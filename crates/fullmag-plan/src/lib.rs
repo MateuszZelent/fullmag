@@ -6,11 +6,16 @@
 //! Additionally, `backend='fem'` produces an executable `FemPlanIR`
 //! when a precomputed `MeshIR` asset is attached; runner execution is fully supported.
 
-use fullmag_ir::{BackendTarget, ExecutionMode, ExecutionPlanIR, ProblemIR, StudyIR};
+use fullmag_ir::{
+    AntennaFieldSolvePlanIR, BackendTarget, ExecutionMode, ExecutionPlanIR, ProblemIR, StudyIR,
+};
 
 #[cfg(test)]
 use fullmag_ir::*;
 
+mod antenna_composition;
+mod antenna_field_solve;
+mod antenna_projection;
 mod antenna_zeeman;
 mod current_transport;
 mod error;
@@ -38,6 +43,8 @@ mod validate;
 
 pub mod boundary_geometry;
 
+pub use antenna_composition::{bind_antenna_field_solve, bind_antenna_field_solve_v03};
+pub use antenna_projection::resolve_fem_antenna_projection_mask;
 pub use error::PlanError;
 pub use fdm::{
     checked_multilayer_aggregate_memory_bytes, checked_multilayer_pair_kernel_footprint,
@@ -214,6 +221,16 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
     }
 
     Ok(execution_plan)
+}
+
+/// Plan one explicit static antenna basis solve without authorizing LLG,
+/// relaxation, eigenmode, or frequency-response execution.
+pub fn plan_antenna_field_solve(
+    problem: &ProblemIR,
+    stage_id: &str,
+    port_mode_id: &str,
+) -> Result<AntennaFieldSolvePlanIR, PlanError> {
+    antenna_field_solve::plan_antenna_field_solve_v03(problem, stage_id, port_mode_id)
 }
 
 #[cfg(test)]

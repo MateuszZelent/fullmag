@@ -13,12 +13,13 @@ pub const FULLMAG_FEM_ERR_INVALID: i32 = -1;
 pub const FULLMAG_FEM_ERR_UNAVAILABLE: i32 = -2;
 pub const FULLMAG_FEM_ERR_INTERNAL: i32 = -3;
 pub const FULLMAG_FEM_ERR_INTERRUPTED: i32 = -4;
-pub const FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION: u32 = 2;
+pub const FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION: u32 = 3;
 pub const FULLMAG_FEM_STAGE_OERSTED_CALLBACK_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STAGE_TRANSPORT_CALLBACK_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STAGE_TRANSPORT_CALLBACK_ERROR_CAPACITY: usize = 256;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_M2_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_CHARGE_TRANSPORT_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_RT0_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_VECTOR_POTENTIAL_ABI_VERSION: u32 = 1;
@@ -254,6 +255,8 @@ pub struct fullmag_fem_spatial_profile_desc {
     pub gaussian_sigma_y_m: f64,
     pub gaussian_wavelength_m: f64,
     pub gaussian_carrier_phase_rad: f64,
+    pub preprojected_h_xyz_a_per_m: *const f64,
+    pub preprojected_h_value_count: u64,
 }
 
 #[repr(C)]
@@ -1124,6 +1127,58 @@ pub struct fullmag_fem_steady_transport_result_v1 {
     pub torque_l2_per_s: f64,
     pub error_message: [c_char; 256],
     pub diagnostics_json: [c_char; 1024],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_charge_transport_request_v1 {
+    pub abi_version: u32,
+    pub reserved_flags: u32,
+    pub struct_size: u64,
+    pub execution_lane: fullmag_fem_steady_transport_execution_lane,
+    pub charge_gauge: fullmag_fem_steady_transport_charge_gauge,
+    pub constitutive_version: *const c_char,
+    pub operator_version: *const c_char,
+    pub physical_residual_version: *const c_char,
+    pub mesh: fullmag_fem_mesh_desc,
+    pub charge_conductivity_spm_per_element: *const f64,
+    pub charge_conductivity_spm_per_element_len: u64,
+    pub relative_tolerance: f64,
+    pub absolute_tolerance: f64,
+    pub maximum_iterations: u32,
+    pub dirichlet_boundary_attributes: *const u32,
+    pub dirichlet_boundary_values_v: *const f64,
+    pub dirichlet_boundary_count: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_charge_transport_result_v1 {
+    pub abi_version: u32,
+    pub reserved_flags: u32,
+    pub struct_size: u64,
+    pub electric_potential_v: *mut f64,
+    pub electric_potential_v_capacity: u64,
+    pub electric_potential_v_len: u64,
+    pub charge_current_density_xyz_apm2: *mut f64,
+    pub charge_current_density_xyz_apm2_capacity: u64,
+    pub charge_current_density_xyz_apm2_len: u64,
+    pub charge_converged: i32,
+    pub charge_iterations: u32,
+    pub charge_relative_residual: f64,
+    pub net_boundary_current_a: f64,
+    pub current_density_volume_average_apm2: [f64; 3],
+    pub error_message: [c_char; 256],
+    pub diagnostics_json: [c_char; 1024],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_charge_transport_result_v2 {
+    pub base: fullmag_fem_charge_transport_result_v1,
+    pub dirichlet_boundary_currents_a: *mut f64,
+    pub dirichlet_boundary_currents_a_capacity: u64,
+    pub dirichlet_boundary_currents_a_len: u64,
 }
 
 #[repr(C)]
@@ -2737,6 +2792,14 @@ extern "C" {
         request: *const fullmag_fem_steady_transport_request_v1,
         result: *mut fullmag_fem_steady_transport_result_v1,
     ) -> i32;
+    pub fn fullmag_fem_solve_charge_transport_v1(
+        request: *const fullmag_fem_charge_transport_request_v1,
+        result: *mut fullmag_fem_charge_transport_result_v1,
+    ) -> i32;
+    pub fn fullmag_fem_solve_charge_transport_v2(
+        request: *const fullmag_fem_charge_transport_request_v1,
+        result: *mut fullmag_fem_charge_transport_result_v2,
+    ) -> i32;
     pub fn fullmag_fem_solve_steady_transport_m2_v1(
         request: *const fullmag_fem_steady_transport_m2_request_v1,
         result: *mut fullmag_fem_steady_transport_result_v1,
@@ -3532,6 +3595,82 @@ mod tests {
                     fullmag_fem_steady_transport_result_v1,
                     electric_potential_v
                 )
+        );
+    }
+
+    #[test]
+    fn charge_transport_v1_layout_is_versioned_and_stable() {
+        assert_eq!(FULLMAG_FEM_CHARGE_TRANSPORT_ABI_VERSION, 1);
+        assert_eq!(
+            std::mem::size_of::<fullmag_fem_charge_transport_request_v1>(),
+            344
+        );
+        assert_eq!(
+            std::mem::align_of::<fullmag_fem_charge_transport_request_v1>(),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_charge_transport_request_v1, abi_version),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_charge_transport_request_v1, mesh),
+            48
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_charge_transport_request_v1,
+                charge_conductivity_spm_per_element
+            ),
+            280
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_charge_transport_request_v1,
+                dirichlet_boundary_attributes
+            ),
+            320
+        );
+        assert_eq!(
+            std::mem::size_of::<fullmag_fem_charge_transport_result_v1>(),
+            1392
+        );
+        assert_eq!(
+            std::mem::align_of::<fullmag_fem_charge_transport_result_v1>(),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_charge_transport_result_v1, electric_potential_v),
+            16
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_charge_transport_result_v1,
+                charge_current_density_xyz_apm2
+            ),
+            40
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_charge_transport_result_v1,
+                current_density_volume_average_apm2
+            ),
+            88
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_charge_transport_result_v1, error_message),
+            112
+        );
+        assert_eq!(
+            std::mem::size_of::<fullmag_fem_charge_transport_result_v2>(),
+            1416
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_charge_transport_result_v2,
+                dirichlet_boundary_currents_a
+            ),
+            1392
         );
     }
 

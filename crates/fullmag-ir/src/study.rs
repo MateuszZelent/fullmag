@@ -136,6 +136,48 @@ pub enum DriveActivationIR {
     StageIds { stage_ids: Vec<String> },
 }
 
+/// Study family carried with a resolved time-stage plan.
+///
+/// A resolved runner no longer has the complete [`StudyIR`] value available,
+/// so the planner records this small semantic discriminator explicitly.  The
+/// `Unknown` default is fail-closed for plans deserialized from older schemas.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum StudyKindIR {
+    #[default]
+    Unknown,
+    TimeEvolution,
+    Relaxation,
+    Hysteresis,
+    Eigenmodes,
+    FrequencyResponse,
+}
+
+impl StudyKindIR {
+    pub const fn is_unknown(&self) -> bool {
+        matches!(self, Self::Unknown)
+    }
+}
+
+impl DriveActivationIR {
+    /// Resolve activation at a concrete execution stage.
+    ///
+    /// `AllTimeEvolution` is intentionally limited to a TimeEvolution study;
+    /// explicit `StageIds` remain valid for any study whose stage is named by
+    /// the author and are subject to the study-specific waveform validation.
+    pub fn is_active_for(
+        &self,
+        study_kind: StudyKindIR,
+        active_stage_id: Option<&str>,
+    ) -> bool {
+        match self {
+            Self::AllTimeEvolution {} => matches!(study_kind, StudyKindIR::TimeEvolution),
+            Self::StageIds { stage_ids } => active_stage_id
+                .is_some_and(|active| stage_ids.iter().any(|stage| stage == active)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct FieldDriveMigrationIR {
@@ -1572,6 +1614,18 @@ fn get_default_dynamics() -> &'static DynamicsIR {
 }
 
 impl StudyIR {
+    /// Return the stable semantic study family used by resolved execution
+    /// plans and activation checks.
+    pub const fn kind(&self) -> StudyKindIR {
+        match self {
+            Self::TimeEvolution { .. } => StudyKindIR::TimeEvolution,
+            Self::Relaxation { .. } => StudyKindIR::Relaxation,
+            Self::Eigenmodes { .. } => StudyKindIR::Eigenmodes,
+            Self::FrequencyResponse { .. } => StudyKindIR::FrequencyResponse,
+            Self::Hysteresis { .. } => StudyKindIR::Hysteresis,
+        }
+    }
+
     pub fn dynamics(&self) -> &DynamicsIR {
         self.optional_dynamics()
             .expect("this study does not define LLG dynamics")

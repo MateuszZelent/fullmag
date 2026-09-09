@@ -615,6 +615,16 @@ if(FULLMAG_USE_MFEM_STACK)
     add_test(NAME fem_steady_transport_abi_contract COMMAND fem_steady_transport_abi_contract)
 
     add_executable(
+        fem_charge_transport_abi_contract
+        tests/charge_transport_abi_contract.cpp
+    )
+    target_link_libraries(fem_charge_transport_abi_contract PRIVATE fullmag_fem)
+    target_include_directories(fem_charge_transport_abi_contract PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+    )
+    add_test(NAME fem_charge_transport_abi_contract COMMAND fem_charge_transport_abi_contract)
+
+    add_executable(
         fem_steady_transport_rt0_contract
         tests/steady_transport_rt0_contract.cpp
     )

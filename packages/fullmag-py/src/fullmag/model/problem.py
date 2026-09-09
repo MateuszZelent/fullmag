@@ -25,6 +25,10 @@ from fullmag._progress import (
 from fullmag._validation import ensure_unique_names, require_non_empty
 from fullmag.init.textures import PresetTexture
 from fullmag.model.antenna import (
+    AntennaFieldSolveStage,
+    AntennaSpectrumRequest,
+    AntennaTargetProjection,
+    AntennaPortMode,
     AntennaFieldSource,
     DriveActivation,
     FieldTarget,
@@ -32,6 +36,7 @@ from fullmag.model.antenna import (
     RegionalFieldDrive,
     SincFieldProfile,
     SpinWaveExcitationAnalysis,
+    SolvedAntennaDrive,
     UniformFieldProfile,
 )
 from fullmag.model.couplings import Coupling
@@ -2339,6 +2344,14 @@ class Problem:
     auxiliary_geometry_roles: Mapping[str, str] = field(default_factory=dict)
     current_modules: Sequence[CurrentModule] = ()
     field_drives: Sequence[RegionalFieldDrive] = ()
+    # Composition-first microwave antenna resources.  These are immutable
+    # authoring records; the solved field asset is produced by a dedicated
+    # stage and is never inferred from a field drive.
+    antenna_port_modes: Sequence[AntennaPortMode] = ()
+    antenna_field_solve_stages: Sequence[AntennaFieldSolveStage] = ()
+    antenna_target_projections: Sequence[AntennaTargetProjection] = ()
+    solved_antenna_drives: Sequence[SolvedAntennaDrive] = ()
+    antenna_spectrum_requests: Sequence[AntennaSpectrumRequest] = ()
     couplings: Sequence[Coupling] = ()
     monitors: Sequence[PlanarMonitor] = ()
     excitation_analysis: SpinWaveExcitationAnalysis | None = None
@@ -2484,6 +2497,16 @@ class Problem:
         ensure_unique_names((drive.name for drive in self.field_drives), "field drive names")
         if any(not isinstance(drive, RegionalFieldDrive) for drive in self.field_drives):
             raise TypeError("Problem.field_drives must contain RegionalFieldDrive objects")
+        for name, values, expected in (
+            ("antenna_port_modes", self.antenna_port_modes, AntennaPortMode),
+            ("antenna_field_solve_stages", self.antenna_field_solve_stages, AntennaFieldSolveStage),
+            ("antenna_target_projections", self.antenna_target_projections, AntennaTargetProjection),
+            ("solved_antenna_drives", self.solved_antenna_drives, SolvedAntennaDrive),
+            ("antenna_spectrum_requests", self.antenna_spectrum_requests, AntennaSpectrumRequest),
+        ):
+            if any(not isinstance(value, expected) for value in values):
+                raise TypeError(f"Problem.{name} must contain {expected.__name__} objects")
+            ensure_unique_names((value.id for value in values), f"{name} ids")
         magnetic_object_ids = {magnet.name for magnet in self.magnets}
         region_ids = {
             (region.owner_object, region.region_id) for region in self._collect_object_regions()
@@ -2770,7 +2793,6 @@ class Problem:
                 "material_assignment_ids": [],
             }
             for name, role in self.auxiliary_geometry_roles.items()
-            if role != "antenna"
         ]
 
         result = {
@@ -2802,6 +2824,19 @@ class Problem:
             "couplings": [coupling.to_ir() for coupling in self.couplings],
             "planar_monitors": [monitor.to_ir() for monitor in self.monitors],
             "field_drives": [drive.to_ir() for drive in self.field_drives],
+            "antenna_port_modes": [mode.to_ir() for mode in self.antenna_port_modes],
+            "antenna_field_solve_stages": [
+                stage.to_ir() for stage in self.antenna_field_solve_stages
+            ],
+            "antenna_target_projections": [
+                projection.to_ir() for projection in self.antenna_target_projections
+            ],
+            "solved_antenna_drives": [
+                drive.to_ir() for drive in self.solved_antenna_drives
+            ],
+            "antenna_spectrum_requests": [
+                request.to_ir() for request in self.antenna_spectrum_requests
+            ],
             "magnets": magnets_ir,
             "selections": [selection.to_ir() for selection in self.selections],
             "magnetization_constraints": [
@@ -3023,7 +3058,7 @@ class Problem:
         for geometry in self.auxiliary_geometries:
             geometry_name = geometry.geometry_name
             role = self.auxiliary_geometry_roles.get(geometry_name)
-            if role is None or role == "antenna" or geometry_name in seen:
+            if role is None or geometry_name in seen:
                 continue
             regions.append(Region(name=geometry_name, geometry=geometry))
             seen.add(geometry_name)
@@ -3068,7 +3103,7 @@ class Problem:
         for geometry in self.auxiliary_geometries:
             geometry_name = geometry.geometry_name
             role = self.auxiliary_geometry_roles.get(geometry_name)
-            if role not in {"conductor", "electrode", "geometry"}:
+            if role not in {"conductor", "electrode", "geometry", "antenna"}:
                 continue
             if geometry_name in seen and seen[geometry_name] != geometry_name:
                 raise ValueError(

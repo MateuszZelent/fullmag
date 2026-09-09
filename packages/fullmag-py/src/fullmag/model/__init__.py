@@ -1,7 +1,16 @@
 from .discretization import DiscretizationHints, FDM, FDMDemag, FDMGrid, FEM, FemLinearSolverPolicy, Hybrid, MeshOperation, MeshSizeControls, PerObjectMeshRecipe, SharedMeshAssemblyPolicy, SweepDistribution, SweptMeshControls
 from .absorbing_boundary import AbsorbingBoundaryLayer
 from .antenna import (
+    AntennaFieldSolveStage,
+    AntennaFieldSolutionRef,
     AntennaFieldSource,
+    AntennaNamedOutput,
+    AntennaPortBranch,
+    AntennaPortMode,
+    AntennaSpectrumKGrid,
+    AntennaSpectrumRequest,
+    AntennaSpectrumSamplingPlane,
+    AntennaTargetProjection,
     CPWAntenna,
     DriveActivation,
     FieldTarget,
@@ -11,6 +20,7 @@ from .antenna import (
     MicrostripAntenna,
     RegionalFieldDrive,
     RfDrive,
+    SolvedAntennaDrive,
     SincFieldProfile,
     SpinWaveExcitationAnalysis,
     UniformFieldProfile,

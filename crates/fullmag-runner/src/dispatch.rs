@@ -2394,15 +2394,20 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
     let stage_oersted_callback_requested =
         crate::native_fem::plan_requests_stage_oersted_callback(&normalized_plan);
     #[cfg(feature = "fem-gpu")]
-    let transport_bundle = if normalized_plan.spin_transport_plans.is_empty() {
+    let transport_bundle = if normalized_plan.spin_transport_plans.is_empty()
+        && normalized_plan.charge_transport_plans.is_empty()
+    {
         None
     } else {
         if engine != FemEngine::CpuNative {
             return Err(RunError {
-                message: "FEM M1 steady spin transport resolved CPU-double, but runtime selected GPU; refusing hidden fallback before provenance".to_string(),
+                message: "FEM charge/spin transport resolved CPU-double, but runtime selected GPU; refusing hidden fallback before provenance".to_string(),
             });
         }
-        crate::native_fem::execute_native_fem_steady_transport_plans(&normalized_plan)?
+        let charge =
+            crate::native_fem::execute_native_fem_charge_transport_plans(&normalized_plan)?;
+        let spin = crate::native_fem::execute_native_fem_steady_transport_plans(&normalized_plan)?;
+        merge_native_fem_transport_bundles(charge, spin)?
     };
     #[cfg(feature = "fem-gpu")]
     if let Some(field) = transport_bundle
@@ -2449,9 +2454,11 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
         }
     }
     #[cfg(not(feature = "fem-gpu"))]
-    if !normalized_plan.spin_transport_plans.is_empty() {
+    if !normalized_plan.spin_transport_plans.is_empty()
+        || !normalized_plan.charge_transport_plans.is_empty()
+    {
         return Err(RunError {
-            message: "FEM steady spin transport requires a runner built with the managed native FEM feature".to_string(),
+            message: "FEM charge/spin transport requires a runner built with the managed native FEM feature".to_string(),
         });
     }
     let pbc_decision = fem_static_periodic_decision(&normalized_plan);
@@ -2512,7 +2519,9 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
         .cloned()
         .collect::<Vec<_>>();
     #[cfg(feature = "fem-gpu")]
-    let runtime_outputs = if normalized_plan.spin_transport_plans.is_empty() {
+    let runtime_outputs = if normalized_plan.spin_transport_plans.is_empty()
+        && normalized_plan.charge_transport_plans.is_empty()
+    {
         outputs
     } else {
         dynamic_outputs.as_slice()
@@ -2602,11 +2611,45 @@ fn steady_transport_output(output: &OutputIR) -> bool {
     )
 }
 
+#[cfg(feature = "fem-gpu")]
+fn merge_native_fem_transport_bundles(
+    left: Option<crate::native_fem::NativeFemSteadyTransportBundle>,
+    right: Option<crate::native_fem::NativeFemSteadyTransportBundle>,
+) -> Result<Option<crate::native_fem::NativeFemSteadyTransportBundle>, RunError> {
+    let Some(mut left) = left else {
+        return Ok(right);
+    };
+    let Some(mut right) = right else {
+        return Ok(Some(left));
+    };
+    match (
+        left.oersted_field_xyz.as_mut(),
+        right.oersted_field_xyz.take(),
+    ) {
+        (Some(left_field), Some(right_field)) => {
+            if left_field.len() != right_field.len() {
+                return Err(RunError {
+                    message: "FEM charge/spin Oersted fields disagree on target size".into(),
+                });
+            }
+            for (left_value, right_value) in left_field.iter_mut().zip(right_field) {
+                *left_value += right_value;
+            }
+        }
+        (None, Some(right_field)) => left.oersted_field_xyz = Some(right_field),
+        _ => {}
+    }
+    left.artifacts.append(&mut right.artifacts);
+    left.field_snapshots.append(&mut right.field_snapshots);
+    left.provenance.append(&mut right.provenance);
+    Ok(Some(left))
+}
+
 fn reject_unsupported_steady_transport_component_outputs(
     plan: &FemPlanIR,
     outputs: &[OutputIR],
 ) -> Result<(), RunError> {
-    if plan.spin_transport_plans.is_empty() {
+    if plan.spin_transport_plans.is_empty() && plan.charge_transport_plans.is_empty() {
         return Ok(());
     }
     for output in outputs {
@@ -4229,6 +4272,38 @@ mod tests {
 
     #[cfg(feature = "fem-gpu")]
     #[test]
+    fn charge_and_spin_transport_bundles_add_oersted_without_losing_artifacts() {
+        let bundle =
+            |name: &str, field: Vec<f64>| crate::native_fem::NativeFemSteadyTransportBundle {
+                artifacts: vec![AuxiliaryArtifact {
+                    relative_path: name.into(),
+                    bytes: Vec::new(),
+                }],
+                field_snapshots: Vec::new(),
+                provenance: Vec::new(),
+                oersted_field_xyz: Some(field),
+            };
+        let merged = merge_native_fem_transport_bundles(
+            Some(bundle("charge.json", vec![1.0, 2.0, 3.0])),
+            Some(bundle("spin.json", vec![4.0, 5.0, 6.0])),
+        )
+        .expect("compatible transport fields should merge")
+        .expect("merged bundle");
+        assert_eq!(merged.oersted_field_xyz, Some(vec![5.0, 7.0, 9.0]));
+        assert_eq!(merged.artifacts.len(), 2);
+
+        let error = match merge_native_fem_transport_bundles(
+            Some(bundle("charge.json", vec![1.0, 2.0, 3.0])),
+            Some(bundle("spin.json", vec![4.0, 5.0])),
+        ) {
+            Ok(_) => panic!("different target sizes must fail closed"),
+            Err(error) => error,
+        };
+        assert!(error.message.contains("target size"));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
     fn steady_transport_component_schedule_is_rejected_before_execution() {
         let mut plan = tiny_fem_plan();
         plan.spin_transport_plans = vec![crate::native_fem::test_resolved_steady_transport_plan()];
@@ -4424,10 +4499,12 @@ mod tests {
             enable_demag: false,
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
+            solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: Vec::new(),
+            charge_transport_plans: Vec::new(),
             spin_transport_plans: Vec::new(),
             gyromagnetic_ratio: 2.211e5,
             precision: fullmag_ir::ExecutionPrecision::Double,

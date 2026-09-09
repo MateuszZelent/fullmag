@@ -437,11 +437,20 @@ pub(crate) fn resolved_antenna_zeeman_field_for_count(
     sample_count: usize,
     time_seconds: f64,
 ) -> Vec<Vector3> {
-    crate::antenna_fields::combined_antenna_zeeman_mask_field_at_time(
+    let mut field = crate::antenna_fields::combined_antenna_zeeman_mask_field_at_time(
         &plan.antenna_zeeman_masks,
         sample_count,
         time_seconds,
-    )
+    );
+    for term in resolved_solved_antenna_drives(plan, plan.time_stage.start_time_s) {
+        let multiplier = term.multiplier_at(time_seconds);
+        for (target, basis) in field.iter_mut().zip(&term.basis_field) {
+            target[0] += basis[0] * multiplier;
+            target[1] += basis[1] * multiplier;
+            target[2] += basis[2] * multiplier;
+        }
+    }
+    field
 }
 
 pub(crate) fn resolved_oersted_visual_field_for_count(
@@ -484,7 +493,8 @@ pub(crate) fn resolved_regional_field_drives(
     plan: &FdmPlanIR,
     stage_start_time_s: f64,
 ) -> Vec<RegionalFieldDriveTerm> {
-    plan.regional_field_drive_bases
+    let mut drives: Vec<_> = plan
+        .regional_field_drive_bases
         .iter()
         .map(|resolved| RegionalFieldDriveTerm {
             basis_field: resolved.field_xyz.clone(),
@@ -494,6 +504,44 @@ pub(crate) fn resolved_regional_field_drives(
                 fullmag_ir::FieldTimeOriginIR::Absolute => 0.0,
             },
             enabled: resolved.drive.enabled,
+        })
+        .collect();
+    drives.extend(resolved_solved_antenna_drives(plan, stage_start_time_s));
+    drives
+}
+
+fn resolved_solved_antenna_drives(
+    plan: &FdmPlanIR,
+    stage_start_time_s: f64,
+) -> Vec<RegionalFieldDriveTerm> {
+    use fullmag_ir::FieldTimeOriginIR;
+
+    plan.solved_antenna_drive_bases
+        .iter()
+        .filter(|basis| {
+            basis.drive.activation.is_active_for(
+                plan.time_stage.study_kind,
+                plan.time_stage.active_stage_id.as_deref(),
+            )
+        })
+        .map(|basis| RegionalFieldDriveTerm {
+            basis_field: basis
+                .field_xyz_apm_per_a
+                .iter()
+                .map(|value| {
+                    [
+                        value[0] * basis.drive.peak_current_a,
+                        value[1] * basis.drive.peak_current_a,
+                        value[2] * basis.drive.peak_current_a,
+                    ]
+                })
+                .collect(),
+            waveform: basis.drive.waveform.clone(),
+            time_offset_s: match basis.drive.time_origin {
+                FieldTimeOriginIR::StageLocal => stage_start_time_s,
+                FieldTimeOriginIR::Absolute => 0.0,
+            },
+            enabled: true,
         })
         .collect()
 }
@@ -3710,7 +3758,8 @@ mod tests {
         FieldSpatialProfileIR, FieldTargetIR, FieldTimeOriginIR, GridDimensions, IntegratorChoice,
         RegionalFieldDriveIR, RelaxStopIR, RelaxationAlgorithmIR, RelaxationControlIR,
         ResolvedFrozenSpinsPlanIR, ResolvedRegionalFieldDriveBasisIR,
-        SelectionAuthoredFingerprintIR, SelectionCertificateIR, StageStopReason, TimeDependenceIR,
+        ResolvedSolvedAntennaDriveBasisIR, SelectionAuthoredFingerprintIR, SelectionCertificateIR,
+        SolvedAntennaDriveIR, StageStopReason, StudyKindIR, TimeDependenceIR,
         RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION, SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
     use sha2::{Digest, Sha256};
@@ -4409,6 +4458,74 @@ mod tests {
                 step.e_drive
             );
         }
+    }
+
+    #[test]
+    fn solved_antenna_basis_uses_peak_current_stage_clock_and_exact_term_time() {
+        let mut plan = make_test_plan();
+        plan.time_stage.active_stage_id = Some("ringdown".into());
+        plan.time_stage.start_time_s = 10.0;
+        plan.solved_antenna_drive_bases = vec![ResolvedSolvedAntennaDriveBasisIR {
+            drive: SolvedAntennaDriveIR {
+                id: "antenna-drive".into(),
+                name: "Antenna drive".into(),
+                projection_ref: "projection".into(),
+                port_mode_id: "common".into(),
+                peak_current_a: 0.25,
+                waveform: TimeDependenceIR::Sinusoidal {
+                    frequency_hz: 0.25,
+                    phase_rad: 0.0,
+                    offset: 0.0,
+                },
+                time_origin: FieldTimeOriginIR::StageLocal,
+                activation: DriveActivationIR::StageIds {
+                    stage_ids: vec!["ringdown".into()],
+                },
+            },
+            solution_id: "solution".into(),
+            source_object_id: "antenna".into(),
+            field_xyz_apm_per_a: vec![[4.0, 8.0, 12.0]; 16],
+            projection_signature: "verified".into(),
+        }];
+
+        let terms = resolved_regional_field_drives(&plan, plan.time_stage.start_time_s);
+        assert_eq!(terms.len(), 1);
+        assert_eq!(terms[0].basis_field[0], [1.0, 2.0, 3.0]);
+        assert!((terms[0].multiplier_at(11.0) - 1.0).abs() < 1.0e-12);
+        let visual = resolved_antenna_zeeman_field_for_count(&plan, 16, 11.0);
+        assert!(visual.iter().all(|value| {
+            (value[0] - 1.0).abs() < 1.0e-12
+                && (value[1] - 2.0).abs() < 1.0e-12
+                && (value[2] - 3.0).abs() < 1.0e-12
+        }));
+    }
+
+    #[test]
+    fn solved_antenna_all_time_evolution_is_inactive_during_relaxation() {
+        let mut plan = make_test_plan();
+        plan.time_stage.study_kind = StudyKindIR::Relaxation;
+        plan.time_stage.active_stage_id = Some("relax".into());
+        plan.solved_antenna_drive_bases = vec![ResolvedSolvedAntennaDriveBasisIR {
+            drive: SolvedAntennaDriveIR {
+                id: "relaxation-drive".into(),
+                name: "Relaxation drive".into(),
+                projection_ref: "projection".into(),
+                port_mode_id: "common".into(),
+                peak_current_a: 1.0,
+                waveform: TimeDependenceIR::Constant,
+                time_origin: FieldTimeOriginIR::StageLocal,
+                activation: DriveActivationIR::AllTimeEvolution {},
+            },
+            solution_id: "solution".into(),
+            source_object_id: "antenna".into(),
+            field_xyz_apm_per_a: vec![[4.0, 8.0, 12.0]; 16],
+            projection_signature: "verified".into(),
+        }];
+
+        assert!(resolved_regional_field_drives(&plan, 0.0).is_empty());
+        assert!(resolved_antenna_zeeman_field_for_count(&plan, 16, 0.0)
+            .iter()
+            .all(|value| *value == [0.0, 0.0, 0.0]));
     }
 
     #[test]

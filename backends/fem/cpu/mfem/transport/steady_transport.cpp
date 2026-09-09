@@ -857,6 +857,20 @@ public:
         }
     }
 
+    void charge_response(
+        mfem::ElementTransformation &transformation,
+        const mfem::IntegrationPoint &point,
+        mfem::Vector &value)
+    {
+        if (parameters.constitutive_model == TransportConstitutiveModel::OneWay) {
+            potential.GetGradient(transformation, value);
+            value *= -conductivity.Eval(transformation, point);
+            return;
+        }
+        mfem::DenseMatrix spin_current;
+        constitutive_response(transformation, point, value, spin_current);
+    }
+
     void project_charge_current()
     {
         class ChargeCurrentCoefficient final : public mfem::VectorCoefficient {
@@ -871,8 +885,7 @@ public:
                 mfem::ElementTransformation &transformation,
                 const mfem::IntegrationPoint &point) override
             {
-                mfem::DenseMatrix spin_current;
-                owner_.constitutive_response(transformation, point, value, spin_current);
+                owner_.charge_response(transformation, point, value);
             }
 
         private:
@@ -927,8 +940,7 @@ public:
                 const auto &point = rule.IntPoint(q);
                 transformation->SetIntPoint(&point);
                 mfem::Vector charge(3);
-                mfem::DenseMatrix spin_current;
-                constitutive_response(*transformation, point, charge, spin_current);
+                charge_response(*transformation, point, charge);
                 const double weight = point.weight * transformation->Weight();
                 volume_current.Add(weight, charge);
                 volume += weight;
@@ -952,8 +964,7 @@ public:
                 face->Loc1.Transform(face_point, element_point);
                 face->Elem1->SetIntPoint(&element_point);
                 mfem::Vector charge(3);
-                mfem::DenseMatrix spin_current;
-                constitutive_response(*face->Elem1, element_point, charge, spin_current);
+                charge_response(*face->Elem1, element_point, charge);
                 mfem::Vector normal(3);
                 face->Face->SetIntPoint(&face_point);
                 mfem::CalcOrtho(face->Face->Jacobian(), normal);
@@ -961,6 +972,35 @@ public:
             }
         }
         diagnostics.net_boundary_current_a = boundary_current;
+    }
+
+    double boundary_current_a(int boundary_attribute)
+    {
+        double boundary_current = 0.0;
+        for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
+            if (mesh.GetBdrAttribute(boundary) != boundary_attribute) {
+                continue;
+            }
+            auto *face = mesh.GetBdrFaceTransformations(boundary);
+            if (face == nullptr || face->Elem1 == nullptr) {
+                continue;
+            }
+            const auto &rule = mfem::IntRules.Get(
+                mesh.GetBdrElementBaseGeometry(boundary), 4);
+            for (int q = 0; q < rule.GetNPoints(); ++q) {
+                const auto &face_point = rule.IntPoint(q);
+                mfem::IntegrationPoint element_point;
+                face->Loc1.Transform(face_point, element_point);
+                face->Elem1->SetIntPoint(&element_point);
+                mfem::Vector charge(3);
+                charge_response(*face->Elem1, element_point, charge);
+                mfem::Vector normal(3);
+                face->Face->SetIntPoint(&face_point);
+                mfem::CalcOrtho(face->Face->Jacobian(), normal);
+                boundary_current += (charge * normal) * face_point.weight;
+            }
+        }
+        return boundary_current;
     }
 
     void accumulate_spin_diagnostics(SpinSolveDiagnostics &diagnostics)
@@ -1223,6 +1263,11 @@ const mfem::GridFunction &SteadyTransportOracle::spin_potential() const
 const mfem::GridFunction &SteadyTransportOracle::charge_current_density() const
 {
     return impl_->current;
+}
+
+double SteadyTransportOracle::boundary_current_a(int boundary_attribute)
+{
+    return impl_->boundary_current_a(boundary_attribute);
 }
 
 const mfem::GridFunction &SteadyTransportOracle::spin_current_tensor() const

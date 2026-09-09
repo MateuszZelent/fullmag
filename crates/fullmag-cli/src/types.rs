@@ -320,6 +320,13 @@ pub(crate) struct ScriptExecutionConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum ScriptExecutionStageAction {
+    AntennaFieldSolve {
+        stage_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port_mode_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        port_mode_ids: Vec<String>,
+    },
     SaveState {
         #[serde(default = "default_stage_action_artifact_name")]
         artifact_name: String,
@@ -431,6 +438,11 @@ pub(crate) struct RuntimeResolutionSummary {
 
 #[derive(Debug, Clone)]
 pub(crate) enum ResolvedScriptStageAction {
+    AntennaFieldSolve {
+        stage_id: String,
+        port_mode_id: String,
+        plan: fullmag_ir::AntennaFieldSolvePlanIR,
+    },
     SaveState {
         artifact_name: String,
         format: Option<String>,
@@ -485,6 +497,7 @@ pub(crate) enum ResolvedScriptStageAction {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum StageTransitionKind {
     ContinueInPlace,
+    AntennaFieldSolve,
     TransferState,
     RemeshTransfer,
     BackendTransfer,
@@ -498,6 +511,7 @@ pub(crate) enum StageTransitionKind {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum StageTransitionReason {
     SameRuntimeContext,
+    AntennaFieldSolve,
     ExplicitRemesh,
     BackendChange,
     MeshGenerationChanged,
@@ -575,6 +589,7 @@ impl StageTransitionMetadata {
         }
         match self.kind {
             StageTransitionKind::ContinueInPlace => "continues",
+            StageTransitionKind::AntennaFieldSolve => "field basis solved",
             StageTransitionKind::SaveCheckpoint => "preserved",
             StageTransitionKind::LoadState => "restored",
             StageTransitionKind::ExportOnly => "exported",

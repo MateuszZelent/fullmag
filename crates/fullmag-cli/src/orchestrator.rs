@@ -3124,6 +3124,146 @@ fn plan_materialized_stage_snapshot(stage: &ResolvedScriptStage) -> Result<Execu
     fullmag_plan::plan(&planning_ir).map_err(|error| anyhow!(error.to_string()))
 }
 
+/// Attach published immutable antenna bases to the FEM execution plan that
+/// will consume them.  The field-solve stage only publishes an asset; this
+/// boundary is the explicit asset-to-LLG hand-off.  FDM and missing/stale
+/// assets fail closed instead of silently dropping the authored drive.
+fn attach_solved_antenna_drive_bases(
+    problem: &ProblemIR,
+    execution_plan: &mut ExecutionPlanIR,
+    artifact_dir: &Path,
+) -> Result<()> {
+    if problem.solved_antenna_drives.is_empty() {
+        return Ok(());
+    }
+    let fem_plan = match &mut execution_plan.backend_plan {
+        BackendPlanIR::Fem(plan) => plan,
+        BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => {
+            bail!(
+                "solved antenna drives require the qualified FEM target-projection lane; FDM materialization is not implemented"
+            )
+        }
+        BackendPlanIR::FemEigen(_) | BackendPlanIR::FemFrequencyResponse(_) => {
+            bail!("solved antenna drives are supported only by the FEM time-evolution LLG lane")
+        }
+    };
+
+    let referenced_projection_ids = problem
+        .solved_antenna_drives
+        .iter()
+        .map(|drive| drive.projection_ref.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut assets = std::collections::BTreeMap::new();
+    for projection in problem
+        .antenna_target_projections
+        .iter()
+        .filter(|projection| referenced_projection_ids.contains(projection.id.as_str()))
+    {
+        let reference = &projection.solution;
+        let asset = fullmag_runner::load_published_antenna_field_solution(artifact_dir, reference)
+            .map_err(|error| {
+                anyhow!(
+                    "load antenna solution asset '{}' for projection '{}': {}",
+                    reference.asset_id,
+                    projection.id,
+                    error.message
+                )
+            })?;
+        if let Some(previous) = assets.get(&reference.asset_id) {
+            if previous != &asset {
+                bail!(
+                    "antenna solution asset '{}' was resolved with conflicting immutable payloads",
+                    reference.asset_id
+                );
+            }
+        } else {
+            assets.insert(reference.asset_id.clone(), asset);
+        }
+    }
+
+    fullmag_runner::materialize_fem_solved_antenna_drives_v03(problem, fem_plan, &assets)
+        .map_err(|error| anyhow!("materialize solved antenna drives: {}", error.message))
+}
+
+/// Execute authored source-spectrum requests only from a published immutable
+/// antenna field asset.  This is an analysis product, not a hidden field solve
+/// and not a magnetization-response FFT.
+fn execute_antenna_spectrum_requests(
+    problem: &ProblemIR,
+    artifact_dir: &Path,
+    current_stage_artifact_dir: &Path,
+) -> Result<()> {
+    if problem.antenna_spectrum_requests.is_empty() {
+        return Ok(());
+    }
+    let mut output_ids = std::collections::BTreeSet::new();
+    for request in &problem.antenna_spectrum_requests {
+        if !output_ids.insert(request.output_id.as_str()) {
+            bail!(
+                "antenna source-spectrum output_id '{}' is declared more than once",
+                request.output_id
+            );
+        }
+        let asset = fullmag_runner::load_published_antenna_field_solution(
+            artifact_dir,
+            &request.solution_ref,
+        )
+        .map_err(|error| {
+            anyhow!(
+                "load antenna spectrum solution asset '{}' for request '{}': {}",
+                request.solution_ref.asset_id,
+                request.id,
+                error.message
+            )
+        })?;
+        let samples = fullmag_runner::load_antenna_field_solution_samples_for_spectrum(
+            &asset.manifest_bytes,
+            &asset.payloads,
+            request,
+        )
+        .map_err(|error| {
+            anyhow!(
+                "load antenna spectrum source samples for request '{}': {}",
+                request.id,
+                error.message
+            )
+        })?;
+        let spectrum =
+            fullmag_runner::compute_antenna_source_spectrum_artifact(request, &samples, None)
+                .map_err(|error| {
+                    anyhow!(
+                        "compute antenna source spectrum request '{}': {}",
+                        request.id,
+                        error.message
+                    )
+                })?;
+        let artifact = fullmag_runner::antenna_source_spectrum_auxiliary_artifact(&spectrum)
+            .map_err(|error| {
+                anyhow!(
+                    "serialize antenna source spectrum request '{}': {}",
+                    request.id,
+                    error.message
+                )
+            })?;
+        let output_path = current_stage_artifact_dir.join(&artifact.relative_path);
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "create antenna source-spectrum artifact directory {}",
+                    parent.display()
+                )
+            })?;
+        }
+        fs::write(&output_path, &artifact.bytes).with_context(|| {
+            format!(
+                "write antenna source-spectrum artifact {}",
+                output_path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 struct PreparedRemeshStageTransaction {
     stages: Vec<ResolvedScriptStage>,
@@ -6613,6 +6753,150 @@ fn execute_synthetic_stage(
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<SyntheticStageOutcome> {
     match action {
+        ResolvedScriptStageAction::AntennaFieldSolve {
+            stage_id,
+            port_mode_id,
+            plan,
+        } => {
+            let mut lifecycle = fullmag_runner::AntennaFieldStageState {
+                stage_id: stage_id.clone(),
+                solution_id: plan.solution_id.clone(),
+                status: fullmag_runner::AntennaFieldStageStatus::Missing,
+                signatures: None,
+                diagnostic: None,
+            };
+            lifecycle.transition(fullmag_runner::AntennaFieldStageStatus::Queued, None)?;
+            lifecycle.transition(fullmag_runner::AntennaFieldStageStatus::Meshing, None)?;
+            lifecycle.transition(
+                fullmag_runner::AntennaFieldStageStatus::SolvingCurrent,
+                None,
+            )?;
+            lifecycle.transition(
+                fullmag_runner::AntennaFieldStageStatus::EvaluatingField,
+                None,
+            )?;
+
+            if let Some(cached) =
+                fullmag_runner::load_cached_antenna_field_solution(artifact_dir, plan)?
+            {
+                lifecycle.transition(
+                    fullmag_runner::AntennaFieldStageStatus::ProjectingTargets,
+                    Some("reused verified immutable field solution".into()),
+                )?;
+                lifecycle.signatures = Some(cached.signatures.clone());
+                lifecycle.transition(fullmag_runner::AntennaFieldStageStatus::Ready, None)?;
+                write_synthetic_stage_record(
+                    current_stage_artifact_dir,
+                    serde_json::json!({
+                        "kind": "antenna_field_solve",
+                        "stage_id": stage_id,
+                        "port_mode_id": port_mode_id,
+                        "solution_id": cached.reference.output_id,
+                        "asset_id": cached.reference.asset_id,
+                        "content_digest": cached.reference.content_digest,
+                        "manifest_path": cached.manifest_path.display().to_string(),
+                        "reused_existing": true,
+                        "quantity_ids": ["H_ant_basis"],
+                        "stage_state": lifecycle,
+                    }),
+                )?;
+                let vectors =
+                    current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
+                return Ok(SyntheticStageOutcome {
+                    magnetization: vectors,
+                    message: format!(
+                        "Reused immutable antenna field basis '{}' for port '{}'.",
+                        cached.reference.output_id, cached.reference.stage_id
+                    ),
+                });
+            }
+
+            let result = match fullmag_runner::execute_antenna_field_solve_plan(plan) {
+                Ok(result) => result,
+                Err(error) => {
+                    let diagnostic = error.to_string();
+                    let _ = lifecycle.transition(
+                        fullmag_runner::AntennaFieldStageStatus::Failed,
+                        Some(diagnostic.clone()),
+                    );
+                    let _ = write_synthetic_stage_record(
+                        current_stage_artifact_dir,
+                        serde_json::json!({
+                            "kind": "antenna_field_solve",
+                            "stage_id": stage_id,
+                            "port_mode_id": port_mode_id,
+                            "stage_state": lifecycle,
+                        }),
+                    );
+                    return Err(error.into());
+                }
+            };
+            lifecycle.transition(
+                fullmag_runner::AntennaFieldStageStatus::ProjectingTargets,
+                None,
+            )?;
+            let published = match fullmag_runner::publish_antenna_field_solution_atomically(
+                artifact_dir,
+                &result,
+            ) {
+                Ok(published) => published,
+                Err(error) => {
+                    let diagnostic = error.to_string();
+                    let _ = lifecycle.transition(
+                        fullmag_runner::AntennaFieldStageStatus::Failed,
+                        Some(diagnostic.clone()),
+                    );
+                    let _ = write_synthetic_stage_record(
+                        current_stage_artifact_dir,
+                        serde_json::json!({
+                            "kind": "antenna_field_solve",
+                            "stage_id": stage_id,
+                            "port_mode_id": port_mode_id,
+                            "stage_state": lifecycle,
+                        }),
+                    );
+                    return Err(error.into());
+                }
+            };
+            lifecycle.signatures = Some(published.signatures.clone());
+            lifecycle.transition(fullmag_runner::AntennaFieldStageStatus::Ready, None)?;
+            write_synthetic_stage_record(
+                current_stage_artifact_dir,
+                serde_json::json!({
+                    "kind": "antenna_field_solve",
+                    "stage_id": stage_id,
+                    "port_mode_id": port_mode_id,
+                    "solution_id": result.solution_id,
+                    "asset_id": published.reference.asset_id,
+                    "content_digest": published.reference.content_digest,
+                    "manifest_path": published.manifest_path.display().to_string(),
+                    "reused_existing": published.reused_existing,
+                    "quantity_ids": result
+                        .quantities
+                        .iter()
+                        .map(|quantity| quantity.quantity_id.as_str())
+                        .collect::<Vec<_>>(),
+                    "transport_provenance": result.transport_provenance,
+                    "stage_state": lifecycle,
+                }),
+            )?;
+            let vectors =
+                current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
+            Ok(SyntheticStageOutcome {
+                magnetization: vectors,
+                message: format!(
+                    "Solved antenna field basis '{}' for port '{}' ({}{}).",
+                    result.solution_id,
+                    result.port_mode_id,
+                    published.reference.asset_id,
+                    if published.reused_existing {
+                        ", reused immutable asset"
+                    } else {
+                        ""
+                    }
+                ),
+            })
+        }
         ResolvedScriptStageAction::SaveState {
             artifact_name,
             format,
@@ -8950,6 +9234,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             continuation_magnetization.as_deref(),
             continuation_relax_handoff.as_ref(),
         )?;
+        if synthetic_action.is_none() {
+            attach_solved_antenna_drive_bases(&stage.ir, &mut execution_plan, &artifact_dir)?;
+        }
         emit_initial_state_warnings(Some(&live_workspace), &stage.ir, &execution_plan)?;
         let use_live_callback = matches!(
             &execution_plan.backend_plan,
@@ -8987,6 +9274,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             initialize_zarr_group(
                 &current_stage_artifact_dir.join("fields"),
                 serde_json::json!({"fullmag_role": "sampled_fields"}),
+            )?;
+        }
+        if synthetic_action.is_none() {
+            execute_antenna_spectrum_requests(
+                &stage.ir,
+                &artifact_dir,
+                &current_stage_artifact_dir,
             )?;
         }
         write_sampling_resolution_stage_record(
@@ -11922,6 +12216,7 @@ mod tests {
         attach_stage_fem_mesh_identity, classify_wait_for_solve_command,
         continuation_source_from_backend_plan, cumulative_rhs_evals, default_domain_region_markers,
         deferred_mesh_failure_stage, discard_active_paused_stage_execution,
+        attach_solved_antenna_drive_bases,
         ensure_frequency_response_relaxed_continuation_is_qualified, execute_synthetic_stage,
         fail_owned_preparation_stage, fem_gpu_memory_preflight_message,
         fem_interactive_dense_ram_estimate, fem_live_mesh_payload_and_initial_magnetization,
@@ -11954,6 +12249,7 @@ mod tests {
         PreparationStageId, PreparationStageStatus, PreparationStatus, SimulationPreparationState,
     };
     use crate::types::PythonProgressEvent;
+    use std::path::Path;
 
     #[test]
     fn fdm_override_wins_over_fem_override_in_summary_device() {
@@ -12231,6 +12527,46 @@ mod tests {
         ];
 
         assert_eq!(cumulative_rhs_evals(&steps), 12);
+    }
+
+    #[test]
+    fn solved_antenna_drive_attachment_rejects_non_fem_execution_lane() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.solved_antenna_drives = vec![serde_json::from_value(serde_json::json!({
+            "id": "drive_1",
+            "name": "Drive 1",
+            "projection_ref": "projection_1",
+            "port_mode_id": "port_1",
+            "peak_current_a": 1.0,
+            "waveform": {"kind": "constant"},
+            "time_origin": "absolute",
+            "activation": {"kind": "all_time_evolution"}
+        }))
+        .expect("fixture drive should deserialize")];
+        let mut plan = fullmag_ir::ExecutionPlanIR {
+            common: fullmag_ir::CommonPlanMeta {
+                ir_version: "test".into(),
+                requested_backend: fullmag_ir::BackendTarget::Fdm,
+                resolved_backend: fullmag_ir::BackendTarget::Fdm,
+                execution_mode: fullmag_ir::ExecutionMode::Strict,
+                material_field_plans: Vec::new(),
+            },
+            backend_plan: BackendPlanIR::Fdm(fullmag_ir::FdmPlanIR::default()),
+            output_plan: fullmag_ir::OutputPlanIR {
+                outputs: Vec::new(),
+            },
+            provenance: fullmag_ir::ProvenancePlanIR::default(),
+        };
+
+        let error = attach_solved_antenna_drive_bases(
+            &problem,
+            &mut plan,
+            Path::new("antenna-test-artifacts"),
+        )
+        .expect_err("FDM solved-antenna attachment must fail closed");
+        assert!(error
+            .to_string()
+            .contains("qualified FEM target-projection lane"));
     }
 
     #[test]
@@ -15003,10 +15339,12 @@ mod tests {
             enable_demag: true,
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
+            solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
+            charge_transport_plans: vec![],
             spin_transport_plans: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
@@ -15144,10 +15482,12 @@ mod tests {
             enable_demag: true,
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
+            solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
+            charge_transport_plans: vec![],
             spin_transport_plans: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
@@ -15284,6 +15624,11 @@ mod tests {
             planar_monitors: Vec::new(),
             field_drives: Vec::new(),
             current_modules: Vec::new(),
+            antenna_port_modes: Vec::new(),
+            antenna_field_solve_stages: Vec::new(),
+            antenna_target_projections: Vec::new(),
+            solved_antenna_drives: Vec::new(),
+            antenna_spectrum_requests: Vec::new(),
             spin_torque_modules: Vec::new(),
             physics_graph: None,
             excitation_analysis: None,

@@ -106,6 +106,7 @@ public:
 
     const mfem::GridFunction &electric_potential() const;
     const mfem::GridFunction &charge_current_density() const;
+    double boundary_current_a(int boundary_attribute);
     const mfem::GridFunction &spin_potential() const;
     const mfem::GridFunction &spin_current_tensor() const;
     const mfem::GridFunction &transport_torque() const;

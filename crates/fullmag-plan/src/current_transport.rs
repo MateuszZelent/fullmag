@@ -81,9 +81,10 @@ pub(crate) fn resolve_current_transports(
             },
             CurrentModuleIR::CurrentTransport {
                 name,
-                model:
-                    CurrentTransportModelIR::OhmicPoisson
-                    | CurrentTransportModelIR::MagnetoresistivePoisson,
+                model,
+                coupling,
+                time_envelope,
+                definition,
                 ..
             } => {
                 if lane == CurrentTransportExecutableLane::Fem
@@ -92,9 +93,27 @@ pub(crate) fn resolve_current_transports(
                         .iter()
                         .any(|module| module.current_source_id == *name)
                 {
-                    reasons.push(format!(
-                        "current_modules[{index}] current_transport(ohmic_poisson) requires a bound FEM spin_transport module on the M1 lane"
-                    ));
+                    match (model, coupling, definition.as_ref(), time_envelope.as_ref()) {
+                        (
+                            CurrentTransportModelIR::OhmicPoisson,
+                            TransportCouplingIR::OneWay,
+                            Some(_),
+                            None,
+                        ) => {}
+                        (CurrentTransportModelIR::OhmicPoisson, _, None, _) => reasons.push(
+                            format!(
+                                "current_modules[{index}] charge-only FEM current_transport(ohmic_poisson) requires a complete charge definition"
+                            ),
+                        ),
+                        (CurrentTransportModelIR::OhmicPoisson, _, _, Some(_)) => reasons.push(
+                            format!(
+                                "current_modules[{index}] charge-only FEM current_transport(ohmic_poisson) does not support time_envelope; dynamic stage coupling fails closed"
+                            ),
+                        ),
+                        _ => reasons.push(format!(
+                            "current_modules[{index}] reciprocal or magnetoresistive FEM current transport requires a bound spin_transport module"
+                        )),
+                    }
                 }
                 // M1 materializes the complete charge solve together with its
                 // owning spin-transport plan. It deliberately does not
@@ -1213,5 +1232,57 @@ mod tests {
             resolve_current_transports(&problem, CurrentTransportExecutableLane::Fem).unwrap();
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].name, "drive");
+    }
+
+    #[test]
+    fn fem_charge_only_gate_accepts_only_complete_static_one_way_ohmic_source() {
+        let problem = bounded_gpu_charge_problem();
+        let resolved = resolve_current_transports(&problem, CurrentTransportExecutableLane::Fem)
+            .expect("complete static one-way Ohmic source reaches FEM descriptor materialization");
+        assert!(resolved.is_empty());
+
+        let mut incomplete = problem.clone();
+        let CurrentModuleIR::CurrentTransport { definition, .. } =
+            &mut incomplete.current_modules[0]
+        else {
+            unreachable!()
+        };
+        *definition = None;
+        let error = resolve_current_transports(&incomplete, CurrentTransportExecutableLane::Fem)
+            .expect_err("incomplete charge-only source must fail before FEM mesh materialization");
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("complete charge definition")));
+
+        let mut dynamic = problem.clone();
+        let CurrentModuleIR::CurrentTransport { time_envelope, .. } =
+            &mut dynamic.current_modules[0]
+        else {
+            unreachable!()
+        };
+        *time_envelope = Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 1.0 });
+        let error = resolve_current_transports(&dynamic, CurrentTransportExecutableLane::Fem)
+            .expect_err("dynamic charge-only source must fail closed");
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("time_envelope")));
+
+        let mut reciprocal = problem;
+        let CurrentModuleIR::CurrentTransport {
+            model, coupling, ..
+        } = &mut reciprocal.current_modules[0]
+        else {
+            unreachable!()
+        };
+        *model = CurrentTransportModelIR::MagnetoresistivePoisson;
+        *coupling = TransportCouplingIR::Bidirectional;
+        let error = resolve_current_transports(&reciprocal, CurrentTransportExecutableLane::Fem)
+            .expect_err("reciprocal transport without spin module must fail closed");
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("requires a bound spin_transport module")));
     }
 }

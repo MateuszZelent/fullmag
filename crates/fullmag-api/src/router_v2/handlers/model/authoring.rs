@@ -2389,6 +2389,7 @@ fn coupling_resolution_mesh(
         .filter_map(|part| {
             let role = match part.role.as_str() {
                 "magnetic_object" => fullmag_ir::FemMeshPartRole::MagneticObject,
+                "conductor" => fullmag_ir::FemMeshPartRole::Conductor,
                 "air" => fullmag_ir::FemMeshPartRole::Air,
                 "interface" => fullmag_ir::FemMeshPartRole::Interface,
                 "outer_boundary" => fullmag_ir::FemMeshPartRole::OuterBoundary,

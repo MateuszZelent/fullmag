@@ -10,6 +10,8 @@
 use fullmag_fem_sys as ffi;
 
 mod availability;
+#[cfg(feature = "fem-gpu")]
+mod charge_transport;
 mod eigen;
 mod frequency_domain;
 mod plan;
@@ -29,6 +31,10 @@ pub(crate) use availability::{
     FrequencyDomainAvailability, FrequencyDomainAvailabilityRequest,
     FrequencyDomainPhaseConvention, FrequencyDomainStudyKind, FrequencyDomainSweepProgress,
     GpuAvailability,
+};
+#[cfg(feature = "fem-gpu")]
+pub(crate) use charge_transport::{
+    execute_native_fem_antenna_field_solve_plan, execute_native_fem_charge_transport_plans,
 };
 #[allow(unused_imports)]
 pub(crate) use eigen::{gpu_eigen_dense_solve, GpuEigenResult};
@@ -1206,6 +1212,7 @@ fn pack_native_regional_field_drives(
         Vec<Vec<ffi::fullmag_fem_time_point>>,
         Vec<Vec<ffi::fullmag_fem_geometry_mask_node>>,
         Vec<Option<ffi::fullmag_fem_geometry_mask_desc>>,
+        Vec<Vec<f64>>,
     ),
     RunError,
 > {
@@ -1213,6 +1220,30 @@ fn pack_native_regional_field_drives(
     let mut marker_storage = Vec::with_capacity(plan.field_drives.len());
     let mut point_storage = Vec::with_capacity(plan.field_drives.len());
     let mut geometry_node_storage = Vec::with_capacity(plan.field_drives.len());
+    let active_solved_bases = plan
+        .solved_antenna_drive_bases
+        .iter()
+        .filter(|basis| {
+            basis.drive.activation.is_active_for(
+                plan.time_stage.study_kind,
+                plan.time_stage.active_stage_id.as_deref(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let basis_storage = active_solved_bases
+        .iter()
+        .map(|basis| {
+            basis
+                .field_xyz_apm_per_a
+                .iter()
+                .flat_map(|value| {
+                    value
+                        .iter()
+                        .map(|component| component * basis.drive.peak_current_a)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
     for drive in plan.field_drives.iter().filter(|drive| drive.enabled) {
         marker_storage.push(resolved_drive_target_markers(plan, &drive.target)?);
         point_storage.push(match &drive.waveform {
@@ -1236,6 +1267,19 @@ fn pack_native_regional_field_drives(
         }
         geometry_node_storage.push(nodes);
     }
+    let procedural_point_count = point_storage.len();
+    point_storage.extend(active_solved_bases.iter().map(|basis| {
+        match &basis.drive.waveform {
+            TimeDependenceIR::PiecewiseLinear { points } => points
+                .iter()
+                .map(|point| ffi::fullmag_fem_time_point {
+                    time_s: point[0],
+                    value: point[1],
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }));
     let geometry_desc_storage: Vec<Option<ffi::fullmag_fem_geometry_mask_desc>> =
         geometry_node_storage
             .iter()
@@ -1280,6 +1324,8 @@ fn pack_native_regional_field_drives(
                 gaussian_sigma_y_m: 0.0,
                 gaussian_wavelength_m: 0.0,
                 gaussian_carrier_phase_rad: 0.0,
+                preprojected_h_xyz_a_per_m: std::ptr::null(),
+                preprojected_h_value_count: 0,
             },
             FieldSpatialProfileIR::Sinc {
                 axis,
@@ -1304,6 +1350,8 @@ fn pack_native_regional_field_drives(
                 gaussian_sigma_y_m: 0.0,
                 gaussian_wavelength_m: 0.0,
                 gaussian_carrier_phase_rad: 0.0,
+                preprojected_h_xyz_a_per_m: std::ptr::null(),
+                preprojected_h_value_count: 0,
             },
             FieldSpatialProfileIR::GeometryMask { envelope, .. } => {
                 let (axis, period, center, width, window) = match envelope {
@@ -1342,6 +1390,8 @@ fn pack_native_regional_field_drives(
                     gaussian_sigma_y_m: 0.0,
                     gaussian_wavelength_m: 0.0,
                     gaussian_carrier_phase_rad: 0.0,
+                    preprojected_h_xyz_a_per_m: std::ptr::null(),
+                    preprojected_h_value_count: 0,
                 }
             }
             FieldSpatialProfileIR::GaussianPlaneWave {
@@ -1369,6 +1419,8 @@ fn pack_native_regional_field_drives(
                 gaussian_sigma_y_m: *sigma_y_m,
                 gaussian_wavelength_m: *wavelength_m,
                 gaussian_carrier_phase_rad: *carrier_phase_rad,
+                preprojected_h_xyz_a_per_m: std::ptr::null(),
+                preprojected_h_value_count: 0,
             },
         };
         let mut parameters = ffi::fullmag_fem_time_dependence_parameters {
@@ -1443,12 +1495,123 @@ fn pack_native_regional_field_drives(
             },
         });
     }
+    for (index, (basis, values)) in active_solved_bases.iter().zip(&basis_storage).enumerate() {
+        if basis.field_xyz_apm_per_a.len() != plan.mesh.nodes.len() {
+            return Err(RunError {
+                message: format!(
+                    "solved antenna drive '{}' has {} projected nodes; expected {}",
+                    basis.drive.id,
+                    basis.field_xyz_apm_per_a.len(),
+                    plan.mesh.nodes.len()
+                ),
+            });
+        }
+        if !basis.drive.peak_current_a.is_finite() {
+            return Err(RunError {
+                message: format!(
+                    "solved antenna drive '{}' peak current must be finite",
+                    basis.drive.id
+                ),
+            });
+        }
+        let points = &point_storage[procedural_point_count + index];
+        let mut parameters = ffi::fullmag_fem_time_dependence_parameters {
+            sinusoidal: ffi::fullmag_fem_sinusoidal_time_desc {
+                frequency_hz: 0.0,
+                phase_rad: 0.0,
+                offset: 0.0,
+            },
+        };
+        let waveform_kind = match &basis.drive.waveform {
+            TimeDependenceIR::Constant => 0,
+            TimeDependenceIR::Sinusoidal {
+                frequency_hz,
+                phase_rad,
+                offset,
+            } => {
+                parameters.sinusoidal = ffi::fullmag_fem_sinusoidal_time_desc {
+                    frequency_hz: *frequency_hz,
+                    phase_rad: *phase_rad,
+                    offset: *offset,
+                };
+                1
+            }
+            TimeDependenceIR::Pulse { t_on, t_off } => {
+                parameters.pulse = ffi::fullmag_fem_pulse_time_desc {
+                    t_on_s: *t_on,
+                    t_off_s: *t_off,
+                };
+                2
+            }
+            TimeDependenceIR::PiecewiseLinear { .. } => 3,
+            TimeDependenceIR::SincPulse {
+                cutoff_hz,
+                t0,
+                amplitude,
+            } => {
+                parameters.sinc_pulse = ffi::fullmag_fem_sinc_pulse_time_desc {
+                    cutoff_hz: *cutoff_hz,
+                    t0_s: *t0,
+                    amplitude: *amplitude,
+                };
+                4
+            }
+        };
+        let digest = Sha256::digest(basis.drive.id.as_bytes());
+        descriptors.push(ffi::fullmag_fem_regional_field_drive_desc {
+            abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_regional_field_drive_desc>() as u32,
+            stable_id_hash: u64::from_le_bytes(digest[..8].try_into().expect("SHA-256 prefix")),
+            target: ffi::fullmag_fem_field_target_desc {
+                abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
+                struct_size: std::mem::size_of::<ffi::fullmag_fem_field_target_desc>() as u32,
+                kind: 0,
+                element_markers: std::ptr::null(),
+                element_marker_count: 0,
+            },
+            spatial_profile: ffi::fullmag_fem_spatial_profile_desc {
+                abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
+                struct_size: std::mem::size_of::<ffi::fullmag_fem_spatial_profile_desc>() as u32,
+                kind: 4,
+                sinc_axis: [0.0; 3],
+                sinc_period_m: 0.0,
+                sinc_center_m: 0.0,
+                sinc_width_m: 0.0,
+                sinc_window: 0,
+                geometry_mask: std::ptr::null(),
+                gaussian_center_x_m: 0.0,
+                gaussian_center_y_m: 0.0,
+                gaussian_carrier_origin_x_m: 0.0,
+                gaussian_sigma_x_m: 0.0,
+                gaussian_sigma_y_m: 0.0,
+                gaussian_wavelength_m: 0.0,
+                gaussian_carrier_phase_rad: 0.0,
+                preprojected_h_xyz_a_per_m: values.as_ptr(),
+                preprojected_h_value_count: values.len() as u64,
+            },
+            amplitude_b_t: 0.0,
+            direction: [0.0; 3],
+            waveform: ffi::fullmag_fem_time_dependence_desc {
+                abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
+                struct_size: std::mem::size_of::<ffi::fullmag_fem_time_dependence_desc>() as u32,
+                kind: waveform_kind,
+                parameters,
+                points: optional_slice_ptr(points),
+                point_count: points.len() as u64,
+            },
+            time_origin: match basis.drive.time_origin {
+                FieldTimeOriginIR::StageLocal => 0,
+                FieldTimeOriginIR::Absolute => 1,
+            },
+        });
+    }
     Ok((
         descriptors,
         marker_storage,
         point_storage,
         geometry_node_storage,
         geometry_desc_storage,
+        basis_storage,
     ))
 }
 
@@ -2271,6 +2434,7 @@ impl NativeFemBackend {
             _regional_point_storage,
             _regional_geometry_node_storage,
             _regional_geometry_desc_storage,
+            _regional_preprojected_basis_storage,
         ) = pack_native_regional_field_drives(plan)?;
         let (sot_envelope, _sot_envelope_points) = pack_native_sot_envelope(plan)?;
 
@@ -5961,10 +6125,12 @@ mod tests {
             enable_demag: false,
             external_field: Some([1.0, 2.0, 3.0]),
             antenna_zeeman_masks: Vec::new(),
+            solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
+            charge_transport_plans: vec![],
             spin_transport_plans: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
@@ -6012,6 +6178,75 @@ mod tests {
             mfem_device_string: None,
             use_consistent_mass: None,
         }
+    }
+
+    #[test]
+    fn native_pack_materializes_solved_antenna_as_preprojected_per_ampere_basis() {
+        let mut plan = make_test_plan();
+        plan.object_segments = vec![fullmag_ir::FemObjectSegmentIR {
+            object_id: "magnet".into(),
+            geometry_id: Some("magnet_geometry".into()),
+            node_start: 1,
+            node_count: 2,
+            element_start: 0,
+            element_count: 1,
+            boundary_face_start: 0,
+            boundary_face_count: 1,
+        }];
+        plan.time_stage.active_stage_id = Some("run".into());
+        plan.time_stage.start_time_s = 2.0;
+        plan.solved_antenna_drive_bases = vec![fullmag_ir::ResolvedSolvedAntennaDriveBasisIR {
+            drive: fullmag_ir::SolvedAntennaDriveIR {
+                id: "drive".into(),
+                name: "Drive".into(),
+                projection_ref: "projection".into(),
+                port_mode_id: "common".into(),
+                peak_current_a: 0.25,
+                waveform: fullmag_ir::TimeDependenceIR::Sinusoidal {
+                    frequency_hz: 5.0e9,
+                    phase_rad: 0.3,
+                    offset: 0.1,
+                },
+                time_origin: fullmag_ir::FieldTimeOriginIR::StageLocal,
+                activation: fullmag_ir::DriveActivationIR::StageIds {
+                    stage_ids: vec!["run".into()],
+                },
+            },
+            solution_id: "solution".into(),
+            source_object_id: "antenna".into(),
+            field_xyz_apm_per_a: vec![[4.0, 8.0, 12.0]; 4],
+            projection_signature: "verified".into(),
+        }];
+
+        let (descriptors, _, points, _, _, bases) =
+            pack_native_regional_field_drives(&plan).expect("packed solved antenna drive");
+        assert_eq!(descriptors.len(), 1);
+        assert_eq!(points.len(), 1);
+        assert_eq!(
+            bases,
+            vec![vec![
+                1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 1.0, 2.0, 3.0
+            ]]
+        );
+        let descriptor = descriptors[0];
+        assert_eq!(descriptor.spatial_profile.kind, 4);
+        assert_eq!(descriptor.spatial_profile.preprojected_h_value_count, 12);
+        assert_eq!(
+            descriptor.spatial_profile.preprojected_h_xyz_a_per_m,
+            bases[0].as_ptr()
+        );
+        assert_eq!(descriptor.waveform.kind, 1);
+        assert_eq!(descriptor.time_origin, 0);
+        assert_eq!(
+            fullmag_plan::resolve_fem_antenna_projection_mask(
+                &plan,
+                &fullmag_ir::FieldTargetIR::Object {
+                    object_id: "magnet".into()
+                }
+            )
+            .unwrap(),
+            Some(vec![false, true, true, false])
+        );
     }
 
     #[test]
@@ -7342,10 +7577,12 @@ mod tests {
             enable_demag: false,
             external_field: Some([1.5e3, -2.0e3, 7.5e2]),
             antenna_zeeman_masks: Vec::new(),
+            solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
+            charge_transport_plans: vec![],
             spin_transport_plans: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,

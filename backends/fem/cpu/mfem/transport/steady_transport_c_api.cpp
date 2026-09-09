@@ -43,6 +43,24 @@ void set_error(fullmag_fem_steady_transport_result_v1 *result, const char *messa
     result->diagnostics_json[0] = '\0';
 }
 
+void set_error(fullmag_fem_charge_transport_result_v1 *result, const char *message)
+{
+    if (result == nullptr) {
+        return;
+    }
+    std::snprintf(result->error_message, sizeof(result->error_message), "%s", message);
+    result->diagnostics_json[0] = '\0';
+    result->electric_potential_v_len = 0;
+    result->charge_current_density_xyz_apm2_len = 0;
+    result->charge_converged = 0;
+    result->charge_iterations = 0;
+    result->charge_relative_residual = 0.0;
+    result->net_boundary_current_a = 0.0;
+    for (double &component : result->current_density_volume_average_apm2) {
+        component = 0.0;
+    }
+}
+
 void set_error(fullmag_fem_steady_transport_rt0_result_v1 *result, const char *message)
 {
     if (result == nullptr) {
@@ -128,6 +146,12 @@ constexpr const char *kM2OperatorVersion =
     "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1";
 constexpr const char *kPhysicalResidualVersion =
     "transport_balance_integrated_l2.v1";
+constexpr const char *kChargeConstitutiveVersion =
+    FULLMAG_FEM_CHARGE_TRANSPORT_CONSTITUTIVE_VERSION;
+constexpr const char *kChargeOperatorVersion =
+    FULLMAG_FEM_CHARGE_TRANSPORT_OPERATOR_VERSION;
+constexpr const char *kChargePhysicalResidualVersion =
+    FULLMAG_FEM_CHARGE_TRANSPORT_PHYSICAL_RESIDUAL_VERSION;
 
 bool equals(const char *actual, const char *expected)
 {
@@ -385,6 +409,112 @@ void validate_request(
         const double sigma = request.charge_conductivity_spm_per_element[i];
         if (!(std::isfinite(sigma) && sigma > 0.0)) {
             throw std::invalid_argument("charge conductivity must be finite and positive");
+        }
+    }
+}
+
+void validate_charge_request_header(
+    const fullmag_fem_charge_transport_request_v1 &request,
+    const fullmag_fem_charge_transport_result_v1 &result)
+{
+    if (request.abi_version != FULLMAG_FEM_CHARGE_TRANSPORT_ABI_VERSION ||
+        request.struct_size != sizeof(fullmag_fem_charge_transport_request_v1)) {
+        throw std::invalid_argument("charge transport request ABI header mismatch");
+    }
+    if (result.abi_version != FULLMAG_FEM_CHARGE_TRANSPORT_ABI_VERSION ||
+        result.struct_size != sizeof(fullmag_fem_charge_transport_result_v1)) {
+        throw std::invalid_argument("charge transport result ABI header mismatch");
+    }
+    if (request.reserved_flags != 0 || result.reserved_flags != 0) {
+        throw std::invalid_argument("charge transport reserved_flags must be zero");
+    }
+    if (request.execution_lane == FULLMAG_FEM_STEADY_TRANSPORT_GPU_DOUBLE) {
+        throw std::domain_error(
+            "FEM charge transport GPU is unavailable; strict requests cannot fall back to CPU");
+    }
+    if (request.execution_lane != FULLMAG_FEM_STEADY_TRANSPORT_CPU_DOUBLE) {
+        throw std::invalid_argument("unknown FEM charge transport execution lane");
+    }
+}
+
+void validate_charge_request(
+    const fullmag_fem_charge_transport_request_v1 &request,
+    const fullmag_fem_charge_transport_result_v1 &result,
+    const MeshView &mesh)
+{
+    validate_charge_request_header(request, result);
+    if (!equals(request.constitutive_version, kChargeConstitutiveVersion) ||
+        !equals(request.operator_version, kChargeOperatorVersion) ||
+        !equals(request.physical_residual_version, kChargePhysicalResidualVersion)) {
+        throw std::invalid_argument(
+            "unsupported FEM charge transport constitutive/operator/residual version");
+    }
+    if (request.mesh.periodic_node_pairs != nullptr ||
+        request.mesh.periodic_node_pairs_len != 0 ||
+        request.mesh.periodic_boundary_pair_markers != nullptr ||
+        request.mesh.periodic_boundary_pair_markers_len != 0) {
+        throw std::domain_error(
+            "periodic charge transport requires a separately versioned realization");
+    }
+    if (!pointer_matches_count(
+            request.charge_conductivity_spm_per_element,
+            request.charge_conductivity_spm_per_element_len) ||
+        request.charge_conductivity_spm_per_element_len != mesh.n_elements) {
+        throw std::invalid_argument(
+            "charge conductivity must contain one value per tetrahedron");
+    }
+    if (!pointer_matches_count(
+            request.dirichlet_boundary_attributes,
+            request.dirichlet_boundary_count) ||
+        !pointer_matches_count(
+            request.dirichlet_boundary_values_v,
+            request.dirichlet_boundary_count)) {
+        throw std::invalid_argument(
+            "charge Dirichlet attributes and values must have equal presence");
+    }
+    if (request.charge_gauge == FULLMAG_FEM_STEADY_TRANSPORT_BOUNDARY_REFERENCE &&
+        request.dirichlet_boundary_count == 0) {
+        throw std::invalid_argument(
+            "boundary-reference charge gauge requires an electrode");
+    }
+    if (request.charge_gauge == FULLMAG_FEM_STEADY_TRANSPORT_ZERO_MEAN_POTENTIAL &&
+        request.dirichlet_boundary_count != 0) {
+        throw std::invalid_argument(
+            "zero-mean charge gauge conflicts with fixed-potential electrodes");
+    }
+    if (request.charge_gauge != FULLMAG_FEM_STEADY_TRANSPORT_BOUNDARY_REFERENCE &&
+        request.charge_gauge != FULLMAG_FEM_STEADY_TRANSPORT_ZERO_MEAN_POTENTIAL) {
+        throw std::invalid_argument("unknown FEM charge transport gauge");
+    }
+    if (!(std::isfinite(request.relative_tolerance) &&
+            request.relative_tolerance > 0.0 && request.relative_tolerance < 1.0)) {
+        throw std::invalid_argument(
+            "charge transport relative_tolerance must be finite and lie in (0, 1)");
+    }
+    if (request.absolute_tolerance != 0.0) {
+        throw std::domain_error(
+            "FEM charge transport absolute_tolerance is not implemented; use zero");
+    }
+    if (request.maximum_iterations == 0 ||
+        request.maximum_iterations > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+        throw std::invalid_argument(
+            "charge transport maximum_iterations must fit a positive int");
+    }
+    if (result.electric_potential_v == nullptr ||
+        result.electric_potential_v_capacity < mesh.n_nodes) {
+        throw std::invalid_argument(
+            "electric_potential_v output capacity is smaller than n_nodes");
+    }
+    if (result.charge_current_density_xyz_apm2 == nullptr ||
+        result.charge_current_density_xyz_apm2_capacity < 3u * mesh.n_nodes) {
+        throw std::invalid_argument(
+            "charge current output capacity is smaller than 3*n_nodes");
+    }
+    for (uint64_t i = 0; i < mesh.n_elements; ++i) {
+        const double sigma = request.charge_conductivity_spm_per_element[i];
+        if (!(std::isfinite(sigma) && sigma > 0.0)) {
+            throw std::invalid_argument(
+                "charge conductivity must be finite and positive");
         }
     }
 }
@@ -943,6 +1073,109 @@ int solve(
     return FULLMAG_FEM_OK;
 }
 
+int solve_charge(
+    const fullmag_fem_charge_transport_request_v1 &request,
+    fullmag_fem_charge_transport_result_v1 &result,
+    double *dirichlet_boundary_currents_a = nullptr,
+    uint64_t dirichlet_boundary_currents_a_capacity = 0,
+    uint64_t *dirichlet_boundary_currents_a_len = nullptr)
+{
+    validate_charge_request_header(request, result);
+    const MeshView mesh_view = make_mesh_view(request.mesh);
+    validate_charge_request(request, result, mesh_view);
+    auto mesh = import_mesh(request.mesh, mesh_view);
+
+    mfem::Vector conductivity_values(static_cast<int>(mesh_view.n_elements));
+    for (uint32_t i = 0; i < mesh_view.n_elements; ++i) {
+        conductivity_values[static_cast<int>(i)] =
+            request.charge_conductivity_spm_per_element[i];
+    }
+    mfem::PWConstCoefficient conductivity(conductivity_values);
+
+    // The one-way charge projection is J=-sigma*grad(V) and does not read
+    // magnetization.  Keep a zero coefficient here so any accidental future
+    // spin/magnetoresistive evaluation fails loudly instead of manufacturing
+    // a synthetic magnetic state for a metallic conductor.
+    mfem::Vector no_magnetization(3);
+    no_magnetization = 0.0;
+    mfem::VectorConstantCoefficient magnetization(no_magnetization);
+    fullmag::fem::transport::SteadyTransportParameters parameters;
+    parameters.relative_tolerance = request.relative_tolerance;
+    parameters.maximum_iterations = static_cast<int>(request.maximum_iterations);
+
+    fullmag::fem::transport::SteadyTransportOracle oracle(
+        *mesh, conductivity, magnetization, parameters);
+    const auto charge_marker = boundary_marker(
+        *mesh,
+        request.dirichlet_boundary_attributes,
+        request.dirichlet_boundary_count);
+    BoundaryScalarCoefficient charge_boundary(
+        request.dirichlet_boundary_attributes,
+        request.dirichlet_boundary_values_v,
+        request.dirichlet_boundary_count);
+    const auto charge_gauge =
+        request.charge_gauge == FULLMAG_FEM_STEADY_TRANSPORT_ZERO_MEAN_POTENTIAL
+            ? fullmag::fem::transport::ChargeGauge::ZeroMeanPotential
+            : fullmag::fem::transport::ChargeGauge::BoundaryReference;
+    const auto diagnostics = oracle.solve_charge(
+        charge_marker, charge_boundary, charge_gauge);
+    if (!diagnostics.converged) {
+        throw std::runtime_error("FEM charge transport solve did not converge");
+    }
+    if (dirichlet_boundary_currents_a_len != nullptr) {
+        if (dirichlet_boundary_currents_a_capacity < request.dirichlet_boundary_count ||
+            (request.dirichlet_boundary_count != 0 && dirichlet_boundary_currents_a == nullptr)) {
+            throw std::invalid_argument(
+                "charge transport terminal-current result capacity is too small");
+        }
+        for (uint64_t index = 0; index < request.dirichlet_boundary_count; ++index) {
+            dirichlet_boundary_currents_a[index] = oracle.boundary_current_a(
+                static_cast<int>(request.dirichlet_boundary_attributes[index]));
+        }
+        *dirichlet_boundary_currents_a_len = request.dirichlet_boundary_count;
+    }
+
+    copy_scalar(
+        oracle.electric_potential(), result.electric_potential_v, mesh_view.n_nodes);
+    copy_by_vdim(
+        oracle.charge_current_density(),
+        3,
+        result.charge_current_density_xyz_apm2,
+        mesh_view.n_nodes);
+    result.electric_potential_v_len = mesh_view.n_nodes;
+    result.charge_current_density_xyz_apm2_len = 3u * mesh_view.n_nodes;
+    result.charge_converged = diagnostics.converged ? 1 : 0;
+    result.charge_iterations = static_cast<uint32_t>(diagnostics.iterations);
+    result.charge_relative_residual = diagnostics.relative_residual;
+    result.net_boundary_current_a = diagnostics.net_boundary_current_a;
+    for (int component = 0; component < 3; ++component) {
+        result.current_density_volume_average_apm2[component] =
+            diagnostics.current_density_volume_average_apm2[component];
+    }
+    result.error_message[0] = '\0';
+    std::snprintf(
+        result.diagnostics_json,
+        sizeof(result.diagnostics_json),
+        "{\"schema_version\":\"fem_charge_transport_diagnostics.v1\"," \
+        "\"constitutive_version\":\"%s\",\"operator_version\":\"%s\"," \
+        "\"physical_residual_version\":\"%s\"," \
+        "\"execution_lane\":\"fem_cpu_double\"," \
+        "\"charge_converged\":true,\"charge_iterations\":%u," \
+        "\"charge_relative_residual\":%.17g," \
+        "\"net_boundary_current_A\":%.17g," \
+        "\"current_density_volume_average_Apm2\":[%.17g,%.17g,%.17g]}",
+        kChargeConstitutiveVersion,
+        kChargeOperatorVersion,
+        kChargePhysicalResidualVersion,
+        result.charge_iterations,
+        result.charge_relative_residual,
+        result.net_boundary_current_a,
+        result.current_density_volume_average_apm2[0],
+        result.current_density_volume_average_apm2[1],
+        result.current_density_volume_average_apm2[2]);
+    return FULLMAG_FEM_OK;
+}
+
 int solve_m2(
     const fullmag_fem_steady_transport_m2_request_v1 &request,
     fullmag_fem_steady_transport_result_v1 &result)
@@ -1490,6 +1723,69 @@ int solve_rt0(
 #endif
 
 } // namespace
+
+extern "C" int fullmag_fem_solve_charge_transport_v1(
+    const fullmag_fem_charge_transport_request_v1 *request,
+    fullmag_fem_charge_transport_result_v1 *result)
+{
+    if (request == nullptr || result == nullptr) {
+        set_error(result, "charge transport requires non-null request and result");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+#if FULLMAG_HAS_MFEM_STACK
+    try {
+        return solve_charge(*request, *result);
+    } catch (const std::domain_error &error) {
+        set_error(result, error.what());
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    } catch (const std::invalid_argument &error) {
+        set_error(result, error.what());
+        return FULLMAG_FEM_ERR_INVALID;
+    } catch (const std::exception &error) {
+        set_error(result, error.what());
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+#else
+    set_error(result,
+        "FEM charge transport requires a runtime built with FULLMAG_USE_MFEM_STACK=ON");
+    return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
+}
+
+extern "C" int fullmag_fem_solve_charge_transport_v2(
+    const fullmag_fem_charge_transport_request_v1 *request,
+    fullmag_fem_charge_transport_result_v2 *result)
+{
+    if (request == nullptr || result == nullptr) {
+        set_error(result == nullptr ? nullptr : &result->base,
+            "charge transport v2 requires non-null request and result");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+#if FULLMAG_HAS_MFEM_STACK
+    try {
+        result->dirichlet_boundary_currents_a_len = 0;
+        return solve_charge(
+            *request,
+            result->base,
+            result->dirichlet_boundary_currents_a,
+            result->dirichlet_boundary_currents_a_capacity,
+            &result->dirichlet_boundary_currents_a_len);
+    } catch (const std::domain_error &error) {
+        set_error(&result->base, error.what());
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    } catch (const std::invalid_argument &error) {
+        set_error(&result->base, error.what());
+        return FULLMAG_FEM_ERR_INVALID;
+    } catch (const std::exception &error) {
+        set_error(&result->base, error.what());
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+#else
+    set_error(&result->base,
+        "FEM charge transport requires a runtime built with FULLMAG_USE_MFEM_STACK=ON");
+    return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
+}
 
 extern "C" int fullmag_fem_solve_steady_transport_v1(
     const fullmag_fem_steady_transport_request_v1 *request,

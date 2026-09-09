@@ -3135,6 +3135,7 @@ pub(crate) fn plan_fdm(
         antenna_zeeman_masks,
         field_drives: active_field_drives,
         regional_field_drive_bases,
+        solved_antenna_drive_bases: Vec::new(),
         time_stage: crate::util::time_stage_context(problem),
         inter_region_exchange,
         gyromagnetic_ratio,

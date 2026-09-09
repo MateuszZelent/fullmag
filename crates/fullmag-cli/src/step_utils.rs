@@ -980,6 +980,11 @@ fn classify_stage_transition(
 
 fn classify_action_stage_transition(action: &ResolvedScriptStageAction) -> StageTransitionMetadata {
     match action {
+        ResolvedScriptStageAction::AntennaFieldSolve { .. } => StageTransitionMetadata::boundary(
+            StageTransitionKind::AntennaFieldSolve,
+            StageTransitionReason::AntennaFieldSolve,
+            None,
+        ),
         ResolvedScriptStageAction::SaveState { .. } => StageTransitionMetadata::boundary(
             StageTransitionKind::SaveCheckpoint,
             StageTransitionReason::UserExport,
@@ -1077,6 +1082,41 @@ fn resolve_explicit_stage_action(
     action: ScriptExecutionStageAction,
 ) -> Result<ResolvedScriptStage> {
     let (entrypoint_fallback, resolved_action) = match action {
+        ScriptExecutionStageAction::AntennaFieldSolve {
+            stage_id,
+            port_mode_id,
+            port_mode_ids,
+        } => {
+            let selected_port_mode_id = match (port_mode_id, port_mode_ids.as_slice()) {
+                (Some(value), []) if !value.trim().is_empty() => value,
+                (None, [value]) if !value.trim().is_empty() => value.clone(),
+                (Some(_), []) => {
+                    bail!("antenna_field_solve action port_mode_id must be a non-empty string")
+                }
+                (None, []) => {
+                    bail!(
+                        "antenna_field_solve action requires port_mode_id or exactly one port_mode_ids entry"
+                    )
+                }
+                (_, values) => {
+                    bail!(
+                        "antenna_field_solve action resolves exactly one port mode; received {} entries",
+                        values.len()
+                    )
+                }
+            };
+            let plan =
+                fullmag_plan::plan_antenna_field_solve(&ir, &stage_id, &selected_port_mode_id)
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            (
+                "study_pipeline_antenna_field_solve",
+                ResolvedScriptStageAction::AntennaFieldSolve {
+                    stage_id,
+                    port_mode_id: selected_port_mode_id,
+                    plan,
+                },
+            )
+        }
         ScriptExecutionStageAction::SaveState {
             artifact_name,
             format,
@@ -1364,6 +1404,9 @@ fn materialize_pipeline_primitive(
 ) -> Result<Option<ResolvedScriptStage>> {
     let normalized_kind = stage_kind.trim().to_ascii_lowercase();
     match normalized_kind.as_str() {
+        "antenna_field_solve" => {
+            materialize_pipeline_antenna_field_solve(current_ir, payload).map(Some)
+        }
         "run" => {
             validate_pipeline_run_primitive_payload(payload)?;
             materialize_pipeline_run(current_ir, payload, default_until_seconds).map(Some)
@@ -1405,6 +1448,73 @@ fn materialize_pipeline_primitive(
             other
         ),
     }
+}
+
+fn materialize_pipeline_antenna_field_solve(
+    current_ir: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+) -> Result<ResolvedScriptStage> {
+    let unsupported = payload
+        .keys()
+        .filter(|key| {
+            !matches!(
+                key.as_str(),
+                "kind" | "stage_id" | "port_mode_id" | "port_mode_ids" | "entrypoint_kind"
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unsupported.is_empty() {
+        bail!(
+            "antenna_field_solve accepts only stage_id, port_mode_id(s), and entrypoint_kind; unsupported payload keys: {}",
+            unsupported.join(", ")
+        );
+    }
+    let stage_id = payload
+        .get("stage_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .filter(|value| !value.trim().is_empty())
+        .context("antenna_field_solve requires non-empty string payload.stage_id")?;
+    let port_mode_id = if let Some(value) = payload.get("port_mode_id") {
+        value
+            .as_str()
+            .map(str::to_owned)
+            .filter(|value| !value.trim().is_empty())
+            .context("antenna_field_solve payload.port_mode_id must be a non-empty string")?
+    } else {
+        let values = payload
+            .get("port_mode_ids")
+            .and_then(Value::as_array)
+            .context(
+                "antenna_field_solve requires payload.port_mode_id or payload.port_mode_ids",
+            )?;
+        if values.len() != 1 {
+            bail!(
+                "antenna_field_solve resolves exactly one port mode per executable stage; payload.port_mode_ids contains {} entries",
+                values.len()
+            );
+        }
+        values[0]
+            .as_str()
+            .map(str::to_owned)
+            .filter(|value| !value.trim().is_empty())
+            .context("antenna_field_solve payload.port_mode_ids[0] must be a non-empty string")?
+    };
+    let plan = fullmag_plan::plan_antenna_field_solve(current_ir, &stage_id, &port_mode_id)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let entrypoint_kind = payload_string(payload, "entrypoint_kind")
+        .unwrap_or_else(|| "study_pipeline_antenna_field_solve".to_string());
+    current_ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
+    Ok(ResolvedScriptStage::synthetic(
+        current_ir.clone(),
+        entrypoint_kind,
+        ResolvedScriptStageAction::AntennaFieldSolve {
+            stage_id,
+            port_mode_id,
+            plan,
+        },
+    ))
 }
 
 fn materialize_pipeline_add_field_drive(
@@ -5053,6 +5163,25 @@ mod tests {
             "until_seconds": 1e-12
         }))
         .expect("minimal solver command")
+    }
+
+    #[test]
+    fn antenna_field_solve_pipeline_uses_the_dedicated_planner_lane() {
+        let mut problem = sample_problem_ir();
+        problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fdm;
+        let payload = BTreeMap::from([
+            ("stage_id".to_string(), json!("solve_antenna")),
+            ("port_mode_ids".to_string(), json!(["drive"])),
+        ]);
+        let error =
+            materialize_pipeline_primitive(&mut problem, "antenna_field_solve", &payload, None)
+                .expect_err("FDM antenna precomputation must fail closed");
+        assert!(error
+            .to_string()
+            .contains("antenna field precomputation requires requested_backend='fem'"));
+        assert!(!error
+            .to_string()
+            .contains("not yet executable by the runtime"));
     }
 
     fn frozen_spins_binding_command(source_scene_revision: u64) -> crate::types::SessionCommand {

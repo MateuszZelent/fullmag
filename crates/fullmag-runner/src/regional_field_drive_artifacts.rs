@@ -100,7 +100,7 @@ mod tests {
     use super::*;
     use fullmag_ir::{
         DriveActivationIR, FieldDriveKindIR, FieldSpatialProfileIR, FieldTargetIR,
-        FieldTimeOriginIR, TimeDependenceIR,
+        FieldTimeOriginIR, StudyKindIR, TimeDependenceIR,
     };
 
     #[test]
@@ -127,6 +127,7 @@ mod tests {
             &TimeStageContextIR {
                 active_stage_id: Some("run".into()),
                 start_time_s: 10e-12,
+                study_kind: StudyKindIR::TimeEvolution,
             },
             3e-12,
             &[],

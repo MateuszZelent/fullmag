@@ -63,6 +63,12 @@ impl PhysicsGraphExecutionContext {
                 }
                 append_field_drive_ids(problem, &fem.field_drives, &mut energy)?;
                 #[cfg(feature = "fem-gpu")]
+                append_charge_transport_plan_ids(
+                    problem,
+                    &fem.charge_transport_plans,
+                    &mut steady_transport,
+                )?;
+                #[cfg(feature = "fem-gpu")]
                 append_transport_plan_ids(
                     problem,
                     &fem.spin_transport_plans,
@@ -274,6 +280,27 @@ fn append_transport_plan_ids(
             if descriptor.oersted_source_bound {
                 append_oersted_ids(problem, Some(&transport.current_source_id), observed)?;
             }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "fem-gpu")]
+fn append_charge_transport_plan_ids(
+    problem: &fullmag_ir::ProblemIR,
+    plans: &[fullmag_ir::ResolvedChargeTransportPlanIR],
+    observed: &mut BTreeSet<String>,
+) -> Result<(), RunError> {
+    for transport in plans {
+        if graph_module_enabled(problem, &transport.module_id, Some("current_transport"))? {
+            observed.insert(transport.module_id.clone());
+        }
+        if transport
+            .fem_cpu_double
+            .as_ref()
+            .is_some_and(|descriptor| descriptor.oersted_source_bound)
+        {
+            append_oersted_ids(problem, Some(&transport.module_id), observed)?;
         }
     }
     Ok(())

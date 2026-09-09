@@ -14,7 +14,7 @@ extern "C" {
 #define FULLMAG_FEM_ERR_INTERNAL -3
 #define FULLMAG_FEM_ERR_INTERRUPTED -4
 
-#define FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION 2u
+#define FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION 3u
 
 typedef enum {
     FULLMAG_FEM_PRECISION_SINGLE = 1,
@@ -128,6 +128,7 @@ typedef enum {
     FULLMAG_FEM_SPATIAL_PROFILE_SINC = 1,
     FULLMAG_FEM_SPATIAL_PROFILE_GEOMETRY_MASK = 2,
     FULLMAG_FEM_SPATIAL_PROFILE_GAUSSIAN_PLANE_WAVE = 3,
+    FULLMAG_FEM_SPATIAL_PROFILE_PREPROJECTED_NODAL = 4,
 } fullmag_fem_spatial_profile_kind;
 
 typedef enum {
@@ -251,6 +252,8 @@ typedef struct {
     double gaussian_sigma_y_m;
     double gaussian_wavelength_m;
     double gaussian_carrier_phase_rad;
+    const double *preprojected_h_xyz_a_per_m;
+    uint64_t preprojected_h_value_count;
 } fullmag_fem_spatial_profile_desc;
 
 typedef struct {
@@ -1056,6 +1059,69 @@ typedef struct {
     char error_message[256];
     char diagnostics_json[1024];
 } fullmag_fem_steady_transport_result_v1;
+
+/*
+ * Standalone Ohmic charge-only FEM solve.  This is an append-only ABI and
+ * does not reinterpret or extend the charge/spin transport v1 layouts.
+ * The implementation reuses the existing conforming H1/P1 charge operator,
+ * but never evaluates the spin equation.
+ */
+#define FULLMAG_FEM_CHARGE_TRANSPORT_ABI_VERSION 1u
+#define FULLMAG_FEM_CHARGE_TRANSPORT_CONSTITUTIVE_VERSION \
+    "transport_constitutive.one_way.fullmag.v1"
+#define FULLMAG_FEM_CHARGE_TRANSPORT_OPERATOR_VERSION \
+    "fem_charge_conforming_h1_p1.transparent.v1"
+#define FULLMAG_FEM_CHARGE_TRANSPORT_PHYSICAL_RESIDUAL_VERSION \
+    "charge_balance_integrated_l2.v1"
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_steady_transport_execution_lane execution_lane;
+    fullmag_fem_steady_transport_charge_gauge charge_gauge;
+    const char *constitutive_version;
+    const char *operator_version;
+    const char *physical_residual_version;
+    fullmag_fem_mesh_desc mesh;
+    const double *charge_conductivity_spm_per_element;
+    uint64_t charge_conductivity_spm_per_element_len;
+    double relative_tolerance;
+    double absolute_tolerance;
+    uint32_t maximum_iterations;
+    const uint32_t *dirichlet_boundary_attributes;
+    const double *dirichlet_boundary_values_v;
+    uint64_t dirichlet_boundary_count;
+} fullmag_fem_charge_transport_request_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t reserved_flags;
+    uint64_t struct_size;
+    double *electric_potential_v;
+    uint64_t electric_potential_v_capacity;
+    uint64_t electric_potential_v_len;
+    double *charge_current_density_xyz_apm2;
+    uint64_t charge_current_density_xyz_apm2_capacity;
+    uint64_t charge_current_density_xyz_apm2_len;
+    int charge_converged;
+    uint32_t charge_iterations;
+    double charge_relative_residual;
+    double net_boundary_current_a;
+    double current_density_volume_average_apm2[3];
+    char error_message[256];
+    char diagnostics_json[1024];
+} fullmag_fem_charge_transport_result_v1;
+
+/* Append-only charge result extension. The v1 prefix remains byte-for-byte
+ * stable; one current integral is returned for each requested Dirichlet
+ * boundary attribute in request order. */
+typedef struct {
+    fullmag_fem_charge_transport_result_v1 base;
+    double *dirichlet_boundary_currents_a;
+    uint64_t dirichlet_boundary_currents_a_capacity;
+    uint64_t dirichlet_boundary_currents_a_len;
+} fullmag_fem_charge_transport_result_v2;
 
 typedef struct {
     uint64_t step;
@@ -2994,6 +3060,15 @@ int fullmag_fem_is_available(void);
 int fullmag_fem_solve_steady_transport_v1(
     const fullmag_fem_steady_transport_request_v1 *request,
     fullmag_fem_steady_transport_result_v1 *result
+);
+int fullmag_fem_solve_charge_transport_v1(
+    const fullmag_fem_charge_transport_request_v1 *request,
+    fullmag_fem_charge_transport_result_v1 *result
+);
+
+int fullmag_fem_solve_charge_transport_v2(
+    const fullmag_fem_charge_transport_request_v1 *request,
+    fullmag_fem_charge_transport_result_v2 *result
 );
 int fullmag_fem_solve_steady_transport_m2_v1(
     const fullmag_fem_steady_transport_m2_request_v1 *request,

@@ -31,12 +31,15 @@ pub fn resolve_fem_surface_selector(
     let part = mesh_parts
         .iter()
         .find(|part| {
-            part.role == FemMeshPartRole::MagneticObject
+            matches!(
+                part.role,
+                FemMeshPartRole::MagneticObject | FemMeshPartRole::Conductor
+            )
                 && part.object_id.as_deref() == Some(object_id)
         })
         .ok_or_else(|| {
             format!(
-                "surface selector '{}' cannot resolve object '{}': FEM mesh has no magnetic object part",
+                "surface selector '{}' cannot resolve object '{}': FEM mesh has no owned volume part",
                 selector, object_id
             )
         })?;

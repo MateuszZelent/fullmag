@@ -226,7 +226,6 @@ def build_physics_graph(problem: Any) -> PhysicsGraph:
         for name, role in sorted(
             getattr(problem, "auxiliary_geometry_roles", {}).items()
         )
-        if role != "antenna"
     )
     return PhysicsGraph(tuple(modules), tuple(edges), objects=objects)
 

@@ -4576,6 +4576,7 @@ mod tests {
             mel_b2: None,
             mel_uniform_strain: None,
             antenna_zeeman_masks: Vec::new(),
+            solved_antenna_drive_bases: Vec::new(),
             ..Default::default()
         }
     }
@@ -4672,6 +4673,7 @@ mod tests {
             mel_b2: None,
             mel_uniform_strain: None,
             antenna_zeeman_masks: Vec::new(),
+            solved_antenna_drive_bases: Vec::new(),
             ..Default::default()
         }
     }
@@ -4758,6 +4760,7 @@ mod tests {
             mel_b2: None,
             mel_uniform_strain: None,
             antenna_zeeman_masks: Vec::new(),
+            solved_antenna_drive_bases: Vec::new(),
             ..Default::default()
         }
     }

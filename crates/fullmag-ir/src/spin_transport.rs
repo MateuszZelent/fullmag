@@ -480,6 +480,56 @@ pub struct ResolvedSpinTransportPlanIR {
     pub fem_cpu_double: Option<ResolvedFemSpinTransportIR>,
 }
 
+/// Resolved standalone charge solve.  This remains separate from
+/// `ResolvedSpinTransportPlanIR`: an Ohmic conductor does not imply spin
+/// transport and must not manufacture a synthetic spin module.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedChargeTransportPlanIR {
+    pub module_id: String,
+    pub resolved_coupling: TransportCouplingIR,
+    pub requested_execution: RequestedTransportExecutionIR,
+    pub resolved_discretization: crate::BackendTarget,
+    pub resolved_device: ExecutionDevice,
+    pub resolved_precision: ExecutionPrecision,
+    pub resolved_execution_mode: ExecutionMode,
+    pub operator_version: String,
+    pub physical_residual_version: String,
+    pub capabilities: Vec<String>,
+    pub inserted_default_boundaries: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antenna_field_solution_request: Option<crate::ResolvedAntennaFieldSolutionRequestIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_cpu_double: Option<ResolvedFemChargeTransportIR>,
+}
+
+/// Complete FEM CPU/double descriptor for a one-way Ohmic charge solve.
+/// Numerical current fields remain runtime-owned; this descriptor pins the
+/// domain, coefficients, boundary partition and optional conservative view.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedFemChargeTransportIR {
+    pub descriptor_schema: String,
+    pub charge_definition: ChargeTransportDefinitionIR,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_envelope: Option<crate::TimeEnvelopeIR>,
+    pub charge_domain: ResolvedFemTransportDomainIR,
+    pub charge_insulating_boundaries: Vec<ResolvedFemBoundaryMarkerSetIR>,
+    pub charge_driven_boundaries: Vec<ResolvedFemBoundaryMarkerSetIR>,
+    pub charge_conductivity_spm_per_element: Vec<f64>,
+    pub charge_gauge: ChargePotentialGaugeIR,
+    pub charge_solver: ChargeSolverPolicyIR,
+    pub charge_dirichlet: Vec<(u32, f64)>,
+    pub resolved_charge_engine: String,
+    pub stage_coupling: String,
+    pub capability_status: String,
+    pub implementation_state: String,
+    pub validation_state: String,
+    pub validation_scope: String,
+    #[serde(default)]
+    pub oersted_source_bound: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conservative_current_view: Option<ResolvedFemConservativeCurrentViewIR>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolvedFemSpinTransportIR {
     pub descriptor_schema: String,

@@ -2739,6 +2739,7 @@ fn mesh_part_role_name(role: &FemMeshPartRole) -> &'static str {
     match role {
         FemMeshPartRole::Air => "air",
         FemMeshPartRole::MagneticObject => "magnetic_object",
+        FemMeshPartRole::Conductor => "conductor",
         FemMeshPartRole::Interface => "interface",
         FemMeshPartRole::OuterBoundary => "outer_boundary",
     }
@@ -4671,10 +4672,12 @@ mod tests {
             enable_demag: false,
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
+            solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: Vec::new(),
+            charge_transport_plans: Vec::new(),
             spin_transport_plans: Vec::new(),
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,

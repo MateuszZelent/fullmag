@@ -1,11 +1,12 @@
 use std::f64::consts::PI;
 
 use fullmag_ir::{
-    AntennaFieldSourceModelIR, AntennaIR, CurrentModuleIR, FemPlanIR, ResolvedAntennaZeemanMaskIR,
-    TimeDependenceIR,
+    AntennaFieldSourceModelIR, AntennaIR, CurrentModuleIR, FemPlanIR, FieldTimeOriginIR,
+    ResolvedAntennaZeemanMaskIR, TimeDependenceIR,
 };
 
 use crate::types::RunError;
+use fullmag_engine::RegionalFieldDriveTerm;
 
 const FIELD_EPSILON2: f64 = 1e-30;
 
@@ -22,12 +23,17 @@ pub(crate) fn has_time_varying_antenna(plan: &FemPlanIR) -> bool {
             } if drive.as_ref().is_some_and(|drive| drive.waveform.is_some())
         )
     }) || has_time_varying_antenna_zeeman_masks(&plan.antenna_zeeman_masks)
+        || plan.solved_antenna_drive_bases.iter().any(|basis| {
+            drive_is_active(&basis.drive.activation, plan)
+                && !matches!(basis.drive.waveform, TimeDependenceIR::Constant)
+        })
 }
 
-/// Evaluate the time-dependent amplitude multiplier for a single drive at time `t`.
-/// Returns `current_a * f(t)` where `f(t)` depends on the waveform type.
-fn drive_amplitude_at(drive: &fullmag_ir::RfDriveIR, t: f64) -> f64 {
-    drive.current_a * time_dependence_multiplier(drive.waveform.as_ref(), t)
+fn drive_is_active(activation: &fullmag_ir::DriveActivationIR, plan: &FemPlanIR) -> bool {
+    activation.is_active_for(
+        plan.time_stage.study_kind,
+        plan.time_stage.active_stage_id.as_deref(),
+    )
 }
 
 pub(crate) fn has_time_varying_antenna_zeeman_masks(masks: &[ResolvedAntennaZeemanMaskIR]) -> bool {
@@ -85,64 +91,166 @@ pub(crate) fn compute_per_unit_antenna_fields(
                 result.push(field);
             }
             CurrentModuleIR::AntennaFieldSource { .. }
-            | CurrentModuleIR::CurrentTransport { .. } => {}
+            | CurrentModuleIR::CurrentTransport { .. } => {
+                result.push(vec![[0.0, 0.0, 0.0]; plan.mesh.nodes.len()]);
+            }
         }
     }
     Ok(result)
 }
 
-/// Compute the combined per-node antenna field at time `t` by superimposing
-/// all antenna contributions scaled by their time-dependent amplitudes.
-pub(crate) fn combined_antenna_field_at_time(
+pub(crate) fn static_antenna_field(
     plan: &FemPlanIR,
     per_unit_fields: &[Vec<[f64; 3]>],
-    t: f64,
-) -> Vec<[f64; 3]> {
+) -> Option<Vec<[f64; 3]>> {
     let n = plan.mesh.nodes.len();
-    let mut total = combined_antenna_zeeman_mask_field_at_time(&plan.antenna_zeeman_masks, n, t);
-    for (module, per_unit) in plan.current_modules.iter().zip(per_unit_fields.iter()) {
-        match module {
-            CurrentModuleIR::AntennaFieldSource {
-                model: AntennaFieldSourceModelIR::Mqs2p5dAz,
-                drive: Some(drive),
-                ..
-            } => {
-                let amp = drive_amplitude_at(drive, t);
-                if amp == 0.0 {
-                    continue;
-                }
-                for (node, field) in total.iter_mut().enumerate() {
-                    field[0] += per_unit[node][0] * amp;
-                    field[1] += per_unit[node][1] * amp;
-                    field[2] += per_unit[node][2] * amp;
-                }
+    let mut total = vec![[0.0, 0.0, 0.0]; n];
+    let mut authored = false;
+    for mask in &plan.antenna_zeeman_masks {
+        if mask.waveform.is_none() {
+            authored = true;
+            for (target, basis) in total.iter_mut().zip(&mask.field_xyz) {
+                *target = [
+                    target[0] + basis[0],
+                    target[1] + basis[1],
+                    target[2] + basis[2],
+                ];
             }
-            CurrentModuleIR::AntennaFieldSource { .. }
-            | CurrentModuleIR::CurrentTransport { .. } => {}
         }
     }
-    total
+    for basis in &plan.solved_antenna_drive_bases {
+        if drive_is_active(&basis.drive.activation, plan)
+            && matches!(basis.drive.waveform, TimeDependenceIR::Constant)
+        {
+            authored = true;
+            for (target, value) in total.iter_mut().zip(&basis.field_xyz_apm_per_a) {
+                target[0] += value[0] * basis.drive.peak_current_a;
+                target[1] += value[1] * basis.drive.peak_current_a;
+                target[2] += value[2] * basis.drive.peak_current_a;
+            }
+        }
+    }
+    for (module, basis) in plan.current_modules.iter().zip(per_unit_fields) {
+        if let CurrentModuleIR::AntennaFieldSource {
+            model: AntennaFieldSourceModelIR::Mqs2p5dAz,
+            drive: Some(drive),
+            ..
+        } = module
+        {
+            if drive.waveform.is_none() {
+                authored = true;
+                for (target, value) in total.iter_mut().zip(basis) {
+                    target[0] += value[0] * drive.current_a;
+                    target[1] += value[1] * drive.current_a;
+                    target[2] += value[2] * drive.current_a;
+                }
+            }
+        }
+    }
+    authored.then_some(total)
+}
+
+pub(crate) fn dynamic_antenna_drive_terms(
+    plan: &FemPlanIR,
+    per_unit_fields: &[Vec<[f64; 3]>],
+) -> Vec<RegionalFieldDriveTerm> {
+    let mut terms = Vec::new();
+    for mask in &plan.antenna_zeeman_masks {
+        if let Some(waveform) = &mask.waveform {
+            terms.push(RegionalFieldDriveTerm {
+                basis_field: mask.field_xyz.clone(),
+                waveform: waveform.clone(),
+                time_offset_s: 0.0,
+                enabled: true,
+            });
+        }
+    }
+    for basis in &plan.solved_antenna_drive_bases {
+        if drive_is_active(&basis.drive.activation, plan)
+            && !matches!(basis.drive.waveform, TimeDependenceIR::Constant)
+        {
+            terms.push(RegionalFieldDriveTerm {
+                basis_field: basis
+                    .field_xyz_apm_per_a
+                    .iter()
+                    .map(|value| {
+                        [
+                            value[0] * basis.drive.peak_current_a,
+                            value[1] * basis.drive.peak_current_a,
+                            value[2] * basis.drive.peak_current_a,
+                        ]
+                    })
+                    .collect(),
+                waveform: basis.drive.waveform.clone(),
+                time_offset_s: match basis.drive.time_origin {
+                    FieldTimeOriginIR::StageLocal => plan.time_stage.start_time_s,
+                    FieldTimeOriginIR::Absolute => 0.0,
+                },
+                enabled: true,
+            });
+        }
+    }
+    for (module, basis) in plan.current_modules.iter().zip(per_unit_fields) {
+        if let CurrentModuleIR::AntennaFieldSource {
+            model: AntennaFieldSourceModelIR::Mqs2p5dAz,
+            drive: Some(drive),
+            ..
+        } = module
+        {
+            if let Some(waveform) = &drive.waveform {
+                terms.push(RegionalFieldDriveTerm {
+                    basis_field: basis
+                        .iter()
+                        .map(|value| {
+                            [
+                                value[0] * drive.current_a,
+                                value[1] * drive.current_a,
+                                value[2] * drive.current_a,
+                            ]
+                        })
+                        .collect(),
+                    waveform: waveform.clone(),
+                    time_offset_s: 0.0,
+                    enabled: true,
+                });
+            }
+        }
+    }
+    terms
 }
 
 #[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
 pub(crate) fn compute_antenna_field(plan: &FemPlanIR) -> Result<Vec<[f64; 3]>, RunError> {
-    if plan.current_modules.is_empty() && plan.antenna_zeeman_masks.is_empty() {
+    compute_antenna_field_at_time(plan, plan.time_stage.start_time_s)
+}
+
+pub(crate) fn compute_antenna_field_at_time(
+    plan: &FemPlanIR,
+    absolute_time_s: f64,
+) -> Result<Vec<[f64; 3]>, RunError> {
+    if plan.current_modules.is_empty()
+        && plan.antenna_zeeman_masks.is_empty()
+        && plan.solved_antenna_drive_bases.is_empty()
+    {
         return Ok(vec![[0.0, 0.0, 0.0]; plan.mesh.nodes.len()]);
     }
 
     let Some(bounds) = magnetic_bounds(plan) else {
-        return Ok(combined_antenna_zeeman_mask_field_at_time(
+        let mut total = combined_antenna_zeeman_mask_field_at_time(
             &plan.antenna_zeeman_masks,
             plan.mesh.nodes.len(),
-            0.0,
-        ));
+            absolute_time_s,
+        );
+        add_solved_antenna_fields(plan, absolute_time_s, &mut total);
+        return Ok(total);
     };
 
     let mut total = combined_antenna_zeeman_mask_field_at_time(
         &plan.antenna_zeeman_masks,
         plan.mesh.nodes.len(),
-        0.0,
+        absolute_time_s,
     );
+    add_solved_antenna_fields(plan, absolute_time_s, &mut total);
     for module in &plan.current_modules {
         match module {
             CurrentModuleIR::AntennaFieldSource {
@@ -164,6 +272,26 @@ pub(crate) fn compute_antenna_field(plan: &FemPlanIR) -> Result<Vec<[f64; 3]>, R
         }
     }
     Ok(total)
+}
+
+fn add_solved_antenna_fields(plan: &FemPlanIR, absolute_time_s: f64, total: &mut [[f64; 3]]) {
+    for basis in &plan.solved_antenna_drive_bases {
+        if !drive_is_active(&basis.drive.activation, plan) {
+            continue;
+        }
+        let local_time = match basis.drive.time_origin {
+            FieldTimeOriginIR::StageLocal => absolute_time_s - plan.time_stage.start_time_s,
+            FieldTimeOriginIR::Absolute => absolute_time_s,
+        };
+        let multiplier =
+            crate::time_dependence::evaluate_time_dependence(&basis.drive.waveform, local_time)
+                * basis.drive.peak_current_a;
+        for (target, value) in total.iter_mut().zip(&basis.field_xyz_apm_per_a) {
+            target[0] += value[0] * multiplier;
+            target[1] += value[1] * multiplier;
+            target[2] += value[2] * multiplier;
+        }
+    }
 }
 
 fn add_antenna_field(

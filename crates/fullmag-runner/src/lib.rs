@@ -14,6 +14,27 @@
 /// Vacuum permeability μ₀ in T·m/A.
 pub const MU0: f64 = 4.0 * std::f64::consts::PI * 1e-7;
 
+mod antenna_field_solution;
+mod antenna_spectrum;
+mod antenna_stage;
+pub use antenna_field_solution::{
+    load_antenna_field_solution_samples, load_antenna_field_solution_samples_for_spectrum,
+    load_solved_antenna_drive_basis, load_solved_antenna_drive_basis_projected,
+    materialize_fem_solved_antenna_drives, materialize_fem_solved_antenna_drives_v03,
+    verify_antenna_field_solution_asset, AntennaFieldSolutionAsset, AntennaFieldSolutionSamples,
+    AntennaFieldSolutionSignatures,
+};
+pub use antenna_spectrum::{
+    antenna_source_spectrum_auxiliary_artifact, compute_antenna_source_spectrum_artifact,
+    compute_nonuniform_k_antenna_source_spectrum, compute_structured_antenna_source_spectrum,
+    sample_antenna_field_on_plane, AntennaSourceSpectrum2D, AntennaSourceSpectrumArtifact,
+    AntennaSpectrumSampleGrid, AntennaSpectrumSamplingMetadata,
+};
+pub use antenna_stage::{
+    antenna_field_solution_signatures, load_cached_antenna_field_solution,
+    load_published_antenna_field_solution, publish_antenna_field_solution_atomically,
+    AntennaFieldStageState, AntennaFieldStageStatus, PublishedAntennaFieldSolution,
+};
 mod antenna_fields;
 pub mod artifact_pipeline;
 mod artifacts;
@@ -519,6 +540,7 @@ pub use types::{
     SolverAttemptRecord, StageFemMeshAsset, StageFemMeshIdentity, StepAction, StepStats,
     StepUpdate, TimestepBackend, TimestepDevice, TimestepExecutionIdentity,
     TimestepPolicyProvenance, TimestepValidationState,
+    TransportExecutionProvenance,
 };
 
 use crate::capabilities::{
@@ -4185,6 +4207,166 @@ pub fn snapshot_problem_vector_fields(
 pub struct ProblemVectorFieldBatch {
     pub fields: Vec<LivePreviewField>,
     pub auxiliary_artifacts: Vec<AuxiliaryArtifact>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AntennaFieldSolveQuantity {
+    pub quantity_id: String,
+    pub unit: String,
+    pub component_count: u8,
+    pub component_order: String,
+    pub location: String,
+    pub scope: String,
+    pub revision: u64,
+    pub values: Vec<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AntennaFieldSolveResult {
+    pub schema_version: String,
+    pub stage_id: String,
+    pub port_mode_id: String,
+    pub solution_id: String,
+    pub field_solution: AntennaFieldSolutionSamples,
+    pub quantities: Vec<AntennaFieldSolveQuantity>,
+    pub auxiliary_artifacts: Vec<AuxiliaryArtifact>,
+    pub transport_provenance: Vec<TransportExecutionProvenance>,
+}
+
+/// Execute only the static charge -> RT0 -> Oersted antenna pipeline.
+/// No magnetization state, LLG integrator, relaxation loop, or time step is
+/// created by this entry point.
+#[cfg(feature = "fem-gpu")]
+pub fn execute_antenna_field_solve_plan(
+    plan: &fullmag_ir::AntennaFieldSolvePlanIR,
+) -> Result<AntennaFieldSolveResult, RunError> {
+    if plan.schema_version != fullmag_ir::ANTENNA_FIELD_SOLVE_PLAN_SCHEMA_VERSION {
+        return Err(RunError {
+            message: format!(
+                "unsupported antenna field-solve plan schema '{}'",
+                plan.schema_version
+            ),
+        });
+    }
+    if plan.conductor.charge_transport_plans.len() != 1 {
+        return Err(RunError {
+            message:
+                "antenna_field_solve_plan.v1 requires exactly one charge-only CurrentTransport"
+                    .into(),
+        });
+    }
+    let request = plan.conductor.charge_transport_plans[0]
+        .antenna_field_solution_request
+        .as_ref()
+        .ok_or_else(|| RunError {
+            message: "antenna field-solve plan has no bound field-solution request".into(),
+        })?;
+    if request.stage_id != plan.stage_id
+        || request.port_mode_id != plan.port_mode_id
+        || request.solution_id != plan.solution_id
+        || request.source_object_id != plan.source_object_id
+    {
+        return Err(RunError {
+            message: "antenna field-solve plan identity disagrees with its bound charge request"
+                .into(),
+        });
+    }
+
+    let bundle =
+        crate::native_fem::execute_native_fem_antenna_field_solve_plan(plan)?.ok_or_else(|| {
+            RunError {
+                message: "antenna field-solve plan produced no charge/Oersted result".into(),
+            }
+        })?;
+    let manifest_path = format!(
+        "antenna/field_solutions/{}/manifest.v1.json",
+        plan.solution_id
+    );
+    let manifest = bundle
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == manifest_path)
+        .ok_or_else(|| RunError {
+            message: format!("antenna field-solve result is missing manifest '{manifest_path}'"),
+        })?;
+    let manifest_value: serde_json::Value =
+        serde_json::from_slice(&manifest.bytes).map_err(|error| RunError {
+            message: format!("parse antenna field-solve result manifest: {error}"),
+        })?;
+    let content_digest = manifest_value
+        .get("content_digest")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| RunError {
+            message: "antenna field-solve result manifest has no content_digest".into(),
+        })?;
+    let field_solution = load_antenna_field_solution_samples(
+        &manifest.bytes,
+        &bundle.artifacts,
+        &plan.port_mode_id,
+        &plan.solution_id,
+        &plan.source_object_id,
+        content_digest,
+    )?;
+    let mut quantities = bundle
+        .field_snapshots
+        .iter()
+        .map(|snapshot| AntennaFieldSolveQuantity {
+            quantity_id: snapshot.name.clone(),
+            unit: fullmag_quantities::quantity_spec(&snapshot.name)
+                .map(|spec| spec.unit)
+                .unwrap_or("1")
+                .into(),
+            component_count: snapshot.component_count,
+            component_order: snapshot.component_order.clone(),
+            location: snapshot.location.clone(),
+            scope: snapshot.scope.clone(),
+            revision: snapshot.revision,
+            values: snapshot.values.clone(),
+        })
+        .collect::<Vec<_>>();
+    let sampling_scope = match &plan.field_sampling.domain {
+        fullmag_ir::FieldTargetIR::Global {} => "global".to_string(),
+        fullmag_ir::FieldTargetIR::Object { object_id } => format!("object:{object_id}"),
+        fullmag_ir::FieldTargetIR::Region {
+            object_id,
+            region_id,
+        } => format!("region:{object_id}:{region_id}"),
+    };
+    quantities.push(AntennaFieldSolveQuantity {
+        quantity_id: "H_ant_basis".into(),
+        unit: "A/m/A".into(),
+        component_count: 3,
+        component_order: "xyz".into(),
+        location: plan.field_sampling.location.clone(),
+        scope: sampling_scope,
+        revision: quantities.len() as u64 + 1,
+        values: field_solution
+            .magnetic_field_xyz_apm_per_a
+            .iter()
+            .flat_map(|value| value.iter().copied())
+            .collect(),
+    });
+
+    Ok(AntennaFieldSolveResult {
+        schema_version: "antenna_field_solve_result.v1".into(),
+        stage_id: plan.stage_id.clone(),
+        port_mode_id: plan.port_mode_id.clone(),
+        solution_id: plan.solution_id.clone(),
+        field_solution,
+        quantities,
+        auxiliary_artifacts: bundle.artifacts,
+        transport_provenance: bundle.provenance,
+    })
+}
+
+#[cfg(not(feature = "fem-gpu"))]
+pub fn execute_antenna_field_solve_plan(
+    _plan: &fullmag_ir::AntennaFieldSolvePlanIR,
+) -> Result<AntennaFieldSolveResult, RunError> {
+    Err(RunError {
+        message: "antenna field precomputation requires a runner built with the managed native FEM feature"
+            .into(),
+    })
 }
 
 /// Materialize vector fields together with separately scoped carriers such as

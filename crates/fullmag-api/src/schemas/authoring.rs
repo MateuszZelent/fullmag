@@ -271,6 +271,21 @@ pub struct SceneResource {
     #[schema(additional_properties, nullable)]
     pub current_modules: Option<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(value_type = Vec<Object>)]
+    pub antenna_port_modes: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(value_type = Vec<Object>)]
+    pub antenna_field_solve_stages: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(value_type = Vec<Object>)]
+    pub antenna_target_projections: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(value_type = Vec<Object>)]
+    pub solved_antenna_drives: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(value_type = Vec<Object>)]
+    pub antenna_spectrum_requests: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub current_transports: Vec<fullmag_authoring::SceneCurrentTransport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spin_transports: Vec<fullmag_authoring::SceneSpinTransport>,
@@ -1670,5 +1685,26 @@ mod stage_autosave_tests {
             .validate()
             .unwrap_err()
             .contains("scalar tables only"));
+    }
+
+    #[test]
+    fn scene_round_trips_antenna_composition_resources_without_field_drive_substitution() {
+        let scene: SceneResource = serde_json::from_value(serde_json::json!({
+            "antenna_port_modes": [{"id": "port_1"}],
+            "antenna_field_solve_stages": [{"id": "solve_1"}],
+            "antenna_target_projections": [{"id": "projection_1"}],
+            "solved_antenna_drives": [{"id": "drive_1"}],
+            "antenna_spectrum_requests": [{"id": "spectrum_1"}]
+        }))
+        .unwrap();
+        let value = serde_json::to_value(scene).unwrap();
+        assert_eq!(value["antenna_port_modes"][0]["id"], "port_1");
+        assert_eq!(value["antenna_field_solve_stages"][0]["id"], "solve_1");
+        assert_eq!(value["antenna_target_projections"][0]["id"], "projection_1");
+        assert_eq!(value["solved_antenna_drives"][0]["id"], "drive_1");
+        assert_eq!(value["antenna_spectrum_requests"][0]["id"], "spectrum_1");
+        assert!(value["field_drives"]["drives"]
+            .as_array()
+            .is_some_and(Vec::is_empty));
     }
 }

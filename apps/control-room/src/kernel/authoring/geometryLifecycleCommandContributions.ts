@@ -572,19 +572,71 @@ function defaultMicrostripAntennaObject(objectId: string): JsonObject {
   };
 }
 
-function defaultMicrostripFieldDrive(objectId: string): JsonObject {
+function sceneArray(scene: unknown, key: string): unknown[] {
+  const record = asRecord(scene);
+  return Array.isArray(record?.[key]) ? record[key] : [];
+}
+
+function defaultMicrostripCurrentTransport(objectId: string): JsonObject {
+  const currentId = `${objectId}:current`;
   return {
-    activation: { kind: "all_time_evolution" },
-    amplitude_B_T: 0.001,
-    direction: [0, 1, 0],
-    enabled: true,
-    id: `${objectId}:H_ant`,
-    kind: "regional",
-    name: "Microstrip antenna field",
-    spatial_profile: { kind: "geometry_mask", object_id: objectId, envelope: { kind: "uniform" } },
-    target: { kind: "global" },
-    time_origin: "stage_local",
-    waveform: { amplitude: 1, cutoff_hz: 20e9, kind: "sinc_pulse", t0: 5e-11 },
+    boundaries: [
+      {
+        id: "signal_terminal",
+        kind: "voltage_electrode",
+        potential_V: 1,
+        surfaces: [{ object_id: objectId, orientation: [0, -1, 0], surface_id: "y_min" }],
+      },
+      {
+        id: "return_terminal",
+        kind: "voltage_electrode",
+        potential_V: 0,
+        surfaces: [{ object_id: objectId, orientation: [0, 1, 0], surface_id: "y_max" }],
+      },
+    ],
+    coupling: "one_way",
+    domain: [{ object_id: objectId }],
+    gauge: "dirichlet_reference",
+    kind: "current_transport",
+    materials: [{ material: { sigma_Spm: 5.8e7 }, region: { object_id: objectId } }],
+    model: "ohmic_poisson",
+    name: currentId,
+    solver: {
+      engine: "fem_cpu",
+      linear: { absolute_tolerance: 1e-12, max_iterations: 500, relative_tolerance: 1e-10 },
+      operator_version: "fem_charge_conforming_h1_p1.transparent.v1",
+      physical_residual_version: "charge_balance_integrated_l2.v1",
+    },
+  };
+}
+
+function defaultMicrostripPortMode(objectId: string): JsonObject {
+  return {
+    branches: [
+      { signed_weight: 1, terminal_selector_ref: "signal_terminal" },
+      { signed_weight: -1, terminal_selector_ref: "return_terminal" },
+    ],
+    current_transport_id: `${objectId}:current`,
+    id: `${objectId}:port:common`,
+    normalization_current_a: 1,
+    source_object_id: objectId,
+  };
+}
+
+function defaultMicrostripFieldSolveStage(objectId: string): JsonObject {
+  return {
+    conductor_mesh_policy: "shared_domain_conforming",
+    conservative_current_view_ref: `${objectId}:current:rt0`,
+    current_transport_id: `${objectId}:current`,
+    field_sampling_domain: { kind: "global" },
+    id: `${objectId}:solve-field`,
+    model: "quasistatic_conduction_biot_savart3d",
+    oersted_realization: "direct_tetra_quadrature",
+    outputs: [{ id: `${objectId}:field-solution`, quantity: "H_ant_basis" }],
+    port_mode_ids: [`${objectId}:port:common`],
+    solver_policy: "fem_cpu_double_reference",
+    source_object_id: objectId,
+    target_refs: [],
   };
 }
 
@@ -716,12 +768,18 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
       const response = await context.api.model.commitTransaction({
         kind: "merge_patch",
         merge_patch: {
-          field_drives: {
-            drives: [
-              ...sceneFieldDrives(scene),
-              defaultMicrostripFieldDrive(objectId),
-            ],
-          },
+          antenna_field_solve_stages: [
+            ...sceneArray(scene, "antenna_field_solve_stages"),
+            defaultMicrostripFieldSolveStage(objectId),
+          ],
+          antenna_port_modes: [
+            ...sceneArray(scene, "antenna_port_modes"),
+            defaultMicrostripPortMode(objectId),
+          ],
+          current_transports: [
+            ...(Array.isArray(scene.current_transports) ? scene.current_transports : []),
+            defaultMicrostripCurrentTransport(objectId),
+          ],
           objects: [
             ...sceneObjects(scene),
             defaultMicrostripAntennaObject(objectId),

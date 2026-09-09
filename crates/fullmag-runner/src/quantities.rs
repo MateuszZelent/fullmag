@@ -149,7 +149,9 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         QuantityId::EdenDmi => plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some(),
         QuantityId::EdenTotal => true,
         QuantityId::MatMs | QuantityId::MatAex | QuantityId::MatAlpha => true,
-        QuantityId::HAnt => !plan.antenna_zeeman_masks.is_empty(),
+        QuantityId::HAnt => {
+            !plan.antenna_zeeman_masks.is_empty() || !plan.solved_antenna_drive_bases.is_empty()
+        }
         QuantityId::VElectric | QuantityId::JCharge => !plan.fdm_gpu_charge_transports.is_empty(),
         QuantityId::U
         | QuantityId::DemagPhi
@@ -260,7 +262,9 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         QuantityId::HDemag => plan.enable_demag,
         QuantityId::DemagPhi => plan.enable_demag,
         QuantityId::HExt => has_nonzero_external_field(plan.external_field),
-        QuantityId::HAnt => !plan.current_modules.is_empty(),
+        QuantityId::HAnt => {
+            !plan.antenna_zeeman_masks.is_empty() || !plan.solved_antenna_drive_bases.is_empty()
+        }
         QuantityId::HDrive => plan.field_drives.iter().any(|drive| drive.enabled),
         QuantityId::HAni => material_has_uniaxial_anisotropy(&plan.material),
         QuantityId::HAniCubic => material_has_cubic_anisotropy(&plan.material),
@@ -290,11 +294,12 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
                 || has_values(&plan.dbulk_field)
         }
         QuantityId::EdenTotal => true,
-        QuantityId::VElectric
-        | QuantityId::JCharge
-        | QuantityId::SpinPotential
-        | QuantityId::SpinCurrentTensor
-        | QuantityId::TorqueStt => !plan.spin_transport_plans.is_empty(),
+        QuantityId::VElectric | QuantityId::JCharge => {
+            !plan.charge_transport_plans.is_empty() || !plan.spin_transport_plans.is_empty()
+        }
+        QuantityId::SpinPotential | QuantityId::SpinCurrentTensor | QuantityId::TorqueStt => {
+            !plan.spin_transport_plans.is_empty()
+        }
         QuantityId::EEx
         | QuantityId::U
         | QuantityId::Eps
@@ -463,10 +468,12 @@ mod tests {
             region_materials: Vec::new(),
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
+            solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: Vec::new(),
+            charge_transport_plans: Vec::new(),
             spin_transport_plans: Vec::new(),
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
