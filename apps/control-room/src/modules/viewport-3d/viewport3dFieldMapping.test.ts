@@ -10,6 +10,7 @@ import {
   buildVertexScalarColors,
   buildVertexScalarColorsChunked,
   fieldTransformNeedsChunking,
+  normalizeScalarValueForShaderAttributeFieldMappingForTests,
   resolveScalarRange,
   resolveViewport3DScalarColorBufferKey,
 } from "./viewport3dFieldMapping";
@@ -112,7 +113,11 @@ describe("viewport3dFieldMapping", () => {
 
     expect(result?.colorMode).toBe("y");
     expect(result?.range).toEqual({ max: 4, min: -2 });
-    expect(Array.from(result?.scalarValues ?? [])).toEqual([-2, 0, 4]);
+    expect(Array.from(result?.scalarValues ?? [])).toEqual([
+      0,
+      expect.closeTo(1 / 3),
+      1,
+    ]);
     expect(result?.colors).toHaveLength(9);
   });
 
@@ -173,10 +178,7 @@ describe("viewport3dFieldMapping", () => {
     );
 
     expect(result).not.toBeNull();
-    expect(Array.from(result?.scalarValues ?? [])).toEqual([
-      expect.closeTo(1),
-      expect.closeTo(0.1),
-    ]);
+    expect(Array.from(result?.scalarValues ?? [])).toEqual([1, 0]);
   });
 
   it("rejects sampled FDM scalar colors when legacy payload count is not the domain count", () => {
@@ -304,7 +306,7 @@ describe("viewport3dFieldMapping", () => {
       4,
     );
 
-    expect(result?.range).toEqual({ max: 0, min: 0 });
+    expect(result?.range).toEqual({ max: 2, min: 0 });
     expect(result?.rangeDiagnostics).toMatchObject({
       finiteCount: 2,
       max: 2,
@@ -354,7 +356,7 @@ describe("viewport3dFieldMapping", () => {
     expect(result?.geometryRole).toBe("face_expanded_surface");
     expect(result?.projectionMode).toBe("surface_faces");
     expect(result?.rangeSource).toBe("face_values");
-    expect(Array.from(result?.scalarValues ?? [])).toEqual([3, 3, 3]);
+    expect(Array.from(result?.scalarValues ?? [])).toEqual([0.5, 0.5, 0.5]);
     expect(result?.faceCount).toBe(1);
     expect(result?.degradedFaceCount).toBe(0);
   });
@@ -375,7 +377,7 @@ describe("viewport3dFieldMapping", () => {
       "x",
     );
 
-    expect(Array.from(result?.scalarValues ?? [])).toEqual([6, 6, 6]);
+    expect(Array.from(result?.scalarValues ?? [])).toEqual([0.5, 0.5, 0.5]);
   });
 
   it("degrades surface-face projection when a face node is missing from the field map", () => {
@@ -418,7 +420,7 @@ describe("viewport3dFieldMapping", () => {
       "x",
     );
 
-    expect(Array.from(result?.scalarValues ?? [])).toEqual([3, 3, 3]);
+    expect(Array.from(result?.scalarValues ?? [])).toEqual([0.5, 0.5, 0.5]);
   });
 
   it("maps legacy scoped payloads for surface-face projection", () => {
@@ -438,7 +440,7 @@ describe("viewport3dFieldMapping", () => {
     );
 
     expect(result?.degradedFaceCount).toBe(0);
-    expect(Array.from(result?.scalarValues ?? [])).toEqual([20, 20, 20]);
+    expect(Array.from(result?.scalarValues ?? [])).toEqual([0.5, 0.5, 0.5]);
   });
 
   it("maps sampled node-index payloads for thickness-average-z projection", () => {
@@ -805,7 +807,7 @@ describe("viewport3dFieldMapping", () => {
 
     if (!result) throw new Error("expected chunked shader scalar buffer");
     expect(result.colors).toHaveLength(0);
-    expect(Array.from(result.scalarValues ?? [])).toEqual([1, 2, 3]);
+    expect(Array.from(result.scalarValues ?? [])).toEqual([0, 0.5, 1]);
     expect(result.colorMode).toBe("magnitude");
     expect(result.colorPalette).toBe("inferno");
   });
@@ -824,7 +826,7 @@ describe("viewport3dFieldMapping", () => {
 
     if (!result) throw new Error("expected chunked shader scalar buffer");
     expect(result.colors).toHaveLength(0);
-    expect(Array.from(result.scalarValues ?? [])).toEqual([-3, 2, 5]);
+    expect(Array.from(result.scalarValues ?? [])).toEqual([0, 0.625, 1]);
     expect(result.colorMode).toBe("y");
     expect(result.colorPalette).toBe("magma");
     expect(result.range).toEqual({ max: 5, min: -3 });
@@ -862,5 +864,55 @@ describe("viewport3dFieldMapping", () => {
         signal: controller.signal,
       }),
     ).rejects.toMatchObject({ name: "AbortError" });
+  });
+  describe("S-11 · Diverging symmetric range resolution", () => {
+    it("auto-symmetrizes signed component ranges for coolwarm palette", () => {
+      const field = vectorField([
+        -1, 0, 0,
+        3, 0, 0,
+      ]);
+      const rangeX = resolveScalarRange(field, "x", "coolwarm");
+      expect(rangeX).toEqual({ max: 3, min: -3 });
+
+      const rangeY = resolveScalarRange(field, "y", "coolwarm");
+      expect(rangeY.min).toBe(-rangeY.max);
+
+      const rangeZ = resolveScalarRange(field, "z", "coolwarm");
+      expect(rangeZ.min).toBe(-rangeZ.max);
+    });
+
+    it("keeps asymmetric range for sequential palettes (viridis)", () => {
+      const field = vectorField([
+        -1, 0, 0,
+        3, 0, 0,
+      ]);
+      const range = resolveScalarRange(field, "x", "viridis");
+      expect(range).toEqual({ max: 3, min: -1 });
+    });
+
+    it("keeps asymmetric range for magnitude mode even with coolwarm", () => {
+      const field = vectorField([
+        1, 0, 0,
+        4, 0, 0,
+      ]);
+      const range = resolveScalarRange(field, "magnitude", "coolwarm");
+      expect(range).toEqual({ max: 4, min: 1 });
+    });
+  });
+
+  describe("S-07 · Shader attribute normalization for tests", () => {
+    it("passes non-finite and overflow values through unnormalized", () => {
+      const range = { max: 10, min: 0 };
+      expect(Number.isNaN(normalizeScalarValueForShaderAttributeFieldMappingForTests(Number.NaN, range))).toBe(true);
+      expect(normalizeScalarValueForShaderAttributeFieldMappingForTests(Number.POSITIVE_INFINITY, range)).toBe(Number.POSITIVE_INFINITY);
+      expect(normalizeScalarValueForShaderAttributeFieldMappingForTests(1e39, range)).toBe(1e39);
+    });
+
+    it("normalizes finite values to [0, 1]", () => {
+      const range = { max: 10, min: 0 };
+      expect(normalizeScalarValueForShaderAttributeFieldMappingForTests(5, range)).toBe(0.5);
+      expect(normalizeScalarValueForShaderAttributeFieldMappingForTests(-5, range)).toBe(0);
+      expect(normalizeScalarValueForShaderAttributeFieldMappingForTests(15, range)).toBe(1);
+    });
   });
 });

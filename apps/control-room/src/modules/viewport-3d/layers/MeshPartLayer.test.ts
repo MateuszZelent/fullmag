@@ -400,7 +400,7 @@ describe("MeshPartLayer", () => {
     expect(source).toContain("<meshBasicMaterial");
     expect(source).not.toContain("<meshStandardMaterial");
     expect(source).not.toContain("MeshStandardMaterial");
-    expect(source).not.toContain("computeVertexNormals");
+    expect(source).toContain("computeVertexNormals");
   });
 
   it("does not render depth-bypassing hidden edges for magnetic-object wireframe", () => {
@@ -1176,7 +1176,7 @@ buildReference: null,
       range: { max: 1, min: 0 },
       scalarValues: new Float32Array([0.2, 0.8]),
     };
-    const materialProfile = { toneMapped: false };
+    const materialProfile = { shadeStrength: 0.45, toneMapped: false };
 
     it("renders exactly one DoubleSide pass with depthWrite for opaque surfaces", () => {
       const policies = resolveMeshPartSurfacePassPolicies(1.0);
@@ -1219,6 +1219,23 @@ buildReference: null,
       });
       expect(policies.renderOrderFront).toBe(RENDER_POLICIES.contextSurfaceFront.renderOrder);
       expect(policies.renderOrderFront).toBe(11);
+    });
+
+    it("passes shadeStrength to both front and back scalar shader materials (S-01)", () => {
+      const tracker = new Viewport3DResourceTracker();
+      const policies = resolveMeshPartSurfacePassPolicies(0.5);
+      const materials = createMeshPartScalarShaderMaterials({
+        buffer: dummyBuffer,
+        enabled: true,
+        materialProfile: { shadeStrength: 0.33, toneMapped: false },
+        surfaceOpacity: 0.5,
+        surfacePolicy: policies.back,
+        surfacePolicyFront: policies.front,
+        tracker,
+      });
+
+      expect(materials.back?.uniforms.fmShadeStrength.value).toBe(0.33);
+      expect(materials.front?.uniforms.fmShadeStrength.value).toBe(0.33);
     });
 
     it("creates and tracks two distinct ShaderMaterial instances for transparent scalar surfaces", () => {

@@ -15,6 +15,12 @@ const COLOR_PALETTES = new Set<ScalarColorPalette>([
   "viridis",
 ]);
 
+const DIVERGING_SCALAR_PALETTES = new Set<ScalarColorPalette>(["coolwarm"]);
+
+export function isDivergingScalarPalette(palette: string): boolean {
+  return DIVERGING_SCALAR_PALETTES.has(palette as ScalarColorPalette);
+}
+
 const PALETTE_STOPS: Record<ScalarColorPalette, Rgb[]> = {
   coolwarm: [
     [0x3b / 255, 0x4c / 255, 0xc0 / 255],
@@ -60,6 +66,17 @@ export function normalizeScalarColorPalette(
     : fallback;
 }
 
+/**
+ * Converts a single sRGB channel value [0..1] to linear-sRGB, using the
+ * standard sRGB EOTF (same piecewise formula as three.js's internal
+ * `sRGBTransferEOTF` GLSL chunk).
+ */
+function srgbChannelToLinear(component: number): number {
+  return component <= 0.04045
+    ? component / 12.92
+    : Math.pow((component + 0.055) / 1.055, 2.4);
+}
+
 export function scalarColorRgb(
   t: number,
   palette: string | null | undefined = "viridis",
@@ -71,10 +88,15 @@ export function scalarColorRgb(
   const fraction = scaled - index;
   const start = stops[index]!;
   const end = stops[index + 1]!;
-  return [
+  const srgb: Rgb = [
     start[0] + (end[0] - start[0]) * fraction,
     start[1] + (end[1] - start[1]) * fraction,
     start[2] + (end[2] - start[2]) * fraction,
+  ];
+  return [
+    srgbChannelToLinear(srgb[0]),
+    srgbChannelToLinear(srgb[1]),
+    srgbChannelToLinear(srgb[2]),
   ];
 }
 

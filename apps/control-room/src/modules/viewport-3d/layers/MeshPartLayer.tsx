@@ -167,6 +167,7 @@ export function createMeshPartSurfaceGeometry({
   if (!expandSurfaceFaces) {
     attachViewport3DSharedTopologyPosition(next, positions);
     next.setIndex(new BufferAttribute(surfaceIndices, 1));
+    next.computeVertexNormals();
     return next;
   }
 
@@ -183,6 +184,7 @@ export function createMeshPartSurfaceGeometry({
     expandedPositions[targetOffset + 2] = positions[sourceOffset + 2] ?? 0;
   }
   next.setAttribute("position", new BufferAttribute(expandedPositions, 3));
+  next.computeVertexNormals();
   return next;
 }
 
@@ -509,7 +511,7 @@ export function createMeshPartScalarShaderMaterials({
 }: {
   buffer: ScalarColorBuffer | null | undefined;
   enabled: boolean;
-  materialProfile: Pick<Viewport3DMaterialProfile["magneticSurface"], "toneMapped">;
+  materialProfile: Pick<Viewport3DMaterialProfile["magneticSurface"], "toneMapped" | "shadeStrength">;
   surfaceOpacity?: number;
   surfacePolicy?: ReturnType<typeof surfaceMaterialPolicyProps>;
   surfacePolicyFront?: ReturnType<typeof surfaceMaterialPolicyPropsFront> | null;
@@ -526,6 +528,7 @@ export function createMeshPartScalarShaderMaterials({
     createScalarSurfaceShaderMaterial(buffer, {
       ...surfacePolicy,
       opacity: surfaceOpacity,
+      shadeStrength: materialProfile.shadeStrength,
       toneMapped: materialProfile.toneMapped,
     }),
   );
@@ -535,6 +538,7 @@ export function createMeshPartScalarShaderMaterials({
         createScalarSurfaceShaderMaterial(buffer, {
           ...surfacePolicyFront,
           opacity: surfaceOpacity,
+          shadeStrength: materialProfile.shadeStrength,
           toneMapped: materialProfile.toneMapped,
         }),
       )
@@ -1024,6 +1028,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         scalarShaderMaterial,
         committedScalarColorState.buffer,
         surfaceOpacity,
+        materialProfile.magneticSurface.shadeStrength,
       );
       Object.assign(scalarShaderMaterial, surfacePolicy);
       scalarShaderMaterial.toneMapped =
@@ -1034,6 +1039,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         scalarShaderMaterialFront,
         committedScalarColorState.buffer,
         surfaceOpacity,
+        materialProfile.magneticSurface.shadeStrength,
       );
       if (surfacePolicyFront) {
         Object.assign(scalarShaderMaterialFront, surfacePolicyFront);
@@ -1044,6 +1050,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   }, [
     committedScalarColorState.buffer,
     committedScalarColorState.pipeline,
+    materialProfile.magneticSurface.shadeStrength,
     materialProfile.magneticSurface.toneMapped,
     scalarShaderMaterial,
     scalarShaderMaterialFront,

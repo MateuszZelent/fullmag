@@ -4,6 +4,22 @@ import { getViewport3DVisualProfile } from "../viewport3dVisualProfile";
 import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 
 describe("viewport3D material profile", () => {
+  it("configures shadeStrength per visual profile (S-01)", () => {
+    const interactive = resolveViewport3DMaterialProfile(
+      getViewport3DVisualProfile("interactive"),
+    );
+    const figure = resolveViewport3DMaterialProfile(
+      getViewport3DVisualProfile("figure"),
+    );
+    const capture = resolveViewport3DMaterialProfile(
+      getViewport3DVisualProfile("capture"),
+    );
+
+    expect(interactive.magneticSurface.shadeStrength).toBe(0.45);
+    expect(figure.magneticSurface.shadeStrength).toBe(0);
+    expect(capture.magneticSurface.shadeStrength).toBe(0);
+  });
+
   it("keeps lite materials un-tonemapped", () => {
     const profile = resolveViewport3DMaterialProfile(
       getViewport3DVisualProfile("interactive-lite"),
@@ -18,7 +34,10 @@ describe("viewport3D material profile", () => {
       getViewport3DVisualProfile("interactive"),
     );
 
-    expect(interactive.magneticSurface).toEqual({ toneMapped: false });
+    expect(interactive.magneticSurface).toEqual({
+      shadeStrength: 0.45,
+      toneMapped: false,
+    });
     expect(interactive.primitivePreview).toEqual({ toneMapped: false });
     expect(interactive.magneticSurface).not.toHaveProperty("metalness");
     expect(interactive.magneticSurface).not.toHaveProperty("roughness");

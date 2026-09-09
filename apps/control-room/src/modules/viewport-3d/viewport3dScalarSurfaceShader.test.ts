@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { BufferGeometry } from "three";
 import { describe, expect, it } from "vitest";
 
@@ -399,5 +400,115 @@ describe("viewport3dScalarSurfaceShader", () => {
       material.dispose();
     });
   });
-});
+  describe("S-01 · View-space normal shading and shade strength uniform", () => {
+    const source = readFileSync(
+      new URL("./viewport3dScalarSurfaceShader.ts", import.meta.url),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
 
+    it("passes fmShadeStrength uniform to material and updates it", () => {
+      const material = createScalarSurfaceShaderMaterial(scalarBuffer([1, 2]), {
+        depthTest: true,
+        depthWrite: true,
+        opacity: 1,
+        polygonOffset: false,
+        polygonOffsetFactor: 0,
+        polygonOffsetUnits: 0,
+        shadeStrength: 0.6,
+        side: 0,
+        transparent: false,
+      });
+      expect(material.uniforms.fmShadeStrength.value).toBe(0.6);
+
+      updateScalarSurfaceShaderMaterial(material, scalarBuffer([1, 2]), 1, 0.2);
+      expect(material.uniforms.fmShadeStrength.value).toBe(0.2);
+      material.dispose();
+    });
+
+    it("defines vNormalView and computes shaded color in fragment shaders", () => {
+      expect(source).toContain("varying vec3 vNormalView;");
+      expect(source).toContain("vNormalView = normalize(normalMatrix * normal);");
+      expect(source).toContain("vec3 shaded = base * mix(1.0, 0.55 + 0.75 * ndl, fmShadeStrength);");
+    });
+  });
+
+  describe("S-02 / S-03 · sRGB to Linear conversion and color space handling", () => {
+    const source = readFileSync(
+      new URL("./viewport3dScalarSurfaceShader.ts", import.meta.url),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+
+    it("defines srgbToLinearVec3 and encodes linear output with colorspace_fragment", () => {
+      expect(source).toContain("vec3 srgbToLinearVec3(vec3 c)");
+      expect(source).toContain("#include <colorspace_fragment>");
+      expect(source).toContain("vec3 color = srgbToLinearVec3(shaded);");
+    });
+  });
+
+  describe("S-04 · Clipping planes support", () => {
+    const source = readFileSync(
+      new URL("./viewport3dScalarSurfaceShader.ts", import.meta.url),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+
+    it("enables clipping on ShaderMaterial instances", () => {
+      const material = createScalarSurfaceShaderMaterial(scalarBuffer([0, 1]), {
+        depthTest: true,
+        depthWrite: true,
+        opacity: 1,
+        polygonOffset: false,
+        polygonOffsetFactor: 0,
+        polygonOffsetUnits: 0,
+        side: 0,
+        transparent: false,
+      });
+      expect(material.clipping).toBe(true);
+      material.dispose();
+    });
+
+    it("includes clipping plane chunks in vertex and fragment shaders", () => {
+      expect(source).toContain("#include <clipping_planes_pars_vertex>");
+      expect(source).toContain("#include <clipping_planes_vertex>");
+      expect(source).toContain("#include <clipping_planes_pars_fragment>");
+      expect(source).toContain("#include <clipping_planes_fragment>");
+    });
+  });
+
+  describe("S-05 / S-06 · Relative epsilon and NaN sentinel in fragment shader", () => {
+    const source = readFileSync(
+      new URL("./viewport3dScalarSurfaceShader.ts", import.meta.url),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+
+    it("uses relative epsilon for span degeneracy check and sentinel for NaN", () => {
+      expect(source).toContain("bool bad = !(v == v) || abs(v) > 3.0e38;");
+      expect(source).toContain("bool degenerate = span <= 1e-6 * max(scale, 1.0);");
+      expect(source).toContain("vec3(0.85, 0.0, 0.85)");
+    });
+  });
+
+  describe("S-12 · Safe arctangent and modal phase projection in complex shaders", () => {
+    const source = readFileSync(
+      new URL("./viewport3dScalarSurfaceShader.ts", import.meta.url),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+
+    it("defines safeAtan2 to protect against division by zero at origin", () => {
+      expect(source).toContain("float safeAtan2(float y, float x)");
+      expect(source).toContain("safeAtan2(complexImag.x, complexReal.x)");
+      expect(source).toContain("fmRepresentationId == 4");
+    });
+  });
+
+  describe("S-13 · Floquet spatial phase wrapping", () => {
+    const source = readFileSync(
+      new URL("./viewport3dScalarSurfaceShader.ts", import.meta.url),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+
+    it("defines wrapPhase and wraps Floquet theta in vertex shaders", () => {
+      expect(source).toContain("float wrapPhase(float value)");
+      expect(source).toContain("theta = wrapPhase(theta);");
+    });
+  });
+});
