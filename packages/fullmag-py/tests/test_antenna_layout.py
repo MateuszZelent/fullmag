@@ -269,3 +269,21 @@ def test_layout_is_not_voxelized_as_a_magnetic_fdm_body() -> None:
 
     assert assets is None
     realize.assert_not_called()
+
+
+def test_layout_uses_native_occ_for_shared_fem_domains() -> None:
+    from fullmag.meshing._gmsh_occ import is_occ_compatible
+
+    layout = fm.MicrostripAntennaLayout(
+        name="occ_microstrip",
+        length_m=2.0e-6,
+        thickness_m=50.0e-9,
+        conductivity_s_per_m=58.0e6,
+        stations=(
+            fm.MicrostripWidthStation(s=0.0, signal_width_m=0.5e-6),
+            fm.MicrostripWidthStation(s=1.0, signal_width_m=0.5e-6),
+        ),
+        return_width_m=0.5e-6,
+    )
+
+    assert is_occ_compatible([layout]) is True
