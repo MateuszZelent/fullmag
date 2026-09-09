@@ -563,7 +563,7 @@ describe("geometry lifecycle command contributions", () => {
       },
       "test",
     );
-    const commitTransaction = vi.fn(async () => ({
+    const commitTransaction = vi.fn(async (_request: unknown) => ({
       committed_scene: { revision: 15 },
       scene_revision: 15,
       transaction_kind: "delete_object",
@@ -653,7 +653,7 @@ describe("geometry lifecycle command contributions", () => {
     now.mockRestore();
   });
 
-  it("adds microstrip antennas as auxiliary scene objects with canonical field drives", async () => {
+  it("adds microstrip antennas with current transport, balanced port, and field solve", async () => {
     const registry = registryWithLifecycleCommands();
     const bus = new EventBus<KernelEventMap>();
     const selection = new SelectionController(bus);
@@ -664,10 +664,11 @@ describe("geometry lifecycle command contributions", () => {
         modules: [{ id: "existing-source", kind: "antenna_field_source" }],
       },
       field_drives: { drives: [{ id: "existing-drive", kind: "regional" }] },
+      current_transports: [],
       objects: [{ id: "waveguide", name: "Waveguide", role: "magnet" }],
       revision: 20,
     }));
-    const commitTransaction = vi.fn(async () => ({
+    const commitTransaction = vi.fn(async (_request: unknown) => ({
       committed_scene: { revision: 22 },
       scene_revision: 22,
       transaction_kind: "merge_patch",
@@ -686,52 +687,46 @@ describe("geometry lifecycle command contributions", () => {
       message: "Microstrip antenna added.",
       status: "completed",
     });
-    expect(commitTransaction).toHaveBeenCalledWith({
+    const request = commitTransaction.mock.calls[0]?.[0] as {
+      merge_patch?: Record<string, unknown>;
+    } | undefined;
+    expect(request).toMatchObject({
       kind: "merge_patch",
       merge_patch: {
-        field_drives: {
-          drives: [
-            { id: "existing-drive", kind: "regional" },
-            {
-              activation: { kind: "all_time_evolution" },
-              amplitude_B_T: 0.001,
-              direction: [0, 1, 0],
-              enabled: true,
-              id: "antenna-9ix:H_ant",
-              kind: "regional",
-              name: "Microstrip antenna field",
-              spatial_profile: { kind: "geometry_mask", object_id: "antenna-9ix", envelope: { kind: "uniform" } },
-              target: { kind: "global" },
-              time_origin: "stage_local",
-              waveform: { amplitude: 1, cutoff_hz: 20e9, kind: "sinc_pulse", t0: 5e-11 },
-            },
+        antenna_field_solve_stages: [{
+          conservative_current_view_ref: "antenna-9ix:current:rt0",
+          current_transport_id: "antenna-9ix:current",
+          field_sampling_domain: { kind: "global" },
+          id: "antenna-9ix:solve-field",
+          model: "quasistatic_conduction_biot_savart3d",
+          oersted_realization: "direct_tetra_quadrature",
+          outputs: [{ id: "antenna-9ix:field-solution", quantity: "H_ant_basis" }],
+          port_mode_ids: ["antenna-9ix:port:common"],
+          source_object_id: "antenna-9ix",
+        }],
+        antenna_port_modes: [{
+          branches: [
+            { signed_weight: 1, terminal_selector_ref: "signal_terminal" },
+            { signed_weight: -1, terminal_selector_ref: "return_terminal" },
           ],
-        },
-        objects: [
-          { id: "waveguide", name: "Waveguide", role: "magnet" },
-          {
-            geometry: {
-              geometry_kind: "Box",
-              geometry_params: { size: [50e-9, 1e-6, 10e-9] },
-            },
-            id: "antenna-9ix",
-            locked: false,
-            magnetization_ref: null,
-            material_ref: "",
-            name: "Microstrip antenna",
-            physics_stack: [],
-            role: "antenna",
-            tags: ["role:antenna"],
-            transform: {
-              rotation: [0, 0, 0],
-              scale: [1, 1, 1],
-              translation: [0, 0, 0],
-            },
-            visible: true,
-          },
-        ],
+          current_transport_id: "antenna-9ix:current",
+          id: "antenna-9ix:port:common",
+          normalization_current_a: 1,
+          source_object_id: "antenna-9ix",
+        }],
+        current_transports: [{
+          coupling: "one_way",
+          domain: [{ object_id: "antenna-9ix" }],
+          kind: "current_transport",
+          model: "ohmic_poisson",
+          name: "antenna-9ix:current",
+        }],
+        objects: expect.arrayContaining([
+          expect.objectContaining({ id: "antenna-9ix", role: "antenna" }),
+        ]),
       },
     });
+    expect(request?.merge_patch).not.toHaveProperty("field_drives");
     expect(selection.get()).toMatchObject({
       kind: "object.root",
       label: "Microstrip antenna",
