@@ -43,6 +43,9 @@ services:
         source: ${FULLMAG_WINDOWS_CONTROL_ROOM_NODE_MODULES_ROOT:?set by scripts/windows/run_fullmag_fem.ps1}
         target: /workspace/apps/control-room/node_modules
       - type: bind
+        source: ${FULLMAG_WINDOWS_FRONTEND_ROOT:?set by scripts/windows/run_fullmag_fem.ps1}
+        target: /fullmag-frontend
+      - type: bind
         source: ${FULLMAG_WINDOWS_TEMP_ROOT:?set by scripts/windows/run_fullmag_fem.ps1}
         target: /tmp/fullmag-windows
     environment:
@@ -82,6 +85,7 @@ services:
       PNPM_HOME: /pnpm
       npm_config_store_dir: /pnpm/store
       COREPACK_HOME: /workspace/.fullmag-cache/corepack
+      FULLMAG_FRONTEND_ROOT: /fullmag-frontend
       CUDA_CACHE_PATH: /workspace/.fullmag-cache/cuda
       PLAYWRIGHT_BROWSERS_PATH: /workspace/.fullmag-cache/playwright-browsers
       PYTHONPYCACHEPREFIX: /workspace/.fullmag-cache/python-bytecode
@@ -129,6 +133,9 @@ services:
         source: ${FULLMAG_WINDOWS_CONTROL_ROOM_NODE_MODULES_ROOT:?set by scripts/windows/run_fullmag_fem.ps1}
         target: /workspace/apps/control-room/node_modules
       - type: bind
+        source: ${FULLMAG_WINDOWS_FRONTEND_ROOT:?set by scripts/windows/run_fullmag_fem.ps1}
+        target: /fullmag-frontend
+      - type: bind
         source: ${FULLMAG_WINDOWS_TEMP_ROOT:?set by scripts/windows/run_fullmag_fem.ps1}
         target: /tmp/fullmag-windows
     environment:
@@ -161,6 +168,7 @@ services:
       PNPM_HOME: /pnpm
       npm_config_store_dir: /pnpm/store
       COREPACK_HOME: /workspace/.fullmag-cache/corepack
+      FULLMAG_FRONTEND_ROOT: /fullmag-frontend
       PLAYWRIGHT_BROWSERS_PATH: /workspace/.fullmag-cache/playwright-browsers
       PYTHONPYCACHEPREFIX: /workspace/.fullmag-cache/python-bytecode
       TMPDIR: /tmp/fullmag-windows

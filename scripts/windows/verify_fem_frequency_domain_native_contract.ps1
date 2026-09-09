@@ -33,57 +33,65 @@ if (-not (Test-Path -LiteralPath $ComposeFile -PathType Leaf)) {
   throw "Windows FEM compose file is missing: $ComposeFile"
 }
 
-$repoDrive = [System.IO.Path]::GetPathRoot($RepoRoot)
-$cacheRoot = if ($env:FULLMAG_WINDOWS_CACHE_ROOT) {
-  $env:FULLMAG_WINDOWS_CACHE_ROOT
-} else {
-  Join-Path $repoDrive "fullmag-cache"
+. (Join-Path $PSScriptRoot "fullmag_storage.ps1")
+$StorageProfile = "windows-fem-$Device"
+if ($env:FULLMAG_STORAGE_MANAGED_ENTRY -ne "1") {
+  $managedExitCode = Invoke-FullmagStorageManagedScript `
+    -RepoRoot $RepoRoot -Profile $StorageProfile -ScriptPath $PSCommandPath `
+    -Arguments @("-Device", $Device, "-RepoRoot", $RepoRoot)
+  exit $managedExitCode
 }
-$buildRoot = if ($env:FULLMAG_WINDOWS_BUILD_ROOT) {
-  $env:FULLMAG_WINDOWS_BUILD_ROOT
+$StorageLayout = Resolve-FullmagStorageLayout -RepoRoot $RepoRoot -Profile $StorageProfile
+Set-FullmagStorageEnvironment -Layout $StorageLayout
+$cacheRoot = [string]$StorageLayout.cache_root
+$buildRoot = [string]$StorageLayout.build_root
+$tempRoot = [string]$StorageLayout.temp_root
+$frontendRoot = if ($env:FULLMAG_WINDOWS_FRONTEND_ROOT) {
+  $env:FULLMAG_WINDOWS_FRONTEND_ROOT
 } else {
-  Join-Path $repoDrive "fullmag-build"
+  Join-Path ([string]$StorageLayout.frontend_root) "fem-$Device"
 }
+$linuxCacheRoot = Join-Path $cacheRoot "fem-$Device"
 $stateRoot = if ($env:FULLMAG_WINDOWS_STATE_ROOT) {
   $env:FULLMAG_WINDOWS_STATE_ROOT
 } else {
-  Join-Path $cacheRoot "state\fem-$Device"
-}
-$tempRoot = if ($env:FULLMAG_WINDOWS_TEMP_ROOT) {
-  $env:FULLMAG_WINDOWS_TEMP_ROOT
-} else {
-  Join-Path $repoDrive "fullmag-tmp"
+  Join-Path ([string]$StorageLayout.runtime_root) "fem-$Device"
 }
 $cargoHome = if ($env:FULLMAG_WINDOWS_CARGO_HOME) {
   $env:FULLMAG_WINDOWS_CARGO_HOME
 } else {
-  Join-Path $cacheRoot "cargo"
+  Join-Path $linuxCacheRoot "cargo"
 }
 $rustupHome = if ($env:FULLMAG_WINDOWS_RUSTUP_HOME) {
   $env:FULLMAG_WINDOWS_RUSTUP_HOME
 } else {
-  Join-Path $cacheRoot "rustup"
+  Join-Path $linuxCacheRoot "rustup"
 }
 $pnpmRoot = if ($env:FULLMAG_WINDOWS_PNPM_ROOT) {
   $env:FULLMAG_WINDOWS_PNPM_ROOT
 } else {
-  Join-Path $cacheRoot "pnpm"
+  Join-Path $linuxCacheRoot "pnpm"
 }
 $nodeModulesRoot = if ($env:FULLMAG_WINDOWS_NODE_MODULES_ROOT) {
   $env:FULLMAG_WINDOWS_NODE_MODULES_ROOT
 } else {
-  Join-Path $cacheRoot "node-modules"
+  Join-Path $frontendRoot "node_modules"
 }
 $controlRoomNodeModulesRoot = if ($env:FULLMAG_WINDOWS_CONTROL_ROOM_NODE_MODULES_ROOT) {
   $env:FULLMAG_WINDOWS_CONTROL_ROOM_NODE_MODULES_ROOT
 } else {
-  Join-Path $cacheRoot "control-room-node-modules"
+  Join-Path $frontendRoot "apps\control-room\node_modules"
 }
 
-foreach ($path in @(
+$storagePaths = @(
     $cacheRoot, $buildRoot, $stateRoot, $tempRoot, $cargoHome, $rustupHome,
-    $pnpmRoot, $nodeModulesRoot, $controlRoomNodeModulesRoot
-  )) {
+    $pnpmRoot, $frontendRoot, $nodeModulesRoot, $controlRoomNodeModulesRoot
+)
+foreach ($path in $storagePaths) {
+  $null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $path `
+    -Label "Windows FEM contract storage" -Parent ([string]$StorageLayout.build_storage_root)
+}
+foreach ($path in $storagePaths) {
   Ensure-Directory $path
 }
 
@@ -95,9 +103,10 @@ $env:FULLMAG_WINDOWS_TEMP_ROOT = To-ComposePath $tempRoot
 $env:FULLMAG_WINDOWS_CARGO_HOME = To-ComposePath $cargoHome
 $env:FULLMAG_WINDOWS_RUSTUP_HOME = To-ComposePath $rustupHome
 $env:FULLMAG_WINDOWS_PNPM_ROOT = To-ComposePath $pnpmRoot
+$env:FULLMAG_WINDOWS_FRONTEND_ROOT = To-ComposePath $frontendRoot
 $env:FULLMAG_WINDOWS_NODE_MODULES_ROOT = To-ComposePath $nodeModulesRoot
 $env:FULLMAG_WINDOWS_CONTROL_ROOM_NODE_MODULES_ROOT = To-ComposePath $controlRoomNodeModulesRoot
-$env:COMPOSE_PROJECT_NAME = "fullmag-windows-fem"
+$env:COMPOSE_PROJECT_NAME = "fullmag-windows-contract-$($StorageLayout.worktree_id)"
 
 $identityPython = Get-Command "python" -ErrorAction SilentlyContinue
 if (-not $identityPython) {
