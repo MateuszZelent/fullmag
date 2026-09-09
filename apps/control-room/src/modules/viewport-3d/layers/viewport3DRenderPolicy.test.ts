@@ -1,10 +1,11 @@
-import { DoubleSide } from "three";
+import { BackSide, DoubleSide, FrontSide } from "three";
 import { describe, expect, it } from "vitest";
 
 import {
   RENDER_POLICIES,
   resolveSurfacePolicy,
   surfaceMaterialPolicyProps,
+  surfaceMaterialPolicyPropsFront,
 } from "./viewport3DRenderPolicy";
 
 describe("viewport3DRenderPolicy", () => {
@@ -46,4 +47,36 @@ describe("viewport3DRenderPolicy", () => {
       transparent: true,
     });
   });
+
+  describe("kolejność przebiegów powierzchni przezroczystych", () => {
+    it("contextSurface rysuje tył przed przodem", () => {
+      expect(RENDER_POLICIES.contextSurface.side).toBe(BackSide);
+      expect(RENDER_POLICIES.contextSurfaceFront.side).toBe(FrontSide);
+      expect(RENDER_POLICIES.contextSurface.renderOrder).toBeLessThan(
+        RENDER_POLICIES.contextSurfaceFront.renderOrder,
+      );
+    });
+
+    it("airbox rysuje się po powierzchni magnetycznej", () => {
+      expect(RENDER_POLICIES.airSurface.renderOrder).toBeGreaterThan(
+        RENDER_POLICIES.contextSurfaceFront.renderOrder,
+      );
+    });
+
+    it("wszystkie renderOrder są unikalne — kolizja cicho zmienia kolejność", () => {
+      const orders = Object.values(RENDER_POLICIES).map((p) => p.renderOrder);
+      expect(new Set(orders).size).toBe(orders.length);
+    });
+
+    it("powierzchnia nieprzezroczysta nie ma przebiegu przedniego", () => {
+      expect(surfaceMaterialPolicyPropsFront(1)).toBeNull();
+      expect(surfaceMaterialPolicyPropsFront(0.5)).not.toBeNull();
+    });
+
+    it("powierzchnia nieprzezroczysta zachowuje depthWrite", () => {
+      expect(surfaceMaterialPolicyProps(1).depthWrite).toBe(true);
+      expect(surfaceMaterialPolicyProps(0.5).depthWrite).toBe(false);
+    });
+  });
 });
+

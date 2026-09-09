@@ -6,6 +6,7 @@ import {
   applyScalarShaderColorBuffer,
   canApplyScalarShaderColorBuffer,
   createScalarSurfaceShaderMaterial,
+  scalarSurfaceShaderVariantKey,
   updateScalarSurfaceShaderMaterial,
   VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE,
   VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE,
@@ -332,4 +333,71 @@ describe("viewport3dScalarSurfaceShader", () => {
 
     material.dispose();
   });
+
+  describe("S-08 · scalarSurfaceShaderVariantKey and GL program stability", () => {
+    it("returns a stable key that only depends on colorMode + complex-value presence, not on values/phase/range", () => {
+      const bufferA = scalarBuffer([0, 1]);
+      const bufferB = {
+        ...bufferA,
+        colorPalette: "magma",
+        complexPhaseRad: Math.PI,
+        range: { max: 999, min: -999 },
+      };
+      expect(scalarSurfaceShaderVariantKey(bufferA)).toBe("scalar:real");
+      expect(scalarSurfaceShaderVariantKey(bufferB)).toBe("scalar:real");
+      expect(scalarSurfaceShaderVariantKey(bufferA)).toBe(
+        scalarSurfaceShaderVariantKey(bufferB),
+      );
+    });
+
+    it("changes when colorMode switches between scalar and orientation", () => {
+      const scalar = scalarBuffer([0, 1]);
+      const orientation = orientationBuffer([1, 0, 0, 0, 0, 1]);
+      expect(scalarSurfaceShaderVariantKey(scalar)).toBe("scalar:real");
+      expect(scalarSurfaceShaderVariantKey(orientation)).toBe("orientation:real");
+      expect(scalarSurfaceShaderVariantKey(scalar)).not.toBe(
+        scalarSurfaceShaderVariantKey(orientation),
+      );
+    });
+
+    it("changes when complex values are present vs. absent", () => {
+      const real = scalarBuffer([0, 1]);
+      const complex = complexBuffer();
+      expect(scalarSurfaceShaderVariantKey(real)).toBe("scalar:real");
+      expect(scalarSurfaceShaderVariantKey(complex)).toBe("scalar:complex");
+      expect(scalarSurfaceShaderVariantKey(real)).not.toBe(
+        scalarSurfaceShaderVariantKey(complex),
+      );
+    });
+
+    it("does not bump material.version when only the phase changes (S-08 GL program stability)", () => {
+      const buffer = complexBuffer();
+      const material = createScalarSurfaceShaderMaterial(buffer, {
+        depthTest: true,
+        depthWrite: true,
+        opacity: 1,
+        polygonOffset: false,
+        polygonOffsetFactor: 0,
+        polygonOffsetUnits: 0,
+        side: 0,
+        transparent: false,
+      });
+      const baselineVersion = material.version;
+
+      for (let step = 0; step < 60; step += 1) {
+        updateScalarSurfaceShaderMaterial(
+          material,
+          { ...buffer, complexPhaseRad: (step / 60) * 2 * Math.PI },
+          1,
+        );
+      }
+
+      expect(material.version).toBe(baselineVersion);
+      expect(material.uniforms.fmPhaseRad.value).toBeCloseTo(
+        (59 / 60) * 2 * Math.PI,
+      );
+      material.dispose();
+    });
+  });
 });
+

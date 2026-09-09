@@ -19,6 +19,7 @@ import { BackSide, DoubleSide, FrontSide, type Side } from "three";
 export type RenderSemantic =
   | "solidSurface"
   | "contextSurface"
+  | "contextSurfaceFront"
   | "airSurface"
   | "featureEdges"
   | "hiddenEdges"
@@ -49,21 +50,35 @@ export const RENDER_POLICIES: Record<RenderSemantic, RenderPolicy> = {
     polygonOffsetUnits: 1,
   },
   contextSurface: {
+    // Rozdzielone na dwa przebiegi dla powierzchni zamkniętych: BackSide (10) przed FrontSide (11).
+    // Daje poprawną kolejność "tył przed przodem" przy non-commutative blending bez sortowania per-trójkąt.
     transparent: true,
     depthWrite: false,
     depthTest: true,
-    side: DoubleSide,
+    side: BackSide,
     renderOrder: 10,
     polygonOffset: true,
     polygonOffsetFactor: 1,
     polygonOffsetUnits: 1,
   },
+  contextSurfaceFront: {
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    side: FrontSide,
+    renderOrder: 11,
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 1,
+  },
   airSurface: {
+    // Airbox zawsze po powierzchni magnetycznej — bryły się przenikają,
+    // więc sortowanie po środkach bounding sphere dawało skokowe przełączanie.
     transparent: true,
     depthWrite: false,
     depthTest: true,
     side: BackSide,
-    renderOrder: 11,
+    renderOrder: 20,
     polygonOffset: true,
     polygonOffsetFactor: 1,
     polygonOffsetUnits: 1,
@@ -73,7 +88,7 @@ export const RENDER_POLICIES: Record<RenderSemantic, RenderPolicy> = {
     depthWrite: false,
     depthTest: true,
     side: DoubleSide,
-    renderOrder: 20,
+    renderOrder: 30,
     polygonOffset: false,
     polygonOffsetFactor: 0,
     polygonOffsetUnits: 0,
@@ -83,7 +98,7 @@ export const RENDER_POLICIES: Record<RenderSemantic, RenderPolicy> = {
     depthWrite: false,
     depthTest: false,
     side: DoubleSide,
-    renderOrder: 21,
+    renderOrder: 31,
     polygonOffset: false,
     polygonOffsetFactor: 0,
     polygonOffsetUnits: 0,
@@ -93,7 +108,7 @@ export const RENDER_POLICIES: Record<RenderSemantic, RenderPolicy> = {
     depthWrite: false,
     depthTest: true,
     side: DoubleSide,
-    renderOrder: 30,
+    renderOrder: 50,
     polygonOffset: true,
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1,
@@ -113,7 +128,7 @@ export const RENDER_POLICIES: Record<RenderSemantic, RenderPolicy> = {
     depthWrite: false,
     depthTest: true,
     side: DoubleSide,
-    renderOrder: 18,
+    renderOrder: 40,
     polygonOffset: false,
     polygonOffsetFactor: 0,
     polygonOffsetUnits: 0,
@@ -178,4 +193,17 @@ export function surfaceMaterialPolicyProps(opacity: number): {
     polygonOffsetFactor: policy.polygonOffsetFactor,
     polygonOffsetUnits: policy.polygonOffsetUnits,
   };
+}
+
+/**
+ * Przebieg przedni dla powierzchni przezroczystej. Zwraca null dla
+ * powierzchni nieprzezroczystej (solidSurface rysuje się jednym przebiegiem
+ * z depthWrite:true, więc kolejność nie ma znaczenia).
+ */
+export function surfaceMaterialPolicyPropsFront(
+  opacity: number,
+): ReturnType<typeof materialPolicyProps> | null {
+  return resolveSurfacePolicy(opacity).transparent
+    ? materialPolicyProps("contextSurfaceFront")
+    : null;
 }

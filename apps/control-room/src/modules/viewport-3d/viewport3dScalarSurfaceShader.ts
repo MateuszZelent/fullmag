@@ -172,6 +172,21 @@ export function createScalarSurfaceShaderMaterial(
   return material;
 }
 
+/**
+ * Stable identifier for "which of the four vertex/fragment shader variants"
+ * a given buffer would select (scalar/orientation × real/complex). Used by
+ * consumers (MeshPartLayer.tsx) to decide when a ShaderMaterial must be
+ * recreated (program shape changed) vs. merely updated in place via
+ * updateScalarSurfaceShaderMaterial (data changed, e.g. per-frame phase
+ * animation) — see S-08.
+ */
+export function scalarSurfaceShaderVariantKey(buffer: ScalarColorBuffer): string {
+  const colorModeId = shaderColorModeId(buffer.colorMode);
+  const orientationMode = colorModeId === 1;
+  const complexMode = hasComplexShaderValues(buffer);
+  return `${orientationMode ? "orientation" : "scalar"}:${complexMode ? "complex" : "real"}`;
+}
+
 export function updateScalarSurfaceShaderMaterial(
   material: ShaderMaterial,
   buffer: ScalarColorBuffer,

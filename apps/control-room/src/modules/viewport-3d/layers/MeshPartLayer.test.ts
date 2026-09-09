@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
+import { BackSide, DoubleSide, FrontSide } from "three";
+
 import {
   DEFAULT_OBJECT_VISUALIZATION,
   type VisualizationTargetSettings,
@@ -18,6 +20,9 @@ import {
   resolveMeshPartWireframeEdgeIndices,
   resolveMeshPartPointNodeSelection,
   recordMeshPartSurfaceAdoption,
+  resolveMeshPartSurfacePassPolicies,
+  createMeshPartScalarShaderMaterials,
+  MESH_PART_SURFACE_USER_DATA,
 } from "./MeshPartLayer";
 import {
   buildMeshPartScalarColorRetentionKey,
@@ -29,6 +34,9 @@ import {
 } from "./meshPartGeometryPlan";
 import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 import { resolveViewport3DScalarColorBufferKey } from "../viewport3dFieldMapping";
+import { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import { RENDER_POLICIES } from "./viewport3DRenderPolicy";
+import { updateScalarSurfaceShaderMaterial } from "../viewport3dScalarSurfaceShader";
 
 describe("MeshPartLayer", () => {
   it("maps both render triangles of a quad back to the same global facet", () => {
@@ -1157,5 +1165,337 @@ buildReference: null,
         vertexCount: 2,
       }),
     ).toBeNull();
+  });
+
+  describe("S-14: transparent surface pass ordering and lifecycle", () => {
+    const dummyBuffer = {
+      colors: new Float32Array(6),
+      colorMode: "magnitude",
+      colorPalette: "viridis",
+      quantityId: "m",
+      range: { max: 1, min: 0 },
+      scalarValues: new Float32Array([0.2, 0.8]),
+    };
+    const materialProfile = { toneMapped: false };
+
+    it("renders exactly one DoubleSide pass with depthWrite for opaque surfaces", () => {
+      const policies = resolveMeshPartSurfacePassPolicies(1.0);
+      expect(policies.back).toMatchObject({
+        depthTest: true,
+        depthWrite: true,
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
+        side: DoubleSide,
+        transparent: false,
+      });
+      expect(policies.renderOrderBack).toBe(RENDER_POLICIES.solidSurface.renderOrder);
+      expect(policies.front).toBeNull();
+      expect(policies.renderOrderFront).toBeNull();
+    });
+
+    it("renders two passes (BackSide renderOrder 10, FrontSide renderOrder 11) for transparent surfaces", () => {
+      const policies = resolveMeshPartSurfacePassPolicies(0.5);
+      expect(policies.back).toMatchObject({
+        depthTest: true,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
+        side: BackSide,
+        transparent: true,
+      });
+      expect(policies.renderOrderBack).toBe(RENDER_POLICIES.contextSurface.renderOrder);
+      expect(policies.renderOrderBack).toBe(10);
+
+      expect(policies.front).toMatchObject({
+        depthTest: true,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
+        side: FrontSide,
+        transparent: true,
+      });
+      expect(policies.renderOrderFront).toBe(RENDER_POLICIES.contextSurfaceFront.renderOrder);
+      expect(policies.renderOrderFront).toBe(11);
+    });
+
+    it("creates and tracks two distinct ShaderMaterial instances for transparent scalar surfaces", () => {
+      const tracker = new Viewport3DResourceTracker();
+      const policies = resolveMeshPartSurfacePassPolicies(0.5);
+      const materials = createMeshPartScalarShaderMaterials({
+        buffer: dummyBuffer,
+        enabled: true,
+        materialProfile,
+        surfaceOpacity: 0.5,
+        surfacePolicy: policies.back,
+        surfacePolicyFront: policies.front,
+        tracker,
+      });
+
+      expect(materials.back).not.toBeNull();
+      expect(materials.front).not.toBeNull();
+      expect(materials.back).not.toBe(materials.front);
+      expect(materials.back?.side).toBe(BackSide);
+      expect(materials.front?.side).toBe(FrontSide);
+      expect(materials.back?.transparent).toBe(true);
+      expect(materials.front?.transparent).toBe(true);
+      expect(materials.back?.depthWrite).toBe(false);
+      expect(materials.front?.depthWrite).toBe(false);
+      expect(tracker.getSnapshot().materials).toBe(2);
+    });
+
+    it("creates a single DoubleSide ShaderMaterial instance for opaque scalar surfaces", () => {
+      const tracker = new Viewport3DResourceTracker();
+      const policies = resolveMeshPartSurfacePassPolicies(1.0);
+      const materials = createMeshPartScalarShaderMaterials({
+        buffer: dummyBuffer,
+        enabled: true,
+        materialProfile,
+        surfaceOpacity: 1.0,
+        surfacePolicy: policies.back,
+        surfacePolicyFront: policies.front,
+        tracker,
+      });
+
+      expect(materials.back).not.toBeNull();
+      expect(materials.front).toBeNull();
+      expect(materials.back?.side).toBe(DoubleSide);
+      expect(materials.back?.transparent).toBe(false);
+      expect(materials.back?.depthWrite).toBe(true);
+      expect(tracker.getSnapshot().materials).toBe(1);
+    });
+
+    it("returns null materials and does not track when enabled is false or buffer is missing", () => {
+      const tracker = new Viewport3DResourceTracker();
+      const transparentPolicies = resolveMeshPartSurfacePassPolicies(0.5);
+
+      const disabledResult = createMeshPartScalarShaderMaterials({
+        buffer: dummyBuffer,
+        enabled: false,
+        materialProfile,
+        surfaceOpacity: 0.5,
+        surfacePolicy: transparentPolicies.back,
+        surfacePolicyFront: transparentPolicies.front,
+        tracker,
+      });
+      expect(disabledResult.back).toBeNull();
+      expect(disabledResult.front).toBeNull();
+      expect(tracker.getSnapshot().materials).toBe(0);
+
+      const nullBufferResult = createMeshPartScalarShaderMaterials({
+        buffer: null,
+        enabled: true,
+        materialProfile,
+        surfaceOpacity: 0.5,
+        surfacePolicy: transparentPolicies.back,
+        surfacePolicyFront: transparentPolicies.front,
+        tracker,
+      });
+      expect(nullBufferResult.back).toBeNull();
+      expect(nullBufferResult.front).toBeNull();
+      expect(tracker.getSnapshot().materials).toBe(0);
+    });
+
+    it("correctly evaluates opacity boundary conditions", () => {
+      // Zero opacity is still transparent (two passes)
+      const zeroPolicies = resolveMeshPartSurfacePassPolicies(0.0);
+      expect(zeroPolicies.back.side).toBe(BackSide);
+      expect(zeroPolicies.renderOrderBack).toBe(10);
+      expect(zeroPolicies.front?.side).toBe(FrontSide);
+      expect(zeroPolicies.renderOrderFront).toBe(11);
+
+      // 0.999 is just below 1.0 (two passes)
+      const nearOpaquePolicies = resolveMeshPartSurfacePassPolicies(0.999);
+      expect(nearOpaquePolicies.back.side).toBe(BackSide);
+      expect(nearOpaquePolicies.front?.side).toBe(FrontSide);
+      expect(nearOpaquePolicies.renderOrderBack).toBe(10);
+      expect(nearOpaquePolicies.renderOrderFront).toBe(11);
+
+      // Exact 1.0 is opaque (single pass)
+      const exactOnePolicies = resolveMeshPartSurfacePassPolicies(1.0);
+      expect(exactOnePolicies.back.side).toBe(DoubleSide);
+      expect(exactOnePolicies.front).toBeNull();
+      expect(exactOnePolicies.renderOrderBack).toBe(0);
+      expect(exactOnePolicies.renderOrderFront).toBeNull();
+
+      // > 1.0 remains opaque
+      const overshootPolicies = resolveMeshPartSurfacePassPolicies(1.5);
+      expect(overshootPolicies.back.side).toBe(DoubleSide);
+      expect(overshootPolicies.front).toBeNull();
+      expect(overshootPolicies.renderOrderBack).toBe(0);
+      expect(overshootPolicies.renderOrderFront).toBeNull();
+    });
+
+    it("ensures picking recognizes surface hits across front and back passes with MESH_PART_SURFACE_USER_DATA", () => {
+      const part = {
+        boundary_face_count: 1,
+        boundary_face_indices: [42],
+        boundary_face_start: 42,
+      };
+
+      // When hitting any mesh tagged with MESH_PART_SURFACE_USER_DATA, surfaceHit evaluates to true
+      const isSurfaceHit = MESH_PART_SURFACE_USER_DATA.viewportMeshPartSurface === true;
+      expect(isSurfaceHit).toBe(true);
+
+      const pickIdentity = resolveMeshPartSurfacePickIdentity({
+        expandedSurfaceFaces: false,
+        faceIndex: 0,
+        part,
+        surfaceHit: isSurfaceHit,
+        surfaceTriangleCellTypes: new Uint32Array([1]),
+        surfaceTriangleFacetIndices: new Uint32Array([42]),
+        surfaceTriangleGlobalCellOrdinals: new BigUint64Array([BigInt(100)]),
+      });
+
+      expect(pickIdentity.boundaryFaceIndex).toBe(42);
+      expect(pickIdentity.globalCellOrdinal).toBe("100");
+    });
+
+    it("releases previous materials without leaving orphans across simulated React component lifecycle transitions", () => {
+      const tracker = new Viewport3DResourceTracker();
+
+      // Helper simulating React's useEffect cleanup chaining pattern
+      let activeCleanup: (() => void) | undefined;
+      const simulateMountOrUpdate = (opacity: number, enabled = true) => {
+        if (typeof activeCleanup === "function") {
+          activeCleanup();
+          activeCleanup = undefined;
+        }
+        const policies = resolveMeshPartSurfacePassPolicies(opacity);
+        const materials = createMeshPartScalarShaderMaterials({
+          buffer: dummyBuffer,
+          enabled,
+          materialProfile,
+          surfaceOpacity: opacity,
+          surfacePolicy: policies.back,
+          surfacePolicyFront: policies.front,
+          tracker,
+        });
+        activeCleanup = () => {
+          tracker.release("material", materials.back);
+          tracker.release("material", materials.front);
+        };
+        return materials;
+      };
+
+      // Step 1: Initial mount transparent (opacity 0.5) -> 2 materials tracked
+      const trans1 = simulateMountOrUpdate(0.5);
+      expect(trans1.back?.side).toBe(BackSide);
+      expect(trans1.front?.side).toBe(FrontSide);
+      expect(tracker.getSnapshot().materials).toBe(2);
+
+      // Step 2: Update opacity to 0.7 (still transparent) -> 2 materials tracked (old 2 released)
+      const trans2 = simulateMountOrUpdate(0.7);
+      expect(trans2.back?.side).toBe(BackSide);
+      expect(trans2.front?.side).toBe(FrontSide);
+      expect(tracker.getSnapshot().materials).toBe(2);
+
+      // Step 3: Transition to opaque (opacity 1.0) -> exactly 1 material tracked (old 2 released)
+      const opaque = simulateMountOrUpdate(1.0);
+      expect(opaque.back?.side).toBe(DoubleSide);
+      expect(opaque.front).toBeNull();
+      expect(tracker.getSnapshot().materials).toBe(1);
+
+      // Step 4: Transition back to transparent (opacity 0.3) -> exactly 2 materials tracked (old 1 released)
+      const trans3 = simulateMountOrUpdate(0.3);
+      expect(trans3.back?.side).toBe(BackSide);
+      expect(trans3.front?.side).toBe(FrontSide);
+      expect(tracker.getSnapshot().materials).toBe(2);
+
+      // Step 5: Shader pipeline disabled -> 0 materials tracked
+      const disabled = simulateMountOrUpdate(0.3, false);
+      expect(disabled.back).toBeNull();
+      expect(disabled.front).toBeNull();
+      expect(tracker.getSnapshot().materials).toBe(0);
+
+      // Step 6: Final unmount cleanup -> 0 materials
+      if (typeof activeCleanup === "function") {
+        activeCleanup();
+      }
+      expect(tracker.getSnapshot().materials).toBe(0);
+    });
+
+    it("verifies MeshPartLayer source structure maintains two-pass rendering and needsUpdate sync", () => {
+      const source = readFileSync(
+        fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
+        "utf8",
+      );
+
+      expect(source).toContain("surfacePassPolicies.renderOrderBack");
+      expect(source).toContain("surfacePassPolicies.renderOrderFront");
+      expect(source).toContain("materialFrontRef.current.needsUpdate = true");
+      expect(source).toContain("scalarShaderMaterialFront");
+      expect(source).toContain("updateScalarSurfaceShaderMaterial(");
+    });
+
+    it("ensures scalarShaderMaterials useMemo depends on scalarShaderVariantKey and excludes per-frame data", () => {
+      const source = readFileSync(
+        fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
+        "utf8",
+      );
+
+      expect(source).toContain("scalarShaderVariantKey =");
+      const useMemoMatch = source.match(
+        /scalarShaderMaterials\s*=\s*useMemo\([\s\S]*?\[([\s\S]*?)\]\s*,?\s*\);/,
+      );
+      expect(useMemoMatch).toBeTruthy();
+      const deps = useMemoMatch![1];
+      expect(deps).toContain("scalarShaderVariantKey");
+      expect(deps).not.toContain("scalarShaderBuffer");
+      expect(deps).not.toContain("surfaceOpacity");
+      expect(deps).not.toContain("surfacePolicy");
+      expect(deps).not.toContain("surfacePolicyFront");
+    });
+
+    it("does not re-allocate materials during phase animation sweeps when variant key is constant (S-08 parity)", () => {
+      const tracker = new Viewport3DResourceTracker();
+      const initialBuffer = {
+        ...dummyBuffer,
+        complexPhaseRad: 0,
+        complexRealValues: new Float32Array([1, 0, 0, 0, 1, 0]),
+        complexImagValues: new Float32Array([0, 1, 0, 0, 0, 1]),
+      };
+
+      // Initial allocation for transparent surface: 2 materials (back and front)
+      const materials = createMeshPartScalarShaderMaterials({
+        buffer: initialBuffer,
+        enabled: true,
+        materialProfile,
+        surfaceOpacity: 0.5,
+        surfacePolicy: RENDER_POLICIES.contextSurface,
+        surfacePolicyFront: RENDER_POLICIES.contextSurfaceFront,
+        tracker,
+      });
+
+      expect(materials.back).not.toBeNull();
+      expect(materials.front).not.toBeNull();
+      expect(tracker.getSnapshot().materials).toBe(2);
+
+      // Simulate 60 animation frames: phase changes continuously, buffer object is recreated every frame
+      for (let step = 1; step <= 60; step++) {
+        const frameBuffer = {
+          ...dummyBuffer,
+          complexPhaseRad: (step / 60) * 2 * Math.PI,
+          complexRealValues: new Float32Array([1, 0, 0, 0, 1, 0]),
+          complexImagValues: new Float32Array([0, 1, 0, 0, 0, 1]),
+        };
+
+        // Uniforms are updated in-place on existing materials without re-creating ShaderMaterial
+        updateScalarSurfaceShaderMaterial(materials.back!, frameBuffer, 0.5);
+        updateScalarSurfaceShaderMaterial(materials.front!, frameBuffer, 0.5);
+      }
+
+      // Zero new material allocations or releases during the entire 60-frame sweep
+      expect(tracker.getSnapshot().materials).toBe(2);
+      expect(materials.back!.uniforms.fmPhaseRad.value).toBeCloseTo(2 * Math.PI);
+      expect(materials.front!.uniforms.fmPhaseRad.value).toBeCloseTo(2 * Math.PI);
+
+      // Cleanup
+      tracker.release("material", materials.back);
+      tracker.release("material", materials.front);
+      expect(tracker.getSnapshot().materials).toBe(0);
+    });
   });
 });

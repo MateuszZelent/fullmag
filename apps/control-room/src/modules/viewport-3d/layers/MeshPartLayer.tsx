@@ -6,11 +6,13 @@ import {
   BufferAttribute,
   BufferGeometry,
   type MeshBasicMaterial,
+  type ShaderMaterial,
 } from "three";
 import {
   RENDER_POLICIES,
   materialPolicyProps,
   surfaceMaterialPolicyProps,
+  surfaceMaterialPolicyPropsFront,
 } from "./viewport3DRenderPolicy";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
@@ -52,6 +54,7 @@ import { attachViewport3DSharedTopologyPosition } from "../viewport3dSharedTopol
 import {
   canApplyScalarShaderColorBuffer,
   createScalarSurfaceShaderMaterial,
+  scalarSurfaceShaderVariantKey,
   updateScalarSurfaceShaderMaterial,
 } from "../viewport3dScalarSurfaceShader";
 import type {
@@ -103,7 +106,7 @@ import {
 } from "../model/modeCompositionViewportProjection";
 
 const MESH_PART_GEOMETRY_UPLOAD_FRAME_BUDGET_MS = 3;
-const MESH_PART_SURFACE_USER_DATA = {
+export const MESH_PART_SURFACE_USER_DATA = {
   viewportMeshPartSurface: true,
 } as const;
 
@@ -473,6 +476,70 @@ function scalarColorBufferMatchesRetainedSettings(
     canApplyVertexScalarColorBuffer(buffer, vertexCount) ||
     canApplyScalarShaderColorBuffer(buffer, vertexCount)
   );
+}
+
+export function resolveMeshPartSurfacePassPolicies(surfaceOpacity: number): {
+  back: ReturnType<typeof surfaceMaterialPolicyProps>;
+  front: ReturnType<typeof surfaceMaterialPolicyPropsFront>;
+  renderOrderBack: number;
+  renderOrderFront: number | null;
+} {
+  const back = surfaceMaterialPolicyProps(surfaceOpacity);
+  const front = surfaceMaterialPolicyPropsFront(surfaceOpacity);
+  return {
+    back,
+    front,
+    renderOrderBack: back.transparent
+      ? RENDER_POLICIES.contextSurface.renderOrder
+      : RENDER_POLICIES.solidSurface.renderOrder,
+    renderOrderFront: front
+      ? RENDER_POLICIES.contextSurfaceFront.renderOrder
+      : null,
+  };
+}
+
+export function createMeshPartScalarShaderMaterials({
+  buffer,
+  enabled,
+  materialProfile,
+  surfaceOpacity = 1,
+  surfacePolicy = RENDER_POLICIES.solidSurface,
+  surfacePolicyFront = RENDER_POLICIES.contextSurfaceFront,
+  tracker,
+}: {
+  buffer: ScalarColorBuffer | null | undefined;
+  enabled: boolean;
+  materialProfile: Pick<Viewport3DMaterialProfile["magneticSurface"], "toneMapped">;
+  surfaceOpacity?: number;
+  surfacePolicy?: ReturnType<typeof surfaceMaterialPolicyProps>;
+  surfacePolicyFront?: ReturnType<typeof surfaceMaterialPolicyPropsFront> | null;
+  tracker: Pick<Viewport3DResourceTracker, "track" | "release">;
+}): {
+  back: ShaderMaterial | null;
+  front: ShaderMaterial | null;
+} {
+  if (!enabled || !buffer) {
+    return { back: null, front: null };
+  }
+  const back = tracker.track(
+    "material",
+    createScalarSurfaceShaderMaterial(buffer, {
+      ...surfacePolicy,
+      opacity: surfaceOpacity,
+      toneMapped: materialProfile.toneMapped,
+    }),
+  );
+  const front = surfacePolicyFront
+    ? tracker.track(
+        "material",
+        createScalarSurfaceShaderMaterial(buffer, {
+          ...surfacePolicyFront,
+          opacity: surfaceOpacity,
+          toneMapped: materialProfile.toneMapped,
+        }),
+      )
+    : null;
+  return { back, front };
 }
 
 export const MeshPartLayer = memo(function MeshPartLayer({
@@ -881,6 +948,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   ]);
 
   const materialRef = useRef<MeshBasicMaterial>(null);
+  const materialFrontRef = useRef<MeshBasicMaterial>(null);
   const { hasScalarColors: hasUploadedVertexScalarColors } =
     resolveMeshPartVisibleScalarColorState({
     effectiveScalarColors,
@@ -896,62 +964,100 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   const surfaceOpacity = modalSurfaceActive
     ? Math.min(1, Math.max(0, modeCompositionSnapshot?.layer?.appearance.opacity ?? 1))
     : renderPlan.surface.opacity;
-  const surfacePolicy = useMemo(
-    () => surfaceMaterialPolicyProps(surfaceOpacity),
+  const surfacePassPolicies = useMemo(
+    () => resolveMeshPartSurfacePassPolicies(surfaceOpacity),
     [surfaceOpacity],
   );
+  const surfacePolicy = surfacePassPolicies.back;
+  const surfacePolicyFront = surfacePassPolicies.front;
   const scalarShaderBuffer = committedScalarColorState.buffer;
-  const scalarShaderMaterial = useMemo(() => {
-    if (!modalSurfaceActive && !fieldColorLayersEnabled && !meshQualityColors) return null;
-    if (
-      committedScalarColorState.pipeline !== "shader" ||
-      !scalarShaderBuffer
-    ) return null;
-    return tracker.track(
-      "material",
-      createScalarSurfaceShaderMaterial(scalarShaderBuffer, {
-        ...surfacePolicy,
-        opacity: surfaceOpacity,
-        toneMapped: materialProfile.magneticSurface.toneMapped,
+  // Stable "program shape" key: null when there is no buffer, otherwise one of 4 strings
+  // (scalar/orientation × real/complex). Deliberately does NOT depend on scalarShaderBuffer's
+  // identity, phase, range, palette, opacity, or surface policies — those are data / render state,
+  // not program shape, and are pushed in place via updateScalarSurfaceShaderMaterial and Object.assign
+  // below instead of forcing a new ShaderMaterial (and synchronous GL program relink) on every
+  // animation frame (S-08). Both back and front pass materials are tracked for S-14.
+  const scalarShaderVariantKey = scalarShaderBuffer
+    ? scalarSurfaceShaderVariantKey(scalarShaderBuffer)
+    : null;
+
+  const scalarShaderMaterials = useMemo(
+    () =>
+      createMeshPartScalarShaderMaterials({
+        buffer: scalarShaderBuffer,
+        enabled:
+          Boolean(modalSurfaceActive || fieldColorLayersEnabled || meshQualityColors) &&
+          committedScalarColorState.pipeline === "shader",
+        materialProfile: materialProfile.magneticSurface,
+        surfaceOpacity: 1,
+        surfacePolicy: RENDER_POLICIES.solidSurface,
+        surfacePolicyFront: RENDER_POLICIES.contextSurfaceFront,
+        tracker,
       }),
-    );
-  }, [
-    fieldColorLayersEnabled,
-    materialProfile.magneticSurface.toneMapped,
-    meshQualityColors,
-    modalSurfaceActive,
-    committedScalarColorState.pipeline,
-    scalarShaderBuffer,
-    surfaceOpacity,
-    surfacePolicy,
-    tracker,
-  ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- S-08/S-14: materials depend strictly on GL program shape (variant key), not per-frame buffer identity, opacity or surface policies
+    [
+      committedScalarColorState.pipeline,
+      fieldColorLayersEnabled,
+      meshQualityColors,
+      modalSurfaceActive,
+      scalarShaderVariantKey,
+      tracker,
+    ],
+  );
+  const scalarShaderMaterial = scalarShaderMaterials.back;
+  const scalarShaderMaterialFront = scalarShaderMaterials.front;
 
   useEffect(
-    () => () => tracker.release("material", scalarShaderMaterial),
-    [scalarShaderMaterial, tracker],
+    () => () => {
+      tracker.release("material", scalarShaderMaterials.back);
+      tracker.release("material", scalarShaderMaterials.front);
+    },
+    [scalarShaderMaterials, tracker],
   );
   useEffect(() => {
     if (
-      !scalarShaderMaterial ||
       committedScalarColorState.pipeline !== "shader" ||
       !committedScalarColorState.buffer
     ) return;
-    updateScalarSurfaceShaderMaterial(
-      scalarShaderMaterial,
-      committedScalarColorState.buffer,
-      surfaceOpacity,
-    );
+    if (scalarShaderMaterial) {
+      updateScalarSurfaceShaderMaterial(
+        scalarShaderMaterial,
+        committedScalarColorState.buffer,
+        surfaceOpacity,
+      );
+      Object.assign(scalarShaderMaterial, surfacePolicy);
+      scalarShaderMaterial.toneMapped =
+        materialProfile.magneticSurface.toneMapped ?? false;
+    }
+    if (scalarShaderMaterialFront) {
+      updateScalarSurfaceShaderMaterial(
+        scalarShaderMaterialFront,
+        committedScalarColorState.buffer,
+        surfaceOpacity,
+      );
+      if (surfacePolicyFront) {
+        Object.assign(scalarShaderMaterialFront, surfacePolicyFront);
+      }
+      scalarShaderMaterialFront.toneMapped =
+        materialProfile.magneticSurface.toneMapped ?? false;
+    }
   }, [
     committedScalarColorState.buffer,
     committedScalarColorState.pipeline,
+    materialProfile.magneticSurface.toneMapped,
     scalarShaderMaterial,
+    scalarShaderMaterialFront,
     surfaceOpacity,
+    surfacePolicy,
+    surfacePolicyFront,
   ]);
 
   useEffect(() => {
     if (materialRef.current) {
       materialRef.current.needsUpdate = true;
+    }
+    if (materialFrontRef.current) {
+      materialFrontRef.current.needsUpdate = true;
     }
   }, [hasUploadedVertexScalarColors]);
 
@@ -1010,26 +1116,49 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       userData={{ viewportSemanticPickPriority: VIEWPORT_3D_PICK_PRIORITY.meshPart }}
     >
       {(modalSurfaceActive || renderPlan.surface.visible) && geometry ? (
-        <mesh
-          geometry={geometry}
-          renderOrder={surfacePolicy.transparent
-            ? RENDER_POLICIES.contextSurface.renderOrder
-            : RENDER_POLICIES.solidSurface.renderOrder}
-          userData={MESH_PART_SURFACE_USER_DATA}
-        >
-          {scalarShaderMaterial ? (
-            <primitive attach="material" object={scalarShaderMaterial} />
-          ) : (
-            <meshBasicMaterial
-              ref={materialRef}
-              color={meshColor}
-              opacity={surfaceOpacity}
-              {...materialProfile.magneticSurface}
-              vertexColors={hasUploadedVertexScalarColors}
-              {...surfacePolicy}
-            />
-          )}
-        </mesh>
+        <>
+          <mesh
+            geometry={geometry}
+            renderOrder={surfacePassPolicies.renderOrderBack}
+            userData={MESH_PART_SURFACE_USER_DATA}
+          >
+            {scalarShaderMaterial ? (
+              <primitive attach="material" object={scalarShaderMaterial} />
+            ) : (
+              <meshBasicMaterial
+                ref={materialRef}
+                color={meshColor}
+                opacity={surfaceOpacity}
+                {...materialProfile.magneticSurface}
+                vertexColors={hasUploadedVertexScalarColors}
+                {...surfacePolicy}
+              />
+            )}
+          </mesh>
+          {surfacePolicyFront ? (
+            <mesh
+              geometry={geometry}
+              renderOrder={
+                surfacePassPolicies.renderOrderFront ??
+                RENDER_POLICIES.contextSurfaceFront.renderOrder
+              }
+              userData={MESH_PART_SURFACE_USER_DATA}
+            >
+              {scalarShaderMaterialFront ? (
+                <primitive attach="material" object={scalarShaderMaterialFront} />
+              ) : (
+                <meshBasicMaterial
+                  ref={materialFrontRef}
+                  color={meshColor}
+                  opacity={surfaceOpacity}
+                  {...materialProfile.magneticSurface}
+                  vertexColors={hasUploadedVertexScalarColors}
+                  {...surfacePolicyFront}
+                />
+              )}
+            </mesh>
+          ) : null}
+        </>
       ) : null}
       {renderPlan.wireframe.visible && edgeGeometry ? (
         <lineSegments
