@@ -31,11 +31,19 @@ class StorageTests(unittest.TestCase):
         profile = kwargs.pop("profile", "test")
         return storage.resolve_layout(self.repo, profile=profile, environ=self.env, **kwargs)
 
-    def test_storage_is_sibling_of_main_checkout_and_stable(self):
+    def test_storage_uses_canonical_project_root_and_is_stable(self):
         layout = self.resolve()
-        self.assertEqual(Path(layout["storage_root"]), self.project / "storage")
+        expected_root = (self.repo if os.name == "nt" else self.project) / "storage"
+        self.assertEqual(Path(layout["storage_root"]), expected_root)
         self.assertEqual(layout, self.resolve())
-        self.assertFalse((self.project / "storage").exists())
+        self.assertFalse(expected_root.exists())
+
+    def test_windows_canonical_storage_override_is_allowed(self):
+        if os.name != "nt":
+            self.skipTest("Windows canonical checkout storage contract")
+        self.env["FULLMAG_PROJECT_STORAGE_ROOT"] = str(self.repo / "storage")
+        layout = self.resolve(profile="windows-native")
+        self.assertEqual(Path(layout["storage_root"]), self.repo / "storage")
 
     def test_nested_worktree_uses_common_project_and_isolated_build(self):
         subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=Test", "-c",

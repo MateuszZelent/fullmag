@@ -147,11 +147,16 @@ def resolve_layout(repo_root, profile=None, environ=None):
         raise StorageError("Resolve storage from the Fullmag checkout, not a Git submodule")
     registrations = worktree_records(repo)
     main_repo = Path(registrations[0]["worktree"]).resolve()
-    project = main_repo.parent
+    # This Windows checkout keeps its worktrees below the canonical checkout
+    # itself (`D:\\git\\fullmag\\worktrees`), so its durable storage belongs
+    # to the checkout (`D:\\git\\fullmag\\storage`). Linux keeps the existing
+    # sibling-project layout used by the managed native storage contract.
+    project = main_repo if os.name == "nt" else main_repo.parent
+    canonical_storage = project / "storage"
     profile = profile or env.get("FULLMAG_STORAGE_PROFILE") or ("windows-native" if os.name == "nt" else "linux-host")
     if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,79}", profile):
         raise StorageError(f"Invalid storage profile: {profile!r}")
-    root = absolute(env.get("FULLMAG_PROJECT_STORAGE_ROOT", str(project / "storage")), "FULLMAG_PROJECT_STORAGE_ROOT")
+    root = absolute(env.get("FULLMAG_PROJECT_STORAGE_ROOT", str(canonical_storage)), "FULLMAG_PROJECT_STORAGE_ROOT")
     if root == Path(root.anchor) or inside(project, root):
         raise StorageError(f"Storage cannot contain the project or be a filesystem root: {root}")
     if root in {Path(root.anchor) / name for name in ("fullmag-build", "fullmag-cache", "fullmag-tmp")}:
@@ -161,7 +166,7 @@ def resolve_layout(repo_root, profile=None, environ=None):
         validate_path(marker, root, "storage marker")
         if json.loads(marker.read_text(encoding="utf-8")) != {"schema": SCHEMA, "project_root": str(project)}:
             raise StorageError(f"Storage marker belongs to another project or schema: {marker}")
-    elif root != project / "storage":
+    elif root != canonical_storage:
         raise StorageError(f"A non-default storage root must already be registered by the operator with a project marker: {root}. No automatic fallback or alternate-root initialization.")
     checkouts = [repo, main_repo]
     for registration in registrations:
@@ -171,8 +176,13 @@ def resolve_layout(repo_root, profile=None, environ=None):
         if candidate.is_absolute():
             checkouts.append(candidate.resolve())
     for checkout in checkouts:
+        # The Windows canonical storage directory is deliberately inside the
+        # main checkout, but remains outside every worktree checkout. No other
+        # in-repository or worktree-overlapping path receives this exception.
+        if os.name == "nt" and checkout == main_repo and root == canonical_storage:
+            continue
         if inside(root, checkout) or inside(checkout, root):
-            raise StorageError(f"Storage must be outside the repository and all worktrees: {root} overlaps {checkout}")
+            raise StorageError(f"Storage must be outside all worktrees and non-canonical checkout paths: {root} overlaps {checkout}")
     wt = identifier(repo)
     platform = "windows" if os.name == "nt" else "linux"
     infrastructure = linux_infrastructure(root, env) if os.name != "nt" else {}
