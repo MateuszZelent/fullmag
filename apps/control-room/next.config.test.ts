@@ -134,9 +134,7 @@ describe("control-room Next dev proxy config", () => {
       "utf8",
     );
 
-    expect(nextEnvSource).toContain(
-      './.next-control-room-3100/dev/types/routes.d.ts',
-    );
+    expect(nextEnvSource).toContain('./.next/types/routes.d.ts');
     expect(packageSource).toContain(
       '"build:audit:webpack": "node scripts/build-audit-control-room.mjs"',
     );

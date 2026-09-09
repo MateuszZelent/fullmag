@@ -14,10 +14,24 @@ Instrukcje dotyczą GPT-Astra, GPT-Sol, GPT-Luna oraz innych agentów pracujący
 ## Ochrona pracy i uprawnienia
 
 - Sprawdź tożsamość checkoutu i `git status --short`. Zachowaj cudze zmiany. Użyj izolacji dla szerokiej implementacji; jeżeli zadanie dotyczy aktywnej konfiguracji, edytuj wskazane pliki z kopią i kontrolą zmian.
-- Nie wykonuj commitów, push, merge, force-push, usuwania danych ani wysyłania wiadomości na zewnątrz bez autoryzacji dla tej czynności. Sam przykład w skillu nie udziela uprawnienia. Nie obchodź odmowy sandboxa ani automatycznej kontroli uprawnień.
+- Dla zadania implementacyjnego w worktree użytkownik ustanawia domyślną autoryzację cyklu opisanego poniżej: commit, push brancha zadania, PR do `master`, merge i usunięcie wyłącznie zweryfikowanego worktree tego zadania. Jawne ograniczenie zadania (np. audyt, plan, tylko lokalnie, bez push/merge) ma pierwszeństwo. Pozostałe usuwanie danych, force-push i wiadomości zewnętrzne wymagają odrębnej autoryzacji. Nie obchodź sandboxa, branch protection ani automatycznej kontroli uprawnień.
 - Przed każdym commitem w współdzielonym checkoutcie sprawdź `git diff --cached --name-only` w osobnym poleceniu. Rozwijaj skrócone identyfikatory przez `git rev-parse`. Nie wnioskuj o właścicielu worktree lub procesu wyłącznie z jego ścieżki.
 - Nie usuwaj współdzielonych cache ani worktree bez sprawdzenia aktywnych użytkowników, procesów i mountów. Przed kasowaniem Cargo target uzyskaj aktualne potwierdzenie od każdego korzystającego agenta. Nigdy nie usuwaj worktree `target/`, gdy kontener bind-mountuje ten checkout.
 - Nie zmieniaj tych instrukcji automatycznie po każdym błędzie. Dodawaj trwałe reguły na zlecenie użytkownika albo przy zmianie kontraktu w zakresie zadania; usuwaj duplikaty zamiast dopisywać kolejne ogólne zakazy.
+
+## Obowiązkowy cykl pracy w worktree
+
+- Przed implementacją odczytaj [pełną procedurę](docs/guides/fullmag-build-storage-governance.md#cykl-integracji-zadania) oraz skill `using-git-worktrees`. Ustal główny checkout przez Git; użyj lub utwórz jedno `worktrees/<task-id>` obok niego, branch `codex/<task-id>`, i zapisz właściciela, bazowy commit oraz cel w rejestrze. Buildy kieruj przez resolver do `storage/builds/<worktree-id>/<profile-id>`.
+- Zakończenie implementacji uruchamia `finishing-a-development-branch`: wymagane testy i review → commit zmian zadania → push brancha → PR do `master` → wymagane kontrole i akceptacje PR → merge PR → przejście do głównego checkoutu na `master` i aktualizacja fast-forward → weryfikacja integracji → usunięcie worktree zadania przez `git worktree remove` → końcowy wpis w rejestrze. Nie kończ na „kod gotowy” ani na samym otwarciu PR, jeżeli pozostałe kroki są wykonalne.
+- Nie wykonuj drugiego lokalnego merge po scaleniu PR. Zachowaj cudze zmiany w głównym checkoutcie. Przed usunięciem potwierdź scalenie PR, czysty worktree, brak unikalnej niezintegrowanej pracy i brak korzystających procesów/kontenerów/mountów. Nie stosuj `--force`, zbiorczego prune ani usuwania cache lub wyników jako skutku ubocznego.
+- Jeżeli CI, review, uprawnienia, dirty checkout lub aktywne zasoby blokują cykl, zapisz `blocked`/`review` z dokładną ścieżką, branchem, HEAD, linkiem PR, przyczyną i następnym krokiem. Zgłoś niedokończoną integrację; nie porzucaj worktree bez wpisu i nie oznaczaj całego zadania jako ukończonego.
+
+### Commity w trakcie implementacji
+
+- Commituj na branchu zadania po każdym ukończonym, spójnym fragmencie, który przeszedł adekwatną weryfikację; nie odkładaj wszystkich commitów do końca zadania. Jeden commit obejmuje jeden logiczny cel wraz z potrzebnymi testami i dokumentacją. Granicę wyznacza działający etap, nie liczba plików ani upływ czasu. Zmiany zależne, które osobno łamią build lub kontrakt, pozostają razem.
+- Przed każdym commitem przejrzyj diff i wyniki kontroli, stage'uj wyłącznie zmiany tego fragmentu, a następnie w osobnym poleceniu sprawdź `git diff --cached --name-only` oraz staged diff. Nie dołączaj cudzych zmian, sekretów ani artefaktów builda. Komunikat po angielsku opisuje cel zmiany; w checkpointcie zadania zapisz pełny hash, zakres i dowody weryfikacji.
+- Dla poprawki zachowania użyj odpowiednich testów; dla dokumentacji wystarczy adekwatna kontrola tekstu/linków/parsera. Nie powtarzaj niezmienionych zielonych testów wyłącznie z powodu commita. Zielony test fragmentu pozwala zapisać fragment, ale nie zastępuje wymaganych bramek integracji, runtime ani nauki przed merge. Nie nazywaj nieweryfikowanego WIP ukończonym etapem.
+- Ta sama autoryzacja zadania obejmuje kolejne commity etapów; nie pytaj o każdy osobno. Commit etapu nie uruchamia osobnego merge ani usunięcia worktree: PR i integracja dotyczą całego uzgodnionego zadania. Jawne polecenie „bez commitów” ma pierwszeństwo.
 
 ## Kontrakt Fullmag
 

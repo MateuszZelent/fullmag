@@ -281,6 +281,68 @@ CMake, CUDA, FEM ani wyników.
 
 ## Zakończenie, odzyskiwanie i sprzątanie
 
+### Cykl integracji zadania
+
+Domyślną decyzją użytkownika dla implementacji w worktree jest doprowadzenie
+zmian do `master` przez PR i usunięcie worktree zadania po udanej integracji.
+Ta autoryzacja obejmuje commit, push brancha zadania, utworzenie i scalenie PR
+oraz usunięcie dokładnie tego worktree po kontrolach poniżej. Audyt, plan i jawne
+ograniczenia użytkownika, np. „tylko lokalnie” lub „bez merge”, wyłączają
+odpowiednie kroki. Nie obejmuje to starych, obcych worktree, cache ani wyników.
+
+1. Ustal lokalny `master`, główny checkout i istniejący rejestr. Utwórz lub
+   wykorzystaj jedno `<project-root>/worktrees/<task-id>` z branchem
+   `codex/<task-id>`; zapisz ownera, cel i pełny bazowy commit. Domyślną bazą
+   jest `master`, chyba że zadanie wskazuje inną. Nie przejmuj aktywnego worktree.
+2. Buduj i testuj z worktree przez właściwe recepty `just`, korzystając z
+   resolverowego `storage/builds/<worktree-id>/<profile-id>`. Zachowaj dowody
+   testów i wymaganych bramek; wykonaj review zmian przed integracją.
+   Po każdym ukończonym, logicznie spójnym i adekwatnie zweryfikowanym etapie
+   wykonaj osobny commit na branchu zadania. Nie czekaj do końca całej pracy.
+   Commit zawiera powiązany kod, testy i dokumentację; nie rozdzielaj zależnych
+   zmian na commity łamiące build lub kontrakt. Przejrzyj staged diff i sprawdź
+   listę staged files w osobnym poleceniu przed każdym commitem. Zapisz pełny
+   hash oraz dowody w checkpointcie. Dokumentacja wymaga adekwatnej kontroli,
+   a nie sztucznego testu; niezmienionych zielonych kontroli nie ponawiaj.
+   Commity etapów są objęte autoryzacją zadania i nie oznaczają ukończenia
+   integracji ani kwalifikacji runtime. Nie uruchamiają oddzielnego merge.
+3. Sprawdź osobno listę staged files i commituj tylko zmiany zadania. Wypchnij
+   branch zadania do zweryfikowanego remote. Utwórz PR z bazą `master` albo
+   kontynuuj istniejący PR tego samego brancha. Zapisz URL i HEAD PR w rejestrze.
+4. Sprawdź wymagane CI, review i branch protection dla aktualnego HEAD PR.
+   Napraw błędy i konflikty na branchu zadania, ponów dotknięte kontrole.
+   Synchronizacja remote potrzebna do tego cyklu jest autoryzowana; zapisz
+   użyty ref. Nie omijaj ochrony ani wymaganej akceptacji. Jeśli wszystko
+   wymagane jest spełnione, scal PR metodą dozwoloną przez repozytorium.
+5. Potwierdź na remote stan PR `MERGED` oraz wynikowy commit. Zakończ polecenia
+   używające worktree i przejdź do głównego checkoutu. Sprawdź jego status;
+   wybierz `master`, pobierz aktualny ref i aktualizuj wyłącznie fast-forward.
+   Nie resetuj, nie stashuj ani nie commituj cudzych zmian. Jeśli aktualizacja
+   koliduje z nimi lub lokalny `master` jest rozbieżny, zapisz blokadę.
+   Po merge PR nie wykonuj kolejnego merge brancha zadania.
+6. Zweryfikuj obecność wyniku PR na `master`, tożsamość źródeł i wymagane
+   kontrole integracyjne. Sprawdź brak nowych commitów na branchu zadania od
+   HEAD scalonego PR. Przy squash/rebase użyj też dowodu PR i porównania zmian;
+   sam brak ancestry nie świadczy o utracie kodu ani o bezpiecznym usunięciu.
+7. Przed cleanupem zapisz ścieżki buildów, logów i zachowanych wyników oraz
+   stan integracji. Sprawdź dokładną rozwiązaną ścieżkę worktree, status
+   obejmujący untracked files, unikalne zmiany, ownership, procesy, kontenery,
+   mounty i linki. Z głównego checkoutu wykonaj `git worktree remove` dla
+   pojedynczej zweryfikowanej ścieżki, bez `--force`. Zweryfikuj brak wpisu
+   w `git worktree list` i brak katalogu. Nie kasuj przy tym storage ani branchy
+   innych zadań. Jeśli Git odmawia, zachowaj dane i zapisz powód.
+8. Zaktualizuj rekord pierwotnego worktree w `storage/index` (nie rekord
+   głównego checkoutu): PR, merge commit, stan cleanupu, zachowane zasoby
+   i następny krok. Istniejący `worktree-finish` jedynie zapisuje stan;
+   nie tworzy PR, nie scala ani nie usuwa worktree. Zachowaj `worktree_id`
+   i ścieżkę rekordu przed usunięciem. Raport końcowy zawiera te dowody.
+
+Zadanie jest zakończone po integracji i cleanupie. Przy oczekiwaniu na CI,
+review, uprawnienia lub zwolnienie zasobów zachowaj worktree i wpis `review`
+albo `blocked`, z przyczyną i konkretnym następnym krokiem. Jawne polecenie
+zachowania worktree jest wyjątkiem i musi być zapisane. Nie przedstawiaj
+samej gotowości kodu ani PR jako ukończenia pełnego cyklu.
+
 Każde zakończenie worktree, profilu, builda i runu zapisuje stan końcowy,
 również po błędzie, anulowaniu lub przerwaniu. Stan musi wskazywać właściciela,
 źródła, ścieżki, procesy/kontenery, lease, ostatnią aktywność, powód
@@ -289,8 +351,9 @@ pozostawienia i następny krok. Używane rozróżnienia to co najmniej:
 `cancelled`/`abandoned` dla operacji przerwanych. Wygasły lease nie daje prawa
 do kasowania.
 
-Cleanup zaczyna się od read-only inventory i dry-runu. Usunięcie wymaga osobnej
-autoryzacji dla dokładnych celów oraz ponownego sprawdzenia dirty files,
+Cleanup zaczyna się od read-only inventory i dry-runu. Dla worktree bieżącego
+zadania autoryzację daje powyższy cykl; pozostałe usuwanie wymaga osobnej
+autoryzacji dla dokładnych celów. Zawsze wymaga ponownego sprawdzenia dirty files,
 unikalnych commitów i zmian, refów, właściciela, aktywnych procesów,
 kontenerów, mountów, junctionów/symlinków i containment. Wiek, nazwa katalogu
 ani status `prunable` nie są dowodem zbędności. Nie używaj szerokiego wildcardu
