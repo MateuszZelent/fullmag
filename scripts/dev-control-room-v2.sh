@@ -2,6 +2,31 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+STORAGE_RESOLVER="${REPO_ROOT}/scripts/fullmag_storage.py"
+STORAGE_PYTHON=""
+if command -v python3 >/dev/null 2>&1; then
+  STORAGE_PYTHON="$(command -v python3)"
+elif command -v python >/dev/null 2>&1; then
+  STORAGE_PYTHON="$(command -v python)"
+else
+  echo "Python is required for the Fullmag storage resolver." >&2
+  exit 2
+fi
+if [[ ! -f "${STORAGE_RESOLVER}" ]]; then
+  echo "Fullmag storage resolver is missing: ${STORAGE_RESOLVER}" >&2
+  exit 2
+fi
+
+# Direct launcher invocations enter through the same lock and environment
+# boundary as just/Make.  A launcher called from an already managed recipe
+# reuses the inherited lock; a direct call is re-entered by the resolver before
+# it can create logs, links, or build outputs.
+if ! "${STORAGE_PYTHON}" "${STORAGE_RESOLVER}" assert-lock --repo-root "${REPO_ROOT}" >/dev/null 2>&1; then
+  exec "${STORAGE_PYTHON}" "${STORAGE_RESOLVER}" run --repo-root "${REPO_ROOT}" -- \
+    bash "${SCRIPT_PATH}" "$@"
+fi
+
 API_PORT="${FULLMAG_API_PORT:-8081}"
 API_URL="${FULLMAG_API_URL:-http://localhost:${API_PORT}}"
 WEB_BIND_HOST="${FULLMAG_CONTROL_ROOM_V2_BIND_HOST:-${FULLMAG_WEB_BIND_HOST:-0.0.0.0}}"
@@ -47,8 +72,6 @@ else
   exit 127
 fi
 
-mkdir -p .fullmag/logs
-
 cleanup() {
   if [[ -n "${API_PID:-}" ]] && kill -0 "$API_PID" 2>/dev/null; then
     kill "$API_PID" >/dev/null 2>&1 || true
@@ -76,13 +99,18 @@ fi
 
 WEB_URL_BASE="http://${WEB_PUBLIC_HOST}:${WEB_PORT}"
 
+"${STORAGE_PYTHON}" "${STORAGE_RESOLVER}" prepare-links \
+  --repo-root "${REPO_ROOT}" --compat --frontend \
+  --next-dist-dir ".next-control-room-${WEB_PORT}" >/dev/null
+
+mkdir -p .fullmag/logs
+
 if curl -fsS "${API_URL}/healthz" >/dev/null 2>&1; then
   echo "Reusing empty Fullmag API backend on ${API_URL} ..."
 else
   echo "Starting empty Fullmag API backend on ${API_URL} ..."
   FULLMAG_API_PORT="${API_PORT}" \
     FULLMAG_DISABLE_STATIC_CONTROL_ROOM=1 \
-    CARGO_TARGET_DIR=.fullmag/target \
     cargo +nightly run -p fullmag-api > .fullmag/logs/fullmag-api-v2.log 2>&1 &
   API_PID=$!
 
@@ -107,10 +135,10 @@ fi
 
 printf '%s\n' "${WEB_URL_BASE}" > "${CONTROL_ROOM_URL_FILE}"
 
-# Kill any stale frontend process running from this project directory, then
-# remove the .next/dev state so Next.js 16's multi-instance guard doesn't
-# reject the new process. Next inserts --webpack between `dev` and the host
-# flags, so matching the old contiguous argv was not reliable.
+# Kill any stale frontend process running from this project directory. Next's
+# port-specific managed distDir and its own lock handling keep the active
+# generation isolated; deleting `.next/dev` would remove a managed link's
+# target or bypass the storage resolver.
 CONTROL_ROOM_DIR="${REPO_ROOT}/apps/control-room"
 while read -r stale_pid; do
   [[ -z "$stale_pid" || "$stale_pid" == "$$" ]] && continue
@@ -121,7 +149,6 @@ while read -r stale_pid; do
   fi
 done < <(pgrep -f 'next|dev-server\.mjs' 2>/dev/null || true)
 sleep 0.5
-rm -rf "${CONTROL_ROOM_DIR}/.next/dev"
 
 echo "Starting frontend v2 dev server on ${WEB_URL_BASE} ..."
 echo "API base: ${API_URL}"
