@@ -58,7 +58,12 @@ from ._gmsh_fields import _apply_mesh_options, _apply_post_mesh_options
 from ._gmsh_selectors import collect_orphan_entity_diagnostics
 from ._gmsh_airbox import _add_airbox_and_fragment, _add_airbox_geo
 from ._gmsh_swept import should_use_swept, generate_swept_mesh, classify_sweepability
-from ._gmsh_waveguides import add_arch_waveguide_to_occ, add_antenna_layout_to_occ
+from ._gmsh_waveguides import (
+    add_antenna_layout_parts_to_occ,
+    add_antenna_layout_terminal_physical_groups,
+    add_arch_waveguide_to_occ,
+    add_antenna_layout_to_occ,
+)
 from ._gmsh_occ import _configure_axis_periodic_surfaces, _scale_periodic_boundary_pairs
 
 _NO_OP_FIELD_SIZE = 1.0e22
@@ -601,7 +606,20 @@ def _generate_csg_mesh(
     try:
         _configure_gmsh_threads(gmsh)
         gmsh.model.add("fullmag_csg")
-        mag_tags = _add_geometry_to_occ(gmsh, geometry, scale=SCALE)
+        antenna_part_tags = None
+        if isinstance(geometry, (MicrostripAntennaLayout, CPWAntennaLayout)):
+            antenna_part_tags = add_antenna_layout_parts_to_occ(
+                gmsh,
+                geometry,
+                scale=SCALE,
+            )
+            mag_tags = [
+                dimtag
+                for part_tags in antenna_part_tags.values()
+                for dimtag in part_tags
+            ]
+        else:
+            mag_tags = _add_geometry_to_occ(gmsh, geometry, scale=SCALE)
         gmsh.model.occ.synchronize()
         has_airbox = airbox_scaled is not None
         airbox_field_ids: list[int] = []
@@ -626,6 +644,13 @@ def _generate_csg_mesh(
                 component_volume_tags = {geometry.geometry_name: [int(tag) for tag in magnetic_volumes]}
             if interface_surfaces:
                 component_surface_tags = {geometry.geometry_name: [int(tag) for tag in interface_surfaces]}
+        elif antenna_part_tags is not None:
+            add_antenna_layout_terminal_physical_groups(
+                gmsh,
+                geometry,
+                antenna_part_tags,
+                scale=SCALE,
+            )
         periodic_pair_specs = _configure_axis_periodic_surfaces(
             gmsh,
             surface_tags=[
@@ -654,7 +679,7 @@ def _generate_csg_mesh(
         mesh = _extract_mesh_data(
             gmsh,
             quality=quality,
-            has_physical_groups=has_airbox,
+            has_physical_groups=has_airbox or antenna_part_tags is not None,
             per_domain_quality=_pdq,
             periodic_pair_specs=periodic_pair_specs,
         )

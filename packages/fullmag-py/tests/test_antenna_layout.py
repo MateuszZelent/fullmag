@@ -289,6 +289,36 @@ def test_layout_uses_native_occ_for_shared_fem_domains() -> None:
     assert is_occ_compatible([layout]) is True
 
 
+def test_independent_layout_mesh_publishes_stable_terminal_markers() -> None:
+    from fullmag.meshing import generate_mesh
+    from fullmag.meshing._gmsh_waveguides import antenna_terminal_marker
+
+    assert antenna_terminal_marker("antenna", "signal", "local_u_min") == 117_762_299
+
+    layout = fm.MicrostripAntennaLayout(
+        name="marked_microstrip",
+        length_m=6.0e-6,
+        thickness_m=100.0e-9,
+        conductivity_s_per_m=58.0e6,
+        stations=(
+            fm.MicrostripWidthStation(s=0.0, signal_width_m=1.0e-6),
+            fm.MicrostripWidthStation(s=1.0, signal_width_m=1.0e-6),
+        ),
+        return_width_m=2.0e-6,
+        return_offset_m=200.0e-9,
+    )
+
+    mesh = generate_mesh(layout, maximum_element_size=1.5e-6)
+    observed = {int(marker) for marker in mesh.boundary_markers}
+    expected = {
+        antenna_terminal_marker(layout.geometry_name, part_id, selector)
+        for part_id in layout.conductor_part_ids
+        for selector in ("local_u_min", "local_u_max")
+    }
+
+    assert expected <= observed
+
+
 def test_fem_mesh_cache_follows_canonical_cache_root(monkeypatch) -> None:
     from pathlib import Path
 
