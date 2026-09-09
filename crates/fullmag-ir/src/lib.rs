@@ -2007,6 +2007,50 @@ impl ProblemIR {
                         ));
                     }
                 }
+                GeometryEntryIR::MicrostripAntenna {
+                    name,
+                    length_m,
+                    thickness_m,
+                    conductivity_s_per_m,
+                    transform,
+                    stations,
+                    return_width_m,
+                    return_offset_m,
+                    conductors,
+                    terminal_faces,
+                } => antenna::validate_microstrip_geometry(
+                    name,
+                    *length_m,
+                    *thickness_m,
+                    *conductivity_s_per_m,
+                    transform,
+                    stations,
+                    *return_width_m,
+                    *return_offset_m,
+                    conductors,
+                    terminal_faces,
+                    &mut errors,
+                ),
+                GeometryEntryIR::CpwAntenna {
+                    name,
+                    length_m,
+                    thickness_m,
+                    conductivity_s_per_m,
+                    transform,
+                    stations,
+                    conductors,
+                    terminal_faces,
+                } => antenna::validate_cpw_geometry(
+                    name,
+                    *length_m,
+                    *thickness_m,
+                    *conductivity_s_per_m,
+                    transform,
+                    stations,
+                    conductors,
+                    terminal_faces,
+                    &mut errors,
+                ),
                 GeometryEntryIR::Difference { name, base, tool } => {
                     if name.trim().is_empty() {
                         errors.push("difference geometry name must not be empty".to_string());

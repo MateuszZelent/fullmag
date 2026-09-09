@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     ChargeTransportDefinitionIR, CurrentModuleIR, CurrentTransportModelIR, DriveActivationIR,
@@ -12,6 +12,278 @@ pub const ANTENNA_NORMALIZATION_CURRENT_A: f64 = 1.0;
 pub const ANTENNA_PORT_MODE_SCHEMA_VERSION_V2: &str = "antenna_port_mode.v2";
 pub const ANTENNA_PORT_MIGRATION_REQUIRES_TERMINAL_PAIRS: &str =
     "antenna_port_migration_requires_terminal_pairs";
+
+/// Rigid transform shared by all conductor bodies and terminal selectors of
+/// an authored microwave antenna layout.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaRigidTransformIR {
+    pub rotation_matrix: [[f64; 3]; 3],
+    pub translation_m: [f64; 3],
+}
+
+/// Longitudinal station for a microstrip signal conductor.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct MicrostripWidthStationIR {
+    pub s: f64,
+    pub signal_width_m: f64,
+}
+
+/// Longitudinal station for an asymmetric CPW signal and its two grounds.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CpwWidthStationIR {
+    pub s: f64,
+    pub signal_width_m: f64,
+    pub left_gap_m: f64,
+    pub right_gap_m: f64,
+    pub left_ground_width_m: f64,
+    pub right_ground_width_m: f64,
+}
+
+/// A named conductor body emitted by an antenna layout helper.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaConductorPartIR {
+    pub id: String,
+    pub kind: String,
+}
+
+/// Local inlet/outlet face selectors for one conductor body.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaTerminalFaceSelectorsIR {
+    pub inlet: String,
+    pub outlet: String,
+}
+
+fn validate_positive(value: f64, path: &str, errors: &mut Vec<String>) {
+    if !value.is_finite() || value <= 0.0 {
+        errors.push(format!("{path} must be finite and positive"));
+    }
+}
+
+fn validate_non_negative(value: f64, path: &str, errors: &mut Vec<String>) {
+    if !value.is_finite() || value < 0.0 {
+        errors.push(format!("{path} must be finite and non-negative"));
+    }
+}
+
+fn validate_rigid_transform(
+    transform: &AntennaRigidTransformIR,
+    path: &str,
+    errors: &mut Vec<String>,
+) {
+    if transform
+        .rotation_matrix
+        .iter()
+        .flatten()
+        .any(|value| !value.is_finite())
+    {
+        errors.push(format!("{path}.rotation_matrix must contain finite values"));
+        return;
+    }
+    let gram: [f64; 9] = std::array::from_fn(|index| {
+        let column = index / 3;
+        let other = index % 3;
+        (0..3)
+            .map(|row| {
+                transform.rotation_matrix[row][column] * transform.rotation_matrix[row][other]
+            })
+            .sum::<f64>()
+    });
+    if gram.iter().enumerate().any(|(index, value)| {
+        let expected = if matches!(index, 0 | 4 | 8) { 1.0 } else { 0.0 };
+        (value - expected).abs() > 1.0e-9
+    }) {
+        errors.push(format!("{path}.rotation_matrix must be orthonormal"));
+    }
+    let matrix = &transform.rotation_matrix;
+    let determinant = matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1])
+        - matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0])
+        + matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0]);
+    if (determinant - 1.0).abs() > 1.0e-9 {
+        errors.push(format!("{path}.rotation_matrix must have determinant +1"));
+    }
+    for (index, value) in transform.translation_m.iter().enumerate() {
+        if !value.is_finite() {
+            errors.push(format!("{path}.translation_m[{index}] must be finite"));
+        }
+    }
+}
+
+fn validate_station_domain(stations: &[(f64, &str)], path: &str, errors: &mut Vec<String>) {
+    if stations.len() < 2 {
+        errors.push(format!("{path} requires at least two stations"));
+        return;
+    }
+    if stations[0].0 != 0.0 {
+        errors.push(format!("{path}[0].s must equal 0"));
+    }
+    if stations[stations.len() - 1].0 != 1.0 {
+        errors.push(format!("{path}[{}].s must equal 1", stations.len() - 1));
+    }
+    for (index, (s, _)) in stations.iter().enumerate() {
+        if !s.is_finite() || !(0.0..=1.0).contains(s) {
+            errors.push(format!(
+                "{path}[{index}].s must be finite and lie in [0, 1]"
+            ));
+        }
+        if index > 0 && *s <= stations[index - 1].0 {
+            errors.push(format!("{path} positions must be strictly increasing"));
+            break;
+        }
+    }
+}
+
+fn validate_conductor_parts(
+    conductors: &[AntennaConductorPartIR],
+    terminal_faces: &BTreeMap<String, AntennaTerminalFaceSelectorsIR>,
+    expected_count: usize,
+    path: &str,
+    errors: &mut Vec<String>,
+) {
+    if conductors.len() != expected_count {
+        errors.push(format!(
+            "{path}.conductors must contain exactly {expected_count} parts"
+        ));
+    }
+    let mut ids = BTreeSet::new();
+    for (index, conductor) in conductors.iter().enumerate() {
+        if !nonempty(&conductor.id) || !ids.insert(conductor.id.as_str()) {
+            errors.push(format!(
+                "{path}.conductors[{index}].id must be non-empty and unique"
+            ));
+        }
+        if !nonempty(&conductor.kind) {
+            errors.push(format!("{path}.conductors[{index}].kind must be non-empty"));
+        }
+        if !terminal_faces.contains_key(&conductor.id) {
+            errors.push(format!(
+                "{path}.terminal_faces is missing conductor '{}'",
+                conductor.id
+            ));
+        }
+    }
+    if terminal_faces.len() != conductors.len() {
+        errors.push(format!(
+            "{path}.terminal_faces must contain one entry per conductor"
+        ));
+    }
+    for (id, selectors) in terminal_faces {
+        if !ids.contains(id.as_str()) {
+            errors.push(format!(
+                "{path}.terminal_faces contains unknown conductor '{id}'"
+            ));
+        }
+        if !nonempty(&selectors.inlet) || !nonempty(&selectors.outlet) {
+            errors.push(format!(
+                "{path}.terminal_faces['{id}'] requires non-empty inlet and outlet selectors"
+            ));
+        }
+        if selectors.inlet == selectors.outlet {
+            errors.push(format!(
+                "{path}.terminal_faces['{id}'] inlet and outlet must differ"
+            ));
+        }
+        if selectors.inlet != "local_u_min" || selectors.outlet != "local_u_max" {
+            errors.push(format!(
+                "{path}.terminal_faces['{id}'] must select local_u_min/local_u_max"
+            ));
+        }
+    }
+}
+
+pub(crate) fn validate_microstrip_geometry(
+    name: &str,
+    length_m: f64,
+    thickness_m: f64,
+    conductivity_s_per_m: f64,
+    transform: &AntennaRigidTransformIR,
+    stations: &[MicrostripWidthStationIR],
+    return_width_m: f64,
+    return_offset_m: f64,
+    conductors: &[AntennaConductorPartIR],
+    terminal_faces: &BTreeMap<String, AntennaTerminalFaceSelectorsIR>,
+    errors: &mut Vec<String>,
+) {
+    let path = format!("microstrip geometry '{name}'");
+    if !nonempty(name) {
+        errors.push("microstrip geometry name must not be empty".to_string());
+    }
+    validate_positive(length_m, &format!("{path}.length_m"), errors);
+    validate_positive(thickness_m, &format!("{path}.thickness_m"), errors);
+    validate_positive(
+        conductivity_s_per_m,
+        &format!("{path}.conductivity_s_per_m"),
+        errors,
+    );
+    validate_rigid_transform(transform, &path, errors);
+    validate_station_domain(
+        &stations
+            .iter()
+            .map(|station| (station.s, "signal_width_m"))
+            .collect::<Vec<_>>(),
+        &format!("{path}.stations"),
+        errors,
+    );
+    for (index, station) in stations.iter().enumerate() {
+        validate_positive(
+            station.signal_width_m,
+            &format!("{path}.stations[{index}].signal_width_m"),
+            errors,
+        );
+    }
+    validate_positive(return_width_m, &format!("{path}.return_width_m"), errors);
+    validate_non_negative(return_offset_m, &format!("{path}.return_offset_m"), errors);
+    validate_conductor_parts(conductors, terminal_faces, 2, &path, errors);
+}
+
+pub(crate) fn validate_cpw_geometry(
+    name: &str,
+    length_m: f64,
+    thickness_m: f64,
+    conductivity_s_per_m: f64,
+    transform: &AntennaRigidTransformIR,
+    stations: &[CpwWidthStationIR],
+    conductors: &[AntennaConductorPartIR],
+    terminal_faces: &BTreeMap<String, AntennaTerminalFaceSelectorsIR>,
+    errors: &mut Vec<String>,
+) {
+    let path = format!("cpw geometry '{name}'");
+    if !nonempty(name) {
+        errors.push("cpw geometry name must not be empty".to_string());
+    }
+    validate_positive(length_m, &format!("{path}.length_m"), errors);
+    validate_positive(thickness_m, &format!("{path}.thickness_m"), errors);
+    validate_positive(
+        conductivity_s_per_m,
+        &format!("{path}.conductivity_s_per_m"),
+        errors,
+    );
+    validate_rigid_transform(transform, &path, errors);
+    validate_station_domain(
+        &stations
+            .iter()
+            .map(|station| (station.s, "signal_width_m"))
+            .collect::<Vec<_>>(),
+        &format!("{path}.stations"),
+        errors,
+    );
+    for (index, station) in stations.iter().enumerate() {
+        for (field, value) in [
+            ("signal_width_m", station.signal_width_m),
+            ("left_gap_m", station.left_gap_m),
+            ("right_gap_m", station.right_gap_m),
+            ("left_ground_width_m", station.left_ground_width_m),
+            ("right_ground_width_m", station.right_ground_width_m),
+        ] {
+            validate_positive(value, &format!("{path}.stations[{index}].{field}"), errors);
+        }
+    }
+    validate_conductor_parts(conductors, terminal_faces, 3, &path, errors);
+}
 
 /// Compatibility-only branch used to read the pre-v2 one-terminal contract.
 /// It is intentionally not part of [`AntennaPortModeIR`].

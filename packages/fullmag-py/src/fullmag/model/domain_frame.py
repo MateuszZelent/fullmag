@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fullmag.model.geometry import (
     ArchWaveguide,
+    CPWAntennaLayout,
     Box,
     Cylinder,
     Difference,
@@ -12,6 +13,7 @@ from fullmag.model.geometry import (
     Ellipsoid,
     ImportedGeometry,
     Intersection,
+    MicrostripAntennaLayout,
     SinWaveguide,
     Translate,
     Union,
@@ -75,6 +77,8 @@ def geometry_bounds(
         bounds_min = tuple(asset.bounds_min[i] * scale[i] for i in range(3))
         bounds_max = tuple(asset.bounds_max[i] * scale[i] for i in range(3))
         return _normalize_bounds_pair(bounds_min, bounds_max)
+    if isinstance(geometry, (MicrostripAntennaLayout, CPWAntennaLayout)):
+        return geometry.world_bounds()
     if isinstance(geometry, Box):
         sx, sy, sz = geometry.size
         return (-0.5 * sx, -0.5 * sy, -0.5 * sz), (0.5 * sx, 0.5 * sy, 0.5 * sz)

@@ -213,6 +213,11 @@ pub(crate) fn ir_to_shape(entry: &GeometryEntryIR) -> Result<GeometryShape, Stri
             "geometry '{}' (Ellipse) is not yet supported by the FDM planner; use Box or Cylinder",
             name
         )),
+        GeometryEntryIR::MicrostripAntenna { name, .. }
+        | GeometryEntryIR::CpwAntenna { name, .. } => Err(format!(
+            "geometry '{}' (antenna layout) requires the conductor mesh planner; it is not an FDM magnetic body",
+            name
+        )),
     }
 }
 
@@ -243,7 +248,10 @@ pub(crate) fn extract_multilayer_geometry(
             "geometry '{}' uses CSG union/intersection which is not yet supported by the public multilayer planner; use Box/Cylinder/Difference with optional Translate",
             entry.name()
         )),
-        GeometryEntryIR::Ellipsoid { .. } | GeometryEntryIR::Ellipse { .. } => Err(format!(
+        GeometryEntryIR::Ellipsoid { .. }
+        | GeometryEntryIR::Ellipse { .. }
+        | GeometryEntryIR::MicrostripAntenna { .. }
+        | GeometryEntryIR::CpwAntenna { .. } => Err(format!(
             "geometry '{}' is not yet supported by the public multilayer planner; use Box/Cylinder/Difference with optional Translate",
             entry.name()
         )),

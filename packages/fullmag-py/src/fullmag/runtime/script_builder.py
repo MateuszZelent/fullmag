@@ -58,6 +58,7 @@ from fullmag.model.dynamics import (
 from fullmag.model.energy import BulkDMI, Constant, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, Pulse, SincPulse, Sinusoidal, ThermalNoise, UniaxialAnisotropy, Zeeman
 from fullmag.model.eigen import serialize_k_sampling
 from fullmag.model.geometry import (
+    CPWAntennaLayout,
     ArchWaveguide,
     Box,
     Cylinder,
@@ -66,6 +67,7 @@ from fullmag.model.geometry import (
     Ellipsoid,
     ImportedGeometry,
     Intersection,
+    MicrostripAntennaLayout,
     SinWaveguide,
     Translate,
     Union,
@@ -858,6 +860,19 @@ def _render_shape_expression(entry: Mapping[str, object]) -> str:
         if any(value is None for value in values):
             raise ValueError("ArchWaveguide geometry requires finite dimensions.")
         expression = f"fm.ArchWaveguide{_python_literal(tuple(values))}"
+    elif kind in {
+        "cpw",
+        "cpwantennalayout",
+        "cpw_antenna_layout",
+        "microstrip",
+        "microstripantennalayout",
+        "microstrip_antenna_layout",
+    }:
+        expression = _render_antenna_layout_expr(
+            str(params.get("kind") or kind),
+            params,
+            name=str(entry.get("name") or params.get("name") or "antenna"),
+        )
     else:
         raise ValueError(f"SceneDocument export does not support geometry kind '{kind}'.")
     translation = params.get("translation")
@@ -6854,6 +6869,108 @@ def _render_excitation_analysis_override(
     return f"{_surface_call(surface, 'spin_wave_excitation')}({', '.join(kwargs)})"
 
 
+def _render_antenna_layout_expr(
+    kind: str,
+    params: Mapping[str, object],
+    *,
+    name: str,
+) -> str:
+    normalized_kind = kind.lower()
+    if normalized_kind in {"cpw", "cpwantennalayout", "cpw_antenna_layout"}:
+        constructor = "fm.CPWAntennaLayout"
+        station_type = "fm.CPWWidthStation"
+    elif normalized_kind in {
+        "microstrip",
+        "microstripantennalayout",
+        "microstrip_antenna_layout",
+    }:
+        constructor = "fm.MicrostripAntennaLayout"
+        station_type = "fm.MicrostripWidthStation"
+    else:
+        raise ValueError(f"unsupported antenna layout kind '{kind}'")
+
+    def number(key: str, *aliases: str) -> str:
+        value = params.get(key)
+        for alias in aliases:
+            if value is None:
+                value = params.get(alias)
+        numeric = _finite_number(value)
+        if numeric is None:
+            raise ValueError(f"{kind} geometry requires finite {key}")
+        return _py_number(numeric)
+
+    def number_from(mapping: Mapping[str, object], key: str, *aliases: str) -> str:
+        value = mapping.get(key)
+        for alias in aliases:
+            if value is None:
+                value = mapping.get(alias)
+        numeric = _finite_number(value)
+        if numeric is None:
+            raise ValueError(f"{kind} station requires finite {key}")
+        return _py_number(numeric)
+
+    raw_stations = params.get("stations")
+    if not isinstance(raw_stations, list) or len(raw_stations) < 2:
+        raise ValueError(f"{kind} geometry requires at least two stations")
+    stations: list[str] = []
+    for raw_station in raw_stations:
+        station = _normalize_mapping(raw_station)
+        if station_type == "fm.CPWWidthStation":
+            stations.append(
+                f"{station_type}(s={number_from(station, 's')}, "
+                f"signal_width_m={number_from(station, 'signal_width_m', 'signal_width')}, "
+                f"left_gap_m={number_from(station, 'left_gap_m', 'left_gap')}, "
+                f"right_gap_m={number_from(station, 'right_gap_m', 'right_gap')}, "
+                f"left_ground_width_m={number_from(station, 'left_ground_width_m', 'left_ground_width')}, "
+                f"right_ground_width_m={number_from(station, 'right_ground_width_m', 'right_ground_width')})"
+            )
+        else:
+            stations.append(
+                f"{station_type}(s={number_from(station, 's')}, "
+                f"signal_width_m={number_from(station, 'signal_width_m', 'signal_width')})"
+            )
+
+    kwargs = [
+        f"name={_py_repr(name)}",
+        f"length_m={number('length_m', 'length')}",
+        f"thickness_m={number('thickness_m', 'thickness')}",
+        f"conductivity_s_per_m={number('conductivity_s_per_m', 'conductivity')}",
+        "stations=(" + ", ".join(stations) + ",)",
+    ]
+    transform = _normalize_mapping(params.get("transform"))
+    rotation = transform.get("rotation_matrix")
+    translation = transform.get("translation_m")
+    identity_rotation = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    if rotation is not None or translation is not None:
+        rotation_tuple = tuple(tuple(float(component) for component in row) for row in rotation) if isinstance(rotation, list) else identity_rotation
+        translation_tuple = tuple(float(component) for component in translation) if isinstance(translation, list) else (0.0, 0.0, 0.0)
+        if rotation_tuple != identity_rotation or any(component != 0.0 for component in translation_tuple):
+            kwargs.append(
+                "transform=fm.RigidTransform("
+                f"rotation_matrix={_py_literal(rotation_tuple)}, "
+                f"translation_m={_py_literal(translation_tuple)})"
+            )
+    if constructor == "fm.MicrostripAntennaLayout":
+        kwargs.extend([
+            f"return_width_m={number('return_width_m', 'return_width')}",
+            f"return_offset_m={number('return_offset_m', 'return_gap_m')}",
+        ])
+        for key, param in (("signal_part_id", "signal_part_id"), ("return_part_id", "return_part_id")):
+            value = params.get(key)
+            if isinstance(value, str) and value and value not in {"signal", "return"}:
+                kwargs.append(f"{param}={_py_repr(value)}")
+    else:
+        for key, default in (
+            ("signal_part_id", "signal"),
+            ("left_ground_part_id", "ground_left"),
+            ("right_ground_part_id", "ground_right"),
+        ):
+            value = params.get(key)
+            if isinstance(value, str) and value and value != default:
+                kwargs.append(f"{key}={_py_repr(value)}")
+    return f"{constructor}({', '.join(kwargs)})"
+
+
 def _render_geometry_expr_from_override(
     kind: str,
     params: dict[str, object],
@@ -6936,6 +7053,15 @@ def _render_geometry_expr_from_override(
         if isinstance(volume, str) and volume and volume != "full":
             kwargs.append(f"volume={_py_repr(volume)}")
         expr = f"fm.ImportedGeometry({', '.join(kwargs)})"
+    elif kind in {
+        "CPWAntennaLayout",
+        "cpw",
+        "cpw_antenna_layout",
+        "MicrostripAntennaLayout",
+        "microstrip",
+        "microstrip_antenna_layout",
+    }:
+        expr = _render_antenna_layout_expr(kind, params, name=name)
     elif kind == "Translate":
         base = _normalize_mapping(params.get("base"))
         base_kind = str(base.get("geometry_kind", "Box"))
@@ -6984,6 +7110,12 @@ def _render_geometry_expr_from_override(
 
 
 def _render_geometry_expr(geometry: object, *, magnet_name: str, source_root: Path) -> str:
+    if isinstance(geometry, (MicrostripAntennaLayout, CPWAntennaLayout)):
+        return _render_antenna_layout_expr(
+            type(geometry).__name__,
+            {key: value for key, value in geometry.to_ir().items() if key not in {"name", "kind"}},
+            name=geometry.geometry_name,
+        )
     if isinstance(geometry, ImportedGeometry):
         kwargs = [f"source={_py_repr(_relativize_path(geometry.source, source_root))}"]
         if geometry.scale != 1.0:
@@ -7751,6 +7883,14 @@ def _export_geometry_descriptor(
     *,
     flatten_translation: bool,
 ) -> dict[str, object]:
+    if isinstance(geom, (MicrostripAntennaLayout, CPWAntennaLayout)):
+        payload = dict(geom.to_ir())
+        payload.pop("name", None)
+        payload.pop("kind", None)
+        return {
+            "geometry_kind": type(geom).__name__,
+            "geometry_params": payload,
+        }
     if isinstance(geom, ImportedGeometry):
         return {
             "geometry_kind": "ImportedGeometry",

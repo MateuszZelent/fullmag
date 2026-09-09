@@ -12,6 +12,15 @@ from fullmag._validation import (
     require_positive,
 )
 from fullmag.model.energy import Sinusoidal, TimeDependence
+from fullmag.model.geometry import (
+    AntennaLayout,
+    AntennaRigidTransform,
+    CPWAntennaLayout,
+    CPWWidthStation,
+    MicrostripAntennaLayout,
+    MicrostripWidthStation,
+    RigidTransform,
+)
 
 # FEM-034 / FEM-035: extensible allow-lists for solver and current_distribution.
 # Add new entries here when additional backends or distributions are implemented.
