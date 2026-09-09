@@ -157,9 +157,11 @@ the background.
 
 1. Complete the physics and validation gates in note 0950 before promoting a
    lane.
-2. Add typed Python and `ProblemIR` contracts for layouts, width stations,
-   port modes, field-solve stages, solution references, and the two drive
-   families.
+2. Add typed Python and `ProblemIR` composition contracts that reference the
+   existing `PhysicsObject`, geometry, material assignment and charge-only
+   `CurrentTransport` owners, plus thin port modes, field-solve stages,
+   solution/projection references, and the two drive families. Do not add a
+   parallel `AntennaLayout` owner that copies those data.
 3. Add planner capability decisions for field solve and drive consumption
    separately.
 4. Add `antenna_field_solution.v1` manifests with heavy binary child resources.

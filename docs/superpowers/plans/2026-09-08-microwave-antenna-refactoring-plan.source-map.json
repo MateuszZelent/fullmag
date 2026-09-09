@@ -1,0 +1,146 @@
+{
+  "document": {
+    "path": "docs/superpowers/plans/2026-09-08-microwave-antenna-refactoring-plan.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "planned_not_qualified",
+      "reason": "Implementation plan only; qualification gates required"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "planned_not_qualified",
+      "reason": "Implementation plan only; qualification gates required"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "planned_not_qualified",
+      "reason": "Implementation plan only; qualification gates required"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "planned_not_qualified",
+      "reason": "Implementation plan only; qualification gates required"
+    }
+  ],
+  "symbols": [],
+  "equations": [],
+  "sources": [
+    {
+      "id": "source0",
+      "path": "crates/fullmag-authoring/src/scene.rs",
+      "symbol": "SceneDocument",
+      "responsibility": "Kotwica planowanych zadan T03"
+    },
+    {
+      "id": "source1",
+      "path": "crates/fullmag-authoring/src/adapters.rs",
+      "symbol": "scene_document_from_script_builder",
+      "responsibility": "Kotwica planowanych zadan T03"
+    },
+    {
+      "id": "source2",
+      "path": "crates/fullmag-api/src/router_v2/handlers/model/authoring.rs",
+      "symbol": "apply_scene_merge_patch",
+      "responsibility": "Kotwica planowanych zadan T03/T14"
+    },
+    {
+      "id": "source3",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class AntennaPortMode",
+      "responsibility": "Kotwica planowanych zadan T02/T03"
+    },
+    {
+      "id": "source4",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class SolvedAntennaDrive",
+      "responsibility": "Kotwica planowanych zadan T03/T07"
+    },
+    {
+      "id": "source5",
+      "path": "crates/fullmag-plan/src/antenna_composition.rs",
+      "symbol": "bind_resolved_antenna_field_solve",
+      "responsibility": "Kotwica planowanych zadan T05"
+    },
+    {
+      "id": "source6",
+      "path": "crates/fullmag-runner/src/native_fem/charge_transport.rs",
+      "symbol": "measured_port_current",
+      "responsibility": "Kotwica planowanych zadan T05"
+    },
+    {
+      "id": "source7",
+      "path": "crates/fullmag-ir/src/validation.rs",
+      "symbol": "validate_time_dependence",
+      "responsibility": "Kotwica planowanych zadan T07"
+    },
+    {
+      "id": "source8",
+      "path": "crates/fullmag-plan/src/util.rs",
+      "symbol": "field_drive_is_active",
+      "responsibility": "Kotwica planowanych zadan T07"
+    },
+    {
+      "id": "source9",
+      "path": "crates/fullmag-runner/src/antenna_field_solution.rs",
+      "symbol": "load_solved_antenna_drive_basis_projected",
+      "responsibility": "Kotwica planowanych zadan T08/T09"
+    },
+    {
+      "id": "source10",
+      "path": "crates/fullmag-runner/src/antenna_stage.rs",
+      "symbol": "antenna_field_solution_signatures",
+      "responsibility": "Kotwica planowanych zadan T08"
+    },
+    {
+      "id": "source11",
+      "path": "crates/fullmag-runner/src/antenna_spectrum.rs",
+      "symbol": "sample_antenna_field_on_plane",
+      "responsibility": "Kotwica planowanych zadan T09/T10"
+    },
+    {
+      "id": "source12",
+      "path": "crates/fullmag-runner/src/antenna_spectrum.rs",
+      "symbol": "compute_structured_antenna_source_spectrum",
+      "responsibility": "Kotwica planowanych zadan T10"
+    },
+    {
+      "id": "source13",
+      "path": "crates/fullmag-runner/src/antenna_spectrum.rs",
+      "symbol": "compute_nonuniform_k_antenna_source_spectrum",
+      "responsibility": "Kotwica planowanych zadan T10"
+    },
+    {
+      "id": "source14",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "symbol": "solve_native_fem_steady_transport_rt0",
+      "responsibility": "Kotwica planowanych zadan T06/T11"
+    },
+    {
+      "id": "source15",
+      "path": "crates/fullmag-cli/src/orchestrator.rs",
+      "symbol": "attach_solved_antenna_drive_bases",
+      "responsibility": "Kotwica planowanych zadan T08/T12/T16/T17"
+    },
+    {
+      "id": "source16",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "pack_native_regional_field_drives",
+      "responsibility": "Kotwica planowanych zadan T07/T13"
+    },
+    {
+      "id": "source17",
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp",
+      "symbol": "project_regional_field_drive_bases",
+      "responsibility": "Kotwica planowanych zadan T00/T13"
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}

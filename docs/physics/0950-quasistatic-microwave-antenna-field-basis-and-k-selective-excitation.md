@@ -2,7 +2,7 @@
 
 - Status: proposed canonical physics and numerics contract
 - Owners: Fullmag core
-- Last updated: 2026-07-10
+- Last updated: 2026-09-08
 - Related ADRs:
   - `docs/adr/0004-backend-canonical-quantities.md`
   - `docs/adr/0011-resource-first-api.md`
@@ -18,6 +18,7 @@
   - `docs/physics/0860-fdm-generalized-oersted-from-prescribed-current.md`
   - `docs/physics/0920-regional-time-domain-field-drive.md`
 
+(antenna-problem-statement)=
 ## 1. Problem statement
 
 Fullmag needs two deliberately different microwave-field source families:
@@ -39,10 +40,14 @@ The scientific target is not a full transient Maxwell solve. Fullmag will
 calculate a spatial magnetic-field basis once and reuse it in subsequent LLG
 stages:
 
-$$
+(antenna-separable-field-basis)=
+```{math}
+:label: antenna-separable-field-basis
 \mathbf H_{\mathrm{ant}}(\mathbf r,t)
 = \sum_p I_p(t)\,\mathbf H_{p,1\mathrm A}(\mathbf r),
-$$
+```
+
+<!-- DOC-ANCHOR: antenna-separable-field-basis -->
 
 where $p$ identifies an independent antenna port mode. For the common
 single-mode case this reduces to
@@ -64,6 +69,7 @@ available only in a localized section, creating a spin-wave beam. The source
 field spectrum and the actual magnetization response must remain separate
 observables.
 
+(antenna-assumptions-and-validity)=
 ## 2. Model hierarchy and selected fidelity level
 
 Fullmag uses an explicit fidelity ladder. The selected implementation target is
@@ -88,7 +94,29 @@ $A_z$ finite-element problem. It must be treated as a compatibility
 approximation and renamed in provenance to
 `legacy_infinite_strip_biot_savart`; it is not exposed by the new authoring UI.
 
+(antenna-governing-equations)=
 ## 3. Physical model
+
+(antenna-symbols-and-si-units)=
+### 3.0 Symbols and SI units
+
+| Symbol | Meaning | SI unit |
+|---|---|---|
+| $\mathbf H_{\mathrm{ant}}$ | instantaneous summed antenna magnetic field strength | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_{p,1\mathrm A}$ | spatial field basis of port mode $p$, normalized per ampere | $\mathrm{A\,m^{-1}\,A^{-1}}$ |
+| $I_p$ | signed current waveform of port mode $p$ | $\mathrm A$ |
+| $\mathbf J$ | conventional electric-current density | $\mathrm{A\,m^{-2}}$ |
+| $V$ | electric scalar potential | $\mathrm V$ |
+| $\sigma$ | electrical conductivity | $\mathrm{S\,m^{-1}}$ |
+| $\Omega_c$ | union of conducting volumes in the mode | $\mathrm{m^3}$ |
+| $\Gamma_{\mathrm{term}}$ | terminal surface set | $\mathrm{m^2}$ |
+| $\mathbf n$ | outward unit normal | $1$ |
+| $w_{p,q}$ | signed branch weight for mode $p$ and branch $q$ | $1$ |
+| $\mathbf r$ | target position | $\mathrm m$ |
+| $\mathbf r'$ | source position | $\mathrm m$ |
+| $\mathbf m$ | normalized magnetization | $1$ |
+| $\mathbf k$ | spin-wave wave vector | $\mathrm{rad\,m^{-1}}$ |
+| $\omega$ | angular frequency | $\mathrm{rad\,s^{-1}}$ |
 
 ### 3.1 Conductor domain and electric potential
 
@@ -407,6 +435,93 @@ combined or inspected separately. Fourier transforming the scalar magnitude
 $\lVert\mathbf H\rVert$ before LLG is forbidden because it discards sign,
 polarization, and component information.
 
+#### 5.1.1 Normative sampling and Fourier convention
+
+An executable request must declare an orthonormal right-handed frame
+$(\mathbf e_u,\mathbf e_v,\mathbf e_n)$, plane origin $\mathbf r_0$, extents
+$L_u,L_v$, and sample counts $N_u,N_v\geq2$. The uniform lattice is
+
+$$
+\mathbf r_{pq}=\mathbf r_0+
+\left(-\frac{L_u}{2}+p\Delta u\right)\mathbf e_u+
+\left(-\frac{L_v}{2}+q\Delta v\right)\mathbf e_v,
+\qquad
+\Delta u=\frac{L_u}{N_u-1},\quad
+\Delta v=\frac{L_v}{N_v-1}.
+$$
+
+FEM values are evaluated at these physical points by element-local
+interpolation on the immutable solution mesh. A nearest-node substitution is
+not a production realization. Points outside the declared carrier fail the
+request unless the authored outside policy is `zero`; the policy and outside
+count are recorded in provenance. FDM values use the same physical lattice
+contract and an explicitly selected interpolation policy.
+
+For window samples $w_{pq}$ and vector-component samples $h_{a,pq}$, Fullmag
+uses the discrete approximation
+
+$$
+\widetilde h_a(k_{u,m},k_{v,n})=
+\Delta u\Delta v\sum_{p=0}^{N_u-1}\sum_{q=0}^{N_v-1}
+w_{pq}h_{a,pq}
+\exp[-i(k_{u,m}u_p+k_{v,n}v_q)],
+$$
+
+with angular wave numbers in $\mathrm{rad\,m^{-1}}$,
+
+$$
+k_{u,m}=2\pi\,\operatorname{fftfreq}(N_u,\Delta u),\qquad
+k_{v,n}=2\pi\,\operatorname{fftfreq}(N_v,\Delta v).
+$$
+
+The mandatory normalization enum is `integral_si` for the expression above
+or `unitary_discrete` for division of the unscaled DFT by
+$\sqrt{N_uN_v}$. The request must also author one of `rectangular`, `hann`,
+`hamming`, or `blackman`; there is no implicit window. The artifact stores the
+coherent gain $G_c=(N_uN_v)^{-1}\sum_{pq}w_{pq}$ and equivalent noise
+bandwidth so amplitudes from different windows are not compared silently.
+
+Transverse analysis requires an equilibrium unit vector
+$\widehat{\mathbf m}_0(\mathbf r_{pq})$ and computes
+
+$$
+\mathbf h_{\perp,pq}=\mathbf h_{pq}
+-(\mathbf h_{pq}\!\cdot\!\widehat{\mathbf m}_{0,pq})
+\widehat{\mathbf m}_{0,pq}.
+$$
+
+If no equilibrium resource is supplied, only explicit Cartesian or local-frame
+components are legal; `transverse` must fail closed. A structured FFT is legal
+only after the interpolation certificate above is published. Direct nonuniform
+Fourier evaluation is a separate realization and must declare its exact
+$\mathbf k$ grid, quadrature weights, tolerance, and implementation identity.
+
+#### 5.1.2 Current executable sampling lane
+
+The first executable `antenna_source_spectrum.v1` lane consumes the immutable
+`antenna_field_solution.v1` sample carrier. That carrier currently contains
+finite nodal coordinates and the corresponding field basis, but not an element
+connectivity payload. Therefore the qualified sampling operation is an
+identity-coordinate projection: every requested lattice point must coincide
+with one and only one source sample within the declared floating-point
+coordinate tolerance. Reordering and strict subsets are valid; a nearest-node
+substitution is not performed. If a point has no matching source sample, the
+request fails closed, except when `outside_policy="zero"`, in which case that
+sample is explicitly zeroed and the outside count is recorded.
+
+The lattice uses the plane origin as its centre, exactly as in the equation
+above. `interpolation="fem_element"` names the carrier contract and is only
+accepted for this identity-coordinate lane until element topology is published
+in a later asset revision. `interpolation="fdm_trilinear"` is rejected because
+the current asset does not contain an FDM grid origin, spacing, and dimensions.
+This restriction is deliberate: the FFT artifact must never silently claim a
+spatial interpolation that was not executed.
+
+The published artifact records the solution digest, source port, lattice frame,
+outside count, coordinate mapping digest, window, normalization, and complex
+amplitudes. It is a source-field spectrum only; it is not a magnetization
+response or an eigenmode overlap.
+
 ### 5.2 Local spectrum for a constricted antenna
 
 For a layout whose profile changes along local $u$, a global FFT hides where a
@@ -471,8 +586,10 @@ $$
 Mode overlap is deferred until the modal field normalization and spatial
 transfer contracts are validated.
 
+(antenna-discrete-realization)=
 ## 6. Numerical interpretation
 
+(antenna-cpu-gpu-separation)=
 ### 6.1 Solver ownership
 
 The first production field solve belongs to `backends/fem` even when the
@@ -521,6 +638,7 @@ The field sampling domain must not be truncated to the ferromagnet. Its purpose
 is to show range and decay in air. The target projection is the buffer used by
 LLG and is separately invalidated when the magnetic mesh/grid changes.
 
+(antenna-fdm-interpretation)=
 ### 6.4 FDM consumption
 
 For FDM, evaluate or transfer the basis at active magnetic cell centers. The
@@ -533,6 +651,7 @@ Topology identity, cell ordering, active mask, precision, and projection method
 are part of the target-projection signature. A basis for one grid may not be
 reused on another grid merely because point counts match.
 
+(antenna-fem-interpretation)=
 ### 6.5 FEM consumption
 
 For FEM P1 time evolution, the MVP projection is a nodal vector coefficient
@@ -565,6 +684,7 @@ CPU reference fixtures. Production tolerances for large models may be relaxed
 only by a documented workload-specific validation gate and must remain visible
 in provenance.
 
+(antenna-runtime-session-impact)=
 ## 7. Runtime stage and artifact contract
 
 ### 7.1 Stage graph
@@ -585,15 +705,17 @@ $\mathbf m_0$ runs only after the equilibrium artifact is available.
 Downstream execution rejects a missing, failed, incompatible, or stale field
 basis. It must not start a hidden solve inside an LLG RHS call.
 
+(antenna-artifact-provenance-impact)=
 ### 7.2 Field-solution artifact
 
 The canonical artifact family is `antenna_field_solution.v1`. Its manifest
 contains:
 
 - solution id, source id, stage id, and creation time;
-- authored conductor layout and rigid transform;
-- conductor material and conductivity;
-- port modes, terminal selectors, weights, and 1 A normalization;
+- immutable references to the source `PhysicsObject`, shared geometry revision,
+  material assignment and charge-only `CurrentTransport`;
+- port-mode ids, references to the transport terminal selectors, signed branch
+  weights, measured terminal-current certificate and 1 A normalization;
 - conductor mesh identity, statistics, and hash;
 - requested and resolved solver/backend/device/precision;
 - gauge policy and linear-solver policy;
@@ -611,8 +733,9 @@ JSON.
 
 Staleness is split into three signatures:
 
-1. `current_solution_signature`: conductor layout, transform, conductivity,
-   ports, conductor mesh, gauge, and conduction solver;
+1. `current_solution_signature`: referenced source-object/geometry/material and
+   `CurrentTransport` revisions, port binding, conductor mesh, gauge, and
+   conduction solver;
 2. `field_solution_signature`: current solution plus Biot-Savart realization,
    quadrature policy, and field-sampling domain;
 3. `target_projection_signature`: field solution plus target topology,
@@ -642,37 +765,51 @@ canonical stored field or imply magnetic-material polarization.
 
 ## 8. Public Python, ProblemIR, and planner impact
 
+(antenna-python-api)=
 ### 8.1 Python authoring target
 
-The canonical Python shape separates layout, field solve, and drive:
+The canonical Python shape is composition-first: geometry, object identity,
+material assignment and charge transport keep their existing owners. The thin
+antenna layer adds only port-mode binding, field-solve staging and field-basis
+consumption:
 
 ```python
-cpw = fm.CPWAntenna(
-    name="cpw_constriction",
-    length=12e-6,
-    thickness=120e-9,
-    conductivity=5.8e7,
-    stations=[
-        fm.CPWStation(s=0.0, signal_width=2.0e-6, gap=1.0e-6, ground_width=4.0e-6),
-        fm.CPWStation(s=0.40, signal_width=2.0e-6, gap=1.0e-6, ground_width=4.0e-6),
-        fm.CPWStation(s=0.46, signal_width=260e-9, gap=95e-9, ground_width=1.2e-6),
-        fm.CPWStation(s=0.54, signal_width=260e-9, gap=95e-9, ground_width=1.2e-6),
-        fm.CPWStation(s=0.60, signal_width=2.0e-6, gap=1.0e-6, ground_width=4.0e-6),
-        fm.CPWStation(s=1.0, signal_width=2.0e-6, gap=1.0e-6, ground_width=4.0e-6),
-    ],
-    transform=fm.Transform(translation=(0.0, 0.0, 150e-9)),
+# %% Shared physical owners
+cpw = fm.PhysicsObject(
+    object_id="cpw_constriction",
+    name="CPW constriction",
+    type="antenna",
+    geometry=cpw_geometry,
+    materials=(copper_assignment,),
+    physics=("cpw_charge",),
 )
 
-cpw_mode = fm.AntennaPortMode.symmetric_cpw(
-    name="drive_mode",
-    signal="signal",
-    grounds=("ground_left", "ground_right"),
+charge = fm.CurrentTransport.charge_only(
+    id="cpw_charge",
+    domain=(fm.RegionRef("cpw_constriction", "conductors"),),
+    conductivity_s_per_m=5.8e7,
+    terminals=(signal_terminal, left_return_terminal, right_return_terminal),
+    conservative_current_view=cpw_closed_current_view,
 )
 
+# %% Thin antenna port binding
+cpw_mode = fm.AntennaPortMode(
+    id="drive_mode",
+    source_object="cpw_constriction",
+    current_transport="cpw_charge",
+    branches=(
+        fm.AntennaPortBranch(terminal="signal", weight=1.0),
+        fm.AntennaPortBranch(terminal="ground_left", weight=-0.5),
+        fm.AntennaPortBranch(terminal="ground_right", weight=-0.5),
+    ),
+)
+
+# %% Precompute and consume the immutable per-ampere basis
 field_solution = fm.AntennaFieldSolve(
     name="solve_cpw_field",
-    antenna=cpw,
-    port_modes=(cpw_mode,),
+    source_object="cpw_constriction",
+    current_transport="cpw_charge",
+    port_modes=("drive_mode",),
     model="quasistatic_conduction_biot_savart_3d",
     field_sampling=fm.FieldSamplingBox(
         size=(16e-6, 10e-6, 3e-6),
@@ -692,37 +829,34 @@ drive = fm.SolvedAntennaDrive(
 ```
 
 The existing constant-width `MicrostripAntenna` and `CPWAntenna` constructors
-remain deserializable. They lower to two endpoint stations with constant
-parameters. Existing `AntennaFieldSource(model="prescribed_zeeman_mask")`
+remain deserializable migration adapters. They must lower once to shared
+geometry, `PhysicsObject`, material assignment, charge-only `CurrentTransport`
+and thin port-mode references; they are not a second geometry/material/current
+model. Existing `AntennaFieldSource(model="prescribed_zeeman_mask")`
 round-trips through a compatibility adapter to the separate regional-drive
 contract described by note 0920.
 
+(antenna-problem-ir)=
 ### 8.2 ProblemIR target
 
-The canonical IR adds explicit types instead of adding more optional fields to
-the current conflated `AntennaFieldSource` variant:
+The canonical IR adds thin composition and lifecycle types instead of adding
+more optional fields to the current conflated `AntennaFieldSource` variant or
+duplicating existing geometry/material/current owners:
 
 ```text
-AntennaLayoutIR
-  id
-  kind = microstrip | cpw
-  length_m
-  thickness_m
-  local_frame
-  transform
-  stations
-  conductor_parts
-  conductivity_s_per_m
-
 AntennaPortModeIR
   id
-  terminal_groups[]
-  current_weights[]
+  source_object_ref -> PhysicsObjectIR
+  current_transport_ref -> CurrentModuleIR::CurrentTransport
+  terminal_selector_refs[]
+  signed_branch_weights[]
   normalization_current_a = 1
 
 StudyIR::AntennaFieldSolve
-  antenna_ref
-  port_modes[]
+  source_object_ref
+  current_transport_ref
+  port_mode_refs[]
+  conservative_current_view_ref
   model = quasistatic_conduction_biot_savart_3d
   conductor_mesh_policy
   field_sampling_domain
@@ -759,21 +893,39 @@ quadrature work arrays, and artifact file paths remain plan/runtime details.
 
 Validation requires:
 
-1. globally unique layout, port-mode, stage, solution-output, and drive ids;
-2. monotone complete station profiles;
-3. positive geometry and conductivity parameters;
-4. valid terminal selectors on conductor boundary faces;
-5. signed port weights summing to zero;
-6. explicit return conductors;
-7. one or more target objects for LLG coupling;
-8. a solved-drive reference to an earlier compatible field-solve stage;
+1. globally unique port-mode, stage, solution-output, projection and drive ids;
+2. an existing source `PhysicsObject` with explicitly authored antenna or
+   conductor presentation type and shared geometry/material references;
+3. an existing complete charge-only `CurrentTransport` bound to that object;
+4. valid referenced terminal selectors on conductor boundary faces;
+5. finite signed branch weights summing to zero;
+6. explicit return conductors and a complete conservative-current closure;
+7. one or more target objects or Airbox/inspection sampling targets;
+8. a solved-drive reference to an earlier compatible published field solution;
 9. finite peak currents and canonical waveform parameters;
 10. an explicit time-origin policy.
 
 Normalization converts convenience symmetric CPW definitions to explicit
-terminal weights and converts constant-width layouts to endpoint stations.
-Normalization must not invent a missing microstrip return plane.
+terminal references and weights. It must not copy geometry, conductivity or
+terminal definitions into the antenna layer and must not invent a missing
+return path.
 
+The exhaustive public parameter mapping for the new thin contracts is:
+
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `AntennaPortMode.source_object` | `str` | required | `1` | nonempty id naming exactly one existing PhysicsObject with explicitly authored antenna or conductor presentation type | stable conductor-source identity without copied geometry | backend-neutral authoring; execution remains capability-scoped | `antenna_port_modes[].source_object_id` |
+| `AntennaPortMode.current_transport` | `str` | required | `1` | names one complete static one-way CurrentTransport bound to the source object | owner of solved electric potential and conventional current | FEM CPU/double initial reference lane | `antenna_port_modes[].current_transport_id` |
+| `AntennaPortBranch.weight` | `float` | required | `1` | finite; all branch weights in one mode sum to zero and include signal plus return | signed current share relative to the common positive orientation | backend-neutral contract | `antenna_port_modes[].branches[].weight` |
+| `SolvedAntennaDrive.peak_current` | `float` | required | `A` | finite; zero disables the drive without invalidating the spatial basis | signed peak multiplying the immutable per-ampere field basis | lane-specific artifact consumer | `solved_antenna_drives[].peak_current_a` |
+
+(The optional `AntennaSpectrumRequest.port_mode_id` selects the immutable
+per-ampere basis used by the source-spectrum transform. It may be omitted only
+for a legacy single-port solve asset; a multi-port asset must name one of its
+solved port modes. The value is recorded in the spectrum provenance and never
+changes the solved field itself.
+
+(antenna-planner-capability-impact)=
 ### 8.4 Planner and execution selection
 
 The field-solve stage and the downstream LLG stage have separate requested and
@@ -789,6 +941,20 @@ Initial capability target:
 | Tier 1 drive consumption | reference oracle | after double parity | production | after double parity |
 | Tier 0 regional drive | current partial reference | deferred until implemented | deferred until native implementation | deferred until native implementation |
 | local source k-spectrum | backend-neutral artifact analysis | same artifact | backend-neutral artifact analysis | same artifact |
+
+(antenna-round-trip-and-failure-semantics)=
+### 8.5 Round-trip and failure semantics
+
+Python and UI authoring preserve the **requested intent**: object, transport,
+terminal references, signed weights, waveform, target and requested execution.
+The planner records **resolved execution** separately, including backend,
+device, precision, operator and projection realization. Round-trip export must
+not replace either record with the other.
+
+Dangling references, stale solution digests, invalid terminal balance and
+unsupported lanes produce typed **validation errors**. **Unsupported combinations**
+fail closed; they do not trigger a hidden antenna solve, a regional-field
+fallback, CPU fallback, or synthetic spin transport.
 
 Forced unsupported lanes fail clearly. `auto` may resolve the Tier 1 field solve
 to FEM CPU, but it preserves both requested downstream discretization and
@@ -818,6 +984,7 @@ Physics-level obligations are:
 10. source k-spectrum and dynamic structure factor are labeled as distinct
     analysis products.
 
+(antenna-validation)=
 ## 10. Validation strategy
 
 ### 10.1 Analytical current and field checks
@@ -892,6 +1059,7 @@ transduction efficiency is not an acceptance metric for Tier 1.
 7. Browser smoke proves a visible 3D canvas with a live WebGL context when 3D
    is active and no 3D canvas when `field-map` is active.
 
+(antenna-completeness-checklist)=
 ## 11. Implementation status and completeness checklist
 
 This note is implementation-ready as a physics contract. It does not claim the
@@ -918,6 +1086,7 @@ new Tier 1 path is implemented.
 - [ ] OpenAPI and control-room implementation
 - [ ] publication benchmark artifacts
 
+(antenna-limitations)=
 ## 12. Deferred work
 
 1. Harmonic complex MQS bases and multi-frequency interpolation.
@@ -931,7 +1100,26 @@ new Tier 1 path is implemented.
    evaluations.
 8. Validated mode-overlap analysis and inductive detector-voltage prediction.
 
-## 13. References
+(antenna-implementation-mapping)=
+## 13. Implementation mapping
+
+The source index distinguishes executable evidence from planned composition
+contracts. A documentation anchor marked `planned_contract` is not runtime
+evidence and cannot promote a capability lane.
+
+(antenna-source-code-index)=
+### 13.1 Source-code index
+
+| Path | Symbol | Responsibility |
+|---|---|---|
+| `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:antenna-separable-field-basis` | planned separable per-port field-basis contract; not executable evidence |
+| `crates/fullmag-ir/src/spin_transport.rs` | `ResolvedChargeTransportPlanIR` | standalone resolved charge-only contract without synthetic spin transport |
+| `crates/fullmag-plan/src/spin_transport.rs` | `resolve_fem_charge_only_transport` | FEM CPU/double charge-only planning and conservative-current-view binding |
+| `crates/fullmag-runner/src/native_fem/charge_transport.rs` | `execute_native_fem_charge_transport_plans` | pre-LLG execution, field publication and Oersted delegation |
+| `backends/fem/tests/charge_transport_abi_contract.cpp` | `main` | native affine sign, linearity, balance and fail-closed gate |
+
+(antenna-scientific-bibliography)=
+## 14. References
 
 1. A. Höfinger et al., “k-Selective Electrical-to-Magnon Transduction with
    Realistic Field-distributed Nanoantennas,” arXiv:2511.10346 (2025),

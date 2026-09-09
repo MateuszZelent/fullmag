@@ -1,0 +1,176 @@
+{
+  "document": {
+    "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "development_executable",
+      "reason": "The standalone one-way H1/P1 charge lane and existing conservative RT0/Oersted owners are under managed qualification. The immutable antenna_field_solution.v1 lifecycle, per-ampere port certificate and solved-drive consumer are not yet qualified."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "unsupported",
+      "reason": "No qualified device-resident antenna field solve or SolvedAntennaDrive consumer exists; forced GPU requests must fail closed."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "unsupported",
+      "reason": "The downstream projection and immutable SolvedAntennaDrive consumer are not implemented; legacy prescribed and solved-current Oersted paths are not substitutes."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "unsupported",
+      "reason": "No qualified projection, artifact consumer or waveform parity evidence exists; silent CPU fallback is forbidden."
+    }
+  ],
+  "symbols": [
+    {"id": "H_ant", "latex": "$\\mathbf H_{\\mathrm{ant}}$", "meaning": "instantaneous summed antenna magnetic field strength", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "H_basis", "latex": "$\\mathbf H_{p,1\\mathrm A}$", "meaning": "spatial field basis of port mode $p$, normalized per ampere", "si_unit": "$\\mathrm{A\\,m^{-1}\\,A^{-1}}$"},
+    {"id": "I_p", "latex": "$I_p$", "meaning": "signed current waveform of port mode $p$", "si_unit": "$\\mathrm A$"},
+    {"id": "J", "latex": "$\\mathbf J$", "meaning": "conventional electric-current density", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
+    {"id": "V", "latex": "$V$", "meaning": "electric scalar potential", "si_unit": "$\\mathrm V$"},
+    {"id": "sigma", "latex": "$\\sigma$", "meaning": "electrical conductivity", "si_unit": "$\\mathrm{S\\,m^{-1}}$"},
+    {"id": "Omega_c", "latex": "$\\Omega_c$", "meaning": "union of conducting volumes in the mode", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Gamma_term", "latex": "$\\Gamma_{\\mathrm{term}}$", "meaning": "terminal surface set", "si_unit": "$\\mathrm{m^2}$"},
+    {"id": "n", "latex": "$\\mathbf n$", "meaning": "outward unit normal", "si_unit": "$1$"},
+    {"id": "w_pq", "latex": "$w_{p,q}$", "meaning": "signed branch weight for mode $p$ and branch $q$", "si_unit": "$1$"},
+    {"id": "r", "latex": "$\\mathbf r$", "meaning": "target position", "si_unit": "$\\mathrm m$"},
+    {"id": "r_prime", "latex": "$\\mathbf r'$", "meaning": "source position", "si_unit": "$\\mathrm m$"},
+    {"id": "m", "latex": "$\\mathbf m$", "meaning": "normalized magnetization", "si_unit": "$1$"},
+    {"id": "k", "latex": "$\\mathbf k$", "meaning": "spin-wave wave vector", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
+    {"id": "omega", "latex": "$\\omega$", "meaning": "angular frequency", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"}
+  ],
+  "equations": [
+    {
+      "id": "antenna-separable-field-basis",
+      "symbols": ["H_ant", "H_basis", "I_p", "r"],
+      "sources": ["separable-basis-planned-contract", "charge-only-runner", "charge-only-native-contract"]
+    }
+  ],
+  "sources": [
+    {
+      "id": "separable-basis-planned-contract",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:antenna-separable-field-basis",
+      "responsibility": "Freeze the planned per-port separable field-basis equation without claiming executable solved-drive evidence.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "charge-only-resolved-contract",
+      "path": "crates/fullmag-ir/src/spin_transport.rs",
+      "symbol": "ResolvedChargeTransportPlanIR",
+      "responsibility": "Represent standalone one-way charge execution independently of spin transport."
+    },
+    {
+      "id": "charge-only-planner",
+      "path": "crates/fullmag-plan/src/spin_transport.rs",
+      "symbol": "resolve_fem_charge_only_transport",
+      "responsibility": "Resolve the static FEM CPU/double charge owner and require a complete conservative-current view for Oersted."
+    },
+    {
+      "id": "charge-only-runner",
+      "path": "crates/fullmag-runner/src/native_fem/charge_transport.rs",
+      "symbol": "execute_native_fem_charge_transport_plans",
+      "responsibility": "Execute charge-only plans before LLG and delegate RT0/Oersted to existing numerical owners."
+    },
+    {
+      "id": "charge-only-native-contract",
+      "path": "backends/fem/tests/charge_transport_abi_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Verify affine potential/current sign, linearity, balance, layout and fail-closed behavior."
+    },
+    {
+      "id": "antenna-spectrum-sampling",
+      "path": "crates/fullmag-runner/src/antenna_spectrum.rs",
+      "symbol": "sample_antenna_field_on_plane",
+      "responsibility": "Construct the declared centred plane lattice and perform only bounded identity-coordinate sampling from the immutable field carrier; reject unsupported interpolation."
+    },
+    {
+      "id": "antenna-spectrum-artifact",
+      "path": "crates/fullmag-runner/src/antenna_spectrum.rs",
+      "symbol": "compute_antenna_source_spectrum_artifact",
+      "responsibility": "Apply the declared component projection, window, normalization, and spatial transform and return the source-field spectrum artifact with provenance."
+    },
+    {
+      "id": "antenna-spectrum-tests",
+      "path": "crates/fullmag-runner/src/antenna_spectrum.rs",
+      "symbol": "identity_plane_sampling_is_coordinate_stable_and_reorders_sources",
+      "responsibility": "Regression evidence for coordinate-stable sampling, outside-policy accounting, fail-closed interpolation, and content-addressed spectrum serialization."
+    },
+    {
+      "id": "antenna-spectrum-cli-consumer",
+      "path": "crates/fullmag-cli/src/orchestrator.rs",
+      "symbol": "execute_antenna_spectrum_requests",
+      "responsibility": "Consume only published immutable field assets and write source-spectrum artifacts before the normal solver stage."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "AntennaPortMode.source_object",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "nonempty id naming exactly one existing PhysicsObject with explicitly authored antenna or conductor presentation type",
+        "meaning": "stable conductor-source identity without copied geometry",
+        "backend_support": "backend-neutral authoring; execution remains capability-scoped",
+        "problem_ir": "antenna_port_modes[].source_object_id"
+      },
+      {
+        "python": "AntennaPortMode.current_transport",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "names one complete static one-way CurrentTransport bound to the source object",
+        "meaning": "owner of solved electric potential and conventional current",
+        "backend_support": "FEM CPU/double initial reference lane",
+        "problem_ir": "antenna_port_modes[].current_transport_id"
+      },
+      {
+        "python": "AntennaPortBranch.weight",
+        "type": "float",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "finite; all branch weights in one mode sum to zero and include signal plus return",
+        "meaning": "signed current share relative to the common positive orientation",
+        "backend_support": "backend-neutral contract",
+        "problem_ir": "antenna_port_modes[].branches[].weight"
+      },
+      {
+        "python": "SolvedAntennaDrive.peak_current",
+        "type": "float",
+        "default": "required",
+        "si_unit": "A",
+        "validation": "finite; zero disables the drive without invalidating the spatial basis",
+        "meaning": "signed peak multiplying the immutable per-ampere field basis",
+        "backend_support": "lane-specific artifact consumer",
+        "problem_ir": "solved_antenna_drives[].peak_current_a"
+      },
+      {
+        "python": "AntennaSpectrumRequest.sampling_plane",
+        "type": "AntennaSpectrumSamplingPlane",
+        "default": "required",
+        "si_unit": "m for origin/extents; 1 for counts and frame",
+        "validation": "orthonormal in-plane axes, positive extents, at least two samples per axis; current executable lane requires identity-coordinate carrier matches and fails closed for unsupported interpolation",
+        "meaning": "centred physical lattice on which the per-ampere source field is sampled before the spatial Fourier transform",
+        "backend_support": "immutable FEM antenna asset; FDM trilinear and arbitrary FEM element interpolation remain explicitly unsupported",
+        "problem_ir": "antenna_spectrum_requests[].sampling_plane"
+      },
+      {
+        "python": "AntennaSpectrumRequest.port_mode_id",
+        "type": "str | None",
+        "default": "None only for legacy single-port assets",
+        "si_unit": "1",
+        "validation": "when present, non-empty and bound to the solve stage; omitted requests are valid only when that stage has exactly one port",
+        "meaning": "selects the immutable per-ampere field basis used by source-spectrum analysis",
+        "backend_support": "immutable FEM antenna asset; multi-port assets require explicit selection",
+        "problem_ir": "antenna_spectrum_requests[].port_mode_id"
+      }
+    ]
+  }
+}
