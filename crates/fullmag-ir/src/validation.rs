@@ -127,7 +127,9 @@ fn validate_v04_magnetization_constraints(problem: &ProblemIRV04, errors: &mut V
     );
 }
 
-fn pipeline_stage_ids(metadata: &BTreeMap<String, serde_json::Value>) -> BTreeSet<String> {
+pub(crate) fn pipeline_stage_ids(
+    metadata: &BTreeMap<String, serde_json::Value>,
+) -> BTreeSet<String> {
     metadata
         .get("study_pipeline")
         .and_then(|value| value.get("nodes"))
@@ -1422,7 +1424,11 @@ pub(crate) fn validate_planar_monitors(problem: &ProblemIR, errors: &mut Vec<Str
     }
 }
 
-fn validate_time_dependence(label: &str, value: &TimeDependenceIR, errors: &mut Vec<String>) {
+pub(crate) fn validate_time_dependence(
+    label: &str,
+    value: &TimeDependenceIR,
+    errors: &mut Vec<String>,
+) {
     match value {
         TimeDependenceIR::Constant => {}
         TimeDependenceIR::Sinusoidal {

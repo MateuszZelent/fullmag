@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     ChargeTransportDefinitionIR, CurrentModuleIR, CurrentTransportModelIR, DriveActivationIR,
-    FieldTargetIR, FieldTimeOriginIR, PhysicsObjectTypeIR, ProblemIR, ProblemIRV04,
+    FieldTargetIR, FieldTimeOriginIR, PhysicsObjectTypeIR, ProblemIR, ProblemIRV04, StudyKindIR,
     TimeDependenceIR, TransportCouplingIR,
 };
 
@@ -652,6 +652,64 @@ fn validate_v2_port_structure(
     }
 }
 
+fn validate_solved_antenna_drive(
+    prefix: &str,
+    drive: &SolvedAntennaDriveIR,
+    projection_ids: &BTreeSet<&str>,
+    port_ids: &BTreeSet<&str>,
+    solved_stage: Option<&AntennaFieldSolveStageIR>,
+    pipeline_stage_ids: &BTreeSet<String>,
+    study_kind: StudyKindIR,
+    errors: &mut Vec<String>,
+) {
+    let valid_projection = projection_ids.contains(drive.projection_ref.as_str());
+    let valid_port = port_ids.contains(drive.port_mode_id.as_str());
+    let valid_stage_port = solved_stage.is_some_and(|stage| {
+        stage
+            .port_mode_ids
+            .iter()
+            .any(|port_mode_id| port_mode_id == &drive.port_mode_id)
+    });
+    if !valid_projection || !valid_port || !drive.peak_current_a.is_finite() || !valid_stage_port {
+        errors.push(format!(
+            "{prefix} has an invalid projection, port mode, or peak current"
+        ));
+    }
+
+    crate::validation::validate_time_dependence(
+        &format!("{prefix}.waveform"),
+        &drive.waveform,
+        errors,
+    );
+
+    if let DriveActivationIR::StageIds { stage_ids } = &drive.activation {
+        if stage_ids.is_empty() {
+            errors.push(format!("{prefix}.activation.stage_ids must not be empty"));
+        }
+        let mut local_ids = BTreeSet::new();
+        for stage_id in stage_ids {
+            if stage_id.trim().is_empty() || !local_ids.insert(stage_id.as_str()) {
+                errors.push(format!(
+                    "{prefix}.activation stage ids must be non-empty and unique"
+                ));
+            }
+            if !pipeline_stage_ids.contains(stage_id) {
+                errors.push(format!(
+                    "{prefix}.activation stage id '{stage_id}' does not exist"
+                ));
+            }
+        }
+    }
+
+    if matches!(study_kind, StudyKindIR::Relaxation)
+        && !matches!(drive.waveform, TimeDependenceIR::Constant)
+    {
+        errors.push(format!(
+            "{prefix}.waveform dynamic waveform is invalid in a minimizer/relaxation study"
+        ));
+    }
+}
+
 pub(crate) fn validate_antenna_composition(problem: &ProblemIRV04, errors: &mut Vec<String>) {
     let mut port_ids = BTreeSet::new();
     for (index, port) in problem.antenna_port_modes.iter().enumerate() {
@@ -791,8 +849,12 @@ pub(crate) fn validate_antenna_composition(problem: &ProblemIRV04, errors: &mut 
         }
     }
 
+    let pipeline_stage_ids =
+        crate::validation::pipeline_stage_ids(&problem.problem_meta.runtime_metadata);
+    let study_kind = problem.study.kind();
     let mut drive_ids = BTreeSet::new();
     for (index, drive) in problem.solved_antenna_drives.iter().enumerate() {
+        let prefix = format!("solved_antenna_drives[{index}]");
         if !nonempty(&drive.id) || !drive_ids.insert(drive.id.as_str()) {
             errors.push(format!(
                 "solved_antenna_drives[{index}].id must be non-empty and unique"
@@ -808,20 +870,16 @@ pub(crate) fn validate_antenna_composition(problem: &ProblemIRV04, errors: &mut 
                     .iter()
                     .find(|stage| stage.id == projection.solution.stage_id)
             });
-        if !projection_ids.contains(drive.projection_ref.as_str())
-            || !port_ids.contains(drive.port_mode_id.as_str())
-            || !drive.peak_current_a.is_finite()
-            || solved_stage.is_some_and(|stage| {
-                !stage
-                    .port_mode_ids
-                    .iter()
-                    .any(|port_mode_id| port_mode_id == &drive.port_mode_id)
-            })
-        {
-            errors.push(format!(
-                "solved_antenna_drives[{index}] has an invalid projection, port mode, or peak current"
-            ));
-        }
+        validate_solved_antenna_drive(
+            &prefix,
+            drive,
+            &projection_ids,
+            &port_ids,
+            solved_stage,
+            &pipeline_stage_ids,
+            study_kind,
+            errors,
+        );
     }
 
     let mut spectrum_ids = BTreeSet::new();
@@ -1088,6 +1146,9 @@ pub(crate) fn validate_antenna_composition_v03(problem: &ProblemIR, errors: &mut
         }
     }
 
+    let pipeline_stage_ids =
+        crate::validation::pipeline_stage_ids(&problem.problem_meta.runtime_metadata);
+    let study_kind = problem.study.kind();
     let mut drive_ids = BTreeSet::new();
     for (index, drive) in problem.solved_antenna_drives.iter().enumerate() {
         let prefix = format!("solved_antenna_drives[{index}]");
@@ -1104,20 +1165,16 @@ pub(crate) fn validate_antenna_composition_v03(problem: &ProblemIR, errors: &mut
                 .iter()
                 .find(|stage| stage.id == projection.solution.stage_id)
         });
-        if projection.is_none()
-            || !port_ids.contains(drive.port_mode_id.as_str())
-            || !drive.peak_current_a.is_finite()
-            || stage.is_some_and(|stage| {
-                !stage
-                    .port_mode_ids
-                    .iter()
-                    .any(|port_mode_id| port_mode_id == &drive.port_mode_id)
-            })
-        {
-            errors.push(format!(
-                "{prefix} has an invalid projection, port mode, or peak current"
-            ));
-        }
+        validate_solved_antenna_drive(
+            &prefix,
+            drive,
+            &projection_ids,
+            &port_ids,
+            stage,
+            &pipeline_stage_ids,
+            study_kind,
+            errors,
+        );
     }
 
     let mut spectrum_ids = BTreeSet::new();
@@ -1213,5 +1270,110 @@ pub(crate) fn validate_antenna_composition_v03(problem: &ProblemIR, errors: &mut
                 "{prefix} must reference a published solution and valid target, sampling frame, transform grid, component/equilibrium, optional mode basis, and output"
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn solved_stage() -> AntennaFieldSolveStageIR {
+        AntennaFieldSolveStageIR {
+            id: "antenna_solve".to_string(),
+            source_object_id: "antenna_1".to_string(),
+            current_transport_id: "antenna_current".to_string(),
+            port_mode_ids: vec!["port_1".to_string()],
+            conservative_current_view_ref: "current_view".to_string(),
+            model: AntennaFieldModelIR::QuasistaticConductionBiotSavart3d,
+            oersted_realization: AntennaOerstedRealizationIR::DirectTetraQuadrature,
+            conductor_mesh_policy: "full_3d".to_string(),
+            field_sampling_domain: FieldTargetIR::Global {},
+            target_refs: vec![FieldTargetIR::Global {}],
+            solver_policy: "direct".to_string(),
+            outputs: vec![AntennaNamedOutputIR {
+                id: "basis".to_string(),
+                quantity: "H_ant_basis".to_string(),
+            }],
+        }
+    }
+
+    fn solved_drive(
+        waveform: TimeDependenceIR,
+        activation: DriveActivationIR,
+    ) -> SolvedAntennaDriveIR {
+        SolvedAntennaDriveIR {
+            id: "drive_1".to_string(),
+            name: "Drive 1".to_string(),
+            projection_ref: "projection_1".to_string(),
+            port_mode_id: "port_1".to_string(),
+            peak_current_a: 1.0,
+            waveform,
+            time_origin: FieldTimeOriginIR::StageLocal,
+            activation,
+        }
+    }
+
+    #[test]
+    fn solved_drive_validation_reuses_waveform_and_activation_contract() {
+        let stage = solved_stage();
+        let drive = solved_drive(
+            TimeDependenceIR::Sinusoidal {
+                frequency_hz: 0.0,
+                phase_rad: 0.0,
+                offset: 0.0,
+            },
+            DriveActivationIR::StageIds {
+                stage_ids: vec!["run".to_string(), "run".to_string(), "missing".to_string()],
+            },
+        );
+        let mut errors = Vec::new();
+        validate_solved_antenna_drive(
+            "solved_antenna_drives[0]",
+            &drive,
+            &BTreeSet::from(["projection_1"]),
+            &BTreeSet::from(["port_1"]),
+            Some(&stage),
+            &BTreeSet::from(["run".to_string()]),
+            StudyKindIR::TimeEvolution,
+            &mut errors,
+        );
+
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("waveform frequency_hz must be finite and > 0")));
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("activation stage ids must be non-empty and unique")));
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("activation stage id 'missing' does not exist")));
+    }
+
+    #[test]
+    fn solved_drive_validation_rejects_dynamic_relaxation_drive() {
+        let stage = solved_stage();
+        let drive = solved_drive(
+            TimeDependenceIR::Pulse {
+                t_on: 0.0,
+                t_off: 1.0,
+            },
+            DriveActivationIR::AllTimeEvolution {},
+        );
+        let mut errors = Vec::new();
+        validate_solved_antenna_drive(
+            "solved_antenna_drives[0]",
+            &drive,
+            &BTreeSet::from(["projection_1"]),
+            &BTreeSet::from(["port_1"]),
+            Some(&stage),
+            &BTreeSet::from(["relax".to_string()]),
+            StudyKindIR::Relaxation,
+            &mut errors,
+        );
+
+        assert!(errors
+            .iter()
+            .any(|error| error
+                .contains("dynamic waveform is invalid in a minimizer/relaxation study")));
     }
 }
