@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { resolveDevServerPublicOrigin } from "./dev-server-public-origin.mjs";
 
 test("uses the published host port without changing the listen port", () => {
