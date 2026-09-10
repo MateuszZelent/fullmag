@@ -46814,6 +46814,9 @@ async fn frozen_spins_test_state() -> Arc<AppState> {
     let mut scene = sample_scene_document();
     scene.revision = 12;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        // This fixture models idle authoring; hot-apply tests explicitly start a stage.
+        snapshot.session.status = "awaiting_command".into();
+        crate::session::refresh_runtime_status(snapshot);
         snapshot.scene_document = Some(scene);
         snapshot.metadata = Some(serde_json::json!({
             "artifact_layout": {
