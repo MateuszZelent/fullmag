@@ -6,6 +6,8 @@ Run interactively on GPU with:
 Use cpu instead of gpu to exercise the strict FEM CPU lane.
 """
 
+from pathlib import Path
+
 import fullmag as fm
 
 
@@ -60,9 +62,9 @@ study.fem_demag_solver(
     rtol=1e-12,
     max_iterations=600,
 )
-# Resolve the authored mesh through the current generator and its validated
-# cache. The historical sibling artifact uses an obsolete quality certificate.
-study.build_domain_mesh()
+study.mesh.save_or_load(
+    Path(__file__).resolve().with_suffix(".fullmag-mesh")
+)
 
 study.stages.add_relax(
     stage_id="relax",
