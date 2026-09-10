@@ -522,6 +522,16 @@ pub fn load_solved_antenna_drive_basis_projected(
     }
     let source_field_xyz_apm_per_a =
         decode_xyz_f64_le(&field_payload.bytes, expected_field_values)?;
+    if let Some(mask) = target_mask {
+        if mask.len() != expected_sample_count {
+            return Err(RunError {
+                message: format!(
+                    "antenna target projection mask has {} entries; expected {expected_sample_count}",
+                    mask.len()
+                ),
+            });
+        }
+    }
     let (mut field_xyz_apm_per_a, mapping_digest) = if let Some(target_positions) =
         target_positions_xyz_m
     {
@@ -580,6 +590,11 @@ pub fn load_solved_antenna_drive_basis_projected(
         let mut projected = Vec::with_capacity(target_positions.len());
         let mut mapping = Vec::with_capacity(target_positions.len());
         for (target_index, position) in target_positions.iter().copied().enumerate() {
+            if target_mask.is_some_and(|mask| !mask[target_index]) {
+                projected.push([0.0; 3]);
+                mapping.push(u64::MAX);
+                continue;
+            }
             let source_index = source_by_coordinate
                 .get(&coordinate_key(position))
                 .copied()
@@ -605,14 +620,6 @@ pub fn load_solved_antenna_drive_basis_projected(
         (source_field_xyz_apm_per_a, "identity".into())
     };
     let mask_digest = if let Some(mask) = target_mask {
-        if mask.len() != expected_sample_count {
-            return Err(RunError {
-                message: format!(
-                    "antenna target projection mask has {} entries; expected {expected_sample_count}",
-                    mask.len()
-                ),
-            });
-        }
         for (value, selected) in field_xyz_apm_per_a.iter_mut().zip(mask) {
             if !selected {
                 *value = [0.0; 3];
@@ -1650,6 +1657,32 @@ mod tests {
         assert_eq!(plan.solved_antenna_drive_bases.len(), 1);
         assert_eq!(
             plan.solved_antenna_drive_bases[0].field_xyz_apm_per_a,
+            vec![[4.0, 5.0, 6.0], [0.0, 0.0, 0.0]]
+        );
+    }
+
+    #[test]
+    fn fem_target_mask_skips_unselected_missing_nodes() {
+        let mut fixture = input(2.0);
+        fixture.sample_positions_xyz_m = vec![[1.0, 1.0, 1.0]];
+        fixture.bases[0].magnetic_field_xyz_apm = vec![[8.0, 10.0, 12.0]];
+        let artifacts = build_antenna_field_solution_artifacts(&fixture).unwrap();
+        let manifest = artifacts.last().unwrap();
+        let digest = manifest_digest(&manifest.bytes);
+        let resolved = load_solved_antenna_drive_basis_projected(
+            &manifest.bytes,
+            &artifacts[..artifacts.len() - 1],
+            drive(),
+            "solution_1",
+            "antenna_1",
+            &digest,
+            2,
+            Some(&[[1.0, 1.0, 1.0], [3.0, 1.0, 1.0]]),
+            Some(&[true, false]),
+        )
+        .unwrap();
+        assert_eq!(
+            resolved.field_xyz_apm_per_a,
             vec![[4.0, 5.0, 6.0], [0.0, 0.0, 0.0]]
         );
     }
