@@ -8747,6 +8747,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 Ok(None) => "no certificate".to_string(),
                                 Err(error) => format!("invalid certificate: {error}"),
                             };
+                        if cmd.kind == "solve" {
+                            command_stage.entrypoint_kind = stages[0].entrypoint_kind.clone();
+                            command_stage.ir.problem_meta.entrypoint_kind =
+                                stages[0].ir.problem_meta.entrypoint_kind.clone();
+                            command_stage.incoming_transition = stages[0].incoming_transition.clone();
+                        }
                         stages[0] = command_stage;
                         stage_execution_plans[0] = command_plan.clone();
                         initial_execution_plan = command_plan;
