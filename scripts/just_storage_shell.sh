@@ -42,6 +42,17 @@ is_windows_shell() {
   return 1
 }
 
+# Python on Windows cannot resolve the POSIX `/usr/bin/bash` entry that Git
+# Bash exposes in PATH. Pass an absolute Windows executable to the managed
+# runner so nested recipe shells inherit the resolved storage environment.
+bash_executable="bash"
+if is_windows_shell && command -v cygpath >/dev/null 2>&1; then
+  bash_path="$(command -v bash)"
+  if [[ "${bash_path}" == /* ]]; then
+    bash_executable="$(cygpath -w "${bash_path}")"
+  fi
+fi
+
 # Read-only listing/help recipes must not create a storage marker or any
 # compatibility path.  The resolver's own read-only actions can therefore be
 # used for inspection even when the checkout has not been initialized yet.
@@ -51,10 +62,10 @@ if [[ "${recipe}" == *"fullmag_storage.py"* &&
       "${recipe}" != *" run "* &&
       "${recipe}" != *" register "* &&
       "${recipe}" != *" finish "* ]]; then
-  FULLMAG_STORAGE_PYTHON="${python_cmd}" exec bash -euo pipefail -c "${recipe}"
+  FULLMAG_STORAGE_PYTHON="${python_cmd}" exec "${bash_executable}" -euo pipefail -c "${recipe}"
 fi
 case "${recipe}" in
-  *"just --list"*|*"just --list --"*) exec bash -euo pipefail -c "${recipe}" ;;
+  *"just --list"*|*"just --list --"*) exec "${bash_executable}" -euo pipefail -c "${recipe}" ;;
 esac
 
 # The Windows PowerShell launchers select their own storage profile and hold
@@ -63,7 +74,7 @@ esac
 if is_windows_shell; then
   case "${recipe}" in
     *"scripts/windows/run_fullmag.ps1"*|*"scripts/windows/run_fullmag_fem.ps1"*|*"scripts/windows/run_fullmag_wsl.ps1"*|*"scripts/windows/setup_fullmag.ps1"*|*"scripts/windows/verify_fem_frequency_domain_native_contract.ps1"*|*"scripts/windows/build_windows_msi.ps1"*)
-      exec bash -euo pipefail -c "${recipe}"
+      exec "${bash_executable}" -euo pipefail -c "${recipe}"
       ;;
   esac
 fi
@@ -95,4 +106,4 @@ esac
 # worktree OS lock until every nested bash/docker/cargo command has finished.
 # Its owner token is inherited by nested `just` calls, which are reentrant.
 exec "${python_cmd}" "${resolver}" run --repo-root "${repo_root}" -- \
-  bash -euo pipefail -c "${recipe}"
+  "${bash_executable}" -euo pipefail -c "${recipe}"
