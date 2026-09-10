@@ -11180,7 +11180,7 @@ class RegionMeshPolicyTests(unittest.TestCase):
             if element_markers[i] != waveguide_marker:
                 continue
             centroid = nodes[tet].mean(axis=0)
-            # Center of cylinder is [0, 0, 0], radius is 15e-9
+            # Match the authored finite cylinder, not an infinite XY column.
             dist_xy = math.sqrt(centroid[0]**2 + centroid[1]**2)
 
             edges = [
@@ -11189,7 +11189,7 @@ class RegionMeshPolicyTests(unittest.TestCase):
             ]
             for u, v in edges:
                 length = np.linalg.norm(nodes[u] - nodes[v])
-                if dist_xy <= 15e-9:
+                if dist_xy <= 15e-9 and abs(centroid[2]) <= 5e-9:
                     region_edge_lengths.append(length)
                 else:
                     bulk_edge_lengths.append(length)
