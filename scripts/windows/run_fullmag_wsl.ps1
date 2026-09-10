@@ -766,6 +766,7 @@ grep -Fxq fem-cpu /workspace/.fullmag/local/launcher-build-mode
     "run", "--rm", "--no-deps", "--service-ports"
   )
   foreach ($entry in @(
+    "FULLMAG_WEB_PUBLIC_PORT=$WebPort",
     "FULLMAG_FEM_EXECUTION=$Device",
     "FULLMAG_RELAX_DEVICE=$Device",
     "FULLMAG_SP4_DEVICE=$Device",

@@ -485,6 +485,7 @@ def test_windows_fem_interactive_launch_separates_host_and_container_web_ports()
 
     assert '$env:FULLMAG_WINDOWS_WEB_PORT = $WebPort.ToString()' in launcher
     assert '$containerWebPort = 3100' in launcher
+    assert '"FULLMAG_WEB_PUBLIC_PORT=$WebPort"' in launcher
     assert '$cliArguments += @("--web-port", $containerWebPort.ToString())' in launcher
     assert '$cliArguments += @("--web-port", $WebPort.ToString())' not in launcher
     assert '"${FULLMAG_WINDOWS_WEB_PORT:-3100}:3100"' in compose
