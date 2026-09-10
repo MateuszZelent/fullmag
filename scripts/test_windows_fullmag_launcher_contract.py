@@ -541,6 +541,33 @@ def test_fullmag_windows_dispatch_preserves_port_defaults(backend, explicit_port
     assert result.stdout == expected
 
 
+@pytest.mark.parametrize("device", ["cpu", "gpu"])
+@pytest.mark.parametrize("override", [False, True])
+def test_windows_fem_exports_resolved_image_to_compose(device, override):
+    powershell = shutil.which("powershell.exe") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is required to exercise image selection")
+    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+    selection = launcher.split("$RuntimeImage = if", 1)[1].split("foreach ($item", 1)[0]
+    image_key = f"FULLMAG_WINDOWS_FEM_{device.upper()}_IMAGE"
+    expected = f"test/{device}:override" if override else f"test/{device}:worktree"
+    setup = (
+        "$env:FULLMAG_WINDOWS_FEM_CPU_IMAGE=$null;"
+        "$env:FULLMAG_WINDOWS_FEM_GPU_IMAGE=$null;"
+        "$DefaultFemCpuImage='test/cpu:worktree';"
+        "$DefaultFemGpuImage='test/gpu:worktree';"
+        f"$Device='{device}';"
+    )
+    if override:
+        setup += f"$env:{image_key}='{expected}';"
+    command = setup + "$RuntimeImage = if" + selection + f"[Console]::Write($env:{image_key})"
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-Command", command], capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == expected
+
+
 def test_windows_compose_uses_only_bind_mounts_for_build_and_cache() -> None:
     compose = WINDOWS_COMPOSE.read_text(encoding="utf-8")
 

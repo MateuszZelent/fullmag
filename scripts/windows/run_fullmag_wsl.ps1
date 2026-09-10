@@ -426,6 +426,14 @@ $RuntimeImage = if ($Device -eq "gpu") {
   }
 }
 
+# Compose must execute the same image selected for build/reuse and provenance.
+# Without this export its YAML default silently selects the shared image tag.
+if ($Device -eq "gpu") {
+  $env:FULLMAG_WINDOWS_FEM_GPU_IMAGE = $RuntimeImage
+} else {
+  $env:FULLMAG_WINDOWS_FEM_CPU_IMAGE = $RuntimeImage
+}
+
 foreach ($item in @(
     @{ Path = $BuildRoot; Label = "FULLMAG_WINDOWS_BUILD_ROOT" },
     @{ Path = $CacheRoot; Label = "FULLMAG_WINDOWS_CACHE_ROOT" },
