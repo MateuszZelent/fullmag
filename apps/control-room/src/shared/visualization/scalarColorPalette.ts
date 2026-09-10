@@ -77,7 +77,8 @@ function srgbChannelToLinear(component: number): number {
     : Math.pow((component + 0.055) / 1.055, 2.4);
 }
 
-export function scalarColorRgb(
+/** Palette samples in display sRGB for Canvas ImageData and CSS consumers. */
+export function scalarColorSrgb(
   t: number,
   palette: string | null | undefined = "viridis",
 ): Rgb {
@@ -88,11 +89,19 @@ export function scalarColorRgb(
   const fraction = scaled - index;
   const start = stops[index]!;
   const end = stops[index + 1]!;
-  const srgb: Rgb = [
+  return [
     start[0] + (end[0] - start[0]) * fraction,
     start[1] + (end[1] - start[1]) * fraction,
     start[2] + (end[2] - start[2]) * fraction,
   ];
+}
+
+/** Palette samples in linear-sRGB for the Three.js working color space. */
+export function scalarColorRgb(
+  t: number,
+  palette: string | null | undefined = "viridis",
+): Rgb {
+  const srgb = scalarColorSrgb(t, palette);
   return [
     srgbChannelToLinear(srgb[0]),
     srgbChannelToLinear(srgb[1]),
