@@ -7194,7 +7194,7 @@ class MeshScaffoldTests(unittest.TestCase):
                     "mesh_options": {
                         "algorithm_3d": ALGO_3D_DELAUNAY,
                         "smoothing_steps": 0,
-                        "optimize_iters": 0,
+                        "optimize": None,
                     },
                 },
             )
@@ -7227,7 +7227,7 @@ class MeshScaffoldTests(unittest.TestCase):
                 "mesh_options": {
                     "algorithm_3d": ALGO_3D_DELAUNAY,
                     "smoothing_steps": 0,
-                    "optimize_iters": 0,
+                    "optimize": None,
                 },
             },
         )
@@ -7256,7 +7256,7 @@ class MeshScaffoldTests(unittest.TestCase):
                     "mesh_options": {
                         "algorithm_3d": ALGO_3D_DELAUNAY,
                         "smoothing_steps": 0,
-                        "optimize_iters": 0,
+                        "optimize": None,
                     },
                 },
             )
