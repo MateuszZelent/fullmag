@@ -140,6 +140,32 @@ fn coordinate_distance_squared(a: [f64; 3], b: [f64; 3]) -> f64 {
         .sum()
 }
 
+fn source_bounds(samples: &[[f64; 3]]) -> ([f64; 3], [f64; 3]) {
+    let mut minimum = [f64::INFINITY; 3];
+    let mut maximum = [f64::NEG_INFINITY; 3];
+    for position in samples {
+        for axis in 0..3 {
+            minimum[axis] = minimum[axis].min(position[axis]);
+            maximum[axis] = maximum[axis].max(position[axis]);
+        }
+    }
+    (minimum, maximum)
+}
+
+fn point_inside_source_bounds(
+    position: [f64; 3],
+    minimum: [f64; 3],
+    maximum: [f64; 3],
+    tolerance_m: f64,
+) -> bool {
+    position
+        .into_iter()
+        .zip(minimum.into_iter().zip(maximum))
+        .all(|(value, (minimum, maximum))| {
+            value >= minimum - tolerance_m && value <= maximum + tolerance_m
+        })
+}
+
 /// Sample the immutable source-field carrier on the declared centred plane.
 ///
 /// The current asset revision stores nodal coordinates but no element/grid
@@ -188,6 +214,7 @@ pub fn sample_antenna_field_on_plane(
         ));
     }
     let tolerance_m = coordinate_scale(request, samples) * 1.0e-12;
+    let (source_minimum, source_maximum) = source_bounds(&samples.sample_positions_xyz_m);
     let mut buckets: HashMap<[i64; 3], Vec<usize>> = HashMap::new();
     for (index, position) in samples.sample_positions_xyz_m.iter().copied().enumerate() {
         let key = coordinate_key(position, tolerance_m).ok_or_else(|| {
@@ -253,18 +280,26 @@ pub fn sample_antenna_field_on_plane(
                     mapping.push(*source_index as u64);
                     samples.magnetic_field_xyz_apm_per_a[*source_index]
                 }
-                [] if matches.is_empty()
-                    && matches!(
-                        request.sampling_plane.outside_policy,
-                        fullmag_ir::AntennaSpectrumOutsidePolicyIR::Zero
-                    ) => {
+                []
+                    if matches.is_empty()
+                        && matches!(
+                            request.sampling_plane.outside_policy,
+                            fullmag_ir::AntennaSpectrumOutsidePolicyIR::Zero
+                        )
+                        && !point_inside_source_bounds(
+                            position,
+                            source_minimum,
+                            source_maximum,
+                            tolerance_m,
+                        ) =>
+                {
                     outside_count += 1;
                     mapping.push(u64::MAX);
                     [0.0; 3]
                 }
                 [] => {
                     return Err(error(format!(
-                        "antenna source-spectrum plane point ({u},{v}) has no matching immutable field sample; explicit FEM interpolation is required"
+                        "antenna source-spectrum plane point ({u},{v}) has no matching immutable field sample inside the source carrier bounds; explicit FEM interpolation is required"
                     )))
                 }
                 _ => {
@@ -895,15 +930,36 @@ mod tests {
     }
 
     #[test]
-    fn outside_zero_policy_records_missing_lattice_points_without_broadcasting() {
+    fn missing_internal_lattice_points_fail_closed_instead_of_becoming_zero() {
         let mut request = request("x");
         request.sampling_plane.outside_policy = fullmag_ir::AntennaSpectrumOutsidePolicyIR::Zero;
         let mut samples = solution_samples_for(&request);
         samples.sample_positions_xyz_m.pop();
         samples.magnetic_field_xyz_apm_per_a.pop();
+        let error = sample_antenna_field_on_plane(&request, &samples).unwrap_err();
+        assert!(error.message.contains("inside the source carrier bounds"));
+    }
+
+    #[test]
+    fn outside_zero_policy_only_zeros_points_outside_source_bounds() {
+        let mut request = request("x");
+        request.sampling_plane.outside_policy = fullmag_ir::AntennaSpectrumOutsidePolicyIR::Zero;
+        let mut samples = solution_samples_for(&request);
+        let retained = (0..samples.sample_positions_xyz_m.len())
+            .filter(|index| index % request.sampling_plane.sample_count_u as usize != 3)
+            .collect::<Vec<_>>();
+        samples.sample_positions_xyz_m = retained
+            .iter()
+            .map(|index| samples.sample_positions_xyz_m[*index])
+            .collect();
+        samples.magnetic_field_xyz_apm_per_a = retained
+            .iter()
+            .map(|index| samples.magnetic_field_xyz_apm_per_a[*index])
+            .collect();
+
         let sampled = sample_antenna_field_on_plane(&request, &samples).unwrap();
-        assert_eq!(sampled.outside_count, 1);
-        assert_eq!(sampled.field_xyz_apm_per_a.last().copied(), Some([0.0; 3]));
+        assert_eq!(sampled.outside_count, 4);
+        assert_eq!(sampled.field_xyz_apm_per_a[3], [0.0; 3]);
     }
 
     #[test]
