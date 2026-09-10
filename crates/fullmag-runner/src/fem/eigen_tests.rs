@@ -497,6 +497,36 @@ fn accepted_relax_stage_handoff_v3_round_trips_and_rejects_unknown_fields() {
 }
 
 #[test]
+fn accepted_relax_stage_handoff_accepts_prism_source_and_checks_m0() {
+    let mut plan = minimal_native_modal_plan();
+    plan.mesh.nodes = vec![
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [0.0, 1.0, 1.0],
+    ];
+    plan.mesh.cells = fullmag_ir::FemConnectivityIR {
+        types: vec![fullmag_ir::FemCellTypeIR::Prism6],
+        offsets: vec![0, 6],
+        nodes: vec![0, 1, 2, 3, 4, 5],
+        global_ordinals: vec![0],
+        mesh_parts: Vec::new(),
+    };
+    plan.equilibrium_magnetization = vec![[1.0, 0.0, 0.0]; 6];
+    fullmag_ir::validate_mesh_for_execution(&plan.mesh)
+        .expect("prism fixture must satisfy execution mesh validation");
+    relax_handoff_from_completion(&plan, &accepted_relax_completion())
+        .expect("native prism relaxation must publish its accepted handoff");
+
+    plan.equilibrium_magnetization[5] = [0.5, 0.0, 0.0];
+    let error = relax_handoff_from_completion(&plan, &accepted_relax_completion())
+        .expect_err("prism magnetic nodes must retain unit-norm validation");
+    assert!(error.message.contains("m0_norm_mismatch"), "{}", error.message);
+}
+
+#[test]
 fn accepted_relax_stage_handoff_allows_zero_m0_on_air_nodes() {
     let mut plan = minimal_native_modal_plan();
     add_minimal_shared_domain_periodic_airbox(&mut plan);
