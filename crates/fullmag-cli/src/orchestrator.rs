@@ -3124,10 +3124,11 @@ fn plan_materialized_stage_snapshot(stage: &ResolvedScriptStage) -> Result<Execu
     fullmag_plan::plan(&planning_ir).map_err(|error| anyhow!(error.to_string()))
 }
 
-/// Attach published immutable antenna bases to the FEM execution plan that
-/// will consume them.  The field-solve stage only publishes an asset; this
-/// boundary is the explicit asset-to-LLG hand-off.  FDM and missing/stale
-/// assets fail closed instead of silently dropping the authored drive.
+/// Attach published immutable antenna bases to the backend execution plan
+/// that will consume them. The field-solve stage only publishes an asset; this
+/// boundary is the explicit asset-to-LLG hand-off. FEM and FDM use separate
+/// target projections, while missing/stale assets fail closed instead of
+/// silently dropping the authored drive.
 fn attach_solved_antenna_drive_bases(
     problem: &ProblemIR,
     execution_plan: &mut ExecutionPlanIR,
@@ -3136,12 +3137,10 @@ fn attach_solved_antenna_drive_bases(
     if problem.solved_antenna_drives.is_empty() {
         return Ok(());
     }
-    let fem_plan = match &mut execution_plan.backend_plan {
-        BackendPlanIR::Fem(plan) => plan,
-        BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => {
-            bail!(
-                "solved antenna drives require the qualified FEM target-projection lane; FDM materialization is not implemented"
-            )
+    match &execution_plan.backend_plan {
+        BackendPlanIR::Fem(_) | BackendPlanIR::Fdm(_) => {}
+        BackendPlanIR::FdmMultilayer(_) => {
+            bail!("solved antenna drives are not supported by the FDM multilayer lane")
         }
         BackendPlanIR::FemEigen(_) | BackendPlanIR::FemFrequencyResponse(_) => {
             bail!("solved antenna drives are supported only by the FEM time-evolution LLG lane")
@@ -3181,8 +3180,21 @@ fn attach_solved_antenna_drive_bases(
         }
     }
 
-    fullmag_runner::materialize_fem_solved_antenna_drives_v03(problem, fem_plan, &assets)
-        .map_err(|error| anyhow!("materialize solved antenna drives: {}", error.message))
+    match &mut execution_plan.backend_plan {
+        BackendPlanIR::Fem(plan) => {
+            fullmag_runner::materialize_fem_solved_antenna_drives_v03(problem, plan, &assets)
+                .map_err(|error| anyhow!("materialize solved antenna drives: {}", error.message))
+        }
+        BackendPlanIR::Fdm(plan) => {
+            fullmag_runner::materialize_fdm_solved_antenna_drives_v03(problem, plan, &assets)
+                .map_err(|error| anyhow!("materialize solved antenna drives: {}", error.message))
+        }
+        BackendPlanIR::FdmMultilayer(_)
+        | BackendPlanIR::FemEigen(_)
+        | BackendPlanIR::FemFrequencyResponse(_) => unreachable!(
+            "backend lane was validated before antenna solution assets were materialized"
+        ),
+    }
 }
 
 /// Execute authored source-spectrum requests only from a published immutable
@@ -12213,10 +12225,10 @@ mod tests {
         apply_live_step_update_to_workspace_state, apply_remeshed_problem_snapshot_to_stages,
         apply_stage_heartbeat_progress, apply_terminal_live_step_update_to_workspace_state,
         attach_initial_magnetization_state_override_metadata, attach_region_realization_revisions,
-        attach_stage_fem_mesh_identity, classify_wait_for_solve_command,
-        continuation_source_from_backend_plan, cumulative_rhs_evals, default_domain_region_markers,
-        deferred_mesh_failure_stage, discard_active_paused_stage_execution,
-        attach_solved_antenna_drive_bases,
+        attach_solved_antenna_drive_bases, attach_stage_fem_mesh_identity,
+        classify_wait_for_solve_command, continuation_source_from_backend_plan,
+        cumulative_rhs_evals, default_domain_region_markers, deferred_mesh_failure_stage,
+        discard_active_paused_stage_execution,
         ensure_frequency_response_relaxed_continuation_is_qualified, execute_synthetic_stage,
         fail_owned_preparation_stage, fem_gpu_memory_preflight_message,
         fem_interactive_dense_ram_estimate, fem_live_mesh_payload_and_initial_magnetization,
@@ -12530,7 +12542,7 @@ mod tests {
     }
 
     #[test]
-    fn solved_antenna_drive_attachment_rejects_non_fem_execution_lane() {
+    fn solved_antenna_drive_attachment_rejects_invalid_projection_before_fdm_materialization() {
         let mut problem = ProblemIR::bootstrap_example();
         problem.solved_antenna_drives = vec![serde_json::from_value(serde_json::json!({
             "id": "drive_1",
@@ -12563,10 +12575,10 @@ mod tests {
             &mut plan,
             Path::new("antenna-test-artifacts"),
         )
-        .expect_err("FDM solved-antenna attachment must fail closed");
-        assert!(error
-            .to_string()
-            .contains("qualified FEM target-projection lane"));
+        .expect_err("FDM solved-antenna attachment must fail closed on invalid projection");
+        assert!(error.to_string().contains(
+            "solved_antenna_drives[0] has an invalid projection, port mode, or peak current"
+        ));
     }
 
     #[test]

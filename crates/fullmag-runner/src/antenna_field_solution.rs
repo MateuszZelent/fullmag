@@ -1,7 +1,8 @@
 use crate::types::{AuxiliaryArtifact, RunError};
 use fullmag_ir::{
-    AntennaFieldSolveStageIR, AntennaSpectrumRequestIR, AntennaTargetProjectionRefIR, FemPlanIR,
-    ProblemIR, ProblemIRV04, ResolvedSolvedAntennaDriveBasisIR, SolvedAntennaDriveIR,
+    AntennaFieldSolveStageIR, AntennaSpectrumRequestIR, AntennaTargetProjectionRefIR, FdmPlanIR,
+    FemPlanIR, FieldTargetIR, ProblemIR, ProblemIRV04, ResolvedSolvedAntennaDriveBasisIR,
+    SolvedAntennaDriveIR,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -794,13 +795,23 @@ pub fn materialize_fem_solved_antenna_drives(
         message: format!("invalid antenna composition: {}", reasons.join("; ")),
     })?;
 
-    materialize_fem_solved_antenna_drive_parts(
+    let materialized = materialize_solved_antenna_drive_parts(
         &problem.solved_antenna_drives,
         &problem.antenna_target_projections,
         &problem.antenna_field_solve_stages,
-        plan,
+        plan.mesh.nodes.len(),
+        Some(&plan.mesh.nodes),
         assets,
-    )
+        |target| {
+            fullmag_plan::resolve_fem_antenna_projection_mask(plan, target).map_err(|error| {
+                RunError {
+                    message: format!("resolve FEM antenna target: {}", error.reasons.join("; ")),
+                }
+            })
+        },
+    )?;
+    plan.solved_antenna_drive_bases = materialized;
+    Ok(())
 }
 
 /// Resolve immutable antenna field-solution artifacts authored through the
@@ -816,7 +827,41 @@ pub fn materialize_fem_solved_antenna_drives_v03(
         message: format!("invalid antenna composition: {}", reasons.join("; ")),
     })?;
 
-    materialize_fem_solved_antenna_drive_parts(
+    let materialized = materialize_solved_antenna_drive_parts(
+        &problem.solved_antenna_drives,
+        &problem.antenna_target_projections,
+        &problem.antenna_field_solve_stages,
+        plan.mesh.nodes.len(),
+        Some(&plan.mesh.nodes),
+        assets,
+        |target| {
+            fullmag_plan::resolve_fem_antenna_projection_mask(plan, target).map_err(|error| {
+                RunError {
+                    message: format!("resolve FEM antenna target: {}", error.reasons.join("; ")),
+                }
+            })
+        },
+    )?;
+    plan.solved_antenna_drive_bases = materialized;
+    Ok(())
+}
+
+/// Resolve an immutable field-solution asset onto the cell-centred FDM grid.
+///
+/// The target projection is deliberately identity-coordinate only.  The
+/// source field-solve sampling carrier must therefore contain exactly the FDM
+/// cell centres; otherwise the caller receives an explicit interpolation error
+/// instead of a point-count-based broadcast.  The active-cell mask is always
+/// applied because inactive FDM cells are not LLG degrees of freedom.
+pub fn materialize_fdm_solved_antenna_drives(
+    problem: &ProblemIRV04,
+    plan: &mut FdmPlanIR,
+    assets: &BTreeMap<String, AntennaFieldSolutionAsset>,
+) -> Result<(), RunError> {
+    problem.validate().map_err(|reasons| RunError {
+        message: format!("invalid antenna composition: {}", reasons.join("; ")),
+    })?;
+    materialize_fdm_solved_antenna_drive_parts(
         &problem.solved_antenna_drives,
         &problem.antenna_target_projections,
         &problem.antenna_field_solve_stages,
@@ -825,13 +870,62 @@ pub fn materialize_fem_solved_antenna_drives_v03(
     )
 }
 
-fn materialize_fem_solved_antenna_drive_parts(
+/// Resolve the public 0.3 antenna composition onto an FDM cell-centred grid.
+pub fn materialize_fdm_solved_antenna_drives_v03(
+    problem: &ProblemIR,
+    plan: &mut FdmPlanIR,
+    assets: &BTreeMap<String, AntennaFieldSolutionAsset>,
+) -> Result<(), RunError> {
+    problem.validate().map_err(|reasons| RunError {
+        message: format!("invalid antenna composition: {}", reasons.join("; ")),
+    })?;
+    materialize_fdm_solved_antenna_drive_parts(
+        &problem.solved_antenna_drives,
+        &problem.antenna_target_projections,
+        &problem.antenna_field_solve_stages,
+        plan,
+        assets,
+    )
+}
+
+fn materialize_fdm_solved_antenna_drive_parts(
     drives: &[SolvedAntennaDriveIR],
     projections: &[AntennaTargetProjectionRefIR],
     stages: &[AntennaFieldSolveStageIR],
-    plan: &mut FemPlanIR,
+    plan: &mut FdmPlanIR,
     assets: &BTreeMap<String, AntennaFieldSolutionAsset>,
 ) -> Result<(), RunError> {
+    if drives.is_empty() {
+        plan.solved_antenna_drive_bases.clear();
+        return Ok(());
+    }
+    let target_positions = fdm_cell_center_positions(plan)?;
+    let active_mask = fdm_active_mask(plan, target_positions.len())?;
+    let materialized = materialize_solved_antenna_drive_parts(
+        drives,
+        projections,
+        stages,
+        target_positions.len(),
+        Some(&target_positions),
+        assets,
+        |target| fdm_antenna_projection_mask(plan, target, &active_mask),
+    )?;
+    plan.solved_antenna_drive_bases = materialized;
+    Ok(())
+}
+
+fn materialize_solved_antenna_drive_parts<F>(
+    drives: &[SolvedAntennaDriveIR],
+    projections: &[AntennaTargetProjectionRefIR],
+    stages: &[AntennaFieldSolveStageIR],
+    expected_sample_count: usize,
+    target_positions: Option<&[[f64; 3]]>,
+    assets: &BTreeMap<String, AntennaFieldSolutionAsset>,
+    resolve_target_mask: F,
+) -> Result<Vec<ResolvedSolvedAntennaDriveBasisIR>, RunError>
+where
+    F: Fn(&FieldTargetIR) -> Result<Option<Vec<bool>>, RunError>,
+{
     let mut materialized = Vec::with_capacity(drives.len());
     let mut drive_ids = BTreeSet::new();
     for drive in drives {
@@ -878,16 +972,12 @@ fn materialize_fem_solved_antenna_drive_parts(
                     projection.solution.asset_id
                 ),
             })?;
-        let target_mask =
-            fullmag_plan::resolve_fem_antenna_projection_mask(plan, &projection.target).map_err(
-                |error| RunError {
-                    message: format!(
-                        "resolve antenna projection '{}': {}",
-                        projection.id,
-                        error.reasons.join("; ")
-                    ),
-                },
-            )?;
+        let target_mask = resolve_target_mask(&projection.target).map_err(|error| RunError {
+            message: format!(
+                "resolve antenna projection '{}': {}",
+                projection.id, error.message
+            ),
+        })?;
         materialized.push(load_solved_antenna_drive_basis_projected(
             &asset.manifest_bytes,
             &asset.payloads,
@@ -895,13 +985,142 @@ fn materialize_fem_solved_antenna_drive_parts(
             &projection.solution.output_id,
             &stage.source_object_id,
             &projection.solution.content_digest,
-            plan.mesh.nodes.len(),
-            Some(&plan.mesh.nodes),
+            expected_sample_count,
+            target_positions,
             target_mask.as_deref(),
         )?);
     }
-    plan.solved_antenna_drive_bases = materialized;
-    Ok(())
+    Ok(materialized)
+}
+
+fn fdm_cell_center_positions(plan: &FdmPlanIR) -> Result<Vec<[f64; 3]>, RunError> {
+    let [nx, ny, nz] = plan.grid.cells;
+    let expected = usize::try_from(
+        u64::from(nx)
+            .checked_mul(u64::from(ny))
+            .and_then(|value| value.checked_mul(u64::from(nz)))
+            .ok_or_else(|| RunError {
+                message: "FDM antenna target grid cell count overflows usize".into(),
+            })?,
+    )
+    .map_err(|_| RunError {
+        message: "FDM antenna target grid cell count is not addressable".into(),
+    })?;
+    if expected == 0 {
+        return Err(RunError {
+            message: "FDM antenna target projection requires a non-empty grid".into(),
+        });
+    }
+    if plan.initial_magnetization.len() != expected || plan.region_mask.len() != expected {
+        return Err(RunError {
+            message: format!(
+                "FDM antenna target topology has {expected} cells but initial_magnetization={} and region_mask={}",
+                plan.initial_magnetization.len(),
+                plan.region_mask.len()
+            ),
+        });
+    }
+    let mut positions = Vec::with_capacity(expected);
+    for z in 0..nz {
+        for y in 0..ny {
+            for x in 0..nx {
+                positions.push([
+                    plan.origin_m[0] + (f64::from(x) + 0.5) * plan.cell_size[0],
+                    plan.origin_m[1] + (f64::from(y) + 0.5) * plan.cell_size[1],
+                    plan.origin_m[2] + (f64::from(z) + 0.5) * plan.cell_size[2],
+                ]);
+            }
+        }
+    }
+    Ok(positions)
+}
+
+fn fdm_active_mask(plan: &FdmPlanIR, expected: usize) -> Result<Vec<bool>, RunError> {
+    let mask = plan
+        .active_mask
+        .clone()
+        .unwrap_or_else(|| vec![true; expected]);
+    if mask.len() != expected {
+        return Err(RunError {
+            message: format!(
+                "FDM antenna active mask has {} entries; expected {expected}",
+                mask.len()
+            ),
+        });
+    }
+    if !mask.iter().any(|active| *active) {
+        return Err(RunError {
+            message: "FDM antenna target projection has no active cells".into(),
+        });
+    }
+    Ok(mask)
+}
+
+fn fdm_antenna_projection_mask(
+    plan: &FdmPlanIR,
+    target: &FieldTargetIR,
+    active_mask: &[bool],
+) -> Result<Option<Vec<bool>>, RunError> {
+    let certificate = plan.grid_certificate.as_ref().ok_or_else(|| RunError {
+        message: "FDM antenna target projection requires a grid certificate".into(),
+    })?;
+    if certificate.region_legend.is_empty() && matches!(target, FieldTargetIR::Region { .. }) {
+        return Err(RunError {
+            message: "FDM antenna region target requires a resolved region legend".into(),
+        });
+    }
+    let mut selected_regions = BTreeSet::new();
+    match target {
+        FieldTargetIR::Global {} => {}
+        FieldTargetIR::Object { object_id } => {
+            selected_regions.extend(
+                certificate
+                    .region_legend
+                    .iter()
+                    .filter(|entry| entry.object_id == *object_id)
+                    .map(|entry| entry.numeric_id),
+            );
+            if selected_regions.is_empty()
+                && !(certificate.object_ids.len() == 1
+                    && certificate.object_ids.first() == Some(object_id))
+            {
+                return Err(RunError {
+                    message: format!(
+                        "FDM antenna object target '{object_id}' has no resolved object or region cells"
+                    ),
+                });
+            }
+        }
+        FieldTargetIR::Region {
+            object_id,
+            region_id,
+        } => {
+            let Some(entry) = certificate
+                .region_legend
+                .iter()
+                .find(|entry| entry.object_id == *object_id && entry.region_id == *region_id)
+            else {
+                return Err(RunError {
+                    message: format!(
+                        "FDM antenna region target '{object_id}:{region_id}' has no resolved region marker"
+                    ),
+                });
+            };
+            selected_regions.insert(entry.numeric_id);
+        }
+    }
+    let mut mask = active_mask.to_vec();
+    if !selected_regions.is_empty() {
+        for (selected, region) in mask.iter_mut().zip(&plan.region_mask) {
+            *selected &= selected_regions.contains(region);
+        }
+    }
+    if !mask.iter().any(|selected| *selected) {
+        return Err(RunError {
+            message: format!("FDM antenna target {target:?} selects no active cells"),
+        });
+    }
+    Ok(Some(mask))
 }
 
 pub(crate) fn build_antenna_field_solution_artifacts(
@@ -1277,6 +1496,62 @@ mod tests {
             .to_string()
     }
 
+    fn fdm_projection_fixture() -> (
+        FdmPlanIR,
+        AntennaTargetProjectionRefIR,
+        AntennaFieldSolveStageIR,
+    ) {
+        let mut plan = FdmPlanIR::default();
+        plan.origin_m = [0.0, 0.0, 0.0];
+        plan.grid.cells = [2, 1, 1];
+        plan.cell_size = [2.0, 2.0, 2.0];
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0]; 2];
+        plan.region_mask = vec![0, 0];
+        plan.active_mask = Some(vec![true, false]);
+        plan.grid_certificate = Some(
+            fullmag_ir::FdmGridCertificateIR::new_with_masks(
+                plan.origin_m,
+                plan.grid.cells,
+                plan.cell_size,
+                1,
+                1,
+                plan.active_mask.as_deref(),
+                &plan.region_mask,
+            )
+            .unwrap()
+            .with_object_ids(vec!["antenna_1".into()]),
+        );
+        let projection = AntennaTargetProjectionRefIR {
+            id: "projection_1".into(),
+            solution: fullmag_ir::AntennaFieldSolutionRefIR {
+                stage_id: "solve_antenna_1".into(),
+                output_id: "solution_1".into(),
+                asset_id: "afs-fixture".into(),
+                content_digest: "sha256:placeholder".into(),
+            },
+            target: FieldTargetIR::Global {},
+            output_id: "solution_1".into(),
+        };
+        let stage = AntennaFieldSolveStageIR {
+            id: "solve_antenna_1".into(),
+            source_object_id: "antenna_1".into(),
+            current_transport_id: "current_1".into(),
+            port_mode_ids: vec!["common".into()],
+            conservative_current_view_ref: "current_1:rt0".into(),
+            model: fullmag_ir::AntennaFieldModelIR::QuasistaticConductionBiotSavart3d,
+            oersted_realization: fullmag_ir::AntennaOerstedRealizationIR::DirectTetraQuadrature,
+            conductor_mesh_policy: "authored_shared_domain".into(),
+            field_sampling_domain: FieldTargetIR::Global {},
+            target_refs: vec![FieldTargetIR::Global {}],
+            solver_policy: "production_default".into(),
+            outputs: vec![fullmag_ir::AntennaNamedOutputIR {
+                id: "solution_1".into(),
+                quantity: "H_ant_basis".into(),
+            }],
+        };
+        (plan, projection, stage)
+    }
+
     #[test]
     fn publishes_payloads_before_manifest_and_normalizes_to_one_ampere() {
         let artifacts = build_antenna_field_solution_artifacts(&input(2.0)).unwrap();
@@ -1306,6 +1581,53 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("sha256:"));
+    }
+
+    #[test]
+    fn fdm_materialization_uses_cell_centers_and_masks_inactive_cells() {
+        let mut fixture = input(2.0);
+        fixture.sample_positions_xyz_m = vec![[1.0, 1.0, 1.0], [3.0, 1.0, 1.0]];
+        fixture.bases[0].magnetic_field_xyz_apm = vec![[8.0, 10.0, 12.0], [16.0, 18.0, 20.0]];
+        let artifacts = build_antenna_field_solution_artifacts(&fixture).unwrap();
+        let manifest = artifacts.last().unwrap();
+        let digest = manifest_digest(&manifest.bytes);
+        let (mut plan, mut projection, stage) = fdm_projection_fixture();
+        projection.solution.content_digest = digest;
+        let assets = BTreeMap::from([(
+            "afs-fixture".into(),
+            AntennaFieldSolutionAsset {
+                manifest_bytes: manifest.bytes.clone(),
+                payloads: artifacts[..artifacts.len() - 1].to_vec(),
+            },
+        )]);
+        materialize_fdm_solved_antenna_drive_parts(
+            &[drive()],
+            &[projection],
+            &[stage],
+            &mut plan,
+            &assets,
+        )
+        .unwrap();
+        assert_eq!(plan.solved_antenna_drive_bases.len(), 1);
+        assert_eq!(
+            plan.solved_antenna_drive_bases[0].field_xyz_apm_per_a,
+            vec![[4.0, 5.0, 6.0], [0.0, 0.0, 0.0]]
+        );
+    }
+
+    #[test]
+    fn fdm_target_projection_rejects_missing_region_marker() {
+        let (plan, _, _) = fdm_projection_fixture();
+        let error = fdm_antenna_projection_mask(
+            &plan,
+            &FieldTargetIR::Region {
+                object_id: "antenna_1".into(),
+                region_id: "core".into(),
+            },
+            &[true, false],
+        )
+        .unwrap_err();
+        assert!(error.message.contains("resolved region legend"));
     }
 
     #[test]

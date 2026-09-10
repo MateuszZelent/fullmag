@@ -7,6 +7,7 @@
 use fullmag_ir::FdmPlanIR;
 
 use crate::artifact_pipeline::ArtifactRecorder;
+use crate::fdm::gpu::cuda::artifacts::copy_cuda_live_preview_field;
 use crate::fdm::gpu::cuda::native::NativeFdmBackend;
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::relaxation::direct_minimizer::{
@@ -161,10 +162,13 @@ pub(crate) fn execute_direct_minimizer(
                 let preview_targets_global_scalar = display_is_global_scalar(&display_selection);
                 let preview_field = if preview_due && !preview_targets_global_scalar {
                     let request = display_selection.preview_request();
-                    Some(backend.copy_live_preview_field(
+                    Some(copy_cuda_live_preview_field(
+                        backend,
+                        plan,
                         &request,
                         plan.grid.cells,
                         plan.active_mask.as_deref(),
+                        current_stats.time,
                     )?)
                 } else {
                     None

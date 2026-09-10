@@ -13,6 +13,10 @@ use fullmag_ir::{BackendPlanIR, FdmPlanIR, FemPlanIR, OutputIR, ProblemIR};
 use crate::dispatch::{self, FdmEngine, FemEngine};
 use crate::fdm::cpu::reference as cpu_reference;
 #[cfg(feature = "cuda")]
+use crate::fdm::gpu::cuda::artifacts::{
+    copy_cuda_field_snapshot_with_plan, copy_cuda_live_preview_field,
+};
+#[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::native::residency::FdmGpuReceiptLifecycle;
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::native::{NativeFdmBackend, NativeFdmPreviewSnapshot};
@@ -3418,10 +3422,13 @@ impl CudaInteractiveFdmPreviewRuntime {
                 ),
             });
         }
-        self.backend.copy_live_preview_field(
+        copy_cuda_live_preview_field(
+            &self.backend,
+            &self.plan_signature,
             request,
             self.original_grid,
             self.plan_signature.active_mask.as_deref(),
+            self.total_time,
         )
     }
 
@@ -3444,10 +3451,13 @@ impl CudaInteractiveFdmPreviewRuntime {
             }
             let mut preview_request = request.clone();
             preview_request.quantity = quantity.to_string();
-            cached.push(self.backend.copy_live_preview_field(
+            cached.push(copy_cuda_live_preview_field(
+                &self.backend,
+                &self.plan_signature,
                 &preview_request,
                 self.original_grid,
                 self.plan_signature.active_mask.as_deref(),
+                self.total_time,
             )?);
         }
 
@@ -3468,6 +3478,16 @@ impl CudaInteractiveFdmPreviewRuntime {
             &cached_preview_quantities_for(display_state),
         );
         if quantities.is_empty() {
+            return Ok(None);
+        }
+        if quantities.iter().any(|quantity| {
+            normalized_quantity_name(quantity)
+                .ok()
+                .is_some_and(|name| name == "H_ant")
+        }) {
+            // H_ant is retained as a runner-side per-cell basis rather than a
+            // native CUDA observable.  Keep this pass synchronous so the
+            // host-materialized field follows the same time as the live step.
             return Ok(None);
         }
         let base_request = display_state.preview_request();
@@ -3583,10 +3603,13 @@ impl CudaInteractiveFdmPreviewRuntime {
             );
             let preview_field = if preview_due && !display_is_global_scalar(&display_state) {
                 let preview_cfg = display_state.preview_request();
-                Some(self.backend.copy_live_preview_field(
+                Some(copy_cuda_live_preview_field(
+                    &self.backend,
+                    &self.plan_signature,
                     &preview_cfg,
                     grid,
                     self.plan_signature.active_mask.as_deref(),
+                    self.total_time,
                 )?)
             } else {
                 None
@@ -3694,10 +3717,13 @@ impl CudaInteractiveFdmPreviewRuntime {
             );
             let preview_field = if preview_due && !display_is_global_scalar(&display_state) {
                 let preview_cfg = display_state.preview_request();
-                Some(self.backend.copy_live_preview_field(
+                Some(copy_cuda_live_preview_field(
+                    &self.backend,
+                    &self.plan_signature,
                     &preview_cfg,
                     grid,
                     self.plan_signature.active_mask.as_deref(),
+                    self.total_time,
                 )?)
             } else {
                 None
@@ -3908,7 +3934,9 @@ impl CudaInteractiveFdmPreviewRuntime {
         let default_scalar_trace = scalar_schedules.is_empty();
         capture_initial_cuda_runtime_fields(
             &self.backend,
+            &self.plan_signature,
             cell_count,
+            self.total_time,
             &mut field_schedules,
             &mut artifacts,
         )?;
@@ -3971,10 +3999,13 @@ impl CudaInteractiveFdmPreviewRuntime {
             );
             let preview_field = if preview_due && !display_is_global_scalar(&display_state) {
                 let preview_cfg = display_state.preview_request();
-                Some(self.backend.copy_live_preview_field(
+                Some(copy_cuda_live_preview_field(
+                    &self.backend,
+                    &self.plan_signature,
                     &preview_cfg,
                     grid,
                     self.plan_signature.active_mask.as_deref(),
+                    self.total_time,
                 )?)
             } else {
                 None
@@ -4084,10 +4115,13 @@ impl CudaInteractiveFdmPreviewRuntime {
             );
             let preview_field = if preview_due && !display_is_global_scalar(&display_state) {
                 let preview_cfg = display_state.preview_request();
-                Some(self.backend.copy_live_preview_field(
+                Some(copy_cuda_live_preview_field(
+                    &self.backend,
+                    &self.plan_signature,
                     &preview_cfg,
                     grid,
                     self.plan_signature.active_mask.as_deref(),
+                    self.total_time,
                 )?)
             } else {
                 None
@@ -4141,8 +4175,10 @@ impl CudaInteractiveFdmPreviewRuntime {
 
             record_due_cuda_runtime_outputs(
                 &self.backend,
+                &self.plan_signature,
                 cell_count,
                 &local_stats,
+                self.total_time,
                 &mut scalar_schedules,
                 &mut field_schedules,
                 &mut steps,
@@ -4168,8 +4204,10 @@ impl CudaInteractiveFdmPreviewRuntime {
 
         record_final_cuda_runtime_outputs(
             &self.backend,
+            &self.plan_signature,
             cell_count,
             latest_local_stats,
+            self.total_time,
             default_scalar_trace,
             &scalar_schedules,
             &field_schedules,
@@ -6000,7 +6038,9 @@ fn copy_native_fem_base_field_values(
 #[cfg(feature = "cuda")]
 fn capture_initial_cuda_runtime_fields(
     backend: &NativeFdmBackend,
+    plan: &FdmPlanIR,
     cell_count: usize,
+    time_seconds: f64,
     field_schedules: &mut [OutputSchedule],
     artifacts: &mut ArtifactRecorder,
 ) -> Result<(), RunError> {
@@ -6022,7 +6062,11 @@ fn capture_initial_cuda_runtime_fields(
             scope: "full".into(),
             revision: (0 as u64).saturating_add(1),
             values: FieldSnapshot::flatten_vec3(copy_cuda_field_values(
-                backend, cell_count, &name,
+                backend,
+                plan,
+                cell_count,
+                time_seconds,
+                &name,
             )?),
         })?;
     }
@@ -6033,8 +6077,10 @@ fn capture_initial_cuda_runtime_fields(
 #[cfg(feature = "cuda")]
 fn record_due_cuda_runtime_outputs(
     backend: &NativeFdmBackend,
+    plan: &FdmPlanIR,
     cell_count: usize,
     stats: &StepStats,
+    time_seconds: f64,
     scalar_schedules: &mut [OutputSchedule],
     field_schedules: &mut [OutputSchedule],
     steps: &mut Vec<StepStats>,
@@ -6068,7 +6114,11 @@ fn record_due_cuda_runtime_outputs(
             scope: "full".into(),
             revision: (stats.step as u64).saturating_add(1),
             values: FieldSnapshot::flatten_vec3(copy_cuda_field_values(
-                backend, cell_count, &name,
+                backend,
+                plan,
+                cell_count,
+                time_seconds,
+                &name,
             )?),
         })?;
     }
@@ -6079,8 +6129,10 @@ fn record_due_cuda_runtime_outputs(
 #[cfg(feature = "cuda")]
 fn record_final_cuda_runtime_outputs(
     backend: &NativeFdmBackend,
+    plan: &FdmPlanIR,
     cell_count: usize,
     latest_stats: Option<StepStats>,
+    time_seconds: f64,
     default_scalar_trace: bool,
     scalar_schedules: &[OutputSchedule],
     field_schedules: &[OutputSchedule],
@@ -6125,7 +6177,13 @@ fn record_final_cuda_runtime_outputs(
             location: "sample".into(),
             scope: "full".into(),
             revision: (latest_stats.step as u64).saturating_add(1),
-            values: FieldSnapshot::flatten_vec3(copy_cuda_field_values(backend, cell_count, name)?),
+            values: FieldSnapshot::flatten_vec3(copy_cuda_field_values(
+                backend,
+                plan,
+                cell_count,
+                time_seconds,
+                name,
+            )?),
         })?;
     }
     let _ = scalar_schedules;
@@ -6135,13 +6193,16 @@ fn record_final_cuda_runtime_outputs(
 #[cfg(feature = "cuda")]
 fn copy_cuda_field_values(
     backend: &NativeFdmBackend,
+    plan: &FdmPlanIR,
     cell_count: usize,
+    time_seconds: f64,
     name: &str,
 ) -> Result<Vec<[f64; 3]>, RunError> {
     if let Some(dot_pos) = name.find('.') {
         let base = &name[..dot_pos];
         let component = &name[dot_pos + 1..];
-        let full = copy_cuda_base_field_values(backend, cell_count, base)?;
+        let full =
+            copy_cuda_field_snapshot_with_plan(backend, plan, base, cell_count, time_seconds)?;
         let idx = match component {
             "x" => 0,
             "y" => 1,
@@ -6158,29 +6219,7 @@ fn copy_cuda_field_values(
         return Ok(full.iter().map(|value| [value[idx], 0.0, 0.0]).collect());
     }
 
-    copy_cuda_base_field_values(backend, cell_count, name)
-}
-
-#[cfg(feature = "cuda")]
-fn copy_cuda_base_field_values(
-    backend: &NativeFdmBackend,
-    cell_count: usize,
-    name: &str,
-) -> Result<Vec<[f64; 3]>, RunError> {
-    match name {
-        "m" => backend.copy_m(cell_count),
-        "H_ex" => backend.copy_h_ex(cell_count),
-        "H_demag" => backend.copy_h_demag(cell_count),
-        "H_ext" => backend.copy_h_ext(cell_count),
-        "H_eff" => backend.copy_h_eff(cell_count),
-        "torque" => backend.copy_torque(cell_count),
-        other => Err(RunError {
-            message: format!(
-                "unsupported interactive CUDA output field snapshot '{}'",
-                other
-            ),
-        }),
-    }
+    copy_cuda_field_snapshot_with_plan(backend, plan, name, cell_count, time_seconds)
 }
 
 fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, RunError> {

@@ -367,6 +367,26 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_preview_exposes_resolved_antenna_field() {
+        let mut plan = fdm_plan();
+        plan.antenna_zeeman_masks = vec![fullmag_ir::ResolvedAntennaZeemanMaskIR {
+            source: "antenna_1".into(),
+            object: "free".into(),
+            amplitude_b_t: 1.0e-3,
+            direction: [0.0, 1.0, 0.0],
+            spatial_profile: None,
+            waveform: None,
+            field_xyz: vec![[0.0, 1.0, 0.0]; plan.initial_magnetization.len()],
+        }];
+
+        assert_eq!(
+            active_fdm_preview_quantities(FdmEngine::CudaFdm, &plan, &["H_ant"]),
+            vec!["H_ant"]
+        );
+    }
+
     fn frozen_spins_plan(mask: Vec<bool>) -> ResolvedFrozenSpinsPlanIR {
         let active_dof_count = mask.len() as u64;
         let frozen_dof_count = mask.iter().filter(|frozen| **frozen).count() as u64;

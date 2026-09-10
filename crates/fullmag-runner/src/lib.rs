@@ -20,6 +20,7 @@ mod antenna_stage;
 pub use antenna_field_solution::{
     load_antenna_field_solution_samples, load_antenna_field_solution_samples_for_spectrum,
     load_solved_antenna_drive_basis, load_solved_antenna_drive_basis_projected,
+    materialize_fdm_solved_antenna_drives, materialize_fdm_solved_antenna_drives_v03,
     materialize_fem_solved_antenna_drives, materialize_fem_solved_antenna_drives_v03,
     verify_antenna_field_solution_asset, AntennaFieldSolutionAsset, AntennaFieldSolutionSamples,
     AntennaFieldSolutionSignatures,

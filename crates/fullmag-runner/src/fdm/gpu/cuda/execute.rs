@@ -11,7 +11,8 @@ use crate::artifact_pipeline::ArtifactRecorder;
 use crate::constraints::FrozenSpinsCheckpointV1;
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::artifacts::{
-    capture_initial_cuda_fields, record_cuda_due_outputs, record_cuda_final_outputs,
+    capture_initial_cuda_fields, copy_cuda_live_preview_field, record_cuda_due_outputs,
+    record_cuda_final_outputs,
 };
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::native::{NativeFdmBackend, NativeStatsPolicy};
@@ -118,6 +119,33 @@ fn apply_regional_drive_energy(
                 continue;
             }
             magnetization_dot_field += multiplier
+                * plan.material.saturation_magnetisation
+                * (m[0] * field[0] + m[1] * field[1] + m[2] * field[2]);
+        }
+    }
+    for resolved in &plan.solved_antenna_drive_bases {
+        if !resolved.drive.activation.is_active_for(
+            plan.time_stage.study_kind,
+            plan.time_stage.active_stage_id.as_deref(),
+        ) {
+            continue;
+        }
+        let time_offset_s = match resolved.drive.time_origin {
+            fullmag_ir::FieldTimeOriginIR::StageLocal => plan.time_stage.start_time_s,
+            fullmag_ir::FieldTimeOriginIR::Absolute => 0.0,
+        };
+        let multiplier =
+            evaluate_time_dependence(&resolved.drive.waveform, stats.time - time_offset_s);
+        for (index, (m, field)) in magnetization
+            .iter()
+            .zip(&resolved.field_xyz_apm_per_a)
+            .enumerate()
+        {
+            if plan.active_mask.as_ref().is_some_and(|mask| !mask[index]) {
+                continue;
+            }
+            magnetization_dot_field += multiplier
+                * resolved.drive.peak_current_a
                 * plan.material.saturation_magnetisation
                 * (m[0] * field[0] + m[1] * field[1] + m[2] * field[2]);
         }
@@ -428,7 +456,13 @@ pub(crate) fn execute_cuda_fdm(
         ArtifactRecorder::in_memory(provenance.clone())
     };
     let default_scalar_trace = scalar_schedules.is_empty();
-    capture_initial_cuda_fields(&backend, cell_count, &mut field_schedules, &mut artifacts)?;
+    capture_initial_cuda_fields(
+        &backend,
+        plan,
+        cell_count,
+        &mut field_schedules,
+        &mut artifacts,
+    )?;
 
     let mut latest_stats: Option<StepStats> = None;
     let mut current_time = 0.0;
@@ -512,6 +546,7 @@ pub(crate) fn execute_cuda_fdm(
                 apply_regional_drive_energy(plan, &mut sampled_stats, &magnetization);
                 record_cuda_due_outputs(
                     &backend,
+                    plan,
                     cell_count,
                     &sampled_stats,
                     Some(&magnetization),
@@ -533,10 +568,13 @@ pub(crate) fn execute_cuda_fdm(
                         display_is_global_scalar(&display_selection);
                     let preview_field = if preview_due && !preview_targets_global_scalar {
                         let request = display_selection.preview_request();
-                        Some(backend.copy_live_preview_field(
+                        Some(copy_cuda_live_preview_field(
+                            &backend,
+                            plan,
                             &request,
                             plan.grid.cells,
                             plan.active_mask.as_deref(),
+                            current_stats.time,
                         )?)
                     } else {
                         None
@@ -688,10 +726,13 @@ pub(crate) fn execute_cuda_fdm(
                 let preview_field = if preview_due && !preview_targets_global_scalar {
                     let selection = display_selection.as_ref().expect("checked preview_due");
                     let request = selection.preview_request();
-                    Some(backend.copy_live_preview_field(
+                    Some(copy_cuda_live_preview_field(
+                        &backend,
+                        plan,
                         &request,
                         plan.grid.cells,
                         plan.active_mask.as_deref(),
+                        sampled_stats.time,
                     )?)
                 } else {
                     None
@@ -731,6 +772,7 @@ pub(crate) fn execute_cuda_fdm(
             }
             record_cuda_due_outputs(
                 &backend,
+                plan,
                 cell_count,
                 &sampled_stats,
                 magnetization_cache.as_deref(),
@@ -775,6 +817,7 @@ pub(crate) fn execute_cuda_fdm(
 
     record_cuda_final_outputs(
         &backend,
+        plan,
         cell_count,
         latest_stats.clone(),
         default_scalar_trace,

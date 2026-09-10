@@ -100,8 +100,12 @@ impl CudaSnapshotObservable {
 }
 
 pub(crate) fn can_materialize_preview_quantity(id: QuantityId) -> bool {
-    matches!(id, QuantityId::Torque | QuantityId::FrozenSpins)
-        || CudaSnapshotObservable::from_quantity(id).is_some()
+    // H_ant is materialized by the runner from the immutable per-cell basis;
+    // the native ABI intentionally has no separate antenna observable ID.
+    matches!(
+        id,
+        QuantityId::HAnt | QuantityId::Torque | QuantityId::FrozenSpins
+    ) || CudaSnapshotObservable::from_quantity(id).is_some()
 }
 
 /// Check whether the native CUDA FDM backend is compiled and available.
@@ -633,38 +637,78 @@ struct NativeRegionalFieldDrivePayload {
 }
 
 #[cfg(feature = "cuda")]
+enum NativeDriveSpec<'a> {
+    Regional(&'a fullmag_ir::ResolvedRegionalFieldDriveBasisIR),
+    Solved(&'a fullmag_ir::ResolvedSolvedAntennaDriveBasisIR),
+}
+
+#[cfg(feature = "cuda")]
 fn native_regional_field_drive_payload(
     plan: &fullmag_ir::FdmPlanIR,
 ) -> Result<Option<NativeRegionalFieldDrivePayload>, RunError> {
-    if plan.regional_field_drive_bases.is_empty() {
+    let mut specs = Vec::with_capacity(
+        plan.regional_field_drive_bases.len() + plan.solved_antenna_drive_bases.len(),
+    );
+    specs.extend(
+        plan.regional_field_drive_bases
+            .iter()
+            .map(NativeDriveSpec::Regional),
+    );
+    specs.extend(
+        plan.solved_antenna_drive_bases
+            .iter()
+            .filter(|resolved| {
+                resolved.drive.activation.is_active_for(
+                    plan.time_stage.study_kind,
+                    plan.time_stage.active_stage_id.as_deref(),
+                )
+            })
+            .map(NativeDriveSpec::Solved),
+    );
+    if specs.is_empty() {
         return Ok(None);
     }
     let cell_count = plan.initial_magnetization.len();
     let flat_len = cell_count.checked_mul(3).ok_or_else(|| RunError {
         message: "regional field drive basis length overflows usize".to_string(),
     })?;
-    let drive_count =
-        u32::try_from(plan.regional_field_drive_bases.len()).map_err(|_| RunError {
-            message: "regional field drive count exceeds the native CUDA ABI limit".to_string(),
-        })?;
-    let mut fields = Vec::with_capacity(plan.regional_field_drive_bases.len());
-    let mut piecewise_points = Vec::with_capacity(plan.regional_field_drive_bases.len());
-    let mut descriptors = Vec::with_capacity(plan.regional_field_drive_bases.len());
+    let drive_count = u32::try_from(specs.len()).map_err(|_| RunError {
+        message: "regional field drive count exceeds the native CUDA ABI limit".to_string(),
+    })?;
+    let mut fields = Vec::with_capacity(specs.len());
+    let mut piecewise_points = Vec::with_capacity(specs.len());
+    let mut descriptors = Vec::with_capacity(specs.len());
 
-    for resolved in &plan.regional_field_drive_bases {
-        if resolved.field_xyz.len() != cell_count {
+    for spec in specs {
+        let (drive_id, field_xyz, field_scale, waveform, time_origin) = match spec {
+            NativeDriveSpec::Regional(resolved) => (
+                resolved.drive.id.as_str(),
+                resolved.field_xyz.as_slice(),
+                1.0,
+                &resolved.drive.waveform,
+                resolved.drive.time_origin,
+            ),
+            NativeDriveSpec::Solved(resolved) => (
+                resolved.drive.id.as_str(),
+                resolved.field_xyz_apm_per_a.as_slice(),
+                resolved.drive.peak_current_a,
+                &resolved.drive.waveform,
+                resolved.drive.time_origin,
+            ),
+        };
+        if field_xyz.len() != cell_count {
             return Err(RunError {
                 message: format!(
                     "regional field drive '{}' basis length {} differs from FDM cell count {}",
-                    resolved.drive.id,
-                    resolved.field_xyz.len(),
+                    drive_id,
+                    field_xyz.len(),
                     cell_count
                 ),
             });
         }
         let mut field = Vec::with_capacity(flat_len);
-        for value in &resolved.field_xyz {
-            field.extend_from_slice(value);
+        for value in field_xyz {
+            field.extend(value.iter().map(|component| component * field_scale));
         }
         let mut frequency_hz = 0.0;
         let mut phase_rad = 0.0;
@@ -674,7 +718,7 @@ fn native_regional_field_drive_payload(
         let mut cutoff_hz = 0.0;
         let mut t0_s = 0.0;
         let mut amplitude = 1.0;
-        let (waveform, points) = match &resolved.drive.waveform {
+        let (waveform, points) = match waveform {
             fullmag_ir::TimeDependenceIR::Constant => (
                 ffi::fullmag_fdm_regional_field_drive_waveform::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_CONSTANT,
                 Vec::new(),
@@ -743,7 +787,7 @@ fn native_regional_field_drive_payload(
             field_xyz: field_storage.as_ptr(),
             field_len: field_storage.len() as u64,
             waveform,
-            time_origin: match resolved.drive.time_origin {
+            time_origin: match time_origin {
                 fullmag_ir::FieldTimeOriginIR::StageLocal => {
                     ffi::fullmag_fdm_regional_field_drive_time_origin::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_STAGE_LOCAL
                 }
@@ -4103,6 +4147,58 @@ mod tests {
         assert_eq!(sync.vector_field_values, vec![1.0, 0.0, 0.0, 1.0]);
         assert_eq!(asynchronous, sync);
         assert!(can_materialize_preview_quantity(QuantityId::FrozenSpins));
+    }
+
+    #[test]
+    fn solved_antenna_basis_payload_scales_field_by_peak_current_and_preserves_waveform() {
+        let mut plan = make_relaxation_precession_test_plan();
+        plan.grid = GridDimensions { cells: [2, 1, 1] };
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0]; 2];
+        plan.time_stage = fullmag_ir::TimeStageContextIR {
+            active_stage_id: None,
+            start_time_s: 0.25,
+            study_kind: fullmag_ir::StudyKindIR::TimeEvolution,
+        };
+        plan.solved_antenna_drive_bases = vec![fullmag_ir::ResolvedSolvedAntennaDriveBasisIR {
+            drive: fullmag_ir::SolvedAntennaDriveIR {
+                id: "antenna-1-port-1".into(),
+                name: "antenna-1 port 1".into(),
+                projection_ref: "projection-1".into(),
+                port_mode_id: "port-1".into(),
+                peak_current_a: 2.5,
+                waveform: fullmag_ir::TimeDependenceIR::Sinusoidal {
+                    frequency_hz: 1.0e9,
+                    phase_rad: 0.125,
+                    offset: 0.25,
+                },
+                time_origin: fullmag_ir::FieldTimeOriginIR::StageLocal,
+                activation: fullmag_ir::DriveActivationIR::AllTimeEvolution {},
+            },
+            solution_id: "solution-1".into(),
+            source_object_id: "antenna-1".into(),
+            field_xyz_apm_per_a: vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+            projection_signature: "projection-signature".into(),
+        }];
+
+        let payload = native_regional_field_drive_payload(&plan)
+            .expect("solved antenna basis should be accepted")
+            .expect("one solved antenna basis should produce one native descriptor");
+
+        assert_eq!(payload.descriptors.len(), 1);
+        assert_eq!(payload._fields[0], vec![2.5, 5.0, 7.5, 10.0, 12.5, 15.0]);
+        let descriptor = &payload.descriptors[0];
+        assert_eq!(
+            descriptor.waveform,
+            ffi::fullmag_fdm_regional_field_drive_waveform::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_SINUSOIDAL
+        );
+        assert_eq!(descriptor.stage_start_time_s, 0.25);
+        assert_eq!(descriptor.frequency_hz, 1.0e9);
+        assert_eq!(descriptor.phase_rad, 0.125);
+        assert_eq!(descriptor.offset, 0.25);
+        assert_eq!(
+            descriptor.time_origin,
+            ffi::fullmag_fdm_regional_field_drive_time_origin::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_STAGE_LOCAL
+        );
     }
 
     #[test]

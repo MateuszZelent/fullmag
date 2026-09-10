@@ -64,6 +64,10 @@ fn time_dependence_multiplier(waveform: Option<&TimeDependenceIR>, t: f64) -> f6
     crate::time_dependence::evaluate_optional_time_dependence(waveform, t)
 }
 
+fn legacy_antenna_current_at_time(drive: &fullmag_ir::RfDriveIR, absolute_time_s: f64) -> f64 {
+    drive.current_a * time_dependence_multiplier(drive.waveform.as_ref(), absolute_time_s)
+}
+
 /// Precompute per-unit-current Biot-Savart fields for each antenna module.
 /// Returns one `Vec<[f64;3]>` per module (using `current_a = 1 A`).
 pub(crate) fn compute_per_unit_antenna_fields(
@@ -259,13 +263,13 @@ pub(crate) fn compute_antenna_field_at_time(
                 drive: Some(drive),
                 ..
             } => {
-                add_antenna_field(
-                    &mut total,
-                    &plan.mesh.nodes,
-                    bounds,
-                    antenna,
-                    drive.current_a,
-                );
+                // The geometry-dependent basis is evaluated once per call and
+                // the authored scalar waveform is applied at the requested
+                // physical time.  Omitting this multiplier silently turned a
+                // sinusoidal/pulsed legacy source into a DC source in previews
+                // and observations.
+                let current_a = legacy_antenna_current_at_time(drive, absolute_time_s);
+                add_antenna_field(&mut total, &plan.mesh.nodes, bounds, antenna, current_a);
             }
             CurrentModuleIR::AntennaFieldSource { .. }
             | CurrentModuleIR::CurrentTransport { .. } => {}
@@ -454,5 +458,35 @@ fn magnetic_bounds(plan: &FemPlanIR) -> Option<([f64; 3], [f64; 3])> {
         Some((min, max))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_antenna_current_applies_sinusoidal_waveform_at_physical_time() {
+        let drive = fullmag_ir::RfDriveIR {
+            current_a: 2.0,
+            waveform: Some(TimeDependenceIR::Sinusoidal {
+                frequency_hz: 1.0,
+                phase_rad: 0.0,
+                offset: 0.0,
+            }),
+        };
+        assert!((legacy_antenna_current_at_time(&drive, 0.0)).abs() < 1.0e-15);
+        assert!((legacy_antenna_current_at_time(&drive, 0.25) - 2.0).abs() < 1.0e-12);
+        assert!((legacy_antenna_current_at_time(&drive, 0.75) + 2.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn legacy_antenna_current_without_waveform_is_static() {
+        let drive = fullmag_ir::RfDriveIR {
+            current_a: -3.5,
+            waveform: None,
+        };
+        assert_eq!(legacy_antenna_current_at_time(&drive, 0.0), -3.5);
+        assert_eq!(legacy_antenna_current_at_time(&drive, 12.0), -3.5);
     }
 }

@@ -3692,6 +3692,28 @@ pub(crate) fn flatten_vectors(values: &[[f64; 3]]) -> Vec<f64> {
         .collect()
 }
 
+#[cfg(all(test, feature = "cuda"))]
+fn partition_cuda_field_schedules(
+    outputs: &[OutputIR],
+    transport_active: bool,
+) -> Result<(
+    Vec<crate::schedules::OutputSchedule>,
+    Vec<crate::schedules::OutputSchedule>,
+), RunError> {
+    let field_schedules = crate::schedules::collect_field_schedules(outputs)?;
+    let (mut transport, field): (Vec<_>, Vec<_>) =
+        field_schedules.into_iter().partition(|schedule| {
+            matches!(
+                schedule.name.as_str(),
+                "V_electric" | "J_charge" | "spin_potential" | "spin_current_tensor" | "torque_stt"
+            )
+        });
+    if !transport_active {
+        transport.clear();
+    }
+    Ok((transport, field))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::fem::test_support::*;
