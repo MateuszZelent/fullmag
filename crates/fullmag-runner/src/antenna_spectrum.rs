@@ -59,6 +59,11 @@ pub struct AntennaSpectrumSamplingMetadata {
     pub outside_count: usize,
     pub source_sample_count: usize,
     pub mapping_digest: String,
+    /// Local `(u, v)` coordinate of the first lattice sample used by both
+    /// Fourier kernels.  The phase correction in the regular FFT makes it
+    /// equivalent to the direct kernel's centered coordinates.
+    pub fourier_origin_uv_m: [f64; 2],
+    pub fourier_phase_convention: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -324,6 +329,11 @@ pub fn compute_antenna_source_spectrum_artifact(
         outside_count: sampled.outside_count,
         source_sample_count: samples.sample_positions_xyz_m.len(),
         mapping_digest: sampled.mapping_digest,
+        fourier_origin_uv_m: [
+            -0.5 * request.sampling_plane.extent_u_m,
+            -0.5 * request.sampling_plane.extent_v_m,
+        ],
+        fourier_phase_convention: "centered_plane_origin_phase_corrected.v1".into(),
     };
     let mut artifact = AntennaSourceSpectrumArtifact {
         schema_version: "antenna_source_spectrum_artifact.v1".into(),
@@ -502,6 +512,10 @@ fn fft2_in_place(values: &mut [Complex64], count_u: usize, count_v: usize) {
     }
 }
 
+fn centered_origin_phase(k_u: f64, k_v: f64, extent_u_m: f64, extent_v_m: f64) -> Complex64 {
+    Complex64::from_polar(1.0, 0.5 * (k_u * extent_u_m + k_v * extent_v_m))
+}
+
 /// Compute the source-field spectrum after a separate carrier interpolation
 /// step has produced the exact authored uniform plane lattice.
 pub fn compute_structured_antenna_source_spectrum(
@@ -553,6 +567,8 @@ pub fn compute_structured_antenna_source_spectrum(
     };
     let (component_labels, components) =
         selected_components(request, field_samples_apm_per_a, equilibrium_samples)?;
+    let k_u_rad_per_m = fft_frequencies(count_u, spacing_u);
+    let k_v_rad_per_m = fft_frequencies(count_v, spacing_v);
     let mut amplitudes = Vec::with_capacity(components.len() * sample_count);
     let mut power = vec![0.0; sample_count];
     for component in components {
@@ -567,7 +583,16 @@ pub fn compute_structured_antenna_source_spectrum(
             .collect::<Vec<_>>();
         fft2_in_place(&mut transformed, count_u, count_v);
         for (index, value) in transformed.into_iter().enumerate() {
-            let value = value * scale;
+            let u = index % count_u;
+            let v = index / count_u;
+            let value = value
+                * centered_origin_phase(
+                    k_u_rad_per_m[u],
+                    k_v_rad_per_m[v],
+                    request.sampling_plane.extent_u_m,
+                    request.sampling_plane.extent_v_m,
+                )
+                * scale;
             power[index] += value.norm_sqr();
             amplitudes.push([value.re, value.im]);
         }
@@ -577,8 +602,8 @@ pub fn compute_structured_antenna_source_spectrum(
         request_id: request.id.clone(),
         output_id: request.output_id.clone(),
         component: request.component.clone(),
-        k_u_rad_per_m: fft_frequencies(count_u, spacing_u),
-        k_v_rad_per_m: fft_frequencies(count_v, spacing_v),
+        k_u_rad_per_m,
+        k_v_rad_per_m,
         component_labels,
         amplitudes_re_im: amplitudes,
         power,
@@ -780,6 +805,44 @@ mod tests {
         let result = compute_nonuniform_k_antenna_source_spectrum(&request, &field, None).unwrap();
         assert!((result.amplitudes_re_im[0][0] - 8.0).abs() < 1.0e-12);
         assert_eq!(result.k_u_rad_per_m, vec![0.0, 0.25]);
+    }
+
+    #[test]
+    fn regular_fft_matches_direct_centered_phase_convention() {
+        let mut structured_request = request("x");
+        let field = (0..16)
+            .map(|index| {
+                if index == 1 {
+                    [3.0, 0.0, 0.0]
+                } else if index == 14 {
+                    [-1.5, 0.0, 0.0]
+                } else {
+                    [0.0, 0.0, 0.0]
+                }
+            })
+            .collect::<Vec<_>>();
+        let structured =
+            compute_structured_antenna_source_spectrum(&structured_request, &field, None).unwrap();
+
+        structured_request.transform = AntennaSpectrumTransformIR::NonuniformSpatialFft;
+        structured_request.nonuniform_k_grid = Some(fullmag_ir::AntennaSpectrumKGridIR {
+            k_u_rad_per_m: structured.k_u_rad_per_m.clone(),
+            k_v_rad_per_m: structured.k_v_rad_per_m.clone(),
+        });
+        let direct =
+            compute_nonuniform_k_antenna_source_spectrum(&structured_request, &field, None)
+                .unwrap();
+
+        assert_eq!(structured.k_u_rad_per_m, direct.k_u_rad_per_m);
+        assert_eq!(structured.k_v_rad_per_m, direct.k_v_rad_per_m);
+        for (fft, direct) in structured
+            .amplitudes_re_im
+            .iter()
+            .zip(&direct.amplitudes_re_im)
+        {
+            assert!((fft[0] - direct[0]).abs() < 1.0e-12);
+            assert!((fft[1] - direct[1]).abs() < 1.0e-12);
+        }
     }
 
     fn solution_samples_for(request: &AntennaSpectrumRequestIR) -> AntennaFieldSolutionSamples {
