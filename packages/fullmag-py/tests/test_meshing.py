@@ -9556,17 +9556,26 @@ class FieldStackAcceptanceTests(unittest.TestCase):
             "airbox_hmin": 20e-9,
         }
 
-        mesh, region_markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
-            geometries=[cylinder, waveguide],
-            hints=fm.FEM(order=1, hmax=120e-9),
-            study_universe=study_universe,
-            per_object_recipes=per_object_recipes,
-        )
+        progress_messages: list[str] = []
+        with patch(
+            "fullmag.meshing.asset_pipeline.emit_progress",
+            side_effect=progress_messages.append,
+        ):
+            mesh, region_markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
+                geometries=[cylinder, waveguide],
+                hints=fm.FEM(order=1, hmax=120e-9),
+                study_universe=study_universe,
+                per_object_recipes=per_object_recipes,
+            )
 
         self.assertGreater(mesh.n_nodes, 0)
         self.assertGreater(mesh.n_elements, 0)
         self.assertEqual(len(region_markers), 2)
-        self.assertEqual(report.build_mode, "conformal_occ")
+        self.assertEqual(
+            report.build_mode,
+            "conformal_occ",
+            msg="\n".join(progress_messages),
+        )
         self.assertFalse(report.degraded)
         self.assertTrue(
             set(report.fallbacks_triggered).issubset(
