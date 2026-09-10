@@ -15,6 +15,32 @@ const OPERATOR_VERSION: &str = "fem_charge_spin_conforming_h1_p1.transparent.v1"
 const M2_CONSTITUTIVE_VERSION: &str = "transport_constitutive.reciprocal.fullmag.v1";
 const M2_OPERATOR_VERSION: &str = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1";
 const PHYSICAL_RESIDUAL_VERSION: &str = "transport_balance_integrated_l2.v1";
+pub(crate) const DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS: u64 = 1_000_000;
+
+fn preflight_direct_oersted_pair_budget(
+    source_cell_count: usize,
+    target_count: usize,
+) -> Result<u64, RunError> {
+    let source_count = u64::try_from(source_cell_count).map_err(|_| RunError {
+        message: "antenna Oersted preflight source cell count is not representable".into(),
+    })?;
+    let target_count = u64::try_from(target_count).map_err(|_| RunError {
+        message: "antenna Oersted preflight target point count is not representable".into(),
+    })?;
+    let pairs = source_count.checked_mul(target_count).ok_or_else(|| RunError {
+        message: format!(
+            "antenna Oersted preflight source-target pair count overflows: {source_count} source tetrahedra x {target_count} target points"
+        ),
+    })?;
+    if pairs > DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS {
+        return Err(RunError {
+            message: format!(
+                "antenna Oersted preflight requires {pairs} source-target pairs ({source_count} source tetrahedra x {target_count} target points), exceeding the limit {DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS}; reduce the authored target resolution or select the qualified vector-potential realization"
+            ),
+        });
+    }
+    Ok(pairs)
+}
 
 mod descriptor;
 mod provenance;
@@ -1025,6 +1051,14 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
     oersted_method: NativeFemSteadyTransportOerstedMethod,
     target_points: Option<&[[f64; 3]]>,
 ) -> Result<NativeFemSteadyTransportRt0Result, RunError> {
+    if matches!(
+        oersted_method,
+        NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature
+    ) {
+        if let Some(target_points) = target_points {
+            preflight_direct_oersted_pair_budget(request.mesh.cell_count(), target_points.len())?;
+        }
+    }
     // The legacy H1 preflight rejects periodic topology because its old ABI
     // cannot represent a source cut.  The RT0 extension carries that closure
     // explicitly, so only remove the legacy rejection while retaining every
@@ -1426,7 +1460,7 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
                     maximum_subdivision_depth: 6,
                     absolute_tolerance_apm: 1.0e-9,
                     relative_tolerance: 1.0e-5,
-                    maximum_source_target_pairs: 1_000_000,
+                    maximum_source_target_pairs: DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS,
                 };
                 let mut outer_result = ffi::fullmag_fem_steady_transport_rt0_oersted_result_v1 {
                     abi_version: ffi::FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_ABI_VERSION,
@@ -3710,6 +3744,18 @@ mod tests {
             "fem_conservative_current_rt0_view.v1"
         );
         assert_eq!(result.flux_unit, "A");
+    }
+
+    #[test]
+    fn direct_oersted_pair_budget_is_checked_before_native_execution() {
+        let allowed = preflight_direct_oersted_pair_budget(1_000, 1_000).unwrap();
+        assert_eq!(allowed, DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS);
+
+        let error = preflight_direct_oersted_pair_budget(1_001, 1_000).unwrap_err();
+        assert!(error.message.contains("source-target pairs"));
+        assert!(error
+            .message
+            .contains("reduce the authored target resolution"));
     }
 }
 
