@@ -22,8 +22,8 @@ pub use antenna_field_solution::{
     load_solved_antenna_drive_basis, load_solved_antenna_drive_basis_projected,
     materialize_fdm_solved_antenna_drives, materialize_fdm_solved_antenna_drives_v03,
     materialize_fem_solved_antenna_drives, materialize_fem_solved_antenna_drives_v03,
-    verify_antenna_field_solution_asset, AntennaFieldSolutionAsset, AntennaFieldSolutionSamples,
-    AntennaFieldSolutionSignatures,
+    verify_antenna_field_solution_asset, verify_antenna_field_solution_signatures,
+    AntennaFieldSolutionAsset, AntennaFieldSolutionSamples, AntennaFieldSolutionSignatures,
 };
 pub use antenna_spectrum::{
     antenna_source_spectrum_auxiliary_artifact, compute_antenna_source_spectrum_artifact,

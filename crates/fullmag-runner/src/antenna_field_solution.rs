@@ -323,6 +323,45 @@ pub fn verify_antenna_field_solution_asset(
     Ok(())
 }
 
+/// Verify that a published asset was produced from the same resolved
+/// conductor, port, material and field-solution dependencies as the current
+/// authoring model.  A valid content digest alone proves only that the old
+/// immutable file was not tampered with; it does not prove that it is current.
+pub fn verify_antenna_field_solution_signatures(
+    manifest_bytes: &[u8],
+    expected: &AntennaFieldSolutionSignatures,
+) -> Result<(), RunError> {
+    let (_, manifest) = parse_verified_manifest(manifest_bytes)?;
+    if manifest.signatures != *expected {
+        let changed = [
+            (
+                "current_solution_signature",
+                manifest.signatures.current_solution_signature
+                    != expected.current_solution_signature,
+            ),
+            (
+                "field_solution_signature",
+                manifest.signatures.field_solution_signature != expected.field_solution_signature,
+            ),
+            (
+                "target_projection_signatures",
+                manifest.signatures.target_projection_signatures
+                    != expected.target_projection_signatures,
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(name, differs)| differs.then_some(name))
+        .collect::<Vec<_>>();
+        return Err(RunError {
+            message: format!(
+                "antenna field solution is stale for the current model; dependency signatures differ: {}",
+                changed.join(", ")
+            ),
+        });
+    }
+    Ok(())
+}
+
 fn encode_f64(values: impl IntoIterator<Item = f64>) -> Vec<u8> {
     let iterator = values.into_iter();
     let (lower, _) = iterator.size_hint();
@@ -1836,5 +1875,22 @@ mod tests {
         .unwrap_err()
         .message
         .contains("stale reference"));
+    }
+
+    #[test]
+    fn dependency_signature_mismatch_rejects_an_intact_old_asset() {
+        let artifacts = build_antenna_field_solution_artifacts(&input(2.0)).unwrap();
+        let manifest = &artifacts.last().unwrap().bytes;
+        let mut expected = serde_json::from_slice::<serde_json::Value>(manifest)
+            .unwrap()
+            .get("signatures")
+            .cloned()
+            .map(|value| serde_json::from_value::<AntennaFieldSolutionSignatures>(value).unwrap())
+            .unwrap();
+        expected.current_solution_signature = format!("sha256:{}", "f".repeat(64));
+
+        let error = verify_antenna_field_solution_signatures(manifest, &expected)
+            .expect_err("an old but untampered asset must not pass current-model validation");
+        assert!(error.message.contains("current_solution_signature"));
     }
 }

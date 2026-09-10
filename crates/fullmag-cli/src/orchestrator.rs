@@ -3124,6 +3124,28 @@ fn plan_materialized_stage_snapshot(stage: &ResolvedScriptStage) -> Result<Execu
     fullmag_plan::plan(&planning_ir).map_err(|error| anyhow!(error.to_string()))
 }
 
+/// Re-resolve the dedicated conductor solve solely to calculate the current
+/// dependency signature.  This does not execute the native solve; it rebuilds
+/// the canonical plan so an old immutable asset cannot be accepted merely
+/// because its own bytes and digest are intact.
+fn current_antenna_solution_signatures(
+    problem: &ProblemIR,
+    stage_id: &str,
+    port_mode_id: &str,
+) -> Result<fullmag_runner::AntennaFieldSolutionSignatures> {
+    let mut verification_problem = problem.clone();
+    verification_problem.backend_policy.requested_backend = BackendTarget::Fem;
+    let solve_plan =
+        fullmag_plan::plan_antenna_field_solve(&verification_problem, stage_id, port_mode_id)
+            .map_err(|error| anyhow!("re-resolve current antenna dependencies: {error}"))?;
+    fullmag_runner::antenna_field_solution_signatures(&solve_plan).map_err(|error| {
+        anyhow!(
+            "compute current antenna dependency signature: {}",
+            error.message
+        )
+    })
+}
+
 /// Attach published immutable antenna bases to the backend execution plan
 /// that will consume them. The field-solve stage only publishes an asset; this
 /// boundary is the explicit asset-to-LLG hand-off. FEM and FDM use separate
@@ -3180,6 +3202,49 @@ fn attach_solved_antenna_drive_bases(
         }
     }
 
+    for drive in &problem.solved_antenna_drives {
+        let projection = problem
+            .antenna_target_projections
+            .iter()
+            .find(|projection| projection.id == drive.projection_ref)
+            .ok_or_else(|| {
+                anyhow!(
+                    "solved antenna drive '{}' references missing projection '{}'",
+                    drive.id,
+                    drive.projection_ref
+                )
+            })?;
+        let stage = problem
+            .antenna_field_solve_stages
+            .iter()
+            .find(|stage| stage.id == projection.solution.stage_id)
+            .ok_or_else(|| {
+                anyhow!(
+                    "antenna projection '{}' references missing solve stage '{}'",
+                    projection.id,
+                    projection.solution.stage_id
+                )
+            })?;
+        let asset = assets.get(&projection.solution.asset_id).ok_or_else(|| {
+            anyhow!(
+                "antenna solution asset '{}' was not loaded for projection '{}'",
+                projection.solution.asset_id,
+                projection.id
+            )
+        })?;
+        let expected =
+            current_antenna_solution_signatures(problem, &stage.id, &drive.port_mode_id)?;
+        fullmag_runner::verify_antenna_field_solution_signatures(&asset.manifest_bytes, &expected)
+            .map_err(|error| {
+                anyhow!(
+                    "antenna solution asset '{}' for drive '{}' is stale: {}",
+                    projection.solution.asset_id,
+                    drive.id,
+                    error.message
+                )
+            })?;
+    }
+
     match &mut execution_plan.backend_plan {
         BackendPlanIR::Fem(plan) => {
             fullmag_runner::materialize_fem_solved_antenna_drives_v03(problem, plan, &assets)
@@ -3228,6 +3293,37 @@ fn execute_antenna_spectrum_requests(
                 error.message
             )
         })?;
+        let stage = problem
+            .antenna_field_solve_stages
+            .iter()
+            .find(|stage| stage.id == request.solution_ref.stage_id)
+            .ok_or_else(|| {
+                anyhow!(
+                    "antenna spectrum request '{}' references missing solve stage '{}'",
+                    request.id,
+                    request.solution_ref.stage_id
+                )
+            })?;
+        let port_mode_id = request
+            .port_mode_id
+            .as_deref()
+            .or_else(|| (stage.port_mode_ids.len() == 1).then(|| stage.port_mode_ids[0].as_str()))
+            .ok_or_else(|| {
+                anyhow!(
+                    "antenna spectrum request '{}' must identify one port mode for dependency validation",
+                    request.id
+                )
+            })?;
+        let expected = current_antenna_solution_signatures(problem, &stage.id, port_mode_id)?;
+        fullmag_runner::verify_antenna_field_solution_signatures(&asset.manifest_bytes, &expected)
+            .map_err(|error| {
+                anyhow!(
+                    "antenna solution asset '{}' for spectrum request '{}' is stale: {}",
+                    request.solution_ref.asset_id,
+                    request.id,
+                    error.message
+                )
+            })?;
         let samples = fullmag_runner::load_antenna_field_solution_samples_for_spectrum(
             &asset.manifest_bytes,
             &asset.payloads,
