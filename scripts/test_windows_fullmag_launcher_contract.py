@@ -1,4 +1,10 @@
 from pathlib import Path
+import os
+import re
+import shutil
+import subprocess
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -504,6 +510,35 @@ def test_windows_fem_default_web_port_is_selected_from_a_bindable_host_range() -
     assert '"pick", "0.0.0.0"' in launcher
     assert '$WebPort = Resolve-HostWebPort -RequestedPort $WebPort' in launcher
     assert '3101..3199' in launcher
+
+
+@pytest.mark.parametrize(
+    "backend,explicit_port,expected",
+    [("fdm", None, "3100"), ("fem", None, "0"),
+     ("fdm", "3197", "3197"), ("fem", "3197", "3197")],
+)
+def test_fullmag_windows_dispatch_preserves_port_defaults(backend, explicit_port, expected):
+    git_bash = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe"
+    bash = str(git_bash) if os.name == "nt" and git_bash.is_file() else shutil.which("bash")
+    if bash is None:
+        pytest.skip("Bash is required to exercise the justfile parser")
+    recipe = JUSTFILE.read_text(encoding="utf-8").split('fullmag opt_1=""', 1)[1]
+    body = recipe.split("bash -euo pipefail -c '\\\n", 1)[1]
+    body = body.split("\n\n", 1)[0].rstrip()
+    assert body.endswith("'")
+    body = body[:-1].replace("\\\n", "\n")
+    options = ["windows=True", backend, "gpu", "justfile"]
+    # Use an existing file: this probe exits before invoking a real launcher.
+    options[3] = "script=justfile"
+    if explicit_port is not None:
+        options.append(f"web_port={explicit_port}")
+    body = body.replace("{{repo_root}}", ".")
+    for index in range(1, 9):
+        body = body.replace("{{opt_" + str(index) + "}}", options[index - 1] if index <= len(options) else "")
+    body = re.sub(r"exec powershell\.exe[^\n]*", 'printf "%s" "$web_port"; exit 0', body)
+    result = subprocess.run([bash, "-c", body], cwd=ROOT, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == expected
 
 
 def test_windows_compose_uses_only_bind_mounts_for_build_and_cache() -> None:
