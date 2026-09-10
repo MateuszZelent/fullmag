@@ -21,7 +21,9 @@ class StorageTests(unittest.TestCase):
         self.addCleanup(environment.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.project = Path(self.temp.name) / "project"
+        # Windows runners may expose TEMP through an 8.3 short-name alias.
+        # Author fixture paths canonically, as required by the storage guard.
+        self.project = Path(self.temp.name).resolve() / "project"
         self.repo = self.project / "fullmag"
         self.repo.mkdir(parents=True)
         subprocess.run(["git", "init", "--quiet", str(self.repo)], check=True)
