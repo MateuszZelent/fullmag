@@ -5273,7 +5273,7 @@ run-headless-bench script:
 
 fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
     bash -euo pipefail -c '\
-      r="{{repo_root}}"; build="false"; force="false"; windows="false"; frontend="dev"; backend="auto"; device="auto"; run_mode="interactive"; script=""; web_port="3100"; skip_local_changes="false"; seen_options=""; \
+      r="{{repo_root}}"; build="false"; force="false"; windows="false"; frontend="dev"; backend="auto"; device="auto"; run_mode="interactive"; script=""; web_port="0"; skip_local_changes="false"; seen_options=""; \
       for raw in "{{opt_1}}" "{{opt_2}}" "{{opt_3}}" "{{opt_4}}" "{{opt_5}}" "{{opt_6}}" "{{opt_7}}" "{{opt_8}}"; do \
         [ -n "$raw" ] || continue; \
         key="${raw%%=*}"; value="$raw"; if [ "$key" != "$raw" ]; then value="${raw#*=}"; fi; \

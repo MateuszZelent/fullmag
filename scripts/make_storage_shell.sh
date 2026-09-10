@@ -68,6 +68,29 @@ case "${recipe}" in
     ;;
 esac
 
+# The Windows FEM launcher resolves and locks the host storage before it
+# starts Docker, then bind-mounts the resolved build/cache/runtime roots into
+# this Linux container.  Re-running the shared resolver here would read the
+# Windows host .env from /workspace and feed C:/... to the Linux resolver.
+# That is both the wrong namespace and a second, impossible-to-share lock.
+# Keep this escape hatch narrow: only the Windows launcher sets the sentinel,
+# and the target directory must be inside its managed build bind mount.
+if ! is_windows_shell && [[ "${FULLMAG_WINDOWS_CONTAINER_MANAGED:-0}" == "1" ]]; then
+  container_target="${FULLMAG_CARGO_TARGET_DIR:-}"
+  case "${container_target}" in
+    /workspace/.fullmag-build/cargo-targets/*) ;;
+    *)
+      echo "[fullmag make] Windows FEM container target is missing or outside /workspace/.fullmag-build/cargo-targets: ${container_target}" >&2
+      exit 2
+      ;;
+  esac
+  if [[ "${CARGO_TARGET_DIR:-}" != "${container_target}" ]]; then
+    echo "[fullmag make] CARGO_TARGET_DIR must match FULLMAG_CARGO_TARGET_DIR in the managed Windows FEM container" >&2
+    exit 2
+  fi
+  exec bash -euo pipefail -c "${recipe}"
+fi
+
 prepare_args=(--compat)
 case "${recipe}" in
   *"apps/control-room"*|*"WEB_APP_DIR"*|*"pnpm"*) prepare_args+=(--frontend) ;;

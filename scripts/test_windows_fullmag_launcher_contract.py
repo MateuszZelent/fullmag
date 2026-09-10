@@ -14,6 +14,7 @@ FEM_CPU_DOCKERFILE = ROOT / "docker" / "fem-cpu" / "Dockerfile"
 SETUP = ROOT / "scripts" / "windows" / "setup_fullmag.ps1"
 STORAGE_ADAPTER = ROOT / "scripts" / "windows" / "fullmag_storage.ps1"
 STORAGE_RESOLVER = ROOT / "scripts" / "fullmag_storage.py"
+MAKE_STORAGE_SHELL = ROOT / "scripts" / "make_storage_shell.sh"
 
 
 def test_justfile_exposes_native_windows_fullmag_route() -> None:
@@ -489,6 +490,21 @@ def test_windows_fem_interactive_launch_separates_host_and_container_web_ports()
     assert '"${FULLMAG_WINDOWS_WEB_PORT:-3100}:3100"' in compose
 
 
+def test_windows_fem_default_web_port_is_selected_from_a_bindable_host_range() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+
+    assert 'fullmag opt_1=""' in justfile
+    assert 'web_port="0"' in justfile
+    assert 'scripts\\control_room_port.py' in launcher
+    assert '[int]$WebPort = 0' in launcher
+    assert "scripts\\control_room_port.py" in launcher
+    assert 'first_bindable_port' not in launcher
+    assert '"pick", "0.0.0.0"' in launcher
+    assert '$WebPort = Resolve-HostWebPort -RequestedPort $WebPort' in launcher
+    assert '3101..3199' in launcher
+
+
 def test_windows_compose_uses_only_bind_mounts_for_build_and_cache() -> None:
     compose = WINDOWS_COMPOSE.read_text(encoding="utf-8")
 
@@ -518,6 +534,38 @@ def test_windows_compose_uses_only_bind_mounts_for_build_and_cache() -> None:
     assert "- cargo-cache:" not in compose
     assert "- target-cache:" not in compose
     assert "- pnpm-store:" not in compose
+
+
+def test_windows_fem_gpu_uses_scientific_python_with_runtime_dependencies() -> None:
+    compose = WINDOWS_COMPOSE.read_text(encoding="utf-8")
+
+    gpu_service = compose.split("  fullmag-windows-fem-gpu:", 1)[1].split(
+        "  fullmag-windows-fem-cpu:", 1
+    )[0]
+    cpu_service = compose.split("  fullmag-windows-fem-cpu:", 1)[1]
+    assert "FULLMAG_PYTHON: /usr/local/bin/python3" in gpu_service
+    assert "FULLMAG_PYTHON: /usr/bin/python3" not in gpu_service
+    assert "FULLMAG_PYTHON: /usr/bin/python3" in cpu_service
+
+
+def test_windows_fem_dev_bootstrap_creates_the_requested_next_target() -> None:
+    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+
+    assert '`"`$frontend_root/next/dev-$containerWebPort`"' in launcher
+    assert 'ensure_managed_link `"`$frontend_app/.next-control-room-$containerWebPort`"' in launcher
+
+
+def test_windows_fem_container_build_uses_host_managed_storage_boundary() -> None:
+    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+    make_shell = MAKE_STORAGE_SHELL.read_text(encoding="utf-8")
+
+    assert "FULLMAG_WINDOWS_CONTAINER_MANAGED=1" in launcher
+    assert "FULLMAG_CARGO_TARGET_DIR=/workspace/.fullmag-build/cargo-targets/$TargetKey" in launcher
+    assert "CARGO_TARGET_DIR=/workspace/.fullmag-build/cargo-targets/$TargetKey" in launcher
+    assert "FULLMAG_WINDOWS_CONTAINER_MANAGED" in make_shell
+    assert "/workspace/.fullmag-build/cargo-targets/*" in make_shell
+    assert "CARGO_TARGET_DIR must match FULLMAG_CARGO_TARGET_DIR" in make_shell
+    assert 'exec bash -euo pipefail -c "${recipe}"' in make_shell
 
 
 def test_fem_gpu_dockerfile_treats_nsight_as_optional() -> None:
