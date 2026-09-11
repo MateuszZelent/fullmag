@@ -8,26 +8,26 @@
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "planned",
-      "reason": "The backend-neutral contract is approved; implementation and directional-derivative qualification are pending."
+      "status": "implemented",
+      "reason": "Double-precision field, energy, boundary, and directional-derivative source tests pass; the Goebel CPU runtime is not verified."
     },
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "planned",
-      "reason": "FP64/FP32 CUDA field and energy kernels plus executed-device parity are pending."
+      "status": "validated",
+      "reason": "The strict FP64 CUDA Goebel bimeron run passed 15/15 gates with a validated device receipt and no fallback."
     },
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "planned",
-      "reason": "The MFEM weak residual, natural boundary term, energy, and projection are pending."
+      "status": "implemented",
+      "reason": "The MFEM weak residual and energy derivative are source tested; the Goebel FEM CPU runtime is not verified."
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "planned",
-      "reason": "Typed-topology device quadrature and CUDA residual/energy qualification are pending."
+      "status": "implemented",
+      "reason": "The CUDA element residual and managed build contract are tested; the Goebel FEM GPU runtime is not verified."
     }
   ],
   "sources": [
@@ -47,17 +47,17 @@
     },
     {
       "id": "fdm-shared",
-      "path": "crates/fullmag-engine/src/fdm/shared/rotated_interfacial_dmi.rs",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
       "symbol": "rotated_interfacial_dmi_field",
       "responsibility": "Define the reference discrete FDM field and energy algebra.",
-      "evidence_status": "planned_contract"
+      "evidence_status": "implemented_source_test"
     },
     {
       "id": "fem-weak",
       "path": "backends/fem/src/dmi_weak_residual.cpp",
       "symbol": "dmi_accumulate_rotated_interfacial_residual",
       "responsibility": "Define the shared FEM first-variation algebra used by CPU and GPU realizations.",
-      "evidence_status": "planned_contract"
+      "evidence_status": "implemented_source_test"
     }
   ],
   "symbols": [

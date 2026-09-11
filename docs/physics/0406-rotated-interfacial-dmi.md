@@ -359,10 +359,12 @@ i ruch SOT zachowują status wskazany w macierzy wsparcia.
 
 | Kontrakt | Ścieżka | Symbol | Odpowiedzialność | Lane | Stan dowodu |
 |---|---|---|---|---|---|
-| Python API | `packages/fullmag-py/src/fullmag/model/energy.py` | `class RotatedInterfacialDMI` | walidacja i lowering | wspólny | planned contract |
+| Python API | `packages/fullmag-py/src/fullmag/model/energy.py` | `class RotatedInterfacialDMI` | walidacja i lowering | wspólny | implemented, source test |
 | `ProblemIR` | `crates/fullmag-ir/src/study.rs` | `EnergyTermIR` | wariant `RotatedInterfacialDmi` i kanoniczna serializacja | wspólny | implemented, source test |
-| energia i pole FDM | `crates/fullmag-engine/src/fdm/shared/rotated_interfacial_dmi.rs` | `rotated_interfacial_dmi_field` | referencyjna algebra dyskretna | FDM CPU | planned contract |
-| residual FEM | `backends/fem/src/dmi_weak_residual.cpp` | `dmi_accumulate_rotated_interfacial_residual` | wspólna pierwsza wariacja | FEM CPU/GPU | planned contract |
+| energia i pole FDM | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `rotated_interfacial_dmi_field` | referencyjna algebra dyskretna | FDM CPU | implemented, source test |
+| residual FEM | `backends/fem/src/dmi_weak_residual.cpp` | `dmi_accumulate_rotated_interfacial_residual` | wspólna pierwsza wariacja | FEM CPU/GPU | implemented, source test; runtime not verified |
 
-Po implementacji source map zostaje uzupełniona o rzeczywiste symbole CUDA,
-plannera, quantities, runnera i testów oraz o pełny immutable revision link.
+Publiczna source map wskazuje także rzeczywiste symbole CUDA, plannera,
+quantities, runnera i walidatora scenariusza. Kwalifikacja naukowa pozostaje
+ograniczona do udokumentowanego przebiegu FDM CUDA FP64; runtime FDM CPU i FEM
+nie jest przez tę notę promowany.
