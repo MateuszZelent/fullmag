@@ -65,6 +65,12 @@ fn web_public_host() -> String {
 }
 
 fn web_public_url(port: u16) -> String {
+    // Docker may publish a different host port than the frontend listens on.
+    let port = std::env::var("FULLMAG_WEB_PUBLIC_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port != 0)
+        .unwrap_or(port);
     let host = web_public_host();
     let formatted_host = if host.contains(':') && !host.starts_with('[') {
         format!("[{host}]")

@@ -661,3 +661,28 @@ def test_makefile_can_build_container_local_fem_cpu() -> None:
     assert "FULLMAG_FORCE_LOCAL_FEM_CPU" in makefile
     assert 'build_mode="fem-cpu"' in makefile
     assert '"fem-gpu"' in makefile
+
+
+@pytest.mark.parametrize("published_port, expected_port", [(None, 3100), ("3101", 3101)])
+def test_logged_control_room_url_uses_published_port(tmp_path, published_port, expected_port):
+    rustc = shutil.which("rustc")
+    if rustc is None:
+        pytest.skip("rustc is required for the isolated launcher URL check")
+    source = CONTROL_ROOM.read_text(encoding="utf-8")
+    start = source.index("fn web_public_url(")
+    end = source.index("\npub(crate) fn internal_live_api_url", start)
+    harness = tmp_path / "public_url.rs"
+    harness.write_text(
+        'fn web_public_host() -> String { "localhost".into() }\n'
+        + source[start:end]
+        + '\nfn main() { println!("{}", web_public_url(3100)); }\n',
+        encoding="utf-8",
+    )
+    executable = tmp_path / ("public_url.exe" if os.name == "nt" else "public_url")
+    subprocess.run([rustc, str(harness), "-o", str(executable)], check=True)
+    env = os.environ.copy()
+    env.pop("FULLMAG_WEB_PUBLIC_PORT", None)
+    if published_port is not None:
+        env["FULLMAG_WEB_PUBLIC_PORT"] = published_port
+    result = subprocess.run([str(executable)], env=env, capture_output=True, text=True, check=True)
+    assert result.stdout.strip() == f"http://localhost:{expected_port}"
