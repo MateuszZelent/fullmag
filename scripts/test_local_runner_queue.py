@@ -25,6 +25,15 @@ class QueueTests(unittest.TestCase):
         with self.assertRaises(QueueError):
             self.submit('request-a', 'wt-other')
 
+    def test_readonly_observer_never_initializes_or_writes_database(self):
+        job = self.submit('readonly')
+        observer = JobQueue(self.path, readonly=True)
+        self.assertEqual(job['job_id'], observer.get(job['job_id'])['job_id'])
+        self.assertEqual(1, len(observer.list()))
+        with self.assertRaises(QueueError):
+            JobQueue(self.path.parent / 'missing.sqlite', readonly=True)
+        self.assertFalse((self.path.parent / 'missing.sqlite').exists())
+
     def test_single_global_heavy_slot_across_worktrees(self):
         first = self.submit('a')
         second = self.submit('b', 'wt-b')

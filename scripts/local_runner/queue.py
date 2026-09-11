@@ -24,15 +24,23 @@ def identifier(value):
 
 
 class JobQueue:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, readonly=False):
         self.path = Path(path)
+        self.readonly = readonly
         if not self.path.is_absolute() or self.path.is_symlink():
             raise QueueError('Queue path must be absolute and not a symlink')
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if readonly and not self.path.is_file():
+            raise QueueError('Queue does not exist')
+        if not readonly:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connection() as db:
             version = db.execute('PRAGMA user_version').fetchone()[0]
             if version not in (0, 1):
                 raise QueueError('Unsupported queue schema')
+            if version == 1:
+                return
+            if readonly:
+                raise QueueError('Queue is not initialized')
             db.execute('''CREATE TABLE IF NOT EXISTS jobs (
                 sequence INTEGER PRIMARY KEY AUTOINCREMENT,
                 job_id TEXT NOT NULL UNIQUE, owner TEXT NOT NULL,
@@ -46,7 +54,8 @@ class JobQueue:
 
     @contextmanager
     def connection(self):
-        db = sqlite3.connect(self.path, timeout=30, isolation_level=None)
+        target = self.path.as_uri() + '?mode=ro' if self.readonly else self.path
+        db = sqlite3.connect(target, uri=self.readonly, timeout=30, isolation_level=None)
         db.row_factory = sqlite3.Row
         try:
             yield db
@@ -75,7 +84,7 @@ class JobQueue:
         result.pop('request_hash', None)
         return result
 
-    def submit(self, *, owner, worktree_id, source_digest, profile, operation, request_key, payload):
+    def submit(self, *, owner, worktree_id, source_digest, profile, operation, request_key, payload, identity_payload=None):
         for value in (owner, worktree_id, profile, operation, request_key):
             identifier(value)
         if not re.fullmatch('[a-f0-9]{64}', source_digest):
@@ -85,7 +94,10 @@ class JobQueue:
         encoded = json.dumps(payload, sort_keys=True, separators=(',', ':'), allow_nan=False)
         if len(encoded.encode('utf-8')) > 65536:
             raise QueueError('Request exceeds 64 KiB')
-        identity = json.dumps([worktree_id, source_digest, profile, operation, encoded])
+        # A caller may exclude capture-instance metadata (random staging ID)
+        # from retry identity. Source digest remains mandatory in every case.
+        stable = encoded if identity_payload is None else json.dumps(identity_payload, sort_keys=True, separators=(',', ':'), allow_nan=False)
+        identity = json.dumps([worktree_id, source_digest, profile, operation, stable])
         request_hash = hashlib.sha256(identity.encode()).hexdigest()
         with self.transaction() as db:
             previous = db.execute('SELECT * FROM jobs WHERE owner=? AND request_key=?', (owner, request_key)).fetchone()
@@ -114,12 +126,17 @@ class JobQueue:
                               (owner, owner, limit)).fetchall()
             return [self.record(row) for row in rows]
 
-    def claim(self, coordinator):
+    def active(self):
+        with self.connection() as db:
+            rows = db.execute("SELECT * FROM jobs WHERE state IN ('running','cancel_requested') ORDER BY sequence").fetchall()
+            return [self.record(row) for row in rows]
+
+    def claim(self, coordinator, *, owner=None):
         identifier(coordinator)
         with self.transaction() as db:
             if db.execute("SELECT 1 FROM jobs WHERE state IN ('running','cancel_requested') LIMIT 1").fetchone():
                 return None
-            row = db.execute("SELECT * FROM jobs WHERE state='queued' ORDER BY sequence LIMIT 1").fetchone()
+            row = db.execute("SELECT * FROM jobs WHERE state='queued' AND (? IS NULL OR owner=?) ORDER BY sequence LIMIT 1", (owner, owner)).fetchone()
             if row is None:
                 return None
             db.execute("UPDATE jobs SET state='running',coordinator=?,lease_token=?,updated_at=? WHERE job_id=?",

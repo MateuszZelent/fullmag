@@ -57,6 +57,15 @@ case "${recipe}" in
   *"just --list"*|*"just --list --"*) exec bash -euo pipefail -c "${recipe}" ;;
 esac
 
+# Runner actions own their storage preflight and per-job/per-worktree locks.
+# Holding the generic worktree lock while `wait` polls would prevent the
+# coordinator from executing that same worktree's queued job.
+case "${recipe}" in
+  *"scripts/local_runner_cli.py"*)
+    FULLMAG_STORAGE_PYTHON="${python_cmd}" exec bash -euo pipefail -c "${recipe}"
+    ;;
+esac
+
 # The Windows PowerShell launchers select their own storage profile and hold
 # the core lock through the managed entrypoint.  Letting the generic Linux /
 # Windows-native preflight create links first would select the wrong profile.
