@@ -1,9 +1,4 @@
-import {
-  BufferAttribute,
-  BufferGeometry,
-  ShaderMaterial,
-  type Side,
-} from "three";
+import { ShaderMaterial, type Side } from "three";
 
 import {
   floquetPhaseAdapter,
