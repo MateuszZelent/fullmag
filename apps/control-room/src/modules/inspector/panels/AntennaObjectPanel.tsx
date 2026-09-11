@@ -108,7 +108,7 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
   return (
     <div className="fm-inspector-panel">
       <InspectorGroup
-        title="Antenna"
+        title="Regional field drive"
         badge={model.mode === "canonical" ? "Regional drive" : model.mode === "legacy" ? "Migration required" : "unassigned"}
       >
         {model.mode === "legacy" ? <FeedbackBanner kind="warning" message="Deprecated prescribed_zeeman_mask source. Saving migrates it atomically to RegionalFieldDrive." /> : null}

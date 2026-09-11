@@ -10,6 +10,14 @@ import {
 import { FdmMultilayerAirboxTargetPanel } from "./panels/airbox/FdmMultilayerAirboxTargetPanel";
 import { AirboxVisualizationDebugInspectorPanel } from "./panels/airbox/AirboxVisualizationDebugInspectorPanel";
 import { AntennaObjectPanel } from "./panels/AntennaObjectPanel";
+import {
+  AntennaConductorPanel,
+  AntennaPortPanel,
+  AntennaProjectionPanel,
+  AntennaSolutionPanel,
+  AntennaSpectrumPanel,
+  SolvedAntennaDrivePanel,
+} from "./panels/antenna/AntennaCompositionPanels";
 import { QuickChartInspectorPanel } from "./panels/QuickChartInspectorPanel";
 import { BoundaryFacesOverviewPanel } from "./panels/boundary-faces/BoundaryFacesOverviewPanel";
 import { CouplingInspectorPanel } from "./panels/CouplingInspectorPanel";
@@ -883,9 +891,45 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
   },
   {
     id: "antenna-object",
-    title: "Antenna",
-    selectionKinds: ["object.antenna"],
+    title: "Regional field drive",
+    selectionKinds: ["object.antenna", "object.antenna.regional"],
     component: AntennaObjectPanel,
+  },
+  {
+    id: "antenna-conductor",
+    title: "Antenna conductor",
+    selectionKinds: ["object.antenna.conductor"],
+    component: AntennaConductorPanel,
+  },
+  {
+    id: "antenna-port",
+    title: "Antenna port",
+    selectionKinds: ["object.antenna.port"],
+    component: AntennaPortPanel,
+  },
+  {
+    id: "antenna-solution",
+    title: "Antenna field solve",
+    selectionKinds: ["object.antenna.solution"],
+    component: AntennaSolutionPanel,
+  },
+  {
+    id: "antenna-projection",
+    title: "Antenna target projection",
+    selectionKinds: ["object.antenna.projection"],
+    component: AntennaProjectionPanel,
+  },
+  {
+    id: "antenna-drive",
+    title: "Solved antenna drive",
+    selectionKinds: ["object.antenna.drive"],
+    component: SolvedAntennaDrivePanel,
+  },
+  {
+    id: "antenna-spectrum",
+    title: "Antenna spectrum",
+    selectionKinds: ["object.antenna.spectrum"],
+    component: AntennaSpectrumPanel,
   },
   {
     id: "airbox-overview",

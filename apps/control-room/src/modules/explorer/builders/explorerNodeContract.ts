@@ -7,6 +7,7 @@ import type {
   FrequencyDomainManifestResource,
   FrequencyDomainTextArtifactResource,
   PlanarMonitorCollectionResource,
+  SceneResource,
   TableListResource,
 } from "@/kernel/api/apiTypes";
 import type { AnalysisFieldOverlayState } from "@/kernel/visualization/AnalysisFieldOverlayController";
@@ -31,6 +32,7 @@ export interface ExplorerTreeResources {
 }
 
 export type ModelTreeResources = ExplorerTreeResources & {
+  scene?: SceneResource | null;
   currentTransports?: CurrentTransportListResource | null;
   frozenSpins?: FrozenSpinsCollectionResource | null;
   planarMonitorDraft?: PlanarMonitorDraft | null;

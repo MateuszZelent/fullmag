@@ -738,6 +738,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
               activeAnalysisFieldOverlay,
               currentTransports: currentTransports.data,
               frozenSpins: frozenSpins.data,
+              scene: modelResource.data,
               frequencyDomainManifest: frequencyDomainManifest.data,
               frequencyDomainResponseSweep: frequencyDomainResponseSweep.data,
               frequencyDomainSpectrum: frequencyDomainSpectrum.data,
