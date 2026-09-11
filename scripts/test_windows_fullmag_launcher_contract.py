@@ -632,6 +632,42 @@ def test_windows_fem_container_build_uses_host_managed_storage_boundary() -> Non
     assert 'exec bash -euo pipefail -c "${recipe}"' in make_shell
 
 
+def test_windows_fem_container_storage_boundary_rejects_parent_traversal(tmp_path) -> None:
+    if os.name == "nt":
+        pytest.skip("The managed-container boundary is exercised by the Linux CI lane")
+    git_bash = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe"
+    bash = str(git_bash) if os.name == "nt" and git_bash.is_file() else shutil.which("bash")
+    if bash is None:
+        pytest.skip("Bash is required to exercise the managed container boundary")
+    escaped = "/workspace/.fullmag-build/cargo-targets/../escape"
+    python_probe = tmp_path / "python3"
+    python_probe.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    python_probe.chmod(0o755)
+    uname_probe = tmp_path / "uname"
+    uname_probe.write_text("#!/usr/bin/env bash\nprintf 'Linux\\n'\n", encoding="utf-8")
+    uname_probe.chmod(0o755)
+    probe_path = str(tmp_path)
+    if os.name == "nt":
+        probe_path = f"/{probe_path[0].lower()}{probe_path[2:].replace(chr(92), '/')}"
+    env = os.environ.copy()
+    env.pop("OS", None)
+    env.update(
+        FULLMAG_WINDOWS_CONTAINER_MANAGED="1",
+        FULLMAG_CARGO_TARGET_DIR=escaped,
+        CARGO_TARGET_DIR=escaped,
+        PATH=probe_path + ":" + env.get("PATH", ""),
+    )
+    result = subprocess.run(
+        [bash, str(MAKE_STORAGE_SHELL), "-c", "exit 0"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert "outside /workspace/.fullmag-build/cargo-targets" in result.stderr
+
+
 def test_fem_gpu_dockerfile_treats_nsight_as_optional() -> None:
     dockerfile = FEM_GPU_DOCKERFILE.read_text(encoding="utf-8")
 
