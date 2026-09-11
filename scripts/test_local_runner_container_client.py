@@ -231,6 +231,20 @@ class ContainerClientTests(unittest.TestCase):
         )
 
     def test_replace_requires_quiescent_health_before_stop(self):
+        # Older coordinators discarded the service return value and called
+        # an intentional, fully completed stop "failed" without an error.
+        health = {'ok': False, 'worker_alive': False, 'worker_error': None,
+                  'worker_state': 'failed', 'accepting_jobs': False,
+                  'active_jobs': [], 'legacy_jobs': [], 'stop_requested': True,
+                  'coordinator': {'state': 'stopped', 'stop_requested': True,
+                                  'active_job_ids': [], 'last_error': None,
+                                  'finished_at': '2026-09-11T18:36:12Z'}}
+        container_client._assert_replacement_health(health)
+        for field, value in (('worker_alive', True), ('worker_error', 'failure'),
+                             ('stop_requested', False), ('legacy_jobs', [{}])):
+            with self.subTest(field=field):
+                with self.assertRaises(container_client.ContainerClientError):
+                    container_client._assert_replacement_health({**health, field: value})
         self.configure()
         docker = FakeDocker(self.storage)
         docker.container_id = CONTAINER_ID

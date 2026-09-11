@@ -272,7 +272,7 @@ class Application:
         return [reconcile_build(self.layout, job['job_id'], owner=self.owner, call=docker) for job in jobs]
 
     def run(self):
-        RunnerService(paths=self.paths, interval_seconds=5,
+        return RunnerService(paths=self.paths, interval_seconds=5,
             execute=self._execute_next,
             active=self.queue.active,
             reconcile=self._reconcile).run()

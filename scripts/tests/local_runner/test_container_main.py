@@ -43,6 +43,13 @@ class LiveThread:
 
 
 class ContainerMainTests(unittest.TestCase):
+    def test_run_preserves_service_terminal_result(self):
+        app = self.app()
+        app.layout = {}
+        with patch.object(container_main, 'RunnerService') as service:
+            service.return_value.run.return_value = {'state': 'stopped'}
+            self.assertEqual({'state': 'stopped'}, app.run())
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

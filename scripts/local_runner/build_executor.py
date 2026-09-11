@@ -92,6 +92,19 @@ def daemon_path(path, storage, daemon_root):
     return daemon_root.rstrip('/') + '/' + relative
 
 
+def prepare_worker_directory(path, storage):
+    """Assign only an empty private mount root; never recurse into shared data."""
+    path = validate_path(path, storage, 'private worker directory')
+    if not path.is_dir() or path == Path(storage):
+        raise ValueError('Expected a private worker directory below storage')
+    info = path.stat(follow_symlinks=False)
+    if (info.st_uid, info.st_gid) == (65532, 65532):
+        return
+    if any(path.iterdir()):
+        raise ValueError('Refusing to change ownership of nonempty worker directory: ' + str(path))
+    os.chown(path, 65532, 65532, follow_symlinks=False)
+
+
 def build_command(job_id, source_digest, profile, config, paths, storage):
     backend, device = profile_lane(profile)
     if not re.fullmatch('[a-f0-9]{32}', job_id) or not re.fullmatch('[a-f0-9]{64}', source_digest):
@@ -278,6 +291,12 @@ def execute_build(layout, *, owner, call=docker, sleep=time.sleep, timeout_secon
                 validate_path(path, storage)
                 if key != 'source':
                     path.mkdir(parents=True, exist_ok=True)
+            if layout.get('container_coordinator'):
+                # The coordinator is root, but workers are deliberately not.
+                # These three exact task-owned roots are separate from caches,
+                # trusted inputs and the immutable capsule. Never chown recursively.
+                for key in ('workspace', 'artifacts', 'build'):
+                    prepare_worker_directory(paths[key], storage)
             trusted_hashes = {}
             for filename in ('build_entrypoint.py', 'worker_entrypoint.py'):
                 content = (Path(__file__).parent / filename).read_bytes()

@@ -736,8 +736,22 @@ def stop(layout: Mapping[str, object], owner: str) -> Any:
 
 
 def _assert_replacement_health(health: object) -> None:
-    if not isinstance(health, Mapping) or health.get("ok") is not True:
+    if not isinstance(health, Mapping):
         raise ContainerClientError("Coordinator health did not confirm a healthy service")
+    service = health.get('coordinator')
+    # Upgrade compatibility: old Application.run discarded the normal stopped
+    # result. Accept only a completed intentional stop, never a crashed worker
+    # or an uncertain lease. Docker identity attestation remains mandatory.
+    intentional_stop = (
+        isinstance(service, Mapping) and service.get('state') == 'stopped'
+        and service.get('stop_requested') is True and bool(service.get('finished_at'))
+        and service.get('active_job_ids') == [] and service.get('last_error') is None
+        and health.get('stop_requested') is True and health.get('worker_alive') is False
+        and health.get('worker_error') is None and health.get('accepting_jobs') is False
+        and health.get('legacy_jobs') == []
+    )
+    if health.get('ok') is not True and not intentional_stop:
+        raise ContainerClientError("Coordinator health did not confirm a healthy service or completed intentional stop")
     active_jobs = health.get("active_jobs")
     if not isinstance(active_jobs, list) or active_jobs:
         raise ContainerClientError("Coordinator has active jobs; replacement is refused")

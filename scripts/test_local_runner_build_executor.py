@@ -8,6 +8,27 @@ from local_runner import build_executor as executor
 
 
 class BuildExecutorTests(unittest.TestCase):
+    def test_empty_private_mount_is_assigned_to_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            target = root / 'execution'
+            target.mkdir()
+            with patch.object(executor.os, 'chown', create=True) as chown:
+                executor.prepare_worker_directory(target, root)
+            chown.assert_called_once_with(target, 65532, 65532, follow_symlinks=False)
+
+    def test_existing_foreign_content_is_not_reowned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            target = root / 'execution'
+            target.mkdir()
+            (target / 'keep').write_text('preserve')
+            with patch.object(executor.os, 'chown', create=True) as chown:
+                with self.assertRaisesRegex(ValueError, 'nonempty'):
+                    executor.prepare_worker_directory(target, root)
+            chown.assert_not_called()
+            self.assertEqual('preserve', (target / 'keep').read_text())
+
     def test_disk_pressure_preserves_queued_job(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
