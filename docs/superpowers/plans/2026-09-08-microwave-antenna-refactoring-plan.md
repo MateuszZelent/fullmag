@@ -542,7 +542,7 @@ restart:    reload ready manifest -> verify bytes and dependencies -> resolve co
 
 ## T14. Domknąć OpenAPI, zasoby i realtime
 
-**Stan 2026-09-11:** dodano typowane endpointy metadanych opublikowanego rozwiązania pola i widma źródłowego anteny (`data/antenna/...`) z tożsamością sesji, podpisami, linkami do artefaktów oraz ETag/304. Facade `ControlRoomApi` i hooki zasobów są podłączone, a OpenAPI/TypeScript wygenerowano ponownie. Zmiana katalogu artefaktów unieważnia teraz tylko prefiksy zasobów wyników anteny; test bridge obejmuje tę izolację. Pozostają binarne payloady widma, pełna walidacja świeżości i testy przeglądarkowe.
+**Stan 2026-09-11:** dodano typowane endpointy metadanych opublikowanego rozwiązania pola i widma źródłowego anteny (`data/antenna/...`) z tożsamością sesji, podpisami, linkami do artefaktów oraz ETag/304. Facade `ControlRoomApi` i hooki zasobów są podłączone, a OpenAPI/TypeScript wygenerowano ponownie. Zmiana katalogu artefaktów unieważnia teraz tylko prefiksy zasobów wyników anteny; test bridge obejmuje tę izolację. Router ma teraz fixture test gotowego pola/widma, 304, 404 i uszkodzonego manifestu (`db52f48cd0e0449784f1dde51e017c8755ccc4b0`). Pozostają binarne payloady widma, pełna walidacja świeżości i testy przeglądarkowe.
 
 **Pliki:** API schema/router handlers wskazane w mapie, nowe `handlers/data/antenna.rs`, `ControlRoomApi.ts`, nowe `antennaResources.ts`, generated transport/types/paths.
 
