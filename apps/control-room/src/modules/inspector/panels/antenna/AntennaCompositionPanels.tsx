@@ -1,6 +1,10 @@
 import type { ReactNode } from "react";
 
 import type { SceneResource } from "@/kernel/api/apiTypes";
+import {
+  useAntennaFieldSolutionResource,
+  useAntennaSourceSpectrumResource,
+} from "@/kernel/resources/antennaResources";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
@@ -44,6 +48,18 @@ interface DetailModel {
   title: string;
 }
 
+type AntennaFieldSolutionResult = ReturnType<
+  typeof useAntennaFieldSolutionResource
+>;
+type AntennaSourceSpectrumResult = ReturnType<
+  typeof useAntennaSourceSpectrumResource
+>;
+
+interface AntennaRuntimeIds {
+  solutionId: string | null;
+  spectrumOutputId: string | null;
+}
+
 function selectedObjectId(selection: InspectorPanelProps["selection"]): string | null {
   return selection.ref?.type === "scene-object"
     ? selection.ref.objectId
@@ -56,6 +72,76 @@ function selectedResourceId(
   return selection.ref?.type === "scene-object"
     ? selection.ref.antennaResourceId ?? null
     : null;
+}
+
+function selectedResourceKind(
+  selection: InspectorPanelProps["selection"],
+): AntennaCompositionKind | null {
+  return selection.ref?.type === "scene-object"
+    ? selection.ref.antennaResourceKind ?? null
+    : null;
+}
+
+function fieldSolutionOutputId(stage: AntennaSolveStage | undefined): string | null {
+  return (
+    stage?.outputs.find((output) => output.quantity === "H_ant_basis")?.id ??
+    null
+  );
+}
+
+export function resolveAntennaRuntimeIds(
+  kind: AntennaCompositionKind | null,
+  resourceId: string | null,
+  scene: SceneResource | null,
+): AntennaRuntimeIds {
+  if (!kind || !resourceId || !scene) {
+    return { solutionId: null, spectrumOutputId: null };
+  }
+
+  switch (kind) {
+    case "solution": {
+      const stage = scene.antenna_field_solve_stages?.find(
+        (candidate) => candidate.id === resourceId,
+      ) as AntennaSolveStage | undefined;
+      return {
+        solutionId: fieldSolutionOutputId(stage),
+        spectrumOutputId: null,
+      };
+    }
+    case "projection": {
+      const projection = scene.antenna_target_projections?.find(
+        (candidate) => candidate.id === resourceId,
+      ) as AntennaProjection | undefined;
+      return {
+        solutionId: projection?.solution.output_id ?? null,
+        spectrumOutputId: null,
+      };
+    }
+    case "drive": {
+      const drive = scene.solved_antenna_drives?.find(
+        (candidate) => candidate.id === resourceId,
+      ) as AntennaDrive | undefined;
+      const projection = scene.antenna_target_projections?.find(
+        (candidate) => candidate.id === drive?.projection_ref,
+      ) as AntennaProjection | undefined;
+      return {
+        solutionId: projection?.solution.output_id ?? null,
+        spectrumOutputId: null,
+      };
+    }
+    case "spectrum": {
+      const request = scene.antenna_spectrum_requests?.find(
+        (candidate) => candidate.id === resourceId,
+      ) as AntennaSpectrumRequest | undefined;
+      return {
+        solutionId: request?.solution_ref.output_id ?? null,
+        spectrumOutputId: request?.output_id ?? null,
+      };
+    }
+    case "conductor":
+    case "port":
+      return { solutionId: null, spectrumOutputId: null };
+  }
 }
 
 function recordValue(value: unknown): Record<string, unknown> | null {
@@ -288,16 +374,168 @@ function detailModel(
   }
 }
 
+function runtimeStatus<T>(
+  resourceId: string | null,
+  result: { data: T | null; error: Error | null; status: string },
+): string {
+  if (!resourceId) return "not attached";
+  if (result.status === "error") return "error";
+  if (result.status === "loading") return "loading";
+  if (result.status === "stale") return result.data ? "stale" : "loading";
+  if (result.status === "ready") return result.data ? "ready" : "missing";
+  return "pending";
+}
+
+function runtimeBadge(
+  baseBadge: string,
+  resourceId: string | null,
+  result: { data: unknown; error: Error | null; status: string },
+): string {
+  switch (runtimeStatus(resourceId, result)) {
+    case "ready":
+      return "ready";
+    case "missing":
+      return "missing result";
+    case "loading":
+      return "loading result";
+    case "stale":
+      return "stale result";
+    case "error":
+      return "result error";
+    default:
+      return baseBadge;
+  }
+}
+
+function fieldSolutionRuntimeRows(
+  resourceId: string | null,
+  result: AntennaFieldSolutionResult,
+): DetailRow[] {
+  const status = runtimeStatus(resourceId, result);
+  const data = result.data;
+  const rows: DetailRow[] = [{ label: "Runtime result", value: status }];
+  if (result.error) {
+    rows.push({ label: "Runtime error", value: result.error.message });
+  }
+  if (!data) return rows;
+  rows.push(
+    { label: "Published solution", value: data.solution_id, mono: true },
+    { label: "Asset", value: data.asset_id, mono: true },
+    { label: "Content digest", value: data.content_digest, mono: true },
+    { label: "Quantity", value: `${data.quantity} / ${data.component}` },
+    {
+      label: "Field signature",
+      value: data.signatures.field_solution_signature,
+      mono: true,
+    },
+    { label: "Port bases", value: String(data.bases.length) },
+    {
+      label: "Sampling carrier",
+      value: data.sample_topology ? "tet4 P1 connectivity" : "point samples only",
+    },
+    {
+      label: "Sample payload",
+      value: `${data.sample_positions.value_count} values · ${data.sample_positions.path}`,
+    },
+  );
+  return rows;
+}
+
+function sourceSpectrumRuntimeRows(
+  resourceId: string | null,
+  result: AntennaSourceSpectrumResult,
+): DetailRow[] {
+  const status = runtimeStatus(resourceId, result);
+  const data = result.data;
+  const rows: DetailRow[] = [{ label: "Runtime result", value: status }];
+  if (result.error) {
+    rows.push({ label: "Runtime error", value: result.error.message });
+  }
+  if (!data) return rows;
+  rows.push(
+    { label: "Published output", value: data.output_id, mono: true },
+    { label: "Content digest", value: data.content_digest, mono: true },
+    { label: "Quantity", value: `${data.quantity} / ${data.component}` },
+    { label: "Field signature", value: data.field_signature, mono: true },
+    { label: "k-grid", value: `${data.k_u_count} × ${data.k_v_count}` },
+    {
+      label: "Amplitude samples",
+      value: `${data.amplitude_count} · ${data.amplitude_unit}`,
+    },
+    { label: "Power samples", value: String(data.power_count) },
+    {
+      label: "Sampling realization",
+      value: `${data.sampling.realization}, outside=${data.sampling.outside_count}`,
+    },
+    { label: "Payload", value: `${data.payload.format} · ${data.payload.path}` },
+  );
+  return rows;
+}
+
+function enrichRuntimeModel(
+  model: DetailModel,
+  kind: AntennaCompositionKind,
+  ids: AntennaRuntimeIds,
+  fieldSolution: AntennaFieldSolutionResult,
+  sourceSpectrum: AntennaSourceSpectrumResult,
+): DetailModel {
+  const fieldStatus = runtimeStatus(ids.solutionId, fieldSolution);
+  const rows = [...model.rows];
+
+  if (kind === "solution") {
+    rows.push(...fieldSolutionRuntimeRows(ids.solutionId, fieldSolution));
+    return {
+      ...model,
+      badge: runtimeBadge(model.badge, ids.solutionId, fieldSolution),
+      rows,
+    };
+  }
+  if (kind === "spectrum") {
+    rows.push(...sourceSpectrumRuntimeRows(ids.spectrumOutputId, sourceSpectrum));
+    return {
+      ...model,
+      badge: runtimeBadge(model.badge, ids.spectrumOutputId, sourceSpectrum),
+      rows,
+    };
+  }
+  if (kind === "projection" || kind === "drive") {
+    rows.push({ label: "Field solution result", value: fieldStatus });
+    if (fieldSolution.data) {
+      rows.push({
+        label: "Published field digest",
+        value: fieldSolution.data.content_digest,
+        mono: true,
+      });
+    }
+  }
+  return { ...model, rows };
+}
+
 export function AntennaCompositionPanel({
   kind,
   selection,
 }: InspectorPanelProps & { kind: AntennaCompositionKind }) {
   const scene = useSceneResource();
-  const model = detailModel(
+  const objectId = selectedObjectId(selection);
+  const resourceId = selectedResourceId(selection);
+  const selectedKind = selectedResourceKind(selection) ?? kind;
+  const ids = resolveAntennaRuntimeIds(selectedKind, resourceId, scene.data);
+  const fieldSolution = useAntennaFieldSolutionResource(ids.solutionId, {
+    enabled:
+      kind === "solution" ||
+      kind === "projection" ||
+      kind === "drive" ||
+      kind === "spectrum",
+  });
+  const sourceSpectrum = useAntennaSourceSpectrumResource(ids.spectrumOutputId, {
+    enabled: kind === "spectrum",
+  });
+  const model = enrichRuntimeModel(
+    detailModel(kind, objectId, resourceId, scene.data),
     kind,
-    selectedObjectId(selection),
-    selectedResourceId(selection),
-    scene.data,
+    ids,
+    fieldSolution,
+    sourceSpectrum,
   );
 
   return (
