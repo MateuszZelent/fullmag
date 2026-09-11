@@ -146,6 +146,14 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
         {draft.waveformKind === "sinc_pulse" ? (
           <>
             <FormField
+              label="Waveform amplitude"
+              type="number"
+              value={draft.sincAmplitude}
+              onChange={(event) =>
+                updateDraft({ sincAmplitude: event.target.value })
+              }
+            />
+            <FormField
               label="Cutoff"
               unit="Hz"
               value={draft.sincCutoffHz}
@@ -162,14 +170,33 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
           </>
         ) : null}
         {draft.waveformKind === "sinusoidal" ? (
-          <FormField
-            label="Frequency"
-            unit="Hz"
-            value={draft.sinusoidalFrequencyHz}
-            onChange={(event) =>
-              updateDraft({ sinusoidalFrequencyHz: event.target.value })
-            }
-          />
+          <>
+            <FormField
+              label="Frequency"
+              unit="Hz"
+              value={draft.sinusoidalFrequencyHz}
+              onChange={(event) =>
+                updateDraft({ sinusoidalFrequencyHz: event.target.value })
+              }
+            />
+            <FormField
+              label="Phase"
+              unit="rad"
+              type="number"
+              value={draft.sinusoidalPhaseRad}
+              onChange={(event) =>
+                updateDraft({ sinusoidalPhaseRad: event.target.value })
+              }
+            />
+            <FormField
+              label="Offset"
+              type="number"
+              value={draft.sinusoidalOffset}
+              onChange={(event) =>
+                updateDraft({ sinusoidalOffset: event.target.value })
+              }
+            />
+          </>
         ) : null}
         {feedback ? (
           <FeedbackBanner kind={feedback.kind} message={feedback.message} />

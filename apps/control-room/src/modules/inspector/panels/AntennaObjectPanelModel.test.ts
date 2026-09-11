@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import { EMPTY_SELECTION } from "@/kernel/selection/selectionTypes";
 
 import {
+  buildAntennaCanonicalFieldDrive,
   buildAntennaLegacyMigrationPatch,
+  resolveAntennaObjectDraft,
   resolveAntennaObjectPanelModel,
 } from "./AntennaObjectPanelModel";
 
@@ -90,10 +92,72 @@ describe("AntennaObjectPanelModel", () => {
       field_drives: { drives: [] },
       current_modules: { modules: [{ id:"old",name:"Old",kind:"antenna_field_source",model:"prescribed_zeeman_mask",object:"antenna",B:0.001,direction:[0,1,0],spatial_profile:{kind:"uniform"} }] },
     } as never, {
-      amplitudeB:"0.001",direction:"0, 1, 0",waveformKind:"constant",sincCutoffHz:"2e10",sincT0:"5e-11",sinusoidalFrequencyHz:"1e10",
+      amplitudeB:"0.001",direction:"0, 1, 0",waveformKind:"constant",sincAmplitude:"1",sincCutoffHz:"2e10",sincT0:"5e-11",sinusoidalFrequencyHz:"1e10",sinusoidalOffset:"0",sinusoidalPhaseRad:"0",
     });
     expect(patch.error).toBeNull();
     expect(patch.modules).toEqual([]);
     expect(patch.drives?.[0]).toMatchObject({ id:"old",kind:"regional",migration:{migrated_from:"prescribed_zeeman_mask"},spatial_profile:{kind:"geometry_mask",object_id:"antenna"} });
+  });
+
+  it("round-trips sinusoidal phase and offset through the antenna draft", () => {
+    const selection = { ...EMPTY_SELECTION, objectId: "antenna" };
+    const scene = {
+      field_drives: {
+        drives: [{
+          id: "drive",
+          kind: "regional",
+          amplitude_B_T: 0.001,
+          direction: [0, 1, 0],
+          spatial_profile: { kind: "geometry_mask", object_id: "antenna" },
+          waveform: {
+            kind: "sinusoidal",
+            frequency_hz: 1e9,
+            phase_rad: 0.4,
+            offset: 0.2,
+          },
+        }],
+      },
+    } as never;
+
+    const draft = resolveAntennaObjectDraft(selection, scene);
+    expect(draft).toMatchObject({
+      sinusoidalFrequencyHz: "1000000000",
+      sinusoidalPhaseRad: "0.4",
+      sinusoidalOffset: "0.2",
+    });
+
+    const patch = buildAntennaCanonicalFieldDrive(selection, scene, draft);
+    expect(patch.error).toBeNull();
+    expect(patch.drive?.waveform).toEqual({
+      kind: "sinusoidal",
+      frequency_hz: 1e9,
+      phase_rad: 0.4,
+      offset: 0.2,
+    });
+  });
+
+  it("round-trips the sinc waveform amplitude instead of resetting it to one", () => {
+    const selection = { ...EMPTY_SELECTION, objectId: "antenna" };
+    const scene = {
+      field_drives: {
+        drives: [{
+          id: "drive",
+          kind: "regional",
+          spatial_profile: { kind: "geometry_mask", object_id: "antenna" },
+          waveform: { kind: "sinc_pulse", cutoff_hz: 2e10, t0: 5e-11, amplitude: 0.35 },
+        }],
+      },
+    } as never;
+
+    const draft = resolveAntennaObjectDraft(selection, scene);
+    expect(draft.sincAmplitude).toBe("0.35");
+    const patch = buildAntennaCanonicalFieldDrive(selection, scene, draft);
+    expect(patch.error).toBeNull();
+    expect(patch.drive?.waveform).toEqual({
+      kind: "sinc_pulse",
+      cutoff_hz: 2e10,
+      t0: 5e-11,
+      amplitude: 0.35,
+    });
   });
 });
