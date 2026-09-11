@@ -158,6 +158,7 @@ fn resolve_field_sampling(
         location: "node".into(),
         topology_digest: sha256_json(&mesh, "antenna field-sampling topology")?,
         positions_xyz_m: mesh.nodes,
+        cells: mesh.cells,
     })
 }
 

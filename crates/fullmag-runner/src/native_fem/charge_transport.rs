@@ -222,6 +222,9 @@ fn execute_native_fem_charge_transport(
                             signatures,
                             conductor_positions_xyz_m: mesh.nodes.clone(),
                             sample_positions_xyz_m: field_sample_positions_xyz_m.to_vec(),
+                            sample_tet4_cells: antenna_plan
+                                .and_then(|plan| plan.field_sampling.cells.require_tet4().ok())
+                                .filter(|cells| !cells.is_empty()),
                             bases: vec![AntennaFieldBasisInput {
                                 port_mode_id: request.port_mode_id.clone(),
                                 measured_positive_terminal_current_a,

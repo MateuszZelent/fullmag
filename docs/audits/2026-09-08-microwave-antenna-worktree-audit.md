@@ -200,9 +200,9 @@ Zachowanie referencji starego artefaktu po zmianie przewężenia lub wag powrotu
 
 `sample_antenna_field_on_plane`, `crates/fullmag-runner/src/antenna_spectrum.rs:248`, przy `outside_policy=zero` zeruje dowolny punkt bez pasującej próbki. Carrier nie dostarcza tutaj interpolacji po elementach. Wewnętrzny punkt czworościanu zwykle nie jest węzłem; nie jest przez to poza domeną. Regularna płaszczyzna może dostać sztuczne zera, mimo że fizyczne pole jest tam niezerowe.
 
-Notatka 0950 w sekcji 5.1.2 **jawnie opisuje to ograniczenie**. Nie przedstawiam go więc jako ukrytego odstępstwa od tego fragmentu dokumentacji. To wada przyjętej semantyki i ograniczenie praktycznej analizy: nazwa `fem_element` oraz „outside” sugerują więcej, niż implementacja wykonuje.
+Notatka 0950 w sekcji 5.1.2 opisywała pierwotne ograniczenie punktowego carriera. W bieżącej gałęzi carrier może już publikować haszowaną topologię tet4, a sampler wykonuje P1 barycentric interpolation przez deterministyczne point-location BVH. Dla starszych assetów bez topologii pozostaje jawny tryb kompatybilności `identity_coordinates_v1`; nie jest on przedstawiany jako interpolacja FEM. Nadal otwarte są bezpośrednia ewaluacja RT0 na żądanej płaszczyźnie, mieszane topologie oraz pełne rozróżnienie stanów `unsupported_topology`/`missing_payload` w API.
 
-**Naprawa:** rozdzielić `outside_domain` i `missing_sample`; wykonać rzeczywistą interpolację elementową lub obliczyć pole bezpośrednio na żądanej płaszczyźnie. Do tego czasu odrzucać brak próbek wewnętrznych i wyraźnie opisywać identity sampling. **Regresja:** stałe niezerowe pole na pojedynczym tetra, próbka w jego wnętrzu, obrót i przesunięcie płaszczyzny oraz rzeczywiste punkty poza domeną.
+**Wykonane w bieżącej gałęzi:** carrier zapisuje topologię tet4, loader weryfikuje jej digest i indeksy, a sampler wykonuje P1 barycentric interpolation z testem affine vector field. `outside_policy="zero"` działa wyłącznie dla punktu poza AABB carriera; punkt wewnętrzny bez elementu kończy się błędem. **Pozostaje:** bezpośrednia ewaluacja RT0, pełny status API (`missing_payload`/`unsupported_topology`) oraz kwalifikacja mieszanych topologii i obciążenia dużych siatek.
 
 ### F08 — P2 / Required: FFT i transformata bezpośrednia mają różne początki fazy
 

@@ -55,6 +55,9 @@ pub struct AntennaSpectrumSamplingMetadata {
     pub sample_count_u: u32,
     pub sample_count_v: u32,
     pub interpolation: String,
+    /// Executed carrier realization, kept distinct from the authored request
+    /// label for backwards-compatible identity assets.
+    pub realization: String,
     pub outside_policy: String,
     pub outside_count: usize,
     pub source_sample_count: usize,
@@ -166,6 +169,322 @@ fn point_inside_source_bounds(
         })
 }
 
+#[derive(Debug, Clone, Copy)]
+struct FieldAabb {
+    minimum: [f64; 3],
+    maximum: [f64; 3],
+}
+
+impl FieldAabb {
+    fn from_tetra(positions: &[[f64; 3]], tetra: [u32; 4], margin: f64) -> Option<Self> {
+        let first = positions.get(tetra[0] as usize).copied()?;
+        let mut minimum = first;
+        let mut maximum = first;
+        for node in tetra.into_iter().skip(1) {
+            let position = positions.get(node as usize).copied()?;
+            for axis in 0..3 {
+                minimum[axis] = minimum[axis].min(position[axis]);
+                maximum[axis] = maximum[axis].max(position[axis]);
+            }
+        }
+        Some(Self {
+            minimum: [
+                minimum[0] - margin,
+                minimum[1] - margin,
+                minimum[2] - margin,
+            ],
+            maximum: [
+                maximum[0] + margin,
+                maximum[1] + margin,
+                maximum[2] + margin,
+            ],
+        })
+    }
+
+    fn contains(&self, position: [f64; 3]) -> bool {
+        (0..3).all(|axis| {
+            position[axis] >= self.minimum[axis] && position[axis] <= self.maximum[axis]
+        })
+    }
+
+    fn merge(self, other: Self) -> Self {
+        Self {
+            minimum: [
+                self.minimum[0].min(other.minimum[0]),
+                self.minimum[1].min(other.minimum[1]),
+                self.minimum[2].min(other.minimum[2]),
+            ],
+            maximum: [
+                self.maximum[0].max(other.maximum[0]),
+                self.maximum[1].max(other.maximum[1]),
+                self.maximum[2].max(other.maximum[2]),
+            ],
+        }
+    }
+
+    fn longest_axis(self) -> usize {
+        let extents = [
+            self.maximum[0] - self.minimum[0],
+            self.maximum[1] - self.minimum[1],
+            self.maximum[2] - self.minimum[2],
+        ];
+        if extents[0] >= extents[1] && extents[0] >= extents[2] {
+            0
+        } else if extents[1] >= extents[2] {
+            1
+        } else {
+            2
+        }
+    }
+}
+
+enum FieldBvhNode {
+    Leaf {
+        bounds: FieldAabb,
+        cell_index: usize,
+    },
+    Internal {
+        bounds: FieldAabb,
+        left: Box<FieldBvhNode>,
+        right: Box<FieldBvhNode>,
+    },
+}
+
+struct FieldTetraBvh {
+    root: Option<FieldBvhNode>,
+}
+
+impl FieldTetraBvh {
+    fn build(positions: &[[f64; 3]], cells: &[[u32; 4]], margin: f64) -> Result<Self, RunError> {
+        if cells.is_empty() {
+            return Ok(Self { root: None });
+        }
+        let mut entries = Vec::with_capacity(cells.len());
+        for (cell_index, cell) in cells.iter().copied().enumerate() {
+            let bounds = FieldAabb::from_tetra(positions, cell, margin).ok_or_else(|| {
+                error(format!(
+                    "antenna source-spectrum topology cell {cell_index} references a missing sample node"
+                ))
+            })?;
+            let center = [
+                0.5 * (bounds.minimum[0] + bounds.maximum[0]),
+                0.5 * (bounds.minimum[1] + bounds.maximum[1]),
+                0.5 * (bounds.minimum[2] + bounds.maximum[2]),
+            ];
+            entries.push((bounds, center, cell_index));
+        }
+        Ok(Self {
+            root: Some(Self::build_recursive(&mut entries)),
+        })
+    }
+
+    fn build_recursive(entries: &mut [(FieldAabb, [f64; 3], usize)]) -> FieldBvhNode {
+        if entries.len() == 1 {
+            return FieldBvhNode::Leaf {
+                bounds: entries[0].0,
+                cell_index: entries[0].2,
+            };
+        }
+        let mut bounds = entries[0].0;
+        for entry in entries.iter().skip(1) {
+            bounds = bounds.merge(entry.0);
+        }
+        let axis = bounds.longest_axis();
+        entries.sort_by(|left, right| {
+            left.1[axis]
+                .partial_cmp(&right.1[axis])
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.2.cmp(&right.2))
+        });
+        let middle = entries.len() / 2;
+        let (left, right) = entries.split_at_mut(middle);
+        FieldBvhNode::Internal {
+            bounds,
+            left: Box::new(Self::build_recursive(left)),
+            right: Box::new(Self::build_recursive(right)),
+        }
+    }
+
+    fn locate(
+        &self,
+        position: [f64; 3],
+        sample_positions: &[[f64; 3]],
+        cells: &[[u32; 4]],
+    ) -> Option<(usize, [f64; 4])> {
+        self.root
+            .as_ref()
+            .and_then(|root| Self::locate_recursive(root, position, sample_positions, cells))
+    }
+
+    fn locate_recursive(
+        node: &FieldBvhNode,
+        position: [f64; 3],
+        sample_positions: &[[f64; 3]],
+        cells: &[[u32; 4]],
+    ) -> Option<(usize, [f64; 4])> {
+        match node {
+            FieldBvhNode::Leaf { bounds, cell_index } => {
+                if !bounds.contains(position) {
+                    return None;
+                }
+                let cell = cells.get(*cell_index).copied()?;
+                let vertices = [
+                    sample_positions.get(cell[0] as usize).copied()?,
+                    sample_positions.get(cell[1] as usize).copied()?,
+                    sample_positions.get(cell[2] as usize).copied()?,
+                    sample_positions.get(cell[3] as usize).copied()?,
+                ];
+                barycentric_tet(position, vertices).map(|weights| (*cell_index, weights))
+            }
+            FieldBvhNode::Internal {
+                bounds,
+                left,
+                right,
+            } => {
+                if !bounds.contains(position) {
+                    return None;
+                }
+                Self::locate_recursive(left, position, sample_positions, cells)
+                    .or_else(|| Self::locate_recursive(right, position, sample_positions, cells))
+            }
+        }
+    }
+}
+
+fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn sub3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn barycentric_tet(position: [f64; 3], vertices: [[f64; 3]; 4]) -> Option<[f64; 4]> {
+    let edge_1 = sub3(vertices[1], vertices[0]);
+    let edge_2 = sub3(vertices[2], vertices[0]);
+    let edge_3 = sub3(vertices[3], vertices[0]);
+    let rhs = sub3(position, vertices[0]);
+    let determinant = dot3(edge_1, cross3(edge_2, edge_3));
+    let scale = edge_1
+        .into_iter()
+        .chain(edge_2)
+        .chain(edge_3)
+        .map(f64::abs)
+        .fold(0.0_f64, f64::max)
+        .max(1.0);
+    if !determinant.is_finite() || determinant.abs() <= 1.0e-14 * scale.powi(3) {
+        return None;
+    }
+    let lambda_1 = dot3(rhs, cross3(edge_2, edge_3)) / determinant;
+    let lambda_2 = dot3(edge_1, cross3(rhs, edge_3)) / determinant;
+    let lambda_3 = dot3(edge_1, cross3(edge_2, rhs)) / determinant;
+    let weights = [
+        1.0 - lambda_1 - lambda_2 - lambda_3,
+        lambda_1,
+        lambda_2,
+        lambda_3,
+    ];
+    weights
+        .iter()
+        .all(|weight| weight.is_finite() && *weight >= -1.0e-9 && *weight <= 1.0 + 1.0e-9)
+        .then_some(weights)
+}
+
+fn sample_antenna_field_with_tetrahedra(
+    request: &AntennaSpectrumRequestIR,
+    samples: &AntennaFieldSolutionSamples,
+    cells: &[[u32; 4]],
+    count_u: usize,
+    count_v: usize,
+    spacing_u: f64,
+    spacing_v: f64,
+    tolerance_m: f64,
+    source_minimum: [f64; 3],
+    source_maximum: [f64; 3],
+) -> Result<AntennaSpectrumSampleGrid, RunError> {
+    let bvh = FieldTetraBvh::build(&samples.sample_positions_xyz_m, cells, tolerance_m)?;
+    let sample_count = count_u
+        .checked_mul(count_v)
+        .ok_or_else(|| error("antenna source-spectrum sample count overflows"))?;
+    let mut positions = Vec::with_capacity(sample_count);
+    let mut field = Vec::with_capacity(sample_count);
+    let mut mapping = Vec::with_capacity(sample_count * 5);
+    let mut outside_count = 0;
+    for v in 0..count_v {
+        let coordinate_v = -0.5 * request.sampling_plane.extent_v_m + v as f64 * spacing_v;
+        for u in 0..count_u {
+            let coordinate_u = -0.5 * request.sampling_plane.extent_u_m + u as f64 * spacing_u;
+            let position = [
+                request.sampling_plane.origin_m[0]
+                    + coordinate_u * request.sampling_plane.axis_u[0]
+                    + coordinate_v * request.sampling_plane.axis_v[0],
+                request.sampling_plane.origin_m[1]
+                    + coordinate_u * request.sampling_plane.axis_u[1]
+                    + coordinate_v * request.sampling_plane.axis_v[1],
+                request.sampling_plane.origin_m[2]
+                    + coordinate_u * request.sampling_plane.axis_u[2]
+                    + coordinate_v * request.sampling_plane.axis_v[2],
+            ];
+            let selected = bvh.locate(position, &samples.sample_positions_xyz_m, cells);
+            let value = match selected {
+                Some((cell_index, weights)) => {
+                    let cell = cells[cell_index];
+                    mapping.push(cell_index as u64);
+                    mapping.extend(weights.iter().copied().map(f64::to_bits));
+                    std::array::from_fn(|component| {
+                        weights
+                            .iter()
+                            .copied()
+                            .zip(cell)
+                            .map(|(weight, node)| {
+                                weight
+                                    * samples.magnetic_field_xyz_apm_per_a[node as usize][component]
+                            })
+                            .sum()
+                    })
+                }
+                None
+                    if matches!(
+                        request.sampling_plane.outside_policy,
+                        fullmag_ir::AntennaSpectrumOutsidePolicyIR::Zero
+                    )
+                    && !point_inside_source_bounds(
+                        position,
+                        source_minimum,
+                        source_maximum,
+                        tolerance_m,
+                    ) =>
+                {
+                    outside_count += 1;
+                    mapping.extend([u64::MAX, 0, 0, 0, 0]);
+                    [0.0; 3]
+                }
+                None => {
+                    return Err(error(format!(
+                        "antenna source-spectrum plane point ({u},{v}) lies inside the sampling carrier bounds but in no FEM tetrahedron"
+                    )))
+                }
+            };
+            positions.push(position);
+            field.push(value);
+        }
+    }
+    Ok(AntennaSpectrumSampleGrid {
+        positions_xyz_m: positions,
+        field_xyz_apm_per_a: field,
+        outside_count,
+        mapping_digest: sha256_u64(&mapping),
+    })
+}
+
 /// Sample the immutable source-field carrier on the declared centred plane.
 ///
 /// The current asset revision stores nodal coordinates but no element/grid
@@ -215,6 +534,25 @@ pub fn sample_antenna_field_on_plane(
     }
     let tolerance_m = coordinate_scale(request, samples) * 1.0e-12;
     let (source_minimum, source_maximum) = source_bounds(&samples.sample_positions_xyz_m);
+    if let Some(cells) = samples.sample_tet4_cells.as_deref() {
+        if cells.is_empty() {
+            return Err(error(
+                "antenna source-spectrum FEM interpolation carrier has no tetrahedral cells",
+            ));
+        }
+        return sample_antenna_field_with_tetrahedra(
+            request,
+            samples,
+            cells,
+            count_u,
+            count_v,
+            spacing_u,
+            spacing_v,
+            tolerance_m,
+            source_minimum,
+            source_maximum,
+        );
+    }
     let mut buckets: HashMap<[i64; 3], Vec<usize>> = HashMap::new();
     for (index, position) in samples.sample_positions_xyz_m.iter().copied().enumerate() {
         let key = coordinate_key(position, tolerance_m).ok_or_else(|| {
@@ -356,6 +694,12 @@ pub fn compute_antenna_source_spectrum_artifact(
         sample_count_u: request.sampling_plane.sample_count_u,
         sample_count_v: request.sampling_plane.sample_count_v,
         interpolation: request.sampling_plane.interpolation.clone(),
+        realization: if samples.sample_tet4_cells.is_some() {
+            "fem_p1_interpolation_v1"
+        } else {
+            "identity_coordinates_v1"
+        }
+        .into(),
         outside_policy: match request.sampling_plane.outside_policy {
             fullmag_ir::AntennaSpectrumOutsidePolicyIR::Error => "error",
             fullmag_ir::AntennaSpectrumOutsidePolicyIR::Zero => "zero",
@@ -912,6 +1256,7 @@ mod tests {
             port_mode_id: "port".into(),
             sample_positions_xyz_m: positions,
             magnetic_field_xyz_apm_per_a: field,
+            sample_tet4_cells: None,
             content_digest: "sha256:solution".into(),
         }
     }
@@ -927,6 +1272,74 @@ mod tests {
         assert_eq!(sampled.field_xyz_apm_per_a[0][0], 0.0);
         assert_eq!(sampled.field_xyz_apm_per_a[15][0], 15.0);
         assert!(sampled.mapping_digest.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn fem_element_sampling_interpolates_a_p1_field_from_tetrahedral_carrier() {
+        let mut request = request("x");
+        request.sampling_plane.origin_m = [0.25, 0.25, 0.0];
+        request.sampling_plane.extent_u_m = 0.5;
+        request.sampling_plane.extent_v_m = 0.5;
+        let positions = vec![
+            [0.0, 0.0, -1.0],
+            [2.0, 0.0, 0.0],
+            [0.0, 2.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ];
+        let fields = positions
+            .iter()
+            .map(|position| {
+                [
+                    position[0] + 2.0 * position[1] + 3.0 * position[2],
+                    0.0,
+                    0.0,
+                ]
+            })
+            .collect();
+        let samples = AntennaFieldSolutionSamples {
+            solution_id: "solution".into(),
+            source_object_id: "antenna".into(),
+            port_mode_id: "port".into(),
+            sample_positions_xyz_m: positions,
+            magnetic_field_xyz_apm_per_a: fields,
+            sample_tet4_cells: Some(vec![[0, 1, 2, 3]]),
+            content_digest: "sha256:solution".into(),
+        };
+
+        let sampled = sample_antenna_field_on_plane(&request, &samples).unwrap();
+        let expected = [
+            0.0,
+            1.0 / 6.0,
+            1.0 / 3.0,
+            0.5,
+            1.0 / 3.0,
+            0.5,
+            2.0 / 3.0,
+            5.0 / 6.0,
+            2.0 / 3.0,
+            5.0 / 6.0,
+            1.0,
+            7.0 / 6.0,
+            1.0,
+            7.0 / 6.0,
+            4.0 / 3.0,
+            1.5,
+        ];
+        for (actual, expected) in sampled
+            .field_xyz_apm_per_a
+            .iter()
+            .map(|value| value[0])
+            .zip(expected)
+        {
+            assert!(
+                (actual - expected).abs() < 1.0e-12,
+                "actual={actual}, expected={expected}"
+            );
+        }
+        assert_eq!(sampled.outside_count, 0);
+        assert!(sampled.mapping_digest.starts_with("sha256:"));
+        let artifact = compute_antenna_source_spectrum_artifact(&request, &samples, None).unwrap();
+        assert_eq!(artifact.sampling.realization, "fem_p1_interpolation_v1");
     }
 
     #[test]
@@ -988,5 +1401,6 @@ mod tests {
             "antenna_source_spectrum_artifact.v1"
         );
         assert_eq!(json["sampling"]["outside_count"], 0);
+        assert_eq!(json["sampling"]["realization"], "identity_coordinates_v1");
     }
 }

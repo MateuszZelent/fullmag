@@ -46,6 +46,10 @@ pub(crate) struct AntennaFieldSolutionInput {
     pub signatures: AntennaFieldSolutionSignatures,
     pub conductor_positions_xyz_m: Vec<[f64; 3]>,
     pub sample_positions_xyz_m: Vec<[f64; 3]>,
+    /// Optional P1 tetrahedral topology for the field-sampling carrier.
+    /// Without it, spectrum sampling remains limited to exact immutable
+    /// sample-coordinate lookup for backwards-compatible assets.
+    pub sample_tet4_cells: Option<Vec<[u32; 4]>>,
     pub bases: Vec<AntennaFieldBasisInput>,
 }
 
@@ -91,6 +95,8 @@ struct SolutionManifest<'a> {
     signatures: &'a AntennaFieldSolutionSignatures,
     conductor_positions: BinaryFieldRef<'a>,
     sample_positions: BinaryFieldRef<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sample_topology: Option<BinaryFieldRef<'a>>,
     assumptions: [&'static str; 4],
     bases: Vec<BasisManifest<'a>>,
 }
@@ -125,6 +131,8 @@ struct StoredSolutionManifest {
     signatures: AntennaFieldSolutionSignatures,
     conductor_positions: StoredBinaryFieldRef,
     sample_positions: StoredBinaryFieldRef,
+    #[serde(default)]
+    sample_topology: Option<StoredBinaryFieldRef>,
     bases: Vec<StoredBasisManifest>,
 }
 
@@ -228,6 +236,67 @@ fn verify_binary_ref(
     Ok(())
 }
 
+fn verify_tet4_topology_ref(
+    reference: &StoredBinaryFieldRef,
+    payloads: &[AuxiliaryArtifact],
+    sample_count: usize,
+) -> Result<(), RunError> {
+    if reference.scalar_type != "uint32_le"
+        || reference.layout != "tet4_connectivity"
+        || reference.unit != "1"
+        || reference.value_count == 0
+        || reference.value_count % 4 != 0
+    {
+        return Err(RunError {
+            message: format!(
+                "antenna field topology payload '{}' has incompatible metadata",
+                reference.path
+            ),
+        });
+    }
+    let payload = payloads
+        .iter()
+        .find(|artifact| artifact.relative_path == reference.path)
+        .ok_or_else(|| RunError {
+            message: format!("missing antenna field payload '{}'", reference.path),
+        })?;
+    let expected_bytes = reference
+        .value_count
+        .checked_mul(4)
+        .ok_or_else(|| RunError {
+            message: format!(
+                "antenna field topology payload '{}' size overflows address space",
+                reference.path
+            ),
+        })?;
+    if sha256(&payload.bytes) != reference.sha256 || payload.bytes.len() != expected_bytes {
+        return Err(RunError {
+            message: format!(
+                "antenna field topology payload '{}' sha256 or size check failed",
+                reference.path
+            ),
+        });
+    }
+    for chunk in payload.bytes.chunks_exact(16) {
+        for offset in [0, 4, 8, 12] {
+            let node = u32::from_le_bytes(
+                chunk[offset..offset + 4]
+                    .try_into()
+                    .expect("four-byte chunk"),
+            ) as usize;
+            if node >= sample_count {
+                return Err(RunError {
+                    message: format!(
+                        "antenna field topology payload '{}' references sample node {} outside carrier of {} nodes",
+                        reference.path, node, sample_count
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Validate the content-addressed manifest and every binary it references.
 pub fn verify_antenna_field_solution_asset(
     manifest_bytes: &[u8],
@@ -262,6 +331,18 @@ pub fn verify_antenna_field_solution_asset(
     }
     let conductor_count = manifest.conductor_positions.value_count / 3;
     let sample_value_count = manifest.sample_positions.value_count;
+    let sample_count = sample_value_count / 3;
+    if let Some(topology) = manifest.sample_topology.as_ref() {
+        if !expected_paths.insert(topology.path.as_str()) {
+            return Err(RunError {
+                message: format!(
+                    "duplicate antenna field payload reference '{}'",
+                    topology.path
+                ),
+            });
+        }
+        verify_tet4_topology_ref(topology, payloads, sample_count)?;
+    }
     let mut ports = BTreeSet::new();
     for basis in &manifest.bases {
         if basis.port_mode_id.trim().is_empty()
@@ -372,6 +453,16 @@ fn encode_f64(values: impl IntoIterator<Item = f64>) -> Vec<u8> {
     bytes
 }
 
+fn encode_u32(values: impl IntoIterator<Item = u32>) -> Vec<u8> {
+    let iterator = values.into_iter();
+    let (lower, _) = iterator.size_hint();
+    let mut bytes = Vec::with_capacity(lower * std::mem::size_of::<u32>());
+    for value in iterator {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes
+}
+
 fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -400,6 +491,41 @@ fn decode_xyz_f64_le(bytes: &[u8], value_count: usize) -> Result<Vec<[f64; 3]>, 
         field.push(value);
     }
     Ok(field)
+}
+
+fn decode_tet4_u32_le(
+    bytes: &[u8],
+    value_count: usize,
+    sample_count: usize,
+) -> Result<Vec<[u32; 4]>, RunError> {
+    let expected_bytes = value_count.checked_mul(4).ok_or_else(|| RunError {
+        message: "antenna field topology payload size overflows address space".into(),
+    })?;
+    if value_count == 0 || value_count % 4 != 0 || bytes.len() != expected_bytes {
+        return Err(RunError {
+            message: format!(
+                "antenna field topology payload has {} bytes for {value_count} declared values",
+                bytes.len()
+            ),
+        });
+    }
+    let mut cells = Vec::with_capacity(value_count / 4);
+    for tet in bytes.chunks_exact(16) {
+        let mut nodes = [0_u32; 4];
+        for (local, chunk) in tet.chunks_exact(4).enumerate() {
+            nodes[local] = u32::from_le_bytes(chunk.try_into().expect("four-byte chunk"));
+            if nodes[local] as usize >= sample_count {
+                return Err(RunError {
+                    message: format!(
+                        "antenna field topology payload references sample node {} outside carrier of {} nodes",
+                        nodes[local], sample_count
+                    ),
+                });
+            }
+        }
+        cells.push(nodes);
+    }
+    Ok(cells)
 }
 
 pub fn load_solved_antenna_drive_basis(
@@ -677,6 +803,7 @@ pub struct AntennaFieldSolutionSamples {
     pub port_mode_id: String,
     pub sample_positions_xyz_m: Vec<[f64; 3]>,
     pub magnetic_field_xyz_apm_per_a: Vec<[f64; 3]>,
+    pub sample_tet4_cells: Option<Vec<[u32; 4]>>,
     pub content_digest: String,
 }
 
@@ -768,12 +895,31 @@ pub fn load_antenna_field_solution_samples(
         }
         decode_xyz_f64_le(&payload.bytes, reference.value_count)
     };
+    let sample_tet4_cells = manifest
+        .sample_topology
+        .as_ref()
+        .map(|reference| {
+            let payload = payloads
+                .iter()
+                .find(|artifact| artifact.relative_path == reference.path)
+                .ok_or_else(|| RunError {
+                    message: format!("missing antenna field payload '{}'", reference.path),
+                })?;
+            verify_tet4_topology_ref(reference, payloads, positions_ref.value_count / 3)?;
+            decode_tet4_u32_le(
+                &payload.bytes,
+                reference.value_count,
+                positions_ref.value_count / 3,
+            )
+        })
+        .transpose()?;
     Ok(AntennaFieldSolutionSamples {
         solution_id: manifest.solution_id,
         source_object_id: manifest.source_object_id,
         port_mode_id: port_mode_id.to_string(),
         sample_positions_xyz_m: decode(positions_ref)?,
         magnetic_field_xyz_apm_per_a: decode(field_ref)?,
+        sample_tet4_cells,
         content_digest: published_digest,
     })
 }
@@ -1242,6 +1388,42 @@ pub(crate) fn build_antenna_field_solution_artifacts(
     );
     let sample_positions_sha = sha256(&sample_positions_bytes);
 
+    let sample_topology = input.sample_tet4_cells.as_ref().map(|cells| {
+        let bytes = encode_u32(cells.iter().flat_map(|cell| cell.iter().copied()));
+        let path = format!(
+            "antenna/field_solutions/{}/sample_topology_tet4.u32le",
+            input.solution_id
+        );
+        let sha = sha256(&bytes);
+        (path, bytes, sha, cells.len() * 4)
+    });
+    if let Some((_, _, _, value_count)) = sample_topology.as_ref() {
+        if *value_count == 0 {
+            return Err(RunError {
+                message: "antenna field solution tetrahedral sampling topology must not be empty"
+                    .into(),
+            });
+        }
+        for (cell_index, cell) in input
+            .sample_tet4_cells
+            .as_ref()
+            .expect("sample topology is present")
+            .iter()
+            .enumerate()
+        {
+            if cell
+                .iter()
+                .any(|node| *node as usize >= input.sample_positions_xyz_m.len())
+            {
+                return Err(RunError {
+                    message: format!(
+                        "antenna field solution sampling tetrahedron {cell_index} references a node outside the sample carrier"
+                    ),
+                });
+            }
+        }
+    }
+
     struct EncodedBasis {
         potential_path: String,
         current_path: String,
@@ -1390,6 +1572,16 @@ pub(crate) fn build_antenna_field_solution_artifacts(
             unit: "m",
             value_count: input.sample_positions_xyz_m.len() * 3,
         },
+        sample_topology: sample_topology.as_ref().map(|(path, _, sha, value_count)| {
+            BinaryFieldRef {
+                path,
+                sha256: sha,
+                scalar_type: "uint32_le",
+                layout: "tet4_connectivity",
+                unit: "1",
+                value_count: *value_count,
+            }
+        }),
         assumptions: [
             "linear_ohmic_conduction",
             "nonmagnetic_background",
@@ -1411,7 +1603,7 @@ pub(crate) fn build_antenna_field_solution_artifacts(
         message: format!("publish antenna field solution manifest: {error}"),
     })?;
 
-    let mut artifacts = Vec::with_capacity(encoded.len() * 3 + 3);
+    let mut artifacts = Vec::with_capacity(encoded.len() * 3 + 4);
     artifacts.push(AuxiliaryArtifact {
         relative_path: conductor_positions_path,
         bytes: conductor_positions_bytes,
@@ -1420,6 +1612,12 @@ pub(crate) fn build_antenna_field_solution_artifacts(
         relative_path: sample_positions_path,
         bytes: sample_positions_bytes,
     });
+    if let Some((path, bytes, _, _)) = sample_topology {
+        artifacts.push(AuxiliaryArtifact {
+            relative_path: path,
+            bytes,
+        });
+    }
     for data in encoded {
         artifacts.push(AuxiliaryArtifact {
             relative_path: data.potential_path,
@@ -1472,6 +1670,7 @@ mod tests {
             },
             conductor_positions_xyz_m: vec![[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
             sample_positions_xyz_m: vec![[0.1, 0.2, 0.3]],
+            sample_tet4_cells: None,
             bases: vec![AntennaFieldBasisInput {
                 port_mode_id: "common".into(),
                 measured_positive_terminal_current_a: current_a,
@@ -1627,6 +1826,44 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("sha256:"));
+    }
+
+    #[test]
+    fn publishes_and_loads_tetrahedral_sampling_topology() {
+        let mut fixture = input(1.0);
+        fixture.sample_positions_xyz_m = vec![
+            [0.0, 0.0, -1.0],
+            [2.0, 0.0, 0.0],
+            [0.0, 2.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ];
+        fixture.bases[0].magnetic_field_xyz_apm = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+        ];
+        fixture.sample_tet4_cells = Some(vec![[0, 1, 2, 3]]);
+        let artifacts = build_antenna_field_solution_artifacts(&fixture).unwrap();
+        let manifest = artifacts.last().unwrap();
+        let manifest_value: serde_json::Value = serde_json::from_slice(&manifest.bytes).unwrap();
+        assert_eq!(
+            manifest_value["sample_topology"]["layout"],
+            "tet4_connectivity"
+        );
+        verify_antenna_field_solution_asset(&manifest.bytes, &artifacts[..artifacts.len() - 1])
+            .unwrap();
+        let digest = manifest_digest(&manifest.bytes);
+        let loaded = load_antenna_field_solution_samples(
+            &manifest.bytes,
+            &artifacts[..artifacts.len() - 1],
+            "common",
+            "solution_1",
+            "antenna_1",
+            &digest,
+        )
+        .unwrap();
+        assert_eq!(loaded.sample_tet4_cells, Some(vec![[0, 1, 2, 3]]));
     }
 
     #[test]

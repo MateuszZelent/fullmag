@@ -772,6 +772,7 @@ mod tests {
             signatures,
             conductor_positions_xyz_m: vec![[0.0, 0.0, 0.0]],
             sample_positions_xyz_m: vec![[1.0, 0.0, 0.0]],
+            sample_tet4_cells: None,
             bases: vec![AntennaFieldBasisInput {
                 port_mode_id: "common".into(),
                 measured_positive_terminal_current_a: 1.0,
@@ -803,6 +804,7 @@ mod tests {
                 port_mode_id: "common".into(),
                 sample_positions_xyz_m: vec![[1.0, 0.0, 0.0]],
                 magnetic_field_xyz_apm_per_a: vec![[h_x, 0.0, 0.0]],
+                sample_tet4_cells: None,
                 content_digest,
             },
             quantities: Vec::new(),

@@ -443,6 +443,15 @@ for each target index i:
 - [ ] `mode_basis_ref` nie może być pozornie przyjętym parametrem: wdrożyć osobną zweryfikowaną analizę modalną albo jawnie odrzucić tę opcję w plannerze. Nie przekształcać W_H w sprawność transdukcji.
 - [ ] Dodać cache analizy zależny od field signature, plane, window, normalization, component i equilibrium digest; zmiana m0 nie unieważnia bazy prądowej.
 
+**Stan implementacji 2026-09-11:** carrier artefaktu publikuje opcjonalny,
+zweryfikowany payload `tet4_connectivity`; sampler Rust realizuje
+`fem_p1_interpolation_v1` przez barycentryczne P1 i deterministyczny BVH, a
+point-only asset działa wyłącznie jako jawne `identity_coordinates_v1`. Testy
+obejmują affine vector field, integralność hasha topologii i `outside=zero`.
+Pozostają: bezpośrednia ewaluacja `direct_rt0_evaluation_v1`, natywny transfer
+MFEM, formalne rozróżnienie `missing_payload`/`unsupported_topology` w API oraz
+kwalifikacja mieszanych topologii i dużych siatek.
+
 Niezależny test analityczny konwencji fazy, wykonywalny już teraz:
 
 ```python

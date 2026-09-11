@@ -499,23 +499,29 @@ $\mathbf k$ grid, quadrature weights, tolerance, and implementation identity.
 #### 5.1.2 Current executable sampling lane
 
 The first executable `antenna_source_spectrum.v1` lane consumes the immutable
-`antenna_field_solution.v1` sample carrier. That carrier currently contains
-finite nodal coordinates and the corresponding field basis, but not an element
-connectivity payload. Therefore the qualified sampling operation is an
-identity-coordinate projection: every requested lattice point must coincide
-with one and only one source sample within the declared floating-point
-coordinate tolerance. Reordering and strict subsets are valid; a nearest-node
-substitution is not performed. If a point has no matching source sample, the
-request fails closed, except when `outside_policy="zero"`, in which case that
-sample is explicitly zeroed and the outside count is recorded.
+`antenna_field_solution.v1` sample carrier. A current carrier may publish both
+finite nodal coordinates/field values and a hashed `tet4_connectivity` payload.
+When that topology is present, the sampler performs deterministic BVH point
+location followed by P1 barycentric interpolation in the containing tetrahedron.
+The executed realization is recorded as `fem_p1_interpolation_v1`; shared-face
+ownership is deterministic and no nearest-node substitution is allowed.
+
+Older point-only carriers remain readable through the explicit compatibility
+realization `identity_coordinates_v1`: every requested lattice point must
+coincide with one and only one source sample within the declared floating-point
+coordinate tolerance. This path is not FEM interpolation and its provenance
+must never be presented as such. If a point is inside the source bounds but is
+not in a tetrahedron (or has no identity match for a point-only asset), the
+request fails closed. Only a geometrically outside point may be zeroed by
+`outside_policy="zero"`, and the outside count is recorded.
 
 The lattice uses the plane origin as its centre, exactly as in the equation
-above. `interpolation="fem_element"` names the carrier contract and is only
-accepted for this identity-coordinate lane until element topology is published
-in a later asset revision. `interpolation="fdm_trilinear"` is rejected because
+above. `interpolation="fem_element"` is executable only when a valid tet4
+carrier is available; `interpolation="fdm_trilinear"` remains rejected because
 the current asset does not contain an FDM grid origin, spacing, and dimensions.
-This restriction is deliberate: the FFT artifact must never silently claim a
-spatial interpolation that was not executed.
+The artifact records the executed realization separately from the authored
+interpolation label so it cannot silently claim a spatial interpolation that
+was not executed.
 
 The published artifact records the solution digest, source port, lattice frame,
 outside count, coordinate mapping digest, window, normalization, and complex

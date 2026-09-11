@@ -4,7 +4,7 @@ use crate::{
     EigenDampingPolicyIR, EigenNormalizationIR, EigenOperatorConfigIR, EigenTargetIR,
     EquilibriumSourceIR, ExchangeBoundaryCondition, ExecutionMode, ExecutionPrecision,
     FdmDemagPeriodicityIR, FdmMultilayerPlanIR, FdmPeriodicityIR, FdmPrecisionPolicyIR,
-    FdmProjectionPolicyIR, FemDomainMeshAssetIR, FemLinearSolverPolicy,
+    FdmProjectionPolicyIR, FemConnectivityIR, FemDomainMeshAssetIR, FemLinearSolverPolicy,
     FemSharedDomainBuildReportIR, FieldRefreshPolicyIR, FieldTargetIR, FrequencyExcitationIR,
     FrequencyResponseNormalizationIR, FrequencySweepIR, GeometryEntryIR, IntegratorChoice,
     KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
@@ -67,6 +67,12 @@ pub struct AntennaFieldSamplingPlanIR {
     pub location: String,
     pub topology_digest: String,
     pub positions_xyz_m: Vec<[f64; 3]>,
+    /// Full connectivity of the sampling carrier when it is available.
+    ///
+    /// Older serialized plans omitted this field; an empty connectivity keeps
+    /// those plans readable but prevents FEM element interpolation at runtime.
+    #[serde(default = "crate::FemConnectivityIR::empty")]
+    pub cells: FemConnectivityIR,
 }
 
 /// Dedicated static antenna precomputation plan.
