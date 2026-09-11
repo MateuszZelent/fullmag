@@ -25,7 +25,7 @@ default is:
 
 `FULLMAG_PROJECT_STORAGE_ROOT` is the only root override after the shared
 resolver validates project identity, marker, containment, mount/volume and
-writability. The Windows default is `C:\git\fullmag\storage`; the Windows
+writability. The Windows default is `D:\git\fullmag\storage`; the Windows
 Docker Desktop route remains separate from this Linux managed route.
 
 ## User-visible behavior
