@@ -7199,6 +7199,65 @@ fn fem_rotated_dmi_field_outputs_fail_until_materialized() {
 }
 
 #[test]
+fn fem_rotated_dmi_energy_output_is_allowed_without_rotated_field_materialization() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    attach_unit_fem_domain_mesh(&mut ir);
+    ir.energy_terms = vec![
+        EnergyTermIR::Exchange,
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+    ir.study = fullmag_ir::StudyIR::TimeEvolution {
+        dynamics: ir.study.dynamics().clone(),
+        sampling: fullmag_ir::SamplingIR {
+            table_autosave: None,
+            stage_autosave: None,
+            outputs: vec![OutputIR::Scalar {
+                name: "E_rotated_dmi".to_string(),
+                every_seconds: 1e-12,
+            }],
+        },
+    };
+
+    let planned = plan(&ir).expect(
+        "FEM must allow the global rotated-DMI energy output even when H_rotated_dmi is not materialized",
+    );
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    assert_eq!(fem.rotated_interfacial_dmi, Some(3.0e-3));
+}
+
+#[test]
+fn rotated_dmi_energy_density_snapshot_is_rejected_until_scalar_field_scheduling_exists() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.energy_terms = vec![
+        EnergyTermIR::Exchange,
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+    ir.study = fullmag_ir::StudyIR::TimeEvolution {
+        dynamics: ir.study.dynamics().clone(),
+        sampling: fullmag_ir::SamplingIR {
+            table_autosave: None,
+            stage_autosave: None,
+            outputs: vec![OutputIR::Snapshot {
+                field: "eden_rotated_dmi".to_string(),
+                component: "3D".to_string(),
+                every_seconds: 1e-12,
+                layer: None,
+            }],
+        },
+    };
+
+    let error = plan(&ir).expect_err(
+        "rotated-DMI energy density snapshots must fail closed until scalar-field scheduling exists",
+    );
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("eden_rotated_dmi") && reason.contains("not executable")
+    }));
+}
+
+#[test]
 fn rotated_interfacial_dmi_rejects_eigen_and_frequency_domain_execution() {
     let mut frequency = fem_frequency_response_mesh_asset_problem();
     frequency

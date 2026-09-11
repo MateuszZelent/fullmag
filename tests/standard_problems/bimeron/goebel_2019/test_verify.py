@@ -4,6 +4,7 @@ import math
 from pathlib import Path
 
 from tests.standard_problems.bimeron.goebel_2019.verify import (
+    _receipt_contains_dmi_operator,
     _initial_energy_from_log,
     analyze_fdm_state,
 )
@@ -90,3 +91,16 @@ def test_initial_energy_ignores_zero_heartbeat(tmp_path: Path) -> None:
     )
 
     assert _initial_energy_from_log(runtime_log) == -7.4885e-18
+
+
+def test_dmi_receipt_requires_operator_bit_in_required_and_executed_masks() -> None:
+    base = {
+        "required_operator_mask": 159,
+        "executed_device_operator_mask": 159,
+    }
+    assert _receipt_contains_dmi_operator(base)
+
+    for key in base:
+        missing = dict(base)
+        missing[key] &= ~(1 << 3)
+        assert not _receipt_contains_dmi_operator(missing)

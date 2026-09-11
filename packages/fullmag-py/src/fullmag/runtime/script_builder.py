@@ -8044,7 +8044,7 @@ def _render_rotated_interfacial_dmi(
     if surface != "study":
         raise ValueError("rotated interfacial DMI requires the canonical study API surface")
     return [
-        f"study.terms.add(fm.RotatedInterfacialDMI(D={_py_number(value)}))"
+        f"study.terms.add(fm.RotatedInterfacialDMI(D={_py_float_roundtrip(value)}))"
     ]
 
 
@@ -8528,6 +8528,11 @@ def _py_repr(value: str) -> str:
 
 def _py_number(value: float) -> str:
     return format(float(value), ".12g")
+
+
+def _py_float_roundtrip(value: float) -> str:
+    """Render a float as a Python literal that preserves its IEEE-754 value."""
+    return repr(float(value))
 
 
 def _py_bias_field_sweep_samples_literal(samples: Sequence[Sequence[float]]) -> str:

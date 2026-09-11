@@ -1,5 +1,6 @@
 #include "plan_ingestion_v2.hpp"
 
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <new>
@@ -89,6 +90,20 @@ bool rotated_dmi_has_valid_open_boundary_exchange(
         !has_open_magnetic_boundary(plan);
 }
 
+bool rotated_dmi_has_valid_abi_and_composition(
+    const fullmag_fdm_plan_desc_v2 &plan)
+{
+    if (plan.has_rotated_interfacial_dmi != 0 &&
+        plan.has_rotated_interfacial_dmi != 1) {
+        return false;
+    }
+    if (!std::isfinite(plan.dmi_D_rotated_interfacial)) {
+        return false;
+    }
+    return plan.has_rotated_interfacial_dmi == 0 ||
+        (plan.base.has_interfacial_dmi == 0 && plan.base.has_bulk_dmi == 0);
+}
+
 } // namespace
 
 namespace fullmag::fdm {
@@ -122,6 +137,9 @@ int fullmag_fdm_plan_ingestion_v2_create_checked(
     fullmag_fdm_plan_desc_v2 normalized{};
     copy_plan_desc_v2_fields(
         normalized, *plan, header.struct_size, complete_plan_desc_v2_size);
+    if (!rotated_dmi_has_valid_abi_and_composition(normalized)) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
     if (!rotated_dmi_has_valid_open_boundary_exchange(normalized)) {
         return FULLMAG_FDM_ERR_INVALID;
     }

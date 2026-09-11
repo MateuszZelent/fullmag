@@ -287,14 +287,13 @@ impl ExchangeLlgProblem {
         let bdmi_field = self.bulk_dmi_field(magnetization);
         let dmi_field = idmi_field
             .iter()
-            .zip(rdmi_field.iter())
             .zip(bdmi_field.iter())
-            .map(|((interfacial, rotated), bulk)| add(add(*interfacial, *rotated), *bulk))
+            .map(|(interfacial, bulk)| add(*interfacial, *bulk))
             .collect::<Vec<_>>();
         let mut effective_field =
             combine_fields_4(&exchange_field, &demag_field, &external_field, &mel_field);
         for (i, h) in effective_field.iter_mut().enumerate() {
-            *h = add(add(*h, ani_field[i]), dmi_field[i]);
+            *h = add(add(add(*h, ani_field[i]), dmi_field[i]), rdmi_field[i]);
         }
         let mut cylinder_oersted_field = zero_vectors(self.grid.cell_count());
         self.oersted_field_add_into_at_time(&mut cylinder_oersted_field, time_seconds);

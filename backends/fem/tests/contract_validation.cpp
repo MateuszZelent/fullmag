@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 static void check(bool condition, const char *msg) {
@@ -162,6 +163,52 @@ int main() {
     expect_create_v3_error(
         rotated_open,
         "RotatedInterfacialDmi with open magnetic boundaries requires Exchange");
+
+    fullmag_fem_plan_desc_v2 rotated_abi = {};
+    rotated_abi.abi_version = FULLMAG_FEM_PLAN_DESC_V2_ABI_VERSION;
+    rotated_abi.struct_size = sizeof(rotated_abi);
+    // Keep this fixture away from the independent open-boundary gate so each
+    // case below exercises the rDMI ABI/composition validation itself.
+    rotated_abi.base.mesh.periodic_node_pairs_len = 1;
+
+    rotated_abi.has_rotated_interfacial_dmi = 2;
+    rotated_abi.rotated_interfacial_dmi_constant = 3.0e-3;
+    expect_create_v3_error(
+        rotated_abi,
+        "fullmag_fem_backend_create_v3 rotated-interfacial DMI flag must be 0 or 1");
+
+    rotated_abi.has_rotated_interfacial_dmi = 1;
+    rotated_abi.rotated_interfacial_dmi_constant =
+        std::numeric_limits<double>::quiet_NaN();
+    expect_create_v3_error(
+        rotated_abi,
+        "fullmag_fem_backend_create_v3 rotated-interfacial DMI constant must be finite");
+
+    rotated_abi.rotated_interfacial_dmi_constant =
+        std::numeric_limits<double>::infinity();
+    expect_create_v3_error(
+        rotated_abi,
+        "fullmag_fem_backend_create_v3 rotated-interfacial DMI constant must be finite");
+
+    rotated_abi.has_rotated_interfacial_dmi = 0;
+    rotated_abi.rotated_interfacial_dmi_constant =
+        std::numeric_limits<double>::quiet_NaN();
+    expect_create_v3_error(
+        rotated_abi,
+        "fullmag_fem_backend_create_v3 rotated-interfacial DMI constant must be finite");
+
+    rotated_abi.has_rotated_interfacial_dmi = 1;
+    rotated_abi.rotated_interfacial_dmi_constant = 3.0e-3;
+    rotated_abi.base.has_interfacial_dmi = 1;
+    expect_create_v3_error(
+        rotated_abi,
+        "fullmag_fem_backend_create_v3 rotated-interfacial DMI cannot be combined with interfacial or bulk DMI");
+
+    rotated_abi.base.has_interfacial_dmi = 0;
+    rotated_abi.base.has_bulk_dmi = 1;
+    expect_create_v3_error(
+        rotated_abi,
+        "fullmag_fem_backend_create_v3 rotated-interfacial DMI cannot be combined with interfacial or bulk DMI");
 
     return 0;
 }

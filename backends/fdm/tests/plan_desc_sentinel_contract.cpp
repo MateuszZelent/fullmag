@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <type_traits>
 
 namespace {
@@ -285,6 +286,9 @@ void owner_ingestion_receipt_preserves_every_semantic_field() {
     // rather than the rDMI boundary-law validator.
     plan.base.active_mask = nullptr;
     plan.base.active_mask_len = 0;
+    plan.base.has_interfacial_dmi = 0;
+    plan.base.has_bulk_dmi = 0;
+    plan.has_rotated_interfacial_dmi = 1;
 
     fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
     int status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
@@ -302,6 +306,9 @@ void owner_ingestion_receipt_preserves_every_semantic_field() {
 void receipt_respects_legacy_output_capacity() {
     fullmag_fdm_plan_desc_v2 plan{};
     populate_distinct_semantic_sentinels(plan);
+    plan.base.has_interfacial_dmi = 0;
+    plan.base.has_bulk_dmi = 0;
+    plan.has_rotated_interfacial_dmi = 1;
 
     fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
     int status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
@@ -369,6 +376,47 @@ void rotated_dmi_fully_periodic_boundary_may_omit_exchange() {
           "fully periodic rotated DMI need not enable Exchange for the ABI boundary law");
     check(ingestion != nullptr, "fully periodic rotated DMI must allocate an owner");
     fullmag_fdm_plan_ingestion_v2_destroy(ingestion);
+}
+
+void rotated_dmi_flag_constant_and_composition_are_validated() {
+    fullmag_fdm_plan_desc_v2 plan{};
+    plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
+    plan.struct_size = sizeof(plan);
+    plan.base.periodic_x = 1;
+    plan.base.periodic_y = 1;
+    plan.base.periodic_z = 1;
+
+    const auto expect_rejected = [&plan](const char *message) {
+        fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
+        const int status =
+            fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
+        check(status == FULLMAG_FDM_ERR_INVALID, message);
+        check(ingestion == nullptr, "invalid rotated-DMI plan must not allocate an owner");
+    };
+
+    plan.has_rotated_interfacial_dmi = 2;
+    plan.dmi_D_rotated_interfacial = 3.0e-3;
+    expect_rejected("rDMI enable flag must be exactly 0 or 1");
+
+    plan.has_rotated_interfacial_dmi = 1;
+    plan.dmi_D_rotated_interfacial = std::numeric_limits<double>::quiet_NaN();
+    expect_rejected("NaN rDMI constant must be rejected");
+
+    plan.dmi_D_rotated_interfacial = std::numeric_limits<double>::infinity();
+    expect_rejected("infinite rDMI constant must be rejected");
+
+    plan.has_rotated_interfacial_dmi = 0;
+    plan.dmi_D_rotated_interfacial = std::numeric_limits<double>::quiet_NaN();
+    expect_rejected("non-finite disabled rDMI constant must be rejected");
+
+    plan.has_rotated_interfacial_dmi = 1;
+    plan.dmi_D_rotated_interfacial = 3.0e-3;
+    plan.base.has_interfacial_dmi = 1;
+    expect_rejected("rDMI cannot be combined with interfacial DMI");
+
+    plan.base.has_interfacial_dmi = 0;
+    plan.base.has_bulk_dmi = 1;
+    expect_rejected("rDMI cannot be combined with bulk DMI");
 }
 
 void legacy_v2_size_preserves_layout_and_defaults_the_extension() {
@@ -511,6 +559,7 @@ int main() {
     legacy_v2_size_preserves_layout_and_defaults_the_extension();
     rotated_dmi_open_boundary_requires_exchange_at_public_ingestion_boundary();
     rotated_dmi_fully_periodic_boundary_may_omit_exchange();
+    rotated_dmi_flag_constant_and_composition_are_validated();
     incompatible_version_and_size_fail_before_backend_allocation();
 #if FULLMAG_FDM_CONTRACT_HAS_CUDA
     checked_backend_constructor_accepts_a_runtime_valid_plan();

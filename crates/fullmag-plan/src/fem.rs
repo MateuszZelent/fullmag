@@ -3324,6 +3324,7 @@ pub(crate) fn plan_fem(
         interfacial_dmi.is_some() || has_material_interfacial_dmi,
         bulk_dmi.is_some() || has_material_bulk_dmi,
         false,
+        rotated_interfacial_dmi.is_some(),
         true,
         has_magnetoelastic,
         problem

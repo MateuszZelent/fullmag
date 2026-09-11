@@ -13,6 +13,7 @@ from typing import Sequence
 
 
 ROOT = Path(__file__).resolve().parent
+DMI_OPERATOR_BIT = 1 << 3
 
 
 def _dot(a: Sequence[float], b: Sequence[float]) -> float:
@@ -143,6 +144,22 @@ def _initial_energy_from_log(path: Path) -> float:
     raise ValueError(f"initial stage energy is missing from {path}")
 
 
+def _receipt_contains_dmi_operator(receipt: dict[str, object]) -> bool:
+    required = receipt.get("required_operator_mask")
+    executed = receipt.get("executed_device_operator_mask")
+    if any(
+        isinstance(mask, bool) or not isinstance(mask, int)
+        for mask in (required, executed)
+    ):
+        return False
+    required_mask = int(required)
+    executed_mask = int(executed)
+    return (
+        (required_mask & DMI_OPERATOR_BIT) == DMI_OPERATOR_BIT
+        and (executed_mask & DMI_OPERATOR_BIT) == DMI_OPERATOR_BIT
+    )
+
+
 def verify_bundle(
     bundle: Path,
     runtime_log: Path,
@@ -208,6 +225,7 @@ def verify_bundle(
         "device_receipt_validated": (
             receipt["validation_state"] == "validated"
             and receipt["executed"] == "cuda_fdm"
+            and _receipt_contains_dmi_operator(receipt)
             and receipt["executed_device_operator_mask"] == receipt["required_operator_mask"]
             and receipt["executed_host_operator_mask"] == 0
             and receipt["executed_unknown_operator_mask"] == 0
@@ -241,6 +259,7 @@ def verify_bundle(
             and hold_receipt["validation_state"] == "validated"
             and hold_receipt["executed"] == "cuda_fdm"
             and hold_receipt["fallback_count"] == 0
+            and _receipt_contains_dmi_operator(hold_receipt)
             and hold_receipt["executed_device_operator_mask"]
             == hold_receipt["required_operator_mask"]
             and hold_receipt["executed_host_operator_mask"] == 0

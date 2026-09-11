@@ -850,6 +850,52 @@ class ProblemApiTests(unittest.TestCase):
             ],
         )
 
+    def test_rotated_interfacial_dmi_rewrite_preserves_float_round_trip(self) -> None:
+        d = 0.0012345678901234567
+        script = textwrap.dedent(
+            f"""
+            import fullmag as fm
+
+            DEFAULT_UNTIL = 1e-12
+
+            def build():
+                geometry = fm.Box(size=(20e-9, 10e-9, 5e-9), name="film")
+                material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.02)
+                magnet = fm.Ferromagnet(
+                    name="film",
+                    geometry=geometry,
+                    material=material,
+                    m0=fm.texture.uniform((1.0, 0.0, 0.0)),
+                )
+                return fm.Problem(
+                    name="flat_rotated_dmi_precision",
+                    magnets=[magnet],
+                    energy=[fm.Exchange(), fm.RotatedInterfacialDMI(D={d!r})],
+                    study=fm.TimeEvolution(
+                        dynamics=fm.LLG(),
+                        outputs=[fm.SaveField("m", every=1e-12)],
+                    ),
+                )
+            """
+        )
+
+        with TemporaryDirectory() as tmp_dir:
+            source_path = Path(tmp_dir) / "flat_rotated_dmi_precision.py"
+            source_path.write_text(script, encoding="utf-8")
+            loaded = load_problem_from_script(source_path, lightweight_assets=True)
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten_path = Path(tmp_dir) / "rewritten.py"
+            rewritten_path.write_text(rendered, encoding="utf-8")
+            reloaded = load_problem_from_script(rewritten_path, lightweight_assets=True)
+
+        self.assertIn(
+            f"study.terms.add(fm.RotatedInterfacialDMI(D={d!r}))",
+            rendered,
+        )
+        rewritten_terms = reloaded.problem.to_ir(include_geometry_assets=False)["energy_terms"]
+        rewritten_d = rewritten_terms[1]["D"]
+        self.assertEqual(rewritten_d.hex(), d.hex())
+
     def test_flat_api_object_region_lowers_to_ir(self) -> None:
         fm.reset()
         fm.engine("fem")

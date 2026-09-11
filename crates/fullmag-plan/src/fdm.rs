@@ -2504,6 +2504,7 @@ pub(crate) fn plan_fdm(
             .any(|term| matches!(term, EnergyTermIR::InterfacialDmi { .. })),
         has_bulk_dmi,
         has_rotated_interfacial_dmi,
+        has_rotated_interfacial_dmi,
         false,
         false,
         problem
@@ -4165,6 +4166,7 @@ pub(crate) fn plan_fdm_multilayer(
         }),
         interfacial_dmi.is_some(),
         bulk_dmi.is_some(),
+        rotated_interfacial_dmi.is_some(),
         rotated_interfacial_dmi.is_some(),
         false,
         false,

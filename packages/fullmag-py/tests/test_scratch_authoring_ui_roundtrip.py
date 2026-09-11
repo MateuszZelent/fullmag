@@ -278,6 +278,31 @@ def test_rotated_dmi_study_term_round_trips_signed_coefficient() -> None:
     assert draft["rotated_interfacial_dmi"] == -0.003
 
 
+def test_rotated_dmi_object_stack_is_rejected_fail_closed() -> None:
+    builder = _builder(backend="fdm")
+    builder["geometries"][0]["physics_stack"].append(
+        {
+            "kind": "rotated_interfacial_dmi",
+            "enabled": True,
+            "params": {"d": 0.003},
+        }
+    )
+
+    with pytest.raises(ValueError, match="study-scoped"):
+        build_scene_document_from_builder(builder)
+
+    scene = build_scene_document_from_builder(_builder(backend="fdm"))
+    scene["objects"][0]["physics_stack"].append(
+        {
+            "kind": "rotated_interfacial_dmi",
+            "enabled": True,
+            "params": {"d": 0.003},
+        }
+    )
+    with pytest.raises(ValueError, match="study-scoped"):
+        build_builder_from_scene_document(scene)
+
+
 def test_scene_document_export_rejects_an_incomplete_scene() -> None:
     from fullmag.runtime.script_builder import render_scene_document_as_script
 

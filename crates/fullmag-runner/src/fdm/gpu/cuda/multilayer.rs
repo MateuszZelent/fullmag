@@ -1789,7 +1789,7 @@ fn snapshot_native_multilayer_observables(
         }
         let h_eff = canonical_snapshot_effective_field(
             &native_h_eff,
-            [&h_ex, &h_demag, &h_ext, &h_ani, &h_dmi],
+            [&h_ex, &h_demag, &h_ext, &h_ani, &h_dmi, &h_rotated_dmi],
             &layer.layer_id,
         )?;
 
@@ -1936,7 +1936,7 @@ fn snapshot_native_multilayer_observables(
 
 fn canonical_snapshot_effective_field(
     native_h_eff: &[[f64; 3]],
-    terms: [&[[f64; 3]]; 5],
+    terms: [&[[f64; 3]]; 6],
     layer_id: &str,
 ) -> Result<Vec<[f64; 3]>, RunError> {
     if terms.iter().any(|term| term.len() != native_h_eff.len()) {
@@ -4964,11 +4964,12 @@ mod tests {
         let h_ext = vec![[7.0, 8.0, 9.0], [0.0, 4.0, 1.0]];
         let h_ani = vec![[10.0, 11.0, 12.0], [-2.0, 0.0, 3.0]];
         let h_dmi = vec![[13.0, 14.0, 15.0], [5.0, -4.0, 2.0]];
-        let native = vec![[35.0, 40.0, 45.0], [5.0, 1.0, 3.0]];
+        let h_rotated_dmi = vec![[16.0, 17.0, 18.0], [0.5, -1.0, -2.0]];
+        let native = vec![[51.0, 57.0, 63.0], [5.5, 0.0, 1.0]];
 
         let canonical = canonical_snapshot_effective_field(
             &native,
-            [&h_ex, &h_demag, &h_ext, &h_ani, &h_dmi],
+            [&h_ex, &h_demag, &h_ext, &h_ani, &h_dmi, &h_rotated_dmi],
             "layer-a",
         )
         .expect("native H_eff matching all active field terms must be accepted");
@@ -4978,7 +4979,7 @@ mod tests {
         inconsistent[1][2] += 1.0;
         assert!(canonical_snapshot_effective_field(
             &inconsistent,
-            [&h_ex, &h_demag, &h_ext, &h_ani, &h_dmi],
+            [&h_ex, &h_demag, &h_ext, &h_ani, &h_dmi, &h_rotated_dmi],
             "layer-a",
         )
         .unwrap_err()

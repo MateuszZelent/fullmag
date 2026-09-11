@@ -271,7 +271,7 @@ pozostaje dlatego wyłącznie ścieżką FDM.
 | Solver | Device | Stan kontraktu | Stan runtime | Wymagany dowód przed promocją |
 |---|---|---|---|---|
 | FDM | CPU | zatwierdzony | operator i pochodna energii zweryfikowane; bimeron runtime `NOT VERIFIED` | pełna reprodukcja bimeronu CPU |
-| FDM | GPU | zatwierdzony | FP64 CUDA bimeron 100 ps `validated` | FP32 parity i sanitizer |
+| FDM | GPU | zatwierdzony | historyczny FP64 CUDA bimeron 15/15; bieżący raport 18-check `NOT VERIFIED` | powtórzony raport 18-check, FP32 parity i sanitizer |
 | FEM | CPU | zatwierdzony | operator MFEM, weak derivative i build zweryfikowane; bimeron runtime `NOT VERIFIED` | reprodukcja bimeronu FEM CPU |
 | FEM | GPU | zatwierdzony | operator CUDA, pochodna i managed build zweryfikowane; bimeron runtime `NOT VERIFIED` | reprodukcja bimeronu FEM GPU |
 
@@ -308,15 +308,28 @@ obecność źródła lub udany build nie zmienia `NOT VERIFIED` na `validated`.
 
 ### Reprodukcja Göbel 2019
 
-Scenariusze FDM i FEM współdzielą: tor $500\times40\times0.5\,\mathrm{nm^3}$,
-PBC $x$, $M_s=0.58\,\mathrm{MA\,m^{-1}}$,
-$A=15\,\mathrm{pJ\,m^{-1}}$, $D=3\,\mathrm{mJ\,m^{-2}}$,
-$K_x=0.8\,\mathrm{MJ\,m^{-3}}$, $\alpha=0.3$ i $T=0\,\mathrm K$.
-FEM ma dokładnie jedną magnetyczną warstwę `prism6` przez grubość.
-FDM używa komórek $0.5\times0.5\times0.5\,\mathrm{nm^3}$; siatka 1 nm
-nie zachowuje bariery topologicznej dla relaksującego rdzenia o średnicy kilku
-nanometrów i nie jest dopuszczona do tej reprodukcji. Zgodna z obróconym
-Néelowskim skyrmionem chiralność presetu ma `vorticity=-1` dla $D>0$.
+#### Okresowy benchmark FDM
+
+Referencyjny benchmark FDM używa toru
+$500\times40\times0.5\,\mathrm{nm^3}$ z PBC w osi $x$ i demagnetyzacją
+`truncated_images`. Parametry materiału i dynamiki to
+$M_s=0.58\,\mathrm{MA\,m^{-1}}$, $A=15\,\mathrm{pJ\,m^{-1}}$,
+$D=3\,\mathrm{mJ\,m^{-2}}$, $K_x=0.8\,\mathrm{MJ\,m^{-3}}$,
+$\alpha=0.3$ i $T=0\,\mathrm K$. FDM używa komórek
+$0.5\times0.5\times0.5\,\mathrm{nm^3}$; siatka 1 nm nie zachowuje bariery
+topologicznej dla relaksującego rdzenia o średnicy kilku nanometrów i nie jest
+dopuszczona do tego benchmarku. Zgodna z obróconym Néelowskim skyrmionem
+chiralność presetu ma `vorticity=-1` dla $D>0$.
+
+#### Otwarty wariant FEM
+
+Wariant FEM ma te same wymiary toru, parametry materiału, teksturę początkową
+i etapy LLG, ale jest osobnym wariantem **open-boundary**: nie deklaruje
+`study.pbc`, używa otwartej demagnetyzacji `poisson_robin` i ma dokładnie jedną
+magnetyczną warstwę `prism6` przez grubość. Nie jest to okresowa reprodukcja
+benchmarku FDM ani dowód równoważności PBC. Wspólne parametry pozwalają na
+porównanie jakościowe tekstury, natomiast warunki brzegowe, operator
+demagnetyzacji i siatka pozostają lane-specific.
 
 Akceptacja wymaga spadku energii, skończonych pól, zachowania normy, dwóch
 rozdzielonych rdzeni o przeciwnych znakach $m_z$, $|Q|\ge0.8$, tła wzdłuż
@@ -328,16 +341,21 @@ Native FEM/MFEM/CUDA/hypre/libCEED jest budowany i uruchamiany wyłącznie przez
 repozytoryjne receptury kontenerowe `just`. Receipt z rzeczywistym urządzeniem
 jest wymagany dla każdego twierdzenia o GPU.
 
-### Wynik kwalifikacyjny FDM GPU FP64
+### Historyczny wynik FDM GPU FP64 — `NOT VERIFIED`
 
-Przebieg na NVIDIA GeForce RTX 4080 SUPER, strict FP64 CUDA, bez fallbacku,
-przeszedł 15/15 bramek po 20 ps relaksacji i 100 ps bezprądowego hold. Otrzymano
+Zapisany przebieg na NVIDIA GeForce RTX 4080 SUPER, strict FP64 CUDA, bez
+fallbacku, historycznie przeszedł 15/15 bramek po 20 ps relaksacji i 100 ps
+bezprądowego hold. Otrzymano
 $Q=-0.9999894870$, $m_z^{\max}=0.9932343$,
 $m_z^{\min}=-0.9935072$, separację rdzeni $5.50\,\mathrm{nm}$ oraz
 $\langle m_x\rangle=0.9858318$. Energia spadła z
 $-7.7736\times10^{-18}\,\mathrm J$ do
 $-8.1467871427\times10^{-18}\,\mathrm J$. Receipt wykazał maskę operatorów
 CUDA $159/159$, zero operatorów host/unknown i `fallback_count=0`.
+Raport powstał przed rozszerzeniem weryfikatora do 18 bramek i dlatego pozostaje
+`NOT VERIFIED` dla bieżącego kontraktu; przed promocją wymagane jest powtórzenie
+tego okresowego benchmarku z aktualnym weryfikatorem. Wynik nie kwalifikuje
+opisanego wyżej open-boundary wariantu FEM.
 
 (limitations)=
 ## Ograniczenia i prace odroczone

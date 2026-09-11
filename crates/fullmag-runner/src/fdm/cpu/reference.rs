@@ -3101,6 +3101,7 @@ fn observe_state_with_antenna_field(
         );
     }
     let anisotropy_field = problem.anisotropy_field(state.magnetization());
+    let conventional_dmi_field = conventional_dmi_field(problem, state.magnetization());
     let rotated_dmi_field = problem.rotated_interfacial_dmi_field(state.magnetization());
     let rotated_dmi_energy =
         problem.rotated_interfacial_dmi_energy_from_vectors(state.magnetization());
@@ -3127,7 +3128,10 @@ fn observe_state_with_antenna_field(
         drive_field,
         effective_field,
         anisotropy_field,
-        dmi_field: observables.dmi_field,
+        // `H_dmi` is the conventional interfacial+bulk observable.  The
+        // rotated-interfacial contribution has its own explicit field
+        // observable and remains part of `H_eff` assembled by the engine.
+        dmi_field: conventional_dmi_field,
         rotated_dmi_field,
         magnetoelastic_field: Vec::new(),
         cubic_anisotropy_field: Vec::new(),
@@ -3150,6 +3154,22 @@ fn observe_state_with_antenna_field(
         max_torque_all_Apm: max_torque_all_apm,
         per_object_scalars: std::collections::HashMap::new(),
     })
+}
+
+fn conventional_dmi_field(problem: &ExchangeLlgProblem, magnetization: &[Vector3]) -> Vec<Vector3> {
+    let interfacial = problem.interfacial_dmi_field(magnetization);
+    let bulk = problem.bulk_dmi_field(magnetization);
+    interfacial
+        .into_iter()
+        .zip(bulk)
+        .map(|(interfacial, bulk)| {
+            [
+                interfacial[0] + bulk[0],
+                interfacial[1] + bulk[1],
+                interfacial[2] + bulk[2],
+            ]
+        })
+        .collect()
 }
 
 fn reconstruct_inactive_fdm_visual_effective_field(
@@ -3509,7 +3529,14 @@ impl<'a> DirectFieldSnapshotCache<'a> {
                 .rotated_interfacial_dmi_energy_density_from_vectors(self.state.magnetization())),
             "eden_total" => {
                 let mut total = vec![0.0; self.state.magnetization().len()];
-                for quantity in ["eden_ex", "eden_demag", "eden_ext", "eden_ani", "eden_dmi"] {
+                for quantity in [
+                    "eden_ex",
+                    "eden_demag",
+                    "eden_ext",
+                    "eden_ani",
+                    "eden_dmi",
+                    "eden_rotated_dmi",
+                ] {
                     let values = self.select_scalar(quantity)?;
                     for (accum, value) in total.iter_mut().zip(values) {
                         *accum += value;
@@ -3599,17 +3626,10 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             }
             "H_dmi" => {
                 if self.dmi_field.is_none() {
-                    self.dmi_field =
-                        Some(
-                            self.problem
-                                .dmi_field(self.state)
-                                .map_err(|error| RunError {
-                                    message: format!(
-                                        "CPU FDM snapshot '{}': DMI field: {}",
-                                        name, error
-                                    ),
-                                })?,
-                        );
+                    self.dmi_field = Some(conventional_dmi_field(
+                        self.problem,
+                        self.state.magnetization(),
+                    ));
                 }
                 Ok(self.dmi_field.as_deref().expect("cached DMI field"))
             }
@@ -3874,6 +3894,12 @@ mod tests {
 
         let observables = observe_state(&problem, &state).expect("runner observables");
         assert_eq!(observables.rotated_dmi_field, rotated_field);
+        assert!(observables
+            .dmi_field
+            .iter()
+            .flatten()
+            .all(|component| *component == 0.0));
+        assert_eq!(observables.effective_field, rotated_field);
         assert_eq!(
             observables.rotated_dmi_energy,
             problem.rotated_interfacial_dmi_energy_from_vectors(state.magnetization())
@@ -3891,6 +3917,12 @@ mod tests {
                 .expect("direct rotated DMI field"),
             rotated_field
         );
+        assert!(direct
+            .select("H_dmi")
+            .expect("conventional DMI field")
+            .iter()
+            .flatten()
+            .all(|component| *component == 0.0));
         let density = direct
             .select_scalar("eden_rotated_dmi")
             .expect("direct rotated DMI energy density");

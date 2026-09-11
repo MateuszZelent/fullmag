@@ -674,6 +674,7 @@ pub(crate) fn validate_executable_outputs(
     enable_h_dmi: bool,
     enable_h_dmi_bulk: bool,
     enable_h_rotated_dmi: bool,
+    enable_e_rotated_dmi: bool,
     allow_h_dmi_bulk: bool,
     enable_magnetoelastic: bool,
     enable_thermal: bool,
@@ -692,7 +693,6 @@ pub(crate) fn validate_executable_outputs(
         "H_ani",
         "H_dmi",
         "H_rotated_dmi",
-        "eden_rotated_dmi",
         "H_mel",
         "H_therm",
     ];
@@ -742,8 +742,7 @@ pub(crate) fn validate_executable_outputs(
                     && !(enable_antenna_field && name == "H_ant")
                     && !(enable_regional_field_drive && name == "H_drive")
                     && !(allow_h_dmi_bulk && name == "H_dmi_bulk")
-                    && !(enable_h_rotated_dmi
-                        && matches!(name.as_str(), "H_rotated_dmi" | "eden_rotated_dmi"))
+                    && !(enable_h_rotated_dmi && name == "H_rotated_dmi")
                     && !(enable_spin_transport && transport_fields.contains(&name.as_str()))
                 {
                     errors.push(format!(
@@ -762,9 +761,7 @@ pub(crate) fn validate_executable_outputs(
                     errors.push("field output 'H_dmi' requires InterfacialDmi(...)".to_string());
                 } else if name == "H_dmi_bulk" && !enable_h_dmi_bulk {
                     errors.push("field output 'H_dmi_bulk' requires BulkDmi(...)".to_string());
-                } else if matches!(name.as_str(), "H_rotated_dmi" | "eden_rotated_dmi")
-                    && !enable_h_rotated_dmi
-                {
+                } else if name == "H_rotated_dmi" && !enable_h_rotated_dmi {
                     errors.push(format!(
                         "field output '{name}' requires RotatedInterfacialDmi(...)"
                     ));
@@ -816,7 +813,7 @@ pub(crate) fn validate_executable_outputs(
                     errors.push("scalar output 'E_demag' requires Demag()".to_string());
                 } else if name == "E_ext" && !enable_zeeman {
                     errors.push("scalar output 'E_ext' requires Zeeman(...)".to_string());
-                } else if name == "E_rotated_dmi" && !enable_h_rotated_dmi {
+                } else if name == "E_rotated_dmi" && !enable_e_rotated_dmi {
                     errors.push(
                         "scalar output 'E_rotated_dmi' requires RotatedInterfacialDmi(...)"
                             .to_string(),
@@ -848,8 +845,7 @@ pub(crate) fn validate_executable_outputs(
                     && !(enable_oersted && field == "H_oe")
                     && !(enable_antenna_field && field == "H_ant")
                     && !(allow_h_dmi_bulk && field == "H_dmi_bulk")
-                    && !(enable_h_rotated_dmi
-                        && matches!(field.as_str(), "H_rotated_dmi" | "eden_rotated_dmi"))
+                    && !(enable_h_rotated_dmi && field == "H_rotated_dmi")
                 {
                     errors.push(format!(
                         "snapshot field '{}' is not executable in the current path; allowed fields are m, H_ex, H_demag, demag_phi, H_ext, H_oe, H_dmi, H_dmi_bulk, and H_eff",
@@ -867,9 +863,7 @@ pub(crate) fn validate_executable_outputs(
                     errors.push("snapshot field 'H_dmi' requires InterfacialDmi(...)".to_string());
                 } else if field == "H_dmi_bulk" && !enable_h_dmi_bulk {
                     errors.push("snapshot field 'H_dmi_bulk' requires BulkDmi(...)".to_string());
-                } else if matches!(field.as_str(), "H_rotated_dmi" | "eden_rotated_dmi")
-                    && !enable_h_rotated_dmi
-                {
+                } else if field == "H_rotated_dmi" && !enable_h_rotated_dmi {
                     errors.push(format!(
                         "snapshot field '{field}' requires RotatedInterfacialDmi(...)"
                     ));

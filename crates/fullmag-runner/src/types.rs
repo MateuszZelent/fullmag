@@ -545,7 +545,7 @@ pub struct StepStats {
     pub e_drive: f64,
     pub e_ani: f64,
     pub e_dmi: f64,
-    #[serde(default, rename = "E_rotated_dmi")]
+    #[serde(default, alias = "E_rotated_dmi")]
     pub e_rotated_dmi: f64,
     pub e_total: f64,
     pub max_dm_dt: f64,
@@ -1733,10 +1733,30 @@ mod rotated_dmi_energy_tests {
             stats.to_quantity_row().scalar_value("e_rotated_dmi"),
             Some(0.75)
         );
-        assert_eq!(
-            serde_json::to_value(&stats).unwrap()["E_rotated_dmi"],
-            serde_json::json!(0.75)
-        );
+        let json = serde_json::to_value(&stats).unwrap();
+        assert_eq!(json["e_rotated_dmi"], serde_json::json!(0.75));
+        assert!(json.get("E_rotated_dmi").is_none());
+        let legacy: StepStats = serde_json::from_value(serde_json::json!({
+            "E_rotated_dmi": 0.75,
+            "e_dmi": 0.75,
+            "e_total": 0.0,
+            "step": 1,
+            "time": 0.0,
+            "dt": 0.0,
+            "mx": 0.0,
+            "my": 0.0,
+            "mz": 1.0,
+            "e_ex": 0.0,
+            "e_demag": 0.0,
+            "e_ext": 0.0,
+            "e_ani": 0.0,
+            "max_dm_dt": 0.0,
+            "max_h_eff": 0.0,
+            "max_h_demag": 0.0,
+            "wall_time_ns": 0
+        }))
+        .expect("legacy uppercase rotated-DMI key should remain an input alias");
+        assert_eq!(legacy.e_rotated_dmi, 0.75);
     }
 }
 

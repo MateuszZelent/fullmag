@@ -175,7 +175,7 @@ pub struct GlobalQuantityRow {
     pub e_drive: f64,
     pub e_ani: f64,
     pub e_dmi: f64,
-    #[serde(default, rename = "E_rotated_dmi")]
+    #[serde(default, alias = "E_rotated_dmi")]
     pub e_rotated_dmi: f64,
     pub e_el: f64,
     pub e_kin_el: f64,

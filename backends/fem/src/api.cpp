@@ -4506,6 +4506,23 @@ fullmag_fem_backend *fullmag_fem_backend_create_v3(
         fullmag_fem_set_global_error("fullmag_fem_backend_create_v3 plan ABI version/size mismatch");
         return nullptr;
     }
+    if (plan->has_rotated_interfacial_dmi != 0 &&
+        plan->has_rotated_interfacial_dmi != 1) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_create_v3 rotated-interfacial DMI flag must be 0 or 1");
+        return nullptr;
+    }
+    if (!std::isfinite(plan->rotated_interfacial_dmi_constant)) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_create_v3 rotated-interfacial DMI constant must be finite");
+        return nullptr;
+    }
+    if (plan->has_rotated_interfacial_dmi != 0 &&
+        (plan->base.has_interfacial_dmi != 0 || plan->base.has_bulk_dmi != 0)) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_create_v3 rotated-interfacial DMI cannot be combined with interfacial or bulk DMI");
+        return nullptr;
+    }
     // Rotated interfacial DMI contributes a natural surface term.  The
     // public ABI must enforce the same fail-closed boundary contract as the
     // planner before importing the term or starting any runtime resources:

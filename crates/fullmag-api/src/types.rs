@@ -578,7 +578,7 @@ pub(crate) struct StepUpdateView {
     pub e_ani: f64,
     #[serde(default)]
     pub e_dmi: f64,
-    #[serde(default, rename = "E_rotated_dmi")]
+    #[serde(default, alias = "E_rotated_dmi")]
     pub e_rotated_dmi: f64,
     pub e_total: f64,
     pub max_dm_dt: f64,

@@ -6045,6 +6045,7 @@ fn capture_pause_checkpoint(
             zeeman: step.map(|value| value.e_ext).unwrap_or(0.0),
             anisotropy: step.map(|value| value.e_ani).unwrap_or(0.0),
             dmi: step.map(|value| value.e_dmi).unwrap_or(0.0),
+            rotated_dmi: step.map(|value| value.e_rotated_dmi).unwrap_or(0.0),
             total: step.map(|value| value.e_total).unwrap_or(0.0),
         },
         magnetization: magnetization.to_vec(),

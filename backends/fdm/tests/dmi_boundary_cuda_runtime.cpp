@@ -336,6 +336,22 @@ void verify_single_grid(
     check(fullmag_fdm_backend_last_error(backend) == nullptr,
           "single-grid DMI backend create failed");
     std::vector<double> actual(count * 3);
+    if (rotated) {
+        const auto expected_rotated = dmi_oracle(
+            nx, ny, nz, spacing, spacing, spacing, ms,
+            0.0, d, 0.0,
+            periodic, periodic, periodic, active, magnetization);
+        std::vector<double> rotated_actual(count * 3);
+        check(fullmag_fdm_backend_copy_field_f64(
+                  backend, FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI,
+                  rotated_actual.data(), rotated_actual.size()) == FULLMAG_FDM_OK,
+              "single-grid rotated DMI field copy failed");
+        compare_field(
+            rotated_actual,
+            expected_rotated,
+            precision == FULLMAG_FDM_PRECISION_DOUBLE ? 2e-12 : 3e-5,
+            "single-grid H_ROTATED_DMI dedicated-kernel oracle");
+    }
     check(fullmag_fdm_backend_copy_field_f64(
               backend, FULLMAG_FDM_OBSERVABLE_H_EFF, actual.data(), actual.size()) ==
               FULLMAG_FDM_OK,

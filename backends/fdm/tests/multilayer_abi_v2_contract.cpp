@@ -1100,6 +1100,28 @@ void native_multilayer_v2_rhs_includes_dmi() {
             dmi_source.substr(rotated_pos, bulk_pos - rotated_pos).find(
                 "missing,\n            rotated_h0,") != std::string::npos,
         "multilayer DMI must keep rotated field accumulation separate from H_DMI");
+    const std::string single_grid_rotated_launch = slice_between(
+        dmi_source,
+        "bool launch_rotated_interfacial_dmi_field_impl",
+        "} // namespace",
+        "single-grid rotated DMI launch");
+    check(
+        dmi_source.find("__global__ void rotated_interfacial_dmi_field_kernel") !=
+                std::string::npos &&
+            single_grid_rotated_launch.find(
+                "rotated_interfacial_dmi_field_kernel<Scalar><<<") != std::string::npos &&
+            single_grid_rotated_launch.find("multilayer_dmi_field_kernel<Scalar><<<") ==
+                std::string::npos &&
+            count_occurrences(
+                single_grid_rotated_launch,
+                "static_cast<Scalar *>(ctx.h_rotated_dmi.x)") == 1 &&
+            count_occurrences(
+                single_grid_rotated_launch,
+                "static_cast<Scalar *>(ctx.h_rotated_dmi.y)") == 1 &&
+            count_occurrences(
+                single_grid_rotated_launch,
+                "static_cast<Scalar *>(ctx.h_rotated_dmi.z)") == 1,
+        "single-grid rotated DMI must use a dedicated kernel with non-aliased outputs");
     check(
         effective_field_source.find("h_rotated_dmi_x") != std::string::npos &&
             effective_field_source.find("h_rotated_dmi_y") != std::string::npos &&

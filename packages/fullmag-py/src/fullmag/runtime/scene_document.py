@@ -992,6 +992,10 @@ def _normalize_interaction_entry(
     if not isinstance(raw, dict):
         return None
     kind = str(raw.get("kind") or "").strip()
+    if kind == "rotated_interfacial_dmi":
+        raise ValueError(
+            "rotated_interfacial_dmi is study-scoped and cannot appear in object physics_stack"
+        )
     if kind not in _INTERACTION_ORDER:
         return None
     if kind in {"exchange", "demag"}:
