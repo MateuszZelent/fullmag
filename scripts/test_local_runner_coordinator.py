@@ -123,6 +123,10 @@ class CoordinatorTests(unittest.TestCase):
         with self.assertRaises(coordinator.CoordinatorError):
             self.execute()
         self.assertEqual('succeeded', self.queue.get(self.job['job_id'])['state'])
+        self.logs_error = False
+        result = coordinator.reconcile(self.layout, self.job['job_id'], owner='alice', call=self.docker)
+        self.assertEqual('succeeded', result['state'])
+        self.assertEqual('diagnostic only\n', (self.storage / 'runs' / 'wt' / self.job['job_id'] / 'worker.log').read_text())
 
     def test_precreate_lock_failure_releases_slot(self):
         with patch.object(coordinator, 'build_lock', side_effect=coordinator.StorageError('busy')):
@@ -169,6 +173,33 @@ class CoordinatorTests(unittest.TestCase):
         self.name_exists = False
         result = coordinator.acknowledge_uncreated(self.layout, self.job['job_id'], owner='alice',
             reason='Operator observed CLI rejection before daemon contact', call=self.docker)
+        self.assertEqual('blocked', result['state'])
+
+    def test_missing_journal_can_be_explicitly_recovered(self):
+        self.queue.claim('crashed')
+        self.name_exists = True
+        with self.assertRaises(coordinator.CoordinatorError):
+            coordinator.acknowledge_uncreated(self.layout, self.job['job_id'], owner='alice',
+                reason='Operator confirmed submitting process ended before create', call=self.docker)
+        self.name_exists = False
+        result = coordinator.acknowledge_uncreated(self.layout, self.job['job_id'], owner='alice',
+            reason='Operator confirmed submitting process ended before create', call=self.docker)
+        self.assertEqual('blocked', result['state'])
+        self.assertNotIn('lease_token', result)
+
+    def test_prepared_recovery_remains_retryable_after_database_failure(self):
+        job = self.queue.claim('crashed')
+        path = self.storage / 'runs' / 'wt' / self.job['job_id'] / 'coordinator.json'
+        path.parent.mkdir()
+        path.write_text(json.dumps(dict(job_id=job['job_id'], owner='alice',
+            phase='prepared', container_id=None, lease_token=job['lease_token'])))
+        with patch.object(JobQueue, 'finish', side_effect=OSError('database unavailable')):
+            with self.assertRaises(OSError):
+                coordinator.acknowledge_uncreated(self.layout, job['job_id'], owner='alice',
+                    reason='Operator confirmed submitting process ended before create', call=self.docker)
+        self.assertEqual('prepared', json.loads(path.read_text())['phase'])
+        result = coordinator.acknowledge_uncreated(self.layout, job['job_id'], owner='alice',
+            reason='Operator confirmed submitting process ended before create', call=self.docker)
         self.assertEqual('blocked', result['state'])
 
 

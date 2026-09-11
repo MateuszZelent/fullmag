@@ -18,9 +18,10 @@ storage/receipt i managed FEM. Nie zastępujemy pełnego celu samym demonstrator
   run-once, reconcile i jawne recovery komendy odrzuconej przed create.
 - Worker bez sieci/GPU, UID 65532, readonly source/build/root, 2 CPU/1 GiB.
   Zaufana konfiguracja przypina image ID i lokalny endpoint Docker Desktop.
-- `just runner-test`: 65 PASS. Dodatkowy test dwóch rzeczywistych worktree
-  w fixture: 1 PASS. Istniejący test_fullmag_storage.py: 26 testów, OK, 2 skipped.
-  To 66 testów komponentów runnera; nie jest to kwalifikacja solvera.
+- `just runner-test`: 68 PASS w jednym przebiegu, w tym dwa worktree,
+  recovery bez journala i ponowienie po błędzie zapisu stanu/logów.
+  Istniejący test_fullmag_storage.py: 26 testów, OK, 2 skipped.
+  To testy komponentów runnera; nie jest to kwalifikacja solvera.
 - Commity etapów:
   - 2ff0e60e032ccffde334fae976c899f6a926e354 — kolejka i jej początkowe testy;
   - a9a830a7a646488da7795c2076bccbfef6d563bf — działający Python oraz przypięty

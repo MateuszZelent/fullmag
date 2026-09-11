@@ -88,8 +88,8 @@ def configured_image(layout, owner):
 def acknowledge_uncreated(layout, job_id, *, owner, reason, call=docker):
     """Explicit operator recovery, never automatic age-based reclamation.
 
-    Caller must have confirmed the create request was rejected before reaching
-    the daemon and its submitting process is finished. An empty Docker lookup
+    Caller must have confirmed create was never issued or was rejected before
+    reaching the daemon, and its submitting process is finished. An empty Docker lookup
     alone is insufficient; the reason is retained as the operator attestation.
     """
     if not isinstance(reason, str) or not 20 <= len(reason.strip()) <= 1000:
@@ -98,19 +98,26 @@ def acknowledge_uncreated(layout, job_id, *, owner, reason, call=docker):
     queue = JobQueue(validate_path(storage / 'index' / 'runner-jobs.sqlite', storage))
     lock = validate_path(storage / 'locks' / 'local-runner-coordinator.lock', storage)
     with file_lock(lock, 'local runner coordinator'):
-        job = queue.get(job_id)
-        if job['owner'] != owner or job['state'] not in ('running', 'cancel_requested'):
-            raise CoordinatorError('Job is not an active job of this operator')
+        job = queue.recovery_lease(job_id, owner)
         journal_path = validate_path(storage / 'runs' / job['worktree_id'] / job_id / 'coordinator.json', storage)
-        journal = json.loads(journal_path.read_text(encoding='utf-8'))
+        journal = json.loads(journal_path.read_text(encoding='utf-8')) if journal_path.exists() else {
+            'schema': 'fullmag.local-runner.coordinator.v1', 'job_id': job_id,
+            'owner': owner, 'source_digest': job['source_digest'],
+            'lease_token': job['lease_token'], 'phase': 'prepared', 'container_id': None}
         if (journal.get('job_id') != job_id or journal.get('owner') != owner
-                or journal.get('phase') != 'create-requested' or journal.get('container_id') is not None):
+                or journal.get('phase') not in ('prepared', 'create-requested', 'operator-confirmed-uncreated')
+                or journal.get('container_id') is not None
+                or journal.get('lease_token') != job['lease_token']):
             raise CoordinatorError('Recovery is restricted to an unacknowledged create')
         if call(['ps', '-a', '-q', '--filter', f'name=^/fullmag-worker-{job_id}$']).strip():
             raise CoordinatorError('A matching container exists; do not release its lease')
-        journal.update(phase='operator-confirmed-uncreated', state='blocked', recovery_reason=reason)
+        # Retain the attestation before releasing the lease, in a retryable phase.
+        journal['recovery_reason'] = reason
+        journal_path.parent.mkdir(parents=True, exist_ok=True)
         atomic_json(journal_path, journal)
         queue.finish(job_id, journal['lease_token'], 'blocked', None)
+        journal.update(phase='operator-confirmed-uncreated', state='blocked')
+        atomic_json(journal_path, journal)
         return queue.get(job_id)
 
 
@@ -156,16 +163,19 @@ def reconcile(layout, job_id, *, owner, call=docker):
         job = queue.get(job_id)
         if job['owner'] != owner:
             raise CoordinatorError('Job owner mismatch')
-        if job['state'] not in ('running', 'cancel_requested'):
-            return job
+        active = job['state'] in ('running', 'cancel_requested')
         run_root = validate_path(storage / 'runs' / job['worktree_id'] / job_id, storage)
         journal_path = validate_path(run_root / 'coordinator.json', storage)
+        if not active and not journal_path.exists():
+            return job
         journal = json.loads(journal_path.read_text(encoding='utf-8'))
         if (journal.get('schema') != 'fullmag.local-runner.coordinator.v1'
                 or journal.get('job_id') != job_id or journal.get('owner') != owner
                 or journal.get('source_digest') != job['source_digest']):
             raise CoordinatorError('Coordinator journal identity mismatch')
         container_id = journal.get('container_id')
+        if not active and container_id is None:
+            return job
         if not isinstance(container_id, str) or not re.fullmatch('[a-f0-9]{64}', container_id):
             raise CoordinatorError('No persisted full container ID; manual reconciliation required')
         inspected = inspect_owned(call, container_id, job_id)
@@ -181,6 +191,11 @@ def reconcile(layout, job_id, *, owner, call=docker):
         code = state.get('ExitCode')
         if not isinstance(code, int) or isinstance(code, bool):
             raise CoordinatorError('Missing terminal exit code; lease retained')
+        logs_path = validate_path(run_root / 'worker.log', storage)
+        if not active:
+            # Queue completion is authoritative; retry only exact-container logs.
+            logs_path.write_text(call(['logs', '--tail', '1000', container_id]), encoding='utf-8')
+            return job
         terminal = 'cancelled' if job['state'] == 'cancel_requested' else ('succeeded' if code == 0 else 'failed')
         artifacts = validate_path(run_root / 'artifacts', storage)
         if terminal == 'succeeded':
@@ -189,7 +204,6 @@ def reconcile(layout, job_id, *, owner, call=docker):
                 verify_source(validate_path(storage / job['payload']['capsule_relative'], storage), job['source_digest'])
             except (OSError, ValueError, KeyError, CoordinatorError):
                 terminal = 'failed'
-        logs_path = validate_path(run_root / 'reconciled-worker.log', storage)
         queue.finish(job_id, journal['lease_token'], terminal, code)
         journal.update(phase='terminal', state=terminal, exit_code=code)
         atomic_json(journal_path, journal)

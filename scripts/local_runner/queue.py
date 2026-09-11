@@ -118,6 +118,14 @@ class JobQueue:
         with self.connection() as db:
             return self.record(db.execute('SELECT * FROM jobs WHERE job_id=?', (job_id,)).fetchone())
 
+    def recovery_lease(self, job_id, owner):
+        """Private coordinator access; never return this record through status."""
+        with self.connection() as db:
+            job = self.record(db.execute('SELECT * FROM jobs WHERE job_id=?', (job_id,)).fetchone(), True)
+        if job['owner'] != owner or job['state'] not in ('running', 'cancel_requested'):
+            raise QueueError('Job is not an active job of this operator')
+        return job
+
     def list(self, *, owner=None, limit=100):
         if not isinstance(limit, int) or not 1 <= limit <= 1000:
             raise QueueError('Limit must be 1..1000')
