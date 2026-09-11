@@ -1162,6 +1162,32 @@ void fem_bem_neumann_rhs_is_owned_by_rhs_module() {
     }
 }
 
+void fem_bem_gpu_solver_helpers_are_guarded_from_cpu_builds() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string gpu_fem_bem = read_text_file(
+        root / "gpu" / "cuda" / "demag_fem_bem" / "fem_bem.cpp");
+    const std::string gpu_mfem_mpi_guard =
+        "#if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)";
+    const size_t guard_begin = gpu_fem_bem.find(gpu_mfem_mpi_guard);
+    const size_t initialize_helper = gpu_fem_bem.find(
+        "bool initialize_linear_system(", guard_begin);
+    const size_t solve_helper = gpu_fem_bem.find(
+        "bool solve_linear_system(", initialize_helper);
+    const size_t guard_end = gpu_fem_bem.find("#endif", solve_helper);
+    check(
+        guard_begin != std::string::npos &&
+            initialize_helper != std::string::npos &&
+            solve_helper != std::string::npos &&
+            guard_end != std::string::npos &&
+            guard_begin < initialize_helper &&
+            initialize_helper < solve_helper &&
+            solve_helper < guard_end,
+        "GPU FEM/BEM Hypre helpers must be enclosed by the CUDA/MFEM/MPI guard");
+    check(
+        gpu_fem_bem.find("cudaStreamSynchronize(", solve_helper) < guard_end,
+        "GPU FEM/BEM stream synchronization must not enter CPU compilation");
+}
+
 } // namespace
 
 int main() {
@@ -1201,5 +1227,6 @@ int main() {
     fem_bem_hierarchical_apply_reuses_workspace_scratch();
     fem_bem_telemetry_is_owned_by_telemetry_module();
     fem_bem_neumann_rhs_is_owned_by_rhs_module();
+    fem_bem_gpu_solver_helpers_are_guarded_from_cpu_builds();
     return 0;
 }
