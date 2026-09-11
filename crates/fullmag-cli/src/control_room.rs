@@ -65,12 +65,6 @@ fn web_public_host() -> String {
 }
 
 fn web_public_url(port: u16) -> String {
-    // Docker may publish a different host port than the frontend listens on.
-    let port = std::env::var("FULLMAG_WEB_PUBLIC_PORT")
-        .ok()
-        .and_then(|value| value.parse::<u16>().ok())
-        .filter(|port| *port != 0)
-        .unwrap_or(port);
     let host = web_public_host();
     let formatted_host = if host.contains(':') && !host.starts_with('[') {
         format!("[{host}]")
@@ -78,6 +72,24 @@ fn web_public_url(port: u16) -> String {
         host
     };
     format!("http://{formatted_host}:{port}")
+}
+
+fn frontend_public_url(listen_port: u16) -> std::io::Result<String> {
+    let port = match std::env::var("FULLMAG_WEB_PUBLIC_PORT") {
+        Ok(value) => value
+            .parse::<u16>()
+            .ok()
+            .filter(|port| *port != 0 && value.bytes().all(|byte| byte.is_ascii_digit()))
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("FULLMAG_WEB_PUBLIC_PORT must contain digits in the range 1-65535, got '{value}'"),
+                )
+            })?,
+        Err(std::env::VarError::NotPresent) => listen_port,
+        Err(error) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, error)),
+    };
+    Ok(web_public_url(port))
 }
 
 pub(crate) fn internal_live_api_url(path: &str) -> String {
@@ -814,6 +826,7 @@ pub(crate) fn bootstrap_control_plane(
     let state_root = runtime_state_root(&root);
     let log_dir = state_root.join("logs");
     let url_file = state_root.join("control-room-url.txt");
+    let listen_port_file = state_root.join("control-room-listen-port.txt");
     let log_suffix = session_id
         .chars()
         .filter(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
@@ -900,10 +913,11 @@ pub(crate) fn bootstrap_control_plane(
         live_workspace.publish_snapshot();
     }
 
-    let web_port = resolve_web_port(requested_port, &url_file)?;
+    let web_port = resolve_web_port(requested_port, &listen_port_file)?;
     let desired_signature = control_room_launch_signature(dev_mode, &api_base_url());
 
     if external_control_room_available {
+        let public_url = frontend_public_url(web_port)?;
         let web_cache_dir = web_dir.join(".next");
         let current_mode = fs::read_to_string(&mode_file).ok();
 
@@ -994,7 +1008,6 @@ pub(crate) fn bootstrap_control_plane(
             }
             frontend_child = Some(child);
 
-            let _ = fs::write(&url_file, web_public_url(web_port));
             let _ = fs::write(&mode_file, &desired_signature);
 
             let bootstrap_deadline = Instant::now() + Duration::from_secs(90);
@@ -1017,9 +1030,12 @@ pub(crate) fn bootstrap_control_plane(
             );
         }
 
+        let _ = fs::write(&url_file, &public_url);
+        let _ = fs::write(&listen_port_file, web_port.to_string());
+
         return Ok(ControlPlaneReady {
             api_port: api_port(),
-            web_url: format!("{}/", web_public_url(web_port)),
+            web_url: format!("{public_url}/"),
             web_port,
             api_child: api_child.map(|child| child.release().0),
             frontend_child: frontend_child.map(|child| child.release().0),
@@ -1201,7 +1217,7 @@ pub(crate) fn spawn_control_room(
     Ok((ready.web_port, ready.api_child, ready.frontend_child))
 }
 
-fn resolve_web_port(requested: Option<u16>, url_file: &Path) -> Result<u16> {
+fn resolve_web_port(requested: Option<u16>, listen_port_file: &Path) -> Result<u16> {
     const CANDIDATE_PORTS: &[u16] = &[3000, 3001, 3002, 3003, 3004, 3005, 3010];
 
     if let Some(port) = requested {
@@ -1213,16 +1229,10 @@ fn resolve_web_port(requested: Option<u16>, url_file: &Path) -> Result<u16> {
         );
     }
 
-    if let Ok(stored) = fs::read_to_string(url_file) {
-        let stored = stored.trim();
-        if let Some(port_str) = stored.rsplit(':').next() {
-            if let Ok(port) = port_str.parse::<u16>() {
-                if port_is_listening(port) {
-                    return Ok(port);
-                }
-                if port_is_bindable(port) {
-                    return Ok(port);
-                }
+    if let Ok(stored) = fs::read_to_string(listen_port_file) {
+        if let Ok(port) = stored.trim().parse::<u16>() {
+            if port != 0 && (port_is_listening(port) || port_is_bindable(port)) {
+                return Ok(port);
             }
         }
     }
