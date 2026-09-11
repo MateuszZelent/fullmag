@@ -3593,7 +3593,7 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
             .as_object()
             .expect("operation capability map")
             .len(),
-        33
+        34
     );
     assert!(active_lane["operations"]["study.frequency_response"]["reason"].is_string());
     assert!(active_lane["operations"]["study.frequency_response"]["requires"].is_array());
