@@ -141,9 +141,6 @@ __global__ void multilayer_dmi_field_kernel(
 
 
     if (has_rotated_interfacial_dmi) {
-        const double h0_before_rotated = h0;
-        const double h1_before_rotated = h1;
-        const double h2_before_rotated = h2;
         const double dmz_dx =
             (static_cast<double>(mz[xp]) - static_cast<double>(mz[xm])) * inv_2dx;
         const double dmy_dy =
@@ -152,9 +149,9 @@ __global__ void multilayer_dmi_field_kernel(
             (static_cast<double>(mx[yp]) - static_cast<double>(mx[ym])) * inv_2dy;
         const double dmx_dx =
             (static_cast<double>(mx[xp]) - static_cast<double>(mx[xm])) * inv_2dx;
-        h0 += dmi_pf * dmi_d_rotated_interfacial * (dmz_dx - dmy_dy);
-        h1 += dmi_pf * dmi_d_rotated_interfacial * dmx_dy;
-        h2 -= dmi_pf * dmi_d_rotated_interfacial * dmx_dx;
+        rotated_h0 += dmi_pf * dmi_d_rotated_interfacial * (dmz_dx - dmy_dy);
+        rotated_h1 += dmi_pf * dmi_d_rotated_interfacial * dmx_dy;
+        rotated_h2 -= dmi_pf * dmi_d_rotated_interfacial * dmx_dx;
         add_rotated_interfacial_dmi_boundary_correction(
             static_cast<double>(mx[idx]),
             static_cast<double>(my[idx]),
@@ -164,12 +161,9 @@ __global__ void multilayer_dmi_field_kernel(
             inv_2dx,
             inv_2dy,
             missing,
-            h0,
-            h1,
-            h2);
-        rotated_h0 = h0 - h0_before_rotated;
-        rotated_h1 = h1 - h1_before_rotated;
-        rotated_h2 = h2 - h2_before_rotated;
+            rotated_h0,
+            rotated_h1,
+            rotated_h2);
     }
 
     if (has_bulk_dmi) {

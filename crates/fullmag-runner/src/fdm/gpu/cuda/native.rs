@@ -1209,12 +1209,6 @@ impl NativeFdmBackend {
             external_field_am: plan.external_field.unwrap_or([0.0, 0.0, 0.0]),
             has_interfacial_dmi: if plan.interfacial_dmi.is_some() { 1 } else { 0 },
             dmi_d_interfacial: plan.interfacial_dmi.unwrap_or(0.0),
-            has_rotated_interfacial_dmi: if plan.rotated_interfacial_dmi.is_some() {
-                1
-            } else {
-                0
-            },
-            dmi_d_rotated_interfacial: plan.rotated_interfacial_dmi.unwrap_or(0.0),
             has_bulk_dmi: if plan.bulk_dmi.is_some() { 1 } else { 0 },
             dmi_d_bulk: plan.bulk_dmi.unwrap_or(0.0),
             layers: layer_descs.as_ptr(),
@@ -1251,6 +1245,33 @@ impl NativeFdmBackend {
             {
                 unsafe { ffi::fullmag_fdm_backend_destroy(handle) };
                 return Err(RunError { message: msg });
+            }
+        }
+
+        if let Some(dmi_d) = plan.rotated_interfacial_dmi {
+            let descriptor = ffi::fullmag_fdm_rotated_interfacial_dmi_desc_v1 {
+                abi_version: ffi::FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1,
+                struct_size: std::mem::size_of::<ffi::fullmag_fdm_rotated_interfacial_dmi_desc_v1>()
+                    as u32,
+                has_rotated_interfacial_dmi: 1,
+                reserved0: 0,
+                dmi_d_rotated_interfacial: dmi_d,
+            };
+            let status = unsafe {
+                ffi::fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(handle, &descriptor)
+            };
+            if status != ffi::FULLMAG_FDM_OK {
+                let message = unsafe {
+                    let err = ffi::fullmag_fdm_backend_last_error(handle);
+                    if err.is_null() {
+                        "failed to configure rotated interfacial DMI on CUDA FDM multilayer backend"
+                            .to_string()
+                    } else {
+                        CStr::from_ptr(err).to_string_lossy().to_string()
+                    }
+                };
+                unsafe { ffi::fullmag_fdm_backend_destroy(handle) };
+                return Err(RunError { message });
             }
         }
 

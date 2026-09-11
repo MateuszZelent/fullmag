@@ -305,9 +305,10 @@ void verify_single_grid(
 
     fullmag_fdm_plan_desc plan{};
     plan.grid = {nx, ny, nz, spacing, spacing, spacing};
-    plan.material = {ms, 1.3e-11, 0.05, 2.211e5};
+    plan.material = {ms, rotated ? 0.0 : 1.3e-11, 0.05, 2.211e5};
     plan.precision = precision;
     plan.integrator = FULLMAG_FDM_INTEGRATOR_HEUN;
+    plan.enable_exchange = rotated ? 1 : 0;
     plan.initial_magnetization_xyz = m_flat.data();
     plan.initial_magnetization_len = m_flat.size();
     plan.active_mask = active.data();
@@ -400,7 +401,8 @@ void verify_multilayer(
     fullmag_fdm_precision precision,
     fullmag_fdm_integrator integrator,
     bool rotated,
-    const char *label)
+    const char *label,
+    bool mixed = false)
 {
     constexpr uint32_t nx = 3;
     constexpr uint32_t ny = 1;
@@ -411,9 +413,17 @@ void verify_multilayer(
     const std::vector<uint8_t> active = {1, 1, 0};
     const std::vector<Vec3> magnetization = {
         Vec3{0.6, 0.0, 0.8}, Vec3{0.0, 0.8, 0.6}, Vec3{0.0, 0.0, 0.0}};
-    const auto expected = dmi_oracle(
+    const auto expected_h_dmi = dmi_oracle(
         nx, ny, nz, spacing, spacing, spacing, ms,
-        rotated ? 0.0 : d, rotated ? d : 0.0, 0.0,
+        (!rotated || mixed) ? d : 0.0, 0.0, 0.0,
+        false, false, false, active, magnetization);
+    const auto expected_h_rotated_dmi = dmi_oracle(
+        nx, ny, nz, spacing, spacing, spacing, ms,
+        0.0, rotated ? d : 0.0, 0.0,
+        false, false, false, active, magnetization);
+    const auto expected_h_eff = dmi_oracle(
+        nx, ny, nz, spacing, spacing, spacing, ms,
+        (!rotated || mixed) ? d : 0.0, rotated ? d : 0.0, 0.0,
         false, false, false, active, magnetization);
     const auto m_flat = flatten(magnetization);
 
@@ -421,7 +431,9 @@ void verify_multilayer(
     layer.native_grid = {nx, ny, nz, spacing, spacing, spacing};
     layer.convolution_grid = layer.native_grid;
     layer.transfer_kind = FULLMAG_FDM_TRANSFER_IDENTITY;
-    layer.material = {ms, 1.3e-11, 0.05, 2.211e5};
+    // Keep the DMI oracle isolated from the exchange contribution; the ABI
+    // contract still exercises the required enabled Exchange flag for rDMI.
+    layer.material = {ms, rotated ? 0.0 : 1.3e-11, 0.05, 2.211e5};
     layer.initial_magnetization_xyz = m_flat.data();
     layer.initial_magnetization_len = m_flat.size();
     layer.active_mask = active.data();
@@ -433,10 +445,9 @@ void verify_multilayer(
     plan.kind = FULLMAG_FDM_PLAN_MULTILAYER_CONV;
     plan.precision = precision;
     plan.integrator = integrator;
-    plan.has_interfacial_dmi = rotated ? 0 : 1;
-    plan.dmi_D_interfacial = rotated ? 0.0 : d;
-    plan.has_rotated_interfacial_dmi = rotated ? 1 : 0;
-    plan.dmi_D_rotated_interfacial = rotated ? d : 0.0;
+    plan.has_interfacial_dmi = (!rotated || mixed) ? 1 : 0;
+    plan.dmi_D_interfacial = (!rotated || mixed) ? d : 0.0;
+    plan.enable_exchange = rotated ? 1 : 0;
     plan.layers = layers.data();
     plan.layer_count = layers.size();
     plan.stats_mode = FULLMAG_FDM_STATS_NONE;
@@ -447,6 +458,18 @@ void verify_multilayer(
     const char *create_status = fullmag_fdm_backend_last_error(backend);
     check(create_status != nullptr && std::string(create_status).find("uploaded 2 layers") != std::string::npos,
           "multilayer DMI backend create failed");
+    if (rotated) {
+        const fullmag_fdm_rotated_interfacial_dmi_desc_v1 descriptor = {
+            FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1,
+            sizeof(fullmag_fdm_rotated_interfacial_dmi_desc_v1),
+            1,
+            0,
+            d,
+        };
+        check(fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
+                  backend, &descriptor) == FULLMAG_FDM_OK,
+              "multilayer rotated DMI setter rejected a valid descriptor");
+    }
     std::vector<double> actual(m_flat.size());
     check(fullmag_fdm_backend_copy_layer_field_f64(
               backend, 0, FULLMAG_FDM_OBSERVABLE_H_DMI, actual.data(), actual.size()) ==
@@ -454,9 +477,29 @@ void verify_multilayer(
           "multilayer DMI H_DMI copy failed");
     compare_field(
         actual,
-        expected,
+        expected_h_dmi,
         precision == FULLMAG_FDM_PRECISION_DOUBLE ? 2e-12 : 3e-5,
         label);
+    std::vector<double> rotated_actual(actual.size());
+    check(fullmag_fdm_backend_copy_layer_field_f64(
+              backend, 0, FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI,
+              rotated_actual.data(), rotated_actual.size()) == FULLMAG_FDM_OK,
+          "multilayer rotated DMI field copy failed");
+    compare_field(
+        rotated_actual,
+        expected_h_rotated_dmi,
+        precision == FULLMAG_FDM_PRECISION_DOUBLE ? 2e-12 : 3e-5,
+        "multilayer H_ROTATED_DMI field must remain separate from H_DMI");
+    std::vector<double> effective(actual.size());
+    check(fullmag_fdm_backend_copy_layer_field_f64(
+              backend, 0, FULLMAG_FDM_OBSERVABLE_H_EFF,
+              effective.data(), effective.size()) == FULLMAG_FDM_OK,
+          "multilayer DMI H_EFF copy failed");
+    compare_field(
+        effective,
+        expected_h_eff,
+        precision == FULLMAG_FDM_PRECISION_DOUBLE ? 2e-12 : 3e-5,
+        "multilayer DMI H_EFF must sum conventional and rotated DMI fields");
     fullmag_fdm_step_stats stats{};
     check(fullmag_fdm_backend_step(backend, 1.0e-15, &stats) == FULLMAG_FDM_OK,
           "multilayer DMI step failed");
@@ -491,6 +534,18 @@ void verify_multilayer(
                   std::string(replay_status).find("uploaded 2 layers") !=
                       std::string::npos,
               "multilayer transaction backend create failed");
+        if (rotated) {
+            const fullmag_fdm_rotated_interfacial_dmi_desc_v1 descriptor = {
+                FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1,
+                sizeof(fullmag_fdm_rotated_interfacial_dmi_desc_v1),
+                1,
+                0,
+                d,
+            };
+            check(fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
+                      replayed, &descriptor) == FULLMAG_FDM_OK,
+                  "multilayer transaction rotated DMI setter rejected a valid descriptor");
+        }
         std::vector<double> before_failure(m_flat.size());
         check(fullmag_fdm_backend_copy_layer_field_f64(
                   replayed, 0, FULLMAG_FDM_OBSERVABLE_M,
@@ -606,6 +661,12 @@ int main() {
             true,
             "multilayer rotated iDMI fp32 boundary oracle");
     }
+    verify_multilayer(
+        FULLMAG_FDM_PRECISION_DOUBLE,
+        FULLMAG_FDM_INTEGRATOR_HEUN,
+        true,
+        "multilayer mixed iDMI H_DMI/H_EFF separation oracle",
+        true);
     std::printf("FDM CUDA DMI boundary runtime qualification: PASS\n");
     return 0;
 }

@@ -78,13 +78,14 @@ def test_fdm_scenario_is_strict_fp64_periodic_x_with_relax_and_hold() -> None:
     assert len(_calls(module, "add_save_state")) == 2
 
 
-def test_fem_scenario_preserves_one_exact_prism_layer_and_periodic_x() -> None:
+def test_fem_scenario_preserves_one_exact_prism_layer_and_open_boundary() -> None:
     module = _module("scenario_fem.py")
     source = ast.unparse(module)
     assert "study.engine('fem')" in source
     assert "study.device(REQUESTED_DEVICE, precision='double')" in source
     assert "study.mode('strict')" in source
-    assert "study.pbc(x=True, demag='periodic_airbox_k0')" in source
+    assert "study.pbc(" not in source
+    assert "film.Aex = AEX" in source
     assert "topology='prismatic'" in source
     assert "layers=1" in source
     assert "exact_layers=True" in source

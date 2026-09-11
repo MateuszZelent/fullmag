@@ -22,6 +22,7 @@ pub const FULLMAG_FDM_CHECKPOINT_REALIZATION_CUDA_FDM: u32 = 1;
 pub const FULLMAG_FDM_FROZEN_SPINS_ABI_V1: u32 = 1;
 pub const FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1: u64 = 1_u64 << 0;
 pub const FULLMAG_FDM_PLAN_DESC_ABI_V2: u32 = 2;
+pub const FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1: u32 = 1;
 
 // ── Return codes ──
 
@@ -310,7 +311,15 @@ pub struct fullmag_fdm_multilayer_plan_desc_v2 {
     pub adaptive_headroom: f64,
     pub stats_mode: fullmag_fdm_stats_mode,
     pub stats_stride: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_rotated_interfacial_dmi_desc_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
     pub has_rotated_interfacial_dmi: i32,
+    pub reserved0: u32,
     pub dmi_d_rotated_interfacial: f64,
 }
 
@@ -1917,6 +1926,12 @@ extern "C" {
         out_receipt: *mut fullmag_fdm_plan_desc_v2,
     ) -> i32;
 
+    pub fn fullmag_fdm_plan_ingestion_v2_receipt_sized(
+        ingestion: *const fullmag_fdm_plan_ingestion_v2,
+        out_receipt: *mut fullmag_fdm_plan_desc_v2,
+        out_receipt_size: u32,
+    ) -> i32;
+
     pub fn fullmag_fdm_plan_ingestion_v2_destroy(ingestion: *mut fullmag_fdm_plan_ingestion_v2);
 
     pub fn fullmag_fdm_backend_create_time_policy_v2_checked(
@@ -1927,6 +1942,11 @@ extern "C" {
     pub fn fullmag_fdm_backend_create_v2(
         plan: *const fullmag_fdm_multilayer_plan_desc_v2,
     ) -> *mut fullmag_fdm_backend;
+
+    pub fn fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
+        handle: *mut fullmag_fdm_backend,
+        descriptor: *const fullmag_fdm_rotated_interfacial_dmi_desc_v1,
+    ) -> i32;
 
     pub fn fullmag_fdm_backend_set_stats_policy_v1(
         handle: *mut fullmag_fdm_backend,

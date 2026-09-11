@@ -4506,6 +4506,19 @@ fullmag_fem_backend *fullmag_fem_backend_create_v3(
         fullmag_fem_set_global_error("fullmag_fem_backend_create_v3 plan ABI version/size mismatch");
         return nullptr;
     }
+    // Rotated interfacial DMI contributes a natural surface term.  The
+    // public ABI must enforce the same fail-closed boundary contract as the
+    // planner before importing the term or starting any runtime resources:
+    // an open magnetic boundary requires the coupled Exchange operator.
+    const bool open_magnetic_boundary =
+        plan->base.mesh.periodic_node_pairs_len == 0u;
+    if (plan->has_rotated_interfacial_dmi != 0 &&
+        open_magnetic_boundary && plan->base.enable_exchange == 0) {
+        fullmag_fem_set_global_error(
+            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange "
+            "for the coupled natural boundary condition");
+        return nullptr;
+    }
 
     auto *handle = new (std::nothrow) fullmag_fem_backend();
     if (handle == nullptr) {

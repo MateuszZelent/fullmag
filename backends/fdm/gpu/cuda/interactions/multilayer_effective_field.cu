@@ -33,6 +33,9 @@ __global__ void multilayer_effective_field_kernel(
     const Scalar *__restrict__ h_dmi_x,
     const Scalar *__restrict__ h_dmi_y,
     const Scalar *__restrict__ h_dmi_z,
+    const Scalar *__restrict__ h_rotated_dmi_x,
+    const Scalar *__restrict__ h_rotated_dmi_y,
+    const Scalar *__restrict__ h_rotated_dmi_z,
     const Scalar *__restrict__ h_ani_x,
     const Scalar *__restrict__ h_ani_y,
     const Scalar *__restrict__ h_ani_z,
@@ -59,14 +62,17 @@ __global__ void multilayer_effective_field_kernel(
     double hx = static_cast<double>(h_ex_x[idx]) +
                 static_cast<double>(h_demag_x[idx]) +
                 static_cast<double>(h_dmi_x[idx]) +
+                static_cast<double>(h_rotated_dmi_x[idx]) +
                 static_cast<double>(h_ani_x[idx]);
     double hy = static_cast<double>(h_ex_y[idx]) +
                 static_cast<double>(h_demag_y[idx]) +
                 static_cast<double>(h_dmi_y[idx]) +
+                static_cast<double>(h_rotated_dmi_y[idx]) +
                 static_cast<double>(h_ani_y[idx]);
     double hz = static_cast<double>(h_ex_z[idx]) +
                 static_cast<double>(h_demag_z[idx]) +
                 static_cast<double>(h_dmi_z[idx]) +
+                static_cast<double>(h_rotated_dmi_z[idx]) +
                 static_cast<double>(h_ani_z[idx]);
 
     if (has_external_field) {
@@ -120,6 +126,9 @@ bool launch_multilayer_effective_field_impl(Context &ctx, const char *operation)
             static_cast<const Scalar *>(layer.h_dmi.x),
             static_cast<const Scalar *>(layer.h_dmi.y),
             static_cast<const Scalar *>(layer.h_dmi.z),
+            static_cast<const Scalar *>(layer.h_rotated_dmi.x),
+            static_cast<const Scalar *>(layer.h_rotated_dmi.y),
+            static_cast<const Scalar *>(layer.h_rotated_dmi.z),
             static_cast<const Scalar *>(layer.h_ani.x),
             static_cast<const Scalar *>(layer.h_ani.y),
             static_cast<const Scalar *>(layer.h_ani.z),

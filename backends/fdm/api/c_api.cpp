@@ -1513,10 +1513,14 @@ int fullmag_fdm_backend_create_time_policy_v2_checked(
 
     ctx->has_rotated_interfacial_dmi = plan->has_rotated_interfacial_dmi != 0;
     ctx->D_rotated_interfacial = plan->dmi_D_rotated_interfacial;
-    if (ctx->has_rotated_interfacial_dmi && !context_refresh_observables(*ctx)) {
-        return FULLMAG_FDM_OK;
-    }
     if (ctx->has_rotated_interfacial_dmi) {
+        // The legacy constructor has already populated the observable cache
+        // from the base descriptor, which cannot carry rDMI. Invalidate that
+        // snapshot before recomputing with the v2 extension enabled.
+        context_invalidate_observables(*ctx);
+        if (!context_refresh_observables(*ctx)) {
+            return FULLMAG_FDM_OK;
+        }
         fullmag_fdm_commit_operator_residency(*ctx);
     }
 
@@ -1655,8 +1659,6 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     ctx->external_field[2] = plan->external_field_am[2];
     ctx->has_interfacial_dmi = plan->has_interfacial_dmi != 0;
     ctx->D_interfacial = plan->dmi_D_interfacial;
-    ctx->has_rotated_interfacial_dmi = plan->has_rotated_interfacial_dmi != 0;
-    ctx->D_rotated_interfacial = plan->dmi_D_rotated_interfacial;
     ctx->has_bulk_dmi = plan->has_bulk_dmi != 0;
     ctx->D_bulk = plan->dmi_D_bulk;
     if (!context_preflight_multilayer_workspace_v2(*ctx, *plan)) {
@@ -1682,6 +1684,58 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
 #else
     (void)plan;
     return nullptr;
+#endif
+}
+
+int fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_rotated_interfacial_dmi_desc_v1 *descriptor)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !descriptor) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    if (descriptor->abi_version != FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1 ||
+        descriptor->struct_size != sizeof(*descriptor) ||
+        descriptor->reserved0 != 0 ||
+        (descriptor->has_rotated_interfacial_dmi != 0 &&
+         descriptor->has_rotated_interfacial_dmi != 1) ||
+        !std::isfinite(descriptor->dmi_D_rotated_interfacial))
+    {
+        ctx->last_error = "rotated_interfacial_dmi_v1_abi_mismatch";
+        return FULLMAG_FDM_ERR_ABI;
+    }
+    if (!ctx->has_multilayer_plan_v2) {
+        ctx->last_error =
+            "rotated_interfacial_dmi_v1_requires_multilayer_v2_handle";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (ctx->accepted_step_pending || ctx->step_count != 0 ||
+        ctx->current_time != 0.0) {
+        ctx->last_error =
+            "rotated_interfacial_dmi_v1_must_be_set_before_first_step";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (descriptor->has_rotated_interfacial_dmi != 0 &&
+        !ctx->enable_exchange)
+    {
+        ctx->last_error =
+            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+
+    ctx->has_rotated_interfacial_dmi =
+        descriptor->has_rotated_interfacial_dmi != 0;
+    ctx->D_rotated_interfacial = descriptor->dmi_D_rotated_interfacial;
+    context_invalidate_observables(*ctx);
+    if (!refresh_multilayer_transaction_observables(*ctx)) {
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+    fullmag_fdm_commit_operator_residency(*ctx);
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle;
+    (void)descriptor;
+    return FULLMAG_FDM_ERR_CUDA;
 #endif
 }
 

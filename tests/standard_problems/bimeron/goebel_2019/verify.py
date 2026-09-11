@@ -220,6 +220,7 @@ def verify_bundle(
             plan["rotated_interfacial_dmi"] == 3e-3
             and plan.get("interfacial_dmi") is None
             and plan.get("bulk_dmi") is None
+            and plan.get("enable_demag") is True
             and material["saturation_magnetisation"] == 0.58e6
             and material["exchange_stiffness"] == 15e-12
             and material["damping"] == 0.3

@@ -7,7 +7,7 @@
   },
   "backend_matrix": [
     {"solver": "FDM", "device": "CPU", "status": "implemented", "reason": "Double-precision field, energy, boundary, and directional-derivative tests pass; the Göbel CPU runtime is not verified."},
-    {"solver": "FDM", "device": "GPU", "status": "validated", "reason": "The strict FP64 CUDA Göbel bimeron run passed 15/15 gates with a validated device receipt and no fallback."},
+    {"solver": "FDM", "device": "GPU", "status": "not-verified", "reason": "The stored strict FP64 CUDA Göbel report passed 15/15 gates before the verifier grew to 18 checks; a fresh run is required before current qualification."},
     {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "The MFEM weak residual and energy derivative are tested; the Göbel FEM CPU runtime is not verified."},
     {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "The CUDA element residual and managed build are tested; the Göbel FEM GPU runtime is not verified."}
   ],

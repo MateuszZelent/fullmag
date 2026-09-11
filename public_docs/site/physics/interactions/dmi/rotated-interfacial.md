@@ -156,7 +156,7 @@ study.stages.add_relax(
     max_physical_time_s=20e-12,
     tolT=1e-6,
 )
-study.stages.add_run(stage_id="hold", until=120e-12)
+study.stages.add_run(stage_id="hold", until=100e-12)
 ```
 
 (rotated-interfacial-dmi-problem-ir)=
@@ -236,29 +236,33 @@ $0.5\,\mathrm{nm}$ FDM cell through thickness, periodic $x$, $M_s=0.58\,
 \mathrm{MA\,m^{-1}}$, $A=15\,\mathrm{pJ\,m^{-1}}$, $D=3\,
 \mathrm{mJ\,m^{-2}}$, $K_x=0.8\,\mathrm{MJ\,m^{-3}}$, and $\alpha=0.3$.
 
-The strict FP64 CUDA run on an NVIDIA GeForce RTX 4080 SUPER passed 15/15
-checks after 20 ps relaxation and a 100 ps zero-current hold. Topological charge
-changed from $-0.9996834$ initially to $-0.9999895$ after the hold; the two
-opposite-sign $m_z$ cores remained resolved, the background reached
-$\langle m_x\rangle=0.9858318$, and total energy decreased from
-$-7.7736\times10^{-18}\,\mathrm J$ to $-8.1467871\times10^{-18}\,\mathrm J$.
-The device receipt reported the required CUDA operator mask 159/159 and no
-host, unknown, or fallback execution.
+The stored strict FP64 CUDA report was generated before the verifier gained its
+current 18 checks. It previously passed 15/15 checks after 20 ps relaxation and
+a 100 ps zero-current hold, but that historical report is **NOT VERIFIED**
+against the current verifier until the run is repeated. The historical result
+reported topological charge changing from $-0.9996834$ initially to
+$-0.9999895$ after the hold; the two opposite-sign $m_z$ cores remained
+resolved, the background reached $\langle m_x\rangle=0.9858318$, and total
+energy decreased from $-7.7736\times10^{-18}\,\mathrm J$ to
+$-8.1467871\times10^{-18}\,\mathrm J$. Its device receipt reported the
+required CUDA operator mask 159/159 and no host, unknown, or fallback
+execution; those values do not replace a fresh 18-check verification.
 
 ```{figure} ../../../_static/images/validation/goebel-2019-rotated-dmi-bimeron.png
 :alt: Initial, relaxed, and held out-of-plane magnetization of a Göbel 2019 bimeron, with a full-track view and validation metrics.
 :width: 100%
 :name: fig-goebel-2019-rotated-dmi-bimeron
 
-Reproducible FDM CUDA FP64 stabilization evidence. Color encodes $m_z$; arrows
-in the held-state close-up show the in-plane magnetization. The figure is
-generated from the verified scenario bundle and its fail-closed verification
-report by `scripts/render_goebel_2019_bimeron_figure.py`.
+Historical FDM CUDA FP64 stabilization artifact. Color encodes $m_z$; arrows in
+the held-state close-up show the in-plane magnetization. The figure is
+generated from the stored scenario bundle and its fail-closed verification
+report by `scripts/render_goebel_2019_bimeron_figure.py`; current 18-check
+qualification remains **NOT VERIFIED** until a fresh run.
 ```
 
-See {doc}`validation` for the cross-variant DMI validation matrix. This result
-qualifies only the stated FDM CUDA FP64 case; FDM CPU and both FEM bimeron
-runtimes remain **not verified**.
+See {doc}`validation` for the cross-variant DMI validation matrix. A fresh
+18-check report is required before this artifact can qualify the stated FDM
+CUDA FP64 case; FDM CPU and both FEM bimeron runtimes remain **not verified**.
 
 (rotated-interfacial-dmi-limitations)=
 ## Limitations

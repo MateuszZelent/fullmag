@@ -107,7 +107,11 @@ fn scalar_metric_is_active(plan: Option<&ExecutionPlanIR>, metric_key: &str) -> 
                     || plan.material.cubic_anisotropy_kc2.is_some()
                     || plan.material.cubic_anisotropy_kc3.is_some()
             }
-            "e_dmi" => plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some(),
+            "e_dmi" => {
+                plan.interfacial_dmi.is_some()
+                    || plan.bulk_dmi.is_some()
+                    || plan.rotated_interfacial_dmi.is_some()
+            }
             "e_rotated_dmi" => plan.rotated_interfacial_dmi.is_some(),
             "e_total" => true,
             _ => false,
@@ -123,7 +127,11 @@ fn scalar_metric_is_active(plan: Option<&ExecutionPlanIR>, metric_key: &str) -> 
                     || plan.material.cubic_anisotropy_kc2.is_some()
                     || plan.material.cubic_anisotropy_kc3.is_some()
             }
-            "e_dmi" => plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some(),
+            "e_dmi" => {
+                plan.interfacial_dmi.is_some()
+                    || plan.bulk_dmi.is_some()
+                    || plan.rotated_interfacial_dmi.is_some()
+            }
             "e_rotated_dmi" => plan.rotated_interfacial_dmi.is_some(),
             "e_total" => true,
             _ => false,
@@ -199,7 +207,7 @@ mod tests {
     use crate::types::{CachedPreviewFields, LatestFields, LiveState, StepUpdateView};
     use fullmag_ir::{
         BackendPlanIR, BackendTarget, CommonPlanMeta, ExecutionMode, ExecutionPlanIR, FdmPlanIR,
-        OutputPlanIR, ProvenancePlanIR,
+        FemPlanIR, OutputPlanIR, ProvenancePlanIR,
     };
 
     #[test]
@@ -308,5 +316,10 @@ mod tests {
 
         assert!(scalar_metric_is_active(Some(&plan), "e_demag"));
         assert!(scalar_metric_is_active(Some(&plan), "e_ani"));
+
+        let mut fem = FemPlanIR::default();
+        fem.rotated_interfacial_dmi = Some(3.0e-3);
+        plan.backend_plan = BackendPlanIR::Fem(fem);
+        assert!(scalar_metric_is_active(Some(&plan), "e_dmi"));
     }
 }

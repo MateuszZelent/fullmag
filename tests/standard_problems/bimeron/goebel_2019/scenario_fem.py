@@ -1,4 +1,4 @@
-"""Göbel 2019 bimeron relaxation and zero-current hold on a one-layer FEM film."""
+"""Göbel 2019 bimeron relaxation on a one-layer, open-boundary FEM film."""
 
 from __future__ import annotations
 
@@ -29,7 +29,6 @@ study = fm.study("goebel_2019_bimeron_fem")
 study.engine("fem")
 study.device(REQUESTED_DEVICE, precision="double")
 study.mode("strict")
-study.pbc(x=True, demag="periodic_airbox_k0")
 
 film = study.geometry(fm.Box(size=TRACK_SIZE, name="film"), name="film")
 film.Ms = MS
@@ -56,6 +55,9 @@ film.mesh.thin_film(
 )
 
 study.terms.add(fm.RotatedInterfacialDMI(D=D_ROTATED))
+# Static-periodic FEM rDMI reduction is unsupported; this is the documented
+# open-boundary variant, with Exchange enabled by the study default and Aex
+# supplied explicitly on the magnetic film.
 study.demag(realization="poisson_robin")
 study.solver(fix_dt=LLG_DT, integrator="rk45")
 study.build_domain_mesh()

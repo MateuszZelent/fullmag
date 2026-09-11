@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import struct
@@ -51,9 +52,20 @@ class GoebelFigureRendererTests(unittest.TestCase):
             hold = bundle / "stages" / "stage_02_flat_run"
             relax.mkdir(parents=True)
             hold.mkdir(parents=True)
-            (relax / "m_initial.json").write_text(json.dumps(_state(48, 24, 7)), encoding="utf-8")
-            (relax / "m_final.json").write_text(json.dumps(_state(48, 24, 5)), encoding="utf-8")
-            (hold / "m_final.json").write_text(json.dumps(_state(48, 24, 3)), encoding="utf-8")
+            state_paths = {
+                "initial": relax / "m_initial.json",
+                "relaxed": relax / "m_final.json",
+                "held": hold / "m_final.json",
+            }
+            state_paths["initial"].write_text(
+                json.dumps(_state(48, 24, 7)), encoding="utf-8"
+            )
+            state_paths["relaxed"].write_text(
+                json.dumps(_state(48, 24, 5)), encoding="utf-8"
+            )
+            state_paths["held"].write_text(
+                json.dumps(_state(48, 24, 3)), encoding="utf-8"
+            )
 
             report = {
                 "status": "passed",
@@ -75,7 +87,11 @@ class GoebelFigureRendererTests(unittest.TestCase):
                     "required_operator_mask": 159,
                     "executed_device_operator_mask": 159,
                 },
-                "checks": {f"check_{index}": True for index in range(15)},
+                "checks": {f"check_{index}": True for index in range(18)},
+                "verified_state_sha256": {
+                    key: hashlib.sha256(path.read_bytes()).hexdigest()
+                    for key, path in state_paths.items()
+                },
             }
             report_path = root / "verification.json"
             report_path.write_text(json.dumps(report), encoding="utf-8")

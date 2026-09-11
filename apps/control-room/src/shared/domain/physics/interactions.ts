@@ -777,6 +777,15 @@ export function buildStudyInteractionPatchFromDraft(
     };
   }
   if (draft.id === "rotated_interfacial_dmi") {
+    if (!draft.enabled || !draft.present) {
+      return {
+        patch: {
+          study: {
+            rotated_interfacial_dmi: null,
+          },
+        },
+      };
+    }
     const d = parseNumber(draft.values.d, "D");
     if ("error" in d) return d;
     return {

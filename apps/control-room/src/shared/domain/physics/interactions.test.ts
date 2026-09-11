@@ -216,6 +216,24 @@ describe("physics interaction catalog", () => {
         patch: { study: { rotated_interfacial_dmi: d } },
       });
     }
+    for (const draft of [
+      {
+        enabled: false,
+        id: "rotated_interfacial_dmi" as const,
+        present: true,
+        values: { d: "" },
+      },
+      {
+        enabled: true,
+        id: "rotated_interfacial_dmi" as const,
+        present: false,
+        values: { d: "" },
+      },
+    ]) {
+      expect(buildStudyInteractionPatchFromDraft(draft)).toEqual({
+        patch: { study: { rotated_interfacial_dmi: null } },
+      });
+    }
   });
 
   it("rejects invalid typed drafts before hitting the API", () => {

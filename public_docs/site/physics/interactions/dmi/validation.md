@@ -175,12 +175,15 @@ accepted reference solution. The validation therefore focuses on:
 ## Rotated interfacial DMI: Göbel 2019 bimeron
 
 The dedicated {doc}`rotated-interfacial` page records a paper-based thin-film
-reproduction with $D=3\,\mathrm{mJ\,m^{-2}}$. The strict FDM CUDA FP64 run
-passed 15/15 gates, preserved $|Q|>0.999$ through a 100 ps zero-current hold,
-retained two opposite-sign $m_z$ cores, and decreased the total energy. Its
-execution receipt identifies an NVIDIA GeForce RTX 4080 SUPER, device operator
-mask 159/159, and zero fallback. This qualifies only that FDM CUDA FP64 case;
-the corresponding FDM CPU and FEM bimeron runtimes remain **not verified**.
+reproduction with $D=3\,\mathrm{mJ\,m^{-2}}$. The stored strict FDM CUDA FP64
+report was produced before the verifier gained its current 18 gates: it
+historically passed 15/15, preserved $|Q|>0.999$ through a 100 ps zero-current
+hold, retained two opposite-sign $m_z$ cores, and decreased the total energy.
+Until the run is repeated with the current verifier, this historical evidence
+is **NOT VERIFIED** for the current 18-gate contract. Its execution receipt
+identifies an NVIDIA GeForce RTX 4080 SUPER, device operator mask 159/159, and
+zero fallback; those fields do not replace a fresh verification. The
+corresponding FDM CPU and FEM bimeron runtimes remain **not verified**.
 
 ## Interfacial DMI tests
 

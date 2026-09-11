@@ -77,6 +77,9 @@ __global__ void multilayer_llg_rhs_kernel(
     uint32_t nx,
     uint32_t ny,
     uint32_t nz,
+    int periodic_x,
+    int periodic_y,
+    int periodic_z,
     double inv_2dx,
     double inv_2dy,
     double inv_2dz,
@@ -148,19 +151,19 @@ __global__ void multilayer_llg_rhs_kernel(
         const uint32_t iy = static_cast<uint32_t>(rem / nx);
         const uint32_t ix = static_cast<uint32_t>(rem - static_cast<uint64_t>(iy) * nx);
 
-        uint64_t xm = ix > 0 ? idx - 1 : idx;
-        uint64_t xp = ix + 1 < nx ? idx + 1 : idx;
-        uint64_t ym = iy > 0 ? idx - nx : idx;
-        uint64_t yp = iy + 1 < ny ? idx + nx : idx;
-        uint64_t zm = iz > 0 ? idx - plane : idx;
-        uint64_t zp = iz + 1 < nz ? idx + plane : idx;
+        uint64_t xm = ix > 0 ? idx - 1 : (periodic_x && nx > 1 ? idx + nx - 1 : idx);
+        uint64_t xp = ix + 1 < nx ? idx + 1 : (periodic_x && nx > 1 ? idx - nx + 1 : idx);
+        uint64_t ym = iy > 0 ? idx - nx : (periodic_y && ny > 1 ? idx + plane - nx : idx);
+        uint64_t yp = iy + 1 < ny ? idx + nx : (periodic_y && ny > 1 ? idx - plane + nx : idx);
+        uint64_t zm = iz > 0 ? idx - plane : (periodic_z && nz > 1 ? idx + plane * (nz - 1) : idx);
+        uint64_t zp = iz + 1 < nz ? idx + plane : (periodic_z && nz > 1 ? idx - plane * (nz - 1) : idx);
 
-        bool missing_xm = ix == 0;
-        bool missing_xp = ix + 1 == nx;
-        bool missing_ym = iy == 0;
-        bool missing_yp = iy + 1 == ny;
-        bool missing_zm = iz == 0;
-        bool missing_zp = iz + 1 == nz;
+        bool missing_xm = ix == 0 && !periodic_x;
+        bool missing_xp = ix + 1 == nx && !periodic_x;
+        bool missing_ym = iy == 0 && !periodic_y;
+        bool missing_yp = iy + 1 == ny && !periodic_y;
+        bool missing_zm = iz == 0 && !periodic_z;
+        bool missing_zp = iz + 1 == nz && !periodic_z;
 
         if (active_mask) {
             missing_xm = missing_xm || active_mask[xm] == 0;
@@ -431,6 +434,9 @@ bool save_original_and_predict(Context &ctx, double dt, const char *operation) {
             layer.native_grid.nx,
             layer.native_grid.ny,
             layer.native_grid.nz,
+            ctx.periodic_x ? 1 : 0,
+            ctx.periodic_y ? 1 : 0,
+            ctx.periodic_z ? 1 : 0,
             0.5 / layer.native_grid.dx,
             0.5 / layer.native_grid.dy,
             0.5 / layer.native_grid.dz,
@@ -524,6 +530,9 @@ bool correct_from_predicted(Context &ctx, double dt, const char *operation) {
             layer.native_grid.nx,
             layer.native_grid.ny,
             layer.native_grid.nz,
+            ctx.periodic_x ? 1 : 0,
+            ctx.periodic_y ? 1 : 0,
+            ctx.periodic_z ? 1 : 0,
             0.5 / layer.native_grid.dx,
             0.5 / layer.native_grid.dy,
             0.5 / layer.native_grid.dz,

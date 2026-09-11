@@ -7970,11 +7970,19 @@ def _script_api_surface(
     surface = runtime_metadata.get("script_api_surface")
     couplings_override = (overrides or {}).get("couplings")
     monitors_override = (overrides or {}).get("planar_monitors")
+    rotated_dmi_override = (overrides or {}).get("rotated_interfacial_dmi")
+    # Rotated interfacial DMI is a study-level term in the public API.  A
+    # legacy ``fm.Problem``/``problem`` entry point can still author it
+    # directly, so promote that flat source to the canonical study surface
+    # instead of rendering an invalid ``fm.terms`` call (or dropping it).
+    has_rotated_dmi = any(
+        isinstance(term, RotatedInterfacialDMI) for term in problem.energy
+    ) or _number_or_none(rotated_dmi_override) is not None
     if problem.couplings or (
         isinstance(couplings_override, list) and len(couplings_override) > 0
     ) or problem.monitors or (
         isinstance(monitors_override, list) and len(monitors_override) > 0
-    ):
+    ) or has_rotated_dmi:
         return "study"
     return "study" if surface == "study" else "flat"
 

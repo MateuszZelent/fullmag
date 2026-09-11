@@ -90,6 +90,15 @@ static void expect_create_error(fullmag_fem_plan_desc &plan, const char *needle)
     check(error != nullptr && std::strstr(error, needle) != nullptr, needle);
 }
 
+static void expect_create_v3_error(
+    const fullmag_fem_plan_desc_v2 &plan,
+    const char *needle) {
+    fullmag_fem_backend *handle = fullmag_fem_backend_create_v3(&plan, nullptr);
+    check(handle == nullptr, "fullmag_fem_backend_create_v3 should reject invalid plan");
+    const char *error = fullmag_fem_backend_last_error(nullptr);
+    check(error != nullptr && std::strstr(error, needle) != nullptr, needle);
+}
+
 int main() {
     fullmag_fem_availability_info availability = {};
     check(
@@ -142,6 +151,17 @@ int main() {
     plan = make_plan(m0);
     plan.adaptive_config = &adaptive;
     expect_create_error(plan, "max_reject");
+
+    fullmag_fem_plan_desc_v2 rotated_open = {};
+    rotated_open.abi_version = FULLMAG_FEM_PLAN_DESC_V2_ABI_VERSION;
+    rotated_open.struct_size = sizeof(rotated_open);
+    rotated_open.base.enable_exchange = 0;
+    rotated_open.base.mesh.periodic_node_pairs_len = 0;
+    rotated_open.has_rotated_interfacial_dmi = 1;
+    rotated_open.rotated_interfacial_dmi_constant = 3.0e-3;
+    expect_create_v3_error(
+        rotated_open,
+        "RotatedInterfacialDmi with open magnetic boundaries requires Exchange");
 
     return 0;
 }
