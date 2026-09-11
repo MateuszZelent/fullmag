@@ -538,6 +538,32 @@ fn nonempty(value: &str) -> bool {
     !value.trim().is_empty()
 }
 
+/// `mode_basis_ref` is reserved for a future, independently verified modal
+/// analysis.  The source-spectrum path must not accept the field and then
+/// silently ignore it, because that would make a request appear modal while
+/// publishing only the driven source spectrum.
+fn validate_mode_basis_ref(
+    prefix: &str,
+    mode_basis_ref: Option<&str>,
+    errors: &mut Vec<String>,
+) -> bool {
+    match mode_basis_ref {
+        None => true,
+        Some(value) if !nonempty(value) => {
+            errors.push(format!(
+                "{prefix}.mode_basis_ref must be non-empty when specified"
+            ));
+            false
+        }
+        Some(_) => {
+            errors.push(format!(
+                "{prefix}.mode_basis_ref is unsupported until a verified modal analysis is implemented"
+            ));
+            false
+        }
+    }
+}
+
 fn target_exists(target: &FieldTargetIR, problem: &ProblemIRV04) -> bool {
     match target {
         FieldTargetIR::Global {} => true,
@@ -951,6 +977,8 @@ pub(crate) fn validate_antenna_composition(problem: &ProblemIRV04, errors: &mut 
         };
         let valid_equilibrium = request.component != "transverse"
             || request.equilibrium_ref.as_deref().is_some_and(nonempty);
+        let valid_mode_basis =
+            validate_mode_basis_ref(&prefix, request.mode_basis_ref.as_deref(), errors);
         if !stage_outputs.contains(&(
             request.solution_ref.stage_id.as_str(),
             request.solution_ref.output_id.as_str(),
@@ -965,10 +993,7 @@ pub(crate) fn validate_antenna_composition(problem: &ProblemIRV04, errors: &mut 
             || !valid_k_grid
             || !valid_port_mode
             || !valid_equilibrium
-            || request
-                .mode_basis_ref
-                .as_deref()
-                .is_some_and(|value| !nonempty(value))
+            || !valid_mode_basis
             || !nonempty(&request.output_id)
         {
             errors.push(format!(
@@ -1246,6 +1271,8 @@ pub(crate) fn validate_antenna_composition_v03(problem: &ProblemIR, errors: &mut
         };
         let valid_equilibrium = request.component != "transverse"
             || request.equilibrium_ref.as_deref().is_some_and(nonempty);
+        let valid_mode_basis =
+            validate_mode_basis_ref(&prefix, request.mode_basis_ref.as_deref(), errors);
         if !stage_outputs.contains(&(
             request.solution_ref.stage_id.as_str(),
             request.solution_ref.output_id.as_str(),
@@ -1260,10 +1287,7 @@ pub(crate) fn validate_antenna_composition_v03(problem: &ProblemIR, errors: &mut
             || !valid_k_grid
             || !valid_port_mode
             || !valid_equilibrium
-            || request
-                .mode_basis_ref
-                .as_deref()
-                .is_some_and(|value| !nonempty(value))
+            || !valid_mode_basis
             || !nonempty(&request.output_id)
         {
             errors.push(format!(
@@ -1375,5 +1399,29 @@ mod tests {
             .iter()
             .any(|error| error
                 .contains("dynamic waveform is invalid in a minimizer/relaxation study")));
+    }
+
+    #[test]
+    fn mode_basis_reference_is_rejected_until_modal_analysis_exists() {
+        let mut errors = Vec::new();
+        assert!(!validate_mode_basis_ref(
+            "antenna_spectrum_requests[0]",
+            Some("modes:1"),
+            &mut errors,
+        ));
+        assert!(errors.iter().any(|error| {
+            error.contains("mode_basis_ref is unsupported")
+                && error.contains("verified modal analysis")
+        }));
+
+        let mut errors = Vec::new();
+        assert!(!validate_mode_basis_ref(
+            "antenna_spectrum_requests[0]",
+            Some("  "),
+            &mut errors,
+        ));
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("mode_basis_ref must be non-empty")));
     }
 }

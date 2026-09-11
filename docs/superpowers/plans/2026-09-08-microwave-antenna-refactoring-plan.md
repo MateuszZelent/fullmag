@@ -440,7 +440,7 @@ for each target index i:
 - [ ] Ustalić spacing `(N-1)` dla siatki z oboma końcami oraz DFT period `N*spacing`; dokumentacja osi musi wyjaśniać tę różnicę. Nie zmieniać samej osi bez przeliczenia konwencji amplitudy.
 - [ ] Sprawdzić unitary i integral_si, gain/ENBW okien oraz jednostkę pola na amper. Jeśli źródło jest na amper, jego squared spectrum nie może być prezentowane jako wynik dla dowolnego prądu bez skalowania.
 - [ ] Dla `component=transverse` rzeczywiście wczytać `equilibrium_ref`, sprawdzić jego digest i zgodność targetu, projektować m0 na te same punkty. Brak równowagi oznacza błąd; nie podstawiać zer ani jednolitej osi.
-- [ ] `mode_basis_ref` nie może być pozornie przyjętym parametrem: wdrożyć osobną zweryfikowaną analizę modalną albo jawnie odrzucić tę opcję w plannerze. Nie przekształcać W_H w sprawność transdukcji.
+- [x] `mode_basis_ref` nie może być pozornie przyjętym parametrem: do czasu osobnej zweryfikowanej analizy modalnej obie wersje walidatora IR odrzucają tę opcję z jawnym statusem unsupported. Nie przekształcać W_H w sprawność transdukcji.
 - [ ] Dodać cache analizy zależny od field signature, plane, window, normalization, component i equilibrium digest; zmiana m0 nie unieważnia bazy prądowej.
 
 **Stan implementacji 2026-09-11:** carrier artefaktu publikuje opcjonalny,
@@ -448,8 +448,11 @@ zweryfikowany payload `tet4_connectivity`; sampler Rust realizuje
 `fem_p1_interpolation_v1` przez barycentryczne P1 i deterministyczny BVH, a
 point-only asset działa wyłącznie jako jawne `identity_coordinates_v1`. Testy
 obejmują affine vector field, integralność hasha topologii i `outside=zero`.
+Opcja `mode_basis_ref` jest teraz fail-closed w obu walidatorach IR; nie można
+jej podać do ścieżki source-spectrum, która nie wykonuje analizy modalnej.
 Pozostają: bezpośrednia ewaluacja `direct_rt0_evaluation_v1`, natywny transfer
-MFEM, formalne rozróżnienie `missing_payload`/`unsupported_topology` w API oraz
+MFEM, formalne rozróżnienie `missing_payload`/`unsupported_topology` w API,
+rzeczywiste wczytanie `equilibrium_ref` dla `component=transverse` oraz
 kwalifikacja mieszanych topologii i dużych siatek.
 
 Niezależny test analityczny konwencji fazy, wykonywalny już teraz:
