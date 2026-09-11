@@ -276,6 +276,14 @@ host-side diagnostic command. Do not silently promote the diagnostic path into
 the build path.
 
 ### Canonical build entrypoints
+
+For a host enrolled with `Fullmag_build_runner`, full builds of master and
+worktrees use the single queue (`local-build-runner` skill). This takes precedence
+over the direct heavy-build entrypoints below. Select the source checkout and
+configured profile explicitly; a missing client/profile or unhealthy coordinator
+is a blocker, not an implicit host/CPU fallback. Run and scientific qualification
+recipes remain separate and must not be relabeled as build jobs.
+
 - `just build fullmag`
 - `just build fem-gpu-runtime-host`
 - `just package fullmag`
