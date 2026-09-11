@@ -139,13 +139,19 @@ class JobQueue:
             rows = db.execute("SELECT * FROM jobs WHERE state IN ('running','cancel_requested') ORDER BY sequence").fetchall()
             return [self.record(row) for row in rows]
 
-    def claim(self, coordinator, *, owner=None):
+    def has_queued(self, owner):
+        with self.connection() as db:
+            return db.execute("SELECT 1 FROM jobs WHERE owner=? AND state='queued' LIMIT 1", (owner,)).fetchone() is not None
+
+    def claim(self, coordinator, *, owner=None, expected_job_id=None):
         identifier(coordinator)
         with self.transaction() as db:
             if db.execute("SELECT 1 FROM jobs WHERE state IN ('running','cancel_requested') LIMIT 1").fetchone():
                 return None
             row = db.execute("SELECT * FROM jobs WHERE state='queued' AND (? IS NULL OR owner=?) ORDER BY sequence LIMIT 1", (owner, owner)).fetchone()
             if row is None:
+                return None
+            if expected_job_id is not None and row['job_id'] != expected_job_id:
                 return None
             db.execute("UPDATE jobs SET state='running',coordinator=?,lease_token=?,updated_at=? WHERE job_id=?",
                        (coordinator, secrets.token_hex(32), time.time(), row['job_id']))

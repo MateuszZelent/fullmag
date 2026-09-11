@@ -197,6 +197,9 @@ def reconcile(layout, job_id, *, owner, call=docker):
             logs_path.write_text(call(['logs', '--tail', '1000', container_id]), encoding='utf-8')
             return job
         terminal = 'cancelled' if job['state'] == 'cancel_requested' else ('succeeded' if code == 0 else 'failed')
+        if job['operation'] == 'storage-probe' and terminal != 'cancelled':
+            # Recover the resource without manufacturing a successful probe receipt.
+            terminal = 'interrupted'
         artifacts = validate_path(run_root / 'artifacts', storage)
         if terminal == 'succeeded':
             try:

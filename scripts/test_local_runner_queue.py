@@ -43,6 +43,15 @@ class QueueTests(unittest.TestCase):
         self.queue.finish(first['job_id'], running['lease_token'], 'succeeded', 0)
         self.assertEqual(second['job_id'], self.queue.claim('other')['job_id'])
 
+    def test_expected_claim_never_takes_another_queued_job(self):
+        first = self.submit('first')
+        second = self.submit('second')
+        self.assertTrue(self.queue.has_queued('agent-a'))
+        self.assertFalse(self.queue.has_queued('other'))
+        self.assertIsNone(self.queue.claim('probe', owner='agent-a', expected_job_id=second['job_id']))
+        self.assertEqual([], self.queue.active())
+        self.assertEqual(first['job_id'], self.queue.claim('probe', expected_job_id=first['job_id'])['job_id'])
+
     def test_cancel_does_not_release_running_slot_before_terminal_ack(self):
         job = self.submit('a')
         running = self.queue.claim('coordinator')

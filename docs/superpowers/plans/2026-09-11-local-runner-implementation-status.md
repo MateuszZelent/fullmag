@@ -47,6 +47,16 @@ storage/receipt i managed FEM. Nie zastępujemy pełnego celu samym demonstrator
 
 ## Decyzja infrastrukturalna przed kolejnym etapem
 
+Aktualizacja po zgodzie użytkownika: zamiast tworzenia nowego wolumenu
+wdrożono [sondę/bramkę właściwości](../../guides/storage-capability-gate.md).
+Testy: 75 runner PASS + 16 capability OK (5 pominiętych na Windows).
+Żywe próby source/artifact przeszły, build odrzucony z powodu braku case
+sensitivity. Próba włączenia flagi w nowym pustym katalogu NTFS otrzymała
+Access denied; WinAPI potwierdziło brak flagi. Nie zmieniono ACL ani nie
+utworzono wolumenu. Dalsza kwalifikacja build/FEM wymaga rozstrzygnięcia tej
+konkretnej właściwości, nie samej nazwy ext4. Poniższy opis pytania o wolumen
+jest historycznym checkpointem sprzed tej zgody.
+
 Bezpośredni odczyt `stat -f -c %T /source /build /artifacts` w rzeczywistym
 workerze zwrócił trzy razy **v9fs**. Obecny guard managed FEM wymaga loop-backed
 ext4 oraz dowodu backing storage. Nie wolno przestawić etykiety lub ominąć guarda.

@@ -155,6 +155,20 @@ rzeczywisty command, inventory przed/po, manifest i ścieżki. Nie deklaruje si�
 
 ## Konsekwencje
 
+### Rozszerzenie 2026-09-11: właściwości zamiast jednego filesystemu
+
+Użytkownik zatwierdził rozdzielenie historycznej trasy `linux-ext4-loop-v1`
+od nowej bramki `capabilities-v1`. Ext4 nie jest wymaganiem FEM. Nowy profil
+ma oceniać rzeczywiste właściwości storage osobno dla źródeł, artefaktów i
+buildów, zachowując containment, tożsamość mountu, lease i provenance.
+Nie ustanawia nowego rootu ani zgody na migrację danych.
+
+Implementacja i kryteria dopuszczenia są opisane w
+[kontrakcie bramki](../guides/storage-capability-gate.md). Sonda właściwości
+nie zastępuje kwalifikacji managed FEM; dotychczasowe recepty Linux zachowują
+guard ext4 do jawnej migracji. Wynik `passed` sondy nie uprawnia do publikacji
+kwalifikowanego runtime’u ani zmiany etykiety CI.
+
 - Nowe artefakty mają jedną, przewidywalną granicę i identyfikowalny właściciel.
 - Zgodne buildy korzystają z cache bez tworzenia płaskiego katalogu dla każdego
   wywołania, a kolizja mutable outputu jest widoczna.

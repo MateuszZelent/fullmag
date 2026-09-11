@@ -145,6 +145,17 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual('succeeded', result['state'])
         self.assertEqual([], self.queue.active())
 
+    def test_storage_probe_recovery_never_manufactures_success(self):
+        self.running = True
+        with self.assertRaises(coordinator.CoordinatorError):
+            self.execute(timeout_seconds=0)
+        with self.queue.connection() as db:
+            db.execute("UPDATE jobs SET operation='storage-probe' WHERE job_id=?", (self.job['job_id'],))
+        self.running = False
+        result = coordinator.reconcile(self.layout, self.job['job_id'], owner='alice', call=self.docker)
+        self.assertEqual('interrupted', result['state'])
+        self.assertEqual([], self.queue.active())
+
     def test_capsule_from_another_worktree_is_rejected(self):
         self.manifest_origin = str(self.storage / 'other-worktree')
         with self.assertRaises(coordinator.CoordinatorError):
