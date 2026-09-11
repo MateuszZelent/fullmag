@@ -15,7 +15,8 @@ const OPERATOR_VERSION: &str = "fem_charge_spin_conforming_h1_p1.transparent.v1"
 const M2_CONSTITUTIVE_VERSION: &str = "transport_constitutive.reciprocal.fullmag.v1";
 const M2_OPERATOR_VERSION: &str = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1";
 const PHYSICAL_RESIDUAL_VERSION: &str = "transport_balance_integrated_l2.v1";
-pub(crate) const DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS: u64 = 1_000_000;
+pub(crate) const DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS: u64 =
+    fullmag_ir::ANTENNA_DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS;
 
 fn preflight_direct_oersted_pair_budget(
     source_cell_count: usize,
@@ -35,7 +36,8 @@ fn preflight_direct_oersted_pair_budget(
     if pairs > DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS {
         return Err(RunError {
             message: format!(
-                "antenna Oersted preflight requires {pairs} source-target pairs ({source_count} source tetrahedra x {target_count} target points), exceeding the limit {DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS}; reduce the authored target resolution or select the qualified vector-potential realization"
+                "antenna Oersted preflight policy='{}' requires {pairs} source-target pairs ({source_count} source tetrahedra x {target_count} target points), exceeding the limit {DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS}; reduce the authored target resolution or select the qualified vector-potential realization",
+                fullmag_ir::ANTENNA_DIRECT_OERSTED_BUDGET_POLICY_V1,
             ),
         });
     }

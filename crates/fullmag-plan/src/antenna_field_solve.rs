@@ -20,6 +20,31 @@ fn fail(reason: impl Into<String>) -> PlanError {
     }
 }
 
+fn preflight_direct_oersted_pair_budget(
+    source_cell_count: usize,
+    target_point_count: usize,
+) -> Result<u64, PlanError> {
+    let source_count = u64::try_from(source_cell_count).map_err(|_| {
+        fail("antenna direct Oersted preflight source cell count is not representable")
+    })?;
+    let target_count = u64::try_from(target_point_count).map_err(|_| {
+        fail("antenna direct Oersted preflight target point count is not representable")
+    })?;
+    let pairs = source_count.checked_mul(target_count).ok_or_else(|| {
+        fail(format!(
+            "antenna direct Oersted preflight source-target pair count overflows: {source_count} source tetrahedra x {target_count} target points"
+        ))
+    })?;
+    if pairs > fullmag_ir::ANTENNA_DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS {
+        return Err(fail(format!(
+            "antenna direct Oersted preflight policy='{}' requires {pairs} source-target pairs ({source_count} source tetrahedra x {target_count} target points), exceeding the limit {}; reduce the authored field-sampling target or select the qualified vector-potential realization",
+            fullmag_ir::ANTENNA_DIRECT_OERSTED_BUDGET_POLICY_V1,
+            fullmag_ir::ANTENNA_DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS,
+        )));
+    }
+    Ok(pairs)
+}
+
 fn sha256_json(value: &impl serde::Serialize, label: &str) -> Result<String, PlanError> {
     let bytes =
         serde_json::to_vec(value).map_err(|error| fail(format!("serialize {label}: {error}")))?;
@@ -310,6 +335,17 @@ pub(crate) fn plan_antenna_field_solve_v03(
     };
     bind_antenna_field_solve_v03(problem, stage_id, port_mode_id, &mut conductor)?;
     let field_sampling = resolve_field_sampling(problem, &stage.field_sampling_domain)?;
+    let direct_oersted_pairs = if matches!(
+        stage.oersted_realization,
+        AntennaOerstedRealizationIR::DirectTetraQuadrature
+    ) {
+        Some(preflight_direct_oersted_pair_budget(
+            conductor.mesh.cells.len(),
+            field_sampling.positions_xyz_m.len(),
+        )?)
+    } else {
+        None
+    };
 
     Ok(AntennaFieldSolvePlanIR {
         schema_version: ANTENNA_FIELD_SOLVE_PLAN_SCHEMA_VERSION.into(),
@@ -334,10 +370,52 @@ pub(crate) fn plan_antenna_field_solve_v03(
                     "conductor mesh policy='{}', solver policy='{}'",
                     stage.conductor_mesh_policy, stage.solver_policy
                 ),
+                format!(
+                    "direct Oersted budget policy='{}', source_target_pairs={}, max_source_target_pairs={}",
+                    fullmag_ir::ANTENNA_DIRECT_OERSTED_BUDGET_POLICY_V1,
+                    direct_oersted_pairs
+                        .map_or_else(|| "not_applicable".to_string(), |pairs| pairs.to_string()),
+                    fullmag_ir::ANTENNA_DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS,
+                ),
             ],
             integrator_resolution: None,
             physics_graph: None,
             fem_eigen_execution_resolution: None,
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preflight_direct_oersted_pair_budget;
+    use fullmag_ir::{
+        ANTENNA_DIRECT_OERSTED_BUDGET_POLICY_V1,
+        ANTENNA_DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS,
+    };
+
+    #[test]
+    fn direct_oersted_preflight_accepts_the_versioned_boundary() {
+        assert_eq!(
+            preflight_direct_oersted_pair_budget(1_000, 1_000).unwrap(),
+            ANTENNA_DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS
+        );
+    }
+
+    #[test]
+    fn direct_oersted_preflight_rejects_pair_budget_before_execution() {
+        let error = preflight_direct_oersted_pair_budget(1_000, 1_001).unwrap_err();
+        let message = error.reasons.join("; ");
+        assert!(message.contains(ANTENNA_DIRECT_OERSTED_BUDGET_POLICY_V1));
+        assert!(message.contains("1001000 source-target pairs"));
+        assert!(message.contains("1000 source tetrahedra x 1001 target points"));
+    }
+
+    #[test]
+    fn direct_oersted_preflight_rejects_pair_count_overflow() {
+        let error = preflight_direct_oersted_pair_budget(usize::MAX, 2).unwrap_err();
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("pair count overflows")));
+    }
 }

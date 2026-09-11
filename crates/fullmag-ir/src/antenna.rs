@@ -12,6 +12,13 @@ pub const ANTENNA_NORMALIZATION_CURRENT_A: f64 = 1.0;
 pub const ANTENNA_PORT_MODE_SCHEMA_VERSION_V2: &str = "antenna_port_mode.v2";
 pub const ANTENNA_PORT_MIGRATION_REQUIRES_TERMINAL_PAIRS: &str =
     "antenna_port_migration_requires_terminal_pairs";
+/// Versioned execution policy for the direct tetrahedral Biot--Savart lane.
+///
+/// The same policy is enforced by the planner and native runner.  Keeping the
+/// identifier in the canonical IR prevents a diagnostic from silently
+/// changing meaning when the default pair budget is revised.
+pub const ANTENNA_DIRECT_OERSTED_BUDGET_POLICY_V1: &str = "antenna_direct_oersted_budget.v1";
+pub const ANTENNA_DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS: u64 = 1_000_000;
 
 /// Rigid transform shared by all conductor bodies and terminal selectors of
 /// an authored microwave antenna layout.

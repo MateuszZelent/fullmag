@@ -484,6 +484,18 @@ Test jednostkowy produkcyjnego Rust ma korzystać z tych samych wartości i okna
 
 ## T11. Wprowadzić preflight ważności modelu i kosztu
 
+**Stan 2026-09-11:** współdzielona polityka `antenna_direct_oersted_budget.v1`
+(`1_000_000` par źródło–target) jest zapisana w kanonicznym IR. Preflight
+planera odrzuca przekroczenie po zbudowaniu rzeczywistego meshu przewodnika i
+nośnika próbkowania, przed wywołaniem native solvera; wrapper RT0 powtarza tę
+kontrolę jako zabezpieczenie runtime. Sprawdzone są konwersje `usize → u64`,
+checked multiplication, granica dokładna, overflow oraz diagnostyka z liczbą
+elementów, targetów i identyfikatorem polityki. Testy planera przechodzą w
+`fullmag-plan` (3/3). Nie jest to jeszcze pełna bramka T11: brakuje agregacji
+kosztu przez wiele portów/bloków/retries, budżetu pamięci i anulowania,
+diagnostyki pasma `eta_wave`/`eta_skin`, pomiaru wall-time/peak-memory oraz
+kontenerowego benchmarku direct RT0.
+
 **Pliki:** nowe planner `antenna_preflight.rs` i runner `antenna_validity.rs`, istniejący IR/plan, `native_fem/steady_transport.rs`, direct tetra options, manifest/DTO; nowy `tests/antenna/verify_budget.py`.
 
 - [ ] Wyliczać przed solve liczbę elementów źródła, targetów, par i rozmiar buforów. Użyć checked multiplication; overflow jest błędem, nie ogromnym zaakceptowanym zadaniem.
