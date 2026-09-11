@@ -8,6 +8,19 @@ from local_runner import build_executor as executor
 
 
 class BuildExecutorTests(unittest.TestCase):
+    def test_new_cache_is_worker_owned_but_existing_cache_is_untouched(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            cache = root / 'cache'
+            with patch.object(executor.os, 'chown', create=True) as chown:
+                executor.prepare_cache_directory(cache, root)
+                chown.assert_called_once_with(cache, 65532, 65532, follow_symlinks=False)
+                chown.reset_mock()
+                (cache / 'keep').write_text('existing')
+                executor.prepare_cache_directory(cache, root)
+                chown.assert_not_called()
+                self.assertEqual('existing', (cache / 'keep').read_text())
+
     def test_empty_private_mount_is_assigned_to_worker(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

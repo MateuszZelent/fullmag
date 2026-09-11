@@ -38,7 +38,7 @@ RECEIPT_SCHEMA = "fullmag.local-runner.build-receipt.v1"
 
 JOB_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 SHA256_RE = re.compile(r"[a-f0-9]{64}\Z")
-COMMIT_RE = re.compile(r"[a-f0-9]{40}\Z")
+COMMIT_RE = re.compile(r"[a-f0-9]{40}(?:[a-f0-9]{24})?\Z")
 IMAGE_RE = re.compile(r"sha256:[a-f0-9]{64}\Z")
 STAGE_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}\Z")
 
@@ -49,6 +49,16 @@ MAX_ERROR_LENGTH = 4096
 ALLOWED_WORKSPACE_MOUNTPOINTS = frozenset(
     {".fullmag-build", ".fullmag-cargo", ".fullmag-rustup"}
 )
+
+# Preserve declared toolchain discovery, not arbitrary command overrides or
+# credentials embedded in an image/environment. Execution paths are set below.
+TOOLCHAIN_ENVIRONMENT = frozenset({
+    'PATH', 'LANG', 'LC_ALL', 'TZ', 'INSTALL_PREFIX', 'CMAKE_PREFIX_PATH',
+    'LD_LIBRARY_PATH', 'LIBRARY_PATH', 'PKG_CONFIG_PATH', 'CPATH',
+    'CUDA_HOME', 'CUDA_PATH', 'CUDA_VISIBLE_DEVICES', 'NVIDIA_VISIBLE_DEVICES',
+    'NVIDIA_DRIVER_CAPABILITIES', 'PETSC_DIR', 'PETSC_ARCH', 'SLEPC_DIR',
+    'FULLMAG_USE_MFEM_STACK', 'COREPACK_HOME', 'PNPM_HOME',
+})
 
 
 class BuildEntryPointError(ValueError):
@@ -388,7 +398,7 @@ def build_environment(
     _regular_directory(build, "build", create=False)
     for directory_name in ("home", "tmp"):
         _private_directory(build / directory_name, f"build {directory_name}", create=True)
-    environment = {str(key): str(value) for key, value in os.environ.items()}
+    environment = {key: value for key, value in os.environ.items() if key in TOOLCHAIN_ENVIRONMENT}
     environment.update(profile.environment)
     environment.update(
         {

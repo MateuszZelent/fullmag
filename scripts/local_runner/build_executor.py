@@ -105,6 +105,19 @@ def prepare_worker_directory(path, storage):
     os.chown(path, 65532, 65532, follow_symlinks=False)
 
 
+def prepare_cache_directory(path, storage):
+    """Provision a new cache for the worker without modifying an existing cache."""
+    path = validate_path(path, storage, 'worker cache directory')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.mkdir()
+    except FileExistsError:
+        if not path.is_dir():
+            raise ValueError('Worker cache must be a directory')
+    else:
+        prepare_worker_directory(path, storage)
+
+
 def build_command(job_id, source_digest, profile, config, paths, storage):
     backend, device = profile_lane(profile)
     if not re.fullmatch('[a-f0-9]{32}', job_id) or not re.fullmatch('[a-f0-9]{64}', source_digest):
@@ -289,7 +302,9 @@ def execute_build(layout, *, owner, call=docker, sleep=time.sleep, timeout_secon
                      'cargo': cache / 'cargo', 'rustup': cache / 'rustup', 'pnpm': cache / 'pnpm'}
             for key, path in paths.items():
                 validate_path(path, storage)
-                if key != 'source':
+                if layout.get('container_coordinator') and key in ('cargo', 'rustup', 'pnpm'):
+                    prepare_cache_directory(path, storage)
+                elif key != 'source':
                     path.mkdir(parents=True, exist_ok=True)
             if layout.get('container_coordinator'):
                 # The coordinator is root, but workers are deliberately not.

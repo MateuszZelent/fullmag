@@ -204,6 +204,29 @@ class BuildEntryPointTests(unittest.TestCase):
             self._identity()["source_snapshot_sha256"],
         )
 
+    def test_native_identity_accepts_sha256_git_commits(self) -> None:
+        identity = self._identity()
+        identity['head_commit_full'] = 'a' * 64
+        payload = dict(identity)
+        for key in ('source_snapshot_dirty', 'dirty_content_sha256', 'source_snapshot_sha256'):
+            payload.pop(key, None)
+        identity['source_snapshot_sha256'] = hashlib.sha256(entrypoint.canonical(payload)).hexdigest()
+        self.assertEqual(identity, entrypoint._validate_native_identity(identity))
+
+    def test_build_environment_excludes_ambient_credentials_and_command_overrides(self) -> None:
+        ambient = {'PATH': '/tools/bin', 'CMAKE_PREFIX_PATH': '/opt/deps',
+                   'GITHUB_TOKEN': 'private', 'HTTPS_PROXY': 'credential',
+                   'DOCKER_HOST': 'remote', 'MAKEFLAGS': '--eval=unexpected',
+                   'RUSTFLAGS': 'unexpected', 'BASH_ENV': '/injected'}
+        with patch.dict(entrypoint.os.environ, ambient, clear=True):
+            environment = entrypoint.build_environment(
+                entrypoint.profile_for(self.profile), workspace=self.workspace,
+                build=self.build, jobs=2, native_identity=self._identity())
+        self.assertEqual('/tools/bin', environment['PATH'])
+        self.assertEqual('/opt/deps', environment['CMAKE_PREFIX_PATH'])
+        for key in set(ambient) - {'PATH', 'CMAKE_PREFIX_PATH'}:
+            self.assertNotIn(key, environment)
+
     def test_context_rejects_tampered_native_v2_self_hash(self) -> None:
         context_path = self._write_context()
         context = json.loads(context_path.read_text(encoding="utf-8"))
