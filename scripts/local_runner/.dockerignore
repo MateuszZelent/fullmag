@@ -1,0 +1,3 @@
+*
+!Dockerfile
+!worker_entrypoint.py

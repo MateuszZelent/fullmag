@@ -19,6 +19,8 @@ Use the user's directory preference or an existing convention. Verify a project-
 
 Read the project's build instructions before installing or building anything. Set up only dependencies needed for the task; do not infer `npm install` or host `cargo build` from file presence. In Fullmag, native FEM builds start with container-backed `just` recipes.
 
+On a host enrolled with `Fullmag_build_runner`, use the `local-build-runner` skill for full builds of master and task worktrees. Reuse the single coordinator and explicitly select the source checkout/commit; creating a worktree does not authorize another runner or bypassing the queue. Keep lightweight tests and scientific runtime gates separate from build submission.
+
 Record relevant pre-existing test failures and distinguish them from regressions. Continue safe independent work; do not silently move into a shared checkout after an isolation or permission failure. Respect the host approval boundary.
 
 Commit each completed, coherent increment on the task branch after appropriate verification; do not accumulate all changes until task completion. Include related tests and documentation, and keep dependent changes together so intermediate commits do not break the build or contract. Review the diff, stage only the increment, then inspect staged paths in a separate command and review the staged diff before each commit. Use an English purpose-focused message and record the full commit hash and verification evidence in the task checkpoint. Reuse still-valid checks; documentation may use parser/link/diff checks. Existing task authorization covers these commits unless the user says otherwise. Incremental commits do not replace final integration gates or trigger separate merges.

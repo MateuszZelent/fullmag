@@ -29,6 +29,86 @@ storage-inventory:
 storage-prepare:
     @{{storage_python}} "{{repo_root}}/scripts/fullmag_storage.py" prepare-links --repo-root "{{repo_root}}" --compat --frontend
 
+# Diagnostic source-check worker; this is not a managed FEM qualification image.
+runner-image:
+    docker build --network none --pull=false -t fullmag/local-runner-source:development scripts/local_runner
+
+runner-build-image toolchain_image tag="fullmag/local-runner-build:development":
+    docker --context desktop-linux build --network none --pull=false --build-arg TOOLCHAIN_IMAGE={{quote(toolchain_image)}} -f scripts/local_runner/Dockerfile.build -t {{quote(tag)}} scripts/local_runner
+
+runner-coordinator-image:
+    docker --context desktop-linux build --network none --pull=false -f scripts/local_runner/Dockerfile.coordinator -t fullmag/build-runner:development scripts
+
+runner-container-configure image_id:
+    {{storage_python}} scripts/local_runner_cli.py container-configure --image-id {{quote(image_id)}}
+
+runner-container-start:
+    {{storage_python}} scripts/local_runner_cli.py container-start
+
+runner-container-status:
+    {{storage_python}} scripts/local_runner_cli.py container-status
+
+runner-container-stop:
+    {{storage_python}} scripts/local_runner_cli.py container-stop
+
+runner-test:
+    {{storage_python}} -m unittest discover -s scripts -p 'test_local_runner_*.py'
+    {{storage_python}} -m unittest discover -s scripts -p 'test_storage_capabilities.py'
+    {{storage_python}} -m unittest discover -s scripts/tests/local_runner -p 'test_*.py'
+
+# Diagnostic only: never enrolls a storage backend for FEM qualification.
+runner-storage-probe role="build":
+    {{storage_python}} scripts/probe_docker_storage.py --role {{quote(role)}}
+
+runner-storage-probe-case-sensitive:
+    {{storage_python}} scripts/probe_docker_storage.py --role build --case-sensitive
+
+runner-submit mode ref="":
+    {{storage_python}} scripts/local_runner_cli.py submit --source {{quote(mode)}} {{if ref == "" { "" } else { "--ref " + quote(ref) }}}
+
+runner-status job:
+    {{storage_python}} scripts/local_runner_cli.py status {{quote(job)}}
+
+runner-logs job:
+    {{storage_python}} scripts/local_runner_cli.py logs {{quote(job)}}
+
+runner-wait job timeout="30":
+    {{storage_python}} scripts/local_runner_cli.py wait {{quote(job)}} --timeout-seconds {{quote(timeout)}}
+
+runner-list:
+    {{storage_python}} scripts/local_runner_cli.py list
+
+runner-doctor:
+    {{storage_python}} scripts/local_runner_cli.py doctor
+
+runner-cancel job:
+    {{storage_python}} scripts/local_runner_cli.py cancel {{quote(job)}}
+
+runner-configure image_id:
+    {{storage_python}} scripts/local_runner_cli.py configure-image --image-id {{quote(image_id)}}
+
+runner-once:
+    {{storage_python}} scripts/local_runner_cli.py run-once
+
+# Build catalogue: immutable source selection, no user-supplied shell command.
+runner-build mode profile="fem-cpu-release" ref="":
+    {{storage_python}} scripts/local_runner_cli.py submit --operation build --profile {{quote(profile)}} --source {{quote(mode)}} {{if ref == "" { "" } else { "--ref " + quote(ref) }}}
+
+runner-configure-build profile image_id:
+    {{storage_python}} scripts/local_runner_cli.py configure-build --profile {{quote(profile)}} --image-id {{quote(image_id)}}
+
+runner-container-resume:
+    {{storage_python}} scripts/local_runner_cli.py container-resume
+
+runner-retention-plan:
+    {{storage_python}} scripts/local_runner_cli.py retention-plan
+
+runner-container-replace image_id:
+    {{storage_python}} scripts/local_runner_cli.py container-replace --image-id {{quote(image_id)}}
+
+runner-reconcile job:
+    {{storage_python}} scripts/local_runner_cli.py reconcile {{quote(job)}}
+
 # Explicit worktree ownership operations.  `quote()` keeps task metadata as
 # one shell argument even when owner/purpose contains spaces or apostrophes.
 worktree-register task_id owner purpose:

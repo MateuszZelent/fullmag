@@ -204,7 +204,7 @@ void destroy_linear_system(GpuFemBemLinearSystem &system)
 }
 #endif
 
-#if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+#if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
 void configure_amg(mfem::HypreBoomerAMG &amg, const Context &ctx)
 {
     const auto &policy = ctx.demag.amg_policy;
