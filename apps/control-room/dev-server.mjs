@@ -24,6 +24,7 @@ import {
 import { createServer, request } from "node:http";
 import { resolve, dirname, extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveDevServerPublicOrigin } from "./scripts/dev-server-public-origin.mjs";
 
 import {
   ensureControlRoomDependencies,
@@ -45,17 +46,15 @@ const apiTarget =
     ? (args[apiTargetIdx + 1] ?? "http://localhost:8081")
     : "http://localhost:8081";
 const browserHost = process.env.FULLMAG_WEB_PUBLIC_HOST ?? "localhost";
-const browserOrigin = `http://${formatUrlHost(browserHost)}:${port}`;
+const browserOrigin = resolveDevServerPublicOrigin(
+  browserHost, port, process.env.FULLMAG_WEB_PUBLIC_PORT,
+);
 const staticRootIdx = args.indexOf("--static-root");
 const staticRoot =
   staticRootIdx >= 0
     ? (args[staticRootIdx + 1] ?? process.env.FULLMAG_STATIC_WEB_ROOT)
     : process.env.FULLMAG_STATIC_WEB_ROOT;
 const devDistDir = `.next-control-room-${port}`;
-
-function formatUrlHost(host) {
-  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
-}
 
 if (staticRoot) {
   startStaticServer(staticRoot);

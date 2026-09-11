@@ -159,13 +159,21 @@ impl AcceptedFemRelaxStageHandoff {
                 message: "relax_stage_handoff_source_plan_mesh_identity_mismatch".to_string(),
             });
         }
-        let source_topology =
-            MeshTopology::from_ir(&source_plan.mesh).map_err(|error| RunError {
-                message: format!("relax_stage_handoff_source_mesh_topology_invalid: {error}"),
-            })?;
+        // Publishing a native relaxation state must not instantiate the tet4-only
+        // reference solver. Validate the full typed mesh, then use the same
+        // magnetic-node membership as the native runtime (including mixed cells).
+        fullmag_ir::validate_mesh_for_execution(&source_plan.mesh).map_err(|errors| RunError {
+            message: format!(
+                "relax_stage_handoff_source_mesh_topology_invalid: {}",
+                errors.join("; ")
+            ),
+        })?;
+        let source_magnetic_nodes =
+            crate::preview::mesh_quantity_active_mask("m", &source_plan.mesh)
+                .expect("magnetization has a magnetic-only spatial domain");
         validate_handoff_m0_norms(
             &equilibrium_magnetization,
-            &source_topology.magnetic_node_volumes,
+            &source_magnetic_nodes,
         )?;
         let source_signatures =
             crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1::from_relax_plan(
@@ -407,7 +415,11 @@ impl AcceptedFemRelaxStageHandoff {
         })?;
         validate_handoff_m0_norms(
             &plan.equilibrium_magnetization,
-            &target_topology.magnetic_node_volumes,
+            &target_topology
+                .magnetic_node_volumes
+                .iter()
+                .map(|volume| *volume > 0.0)
+                .collect::<Vec<_>>(),
         )?;
         if target_equilibrium_sha256 != self.equilibrium_content_sha256
             || plan.equilibrium_magnetization != self.equilibrium_magnetization
@@ -514,13 +526,13 @@ impl AcceptedFemRelaxStageHandoff {
 
 fn validate_handoff_m0_norms(
     equilibrium: &[Vector3],
-    magnetic_node_volumes: &[f64],
+    magnetic_nodes: &[bool],
 ) -> Result<(), RunError> {
-    if equilibrium.len() != magnetic_node_volumes.len() {
+    if equilibrium.len() != magnetic_nodes.len() {
         return Err(RunError {
             message: format!(
                 "relax_stage_handoff_m0_norm_mismatch: topology has {} nodes, equilibrium has {}",
-                magnetic_node_volumes.len(),
+                magnetic_nodes.len(),
                 equilibrium.len()
             ),
         });
@@ -538,7 +550,7 @@ fn validate_handoff_m0_norms(
                 ),
             });
         }
-        if magnetic_node_volumes[node] <= 0.0 {
+        if !magnetic_nodes[node] {
             continue;
         }
         let norm_error = (norm - 1.0).abs();

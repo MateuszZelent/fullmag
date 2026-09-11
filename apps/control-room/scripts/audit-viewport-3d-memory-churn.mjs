@@ -449,8 +449,9 @@ async function assertCanvasHasFidelity(page) {
     });
   }
   const sample = await page.evaluate(async (encodedPng) => {
-    const response = await fetch(`data:image/png;base64,${encodedPng}`);
-    const bitmap = await createImageBitmap(await response.blob());
+    // Decode locally: the application CSP intentionally disallows data: fetches.
+    const bytes = Uint8Array.from(atob(encodedPng), (character) => character.charCodeAt(0));
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
     const target = new OffscreenCanvas(bitmap.width, bitmap.height);
     const context = target.getContext("2d");
     if (!context) return null;

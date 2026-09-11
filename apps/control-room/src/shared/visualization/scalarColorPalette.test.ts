@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isDivergingScalarPalette,
   scalarColorRgb,
+  scalarColorSrgb,
 } from "./scalarColorPalette";
 
 describe("scalarColorRgb · S-02 linear-sRGB conversion", () => {
@@ -12,21 +13,23 @@ describe("scalarColorRgb · S-02 linear-sRGB conversion", () => {
     expect(b).toBeCloseTo(0.0887, 3);
   });
 
-  it("round-trips back to the original sRGB stop through the sRGB OETF (regression: GPU/CPU parity for t=0,0.5,1)", () => {
+  it("round-trips linear GPU colors to the display samples used by Canvas", () => {
     const srgbEncode = (c: number): number =>
       c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
 
     for (const t of [0, 0.5, 1]) {
       const [r, g, b] = scalarColorRgb(t, "viridis");
+      const display = scalarColorSrgb(t, "viridis");
       const reencoded: [number, number, number] = [
         srgbEncode(r),
         srgbEncode(g),
         srgbEncode(b),
       ];
-      for (const channel of reencoded) {
+      for (const [index, channel] of reencoded.entries()) {
         expect(Number.isFinite(channel)).toBe(true);
         expect(channel).toBeGreaterThanOrEqual(0);
         expect(channel).toBeLessThanOrEqual(1);
+        expect(channel).toBeCloseTo(display[index]!, 12);
       }
     }
   });
@@ -43,6 +46,13 @@ describe("scalarColorRgb · S-02 linear-sRGB conversion", () => {
         }
       }
     }
+  });
+});
+
+describe("scalarColorSrgb display sampling", () => {
+  it("preserves independently specified viridis endpoint and midpoint bytes", () => {
+    expect([0, 0.5, 1].map((t) => scalarColorSrgb(t).map((c) => Math.round(c * 255))))
+      .toEqual([[68, 1, 84], [51, 144, 132], [253, 231, 37]]);
   });
 });
 

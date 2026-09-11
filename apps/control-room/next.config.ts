@@ -242,6 +242,12 @@ const nextConfig: NextConfig = {
         trailingSlash: true,
       }
     : {
+        // The launcher probes / without following redirects. Resolve the
+        // existing home redirect before Next lazily compiles any page so a
+        // cold workspace compilation cannot exhaust the bootstrap deadline.
+        async redirects() {
+          return [{ source: "/", destination: "/workspace", permanent: false }];
+        },
         async headers() {
           return [
             {

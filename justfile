@@ -5273,7 +5273,7 @@ run-headless-bench script:
 
 fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
     bash -euo pipefail -c '\
-      build="false"; force="false"; windows="false"; frontend="dev"; backend="auto"; device="auto"; run_mode="interactive"; script=""; web_port="3100"; skip_local_changes="false"; seen_options=""; \
+      r="{{repo_root}}"; build="false"; force="false"; windows="false"; frontend="dev"; backend="auto"; device="auto"; run_mode="interactive"; script=""; web_port="3100"; skip_local_changes="false"; seen_options=""; \
       for raw in "{{opt_1}}" "{{opt_2}}" "{{opt_3}}" "{{opt_4}}" "{{opt_5}}" "{{opt_6}}" "{{opt_7}}" "{{opt_8}}"; do \
         [ -n "$raw" ] || continue; \
         key="${raw%%=*}"; value="$raw"; if [ "$key" != "$raw" ]; then value="${raw#*=}"; fi; \
@@ -5337,19 +5337,20 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
       host_windows="false"; \
       case "$(uname -s 2>/dev/null || true)" in MINGW*|MSYS*|CYGWIN*) host_windows="true" ;; esac; \
       if [ "$backend" = "fem" ] && { [ "$windows" = "true" ] || [ "$host_windows" = "true" ]; }; then \
-        exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{ repo_root }}/scripts/windows/run_fullmag_fem.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port" "${skip_local_changes_args[@]}"; \
+        case ",$seen_options," in *",web_port,"*) ;; *) web_port="0" ;; esac; \
+        exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "$r/scripts/windows/run_fullmag_fem.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port" "${skip_local_changes_args[@]}"; \
       fi; \
       if [ "$windows" = "true" ] || [ "$host_windows" = "true" ]; then \
-        exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{ repo_root }}/scripts/windows/run_fullmag.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port" "${skip_local_changes_args[@]}"; \
+        exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "$r/scripts/windows/run_fullmag.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port" "${skip_local_changes_args[@]}"; \
       fi; \
-      if [ "$build" = "true" ]; then just ensure-python; elif [ ! -x "{{repo_python}}" ]; then echo "Python env is missing; run with build=True or force=True once." >&2; exit 2; fi; \
+      if [ "$build" = "true" ]; then just ensure-python; elif [ ! -x "$r/.fullmag/local/python/bin/python" ]; then echo "Python env is missing; run with build=True or force=True once." >&2; exit 2; fi; \
       if [ "$frontend" = "static" ]; then \
         if [ "$force" = "true" ]; then make web-build-static; \
         elif [ "$build" = "true" ]; then just build-static-control-room; \
-        elif [ ! -f "{{local_web_root}}/index.html" ] && [ ! -f "{{control_room_static_out}}/index.html" ]; then echo "Static control room is missing; run with build=True or force=True once." >&2; exit 2; fi; \
+        elif [ ! -f "$r/.fullmag/local/web/index.html" ] && [ ! -f "$r/apps/control-room/out/index.html" ]; then echo "Static control room is missing; run with build=True or force=True once." >&2; exit 2; fi; \
       fi; \
       if [ "$backend" = "fem" ]; then \
-        runtime_copy_helper="{{repo_root}}/scripts/lib/runtime_bundle_copy.sh"; \
+        runtime_copy_helper="$r/scripts/lib/runtime_bundle_copy.sh"; \
         test -f "$runtime_copy_helper" || { echo "managed FEM runtime copy helper is missing: $runtime_copy_helper" >&2; exit 2; }; \
         if [ "$force" = "true" ]; then just rebuild-fem-runtime; else just ensure-managed-fem-runtime; fi; \
         bin="{{gpu_runtime_bin}}"; path_prefix=""; \
@@ -5358,10 +5359,10 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
           if [ "$backend" = "fdm" ]; then FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 just build fullmag; else just build fullmag; fi; \
         elif [ "$build" = "true" ]; then \
           if [ "$backend" = "fdm" ]; then FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 just build fullmag; else just build fullmag; fi; \
-        elif [ ! -x "{{local_bin}}/fullmag" ]; then echo "Fullmag binary is missing; run with build=True or force=True once." >&2; exit 2; fi; \
-        bin="{{local_bin}}/fullmag"; path_prefix="{{local_bin}}:$PATH"; \
+        elif [ ! -x "$r/.fullmag/local/bin/fullmag" ]; then echo "Fullmag binary is missing; run with build=True or force=True once." >&2; exit 2; fi; \
+        bin="$r/.fullmag/local/bin/fullmag"; path_prefix="$r/.fullmag/local/bin:$PATH"; \
       fi; \
-      env_args=(FULLMAG_PYTHON="{{repo_python}}"); \
+      env_args=(FULLMAG_PYTHON="$r/.fullmag/local/python/bin/python"); \
       if [ -n "$path_prefix" ]; then env_args+=(PATH="$path_prefix"); fi; \
       if [ "$run_mode" = "headless" ]; then env_args+=(FULLMAG_API_PORT=0); fi; \
       if [ "$backend" = "fem" ]; then env_args+=(FULLMAG_FDM_EXECUTION=cpu); fi; \
