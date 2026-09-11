@@ -7089,9 +7089,11 @@ fn rotated_interfacial_dmi_rejects_eigen_and_frequency_domain_execution() {
         target: fullmag_ir::EigenTargetIR::Lowest,
         equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
         k_sampling: None,
+        bias_field_sweep: None,
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             stage_autosave: None,

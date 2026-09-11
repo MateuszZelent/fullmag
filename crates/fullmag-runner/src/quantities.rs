@@ -831,7 +831,10 @@ mod tests {
             active_fdm_preview_quantities(FdmEngine::CpuReference, &fdm, &quantities),
             vec!["H_rotated_dmi", "eden_rotated_dmi"]
         );
-        assert!(active_fdm_preview_quantities(FdmEngine::CudaFdm, &fdm, &quantities).is_empty());
+        assert_eq!(
+            active_fdm_preview_quantities(FdmEngine::CudaFdm, &fdm, &quantities),
+            vec!["H_rotated_dmi", "eden_rotated_dmi"]
+        );
 
         let mut fem = fem_plan();
         assert!(!fem_plan_enables_quantity(&fem, QuantityId::HDmiRotated));
