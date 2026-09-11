@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { BufferAttribute, type BufferGeometry } from "three";
+import { BufferAttribute, DynamicDrawUsage, type BufferGeometry } from "three";
 
 import { createViewport3DGpuUploadManager } from "../build-engine/gpu/viewport3dGpuUploadManager";
 import type { Viewport3DGpuUploadChunk } from "../build-engine/gpu/viewport3dGpuUploadTypes";
@@ -300,9 +300,14 @@ export function createViewport3DScalarColorUploadPlan(
     existing.array instanceof Float32Array
       ? existing
       : null;
-  const attribute =
-    existingAttribute ??
-    new BufferAttribute(new Float32Array(vertexCount * 3), 3);
+  // These colors are updated during phase animation. Hint repeated writes
+  // before the first GPU upload; retain the usage of reused attributes.
+  // Driver allocation and synchronization behavior is implementation-dependent.
+  let attribute = existingAttribute;
+  if (!attribute) {
+    attribute = new BufferAttribute(new Float32Array(vertexCount * 3), 3);
+    attribute.setUsage(DynamicDrawUsage);
+  }
   const target = attribute.array as Float32Array;
   const source = colorBuffer.colors;
   const safeBatchSize = Math.max(1, Math.floor(batchSize));
@@ -599,10 +604,15 @@ function addShaderUploadAttribute(
     existing.array instanceof Float32Array
       ? existing
       : null;
+  // Scalar, vector, and complex attributes also receive repeated field updates.
+  // Set the usage hint on creation, before their first GPU upload.
+  let attribute = existingAttribute;
+  if (!attribute) {
+    attribute = new BufferAttribute(new Float32Array(vertexCount * itemSize), itemSize);
+    attribute.setUsage(DynamicDrawUsage);
+  }
   attributes.push({
-    attribute:
-      existingAttribute ??
-      new BufferAttribute(new Float32Array(vertexCount * itemSize), itemSize),
+    attribute,
     itemSize,
     name,
     source,
