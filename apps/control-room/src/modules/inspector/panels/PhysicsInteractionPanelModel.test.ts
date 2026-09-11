@@ -25,6 +25,7 @@ describe("PhysicsInteractionPanelModel", () => {
       "current_transport",
       "spin_torque",
       "interfacial_dmi",
+      "rotated_interfacial_dmi",
       "bulk_dmi",
       "uniaxial_anisotropy",
       "cubic_anisotropy",

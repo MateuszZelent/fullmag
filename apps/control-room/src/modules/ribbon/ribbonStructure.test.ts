@@ -1611,6 +1611,7 @@ describe("ribbon structure", () => {
       { interactionId: "current_transport" },
       { interactionId: "spin_torque" },
       { interactionId: "interfacial_dmi" },
+      { interactionId: "rotated_interfacial_dmi" },
       { interactionId: "bulk_dmi" },
       { interactionId: "uniaxial_anisotropy" },
       { interactionId: "cubic_anisotropy" },
@@ -1920,12 +1921,13 @@ describe("ribbon structure", () => {
       "physics-global:exchange",
       "physics-global:demag",
       "physics-global:zeeman",
+      "physics-global:rotated_interfacial_dmi",
       "physics-global:add-field-drive",
     ]);
-    expect(items.slice(0, 3).every(
+    expect(items.slice(0, 4).every(
       (node) => node.commandId === RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
     )).toBe(true);
-    expect(items[3]).toMatchObject({
+    expect(items[4]).toMatchObject({
       commandId: RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
       label: "Field Drive",
     });
