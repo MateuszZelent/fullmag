@@ -1028,6 +1028,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/data/antenna/field-solutions/{solution_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_antenna_field_solutions_solution_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/antenna/source-spectra/{output_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_antenna_source_spectra_output_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/artifacts": {
         parameters: {
             query?: never;
@@ -4410,6 +4442,28 @@ export interface components {
             reason_code?: string | null;
             resource: string;
         };
+        AntennaFieldBasisResource: {
+            current_balance_certificate_digest: string;
+            current_density_per_ampere: components["schemas"]["AntennaFieldBinaryRefResource"];
+            electric_potential_per_ampere: components["schemas"]["AntennaFieldBinaryRefResource"];
+            magnetic_field_per_ampere: components["schemas"]["AntennaFieldBinaryRefResource"];
+            /** Format: double */
+            measured_positive_terminal_current_a: number;
+            /** Format: double */
+            normalization_current_a: number;
+            /** Format: double */
+            normalization_scale: number;
+            port_mode_id: string;
+            quadrature_diagnostics: unknown;
+        };
+        AntennaFieldBinaryRefResource: {
+            layout: string;
+            path: string;
+            scalar_type: string;
+            sha256: string;
+            unit: string;
+            value_count: number;
+        };
         /** @enum {string} */
         AntennaFieldModelResource: "quasistatic_conduction_biot_savart3d";
         AntennaFieldSolutionRefResource: {
@@ -4417,6 +4471,42 @@ export interface components {
             content_digest: string;
             output_id: string;
             stage_id: string;
+        };
+        AntennaFieldSolutionResource: {
+            asset_id: string;
+            assumptions: string[];
+            bases: components["schemas"]["AntennaFieldBasisResource"][];
+            component: string;
+            conductor_positions: components["schemas"]["AntennaFieldBinaryRefResource"];
+            content_digest: string;
+            current_transport_id: string;
+            gauge_policy: string;
+            geometry_revision: string;
+            material_revision: string;
+            mesh_digest: string;
+            quantity: string;
+            requested_execution: unknown;
+            resolved_execution: unknown;
+            resource_id: string;
+            sample_positions: components["schemas"]["AntennaFieldBinaryRefResource"];
+            sample_topology?: null | components["schemas"]["AntennaFieldBinaryRefResource"];
+            schema_version: string;
+            session_epoch: string;
+            session_id: string;
+            signatures: components["schemas"]["AntennaFieldSolutionSignaturesResource"];
+            solution_id: string;
+            solver_policy: unknown;
+            source_object_id: string;
+            stage_id: string;
+            status: string;
+            target_projection_signature?: string | null;
+        };
+        AntennaFieldSolutionSignaturesResource: {
+            current_solution_signature: string;
+            field_solution_signature: string;
+            target_projection_signatures: {
+                [key: string]: string;
+            };
         };
         AntennaFieldSolveStageResource: {
             conductor_mesh_policy: string;
@@ -4431,6 +4521,19 @@ export interface components {
             solver_policy: string;
             source_object_id: string;
             target_refs: components["schemas"]["FieldTargetResource"][];
+        };
+        AntennaFieldTargetResource: {
+            /** @enum {string} */
+            kind: "global";
+        } | {
+            /** @enum {string} */
+            kind: "object";
+            object_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "region";
+            object_id: string;
+            region_id: string;
         };
         AntennaNamedOutputResource: {
             id: string;
@@ -4454,6 +4557,37 @@ export interface components {
             schema_version: string;
             source_object_id: string;
         };
+        AntennaSourceSpectrumResource: {
+            amplitude_count: number;
+            amplitude_unit: string;
+            /** Format: double */
+            coherent_gain: number;
+            component: string;
+            component_labels: string[];
+            content_digest: string;
+            /** Format: double */
+            equivalent_noise_bandwidth_bins: number;
+            field_signature: string;
+            k_u_count: number;
+            k_v_count: number;
+            normalization: string;
+            output_id: string;
+            payload: components["schemas"]["AntennaSpectrumPayloadResource"];
+            port_mode_id: string;
+            power_count: number;
+            quantity: string;
+            request_id: string;
+            resource_id: string;
+            sampling: components["schemas"]["AntennaSpectrumSamplingResource"];
+            schema_version: string;
+            session_epoch: string;
+            session_id: string;
+            solution_content_digest: string;
+            solution_id: string;
+            source_object_id: string;
+            target_projection_signature?: string | null;
+            wave_vector_unit: string;
+        };
         AntennaSpectrumKGridResource: {
             k_u_rad_per_m: number[];
             k_v_rad_per_m: number[];
@@ -4462,6 +4596,11 @@ export interface components {
         AntennaSpectrumNormalizationResource: "integral_si" | "unitary_discrete";
         /** @enum {string} */
         AntennaSpectrumOutsidePolicyResource: "error" | "zero";
+        AntennaSpectrumPayloadResource: {
+            content_type: string;
+            format: string;
+            path: string;
+        };
         AntennaSpectrumRequestResource: {
             component: string;
             equilibrium_ref?: string | null;
@@ -4491,6 +4630,32 @@ export interface components {
             sample_count_u: number;
             /** Format: int32 */
             sample_count_v: number;
+        };
+        AntennaSpectrumSamplingResource: {
+            axis_u: number[];
+            axis_v: number[];
+            /** Format: double */
+            extent_u_m: number;
+            /** Format: double */
+            extent_v_m: number;
+            fourier_origin_uv_m: number[];
+            fourier_phase_convention: string;
+            interpolation: string;
+            mapping_digest: string;
+            origin_m: number[];
+            outside_count: number;
+            outside_policy: string;
+            port_mode_id: string;
+            realization: string;
+            /** Format: int32 */
+            sample_count_u: number;
+            /** Format: int32 */
+            sample_count_v: number;
+            schema_version: string;
+            solution_id: string;
+            source_object_id: string;
+            source_sample_count: number;
+            target: components["schemas"]["AntennaFieldTargetResource"];
         };
         /** @enum {string} */
         AntennaSpectrumTransformResource: "spatial_fft" | "nonuniform_spatial_fft";
@@ -14519,6 +14684,80 @@ export interface operations {
                 };
             };
             /** @description No Γ spin-wave response artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_antenna_field_solutions_solution_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Published antenna field solution id */
+                solution_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Published antenna field solution metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AntennaFieldSolutionResource"];
+                };
+            };
+            /** @description Field solution metadata not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Field solution artifact not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_antenna_source_spectra_output_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Published antenna source spectrum output id */
+                output_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Published antenna source spectrum metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AntennaSourceSpectrumResource"];
+                };
+            };
+            /** @description Source spectrum metadata not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Source spectrum artifact not found */
             404: {
                 headers: {
                     [name: string]: unknown;

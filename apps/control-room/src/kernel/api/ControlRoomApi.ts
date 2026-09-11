@@ -53,6 +53,8 @@ import {
   DATA_QUANTITIES_PATH,
   DATA_ARTIFACT_PATH,
   DATA_ARTIFACTS_PATH,
+  DATA_ANTENNA_FIELD_SOLUTION_PATH,
+  DATA_ANTENNA_SOURCE_SPECTRUM_PATH,
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_FDM_MULTILAYER_LAYOUT_PATH,
   DATA_DOMAIN_FDM_MULTILAYER_LAYER_ACTIVE_MASK_PATH,
@@ -309,6 +311,8 @@ import type {
   FrequencyDomainJsonArtifactResource,
   FrequencyDomainTextArtifactResource,
   ArtifactResource,
+  AntennaFieldSolutionResource,
+  AntennaSourceSpectrumResource,
   FrequencyDomainFieldResource,
   FrequencyDomainSweepProgressResource,
   HysteresisAdaptiveRefinementResource,
@@ -1281,6 +1285,20 @@ export class ControlRoomApi {
   };
 
   readonly data = {
+    antenna: {
+      fieldSolution: (solutionId: string, options?: RequestOptions) =>
+        this.requestJson<AntennaFieldSolutionResource>(
+          DATA_ANTENNA_FIELD_SOLUTION_PATH,
+          options,
+          { path: { solution_id: solutionId } },
+        ),
+      sourceSpectrum: (outputId: string, options?: RequestOptions) =>
+        this.requestJson<AntennaSourceSpectrumResource>(
+          DATA_ANTENNA_SOURCE_SPECTRUM_PATH,
+          options,
+          { path: { output_id: outputId } },
+        ),
+    },
     artifacts: {
       list: (options?: RequestOptions) =>
         this.requestJson<ArtifactResource[]>(DATA_ARTIFACTS_PATH, options),

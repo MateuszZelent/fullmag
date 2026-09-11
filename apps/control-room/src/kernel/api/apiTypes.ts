@@ -254,6 +254,10 @@ export type FrequencyDomainFmrPeaksArtifactPayload =
 export type FrequencyDomainTextArtifactResource =
   components["schemas"]["FrequencyDomainTextArtifactResource"];
 export type ArtifactResource = components["schemas"]["ArtifactResource"];
+export type AntennaFieldSolutionResource =
+  components["schemas"]["AntennaFieldSolutionResource"];
+export type AntennaSourceSpectrumResource =
+  components["schemas"]["AntennaSourceSpectrumResource"];
 export type FrequencyDomainKPathMetadataResource =
   components["schemas"]["FrequencyDomainKPathMetadataResource"];
 export type FrequencyDomainKPathSamplingResource =

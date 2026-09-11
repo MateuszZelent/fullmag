@@ -732,6 +732,14 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::data::get_artifact),
         )
         .route(
+            "/v2/sessions/current/data/antenna/field-solutions/:solution_id",
+            get(handlers::data::get_antenna_field_solution),
+        )
+        .route(
+            "/v2/sessions/current/data/antenna/source-spectra/:output_id",
+            get(handlers::data::get_antenna_source_spectrum),
+        )
+        .route(
             "/v2/sessions/current/visualization/display",
             get(handlers::visualization::get_display)
                 .put(handlers::visualization::replace_display)

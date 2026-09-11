@@ -352,6 +352,14 @@ export const DATA_ARTIFACTS_PATH = openApiV2Path(
   "/v2/sessions/current/data/artifacts",
 );
 
+export const DATA_ANTENNA_FIELD_SOLUTION_PATH = openApiV2Path(
+  "/v2/sessions/current/data/antenna/field-solutions/{solution_id}",
+);
+
+export const DATA_ANTENNA_SOURCE_SPECTRUM_PATH = openApiV2Path(
+  "/v2/sessions/current/data/antenna/source-spectra/{output_id}",
+);
+
 export const DATA_ARTIFACT_PATH = openApiV2Path(
   "/v2/sessions/current/data/artifacts/{artifact_id}",
 );

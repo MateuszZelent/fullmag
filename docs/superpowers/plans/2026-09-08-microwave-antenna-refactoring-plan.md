@@ -542,6 +542,8 @@ restart:    reload ready manifest -> verify bytes and dependencies -> resolve co
 
 ## T14. Domknąć OpenAPI, zasoby i realtime
 
+**Stan 2026-09-11:** dodano typowane endpointy metadanych opublikowanego rozwiązania pola i widma źródłowego anteny (`data/antenna/...`) z tożsamością sesji, podpisami, linkami do artefaktów oraz ETag/304. Facade `ControlRoomApi` i hooki zasobów są podłączone, a OpenAPI/TypeScript wygenerowano ponownie. Pozostają binarne payloady widma, pełna walidacja świeżości, invalidation websocket i testy przeglądarkowe.
+
 **Pliki:** API schema/router handlers wskazane w mapie, nowe `handlers/data/antenna.rs`, `ControlRoomApi.ts`, nowe `antennaResources.ts`, generated transport/types/paths.
 
 - [ ] Regenerować scenę z typowanych danych T03; pole błędnie nazwane lub nieznane ma być wykrywane w authoring contract. Nie usztywniać przypadkowo unrelated extension fields bez migracji.

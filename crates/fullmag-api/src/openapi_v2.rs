@@ -224,6 +224,8 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::simulation::runtime::get_object_metrics,
         crate::router_v2::handlers::data::artifacts::list_artifacts,
         crate::router_v2::handlers::data::artifacts::get_artifact,
+        crate::router_v2::handlers::data::antenna::get_antenna_field_solution,
+        crate::router_v2::handlers::data::antenna::get_antenna_source_spectrum,
         crate::router_v2::handlers::analysis::eigen::get_spectrum,
         crate::router_v2::handlers::analysis::eigen::get_spectrum_v2,
         crate::router_v2::handlers::analysis::eigen::get_mode,
