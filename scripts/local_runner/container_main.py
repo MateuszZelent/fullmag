@@ -25,6 +25,9 @@ from local_runner.unix_docker import docker
 from local_runner.container_api import APIUnavailable
 
 
+_RETENTION_QUEUE_LIMIT = 1000
+
+
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -180,7 +183,11 @@ class Application:
         with self._lifecycle_lock:
             self._assert_submission_ready()
             return self.queue.submit(owner=self.owner, **payload,
-                identity_payload={'source_mode': detail['source_mode'], 'origin_repo': detail['origin_repo']})
+                identity_payload={
+                    'source_mode': detail['source_mode'],
+                    'origin_repo': detail['origin_repo'],
+                    'native_source_identity': detail['native_source_identity'],
+                })
 
     def list(self):
         return self.queue.list(owner=self.owner)
@@ -227,6 +234,20 @@ class Application:
 
     def resume(self):
         with self._lifecycle_lock:
+            worker_alive = self._worker_thread is not None and self._worker_thread.is_alive()
+            # Once drain starts, the service can decide to stop before it
+            # publishes its terminal record. Do not clear the marker until
+            # the thread exits, even if the durable state still says running.
+            if worker_alive and self._worker_state == 'stopping':
+                health = self._health_snapshot()
+                return {
+                    'resumed': False,
+                    'worker_started': False,
+                    'worker_alive': health['worker_alive'],
+                    'worker_state': health['worker_state'],
+                    'stop_requested': health['stop_requested'],
+                    'reason': 'worker is finishing its stop; retry resume after it exits',
+                }
             clear_stop_request(self.paths, reason='operator resumed the service')
             started = self._start_worker_locked()
             health = self._health_snapshot()
@@ -239,7 +260,16 @@ class Application:
             }
 
     def retention(self):
-        return retention_plan(str(self.storage), self.queue.list(owner=self.owner), time.time())
+        jobs = self.queue.list(owner=self.owner, limit=_RETENTION_QUEUE_LIMIT)
+        result = retention_plan(str(self.storage), jobs, time.time())
+        # JobQueue exposes a bounded list without a count/offset API.  Keep
+        # retention fail-closed and disclose that a full inventory is not
+        # proven whenever the bound is reached.
+        result['queue_inventory'] = {
+            'limit': _RETENTION_QUEUE_LIMIT,
+            'truncated': len(jobs) >= _RETENTION_QUEUE_LIMIT,
+        }
+        return result
 
     def health(self):
         import shutil

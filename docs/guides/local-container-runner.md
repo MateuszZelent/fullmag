@@ -70,6 +70,9 @@ przed ponowieniem. Timeout `wait` nie anuluje builda.
 
 `runner-container-stop` oznacza pauzę przyjmowania zadań i dokończenie aktywnego
 builda, nie zabicie kontenera. `runner-container-resume` wznawia kolejkę.
+Jeśli trwa jeszcze drain po `stop`, odpowiedź ma `resumed=false`: poczekaj na
+zakończenie workera i ponów `resume`. Marker pauzy pozostaje wtedy aktywny;
+nie uruchamiaj dodatkowego koordynatora.
 `runner-container-replace sha256:<nowy-image-id>` wymaga potwierdzonej pauzy i braku
 aktywnego joba; wymienia wyłącznie własny, dokładnie sprawdzony kontener, bez
 usuwania storage. Samo `configure` nie podmienia istniejącej instalacji.
