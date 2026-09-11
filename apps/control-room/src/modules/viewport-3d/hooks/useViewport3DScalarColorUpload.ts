@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { BufferAttribute, type BufferGeometry } from "three";
+import { BufferAttribute, DynamicDrawUsage, type BufferGeometry } from "three";
 
 import { createViewport3DGpuUploadManager } from "../build-engine/gpu/viewport3dGpuUploadManager";
 import type { Viewport3DGpuUploadChunk } from "../build-engine/gpu/viewport3dGpuUploadTypes";
@@ -300,9 +300,17 @@ export function createViewport3DScalarColorUploadPlan(
     existing.array instanceof Float32Array
       ? existing
       : null;
-  const attribute =
-    existingAttribute ??
-    new BufferAttribute(new Float32Array(vertexCount * 3), 3);
+  // S-19: fmScalarValue/fmVectorValue/... i tu "color" są nadpisywane co
+  // krok animacji fazy (bufferSubData wiele razy na sekundę). Domyślny
+  // StaticDrawUsage sugeruje sterownikowi jednorazowy zapis — częste
+  // aktualizacje na takiej alokacji wymuszają realokację bufora GPU albo
+  // synchronizację potoku. Hint trzeba ustawić przed pierwszym bufferData,
+  // czyli w momencie tworzenia atrybutu (nie przy każdym ponownym użyciu).
+  let attribute = existingAttribute;
+  if (!attribute) {
+    attribute = new BufferAttribute(new Float32Array(vertexCount * 3), 3);
+    attribute.setUsage(DynamicDrawUsage);
+  }
   const target = attribute.array as Float32Array;
   const source = colorBuffer.colors;
   const safeBatchSize = Math.max(1, Math.floor(batchSize));
@@ -599,10 +607,16 @@ function addShaderUploadAttribute(
     existing.array instanceof Float32Array
       ? existing
       : null;
+  // S-19: patrz komentarz w createViewport3DScalarColorUploadPlan — ten sam
+  // problem dotyczy fmScalarValue/fmVectorValue/fmComplexRealValue/
+  // fmComplexImagValue.
+  let attribute = existingAttribute;
+  if (!attribute) {
+    attribute = new BufferAttribute(new Float32Array(vertexCount * itemSize), itemSize);
+    attribute.setUsage(DynamicDrawUsage);
+  }
   attributes.push({
-    attribute:
-      existingAttribute ??
-      new BufferAttribute(new Float32Array(vertexCount * itemSize), itemSize),
+    attribute,
     itemSize,
     name,
     source,

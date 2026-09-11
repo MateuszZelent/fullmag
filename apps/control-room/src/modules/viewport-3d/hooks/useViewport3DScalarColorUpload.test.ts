@@ -1,4 +1,4 @@
-import { BufferAttribute, BufferGeometry } from "three";
+import { BufferAttribute, BufferGeometry, DynamicDrawUsage, StaticDrawUsage } from "three";
 import { describe, expect, it } from "vitest";
 
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
@@ -9,6 +9,8 @@ import {
   createViewport3DScalarShaderColorUploadPlan,
 } from "./useViewport3DScalarColorUpload";
 import {
+  VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE,
+  VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE,
   VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE,
   VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE,
 } from "../viewport3dScalarSurfaceShader";
@@ -126,6 +128,7 @@ describe("createViewport3DScalarColorUploadPlan", () => {
       Array.from(colorBuffer.colors),
     );
     expect(attribute.version).toBeGreaterThan(0);
+    expect(attribute.usage).toBe(DynamicDrawUsage);
   });
 
   it("reuses an existing compatible scalar color attribute", () => {
@@ -147,6 +150,7 @@ describe("createViewport3DScalarColorUploadPlan", () => {
     uploadPlan?.onVisible();
 
     expect(geometry.getAttribute("color")).toBe(existing);
+    expect(existing.usage).toBe(StaticDrawUsage);
     expect(Array.from(existing.array as Float32Array)).toEqual(
       Array.from(colorBuffer.colors),
     );
@@ -192,6 +196,7 @@ describe("createViewport3DScalarShaderColorUploadPlan", () => {
       Array.from(scalarValues),
     );
     expect(attribute.version).toBeGreaterThan(0);
+    expect(attribute.usage).toBe(DynamicDrawUsage);
   });
 
   it("reuses compatible shader attributes while retaining inactive slots", () => {
@@ -225,6 +230,7 @@ describe("createViewport3DScalarShaderColorUploadPlan", () => {
     expect(geometry.getAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE)).toBe(
       scalarAttribute,
     );
+    expect(scalarAttribute.usage).toBe(StaticDrawUsage);
     expect(Array.from(scalarAttribute.array as Float32Array)).toEqual([7, 9]);
     expect(geometry.hasAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE)).toBe(true);
   });
@@ -270,5 +276,41 @@ describe("createViewport3DScalarShaderColorUploadPlan", () => {
     expect(geometry.getAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE)).toBeInstanceOf(
       BufferAttribute,
     );
+  });
+
+  it("uploads complex real/imag attributes for shader-side phase projection (S-18)", () => {
+    const geometry = new BufferGeometry();
+    const colorBuffer: ScalarColorBuffer = {
+      colors: new Float32Array(),
+      colorMode: "x",
+      complexImagValues: new Float32Array([0, 1, 0, 0, 0, 1]),
+      complexPhaseRad: Math.PI / 2,
+      complexRealValues: new Float32Array([1, 0, 0, 0, 1, 0]),
+      range: { max: 1, min: -1 },
+      scalarValues: new Float32Array([1, 0]),
+    };
+
+    const uploadPlan = createViewport3DScalarShaderColorUploadPlan(
+      geometry,
+      colorBuffer,
+      2,
+    );
+
+    expect(uploadPlan).not.toBeNull();
+    for (const chunk of uploadPlan?.chunks ?? []) chunk.upload();
+    uploadPlan?.onVisible();
+
+    expect(
+      Array.from(
+        geometry.getAttribute(VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE)
+          .array as Float32Array,
+      ),
+    ).toEqual([1, 0, 0, 0, 1, 0]);
+    expect(
+      Array.from(
+        geometry.getAttribute(VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE)
+          .array as Float32Array,
+      ),
+    ).toEqual([0, 1, 0, 0, 0, 1]);
   });
 });
