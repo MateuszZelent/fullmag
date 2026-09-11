@@ -153,6 +153,18 @@ function sourceForObject(scene: SceneResource | null, objectId: string | null): 
   return legacy ? { kind: "legacy", source: legacy } : null;
 }
 
+export function antennaObjectDraftKey(
+  selection: Selection,
+  scene: SceneResource | null,
+): string {
+  const objectId =
+    selection.ref?.type === "scene-object" ? selection.ref.objectId : selection.objectId;
+  const resolved = sourceForObject(scene, objectId);
+  const sourceId =
+    asString(resolved?.source.id) ?? asString(resolved?.source.name) ?? "unassigned";
+  return `${resolved?.kind ?? "missing"}:${objectId ?? "none"}:${sourceId}`;
+}
+
 function sourceField(source: JsonRecord | null): {
   amplitudeB: unknown;
   direction: unknown;

@@ -14,6 +14,7 @@ import { InspectorGroup } from "../primitives/InspectorGroup";
 import {
   buildAntennaCanonicalFieldDrive,
   buildAntennaLegacyMigrationPatch,
+  antennaObjectDraftKey,
   resolveAntennaObjectDraft,
   resolveAntennaObjectPanelModel,
   type AntennaObjectDraft,
@@ -54,7 +55,7 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
     () => resolveAntennaObjectDraft(selection, scene.data),
     [scene.data, selection],
   );
-  const draftKey = `${model.objectId}:${scene.data?.revision ?? "none"}`;
+  const draftKey = antennaObjectDraftKey(selection, scene.data);
   const [draftState, setDraftState] = useState<DraftState>({
     draft: baseDraft,
     key: draftKey,

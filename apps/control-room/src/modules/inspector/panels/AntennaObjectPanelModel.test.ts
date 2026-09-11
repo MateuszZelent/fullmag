@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { EMPTY_SELECTION } from "@/kernel/selection/selectionTypes";
 
 import {
+  antennaObjectDraftKey,
   buildAntennaCanonicalFieldDrive,
   buildAntennaLegacyMigrationPatch,
   resolveAntennaObjectDraft,
@@ -10,6 +11,36 @@ import {
 } from "./AntennaObjectPanelModel";
 
 describe("AntennaObjectPanelModel", () => {
+  it("keeps the draft identity stable across unrelated scene revisions", () => {
+    const selection = { ...EMPTY_SELECTION, objectId: "antenna" };
+    const scene = {
+      revision: 11,
+      field_drives: {
+        drives: [{
+          id: "drive",
+          kind: "regional",
+          spatial_profile: { kind: "geometry_mask", object_id: "antenna" },
+          waveform: { kind: "constant" },
+        }],
+      },
+    } as never;
+    const nextScene = {
+      revision: 12,
+      field_drives: {
+        drives: [{
+          id: "drive",
+          kind: "regional",
+          spatial_profile: { kind: "geometry_mask", object_id: "antenna" },
+          waveform: { kind: "constant" },
+        }],
+      },
+    } as never;
+
+    expect(antennaObjectDraftKey(selection, scene)).toBe(
+      antennaObjectDraftKey(selection, nextScene),
+    );
+  });
+
   it("resolves prescribed Zeeman mask antenna details from SceneResource", () => {
     const model = resolveAntennaObjectPanelModel(
       {
