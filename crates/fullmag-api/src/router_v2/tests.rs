@@ -28767,6 +28767,215 @@ async fn artifacts_list_returns_304_when_etag_matches() {
 }
 
 #[tokio::test]
+async fn antenna_result_resources_publish_metadata_and_etags() {
+    let state = test_app_state_with_live_session().await;
+    let artifact_dir = std::env::temp_dir().join(format!(
+        "fullmag-antenna-result-resources-{}",
+        uuid_v4_hex()
+    ));
+    let field_dir = artifact_dir.join("antenna/field_solutions/solution-1");
+    let spectrum_dir = artifact_dir.join("antenna/source_spectra/spectrum-output");
+    fs::create_dir_all(&field_dir).expect("field solution artifact directory");
+    fs::create_dir_all(&spectrum_dir).expect("source spectrum artifact directory");
+    fs::write(
+        field_dir.join("manifest.v1.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": "antenna_field_solution.v1",
+            "asset_id": "asset-1",
+            "status": "ready",
+            "solution_id": "solution-1",
+            "source_object_id": "antenna-1",
+            "current_transport_id": "current-1",
+            "stage_id": "solve-1",
+            "geometry_revision": "geometry-1",
+            "material_revision": "material-1",
+            "mesh_digest": "mesh-1",
+            "requested_execution": {"backend": "fem", "device": "cpu"},
+            "resolved_execution": {"backend": "fem", "device": "cpu"},
+            "gauge_policy": "zero_mean",
+            "solver_policy": {"linear": "cg"},
+            "signatures": {
+                "current_solution_signature": "sha256:current",
+                "field_solution_signature": "sha256:field",
+                "target_projection_signatures": {"global": "sha256:target"}
+            },
+            "content_digest": "sha256:solution",
+            "conductor_positions": {
+                "path": "antenna/field_solutions/solution-1/conductor_positions_xyz_m.f64le",
+                "sha256": "sha256:conductor",
+                "scalar_type": "f64",
+                "layout": "xyz",
+                "unit": "m",
+                "value_count": 3
+            },
+            "sample_positions": {
+                "path": "antenna/field_solutions/solution-1/sample_positions_xyz_m.f64le",
+                "sha256": "sha256:samples",
+                "scalar_type": "f64",
+                "layout": "xyz",
+                "unit": "m",
+                "value_count": 6
+            },
+            "sample_topology": null,
+            "assumptions": ["static current", "linear conductor"],
+            "bases": [{
+                "port_mode_id": "port-1",
+                "measured_positive_terminal_current_a": 1.0,
+                "normalization_current_a": 1.0,
+                "normalization_scale": 1.0,
+                "current_balance_certificate_digest": "sha256:balance",
+                "electric_potential_per_ampere": {
+                    "path": "potential.f64le", "sha256": "sha256:v", "scalar_type": "f64",
+                    "layout": "node", "unit": "V/A", "value_count": 2
+                },
+                "current_density_per_ampere": {
+                    "path": "current.f64le", "sha256": "sha256:j", "scalar_type": "f64",
+                    "layout": "element_xyz", "unit": "A/m2/A", "value_count": 6
+                },
+                "magnetic_field_per_ampere": {
+                    "path": "field.f64le", "sha256": "sha256:h", "scalar_type": "f64",
+                    "layout": "sample_xyz", "unit": "A/m/A", "value_count": 6
+                },
+                "quadrature_diagnostics": {"order": 2}
+            }]
+        }))
+        .expect("serialize field solution manifest"),
+    )
+    .expect("write field solution manifest");
+    fs::write(
+        spectrum_dir.join("spectrum.v1.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": "antenna_source_spectrum_artifact.v1",
+            "request_id": "spectrum-request-1",
+            "output_id": "spectrum-output",
+            "solution_id": "solution-1",
+            "source_object_id": "antenna-1",
+            "port_mode_id": "port-1",
+            "solution_content_digest": "sha256:solution",
+            "content_digest": "sha256:spectrum",
+            "sampling": {
+                "schema_version": "antenna_spectrum_sampling.v1",
+                "solution_id": "solution-1",
+                "source_object_id": "antenna-1",
+                "port_mode_id": "port-1",
+                "target": {"kind": "global"},
+                "origin_m": [0.0, 0.0, 0.0],
+                "axis_u": [1.0, 0.0, 0.0],
+                "axis_v": [0.0, 1.0, 0.0],
+                "extent_u_m": 1.0,
+                "extent_v_m": 1.0,
+                "sample_count_u": 2,
+                "sample_count_v": 2,
+                "interpolation": "fem_element",
+                "realization": "fem_p1_interpolation_v1",
+                "outside_policy": "zero",
+                "outside_count": 0,
+                "source_sample_count": 4,
+                "mapping_digest": "sha256:mapping",
+                "fourier_origin_uv_m": [-0.5, -0.5],
+                "fourier_phase_convention": "centered_plane_origin_phase_corrected.v1"
+            },
+            "spectrum": {
+                "schema_version": "antenna_source_spectrum.v1",
+                "request_id": "spectrum-request-1",
+                "output_id": "spectrum-output",
+                "component": "H_z",
+                "k_u_rad_per_m": [0.0, 1.0],
+                "k_v_rad_per_m": [0.0, 1.0],
+                "component_labels": ["z"],
+                "amplitudes_re_im": [[1.0, 0.0]],
+                "power": [1.0],
+                "coherent_gain": 1.0,
+                "equivalent_noise_bandwidth_bins": 1.0,
+                "normalization": "unitary_discrete",
+                "amplitude_unit": "A/m/A",
+                "wave_vector_unit": "rad/m"
+            }
+        }))
+        .expect("serialize source spectrum artifact"),
+    )
+    .expect("write source spectrum artifact");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.artifact_dir = artifact_dir.display().to_string();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let field = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(field.status(), StatusCode::OK);
+    let field_etag = field.headers().get("etag").unwrap().clone();
+    let field_json = body_json(field).await;
+    assert_eq!(field_json["solution_id"], "solution-1");
+    assert_eq!(field_json["quantity"], "H_ant_basis");
+    assert_eq!(field_json["sample_positions"]["value_count"], 6);
+
+    let field_not_modified = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .header("if-none-match", field_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(field_not_modified.status(), StatusCode::NOT_MODIFIED);
+    assert!(body_bytes(field_not_modified).await.is_empty());
+
+    let spectrum = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(spectrum.status(), StatusCode::OK);
+    let spectrum_json = body_json(spectrum).await;
+    assert_eq!(spectrum_json["output_id"], "spectrum-output");
+    assert_eq!(spectrum_json["k_u_count"], 2);
+    assert_eq!(spectrum_json["sampling"]["realization"], "fem_p1_interpolation_v1");
+
+    let missing = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/missing")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    fs::write(field_dir.join("manifest.v1.json"), b"not-json")
+        .expect("corrupt field manifest");
+    let corrupt = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/field-solutions/solution-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(corrupt.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
 async fn artifacts_list_exposes_stage_autosave_progress_completion_and_failure() {
     let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
     fs::write(
