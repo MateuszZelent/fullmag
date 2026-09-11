@@ -343,8 +343,10 @@ odpowiednie kroki. Nie obejmuje to starych, obcych worktree, cache ani wyników.
 7. Przed cleanupem zapisz ścieżki buildów, logów i zachowanych wyników oraz
    stan integracji. Sprawdź dokładną rozwiązaną ścieżkę worktree, status
    obejmujący untracked files, unikalne zmiany, ownership, procesy, kontenery,
-   mounty i linki. Z głównego checkoutu wykonaj `git worktree remove` dla
-   pojedynczej zweryfikowanej ścieżki, bez `--force`. Zweryfikuj brak wpisu
+   mounty i linki. Z dostępnego cleanup executora — głównego checkoutu albo
+   innego zachowanego checkoutu, którego nie usuwasz — wykonaj
+   `git worktree remove` dla pojedynczej zweryfikowanej ścieżki, bez `--force`.
+   Zweryfikuj brak wpisu
    w `git worktree list` i brak katalogu. Następnie usuń lokalny branch zadania
    dopiero po potwierdzeniu integracji: dla merge/fast-forward sprawdź ancestry,
    a dla squash/rebase użyj stanu PR `MERGED` oraz porównania zmian. W obu
