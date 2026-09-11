@@ -28976,6 +28976,191 @@ async fn antenna_result_resources_publish_metadata_and_etags() {
 }
 
 #[tokio::test]
+async fn antenna_source_spectrum_v2_serves_hashed_binary_payloads_with_ranges() {
+    let state = test_app_state_with_live_session().await;
+    let artifact_dir = std::env::temp_dir().join(format!(
+        "fullmag-antenna-spectrum-v2-{}",
+        uuid_v4_hex()
+    ));
+    let spectrum_dir = artifact_dir.join("antenna/source_spectra/spectrum-output");
+    fs::create_dir_all(&spectrum_dir).expect("source spectrum artifact directory");
+    let f64_payload = |values: &[f64]| {
+        values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect::<Vec<_>>()
+    };
+    let k_u = f64_payload(&[0.0, 1.0]);
+    let k_v = f64_payload(&[0.0, 2.0]);
+    let amplitudes = f64_payload(&[1.0, 0.0, 2.0, -1.0]);
+    let power = f64_payload(&[1.0, 5.0]);
+    let digest = |bytes: &[u8]| format!("sha256:{:x}", Sha256::digest(bytes));
+    fs::write(
+        spectrum_dir.join("k_u_rad_per_m.f64le"),
+        &k_u,
+    )
+    .expect("write k_u payload");
+    fs::write(
+        spectrum_dir.join("k_v_rad_per_m.f64le"),
+        &k_v,
+    )
+    .expect("write k_v payload");
+    fs::write(
+        spectrum_dir.join("amplitudes_re_im.f64le"),
+        &amplitudes,
+    )
+    .expect("write amplitudes payload");
+    fs::write(spectrum_dir.join("power.f64le"), &power).expect("write power payload");
+    let payload_ref = |name: &str, bytes: &[u8], layout: &str, unit: &str, value_count: usize| {
+        serde_json::json!({
+            "path": format!("antenna/source_spectra/spectrum-output/{name}.f64le"),
+            "sha256": digest(bytes),
+            "scalar_type": "float64_le",
+            "layout": layout,
+            "unit": unit,
+            "value_count": value_count
+        })
+    };
+    fs::write(
+        spectrum_dir.join("spectrum.v2.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": "antenna_source_spectrum_artifact.v2",
+            "request_id": "spectrum-request-1",
+            "output_id": "spectrum-output",
+            "solution_id": "solution-1",
+            "source_object_id": "antenna-1",
+            "port_mode_id": "port-1",
+            "solution_content_digest": "sha256:solution",
+            "content_digest": "sha256:spectrum-v2",
+            "sampling": {
+                "schema_version": "antenna_spectrum_sampling.v1",
+                "solution_id": "solution-1",
+                "source_object_id": "antenna-1",
+                "port_mode_id": "port-1",
+                "target": {"kind": "global"},
+                "origin_m": [0.0, 0.0, 0.0],
+                "axis_u": [1.0, 0.0, 0.0],
+                "axis_v": [0.0, 1.0, 0.0],
+                "extent_u_m": 1.0,
+                "extent_v_m": 1.0,
+                "sample_count_u": 2,
+                "sample_count_v": 2,
+                "interpolation": "fem_element",
+                "realization": "fem_p1_interpolation_v1",
+                "outside_policy": "zero",
+                "outside_count": 0,
+                "source_sample_count": 4,
+                "mapping_digest": "sha256:mapping",
+                "fourier_origin_uv_m": [-0.5, -0.5],
+                "fourier_phase_convention": "centered_plane_origin_phase_corrected.v1"
+            },
+            "spectrum": {
+                "schema_version": "antenna_source_spectrum.v1",
+                "request_id": "spectrum-request-1",
+                "output_id": "spectrum-output",
+                "component": "H_z",
+                "component_labels": ["z"],
+                "k_u_count": 2,
+                "k_v_count": 2,
+                "amplitude_count": 2,
+                "power_count": 2,
+                "coherent_gain": 1.0,
+                "equivalent_noise_bandwidth_bins": 1.0,
+                "normalization": "unitary_discrete",
+                "amplitude_unit": "A/m/A",
+                "wave_vector_unit": "rad/m"
+            },
+            "payloads": {
+                "k_u_rad_per_m": payload_ref("k_u_rad_per_m", &k_u, "axis_u_1d", "rad/m", 2),
+                "k_v_rad_per_m": payload_ref("k_v_rad_per_m", &k_v, "axis_v_1d", "rad/m", 2),
+                "amplitudes_re_im": payload_ref("amplitudes_re_im", &amplitudes, "component_kv_ku_complex_re_im", "A/m/A", 4),
+                "power": payload_ref("power", &power, "kv_ku_power", "(A/m/A)^2", 2)
+            }
+        }))
+        .expect("serialize source spectrum v2 manifest"),
+    )
+    .expect("write source spectrum v2 manifest");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.artifact_dir = artifact_dir.display().to_string();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let metadata = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(metadata.status(), StatusCode::OK);
+    let metadata_json = body_json(metadata).await;
+    assert_eq!(metadata_json["schema_version"], "antenna_source_spectrum_artifact.v2");
+    assert_eq!(metadata_json["payloads"]["amplitudes_re_im"]["value_count"], 4);
+
+    let binary = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output/payloads/amplitudes_re_im")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(binary.status(), StatusCode::OK);
+    assert_eq!(binary.headers()[header::CONTENT_TYPE], "application/octet-stream");
+    let binary_etag = binary.headers()[header::ETAG].clone();
+    assert_eq!(body_bytes(binary).await, amplitudes);
+
+    let not_modified = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output/payloads/amplitudes_re_im")
+                .header(header::IF_NONE_MATCH, binary_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
+    assert!(body_bytes(not_modified).await.is_empty());
+
+    let partial = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output/payloads/amplitudes_re_im")
+                .header(header::RANGE, "bytes=0-7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(partial.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(partial.headers()[header::CONTENT_RANGE], "bytes 0-7/32");
+    assert_eq!(body_bytes(partial).await, amplitudes[..8]);
+
+    fs::write(spectrum_dir.join("amplitudes_re_im.f64le"), b"corrupted")
+        .expect("corrupt amplitudes payload");
+    let corrupt = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/antenna/source-spectra/spectrum-output/payloads/amplitudes_re_im")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(corrupt.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
 async fn artifacts_list_exposes_stage_autosave_progress_completion_and_failure() {
     let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
     fs::write(

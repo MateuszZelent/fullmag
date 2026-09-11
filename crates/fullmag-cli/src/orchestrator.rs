@@ -3345,29 +3345,31 @@ fn execute_antenna_spectrum_requests(
                         error.message
                     )
                 })?;
-        let artifact = fullmag_runner::antenna_source_spectrum_auxiliary_artifact(&spectrum)
+        let artifacts = fullmag_runner::antenna_source_spectrum_auxiliary_artifacts(&spectrum)
             .map_err(|error| {
                 anyhow!(
-                    "serialize antenna source spectrum request '{}': {}",
+                    "serialize antenna source-spectrum request '{}': {}",
                     request.id,
                     error.message
                 )
             })?;
-        let output_path = current_stage_artifact_dir.join(&artifact.relative_path);
-        if let Some(parent) = output_path.parent() {
-            fs::create_dir_all(parent).with_context(|| {
+        for artifact in artifacts {
+            let output_path = current_stage_artifact_dir.join(&artifact.relative_path);
+            if let Some(parent) = output_path.parent() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!(
+                        "create antenna source-spectrum artifact directory {}",
+                        parent.display()
+                    )
+                })?;
+            }
+            fs::write(&output_path, &artifact.bytes).with_context(|| {
                 format!(
-                    "create antenna source-spectrum artifact directory {}",
-                    parent.display()
+                    "write antenna source-spectrum artifact {}",
+                    output_path.display()
                 )
             })?;
         }
-        fs::write(&output_path, &artifact.bytes).with_context(|| {
-            format!(
-                "write antenna source-spectrum artifact {}",
-                output_path.display()
-            )
-        })?;
     }
     Ok(())
 }

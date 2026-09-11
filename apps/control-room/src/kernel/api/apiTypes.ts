@@ -258,6 +258,11 @@ export type AntennaFieldSolutionResource =
   components["schemas"]["AntennaFieldSolutionResource"];
 export type AntennaSourceSpectrumResource =
   components["schemas"]["AntennaSourceSpectrumResource"];
+export type AntennaSpectrumPayloadKind =
+  | "k_u_rad_per_m"
+  | "k_v_rad_per_m"
+  | "amplitudes_re_im"
+  | "power";
 export type FrequencyDomainKPathMetadataResource =
   components["schemas"]["FrequencyDomainKPathMetadataResource"];
 export type FrequencyDomainKPathSamplingResource =

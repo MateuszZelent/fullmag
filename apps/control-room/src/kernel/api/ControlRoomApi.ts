@@ -55,6 +55,7 @@ import {
   DATA_ARTIFACTS_PATH,
   DATA_ANTENNA_FIELD_SOLUTION_PATH,
   DATA_ANTENNA_SOURCE_SPECTRUM_PATH,
+  DATA_ANTENNA_SOURCE_SPECTRUM_PAYLOAD_PATH,
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_FDM_MULTILAYER_LAYOUT_PATH,
   DATA_DOMAIN_FDM_MULTILAYER_LAYER_ACTIVE_MASK_PATH,
@@ -312,6 +313,7 @@ import type {
   FrequencyDomainTextArtifactResource,
   ArtifactResource,
   AntennaFieldSolutionResource,
+  AntennaSpectrumPayloadKind,
   AntennaSourceSpectrumResource,
   FrequencyDomainFieldResource,
   FrequencyDomainSweepProgressResource,
@@ -1297,6 +1299,16 @@ export class ControlRoomApi {
           DATA_ANTENNA_SOURCE_SPECTRUM_PATH,
           options,
           { path: { output_id: outputId } },
+        ),
+      sourceSpectrumPayload: (
+        outputId: string,
+        payloadKind: AntennaSpectrumPayloadKind,
+        options?: BinaryRequestOptions,
+      ) =>
+        this.requestBinaryBytes(
+          DATA_ANTENNA_SOURCE_SPECTRUM_PAYLOAD_PATH,
+          options,
+          { output_id: outputId, payload_kind: payloadKind },
         ),
     },
     artifacts: {

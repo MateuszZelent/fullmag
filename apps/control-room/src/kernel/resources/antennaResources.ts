@@ -5,11 +5,14 @@ import { useCallback } from "react";
 import {
   DATA_ANTENNA_FIELD_SOLUTION_PATH,
   DATA_ANTENNA_SOURCE_SPECTRUM_PATH,
+  DATA_ANTENNA_SOURCE_SPECTRUM_PAYLOAD_PATH,
 } from "../api/apiPaths";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import type {
   AntennaFieldSolutionResource,
+  AntennaSpectrumPayloadKind,
   AntennaSourceSpectrumResource,
+  BinaryResourceResult,
 } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 
@@ -21,6 +24,21 @@ export interface AntennaResourceOptions {
 
 function concretePath(template: string, name: string, value: string): string {
   return template.replace(`{${name}}`, encodeURIComponent(value));
+}
+
+function concreteSpectrumPayloadPath(
+  outputId: string,
+  payloadKind: AntennaSpectrumPayloadKind,
+): string {
+  return concretePath(
+    concretePath(
+      DATA_ANTENNA_SOURCE_SPECTRUM_PAYLOAD_PATH,
+      "output_id",
+      outputId,
+    ),
+    "payload_kind",
+    payloadKind,
+  );
 }
 
 function ignoreMissingAntennaResource<T>(error: unknown): T | null {
@@ -76,6 +94,35 @@ export function useAntennaSourceSpectrumResource(
     enabled: Boolean(outputId) && options.enabled !== false,
     load,
     resolveRevision: (data) => data?.content_digest ?? null,
+    resourceKey,
+  });
+}
+
+export function useAntennaSourceSpectrumPayloadResource(
+  outputId: string | null | undefined,
+  payloadKind: AntennaSpectrumPayloadKind | null | undefined,
+  options: AntennaResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = outputId && payloadKind
+    ? concreteSpectrumPayloadPath(outputId, payloadKind)
+    : `${DATA_ANTENNA_SOURCE_SPECTRUM_PAYLOAD_PATH}:none`;
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      outputId && payloadKind
+        ? api.data.antenna
+            .sourceSpectrumPayload(outputId, payloadKind, { signal })
+            .catch(ignoreMissingAntennaResource<BinaryResourceResult<ArrayBuffer>>)
+        : Promise.resolve(null),
+    [api, outputId, payloadKind],
+  );
+
+  return useResource<BinaryResourceResult<ArrayBuffer> | null>({
+    enabled:
+      Boolean(outputId && payloadKind) && options.enabled !== false,
+    load,
+    resolveRevision: (data) =>
+      data?.status === "ready" ? data.etag : null,
     resourceKey,
   });
 }

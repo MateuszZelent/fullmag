@@ -8,11 +8,15 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, HeaderValue};
 use fullmag_ir::FieldTargetIR;
-use fullmag_runner::AntennaSourceSpectrumArtifact;
+use fullmag_runner::{
+    AntennaSourceSpectrumArtifact, AntennaSourceSpectrumManifest, AntennaSpectrumPayloadRef,
+    AntennaSpectrumPayloads,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
 
 use crate::artifacts::{read_json_artifact_value, require_current_live_artifact_dir};
@@ -20,6 +24,8 @@ use crate::error::ApiError;
 use crate::types::AppState;
 
 const FIELD_SOLUTION_SCHEMA: &str = "antenna_field_solution.v1";
+const SOURCE_SPECTRUM_SCHEMA_V1: &str = "antenna_source_spectrum_artifact.v1";
+const SOURCE_SPECTRUM_SCHEMA_V2: &str = "antenna_source_spectrum_artifact.v2";
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AntennaFieldBinaryRefResource {
@@ -127,6 +133,14 @@ pub struct AntennaSpectrumPayloadResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AntennaSpectrumPayloadsResource {
+    pub k_u_rad_per_m: AntennaFieldBinaryRefResource,
+    pub k_v_rad_per_m: AntennaFieldBinaryRefResource,
+    pub amplitudes_re_im: AntennaFieldBinaryRefResource,
+    pub power: AntennaFieldBinaryRefResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AntennaSourceSpectrumResource {
     pub resource_id: String,
     pub session_id: String,
@@ -155,6 +169,8 @@ pub struct AntennaSourceSpectrumResource {
     pub wave_vector_unit: String,
     pub sampling: AntennaSpectrumSamplingResource,
     pub payload: AntennaSpectrumPayloadResource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payloads: Option<AntennaSpectrumPayloadsResource>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -275,10 +291,142 @@ pub async fn get_antenna_source_spectrum(
     headers: HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
     let artifact_dir = require_current_live_artifact_dir(&state).await?;
-    let relative_path = format!("antenna/source_spectra/{output_id}/spectrum.v1.json");
+    let v2_path = format!("antenna/source_spectra/{output_id}/spectrum.v2.json");
+    let v1_path = format!("antenna/source_spectra/{output_id}/spectrum.v1.json");
+    let relative_path =
+        if crate::artifacts::try_resolve_artifact_path(&artifact_dir, &v2_path)?.is_some() {
+            v2_path
+        } else {
+            v1_path
+        };
     let value = read_json_artifact_value(&artifact_dir, &relative_path)?;
+    let parsed = parse_source_spectrum_artifact(&value, &output_id, &relative_path)?;
+
+    let (session_id, session_epoch) = current_session_identity(&state).await?;
+    let resource = AntennaSourceSpectrumResource {
+        resource_id: format!("antenna/source-spectrum/{output_id}"),
+        session_id,
+        session_epoch: session_epoch.clone(),
+        schema_version: parsed.schema_version,
+        request_id: parsed.request_id,
+        output_id: parsed.output_id,
+        solution_id: parsed.solution_id,
+        source_object_id: parsed.source_object_id,
+        port_mode_id: parsed.port_mode_id,
+        solution_content_digest: parsed.solution_content_digest.clone(),
+        content_digest: parsed.content_digest.clone(),
+        field_signature: parsed.solution_content_digest,
+        target_projection_signature: None,
+        quantity: "H_ant_source_spectrum".into(),
+        component: parsed.component,
+        component_labels: parsed.component_labels,
+        k_u_count: parsed.k_u_count,
+        k_v_count: parsed.k_v_count,
+        amplitude_count: parsed.amplitude_count,
+        power_count: parsed.power_count,
+        coherent_gain: parsed.coherent_gain,
+        equivalent_noise_bandwidth_bins: parsed.equivalent_noise_bandwidth_bins,
+        normalization: parsed.normalization,
+        amplitude_unit: parsed.amplitude_unit,
+        wave_vector_unit: parsed.wave_vector_unit,
+        sampling: sampling_resource(parsed.sampling),
+        payload: AntennaSpectrumPayloadResource {
+            path: relative_path,
+            content_type: "application/json".into(),
+            format: parsed.payload_format,
+        },
+        payloads: parsed.payloads.map(payloads_resource),
+    };
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "antenna-source-spectrum:{session_epoch}:{output_id}:{}",
+        resource.content_digest
+    ));
+    Ok(crate::router_v2::handlers::shared::conditional_json_response(&headers, &etag, &resource))
+}
+
+struct ParsedSourceSpectrumArtifact {
+    schema_version: String,
+    request_id: String,
+    output_id: String,
+    solution_id: String,
+    source_object_id: String,
+    port_mode_id: String,
+    solution_content_digest: String,
+    content_digest: String,
+    component: String,
+    component_labels: Vec<String>,
+    k_u_count: usize,
+    k_v_count: usize,
+    amplitude_count: usize,
+    power_count: usize,
+    coherent_gain: f64,
+    equivalent_noise_bandwidth_bins: f64,
+    normalization: String,
+    amplitude_unit: String,
+    wave_vector_unit: String,
+    sampling: fullmag_runner::AntennaSpectrumSamplingMetadata,
+    payload_format: String,
+    payloads: Option<AntennaSpectrumPayloads>,
+}
+
+fn parse_source_spectrum_artifact(
+    value: &Value,
+    output_id: &str,
+    relative_path: &str,
+) -> Result<ParsedSourceSpectrumArtifact, ApiError> {
+    let schema = value
+        .get("schema_version")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "invalid {relative_path} artifact: missing schema_version"
+            ))
+        })?;
+    if schema == SOURCE_SPECTRUM_SCHEMA_V2 {
+        let manifest: AntennaSourceSpectrumManifest = serde_json::from_value(value.clone())
+            .map_err(|error| {
+                ApiError::internal(format!("invalid {relative_path} artifact: {error}"))
+            })?;
+        if manifest.output_id != output_id
+            || manifest.spectrum.output_id != manifest.output_id
+            || manifest.spectrum.request_id != manifest.request_id
+        {
+            return Err(ApiError::internal(
+                "antenna source spectrum artifact identity mismatch",
+            ));
+        }
+        return Ok(ParsedSourceSpectrumArtifact {
+            schema_version: manifest.schema_version,
+            request_id: manifest.request_id,
+            output_id: manifest.output_id,
+            solution_id: manifest.solution_id,
+            source_object_id: manifest.source_object_id,
+            port_mode_id: manifest.port_mode_id,
+            solution_content_digest: manifest.solution_content_digest,
+            content_digest: manifest.content_digest,
+            component: manifest.spectrum.component,
+            component_labels: manifest.spectrum.component_labels,
+            k_u_count: manifest.spectrum.k_u_count,
+            k_v_count: manifest.spectrum.k_v_count,
+            amplitude_count: manifest.spectrum.amplitude_count,
+            power_count: manifest.spectrum.power_count,
+            coherent_gain: manifest.spectrum.coherent_gain,
+            equivalent_noise_bandwidth_bins: manifest.spectrum.equivalent_noise_bandwidth_bins,
+            normalization: manifest.spectrum.normalization,
+            amplitude_unit: manifest.spectrum.amplitude_unit,
+            wave_vector_unit: manifest.spectrum.wave_vector_unit,
+            sampling: manifest.sampling,
+            payload_format: "antenna_source_spectrum.v2.json".into(),
+            payloads: Some(manifest.payloads),
+        });
+    }
+    if schema != SOURCE_SPECTRUM_SCHEMA_V1 {
+        return Err(ApiError::internal(format!(
+            "unsupported antenna source spectrum schema '{schema}'"
+        )));
+    }
     let artifact: AntennaSourceSpectrumArtifact =
-        serde_json::from_value(value).map_err(|error| {
+        serde_json::from_value(value.clone()).map_err(|error| {
             ApiError::internal(format!("invalid {relative_path} artifact: {error}"))
         })?;
     if artifact.output_id != output_id {
@@ -286,26 +434,18 @@ pub async fn get_antenna_source_spectrum(
             "antenna source spectrum artifact identity mismatch",
         ));
     }
-
-    let (session_id, session_epoch) = current_session_identity(&state).await?;
     let spectrum = artifact.spectrum;
-    let resource = AntennaSourceSpectrumResource {
-        resource_id: format!("antenna/source-spectrum/{output_id}"),
-        session_id,
-        session_epoch: session_epoch.clone(),
+    Ok(ParsedSourceSpectrumArtifact {
         schema_version: artifact.schema_version,
         request_id: artifact.request_id,
         output_id: artifact.output_id,
         solution_id: artifact.solution_id,
         source_object_id: artifact.source_object_id,
         port_mode_id: artifact.port_mode_id,
-        solution_content_digest: artifact.solution_content_digest.clone(),
-        content_digest: artifact.content_digest.clone(),
-        field_signature: artifact.solution_content_digest,
-        target_projection_signature: None,
-        quantity: "H_ant_source_spectrum".into(),
-        component: spectrum.component.clone(),
-        component_labels: spectrum.component_labels.clone(),
+        solution_content_digest: artifact.solution_content_digest,
+        content_digest: artifact.content_digest,
+        component: spectrum.component,
+        component_labels: spectrum.component_labels,
         k_u_count: spectrum.k_u_rad_per_m.len(),
         k_v_count: spectrum.k_v_rad_per_m.len(),
         amplitude_count: spectrum.amplitudes_re_im.len(),
@@ -315,18 +455,131 @@ pub async fn get_antenna_source_spectrum(
         normalization: spectrum.normalization,
         amplitude_unit: spectrum.amplitude_unit,
         wave_vector_unit: spectrum.wave_vector_unit,
-        sampling: sampling_resource(artifact.sampling),
-        payload: AntennaSpectrumPayloadResource {
-            path: relative_path,
-            content_type: "application/json".into(),
-            format: "antenna_source_spectrum.v1.json".into(),
-        },
+        sampling: artifact.sampling,
+        payload_format: "antenna_source_spectrum.v1.json".into(),
+        payloads: None,
+    })
+}
+
+fn payload_ref_resource(reference: AntennaSpectrumPayloadRef) -> AntennaFieldBinaryRefResource {
+    AntennaFieldBinaryRefResource {
+        path: reference.path,
+        sha256: reference.sha256,
+        scalar_type: reference.scalar_type,
+        layout: reference.layout,
+        unit: reference.unit,
+        value_count: reference.value_count,
+    }
+}
+
+fn payloads_resource(payloads: AntennaSpectrumPayloads) -> AntennaSpectrumPayloadsResource {
+    AntennaSpectrumPayloadsResource {
+        k_u_rad_per_m: payload_ref_resource(payloads.k_u_rad_per_m),
+        k_v_rad_per_m: payload_ref_resource(payloads.k_v_rad_per_m),
+        amplitudes_re_im: payload_ref_resource(payloads.amplitudes_re_im),
+        power: payload_ref_resource(payloads.power),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/antenna/source-spectra/{output_id}/payloads/{payload_kind}",
+    params(
+        ("output_id" = String, Path, description = "Published antenna source spectrum output id"),
+        ("payload_kind" = String, Path, description = "Binary payload name: k_u_rad_per_m, k_v_rad_per_m, amplitudes_re_im, or power"),
+        ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous binary payload response"),
+        ("Range" = Option<String>, Header, description = "Optional single byte range"),
+    ),
+    responses(
+        (status = 200, description = "Binary antenna source-spectrum payload", content_type = "application/octet-stream"),
+        (status = 206, description = "Partial binary antenna source-spectrum payload", content_type = "application/octet-stream"),
+        (status = 304, description = "Binary payload not modified for the supplied ETag"),
+        (status = 404, description = "Source-spectrum payload not found"),
+        (status = 416, description = "Requested binary payload range is not satisfiable"),
+    ),
+    tag = "data"
+)]
+pub async fn get_antenna_source_spectrum_payload(
+    State(state): State<Arc<AppState>>,
+    Path((output_id, payload_kind)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
+    let artifact_dir = require_current_live_artifact_dir(&state).await?;
+    let manifest_path = format!("antenna/source_spectra/{output_id}/spectrum.v2.json");
+    let value = read_json_artifact_value(&artifact_dir, &manifest_path)?;
+    let manifest: AntennaSourceSpectrumManifest =
+        serde_json::from_value(value).map_err(|error| {
+            ApiError::internal(format!("invalid {manifest_path} artifact: {error}"))
+        })?;
+    if manifest.schema_version != SOURCE_SPECTRUM_SCHEMA_V2 || manifest.output_id != output_id {
+        return Err(ApiError::internal(
+            "antenna source spectrum manifest identity or schema mismatch",
+        ));
+    }
+    let reference = match payload_kind.as_str() {
+        "k_u_rad_per_m" => &manifest.payloads.k_u_rad_per_m,
+        "k_v_rad_per_m" => &manifest.payloads.k_v_rad_per_m,
+        "amplitudes_re_im" => &manifest.payloads.amplitudes_re_im,
+        "power" => &manifest.payloads.power,
+        _ => {
+            return Err(ApiError::bad_request(format!(
+                "unsupported antenna source-spectrum payload '{payload_kind}'"
+            )))
+        }
     };
+    let prefix = format!("antenna/source_spectra/{output_id}/");
+    if !reference.path.starts_with(&prefix) {
+        return Err(ApiError::internal(
+            "antenna source spectrum payload path escapes its output namespace",
+        ));
+    }
+    let resolved = crate::artifacts::try_resolve_artifact_path(&artifact_dir, &reference.path)?
+        .ok_or_else(|| {
+            ApiError::not_found(format!(
+                "source-spectrum payload '{}' not found",
+                reference.path
+            ))
+        })?;
+    let bytes = std::fs::read(&resolved).map_err(|error| {
+        ApiError::internal(format!("failed to read source-spectrum payload: {error}"))
+    })?;
+    let scalar_bytes = match reference.scalar_type.as_str() {
+        "float64_le" => 8,
+        "uint32_le" => 4,
+        _ => {
+            return Err(ApiError::internal(format!(
+                "unsupported source-spectrum payload scalar type '{}'",
+                reference.scalar_type
+            )))
+        }
+    };
+    let expected_len = reference
+        .value_count
+        .checked_mul(scalar_bytes)
+        .ok_or_else(|| {
+            ApiError::internal("source-spectrum payload size overflows address space")
+        })?;
+    if bytes.len() != expected_len
+        || format!("sha256:{:x}", Sha256::digest(&bytes)) != reference.sha256
+    {
+        return Err(ApiError::internal(format!(
+            "source-spectrum payload '{}' hash or size mismatch",
+            reference.path
+        )));
+    }
+    let (session_id, session_epoch) = current_session_identity(&state).await?;
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "antenna-source-spectrum:{session_epoch}:{output_id}:{}",
-        resource.content_digest
+        "antenna-source-spectrum-payload:{session_id}:{session_epoch}:{output_id}:{payload_kind}:{}:{}",
+        manifest.content_digest, reference.sha256
     ));
-    Ok(crate::router_v2::handlers::shared::conditional_json_response(&headers, &etag, &resource))
+    Ok(
+        crate::router_v2::handlers::shared::conditional_binary_response_with_content_type(
+            &headers,
+            &etag,
+            bytes,
+            HeaderValue::from_static("application/octet-stream"),
+        ),
+    )
 }
 
 fn sampling_resource(

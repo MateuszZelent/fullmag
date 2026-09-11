@@ -69,6 +69,65 @@ pub struct AntennaSpectrumSamplingMetadata {
     pub fourier_phase_convention: String,
 }
 
+/// Immutable reference to one binary spectrum array in the artifact store.
+/// `value_count` counts scalar values, not bytes; complex amplitudes therefore
+/// contain two `float64` values per complex sample.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AntennaSpectrumPayloadRef {
+    pub path: String,
+    pub sha256: String,
+    pub scalar_type: String,
+    pub layout: String,
+    pub unit: String,
+    pub value_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AntennaSpectrumPayloads {
+    pub k_u_rad_per_m: AntennaSpectrumPayloadRef,
+    pub k_v_rad_per_m: AntennaSpectrumPayloadRef,
+    pub amplitudes_re_im: AntennaSpectrumPayloadRef,
+    pub power: AntennaSpectrumPayloadRef,
+}
+
+/// JSON-only spectrum summary.  Numerical arrays are intentionally absent;
+/// consumers load them through the binary payload references.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AntennaSourceSpectrumSummary {
+    pub schema_version: String,
+    pub request_id: String,
+    pub output_id: String,
+    pub component: String,
+    pub component_labels: Vec<String>,
+    pub k_u_count: usize,
+    pub k_v_count: usize,
+    pub amplitude_count: usize,
+    pub power_count: usize,
+    pub coherent_gain: f64,
+    pub equivalent_noise_bandwidth_bins: f64,
+    pub normalization: String,
+    pub amplitude_unit: String,
+    pub wave_vector_unit: String,
+}
+
+/// Published v2 source-spectrum manifest.  It is deliberately separate from
+/// the in-memory result so serializing the manifest cannot accidentally put a
+/// large FFT array on the control plane.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AntennaSourceSpectrumManifest {
+    pub schema_version: String,
+    pub request_id: String,
+    pub output_id: String,
+    pub solution_id: String,
+    pub source_object_id: String,
+    pub port_mode_id: String,
+    pub solution_content_digest: String,
+    pub content_digest: String,
+    pub sampling: AntennaSpectrumSamplingMetadata,
+    pub spectrum: AntennaSourceSpectrumSummary,
+    pub payloads: AntennaSpectrumPayloads,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AntennaSourceSpectrumArtifact {
     pub schema_version: String,
@@ -91,6 +150,18 @@ fn error(message: impl Into<String>) -> RunError {
 
 fn sha256_bytes(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+fn encode_f64_le(values: impl IntoIterator<Item = f64>) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for value in values {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes
+}
+
+fn encode_complex_f64_le(values: &[[f64; 2]]) -> Vec<u8> {
+    encode_f64_le(values.iter().flat_map(|value| value.iter().copied()))
 }
 
 fn sha256_u64(values: &[u64]) -> String {
@@ -715,7 +786,7 @@ pub fn compute_antenna_source_spectrum_artifact(
         fourier_phase_convention: "centered_plane_origin_phase_corrected.v1".into(),
     };
     let mut artifact = AntennaSourceSpectrumArtifact {
-        schema_version: "antenna_source_spectrum_artifact.v1".into(),
+        schema_version: "antenna_source_spectrum_artifact.v2".into(),
         request_id: request.id.clone(),
         output_id: request.output_id.clone(),
         solution_id: samples.solution_id.clone(),
@@ -726,7 +797,8 @@ pub fn compute_antenna_source_spectrum_artifact(
         sampling,
         spectrum,
     };
-    let mut canonical = serde_json::to_value(&artifact).map_err(|serialization_error| {
+    let (manifest, _) = build_source_spectrum_manifest(&artifact, String::new())?;
+    let mut canonical = serde_json::to_value(&manifest).map_err(|serialization_error| {
         error(format!(
             "serialize antenna source-spectrum artifact: {serialization_error}"
         ))
@@ -745,10 +817,10 @@ pub fn compute_antenna_source_spectrum_artifact(
     Ok(artifact)
 }
 
-/// Convert a source-spectrum result into the session artifact namespace.
-pub fn antenna_source_spectrum_auxiliary_artifact(
+fn build_source_spectrum_manifest(
     artifact: &AntennaSourceSpectrumArtifact,
-) -> Result<AuxiliaryArtifact, RunError> {
+    content_digest: String,
+) -> Result<(AntennaSourceSpectrumManifest, Vec<AuxiliaryArtifact>), RunError> {
     let valid_component = |value: &str| {
         !value.is_empty()
             && value
@@ -761,18 +833,152 @@ pub fn antenna_source_spectrum_auxiliary_artifact(
             artifact.output_id
         )));
     }
-    let bytes = serde_json::to_vec_pretty(artifact).map_err(|serialization_error| {
+    let spectrum = &artifact.spectrum;
+    if spectrum
+        .k_u_rad_per_m
+        .iter()
+        .chain(&spectrum.k_v_rad_per_m)
+        .chain(
+            spectrum
+                .amplitudes_re_im
+                .iter()
+                .flat_map(|value| value.iter()),
+        )
+        .chain(&spectrum.power)
+        .any(|value| !value.is_finite())
+    {
+        return Err(error(
+            "antenna source-spectrum payload contains a non-finite value",
+        ));
+    }
+    let base = format!("antenna/source_spectra/{}", artifact.output_id);
+    let k_u_bytes = encode_f64_le(spectrum.k_u_rad_per_m.iter().copied());
+    let k_v_bytes = encode_f64_le(spectrum.k_v_rad_per_m.iter().copied());
+    let amplitudes_bytes = encode_complex_f64_le(&spectrum.amplitudes_re_im);
+    let power_bytes = encode_f64_le(spectrum.power.iter().copied());
+    let payload_ref = |name: &str, bytes: &[u8], layout: &str, unit: &str, value_count: usize| {
+        AntennaSpectrumPayloadRef {
+            path: format!("{base}/{name}.f64le"),
+            sha256: sha256_bytes(bytes),
+            scalar_type: "float64_le".into(),
+            layout: layout.into(),
+            unit: unit.into(),
+            value_count,
+        }
+    };
+    let payloads = AntennaSpectrumPayloads {
+        k_u_rad_per_m: payload_ref(
+            "k_u_rad_per_m",
+            &k_u_bytes,
+            "axis_u_1d",
+            &spectrum.wave_vector_unit,
+            spectrum.k_u_rad_per_m.len(),
+        ),
+        k_v_rad_per_m: payload_ref(
+            "k_v_rad_per_m",
+            &k_v_bytes,
+            "axis_v_1d",
+            &spectrum.wave_vector_unit,
+            spectrum.k_v_rad_per_m.len(),
+        ),
+        amplitudes_re_im: payload_ref(
+            "amplitudes_re_im",
+            &amplitudes_bytes,
+            "component_kv_ku_complex_re_im",
+            &spectrum.amplitude_unit,
+            spectrum.amplitudes_re_im.len() * 2,
+        ),
+        power: payload_ref(
+            "power",
+            &power_bytes,
+            "kv_ku_power",
+            &format!("({})^2", spectrum.amplitude_unit),
+            spectrum.power.len(),
+        ),
+    };
+    let summary = AntennaSourceSpectrumSummary {
+        schema_version: spectrum.schema_version.clone(),
+        request_id: spectrum.request_id.clone(),
+        output_id: spectrum.output_id.clone(),
+        component: spectrum.component.clone(),
+        component_labels: spectrum.component_labels.clone(),
+        k_u_count: spectrum.k_u_rad_per_m.len(),
+        k_v_count: spectrum.k_v_rad_per_m.len(),
+        amplitude_count: spectrum.amplitudes_re_im.len(),
+        power_count: spectrum.power.len(),
+        coherent_gain: spectrum.coherent_gain,
+        equivalent_noise_bandwidth_bins: spectrum.equivalent_noise_bandwidth_bins,
+        normalization: spectrum.normalization.clone(),
+        amplitude_unit: spectrum.amplitude_unit.clone(),
+        wave_vector_unit: spectrum.wave_vector_unit.clone(),
+    };
+    let manifest = AntennaSourceSpectrumManifest {
+        schema_version: "antenna_source_spectrum_artifact.v2".into(),
+        request_id: artifact.request_id.clone(),
+        output_id: artifact.output_id.clone(),
+        solution_id: artifact.solution_id.clone(),
+        source_object_id: artifact.source_object_id.clone(),
+        port_mode_id: artifact.port_mode_id.clone(),
+        solution_content_digest: artifact.solution_content_digest.clone(),
+        content_digest,
+        sampling: artifact.sampling.clone(),
+        spectrum: summary,
+        payloads,
+    };
+    let binaries = vec![
+        AuxiliaryArtifact {
+            relative_path: manifest.payloads.k_u_rad_per_m.path.clone(),
+            bytes: k_u_bytes,
+        },
+        AuxiliaryArtifact {
+            relative_path: manifest.payloads.k_v_rad_per_m.path.clone(),
+            bytes: k_v_bytes,
+        },
+        AuxiliaryArtifact {
+            relative_path: manifest.payloads.amplitudes_re_im.path.clone(),
+            bytes: amplitudes_bytes,
+        },
+        AuxiliaryArtifact {
+            relative_path: manifest.payloads.power.path.clone(),
+            bytes: power_bytes,
+        },
+    ];
+    Ok((manifest, binaries))
+}
+
+/// Convert a source-spectrum result into all session artifacts. Binary
+/// payloads are emitted before the JSON manifest, so a visible manifest always
+/// has complete referenced data behind it.
+pub fn antenna_source_spectrum_auxiliary_artifacts(
+    artifact: &AntennaSourceSpectrumArtifact,
+) -> Result<Vec<AuxiliaryArtifact>, RunError> {
+    let (manifest, mut artifacts) =
+        build_source_spectrum_manifest(artifact, artifact.content_digest.clone())?;
+    let bytes = serde_json::to_vec_pretty(&manifest).map_err(|serialization_error| {
         error(format!(
-            "serialize antenna source-spectrum artifact: {serialization_error}"
+            "serialize antenna source-spectrum manifest: {serialization_error}"
         ))
     })?;
-    Ok(AuxiliaryArtifact {
+    artifacts.push(AuxiliaryArtifact {
         relative_path: format!(
-            "antenna/source_spectra/{}/spectrum.v1.json",
+            "antenna/source_spectra/{}/spectrum.v2.json",
             artifact.output_id
         ),
         bytes,
-    })
+    });
+    Ok(artifacts)
+}
+
+/// Convert a source-spectrum result into its JSON manifest only. Kept as a
+/// compatibility helper for callers that publish auxiliary artifacts one at a
+/// time; new workflows should use [`antenna_source_spectrum_auxiliary_artifacts`].
+pub fn antenna_source_spectrum_auxiliary_artifact(
+    artifact: &AntennaSourceSpectrumArtifact,
+) -> Result<AuxiliaryArtifact, RunError> {
+    antenna_source_spectrum_auxiliary_artifacts(artifact)?
+        .into_iter()
+        .find(|entry| entry.relative_path.ends_with("/spectrum.v2.json"))
+        .ok_or_else(|| error("source-spectrum manifest was not generated"))
 }
 
 fn window_values(kind: &AntennaSpectrumWindowIR, count: usize) -> Vec<f64> {
@@ -1390,17 +1596,32 @@ mod tests {
         let samples = solution_samples_for(&request);
         let artifact = compute_antenna_source_spectrum_artifact(&request, &samples, None).unwrap();
         assert!(artifact.content_digest.starts_with("sha256:"));
-        let payload = antenna_source_spectrum_auxiliary_artifact(&artifact).unwrap();
+        let artifacts = antenna_source_spectrum_auxiliary_artifacts(&artifact).unwrap();
+        assert_eq!(artifacts.len(), 5);
+        assert!(artifacts
+            .iter()
+            .any(|entry| entry.relative_path.ends_with("/k_u_rad_per_m.f64le")));
+        assert!(artifacts
+            .iter()
+            .any(|entry| entry.relative_path.ends_with("/amplitudes_re_im.f64le")));
+        let payload = artifacts
+            .iter()
+            .find(|entry| entry.relative_path.ends_with("/spectrum.v2.json"))
+            .unwrap();
         assert_eq!(
             payload.relative_path,
-            "antenna/source_spectra/spectrum/spectrum.v1.json"
+            "antenna/source_spectra/spectrum/spectrum.v2.json"
         );
         let json: serde_json::Value = serde_json::from_slice(&payload.bytes).unwrap();
         assert_eq!(
             json["schema_version"],
-            "antenna_source_spectrum_artifact.v1"
+            "antenna_source_spectrum_artifact.v2"
         );
         assert_eq!(json["sampling"]["outside_count"], 0);
         assert_eq!(json["sampling"]["realization"], "identity_coordinates_v1");
+        assert!(json["spectrum"].get("amplitudes_re_im").is_none());
+        assert!(json["payloads"]["amplitudes_re_im"]["sha256"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:")));
     }
 }

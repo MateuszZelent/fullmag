@@ -26,9 +26,11 @@ pub use antenna_field_solution::{
     AntennaFieldSolutionAsset, AntennaFieldSolutionSamples, AntennaFieldSolutionSignatures,
 };
 pub use antenna_spectrum::{
-    antenna_source_spectrum_auxiliary_artifact, compute_antenna_source_spectrum_artifact,
-    compute_nonuniform_k_antenna_source_spectrum, compute_structured_antenna_source_spectrum,
-    sample_antenna_field_on_plane, AntennaSourceSpectrum2D, AntennaSourceSpectrumArtifact,
+    antenna_source_spectrum_auxiliary_artifact, antenna_source_spectrum_auxiliary_artifacts,
+    compute_antenna_source_spectrum_artifact, compute_nonuniform_k_antenna_source_spectrum,
+    compute_structured_antenna_source_spectrum, sample_antenna_field_on_plane,
+    AntennaSourceSpectrum2D, AntennaSourceSpectrumArtifact, AntennaSourceSpectrumManifest,
+    AntennaSourceSpectrumSummary, AntennaSpectrumPayloadRef, AntennaSpectrumPayloads,
     AntennaSpectrumSampleGrid, AntennaSpectrumSamplingMetadata,
 };
 pub use antenna_stage::{

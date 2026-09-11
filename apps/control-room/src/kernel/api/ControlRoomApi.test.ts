@@ -25,6 +25,7 @@ import type {
 import {
   ANALYSIS_RESULT_BRANCH_POINTS_PATH,
   ANALYSIS_RESULT_ITEMS_PATH,
+  DATA_ANTENNA_SOURCE_SPECTRUM_PAYLOAD_PATH,
   SESSIONS_PATH,
   SIMULATION_PREPARATION_PATH,
 } from "./apiPaths";
@@ -85,6 +86,45 @@ describe("derived B_drive display quantity", () => {
     expect(converted.data.values[1]).toBeCloseTo(-2 * 4e-7 * Math.PI, 15);
     expect(sourceValues[1]).toBe(-2);
     expect(converted.responseMetadata.quantityId).toBe("B_drive");
+  });
+});
+
+describe("antenna source-spectrum binary payloads", () => {
+  it("loads a payload through the typed v2 binary facade", async () => {
+    let observedUrl = "";
+    let observedHeaders = new Headers();
+    const payload = new Float64Array([1, 0, 2, -1]);
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        observedUrl = String(url);
+        observedHeaders = new Headers(init?.headers);
+        return binaryResponse(payload.buffer, {
+          headers: { etag: '"spectrum-v2-amplitudes"' },
+        });
+      },
+    });
+
+    const result = await api.data.antenna.sourceSpectrumPayload(
+      "spectrum-output",
+      "amplitudes_re_im",
+      { etag: '"previous"', range: "bytes=0-15" },
+    );
+
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error(`Expected ready spectrum payload, received ${result.status}`);
+    }
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/data/antenna/source-spectra/spectrum-output/payloads/amplitudes_re_im",
+    );
+    expect(observedHeaders.get("if-none-match")).toBe('"previous"');
+    expect(observedHeaders.get("range")).toBe("bytes=0-15");
+    expect(result.etag).toBe('"spectrum-v2-amplitudes"');
+    expect(Array.from(new Float64Array(result.data))).toEqual([1, 0, 2, -1]);
+    expect(DATA_ANTENNA_SOURCE_SPECTRUM_PAYLOAD_PATH).toContain(
+      "/payloads/{payload_kind}",
+    );
   });
 });
 

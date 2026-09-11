@@ -2478,6 +2478,16 @@
           "payload": {
             "$ref": "#/components/schemas/AntennaSpectrumPayloadResource"
           },
+          "payloads": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaSpectrumPayloadsResource"
+              }
+            ]
+          },
           "port_mode_id": {
             "type": "string"
           },
@@ -2609,6 +2619,29 @@
           "path",
           "content_type",
           "format"
+        ],
+        "type": "object"
+      },
+      "AntennaSpectrumPayloadsResource": {
+        "properties": {
+          "amplitudes_re_im": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          },
+          "k_u_rad_per_m": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          },
+          "k_v_rad_per_m": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          },
+          "power": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          }
+        },
+        "required": [
+          "k_u_rad_per_m",
+          "k_v_rad_per_m",
+          "amplitudes_re_im",
+          "power"
         ],
         "type": "object"
       },
@@ -39476,6 +39509,81 @@
           },
           "404": {
             "description": "Source spectrum artifact not found"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/antenna/source-spectra/{output_id}/payloads/{payload_kind}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_antenna_source_spectra_output_id_payloads_payload_kind",
+        "parameters": [
+          {
+            "description": "Published antenna source spectrum output id",
+            "in": "path",
+            "name": "output_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Binary payload name: k_u_rad_per_m, k_v_rad_per_m, amplitudes_re_im, or power",
+            "in": "path",
+            "name": "payload_kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Strong ETag from a previous binary payload response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Binary antenna source-spectrum payload"
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial binary antenna source-spectrum payload"
+          },
+          "304": {
+            "description": "Binary payload not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "Source-spectrum payload not found"
+          },
+          "416": {
+            "description": "Requested binary payload range is not satisfiable"
           }
         },
         "tags": [

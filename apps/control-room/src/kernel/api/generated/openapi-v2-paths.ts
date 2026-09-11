@@ -66,6 +66,7 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/analysis/spin-wave/gamma.v1",
   "/v2/sessions/current/data/antenna/field-solutions/{solution_id}",
   "/v2/sessions/current/data/antenna/source-spectra/{output_id}",
+  "/v2/sessions/current/data/antenna/source-spectra/{output_id}/payloads/{payload_kind}",
   "/v2/sessions/current/data/artifacts",
   "/v2/sessions/current/data/artifacts/{artifact_id}",
   "/v2/sessions/current/data/domain/fdm-multilayer-layers/{layer_id}/active-mask",

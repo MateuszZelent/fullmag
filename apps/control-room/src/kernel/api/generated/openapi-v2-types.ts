@@ -1060,6 +1060,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/data/antenna/source-spectra/{output_id}/payloads/{payload_kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_antenna_source_spectra_output_id_payloads_payload_kind"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/artifacts": {
         parameters: {
             query?: never;
@@ -4573,6 +4589,7 @@ export interface components {
             normalization: string;
             output_id: string;
             payload: components["schemas"]["AntennaSpectrumPayloadResource"];
+            payloads?: null | components["schemas"]["AntennaSpectrumPayloadsResource"];
             port_mode_id: string;
             power_count: number;
             quantity: string;
@@ -4600,6 +4617,12 @@ export interface components {
             content_type: string;
             format: string;
             path: string;
+        };
+        AntennaSpectrumPayloadsResource: {
+            amplitudes_re_im: components["schemas"]["AntennaFieldBinaryRefResource"];
+            k_u_rad_per_m: components["schemas"]["AntennaFieldBinaryRefResource"];
+            k_v_rad_per_m: components["schemas"]["AntennaFieldBinaryRefResource"];
+            power: components["schemas"]["AntennaFieldBinaryRefResource"];
         };
         AntennaSpectrumRequestResource: {
             component: string;
@@ -14759,6 +14782,66 @@ export interface operations {
             };
             /** @description Source spectrum artifact not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_antenna_source_spectra_output_id_payloads_payload_kind: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Strong ETag from a previous binary payload response */
+                "If-None-Match"?: string | null;
+                /** @description Optional single byte range */
+                Range?: string | null;
+            };
+            path: {
+                /** @description Published antenna source spectrum output id */
+                output_id: string;
+                /** @description Binary payload name: k_u_rad_per_m, k_v_rad_per_m, amplitudes_re_im, or power */
+                payload_kind: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Binary antenna source-spectrum payload */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Partial binary antenna source-spectrum payload */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Binary payload not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Source-spectrum payload not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested binary payload range is not satisfiable */
+            416: {
                 headers: {
                     [name: string]: unknown;
                 };
