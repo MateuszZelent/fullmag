@@ -1,5 +1,6 @@
 #include "plan_ingestion_v2.hpp"
 
+#include <cstddef>
 #include <cstring>
 #include <new>
 
@@ -7,7 +8,8 @@ namespace {
 
 void copy_plan_desc_v2_fields(
     fullmag_fdm_plan_desc_v2 &destination,
-    const fullmag_fdm_plan_desc_v2 &source)
+    const fullmag_fdm_plan_desc_v2 &source,
+    uint32_t source_size)
 {
     std::memset(&destination, 0, sizeof(destination));
 #define FULLMAG_FDM_PLAN_V2_HEADER_FIELD(field, expected) \
@@ -20,7 +22,12 @@ void copy_plan_desc_v2_fields(
 #define FULLMAG_FDM_PLAN_V2_TIME_FIELD(field, expected) \
     std::memcpy(&destination.time_policy.field, &source.time_policy.field, \
                 sizeof(destination.time_policy.field));
+#define FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD(field, expected) \
+    if (source_size >= expected + sizeof(destination.field)) { \
+        std::memcpy(&destination.field, &source.field, sizeof(destination.field)); \
+    }
 #include "fullmag_fdm_plan_desc_v2_layout.def"
+#undef FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD
 #undef FULLMAG_FDM_PLAN_V2_TIME_FIELD
 #undef FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD
 #undef FULLMAG_FDM_PLAN_V2_GRID_FIELD
@@ -52,14 +59,18 @@ int fullmag_fdm_plan_ingestion_v2_create_checked(
         uint32_t struct_size;
     } header{};
     std::memcpy(&header, plan, sizeof(header));
+    constexpr uint32_t legacy_struct_size =
+        static_cast<uint32_t>(offsetof(fullmag_fdm_plan_desc_v2, has_rotated_interfacial_dmi));
     if (header.abi_version != FULLMAG_FDM_PLAN_DESC_ABI_V2 ||
-        header.struct_size != sizeof(fullmag_fdm_plan_desc_v2))
+        (header.struct_size != legacy_struct_size &&
+         header.struct_size != sizeof(fullmag_fdm_plan_desc_v2)))
     {
         return FULLMAG_FDM_ERR_ABI;
     }
     auto *ingestion = new (std::nothrow) fullmag_fdm_plan_ingestion_v2();
     if (!ingestion) return FULLMAG_FDM_ERR_INTERNAL;
-    copy_plan_desc_v2_fields(ingestion->descriptor, *plan);
+    copy_plan_desc_v2_fields(ingestion->descriptor, *plan, header.struct_size);
+    ingestion->descriptor.struct_size = sizeof(fullmag_fdm_plan_desc_v2);
     *out_ingestion = ingestion;
     return FULLMAG_FDM_OK;
 }
@@ -69,7 +80,8 @@ int fullmag_fdm_plan_ingestion_v2_receipt(
     fullmag_fdm_plan_desc_v2 *out_receipt)
 {
     if (!ingestion || !out_receipt) return FULLMAG_FDM_ERR_INVALID;
-    copy_plan_desc_v2_fields(*out_receipt, ingestion->descriptor);
+    copy_plan_desc_v2_fields(
+        *out_receipt, ingestion->descriptor, sizeof(fullmag_fdm_plan_desc_v2));
     return FULLMAG_FDM_OK;
 }
 

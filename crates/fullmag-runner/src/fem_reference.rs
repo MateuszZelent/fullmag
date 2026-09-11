@@ -295,6 +295,7 @@ pub(crate) fn build_problem_and_state(
     if !plan.mesh.periodic_node_pairs.is_empty()
         && (plan.enable_demag
             || plan.interfacial_dmi.is_some()
+            || plan.rotated_interfacial_dmi.is_some()
             || plan.bulk_dmi.is_some()
             || has_time_varying_antenna(plan))
     {
@@ -394,6 +395,9 @@ pub(crate) fn build_problem_and_state(
         }
         if plan.dbulk_field.is_some() {
             unsupported_terms.push("dbulk_field");
+        }
+        if plan.rotated_interfacial_dmi.is_some() {
+            unsupported_terms.push("rotated_interfacial_dmi");
         }
         if plan.current_density.is_some() || plan.stt_degree.is_some() || plan.stt_beta.is_some() {
             unsupported_terms.push("zhang_li_stt");

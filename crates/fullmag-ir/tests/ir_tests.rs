@@ -6725,6 +6725,19 @@ fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
     assert!(errors.iter().any(|error| {
         error.contains("at most one rotated_interfacial_dmi energy term is supported")
     }));
+
+    let mut mixed = ProblemIR::bootstrap_example();
+    mixed.energy_terms.extend([
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        EnergyTermIR::BulkDmi { d: 1.0e-3 },
+    ]);
+    let errors = mixed
+        .validate()
+        .expect_err("mixed rotated and conventional DMI must fail validation");
+    assert!(errors.iter().any(|error| {
+        error
+            .contains("rotated_interfacial_dmi cannot be combined with interfacial_dmi or bulk_dmi")
+    }));
 }
 
 #[test]

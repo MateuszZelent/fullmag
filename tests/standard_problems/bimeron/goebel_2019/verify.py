@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import re
@@ -50,6 +51,14 @@ def analyze_fdm_state(
         raise ValueError("topological charge requires at least a 2 x 2 grid")
     if any(len(vector) != 3 for vector in values):
         raise ValueError("every magnetization value must have three components")
+    for index, vector in enumerate(values):
+        if not all(math.isfinite(component) for component in vector):
+            raise ValueError(f"magnetization value {index} contains a non-finite component")
+        norm = math.sqrt(_dot(vector, vector))
+        if abs(norm - 1.0) > 5.0e-6:
+            raise ValueError(
+                f"magnetization value {index} is not unit length: norm={norm:.17g}"
+            )
 
     charge_sum = 0.0
     x_stop = nx if periodic_x else nx - 1
@@ -115,6 +124,14 @@ def _last_scalar(path: Path) -> dict[str, float]:
     return {key: float(value) for key, value in rows[-1].items()}
 
 
+def _first_scalar(path: Path) -> dict[str, float]:
+    with path.open(newline="", encoding="utf-8") as stream:
+        row = next(csv.DictReader(stream), None)
+    if row is None:
+        raise ValueError(f"no scalar rows in {path}")
+    return {key: float(value) for key, value in row.items()}
+
+
 def _initial_energy_from_log(path: Path) -> float:
     pattern = re.compile(r"stage 1/4 .*?step\s+0 .*?E_total=([-+0-9.eE]+)")
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -136,16 +153,25 @@ def verify_bundle(
     hold = bundle / "stages" / "stage_02_flat_run"
     initial_payload, initial = _read_state(relax / "m_initial.json")
     relaxed_payload, relaxed = _read_state(relax / "m_final.json")
-    _read_state(hold / "m_initial.json")
+    hold_initial_payload, _hold_initial = _read_state(hold / "m_initial.json")
     held_payload, held = _read_state(hold / "m_final.json")
     relax_scalars = _last_scalar(relax / "scalars.csv")
+    relax_initial_scalars = _first_scalar(relax / "scalars.csv")
     hold_scalars = _last_scalar(hold / "scalars.csv")
     metadata = json.loads((relax / "metadata.json").read_text(encoding="utf-8"))
+    hold_metadata = json.loads((hold / "metadata.json").read_text(encoding="utf-8"))
 
     execution = metadata["execution_provenance"]
     resolution = execution["execution_resolution"]
     receipt = execution["fdm_gpu_execution_receipt"]
-    initial_energy = _initial_energy_from_log(runtime_log)
+    if not runtime_log.is_file():
+        raise ValueError(f"runtime log is missing: {runtime_log}")
+    initial_energy = relax_initial_scalars["E_total"]
+    plan = metadata["execution_plan"]["backend_plan"]
+    material = plan["material"]
+    periodicity = plan["periodicity"]
+    hold_execution = hold_metadata["execution_provenance"]
+    hold_receipt = hold_execution["fdm_gpu_execution_receipt"]
     layout = held_payload["layout"]
     origin = layout["origin_m"]
     extent = [
@@ -190,6 +216,35 @@ def verify_bundle(
             initial_payload["layout"]["grid_cells"] == [1000, 80, 1]
             and initial_payload["layout"]["cell_size"] == [0.5e-9, 0.5e-9, 0.5e-9]
         ),
+        "source_physics": (
+            plan["rotated_interfacial_dmi"] == 3e-3
+            and plan.get("interfacial_dmi") is None
+            and plan.get("bulk_dmi") is None
+            and material["saturation_magnetisation"] == 0.58e6
+            and material["exchange_stiffness"] == 15e-12
+            and material["damping"] == 0.3
+            and material["uniaxial_anisotropy_ku1"] == 0.8e6
+            and material["anisotropy_axis"] == [1.0, 0.0, 0.0]
+            and periodicity["axes"] == ["periodic", "open", "open"]
+            and periodicity["demag"] == "truncated_images"
+        ),
+        "hold_starts_from_relaxed_state": (
+            hold_initial_payload["values"] == relaxed_payload["values"]
+            and float(hold_initial_payload["time"]) == float(relaxed_payload["time"])
+        ),
+        "hold_provenance_matches_relax": (
+            hold_metadata["source_hash"] == metadata["source_hash"]
+            and hold_metadata["requested_execution"] == metadata["requested_execution"]
+            and hold_execution["execution_engine"] == execution["execution_engine"]
+            and hold_execution["precision"] == execution["precision"]
+            and hold_receipt["validation_state"] == "validated"
+            and hold_receipt["executed"] == "cuda_fdm"
+            and hold_receipt["fallback_count"] == 0
+            and hold_receipt["executed_device_operator_mask"]
+            == hold_receipt["required_operator_mask"]
+            and hold_receipt["executed_host_operator_mask"] == 0
+            and hold_receipt["executed_unknown_operator_mask"] == 0
+        ),
         "energy_decreased": hold_scalars["E_total"] < initial_energy,
         "initial_charge": abs(float(initial["topological_charge"])) >= thresholds["min_abs_topological_charge"],
         "relaxed_charge": abs(float(relaxed["topological_charge"])) >= thresholds["min_abs_topological_charge"],
@@ -228,6 +283,11 @@ def verify_bundle(
         "initial_energy_j": initial_energy,
         "relaxed_energy_j": relax_scalars["E_total"],
         "held_energy_j": hold_scalars["E_total"],
+        "verified_state_sha256": {
+            "initial": hashlib.sha256((relax / "m_initial.json").read_bytes()).hexdigest(),
+            "relaxed": hashlib.sha256((relax / "m_final.json").read_bytes()).hexdigest(),
+            "held": hashlib.sha256((hold / "m_final.json").read_bytes()).hexdigest(),
+        },
         "execution": {
             "engine": execution["execution_engine"],
             "device": receipt["device"],

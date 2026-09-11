@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -168,7 +169,17 @@ def render_figure(bundle: Path, verification_report: Path, output: Path) -> None
     report = json.loads(verification_report.read_text(encoding="utf-8"))
     if report.get("status") != "passed":
         raise ValueError("figure generation requires a passed verification report")
-    states = [(title, _load_state(bundle / relative)) for title, relative in STATE_PATHS]
+    expected_hashes = report.get("verified_state_sha256")
+    if not isinstance(expected_hashes, dict):
+        raise ValueError("verification report does not bind the rendered state files")
+    hash_keys = ("initial", "relaxed", "held")
+    states = []
+    for (title, relative), hash_key in zip(STATE_PATHS, hash_keys):
+        state_path = bundle / relative
+        actual_hash = hashlib.sha256(state_path.read_bytes()).hexdigest()
+        if expected_hashes.get(hash_key) != actual_hash:
+            raise ValueError(f"verification report state hash mismatch for {relative}")
+        states.append((title, _load_state(state_path)))
 
     canvas = Image.new("RGB", (3000, 1700), "#f8fafc")
     draw = ImageDraw.Draw(canvas, "RGBA")

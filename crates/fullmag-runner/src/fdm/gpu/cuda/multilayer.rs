@@ -3729,6 +3729,7 @@ fn observe_native_stacked_cuda(
     let exchange_full = backend.copy_h_ex(cell_count)?;
     let demag_full = backend.copy_h_demag(cell_count)?;
     let external_full = backend.copy_h_ext(cell_count)?;
+    let rotated_dmi_full = backend.copy_h_rotated_dmi(cell_count)?;
     let effective_full = backend.copy_h_eff(cell_count)?;
     observe_native_stacked_fields(
         native,
@@ -3736,6 +3737,7 @@ fn observe_native_stacked_cuda(
         &exchange_full,
         &demag_full,
         &external_full,
+        &rotated_dmi_full,
         &effective_full,
     )
 }
@@ -3746,6 +3748,7 @@ fn observe_native_stacked_fields(
     exchange_full: &[[f64; 3]],
     demag_full: &[[f64; 3]],
     external_full: &[[f64; 3]],
+    rotated_dmi_full: &[[f64; 3]],
     effective_full: &[[f64; 3]],
 ) -> Result<StateObservables, RunError> {
     let cell_count = magnetization_full.len();
@@ -3866,10 +3869,8 @@ fn observe_native_stacked_fields(
             layer.context.problem.active_mask.as_deref(),
         );
         let mut local_dmi = local_observables.dmi_field;
-        let mut local_rotated_dmi = layer
-            .context
-            .problem
-            .rotated_interfacial_dmi_field(local_state.magnetization());
+        let mut local_rotated_dmi =
+            extract_native_stacked_layer_field(rotated_dmi_full, native, layer);
         zero_outside_active(&mut local_dmi, layer.context.problem.active_mask.as_deref());
         zero_outside_active(
             &mut local_rotated_dmi,
@@ -3877,10 +3878,13 @@ fn observe_native_stacked_fields(
         );
         let local_anisotropy_energy = local_observables.anisotropy_energy_joules;
         let local_dmi_energy = local_observables.dmi_energy_joules;
-        let local_rotated_dmi_energy = layer
-            .context
-            .problem
-            .rotated_interfacial_dmi_energy_from_vectors(local_state.magnetization());
+        let local_rotated_dmi_energy = field_energy_from_full(
+            local_state.magnetization(),
+            &local_rotated_dmi,
+            layer.context.problem.active_mask.as_deref(),
+            layer.context.problem.material.saturation_magnetisation,
+            cell_volume,
+        );
         anisotropy_energy += local_anisotropy_energy;
         dmi_energy += local_dmi_energy;
         rotated_dmi_energy += local_rotated_dmi_energy;
@@ -4756,6 +4760,7 @@ mod tests {
             fft: None,
             external_field: None,
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             bulk_dmi: None,
             gyromagnetic_ratio: 2.211e5,
             precision,
@@ -5276,6 +5281,7 @@ mod tests {
             fft: None,
             external_field: None,
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             bulk_dmi: None,
             gyromagnetic_ratio: 2.211e5,
             precision,
@@ -5521,6 +5527,7 @@ mod tests {
             &zero_field,
             &zero_field,
             &zero_field,
+            &zero_field,
         )
         .expect("native stacked field assembly should compute");
 
@@ -5562,6 +5569,7 @@ mod tests {
             &zero_field,
             &external_field,
             &zero_field,
+            &zero_field,
         )
         .expect("native stacked field assembly should compute");
 
@@ -5593,6 +5601,7 @@ mod tests {
         let observables = observe_native_stacked_fields(
             &native,
             &native.combined_plan.initial_magnetization,
+            &zero_field,
             &zero_field,
             &zero_field,
             &zero_field,
@@ -5645,6 +5654,7 @@ mod tests {
             effective_field: Vec::new(),
             anisotropy_field: Vec::new(),
             dmi_field: Vec::new(),
+            rotated_dmi_field: Vec::new(),
             magnetoelastic_field: Vec::new(),
             cubic_anisotropy_field: Vec::new(),
             bulk_dmi_field: Vec::new(),
@@ -5656,6 +5666,7 @@ mod tests {
             drive_energy: 0.0,
             anisotropy_energy: 0.5,
             dmi_energy: 0.25,
+            rotated_dmi_energy: 0.0,
             total_energy: 6.75,
             max_dm_dt: 7.0,
             max_rhs_all_norm_per_s: 7.0,

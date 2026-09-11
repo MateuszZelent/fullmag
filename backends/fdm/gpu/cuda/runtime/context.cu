@@ -162,7 +162,7 @@ bool context_preflight_single_grid_workspace(
     if (ctx.cell_count > maximum / scalar_bytes) return overflow();
     const uint64_t component_bytes = ctx.cell_count * scalar_bytes;
 
-    uint64_t vector_field_count = 10;
+    uint64_t vector_field_count = 11;
     if (ctx.has_frozen_mask) ++vector_field_count;
     switch (ctx.integrator) {
     case FULLMAG_FDM_INTEGRATOR_DP45:
@@ -1668,7 +1668,7 @@ bool context_preflight_multilayer_workspace_v2(
 
     const uint64_t scalar_bytes = scalar_size(ctx.precision);
     const uint64_t complex_bytes = complex_size(ctx.precision);
-    constexpr uint64_t layer_vector_component_count = 11 * 3;
+    constexpr uint64_t layer_vector_component_count = 12 * 3;
     for (uint32_t layer_index = 0;
          layer_index < plan.layer_count;
          ++layer_index)

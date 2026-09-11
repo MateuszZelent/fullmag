@@ -243,28 +243,28 @@ __global__ void energy_density_kernel(
             if (has_xp) {
                 const double right_x = static_cast<double>(mx[xp]);
                 const double right_z = static_cast<double>(mz[xp]);
-                density += d_rotated_interfacial * inv_2dx *
+                dmi_density += d_rotated_interfacial * inv_2dx *
                     ((mmz + right_z) * 0.5 * (right_x - mmx) -
                      (mmx + right_x) * 0.5 * (right_z - mmz));
             }
             if (has_xm) {
                 const double left_x = static_cast<double>(mx[xm]);
                 const double left_z = static_cast<double>(mz[xm]);
-                density += d_rotated_interfacial * inv_2dx *
+                dmi_density += d_rotated_interfacial * inv_2dx *
                     ((left_z + mmz) * 0.5 * (mmx - left_x) -
                      (left_x + mmx) * 0.5 * (mmz - left_z));
             }
             if (has_yp) {
                 const double right_x = static_cast<double>(mx[yp]);
                 const double right_y = static_cast<double>(my[yp]);
-                density += d_rotated_interfacial * inv_2dy *
+                dmi_density += d_rotated_interfacial * inv_2dy *
                     ((mmx + right_x) * 0.5 * (right_y - mmy) -
                      (mmy + right_y) * 0.5 * (right_x - mmx));
             }
             if (has_ym) {
                 const double left_x = static_cast<double>(mx[ym]);
                 const double left_y = static_cast<double>(my[ym]);
-                density += d_rotated_interfacial * inv_2dy *
+                dmi_density += d_rotated_interfacial * inv_2dy *
                     ((left_x + mmx) * 0.5 * (mmy - left_y) -
                      (left_y + mmy) * 0.5 * (mmx - left_x));
             }

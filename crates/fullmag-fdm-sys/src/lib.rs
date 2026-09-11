@@ -482,8 +482,6 @@ pub struct fullmag_fdm_plan_desc {
     pub frozen_mask_len: u64,
     pub frozen_reference_xyz: *const f64,
     pub frozen_reference_len: u64,
-    pub has_rotated_interfacial_dmi: i32,
-    pub dmi_D_rotated_interfacial: f64,
 }
 
 #[repr(C)]
@@ -506,11 +504,14 @@ pub struct fullmag_fdm_time_policy_desc_v2 {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+#[allow(non_snake_case)]
 pub struct fullmag_fdm_plan_desc_v2 {
     pub abi_version: u32,
     pub struct_size: u32,
     pub base: fullmag_fdm_plan_desc,
     pub time_policy: fullmag_fdm_time_policy_desc_v2,
+    pub has_rotated_interfacial_dmi: i32,
+    pub dmi_D_rotated_interfacial: f64,
 }
 
 pub const FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V1: u32 = 1;

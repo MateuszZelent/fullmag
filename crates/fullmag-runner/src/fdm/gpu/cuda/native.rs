@@ -1660,12 +1660,6 @@ impl NativeFdmBackend {
 
             has_interfacial_dmi: if plan.interfacial_dmi.is_some() { 1 } else { 0 },
             dmi_D_interfacial: plan.interfacial_dmi.unwrap_or(0.0),
-            has_rotated_interfacial_dmi: if plan.rotated_interfacial_dmi.is_some() {
-                1
-            } else {
-                0
-            },
-            dmi_D_rotated_interfacial: plan.rotated_interfacial_dmi.unwrap_or(0.0),
             has_bulk_dmi: if plan.bulk_dmi.is_some() { 1 } else { 0 },
             dmi_D_bulk: plan.bulk_dmi.unwrap_or(0.0),
             dind_field: plan
@@ -1892,6 +1886,12 @@ impl NativeFdmBackend {
             struct_size: std::mem::size_of::<ffi::fullmag_fdm_plan_desc_v2>() as u32,
             base: plan_desc,
             time_policy,
+            has_rotated_interfacial_dmi: if plan.rotated_interfacial_dmi.is_some() {
+                1
+            } else {
+                0
+            },
+            dmi_D_rotated_interfacial: plan.rotated_interfacial_dmi.unwrap_or(0.0),
         };
 
         let mut handle = std::ptr::null_mut();
@@ -2741,6 +2741,13 @@ impl NativeFdmBackend {
     pub fn copy_h_ani(&self, cell_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
         self.copy_field(
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ANI,
+            cell_count,
+        )
+    }
+
+    pub fn copy_h_rotated_dmi(&self, cell_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
+        self.copy_field(
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI,
             cell_count,
         )
     }
@@ -4148,6 +4155,7 @@ mod tests {
             gpu_transport_bound: false,
             adaptive_timestep_enabled: false,
             stats_policy: NativeStatsPolicy::full(1),
+            rotated_dmi_only: false,
         };
         let request = LivePreviewRequest {
             quantity: "frozen_spins".to_string(),
@@ -5104,6 +5112,7 @@ mod tests {
                             .unwrap_or([0.0, 1.0, 0.0]),
                     }),
                 interfacial_dmi: plan.interfacial_dmi,
+                rotated_interfacial_dmi: plan.rotated_interfacial_dmi,
                 bulk_dmi: plan.bulk_dmi,
                 zhang_li_stt: None,
                 slonczewski_stt: None,

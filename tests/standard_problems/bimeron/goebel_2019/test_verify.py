@@ -63,6 +63,24 @@ def test_analyze_fdm_state_rejects_shape_mismatch() -> None:
         raise AssertionError("shape mismatch must fail closed")
 
 
+def test_analyze_fdm_state_rejects_non_unit_or_non_finite_vectors() -> None:
+    for invalid in ([2.0, 0.0, 0.0], [math.nan, 0.0, 1.0]):
+        values = [[1.0, 0.0, 0.0] for _ in range(4)]
+        values[2] = invalid
+        try:
+            analyze_fdm_state(
+                values,
+                grid_cells=(2, 2, 1),
+                cell_size=(1.0, 1.0, 1.0),
+                origin=(0.0, 0.0, 0.0),
+                periodic_x=True,
+            )
+        except ValueError as exc:
+            assert "magnetization value 2" in str(exc)
+        else:
+            raise AssertionError("invalid magnetization must fail closed")
+
+
 def test_initial_energy_ignores_zero_heartbeat(tmp_path: Path) -> None:
     runtime_log = tmp_path / "runtime.log"
     runtime_log.write_text(

@@ -2371,6 +2371,18 @@ pub(crate) fn plan_fdm(
                 .to_string(),
         );
     }
+    if has_rotated_interfacial_dmi
+        && (has_bulk_dmi
+            || problem
+                .energy_terms
+                .iter()
+                .any(|term| matches!(term, EnergyTermIR::InterfacialDmi { .. })))
+    {
+        errors.push(
+            "RotatedInterfacialDmi cannot be combined with InterfacialDmi or BulkDmi until independent native field and energy channels are implemented"
+                .to_string(),
+        );
+    }
     let bulk_dmi_is_fully_periodic = problem.pbc.as_ref().is_some_and(|pbc| {
         pbc.axes
             .iter()
@@ -2578,6 +2590,17 @@ pub(crate) fn plan_fdm(
             voxelize_shape(&shape, cell_size, &mut errors);
         (bounding_size, active_mask, grid_cells, origin, false)
     };
+    if has_rotated_interfacial_dmi
+        && !enable_exchange
+        && active_mask
+            .as_deref()
+            .is_some_and(|mask| mask.iter().any(|active| !active))
+    {
+        errors.push(
+            "RotatedInterfacialDmi with an active-mask material boundary requires Exchange for the coupled natural boundary condition"
+                .to_string(),
+        );
+    }
 
     let mut transport_object_masks = BTreeMap::new();
     let mut transport_region_masks = BTreeMap::new();
@@ -4084,6 +4107,12 @@ pub(crate) fn plan_fdm_multilayer(
     if rotated_interfacial_dmi.is_some() && !enable_exchange {
         errors.push(
             "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition"
+                .to_string(),
+        );
+    }
+    if rotated_interfacial_dmi.is_some() && (interfacial_dmi.is_some() || bulk_dmi.is_some()) {
+        errors.push(
+            "RotatedInterfacialDmi cannot be combined with InterfacialDmi or BulkDmi until independent native field and energy channels are implemented"
                 .to_string(),
         );
     }

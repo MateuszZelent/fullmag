@@ -777,6 +777,16 @@ pub struct fullmag_fem_plan_desc {
     pub frozen_mask_len: u64,
     pub frozen_reference_xyz: *const f64,
     pub frozen_reference_len: u64,
+}
+
+pub const FULLMAG_FEM_PLAN_DESC_V2_ABI_VERSION: u32 = 2;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_plan_desc_v2 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub base: fullmag_fem_plan_desc,
     pub has_rotated_interfacial_dmi: i32,
     pub rotated_interfacial_dmi_constant: f64,
 }
@@ -2850,6 +2860,10 @@ extern "C" {
         plan: *const fullmag_fem_plan_desc,
         adaptive_config: *const fullmag_fem_adaptive_config_v2,
     ) -> *mut fullmag_fem_backend;
+    pub fn fullmag_fem_backend_create_v3(
+        plan: *const fullmag_fem_plan_desc_v2,
+        adaptive_config: *const fullmag_fem_adaptive_config_v2,
+    ) -> *mut fullmag_fem_backend;
     pub fn fullmag_fem_backend_begin_stage(
         handle: *mut fullmag_fem_backend,
         stage_start_time_s: f64,
@@ -3509,14 +3523,12 @@ mod tests {
             std::mem::offset_of!(fullmag_fem_plan_desc, frozen_reference_len)
                 > std::mem::offset_of!(fullmag_fem_plan_desc, frozen_reference_xyz)
         );
+        assert_eq!(std::mem::size_of::<fullmag_fem_plan_desc>(), 1616);
+        assert_eq!(FULLMAG_FEM_PLAN_DESC_V2_ABI_VERSION, 2);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_plan_desc_v2, base), 8);
         assert!(
-            std::mem::offset_of!(fullmag_fem_plan_desc, has_rotated_interfacial_dmi)
-                > std::mem::offset_of!(fullmag_fem_plan_desc, frozen_reference_len),
-            "rotated-interfacial DMI must remain an append-only plan extension"
-        );
-        assert!(
-            std::mem::offset_of!(fullmag_fem_plan_desc, rotated_interfacial_dmi_constant)
-                > std::mem::offset_of!(fullmag_fem_plan_desc, has_rotated_interfacial_dmi)
+            std::mem::offset_of!(fullmag_fem_plan_desc_v2, has_rotated_interfacial_dmi)
+                >= 8 + std::mem::size_of::<fullmag_fem_plan_desc>()
         );
     }
 

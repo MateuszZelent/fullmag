@@ -29,7 +29,7 @@ study = fm.study("goebel_2019_bimeron_fem")
 study.engine("fem")
 study.device(REQUESTED_DEVICE, precision="double")
 study.mode("strict")
-study.pbc(x=True, demag="truncated_images")
+study.pbc(x=True, demag="periodic_airbox_k0")
 
 film = study.geometry(fm.Box(size=TRACK_SIZE, name="film"), name="film")
 film.Ms = MS
@@ -84,7 +84,7 @@ study.stages.add_save_state(
     dataset="m",
 )
 
-hold = study.stages.add_run(stage_id="hold", until=RELAX_TIME + HOLD_TIME)
+hold = study.stages.add_run(stage_id="hold", until=HOLD_TIME)
 hold.autosave(
     fm.StageAutosave(
         table=fm.TableAutosave(

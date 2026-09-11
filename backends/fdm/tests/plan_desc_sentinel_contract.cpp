@@ -11,7 +11,7 @@
 namespace {
 
 static_assert(alignof(fullmag_fdm_plan_desc) == 8);
-static_assert(sizeof(fullmag_fdm_plan_desc) == 1296);
+static_assert(sizeof(fullmag_fdm_plan_desc) == 1280);
 static_assert(alignof(fullmag_fdm_plan_desc_v2) == 8);
 static_assert(sizeof(fullmag_fdm_plan_desc_v2) == 1400);
 #define FULLMAG_FDM_PLAN_V2_HEADER_FIELD(field, expected) \
@@ -32,7 +32,10 @@ static_assert(sizeof(fullmag_fdm_plan_desc_v2) == 1400);
 #define FULLMAG_FDM_PLAN_V2_TIME_FIELD(field, expected) \
     static_assert(offsetof(fullmag_fdm_plan_desc_v2, time_policy) + \
                       offsetof(fullmag_fdm_time_policy_desc_v2, field) == expected);
+#define FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD(field, expected) \
+    static_assert(offsetof(fullmag_fdm_plan_desc_v2, field) == expected);
 #include "fullmag_fdm_plan_desc_v2_layout.def"
+#undef FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD
 #undef FULLMAG_FDM_PLAN_V2_TIME_FIELD
 #undef FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD
 #undef FULLMAG_FDM_PLAN_V2_GRID_FIELD
@@ -47,6 +50,7 @@ constexpr std::size_t kHeaderFieldCount = 0
 #define FULLMAG_FDM_PLAN_V2_GRID_FIELD(field, expected)
 #define FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD(field, expected)
 #define FULLMAG_FDM_PLAN_V2_TIME_FIELD(field, expected)
+#define FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD(field, expected)
 #include "fullmag_fdm_plan_desc_v2_layout.def"
 ;
 constexpr std::size_t kAggregateFieldCount = 0
@@ -82,8 +86,18 @@ constexpr std::size_t kTimeFieldCount = 0
 #define FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD(field, expected)
 #undef FULLMAG_FDM_PLAN_V2_TIME_FIELD
 #define FULLMAG_FDM_PLAN_V2_TIME_FIELD(field, expected) +1
+#undef FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD
+#define FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD(field, expected)
 #include "fullmag_fdm_plan_desc_v2_layout.def"
 ;
+constexpr std::size_t kExtensionFieldCount = 0
+#undef FULLMAG_FDM_PLAN_V2_TIME_FIELD
+#define FULLMAG_FDM_PLAN_V2_TIME_FIELD(field, expected)
+#undef FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD
+#define FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD(field, expected) +1
+#include "fullmag_fdm_plan_desc_v2_layout.def"
+;
+#undef FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD
 #undef FULLMAG_FDM_PLAN_V2_TIME_FIELD
 #undef FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD
 #undef FULLMAG_FDM_PLAN_V2_GRID_FIELD
@@ -96,6 +110,7 @@ static_assert(kBaseFieldCount == 140);
 static_assert(kGridFieldCount == 6);
 static_assert(kMaterialFieldCount == 4);
 static_assert(kTimeFieldCount == 13);
+static_assert(kExtensionFieldCount == 2);
 
 void check(bool condition, const char *message) {
     if (!condition) {
@@ -218,7 +233,9 @@ void populate_distinct_semantic_sentinels(fullmag_fdm_plan_desc_v2 &plan) {
 #define FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD(field, expected)
 #define FULLMAG_FDM_PLAN_V2_TIME_FIELD(field, expected) \
     assign_sentinel(plan.time_policy.field, seed++);
+#define FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD(field, expected) assign_sentinel(plan.field, seed++);
 #include "fullmag_fdm_plan_desc_v2_layout.def"
+#undef FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD
 #undef FULLMAG_FDM_PLAN_V2_TIME_FIELD
 #undef FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD
 #undef FULLMAG_FDM_PLAN_V2_GRID_FIELD
@@ -242,7 +259,9 @@ void check_semantic_receipt(
 #define FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD(field, expected)
 #define FULLMAG_FDM_PLAN_V2_TIME_FIELD(field, expected) \
     FULLMAG_FDM_CHECK_FIELD(time_policy.field);
+#define FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD(field, expected) FULLMAG_FDM_CHECK_FIELD(field);
 #include "fullmag_fdm_plan_desc_v2_layout.def"
+#undef FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD
 #undef FULLMAG_FDM_PLAN_V2_TIME_FIELD
 #undef FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD
 #undef FULLMAG_FDM_PLAN_V2_GRID_FIELD
@@ -265,6 +284,35 @@ void owner_ingestion_receipt_preserves_every_semantic_field() {
     status = fullmag_fdm_plan_ingestion_v2_receipt(ingestion, &receipt);
     check(status == FULLMAG_FDM_OK, "owner must expose its post-ingestion receipt");
     check_semantic_receipt(plan, receipt);
+    fullmag_fdm_plan_ingestion_v2_destroy(ingestion);
+}
+
+void legacy_v2_size_preserves_layout_and_defaults_the_extension() {
+    fullmag_fdm_plan_desc_v2 plan{};
+    plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
+    plan.struct_size =
+        static_cast<uint32_t>(offsetof(fullmag_fdm_plan_desc_v2, has_rotated_interfacial_dmi));
+    plan.base.material.saturation_magnetisation = 8.0e5;
+    plan.time_policy.adaptive_atol = 1.0e-6;
+    // Bytes beyond the declared legacy extent must never acquire semantics.
+    plan.has_rotated_interfacial_dmi = 1;
+    plan.dmi_D_rotated_interfacial = 3.0e-3;
+
+    fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
+    int status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
+    check(status == FULLMAG_FDM_OK, "legacy 1384-byte v2 descriptor must remain accepted");
+
+    fullmag_fdm_plan_desc_v2 receipt{};
+    status = fullmag_fdm_plan_ingestion_v2_receipt(ingestion, &receipt);
+    check(status == FULLMAG_FDM_OK, "legacy descriptor must expose a widened receipt");
+    check(receipt.struct_size == sizeof(receipt), "receipt must advertise the current extent");
+    check(receipt.base.material.saturation_magnetisation == 8.0e5,
+          "legacy base field changed during ingestion");
+    check(receipt.time_policy.adaptive_atol == 1.0e-6,
+          "legacy time policy offset changed during ingestion");
+    check(receipt.has_rotated_interfacial_dmi == 0 &&
+              receipt.dmi_D_rotated_interfacial == 0.0,
+          "legacy descriptor must default the appended rotated-DMI extension");
     fullmag_fdm_plan_ingestion_v2_destroy(ingestion);
 }
 
@@ -373,6 +421,7 @@ void checked_backend_constructor_accepts_a_runtime_valid_plan() {
 
 int main() {
     owner_ingestion_receipt_preserves_every_semantic_field();
+    legacy_v2_size_preserves_layout_and_defaults_the_extension();
     incompatible_version_and_size_fail_before_backend_allocation();
 #if FULLMAG_FDM_CONTRACT_HAS_CUDA
     checked_backend_constructor_accepts_a_runtime_valid_plan();

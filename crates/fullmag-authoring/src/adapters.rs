@@ -324,6 +324,9 @@ pub fn scene_document_to_script_builder_overrides(
         "external_field": builder.external_field
             .map(|value| serde_json::json!([value[0], value[1], value[2]]))
             .unwrap_or(Value::Null),
+        "rotated_interfacial_dmi": builder.rotated_interfacial_dmi
+            .map(Value::from)
+            .unwrap_or(Value::Null),
         "solver": solver_override_value(&builder.solver),
         "mesh": {
             "algorithm_2d": builder.mesh.algorithm_2d,
@@ -2620,6 +2623,15 @@ mod tests {
 
         assert_eq!(scene.study.rotated_interfacial_dmi, Some(-3.0e-3));
         assert_eq!(round_trip.rotated_interfacial_dmi, Some(-3.0e-3));
+        let overrides = scene_document_to_script_builder_overrides(&scene).expect("overrides");
+        assert_eq!(overrides["rotated_interfacial_dmi"], -3.0e-3);
+    }
+
+    #[test]
+    fn scene_document_override_emits_null_when_rotated_dmi_is_removed() {
+        let scene = scene_document_from_script_builder(&sample_builder());
+        let overrides = scene_document_to_script_builder_overrides(&scene).expect("overrides");
+        assert_eq!(overrides["rotated_interfacial_dmi"], Value::Null);
     }
 
     #[test]

@@ -716,8 +716,6 @@ typedef struct {
     uint64_t                   frozen_mask_len;
     const double              *frozen_reference_xyz;
     uint64_t                   frozen_reference_len;
-    int                        has_rotated_interfacial_dmi;
-    double                     dmi_D_rotated_interfacial; /* append-only: D_21 = D_32 (J/m^2) */
 } fullmag_fdm_plan_desc;
 
 typedef enum {
@@ -768,6 +766,9 @@ typedef struct {
     uint32_t struct_size;
     fullmag_fdm_plan_desc base;
     fullmag_fdm_time_policy_desc_v2 time_policy;
+    /* Optional append-only extension; absent when struct_size is the legacy 1384 bytes. */
+    int has_rotated_interfacial_dmi;
+    double dmi_D_rotated_interfacial; /* D_21 = D_32 (J/m^2) */
 } fullmag_fdm_plan_desc_v2;
 
 /* Append-only native CUDA extension for resolved regional field drives. */

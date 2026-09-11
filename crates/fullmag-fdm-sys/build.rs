@@ -258,6 +258,7 @@ fn generate_plan_desc_layout_assertions() {
     let mut grid_fields = 0usize;
     let mut material_fields = 0usize;
     let mut time_fields = 0usize;
+    let mut extension_fields = 0usize;
     for line in source.lines().map(str::trim) {
         if line.is_empty() || line.starts_with("/*") {
             continue;
@@ -324,6 +325,13 @@ fn generate_plan_desc_layout_assertions() {
                     ),
                 )
             }
+            "FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD" => {
+                extension_fields += 1;
+                (
+                    field.to_string(),
+                    format!("std::mem::offset_of!(fullmag_fdm_plan_desc_v2, {field})"),
+                )
+            }
             other => panic!("unknown layout manifest macro: {other}"),
         };
         assertions.push_str(&format!(
@@ -338,10 +346,11 @@ fn generate_plan_desc_layout_assertions() {
         aggregate_fields, 2,
         "v2 layout manifest aggregate field count drift"
     );
-    assert_eq!(base_fields, 142, "base plan descriptor field count drift");
+    assert_eq!(base_fields, 140, "base plan descriptor field count drift");
     assert_eq!(grid_fields, 6, "grid descriptor field count drift");
     assert_eq!(material_fields, 4, "material descriptor field count drift");
     assert_eq!(time_fields, 13, "time policy descriptor field count drift");
+    assert_eq!(extension_fields, 2, "v2 extension field count drift");
 
     let generated = format!("{{\n{assertions}}}\n");
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());

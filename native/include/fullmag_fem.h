@@ -704,10 +704,18 @@ typedef struct {
     uint64_t frozen_mask_len;
     const double *frozen_reference_xyz;
     uint64_t frozen_reference_len;
-    /* Append-only Göbel rotated interfacial DMI extension (D_21 = D_32). */
-    int has_rotated_interfacial_dmi;
-    double rotated_interfacial_dmi_constant;
 } fullmag_fem_plan_desc;
+
+/* Versioned plan wrapper for physics extensions that cannot be appended to the
+   unversioned legacy descriptor without breaking existing binary clients. */
+#define FULLMAG_FEM_PLAN_DESC_V2_ABI_VERSION 2u
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    fullmag_fem_plan_desc base;
+    int has_rotated_interfacial_dmi;
+    double rotated_interfacial_dmi_constant; /* D_21 = D_32 (J/m^2) */
+} fullmag_fem_plan_desc_v2;
 
 /*
  * Standalone M1 steady charge/spin transport ABI.
@@ -3107,6 +3115,11 @@ fullmag_fem_backend *fullmag_fem_backend_create(
 
 fullmag_fem_backend *fullmag_fem_backend_create_v2(
     const fullmag_fem_plan_desc *plan,
+    const fullmag_fem_adaptive_config_v2 *adaptive_config
+);
+
+fullmag_fem_backend *fullmag_fem_backend_create_v3(
+    const fullmag_fem_plan_desc_v2 *plan,
     const fullmag_fem_adaptive_config_v2 *adaptive_config
 );
 

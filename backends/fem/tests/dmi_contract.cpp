@@ -533,10 +533,8 @@ void dmi_plan_import_normalizes_interface_normal_and_defaults_zero() {
     plan.dmi_interface_normal[2] = 4.0;
     plan.has_bulk_dmi = 1;
     plan.bulk_dmi_constant = 2.5e-3;
-    plan.has_rotated_interfacial_dmi = 1;
-    plan.rotated_interfacial_dmi_constant = 3.75e-3;
-
     fullmag::fem::initialize_dmi_plan_fields(ctx, plan);
+    fullmag::fem::initialize_rotated_dmi_plan_fields(ctx, 1, 3.75e-3);
 
     check(ctx.dmi.interfacial_enabled, "interfacial DMI flag copied");
     check(ctx.dmi.interfacial_D == 1.25e-3, "interfacial DMI constant copied");
@@ -551,6 +549,7 @@ void dmi_plan_import_normalizes_interface_normal_and_defaults_zero() {
     check(ctx.dmi.interface_normal[2] == 1.0, "DMI normal z normalized");
 
     fullmag_fem_plan_desc zero_normal_plan{};
+    fullmag::fem::initialize_rotated_dmi_plan_fields(ctx, 0, 0.0);
     fullmag::fem::initialize_dmi_plan_fields(ctx, zero_normal_plan);
     check(!ctx.dmi.rotated_interfacial_enabled, "rotated-interfacial DMI defaults disabled");
     check(ctx.dmi.rotated_interfacial_D == 0.0, "rotated-interfacial DMI defaults zero");

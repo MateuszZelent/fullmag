@@ -2913,7 +2913,7 @@ pub async fn patch_authoring_magnetization_asset(
     path = "/v2/sessions/current/model/objects/{object_id}/interactions/{interaction_kind}",
     params(
         ("object_id" = String, Path, description = "Canonical scene object id"),
-        ("interaction_kind" = String, Path, description = "Interaction kind: exchange | demag | interfacial_dmi | rotated_interfacial_dmi | bulk_dmi | uniaxial_anisotropy")
+        ("interaction_kind" = String, Path, description = "Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy")
     ),
     responses(
         (status = 200, description = "Canonical object interaction resource", body = ObjectInteractionResource),
@@ -2927,6 +2927,14 @@ pub async fn get_authoring_object_interaction(
 ) -> Result<Json<ObjectInteractionResource>, ApiError> {
     let scene = crate::get_or_load_current_live_scene_document(&state).await?;
     let kind = parse_interaction_kind(&interaction_kind)?;
+    if matches!(
+        kind,
+        ScriptBuilderMagneticInteractionKind::RotatedInterfacialDmi
+    ) {
+        return Err(ApiError::bad_request(
+            "rotated_interfacial_dmi is study-scoped; use the scene study patch",
+        ));
+    }
     let object = scene
         .objects
         .iter()
@@ -2951,7 +2959,7 @@ pub async fn get_authoring_object_interaction(
     path = "/v2/sessions/current/model/objects/{object_id}/interactions/{interaction_kind}",
     params(
         ("object_id" = String, Path, description = "Canonical scene object id"),
-        ("interaction_kind" = String, Path, description = "Interaction kind: exchange | demag | interfacial_dmi | rotated_interfacial_dmi | bulk_dmi | uniaxial_anisotropy")
+        ("interaction_kind" = String, Path, description = "Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy")
     ),
     request_body = ObjectInteractionPatchRequest,
     responses(
@@ -2969,6 +2977,14 @@ pub async fn patch_authoring_object_interaction(
     let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
     check_base_scene_revision(&scene, req.base_revision)?;
     let kind = parse_interaction_kind(&interaction_kind)?;
+    if matches!(
+        kind,
+        ScriptBuilderMagneticInteractionKind::RotatedInterfacialDmi
+    ) {
+        return Err(ApiError::bad_request(
+            "rotated_interfacial_dmi is study-scoped; use the scene study patch",
+        ));
+    }
     let material_dind = material_dind_for_object(&scene, &object_id);
     let material_dbulk = material_dbulk_for_object(&scene, &object_id);
     let object = scene

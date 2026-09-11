@@ -573,7 +573,8 @@ bool validate_supported_physics_topology(
         mfem_device == "cpu" || mfem_device == "cuda";
     const bool has_dmi =
         plan.has_interfacial_dmi != 0 || plan.has_bulk_dmi != 0 ||
-        plan.dind_field_len != 0u || plan.dbulk_field_len != 0u;
+        ctx.dmi.rotated_interfacial_enabled || plan.dind_field_len != 0u ||
+        plan.dbulk_field_len != 0u;
     const bool dmi_supported = !has_dmi || mfem_device == "cpu";
     const bool no_other_extended_physics =
         plan.ms_field_len == 0u && plan.a_field_len == 0u &&

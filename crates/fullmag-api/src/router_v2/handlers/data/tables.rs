@@ -623,6 +623,15 @@ fn table_column_meta(column: &str) -> Option<TableColumnMeta> {
         "e_ext" => ("e_ext", "E ext", "J", "energy", None, Some("sum"), "float"),
         "e_ani" => ("e_ani", "E ani", "J", "energy", None, Some("sum"), "float"),
         "e_dmi" => ("e_dmi", "E dmi", "J", "energy", None, Some("sum"), "float"),
+        "e_rotated_dmi" => (
+            "e_rotated_dmi",
+            "E rotated DMI",
+            "J",
+            "energy",
+            None,
+            Some("sum"),
+            "float",
+        ),
         "e_total" => (
             "e_total",
             "E total",
@@ -731,6 +740,7 @@ fn table_column_value(row: &ScalarRow, column: &str) -> Option<f64> {
         "e_ext" => row.e_ext,
         "e_ani" => row.e_ani,
         "e_dmi" => row.e_dmi,
+        "e_rotated_dmi" => row.e_rotated_dmi,
         "e_total" => row.e_total,
         "max_dm_dt" | "max_rhs_norm_per_s" => row.max_dm_dt,
         "max_h_eff" => row.max_h_eff,

@@ -712,6 +712,9 @@ fn first_unsupported_elementwise_ms_cpu_owner(plan: &FemPlanIR) -> Option<&'stat
     if plan.interfacial_dmi.is_some() || plan.dind_field.is_some() {
         return Some("interfacial DMI");
     }
+    if plan.rotated_interfacial_dmi.is_some() {
+        return Some("rotated interfacial DMI");
+    }
     if plan.bulk_dmi.is_some() || plan.dbulk_field.is_some() {
         return Some("bulk DMI");
     }
@@ -3268,6 +3271,17 @@ pub(crate) fn plan_fem(
                 .as_ref()
                 .is_some_and(|values: &Vec<f64>| !values.is_empty())
     });
+    if rotated_interfacial_dmi.is_some()
+        && (interfacial_dmi.is_some()
+            || bulk_dmi.is_some()
+            || has_material_interfacial_dmi
+            || has_material_bulk_dmi)
+    {
+        errors.push(
+            "RotatedInterfacialDmi cannot be combined with InterfacialDmi or BulkDmi until independent native field and energy channels are implemented"
+                .to_string(),
+        );
+    }
     if !(enable_exchange
         || enable_demag
         || external_field.is_some()
@@ -3309,7 +3323,7 @@ pub(crate) fn plan_fem(
         }),
         interfacial_dmi.is_some() || has_material_interfacial_dmi,
         bulk_dmi.is_some() || has_material_bulk_dmi,
-        rotated_interfacial_dmi.is_some(),
+        false,
         true,
         has_magnetoelastic,
         problem
@@ -3469,6 +3483,14 @@ pub(crate) fn plan_fem(
                 "FEM static/time-domain mesh.periodic_node_pairs require ProblemIR.pbc to declare \
                  the physical PBC intent; mesh periodic-pair metadata is topology only and must not \
                  enable periodic physics implicitly."
+                    .to_string(),
+            ],
+        });
+    }
+    if rotated_interfacial_dmi.is_some() && !mesh.periodic_node_pairs.is_empty() {
+        return Err(PlanError {
+            reasons: vec![
+                "FEM RotatedInterfacialDmi with periodic node pairs is unsupported until the weak residual and mass projection are reduced over periodic node classes"
                     .to_string(),
             ],
         });

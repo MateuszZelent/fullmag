@@ -12,6 +12,7 @@
 #include "backend_handle.hpp"
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
+#include "cpu/mfem/interactions/dmi.hpp"
 #include "cpu/mfem/interactions/magnetoelastic.hpp"
 #include "cpu/mfem/interactions/transport_stage.hpp"
 #include "cpu/mfem/runtime/availability.hpp"
@@ -4481,6 +4482,56 @@ fullmag_fem_backend *fullmag_fem_backend_create_v2(
     fullmag_fem_plan_desc plan_v2 = *plan;
     plan_v2.adaptive_config = &adaptive_config->base;
     if (!fullmag::fem::initialize_backend_runtime(handle->context, plan_v2, error)) {
+        fullmag_fem_set_global_error(error);
+        fullmag_fem_set_handle_error(handle, error);
+        delete handle;
+        return nullptr;
+    }
+
+    handle->last_error.clear();
+    fullmag_fem_clear_global_error();
+    return handle;
+}
+
+fullmag_fem_backend *fullmag_fem_backend_create_v3(
+    const fullmag_fem_plan_desc_v2 *plan,
+    const fullmag_fem_adaptive_config_v2 *adaptive_config)
+{
+    if (plan == nullptr) {
+        fullmag_fem_set_global_error("fullmag_fem_backend_create_v3 received null plan");
+        return nullptr;
+    }
+    if (plan->abi_version != FULLMAG_FEM_PLAN_DESC_V2_ABI_VERSION ||
+        plan->struct_size != sizeof(fullmag_fem_plan_desc_v2)) {
+        fullmag_fem_set_global_error("fullmag_fem_backend_create_v3 plan ABI version/size mismatch");
+        return nullptr;
+    }
+
+    auto *handle = new (std::nothrow) fullmag_fem_backend();
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error("failed to allocate fullmag_fem_backend");
+        return nullptr;
+    }
+
+    std::string error;
+    if (adaptive_config != nullptr &&
+        !fullmag::fem::apply_adaptive_dt_v2_guard_fields(
+            handle->context, adaptive_config, error)) {
+        fullmag_fem_set_global_error(error);
+        fullmag_fem_set_handle_error(handle, error);
+        delete handle;
+        return nullptr;
+    }
+
+    fullmag::fem::initialize_rotated_dmi_plan_fields(
+        handle->context,
+        plan->has_rotated_interfacial_dmi,
+        plan->rotated_interfacial_dmi_constant);
+    fullmag_fem_plan_desc base = plan->base;
+    if (adaptive_config != nullptr) {
+        base.adaptive_config = &adaptive_config->base;
+    }
+    if (!fullmag::fem::initialize_backend_runtime(handle->context, base, error)) {
         fullmag_fem_set_global_error(error);
         fullmag_fem_set_handle_error(handle, error);
         delete handle;

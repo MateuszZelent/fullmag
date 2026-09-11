@@ -19,8 +19,8 @@ void initialize_dmi_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan)
 {
     ctx.dmi.interfacial_enabled = plan.has_interfacial_dmi != 0;
     ctx.dmi.interfacial_D = plan.dmi_constant;
-    ctx.dmi.rotated_interfacial_enabled = plan.has_rotated_interfacial_dmi != 0;
-    ctx.dmi.rotated_interfacial_D = plan.rotated_interfacial_dmi_constant;
+    // Rotated DMI is carried only by fullmag_fem_plan_desc_v2. Preserve the
+    // value imported by the versioned create entry point.
 
     const double nx = plan.dmi_interface_normal[0];
     const double ny = plan.dmi_interface_normal[1];
@@ -34,6 +34,15 @@ void initialize_dmi_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan)
 
     ctx.dmi.bulk_enabled = plan.has_bulk_dmi != 0;
     ctx.dmi.bulk_D = plan.bulk_dmi_constant;
+}
+
+void initialize_rotated_dmi_plan_fields(
+    Context &ctx,
+    int has_rotated_interfacial_dmi,
+    double rotated_interfacial_dmi_constant)
+{
+    ctx.dmi.rotated_interfacial_enabled = has_rotated_interfacial_dmi != 0;
+    ctx.dmi.rotated_interfacial_D = rotated_interfacial_dmi_constant;
 }
 
 // Umbrella translation unit retained for build systems that still list dmi.cpp.

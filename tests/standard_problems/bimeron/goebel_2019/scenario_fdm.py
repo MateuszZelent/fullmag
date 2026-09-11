@@ -76,7 +76,7 @@ study.stages.add_save_state(
     dataset="m",
 )
 
-hold = study.stages.add_run(stage_id="hold", until=RELAX_TIME + HOLD_TIME)
+hold = study.stages.add_run(stage_id="hold", until=HOLD_TIME)
 hold.autosave(
     fm.StageAutosave(
         table=fm.TableAutosave(

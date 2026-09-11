@@ -798,9 +798,6 @@ function valuesFromParams(
   if (id === "interfacial_dmi") {
     return { dind: stringValue(params.dind, "1e-3") };
   }
-  if (id === "rotated_interfacial_dmi") {
-    return { d: stringValue(params.d, "0.003") };
-  }
   if (id === "uniaxial_anisotropy") {
     return {
       axis: vectorValue(params.axis, ["0", "0", "1"], 3),
@@ -818,11 +815,6 @@ function objectParamsFromDraft(
     const dind = parseNumber(draft.values.dind, "D_ind");
     if ("error" in dind) return dind;
     return { params: { dind: dind.value } };
-  }
-  if (draft.id === "rotated_interfacial_dmi") {
-    const d = parseNumber(draft.values.d, "D");
-    if ("error" in d) return d;
-    return { params: { d: d.value } };
   }
   if (draft.id === "uniaxial_anisotropy") {
     const ku1 = parseNumber(draft.values.ku1, "K_u1");
@@ -859,9 +851,7 @@ function isObjectInteractionKind(id: string): id is ObjectInteractionKind {
   return (
     id === "exchange" ||
     id === "demag" ||
-    id === "interfacial_dmi" ||
-    id === "rotated_interfacial_dmi" ||
-    id === "uniaxial_anisotropy"
+    id === "interfacial_dmi" || id === "uniaxial_anisotropy"
   );
 }
 

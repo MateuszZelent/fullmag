@@ -191,7 +191,9 @@ request; **resolved execution** is the planner's selected legal lane;
 
 The canonical quantities are `H_rotated_dmi` in $\mathrm{A\,m^{-1}}$,
 `eden_rotated_dmi` in $\mathrm{J\,m^{-3}}$, and `E_rotated_dmi` in $\mathrm{J}$.
-Requesting them without an active rotated-interfacial term is rejected.
+Requesting them without an active rotated-interfacial term is rejected. The
+current FEM path also rejects the two field quantities until their separate
+materialization path exists; global `E_rotated_dmi` remains available.
 
 (rotated-interfacial-dmi-discrete-realization)=
 ## Discrete realization and backend status
@@ -207,8 +209,10 @@ residual and projects the field using
 {\mu_0M_{s,a}M_a^{\mathrm{lump}}}.
 ```
 
-FEM GPU uses the same element residual in device kernels. Source implementation or
-a successful build is not scientific runtime qualification.
+FEM GPU uses the same element residual in device kernels. Static-periodic FEM rDMI
+is rejected until residual and mass reduction over periodic node classes is
+implemented; the periodic Göbel qualification therefore uses FDM. Source
+implementation or a successful build is not scientific runtime qualification.
 
 | Solver | Device | Implementation status | Scientific runtime status |
 |---|---|---|---|

@@ -114,6 +114,20 @@ export function draftFromStudyScene(
     };
   }
 
+  if (id === "rotated_interfacial_dmi") {
+    const value = study?.rotated_interfacial_dmi;
+    const present = typeof value === "number" && Number.isFinite(value);
+    return {
+      ...draft,
+      enabled: present,
+      present,
+      values: {
+        ...draft.values,
+        d: present ? String(value) : "0.003",
+      },
+    };
+  }
+
   return draft;
 }
 
@@ -229,9 +243,7 @@ function isObjectInteractionKind(id: PhysicsInteractionId): id is ObjectInteract
   return (
     id === "exchange" ||
     id === "demag" ||
-    id === "interfacial_dmi" ||
-    id === "rotated_interfacial_dmi" ||
-    id === "uniaxial_anisotropy"
+    id === "interfacial_dmi" || id === "uniaxial_anisotropy"
   );
 }
 

@@ -8902,7 +8902,7 @@ def _validate_energy_terms(problem: Problem) -> None:
         if isinstance(term, Zeeman):
             zeeman_count += 1
             continue
-        if isinstance(term, InterfacialDMI):
+        if isinstance(term, (InterfacialDMI, RotatedInterfacialDMI)):
             dmi_count += 1
             continue
         if isinstance(term, Demag):

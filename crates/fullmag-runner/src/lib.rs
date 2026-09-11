@@ -1898,13 +1898,15 @@ fn require_supported_fem_topology(
                 }
             }
             fullmag_ir::EnergyTermIR::InterfacialDmi { .. }
-            | fullmag_ir::EnergyTermIR::BulkDmi { .. } => {}
+            | fullmag_ir::EnergyTermIR::BulkDmi { .. }
+            | fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { .. } => {}
             fullmag_ir::EnergyTermIR::Zeeman { .. } => {}
             _ => energy_supported = false,
         }
     }
     let has_dmi = fem_plan.is_some_and(|fem| {
         fem.interfacial_dmi.is_some()
+            || fem.rotated_interfacial_dmi.is_some()
             || fem.bulk_dmi.is_some()
             || fem.dind_field.is_some()
             || fem.dbulk_field.is_some()
@@ -1913,6 +1915,7 @@ fn require_supported_fem_topology(
             term,
             fullmag_ir::EnergyTermIR::InterfacialDmi { .. }
                 | fullmag_ir::EnergyTermIR::BulkDmi { .. }
+                | fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { .. }
         )
     }) || problem.materials.iter().any(|material| {
         material.interfacial_dmi.is_some()
@@ -5527,10 +5530,11 @@ mod tests {
         ))
         .expect("read unified interactive runtime");
         assert!(
-            interactive_runtime_source
-                .contains("let runtime_outputs = crate::runtime_outputs_with_table_autosave(problem, plan);")
-                && interactive_runtime_source.contains("let mut runtime_plan = plan.clone();")
-                && interactive_runtime_source.contains("runtime_plan.output_plan.outputs = runtime_outputs;"),
+            interactive_runtime_source.contains(
+                "let runtime_outputs = crate::runtime_outputs_with_table_autosave(problem, plan);"
+            ) && interactive_runtime_source.contains("let mut runtime_plan = plan.clone();")
+                && interactive_runtime_source
+                    .contains("runtime_plan.output_plan.outputs = runtime_outputs;"),
             "unified interactive streaming must promote table autosave before backend dispatch"
         );
     }

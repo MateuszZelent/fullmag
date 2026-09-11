@@ -63,8 +63,8 @@ pub(crate) use plan::{
 #[cfg(feature = "fem-gpu")]
 pub(crate) use runtime_info::{
     stage_completion_from_ffi, stage_completion_is_representability_stationary,
-    strict_gpu_runtime_build_info, DeviceInfo, NativeFemDataResidency,
-    NativeFemGpuRkPlanInfo, NativeFemGpuStateInfo,
+    strict_gpu_runtime_build_info, DeviceInfo, NativeFemDataResidency, NativeFemGpuRkPlanInfo,
+    NativeFemGpuStateInfo,
 };
 #[cfg(feature = "fem-gpu")]
 pub(crate) use stage_coupled::StageM2CoupledProvider;
@@ -966,6 +966,7 @@ pub(crate) struct NativeFemBackend {
     demag_preconditioner: Option<String>,
     adaptive_max_error: Option<f64>,
     backend_create_wall_time_ns: Option<u64>,
+    rotated_dmi_only: bool,
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -2785,12 +2786,6 @@ impl NativeFemBackend {
             } else {
                 0
             },
-            has_rotated_interfacial_dmi: if plan.rotated_interfacial_dmi.is_some() {
-                1
-            } else {
-                0
-            },
-            rotated_interfacial_dmi_constant: plan.rotated_interfacial_dmi.unwrap_or(0.0),
             // Oersted field
             has_oersted_cylinder: if plan.has_oersted_cylinder { 1 } else { 0 },
             oersted_current: plan.oersted_current.unwrap_or(0.0),
@@ -2920,13 +2915,17 @@ impl NativeFemBackend {
             plan_desc.mfem_device_string = cs.as_ptr();
         }
 
-        let handle = unsafe {
-            if let Some(ref cfg) = adaptive_cfg {
-                ffi::fullmag_fem_backend_create_v2(&plan_desc, cfg)
-            } else {
-                ffi::fullmag_fem_backend_create(&plan_desc)
-            }
+        let plan_desc_v2 = ffi::fullmag_fem_plan_desc_v2 {
+            abi_version: ffi::FULLMAG_FEM_PLAN_DESC_V2_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_plan_desc_v2>() as u32,
+            base: plan_desc,
+            has_rotated_interfacial_dmi: i32::from(plan.rotated_interfacial_dmi.is_some()),
+            rotated_interfacial_dmi_constant: plan.rotated_interfacial_dmi.unwrap_or(0.0),
         };
+        let adaptive_ptr = adaptive_cfg
+            .as_ref()
+            .map_or(std::ptr::null(), |cfg| cfg as *const _);
+        let handle = unsafe { ffi::fullmag_fem_backend_create_v3(&plan_desc_v2, adaptive_ptr) };
         if handle.is_null() {
             let availability = native_availability();
             return Err(RunError {
@@ -2995,6 +2994,11 @@ impl NativeFemBackend {
                     .as_nanos()
                     .min(u128::from(u64::MAX)) as u64,
             ),
+            rotated_dmi_only: plan.rotated_interfacial_dmi.is_some()
+                && plan.interfacial_dmi.is_none()
+                && plan.bulk_dmi.is_none()
+                && plan.dind_field.is_none()
+                && plan.dbulk_field.is_none(),
         };
         Ok(backend)
     }
@@ -3002,6 +3006,14 @@ impl NativeFemBackend {
     fn attach_backend_create_timing(&mut self, stats: &mut StepStats) {
         stats.backend_create_wall_time_ns =
             self.backend_create_wall_time_ns.take().unwrap_or_default();
+    }
+
+    fn split_dmi_energy(&self, aggregate: f64) -> (f64, f64) {
+        if self.rotated_dmi_only {
+            (0.0, aggregate)
+        } else {
+            (aggregate, 0.0)
+        }
     }
 
     fn apply_demag_solver_policy_to_step_stats(&self, stats: &mut StepStats) {
@@ -3165,8 +3177,7 @@ impl NativeFemBackend {
     ) -> Result<Option<runtime_info::NativeFemDemagFemBemProvenance>, RunError> {
         let mut provenance = ffi::fullmag_fem_demag_fem_bem_provenance_v1 {
             abi_version: ffi::FULLMAG_FEM_DEMAG_FEM_BEM_PROVENANCE_V1_ABI_VERSION,
-            struct_size:
-                std::mem::size_of::<ffi::fullmag_fem_demag_fem_bem_provenance_v1>() as u32,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_demag_fem_bem_provenance_v1>() as u32,
             ..Default::default()
         };
         let rc = unsafe {
@@ -3376,6 +3387,7 @@ impl NativeFemBackend {
 
         let relaxation_subphase_wall_time_ns = relaxation_driver_subphase_wall_time_ns(&stats);
         let torque_apm = validate_native_step_stats(&stats)?;
+        let (e_dmi, e_rotated_dmi) = self.split_dmi_energy(stats.dmi_energy_joules);
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -3388,7 +3400,8 @@ impl NativeFemBackend {
             e_ext: stats.external_energy_joules,
             e_drive: stats.drive_energy_joules,
             e_ani: stats.anisotropy_energy_joules,
-            e_dmi: stats.dmi_energy_joules,
+            e_dmi,
+            e_rotated_dmi,
             e_total: stats.total_energy_joules,
             max_dm_dt: stats.max_rhs_amplitude,
             max_h_eff: stats.max_effective_field_amplitude,
@@ -3824,6 +3837,7 @@ impl NativeFemBackend {
         }
         let relaxation_subphase_wall_time_ns = relaxation_driver_subphase_wall_time_ns(&stats);
         let torque_apm = validate_native_step_stats(&stats)?;
+        let (e_dmi, e_rotated_dmi) = self.split_dmi_energy(stats.dmi_energy_joules);
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -3836,7 +3850,8 @@ impl NativeFemBackend {
             e_ext: stats.external_energy_joules,
             e_drive: stats.drive_energy_joules,
             e_ani: stats.anisotropy_energy_joules,
-            e_dmi: stats.dmi_energy_joules,
+            e_dmi,
+            e_rotated_dmi,
             e_total: stats.total_energy_joules,
             max_dm_dt: stats.max_rhs_amplitude,
             max_h_eff: stats.max_effective_field_amplitude,
@@ -4190,6 +4205,7 @@ impl NativeFemBackend {
 
         let accepted_energy_proof: Option<(f64, f64, f64, f64)> = None;
         let torque_apm = validate_native_step_stats(&stats)?;
+        let (e_dmi, e_rotated_dmi) = self.split_dmi_energy(stats.dmi_energy_joules);
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -4202,7 +4218,8 @@ impl NativeFemBackend {
             e_ext: stats.external_energy_joules,
             e_drive: stats.drive_energy_joules,
             e_ani: stats.anisotropy_energy_joules,
-            e_dmi: stats.dmi_energy_joules,
+            e_dmi,
+            e_rotated_dmi,
             e_total: stats.total_energy_joules,
             max_dm_dt: stats.max_rhs_amplitude,
             max_h_eff: stats.max_effective_field_amplitude,

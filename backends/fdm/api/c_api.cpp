@@ -892,8 +892,8 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     // DMI
     ctx->has_interfacial_dmi = plan->has_interfacial_dmi != 0;
     ctx->D_interfacial = plan->dmi_D_interfacial;
-    ctx->has_rotated_interfacial_dmi = plan->has_rotated_interfacial_dmi != 0;
-    ctx->D_rotated_interfacial = plan->dmi_D_rotated_interfacial;
+    ctx->has_rotated_interfacial_dmi = false;
+    ctx->D_rotated_interfacial = 0.0;
     ctx->has_bulk_dmi = plan->has_bulk_dmi != 0;
     ctx->D_bulk = plan->dmi_D_bulk;
 
@@ -1510,6 +1510,15 @@ int fullmag_fdm_backend_create_time_policy_v2_checked(
     *out_handle = handle;
     auto *ctx = reinterpret_cast<Context *>(handle);
     if (!ctx->last_error.empty()) return FULLMAG_FDM_OK;
+
+    ctx->has_rotated_interfacial_dmi = plan->has_rotated_interfacial_dmi != 0;
+    ctx->D_rotated_interfacial = plan->dmi_D_rotated_interfacial;
+    if (ctx->has_rotated_interfacial_dmi && !context_refresh_observables(*ctx)) {
+        return FULLMAG_FDM_OK;
+    }
+    if (ctx->has_rotated_interfacial_dmi) {
+        fullmag_fdm_commit_operator_residency(*ctx);
+    }
 
     const auto &policy = plan->time_policy;
     ctx->adaptive_enabled = policy.adaptive_enabled != 0;

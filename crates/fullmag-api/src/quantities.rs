@@ -108,6 +108,7 @@ fn scalar_metric_is_active(plan: Option<&ExecutionPlanIR>, metric_key: &str) -> 
                     || plan.material.cubic_anisotropy_kc3.is_some()
             }
             "e_dmi" => plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some(),
+            "e_rotated_dmi" => plan.rotated_interfacial_dmi.is_some(),
             "e_total" => true,
             _ => false,
         },
@@ -123,6 +124,7 @@ fn scalar_metric_is_active(plan: Option<&ExecutionPlanIR>, metric_key: &str) -> 
                     || plan.material.cubic_anisotropy_kc3.is_some()
             }
             "e_dmi" => plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some(),
+            "e_rotated_dmi" => plan.rotated_interfacial_dmi.is_some(),
             "e_total" => true,
             _ => false,
         },
@@ -138,6 +140,7 @@ fn scalar_metric_is_active(plan: Option<&ExecutionPlanIR>, metric_key: &str) -> 
                     || plan.material.cubic_anisotropy_kc3.is_some()
             }
             "e_dmi" => plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some(),
+            "e_rotated_dmi" => false,
             "e_total" => true,
             _ => false,
         },
@@ -153,6 +156,7 @@ fn scalar_metric_is_active(plan: Option<&ExecutionPlanIR>, metric_key: &str) -> 
                     || plan.material.cubic_anisotropy_kc3.is_some()
             }
             "e_dmi" => plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some(),
+            "e_rotated_dmi" => false,
             "e_total" => true,
             _ => false,
         },
@@ -170,6 +174,9 @@ pub(crate) fn run_manifest_scalar_value(
         "e_ext" => run.and_then(|manifest| manifest.final_e_ext),
         "e_ani" => run.and_then(|manifest| manifest.final_e_ani),
         "e_dmi" => run.and_then(|manifest| manifest.final_e_dmi),
+        // Completed-run manifests still expose the aggregate DMI value only. Live and
+        // persisted scalar rows carry the exact rotated component.
+        "e_rotated_dmi" => None,
         "e_total" => run.and_then(|manifest| manifest.final_e_total),
         _ => None,
     }
@@ -210,6 +217,7 @@ mod tests {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,

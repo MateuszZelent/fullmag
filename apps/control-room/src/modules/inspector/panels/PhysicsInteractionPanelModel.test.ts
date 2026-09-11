@@ -110,6 +110,23 @@ describe("PhysicsInteractionPanelModel", () => {
       patch: { study: { external_field: [0.01, 0, -0.002] } },
       storage: "study",
     });
+
+    const rotated = draftFromStudyScene("rotated_interfacial_dmi", {
+      ...scene,
+      study: { ...scene.study, rotated_interfacial_dmi: -0.003 },
+    } as unknown as SceneResource);
+    expect(rotated).toMatchObject({
+      enabled: true,
+      present: true,
+      values: { d: "-0.003" },
+    });
+    expect(buildInteractionApplyPatch(rotated)).toEqual({
+      patch: { study: { rotated_interfacial_dmi: -0.003 } },
+      storage: "study",
+    });
+    expect(
+      draftFromStudyScene("rotated_interfacial_dmi", scene),
+    ).toMatchObject({ enabled: false, present: false });
   });
 
   it("rejects deferred backend terms before hitting the API", () => {

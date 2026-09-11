@@ -316,14 +316,21 @@ void verify_single_grid(
     plan.dmi_D_interfacial = (bulk || rotated) ? 0.0 : d;
     plan.has_bulk_dmi = bulk ? 1 : 0;
     plan.dmi_D_bulk = bulk ? d : 0.0;
-    plan.has_rotated_interfacial_dmi = rotated ? 1 : 0;
-    plan.dmi_D_rotated_interfacial = rotated ? d : 0.0;
     plan.periodic_x = periodic ? 1 : 0;
     plan.periodic_y = periodic ? 1 : 0;
     plan.periodic_z = periodic ? 1 : 0;
     plan.stats_mode = rotated ? FULLMAG_FDM_STATS_FULL : FULLMAG_FDM_STATS_NONE;
 
-    fullmag_fdm_backend *backend = fullmag_fdm_backend_create(&plan);
+    fullmag_fdm_plan_desc_v2 plan_v2{};
+    plan_v2.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
+    plan_v2.struct_size = sizeof(plan_v2);
+    plan_v2.base = plan;
+    plan_v2.has_rotated_interfacial_dmi = rotated ? 1 : 0;
+    plan_v2.dmi_D_rotated_interfacial = rotated ? d : 0.0;
+    fullmag_fdm_backend *backend = nullptr;
+    check(fullmag_fdm_backend_create_time_policy_v2_checked(&plan_v2, &backend) ==
+              FULLMAG_FDM_OK,
+          "single-grid DMI checked v2 create rejected the descriptor");
     check(backend != nullptr, "single-grid DMI backend create returned null");
     check(fullmag_fdm_backend_last_error(backend) == nullptr,
           "single-grid DMI backend create failed");

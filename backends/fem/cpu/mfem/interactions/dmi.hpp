@@ -41,12 +41,17 @@ struct DmiRuntimeState {
 /*
  * Initialize DMI plan fields and normalize the interface normal.
  *
- * Copies conventional-interfacial, rotated-interfacial, and bulk DMI enable
- * flags/constants from the ABI plan into Context compatibility storage. The
+ * Copies conventional-interfacial and bulk DMI enable flags/constants from the
+ * legacy ABI plan into Context compatibility storage. Rotated DMI is imported
+ * separately from the versioned plan wrapper. The
  * conventional interfacial normal is normalized when finite and non-zero;
  * otherwise it falls back to +z.
  */
 void initialize_dmi_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan);
+void initialize_rotated_dmi_plan_fields(
+    Context &ctx,
+    int has_rotated_interfacial_dmi,
+    double rotated_interfacial_dmi_constant);
 
 /*
  * Release DMI element-loop scratch stored in the DMI runtime state.

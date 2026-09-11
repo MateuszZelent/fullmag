@@ -166,7 +166,7 @@ study.stages.add_relax(
     max_physical_time_s=20e-12,
     tolT=1e-6,
 )
-study.stages.add_run(stage_id="hold", until=120e-12)
+study.stages.add_run(stage_id="hold", until=100e-12)
 ```
 
 Konstruktor odrzuca `NaN`, `+inf` i `-inf` przez `ValueError`. Rust ponawia
@@ -213,9 +213,12 @@ typowanym błędem przed wykonaniem. Nie istnieje zamiana na inny rodzaj DMI,
 pominięcie operatora ani cichy fallback GPU do CPU.
 
 Nowe ilości kanoniczne to `H_rotated_dmi` w $\mathrm{A\,m^{-1}}$,
-`Eden_rotated_dmi` w $\mathrm{J\,m^{-3}}$ i `E_rotated_dmi` w $\mathrm{J}$.
+`eden_rotated_dmi` w $\mathrm{J\,m^{-3}}$ i `E_rotated_dmi` w $\mathrm{J}$.
 `H_eff` oraz `E_total` zawierają składnik dokładnie raz. Żądanie ilości bez
-aktywnej interakcji jest odrzucane przez planner.
+aktywnej interakcji jest odrzucane przez planner. Bieżący FEM nie materializuje
+jeszcze osobnych pól `H_rotated_dmi` ani `eden_rotated_dmi`, dlatego takie
+żądania również odrzuca; energia globalna pozostaje rozdzielona jako
+`E_rotated_dmi`.
 
 (discrete-realization)=
 ## Realizacje dyskretne
@@ -255,11 +258,13 @@ projekcją z lumped mass:
 ### FEM GPU/CUDA
 
 FEM GPU używa tego samego residualu elementowego, ale osobnego operatora CUDA
-lub libCEED. Podczas setupu MFEM przygotowuje typowane tablice kwadratury,
-wartości funkcji bazowych, gradienty fizyczne, jacobiany, membership i mapy
-true DOF dla `tet4`, `prism6` oraz `pyramid5`. Hot loop jest device-resident;
-nie spłaszcza pryzmatów ani piramid do niejawnych tetraedrów. Brak kernela lub
-bufora dla aktywnej topologii kończy krok błędem bez delegacji elementów na CPU.
+lub libCEED. Bieżący wykonywalny zakres rDMI na GPU jest ograniczony do P1
+`tet4`. `prism6`, `pyramid5` i topologie mieszane są odrzucane przed startem,
+dopóki osobne kernele i testy pochodnej energii nie zostaną zakwalifikowane.
+Brak kernela lub bufora kończy krok błędem bez delegacji elementów na CPU.
+FEM z periodycznymi klasami węzłów odrzuca rDMI, dopóki residual i projekcja
+masy nie zostaną zredukowane po tych klasach; periodyczna kwalifikacja Göbela
+pozostaje dlatego wyłącznie ścieżką FDM.
 
 ### Macierz wsparcia i kwalifikacji
 
