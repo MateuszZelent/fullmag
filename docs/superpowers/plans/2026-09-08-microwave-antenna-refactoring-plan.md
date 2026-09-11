@@ -453,9 +453,12 @@ jej podać do ścieżki source-spectrum, która nie wykonuje analizy modalnej.
 Analogicznie `component="transverse"` z dowolnym `equilibrium_ref` jest
 odrzucany już na granicy IR, ponieważ runner nie ma jeszcze zweryfikowanego
 ładowania i projekcji równowagi na tę samą siatkę próbkowania.
+API widma rozróżnia teraz `missing_payload` (HTTP 404) od
+`unsupported_topology` (HTTP 422), a metadata endpoint sprawdza obecność
+wszystkich czterech binarnych payloadów przed publikacją zasobu.
 Pozostają: bezpośrednia ewaluacja `direct_rt0_evaluation_v1`, natywny transfer
-MFEM, formalne rozróżnienie `missing_payload`/`unsupported_topology` w API,
-rzeczywiste wczytanie `equilibrium_ref` dla `component=transverse` oraz
+MFEM, rzeczywiste wczytanie `equilibrium_ref` dla `component=transverse`,
+odświeżenie śledzonych plików generated OpenAPI po zmianie odpowiedzi oraz
 kwalifikacja mieszanych topologii i dużych siatek.
 
 Niezależny test analityczny konwencji fazy, wykonywalny już teraz:

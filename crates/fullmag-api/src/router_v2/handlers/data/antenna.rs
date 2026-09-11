@@ -5,6 +5,7 @@
 //! remain artifacts rather than being copied into the control-plane resource.
 
 use std::collections::BTreeMap;
+use std::path::Path as FsPath;
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
@@ -26,6 +27,8 @@ use crate::types::AppState;
 const FIELD_SOLUTION_SCHEMA: &str = "antenna_field_solution.v1";
 const SOURCE_SPECTRUM_SCHEMA_V1: &str = "antenna_source_spectrum_artifact.v1";
 const SOURCE_SPECTRUM_SCHEMA_V2: &str = "antenna_source_spectrum_artifact.v2";
+const SUPPORTED_SOURCE_SPECTRUM_REALIZATIONS: [&str; 2] =
+    ["fem_p1_interpolation_v1", "identity_coordinates_v1"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AntennaFieldBinaryRefResource {
@@ -282,6 +285,7 @@ pub async fn get_antenna_field_solution(
         (status = 200, description = "Published antenna source spectrum metadata", body = AntennaSourceSpectrumResource),
         (status = 304, description = "Source spectrum metadata not modified for the supplied ETag"),
         (status = 404, description = "Source spectrum artifact not found"),
+        (status = 422, description = "Source spectrum sampling topology is unsupported"),
     ),
     tag = "data"
 )]
@@ -301,6 +305,8 @@ pub async fn get_antenna_source_spectrum(
         };
     let value = read_json_artifact_value(&artifact_dir, &relative_path)?;
     let parsed = parse_source_spectrum_artifact(&value, &output_id, &relative_path)?;
+    validate_source_spectrum_realization(&parsed.sampling.realization)?;
+    validate_source_spectrum_payloads(&artifact_dir, &output_id, parsed.payloads.as_ref())?;
 
     let (session_id, session_epoch) = current_session_identity(&state).await?;
     let resource = AntennaSourceSpectrumResource {
@@ -496,6 +502,7 @@ fn payloads_resource(payloads: AntennaSpectrumPayloads) -> AntennaSpectrumPayloa
         (status = 304, description = "Binary payload not modified for the supplied ETag"),
         (status = 404, description = "Source-spectrum payload not found"),
         (status = 416, description = "Requested binary payload range is not satisfiable"),
+        (status = 422, description = "Source spectrum sampling topology is unsupported"),
     ),
     tag = "data"
 )]
@@ -516,6 +523,7 @@ pub async fn get_antenna_source_spectrum_payload(
             "antenna source spectrum manifest identity or schema mismatch",
         ));
     }
+    validate_source_spectrum_realization(&manifest.sampling.realization)?;
     let reference = match payload_kind.as_str() {
         "k_u_rad_per_m" => &manifest.payloads.k_u_rad_per_m,
         "k_v_rad_per_m" => &manifest.payloads.k_v_rad_per_m,
@@ -535,10 +543,10 @@ pub async fn get_antenna_source_spectrum_payload(
     }
     let resolved = crate::artifacts::try_resolve_artifact_path(&artifact_dir, &reference.path)?
         .ok_or_else(|| {
-            ApiError::not_found(format!(
-                "source-spectrum payload '{}' not found",
-                reference.path
-            ))
+            ApiError::not_found_with_code(
+                "missing_payload",
+                format!("source-spectrum payload '{}' not found", reference.path),
+            )
         })?;
     let bytes = std::fs::read(&resolved).map_err(|error| {
         ApiError::internal(format!("failed to read source-spectrum payload: {error}"))
@@ -580,6 +588,48 @@ pub async fn get_antenna_source_spectrum_payload(
             HeaderValue::from_static("application/octet-stream"),
         ),
     )
+}
+
+fn validate_source_spectrum_realization(realization: &str) -> Result<(), ApiError> {
+    if SUPPORTED_SOURCE_SPECTRUM_REALIZATIONS.contains(&realization) {
+        return Ok(());
+    }
+    Err(ApiError::unprocessable_with_code(
+        "unsupported_topology",
+        format!(
+            "source-spectrum sampling realization '{realization}' is unsupported by this API"
+        ),
+    ))
+}
+
+fn validate_source_spectrum_payloads(
+    artifact_dir: &FsPath,
+    output_id: &str,
+    payloads: Option<&AntennaSpectrumPayloads>,
+) -> Result<(), ApiError> {
+    let Some(payloads) = payloads else {
+        return Ok(());
+    };
+    let prefix = format!("antenna/source_spectra/{output_id}/");
+    for reference in [
+        &payloads.k_u_rad_per_m,
+        &payloads.k_v_rad_per_m,
+        &payloads.amplitudes_re_im,
+        &payloads.power,
+    ] {
+        if !reference.path.starts_with(&prefix) {
+            return Err(ApiError::internal(
+                "antenna source spectrum payload path escapes its output namespace",
+            ));
+        }
+        if crate::artifacts::try_resolve_artifact_path(artifact_dir, &reference.path)?.is_none() {
+            return Err(ApiError::not_found_with_code(
+                "missing_payload",
+                format!("source-spectrum payload '{}' not found", reference.path),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn sampling_resource(
@@ -670,5 +720,42 @@ mod tests {
             .unwrap();
             assert!(value.get("kind").is_some());
         }
+    }
+
+    #[test]
+    fn source_spectrum_api_distinguishes_missing_payload_and_unsupported_topology() {
+        let unsupported = validate_source_spectrum_realization("direct_rt0_evaluation_v1")
+            .expect_err("unqualified topology must be rejected");
+        assert_eq!(unsupported.status, axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(unsupported.code.as_deref(), Some("unsupported_topology"));
+
+        let reference = AntennaSpectrumPayloadRef {
+            path: "antenna/source_spectra/output/power.f64le".into(),
+            sha256: "sha256:missing".into(),
+            scalar_type: "float64_le".into(),
+            layout: "kv_ku_power".into(),
+            unit: "(A/m/A)^2".into(),
+            value_count: 1,
+        };
+        let payloads = AntennaSpectrumPayloads {
+            k_u_rad_per_m: reference.clone(),
+            k_v_rad_per_m: reference.clone(),
+            amplitudes_re_im: reference.clone(),
+            power: reference,
+        };
+        let artifact_dir = std::env::temp_dir().join(format!(
+            "fullmag-antenna-api-missing-payload-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&artifact_dir).expect("create missing-payload fixture");
+        let missing = validate_source_spectrum_payloads(
+            &artifact_dir,
+            "output",
+            Some(&payloads),
+        )
+        .expect_err("missing binary must be reported");
+        assert_eq!(missing.status, axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(missing.code.as_deref(), Some("missing_payload"));
+        let _ = std::fs::remove_dir_all(artifact_dir);
     }
 }
