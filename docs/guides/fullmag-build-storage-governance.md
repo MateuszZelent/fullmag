@@ -330,7 +330,11 @@ odpowiednie kroki. Nie obejmuje to starych, obcych worktree, cache ani wyników.
    wybierz `master`, pobierz aktualny ref i aktualizuj wyłącznie fast-forward.
    Nie resetuj, nie stashuj ani nie commituj cudzych zmian. Jeśli aktualizacja
    koliduje z nimi lub lokalny `master` jest rozbieżny, zapisz blokadę.
-   Po merge PR nie wykonuj kolejnego merge brancha zadania.
+   Zdalny merge musi mieć lokalny odpowiednik: potwierdź, że lokalny `HEAD`
+   głównego checkoutu wskazuje wynikowy commit `master`. Jeżeli główny checkout
+   nie może być użyty, ustaw pierwotny worktree na wynikowy ref dopiero po
+   sprawdzeniu jego procesów i mountów. Po merge PR nie wykonuj kolejnego merge
+   brancha zadania.
 6. Zweryfikuj obecność wyniku PR na `master`, tożsamość źródeł i wymagane
    kontrole integracyjne. Sprawdź brak nowych commitów na branchu zadania od
    HEAD scalonego PR. Przy squash/rebase użyj też dowodu PR i porównania zmian;
@@ -340,8 +344,10 @@ odpowiednie kroki. Nie obejmuje to starych, obcych worktree, cache ani wyników.
    obejmujący untracked files, unikalne zmiany, ownership, procesy, kontenery,
    mounty i linki. Z głównego checkoutu wykonaj `git worktree remove` dla
    pojedynczej zweryfikowanej ścieżki, bez `--force`. Zweryfikuj brak wpisu
-   w `git worktree list` i brak katalogu. Nie kasuj przy tym storage ani branchy
-   innych zadań. Jeśli Git odmawia, zachowaj dane i zapisz powód.
+   w `git worktree list` i brak katalogu. Następnie usuń lokalny branch zadania
+   tylko wtedy, gdy wynikowy merge zawiera jego historię i żaden inny worktree
+   go nie używa; potwierdź brak lokalnego brancha. Nie kasuj przy tym storage
+   ani branchy innych zadań. Jeśli Git odmawia, zachowaj dane i zapisz powód.
 8. Zaktualizuj rekord pierwotnego worktree w `storage/index` (nie rekord
    głównego checkoutu): PR, merge commit, stan cleanupu, zachowane zasoby
    i następny krok. Istniejący `worktree-finish` jedynie zapisuje stan;
