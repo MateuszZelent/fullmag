@@ -11,6 +11,7 @@ import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
+import { AntennaSourceSpectrumPayloadView } from "./AntennaSourceSpectrumPayloadView";
 
 export type AntennaCompositionKind =
   | "conductor"
@@ -347,7 +348,7 @@ function spectrumDetails(
       { label: "Window", value: request.window },
       { label: "Normalization", value: request.normalization },
       { label: "k-grid", value: request.nonuniform_k_grid ? "nonuniform authored" : "FFT grid" },
-      { label: "Publication", value: "Spectrum request is configured; FFT payload is not yet attached." },
+      { label: "Publication", value: "Spectrum request is configured; binary FFT payload is published after a qualified solve." },
     ],
   };
 }
@@ -468,6 +469,9 @@ function sourceSpectrumRuntimeRows(
       value: `${data.sampling.realization}, outside=${data.sampling.outside_count}`,
     },
     { label: "Payload", value: `${data.payload.format} · ${data.payload.path}` },
+    ...(data.payloads
+      ? [{ label: "Binary payloads", value: "k_u · k_v · amplitudes · power" }]
+      : []),
   );
   return rows;
 }
@@ -557,6 +561,14 @@ export function AntennaCompositionPanel({
           />
         ) : null}
       </InspectorGroup>
+      {kind === "spectrum" &&
+      ids.spectrumOutputId &&
+      sourceSpectrum.data?.payloads ? (
+        <AntennaSourceSpectrumPayloadView
+          outputId={ids.spectrumOutputId}
+          spectrum={sourceSpectrum.data}
+        />
+      ) : null}
     </div>
   );
 }
