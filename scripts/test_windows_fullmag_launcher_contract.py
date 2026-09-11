@@ -485,8 +485,9 @@ def test_windows_fem_build_mutex_is_released_before_long_running_simulation() ->
     assert '$buildMutex = $null' in launcher[release_boundary:run_boundary]
 
 
-def test_windows_fem_interactive_launch_separates_host_and_container_web_ports() -> None:
-    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+@pytest.mark.parametrize("launcher_path", [LEGACY_FEM_LAUNCHER, DOCKER_LAUNCHER])
+def test_windows_fem_interactive_launch_separates_host_and_container_web_ports(launcher_path) -> None:
+    launcher = launcher_path.read_text(encoding="utf-8")
     compose = WINDOWS_COMPOSE.read_text(encoding="utf-8")
 
     assert '$env:FULLMAG_WINDOWS_WEB_PORT = $WebPort.ToString()' in launcher
