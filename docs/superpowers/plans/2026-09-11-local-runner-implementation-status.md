@@ -2,6 +2,11 @@
 
 ## Aktualizacja: koordynator w Dockerze, 2026-09-11
 
+Commit etapu: `a5486faec0319f1440b93e489fea9ae48297587a` — kolejka w Dockerze,
+uwierzytelniony klient, wykonawca buildów, testy i instrukcje. Dowody: `just
+runner-test` (130 + 20 PASS, capability 16 OK/5 skipped), resolver 26 OK/2 skipped.
+To commit komponentów, nie zakończona kwalifikacja pełnego builda.
+
 Poniższe wcześniejsze etapy zachowano jako historię, nie instrukcję nowego wdrożenia.
 Użytkownik zatwierdził socket Docker wyłącznie dla `Fullmag_build_runner` i bearer
 API publikowane wyłącznie na `127.0.0.1:8765`. Stała usługa Windows została zastąpiona.

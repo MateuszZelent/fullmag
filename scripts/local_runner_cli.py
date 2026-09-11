@@ -90,6 +90,11 @@ def main(argv=None):
                 result = container_client.start(layout, owner=owner)
             elif args.action == 'container-status':
                 result = container_client.status(layout, owner=owner)
+                if result['running']:
+                    try:
+                        result['health'] = container_client.request(layout, owner=owner, method='GET', path='/health')
+                    except ContainerClientError as error:
+                        result['health'] = {'ok': False, 'error': str(error)}
             else:
                 result = container_client.request(layout, owner=owner, method='POST', path='/stop', payload={})
         elif container_mode and args.action in ('run-once', 'reconcile', 'acknowledge-uncreated'):
