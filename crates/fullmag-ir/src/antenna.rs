@@ -564,6 +564,42 @@ fn validate_mode_basis_ref(
     }
 }
 
+/// `equilibrium_ref` is intentionally fail-closed until the source-spectrum
+/// workflow can resolve, verify, and project a certified equilibrium resource
+/// onto the exact sampling lattice.  Accepting the reference while the runner
+/// supplies no equilibrium samples would silently turn `transverse` into an
+/// invalid projection.
+fn validate_transverse_equilibrium_ref(
+    prefix: &str,
+    component: &str,
+    equilibrium_ref: Option<&str>,
+    errors: &mut Vec<String>,
+) -> bool {
+    if component != "transverse" {
+        return true;
+    }
+    match equilibrium_ref {
+        None => {
+            errors.push(format!(
+                "{prefix}.equilibrium_ref is required for component='transverse'"
+            ));
+            false
+        }
+        Some(value) if !nonempty(value) => {
+            errors.push(format!(
+                "{prefix}.equilibrium_ref must be non-empty for component='transverse'"
+            ));
+            false
+        }
+        Some(_) => {
+            errors.push(format!(
+                "{prefix}.component='transverse' is unsupported until a verified equilibrium resource loader and projection are implemented"
+            ));
+            false
+        }
+    }
+}
+
 fn target_exists(target: &FieldTargetIR, problem: &ProblemIRV04) -> bool {
     match target {
         FieldTargetIR::Global {} => true,
@@ -975,8 +1011,12 @@ pub(crate) fn validate_antenna_composition(problem: &ProblemIRV04, errors: &mut 
             }
             None => solved_stage.is_some_and(|stage| stage.port_mode_ids.len() == 1),
         };
-        let valid_equilibrium = request.component != "transverse"
-            || request.equilibrium_ref.as_deref().is_some_and(nonempty);
+        let valid_equilibrium = validate_transverse_equilibrium_ref(
+            &prefix,
+            request.component.as_str(),
+            request.equilibrium_ref.as_deref(),
+            errors,
+        );
         let valid_mode_basis =
             validate_mode_basis_ref(&prefix, request.mode_basis_ref.as_deref(), errors);
         if !stage_outputs.contains(&(
@@ -1269,8 +1309,12 @@ pub(crate) fn validate_antenna_composition_v03(problem: &ProblemIR, errors: &mut
             }
             None => solved_stage.is_some_and(|stage| stage.port_mode_ids.len() == 1),
         };
-        let valid_equilibrium = request.component != "transverse"
-            || request.equilibrium_ref.as_deref().is_some_and(nonempty);
+        let valid_equilibrium = validate_transverse_equilibrium_ref(
+            &prefix,
+            request.component.as_str(),
+            request.equilibrium_ref.as_deref(),
+            errors,
+        );
         let valid_mode_basis =
             validate_mode_basis_ref(&prefix, request.mode_basis_ref.as_deref(), errors);
         if !stage_outputs.contains(&(
@@ -1423,5 +1467,31 @@ mod tests {
         assert!(errors
             .iter()
             .any(|error| error.contains("mode_basis_ref must be non-empty")));
+    }
+
+    #[test]
+    fn transverse_spectrum_is_rejected_until_equilibrium_projection_exists() {
+        let mut errors = Vec::new();
+        assert!(!validate_transverse_equilibrium_ref(
+            "antenna_spectrum_requests[0]",
+            "transverse",
+            Some("equilibrium_1"),
+            &mut errors,
+        ));
+        assert!(errors.iter().any(|error| {
+            error.contains("component='transverse'")
+                && error.contains("verified equilibrium resource loader")
+        }));
+
+        let mut errors = Vec::new();
+        assert!(!validate_transverse_equilibrium_ref(
+            "antenna_spectrum_requests[0]",
+            "transverse",
+            None,
+            &mut errors,
+        ));
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("equilibrium_ref is required")));
     }
 }

@@ -450,6 +450,9 @@ point-only asset działa wyłącznie jako jawne `identity_coordinates_v1`. Testy
 obejmują affine vector field, integralność hasha topologii i `outside=zero`.
 Opcja `mode_basis_ref` jest teraz fail-closed w obu walidatorach IR; nie można
 jej podać do ścieżki source-spectrum, która nie wykonuje analizy modalnej.
+Analogicznie `component="transverse"` z dowolnym `equilibrium_ref` jest
+odrzucany już na granicy IR, ponieważ runner nie ma jeszcze zweryfikowanego
+ładowania i projekcji równowagi na tę samą siatkę próbkowania.
 Pozostają: bezpośrednia ewaluacja `direct_rt0_evaluation_v1`, natywny transfer
 MFEM, formalne rozróżnienie `missing_payload`/`unsupported_topology` w API,
 rzeczywiste wczytanie `equilibrium_ref` dla `component=transverse` oraz
