@@ -1,5 +1,48 @@
 # Lokalny runner — stan wdrożenia
 
+## Aktualizacja: koordynator w Dockerze, 2026-09-11
+
+Poniższe wcześniejsze etapy zachowano jako historię, nie instrukcję nowego wdrożenia.
+Użytkownik zatwierdził socket Docker wyłącznie dla `Fullmag_build_runner` i bearer
+API publikowane wyłącznie na `127.0.0.1:8765`. Stała usługa Windows została zastąpiona.
+
+- Działa kontener `9fc8d4d9bbc5a8b71a2f94cd5b2f8a37e6a4e96971981a7395bd60b8cba6d293`,
+  obraz `sha256:f41edac5d4d079e97d0f078d051b960e9a8762e3f8502bc1e24eed6325e250b7`.
+- Sprawdzono exact image/name/labels/mounty/port, uwierzytelnione health,
+  pauzę, kontrolowaną wymianę pustego koordynatora i wznowienie.
+  Worker health: running/alive/accepting_jobs; nie jest to dowód buildu.
+- Skonfigurowany obraz FEM CPU:
+  `sha256:e9b8ec88b9a9ea09a6cd5e3ad3945fcabd269541f1cdd24ffafd3dff3925399d`.
+- Implementacja: stała kolejka, Unix Docker API, katalog profili, prywatny
+  execution, wymagane artefakty/receipt, heartbeat podczas builda, pauza/resume,
+  ochrona klienta przed redirect/proxy, read-only plan retencji.
+- Testy aktualnego etapu: 130 runner + 20 service/API PASS; capability 16 OK
+  (5 skipped Windows). Testy nie zastępują uruchomienia solvera.
+- Snapshot `b1fdb5b6d1138772d84246343e0c7aba38f7c9492d91c539fc878470620ab986`,
+  capture `b8b254d42d254c599ee8cfbd11f84212`, HEAD
+  `5e53b8590b34067a8da8b608e4f3d2c20386986a` plus jawne dirty/untracked wejścia.
+  Job `5e5502807a9c4209aa38dad9fa0e83d0` został przyjęty mimo timeoutu klienta,
+  ma aktywny lease i wykonuje preflight. Nie zgłoszono duplikatu.
+  Pełny build nową trasą **NOT VERIFIED**.
+- Przygotowano poprawkę: API sprawdza bounded manifest i rejestruje job,
+  a pełne hashowanie plików należy do preflight wykonawcy przed Docker create.
+  Przygotowany obraz `sha256:115a9c236a5291b5cc36bc38f250fc89112e7a9f29f373574bf376529a40928c`
+  nie jest wdrożony; po jego zbudowaniu dodatkowo poprawiono writable katalogi
+  prywatnej kopii. Wymagana kolejna budowa obrazu i wymiana po terminalnym jobie.
+- Pierwsze capture odrzucono po zmianie pliku w trakcie kopiowania; drugie
+  odrzucono z powodu niejawnych untracked wejść. Nie uznano ich za buildy.
+- Destrukcyjne apply retencji zostało odrzucone przez kontrolę uprawnień.
+  Brak wdrożonego automatycznego usuwania execution/kontenerów buildów.
+  Nie usunięto cache, logów ani wyników. Wymiana dotyczyła tylko własnego
+  zatrzymanego kontenera koordynatora, przy zachowaniu storage i obrazu.
+- Skorygowano AGENTS.md, dodano skill `local-build-runner` i aktualną instrukcję.
+  Walidator skilla nie wystartował bez PyYAML; frontmatter i referencję
+  sprawdzono osobnym, ograniczonym testem strukturalnym.
+
+Pozostaje: rzeczywisty build/worker recovery, decyzja o wąskim cleanup apply,
+końcowe review oraz integracja brancha. GPU, fizyka, publikacja runtime `current`,
+GitHub ingress i kwalifikacja wydania **NOT VERIFIED**. Nie wykonano merge.
+
 Zakres zatwierdzony: koordynator na tym komputerze, kapsuły commit/dirty snapshot,
 kolejka współdzielona przez agentów i GitHub, izolowany worker Docker, zgodność
 storage/receipt i managed FEM. Nie zastępujemy pełnego celu samym demonstratorem.

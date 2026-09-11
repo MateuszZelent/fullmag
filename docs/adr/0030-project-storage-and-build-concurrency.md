@@ -157,6 +157,29 @@ rzeczywisty command, inventory przed/po, manifest i ścieżki. Nie deklaruje si�
 
 ### Rozszerzenie 2026-09-11: właściwości zamiast jednego filesystemu
 
+#### Korekta architektury lokalnego koordynatora
+
+Użytkownik zatwierdził jeden stały kontener `Fullmag_build_runner`, zamiast
+stałego procesu Windows. Windows przygotowuje kapsułę i zgłasza ją do API.
+Wyłącznie koordynator ma socket Docker Engine; kontenery buildów działają
+obok niego i nie otrzymują socketu, tokenu API, `.env` ani checkoutu hosta.
+API z bearer tokenem jest publikowane wyłącznie na `127.0.0.1:8765`.
+Dostęp do socketu jest szerokim uprawnieniem operatorowym, nie sandboxem
+dla kodu z PR. Niezaufane zewnętrzne PR nie są automatycznie wykonywane.
+
+Kolejka ma jednego właściciela: kontener. Klient Windows nie zapisuje SQLite
+po skonfigurowaniu tej trasy. Nie polegamy na współdzieleniu blokad Win32 i
+Linux przez bind NTFS; bezpośrednie hostowe ciężkie buildy tej wersji
+launchera są wtedy odrzucane. Stare, niezmigrowane procesy wymagają sprawdzenia
+przed startem. Istniejący aktywny kontener Fullmaga nie jest zatrzymywany.
+
+Stan implementacji i dowody pozostają w checkpointcie runnera. Sam obraz,
+uruchomiony serwer lub sonda storage nie oznaczają ukończenia builda ani
+kwalifikacji FEM. Brak case sensitivity jest wynikiem diagnostycznym, nie
+udowodnionym ogólnym wymaganiem Fullmaga. Historyczne raporty sond nie są
+przepisywane na PASS. Zmiana nie upoważnia do globalnego prune ani kasowania
+cudzych cache. Retencja wymaga jawnego zakresu zasobów i kontroli użycia.
+
 Użytkownik zatwierdził rozdzielenie historycznej trasy `linux-ext4-loop-v1`
 od nowej bramki `capabilities-v1`. Ext4 nie jest wymaganiem FEM. Nowy profil
 ma oceniać rzeczywiste właściwości storage osobno dla źródeł, artefaktów i

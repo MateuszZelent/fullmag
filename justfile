@@ -33,9 +33,28 @@ storage-prepare:
 runner-image:
     docker build --network none --pull=false -t fullmag/local-runner-source:development scripts/local_runner
 
+runner-build-image toolchain_image tag="fullmag/local-runner-build:development":
+    docker --context desktop-linux build --network none --pull=false --build-arg TOOLCHAIN_IMAGE={{quote(toolchain_image)}} -f scripts/local_runner/Dockerfile.build -t {{quote(tag)}} scripts/local_runner
+
+runner-coordinator-image:
+    docker --context desktop-linux build --network none --pull=false -f scripts/local_runner/Dockerfile.coordinator -t fullmag/build-runner:development scripts
+
+runner-container-configure image_id:
+    {{storage_python}} scripts/local_runner_cli.py container-configure --image-id {{quote(image_id)}}
+
+runner-container-start:
+    {{storage_python}} scripts/local_runner_cli.py container-start
+
+runner-container-status:
+    {{storage_python}} scripts/local_runner_cli.py container-status
+
+runner-container-stop:
+    {{storage_python}} scripts/local_runner_cli.py container-stop
+
 runner-test:
     {{storage_python}} -m unittest discover -s scripts -p 'test_local_runner_*.py'
     {{storage_python}} -m unittest discover -s scripts -p 'test_storage_capabilities.py'
+    {{storage_python}} -m unittest discover -s scripts/tests/local_runner -p 'test_*.py'
 
 # Diagnostic only: never enrolls a storage backend for FEM qualification.
 runner-storage-probe role="build":
@@ -70,6 +89,22 @@ runner-configure image_id:
 
 runner-once:
     {{storage_python}} scripts/local_runner_cli.py run-once
+
+# Build catalogue: immutable source selection, no user-supplied shell command.
+runner-build mode profile="fem-cpu-release" ref="":
+    {{storage_python}} scripts/local_runner_cli.py submit --operation build --profile {{quote(profile)}} --source {{quote(mode)}} {{if ref == "" { "" } else { "--ref " + quote(ref) }}}
+
+runner-configure-build profile image_id:
+    {{storage_python}} scripts/local_runner_cli.py configure-build --profile {{quote(profile)}} --image-id {{quote(image_id)}}
+
+runner-container-resume:
+    {{storage_python}} scripts/local_runner_cli.py container-resume
+
+runner-retention-plan:
+    {{storage_python}} scripts/local_runner_cli.py retention-plan
+
+runner-container-replace image_id:
+    {{storage_python}} scripts/local_runner_cli.py container-replace --image-id {{quote(image_id)}}
 
 runner-reconcile job:
     {{storage_python}} scripts/local_runner_cli.py reconcile {{quote(job)}}

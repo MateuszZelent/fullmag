@@ -44,6 +44,8 @@ Instrukcje dotyczą GPT-Astra, GPT-Sol, GPT-Luna oraz innych agentów pracujący
 
 ## Build i dowody
 
+- Dla buildów przez lokalną kolejkę Docker Desktop użyj skilla `local-build-runner` i [instrukcji runnera](docs/guides/local-container-runner.md). Jeden `Fullmag_build_runner` obsługuje wszystkie worktree przez uwierzytelnione API; Windows przygotowuje snapshot, nie wykonuje kolejki. Po konfiguracji kontenera nie uruchamiaj starego hostowego wykonawcy ani bezpośredniego ciężkiego builda. Status wdrożenia i brakujące dowody są jawne w instrukcji; działający kontener nie oznacza zaliczonego buildu.
+
 - Nowy worktree na tym samym hoście nie potrzebuje własnego `.env`: resolver ustala główny checkout przez Git i czyta jego plik. Instrukcja i `.env.example` są wersjonowane; wartości hosta pozostają lokalne. Dla nowego klona na innym hoście przed pierwszym buildem skonfiguruj `.env` głównego checkoutu według `.env.example`, zachowując istniejące ustawienia. Jeśli lokalizacja storage nie została określona, uzyskaj ją od użytkownika; nie kopiuj ścieżki z innego hosta ani nie traktuj fallbacku resolvera jako konfiguracji operatora.
 
 - Fizyczną lokalizację storage hosta deklaruj przez `FULLMAG_PROJECT_STORAGE_ROOT` w lokalnym `.env` głównego checkoutu (szablon: `.env.example`). Worktree korzystają z tej samej konfiguracji przez resolver. Nie wpisuj stałych ścieżek Windows/Linux do instrukcji ani skilli i nie kopiuj całego `.env` do worktree. Buildy są podkatalogami rozwiązanego storage; jawne zmienne procesu, w tym mapowanie kontenera, mają pierwszeństwo i podlegają tej samej walidacji.

@@ -7,9 +7,12 @@ nie wymagania numeryczne FEM. Zachowujemy tę trasę jako
 `linux-ext4-loop-v1`. Nowa trasa `capabilities-v1` sprawdza żywe operacje
 na docelowym filesystemie; nazwa `v9fs`, NTFS czy ext4 nie stanowi wyniku testu.
 
-Role są oddzielne: źródła, artefakty i build. Build potrzebuje ponadto
-semantyki Linux wymaganej przez toolchain (m.in. wielkość liter, linki,
-uprawnienia wykonania, mmap). Nie narzucamy tych wymagań eksportowi zwykłych
+Role są oddzielne: źródła, artefakty i build. Build potrzebuje właściwości
+rzeczywiście używanych przez wybrany toolchain (np. linki, wykonywalność, mmap).
+Case sensitivity pozostaje mierzoną właściwością, nie udowodnionym ogólnym
+wymogiem Fullmaga. Historyczny profil sondy nadal raportuje swój wynik FAIL;
+nowy build Desktop musi mieć własny dowód, bez przepisywania starego raportu.
+Nie narzucamy tych wymagań eksportowi zwykłych
 plików wynikowych. Kapsuła źródeł w jobie pozostaje readonly; sonda używa
 wyłącznie własnego, zapisywalnego katalogu testowego na tym samym storage.
 
@@ -19,6 +22,10 @@ przenosimy dysku Docker Desktop, nie dotykamy cudzych kontenerów ani cache.
 ## Operacyjne sprawdzenie Docker Desktop
 
 Po jawnym skonfigurowaniu obrazu diagnostycznego runnera:
+
+Poniższe sondy dotyczą wcześniejszego, hostowego etapu. Po skonfigurowaniu
+`Fullmag_build_runner` są odrzucane, żeby Windows nie zapisywał kolejki SQLite
+posiadanej przez kontener. Bieżąca trasa: [lokalny runner](local-container-runner.md).
 
 ```text
 just runner-storage-probe build

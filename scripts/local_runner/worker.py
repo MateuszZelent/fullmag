@@ -68,7 +68,7 @@ def _absolute_path(value: object, label: str) -> Path:
         raise ValueError(f"{label} must be a path")
     if isinstance(raw, bytes):
         raise ValueError(f"{label} must be a text path")
-    if not raw or "\x00" in raw:
+    if not raw or any(character in raw for character in ('\x00', '\n', '\r')):
         raise ValueError(f"{label} must be a non-empty path without NUL")
     lexical_path = Path(raw)
     if not lexical_path.is_absolute():

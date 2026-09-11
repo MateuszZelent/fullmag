@@ -139,6 +139,11 @@ class JobQueue:
             rows = db.execute("SELECT * FROM jobs WHERE state IN ('running','cancel_requested') ORDER BY sequence").fetchall()
             return [self.record(row) for row in rows]
 
+    def next_queued(self, owner):
+        with self.connection() as db:
+            row = db.execute("SELECT * FROM jobs WHERE owner=? AND state='queued' ORDER BY sequence LIMIT 1", (owner,)).fetchone()
+            return self.record(row) if row is not None else None
+
     def has_queued(self, owner):
         with self.connection() as db:
             return db.execute("SELECT 1 FROM jobs WHERE owner=? AND state='queued' LIMIT 1", (owner,)).fetchone() is not None

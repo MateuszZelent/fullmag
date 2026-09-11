@@ -42,7 +42,7 @@ def docker(arguments):
                             capture_output=True, text=True, timeout=60, env=environment)
     if result.returncode:
         raise CoordinatorError(f'Docker {arguments[0]} failed: {result.stderr.strip()}')
-    return result.stdout
+    return result.stdout + result.stderr if arguments[0] == 'logs' else result.stdout
 
 
 def inspect_owned(call, container_id, job_id):
@@ -217,7 +217,7 @@ def reconcile(layout, job_id, *, owner, call=docker):
 
 
 def execute_once(layout, *, owner, image_digest, cpus=2, memory_bytes=1024**3,
-                 call=docker, sleep=time.sleep, timeout_seconds=300):
+                 call=docker, sleep=time.sleep, timeout_seconds=300, expected_job_id=None):
     """Execute at most one source-check; interrupted launches retain their lease.
 
     Stopped containers and logs are intentionally retained. Timeout is not
@@ -239,7 +239,7 @@ def execute_once(layout, *, owner, image_digest, cpus=2, memory_bytes=1024**3,
         image = json.loads(call(['image', 'inspect', image_digest]))
         if not image or image[0].get('Id') != image_digest:
             raise CoordinatorError('Worker image identity mismatch')
-        job = queue.claim('local-host', owner=owner)
+        job = queue.claim('local-host', owner=owner, expected_job_id=expected_job_id)
         if job is None:
             return None
         if job['owner'] != owner:

@@ -268,6 +268,11 @@ wywołanie nie tworzy `C:\fullmag-build`, `C:\fullmag-cache` ani
 
 ## Linux
 
+Lokalną kolejkę Docker Desktop opisuje [instrukcja runnera](local-container-runner.md).
+Jej stały koordynator jest jedynym właścicielem SQLite; host przygotowuje kapsuły
+i komunikuje się przez API. Nie zakładamy zgodności blokad Win32 i Linux na bind
+NTFS. Poniższa historyczna trasa Linux nie narzuca ext4 nowemu profilowi Desktop.
+
 Rozszerzenie z 2026-09-11: [bramka właściwości storage](storage-capability-gate.md)
 pozwala badać osobną trasę Docker Desktop bez narzucania jej ext4. Nie zmienia
 automatycznie kwalifikacji ani guardów istniejących recept Linux opisanych

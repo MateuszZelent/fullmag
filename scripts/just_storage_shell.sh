@@ -61,6 +61,15 @@ esac
 # Holding the generic worktree lock while `wait` polls would prevent the
 # coordinator from executing that same worktree's queued job.
 case "${recipe}" in
+  *"test_local_runner_"*|*"scripts/tests/local_runner"*|*"test_storage_capabilities.py"*)
+    "${python_cmd}" "${resolver}" resolve --repo-root "${repo_root}" >/dev/null
+    export PYTHONDONTWRITEBYTECODE=1
+    exec bash -euo pipefail -c "${recipe}"
+    ;;
+  *"scripts/local_runner/Dockerfile.coordinator"*|*"scripts/local_runner/Dockerfile.build"*)
+    "${python_cmd}" "${resolver}" resolve --repo-root "${repo_root}" >/dev/null
+    exec bash -euo pipefail -c "${recipe}"
+    ;;
   *"scripts/local_runner_cli.py"*)
     FULLMAG_STORAGE_PYTHON="${python_cmd}" exec bash -euo pipefail -c "${recipe}"
     ;;

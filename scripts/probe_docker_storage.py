@@ -107,6 +107,8 @@ def query_case_sensitive(root):
 def run(layout, role, *, owner, call=docker, case_sensitive=False):
     initialize(layout)
     storage = Path(layout['storage_root'])
+    if (storage / 'index/local-runner-container.json').exists():
+        raise CoordinatorError('Container coordinator owns the queue; legacy host probes are disabled')
     with file_lock(storage / 'locks/local-runner-coordinator.lock', 'storage probe'), build_lock(layout):
         volume = host_volume(storage)
         database = storage / 'index/runner-jobs.sqlite'
