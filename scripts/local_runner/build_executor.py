@@ -105,6 +105,18 @@ def prepare_worker_directory(path, storage):
     os.chown(path, 65532, 65532, follow_symlinks=False)
 
 
+def dependency_cache_paths(storage, profile):
+    backend, device = profile_lane(profile)
+    lane = backend + '-' + device
+    base = Path(storage) / 'cache' / 'windows' / lane
+    # Legacy launchers populated dependency trees as root. A writable top-level
+    # directory does not make their descendants writable by this worker UID.
+    # Keep those trees intact; all runner worktrees share a dedicated namespace.
+    mutable = base / 'runner-uid-65532'
+    return {'cargo': mutable / 'cargo', 'pnpm': mutable / 'pnpm',
+            'rustup': base / 'rustup'}
+
+
 def prepare_cache_directory(path, storage):
     """Provision a new cache for the worker without modifying an existing cache."""
     path = validate_path(path, storage, 'worker cache directory')
@@ -296,10 +308,9 @@ def execute_build(layout, *, owner, call=docker, sleep=time.sleep, timeout_secon
             run_root = validate_path(storage / 'runs' / job['worktree_id'] / job['job_id'], storage)
             run_root.mkdir(exist_ok=False)
             profile_key = 'runner-' + job['profile'] + '-' + config['image_digest'][7:19]
-            cache = storage / 'cache' / 'windows' / ('fem-gpu' if job['profile'] == 'fem-gpu-release' else 'fem-cpu')
             paths = {'source': capsule, 'workspace': run_root / 'execution', 'artifacts': run_root / 'artifacts',
                      'trusted': run_root / 'trusted', 'build': storage / 'builds' / job['worktree_id'] / profile_key,
-                     'cargo': cache / 'cargo', 'rustup': cache / 'rustup', 'pnpm': cache / 'pnpm'}
+                     **dependency_cache_paths(storage, job['profile'])}
             for key, path in paths.items():
                 validate_path(path, storage)
                 if layout.get('container_coordinator') and key in ('cargo', 'rustup', 'pnpm'):

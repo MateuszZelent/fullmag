@@ -87,6 +87,12 @@ Zdrowie API i stan wykonawcy są oddzielne: sprawdzaj `accepting_jobs`,
 - `storage/builds/<worktree-id>/runner-<profile>-<image-id>`: trwały target buildu.
 - `storage/cache`: jawnie współdzielone zależności, chronione przed cleanupem.
 
+Zapisywalne cache Cargo i pnpm runnera używają podkatalogu
+`cache/windows/<backend>-<device>/runner-uid-65532/`, wspólnego dla jego worktree.
+Nie przejmują starszych drzew tworzonych przez launchery jako root; ich danych
+i uprawnień nie zmieniamy. Zainstalowany toolchain rustup pozostaje pod dotychczasową
+ścieżką danego backendu; runner nie instaluje automatycznie toolchainów.
+
 Build wykonuje natywny `make install-cli-dev`, instalację zależności frontendu
 z lockfile i `make web-build-static`. Success wymaga exit 0, etapów zakończonych
 poprawnie i hashy wymaganych binariów/core/web/markera. Nie publikuje automatycznie

@@ -8,6 +8,17 @@ from local_runner import build_executor as executor
 
 
 class BuildExecutorTests(unittest.TestCase):
+    def test_mutable_caches_do_not_reuse_legacy_root_owned_trees(self):
+        root = Path('/storage')
+        paths = executor.dependency_cache_paths(root, 'fem-cpu-release')
+        legacy = root / 'cache' / 'windows' / 'fem-cpu'
+        self.assertEqual(legacy / 'runner-uid-65532' / 'cargo', paths['cargo'])
+        self.assertEqual(legacy / 'runner-uid-65532' / 'pnpm', paths['pnpm'])
+        self.assertEqual(legacy / 'rustup', paths['rustup'])
+        self.assertNotEqual(paths, executor.dependency_cache_paths(root, 'fem-gpu-release'))
+        with self.assertRaises(ValueError):
+            executor.dependency_cache_paths(root, '../untrusted')
+
     def test_new_cache_is_worker_owned_but_existing_cache_is_untouched(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
