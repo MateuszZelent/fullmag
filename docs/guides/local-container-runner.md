@@ -16,9 +16,11 @@ rootfs readonly, ograniczenia CPU/RAM/PID oraz prywatne katalogi wykonania.
 Sieć workera służy pobieraniu zależności. To nie jest izolacja niezaufanych PR.
 
 Stan wdrożenia: koordynator uruchomiony i API sprawdzone; testy modułów przechodzą.
-Pełny build nową trasą, crash/restart aktywnego workera, FEM GPU i kwalifikacja
-naukowa pozostają **NOT VERIFIED** do dowodów w
+Pełny build FEM CPU release potwierdzono terminalnym sukcesem kolejki, receipt
+i hashami 109 artefaktów; źródła i obrazy są zapisane w
 [checkpointcie](../superpowers/plans/2026-09-11-local-runner-implementation-status.md).
+Crash/restart aktywnego workera, FEM GPU, uruchomienie aplikacji, kwalifikacja
+naukowa i wydania pozostają **NOT VERIFIED**.
 Nie nadawaj etykiety `fem-managed` na podstawie samego startu kontenera.
 
 ## Konfiguracja i obsługa
