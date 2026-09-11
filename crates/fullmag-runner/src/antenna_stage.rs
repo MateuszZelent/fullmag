@@ -54,10 +54,21 @@ impl AntennaFieldStageStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+pub struct AntennaFieldStageTransition {
+    pub from: AntennaFieldStageStatus,
+    pub to: AntennaFieldStageStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct AntennaFieldStageState {
     pub stage_id: String,
     pub solution_id: String,
     pub status: AntennaFieldStageStatus,
+    #[serde(default)]
+    pub transitions: Vec<AntennaFieldStageTransition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signatures: Option<AntennaFieldSolutionSignatures>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -78,6 +89,11 @@ impl AntennaFieldStageState {
                 ),
             });
         }
+        self.transitions.push(AntennaFieldStageTransition {
+            from: self.status,
+            to: next,
+            diagnostic: diagnostic.clone(),
+        });
         self.status = next;
         self.diagnostic = diagnostic;
         Ok(())
@@ -803,6 +819,33 @@ mod tests {
         assert!(AntennaFieldStageStatus::SolvingCurrent
             .can_transition_to(AntennaFieldStageStatus::Failed));
         assert!(AntennaFieldStageStatus::Ready.can_transition_to(AntennaFieldStageStatus::Stale));
+    }
+
+    #[test]
+    fn lifecycle_records_every_valid_transition_and_diagnostic() {
+        let mut state = AntennaFieldStageState {
+            stage_id: "solve".into(),
+            solution_id: "solution".into(),
+            status: AntennaFieldStageStatus::Missing,
+            transitions: Vec::new(),
+            signatures: None,
+            diagnostic: None,
+        };
+        state
+            .transition(AntennaFieldStageStatus::Queued, None)
+            .unwrap();
+        state
+            .transition(
+                AntennaFieldStageStatus::Meshing,
+                Some("mesh cache miss".into()),
+            )
+            .unwrap();
+        assert_eq!(state.transitions.len(), 2);
+        assert_eq!(state.transitions[0].from, AntennaFieldStageStatus::Missing);
+        assert_eq!(state.transitions[0].to, AntennaFieldStageStatus::Queued);
+        assert_eq!(state.transitions[1].from, AntennaFieldStageStatus::Queued);
+        assert_eq!(state.transitions[1].to, AntennaFieldStageStatus::Meshing);
+        assert_eq!(state.transitions[1].diagnostic.as_deref(), Some("mesh cache miss"));
     }
 
     #[test]

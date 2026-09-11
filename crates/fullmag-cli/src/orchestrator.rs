@@ -6870,6 +6870,7 @@ fn execute_synthetic_stage(
                 stage_id: stage_id.clone(),
                 solution_id: plan.solution_id.clone(),
                 status: fullmag_runner::AntennaFieldStageStatus::Missing,
+                transitions: Vec::new(),
                 signatures: None,
                 diagnostic: None,
             };
