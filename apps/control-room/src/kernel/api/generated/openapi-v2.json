@@ -48357,7 +48357,7 @@
             }
           },
           {
-            "description": "Interaction kind: exchange | demag | interfacial_dmi | rotated_interfacial_dmi | bulk_dmi | uniaxial_anisotropy",
+            "description": "Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy",
             "in": "path",
             "name": "interaction_kind",
             "required": true,
@@ -48398,7 +48398,7 @@
             }
           },
           {
-            "description": "Interaction kind: exchange | demag | interfacial_dmi | rotated_interfacial_dmi | bulk_dmi | uniaxial_anisotropy",
+            "description": "Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy",
             "in": "path",
             "name": "interaction_kind",
             "required": true,
