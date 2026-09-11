@@ -17,8 +17,8 @@ describe("ChartControlBar", () => {
     );
 
     expect(html).toContain("Live");
-    expect(html).toContain("1,600");
-    expect(html).toContain("5,000");
+    expect(html).toContain((1600).toLocaleString());
+    expect(html).toContain((5000).toLocaleString());
     expect(html).toContain("Follow");
     expect(html).toContain("Fit");
   });

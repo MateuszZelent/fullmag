@@ -28,8 +28,8 @@ param(
   [Alias("skip_local_changes")]
   [switch]$SkipLocalChanges,
 
-  [ValidateRange(1, 65535)]
-  [int]$WebPort = 3100
+  [ValidateRange(0, 65535)]
+  [int]$WebPort = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -106,6 +106,42 @@ $CudaCacheKey = (($CudaBaseImage -replace "[^A-Za-z0-9]+", "-").Trim("-")).ToLow
 function Resolve-AbsolutePath {
   param([Parameter(Mandatory = $true)][string]$Path)
   return [System.IO.Path]::GetFullPath($Path)
+}
+
+function Resolve-HostWebPort {
+  param([Parameter(Mandatory = $true)][int]$RequestedPort)
+
+  if ($RequestedPort -gt 0) {
+    return $RequestedPort
+  }
+
+  $python = Get-Command "python" -ErrorAction SilentlyContinue
+  if (-not $python) {
+    throw "Python is required to select an available Windows FEM web port"
+  }
+  $portHelper = Join-Path $RepoRoot "scripts\control_room_port.py"
+  if (-not (Test-Path -LiteralPath $portHelper -PathType Leaf)) {
+    throw "Control Room port helper is missing: $portHelper"
+  }
+
+  # The container always listens on 3100; only the host-side published port
+  # needs to move.  Keep 3100 reserved for the long-lived Control Room lane:
+  # Docker Desktop port reservations are not always visible to a Windows
+  # socket bind probe launched through the managed Python runner.
+  $candidatePorts = 3101..3199
+  $helperArguments = @($portHelper, "pick", "0.0.0.0") + [string[]]($candidatePorts | ForEach-Object { $_.ToString() })
+  $portOutput = @(& $python.Source @helperArguments 2>&1)
+  $portExitCode = $LASTEXITCODE
+  $selectedPort = ($portOutput -join [Environment]::NewLine).Trim()
+  if ($portExitCode -ne 0 -or $selectedPort -notmatch '^\d+$') {
+    throw "Could not select an available Windows FEM web port from 3101-3199: $selectedPort"
+  }
+  $resolvedPort = [int]$selectedPort
+  if ($resolvedPort -lt 3101 -or $resolvedPort -gt 3199) {
+    throw "Control Room port helper returned an unsafe Windows FEM web port: $resolvedPort"
+  }
+  Write-Host "Selected available Windows FEM host web port: $resolvedPort" -ForegroundColor DarkCyan
+  return $resolvedPort
 }
 
 function Ensure-Directory {
@@ -390,6 +426,14 @@ $RuntimeImage = if ($Device -eq "gpu") {
   }
 }
 
+# Compose must execute the same image selected for build/reuse and provenance.
+# Without this export its YAML default silently selects the shared image tag.
+if ($Device -eq "gpu") {
+  $env:FULLMAG_WINDOWS_FEM_GPU_IMAGE = $RuntimeImage
+} else {
+  $env:FULLMAG_WINDOWS_FEM_CPU_IMAGE = $RuntimeImage
+}
+
 foreach ($item in @(
     @{ Path = $BuildRoot; Label = "FULLMAG_WINDOWS_BUILD_ROOT" },
     @{ Path = $CacheRoot; Label = "FULLMAG_WINDOWS_CACHE_ROOT" },
@@ -424,7 +468,10 @@ $env:FULLMAG_WINDOWS_PNPM_ROOT = To-ComposePath $PnpmRoot
 $env:FULLMAG_WINDOWS_NODE_MODULES_ROOT = To-ComposePath $NodeModulesRoot
 $env:FULLMAG_WINDOWS_CONTROL_ROOM_NODE_MODULES_ROOT = To-ComposePath $ControlRoomNodeModulesRoot
 $env:FULLMAG_WINDOWS_FRONTEND_ROOT = To-ComposePath $FrontendRoot
+Write-Host "Windows FEM host web port request: $WebPort" -ForegroundColor DarkCyan
+$WebPort = Resolve-HostWebPort -RequestedPort $WebPort
 $env:FULLMAG_WINDOWS_WEB_PORT = $WebPort.ToString()
+Write-Host "Windows FEM host web port selected: $WebPort" -ForegroundColor DarkCyan
 $containerWebPort = 3100
 $containerFrontendLinkCommand = @'
 set -euo pipefail
@@ -454,7 +501,7 @@ ensure_managed_link "$frontend_app/.artifacts" "$frontend_root/artifacts"
 ensure_managed_link "$frontend_app/storybook-static" "$frontend_root/storybook-static"
 '@
 if ($Frontend -eq "dev") {
-  $containerFrontendLinkCommand += "`nensure_managed_link `"`$frontend_app/.next-control-room-$containerWebPort`" `"`$frontend_root/next/dev-$containerWebPort`"`n"
+  $containerFrontendLinkCommand += "`nmkdir -p `"`$frontend_root/next/dev-$containerWebPort`"`nensure_managed_link `"`$frontend_app/.next-control-room-$containerWebPort`" `"`$frontend_root/next/dev-$containerWebPort`"`n"
 }
 $env:COMPOSE_PROJECT_NAME = $ComposeProjectName
 $identityPython = Get-Command "python" -ErrorAction SilentlyContinue
@@ -601,7 +648,7 @@ rustup toolchain install nightly --profile minimal --no-self-update
 if [ ! -f /workspace/apps/control-room/node_modules/.bin/next ]; then
   pnpm --dir /workspace/apps/control-room install --frozen-lockfile
 fi
-FULLMAG_CUDA_BASE_IMAGE=$CudaBaseImage FULLMAG_CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets/$TargetKey CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets/$TargetKey FULLMAG_FORCE_LOCAL_FEM_GPU=1 make $makeTarget
+FULLMAG_CUDA_BASE_IMAGE=$CudaBaseImage FULLMAG_WINDOWS_CONTAINER_MANAGED=1 FULLMAG_CARGO_TARGET_DIR=/workspace/.fullmag-build/cargo-targets/$TargetKey CARGO_TARGET_DIR=/workspace/.fullmag-build/cargo-targets/$TargetKey FULLMAG_CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets/$TargetKey CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets/$TargetKey FULLMAG_FORCE_LOCAL_FEM_GPU=1 make $makeTarget
 test -x /workspace/.fullmag/local/bin/fullmag
 grep -Fxq cuda-fem-gpu /workspace/.fullmag/local/launcher-build-mode
 "@
@@ -614,7 +661,7 @@ rustup toolchain install nightly --profile minimal --no-self-update
 if [ ! -f /workspace/apps/control-room/node_modules/.bin/next ]; then
   pnpm --dir /workspace/apps/control-room install --frozen-lockfile
 fi
-FULLMAG_CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets/$TargetKey CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets/$TargetKey FULLMAG_FORCE_LOCAL_FEM_CPU=1 make $makeTarget
+FULLMAG_WINDOWS_CONTAINER_MANAGED=1 FULLMAG_CARGO_TARGET_DIR=/workspace/.fullmag-build/cargo-targets/$TargetKey CARGO_TARGET_DIR=/workspace/.fullmag-build/cargo-targets/$TargetKey FULLMAG_CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets/$TargetKey CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets/$TargetKey FULLMAG_FORCE_LOCAL_FEM_CPU=1 make $makeTarget
 test -x /workspace/.fullmag/local/bin/fullmag
 grep -Fxq fem-cpu /workspace/.fullmag/local/launcher-build-mode
 "@ }
@@ -727,6 +774,7 @@ grep -Fxq fem-cpu /workspace/.fullmag/local/launcher-build-mode
     "run", "--rm", "--no-deps", "--service-ports"
   )
   foreach ($entry in @(
+    "FULLMAG_WEB_PUBLIC_PORT=$WebPort",
     "FULLMAG_FEM_EXECUTION=$Device",
     "FULLMAG_RELAX_DEVICE=$Device",
     "FULLMAG_SP4_DEVICE=$Device",

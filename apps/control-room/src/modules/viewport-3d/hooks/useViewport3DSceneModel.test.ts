@@ -789,6 +789,24 @@ describe("useViewport3DSceneModel", () => {
     expect(source).not.toContain("`${fdmDomain.displayCellCount}/${fdmDomain.totalCells}`");
   });
 
+  it("reports FDM field mismatches only while the FDM lane is active", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const expression = source.match(
+      /fieldVector\.error\?\.message \?\?\s*([\s\S]*?)\s*\?\?\s*magneticPartFieldVectors/,
+    )?.[1];
+    expect(expression).toBeDefined();
+    const resolveWarning = new Function(
+      "fdmLaneActive", "fdmFieldCompatibility", `return ${expression}`,
+    );
+    const mismatch = { status: "mismatch", reason: "fdm-carrier-identity-unknown" };
+    expect(resolveWarning(false, mismatch)).toBeNull();
+    expect(resolveWarning(true, mismatch)).toBe(
+      "FDM field degraded: fdm-carrier-identity-unknown",
+    );
+    expect(resolveWarning(true, { status: "compatible" })).toBeNull();
+    expect(resolveWarning(true, null)).toBeNull();
+  });
+
   it("keeps FEM colorbar identity compatible regardless of FDM-only diagnostics", () => {
     expect(
       resolveViewport3DFdmFieldIdentityCompatible({

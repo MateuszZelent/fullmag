@@ -35,6 +35,7 @@ from fullmag.meshing.gmsh_bridge import MeshData
 from fullmag.model.discretization import PerObjectMeshRecipe
 from fullmag.model.problem import (
     _fem_mesh_cache_key,
+    _geometry_asset_cache_key,
     _fem_cache_write_lock,
     _quarantine_fem_mesh_cache_entry,
     _save_fem_mesh_cache_atomically,
@@ -67,14 +68,7 @@ class ProblemApiTests(unittest.TestCase):
             with self.subTest(field=field_name):
                 with self.assertRaisesRegex(TypeError, "not bool"):
                     fm.FEM(order=1, **kwargs)
-from fullmag.model.problem import (
-    _fem_mesh_cache_key,
-    _geometry_asset_cache_key,
-    build_geometry_assets_for_request,
-)
 
-
-class ProblemApiTests(unittest.TestCase):
     def test_fem_mesh_cache_key_changes_when_imported_source_content_changes_with_same_stat(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             source = Path(tmp_dir) / "shape.stl"
@@ -105,6 +99,7 @@ class ProblemApiTests(unittest.TestCase):
                 discretization=discretization,
                 study_universe=None,
                 mesh_workflow=None,
+                per_object_recipes=None,
                 object_regions=None,
                 fdm_only=False,
             )
@@ -122,6 +117,7 @@ class ProblemApiTests(unittest.TestCase):
                     discretization=discretization,
                     study_universe=None,
                     mesh_workflow=None,
+                    per_object_recipes=None,
                     object_regions=None,
                     fdm_only=False,
                 ),

@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
+import { ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH } from "@/kernel/api/apiPaths";
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import {
   DispersionOverviewResultInspector,
@@ -37,7 +38,7 @@ describe("physics-first result root Inspectors", () => {
 
   it("makes a legacy spectral selection inspectable without promoting its field", () => {
     const ref: Extract<SelectionRef, { type: "frequency-domain" }> = {
-      artifactPath: "/v2/sessions/current/analysis/spin-wave/gamma.v1",
+      artifactPath: ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH,
       artifactRevision: "spin_wave_response.gamma.v1:sha256:gamma-1",
       availability: "partial",
       executionState: "completed",
@@ -46,7 +47,7 @@ describe("physics-first result root Inspectors", () => {
       kind: "results.time_domain.spectral_feature",
       nodeId: "analysis:legacy:time-domain:legacy%3Agamma%3Apeak%3A7",
       pointId: "legacy:gamma:peak:7",
-      resourceRef: "/v2/sessions/current/analysis/spin-wave/gamma.v1",
+      resourceRef: ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH,
       resourceState: "ready",
       sampleId: "gamma-spectrum-sample-0000",
       sampleIndex: 0,

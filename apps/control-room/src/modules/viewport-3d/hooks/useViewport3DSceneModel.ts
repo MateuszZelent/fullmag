@@ -6185,7 +6185,7 @@ export function useViewport3DSceneModel({
     (renderingState?.clip?.enabled ? clipCrossSection.error?.message : null) ??
     (meshQualityOverlayVisible ? meshQualityData.error?.message : null) ??
     fieldVector.error?.message ??
-    (fdmFieldCompatibility?.status === "mismatch"
+    (fdmLaneActive && fdmFieldCompatibility?.status === "mismatch"
       ? `FDM field degraded: ${fdmFieldCompatibility.reason}`
       : null) ??
     magneticPartFieldVectors.error?.message ??

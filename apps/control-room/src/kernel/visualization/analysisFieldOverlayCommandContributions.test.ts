@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH } from "../api/apiPaths";
 
 import { CommandRegistry } from "../commands/CommandRegistry";
 import { EventBus } from "../events/EventBus";
@@ -162,7 +163,7 @@ describe("analysis field overlay commands", () => {
     const overlay = new AnalysisFieldOverlayController();
     const selection = new SelectionController(new EventBus<KernelEventMap>());
     const ref = {
-      artifactPath: "/v2/sessions/current/analysis/spin-wave/gamma.v1",
+      artifactPath: ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH,
       artifactRevision: "spin_wave_response.gamma.v1:sha256:gamma-1",
       availability: "partial",
       executionState: "completed",
@@ -171,7 +172,7 @@ describe("analysis field overlay commands", () => {
       kind: "results.time_domain.spectral_feature",
       nodeId: "analysis:legacy:time-domain:legacy%3Agamma%3Apeak%3A7",
       pointId: "legacy:gamma:peak:7",
-      resourceRef: "/v2/sessions/current/analysis/spin-wave/gamma.v1",
+      resourceRef: ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH,
       resourceState: "ready",
       sampleId: "gamma-spectrum-sample-0000",
       sampleIndex: 0,

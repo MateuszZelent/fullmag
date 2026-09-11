@@ -126,6 +126,7 @@
   --fm-shadow-panel: 0 8px 32px -6px rgba(0, 0, 0, 0.45), 0 4px 12px -4px rgba(0, 0, 0, 0.2);
   --fm-shadow-drop-sm: 0 1px 3px rgb(0 0 0 / 50%);
   --fm-shadow-swatch-inset: inset 0 1px 2px rgb(0 0 0 / 30%);
+  --fm-shadow-colorbar-inset: inset 0 1px 1px rgb(255 255 255 / 12%), inset 0 -1px 1px rgb(0 0 0 / 20%);
 
   /* Scrim / modal backdrop */
   --fm-scrim: rgba(0, 0, 0, 0.5);

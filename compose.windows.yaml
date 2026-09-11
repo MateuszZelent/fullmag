@@ -70,7 +70,10 @@ services:
       FULLMAG_SOURCE_GIT_COMMIT: "${FULLMAG_SOURCE_GIT_COMMIT:-}"
       FULLMAG_SOURCE_WORKTREE_STATE: "${FULLMAG_SOURCE_WORKTREE_STATE:-}"
       FULLMAG_SOURCE_SNAPSHOT_SHA256: "${FULLMAG_SOURCE_SNAPSHOT_SHA256:-}"
-      FULLMAG_PYTHON: /usr/bin/python3
+      # The GPU image installs the scientific stack into the source-built
+      # Python under /usr/local.  /usr/bin/python3 is the distro interpreter
+      # and does not see numpy/gmsh/meshio required by the scene helper.
+      FULLMAG_PYTHON: /usr/local/bin/python3
       FULLMAG_USE_MFEM_STACK: "ON"
       FULLMAG_FEM_REQUIRE_GPU: "1"
       FULLMAG_FEM_REQUIRE_CEED: "1"

@@ -40,7 +40,9 @@
     ".next-audit-target-smoke-*/types/**/*.ts",
     ".next-audit-target-smoke-*/dev/types/**/*.ts",
     ".next-control-room-*/types/**/*.ts",
-    ".next-control-room-*/dev/types/**/*.ts"
+    ".next-control-room-*/dev/types/**/*.ts",
+    ".next-control-room-3100/types/**/*.ts",
+    ".next-control-room-3100/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",

@@ -1,6 +1,4 @@
 import {
-  BufferAttribute,
-  BufferGeometry,
   ShaderMaterial,
   type Side,
 } from "three";

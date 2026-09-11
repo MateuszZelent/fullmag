@@ -300,12 +300,9 @@ export function createViewport3DScalarColorUploadPlan(
     existing.array instanceof Float32Array
       ? existing
       : null;
-  // S-19: fmScalarValue/fmVectorValue/... i tu "color" są nadpisywane co
-  // krok animacji fazy (bufferSubData wiele razy na sekundę). Domyślny
-  // StaticDrawUsage sugeruje sterownikowi jednorazowy zapis — częste
-  // aktualizacje na takiej alokacji wymuszają realokację bufora GPU albo
-  // synchronizację potoku. Hint trzeba ustawić przed pierwszym bufferData,
-  // czyli w momencie tworzenia atrybutu (nie przy każdym ponownym użyciu).
+  // These colors are updated during phase animation. Hint repeated writes
+  // before the first GPU upload; retain the usage of reused attributes.
+  // Driver allocation and synchronization behavior is implementation-dependent.
   let attribute = existingAttribute;
   if (!attribute) {
     attribute = new BufferAttribute(new Float32Array(vertexCount * 3), 3);
@@ -607,9 +604,8 @@ function addShaderUploadAttribute(
     existing.array instanceof Float32Array
       ? existing
       : null;
-  // S-19: patrz komentarz w createViewport3DScalarColorUploadPlan — ten sam
-  // problem dotyczy fmScalarValue/fmVectorValue/fmComplexRealValue/
-  // fmComplexImagValue.
+  // Scalar, vector, and complex attributes also receive repeated field updates.
+  // Set the usage hint on creation, before their first GPU upload.
   let attribute = existingAttribute;
   if (!attribute) {
     attribute = new BufferAttribute(new Float32Array(vertexCount * itemSize), itemSize);
