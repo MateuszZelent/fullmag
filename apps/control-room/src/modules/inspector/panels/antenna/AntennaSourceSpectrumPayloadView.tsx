@@ -6,6 +6,7 @@ import type {
   AntennaSourceSpectrumResource,
   BinaryResourceResult,
 } from "@/kernel/api/apiTypes";
+import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import { useAntennaSourceSpectrumPayloadResource } from "@/kernel/resources/antennaResources";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 
@@ -64,7 +65,7 @@ export function AntennaSourceSpectrumPayloadView({
     return (
       <section className="fm-antenna-spectrum" aria-label="Antenna source spectrum payload">
         <p className="fm-antenna-spectrum__status fm-antenna-spectrum__status--error" role="alert">
-          FFT payload unavailable: {payloads.message}
+          FFT payload unavailable: {formatPayloadError(payloads.error)}
         </p>
       </section>
     );
@@ -153,22 +154,22 @@ function decodePayloads(
   power: SpectrumPayloadResource,
 ):
   | { kind: "pending" }
-  | { kind: "error"; message: string }
+  | { kind: "error"; error: Error }
   | { kind: "ready"; value: DecodedPayloads } {
   const resources = [kU, kV, amplitudes, power];
   const error = resources.find((resource) => resource.status === "error");
   if (error?.status === "error") {
-    return { kind: "error", message: error.error?.message ?? "binary request failed" };
+    return { kind: "error", error: error.error ?? new Error("binary request failed") };
   }
   if (resources.some((resource) => resource.status === "idle" || resource.status === "loading")) {
     return { kind: "pending" };
   }
   if (resources.some((resource) => !resource.data)) {
-    return { kind: "error", message: "binary payload is not published" };
+    return { kind: "error", error: new Error("binary payload is not published") };
   }
   const results = resources.map((resource) => resource.data);
   if (results.some((result) => !result || result.status !== "ready")) {
-    return { kind: "error", message: "binary payload returned without data" };
+    return { kind: "error", error: new Error("binary payload returned without data") };
   }
   try {
     return {
@@ -183,9 +184,21 @@ function decodePayloads(
   } catch (error) {
     return {
       kind: "error",
-      message: error instanceof Error ? error.message : "binary payload decoding failed",
+      error: error instanceof Error ? error : new Error("binary payload decoding failed"),
     };
   }
+}
+
+function formatPayloadError(error: Error): string {
+  if (error instanceof ControlRoomApiError) {
+    if (error.code === "missing_payload") {
+      return "published spectrum manifest references a missing binary payload";
+    }
+    if (error.code === "unsupported_topology") {
+      return "spectrum payload is unsupported for the resolved topology";
+    }
+  }
+  return error.message;
 }
 
 function binaryData(result: BinaryResourceResult<ArrayBuffer> | null): ArrayBuffer {

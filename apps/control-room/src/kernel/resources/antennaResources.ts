@@ -42,7 +42,13 @@ function concreteSpectrumPayloadPath(
 }
 
 function ignoreMissingAntennaResource<T>(error: unknown): T | null {
-  if (error instanceof ControlRoomApiError && error.status === 404) return null;
+  if (
+    error instanceof ControlRoomApiError &&
+    error.status === 404 &&
+    error.code !== "missing_payload"
+  ) {
+    return null;
+  }
   throw error;
 }
 

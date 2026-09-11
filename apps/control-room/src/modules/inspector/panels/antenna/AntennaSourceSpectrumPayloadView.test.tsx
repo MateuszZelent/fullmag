@@ -6,6 +6,7 @@ import type {
   AntennaSourceSpectrumResource,
   BinaryResourceResult,
 } from "@/kernel/api/apiTypes";
+import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 import {
   installSimulationPreparationTestDom,
@@ -89,6 +90,42 @@ describe("AntennaSourceSpectrumPayloadView", () => {
       dom.restore();
     }
   });
+
+  it("does not mask a missing published payload as an absent spectrum", async () => {
+    mocks.payloads = {
+      k_u_rad_per_m: readyPayload([0, 1], "etag-ku"),
+      k_v_rad_per_m: readyPayload([0, 2], "etag-kv"),
+      amplitudes_re_im: readyPayload([1, 0, 2, -1], "etag-amplitudes"),
+      power: errorPayload(
+        new ControlRoomApiError(
+          "payload is missing",
+          404,
+          "request-1",
+          "missing_payload",
+        ),
+      ),
+    };
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(
+          <AntennaSourceSpectrumPayloadView
+            outputId="spectrum-1"
+            spectrum={spectrumFixture()}
+          />,
+        ),
+      );
+      expect(container.textContent).toContain(
+        "published spectrum manifest references a missing binary payload",
+      );
+      expect(countByRole(container as unknown as TestNode, "gridcell")).toBe(0);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
 });
 
 function loadingPayload(): PayloadResource {
@@ -119,10 +156,10 @@ function readyPayload(values: number[], etag: string): PayloadResource {
   };
 }
 
-function errorPayload(message: string): PayloadResource {
+function errorPayload(error: Error | string): PayloadResource {
   return {
     data: null,
-    error: new Error(message),
+    error: typeof error === "string" ? new Error(error) : error,
     refetch: vi.fn(),
     revision: null,
     status: "error",
