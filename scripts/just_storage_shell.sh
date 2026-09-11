@@ -13,25 +13,6 @@ if [ "$#" -ne 1 ]; then
   exit 2
 fi
 
-recipe="$1"
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "${script_dir}/.." && pwd)"
-resolver="${repo_root}/scripts/fullmag_storage.py"
-python_cmd=""
-if command -v python3 >/dev/null 2>&1; then
-  python_cmd="$(command -v python3)"
-elif command -v python >/dev/null 2>&1; then
-  python_cmd="$(command -v python)"
-else
-  echo "[fullmag just] Python is required for the storage resolver" >&2
-  exit 2
-fi
-
-if [ ! -f "${resolver}" ]; then
-  echo "[fullmag just] common storage resolver is missing: ${resolver}" >&2
-  exit 2
-fi
-
 is_windows_shell() {
   case "${OS:-}" in
     Windows_NT) return 0 ;;
@@ -41,6 +22,31 @@ is_windows_shell() {
   esac
   return 1
 }
+
+recipe="$1"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd)"
+resolver="${repo_root}/scripts/fullmag_storage.py"
+python_cmd=""
+python_candidates=(python3 python)
+if is_windows_shell; then
+  python_candidates=(python python3)
+fi
+for python_candidate in "${python_candidates[@]}"; do
+  if command -v "${python_candidate}" >/dev/null 2>&1; then
+    python_cmd="$(command -v "${python_candidate}")"
+    break
+  fi
+done
+if [ -z "${python_cmd}" ]; then
+  echo "[fullmag just] Python is required for the storage resolver" >&2
+  exit 2
+fi
+
+if [ ! -f "${resolver}" ]; then
+  echo "[fullmag just] common storage resolver is missing: ${resolver}" >&2
+  exit 2
+fi
 
 # Python on Windows cannot resolve the POSIX `/usr/bin/bash` entry that Git
 # Bash exposes in PATH. Pass an absolute Windows executable to the managed
