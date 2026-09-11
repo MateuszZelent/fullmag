@@ -4410,6 +4410,98 @@ export interface components {
             reason_code?: string | null;
             resource: string;
         };
+        /** @enum {string} */
+        AntennaFieldModelResource: "quasistatic_conduction_biot_savart3d";
+        AntennaFieldSolutionRefResource: {
+            asset_id: string;
+            content_digest: string;
+            output_id: string;
+            stage_id: string;
+        };
+        AntennaFieldSolveStageResource: {
+            conductor_mesh_policy: string;
+            conservative_current_view_ref: string;
+            current_transport_id: string;
+            field_sampling_domain: components["schemas"]["FieldTargetResource"];
+            id: string;
+            model: components["schemas"]["AntennaFieldModelResource"];
+            oersted_realization: components["schemas"]["AntennaOerstedRealizationResource"];
+            outputs: components["schemas"]["AntennaNamedOutputResource"][];
+            port_mode_ids: string[];
+            solver_policy: string;
+            source_object_id: string;
+            target_refs: components["schemas"]["FieldTargetResource"][];
+        };
+        AntennaNamedOutputResource: {
+            id: string;
+            quantity: string;
+        };
+        /** @enum {string} */
+        AntennaOerstedRealizationResource: "direct_tetra_quadrature" | "vector_potential_solver";
+        AntennaPortBranchResource: {
+            id: string;
+            inlet_terminal_ref: string;
+            outlet_terminal_ref: string;
+            /** Format: double */
+            signed_weight: number;
+        };
+        AntennaPortModeResource: {
+            branches: components["schemas"]["AntennaPortBranchResource"][];
+            current_transport_id: string;
+            id: string;
+            /** Format: double */
+            normalization_current_a?: number;
+            schema_version: string;
+            source_object_id: string;
+        };
+        AntennaSpectrumKGridResource: {
+            k_u_rad_per_m: number[];
+            k_v_rad_per_m: number[];
+        };
+        /** @enum {string} */
+        AntennaSpectrumNormalizationResource: "integral_si" | "unitary_discrete";
+        /** @enum {string} */
+        AntennaSpectrumOutsidePolicyResource: "error" | "zero";
+        AntennaSpectrumRequestResource: {
+            component: string;
+            equilibrium_ref?: string | null;
+            id: string;
+            mode_basis_ref?: string | null;
+            nonuniform_k_grid?: null | components["schemas"]["AntennaSpectrumKGridResource"];
+            normalization: components["schemas"]["AntennaSpectrumNormalizationResource"];
+            output_id: string;
+            port_mode_id?: string | null;
+            sampling_plane: components["schemas"]["AntennaSpectrumSamplingPlaneResource"];
+            solution_ref: components["schemas"]["AntennaFieldSolutionRefResource"];
+            target: components["schemas"]["FieldTargetResource"];
+            transform: components["schemas"]["AntennaSpectrumTransformResource"];
+            window: components["schemas"]["AntennaSpectrumWindowResource"];
+        };
+        AntennaSpectrumSamplingPlaneResource: {
+            axis_u: number[];
+            axis_v: number[];
+            /** Format: double */
+            extent_u_m: number;
+            /** Format: double */
+            extent_v_m: number;
+            interpolation: string;
+            origin_m: number[];
+            outside_policy: components["schemas"]["AntennaSpectrumOutsidePolicyResource"];
+            /** Format: int32 */
+            sample_count_u: number;
+            /** Format: int32 */
+            sample_count_v: number;
+        };
+        /** @enum {string} */
+        AntennaSpectrumTransformResource: "spatial_fft" | "nonuniform_spatial_fft";
+        /** @enum {string} */
+        AntennaSpectrumWindowResource: "rectangular" | "hann" | "hamming" | "blackman";
+        AntennaTargetProjectionResource: {
+            id: string;
+            output_id: string;
+            solution: components["schemas"]["AntennaFieldSolutionRefResource"];
+            target: components["schemas"]["FieldTargetResource"];
+        };
         ApiErrorDiagnosticResponse: {
             code: string;
             message: string;
@@ -10318,6 +10410,10 @@ export interface components {
             precision: components["schemas"]["SceneTransportPrecision"];
         };
         SceneResource: {
+            antenna_field_solve_stages?: components["schemas"]["AntennaFieldSolveStageResource"][];
+            antenna_port_modes?: components["schemas"]["AntennaPortModeResource"][];
+            antenna_spectrum_requests?: components["schemas"]["AntennaSpectrumRequestResource"][];
+            antenna_target_projections?: components["schemas"]["AntennaTargetProjectionResource"][];
             couplings?: components["schemas"]["SceneCoupling"][];
             current_modules?: {
                 [key: string]: unknown;
@@ -10343,6 +10439,7 @@ export interface components {
             /** Format: int64 */
             scene_revision?: number | null;
             selections?: components["schemas"]["SelectionDefinitionSchema"][];
+            solved_antenna_drives?: components["schemas"]["SolvedAntennaDriveResource"][];
             spin_torques?: components["schemas"]["SceneSpinTorque"][];
             spin_transports?: components["schemas"]["SceneSpinTransport"][];
             study?: {
@@ -11041,6 +11138,17 @@ export interface components {
         SlonczewskiRealizationKind: "thin_layer_homogenized";
         /** @enum {string} */
         SlonczewskiRealizationVersion: "slonczewski_thin_layer_homogenized.v1";
+        SolvedAntennaDriveResource: {
+            activation: components["schemas"]["DriveActivationResource"];
+            id: string;
+            name: string;
+            /** Format: double */
+            peak_current_a: number;
+            port_mode_id: string;
+            projection_ref: string;
+            time_origin: components["schemas"]["FieldTimeOriginResource"];
+            waveform: components["schemas"]["TimeDependenceResource"];
+        };
         SolverEnergyCurrentResource: {
             /** Format: double */
             anisotropy: number;

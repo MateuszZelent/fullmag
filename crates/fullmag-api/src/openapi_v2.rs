@@ -1094,6 +1094,35 @@ mod tests {
     }
 
     #[test]
+    fn openapi_exposes_typed_antenna_composition_contract() {
+        let document = openapi_json();
+        let schemas = &document["components"]["schemas"];
+        let scene = &schemas["SceneResource"]["properties"];
+        for (property, schema) in [
+            ("antenna_port_modes", "AntennaPortModeResource"),
+            ("antenna_field_solve_stages", "AntennaFieldSolveStageResource"),
+            ("antenna_target_projections", "AntennaTargetProjectionResource"),
+            ("solved_antenna_drives", "SolvedAntennaDriveResource"),
+            ("antenna_spectrum_requests", "AntennaSpectrumRequestResource"),
+        ] {
+            assert_eq!(
+                scene[property]["items"]["$ref"],
+                serde_json::json!(format!("#/components/schemas/{schema}")),
+                "SceneResource.{property} must remain semantically typed"
+            );
+        }
+        assert!(schemas["AntennaPortModeResource"]["properties"]["branches"]
+            .to_string()
+            .contains("AntennaPortBranchResource"));
+        assert!(schemas["AntennaFieldSolveStageResource"]["properties"]["target_refs"]
+            .to_string()
+            .contains("FieldTargetResource"));
+        assert!(schemas["AntennaSpectrumRequestResource"]["properties"]["sampling_plane"]
+            .to_string()
+            .contains("AntennaSpectrumSamplingPlaneResource"));
+    }
+
+    #[test]
     fn openapi_current_transport_preserves_conservative_current_view_payload() {
         let document = openapi_json();
         let property = &document["components"]["schemas"]["KnownSceneCurrentTransport"]

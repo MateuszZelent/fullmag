@@ -572,9 +572,13 @@ function defaultMicrostripAntennaObject(objectId: string): JsonObject {
   };
 }
 
-function sceneArray(scene: unknown, key: string): unknown[] {
+function sceneArray(scene: unknown, key: string): JsonValue[] {
   const record = asRecord(scene);
-  return Array.isArray(record?.[key]) ? record[key] : [];
+  if (!Array.isArray(record?.[key])) return [];
+  return record[key].flatMap((item) => {
+    const converted = jsonValue(item);
+    return converted === undefined ? [] : [converted];
+  });
 }
 
 function defaultMicrostripCurrentTransport(objectId: string): JsonObject {
@@ -777,7 +781,7 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
             defaultMicrostripPortMode(objectId),
           ],
           current_transports: [
-            ...(Array.isArray(scene.current_transports) ? scene.current_transports : []),
+            ...sceneArray(scene, "current_transports"),
             defaultMicrostripCurrentTransport(objectId),
           ],
           objects: [

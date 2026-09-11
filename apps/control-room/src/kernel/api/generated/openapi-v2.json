@@ -1969,6 +1969,396 @@
         ],
         "type": "object"
       },
+      "AntennaFieldModelResource": {
+        "enum": [
+          "quasistatic_conduction_biot_savart3d"
+        ],
+        "type": "string"
+      },
+      "AntennaFieldSolutionRefResource": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_id": {
+            "type": "string"
+          },
+          "content_digest": {
+            "type": "string"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage_id",
+          "output_id",
+          "asset_id",
+          "content_digest"
+        ],
+        "type": "object"
+      },
+      "AntennaFieldSolveStageResource": {
+        "additionalProperties": false,
+        "properties": {
+          "conductor_mesh_policy": {
+            "type": "string"
+          },
+          "conservative_current_view_ref": {
+            "type": "string"
+          },
+          "current_transport_id": {
+            "type": "string"
+          },
+          "field_sampling_domain": {
+            "$ref": "#/components/schemas/FieldTargetResource"
+          },
+          "id": {
+            "type": "string"
+          },
+          "model": {
+            "$ref": "#/components/schemas/AntennaFieldModelResource"
+          },
+          "oersted_realization": {
+            "$ref": "#/components/schemas/AntennaOerstedRealizationResource"
+          },
+          "outputs": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaNamedOutputResource"
+            },
+            "type": "array"
+          },
+          "port_mode_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "solver_policy": {
+            "type": "string"
+          },
+          "source_object_id": {
+            "type": "string"
+          },
+          "target_refs": {
+            "items": {
+              "$ref": "#/components/schemas/FieldTargetResource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "source_object_id",
+          "current_transport_id",
+          "port_mode_ids",
+          "conservative_current_view_ref",
+          "model",
+          "oersted_realization",
+          "conductor_mesh_policy",
+          "field_sampling_domain",
+          "target_refs",
+          "solver_policy",
+          "outputs"
+        ],
+        "type": "object"
+      },
+      "AntennaNamedOutputResource": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "quantity"
+        ],
+        "type": "object"
+      },
+      "AntennaOerstedRealizationResource": {
+        "enum": [
+          "direct_tetra_quadrature",
+          "vector_potential_solver"
+        ],
+        "type": "string"
+      },
+      "AntennaPortBranchResource": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "inlet_terminal_ref": {
+            "type": "string"
+          },
+          "outlet_terminal_ref": {
+            "type": "string"
+          },
+          "signed_weight": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "inlet_terminal_ref",
+          "outlet_terminal_ref",
+          "signed_weight"
+        ],
+        "type": "object"
+      },
+      "AntennaPortModeResource": {
+        "additionalProperties": false,
+        "properties": {
+          "branches": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaPortBranchResource"
+            },
+            "type": "array"
+          },
+          "current_transport_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "normalization_current_a": {
+            "format": "double",
+            "type": "number"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_object_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "source_object_id",
+          "current_transport_id",
+          "branches"
+        ],
+        "type": "object"
+      },
+      "AntennaSpectrumKGridResource": {
+        "additionalProperties": false,
+        "properties": {
+          "k_u_rad_per_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "k_v_rad_per_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "k_u_rad_per_m",
+          "k_v_rad_per_m"
+        ],
+        "type": "object"
+      },
+      "AntennaSpectrumNormalizationResource": {
+        "enum": [
+          "integral_si",
+          "unitary_discrete"
+        ],
+        "type": "string"
+      },
+      "AntennaSpectrumOutsidePolicyResource": {
+        "enum": [
+          "error",
+          "zero"
+        ],
+        "type": "string"
+      },
+      "AntennaSpectrumRequestResource": {
+        "additionalProperties": false,
+        "properties": {
+          "component": {
+            "type": "string"
+          },
+          "equilibrium_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "mode_basis_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nonuniform_k_grid": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaSpectrumKGridResource"
+              }
+            ]
+          },
+          "normalization": {
+            "$ref": "#/components/schemas/AntennaSpectrumNormalizationResource"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "port_mode_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sampling_plane": {
+            "$ref": "#/components/schemas/AntennaSpectrumSamplingPlaneResource"
+          },
+          "solution_ref": {
+            "$ref": "#/components/schemas/AntennaFieldSolutionRefResource"
+          },
+          "target": {
+            "$ref": "#/components/schemas/FieldTargetResource"
+          },
+          "transform": {
+            "$ref": "#/components/schemas/AntennaSpectrumTransformResource"
+          },
+          "window": {
+            "$ref": "#/components/schemas/AntennaSpectrumWindowResource"
+          }
+        },
+        "required": [
+          "id",
+          "solution_ref",
+          "target",
+          "transform",
+          "sampling_plane",
+          "window",
+          "normalization",
+          "component",
+          "output_id"
+        ],
+        "type": "object"
+      },
+      "AntennaSpectrumSamplingPlaneResource": {
+        "additionalProperties": false,
+        "properties": {
+          "axis_u": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "axis_v": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "extent_u_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "extent_v_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "interpolation": {
+            "type": "string"
+          },
+          "origin_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "outside_policy": {
+            "$ref": "#/components/schemas/AntennaSpectrumOutsidePolicyResource"
+          },
+          "sample_count_u": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sample_count_v": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "origin_m",
+          "axis_u",
+          "axis_v",
+          "extent_u_m",
+          "extent_v_m",
+          "sample_count_u",
+          "sample_count_v",
+          "interpolation",
+          "outside_policy"
+        ],
+        "type": "object"
+      },
+      "AntennaSpectrumTransformResource": {
+        "enum": [
+          "spatial_fft",
+          "nonuniform_spatial_fft"
+        ],
+        "type": "string"
+      },
+      "AntennaSpectrumWindowResource": {
+        "enum": [
+          "rectangular",
+          "hann",
+          "hamming",
+          "blackman"
+        ],
+        "type": "string"
+      },
+      "AntennaTargetProjectionResource": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "solution": {
+            "$ref": "#/components/schemas/AntennaFieldSolutionRefResource"
+          },
+          "target": {
+            "$ref": "#/components/schemas/FieldTargetResource"
+          }
+        },
+        "required": [
+          "id",
+          "solution",
+          "target",
+          "output_id"
+        ],
+        "type": "object"
+      },
       "ApiErrorDiagnosticResponse": {
         "properties": {
           "code": {
@@ -26003,6 +26393,30 @@
       },
       "SceneResource": {
         "properties": {
+          "antenna_field_solve_stages": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaFieldSolveStageResource"
+            },
+            "type": "array"
+          },
+          "antenna_port_modes": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaPortModeResource"
+            },
+            "type": "array"
+          },
+          "antenna_spectrum_requests": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaSpectrumRequestResource"
+            },
+            "type": "array"
+          },
+          "antenna_target_projections": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaTargetProjectionResource"
+            },
+            "type": "array"
+          },
           "couplings": {
             "items": {
               "$ref": "#/components/schemas/SceneCoupling"
@@ -26102,6 +26516,12 @@
           "selections": {
             "items": {
               "$ref": "#/components/schemas/SelectionDefinitionSchema"
+            },
+            "type": "array"
+          },
+          "solved_antenna_drives": {
+            "items": {
+              "$ref": "#/components/schemas/SolvedAntennaDriveResource"
             },
             "type": "array"
           },
@@ -28999,6 +29419,47 @@
           "slonczewski_thin_layer_homogenized.v1"
         ],
         "type": "string"
+      },
+      "SolvedAntennaDriveResource": {
+        "additionalProperties": false,
+        "properties": {
+          "activation": {
+            "$ref": "#/components/schemas/DriveActivationResource"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "peak_current_a": {
+            "format": "double",
+            "type": "number"
+          },
+          "port_mode_id": {
+            "type": "string"
+          },
+          "projection_ref": {
+            "type": "string"
+          },
+          "time_origin": {
+            "$ref": "#/components/schemas/FieldTimeOriginResource"
+          },
+          "waveform": {
+            "$ref": "#/components/schemas/TimeDependenceResource"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "projection_ref",
+          "port_mode_id",
+          "peak_current_a",
+          "waveform",
+          "time_origin",
+          "activation"
+        ],
+        "type": "object"
       },
       "SolverEnergyCurrentResource": {
         "properties": {
@@ -51624,6 +52085,7 @@
     "eigenmodes",
     "frequency_response",
     "hysteresis",
+    "antenna_field_solve",
     "change_device",
     "add_field_drive",
     "remove_field_drive",
