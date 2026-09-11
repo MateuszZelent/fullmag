@@ -28,7 +28,7 @@ root `AGENTS.md`. `apps/control-room` pozostaje repozytoryjnym źródłem kodu,
 ale nie jest magazynem dużych artefaktów:
 
 - `FULLMAG_PROJECT_STORAGE_ROOT` jest jedynym override’em project storage po
-  walidacji; domyślnie na Windowsie jest to `C:\git\fullmag\storage`, a na
+  walidacji; domyślnie na Windowsie jest to `D:\git\fullmag\storage`, a na
   managed Linux `/zfn2/mateuszz/git/fullmag/storage`;
 - pnpm store/home, npm/pip/uv cache, Playwright browsers, Vite/TypeScript
   cache i duże test outputs muszą być potomkami zaakceptowanego
