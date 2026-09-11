@@ -92,11 +92,41 @@ _EXCLUDED_FILE_NAMES = frozenset(
         "secret.json",
     }
 )
+# Credential stores are commonly organised under these exact directory names.
+# Keep this list narrow: names such as ``credentialing`` or ``secretsauce`` are
+# ordinary source directories and must not be excluded by substring matching.
+_SECRET_DIRECTORY_NAMES = frozenset(
+    {
+        ".credential",
+        ".credentials",
+        ".secret",
+        ".secrets",
+        "credential",
+        "credentials",
+        "secret",
+        "secrets",
+    }
+)
 _SECRET_FILE_RE = re.compile(
     r"(?:^|[._-])(secret|secrets|token|tokens|credential|credentials)(?:$|[._-])",
     re.IGNORECASE,
 )
-_SECRET_SUFFIXES = frozenset({".pem", ".key", ".p12", ".pfx", ".jks", ".crt"})
+_SECRET_SUFFIXES = frozenset(
+    {
+        ".pem",
+        ".key",
+        ".p12",
+        ".pfx",
+        ".jks",
+        ".crt",
+        ".credential",
+        ".credentials",
+        ".secret",
+        ".secrets",
+        ".token",
+        ".tokens",
+    }
+)
 # This tracked stylesheet uses ``tokens`` as a design-system identifier, not
 # as credential material.  Keep the exception path-specific; the general
 # token/credential heuristic remains fail-closed for all other paths.
@@ -405,6 +435,8 @@ def _policy_reason(relative: str) -> str | None:
     if _is_admin_excluded(relative):
         return "administrative source tree"
     for directory in lowered[:-1]:
+        if directory in _SECRET_DIRECTORY_NAMES:
+            return f"secret/credential directory {directory!r}"
         if directory in _EXCLUDED_DIRECTORY_NAMES:
             return f"excluded directory {directory!r}"
     basename = lowered[-1]
@@ -446,6 +478,9 @@ def _resolve_source_path(repo: Path, relative: str) -> Path:
     candidate = repo / Path(*relative.split("/"))
     # Do not use a fully resolved final path for the open: a final symlink must
     # be inspected and copied as a link, not followed into another tree.
+    # Check the lexical parent first; resolving it before this check would hide
+    # an internal symlink/junction behind its contained target path.
+    _ensure_no_reparse_ancestors(candidate.parent, "source", allow_missing=True)
     parent = candidate.parent.resolve(strict=False)
     try:
         parent.relative_to(repo.resolve())

@@ -365,6 +365,81 @@ class LocalRunnerSourceTests(unittest.TestCase):
             with self.assertRaisesRegex(SourceError, "UNSAFE_SYMLINK"):
                 capture_source(repo, output, mode="commit", ref="HEAD")
 
+    def test_rejects_internal_symlinked_parent_when_supported(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fullmag-source-test-") as raw:
+            root = Path(raw)
+            repo, _ = _repository(root)
+            tracked_directory = repo / "tracked-directory"
+            tracked_directory.mkdir()
+            (tracked_directory / "source.txt").write_text("committed\n", encoding="utf-8")
+            _git(repo, "add", "tracked-directory/source.txt")
+            _git(repo, "commit", "-qm", "tracked directory")
+
+            internal_target = repo / "internal-target"
+            internal_target.mkdir()
+            (internal_target / "source.txt").write_text("working tree\n", encoding="utf-8")
+            (tracked_directory / "source.txt").unlink()
+            tracked_directory.rmdir()
+            try:
+                tracked_directory.symlink_to(internal_target, target_is_directory=True)
+            except (OSError, NotImplementedError) as error:
+                self.skipTest(f"directory symlinks unavailable: {error}")
+
+            output = root / "capsule"
+            output.mkdir()
+            with self.assertRaisesRegex(SourceError, "symlink or reparse point"):
+                capture_source(repo, output)
+
+    def test_rejects_known_credential_directories_and_suffixes(self) -> None:
+        blocked_paths = (
+            "secrets/api.json",
+            "credentials/prod.json",
+            ".secrets/config",
+            "config/foo.token",
+            "auth.credentials",
+            "session.secret",
+        )
+        with tempfile.TemporaryDirectory(prefix="fullmag-source-test-") as raw:
+            root = Path(raw)
+            for index, relative in enumerate(blocked_paths):
+                with self.subTest(relative=relative):
+                    case_root = root / f"case-{index}"
+                    case_root.mkdir()
+                    repo, _ = _repository(case_root)
+                    candidate = repo / Path(*relative.split("/"))
+                    candidate.parent.mkdir(parents=True, exist_ok=True)
+                    candidate.write_text("credential placeholder\n", encoding="utf-8")
+                    _git(repo, "add", relative)
+                    _git(repo, "commit", "-qm", "credential policy")
+                    output = case_root / "capsule"
+                    output.mkdir()
+                    with self.assertRaisesRegex(SourceError, "EXCLUDED_SOURCE"):
+                        capture_source(repo, output, mode="commit", ref="HEAD")
+
+    def test_allows_similar_noncredential_names(self) -> None:
+        allowed_paths = (
+            "credentialing/prod.json",
+            "secretsauce/config.json",
+            "config/foo.tokenizer",
+            "auth.credentials_helper",
+            "session.secretary",
+        )
+        with tempfile.TemporaryDirectory(prefix="fullmag-source-test-") as raw:
+            root = Path(raw)
+            repo, _ = _repository(root)
+            for relative in allowed_paths:
+                candidate = repo / Path(*relative.split("/"))
+                candidate.parent.mkdir(parents=True, exist_ok=True)
+                candidate.write_text("not credential material\n", encoding="utf-8")
+            _git(repo, "add", *allowed_paths)
+            _git(repo, "commit", "-qm", "noncredential names")
+            output = root / "capsule"
+            output.mkdir()
+
+            manifest = capture_source(repo, output, mode="commit", ref="HEAD")
+
+            self.assertTrue(set(allowed_paths).issubset({item["path"] for item in manifest["files"]}))
+
 
 if __name__ == "__main__":
     unittest.main()
