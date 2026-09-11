@@ -24,6 +24,9 @@ import {
 import { frequencyDomainModeFieldMetaResourceKey } from "../resources/frequencyDomainResourceKeys";
 import {
   ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
+  DATA_ANTENNA_FIELD_SOLUTION_PATH,
+  DATA_ANTENNA_SOURCE_SPECTRUM_PATH,
+  DATA_ARTIFACTS_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELD_AVAILABILITY_PATH,
   DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
@@ -251,6 +254,44 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH)).toBe(
       digest,
     );
+  });
+
+  it("invalidates only antenna result resources when the artifact catalog changes", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const fieldSolutionKey = DATA_ANTENNA_FIELD_SOLUTION_PATH.replace(
+      "{solution_id}",
+      "solution-1",
+    );
+    const sourceSpectrumKey = DATA_ANTENNA_SOURCE_SPECTRUM_PATH.replace(
+      "{output_id}",
+      "spectrum-1",
+    );
+    resources.subscribe(fieldSolutionKey, () => {});
+    resources.subscribe(sourceSpectrumKey, () => {});
+    resources.subscribe(DATA_ARTIFACTS_PATH, () => {});
+    resources.subscribe(DATA_DOMAIN_TOPOLOGY_PATH, () => {});
+
+    expect(
+      bridge.handleEvent({
+        payload: {
+          changes: [
+            {
+              recommended_fetch: DATA_ARTIFACTS_PATH,
+              resource: "artifacts",
+              revision: 17,
+            },
+          ],
+        },
+        type: "resource.batch_changed",
+      }),
+    ).toBe(true);
+
+    expect(resources.getRevision(fieldSolutionKey)).toBe(17);
+    expect(resources.getRevision(sourceSpectrumKey)).toBe(17);
+    expect(resources.getRevision(DATA_ARTIFACTS_PATH)).toBe(17);
+    expect(resources.getRevision(DATA_DOMAIN_TOPOLOGY_PATH)).toBeNull();
   });
 
   it.each([
