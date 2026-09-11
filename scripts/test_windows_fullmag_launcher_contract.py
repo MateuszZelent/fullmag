@@ -485,8 +485,9 @@ def test_windows_fem_build_mutex_is_released_before_long_running_simulation() ->
     assert '$buildMutex = $null' in launcher[release_boundary:run_boundary]
 
 
-def test_windows_fem_interactive_launch_separates_host_and_container_web_ports() -> None:
-    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+@pytest.mark.parametrize("launcher_path", [LEGACY_FEM_LAUNCHER, DOCKER_LAUNCHER])
+def test_windows_fem_interactive_launch_separates_host_and_container_web_ports(launcher_path) -> None:
+    launcher = launcher_path.read_text(encoding="utf-8")
     compose = WINDOWS_COMPOSE.read_text(encoding="utf-8")
 
     assert '$env:FULLMAG_WINDOWS_WEB_PORT = $WebPort.ToString()' in launcher
@@ -661,3 +662,79 @@ def test_makefile_can_build_container_local_fem_cpu() -> None:
     assert "FULLMAG_FORCE_LOCAL_FEM_CPU" in makefile
     assert 'build_mode="fem-cpu"' in makefile
     assert '"fem-gpu"' in makefile
+
+
+@pytest.fixture(scope="module")
+def public_url_probe(tmp_path_factory):
+    rustc = shutil.which("rustc")
+    if rustc is None:
+        pytest.skip("rustc is required for the isolated launcher URL check")
+    source = CONTROL_ROOM.read_text(encoding="utf-8")
+    url_helpers = source[source.index("fn web_public_url("):source.index("\npub(crate) fn internal_live_api_url")]
+    resolver = source[source.index("fn resolve_web_port("):source.index("\npub(crate) fn port_is_listening")]
+    tmp_path = tmp_path_factory.mktemp("public-url")
+    harness = tmp_path / "public_url.rs"
+    harness.write_text(
+        '''use std::{fs, path::Path};
+        type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+        macro_rules! bail { ($($arg:tt)*) => { return Err(format!($($arg)*).into()) }; }
+        fn web_public_host() -> String { "localhost".into() }
+        fn port_is_listening(_: u16) -> bool { false }
+        fn port_is_bindable(_: u16) -> bool { true }
+        ''' + url_helpers + resolver + '''
+        fn main() -> Result<()> {
+            let mode = std::env::args().nth(1).unwrap();
+            match mode.as_str() {
+                "frontend" => println!("{}", frontend_public_url(3100)?),
+                "api" => println!("{}", web_public_url(8081)),
+                "listen" => println!("{}", resolve_web_port(None, Path::new(&std::env::args().nth(2).unwrap()))?),
+                _ => panic!("unknown probe mode"),
+            }
+            Ok(())
+        }
+        ''', encoding="utf-8",
+    )
+    executable = tmp_path / ("public_url.exe" if os.name == "nt" else "public_url")
+    subprocess.run([rustc, str(harness), "-o", str(executable)], check=True)
+
+    def run(mode, published_port, *args):
+        env = os.environ.copy()
+        env.pop("FULLMAG_WEB_PUBLIC_PORT", None)
+        if published_port is not None:
+            env["FULLMAG_WEB_PUBLIC_PORT"] = published_port
+        return subprocess.run([str(executable), mode, *map(str, args)], env=env, capture_output=True, text=True)
+
+    return run
+
+
+@pytest.mark.parametrize("published_port, expected_port", [(None, 3100), ("3101", 3101), ("65535", 65535)])
+def test_logged_control_room_url_uses_published_port(public_url_probe, published_port, expected_port):
+    result = public_url_probe("frontend", published_port)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"http://localhost:{expected_port}"
+
+
+@pytest.mark.parametrize("published_port", ["", "0", "65536", "3101x", "+3101", " 3101", "-1"])
+def test_public_frontend_port_rejects_invalid_configuration(public_url_probe, published_port):
+    result = public_url_probe("frontend", published_port)
+    assert result.returncode != 0
+    assert "FULLMAG_WEB_PUBLIC_PORT" in result.stderr
+
+
+def test_api_fallback_keeps_its_own_port(public_url_probe):
+    result = public_url_probe("api", "3101")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "http://localhost:8081"
+
+
+def test_listener_state_is_separate_from_public_url(public_url_probe, tmp_path):
+    (tmp_path / "control-room-url.txt").write_text("http://localhost:3101")
+    listen_file = tmp_path / "control-room-listen-port.txt"
+    listen_file.write_text("3100")
+    result = public_url_probe("listen", "3101", listen_file)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "3100"
+    source = CONTROL_ROOM.read_text(encoding="utf-8")
+    assert 'state_root.join("control-room-listen-port.txt")' in source
+    assert 'resolve_web_port(requested_port, &listen_port_file)?' in source
+    assert 'fs::write(&listen_port_file, web_port.to_string())' in source
