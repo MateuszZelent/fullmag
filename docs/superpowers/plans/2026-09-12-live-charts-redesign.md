@@ -160,3 +160,11 @@ Baseline przed normalizacja: 13 FAIL / 630 PASS / 1 SKIP i 12 bledow startu work
 Browser smoke po restarcie serwera: PASS, exit 0. Artefakty w `review-fixes-smoke-diagnostic`, log `browser-review-fixes-diagnostic.log`. Dodatkowe asercje potwierdzają aktywny wykres przed i po kolejnych fazach; bez automatycznego ponownego otwierania modułu. Oba wcześniejsze nieudane przebiegi zachowano; nie odtworzono resetu na świeżym runtime, a resize nie był jego ustaloną przyczyną. Nie zmieniono kodu layoutu na podstawie domniemania.
 Dowód obejmuje 2 kolejne komendy PNG z tą samą instancją canvas, CSV bieżącego pobrania, 100 przełączeń cyklu życia, 8 kombinacji sygnałów, Step → Time → Step, jawny limit 5000 próbek, Mocha/Latte/reduced motion/narrow i zoom 200%. Canvas 570×342, jeden renderer i jeden ResizeObserver, brak żądań podczas 3 s idle. Fixture UI nie jest kwalifikacją naukową FEM.
 Po zatrzymaniu serwera przywrócono wyłącznie generowany plik `next-env.d.ts` worktree. Kontrole smoke i Next: 3 pliki / 24 testy PASS; `node --check` PASS. Pełny zielony suite pozostaje aktualnym dowodem dla niezmienionych źródeł produkcyjnych.
+
+### Poprawki review PR #90
+
+Commit `9146d4f7b58ab3e373f6a746cceee5db3a173cfb` usuwa wszystkie cztery uwagi GitHub: kolejkuje eksporty, potwierdza tylko żądanie właściwego źródła i ID, kończy PNG po błędzie importu renderera oraz udostępnia okno próbek dla osi obserwabli. Dodatkowy test chroni nowe żądanie przed spóźnionym ACK.
+
+Weryfikacja: pełna suite 659 plików / 6453 testy PASS, 1 SKIP (218.05 s), `vitest-final-github-fixes.log`; późniejsza poprawka stale ACK: 2 testy PASS. Typecheck i lint PASS. Browser na końcowych źródłach PASS, `browser-github-fixes-final.log`, obrazy w `github-fixes-browser-final`; obejmuje też widoczny błąd pobierania i skuteczną ponowną próbę. Serwer zatrzymano.
+
+PR: https://github.com/MateuszZelent/fullmag/pull/90. Integracja i cleanup pozostają otwarte do wyniku CI. Pierwszy przebieg python-contracts miał błąd testu siatkowania przy identycznych źródłach Python i backendu jak master; bazowy przebieg z Gmsh 4.15.2 przeszedł. Przyczyna niestabilności nie została potwierdzona. Managed FEM nadal NOT VERIFIED; nie zmieniano silnika ani filtrów workflow.
