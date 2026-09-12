@@ -46,4 +46,35 @@ describe("InteractiveChartSurface", () => {
     });
   });
 
+  it("keeps a visible series in its all-series color slot when an earlier series is hidden", () => {
+    const allSeries = [
+      series[0]!,
+      {
+        ...series[0]!,
+        id: "analysis:my",
+        label: "m_y",
+        points: [{ rowIndex: 0, x: 0, y: 2 }],
+        quantity: "my",
+      },
+    ];
+
+    const model = chartSeriesRenderModel(
+      [allSeries[1]!],
+      allSeries,
+      {
+        ariaLabel: "Live magnetization",
+        chartId: "live:magnetization",
+        presentationCopy: { empty: "No live samples", error: "Live data unavailable", loading: "Loading live samples" },
+        provenance: { dataRevision: 7, decimation: "tail", descriptorId: "live:magnetization", query: "tail=100", resourceKey: "live/magnetization" },
+      },
+    );
+
+    expect(model.series).toEqual([
+      expect.objectContaining({
+        colorIndex: 1,
+        id: "analysis:my",
+      }),
+    ]);
+  });
+
 });

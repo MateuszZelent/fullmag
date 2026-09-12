@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { chartRenderModelToEChartsOption, createChartRendererOwner, type ChartRendererEngine, type ChartRenderModel } from "./chartRenderer";
+import { DEFAULT_CHART_TOKENS } from "./fullmagChartTokens";
 
 const model: ChartRenderModel = {
   ariaLabel: "Magnetization dynamics",
@@ -85,6 +86,26 @@ describe("chart renderer owner", () => {
 
     expect(option.series).toEqual([
       expect.objectContaining({ connectNulls: false }),
+    ]);
+  });
+
+  it("pins a series color to its stable model slot when earlier series are hidden", () => {
+    const option = chartRenderModelToEChartsOption(
+      {
+        ...model,
+        series: [{
+          ...model.series[0]!,
+          colorIndex: 1,
+        }],
+      },
+      { ...DEFAULT_CHART_TOKENS, palette: ["red", "green", "blue"] },
+    );
+
+    expect(option.series).toEqual([
+      expect.objectContaining({
+        itemStyle: { color: "green" },
+        lineStyle: { color: "green", width: 1.5 },
+      }),
     ]);
   });
 

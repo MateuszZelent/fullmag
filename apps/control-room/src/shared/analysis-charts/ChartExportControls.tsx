@@ -29,9 +29,9 @@ export function exportChartData(model: ChartRenderModel, format: ChartExportForm
 export function exportChartPng(
   model: ChartRenderModel,
   rendererRef: MutableRefObject<ChartRendererOwner | null>,
-): void {
+): boolean {
   const dataUrl = rendererRef.current?.exportPng();
-  if (!dataUrl) return;
+  if (!dataUrl) return false;
   const anchor = document.createElement("a");
   anchor.download = safeChartExportFilename(model, "png");
   anchor.href = dataUrl;
@@ -41,15 +41,19 @@ export function exportChartPng(
     filename: safeChartExportFilename(model, "provenance.json"),
     mimeType: "application/json",
   });
+  return true;
 }
 
 export function ChartExportControls({
   model,
+  pngReady = true,
   rendererRef,
   onExportRequested,
   onOpenPointsTable,
 }: {
   model: ChartRenderModel;
+  /** Optional readiness gate for callers whose renderer initializes asynchronously. */
+  pngReady?: boolean;
   onExportRequested?: (format: ChartExportFormat | "png") => void;
   rendererRef: MutableRefObject<ChartRendererOwner | null>;
   onOpenPointsTable?: () => void;
@@ -63,7 +67,7 @@ export function ChartExportControls({
       ) : null}
       <Button size="sm" type="button" variant="secondary" onClick={() => { onExportRequested?.("csv"); exportChartData(model, "csv"); }}>CSV</Button>
       <Button size="sm" type="button" variant="secondary" onClick={() => { onExportRequested?.("tsv"); exportChartData(model, "tsv"); }}>TSV</Button>
-      <Button size="sm" type="button" variant="secondary" onClick={() => { onExportRequested?.("png"); exportChartPng(model, rendererRef); }}>PNG</Button>
+      <Button disabled={!pngReady} size="sm" type="button" variant="secondary" onClick={() => { onExportRequested?.("png"); exportChartPng(model, rendererRef); }}>PNG</Button>
     </div>
   );
 }
