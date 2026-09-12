@@ -18,6 +18,7 @@ pub mod capture;
 pub mod cas;
 pub mod communication_policy;
 pub mod fms;
+pub mod mesh_operation;
 pub mod store;
 pub mod types;
 

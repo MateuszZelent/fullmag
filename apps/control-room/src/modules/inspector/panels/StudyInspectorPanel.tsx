@@ -15,18 +15,11 @@ import {
 import { useCallback, useEffect, useReducer, type ReactNode } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
+import { runFdmGridRefreshOperation } from "@/kernel/authoring/geometryLifecycleCommandContributions";
 import {
-  MESHING_BUILDS_CURRENT_PATH,
-  MESHING_BUILDS_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
-  MESHING_SEMANTICS_PATH,
   MESHING_PERIODIC_PAIRS_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
-  MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
-  MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH,
-  MESHING_SHARED_DOMAIN_QUALITY_PATH,
-  MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
-  MESHING_SHARED_DOMAIN_REPORT_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_READINESS_PATH,
   MODEL_SCENE_PATH,
@@ -69,6 +62,7 @@ import {
   useMeshPeriodicPairsResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import {
+  invalidateFdmGridResources,
   useGeometryValidationResource,
   useMeshBuildCurrent,
   useMeshBuildLatestSuccessful,
@@ -448,27 +442,6 @@ function numericSceneRevision(value: number | string | null): number | null {
   if (typeof value !== "string" || !value.trim()) return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
-}
-
-function invalidateFdmGridResources(
-  resources: { invalidate: (resourceKey: string, revision: number) => void },
-  revision: number,
-): void {
-  for (const resourceKey of [
-    MESHING_BUILDS_PATH,
-    MESHING_BUILDS_CURRENT_PATH,
-    MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
-    MESHING_SUMMARY_PATH,
-    MESHING_SEMANTICS_PATH,
-    MESHING_SHARED_DOMAIN_MANIFEST_PATH,
-    MESHING_SHARED_DOMAIN_REPORT_PATH,
-    MESHING_SHARED_DOMAIN_QUALITY_PATH,
-    MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
-    MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH,
-    MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
-  ]) {
-    resources.invalidate(resourceKey, revision);
-  }
 }
 
 function formatGridVector(values: readonly number[]): string {
@@ -1036,20 +1009,48 @@ export function useStudyInspectorPanelController(
       kernel.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
       kernel.resources.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
       kernel.resources.invalidate(SIMULATION_COMMANDS_PATH, revision);
-      if (
-        isExplicitFdmStudy({
-          requestedBackend: state.globalDraft.requestedBackend,
-          sessionDiscretization: runtimeStatus?.domain.discretization,
-        })
-      ) {
+      const explicitFdm = isExplicitFdmStudy({
+        requestedBackend: state.globalDraft.requestedBackend,
+        sessionDiscretization: runtimeStatus?.domain.discretization,
+      });
+      if (explicitFdm) {
         invalidateFdmGridResources(kernel.resources, revision);
+      }
+      let feedbackKind: "success" | "warning" | "error" = "success";
+      let feedbackMessage = "Committed global study settings.";
+      if (explicitFdm) {
+        try {
+          const result = await runFdmGridRefreshOperation(commandContext, {
+            kind: "fdm_grid_refresh",
+            reason: "study_global_commit",
+            precondition: { scene_revision: revision },
+          });
+          if (result.status === "completed") {
+            feedbackMessage = "Committed global study settings. FDM grid replan completed; magnetization was reinitialized from the model.";
+          } else if (result.status === "failed") {
+            feedbackKind = "error";
+            feedbackMessage =
+              result.message ??
+              "Global study settings were saved, but the FDM grid replan failed.";
+          } else {
+            feedbackKind = "warning";
+            feedbackMessage =
+              result.message ??
+              "Global study settings were saved. FDM grid replan remains active; see Mesh Jobs.";
+          }
+        } catch (error) {
+          feedbackKind = "warning";
+          feedbackMessage = `Global study settings were saved, but the FDM grid replan could not be submitted: ${
+            error instanceof Error ? error.message : "unknown command error"
+          }`;
+        }
       }
       dispatch({
         type: "setAuthoringFeedback",
         scope: "global",
         feedback: {
-          kind: "success",
-          message: "Committed global study settings.",
+          kind: feedbackKind,
+          message: feedbackMessage,
         },
       });
       dispatch({ type: "acceptGlobalDraft" });
@@ -1960,7 +1961,7 @@ export function StudyBoundarySection({
             )}
             <FieldRow
               label="Topology after Apply Grid"
-              value={sceneStatus === "ready" ? "stale until the next FDM realization" : "waiting for current scene"}
+              value={sceneStatus === "ready" ? "queued for the next FDM realization" : "waiting for current scene"}
             />
           </InspectorGroup>
           <FormField

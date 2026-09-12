@@ -136,6 +136,14 @@ windows-build backend="fdm" device="cpu" frontend="dev" skip_local_changes="fals
       powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag.ps1" -BuildMode true -BuildOnly -Frontend "$frontend" -Backend "$backend" -Device "$device" "${skip_local_changes_args[@]}"; \
     fi
 
+# Run targeted Rust tests in the same Windows-managed FEM container lane.
+windows-test-fem device="cpu" package="fullmag-api" filter="remesh":
+    device="{{device}}"; package="{{package}}"; filter="{{filter}}"; \
+    case "$device" in device=*) device="${device#device=}" ;; --device=*) device="${device#--device=}" ;; esac; \
+    case "$package" in package=*) package="${package#package=}" ;; --package=*) package="${package#--package=}" ;; esac; \
+    case "$filter" in filter=*) filter="${filter#filter=}" ;; --filter=*) filter="${filter#--filter=}" ;; esac; \
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag_fem.ps1" -BuildMode true -BuildOnly -Backend fem -Device "$device" -TestPackage "$package" -TestFilter "$filter"
+
 ensure-python:
     @set -euo pipefail; \
       mkdir -p "{{repo_root}}/.fullmag/local"; \

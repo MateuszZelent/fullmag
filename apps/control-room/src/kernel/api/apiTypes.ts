@@ -820,9 +820,17 @@ type MeshBuildCommandRequest = RuntimeCommandIntent & {
   mesh_reason?: string | null;
   mesh_target?: components["schemas"]["MeshCommandTarget"] | null;
 };
+type FdmGridRefreshCommandRequest = RuntimeCommandIntent & {
+  kind: "fdm_grid_refresh";
+  mesh_options?: JsonObject | null;
+};
 export type StructuredCommandRequest =
-  | Exclude<GeneratedStructuredCommandRequest, { kind: "mesh_build" }>
-  | MeshBuildCommandRequest;
+  | Exclude<
+      GeneratedStructuredCommandRequest,
+      { kind: "mesh_build" } | { kind: "fdm_grid_refresh" }
+    >
+  | MeshBuildCommandRequest
+  | FdmGridRefreshCommandRequest;
 export type UniversePatchRequest = components["schemas"]["UniversePatchRequest"];
 export type UniverseResource = components["schemas"]["UniverseResource"];
 export type VisualizationStatePatch =

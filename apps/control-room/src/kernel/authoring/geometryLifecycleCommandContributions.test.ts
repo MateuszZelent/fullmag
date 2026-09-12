@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { ControlRoomApiError } from "../api/ControlRoomApi";
 
 import {
   MESHING_BUILDS_CURRENT_PATH,
@@ -33,13 +34,29 @@ import {
   GEOMETRY_LIFECYCLE_COMMANDS,
   UNKNOWN_MESH_COMMAND_LANE_REASON,
   resolveMeshCommandLane,
+  resumeMeshBuildObservation,
+  restoreMeshBuildObservation,
+  runFdmGridRefreshOperation,
 } from "./geometryLifecycleCommandContributions";
 
-function registryWithLifecycleCommands(): CommandRegistry {
+function registryWithLifecycleCommands(confirm = true): CommandRegistry {
   const registry = new CommandRegistry();
-  registry.attach(new EventBus<KernelEventMap>());
+  const fallbackBus = new EventBus<KernelEventMap>();
+  const configuredBuses = new WeakSet<EventBus<KernelEventMap>>();
+  registry.attach(fallbackBus);
   for (const command of GEOMETRY_LIFECYCLE_COMMANDS) {
-    registry.register(command);
+    registry.register({ ...command, run: (context) => {
+      const bus = context.bus ?? fallbackBus;
+      if (!configuredBuses.has(bus)) {
+        bus.on("mesh:build-confirm-requested", (request) => {
+          if (request.requestId) bus.emit("mesh:build-confirm-resolved", {
+            requestId: request.requestId, confirmed: confirm,
+          });
+        });
+        configuredBuses.add(bus);
+      }
+      return command.run({ ...context, bus });
+    } });
   }
   return registry;
 }
@@ -119,8 +136,9 @@ describe("geometry lifecycle command contributions", () => {
       source: "test",
     });
 
-    expect(result).toEqual({ status: "completed" });
+    expect(result).toEqual({ commandId: "cmd-1", status: "completed" });
     expect(submit).toHaveBeenCalledWith({
+      client_intent_id: expect.stringMatching(/^mesh-confirm-/),
       kind: "mesh_build",
       mesh_reason: "selected-object",
       mesh_target: { kind: "object_mesh", object_id: "box" },
@@ -143,6 +161,7 @@ describe("geometry lifecycle command contributions", () => {
     ).toBe(1);
     expect(meshEvents).toEqual([
       {
+        requestId: expect.stringMatching(/^mesh-confirm-/),
         commandId: "cmd-1",
         objectId: "box",
         reason: "selected-object",
@@ -189,8 +208,9 @@ describe("geometry lifecycle command contributions", () => {
       source: "test",
     });
 
-    expect(result).toEqual({ status: "completed" });
+    expect(result).toEqual({ commandId: "cmd-shared", status: "completed" });
     expect(submit).toHaveBeenCalledWith({
+      client_intent_id: expect.stringMatching(/^mesh-confirm-/),
       kind: "mesh_build",
       mesh_reason: "shared-domain",
       mesh_target: { kind: "study_domain" },
@@ -198,6 +218,7 @@ describe("geometry lifecycle command contributions", () => {
     expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBe(2);
     expect(meshEvents).toEqual([
       {
+        requestId: expect.stringMatching(/^mesh-confirm-/),
         commandId: "cmd-shared",
         reason: "shared-domain",
         targetKind: "study_domain",
@@ -358,8 +379,9 @@ describe("geometry lifecycle command contributions", () => {
       { elementIndex: 7, meshOptions },
     );
 
-    expect(result).toEqual({ status: "completed" });
+    expect(result).toEqual({ commandId: "cmd-refine", status: "completed" });
     expect(submit).toHaveBeenCalledWith({
+      client_intent_id: expect.stringMatching(/^mesh-confirm-/),
       kind: "mesh_build",
       mesh_options: meshOptions,
       mesh_reason: "quality_threshold_refinement",
@@ -898,4 +920,360 @@ describe("geometry lifecycle command contributions", () => {
     expect(resolveMeshCommandLane("auto")).toBe("unknown");
     expect(resolveMeshCommandLane(null)).toBe("unknown");
   });
+  it("coalesces double-clicks into one confirmation, submission and terminal observer", async () => {
+    const registry = registryWithLifecycleCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const confirmations = vi.fn();
+    bus.on("mesh:build-confirm-requested", confirmations);
+    let complete!: (value: unknown) => void;
+    const detail = vi.fn(() => new Promise((resolve) => { complete = resolve; }));
+    const submit = vi.fn(async () => ({ accepted: true, command_id: "cmd-once" }));
+    const context = { api: { commands: { submit, detail } } as never,
+      bus, resourceData: sessionStatus("fem"), source: "test" as const };
+    const first = registry.execute("mesh.build-shared-domain", context);
+    const second = registry.execute("mesh.build-shared-domain", context);
+    await vi.waitFor(() => expect(detail).toHaveBeenCalledOnce());
+    expect(submit).toHaveBeenCalledOnce();
+    expect(confirmations).toHaveBeenCalledOnce();
+    complete({ command_id: "cmd-once", status: "completed", seq: 10,
+      resource_invalidations: [{ resource_key: "data/domain/topology", revision: 10 }] });
+    expect(await first).toEqual({ commandId: "cmd-once", status: "completed" });
+    expect(await second).toEqual(await first);
+  });
+
+  it("resumes a disconnected command without another confirmation or POST", async () => {
+    const registry = registryWithLifecycleCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    resources.invalidate(MESHING_SHARED_DOMAIN_MANIFEST_PATH, 7);
+    const confirmations = vi.fn();
+    bus.on("mesh:build-confirm-requested", confirmations);
+    const submit = vi.fn(async () => ({ accepted: true, command_id: "cmd-resume" }));
+    const detail = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue({
+      command_id: "cmd-resume", status: "completed", seq: 8,
+      resource_invalidations: [{ resource_key: "data/domain/topology", revision: 8 }],
+    });
+    const context = { api: { commands: { submit, detail } } as never,
+      bus, resources, resourceData: sessionStatus("fem"), source: "test" as const };
+    expect(await registry.execute("mesh.build-shared-domain", context)).toMatchObject({
+      commandId: "cmd-resume", observation: "disconnected", status: "pending",
+    });
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(7);
+    expect(await registry.execute("mesh.build-shared-domain", context)).toMatchObject({
+      commandId: "cmd-resume", observation: "waiting", status: "pending",
+    });
+    expect(detail).toHaveBeenCalledOnce();
+    expect(await resumeMeshBuildObservation(context)).toEqual({
+      commandId: "cmd-resume", status: "completed",
+    });
+    expect(submit).toHaveBeenCalledOnce();
+    expect(confirmations).toHaveBeenCalledOnce();
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(8);
+  });
+
+  it("preserves mesh resource generations after an authoritative failed build", async () => {
+    const registry = registryWithLifecycleCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    resources.invalidate(MESHING_SHARED_DOMAIN_MANIFEST_PATH, 7);
+    const observed = vi.fn();
+    bus.on("mesh:build-observed", observed);
+    const submit = vi.fn(async () => ({ accepted: true, command_id: "cmd-failed" }));
+    const detail = vi.fn(async () => ({ command_id: "cmd-failed", status: "failed",
+      error: "mesher failed", seq: 99, resource_invalidations: [] }));
+    expect(await registry.execute("mesh.build-shared-domain", {
+      api: { commands: { submit, detail } } as never, bus, resources,
+      resourceData: sessionStatus("fem"), source: "test",
+    })).toEqual({ commandId: "cmd-failed", message: "mesher failed", status: "failed" });
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(7);
+    expect(observed).toHaveBeenCalledWith(expect.objectContaining({ commandId: "cmd-failed", status: "failed" }));
+  });
+
+  it.each(["fem", "fdm"])("releases the %s submission lock after HTTP 409 so a corrected request can succeed", async (lane) => {
+    const registry = registryWithLifecycleCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const observed = vi.fn();
+    bus.on("mesh:build-observed", observed);
+    const submit = vi.fn()
+      .mockRejectedValueOnce(new ControlRoomApiError("scene_revision precondition failed", 409))
+      .mockResolvedValue({ accepted: true, command_id: "cmd-retry" });
+    const list = vi.fn(async () => ({ commands: [] }));
+    const detail = vi.fn(async () => ({
+      command_id: "cmd-retry", status: "completed", seq: 10,
+      resource_invalidations: [{ resource_key: "data/domain/topology", revision: 10 }],
+    }));
+    const context = { api: { commands: { submit, detail, list } } as never,
+      bus, resourceData: sessionStatus(lane), source: "test" as const };
+    const run = () => lane === "fem"
+      ? registry.execute("mesh.build-shared-domain", context)
+      : runFdmGridRefreshOperation(context, { kind: "fdm_grid_refresh" });
+    expect(await run()).toMatchObject({ status: "failed", message: "scene_revision precondition failed" });
+    expect(list).not.toHaveBeenCalled();
+    expect(observed).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
+    expect(await run()).toEqual({ commandId: "cmd-retry", status: "completed" });
+    expect(submit).toHaveBeenCalledTimes(2);
+  });
+  it("reconciles a lost submission ACK by client intent and never retries the POST", async () => {
+    const registry = registryWithLifecycleCommands();
+    let intentId: string | undefined;
+    const submit = vi.fn(async (request) => {
+      intentId = request.client_intent_id;
+      throw new Error("response lost after acceptance");
+    });
+    const list = vi.fn().mockResolvedValueOnce({ commands: [] }).mockResolvedValue({
+      commands: [{ command_id: "cmd-recovered", kind: "remesh", seq: 10 }],
+    });
+    const detail = vi.fn(async () => ({ command_id: "cmd-recovered", client_intent_id: intentId,
+      status: "completed", seq: 10,
+      resource_invalidations: [{ resource_key: "data/domain/topology", revision: 10 }],
+    }));
+    const context = { api: { commands: { submit, detail, list } } as never,
+      resourceData: sessionStatus("fem"), source: "test" as const };
+    expect(await registry.execute("mesh.build-shared-domain", context)).toMatchObject({
+      status: "pending", observation: "publication-unconfirmed",
+    });
+    expect(await resumeMeshBuildObservation(context)).toEqual({
+      commandId: "cmd-recovered", status: "completed",
+    });
+    expect(submit).toHaveBeenCalledOnce();
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["mesh.build-selected", "mesh.build-shared-domain", "mesh.refine-worst-quality-element"])(
+    "does not submit %s when the common preflight is cancelled", async (commandId) => {
+      const registry = registryWithLifecycleCommands(false);
+      const selection = new SelectionController(new EventBus<KernelEventMap>());
+      selectBox(selection);
+      const submit = vi.fn();
+      expect(await registry.execute(commandId, {
+        api: { commands: { submit } } as never, selection,
+        resourceData: sessionStatus("fem"), source: "test",
+      }, { meshOptions: { compute_quality: true } })).toEqual({ status: "cancelled" });
+      expect(submit).not.toHaveBeenCalled();
+    },
+  );
+
+  it("freezes the selected target before waiting for confirmation", async () => {
+    const bus = new EventBus<KernelEventMap>();
+    const selection = new SelectionController(bus);
+    selectBox(selection);
+    let confirmation: KernelEventMap["mesh:build-confirm-requested"] | undefined;
+    bus.on("mesh:build-confirm-requested", (request) => { confirmation = request; });
+    const submit = vi.fn(async () => ({ accepted: true, command_id: "cmd-box" }));
+    const detail = vi.fn(async () => ({ command_id: "cmd-box", status: "completed", seq: 9,
+      resource_invalidations: [{ resource_key: "data/domain/topology", revision: 9 }] }));
+    const command = GEOMETRY_LIFECYCLE_COMMANDS.find((entry) => entry.id === "mesh.build-selected")!;
+    const result = command.run({ api: { commands: { submit, detail } } as never, bus,
+      resourceData: sessionStatus("fem"), selection, source: "test" });
+    expect(confirmation?.input).toMatchObject({ mesh_target: { kind: "object_mesh", object_id: "box" } });
+    selection.clear("test");
+    bus.emit("mesh:build-confirm-resolved", { requestId: confirmation!.requestId!, confirmed: true,
+      precondition: { scene_revision: 21, mesh_revision: 8 },
+    });
+    expect(await result).toMatchObject({ commandId: "cmd-box", status: "completed" });
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+      precondition: { scene_revision: 21, mesh_revision: 8 },
+      mesh_target: { kind: "object_mesh", object_id: "box" },
+    }));
+  });
+
+  it("blocks a different target until the existing command has an authoritative outcome", async () => {
+    const registry = registryWithLifecycleCommands();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    selectBox(selection);
+    const submit = vi.fn(async () => ({ accepted: true, command_id: "cmd-busy" }));
+    const detail = vi.fn().mockRejectedValue(new Error("offline"));
+    const context = { api: { commands: { submit, detail } } as never, selection,
+      resourceData: sessionStatus("fem"), source: "test" as const };
+    expect(await registry.execute("mesh.build-shared-domain", context)).toMatchObject({ status: "pending" });
+    expect(await registry.execute("mesh.build-selected", context)).toMatchObject({
+      status: "pending", message: expect.stringContaining("existing mesh build"),
+    });
+    expect(submit).toHaveBeenCalledOnce();
+  });
+
+  it("bounds lost-ACK reconciliation and reports pending when the queue is unreachable", async () => {
+    const registry = registryWithLifecycleCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const observed = vi.fn();
+    bus.on("mesh:build-observed", observed);
+    const submit = vi.fn().mockRejectedValue(new Error("lost ACK"));
+    const list = vi.fn().mockResolvedValueOnce({ commands: Array.from({ length: 50 }, (_, seq) => ({
+      command_id: "other-" + seq, seq, kind: "mesh_build",
+    })) }).mockRejectedValue(new Error("offline"));
+    const detail = vi.fn(async (id: string) => ({ command_id: id, client_intent_id: "another-intent" }));
+    const context = { api: { commands: { submit, detail, list } } as never, bus,
+      resourceData: sessionStatus("fem"), source: "test" as const };
+    expect(await registry.execute("mesh.build-shared-domain", context)).toMatchObject({ status: "pending" });
+    expect(detail).toHaveBeenCalledTimes(8);
+    expect(await resumeMeshBuildObservation(context)).toMatchObject({
+      status: "pending", observation: "disconnected",
+    });
+    expect(submit).toHaveBeenCalledOnce();
+    expect(observed).toHaveBeenLastCalledWith(expect.objectContaining({
+      requestId: expect.stringMatching(/^mesh-confirm-/), status: "pending", observation: "disconnected",
+    }));
+  });
+
+  it("does not coalesce a new scene revision with an older in-flight build", async () => {
+    const registry = registryWithLifecycleCommands();
+    let complete!: (value: unknown) => void;
+    const detail = vi.fn(() => new Promise((resolve) => { complete = resolve; }));
+    const submit = vi.fn(async () => ({ accepted: true, command_id: "cmd-old-scene" }));
+    const context = { api: { commands: { submit, detail } } as never, source: "test" as const,
+      resourceData: { [SESSION_STATUS_RESOURCE_KEY]: { domain: { discretization: "fem" }, resources: { scene_revision: 3 } } } };
+    const first = registry.execute("mesh.build-shared-domain", context);
+    await vi.waitFor(() => expect(detail).toHaveBeenCalledOnce());
+    const next = await registry.execute("mesh.build-shared-domain", { ...context,
+      resourceData: { [SESSION_STATUS_RESOURCE_KEY]: { domain: { discretization: "fem" }, resources: { scene_revision: 4 } } },
+    });
+    expect(next).toMatchObject({ commandId: "cmd-old-scene", status: "pending", observation: "waiting" });
+    expect(submit).toHaveBeenCalledOnce();
+    complete({ command_id: "cmd-old-scene", status: "completed", seq: 8,
+      resource_invalidations: [{ resource_key: "data/domain/topology", revision: 8 }] });
+    expect(await first).toMatchObject({ status: "completed" });
+  });
+
+  it("releases the submission lock only after terminal observation", async () => {
+    const registry = registryWithLifecycleCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const confirmations = vi.fn();
+    bus.on("mesh:build-confirm-requested", confirmations);
+    let sequence = 0;
+    const submit = vi.fn(async () => ({ accepted: true, command_id: "cmd-" + (++sequence) }));
+    const detail = vi.fn(async (id: string) => ({ command_id: id, status: "completed", seq: sequence,
+      resource_invalidations: [{ resource_key: "data/domain/topology", revision: sequence }] }));
+    const context = { api: { commands: { submit, detail } } as never, bus,
+      source: "test" as const, resourceData: sessionStatus("fem") };
+    expect(await registry.execute("mesh.build-shared-domain", context)).toEqual({ commandId: "cmd-1", status: "completed" });
+    expect(await registry.execute("mesh.build-shared-domain", context)).toEqual({ commandId: "cmd-2", status: "completed" });
+    expect(submit).toHaveBeenCalledTimes(2);
+    expect(confirmations).toHaveBeenCalledTimes(2);
+    expect(await resumeMeshBuildObservation(context)).toMatchObject({ status: "cancelled" });
+  });
+
+  it("restores an already completed mesh command after reload without comparing against its published current revision", async () => {
+    const bus = new EventBus<KernelEventMap>();
+    const events: string[] = [];
+    const requested = vi.fn(() => { events.push("requested"); });
+    bus.on("mesh:build-observation-requested", requested);
+    bus.on("mesh:build-observed", () => { events.push("observed"); });
+    const submit = vi.fn();
+    const detail = vi.fn(async (id: string) => ({ command_id: id, kind: "remesh", status: "completed",
+      client_intent_id: "intent-reload", mesh_target: { kind: "object_mesh", object_id: "box" }, seq: 7,
+      resource_invalidations: [{ resource_key: "data/domain/topology", revision: 7 }] }));
+    const context = { api: { commands: { submit, detail } } as never, bus, source: "test" as const,
+      resourceData: { [SESSION_STATUS_RESOURCE_KEY]: { resources: { mesh_revision: 7 } } } };
+    expect(await restoreMeshBuildObservation(context, "cmd-reload")).toEqual({ commandId: "cmd-reload", status: "completed" });
+    expect(requested).toHaveBeenCalledWith({ commandId: "cmd-reload", requestId: "intent-reload",
+      objectId: "box", targetKind: "object_mesh" });
+    expect(events).toEqual(["requested", "observed"]);
+    expect(submit).not.toHaveBeenCalled();
+    expect(detail.mock.calls.every((args) => args[0] === "cmd-reload")).toBe(true);
+  });
+
+  it("keeps restored observation resumable across another disconnect", async () => {
+    const submit = vi.fn();
+    const detail = vi.fn().mockResolvedValueOnce({ command_id: "cmd-restored", kind: "mesh_build", status: "running",
+      mesh_target: { kind: "study_domain" }, seq: 9,
+    }).mockRejectedValueOnce(new Error("connection lost")).mockResolvedValue({
+      command_id: "cmd-restored", status: "completed", seq: 9,
+      resource_invalidations: [{ resource_key: "data/domain/topology", revision: 9 }],
+    });
+    const context = { api: { commands: { submit, detail } } as never, source: "test" as const };
+    expect(await restoreMeshBuildObservation(context, "cmd-restored")).toMatchObject({
+      commandId: "cmd-restored", status: "pending", observation: "disconnected",
+    });
+    expect(await resumeMeshBuildObservation(context)).toEqual({ commandId: "cmd-restored", status: "completed" });
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("refuses a foreign or non-mesh resource when restoring an observation", async () => {
+    const submit = vi.fn();
+    const detail = vi.fn().mockResolvedValueOnce({ command_id: "foreign", kind: "mesh_build", mesh_target: { kind: "study_domain" } })
+      .mockResolvedValue({ command_id: "cmd-invalid", kind: "relax", mesh_target: null });
+    const context = { api: { commands: { submit, detail } } as never, source: "test" as const };
+    expect(await restoreMeshBuildObservation(context, "cmd-invalid")).toMatchObject({ status: "failed" });
+    expect(await restoreMeshBuildObservation(context, "cmd-invalid")).toMatchObject({ status: "failed" });
+    expect(await resumeMeshBuildObservation(context)).toMatchObject({ status: "cancelled" });
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("does not replace an active observation with another restored command", async () => {
+    const registry = registryWithLifecycleCommands();
+    const submit = vi.fn(async () => ({ accepted: true, command_id: "cmd-owned" }));
+    const detail = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue({
+      command_id: "cmd-owned", status: "completed", seq: 5,
+      resource_invalidations: [{ resource_key: "data/domain/topology", revision: 5 }],
+    });
+    const context = { api: { commands: { submit, detail } } as never, source: "test" as const,
+      resourceData: sessionStatus("fem") };
+    expect(await registry.execute("mesh.build-shared-domain", context)).toMatchObject({ status: "pending" });
+    expect(await restoreMeshBuildObservation(context, "cmd-other")).toMatchObject({ status: "failed" });
+    expect(detail).toHaveBeenCalledTimes(1);
+    expect(await restoreMeshBuildObservation(context, "cmd-owned")).toEqual({ commandId: "cmd-owned", status: "completed" });
+    expect(submit).toHaveBeenCalledOnce();
+  });
+
+  it("observes an FDM grid refresh through its terminal command and invalidates the published grid", async () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const submit = vi.fn(async () => ({ accepted: true, command_id: "cmd-fdm-grid" }));
+    const detail = vi.fn(async () => ({
+      command_id: "cmd-fdm-grid",
+      kind: "fdm_grid_refresh",
+      status: "completed",
+      completion_status: "completed",
+      seq: 14,
+      resource_invalidations: [
+        { resource_key: "data/domain/topology", revision: 14 },
+      ],
+    }));
+    const context: CommandContext = {
+      api: { commands: { submit, detail } } as never,
+      bus,
+      resources,
+      source: "test",
+    };
+
+    await expect(runFdmGridRefreshOperation(context, {
+      kind: "fdm_grid_refresh",
+      reason: "test_policy_commit",
+      precondition: { scene_revision: 9 },
+    })).resolves.toEqual({ commandId: "cmd-fdm-grid", status: "completed" });
+    expect(submit).toHaveBeenCalledWith({
+      client_intent_id: expect.stringMatching(/^fdm-grid-refresh-/),
+      kind: "fdm_grid_refresh",
+      precondition: { scene_revision: 9 },
+      reason: "test_policy_commit",
+    });
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(14);
+  });
+
+  it("restores an FDM grid refresh observation after reload without a FEM mesh target", async () => {
+    const resources = new ResourceInvalidationController(new EventBus<KernelEventMap>());
+    const detail = vi.fn(async () => ({
+      command_id: "cmd-fdm-reload",
+      kind: "fdm_grid_refresh",
+      status: "completed",
+      completion_status: "completed",
+      client_intent_id: "fdm-intent-reload",
+      reason: "study_global_commit",
+      seq: 15,
+      resource_invalidations: [
+        { resource_key: "data/domain/topology", revision: 15 },
+      ],
+    }));
+    const context: CommandContext = {
+      api: { commands: { detail } } as never,
+      resources,
+      source: "test",
+    };
+
+    await expect(
+      restoreMeshBuildObservation(context, "cmd-fdm-reload"),
+    ).resolves.toEqual({ commandId: "cmd-fdm-reload", status: "completed" });
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(15);
+  });
+
 });

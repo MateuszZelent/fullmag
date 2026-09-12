@@ -696,13 +696,6 @@ fn active_lane_operations(
             requires.iter().copied(),
         )
     };
-    let deferred = |reason: &str, requires: &[&str]| {
-        operation(
-            ActiveLaneCapabilityState::Deferred,
-            reason,
-            requires.iter().copied(),
-        )
-    };
     let term_operation = |available: bool, term: &str| {
         if available {
             supported(
@@ -755,9 +748,9 @@ fn active_lane_operations(
         (
             "grid_build".into(),
             if is_fdm {
-                deferred(
-                    "FDM grid and membership masks are immutable execution-plan artifacts; standalone refresh is deferred until a safe replanning lifecycle exists.",
-                    &["discretization:fdm", "safe_replanning_lifecycle"],
+                supported(
+                    "FDM grid and membership masks are rebuilt by an atomic execution-plan replan.",
+                    &["discretization:fdm", "operation:fdm_grid_refresh"],
                 )
             } else {
                 unsupported(

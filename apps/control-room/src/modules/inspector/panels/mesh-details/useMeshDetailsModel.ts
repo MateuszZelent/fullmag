@@ -1,5 +1,7 @@
 "use client";
 
+import { restoreMeshHistoryToDraft } from "@/kernel/authoring/meshBuildHistoryRestore";
+
 import { useCallback, useMemo } from "react";
 
 import type { JsonObject, LiveStatusResource, MeshSharedDomainManifestResource } from "@/kernel/api/apiTypes";
@@ -32,7 +34,10 @@ import {
   normalizeMeshPipelineStatus,
   resolveMeshBuildStatusLabel,
 } from "@/shared/domain/mesh/buildPipeline";
-import { normalizeMeshBuildHistory } from "@/shared/domain/mesh/meshBuildHistory";
+import {
+  normalizeMeshBuildHistory,
+  type MeshBuildHistoryEntry,
+} from "@/shared/domain/mesh/meshBuildHistory";
 import {
   type MeshPolicyDiffRow,
   diffMeshPolicies,
@@ -140,6 +145,7 @@ export interface MeshDetailsModel {
   onHoverSizeDistributionBin: (bin: MeshSizeDistributionHoverBin | null) => void;
   onOpenBuildDetails: () => void;
   onRefineWorstElement: () => void;
+  onRestoreBuildToDraft: (entry: MeshBuildHistoryEntry) => void;
   onSelectMetric: (metric: MeshQualityMetric["id"]) => void;
   onSelectWorstElement: (element: MeshWorstElement) => void;
 }
@@ -506,6 +512,12 @@ export function useMeshDetailsModel(
     if (!femLane) return;
     void kernel.commands.execute("mesh.build-shared-domain", buildContext);
   }, [buildContext, femLane, kernel.commands]);
+  const restoreBuildToDraft = useCallback(
+    (entry: MeshBuildHistoryEntry) => {
+      restoreMeshHistoryToDraft(kernel, entry);
+    },
+    [kernel],
+  );
 
   return {
     activeBuildRevision: activeBuild.data?.revision,
@@ -585,6 +597,7 @@ export function useMeshDetailsModel(
         "mesh",
       ),
     onRefineWorstElement: refineWorstQualityElement,
+    onRestoreBuildToDraft: restoreBuildToDraft,
     onSelectMetric: selectQualityMetric,
     onSelectWorstElement: selectWorstElement,
   };

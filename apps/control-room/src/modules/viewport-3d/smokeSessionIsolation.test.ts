@@ -61,8 +61,15 @@ describe("viewport smoke session isolation", () => {
 
   it("rejects a symlink alias instead of snapshotting its real path", async () => {
     const fixture = disposableFixture();
-    const aliasPath = join(fixture.directory, "fixture-alias.py");
-    symlinkSync(fixture.scriptPath, aliasPath);
+    let aliasPath = join(fixture.directory, "fixture-alias.py");
+    if (process.platform === "win32") {
+      const aliasRoot = mkdtempSync(join(tmpdir(), "fullmag-smoke-alias-"));
+      const directoryLink = join(aliasRoot, "linked");
+      symlinkSync(fixture.directory, directoryLink, "junction");
+      aliasPath = join(directoryLink, "fixture.py");
+    } else {
+      symlinkSync(fixture.scriptPath, aliasPath);
+    }
 
     await expect(
       createSmokeMutationGuard({

@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { configDefaults } from "vitest/config";
 import { isAbsolute, resolve } from "node:path";
 
@@ -12,7 +13,7 @@ const vitestConfig = {
     : {}),
   resolve: {
     alias: {
-      "@": new URL("./src", import.meta.url).pathname,
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
   test: {

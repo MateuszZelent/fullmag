@@ -1031,10 +1031,18 @@ function checkMeshBuildDialogSessionStatusSelector() {
     "meshBuildDialogRuntimeStatusEquals",
     "useSessionStatusSelector",
     "runtimeStatus",
-    "shouldLoadRuntimeMeshBuild(state.open, runtimeStatus)",
-    "shouldLoadRuntimeMeshSummary(state.open, runtimeStatus)",
-    "shouldLoadRuntimeMeshManifest(state.open, runtimeStatus)",
+
   ]);
+  const compact = source.replace(/\s+/g, "");
+  requireTokens(compact, "MeshBuildDialog open FEM resource gate", [
+    'returnopen&&lane==="fem";',
+    "constexplicitFemLane=shouldLoadMeshBuildDialogFemResources(state.open,lane,);",
+    "useMeshBuildCurrent({enabled:explicitFemLane,})",
+    "useMeshBuildLatestSuccessful({enabled:explicitFemLane,})",
+    "useMeshSummaryResource({enabled:explicitFemLane,})",
+    "useMeshSharedDomainManifestResource({enabled:explicitFemLane,})",
+  ]);
+  forbidTokens(source, "MeshBuildDialog idle polling", ["setInterval("]);
   forbidTokens(source, "MeshBuildDialog session status selector", [
     "import { useSessionStatus }",
     "const sessionStatus = useSessionStatus()",

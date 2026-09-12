@@ -16,6 +16,11 @@ export function MeshBuildConfirmDialogContent({
   diffRows,
   errorMessage,
   mode,
+  ready = true,
+  stale = false,
+  onRefresh,
+  onResumeObservation,
+  rendered = false,
   newSummary,
   onApplyBuild,
   onCancel,
@@ -28,7 +33,12 @@ export function MeshBuildConfirmDialogContent({
   currentSummary: readonly MeshBuildSummaryRow[];
   diffRows: readonly MeshPolicyDiffRow[];
   errorMessage?: string | null;
-  mode?: "pre-build" | "submitting" | "post-build" | "error";
+  mode?: "pre-build" | "submitting" | "waiting" | "post-build" | "error";
+  ready?: boolean;
+  stale?: boolean;
+  onRefresh?: () => void;
+  onResumeObservation?: () => void;
+  rendered?: boolean;
   newSummary?: readonly MeshBuildSummaryRow[];
   onApplyBuild: () => void;
   onCancel: () => void;
@@ -38,7 +48,7 @@ export function MeshBuildConfirmDialogContent({
 }) {
   const phase = mode ?? "pre-build";
   const buildButtonLabel =
-    phase === "submitting" ? "Submitting..." : "Accept & Build";
+    phase === "submitting" ? "Build in progress" : "Accept & Build";
   const requestsExactLayeredPrism = diffRows.some(
     (row) =>
       (row.path === "topology" && row.draftValue === "prismatic") ||
@@ -65,18 +75,21 @@ export function MeshBuildConfirmDialogContent({
         </dl>
       </section>
 
-      {phase === "error" && errorMessage ? (
+      {(phase === "error" || phase === "waiting") && errorMessage ? (
         <section
           className="fm-mesh-build-confirm__section fm-mesh-build-confirm__banner fm-mesh-build-confirm__banner--error"
           aria-label="Mesh build error"
         >
-          <h3 className="fm-mesh-build-confirm__section-title">Build Error</h3>
+          <h3 className="fm-mesh-build-confirm__section-title">{phase === "error" ? "Build Error" : "Build observation paused"}</h3>
           <p className="fm-mesh-build-confirm__empty">{errorMessage}</p>
         </section>
       ) : null}
 
       {phase === "post-build" ? (
-        <MeshBuildPostBuildSummary rows={postBuildRows ?? []} />
+        <>
+          <p className="fm-mesh-build-confirm__empty">{rendered ? "Published mesh revision rendered in the viewport." : "New mesh revision published. Viewport rendering has not been confirmed."}</p>
+          <MeshBuildPostBuildSummary rows={postBuildRows ?? []} />
+        </>
       ) : null}
 
       {requestsExactLayeredPrism ? (
@@ -93,6 +106,7 @@ export function MeshBuildConfirmDialogContent({
         </section>
       ) : null}
 
+      {!ready && phase === "pre-build" ? <p className="fm-mesh-build-confirm__empty">{stale ? "The model changed after this confirmation was prepared. Review an updated preflight." : "Loading the target policy and current mesh baseline…"}</p> : null}
       <MeshBuildParameterDiff rows={diffRows} />
 
       <section className="fm-mesh-build-confirm__section" aria-label="Current mesh summary">
@@ -120,15 +134,17 @@ export function MeshBuildConfirmDialogContent({
       </section>
 
       <div className="fm-mesh-build-confirm__actions">
+        {stale && phase === "pre-build" ? <Button size="sm" variant="secondary" onClick={onRefresh}>Refresh preflight</Button> : null}
+        {phase === "waiting" ? <Button size="sm" variant="secondary" onClick={onResumeObservation}>Resume observation</Button> : null}
         <Button size="sm" type="button" variant="ghost" onClick={onCancel}>
-          {phase === "post-build" ? "Close" : "Cancel"}
+          {phase === "pre-build" ? "Cancel" : "Close"}
         </Button>
         <Button size="sm" type="button" variant="secondary" onClick={onOpenMeshJobs}>
           Open Mesh Jobs
         </Button>
-        {phase === "post-build" ? null : (
+        {phase !== "pre-build" && phase !== "submitting" ? null : (
           <Button
-            disabled={phase === "submitting"}
+            disabled={phase === "submitting" || !ready}
             size="sm"
             type="button"
             variant="primary"
@@ -159,7 +175,7 @@ function MeshBuildPostBuildSummary({
       <h3 className="fm-mesh-build-confirm__section-title">Build Result Summary</h3>
       {visibleRows.length === 0 ? (
         <p className="fm-mesh-build-confirm__empty">
-          Mesh resources were published and rendered by the viewport.
+          Mesh resources were published. Detailed metrics are not available.
         </p>
       ) : (
         <table className="fm-mesh-build-confirm__diff fm-mesh-build-confirm__diff--summary">
@@ -180,10 +196,10 @@ function MeshBuildPostBuildSummary({
                   data-state={hasChanged ? "changed" : "unchanged"}
                   key={row.id}
                 >
-                  <td className="font-bold">{row.label}</td>
+                  <td className="fm-mesh-build-confirm__metric">{row.label}</td>
                   <td>{row.currentValue}</td>
-                  <td className={hasChanged ? "font-bold text-success" : ""}>{row.nextValue}</td>
-                  <td className="opacity-70">{row.group}</td>
+                  <td className={hasChanged ? "fm-mesh-build-confirm__metric--changed" : ""}>{row.nextValue}</td>
+                  <td className="fm-mesh-build-confirm__metric-group">{row.group}</td>
                 </tr>
               );
             })}

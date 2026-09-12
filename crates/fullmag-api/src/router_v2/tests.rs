@@ -3541,10 +3541,13 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
     );
     assert!(active_lane["source"]["capability_profile_version"].is_string());
     assert_eq!(active_lane["qualification"]["status"], "not_asserted");
-    assert_eq!(active_lane["operations"]["grid_build"]["state"], "deferred");
+    assert_eq!(
+        active_lane["operations"]["grid_build"]["state"],
+        "supported"
+    );
     assert_eq!(
         active_lane["operations"]["grid_build"]["reason_code"],
-        "capability_deferred"
+        "capability_supported"
     );
     assert_eq!(
         active_lane["operations"]["shared_mesh_build"]["state"],
@@ -11348,9 +11351,19 @@ async fn mesh_active_build_returns_304_when_etag_matches() {
 }
 
 #[tokio::test]
-async fn fdm_grid_refresh_command_is_deferred_without_queueing_a_fake_runtime_mutation() {
+async fn fdm_grid_refresh_command_is_queued_for_atomic_runtime_replan() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.status = "awaiting_command".into();
+        snapshot.live_state = None;
+        snapshot.stage_execution = None;
+        let mut scene = snapshot
+            .scene_document
+            .take()
+            .unwrap_or_else(sample_scene_document);
+        scene.study.requested_backend = "fdm".into();
+        scene.study.requested_device = "auto".into();
+        snapshot.scene_document = Some(scene);
         snapshot.metadata = Some(serde_json::json!({
             "execution_plan": {
                 "backend_plan": {
@@ -11359,10 +11372,12 @@ async fn fdm_grid_refresh_command_is_deferred_without_queueing_a_fake_runtime_mu
                 }
             }
         }));
+        crate::session::refresh_runtime_status(snapshot);
     }
     let app = build_v2_router().with_state(state.clone());
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -11380,27 +11395,104 @@ async fn fdm_grid_refresh_command_is_deferred_without_queueing_a_fake_runtime_mu
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
     let json = body_json(response).await;
-    assert_eq!(json["accepted"], false);
-    assert_eq!(
-        json["error"],
-        "FDM grid and membership masks are immutable execution-plan artifacts; standalone refresh is deferred until a safe replanning lifecycle exists."
-    );
-    assert_eq!(state.current_control_queue.lock().await.len(), 0);
+    assert_eq!(status, StatusCode::OK, "unexpected response: {json}");
+    assert_eq!(json["accepted"], true);
+    assert_eq!(json["error"], serde_json::Value::Null);
+    assert_eq!(state.current_control_queue.lock().await.len(), 1);
 
-    let ledger = state.current_command_ledger.lock().await;
-    let record = ledger.back().expect("deferred command should be recorded");
-    assert_eq!(record.command.kind, "fdm_grid_refresh");
-    assert_eq!(record.status, CommandLifecycleState::Rejected);
-    assert_eq!(
-        record.completion_status,
-        Some(CommandCompletionState::Rejected)
+    let command_id = {
+        let mut ledger = state.current_command_ledger.lock().await;
+        let record = ledger.back_mut().expect("FDM command should be recorded");
+        assert_eq!(record.command.kind, "fdm_grid_refresh");
+        assert_eq!(record.status, CommandLifecycleState::Queued);
+        assert_eq!(record.completion_status, None);
+        assert_eq!(record.error, None);
+        assert_eq!(
+            record
+                .command
+                .mesh_options
+                .as_ref()
+                .and_then(|options| options
+                    .pointer("/scene_problem_patch/runtime_selection/explicit_selection"))
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        record.status = CommandLifecycleState::Dispatched;
+        record.command.command_id.clone()
+    };
+    state.current_control_queue.lock().await.clear();
+    let snapshot = {
+        let mut live = state.current_live_state.write().await;
+        let snapshot = live.as_mut().expect("FDM session should remain live");
+        snapshot.mesh_revision = 14;
+        snapshot.mesh_build_revision = 14;
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "command_outcomes": [{
+                "command_id": command_id,
+                "build_id": format!("mesh:{command_id}"),
+                "status": "completed",
+                "state_policy": "reinitialize_from_model",
+                "completed_at_unix_ms": 1_700_000_000_700u64,
+                "mesh_generation_id": "fdm-generation-b"
+            }]
+        }));
+        snapshot.clone()
+    };
+    let reconciled = {
+        let mut ledger = state.current_command_ledger.lock().await;
+        crate::session::reconcile_dispatched_command_ledger_from_snapshot(
+            &mut ledger,
+            &snapshot,
+            1_700_000_002_000,
+        )
+    };
+    assert!(reconciled);
+
+    let detail = get_command_detail(&app, &command_id).await;
+    assert_eq!(detail["kind"], "fdm_grid_refresh");
+    assert_eq!(detail["status"], "completed");
+    assert_eq!(detail["completion_status"], "completed");
+    let invalidations = detail["resource_invalidations"]
+        .as_array()
+        .expect("FDM grid refresh should publish invalidations");
+    assert_command_invalidation(invalidations, "meshing/shared-domain/manifest", "observed");
+    assert_command_invalidation(invalidations, "data/domain/topology", "observed");
+
+    let queue_status = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/simulation/commands")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let queue_status = body_json(queue_status).await;
+    assert_runtime_control(
+        queue_status["runtime_controls"]
+            .as_array()
+            .expect("runtime controls should be present"),
+        "fdm_grid_refresh",
+        true,
+        None,
     );
-    assert_eq!(
-        record.error.as_deref(),
-        Some("FDM grid and membership masks are immutable execution-plan artifacts; standalone refresh is deferred until a safe replanning lifecycle exists.")
-    );
+
+    let next = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"kind":"fdm_grid_refresh"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(next.status(), StatusCode::OK);
+    assert_eq!(body_json(next).await["accepted"], true);
 }
 
 #[tokio::test]
@@ -11442,9 +11534,56 @@ async fn fdm_grid_refresh_command_rejects_non_fdm_sessions_without_queueing() {
 }
 
 #[tokio::test]
+async fn fdm_grid_refresh_command_rejects_missing_authoring_scene_without_queueing() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.status = "awaiting_command".into();
+        snapshot.live_state = None;
+        snapshot.stage_execution = None;
+        snapshot.scene_document = None;
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": { "backend_plan": { "kind": "fdm" } }
+        }));
+        crate::session::refresh_runtime_status(snapshot);
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"kind":"fdm_grid_refresh"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["accepted"], false);
+    assert_eq!(
+        json["error"],
+        "FDM grid refresh requires a materialized authoring scene."
+    );
+    assert!(state.current_control_queue.lock().await.is_empty());
+    assert_eq!(
+        state
+            .current_command_ledger
+            .lock()
+            .await
+            .back()
+            .map(|record| record.status),
+        Some(CommandLifecycleState::Rejected)
+    );
+}
+
+#[tokio::test]
 async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.status = "awaiting_command".into();
         let mut scene = sample_scene_document();
         let object_mesh = fullmag_authoring::ScriptBuilderPerGeometryMeshState {
             mode: "custom".to_string(),
@@ -11479,6 +11618,7 @@ async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
     let app = build_v2_router().with_state(state.clone());
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -11510,6 +11650,7 @@ async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
     let queue = state.current_control_queue.lock().await;
     assert_eq!(queue.len(), 1);
     let command = queue.front().expect("remesh command enqueued");
+    let command_id = command.command_id.clone();
     assert_eq!(command.kind, "remesh");
     assert_eq!(
         command
@@ -11617,12 +11758,29 @@ async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
             .and_then(serde_json::Value::as_str),
         Some("linear")
     );
+    drop(queue);
+
+    let detail = get_command_detail(&app, &command_id).await;
+    assert_eq!(detail["kind"], "mesh_build");
+    let list = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/simulation/commands")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let listed = body_json(list).await;
+    assert_eq!(listed["commands"][0]["kind"], "mesh_build");
 }
 
 #[tokio::test]
 async fn mesh_build_command_lowers_difference_geometry_from_scene() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.status = "awaiting_command".into();
         let mut scene = sample_scene_document();
         scene.objects[0].id = "permalloy_box".to_string();
         scene.objects[0].name = "permalloy_box".to_string();
@@ -20930,6 +21088,12 @@ async fn solver_command_binds_current_frozen_spins_scene_revision_into_canonical
 #[tokio::test]
 async fn commands_endpoint_keeps_control_sequence_monotonic_after_ledger_reset() {
     let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.status = "awaiting_command".into();
+    }
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.status = "awaiting_command".into();
+    }
     {
         let mut next_seq = state.current_control_next_seq.lock().await;
         *next_seq = 1;
@@ -48856,3 +49020,6 @@ async fn session_collection_handler_returns_a_typed_confirmed_empty_resource() {
     assert_eq!(resource.schema_version, "2.0.0");
     assert!(resource.sessions.is_empty());
 }
+
+#[path = "tests/remesh_admission.rs"]
+mod remesh_admission;

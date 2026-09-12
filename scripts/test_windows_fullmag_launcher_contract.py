@@ -782,3 +782,36 @@ def test_listener_state_is_separate_from_public_url(public_url_probe, tmp_path):
     assert 'state_root.join("control-room-listen-port.txt")' in source
     assert 'resolve_web_port(requested_port, &listen_port_file)?' in source
     assert 'fs::write(&listen_port_file, web_port.to_string())' in source
+
+
+@pytest.mark.parametrize("test_filter", ["", "orchestrator::tests::fdm_grid"])
+def test_windows_fem_managed_entry_preserves_targeted_test_arguments(test_filter):
+    powershell = shutil.which("powershell.exe") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is required to exercise managed test dispatch")
+    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+    dispatch = launcher.split('if ($env:FULLMAG_STORAGE_MANAGED_ENTRY -ne "1") {', 1)[1]
+    dispatch = dispatch.split("$StorageLayout =", 1)[0]
+    command = (
+        "function Invoke-FullmagStorageManagedScript { "
+        "param($RepoRoot, $Profile, $ScriptPath, $Arguments) "
+        "[Console]::Write(($Arguments | ConvertTo-Json -Compress)); return 0 };"
+        "$BuildMode='true'; $Frontend='dev'; $Backend='fem'; $Device='cpu';"
+        "$RunMode='headless'; $WebPort=0; $BuildOnly=$true;"
+        "$TestPackage='fullmag-cli';"
+        f"$TestFilter='{test_filter}';"
+        "& {" + dispatch
+    )
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-Command", command], capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    import json
+    arguments = json.loads(result.stdout)
+    assert arguments[arguments.index("-TestPackage") + 1] == "fullmag-cli"
+    assert "-BuildOnly" in arguments
+    assert arguments[arguments.index("-WebPort") + 1] == "0"
+    if test_filter:
+        assert arguments[arguments.index("-TestFilter") + 1] == test_filter
+    else:
+        assert "-TestFilter" not in arguments

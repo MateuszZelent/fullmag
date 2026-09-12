@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useReducer, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
+import { resumeMeshBuildObservation } from "@/kernel/authoring/geometryLifecycleCommandContributions";
+import { initialMeshBuildDialogState, meshBuildDialogReducer } from "./mesh-build/meshBuildDialogState";
 import {
   FDM_MESH_COMMAND_NOT_APPLICABLE_REASON,
   UNKNOWN_MESH_COMMAND_LANE_REASON,
@@ -10,6 +12,10 @@ import {
   type MeshCommandLane,
 } from "@/kernel/authoring/geometryLifecycleCommandContributions";
 import {
+  useSceneResource,
+  useObjectMeshPolicyResource,
+  useUniverseMeshPolicyResource,
+  useMeshSharedDomainPolicyResource,
   useMeshBuildCurrent,
   useMeshBuildLatestSuccessful,
   useModelRegionDiagnosticsResource,
@@ -17,21 +23,11 @@ import {
   useMeshSharedDomainManifestResource,
   useMeshSummaryResource,
 } from "@/kernel/resources/geometryLifecycleResources";
-import {
-  shouldLoadRuntimeMeshBuild,
-  shouldLoadRuntimeMeshManifest,
-  shouldLoadRuntimeMeshSummary,
-  useStudyRuntimeCommandResourceData,
-} from "@/kernel/resources/studyRuntimeResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import type { JsonObject, LiveStatusResource } from "@/kernel/api/apiTypes";
 import type { KernelApi } from "@/kernel/types";
 import { diffMeshPolicies } from "@/shared/domain/mesh/meshPolicyDiff";
 import { buildMeshSnapshotRows } from "@/shared/domain/mesh/meshBuildSnapshots";
-import {
-  normalizeMeshPipelineStatus,
-  resolveMeshBuildStatusLabel,
-} from "@/shared/domain/mesh/buildPipeline";
 import {
   Dialog,
   DialogContent,
@@ -57,104 +53,6 @@ function text(value: unknown, fallback = "unknown"): string {
   return JSON.stringify(value);
 }
 
-interface MeshBuildDialogState {
-  acceptedCommandId: string | null;
-  commandId: "mesh.build-selected" | "mesh.build-shared-domain" | null;
-  errorMessage: string | null;
-  input: unknown;
-  lastCommandId: string | null;
-  lastCommandStatus: string;
-  open: boolean;
-  phase: "pre-build" | "submitting" | "post-build" | "error";
-  source: "inspector" | "palette" | "ribbon" | "test";
-  sourceDetail: string | undefined;
-}
-
-type MeshBuildDialogAction =
-  | {
-      commandId: "mesh.build-selected" | "mesh.build-shared-domain";
-      input: unknown;
-      source: "inspector" | "palette" | "ribbon" | "test";
-      sourceDetail: string | undefined;
-      type: "request";
-    }
-  | {
-      commandId: string | null;
-      status: string;
-      type: "accepted";
-    }
-  | {
-      message: string;
-      type: "error";
-    }
-  | {
-      type: "rendered";
-    }
-  | {
-      type: "submitting";
-    }
-  | {
-      open: boolean;
-      type: "open";
-    };
-
-function meshBuildDialogReducer(
-  state: MeshBuildDialogState,
-  action: MeshBuildDialogAction,
-): MeshBuildDialogState {
-  if (action.type === "open") {
-    return { ...state, open: action.open };
-  }
-  if (action.type === "request") {
-    return {
-      acceptedCommandId: null,
-      commandId: action.commandId,
-      errorMessage: null,
-      input: action.input,
-      lastCommandId: action.commandId,
-      lastCommandStatus: "pending-confirmation",
-      open: true,
-      phase: "pre-build",
-      source: action.source,
-      sourceDetail: action.sourceDetail,
-    };
-  }
-  if (action.type === "submitting") {
-    return {
-      ...state,
-      errorMessage: null,
-      lastCommandStatus: "submitting",
-      open: true,
-      phase: "submitting",
-    };
-  }
-  if (action.type === "accepted") {
-    return {
-      ...state,
-      acceptedCommandId: action.commandId,
-      lastCommandId: action.commandId,
-      lastCommandStatus: action.status,
-      open: true,
-      phase: "submitting",
-    };
-  }
-  if (action.type === "rendered") {
-    if (!state.open || state.phase === "pre-build") return state;
-    return {
-      ...state,
-      lastCommandStatus: "rendered",
-      phase: "post-build",
-    };
-  }
-  return {
-    ...state,
-    errorMessage: action.message,
-    lastCommandStatus: "failed",
-    open: true,
-    phase: "error",
-  };
-}
-
 type MeshBuildDialogRuntimeStatus = {
   capabilities: Pick<
     LiveStatusResource["capabilities"],
@@ -165,6 +63,20 @@ type MeshBuildDialogRuntimeStatus = {
     LiveStatusResource["resources"],
     "mesh_build_revision" | "mesh_revision"
   >;
+};
+
+type MeshBuildDialogSnapshot = {
+  requestId: string;
+  sceneRevision: number;
+  meshRevision: number;
+  policyKey: string;
+  policy: JsonObject | null;
+  requestedPolicy: JsonObject | null;
+  stats: {
+    build: JsonObject | null;
+    manifest: JsonObject | null;
+    quality: JsonObject | null;
+  };
 };
 
 function selectMeshBuildDialogRuntimeStatus(status: {
@@ -226,7 +138,7 @@ export function meshBuildDialogUnavailableMessage(
   if (lane === "fdm") {
     return (
       fdmGridRefreshReason ??
-      "FDM grid and membership masks are immutable execution-plan artifacts; standalone refresh is deferred until a safe replanning lifecycle exists."
+      "FDM grid and membership masks are rebuilt by an atomic execution-plan replan. Use Study → Apply Grid."
     );
   }
   if (lane === "unknown") return UNKNOWN_MESH_COMMAND_LANE_REASON;
@@ -234,26 +146,13 @@ export function meshBuildDialogUnavailableMessage(
 }
 
 export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
-  const [state, dispatch] = useReducer(meshBuildDialogReducer, {
-    acceptedCommandId: null,
-    commandId: null,
-    errorMessage: null,
-    input: undefined,
-    lastCommandId: null,
-    lastCommandStatus: "pending",
-    open: false,
-    phase: "pre-build",
-    source: "ribbon",
-    sourceDetail: undefined,
-  });
-  const [snapshotBefore, setSnapshotBefore] = useState<{
-    policy: JsonObject | null;
-    stats: {
-      build: JsonObject | null;
-      manifest: JsonObject | null;
-      quality: JsonObject | null;
-    };
-  } | null>(null);
+  const [state, dispatch] = useReducer(meshBuildDialogReducer, initialMeshBuildDialogState);
+  const stateRef = useRef(state);
+  useEffect(() => { stateRef.current = state; }, [state]);
+  const [snapshotBefore, captureSnapshot] = useReducer(
+    (_previous: MeshBuildDialogSnapshot | null, next: MeshBuildDialogSnapshot | null) => next,
+    null,
+  );
 
   const runtimeStatus = useSessionStatusSelector(
     selectMeshBuildDialogRuntimeStatus,
@@ -264,37 +163,21 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     state.open,
     lane,
   );
-  const resourceData = useStudyRuntimeCommandResourceData({
-    enabled: explicitFemLane,
-  });
-  const commandContext = createCommandContext(state.source, kernel, {
-    input: state.input,
-    resourceData,
-    sourceDetail: state.sourceDetail,
-  });
   const unavailableMessage = meshBuildDialogUnavailableMessage(
     lane,
     runtimeStatus?.capabilities.active_lane.operations.grid_build.reason,
   );
   const activeBuild = useMeshBuildCurrent({
-    enabled:
-      explicitFemLane &&
-      (shouldLoadRuntimeMeshBuild(state.open, runtimeStatus) ||
-        state.phase === "submitting"),
+    enabled: explicitFemLane,
   });
   const latestBuild = useMeshBuildLatestSuccessful({
-    enabled:
-      explicitFemLane &&
-      (shouldLoadRuntimeMeshBuild(state.open, runtimeStatus) ||
-        state.phase === "submitting"),
+    enabled: explicitFemLane,
   });
   const summary = useMeshSummaryResource({
-    enabled:
-      explicitFemLane && shouldLoadRuntimeMeshSummary(state.open, runtimeStatus),
+    enabled: explicitFemLane,
   });
   const manifest = useMeshSharedDomainManifestResource({
-    enabled:
-      explicitFemLane && shouldLoadRuntimeMeshManifest(state.open, runtimeStatus),
+    enabled: explicitFemLane,
   });
   const sharedQuality = useMeshSharedDomainQualityResource({
     enabled: explicitFemLane && state.open,
@@ -303,54 +186,95 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     enabled: explicitFemLane && state.open,
   });
 
-  const currentSnapshot = state.open ? snapshotBefore : null;
-
-  const activeRecord = asRecord(activeBuild.data?.active_build);
-  const pipelinePhases = normalizeMeshPipelineStatus(activeBuild.data?.mesh_pipeline_status);
-  const buildStatus = resolveMeshBuildStatusLabel(activeRecord, pipelinePhases);
+  const inputRecord = asRecord(state.request?.input);
+  const target = asRecord(inputRecord?.mesh_target);
+  const objectId = typeof target?.object_id === "string" ? target.object_id : null;
+  const scene = useSceneResource({ enabled: explicitFemLane });
+  const objectPolicy = useObjectMeshPolicyResource(objectId, { enabled: explicitFemLane && Boolean(objectId) });
+  const universePolicy = useUniverseMeshPolicyResource({ enabled: explicitFemLane && !objectId });
+  const sharedPolicy = useMeshSharedDomainPolicyResource({ enabled: explicitFemLane && !objectId });
+  const requestedPolicy = useMemo(
+    () =>
+      objectId
+        ? { override: objectPolicy.data?.config ?? null }
+        : {
+            shared_domain: sharedPolicy.data?.config ?? null,
+            universe: universePolicy.data?.config ?? null,
+          },
+    [objectId, objectPolicy.data?.config, sharedPolicy.data?.config, universePolicy.data?.config],
+  );
+  const requestedPolicyKey = JSON.stringify(requestedPolicy);
+  const sceneRevision = typeof scene.data?.revision === "number" ? scene.data.revision : null;
+  const policyLoaded = objectId ? objectPolicy.status === "ready"
+    : universePolicy.status === "ready" && sharedPolicy.status === "ready";
+  const computedSnapshot = useMemo(() => {
+    if (!state.request?.requestId || !policyLoaded || sceneRevision == null || !runtimeStatus
+      || summary.status !== "ready" || latestBuild.status !== "ready" || manifest.status !== "ready") {
+      return null;
+    }
+    const previousSnapshot = asRecord(asRecord(latestBuild.data?.last_success)?.canonical_policy_snapshot);
+    const previousPolicy = objectId
+      ? previousSnapshot && { override: asRecord(previousSnapshot.objects)?.[objectId] ?? null }
+      : previousSnapshot && { shared_domain: previousSnapshot.shared_domain, universe: previousSnapshot.universe };
+    return {
+      requestId: state.request.requestId,
+      sceneRevision,
+      meshRevision: runtimeStatus.resources.mesh_revision,
+      policyKey: requestedPolicyKey,
+      policy: asRecord(previousPolicy),
+      requestedPolicy: asRecord(structuredClone(requestedPolicy)),
+      stats: {
+        build: asRecord(structuredClone(latestBuild.data)),
+        manifest: asRecord(structuredClone(manifest.data)),
+        quality: asRecord(structuredClone(sharedQuality.data)),
+      },
+    };
+  }, [
+    state.request,
+    policyLoaded,
+    sceneRevision,
+    runtimeStatus,
+    summary.status,
+    latestBuild.status,
+    latestBuild.data,
+    manifest.status,
+    manifest.data,
+    sharedQuality.data,
+    objectId,
+    requestedPolicy,
+    requestedPolicyKey,
+  ]);
+  const stableSnapshotBefore = snapshotBefore ?? computedSnapshot;
+  const snapshotCurrent = stableSnapshotBefore !== null
+    && stableSnapshotBefore.sceneRevision === sceneRevision
+    && stableSnapshotBefore.meshRevision === runtimeStatus?.resources.mesh_revision
+    && stableSnapshotBefore.policyKey === requestedPolicyKey;
+  const currentSnapshot = state.open ? stableSnapshotBefore : null;
 
   const diffRows = diffMeshPolicies({
-    current: currentSnapshot?.policy ?? asRecord(summary.data?.effective_airbox_target),
-    draft: state.phase === "post-build"
-      ? asRecord(latestBuild.data?.effective_airbox_target)
-      : asRecord(activeBuild.data?.effective_airbox_target),
-    realized: asRecord(latestBuild.data?.effective_airbox_target),
-    scope: "airbox",
+    current: currentSnapshot?.policy,
+    draft: currentSnapshot?.requestedPolicy,
+    scope: objectId ? "object" : "shared-domain",
   });
 
   const targetLabel =
-    targetLabelForPendingCommand(state.commandId, state.input) ??
+    targetLabelForPendingCommand(state.request?.commandId, state.request?.input) ??
     targetLabelForBuild(activeBuild.data?.active_build);
   const currentSummary = explicitFemLane
     ? [
-        { label: "Mesh", value: manifest.data?.mesh_name ?? "not built" },
-        {
-          label: "Revision",
-          value: String(
-            summary.data?.revision ?? activeBuild.data?.revision ?? "unknown",
-          ),
-        },
-        { label: "Build resource", value: activeBuild.status },
-        { label: "Active build", value: buildStatus },
-        {
-          label: "Last error",
-          value:
-            activeBuild.data?.last_build_error ??
-            latestBuild.data?.last_build_error ??
-            "none",
-        },
+        { label: "Mesh", value: text(currentSnapshot?.stats.manifest?.mesh_name, "not built") },
+        { label: "Mesh revision", value: String(currentSnapshot?.meshRevision ?? "loading") },
+        { label: "Scene revision", value: String(currentSnapshot?.sceneRevision ?? "loading") },
+        { label: "Previous authored configuration", value: currentSnapshot?.policy ? "available" : "unavailable for this build" },
       ]
-    : [
-        { label: "Mesh lane", value: lane === "fdm" ? "FDM structured grid" : "unresolved" },
-        { label: "Availability", value: unavailableMessage ?? "not applicable" },
-      ];
+    : [{ label: "Mesh lane", value: lane === "fdm" ? "FDM structured grid" : "unresolved" }];
   const regionReasonRows = buildRegionMeshBuildReasonRows(regionDiagnostics.data);
   const newSummary = explicitFemLane
     ? [
         { label: "Requested target", value: targetLabel },
         {
           label: "Command",
-          value: state.commandId ?? "none",
+          value: state.request?.commandId ?? "none",
         },
         {
           label: "Policy changes",
@@ -361,7 +285,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
         },
         {
           label: "Expected result",
-          value: "New mesh revision, manifest, quality and viewport render",
+          value: "New mesh revision; magnetization reinitialized from the authored model",
         },
         ...regionReasonRows,
       ]
@@ -381,130 +305,43 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
 
   useEffect(() => {
     const offRequested = kernel.bus.on("mesh:build-confirm-requested", (request) => {
-      setSnapshotBefore({
-        policy: asRecord(summary.data?.effective_airbox_target),
-        stats: {
-          build: asRecord(latestBuild.data),
-          manifest: asRecord(manifest.data),
-          quality: asRecord(sharedQuality.data),
-        },
-      });
-      dispatch({
-        commandId: request.commandId,
-        input: request.input,
-        source: request.source,
-        sourceDetail: request.sourceDetail,
-        type: "request",
-      });
+      const previous = stateRef.current;
+      if (previous.request?.requestId && previous.phase === "pre-build") {
+        kernel.bus.emit("mesh:build-confirm-resolved", { requestId: previous.request.requestId, confirmed: false });
+      }
+      captureSnapshot(null);
+      dispatch({ type: "request", request });
     });
-    const offSubmitted = kernel.bus.on("mesh:build-submitted", ({ commandId }) => {
-      dispatch({ commandId, status: "accepted", type: "accepted" });
-    });
-    const offRendered = kernel.bus.on("mesh:topology-rendered", () => {
-      dispatch({ type: "rendered" });
-    });
-    return () => {
-      offRequested();
-      offSubmitted();
-      offRendered();
-    };
-  }, [
-    kernel.bus,
-    summary.data,
-    latestBuild.data,
-    manifest.data,
-    sharedQuality.data,
-  ]);
+    const offRestore = kernel.bus.on("mesh:build-observation-requested", (event) => { captureSnapshot(null); dispatch({ type: "restore", event }); });
+    const offSubmitted = kernel.bus.on("mesh:build-submitted", (event) => dispatch({ type: "accepted", event }));
+    const offObserved = kernel.bus.on("mesh:build-observed", (event) => dispatch({ type: "observed", event }));
+    const offRendered = kernel.bus.on("mesh:topology-rendered", (event) => dispatch({ type: "rendered", revision: event.meshRevision }));
+    return () => { offRequested(); offRestore(); offSubmitted(); offObserved(); offRendered(); };
+  }, [kernel.bus]);
 
-  // Polling fallback while in "submitting" phase to ensure we query status every 1000ms.
-  const { refetch: refetchActive } = activeBuild;
-  const { refetch: refetchLatest } = latestBuild;
   useEffect(() => {
-    if (!state.open || state.phase !== "submitting") return;
-
-    const intervalId = setInterval(() => {
-      void refetchActive();
-      void refetchLatest();
-    }, 1000);
-
-    return () => {
-      clearInterval(intervalId);
-    };
-  }, [state.open, state.phase, refetchActive, refetchLatest]);
-
-  // Query-based success/failure transition detection (decoupled from the 3D viewport).
-  useEffect(() => {
-    if (!state.open || state.phase !== "submitting") return;
-
-    const activeRecord = asRecord(activeBuild.data?.active_build);
-    const pipelinePhases = normalizeMeshPipelineStatus(activeBuild.data?.mesh_pipeline_status);
-    const isReady = pipelinePhases.some(
-      (p) =>
-        p.id === "ready" &&
-        (p.status === "active" || p.status === "done" || p.status === "completed")
-    );
-
-    const hasFailedPhase = pipelinePhases.some(
-      (p) => p.status === "warning" || p.status === "failed"
-    );
-    const lastError = activeBuild.data?.last_build_error;
-
-    if (lastError || hasFailedPhase) {
-      dispatch({
-        message: lastError ?? "Mesh build failed during background execution.",
-        type: "error",
-      });
-      return;
+    if (state.phase === "pre-build" && snapshotBefore === null && computedSnapshot !== null) {
+      captureSnapshot(computedSnapshot);
     }
+  }, [computedSnapshot, snapshotBefore, state.phase]);
 
-    const prevRev = snapshotBefore?.stats?.build?.revision;
-    const previousRevision = typeof prevRev === "number" ? prevRev : 0;
-    const currentRevision = latestBuild.data?.revision ?? 0;
-
-    const isSuccess =
-      (activeBuild.data && !activeRecord && isReady) ||
-      (latestBuild.data && currentRevision > previousRevision);
-
-    if (isSuccess) {
-      dispatch({ type: "rendered" });
+  function closeDialog(): void {
+    if (state.phase === "pre-build" && state.request?.requestId) {
+      kernel.bus.emit("mesh:build-confirm-resolved", { requestId: state.request.requestId, confirmed: false });
     }
-  }, [
-    state.open,
-    state.phase,
-    activeBuild.data,
-    latestBuild.data,
-    snapshotBefore,
-  ]);
+    dispatch({ open: false, type: "open" });
+  }
 
-  async function confirmBuild(): Promise<void> {
-    if (!state.commandId) return;
-    if (!explicitFemLane) {
-      dispatch({
-        message: unavailableMessage ?? UNKNOWN_MESH_COMMAND_LANE_REASON,
-        type: "error",
-      });
-      return;
-    }
+  function confirmBuild(): void {
+    if (!state.request?.requestId || !stableSnapshotBefore || !snapshotCurrent || state.phase !== "pre-build") return;
     dispatch({ type: "submitting" });
-    const result = await kernel.commands.execute(
-      state.commandId,
-      commandContext,
-      state.input,
-    );
-    if (result.status === "failed") {
-      dispatch({
-        message: result.message ?? "Mesh build command failed.",
-        type: "error",
-      });
-      return;
-    }
-    openMeshBuildDiagnostics(kernel);
+    kernel.bus.emit("mesh:build-confirm-resolved", { requestId: state.request.requestId, confirmed: true, precondition: { scene_revision: stableSnapshotBefore.sceneRevision, mesh_revision: stableSnapshotBefore.meshRevision } });
   }
 
   return (
     <Dialog
       open={state.open}
-      onOpenChange={(open) => dispatch({ open, type: "open" })}
+      onOpenChange={(open) => { if (!open) closeDialog(); }}
     >
       <DialogContent
         aria-describedby="fm-mesh-build-dialog-description"
@@ -531,19 +368,30 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
         <div className="fm-dialog__body">
           {explicitFemLane ? (
             <MeshBuildConfirmDialogContent
-              commandId={state.acceptedCommandId ?? state.lastCommandId}
+              commandId={state.acceptedCommandId ?? state.request?.commandId ?? null}
               commandStatus={state.lastCommandStatus}
               currentSummary={currentSummary}
               diffRows={diffRows}
               errorMessage={state.errorMessage}
               mode={state.phase}
+              ready={snapshotCurrent}
+              stale={stableSnapshotBefore !== null && !snapshotCurrent}
+              onRefresh={() => {
+                captureSnapshot(null);
+                if (state.request) dispatch({ type: "request", request: state.request });
+              }}
+              onResumeObservation={() => {
+                dispatch({ type: "submitting" });
+                void resumeMeshBuildObservation(createCommandContext(state.request?.source ?? "inspector", kernel));
+              }}
+              rendered={state.lastCommandStatus === "rendered"}
               newSummary={newSummary}
               postBuildRows={snapshotRows}
               targetLabel={targetLabel}
               onApplyBuild={() => {
                 void confirmBuild();
               }}
-              onCancel={() => dispatch({ open: false, type: "open" })}
+              onCancel={closeDialog}
               onOpenMeshJobs={() => openMeshBuildDiagnostics(kernel)}
             />
           ) : (
@@ -594,7 +442,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
 }
 
 function targetLabelForPendingCommand(
-  commandId: MeshBuildDialogState["commandId"],
+  commandId: string | undefined,
   input: unknown,
 ): string | null {
   if (commandId === "mesh.build-shared-domain") return "Shared-domain mesh";

@@ -246,6 +246,16 @@ pub(crate) fn reconcile_dispatched_command_ledger_from_snapshot(
             continue;
         };
 
+        if matches!(record.command.kind.as_str(), "remesh" | "fdm_grid_refresh") {
+            record.error = snapshot.mesh_workspace.as_ref().and_then(|workspace| {
+                fullmag_session::mesh_operation::mesh_command_outcome(
+                    workspace,
+                    &record.command.command_id,
+                )
+                .and_then(|outcome| outcome.error)
+            });
+        }
+
         changed |= set_command_lifecycle(
             record,
             command_lifecycle_for_completion(completion_status),
@@ -291,7 +301,7 @@ fn infer_dispatched_command_completion(
         "set_solver_profile" if solver_profile_command_applied(record, snapshot) => {
             Some(CommandCompletionState::Completed)
         }
-        "remesh" => remesh_command_completion(record, snapshot),
+        "remesh" | "fdm_grid_refresh" => remesh_command_completion(record, snapshot),
         "load_state"
             if command_has_terminal_log(record, snapshot, "Failed to load workspace state") =>
         {
@@ -504,15 +514,16 @@ fn remesh_command_completion(
     record: &TrackedCommandRecord,
     snapshot: &SessionStateResponse,
 ) -> Option<CommandCompletionState> {
-    if command_has_terminal_log(record, snapshot, "Remesh failed")
-        || command_has_terminal_log(record, snapshot, "Cannot remesh")
-    {
-        return Some(CommandCompletionState::Failed);
-    }
-    if command_has_terminal_log(record, snapshot, "Remesh complete") {
-        return Some(CommandCompletionState::Completed);
-    }
-    None
+    use fullmag_session::mesh_operation::{mesh_command_outcome, MeshCommandStatus};
+    let outcome = mesh_command_outcome(
+        snapshot.mesh_workspace.as_ref()?,
+        &record.command.command_id,
+    )?;
+    Some(match outcome.status {
+        MeshCommandStatus::Completed => CommandCompletionState::Completed,
+        MeshCommandStatus::Failed => CommandCompletionState::Failed,
+        MeshCommandStatus::Rejected => CommandCompletionState::Rejected,
+    })
 }
 
 fn snapshot_runtime_is(snapshot: &SessionStateResponse, expected: RuntimeLifecycleState) -> bool {
@@ -3936,6 +3947,12 @@ mod tests {
         };
         current.mesh_workspace = Some(json!({
             "active_build": null,
+            "command_outcomes": [{
+                "command_id": "cmd-remesh", "build_id": "mesh:cmd-remesh",
+                "status": "completed", "state_policy": "reinitialize_from_model",
+                "completed_at_unix_ms": 1_700_000_000_700u64,
+                "mesh_generation_id": "generation-remeshed"
+            }],
             "last_build_summary": {
                 "mesh_target": "study_domain",
                 "mesh_reason": "user_requested",
@@ -4005,6 +4022,12 @@ mod tests {
         let mut current = test_current_snapshot();
         current.mesh_workspace = Some(json!({
             "active_build": null,
+            "command_outcomes": [{
+                "command_id": "cmd-remesh", "build_id": "mesh:cmd-remesh",
+                "status": "failed", "state_policy": "reinitialize_from_model",
+                "completed_at_unix_ms": 1_700_000_000_700u64,
+                "error": "gmsh exited non-zero"
+            }],
             "last_build_error": "gmsh exited non-zero"
         }));
         current.engine_log = vec![engine_log(
@@ -4028,6 +4051,110 @@ mod tests {
             Some(CommandCompletionState::Failed)
         );
         assert_eq!(record.completed_at_unix_ms, Some(1_700_000_002_000));
+        assert_eq!(record.error.as_deref(), Some("gmsh exited non-zero"));
+    }
+
+    #[test]
+    fn snapshot_reconciliation_marks_fdm_grid_refresh_terminal_and_propagates_error() {
+        let mut current = test_current_snapshot();
+        current.mesh_workspace = Some(json!({
+            "command_outcomes": [
+                {
+                    "command_id": "cmd-fdm-complete",
+                    "build_id": "mesh:cmd-fdm-complete",
+                    "status": "completed",
+                    "state_policy": "reinitialize_from_model",
+                    "completed_at_unix_ms": 1_700_000_000_700u64,
+                    "mesh_generation_id": "fdm-generation-b"
+                },
+                {
+                    "command_id": "cmd-fdm-failed",
+                    "build_id": "mesh:cmd-fdm-failed",
+                    "status": "failed",
+                    "state_policy": "reinitialize_from_model",
+                    "completed_at_unix_ms": 1_700_000_000_800u64,
+                    "error": "FDM planner rejected the grid"
+                }
+            ]
+        }));
+        let mut ledger = VecDeque::from([
+            tracked_command("cmd-fdm-complete", "fdm_grid_refresh"),
+            tracked_command("cmd-fdm-failed", "fdm_grid_refresh"),
+        ]);
+
+        assert!(reconcile_dispatched_command_ledger_from_snapshot(
+            &mut ledger,
+            &current,
+            1_700_000_002_000,
+        ));
+        assert_eq!(ledger[0].status, CommandLifecycleState::Completed);
+        assert_eq!(
+            ledger[0].completion_status,
+            Some(CommandCompletionState::Completed)
+        );
+        assert_eq!(ledger[1].status, CommandLifecycleState::Failed);
+        assert_eq!(
+            ledger[1].completion_status,
+            Some(CommandCompletionState::Failed)
+        );
+        assert_eq!(
+            ledger[1].error.as_deref(),
+            Some("FDM planner rejected the grid")
+        );
+    }
+
+    #[test]
+    fn remesh_receipts_isolate_commands_and_ignore_unrelated_terminal_logs() {
+        let mut current = test_current_snapshot();
+        current.mesh_workspace = Some(json!({
+            "command_outcomes": [{
+                "command_id": "cmd-a", "build_id": "mesh:cmd-a",
+                "status": "completed", "state_policy": "reinitialize_from_model",
+                "completed_at_unix_ms": 1_700_000_000_700u64,
+                "mesh_generation_id": "generation-a"
+            }]
+        }));
+        current.engine_log = vec![engine_log(
+            1_700_000_000_800,
+            "error",
+            "Remesh failed: unrelated operation",
+        )];
+        let mut ledger = VecDeque::from([
+            tracked_command("cmd-a", "remesh"),
+            tracked_command("cmd-b", "remesh"),
+        ]);
+        assert!(reconcile_dispatched_command_ledger_from_snapshot(
+            &mut ledger,
+            &current,
+            1_700_000_002_000,
+        ));
+        assert_eq!(
+            ledger[0].completion_status,
+            Some(CommandCompletionState::Completed)
+        );
+        assert_eq!(ledger[1].completion_status, None);
+        current.mesh_workspace.as_mut().unwrap()["command_outcomes"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "command_id": "cmd-b", "build_id": "mesh:cmd-b",
+                "status": "rejected", "state_policy": "reinitialize_from_model",
+                "completed_at_unix_ms": 1_700_000_000_900u64, "error": "runtime is paused"
+            }));
+        assert!(reconcile_dispatched_command_ledger_from_snapshot(
+            &mut ledger,
+            &current,
+            1_700_000_003_000,
+        ));
+        assert_eq!(
+            ledger[0].completion_status,
+            Some(CommandCompletionState::Completed)
+        );
+        assert_eq!(
+            ledger[1].completion_status,
+            Some(CommandCompletionState::Rejected)
+        );
+        assert_eq!(ledger[1].error.as_deref(), Some("runtime is paused"));
     }
 
     #[test]
