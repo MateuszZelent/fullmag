@@ -87,7 +87,9 @@ Zrzuty i logi zapisano w
 
 Pierwszy zweryfikowany etap zapisano jako
 `e489b572a91f095a612c0b7286df958adfdadadf`: stałe kolory serii oraz eksport
-czekający na gotowość renderera. Dowody: focused Vitest, typecheck, lint.
+czekający na gotowość renderera. Drugi etap zapisano jako
+`f092ee508`: pełny układ Live Charts, selekcja sygnałów, osie/okna, split-pane,
+smoke i dokumentacja. Dowody: focused Vitest, typecheck, lint i browser smoke.
 Hook commita zgłosił istniejący, niezmieniany łańcuch iteracji w
 `chartRenderer.ts:213`; nie jest to nowa regresja.
 
@@ -104,8 +106,8 @@ Runner nie ma osobnego profilu frontend verification/dev. Profil
 lecz nie uruchamia pełnego suite ani browser smoke; te bramki pozostają osobnymi
 dowodami do zebrania.
 
-Stan: pierwszy etap zapisany jako `e489b572a91f095a612c0b7286df958adfdadadf`,
-drugi etap oczekuje na staged review i commit. Rejestr worktree pozostaje
+Stan: oba etapy zapisane (`e489b572a91f095a612c0b7286df958adfdadadf`,
+`f092ee508`). Rejestr worktree pozostaje
 `active` w `storage/index/live-charts-redesign-20260912-f2e7bb663a3cfe15.json`.
-Następny krok: końcowy review diffu, commit/push/PR/merge, weryfikacja na
+Następny krok: push/PR/merge, weryfikacja na
 `master` i usunięcie wyłącznie tego zweryfikowanego worktree.
