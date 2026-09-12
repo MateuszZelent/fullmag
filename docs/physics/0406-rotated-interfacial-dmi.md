@@ -385,10 +385,10 @@ regresji. Korekty są fail-closed i nie zmieniają zakresu fizycznego Göbela:
 
 | ID | Zakres | Korekta i regresja |
 |---|---|---|
-| P1 | FEM reference/live | `StepStats` rozdziela agregat `E_dmi` i `E_rotated_dmi`. |
+| P1 | FEM reference/live | `StepStats` rozdziela agregat `E_dmi` i `E_rotated_dmi`, a silnik i telemetria używają tego samego predykatu `D != 0`. |
 | P2 | CLI transport | scalar-row zachowuje `e_rotated_dmi`. |
 | P3 | FEM equilibrium identity | źródło z dowolnym DMI jest odrzucane, zamiast pomijać fizykę. |
-| P4 | CUDA workspace | częściowe alokacje rDMI są zwalniane transakcyjnie, a retry ma nową bazę księgowania. |
+| P4 | CUDA workspace | częściowe alokacje rDMI są zwalniane transakcyjnie; błędny `cudaFree` zachowuje wskaźnik do retry/teardown, a retry ma nową bazę księgowania. |
 | P5 | FEM material A | nodal/element `A` zasila estymatę bez fałszywego wymogu dodatniego skalaru. |
 | P6 | capability/API | status lane'u wyprowadza rDMI z rozwiązanego planu, nie z deklaracji stałej. |
 | P7 | mixed-P1 | CPU z rDMI jest akceptowany, GPU bez kwalifikowanego kernela jest odrzucane. |
@@ -436,6 +436,7 @@ w macierzy wsparcia.
 | walidacja DMI | `crates/fullmag-ir/src/validation.rs` | `validate_dmi_energy_terms` | konflikt rDMI z konwencjonalnym i materiałowym DMI | wspólny | implemented, source test |
 | Python canonical rewrite | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_validate_energy_terms`, `_magnet_bulk_dmi` | zachowanie materiałowego DMI i fail-closed dla pól przestrzennych/mieszania | wspólny | implemented, source test |
 | energia i pole FDM | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `rotated_interfacial_dmi_field` | referencyjna algebra dyskretna | FDM CPU | implemented, source test |
+| FEM exact-term activity | `crates/fullmag-engine/src/fem.rs` | `dmi_energy_from_vectors_selected` | exact-nonzero aktywność kanałów DMI współdzielona przez energię i pole (`dmi_fields_compute_into_selected`) | FEM CPU | implemented, source test |
 | FEM planner | `crates/fullmag-plan/src/fem.rs` | `estimate_fem_exchange_stiffness` | lokalny exchange z nodal/element `A` dla warunku naturalnego | FEM CPU/GPU | implemented, source test |
 | residual FEM | `backends/fem/src/dmi_weak_residual.cpp` | `dmi_accumulate_rotated_interfacial_residual` | wspólna pierwsza wariacja | FEM CPU/GPU | implemented, source test; runtime not verified |
 | FEM reference telemetry | `crates/fullmag-runner/src/fem_reference.rs` | `rotated_dmi_energy_from_magnetization` | rozdzielenie energii rDMI w live/relaxation stats | FEM CPU | implemented, source test; runtime not verified |
