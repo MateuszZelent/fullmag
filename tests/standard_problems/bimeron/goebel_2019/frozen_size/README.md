@@ -38,3 +38,7 @@ nie jest za nią podstawiana. Do profilu energii należy używać
 pola `profile_energy`, które wskazuje ostatni pomiar etapu `constrained_hold`;
 pole `energy` opisuje stan terminalny, a więc po release, gdy release został
 włączony.
+Jeżeli runtime nie publikuje dryfu referencji, analizator porównuje zapisane
+`m_initial` z checkpointami constrained na rzeczywistych indeksach maski i
+oznacza źródło jako `state_artifact_comparison`; brak któregoś artefaktu nadal
+pozostaje ostrzeżeniem.
