@@ -63,12 +63,13 @@ export function LiveChartSurface({ exportErrorFormat, fitRequest, onChartSelecte
     if (exported) handleRequestedExportHandled();
     else acknowledgeExportFailure(handleRequestedExportFailed, handleRequestedExportHandled);
   }, [dataExportModel, exportRequest, handleRequestedExportFailed, handleRequestedExportHandled, visibleSeries]);
-  return <div className="fm-live-charts__workspace">
+  return <>
     {exportErrorFormat ? <p className="fm-live-charts__export-error" role="alert">
       {exportErrorFormat.toUpperCase()} export failed. Try again.
     </p> : null}
-    <LiveChartSignals series={series} selectedSeriesIds={selectedSeriesIds} onSeriesChange={(ids) => { onChartSelected(); onSeriesChange(ids); }} />
-    <div className="fm-live-charts__panes" data-pane-count={panes.length}>
+    <div className="fm-live-charts__workspace">
+      <LiveChartSignals series={series} selectedSeriesIds={selectedSeriesIds} onSeriesChange={(ids) => { onChartSelected(); onSeriesChange(ids); }} />
+      <div className="fm-live-charts__panes" data-pane-count={panes.length}>
     {panes.length === 0 ? <ChartSection title={title} status={{ presentation, primary: "Live" }}>
       <div className="fm-live-charts__empty" role="status">
         <Activity size={32} aria-hidden="true" />
@@ -100,7 +101,8 @@ export function LiveChartSurface({ exportErrorFormat, fitRequest, onChartSelecte
         }}
       />
     </ChartSection>;
-  })}</div></div>;
+  })}</div></div>
+  </>;
 }
 
 function acknowledgeExportFailure(

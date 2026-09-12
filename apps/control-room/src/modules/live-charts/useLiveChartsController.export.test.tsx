@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => {
   };
   return {
     descriptor,
+    selectedDescriptorId: "magnetization" as "magnetization" | "energy",
     preferences: {
       descriptor,
       isHydrated: true,
@@ -36,7 +37,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("@/kernel/workspace/useLiveChartsWorkspace", () => ({
-  useLiveChartsWorkspaceSelector: () => "magnetization",
+  useLiveChartsWorkspaceSelector: () => mocks.selectedDescriptorId,
 }));
 
 vi.mock("@/kernel/workspace/liveChartsWorkspace", () => ({
@@ -85,6 +86,7 @@ function ControllerHarness() {
 
 afterEach(() => {
   latestController = null;
+  mocks.selectedDescriptorId = "magnetization";
   mocks.workspace.clearRange.mockClear();
   mocks.workspace.setRange.mockClear();
   mocks.workspace.setSelectedDescriptorId.mockClear();
@@ -207,6 +209,25 @@ describe("useLiveChartsController export ownership", () => {
       await act(async () => latestController?.onRequestedExportFailed?.());
       expect(latestController?.requestedExportRequest).toBeNull();
       expect(latestController?.exportErrorFormat).toBe("tsv");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("clears a previous export error when the chart preset changes", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as HTMLElement);
+    try {
+      await act(async () => root.render(<ControllerHarness />));
+      await act(async () => latestController?.onExport("csv"));
+      await act(async () => latestController?.onRequestedExportFailed?.());
+      expect(latestController?.exportErrorFormat).toBe("csv");
+
+      mocks.selectedDescriptorId = "energy";
+      await act(async () => root.render(<ControllerHarness />));
+      expect(latestController?.descriptorId).toBe("energy");
+      expect(latestController?.exportErrorFormat).toBeNull();
     } finally {
       await act(async () => root.unmount());
       dom.restore();

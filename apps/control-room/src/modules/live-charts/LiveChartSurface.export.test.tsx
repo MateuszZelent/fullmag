@@ -148,6 +148,7 @@ describe("Live Charts export ownership", () => {
       const alerts = findElements(container, (element) => element.getAttribute("role") === "alert");
       expect(alerts).toHaveLength(1);
       expect(alerts[0]?.textContent).toContain("CSV export failed");
+      expect(container.querySelector(".fm-live-charts__workspace > [role=alert]")).toBeNull();
     } finally {
       vi.mocked(exportChartData).mockReturnValue(true);
       await act(async () => root.unmount());

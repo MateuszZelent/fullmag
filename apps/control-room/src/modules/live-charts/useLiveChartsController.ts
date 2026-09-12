@@ -127,6 +127,9 @@ export function useLiveChartsController(selection: SelectionController) {
   const [localExportState, setLocalExportState] = useState<LiveChartsLocalExportState>({ errorFormat: null, request: null });
   const localExportRequest = localExportState.request;
   const exportErrorFormat = localExportState.errorFormat;
+  useEffect(() => {
+    clearLiveChartsExportError(setLocalExportState);
+  }, [descriptorId]);
   const onExport = (format: LiveChartsExportRequest["format"]) => {
     setLocalExportState({
       errorFormat: null,
