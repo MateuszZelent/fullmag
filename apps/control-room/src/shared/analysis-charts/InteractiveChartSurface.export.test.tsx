@@ -65,6 +65,7 @@ describe("InteractiveChartSurface export lifecycle", () => {
     const container = dom.document.createElement("div");
     const root = createRoot(container as unknown as HTMLElement);
     const handled = vi.fn();
+    const failed = vi.fn();
     harness.exportChartPng.mockReturnValueOnce(false);
 
     try {
@@ -73,6 +74,7 @@ describe("InteractiveChartSurface export lifecycle", () => {
           <InteractiveChartSurface
             fitRequest={1}
             onRequestedExportHandled={handled}
+            onRequestedExportFailed={failed}
             requestedExportFormat="png"
             series={series}
             surface={surface}
@@ -90,6 +92,7 @@ describe("InteractiveChartSurface export lifecycle", () => {
 
       expect(harness.exportChartPng).toHaveBeenCalledOnce();
       expect(handled).not.toHaveBeenCalled();
+      expect(failed).toHaveBeenCalledOnce();
       expect(harness.pngReady).toBe(true);
       expect(harness.fitView).toHaveBeenCalledOnce();
 
@@ -104,8 +107,9 @@ describe("InteractiveChartSurface export lifecycle", () => {
           />,
         );
       });
-      expect(harness.exportChartPng).toHaveBeenCalledTimes(2);
-      expect(handled).toHaveBeenCalledOnce();
+      expect(harness.exportChartPng).toHaveBeenCalledOnce();
+      expect(failed).toHaveBeenCalledOnce();
+      expect(handled).not.toHaveBeenCalled();
     } finally {
       await act(async () => root.unmount());
       dom.restore();

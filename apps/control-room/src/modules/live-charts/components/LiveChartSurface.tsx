@@ -1,40 +1,90 @@
 "use client";
 
-import { ChartLegend, chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend";
+import { Activity } from "lucide-react";
+import { useEffect, useRef } from "react";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
+import { exportChartData } from "@/shared/analysis-charts/ChartExportControls";
 import { InteractiveChartSurface } from "@/shared/analysis-charts/InteractiveChartSurface";
-import { formatChartDisplayValue, createChartDisplayTransform } from "@/shared/analysis-charts/chartScalePolicy";
-import { compatibleLiveChartPanes } from "../liveChartsModel";
+import { liveChartExportModel, visibleLiveChartPanes } from "../liveChartsPresentation";
+import { LiveChartSignals } from "./LiveChartSignals";
 import type { LiveChartsViewProps } from "../liveChartsViewTypes";
 
-export function LiveChartSurface({ fitRequest, onChartSelected, onExport, onPointSelected, onRangeSelected, onRequestedExportHandled, onSeriesChange, presentation, requestedExportFormat, series, selectedSeriesIds, title, xAxisLabel }: Pick<LiveChartsViewProps, "fitRequest" | "onChartSelected" | "onExport" | "onPointSelected" | "onRangeSelected" | "onRequestedExportHandled" | "onSeriesChange" | "presentation" | "requestedExportFormat" | "series" | "selectedSeriesIds" | "title" | "xAxisLabel">) {
+export function LiveChartSurface({ fitRequest, onChartSelected, onPointSelected, onRangeSelected, onRequestedExportFailed, onRequestedExportHandled, onSeriesChange, presentation, requestedExportFormat, series, selectedSeriesIds, title, xAxisLabel }: Pick<LiveChartsViewProps, "fitRequest" | "onChartSelected" | "onExport" | "onPointSelected" | "onRangeSelected" | "onRequestedExportFailed" | "onRequestedExportHandled" | "onSeriesChange" | "presentation" | "requestedExportFormat" | "series" | "selectedSeriesIds" | "title" | "xAxisLabel">) {
   const selected = new Set(selectedSeriesIds);
-  const panes = compatibleLiveChartPanes(series);
-  if (panes.length === 0) {
-    return (
-      <div className="fm-live-charts__panes">
-        <ChartSection title={title} status={{ presentation, primary: "Live" }}>
-          <div className="fm-live-charts__empty" role="status">
-            {emptySeriesMessage(presentation)}
-          </div>
-        </ChartSection>
+  const panes = visibleLiveChartPanes(series, selectedSeriesIds);
+  const completedPngPanes = useRef(new Set<string>());
+  const pngRequestHandled = useRef<string | null>(null);
+  const failedPngRequest = useRef<string | null>(null);
+  const handledDataExport = useRef<"csv" | "tsv" | null>(null);
+  const topologyKey = panes.map((pane) => `${pane.unit}:${pane.seriesIds.join(",")}`).join("|");
+  const activePngRequestKey = requestedExportFormat === "png" ? topologyKey : null;
+  useEffect(() => {
+    if (!requestedExportFormat) {
+      completedPngPanes.current.clear();
+      pngRequestHandled.current = null;
+      failedPngRequest.current = null;
+      handledDataExport.current = null;
+      return;
+    }
+    const selected = new Set(selectedSeriesIds);
+    const visible = series.filter((item) => selected.has(item.id));
+    if (requestedExportFormat === "png") {
+      if (visible.length === 0) {
+        if (pngRequestHandled.current !== activePngRequestKey) {
+          pngRequestHandled.current = activePngRequestKey;
+          onRequestedExportHandled();
+        }
+        return;
+      }
+      if (pngRequestHandled.current !== activePngRequestKey && visible.every((item) => completedPngPanes.current.has(`${activePngRequestKey}:${item.unit}`))) {
+        pngRequestHandled.current = activePngRequestKey;
+        onRequestedExportHandled();
+      }
+      return;
+    }
+    if (handledDataExport.current === requestedExportFormat) return;
+    handledDataExport.current = requestedExportFormat;
+    if (visible.some((item) => item.points.length > 0)) {
+      exportChartData(liveChartExportModel(visible, title, xAxisLabel, presentation), requestedExportFormat);
+    }
+    // An empty selection also acknowledges a command, so it cannot block the queue.
+    onRequestedExportHandled();
+  }, [activePngRequestKey, onRequestedExportHandled, presentation, requestedExportFormat, selectedSeriesIds, series, title, xAxisLabel]);
+  return <div className="fm-live-charts__workspace">
+    <LiveChartSignals series={series} selectedSeriesIds={selectedSeriesIds} onSeriesChange={(ids) => { onChartSelected(); onSeriesChange(ids); }} />
+    <div className="fm-live-charts__panes" data-pane-count={panes.length}>
+    {panes.length === 0 ? <ChartSection title={title} status={{ presentation, primary: "Live" }}>
+      <div className="fm-live-charts__empty" role="status">
+        <Activity size={32} aria-hidden="true" />
+        <strong>{series.length ? "Select at least one signal" : emptySeriesMessage(presentation)}</strong>
+        <span>{series.length ? "Choose signals from the list to compare their evolution." : "Recorded scalar quantities will appear here as the simulation advances."}</span>
       </div>
-    );
-  }
-  return <div className="fm-live-charts__panes">{panes.map((pane) => {
+    </ChartSection> : null}
+    {panes.map((pane) => {
     const paneSeries = series.filter((item) => pane.seriesIds.includes(item.id));
     const visible = paneSeries.filter((item) => selected.has(item.id));
-    const legend = paneSeries.map((item, index) => ({ colorIndex: index, colorName: chartColorNameForIndex(index), id: item.id, label: item.label || item.quantity, latestValue: formatChartDisplayValue(item.points.at(-1)?.y ?? Number.NaN, createChartDisplayTransform(item.unit, null)), unit: item.unit }));
     const panelTitle = panes.length > 1 ? `${title} — ${pane.label}` : title;
     const revision = paneSeries.find((item) => item.dataRevision != null)?.dataRevision ?? presentationRevision(presentation);
-    return <ChartSection key={pane.unit} title={panelTitle} status={{ presentation, primary: "Live", pointSummary: paneSeries[0]?.points.length ? `${paneSeries[0].points.length.toLocaleString()} rows` : undefined }} legend={<ChartLegend items={legend} onSelectedSeriesIdsChange={(ids) => { onChartSelected(); onSeriesChange(ids); }} selectedSeriesIds={selectedSeriesIds} />}>
-      {paneSeries.length > 0 && visible.length === 0 ? <div className="fm-live-charts__empty" role="status">Select at least one signal</div> : <InteractiveChartSurface
-        allSeries={paneSeries} fitRequest={fitRequest} presentation={presentation} requestedExportFormat={requestedExportFormat} series={visible} xAxisLabel={xAxisLabel}
-        surface={{ ariaLabel: `${panelTitle} live chart`, chartId: `live-charts:${panelTitle}:${paneSeries.map((item) => `${item.id}:${item.points.length}`).join("|")}`, presentationCopy: { empty: "No live samples", error: "Live samples unavailable", hidden: "All selected series are hidden", loading: "Loading live samples" }, provenance: { dataRevision: paneSeries[0]?.dataRevision ?? null, decimation: "minmax_lttb", descriptorId: `live:${title.toLowerCase()}`, query: title, resourceKey: paneSeries[0]?.source.resourceKey ?? "data.table:default" } }}
-        onExportRequested={onExport} onPointSelected={(seriesId, pointIndex) => { if (revision != null) onPointSelected(seriesId, pointIndex, revision); }} onRangeSelected={onRangeSelected} onRequestedExportHandled={onRequestedExportHandled}
-      />}
+    const sampleCount = visible.reduce((count, item) => Math.max(count, item.points.length), 0);
+    return <ChartSection key={`${pane.unit}:${activePngRequestKey ?? "idle"}`} title={panelTitle} subtitle={`${pane.label} · ${visible.length} ${visible.length === 1 ? "signal" : "signals"}`} status={{ presentation, primary: "Live", pointSummary: sampleCount ? `${sampleCount.toLocaleString()} samples shown` : undefined }}>
+      <InteractiveChartSurface
+        allSeries={paneSeries} fitRequest={fitRequest} presentation={presentation} requestedExportFormat={requestedExportFormat === "png" ? "png" : null} series={visible} xAxisLabel={xAxisLabel}
+        surface={{ ariaLabel: `${panelTitle} live chart`, chartId: `live-charts:${title}:${pane.unit}`, presentationCopy: { empty: "No live samples", error: "Live samples unavailable", hidden: "All selected series are hidden", loading: "Loading live samples" }, provenance: { dataRevision: paneSeries[0]?.dataRevision ?? null, decimation: "minmax_lttb", descriptorId: `live:${title.toLowerCase()}`, query: title, resourceKey: paneSeries[0]?.source.resourceKey ?? "data.table:default" } }}
+        onPointSelected={(seriesId, pointIndex) => { if (revision != null) onPointSelected(seriesId, pointIndex, revision); }} onRangeSelected={onRangeSelected} onRequestedExportFailed={() => {
+          if (activePngRequestKey === null || failedPngRequest.current === activePngRequestKey) return;
+          failedPngRequest.current = activePngRequestKey;
+          onRequestedExportFailed?.();
+        }} onRequestedExportHandled={() => {
+          if (activePngRequestKey === null || failedPngRequest.current === activePngRequestKey) return;
+          completedPngPanes.current.add(`${activePngRequestKey}:${pane.unit}`);
+          if (pngRequestHandled.current !== activePngRequestKey && panes.every((item) => completedPngPanes.current.has(`${activePngRequestKey}:${item.unit}`))) {
+            pngRequestHandled.current = activePngRequestKey;
+            onRequestedExportHandled();
+          }
+        }}
+      />
     </ChartSection>;
-  })}</div>;
+  })}</div></div>;
 }
 
 function emptySeriesMessage(presentation: LiveChartsViewProps["presentation"]): string {

@@ -17,6 +17,7 @@ export interface ChartInteractionCallbacks {
   onExportRequested?: (format: "csv" | "tsv" | "png") => void;
   onPointSelected?: (seriesId: string, pointIndex: number) => void;
   onRangeSelected?: (fromSI: number, toSI: number) => void;
+  onRequestedExportFailed?: () => void;
 }
 
 export interface InteractiveChartSurfaceIdentity {
@@ -62,6 +63,7 @@ export function InteractiveChartSurface({
   onPointSelected,
   onRangeSelected,
   onRequestedExportHandled,
+  onRequestedExportFailed,
   presentation,
   requestedExportFormat = null,
   series,
@@ -95,10 +97,14 @@ export function InteractiveChartSurface({
     } else {
       exportChartData(model, requestedExportFormat);
     }
-    if (!exported) return;
+    if (!exported) {
+      handledExportFormatRef.current = requestedExportFormat;
+      onRequestedExportFailed?.();
+      return;
+    }
     handledExportFormatRef.current = requestedExportFormat;
     onRequestedExportHandled?.();
-  }, [model, onExportRequested, onRequestedExportHandled, rendererReady, requestedExportFormat]);
+  }, [model, onExportRequested, onRequestedExportFailed, onRequestedExportHandled, rendererReady, requestedExportFormat]);
 
   return (
     <div className="fm-analysis-plots__chart-frame">
@@ -108,6 +114,11 @@ export function InteractiveChartSurface({
         initialRange={initialRange}
         model={model}
         onRendererReady={() => setRendererReady(true)}
+        onRendererError={() => {
+          if (requestedExportFormat === "png") {
+            onRequestedExportFailed?.();
+          }
+        }}
         presentation={presentation}
         ownerStatus={ownerStatus}
         onClick={(event) => {

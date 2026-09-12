@@ -38,6 +38,7 @@ export function EChartsCanvasSurface({
   onDataZoom,
   onDoubleClick,
   onRendererReady,
+  onRendererError,
   presentation,
   ownerStatus,
   diagnostics,
@@ -60,6 +61,7 @@ export function EChartsCanvasSurface({
   onDataZoom?: (event: unknown) => void;
   onDoubleClick?: (event: unknown) => void;
   onRendererReady?: () => void;
+  onRendererError?: () => void;
   presentation?: ChartDataPresentationState;
   ownerStatus?: string;
 }) {
@@ -69,7 +71,7 @@ export function EChartsCanvasSurface({
   const previousInitialRangeRef = useRef(initialRange);
   const ownerRef = useRef<ChartRendererOwner | null>(null);
   const tokensRef = useRef<FullmagChartTokens | null>(null);
-  const callbacksRef = useRef({ diagnostics, onClick, onDataZoom, onDoubleClick, onRendererReady });
+  const callbacksRef = useRef({ diagnostics, onClick, onDataZoom, onDoubleClick, onRendererReady, onRendererError });
   const [rendererStatus, setRendererStatus] = useReducer(
     (_: "loading" | "ready" | "error", next: "loading" | "ready" | "error") =>
       next,
@@ -83,8 +85,8 @@ export function EChartsCanvasSurface({
     initialRangeRef.current = initialRange;
   }, [initialRange]);
   useEffect(() => {
-    callbacksRef.current = { diagnostics, onClick, onDataZoom, onDoubleClick, onRendererReady };
-  }, [diagnostics, onClick, onDataZoom, onDoubleClick, onRendererReady]);
+    callbacksRef.current = { diagnostics, onClick, onDataZoom, onDoubleClick, onRendererReady, onRendererError };
+  }, [diagnostics, onClick, onDataZoom, onDoubleClick, onRendererReady, onRendererError]);
 
   useEffect(() => {
     const element = elementRef.current;
@@ -161,7 +163,10 @@ export function EChartsCanvasSurface({
         };
       })
       .catch(() => {
-        if (!cancelled) setRendererStatus("error");
+        if (!cancelled) {
+          setRendererStatus("error");
+          callbacksRef.current.onRendererError?.();
+        }
       });
 
     return () => {
