@@ -126,6 +126,15 @@ payload żądanego eksportu jest błędem writera, nie zerowym wektorem zastępc
 referuje Cartesian complex payload; sam tangent-local vector bez rekonstrukcji
 `global_xyz` nie jest poprawnym `mode_field_id` do wizualizacji.
 
+W artefaktach modalnych namespace identyfikatora odzwierciedla rodzaj osi:
+`bias-field-sample-####` jest zarezerwowany dla planu z jawnym
+`bias_field_samples`, `k-path-sample-####` oznacza punkt rozwiniętej ścieżki
+`KSamplingIR::Path`, a `k-sample-####` pojedynczy wybór `KSamplingIR::Single`
+(także dla niezerowego k). Klient traktuje identyfikator jako nieprzezroczysty
+i korzysta z `k_vector`, `path_s` oraz `external_field_a_per_m` do prezentacji;
+punkt Γ na ścieżce nie może być utożsamiany z próbką sweepu pola wyłącznie na
+podstawie zerowego wektora k.
+
 Każdy zapisany mode field musi ponadto nieść niezmienną
 `source_mesh_identity`: niepusty `mesh_id`, pełny lowercase
 `topology_fingerprint=sha256:<64 hex>`, opcjonalne generation ID i revision,
