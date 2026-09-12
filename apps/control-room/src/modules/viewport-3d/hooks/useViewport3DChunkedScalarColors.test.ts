@@ -33,6 +33,10 @@ type TargetFieldBufferOptions = Parameters<
   typeof buildViewport3DTargetFieldBufferWithResourceKey
 >[0];
 
+function readSource(path: string | URL): string {
+  return readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+}
+
 function buildViewport3DTargetFieldBuffer(
   options: Omit<TargetFieldBufferOptions, "resourceKey">,
 ) {
@@ -45,17 +49,14 @@ function buildViewport3DTargetFieldBuffer(
 }
 
 const sourceUrl = new URL("./useViewport3DChunkedScalarColors.ts", import.meta.url);
-const fallbackLayerSource = readFileSync(
+const fallbackLayerSource = readSource(
   join(process.cwd(), "src/modules/viewport-3d/layers/FallbackTopologyMeshLayer.tsx"),
-  "utf8",
 );
-const meshPartLayerSource = readFileSync(
+const meshPartLayerSource = readSource(
   join(process.cwd(), "src/modules/viewport-3d/layers/MeshPartLayer.tsx"),
-  "utf8",
 );
-const boundsLayerSource = readFileSync(
+const boundsLayerSource = readSource(
   join(process.cwd(), "src/modules/viewport-3d/layers/BoundsLayers.tsx"),
-  "utf8",
 );
 
 function colorBuffer(value: number): ScalarColorBuffer {
@@ -82,7 +83,7 @@ function fieldVectorFixture(
 
 describe("useViewport3DChunkedScalarColors", () => {
   it("publishes completed color modes progressively instead of waiting for every mode", () => {
-    const source = readFileSync(sourceUrl, "utf8");
+    const source = readSource(sourceUrl);
 
     expect(source).toContain("await Promise.allSettled(");
     expect(source).toContain("publishEntries(true)");
@@ -329,7 +330,7 @@ describe("useViewport3DChunkedScalarColors", () => {
   });
 
   it("keeps chunked buffers out of React state and clears them on cleanup", () => {
-    const source = readFileSync(sourceUrl, "utf8");
+    const source = readSource(sourceUrl);
 
     expect(source).toContain("const chunkedScalarColorBuffers = new WeakMap");
     expect(source).toContain("const chunkedScalarColorBuffersByPartAndMode = new WeakMap");
@@ -531,7 +532,7 @@ describe("useViewport3DChunkedScalarColors", () => {
   });
 
   it("filters stale chunked entries to currently requested global and per-part modes", () => {
-    const source = readFileSync(sourceUrl, "utf8");
+    const source = readSource(sourceUrl);
     const orientation = colorBuffer(1);
     const x = colorBuffer(2);
     const y = colorBuffer(3);
@@ -569,7 +570,7 @@ describe("useViewport3DChunkedScalarColors", () => {
   });
 
   it("builds part-specific chunked colors from the primary field when part range or palette differs", () => {
-    const source = readFileSync(sourceUrl, "utf8");
+    const source = readSource(sourceUrl);
 
     expect(source).toContain("resolveViewport3DTargetFieldInput");
     expect(source).toContain("shouldBuildViewport3DPartChunkedScalarColor");
@@ -624,7 +625,7 @@ describe("useViewport3DChunkedScalarColors", () => {
   });
 
   it("allows part-only chunked builds without requiring a primary field vector", () => {
-    const source = readFileSync(sourceUrl, "utf8");
+    const source = readSource(sourceUrl);
 
     expect(source).toContain(
       "const buildIdentityFieldVector =\n    fieldVector ?? partBuildSpecs[0]?.fieldVector ?? null;",
@@ -864,7 +865,7 @@ describe("useViewport3DChunkedScalarColors", () => {
   });
 
   it("passes semantic field-color build references into off-main-thread transforms", () => {
-    const source = readFileSync(sourceUrl, "utf8");
+    const source = readSource(sourceUrl);
 
     expect(source).toContain("const fieldColorBuildReference =");
     expect(source).toContain("createViewport3DFieldColorBuildReference({");
@@ -913,10 +914,9 @@ describe("useViewport3DChunkedScalarColors", () => {
   });
 
   it("passes backend field stats into field-color builds by color mode when available", () => {
-    const source = readFileSync(sourceUrl, "utf8");
-    const sceneModelSource = readFileSync(
+    const source = readSource(sourceUrl);
+    const sceneModelSource = readSource(
       join(process.cwd(), "src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts"),
-      "utf8",
     );
 
     expect(source).toContain("fieldScalarRangesByMode");

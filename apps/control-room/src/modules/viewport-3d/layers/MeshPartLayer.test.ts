@@ -529,7 +529,7 @@ describe("MeshPartLayer", () => {
     const uploadSource = readFileSync(
       fileURLToPath(new URL("../hooks/useViewport3DGeometryUpload.ts", import.meta.url)),
       "utf8",
-    );
+    ).replace(/\r\n/g, "\n");
     const uploadEffect = uploadSource.slice(
       uploadSource.indexOf("useEffect(() => {"),
       uploadSource.indexOf("const abortController = new AbortController();"),

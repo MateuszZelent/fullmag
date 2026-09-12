@@ -77,7 +77,10 @@ describe("viewport smoke projection round-trip", () => {
   });
 
   it("refuses mutating an existing session without a disposable script guard", () => {
-    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8").replace(
+      /\r\n/g,
+      "\n",
+    );
 
     expect(smokeScript).toContain(
       'import { createSmokeMutationGuard } from "./lib/smoke-session-isolation.mjs"',
@@ -283,7 +286,10 @@ describe("viewport smoke projection round-trip", () => {
   });
 
   it("marks controlled missing-session smoke runs in browser config", () => {
-    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8").replace(
+      /\r\n/g,
+      "\n",
+    );
 
     expect(smokeScript).toContain("allowMissingSessionSmoke");
     expect(smokeScript).toContain("allowMissingSessionSmoke: allowMissingSession");
