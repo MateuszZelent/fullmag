@@ -121,6 +121,12 @@ FrequencyDomainStatus validate_problem(
     *factored_phi_dof_count = problem.gauge_policy == FloquetDynamicDemagKGaugePolicy::pin_first_dof
         ? problem.phi_dof_count - 1
         : problem.phi_dof_count;
+    if (*factored_phi_dof_count == 0) {
+        copy_error(
+            diagnostics,
+            "Floquet dynamic demag-k gauge pinning removes every scalar-potential degree of freedom");
+        return FrequencyDomainStatus::validation_error;
+    }
 
     if (!finite_complex_values(problem.a_qphi_row_major, q_phi_count) ||
         !finite_complex_values(problem.p_row_major, phi_phi_count) ||

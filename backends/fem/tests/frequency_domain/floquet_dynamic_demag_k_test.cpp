@@ -100,7 +100,7 @@ void hermitian_blocks_produce_hermitian_dynamic_demag()
     check_close(output[0], -0.5, "q0 real block is realified exactly");
     check_close(output[1], 0.0, "q0-q1 real coupling has zero real part");
     check_close(output[2], 0.0, "q1-q0 real coupling has zero real part");
-    check_close(output[3], -2.0, "q1 real block is realified exactly");
+    check_close(output[5], -2.0, "q1 real block is realified exactly");
     check_close(output[3], -1.0, "q0-to-q1 imaginary block has the expected sign");
     check_close(output[9], 1.0, "q1-to-q0 imaginary block has the expected sign");
 }
@@ -192,6 +192,33 @@ void pin_first_phi_gauge_excludes_the_pinned_dof()
     check_close(output[0], -1.5, "pin-first-dof Schur uses the unpinned scalar potential");
 }
 
+void pin_first_phi_gauge_rejects_a_single_potential_dof()
+{
+    const Complex coupling[1] = {Complex(1.0, 0.0)};
+    const Complex p[1] = {Complex(1.0, 0.0)};
+    fd::FloquetDynamicDemagKProblem problem{};
+    problem.q_dof_count = 1;
+    problem.phi_dof_count = 1;
+    problem.a_qphi_row_major = coupling;
+    problem.a_qphi_value_count = 1;
+    problem.p_row_major = p;
+    problem.p_value_count = 1;
+    problem.a_phiq_row_major = coupling;
+    problem.a_phiq_value_count = 1;
+    problem.k_rad_per_m[0] = 1.0;
+    problem.gauge_policy = fd::FloquetDynamicDemagKGaugePolicy::pin_first_dof;
+
+    std::vector<double> output(4, 0.0);
+    fd::FloquetDynamicDemagKDiagnostics diagnostics{};
+    check(
+        fd::build_floquet_dynamic_demag_k_real_split(
+            problem,
+            output.data(),
+            output.size(),
+            &diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "pin-first-dof gauge rejects a scalar space with no unpinned DOF");
+}
+
 } // namespace
 
 int main()
@@ -200,5 +227,6 @@ int main()
     hermitian_blocks_produce_hermitian_dynamic_demag();
     validation_rejects_zero_k_singular_p_and_budget_overflow();
     pin_first_phi_gauge_excludes_the_pinned_dof();
+    pin_first_phi_gauge_rejects_a_single_potential_dof();
     return 0;
 }

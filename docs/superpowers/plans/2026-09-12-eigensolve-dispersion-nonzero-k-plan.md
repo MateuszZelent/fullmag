@@ -255,13 +255,13 @@ Wykorzystać rodzinę `analysis/frequency-domain`, istniejący facade/resource h
 
 Wszystkie etapy poniżej mają status **DO WYKONANIA**. Każdy kończy się spójnym, zweryfikowanym przyrostem na branchu implementacyjnym. To lista prac do przyszłej implementacji, nie zapis wykonanych commitów.
 
-### Konkretni nowi właściciele S03–S05 (proponowane, pliki jeszcze nie istnieją)
+### Konkretni nowi właściciele S03–S05 (kontrakty źródłowe; runtime pozostaje do kwalifikacji)
 
 Pod `backends/fem/` przewidziano:
 
 - `include/frequency_domain/floquet_modal_problem.hpp` — opis geometrii, materiałów, równowagi, k, obu zbiorów par, reprezentacji pola i BC/gauge; przekazany native problem, nie gotowa macierz numeryczna z Rust.
 - `cpu/frequency_domain/operators/floquet_magnetic_operator.hpp` oraz `.cpp` — pełny styczny operator magnetyczny na polach Blocha i fazowa redukcja w natywnym MFEM.
-- `cpu/frequency_domain/operators/floquet_airbox_operator.hpp` oraz `.cpp` — wspólny właściciel bloków magnetization→potential, potential→field i potential→potential, dwóch ograniczeń C oraz jawnej rekonstrukcji residualu. Używa zwykłych pochodnych z §4.3.
+- `cpu/frequency_domain/operators/floquet_airbox_operator.hpp` oraz `.cpp` — bounded MFEM bridge właściciela bloków magnetization→potential, potential→field i potential→potential, dwóch ograniczeń C oraz jawnej rekonstrukcji Schura. Używa zwykłych pochodnych z §4.3; pełna assemblacja siatki i residual produkcyjny pozostają do S04.
 - `cpu/frequency_domain/modal/floquet_modal_solver.hpp` oraz `.cpp` — wybrane widmo SLEPc nad powyższym operatorem, real-frequency representation i certyfikat zakresu.
 
 Rozszerzyć istniejący `modal_eigen_request.hpp` oraz wrapper `crates/fullmag-runner/src/native_fem/frequency_domain.rs` wersjonowanym requestem/native handle. Zachować aktualny dense caller-supplied payload wyłącznie jako oracle. Zmiana capability od reject do supported następuje dopiero dla dokładnie zweryfikowanej kombinacji i nie usuwa zbiorczo strażników K0/GPU.

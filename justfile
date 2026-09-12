@@ -1774,7 +1774,7 @@ verify-fem-frequency-domain-floquet-bloch-scalar:
       fem-gpu bash -lc 'cd /workspace && cmake -S native -B ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native --target fem_floquet_bloch_scalar_contract && LD_LIBRARY_PATH=${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem:${LD_LIBRARY_PATH:-} ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem/fem_floquet_bloch_scalar_contract'
 
 # Managed source contracts for the nonzero-k modal foundation.  These targets
-# validate the phase-reduced magnetic operator and the bounded demag-k oracles;
+# validate the phase-reduced magnetic operator and the bounded demag-k bridges;
 # they do not claim a production mesh assembly or physics qualification.
 verify-fem-modal-floquet-magnetic-contract:
     just ensure-managed-fem-runtime
@@ -1784,7 +1784,7 @@ verify-fem-modal-floquet-magnetic-contract:
 verify-fem-modal-floquet-airbox-cpu:
     just ensure-managed-fem-runtime
     docker compose --profile fem-gpu run --rm \
-      fem-gpu bash -lc 'cd /workspace && cmake -S native -B ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native --target fem_floquet_dynamic_demag_k_contract fem_floquet_waveguide_demag_k_contract && LD_LIBRARY_PATH=${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem:${LD_LIBRARY_PATH:-} ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem/fem_floquet_dynamic_demag_k_contract && ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem/fem_floquet_waveguide_demag_k_contract'
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native --target fem_floquet_airbox_operator_contract fem_floquet_dynamic_demag_k_contract fem_floquet_waveguide_demag_k_contract && LD_LIBRARY_PATH=${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem:${LD_LIBRARY_PATH:-} ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem/fem_floquet_airbox_operator_contract && ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem/fem_floquet_dynamic_demag_k_contract && ${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/native/backends/fem/fem_floquet_waveguide_demag_k_contract'
 
 verify-fem-frequency-domain-native-contract:
     powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/verify_fem_frequency_domain_native_contract.ps1" -Device gpu
