@@ -13,6 +13,8 @@ import math
 from pathlib import Path
 from typing import Any
 
+MU0_T_M_PER_A = 4.0 * math.pi * 1.0e-7
+
 
 def _load(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
@@ -93,6 +95,15 @@ def _fmt_energy(value: Any) -> str:
     return "—" if number is None else f"{number:.6e}"
 
 
+def _free_torque_t(frozen: dict[str, Any]) -> float | None:
+    value = _number(frozen.get("free_torque_metric"))
+    if value is None:
+        return None
+    if frozen.get("free_torque_metric_units") != "T":
+        value *= MU0_T_M_PER_A
+    return value
+
+
 def render_report(summary: dict[str, Any]) -> str:
     results = [value for value in summary.get("results", []) if isinstance(value, dict)]
     rows: list[tuple[dict[str, Any], dict[str, Any], str]] = []
@@ -113,8 +124,8 @@ def render_report(summary: dict[str, Any]) -> str:
         "",
         "## Size-to-energy table",
         "",
-        "| R target (nm) | R area hold (nm) | R core release (nm) | Q hold | E profile (J) | ΔE to background (J) | frozen DOF | verification | classification |",
-        "|---:|---:|---:|---:|---:|---:|---:|---|---|",
+        "| R target (nm) | R area hold (nm) | R core release (nm) | Q hold | E profile (J) | ΔE to background (J) | frozen DOF | max free torque (T) | verification | classification |",
+        "|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
     ]
     for result, verification, classification in rows:
         protocol = result.get("protocol") if isinstance(result.get("protocol"), dict) else {}
@@ -123,7 +134,7 @@ def render_report(summary: dict[str, Any]) -> str:
         released = _measurement(result, "released")
         frozen = result.get("frozen_runtime") if isinstance(result.get("frozen_runtime"), dict) else {}
         lines.append(
-            "| {target} | {area} | {core} | {q} | {energy} | {delta} | {frozen_count} | {status} | {classification} |".format(
+            "| {target} | {area} | {core} | {q} | {energy} | {delta} | {frozen_count} | {free_torque} | {status} | {classification} |".format(
                 target=_fmt(protocol.get("target_radius_nm")),
                 area=_fmt(held.get("R_area_nm")),
                 core=_fmt(released.get("R_core_nm")),
@@ -131,6 +142,7 @@ def render_report(summary: dict[str, Any]) -> str:
                 energy=_fmt_energy(profile.get("E_total_J")),
                 delta=_fmt_energy(profile.get("delta_E_to_background_J")),
                 frozen_count=frozen.get("frozen_dof_count", "—"),
+                free_torque=_fmt(_free_torque_t(frozen)),
                 status=verification.get("status", "not_run"),
                 classification=classification,
             )
