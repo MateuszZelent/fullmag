@@ -27,7 +27,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 | S06 — śledzenie gałęzi | W TRAKCIE | Hungarian/gaps i metryka masy FE są gotowe; pozostają fizyczne podprzestrzenie zdegenerowane |
 | S07 — artefakty i API | W TRAKCIE | Stabilne ID, faza/obwiednia, selektory, binarne pola |
 | S08 — Control Room | DO WYKONANIA | Authoring, dyspersja, wybór modu i przestrzenna faza; browser/WebGL |
-| S09 — falowód 2.5D | W TRAKCIE | Bounded algebraic provider `K⊥ + k²M` i axial transverse Schur oracle są zapisane; pozostają assembler przekroju MFEM, open boundary, normalizacja na długość i porównania TetraX/3D |
+| S09 — falowód 2.5D | W TRAKCIE | Bounded provider i deterministyczny P1 assembler przekroju są zapisane; pozostają managed/MFEM owner, open-boundary convergence i porównania TetraX/3D |
 | S10 — interakcje | DO WYKONANIA | Anizotropia, DMI seams, Gilbert i legalność |
 | S11 — GPU | DO WYKONANIA | Jawna trasa double bez fallbacku, residency i parytet |
 | S12 — kwalifikacja i integracja | W TRAKCIE | Managed benchmarki, review, commity, PR, merge, weryfikacja mastera |
@@ -258,3 +258,23 @@ problemach konfiguracji hosta (`FULLMAG_USE_MFEM_STACK=OFF`, brak działającego
 managed MFEM/SLEPc oraz wcześniejsze błędy MSVC w CUDA/Context); nie jest to
 receipt wykonania operatora. Managed runtime, wynik fizyczny `f(k)`, artefakty,
 API/UI i GPU nadal mają status **NOT VERIFIED**.
+
+### Przyrost S09 — assembler przekroju 2.5D
+
+Dodano `floquet_waveguide_cross_section`: bounded element-level P1 assembler
+dla trójkątnego przekroju 2D. Assembler składa `K_perp`, `M`, jawny warunek
+Robin, sprzężenia `A_phiq_perp`/`A_phiq_axial` z maską domeny magnetycznej i
+lokalnym `M_s`, a następnie wyprowadza blok sprzężony przez hermitowskie
+sprzężenie zwrotne. Wszystkie macierze są skalowane przez odwrotność jawnego
+`normalization_length_m`, więc wynik ma normę na jednostkę długości. Jest to
+referencyjny właściciel elementowy, nie deklaracja managed MFEM assemblacji ani
+dowód zbieżności otwartej granicy.
+
+Izolowany projekt MSVC z assemblerem, providerem Schura i testem kontraktu
+skonfigurował się (exit 0), zbudował (exit 0), a wykonanie zakończyło się
+`floquet waveguide cross-section contract tests passed` (exit 0). Test
+sprawdza macierze masy/stiffness, długość brzegu Robin, znak źródła `-i k M_z`,
+sprzężenie hermitowskie, odrzucenie wadliwej mapy oraz przejście przez
+real-split Schur. Pełny target `fullmag_fem` nadal zatrzymuje się na
+wcześniejszych błędach bez MFEM; nowy plik został w tym przebiegu
+przetworzony przez MSBuild bez własnych błędów.

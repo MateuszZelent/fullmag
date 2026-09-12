@@ -173,6 +173,7 @@ set(FEM_SOURCES
     cpu/frequency_domain/floquet_airbox_operator.cpp
     cpu/frequency_domain/floquet_dynamic_demag_k.cpp
     cpu/frequency_domain/floquet_waveguide_demag_k.cpp
+    cpu/frequency_domain/floquet_waveguide_cross_section.cpp
     cpu/frequency_domain/operators/floquet_magnetic_operator.cpp
     cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp
     cpu/frequency_domain/poisson_airbox_modal_eigen.cpp
@@ -1012,6 +1013,10 @@ add_fem_source_facade_contract(
 add_fem_source_facade_contract(
     fem_floquet_waveguide_demag_k_contract
     tests/frequency_domain/floquet_waveguide_demag_k_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_floquet_waveguide_cross_section_contract
+    tests/frequency_domain/floquet_waveguide_cross_section_test.cpp
 )
 add_fem_source_facade_contract(
     fem_poisson_airbox_shared_domain_contract
