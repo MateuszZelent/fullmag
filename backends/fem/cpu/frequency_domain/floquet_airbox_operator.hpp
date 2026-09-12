@@ -18,6 +18,11 @@ struct FloquetAirboxDynamicDemagKProblem {
     const mfem::ComplexSparseMatrix *scalar_operator = nullptr;
     const mfem::ComplexSparseMatrix *scalar_constraint = nullptr;
     const mfem::ComplexSparseMatrix *tangent_source = nullptr;
+    // Optional full-q -> reduced-q Floquet constraint.  When present the
+    // bridge materializes A_phiq = C_phi^H A_phiq,full C_q; when absent the
+    // tangent source is already in reduced q coordinates for compatibility
+    // with the original bounded oracle.
+    const mfem::ComplexSparseMatrix *tangent_constraint = nullptr;
     std::array<double, 3> k_rad_per_m{};
     FloquetDynamicDemagKGaugePolicy gauge_policy =
         FloquetDynamicDemagKGaugePolicy::require_invertible;

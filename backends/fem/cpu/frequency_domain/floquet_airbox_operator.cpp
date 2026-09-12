@@ -136,26 +136,44 @@ FrequencyDomainStatus assemble_floquet_airbox_dynamic_demag_k(
     std::uint64_t constraint_rows = 0;
     std::uint64_t reduced_phi = 0;
     std::uint64_t source_rows = 0;
+    std::uint64_t source_columns = 0;
+    std::uint64_t tangent_constraint_rows = 0;
     std::uint64_t q = 0;
     if (!matrix_shape(
             problem.scalar_operator,
             &full_phi_from_operator,
             &full_phi_columns) ||
         !matrix_shape(problem.scalar_constraint, &constraint_rows, &reduced_phi) ||
-        !matrix_shape(problem.tangent_source, &source_rows, &q) ||
+        !matrix_shape(problem.tangent_source, &source_rows, &source_columns) ||
         full_phi_from_operator != full_phi_columns ||
         constraint_rows != full_phi_from_operator || source_rows != full_phi_from_operator ||
         full_phi_from_operator > kMaxMaterializedDofs || reduced_phi > kMaxMaterializedDofs ||
-        q > kMaxMaterializedDofs) {
+        source_columns > kMaxMaterializedDofs) {
         return fail(out_result, "Floquet airbox dynamic demag-k block dimensions are invalid");
+    }
+    if (problem.tangent_constraint != nullptr) {
+        if (!matrix_shape(
+                problem.tangent_constraint,
+                &tangent_constraint_rows,
+                &q) ||
+            tangent_constraint_rows != source_columns || q == 0u ||
+            q > kMaxMaterializedDofs) {
+            return fail(out_result, "Floquet airbox tangent constraint dimensions are invalid");
+        }
+    } else {
+        q = source_columns;
     }
     if (problem.scalar_operator->GetConvention() != mfem::ComplexOperator::HERMITIAN ||
         problem.scalar_constraint->GetConvention() != mfem::ComplexOperator::HERMITIAN ||
-        problem.tangent_source->GetConvention() != mfem::ComplexOperator::HERMITIAN) {
+        problem.tangent_source->GetConvention() != mfem::ComplexOperator::HERMITIAN ||
+        (problem.tangent_constraint != nullptr &&
+         problem.tangent_constraint->GetConvention() != mfem::ComplexOperator::HERMITIAN)) {
         return fail(out_result, "Floquet airbox dynamic demag-k blocks require Hermitian convention");
     }
     if (!finite_matrix(*problem.scalar_operator) ||
-        !finite_matrix(*problem.scalar_constraint) || !finite_matrix(*problem.tangent_source)) {
+        !finite_matrix(*problem.scalar_constraint) || !finite_matrix(*problem.tangent_source) ||
+        (problem.tangent_constraint != nullptr &&
+         !finite_matrix(*problem.tangent_constraint))) {
         return fail(out_result, "Floquet airbox dynamic demag-k blocks contain non-finite values");
     }
     if (problem.workspace_budget_bytes == 0u ||
@@ -207,11 +225,35 @@ FrequencyDomainStatus assemble_floquet_airbox_dynamic_demag_k(
             for (int column = 0; column < q_count; ++column) {
                 Complex value(0.0, 0.0);
                 for (int row = 0; row < full_phi; ++row) {
-                    value += std::conj(matrix_entry(
+                    const Complex phi_constraint = std::conj(matrix_entry(
                         *problem.scalar_constraint,
                         row,
-                        reduced_row)) *
-                        matrix_entry(*problem.tangent_source, row, column);
+                        reduced_row));
+                    if (std::abs(phi_constraint) == 0.0) {
+                        continue;
+                    }
+                    if (problem.tangent_constraint == nullptr) {
+                        value += phi_constraint * matrix_entry(
+                            *problem.tangent_source,
+                            row,
+                            column);
+                        continue;
+                    }
+                    for (int full_column = 0;
+                         full_column < static_cast<int>(source_columns);
+                         ++full_column) {
+                        const Complex q_constraint = matrix_entry(
+                            *problem.tangent_constraint,
+                            full_column,
+                            column);
+                        if (std::abs(q_constraint) == 0.0) {
+                            continue;
+                        }
+                        value += phi_constraint * matrix_entry(
+                            *problem.tangent_source,
+                            row,
+                            full_column) * q_constraint;
+                    }
                 }
                 if (!finite_complex(value)) {
                     return fail(out_result, "Floquet airbox reduced magnetic-potential coupling is non-finite");

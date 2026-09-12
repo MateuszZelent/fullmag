@@ -115,6 +115,56 @@ void rejects_missing_floquet_airbox_blocks_without_fallback()
           "rejected airbox assembly does not publish a partial matrix");
 }
 
+void applies_the_magnetic_floquet_constraint_before_schur_elimination()
+{
+    // The scalar and magnetic constraints both use
+    // C=[1, exp(-i*pi/2)].  With P_full=I and A_phiq,full=I, both reductions
+    // contribute a factor of two, so D=-(2)(2)/2=-2.
+    auto scalar_operator = make_complex_matrix(
+        2,
+        2,
+        {{0, 0, 1.0}, {1, 1, 1.0}},
+        {});
+    auto scalar_constraint = make_complex_matrix(
+        2,
+        1,
+        {{0, 0, 1.0}},
+        {{1, 0, -1.0}});
+    auto tangent_source = make_complex_matrix(
+        2,
+        2,
+        {{0, 0, 1.0}, {1, 1, 1.0}},
+        {});
+    auto tangent_constraint = make_complex_matrix(
+        2,
+        1,
+        {{0, 0, 1.0}},
+        {{1, 0, -1.0}});
+
+    fd::FloquetAirboxDynamicDemagKProblem problem{};
+    problem.scalar_operator = scalar_operator.get();
+    problem.scalar_constraint = scalar_constraint.get();
+    problem.tangent_source = tangent_source.get();
+    problem.tangent_constraint = tangent_constraint.get();
+    problem.k_rad_per_m[0] = 1.0;
+
+    fd::FloquetAirboxDynamicDemagKResult result{};
+    check(
+        fd::assemble_floquet_airbox_dynamic_demag_k(problem, &result) ==
+            fd::FrequencyDomainStatus::ok,
+        "magnetic phase-reduced Floquet Schur assembly succeeds");
+    check(result.real_split_row_major.size() == 4,
+          "magnetic phase reduction produces a one-class 2x2 real-split block");
+    check_close(result.real_split_row_major[0], -2.0,
+                "magnetic phase reduction scales the Schur real-real entry");
+    check_close(result.real_split_row_major[1], 0.0,
+                "magnetic phase reduction has zero real-imag entry");
+    check_close(result.real_split_row_major[2], 0.0,
+                "magnetic phase reduction has zero imag-real entry");
+    check_close(result.real_split_row_major[3], -2.0,
+                "magnetic phase reduction scales the Schur imag-imag entry");
+}
+
 #endif
 
 } // namespace
@@ -123,6 +173,7 @@ int main()
 {
 #if FULLMAG_HAS_MFEM_STACK
     reduces_phase_constrained_airbox_blocks_before_schur_elimination();
+    applies_the_magnetic_floquet_constraint_before_schur_elimination();
     rejects_missing_floquet_airbox_blocks_without_fallback();
 #endif
     return 0;
