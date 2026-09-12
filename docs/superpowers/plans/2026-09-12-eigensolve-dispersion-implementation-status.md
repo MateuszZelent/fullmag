@@ -9,7 +9,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 - Baza `master`: `5084a94ed14b151fc865e8def5a5c28401e98b44`.
 - Branch: `codex/eigensolve-dispersion-plan-20260912`.
 - Worktree: `C:/git/fullmag/worktrees/eigensolve-dispersion-plan-20260912`.
-- Ostatni lokalny HEAD: `3784e7713c9678758229bb07c35fdb1385279059`; `git status --short` jest czysty.
+- Ostatni lokalny HEAD: `41e80e534` (`feat(fem): bridge Floquet airbox blocks into demag Schur`); po commicie `git status --short` był czysty.
 - Właściciel: `codex:01a0941c-eb15-7261-a7ee-7cf099385525`.
 - Rejestr: `eigensolve-dispersion-plan-20260-c5dfad6d7f548079`; reaktywowany do implementacji.
 - Fizyczne źródła COMSOL: oba lokalne podręczniki modułu mikromagnetycznego wymienione w planie; szczególnie s. PDF 21–28 i 40–43. Przykład RF jest wzorem sprzężenia pól, a nie gotowym dowodem modalnym.
@@ -117,6 +117,7 @@ hostowych nie kwalifikuje relacji dyspersji ani dynamicznego demag-k.
 - `6ce1ced8e` — jednokowy writer `write_eigen_v2_bundle` publikuje `sample_id` w `spectrum.v2` i `spectrum.v3`, wybierając namespace z planu zamiast oznaczać każdy wynik jako sweep pola; regresja provenance sprawdza `k-sample-0000`.
 - `72645805b` — checkpoint doprecyzowuje rozdział namespace'ów artefaktów dla sweepu pola, ścieżki k i pojedynczego k.
 - `43fbba45d` — dokumentacja fizyki i spec artefaktów zawierają indeksy obu bounded providerów demag-k oraz kontrakt nieprzezroczystych `sample_id`; walidator map źródeł został uruchomiony na bazie mastera.
+- `41e80e534` — bounded MFEM bridge `floquet_airbox_operator`, test redukcji `CᴴP_fullC`/`CᴴAφq`, osobna recepta managed oraz regresja pinowania pojedynczego DOF w providerze Schura; źródła są zapisane, lecz kompilacja z MFEM pozostaje niezweryfikowana.
 
 Adapter dynamicznego demag-k przyjmuje wyłącznie kompletną macierz dostarczoną
 przez przyszłego właściciela `A_{q\phi}(k)`/`P(k)`/`A_{\phi q}(k)`; nie jest
@@ -130,6 +131,18 @@ finite `k`, nie maskuje osobliwości `P(k)`, a `pin_first_dof` jest jawny. Nie
 ma jeszcze assemblera bloków na siatce MFEM ani podłączenia tego provider'a do
 shared-domain modal path; runner nadal odrzuca non-k0 z demag-k.
 
+W commicie `41e80e534` dodano bounded MFEM bridge
+`assemble_floquet_airbox_dynamic_demag_k`. Bridge odczytuje zespolone bloki
+`P_full(k)`, `C(k)` i `A_{φq,full}`, materializuje
+`P(k)=CᴴP_fullC`, `A_{φq}(k)=CᴴA_{φq,full}` oraz jawne sprzężenie
+`A_{qφ}=A_{φq}ᴴ`, a następnie deleguje eliminację do providera Schura. Ma
+limit 512 DOF na blok i jeden budżet obejmujący macierze pośrednie, wynik oraz
+LU/RHS providera; odrzuca nie-Hermitowskie lub niepełne bloki i nie publikuje
+częściowego wyniku. Regresja z fazą `exp(-iπ/2)` sprawdza redukcję seamów i
+realifikację wyniku. To nadal bounded oracle: nie jest assemblerem siatkowym,
+nie zmienia capability planera i nie otwiera runnerowej ścieżki dynamicznego
+demag-k.
+
 W S09 dodano analogiczny, jawnie oddzielony provider 2.5D
 `floquet_waveguide_demag_k`. Buduje on `P(k)=K⊥+k²M`, przyjmuje osobne
 poprzeczne i osiowe sprzężenia `A_qphi`/`A_phiq`, zachowuje znak źródła `−ik
@@ -141,7 +154,7 @@ i wykonanie testu pozostają **NOT VERIFIED** przez managed runner.
 
 Dodano recepty managed dla tych kontraktów źródłowych:
 `verify-fem-modal-floquet-magnetic-contract` uruchamia test operatora Blocha,
-a `verify-fem-modal-floquet-airbox-cpu` uruchamia oba ograniczone providery
+a `verify-fem-modal-floquet-airbox-cpu` uruchamia bridge oraz oba ograniczone providery
 demag-k. Recepty korzystają z `ensure-managed-fem-runtime` i nie zmieniają
 statusu fizycznej assemblacji ani kwalifikacji runtime. Na bieżącym hoście
 runner nadal zwraca 503/profile mismatch przed utworzeniem joba, więc te
@@ -149,6 +162,10 @@ bramki pozostają **NOT VERIFIED**.
 
 ### Walidacja po domknięciu przyrostu
 
+- `cmake -S native -B C:/Users/Mateusz/AppData/Local/Temp/fullmag-eigensolve-airbox -DFULLMAG_ENABLE_CUDA=OFF -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF`: konfiguracja CMake zakończyła się exit 0 i wygenerowała nowy target bridge.
+- Bezpośrednia kompilacja MSVC (`FULLMAG_HAS_MFEM_STACK=0`) dla `floquet_airbox_operator.cpp`, jego testu oraz providera `floquet_dynamic_demag_k` zakończyła się exit 0. Zlinkowany test `floquet_dynamic_demag_k_contract` zakończył się exit 0.
+- `cargo +nightly test --locked -p fullmag-runner --lib fem::eigen_tests::runner_rejects_floquet_dynamic_demag_gate --target-dir C:/Users/Mateusz/AppData/Local/Temp/fullmag-eigensolve-airbox-cargo-target -- --nocapture`: 1 passed, exit 0; runner nadal odrzuca niepodłączony dynamiczny demag-k.
+- Próba kompilacji bridge z `FULLMAG_HAS_MFEM_STACK=1` zatrzymała się na braku `mfem.hpp`; managed test `fem_floquet_airbox_operator_contract` nie został wykonany, więc implementacja MFEM pozostaje **NOT VERIFIED**.
 - `cargo +nightly check --locked -p fullmag-ir -p fullmag-plan -p fullmag-runner --lib --target-dir C:/Users/Mateusz/AppData/Local/Temp/fullmag-eigensolve-cargo-target`: exit 0; ostrzeżenia są istniejące lub dotyczą nieużytych elementów oczekujących na integrację.
 - `cargo +nightly check --locked -p fullmag-cli --target-dir C:/Users/Mateusz/AppData/Local/Temp/fullmag-eigensolve-cargo-target` oraz `cargo +nightly check --locked -p fullmag-runner --tests --target-dir C:/Users/Mateusz/AppData/Local/Temp/fullmag-eigensolve-cargo-target`: exit 0.
 - `cargo +nightly test --locked -p fullmag-ir --lib`: 101 passed, exit 0.
