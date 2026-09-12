@@ -464,6 +464,10 @@ odrzucany już na granicy IR, ponieważ runner nie ma jeszcze zweryfikowanego
 API widma rozróżnia teraz `missing_payload` (HTTP 404) od
 `unsupported_topology` (HTTP 422), a metadata endpoint sprawdza obecność
 wszystkich czterech binarnych payloadów przed publikacją zasobu.
+Inspector opisuje widmo jako bazę pola portu znormalizowaną do `1 A`, bez
+przyłożonego waveformu lub deklarowanego prądu drive, oraz wyświetla jednostkę
+mocy bezpośrednio z `payloads.power.unit`. Test UI chroni zarówno tę semantykę,
+jak i dokładną postać jednostki `(A/m/A)^2`.
 Pozostają: bezpośrednia ewaluacja `direct_rt0_evaluation_v1`, natywny transfer
 MFEM, rzeczywiste wczytanie `equilibrium_ref` dla `component=transverse`,
 odświeżenie śledzonych plików generated OpenAPI po zmianie odpowiedzi oraz

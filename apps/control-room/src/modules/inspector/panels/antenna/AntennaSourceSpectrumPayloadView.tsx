@@ -97,6 +97,7 @@ export function AntennaSourceSpectrumPayloadView({
   const renderedCellCount = cells.length;
   const isDecimated =
     payloads.value.kU.length * payloads.value.kV.length > MAX_RENDERED_CELLS;
+  const powerUnit = spectrum.payloads?.power.unit ?? `(${spectrum.amplitude_unit})^2`;
 
   return (
     <section className="fm-antenna-spectrum" aria-label="Antenna source spectrum payload">
@@ -104,7 +105,8 @@ export function AntennaSourceSpectrumPayloadView({
         <div>
           <h3 className="fm-antenna-spectrum__title">Source FFT power</h3>
           <p className="fm-antenna-spectrum__subtitle">
-            |H(k<sub>u</sub>, k<sub>v</sub>)|² · normalized to the declared current
+            |H(k<sub>u</sub>, k<sub>v</sub>)|² · per 1 A port-current basis; drive
+            waveform not applied
           </p>
         </div>
         <span className="fm-antenna-spectrum__badge" data-status="ready">
@@ -121,12 +123,12 @@ export function AntennaSourceSpectrumPayloadView({
       >
         {cells.map((cell) => (
           <span
-            aria-label={`k_u ${formatScientific(payloads.value.kU[cell.kUIndex])} ${spectrum.wave_vector_unit}, k_v ${formatScientific(payloads.value.kV[cell.kVIndex])} ${spectrum.wave_vector_unit}, power ${formatScientific(cell.power)} ${spectrum.amplitude_unit}²`}
+            aria-label={`k_u ${formatScientific(payloads.value.kU[cell.kUIndex])} ${spectrum.wave_vector_unit}, k_v ${formatScientific(payloads.value.kV[cell.kVIndex])} ${spectrum.wave_vector_unit}, power ${formatScientific(cell.power)} ${powerUnit}`}
             className="fm-antenna-spectrum__cell"
             key={`${cell.kVIndex}:${cell.kUIndex}`}
             role="gridcell"
             style={{ opacity: 0.08 + 0.92 * cell.normalizedPower }}
-            title={`k_u=${formatScientific(payloads.value.kU[cell.kUIndex])} ${spectrum.wave_vector_unit}; k_v=${formatScientific(payloads.value.kV[cell.kVIndex])} ${spectrum.wave_vector_unit}; |H|²=${formatScientific(cell.power)} ${spectrum.amplitude_unit}²`}
+            title={`k_u=${formatScientific(payloads.value.kU[cell.kUIndex])} ${spectrum.wave_vector_unit}; k_v=${formatScientific(payloads.value.kV[cell.kVIndex])} ${spectrum.wave_vector_unit}; |H|²=${formatScientific(cell.power)} ${powerUnit}`}
           />
         ))}
       </div>
@@ -137,7 +139,7 @@ export function AntennaSourceSpectrumPayloadView({
       </div>
       <div className="fm-antenna-spectrum__summary" aria-label="Source spectrum peak">
         <span>
-          Peak {peak ? formatScientific(peak.value) : "unavailable"} {spectrum.amplitude_unit}²
+          Peak {peak ? formatScientific(peak.value) : "unavailable"} {powerUnit}
         </span>
         <span>
           k=({peakKU === null ? "—" : formatScientific(peakKU)}, {peakKV === null ? "—" : formatScientific(peakKV)}) {spectrum.wave_vector_unit}

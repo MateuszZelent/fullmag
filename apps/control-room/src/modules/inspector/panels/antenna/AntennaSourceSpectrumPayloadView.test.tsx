@@ -54,10 +54,17 @@ describe("AntennaSourceSpectrumPayloadView", () => {
         ),
       );
       expect(container.textContent).toContain("Source FFT power");
+      expect(container.textContent).toContain(
+        "per 1 A port-current basis; drive waveform not applied",
+      );
+      expect(container.textContent).not.toContain("declared current");
       expect(container.textContent).toContain("cells: 4");
-      expect(container.textContent).toContain("Peak 5.000e+0");
+      expect(container.textContent).toContain("Peak 5.000e+0 (A/m/A)^2");
       expect(container.querySelector('[role="grid"]')).toBeDefined();
       expect(countByRole(container as unknown as TestNode, "gridcell")).toBe(4);
+      const firstCell = firstByRole(container as unknown as TestNode, "gridcell");
+      expect(firstCell?.getAttribute("aria-label")).toContain("(A/m/A)^2");
+      expect(firstCell?.getAttribute("title")).toContain("(A/m/A)^2");
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -169,7 +176,7 @@ function errorPayload(error: Error | string): PayloadResource {
 function spectrumFixture(): AntennaSourceSpectrumResource {
   return {
     amplitude_count: 2,
-    amplitude_unit: "A",
+    amplitude_unit: "A/m/A",
     coherent_gain: 1,
     component: "vector_basis",
     component_labels: ["x", "y", "z"],
@@ -186,10 +193,10 @@ function spectrumFixture(): AntennaSourceSpectrumResource {
       path: "antenna/source_spectra/spectrum-1/spectrum.v1.json",
     },
     payloads: {
-      amplitudes_re_im: binaryRef("A"),
+      amplitudes_re_im: binaryRef("A/m/A"),
       k_u_rad_per_m: binaryRef("rad/m"),
       k_v_rad_per_m: binaryRef("rad/m"),
-      power: binaryRef("A²"),
+      power: binaryRef("(A/m/A)^2"),
     },
     port_mode_id: "mode-1",
     power_count: 4,
@@ -228,4 +235,15 @@ function countByRole(root: TestNode, role: string): number {
   };
   visit(root);
   return count;
+}
+
+function firstByRole(root: TestNode, role: string): TestElement | null {
+  if (root instanceof TestElement && root.getAttribute("role") === role) {
+    return root;
+  }
+  for (const child of root.childNodes) {
+    const match = firstByRole(child, role);
+    if (match) return match;
+  }
+  return null;
 }
