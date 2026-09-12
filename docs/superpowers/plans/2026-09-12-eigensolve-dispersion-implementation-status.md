@@ -9,7 +9,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 - Baza `master`: `5084a94ed14b151fc865e8def5a5c28401e98b44`.
 - Branch: `codex/eigensolve-dispersion-plan-20260912`.
 - Worktree: `C:/git/fullmag/worktrees/eigensolve-dispersion-plan-20260912`.
-- Ostatni zapisany kodowy przyrost: `71ce348b0` (`test(eigensolve): guard Floquet provider against forced GPU`), nad routingiem Γ `1114e1aa0` i podłączeniem providera `f2acf7b9b425733899bdfde63cb0566d16d74a59`.
+- Ostatni zapisany kodowy przyrost: `c511cb413` (`feat(eigensolve): bind nodal Ms in shared-domain demag`), nad testem wymuszonego GPU `71ce348b0`, routingiem Γ `1114e1aa0` i podłączeniem providera `f2acf7b9b425733899bdfde63cb0566d16d74a59`.
 - Właściciel: `codex:01a0941c-eb15-7261-a7ee-7cf099385525`.
 - Rejestr: `eigensolve-dispersion-plan-20260-c5dfad6d7f548079`; reaktywowany do implementacji.
 - Fizyczne źródła COMSOL: oba lokalne podręczniki modułu mikromagnetycznego wymienione w planie; szczególnie s. PDF 21–28 i 40–43. Przykład RF jest wzorem sprzężenia pól, a nie gotowym dowodem modalnym.
@@ -300,9 +300,24 @@ Weryfikacja tego przyrostu:
 - `fem_eigen_path_rejects_floquet_dynamic_demag_before_sample_solves` — `1 passed`, exit 0;
 - `git diff --check` i ukierunkowany `rustfmt --check` — exit 0.
 
+### Przyrost zgodności materiałowej shared-domain
+
+Commit `c511cb413` otwiera nodalne `Ms` w bounded CPU providerze. Natywny
+descriptor już przenosi pełny wektor `saturation_magnetisation_a_per_m`, więc
+runner nie odrzuca go przed assemblacją; digest wejścia operatora obejmuje teraz
+zarówno wektor nodalny, jak i wartość uniform fallback. Certyfikat okresowości
+pozostaje obowiązkowy: wartości `Ms` na sparowanych seamach muszą być zgodne.
+
+Regresje `fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path`
+(`fullmag-plan`) oraz `shared_domain_builder_rejects_missing_accepted_linearization_state`
+i `native_cpu_modal_window_accepts_nonzero_floquet_airbox_demag_path`
+(`fullmag-runner`) przeszły; szerokie przebiegi dały odpowiednio `461/461` i
+`139/139` testów, exit 0. Nodalne `Aex`, anizotropia, DMI i damping nadal są
+jawnie poza tym bounded wariantem.
+
 To jest bramka planowania i routingu, a nie kwalifikacja fizyczna. Nadal brak
 managed MFEM/SLEPc receipt, wykonania operatora na siatce, residuali
-oryginalnego układu, zbieżności paddingu oraz porównania COMSOL/TetraX. Nodalny
-`M_s`, damping i GPU pozostają poza otwartym wariantem. Worktree pozostaje
+oryginalnego układu, zbieżności paddingu oraz porównania COMSOL/TetraX. Damping
+i GPU pozostają poza otwartym wariantem. Worktree pozostaje
 niezintegrowany z `master`; push/PR/merge są zablokowane przez brak poprawnego
 uwierzytelnienia GitHub i wcześniejszą odmowę automatycznego review.
