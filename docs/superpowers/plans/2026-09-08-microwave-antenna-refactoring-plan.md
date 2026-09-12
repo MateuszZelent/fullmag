@@ -448,6 +448,14 @@ zweryfikowany payload `tet4_connectivity`; sampler Rust realizuje
 `fem_p1_interpolation_v1` przez barycentryczne P1 i deterministyczny BVH, a
 point-only asset działa wyłącznie jako jawne `identity_coordinates_v1`. Testy
 obejmują affine vector field, integralność hasha topologii i `outside=zero`.
+**Uzupełnienie 2026-09-12:** klasyfikacja i interpolacja tet4 oblicza wyznacznik
+po unormowaniu krawędzi lokalnym rozmiarem elementu, więc decyzja o degeneracji
+jest bezwymiarowa i nie zawiera już bezwzględnej podłogi `1 m`. Test
+publicznego samplera potwierdza to samo obrócone pole afiniczne dla skali
+`1 m`, `1 µm` i `1 nm`, a osobny test odrzuca zdegenerowany element
+nanometrowy. Zamknięta jest część T09 dotycząca skali P1; nadal otwarte są
+`direct_rt0_evaluation_v1`, transfer do native MFEM, mixed topology oraz
+kwalifikacja dużych siatek.
 Opcja `mode_basis_ref` jest teraz fail-closed w obu walidatorach IR; nie można
 jej podać do ścieżki source-spectrum, która nie wykonuje analizy modalnej.
 Analogicznie `component="transverse"` z dowolnym `equilibrium_ref` jest

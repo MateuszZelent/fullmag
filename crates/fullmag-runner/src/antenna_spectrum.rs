@@ -443,15 +443,23 @@ fn barycentric_tet(position: [f64; 3], vertices: [[f64; 3]; 4]) -> Option<[f64; 
     let edge_2 = sub3(vertices[2], vertices[0]);
     let edge_3 = sub3(vertices[3], vertices[0]);
     let rhs = sub3(position, vertices[0]);
-    let determinant = dot3(edge_1, cross3(edge_2, edge_3));
     let scale = edge_1
         .into_iter()
         .chain(edge_2)
         .chain(edge_3)
         .map(f64::abs)
-        .fold(0.0_f64, f64::max)
-        .max(1.0);
-    if !determinant.is_finite() || determinant.abs() <= 1.0e-14 * scale.powi(3) {
+        .fold(0.0_f64, f64::max);
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    // A dimensionless determinant keeps the degeneracy decision invariant
+    // under the metre, micrometre and nanometre scales used by the same mesh.
+    let edge_1 = edge_1.map(|value| value / scale);
+    let edge_2 = edge_2.map(|value| value / scale);
+    let edge_3 = edge_3.map(|value| value / scale);
+    let rhs = rhs.map(|value| value / scale);
+    let determinant = dot3(edge_1, cross3(edge_2, edge_3));
+    if !determinant.is_finite() || determinant.abs() <= 1.0e-14 {
         return None;
     }
     let lambda_1 = dot3(rhs, cross3(edge_2, edge_3)) / determinant;
@@ -1546,6 +1554,87 @@ mod tests {
         assert!(sampled.mapping_digest.starts_with("sha256:"));
         let artifact = compute_antenna_source_spectrum_artifact(&request, &samples, None).unwrap();
         assert_eq!(artifact.sampling.realization, "fem_p1_interpolation_v1");
+    }
+
+    #[test]
+    fn fem_element_sampling_is_scale_and_rotation_invariant() {
+        let inverse_sqrt_2 = 1.0 / 2.0_f64.sqrt();
+        let inverse_sqrt_3 = 1.0 / 3.0_f64.sqrt();
+        let inverse_sqrt_6 = 1.0 / 6.0_f64.sqrt();
+        let axis_u = [inverse_sqrt_2, inverse_sqrt_2, 0.0];
+        let axis_v = [-inverse_sqrt_6, inverse_sqrt_6, 2.0 * inverse_sqrt_6];
+        let axis_w = [inverse_sqrt_3, -inverse_sqrt_3, inverse_sqrt_3];
+        let local_vertices = [
+            [0.0, 0.0, -1.0],
+            [2.0, 0.0, 0.0],
+            [0.0, 2.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ];
+
+        for scale_m in [1.0, 1.0e-6, 1.0e-9] {
+            let translation = [3.0 * scale_m, -2.0 * scale_m, 5.0 * scale_m];
+            let transform = |local: [f64; 3]| {
+                std::array::from_fn(|component| {
+                    translation[component]
+                        + scale_m
+                            * (local[0] * axis_u[component]
+                                + local[1] * axis_v[component]
+                                + local[2] * axis_w[component])
+                })
+            };
+            let mut request = request("x");
+            request.sampling_plane.origin_m = transform([0.25, 0.25, 0.0]);
+            request.sampling_plane.axis_u = axis_u;
+            request.sampling_plane.axis_v = axis_v;
+            request.sampling_plane.extent_u_m = 0.5 * scale_m;
+            request.sampling_plane.extent_v_m = 0.5 * scale_m;
+            let samples = AntennaFieldSolutionSamples {
+                solution_id: "solution".into(),
+                source_object_id: "antenna".into(),
+                port_mode_id: "port".into(),
+                sample_positions_xyz_m: local_vertices.into_iter().map(transform).collect(),
+                magnetic_field_xyz_apm_per_a: local_vertices
+                    .into_iter()
+                    .map(|local| {
+                        [
+                            1.0 + 2.0 * local[0] + 3.0 * local[1] - 4.0 * local[2],
+                            0.0,
+                            0.0,
+                        ]
+                    })
+                    .collect(),
+                sample_tet4_cells: Some(vec![[0, 1, 2, 3]]),
+                content_digest: "sha256:solution".into(),
+            };
+
+            let sampled = sample_antenna_field_on_plane(&request, &samples)
+                .unwrap_or_else(|error| panic!("scale_m={scale_m:.1e}: {}", error.message));
+            for v in 0..4 {
+                for u in 0..4 {
+                    let local_u = u as f64 / 6.0;
+                    let local_v = v as f64 / 6.0;
+                    let expected = 1.0 + 2.0 * local_u + 3.0 * local_v;
+                    let actual = sampled.field_xyz_apm_per_a[v * 4 + u][0];
+                    assert!(
+                        (actual - expected).abs() < 1.0e-10,
+                        "scale_m={scale_m:.1e}, u={u}, v={v}, actual={actual:.17e}, expected={expected:.17e}"
+                    );
+                }
+            }
+            assert_eq!(sampled.outside_count, 0);
+        }
+    }
+
+    #[test]
+    fn barycentric_tet_rejects_degenerate_nanometre_geometry() {
+        let scale_m = 1.0e-9;
+        let vertices = [
+            [0.0, 0.0, 0.0],
+            [scale_m, 0.0, 0.0],
+            [0.0, scale_m, 0.0],
+            [scale_m, scale_m, 0.0],
+        ];
+        assert!(barycentric_tet([0.25 * scale_m, 0.25 * scale_m, 0.0], vertices).is_none());
     }
 
     #[test]
