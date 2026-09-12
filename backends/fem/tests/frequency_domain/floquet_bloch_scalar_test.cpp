@@ -384,6 +384,8 @@ void floquet_bloch_scalar_tangent_source_masks_air_and_reduces_magnetic_nodes()
     const int dof_count = scalar_space.GetVSize();
     const int element_count = mesh.GetNE();
     std::vector<fd::TangentFrameNode> frames(static_cast<std::size_t>(dof_count));
+    std::vector<double> nodal_ms(static_cast<std::size_t>(dof_count), 0.0);
+    nodal_ms[0] = 1.0;
 
     std::vector<std::uint8_t> no_magnetic_elements(
         static_cast<std::size_t>(element_count), 0u);
@@ -391,7 +393,9 @@ void floquet_bloch_scalar_tangent_source_masks_air_and_reduces_magnetic_nodes()
     masked_request.scalar_space = &scalar_space;
     masked_request.tangent_frames = frames.data();
     masked_request.tangent_frame_count = static_cast<std::uint64_t>(frames.size());
-    masked_request.saturation_magnetization_a_per_m = 1.0;
+    masked_request.saturation_magnetization_field = nodal_ms.data();
+    masked_request.saturation_magnetization_field_count =
+        static_cast<std::uint64_t>(nodal_ms.size());
     masked_request.representation =
         fd::FloquetBlochScalarRepresentation::full_field_phase_constrained;
     masked_request.magnetic_element_mask = no_magnetic_elements.data();
