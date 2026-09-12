@@ -1721,6 +1721,9 @@ int fullmag_fdm_backend_create_time_policy_v2_checked(
     ctx->has_rotated_interfacial_dmi = plan->has_rotated_interfacial_dmi != 0;
     ctx->D_rotated_interfacial = plan->dmi_D_rotated_interfacial;
     if (ctx->has_rotated_interfacial_dmi) {
+        if (!context_ensure_rotated_dmi_workspace(*ctx)) {
+            return FULLMAG_FDM_OK;
+        }
         // The legacy constructor has already populated the observable cache
         // from the base descriptor, which cannot carry rDMI. Invalidate that
         // snapshot before recomputing with the v2 extension enabled.
@@ -1958,6 +1961,12 @@ int fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
     ctx->has_rotated_interfacial_dmi =
         descriptor->has_rotated_interfacial_dmi != 0;
     ctx->D_rotated_interfacial = descriptor->dmi_D_rotated_interfacial;
+    if (ctx->has_rotated_interfacial_dmi &&
+        !context_ensure_rotated_dmi_workspace(*ctx)) {
+        ctx->has_rotated_interfacial_dmi = snapshot.has_rotated_interfacial_dmi;
+        ctx->D_rotated_interfacial = snapshot.D_rotated_interfacial;
+        return FULLMAG_FDM_ERR_CUDA;
+    }
     context_invalidate_observables(*ctx);
     bool refreshed = refresh_multilayer_transaction_observables(*ctx, true);
     if (refreshed && inject_refresh_failure) {

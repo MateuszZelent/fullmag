@@ -62,17 +62,17 @@ __global__ void multilayer_effective_field_kernel(
     double hx = static_cast<double>(h_ex_x[idx]) +
                 static_cast<double>(h_demag_x[idx]) +
                 static_cast<double>(h_dmi_x[idx]) +
-                static_cast<double>(h_rotated_dmi_x[idx]) +
+                (h_rotated_dmi_x != nullptr ? static_cast<double>(h_rotated_dmi_x[idx]) : 0.0) +
                 static_cast<double>(h_ani_x[idx]);
     double hy = static_cast<double>(h_ex_y[idx]) +
                 static_cast<double>(h_demag_y[idx]) +
                 static_cast<double>(h_dmi_y[idx]) +
-                static_cast<double>(h_rotated_dmi_y[idx]) +
+                (h_rotated_dmi_y != nullptr ? static_cast<double>(h_rotated_dmi_y[idx]) : 0.0) +
                 static_cast<double>(h_ani_y[idx]);
     double hz = static_cast<double>(h_ex_z[idx]) +
                 static_cast<double>(h_demag_z[idx]) +
                 static_cast<double>(h_dmi_z[idx]) +
-                static_cast<double>(h_rotated_dmi_z[idx]) +
+                (h_rotated_dmi_z != nullptr ? static_cast<double>(h_rotated_dmi_z[idx]) : 0.0) +
                 static_cast<double>(h_ani_z[idx]);
 
     if (has_external_field) {

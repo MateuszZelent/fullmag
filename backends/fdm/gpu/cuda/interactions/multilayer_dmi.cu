@@ -62,9 +62,9 @@ __global__ void multilayer_dmi_field_kernel(
         hx[idx] = static_cast<Scalar>(0);
         hy[idx] = static_cast<Scalar>(0);
         hz[idx] = static_cast<Scalar>(0);
-        rotated_hx[idx] = static_cast<Scalar>(0);
-        rotated_hy[idx] = static_cast<Scalar>(0);
-        rotated_hz[idx] = static_cast<Scalar>(0);
+        if (rotated_hx) rotated_hx[idx] = static_cast<Scalar>(0);
+        if (rotated_hy) rotated_hy[idx] = static_cast<Scalar>(0);
+        if (rotated_hz) rotated_hz[idx] = static_cast<Scalar>(0);
         return;
     }
 
@@ -200,9 +200,9 @@ __global__ void multilayer_dmi_field_kernel(
     hx[idx] = static_cast<Scalar>(h0);
     hy[idx] = static_cast<Scalar>(h1);
     hz[idx] = static_cast<Scalar>(h2);
-    rotated_hx[idx] = static_cast<Scalar>(rotated_h0);
-    rotated_hy[idx] = static_cast<Scalar>(rotated_h1);
-    rotated_hz[idx] = static_cast<Scalar>(rotated_h2);
+    if (rotated_hx) rotated_hx[idx] = static_cast<Scalar>(rotated_h0);
+    if (rotated_hy) rotated_hy[idx] = static_cast<Scalar>(rotated_h1);
+    if (rotated_hz) rotated_hz[idx] = static_cast<Scalar>(rotated_h2);
 }
 
 // The single-grid rotated-DMI observable has only one logical output field.
@@ -390,6 +390,17 @@ bool launch_multilayer_dmi_field_impl(Context &ctx, const char *operation)
 template <typename Scalar>
 bool launch_rotated_interfacial_dmi_field_impl(Context &ctx, const char *operation)
 {
+    if (!ctx.has_rotated_interfacial_dmi) {
+        // No dormant output allocation is required for an inactive optional
+        // observable; callers return a zero host field in this state.
+        ctx.last_error.clear();
+        return true;
+    }
+    if (ctx.h_rotated_dmi.x == nullptr || ctx.h_rotated_dmi.y == nullptr ||
+        ctx.h_rotated_dmi.z == nullptr) {
+        ctx.last_error = std::string(operation) + " rotated DMI workspace is unavailable";
+        return false;
+    }
     if (!context_begin_compute_stream_work(ctx, operation)) return false;
     int grid = 0;
     if (!layer_launch_grid(ctx, ctx.cell_count, operation, grid)) {
