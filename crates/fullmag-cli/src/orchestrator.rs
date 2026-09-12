@@ -8,7 +8,7 @@ use fullmag_ir::{
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -3265,6 +3265,134 @@ fn attach_solved_antenna_drive_bases(
 /// Execute authored source-spectrum requests only from a published immutable
 /// antenna field asset.  This is an analysis product, not a hidden field solve
 /// and not a magnetization-response FFT.
+fn publish_antenna_spectrum_artifacts_atomically(
+    current_stage_artifact_dir: &Path,
+    output_id: &str,
+    artifacts: &[fullmag_runner::AuxiliaryArtifact],
+) -> Result<()> {
+    if artifacts.is_empty() {
+        bail!("antenna source-spectrum output '{output_id}' produced no artifacts");
+    }
+    let output_prefix = Path::new("antenna").join("source_spectra").join(output_id);
+    let final_dir = current_stage_artifact_dir.join(&output_prefix);
+    let parent = final_dir
+        .parent()
+        .ok_or_else(|| anyhow!("antenna source-spectrum output has no parent directory"))?;
+    let mut normalized = Vec::with_capacity(artifacts.len());
+    let mut seen = std::collections::BTreeSet::new();
+    let mut has_manifest = false;
+    for artifact in artifacts {
+        let path = Path::new(&artifact.relative_path);
+        let relative = path.strip_prefix(&output_prefix).map_err(|_| {
+            anyhow!(
+                "antenna source-spectrum artifact '{}' is outside output '{}'",
+                artifact.relative_path,
+                output_id
+            )
+        })?;
+        if relative.as_os_str().is_empty()
+            || relative.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            })
+        {
+            bail!(
+                "antenna source-spectrum artifact '{}' has an unsafe relative path",
+                artifact.relative_path
+            );
+        }
+        if !seen.insert(relative.to_string_lossy().into_owned()) {
+            bail!(
+                "antenna source-spectrum output '{}' contains duplicate artifact '{}'",
+                output_id,
+                relative.display()
+            );
+        }
+        if relative == Path::new("spectrum.v2.json") {
+            has_manifest = true;
+        }
+        normalized.push((relative.to_path_buf(), artifact));
+    }
+    if !has_manifest {
+        bail!(
+            "antenna source-spectrum output '{}' has no spectrum.v2.json manifest",
+            output_id
+        );
+    }
+
+    if final_dir.exists() {
+        if !final_dir.is_dir() {
+            bail!(
+                "antenna source-spectrum output '{}' already exists as a non-directory",
+                output_id
+            );
+        }
+        for (relative, artifact) in &normalized {
+            let existing = final_dir.join(relative);
+            let bytes = fs::read(&existing).with_context(|| {
+                format!(
+                    "read existing antenna source-spectrum artifact {}",
+                    existing.display()
+                )
+            })?;
+            if bytes != artifact.bytes {
+                bail!(
+                    "antenna source-spectrum output '{}' already exists with different content at '{}'",
+                    output_id,
+                    relative.display()
+                );
+            }
+        }
+        return Ok(());
+    }
+
+    fs::create_dir_all(parent).with_context(|| {
+        format!(
+            "create antenna source-spectrum publication directory {}",
+            parent.display()
+        )
+    })?;
+    let staging_dir = parent.join(format!(
+        ".{output_id}.staging-{}-{}",
+        std::process::id(),
+        unix_time_millis()?
+    ));
+    fs::create_dir(&staging_dir).with_context(|| {
+        format!(
+            "create antenna source-spectrum staging directory {}",
+            staging_dir.display()
+        )
+    })?;
+    let publish_result = (|| -> Result<()> {
+        normalized.sort_by_key(|(relative, _)| relative != Path::new("spectrum.v2.json"));
+        for (relative, artifact) in &normalized {
+            let target = staging_dir.join(relative);
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&target, &artifact.bytes).with_context(|| {
+                format!(
+                    "write staged antenna source-spectrum artifact {}",
+                    target.display()
+                )
+            })?;
+        }
+        fs::rename(&staging_dir, &final_dir).with_context(|| {
+            format!(
+                "atomically publish antenna source-spectrum output {}",
+                final_dir.display()
+            )
+        })?;
+        Ok(())
+    })();
+    if publish_result.is_err() {
+        let _ = fs::remove_dir_all(&staging_dir);
+    }
+    publish_result
+}
+
 fn execute_antenna_spectrum_requests(
     problem: &ProblemIR,
     artifact_dir: &Path,
@@ -3353,23 +3481,11 @@ fn execute_antenna_spectrum_requests(
                     error.message
                 )
             })?;
-        for artifact in artifacts {
-            let output_path = current_stage_artifact_dir.join(&artifact.relative_path);
-            if let Some(parent) = output_path.parent() {
-                fs::create_dir_all(parent).with_context(|| {
-                    format!(
-                        "create antenna source-spectrum artifact directory {}",
-                        parent.display()
-                    )
-                })?;
-            }
-            fs::write(&output_path, &artifact.bytes).with_context(|| {
-                format!(
-                    "write antenna source-spectrum artifact {}",
-                    output_path.display()
-                )
-            })?;
-        }
+        publish_antenna_spectrum_artifacts_atomically(
+            current_stage_artifact_dir,
+            &request.output_id,
+            &artifacts,
+        )?;
     }
     Ok(())
 }
@@ -12456,7 +12572,10 @@ mod tests {
         let certified_block = production
             .split("let next_continuation_certified_fields =")
             .nth(1)
-            .and_then(|tail| tail.split("let next_continuation_recomputed_certificate =").next())
+            .and_then(|tail| {
+                tail.split("let next_continuation_recomputed_certificate =")
+                    .next()
+            })
             .expect("certified FEM equilibrium field handoff block");
         let recomputed_block = production
             .split("let next_continuation_recomputed_certificate =")
@@ -16194,6 +16313,52 @@ mod tests {
         ));
         fs::create_dir_all(&dir).expect("temp dir should be creatable");
         dir
+    }
+
+    #[test]
+    fn antenna_spectrum_publication_is_atomic_and_content_addressed() {
+        let root = temp_test_dir("antenna-spectrum-publication");
+        let artifacts = vec![
+            fullmag_runner::AuxiliaryArtifact {
+                relative_path: "antenna/source_spectra/field/k_u_rad_per_m.f64le".into(),
+                bytes: vec![1, 2, 3],
+            },
+            fullmag_runner::AuxiliaryArtifact {
+                relative_path: "antenna/source_spectra/field/spectrum.v2.json".into(),
+                bytes: br#"{"content_digest":"sha256:test"}"#.to_vec(),
+            },
+        ];
+        super::publish_antenna_spectrum_artifacts_atomically(&root, "field", &artifacts)
+            .expect("first spectrum publication should succeed");
+        let output_dir = root.join("antenna/source_spectra/field");
+        assert_eq!(
+            fs::read(output_dir.join("k_u_rad_per_m.f64le")).unwrap(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            fs::read(output_dir.join("spectrum.v2.json")).unwrap(),
+            br#"{"content_digest":"sha256:test"}"#
+        );
+        assert!(fs::read_dir(root.join("antenna/source_spectra"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .all(|entry| !entry.file_name().to_string_lossy().contains("staging")));
+
+        super::publish_antenna_spectrum_artifacts_atomically(&root, "field", &artifacts)
+            .expect("identical spectrum publication should be reused");
+
+        let mut conflicting = artifacts.clone();
+        conflicting[0].bytes = vec![9, 9, 9];
+        let error =
+            super::publish_antenna_spectrum_artifacts_atomically(&root, "field", &conflicting)
+                .expect_err("different content must not overwrite an existing result");
+        assert!(error.to_string().contains("different content"));
+        assert_eq!(
+            fs::read(output_dir.join("k_u_rad_per_m.f64le")).unwrap(),
+            vec![1, 2, 3]
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

@@ -118,7 +118,7 @@
       "id": "antenna-spectrum-cli-consumer",
       "path": "crates/fullmag-cli/src/orchestrator.rs",
       "symbol": "execute_antenna_spectrum_requests",
-      "responsibility": "Consume only published immutable field assets and write source-spectrum artifacts before the normal solver stage."
+      "responsibility": "Consume only published immutable field assets and publish each source-spectrum output through a task-private staging directory with manifest-last atomic promotion and bytewise reuse/conflict protection before the normal solver stage."
     }
   ],
   "public_api": {

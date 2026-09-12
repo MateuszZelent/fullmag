@@ -589,6 +589,17 @@ stale:      ready -> stale(reason); old immutable artifact remains readable by i
 restart:    reload ready manifest -> verify bytes and dependencies -> resolve consumer
 ```
 
+**Stan implementacji 2026-09-12:** ścieżka `execute_antenna_spectrum_requests`
+publikuje każdy wynik source-spectrum w prywatnym katalogu stagingowym i
+promuje kompletny katalog jednym rename. Manifest `spectrum.v2.json` jest
+zapisywany jako ostatni plik w stagingu; niekompletny lub uszkodzony zapis nie
+może pojawić się jako gotowy output. Ponowne żądanie tego samego `output_id`
+porównuje wszystkie oczekiwane payloady bajt-po-bajcie i reużywa identyczny
+wynik, natomiast konflikt treści albo brak pliku kończy się błędem bez
+nadpisania poprzedniego assetu. Dodany test CLI obejmuje pierwszą publikację,
+reuse i konflikt. Nadal pozostaje test fault-injection dla anulowania/przerwania
+całego batcha wielu requestów oraz pełne spięcie z resolverem stage/output.
+
 **Bramka:** `lifecycle` i `artifact`; testy fault injection obejmują przerwanie przed/po zapisie payloadu i przed publikacją manifestu. Commit: `fix: bind antenna stage lifecycle to actual execution`.
 
 ## T13. Domknąć i zakwalifikować FEM LLG
