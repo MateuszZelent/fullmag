@@ -146,4 +146,22 @@ describe("useLiveChartsController export ownership", () => {
       dom.restore();
     }
   });
+
+  it("retains an accessible error after a local export fails", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as HTMLElement);
+    try {
+      await act(async () => root.render(<ControllerHarness />));
+      await act(async () => latestController?.onExport("csv"));
+      expect(latestController?.requestedExportRequest).toMatchObject({ format: "csv" });
+      await act(async () => latestController?.onRequestedExportFailed?.());
+      expect(latestController?.requestedExportRequest).toBeNull();
+      expect(latestController?.exportErrorFormat).toBe("csv");
+      await act(async () => latestController?.onExport("csv"));
+      expect(latestController?.exportErrorFormat).toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
 });

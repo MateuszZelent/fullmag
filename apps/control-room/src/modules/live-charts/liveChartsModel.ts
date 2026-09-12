@@ -96,9 +96,7 @@ export function resolveLiveChartAxisAndRange(
     : requestedXAxisId;
   return {
     axisChanged: xAxisId !== requestedXAxisId,
-    range: xAxisId !== requestedXAxisId
-      ? { mode: "follow" }
-      : normalizeLiveChartRangeForXAxis(range, xAxisId),
+    range: normalizeLiveChartRangeForXAxis(range, xAxisId),
     xAxisId,
   };
 }

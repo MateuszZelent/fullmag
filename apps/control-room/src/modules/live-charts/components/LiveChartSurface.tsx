@@ -3,13 +3,13 @@
 import { Activity } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
-import { exportChartData } from "@/shared/analysis-charts/ChartExportControls";
+import { exportChartData } from "@/shared/analysis-charts/chartExport";
 import { InteractiveChartSurface } from "@/shared/analysis-charts/InteractiveChartSurface";
 import { liveChartExportModel, visibleLiveChartPanes } from "../liveChartsPresentation";
 import { LiveChartSignals } from "./LiveChartSignals";
 import type { LiveChartsViewProps } from "../liveChartsViewTypes";
 
-export function LiveChartSurface({ fitRequest, onChartSelected, onPointSelected, onRangeSelected, onRequestedExportFailed, onRequestedExportHandled, onSeriesChange, presentation, requestedExportRequest, series, selectedSeriesIds, title, xAxisLabel }: Pick<LiveChartsViewProps, "fitRequest" | "onChartSelected" | "onExport" | "onPointSelected" | "onRangeSelected" | "onRequestedExportFailed" | "onRequestedExportHandled" | "onSeriesChange" | "presentation" | "requestedExportRequest" | "series" | "selectedSeriesIds" | "title" | "xAxisLabel">) {
+export function LiveChartSurface({ exportErrorFormat, fitRequest, onChartSelected, onPointSelected, onRangeSelected, onRequestedExportFailed, onRequestedExportHandled, onSeriesChange, presentation, requestedExportRequest, series, selectedSeriesIds, title, xAxisLabel }: Pick<LiveChartsViewProps, "exportErrorFormat" | "fitRequest" | "onChartSelected" | "onExport" | "onPointSelected" | "onRangeSelected" | "onRequestedExportFailed" | "onRequestedExportHandled" | "onSeriesChange" | "presentation" | "requestedExportRequest" | "series" | "selectedSeriesIds" | "title" | "xAxisLabel">) {
   const selected = new Set(selectedSeriesIds);
   const panes = visibleLiveChartPanes(series, selectedSeriesIds);
   const exportRequest = requestedExportRequest ?? null;
@@ -18,6 +18,8 @@ export function LiveChartSurface({ fitRequest, onChartSelected, onPointSelected,
   const failedPngRequest = useRef<string | null>(null);
   const handledDataExport = useRef<string | null>(null);
   const activePngRequestId = exportRequest?.format === "png" ? exportRequest.requestId : null;
+  const handleRequestedExportHandled = onRequestedExportHandled;
+  const handleRequestedExportFailed = onRequestedExportFailed;
   const visibleSeries = useMemo(
     () => {
       const selectedIds = new Set(selectedSeriesIds);
@@ -41,13 +43,13 @@ export function LiveChartSurface({ fitRequest, onChartSelected, onPointSelected,
       if (visibleSeries.length === 0) {
         if (pngRequestHandled.current !== exportRequest.requestId) {
           pngRequestHandled.current = exportRequest.requestId;
-          onRequestedExportHandled();
+          handleRequestedExportHandled();
         }
         return;
       }
       if (pngRequestHandled.current !== exportRequest.requestId && visibleSeries.every((item) => completedPngPanes.current.has(`${exportRequest.requestId}:${item.unit}`))) {
         pngRequestHandled.current = exportRequest.requestId;
-        onRequestedExportHandled();
+        handleRequestedExportHandled();
       }
       return;
     }
@@ -58,10 +60,13 @@ export function LiveChartSurface({ fitRequest, onChartSelected, onPointSelected,
     }
     // An empty selection also acknowledges a command, so it cannot block the queue.
     handledDataExport.current = exportRequest.requestId;
-    if (exported) onRequestedExportHandled();
-    else acknowledgeExportFailure(onRequestedExportFailed, onRequestedExportHandled);
-  }, [dataExportModel, exportRequest, onRequestedExportFailed, onRequestedExportHandled, visibleSeries]);
+    if (exported) handleRequestedExportHandled();
+    else acknowledgeExportFailure(handleRequestedExportFailed, handleRequestedExportHandled);
+  }, [dataExportModel, exportRequest, handleRequestedExportFailed, handleRequestedExportHandled, visibleSeries]);
   return <div className="fm-live-charts__workspace">
+    {exportErrorFormat ? <p className="fm-live-charts__export-error" role="alert">
+      {exportErrorFormat.toUpperCase()} export failed. Try again.
+    </p> : null}
     <LiveChartSignals series={series} selectedSeriesIds={selectedSeriesIds} onSeriesChange={(ids) => { onChartSelected(); onSeriesChange(ids); }} />
     <div className="fm-live-charts__panes" data-pane-count={panes.length}>
     {panes.length === 0 ? <ChartSection title={title} status={{ presentation, primary: "Live" }}>
@@ -84,13 +89,13 @@ export function LiveChartSurface({ fitRequest, onChartSelected, onPointSelected,
         onPointSelected={(seriesId, pointIndex) => { if (revision != null) onPointSelected(seriesId, pointIndex, revision); }} onRangeSelected={onRangeSelected} onRequestedExportFailed={() => {
           if (activePngRequestId === null || failedPngRequest.current === activePngRequestId) return;
           failedPngRequest.current = activePngRequestId;
-          acknowledgeExportFailure(onRequestedExportFailed, onRequestedExportHandled);
+          acknowledgeExportFailure(handleRequestedExportFailed, handleRequestedExportHandled);
         }} onRequestedExportHandled={() => {
           if (activePngRequestId === null || failedPngRequest.current === activePngRequestId) return;
           completedPngPanes.current.add(`${activePngRequestId}:${pane.unit}`);
           if (pngRequestHandled.current !== activePngRequestId && panes.every((item) => completedPngPanes.current.has(`${activePngRequestId}:${item.unit}`))) {
             pngRequestHandled.current = activePngRequestId;
-            onRequestedExportHandled();
+            handleRequestedExportHandled();
           }
         }}
       />

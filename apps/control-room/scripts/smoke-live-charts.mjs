@@ -832,9 +832,9 @@ async function waitForReadyLiveChart(page) {
     const root = document.querySelector(".fm-live-charts");
     const canvas = root?.querySelector(".fm-analysis-chart-surface canvas");
     const readings = root?.querySelectorAll(".fm-chart-legend__latest") ?? [];
-    const availableSeriesIds = Array.from(root?.querySelectorAll(".fm-chart-legend__label") ?? [])
-      .map((node) => node.textContent?.trim());
-    return canvas instanceof HTMLCanvasElement && canvas.width > 0 && canvas.height > 0 && readings.length >= requiredSeriesIds.length && requiredSeriesIds.every((id) => availableSeriesIds.includes(id));
+    const availableSeriesIds = new Set(Array.from(root?.querySelectorAll(".fm-chart-legend__label") ?? [])
+      .map((node) => node.textContent?.trim()));
+    return canvas instanceof HTMLCanvasElement && canvas.width > 0 && canvas.height > 0 && readings.length >= requiredSeriesIds.length && requiredSeriesIds.every((id) => availableSeriesIds.has(id));
   }, [...SERIES_IDS], { timeout: timeoutMs });
   await waitForQuietFrames(page);
 }
@@ -918,11 +918,14 @@ async function verifyLiveChartsInspector(page) {
   }
   const signalControls = inspector.getByRole("checkbox");
   if (await signalControls.count() < SERIES_IDS.length) throw new Error("Live Charts Inspector must expose mx, my, and mz signal controls.");
-  for (const quantity of SERIES_IDS) {
-    if (!(await inspector.getByRole("checkbox", { name: `Show ${quantity}` }).isVisible())) {
-      throw new Error(`Live Charts Inspector does not expose the ${quantity} visibility control.`);
+  const visibility = await Promise.all(SERIES_IDS.map((quantity) =>
+    inspector.getByRole("checkbox", { name: `Show ${quantity}` }).isVisible(),
+  ));
+  visibility.forEach((isVisible, index) => {
+    if (!isVisible) {
+      throw new Error(`Live Charts Inspector does not expose the ${SERIES_IDS[index]} visibility control.`);
     }
-  }
+  });
 }
 
 async function verifyOneVisibleCanvas(page) {
@@ -945,8 +948,9 @@ async function verifyOneVisibleCanvas(page) {
 
 async function verifyExactScientificValues(page) {
   const readings = await legendReadings(page);
+  const readingsByLabel = new Map(readings.map((entry) => [entry.label, entry]));
   for (const [quantity, expected] of Object.entries(EXACT_VALUES)) {
-    const reading = readings.find((entry) => entry.label === quantity);
+    const reading = readingsByLabel.get(quantity);
     if (!reading) throw new Error(`Missing ${quantity} legend reading.`);
     const actual = Number(reading.value);
     if (!numbersEqual(actual, expected)) {
@@ -995,15 +999,7 @@ async function verifyTooltipValues(page) {
 async function verifyVisibilityMatrix(page, evidence) {
   for (let mask = 0; mask < VISIBILITY_COMBINATIONS; mask += 1) {
     const requestStart = evidence.requests.length;
-    for (let index = 0; index < SERIES_IDS.length; index += 1) {
-      const button = legendButton(page, SERIES_IDS[index]);
-      const desired = Boolean(mask & (1 << index));
-      const selected = (await button.getAttribute("aria-pressed")) === "true";
-      if (selected !== desired) {
-        await button.focus();
-        await page.keyboard.press("Enter");
-      }
-    }
+    await setVisibilityMask(page, mask);
     await page.waitForFunction(({ expected }) => {
       const root = document.querySelector(".fm-live-charts");
       const selected = root?.querySelectorAll(".fm-chart-legend__item[aria-pressed='true']").length ?? 0;
@@ -1015,6 +1011,18 @@ async function verifyVisibilityMatrix(page, evidence) {
   }
   await showAllSignals(page);
   await verifyOneVisibleCanvas(page);
+}
+
+async function setVisibilityMask(page, mask, index = 0) {
+  if (index >= SERIES_IDS.length) return;
+  const button = legendButton(page, SERIES_IDS[index]);
+  const desired = Boolean(mask & (1 << index));
+  const selected = (await button.getAttribute("aria-pressed")) === "true";
+  if (selected !== desired) {
+    await button.focus();
+    await page.keyboard.press("Enter");
+  }
+  await setVisibilityMask(page, mask, index + 1);
 }
 
 async function verifyCanonicalCsvExport(page) {
@@ -1277,15 +1285,19 @@ async function runLifecycleStress(page) {
   await page.locator("[data-active-module-id='analysis-plots']").waitFor({ state: "attached", timeout: timeoutMs });
   await waitForQuietFrames(page);
   const baseline = await page.evaluate(() => ({ ...window.__FULLMAG_LIVE_CHARTS_SMOKE__.counters }));
-  for (let index = 0; index < LIFECYCLE_SWITCH_COUNT; index += 1) {
-    await live.click();
-    await page.locator("[data-active-module-id='live-charts']").waitFor({ state: "attached", timeout: timeoutMs });
-    await page.locator(".fm-live-charts .fm-analysis-chart-surface canvas").waitFor({ state: "visible", timeout: timeoutMs });
-    await analysis.click();
-    await page.locator("[data-active-module-id='analysis-plots']").waitFor({ state: "attached", timeout: timeoutMs });
-  }
+  await switchLifecycle(page, live, analysis, LIFECYCLE_SWITCH_COUNT);
   await waitForQuietFrames(page);
   return baseline;
+}
+
+async function switchLifecycle(page, live, analysis, remaining) {
+  if (remaining <= 0) return;
+  await live.click();
+  await page.locator("[data-active-module-id='live-charts']").waitFor({ state: "attached", timeout: timeoutMs });
+  await page.locator(".fm-live-charts .fm-analysis-chart-surface canvas").waitFor({ state: "visible", timeout: timeoutMs });
+  await analysis.click();
+  await page.locator("[data-active-module-id='analysis-plots']").waitFor({ state: "attached", timeout: timeoutMs });
+  await switchLifecycle(page, live, analysis, remaining - 1);
 }
 
 async function beginLiveRevisionObservation(page) {
@@ -1467,9 +1479,11 @@ async function setTheme(page, theme) {
 }
 
 async function collectProof(page, evidence, initialRequests, { axisRangeProof, idleProof }) {
-  const geometry = await liveChartGeometry(page);
-  const counters = await page.evaluate(() => window.__FULLMAG_LIVE_CHARTS_SMOKE__.counters);
-  const readings = await legendReadings(page);
+  const [geometry, counters, readings] = await Promise.all([
+    liveChartGeometry(page),
+    page.evaluate(() => window.__FULLMAG_LIVE_CHARTS_SMOKE__.counters),
+    legendReadings(page),
+  ]);
   return {
     apiBase,
     axisRange: axisRangeProof,
@@ -1519,13 +1533,17 @@ function legendButton(page, quantity) {
 }
 
 async function showAllSignals(page) {
-  for (const quantity of SERIES_IDS) {
-    const button = legendButton(page, quantity);
-    if ((await button.getAttribute("aria-pressed")) !== "true") {
-      await button.focus();
-      await page.keyboard.press("Enter");
-    }
+  await showAllSignalsAt(page);
+}
+
+async function showAllSignalsAt(page, index = 0) {
+  if (index >= SERIES_IDS.length) return;
+  const button = legendButton(page, SERIES_IDS[index]);
+  if ((await button.getAttribute("aria-pressed")) !== "true") {
+    await button.focus();
+    await page.keyboard.press("Enter");
   }
+  await showAllSignalsAt(page, index + 1);
 }
 
 async function liveChartGeometry(page) {
@@ -1602,11 +1620,15 @@ function rowsRequestsSince(evidence, index) {
 
 async function waitForRowsRequestCount(page, evidence, index, expected) {
   const deadline = Date.now() + Math.min(timeoutMs, 5_000);
-  while (rowsRequestsSince(evidence, index).length < expected && Date.now() < deadline) {
-    await page.waitForTimeout(50);
-  }
+  await waitForRowsRequestCountUntil(page, evidence, index, expected, deadline);
   await page.waitForTimeout(750);
   return rowsRequestsSince(evidence, index).length;
+}
+
+async function waitForRowsRequestCountUntil(page, evidence, index, expected, deadline) {
+  if (rowsRequestsSince(evidence, index).length >= expected || Date.now() >= deadline) return;
+  await page.waitForTimeout(50);
+  await waitForRowsRequestCountUntil(page, evidence, index, expected, deadline);
 }
 
 function liveChartsOwnedRequestsSince(evidence, index) {

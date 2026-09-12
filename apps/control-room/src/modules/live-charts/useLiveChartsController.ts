@@ -28,6 +28,11 @@ import { resolveLiveChartSelectedSeriesIds } from "./liveChartsSelection";
 import { liveChartXAxisOptions } from "./liveChartsPresentation";
 import type { LiveChartsExportRequest } from "./liveChartsViewTypes";
 
+type LiveChartPreferencesActions = Pick<
+  ReturnType<typeof useLiveChartPreferencesHydration>,
+  "setDescriptorLiveMode" | "setDescriptorRange" | "setDescriptorSelectedSeriesIds"
+>;
+
 export function createLiveChartSelectionHandlers({
   descriptorId,
   selection,
@@ -111,6 +116,7 @@ export function useLiveChartsController(selection: SelectionController) {
   const energyData = useLiveEnergyData({ active: true, descriptorId, paused });
   const [localFitRequest, setLocalFitRequest] = useState(0);
   const [localExportRequest, setLocalExportRequest] = useState<LiveChartsExportRequest | null>(null);
+  const [exportErrorFormat, setExportErrorFormat] = useState<LiveChartsExportRequest["format"] | null>(null);
   const localExportSequenceRef = useRef(0);
   const fitRequest = commandFitRequest + localFitRequest;
   const commandExportRequest: LiveChartsExportRequest | null = commandAction?.kind === "export"
@@ -138,43 +144,7 @@ export function useLiveChartsController(selection: SelectionController) {
   }, [descriptor.range, descriptor.xAxisId, descriptorId, preferences.isHydrated, tableData.range, tableData.xAxisId]);
   useEffect(() => {
     if (!commandAction) return;
-    if (commandAction.kind === "fit") {
-      liveChartsCommandRequests.complete();
-      return;
-    }
-    if (commandAction.kind === "set-live-mode") {
-      if (!commandAction.descriptorId || commandAction.descriptorId === descriptorId) {
-        preferences.setDescriptorLiveMode(descriptorId, commandAction.liveMode);
-      }
-      liveChartsCommandRequests.complete();
-      return;
-    }
-    if (commandAction.kind === "set-selected-series") {
-      if (commandAction.descriptorId === descriptorId) {
-        preferences.setDescriptorSelectedSeriesIds(descriptorId, commandAction.selectedSeriesIds);
-      }
-      liveChartsCommandRequests.complete();
-      return;
-    }
-    if (commandAction.kind === "set-range") {
-      if (commandAction.descriptorId === descriptorId) {
-        const nextRange = descriptorId === "energy"
-          ? commandAction.range
-          : normalizeLiveChartRangeForXAxis(commandAction.range, tableData.xAxisId);
-        if (nextRange.mode === "fixed") {
-          liveChartsWorkspaceStore.setRange({ fromSI: nextRange.fromSI, toSI: nextRange.toSI });
-        } else {
-          liveChartsWorkspaceStore.clearRange();
-        }
-        preferences.setDescriptorRange(descriptorId, nextRange);
-      }
-      liveChartsCommandRequests.complete();
-      return;
-    }
-    if (commandAction.kind === "set-preset") {
-      liveChartsWorkspaceStore.setSelectedDescriptorId(commandAction.descriptorId);
-      liveChartsCommandRequests.complete();
-    }
+    applyLiveChartsCommand({ action: commandAction, descriptorId, preferences, tableXAxisId: tableData.xAxisId });
   }, [commandAction, descriptorId, preferences, tableData.xAxisId]);
   const effectiveTableXAxisId = tableData.xAxisId;
   const tableSeries = useMemo(() => tableData.table ? buildScalarChartSeries({ ...tableData.table, valueAt: (rowIndex, columnIndex) => tableData.table!.values[rowIndex * tableData.table!.columnCount + columnIndex] }, {
@@ -211,13 +181,17 @@ export function useLiveChartsController(selection: SelectionController) {
   const effectiveXAxisId = descriptorId === "energy" ? "t" : effectiveTableXAxisId;
   return {
     descriptorId,
+    exportErrorFormat,
     fitRequest,
     isFollowing: !paused,
     onDescriptorChange: (next: LiveChartPresetId) => liveChartsWorkspaceStore.setSelectedDescriptorId(next),
-    onExport: (format: "csv" | "tsv" | "png") => setLocalExportRequest({
-      format,
-      requestId: `live-charts-local-export-${++localExportSequenceRef.current}`,
-    }),
+    onExport: (format: "csv" | "tsv" | "png") => {
+      setExportErrorFormat(null);
+      setLocalExportRequest({
+        format,
+        requestId: `live-charts-local-export-${++localExportSequenceRef.current}`,
+      });
+    },
     onFit: () => setLocalFitRequest((value) => value + 1),
     ...selectionHandlers,
     onRangeSelected: (fromSI: number, toSI: number) => {
@@ -227,6 +201,7 @@ export function useLiveChartsController(selection: SelectionController) {
     },
     onSeriesChange: (ids: string[]) => preferences.setDescriptorSelectedSeriesIds(descriptorId, ids),
     onRequestedExportHandled: () => {
+      setExportErrorFormat(null);
       if (commandExportRequest && isCurrentExportCommand(commandExportRequest.requestId)) {
         liveChartsCommandRequests.complete();
       } else if (!commandExportRequest && requestedExportRequestId) {
@@ -234,6 +209,7 @@ export function useLiveChartsController(selection: SelectionController) {
       }
     },
     onRequestedExportFailed: () => {
+      if (requestedExportRequest) setExportErrorFormat(requestedExportRequest.format);
       if (commandExportRequest && isCurrentExportCommand(commandExportRequest.requestId)) {
         liveChartsCommandRequests.fail();
       } else if (!commandExportRequest && requestedExportRequestId) {
@@ -269,6 +245,55 @@ export function useLiveChartsController(selection: SelectionController) {
         ? "Step"
         : effectiveXAxisId,
   };
+}
+
+function applyLiveChartsCommand({
+  action,
+  descriptorId,
+  preferences,
+  tableXAxisId,
+}: {
+  action: Exclude<NonNullable<ReturnType<typeof liveChartsCommandRequests.getSnapshot>>, null>;
+  descriptorId: string;
+  preferences: LiveChartPreferencesActions;
+  tableXAxisId: string;
+}): void {
+  if (action.kind === "export") return;
+  if (action.kind === "fit") {
+    liveChartsCommandRequests.complete();
+    return;
+  }
+  if (action.kind === "set-live-mode") {
+    if (!action.descriptorId || action.descriptorId === descriptorId) {
+      preferences.setDescriptorLiveMode(descriptorId, action.liveMode);
+    }
+    liveChartsCommandRequests.complete();
+    return;
+  }
+  if (action.kind === "set-selected-series") {
+    if (action.descriptorId === descriptorId) {
+      preferences.setDescriptorSelectedSeriesIds(descriptorId, action.selectedSeriesIds);
+    }
+    liveChartsCommandRequests.complete();
+    return;
+  }
+  if (action.kind === "set-range") {
+    if (action.descriptorId === descriptorId) {
+      const nextRange = descriptorId === "energy"
+        ? action.range
+        : normalizeLiveChartRangeForXAxis(action.range, tableXAxisId);
+      if (nextRange.mode === "fixed") {
+        liveChartsWorkspaceStore.setRange({ fromSI: nextRange.fromSI, toSI: nextRange.toSI });
+      } else {
+        liveChartsWorkspaceStore.clearRange();
+      }
+      preferences.setDescriptorRange(descriptorId, nextRange);
+    }
+    liveChartsCommandRequests.complete();
+    return;
+  }
+  liveChartsWorkspaceStore.setSelectedDescriptorId(action.descriptorId);
+  liveChartsCommandRequests.complete();
 }
 
 function isCurrentExportCommand(requestId: string): boolean {

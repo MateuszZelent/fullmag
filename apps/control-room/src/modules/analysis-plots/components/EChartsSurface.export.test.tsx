@@ -109,6 +109,33 @@ describe("Analysis chart export routing", () => {
     }
   });
 
+  it("cancels pending requests when the mounted chart identity changes", async () => {
+    renderedFormats.length = 0;
+    renderedRequestIds.length = 0;
+    renderedHandledCallbacks.clear();
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    const bus = new EventBus<KernelEventMap>();
+    try {
+      await act(async () => root.render(<EChartsSurface bus={bus} chartId="table-a" series={series} />));
+      await act(async () => bus.emit("analysis-plots:export-requested", { chartId: "table-a", format: "csv", requestId: "table-a-pending", source: "analysis-plots" }));
+      const staleAck = renderedHandledCallbacks.get("table-a-pending");
+      expect(renderedRequestIds).toContain("table-a-pending");
+
+      await act(async () => root.render(<EChartsSurface bus={bus} chartId="table-b" series={series} />));
+      expect(renderedRequestIds.at(-1)).toBeNull();
+      await act(async () => staleAck?.());
+      expect(renderedRequestIds.at(-1)).toBeNull();
+
+      await act(async () => bus.emit("analysis-plots:export-requested", { chartId: "table-b", format: "csv", requestId: "table-b-current", source: "analysis-plots" }));
+      expect(renderedRequestIds.at(-1)).toBe("table-b-current");
+      expect(renderedRequestIds.filter((requestId) => requestId === "table-a-pending")).toHaveLength(1);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("routes a right comparison-pane export only to its secondary chart identity", async () => {
     renderedRequests.length = 0;
     const dom = installSimulationPreparationTestDom();

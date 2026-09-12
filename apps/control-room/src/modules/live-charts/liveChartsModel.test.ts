@@ -117,6 +117,16 @@ describe("liveChartsModel", () => {
       range: { mode: "follow" },
       xAxisId: "step",
     });
+    expect(resolveLiveChartAxisAndRange(["mx"], "removed-axis", { mode: "tailRows", rows: 120 })).toEqual({
+      axisChanged: true,
+      range: { mode: "tailRows", rows: 120 },
+      xAxisId: "mx",
+    });
+    expect(resolveLiveChartAxisAndRange(["mx"], "removed-axis", { mode: "fullDecimated" })).toEqual({
+      axisChanged: true,
+      range: { mode: "fullDecimated" },
+      xAxisId: "mx",
+    });
     expect(normalizeLiveChartRangeForXAxis({ mode: "tailTime", durationS: 1e-9 }, "step")).toEqual({ mode: "follow" });
     expect(normalizeLiveChartRangeForXAxis({ mode: "fixed", fromSI: 3, toSI: 8 }, "step")).toEqual({ mode: "follow" });
     expect(normalizeLiveChartRangeForXAxis({ mode: "fixed", fromSI: 3, toSI: 8 }, "mx")).toEqual({ mode: "follow" });

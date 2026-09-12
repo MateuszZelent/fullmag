@@ -74,6 +74,11 @@
 .fm-live-charts__control-field [data-slot="select-trigger"] { min-width: 8rem; height: 34px; }
 .fm-live-charts__actions .fm-button { min-height: 34px; }
 .fm-live-charts__surface { min-height: 0; min-width: 0; }
+.fm-live-charts__export-error {
+  margin: 0 0 var(--fm-space-2);
+  color: var(--fm-danger);
+  font-size: var(--fm-font-size-xs);
+}
 .fm-live-charts__workspace {
   display: grid;
   grid-template-columns: minmax(195px, 225px) minmax(0, 1fr);

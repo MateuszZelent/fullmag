@@ -2019,7 +2019,7 @@ function relativeAppPath(filePath) {
 
 function requireTokens(block, label, tokens) {
   for (const token of tokens) {
-    if (!block.includes(token)) {
+    if (block.indexOf(token) === -1) {
       failures.push(`${label} must include ${token}.`);
     }
   }
@@ -2035,7 +2035,7 @@ function requirePatterns(block, label, patterns) {
 
 function forbidTokens(block, label, tokens) {
   for (const token of tokens) {
-    if (block.includes(token)) {
+    if (block.indexOf(token) !== -1) {
       failures.push(`${label} must not include ${token}.`);
     }
   }
