@@ -157,6 +157,12 @@ void context_record_adaptive_numerics_terminal(
 
 namespace {
 
+// The existing step-transaction injection slot is also used by the native
+// setter regression below.  Keep the marker out of the public ABI and reserve
+// the all-ones value, which cannot be a valid StepTransactionPhase.
+constexpr uint32_t ROTATED_DMI_REFRESH_FAILURE_TEST_INJECTION =
+    std::numeric_limits<uint32_t>::max();
+
 bool reject_step_transaction_mutation(Context &ctx, const char *operation)
 {
     if (!ctx.gpu_workspace_step_active) return false;
@@ -230,7 +236,9 @@ bool select_cuda_device_if_requested(Context &ctx) {
     return true;
 }
 
-bool refresh_multilayer_transaction_observables(Context &ctx)
+bool refresh_multilayer_transaction_observables(
+    Context &ctx,
+    bool force_dmi_observable_refresh = false)
 {
     ctx.last_error.clear();
     if (ctx.enable_demag) {
@@ -249,7 +257,8 @@ bool refresh_multilayer_transaction_observables(Context &ctx)
         }
         if (!ctx.last_error.empty()) return false;
     }
-    if (ctx.has_interfacial_dmi || ctx.has_rotated_interfacial_dmi || ctx.has_bulk_dmi) {
+    if (force_dmi_observable_refresh || ctx.has_interfacial_dmi ||
+        ctx.has_rotated_interfacial_dmi || ctx.has_bulk_dmi) {
         const bool ok = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
             ? launch_multilayer_dmi_field_fp64(ctx)
             : launch_multilayer_dmi_field_fp32(ctx);
@@ -269,6 +278,85 @@ bool refresh_multilayer_transaction_observables(Context &ctx)
     return ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
         ? launch_multilayer_effective_field_fp64(ctx)
         : launch_multilayer_effective_field_fp32(ctx);
+}
+
+struct RotatedDmiMutationSnapshot {
+    bool has_rotated_interfacial_dmi = false;
+    double D_rotated_interfacial = 0.0;
+    bool observables_valid = false;
+    EndpointFieldCache endpoint_field_cache{};
+    MultilayerDemagStageCounters multilayer_demag_stage_counters{};
+    uint64_t pending_device_operator_mask = 0;
+};
+
+RotatedDmiMutationSnapshot capture_rotated_dmi_mutation_snapshot(
+    const Context &ctx)
+{
+    RotatedDmiMutationSnapshot snapshot{};
+    snapshot.has_rotated_interfacial_dmi = ctx.has_rotated_interfacial_dmi;
+    snapshot.D_rotated_interfacial = ctx.D_rotated_interfacial;
+    snapshot.observables_valid = ctx.observables_valid;
+    snapshot.endpoint_field_cache = ctx.endpoint_field_cache;
+    snapshot.multilayer_demag_stage_counters =
+        ctx.multilayer_demag_stage_counters;
+    if (ctx.execution_receipt) {
+        const auto &receipt = *ctx.execution_receipt;
+        std::lock_guard<std::mutex> lock(receipt.accounting_mutex);
+        snapshot.pending_device_operator_mask =
+            receipt.pending_device_operator_mask;
+    }
+    return snapshot;
+}
+
+void restore_rotated_dmi_pending_receipt(
+    Context &ctx,
+    uint64_t pending_device_operator_mask)
+{
+    if (!ctx.execution_receipt) return;
+    auto &receipt = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(receipt.accounting_mutex);
+    receipt.pending_device_operator_mask = pending_device_operator_mask;
+}
+
+bool rollback_rotated_dmi_mutation(
+    Context &ctx,
+    const RotatedDmiMutationSnapshot &snapshot,
+    const std::string &primary_error)
+{
+    ctx.has_rotated_interfacial_dmi = snapshot.has_rotated_interfacial_dmi;
+    ctx.D_rotated_interfacial = snapshot.D_rotated_interfacial;
+
+    // Recompute the old observable fields before restoring cache metadata.  A
+    // forced DMI launch is required when the old state had no DMI: the kernel
+    // then clears stale buffers produced by the failed candidate update.
+    context_invalidate_observables(ctx);
+    const bool observables_restored =
+        refresh_multilayer_transaction_observables(ctx, true);
+
+    ctx.multilayer_demag_stage_counters =
+        snapshot.multilayer_demag_stage_counters;
+    if (observables_restored) {
+        ctx.endpoint_field_cache = snapshot.endpoint_field_cache;
+        ctx.observables_valid = snapshot.observables_valid;
+    } else {
+        // Never advertise the old cache as fresh when the device restore did
+        // not complete.
+        context_invalidate_observables(ctx);
+    }
+    restore_rotated_dmi_pending_receipt(
+        ctx, snapshot.pending_device_operator_mask);
+    ctx.last_error = primary_error;
+    return observables_restored;
+}
+
+bool consume_rotated_dmi_refresh_failure_injection(Context &ctx)
+{
+    if (ctx.step_transaction_test_failure_phase !=
+        ROTATED_DMI_REFRESH_FAILURE_TEST_INJECTION) {
+        return false;
+    }
+    ctx.step_transaction_test_failure_phase = 0;
+    return true;
 }
 
 bool rollback_step_transaction(Context &ctx)
@@ -1852,11 +1940,22 @@ int fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
         }
     }
 
+    const auto snapshot = capture_rotated_dmi_mutation_snapshot(*ctx);
+    const bool inject_refresh_failure = consume_rotated_dmi_refresh_failure_injection(*ctx);
     ctx->has_rotated_interfacial_dmi =
         descriptor->has_rotated_interfacial_dmi != 0;
     ctx->D_rotated_interfacial = descriptor->dmi_D_rotated_interfacial;
     context_invalidate_observables(*ctx);
-    if (!refresh_multilayer_transaction_observables(*ctx)) {
+    bool refreshed = refresh_multilayer_transaction_observables(*ctx, true);
+    if (refreshed && inject_refresh_failure) {
+        ctx->last_error = "injected rotated DMI observable refresh failure";
+        refreshed = false;
+    }
+    if (!refreshed) {
+        const std::string primary_error = ctx->last_error;
+        if (!rollback_rotated_dmi_mutation(*ctx, snapshot, primary_error)) {
+            ctx->last_error += "; rollback observable refresh failed; cache invalidated";
+        }
         return FULLMAG_FDM_ERR_CUDA;
     }
     fullmag_fdm_commit_operator_residency(*ctx);
@@ -2185,6 +2284,22 @@ extern "C" int fullmag_fdm_test_force_gpu_transport_adaptive_retry(
         return FULLMAG_FDM_ERR_INVALID;
     ctx->gpu_transport_test_force_adaptive_retry = true;
     return FULLMAG_FDM_OK;
+}
+
+extern "C" int fullmag_fdm_test_inject_rotated_dmi_refresh_failure_once(
+    fullmag_fdm_backend *handle)
+{
+#if FULLMAG_HAS_CUDA
+    if (handle == nullptr) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    if (!ctx->has_multilayer_plan_v2) return FULLMAG_FDM_ERR_INVALID;
+    ctx->step_transaction_test_failure_phase =
+        ROTATED_DMI_REFRESH_FAILURE_TEST_INJECTION;
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
 }
 
 extern "C" int fullmag_fdm_test_inject_step_transaction_failure_once(

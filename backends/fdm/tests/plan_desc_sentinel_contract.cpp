@@ -454,6 +454,7 @@ void rotated_dmi_fully_periodic_boundary_may_omit_exchange() {
     fullmag_fdm_plan_desc_v2 plan{};
     plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
     plan.struct_size = sizeof(plan);
+    plan.base.grid = {3, 2, 1, 1.0e-9, 1.0e-9, 1.0e-9};
     plan.base.periodic_x = 1;
     plan.base.periodic_y = 1;
     plan.base.periodic_z = 1;
@@ -465,6 +466,39 @@ void rotated_dmi_fully_periodic_boundary_may_omit_exchange() {
     check(status == FULLMAG_FDM_OK,
           "fully periodic rotated DMI need not enable Exchange for the ABI boundary law");
     check(ingestion != nullptr, "fully periodic rotated DMI must allocate an owner");
+    fullmag_fdm_plan_ingestion_v2_destroy(ingestion);
+}
+
+void rotated_dmi_boundary_exchange_distinguishes_periodic_seams_from_mask_edges() {
+    std::array<unsigned char, 3> active = {1, 1, 1};
+    std::array<double, 3> exchange = {0.0, 1.3e-11, 1.3e-11};
+    fullmag_fdm_plan_desc_v2 plan{};
+    plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
+    plan.struct_size = sizeof(plan);
+    plan.base.grid = {3, 1, 1, 1.0e-9, 1.0e-9, 1.0e-9};
+    plan.base.material.exchange_stiffness = 1.3e-11;
+    plan.base.enable_exchange = 1;
+    plan.base.periodic_x = 1;
+    plan.base.periodic_y = 1;
+    plan.base.periodic_z = 1;
+    plan.base.active_mask = active.data();
+    plan.base.active_mask_len = active.size();
+    plan.base.a_field = exchange.data();
+    plan.base.a_field_len = exchange.size();
+    plan.has_rotated_interfacial_dmi = 1;
+    plan.dmi_D_rotated_interfacial = 3.0e-3;
+    fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
+    check(fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion) == FULLMAG_FDM_OK,
+          "a fully active periodic seam is not an open Aex boundary");
+    fullmag_fdm_plan_ingestion_v2_destroy(ingestion);
+    ingestion = nullptr;
+    active[2] = 0;
+    check(fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion) == FULLMAG_FDM_ERR_INVALID,
+          "mask boundary across the periodic seam must inspect resolved local Aex");
+    check(ingestion == nullptr, "invalid masked seam must not allocate an owner");
+    exchange[0] = 1.3e-11;
+    check(fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion) == FULLMAG_FDM_OK,
+          "positive local Aex must allow the masked periodic seam");
     fullmag_fdm_plan_ingestion_v2_destroy(ingestion);
 }
 
@@ -652,6 +686,7 @@ int main() {
     rotated_dmi_active_mask_boundary_requires_positive_exchange_stiffness_at_public_ingestion_boundary();
     rotated_dmi_zero_is_noop_for_public_open_boundary_exchange_stiffness();
     rotated_dmi_fully_periodic_boundary_may_omit_exchange();
+    rotated_dmi_boundary_exchange_distinguishes_periodic_seams_from_mask_edges();
     rotated_dmi_flag_constant_and_composition_are_validated();
     incompatible_version_and_size_fail_before_backend_allocation();
 #if FULLMAG_FDM_CONTRACT_HAS_CUDA
