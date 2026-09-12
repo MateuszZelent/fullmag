@@ -127,6 +127,13 @@ jeszcze takim providerem i nie usuwa runnerowego odrzucenia planu Floquet z
 - Test kontraktu dokumentacji matematycznej: 9 passed. Walidatory source-map i `git diff --check`: exit 0.
 - Próba nowego managed snapshotu nie utworzyła dodatkowego joba: runner zgłosił aktywny lock/storage dla rejestru `eigensolve-dispersion-plan-20260-c5dfad6d7f548079` i nakazał użyć istniejącego joba lub zaczekać. Najnowszy własny snapshot to job `b5200ded44964953a03491183dffaae1`, sequence 19, source digest `b59eadab5a1dd98e7b394403bd722bce864c81ea4d7659e24acd790f70853757`; ostatni odczyt pozostaje `queued` bez exit code. Nie uzyskano kompilacji C++ ani runtime dla bieżącego snapshotu.
 
+Próba `just worktree-finish ... state=review` z aktualnym HEAD została
+zatrzymana przez ten sam preflight (`Container runner owns heavy builds on this
+host`). Rejestr pozostaje więc `active` z historycznym HEAD-em bazowym; nie
+wykonywano ręcznej mutacji pliku ani obchodzenia blokady. Następny krok to
+zwolnienie/rozliczenie dokładnego lease runnera, a potem ponowienie
+`worktree-finish`.
+
 Stan integracji pozostaje **W TRAKCIE**. Commity mają przejrzany staged diff;
 otwarte pozostają PR, managed C++/SLEPc, provider `A_{q\phi}(k)`/`P(k)`/
 `A_{\phi q}(k)`, walidacja fizyczna oraz ścieżki Control Room/GPU.
