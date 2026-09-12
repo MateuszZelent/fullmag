@@ -50,7 +50,12 @@ interface EChartsSurfaceProps {
   xAxisLabel?: string;
 }
 
-export function EChartsSurface({
+export function EChartsSurface(props: EChartsSurfaceProps) {
+  const stableChartKey = props.chartId ?? "default";
+  return <EChartsSurfaceImpl key={stableChartKey} {...props} />;
+}
+
+function EChartsSurfaceImpl({
   allSeries,
   bus,
   chartId,
@@ -71,6 +76,7 @@ export function EChartsSurface({
   const queuedExportRequestsRef = useRef<ChartExportRequest[]>([]);
   const activeExportRequestRef = useRef<ChartExportRequest | null>(null);
   const rangeCommitTimerRef = useRef<number | null>(null);
+  const acceptedChartId = chartId ?? series[0]?.source.tableId ?? "default";
   const enqueueExportRequest = useCallback((request: ChartExportRequest) => {
     if (
       activeExportRequestRef.current?.requestId === request.requestId ||
@@ -100,7 +106,6 @@ export function EChartsSurface({
   useEffect(() => () => cancelRangeCommit(rangeCommitTimerRef), [rangeCommitTimerRef]);
   useEffect(() => {
     if (!bus) return;
-    const acceptedChartId = chartId ?? series[0]?.source.tableId ?? "default";
     return bus.subscribe("analysis-plots:export-requested", (request) => {
       if (request.chartId === acceptedChartId) {
         enqueueExportRequest({
@@ -109,7 +114,7 @@ export function EChartsSurface({
         });
       }
     });
-  }, [bus, chartId, enqueueExportRequest, series]);
+  }, [acceptedChartId, bus, enqueueExportRequest]);
 
   return (
     <InteractiveChartSurface
@@ -134,7 +139,7 @@ export function EChartsSurface({
       fitRequest={fitRequest}
       initialRange={initialRange}
       presentation={presentation}
-       requestedExportRequest={requestedExportRequest}
+      requestedExportRequest={requestedExportRequest}
       series={series}
       surface={surface}
       ownerStatus={surfaceStatus}
@@ -150,8 +155,8 @@ export function EChartsSurface({
         const range = chartRangeFromDataZoomEvent({ endValue: toValue, startValue: fromValue });
         if (range) scheduleRangeCommit(rangeCommitTimerRef, () => onRangeChange?.(range));
       }}
-       onRequestedExportHandled={() => acknowledgeExportRequest(requestedExportRequest?.requestId ?? null)}
-       onRequestedExportFailed={() => acknowledgeExportRequest(requestedExportRequest?.requestId ?? null)}
+      onRequestedExportHandled={() => acknowledgeExportRequest(requestedExportRequest?.requestId ?? null)}
+      onRequestedExportFailed={() => acknowledgeExportRequest(requestedExportRequest?.requestId ?? null)}
     />
   );
 }

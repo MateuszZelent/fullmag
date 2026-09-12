@@ -8,6 +8,8 @@ from tests.standard_problems.bimeron.goebel_2019.verify import (
     MIN_RELAX_TIME_S,
     _receipt_contains_dmi_operator,
     _goebel_plan_has_only_expected_physics,
+    _goebel_material_has_only_expected_physics,
+    _explicit_initial_scalar,
     _initial_energy_from_log,
     _stage_duration_s,
     _stage_meets_minimum_duration,
@@ -29,6 +31,23 @@ def test_goebel_source_physics_rejects_extra_drives_and_torques() -> None:
     ):
         plan = {key: value}
         assert not _goebel_plan_has_only_expected_physics(plan), key
+
+
+def test_goebel_material_physics_allowlist_is_exact() -> None:
+    material = {
+        "saturation_magnetisation": 0.58e6,
+        "exchange_stiffness": 15e-12,
+        "damping": 0.3,
+        "uniaxial_anisotropy_ku1": 0.8e6,
+        "anisotropy_axis": [1.0, 0.0, 0.0],
+    }
+    assert _goebel_material_has_only_expected_physics(material)
+    assert not _goebel_material_has_only_expected_physics(
+        {**material, "bulk_dmi": 1.0e-3}
+    )
+    assert not _goebel_material_has_only_expected_physics(
+        {key: value for key, value in material.items() if key != "damping"}
+    )
 
 
 def _analytic_bimeron(nx: int, ny: int) -> list[list[float]]:
@@ -112,6 +131,18 @@ def test_initial_energy_ignores_zero_heartbeat(tmp_path: Path) -> None:
     )
 
     assert _initial_energy_from_log(runtime_log) == -7.4885e-18
+
+
+def test_explicit_initial_scalar_does_not_treat_post_relax_row_as_step_zero(
+    tmp_path: Path,
+) -> None:
+    scalars = tmp_path / "scalars.csv"
+    scalars.write_text(
+        "step,time,E_total\n10,1.0e-11,-1.1e-18\n",
+        encoding="utf-8",
+    )
+
+    assert _explicit_initial_scalar(scalars) is None
 
 
 def test_relaxation_duration_floor_rejects_a_short_stage() -> None:

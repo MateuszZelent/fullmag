@@ -979,8 +979,9 @@ uint64_t fullmag_fdm_capability_bits_v1(void) {
 
 /* ── Create ── */
 
-fullmag_fdm_backend *fullmag_fdm_backend_create(
-    const fullmag_fdm_plan_desc *plan)
+static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
+    const fullmag_fdm_plan_desc *plan,
+    bool reserve_rotated_dmi)
 {
 #if FULLMAG_HAS_CUDA
     if (!plan) return nullptr;
@@ -1483,7 +1484,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
         }
     }
 
-    if (!context_preflight_single_grid_workspace(*ctx, *plan)) {
+    if (!context_preflight_single_grid_workspace(*ctx, *plan, reserve_rotated_dmi)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
 
@@ -1695,8 +1696,15 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     return reinterpret_cast<fullmag_fdm_backend *>(ctx);
 #else
     (void)plan;
+    (void)reserve_rotated_dmi;
     return nullptr;
 #endif
+}
+
+fullmag_fdm_backend *fullmag_fdm_backend_create(
+    const fullmag_fdm_plan_desc *plan)
+{
+    return fullmag_fdm_backend_create_impl(plan, false);
 }
 
 int fullmag_fdm_backend_create_time_policy_v2_checked(
@@ -1712,7 +1720,9 @@ int fullmag_fdm_backend_create_time_policy_v2_checked(
     std::unique_ptr<fullmag_fdm_plan_ingestion_v2> ingestion(raw_ingestion);
 #if FULLMAG_HAS_CUDA
     plan = &plan_ingestion_descriptor(*ingestion);
-    fullmag_fdm_backend *handle = fullmag_fdm_backend_create(&plan->base);
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create_impl(
+        &plan->base,
+        plan->has_rotated_interfacial_dmi != 0);
     if (!handle) return FULLMAG_FDM_ERR_CUDA;
     *out_handle = handle;
     auto *ctx = reinterpret_cast<Context *>(handle);
@@ -1980,6 +1990,13 @@ int fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
         }
         return FULLMAG_FDM_ERR_CUDA;
     }
+    // The setter is a pre-step configuration boundary.  Keep the receipt's
+    // DMI requirement synchronized with the post-mutation Hamiltonian rather
+    // than retaining a stale bit from an earlier enable operation.
+    const bool dmi_required = ctx->has_interfacial_dmi ||
+        ctx->has_rotated_interfacial_dmi || ctx->has_bulk_dmi;
+    fullmag_fdm_set_operator_device_requirement(
+        *ctx->execution_receipt, FULLMAG_FDM_OPERATOR_DMI, dmi_required);
     fullmag_fdm_commit_operator_residency(*ctx);
     return FULLMAG_FDM_OK;
 #else

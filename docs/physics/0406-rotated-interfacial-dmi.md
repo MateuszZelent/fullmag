@@ -226,8 +226,10 @@ jeszcze osobnych pól `H_rotated_dmi` ani `eden_rotated_dmi`, dlatego takie
 
 `E_dmi` i `eden_dmi` są agregatami DMI; osobny składnik rDMI nie jest ponownie
 dodawany do `E_total` ani `eden_total`. Manifest zakończonego przebiegu zapisuje
-agregat `final_e_dmi`: API może użyć go jako `E_rotated_dmi` tylko przy
-jednoznacznym planie zawierającym wyłącznie rDMI. W FDM `eden_rotated_dmi` jest
+zarówno agregat `final_e_dmi`, jak i rozdzielony składnik `final_e_rotated_dmi`.
+API preferuje składnik rozdzielony; dla starych manifestów może użyć
+`final_e_dmi` jako `E_rotated_dmi` tylko przy jednoznacznym planie zawierającym
+wyłącznie rDMI. W FDM `eden_rotated_dmi` jest
 dostępne przez materializację on-demand, lecz nie przez harmonogram snapshotów
 ani field autosave; takie żądanie jest odrzucane. FEM eigenmodes i frequency
 response nie obsługują rDMI i nie ogłaszają jego wielkości w capabilities.

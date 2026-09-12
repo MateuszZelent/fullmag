@@ -7437,6 +7437,30 @@ fn rotated_interfacial_dmi_rejects_mixed_dmi_energy_channels() {
 }
 
 #[test]
+fn fem_rotated_interfacial_dmi_ignores_unreferenced_material_dmi() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    attach_unit_fem_domain_mesh(&mut ir);
+    ir.energy_terms = vec![
+        EnergyTermIR::Exchange,
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+    let mut unused_material = ir.materials[0].clone();
+    unused_material.name = "unused".to_string();
+    unused_material.interfacial_dmi = Some(1.0e-3);
+    ir.materials.push(unused_material);
+
+    let planned = plan(&ir).expect(
+        "an unreferenced conventional material DMI must not conflict with active FEM rotated DMI",
+    );
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    assert_eq!(fem.rotated_interfacial_dmi, Some(3.0e-3));
+    assert_eq!(fem.interfacial_dmi, None);
+}
+
+#[test]
 fn fem_rotated_dmi_field_outputs_fail_until_materialized() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;

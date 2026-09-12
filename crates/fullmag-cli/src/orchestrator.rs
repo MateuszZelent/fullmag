@@ -5595,6 +5595,7 @@ pub(crate) fn run_manifest_from_steps(
         final_e_ext: steps.last().map(|step| step.e_ext),
         final_e_ani: steps.last().map(|step| step.e_ani),
         final_e_dmi: steps.last().map(|step| step.e_dmi),
+        final_e_rotated_dmi: steps.last().map(|step| step.e_rotated_dmi),
         final_e_total: steps.last().map(|step| step.e_total),
         artifact_dir: artifact_dir.display().to_string(),
     }
@@ -5776,6 +5777,12 @@ fn print_script_summary(summary: &ScriptRunSummary) {
     if let Some(final_e_dmi) = summary.final_e_dmi {
         println!("- final_E_dmi: {:.6e} J", final_e_dmi);
     }
+    if let Some(final_e_rotated_dmi) = summary.final_e_rotated_dmi {
+        println!(
+            "- final_E_rotated_dmi: {:.6e} J",
+            final_e_rotated_dmi
+        );
+    }
     if let Some(final_e_total) = summary.final_e_total {
         println!("- final_E_total: {:.6e} J", final_e_total);
     }
@@ -5879,6 +5886,7 @@ fn refresh_problem_energy_state(
         state.live_state.latest_step.e_ext = step_stats.e_ext;
         state.live_state.latest_step.e_ani = step_stats.e_ani;
         state.live_state.latest_step.e_dmi = step_stats.e_dmi;
+        state.live_state.latest_step.e_rotated_dmi = step_stats.e_rotated_dmi;
         state.live_state.latest_step.e_total = step_stats.e_total;
         state.live_state.latest_step.max_dm_dt = step_stats.max_dm_dt;
         state.live_state.latest_step.max_h_eff = step_stats.max_h_eff;
@@ -11293,6 +11301,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         final_e_ext: aggregated_steps.last().map(|step| step.e_ext),
         final_e_ani: aggregated_steps.last().map(|step| step.e_ani),
         final_e_dmi: aggregated_steps.last().map(|step| step.e_dmi),
+        final_e_rotated_dmi: aggregated_steps.last().map(|step| step.e_rotated_dmi),
         final_e_total: aggregated_steps.last().map(|step| step.e_total),
         wall_time_ns: aggregated_steps.last().map(|step| step.wall_time_ns),
         backend_create_wall_time_ns: aggregated_steps
@@ -11407,6 +11416,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             e_ext: step.e_ext,
             e_ani: step.e_ani,
             e_dmi: step.e_dmi,
+            e_rotated_dmi: step.e_rotated_dmi,
             e_total: step.e_total,
             max_dm_dt: step.max_dm_dt,
             max_h_eff: step.max_h_eff,
@@ -12265,6 +12275,7 @@ mod tests {
                 final_e_ext: None,
                 final_e_ani: None,
                 final_e_dmi: None,
+                final_e_rotated_dmi: None,
                 final_e_total: None,
                 artifact_dir: "/tmp/artifacts".to_string(),
             },
@@ -16030,11 +16041,13 @@ mod tests {
         state.live_state.latest_step.preview_field = Some(test_preview_field("h_eff", 1, 2.0));
         let mut update = test_step_update(9);
         update.stats.e_total = 42.0;
+        update.stats.e_rotated_dmi = 17.0;
         let progress = crate::stage_heartbeat::StageHeartbeatProgress::new(&update);
 
         progress.apply_to_live_step(&mut state.live_state.latest_step);
 
         assert_eq!(state.live_state.latest_step.step, 9);
+        assert_eq!(state.live_state.latest_step.e_rotated_dmi, 17.0);
         assert_eq!(state.live_state.latest_step.e_total, 42.0);
         assert_eq!(state.live_state.latest_step.grid, [17, 19, 23]);
         assert_eq!(

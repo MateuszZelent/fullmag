@@ -819,11 +819,23 @@ fn rotated_dmi_exchange_stiffness_error(
                 .to_string(),
         );
     }
-    if !(material.exchange_stiffness.is_finite() && material.exchange_stiffness > 0.0) {
+    let has_resolved_spatial_exchange = material.a_field.is_some() || a_element_field.is_some();
+    if !has_resolved_spatial_exchange
+        && !(material.exchange_stiffness.is_finite() && material.exchange_stiffness > 0.0)
+    {
         return Some(
             "RotatedInterfacialDmi with open magnetic boundaries requires a strictly positive finite resolved FEM exchange stiffness A"
                 .to_string(),
         );
+    }
+
+    if let Some(values) = a_element_field {
+        if values.len() != mesh.cells.len() {
+            return Some(
+                "RotatedInterfacialDmi with open magnetic boundaries requires A_element_field to cover every FEM cell"
+                    .to_string(),
+            );
+        }
     }
 
     let classified = match mesh.cells.mesh_parts.len() {
@@ -879,10 +891,11 @@ fn rotated_dmi_exchange_stiffness_error(
                     .to_string(),
             );
         }
-        if magnetic_nodes
-            .iter()
-            .any(|node| !(values[*node].is_finite() && values[*node] > 0.0))
-        {
+        if magnetic_nodes.iter().any(|node| {
+            values
+                .get(*node)
+                .is_none_or(|value| !(value.is_finite() && *value > 0.0))
+        }) {
             return Some(
                 "RotatedInterfacialDmi with open magnetic boundaries requires strictly positive finite material.a_field values on every magnetic boundary support"
                     .to_string(),
@@ -3372,14 +3385,14 @@ pub(crate) fn plan_fem(
     } else {
         interfacial_dmi_normal = None;
     }
-    let has_material_interfacial_dmi = problem.materials.iter().any(|material| {
+    let has_material_interfacial_dmi = magnet_materials.values().any(|material| {
         material.interfacial_dmi.is_some()
             || material
                 .dind_field
                 .as_ref()
                 .is_some_and(|values: &Vec<f64>| !values.is_empty())
     });
-    let has_material_bulk_dmi = problem.materials.iter().any(|material| {
+    let has_material_bulk_dmi = magnet_materials.values().any(|material| {
         material.bulk_dmi.is_some()
             || material
                 .dbulk_field

@@ -2027,7 +2027,7 @@ function relativeAppPath(filePath) {
 
 function requireTokens(block, label, tokens) {
   for (const token of tokens) {
-    if (!block.includes(token)) {
+    if (!containsToken(block, token)) {
       failures.push(`${label} must include ${token}.`);
     }
   }
@@ -2043,8 +2043,13 @@ function requirePatterns(block, label, patterns) {
 
 function forbidTokens(block, label, tokens) {
   for (const token of tokens) {
-    if (block.includes(token)) {
+    if (containsToken(block, token)) {
       failures.push(`${label} must not include ${token}.`);
     }
   }
+}
+
+function containsToken(block, token) {
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(escaped).test(block);
 }

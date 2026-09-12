@@ -79,9 +79,16 @@ class SaveScalar:
     every: SamplingPeriod
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "scalar", require_non_empty(self.scalar, "scalar"))
-        if self.scalar not in _KNOWN_SCALARS:
-            raise ValueError(f"unsupported scalar quantity '{self.scalar}'")
+        scalar = require_non_empty(self.scalar, "scalar")
+        # Canonical quantity identifiers are case-sensitive in ProblemIR, but
+        # the public scalar API historically accepted lower-case aliases.
+        # Normalize the new component at the boundary so every transport
+        # layer receives the same `E_rotated_dmi` key.
+        if scalar == "e_rotated_dmi":
+            scalar = "E_rotated_dmi"
+        object.__setattr__(self, "scalar", scalar)
+        if scalar not in _KNOWN_SCALARS:
+            raise ValueError(f"unsupported scalar quantity '{scalar}'")
         object.__setattr__(self, "every", normalize_sampling_period(self.every, "every"))
 
     def to_ir(self) -> dict[str, object]:

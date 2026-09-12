@@ -1,6 +1,12 @@
 import pytest
 
-from fullmag.model.energy import BulkDMI, Demag, Exchange, InterfacialDMI
+from fullmag.model.energy import (
+    BulkDMI,
+    Demag,
+    Exchange,
+    InterfacialDMI,
+    RotatedInterfacialDMI,
+)
 from fullmag.model.problem import _validate_authored_mixed_p1_scope
 from fullmag.model.structure import Material
 
@@ -93,6 +99,20 @@ def test_mixed_p1_preflight_rejects_gpu_dmi_with_stable_predicate() -> None:
 
     assert "failed_predicates=[gpu_dmi_kernel_not_mixed_p1]" in str(error.value)
     assert "fallback=none" in str(error.value)
+
+
+def test_mixed_p1_preflight_ignores_zero_rotated_dmi_on_gpu() -> None:
+    material = Material(name="Py", Ms=8.0e5, A=1.3e-11, alpha=0.02)
+
+    _validate_mixed_p1(
+        device="cuda",
+        material=material,
+        energy_terms=[
+            Exchange(),
+            Demag(realization="auto"),
+            RotatedInterfacialDMI(0.0),
+        ],
+    )
 
 
 def test_mixed_p1_preflight_keeps_ms_field_rejected() -> None:

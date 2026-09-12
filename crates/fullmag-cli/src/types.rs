@@ -87,6 +87,7 @@ pub(crate) struct ScriptRunSummary {
     pub final_e_ext: Option<f64>,
     pub final_e_ani: Option<f64>,
     pub final_e_dmi: Option<f64>,
+    pub final_e_rotated_dmi: Option<f64>,
     pub final_e_total: Option<f64>,
     pub wall_time_ns: Option<u64>,
     pub backend_create_wall_time_ns: Option<u64>,
@@ -189,6 +190,7 @@ pub(crate) struct RunManifest {
     pub final_e_ext: Option<f64>,
     pub final_e_ani: Option<f64>,
     pub final_e_dmi: Option<f64>,
+    pub final_e_rotated_dmi: Option<f64>,
     pub final_e_total: Option<f64>,
     pub artifact_dir: String,
 }
@@ -226,6 +228,8 @@ pub(crate) struct LiveStepView {
     pub e_ext: f64,
     pub e_ani: f64,
     pub e_dmi: f64,
+    #[serde(default)]
+    pub e_rotated_dmi: f64,
     pub e_total: f64,
     pub max_dm_dt: f64,
     pub max_h_eff: f64,
@@ -810,6 +814,8 @@ pub(crate) struct CurrentLiveScalarRow {
     pub e_ext: f64,
     pub e_ani: f64,
     pub e_dmi: f64,
+    #[serde(default)]
+    pub e_rotated_dmi: f64,
     pub e_total: f64,
     pub max_dm_dt: f64,
     pub max_h_eff: f64,

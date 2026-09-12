@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => {
   };
   return {
     descriptor,
+    selectedDescriptorId: "magnetization" as "magnetization" | "energy",
     preferences: {
       descriptor,
       isHydrated: true,
@@ -36,7 +37,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("@/kernel/workspace/useLiveChartsWorkspace", () => ({
-  useLiveChartsWorkspaceSelector: () => "magnetization",
+  useLiveChartsWorkspaceSelector: () => mocks.selectedDescriptorId,
 }));
 
 vi.mock("@/kernel/workspace/liveChartsWorkspace", () => ({
@@ -85,6 +86,7 @@ function ControllerHarness() {
 
 afterEach(() => {
   latestController = null;
+  mocks.selectedDescriptorId = "magnetization";
   mocks.workspace.clearRange.mockClear();
   mocks.workspace.setRange.mockClear();
   mocks.workspace.setSelectedDescriptorId.mockClear();
@@ -141,6 +143,91 @@ describe("useLiveChartsController export ownership", () => {
       const thirdRequestId = latestController?.requestedExportRequest?.requestId;
       await act(async () => staleFailed?.());
       expect(latestController?.requestedExportRequest?.requestId).toBe(thirdRequestId);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("retains an accessible error after a local export fails", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as HTMLElement);
+    try {
+      await act(async () => root.render(<ControllerHarness />));
+      await act(async () => latestController?.onExport("csv"));
+      expect(latestController?.requestedExportRequest).toMatchObject({ format: "csv" });
+      await act(async () => latestController?.onRequestedExportFailed?.());
+      expect(latestController?.requestedExportRequest).toBeNull();
+      expect(latestController?.exportErrorFormat).toBe("csv");
+      await act(async () => latestController?.onExport("csv"));
+      expect(latestController?.exportErrorFormat).toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("clears a previous local export error when a command export succeeds", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as HTMLElement);
+    let command: Promise<"completed" | "failed"> | undefined;
+    try {
+      await act(async () => root.render(<ControllerHarness />));
+      await act(async () => latestController?.onExport("csv"));
+      await act(async () => latestController?.onRequestedExportFailed?.());
+      expect(latestController?.exportErrorFormat).toBe("csv");
+
+      await act(async () => {
+        command = liveChartsCommandRequests.request({ kind: "export", format: "png" });
+        await Promise.resolve();
+      });
+      expect(latestController?.exportErrorFormat).toBeNull();
+
+      await act(async () => latestController?.onRequestedExportHandled());
+      await expect(command).resolves.toBe("completed");
+      expect(latestController?.exportErrorFormat).toBeNull();
+    } finally {
+      liveChartsCommandRequests.fail();
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("ignores a stale failure callback after a newer export request", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as HTMLElement);
+    try {
+      await act(async () => root.render(<ControllerHarness />));
+      await act(async () => latestController?.onExport("csv"));
+      const staleFailed = latestController?.onRequestedExportFailed;
+      await act(async () => latestController?.onExport("tsv"));
+      const currentRequestId = latestController?.requestedExportRequest?.requestId;
+      await act(async () => staleFailed?.());
+      expect(latestController?.requestedExportRequest?.requestId).toBe(currentRequestId);
+      expect(latestController?.exportErrorFormat).toBeNull();
+
+      await act(async () => latestController?.onRequestedExportFailed?.());
+      expect(latestController?.requestedExportRequest).toBeNull();
+      expect(latestController?.exportErrorFormat).toBe("tsv");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("clears a previous export error when the chart preset changes", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as HTMLElement);
+    try {
+      await act(async () => root.render(<ControllerHarness />));
+      await act(async () => latestController?.onExport("csv"));
+      await act(async () => latestController?.onRequestedExportFailed?.());
+      expect(latestController?.exportErrorFormat).toBe("csv");
+
+      mocks.selectedDescriptorId = "energy";
+      await act(async () => root.render(<ControllerHarness />));
+      expect(latestController?.descriptorId).toBe("energy");
+      expect(latestController?.exportErrorFormat).toBeNull();
     } finally {
       await act(async () => root.unmount());
       dom.restore();

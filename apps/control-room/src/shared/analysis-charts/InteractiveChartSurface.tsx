@@ -3,11 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { ChartDataPresentationState } from "./chartPresentationState";
-import {
-  ChartExportControls,
-  exportChartData,
-  exportChartPng,
-} from "./ChartExportControls";
+import { ChartExportControls } from "./ChartExportControls";
+import { exportChartData, exportChartPng } from "./chartExport";
 import type { ChartExportRequest } from "./chartExport";
 import { EChartsCanvasSurface } from "./EChartsCanvasSurface";
 import { PointsTableDialog } from "./PointsTableDialog";

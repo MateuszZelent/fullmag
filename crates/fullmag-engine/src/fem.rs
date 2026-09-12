@@ -3387,6 +3387,25 @@ impl FemLlgProblem {
         interfacial_field: &mut [Vector3],
         bulk_field: &mut [Vector3],
     ) {
+        self.dmi_fields_compute_into_selected(
+            magnetization,
+            interfacial_field,
+            bulk_field,
+            true,
+            true,
+            true,
+        );
+    }
+
+    fn dmi_fields_compute_into_selected(
+        &self,
+        magnetization: &[Vector3],
+        interfacial_field: &mut [Vector3],
+        bulk_field: &mut [Vector3],
+        include_interfacial: bool,
+        include_rotated: bool,
+        include_bulk: bool,
+    ) {
         let n_nodes = self.topology.n_nodes;
         let interfacial_field = &mut interfacial_field[..n_nodes];
         let bulk_field = &mut bulk_field[..n_nodes];
@@ -3396,12 +3415,15 @@ impl FemLlgProblem {
         let interfacial_d = self
             .terms
             .interfacial_dmi
-            .filter(|d| d.abs() > ZERO_THRESHOLD);
+            .filter(|d| include_interfacial && d.abs() > ZERO_THRESHOLD);
         let rotated_d = self
             .terms
             .rotated_interfacial_dmi
-            .filter(|d| d.abs() > ZERO_THRESHOLD);
-        let bulk_d = self.terms.bulk_dmi.filter(|d| d.abs() > ZERO_THRESHOLD);
+            .filter(|d| include_rotated && d.abs() > ZERO_THRESHOLD);
+        let bulk_d = self
+            .terms
+            .bulk_dmi
+            .filter(|d| include_bulk && d.abs() > ZERO_THRESHOLD);
         if interfacial_d.is_none() && rotated_d.is_none() && bulk_d.is_none() {
             return;
         }
@@ -3570,16 +3592,74 @@ impl FemLlgProblem {
         (interfacial_field, bulk_field)
     }
 
+    /// Return only the rotated-interfacial contribution for an observable
+    /// snapshot.  The effective field path still uses the aggregate DMI
+    /// buffer, while this selector provides a lossless component split for
+    /// runners and public scalar/field transports.
+    pub fn rotated_interfacial_dmi_field_from_vectors(
+        &self,
+        magnetization: &[Vector3],
+    ) -> Vec<Vector3> {
+        let n_nodes = self.topology.n_nodes;
+        let mut rotated_field = vec![[0.0, 0.0, 0.0]; n_nodes];
+        let mut unused_bulk = vec![[0.0, 0.0, 0.0]; n_nodes];
+        self.dmi_fields_compute_into_selected(
+            magnetization,
+            &mut rotated_field,
+            &mut unused_bulk,
+            false,
+            true,
+            false,
+        );
+        rotated_field
+    }
+
+    /// Return only the bulk-DMI contribution for an observable snapshot.
+    /// The effective field path still assembles all DMI terms together, while
+    /// this selector keeps the public runner fields losslessly separated.
+    pub fn bulk_dmi_field_from_vectors(&self, magnetization: &[Vector3]) -> Vec<Vector3> {
+        let n_nodes = self.topology.n_nodes;
+        let mut unused_interfacial = vec![[0.0, 0.0, 0.0]; n_nodes];
+        let mut bulk_field = vec![[0.0, 0.0, 0.0]; n_nodes];
+        self.dmi_fields_compute_into_selected(
+            magnetization,
+            &mut unused_interfacial,
+            &mut bulk_field,
+            false,
+            false,
+            true,
+        );
+        bulk_field
+    }
+
     fn dmi_energy_from_vectors(&self, magnetization: &[Vector3]) -> f64 {
+        self.dmi_energy_from_vectors_selected(magnetization, true, true, true)
+    }
+
+    /// Return only the rotated-interfacial energy component.
+    pub fn rotated_interfacial_dmi_energy_from_vectors(&self, magnetization: &[Vector3]) -> f64 {
+        self.dmi_energy_from_vectors_selected(magnetization, false, true, false)
+    }
+
+    fn dmi_energy_from_vectors_selected(
+        &self,
+        magnetization: &[Vector3],
+        include_interfacial: bool,
+        include_rotated: bool,
+        include_bulk: bool,
+    ) -> f64 {
         let interfacial_d = self
             .terms
             .interfacial_dmi
-            .filter(|d| d.abs() > ZERO_THRESHOLD);
+            .filter(|d| include_interfacial && d.abs() > ZERO_THRESHOLD);
         let rotated_d = self
             .terms
             .rotated_interfacial_dmi
-            .filter(|d| d.abs() > ZERO_THRESHOLD);
-        let bulk_d = self.terms.bulk_dmi.filter(|d| d.abs() > ZERO_THRESHOLD);
+            .filter(|d| include_rotated && d.abs() > ZERO_THRESHOLD);
+        let bulk_d = self
+            .terms
+            .bulk_dmi
+            .filter(|d| include_bulk && d.abs() > ZERO_THRESHOLD);
         if interfacial_d.is_none() && rotated_d.is_none() && bulk_d.is_none() {
             return 0.0;
         }

@@ -209,6 +209,7 @@ fn validate_supported_relax_source(plan: &FemPlanIR) -> Result<(), RunError> {
         || plan.bulk_dmi.is_some()
         || plan.dind_field.is_some()
         || plan.dbulk_field.is_some()
+        || plan.rotated_interfacial_dmi.is_some()
     {
         return Err(unsupported_source_identity(
             "source relaxation plan contains regional, anisotropy-axis, element-field, or DMI data that the current eigen source identity cannot reproduce",
