@@ -133,7 +133,9 @@ cudaError_t context_gpu_workspace_cuda_malloc_raw(
 }
 
 bool context_preflight_single_grid_workspace(
-    Context &ctx, const fullmag_fdm_plan_desc &plan)
+    Context &ctx,
+    const fullmag_fdm_plan_desc &plan,
+    bool reserve_rotated_dmi)
 {
     constexpr uint64_t maximum = std::numeric_limits<uint64_t>::max();
     uint64_t required_aggregate_workspace_bytes = 0;
@@ -162,13 +164,8 @@ bool context_preflight_single_grid_workspace(
     if (ctx.cell_count > maximum / scalar_bytes) return overflow();
     const uint64_t component_bytes = ctx.cell_count * scalar_bytes;
 
-    // Reserve the optional rotated-DMI observable in the setup budget even
-    // though allocation is deferred until the v2 descriptor enables the
-    // interaction.  The v2 entry point imports the extension after creating
-    // the legacy context; unconditional budgeting prevents that late
-    // allocation from bypassing the initial OOM gate.
     uint64_t vector_field_count = 10;
-    ++vector_field_count;
+    if (reserve_rotated_dmi) ++vector_field_count;
     if (ctx.has_frozen_mask) ++vector_field_count;
     switch (ctx.integrator) {
     case FULLMAG_FDM_INTEGRATOR_DP45:
@@ -529,7 +526,7 @@ static bool alloc_vector_field(Context &ctx, DeviceVectorField &field) {
 
     err = cudaMalloc(&field.y, bytes);
     if (err != cudaSuccess) {
-        fullmag_fdm_untracked_cuda_free(field.x);
+        context_gpu_workspace_cuda_free(ctx, field.x);
         field.x = nullptr;
         set_cuda_error(ctx, "cudaMalloc(y)", err);
         return false;
@@ -537,8 +534,8 @@ static bool alloc_vector_field(Context &ctx, DeviceVectorField &field) {
 
     err = cudaMalloc(&field.z, bytes);
     if (err != cudaSuccess) {
-        fullmag_fdm_untracked_cuda_free(field.x);
-        fullmag_fdm_untracked_cuda_free(field.y);
+        context_gpu_workspace_cuda_free(ctx, field.x);
+        context_gpu_workspace_cuda_free(ctx, field.y);
         field.x = nullptr;
         field.y = nullptr;
         set_cuda_error(ctx, "cudaMalloc(z)", err);
@@ -969,13 +966,13 @@ static bool alloc_vector_field_cells(
     };
     if (!alloc_component(&field.x, "x")) return false;
     if (!alloc_component(&field.y, "y")) {
-        fullmag_fdm_untracked_cuda_free(field.x);
+        context_gpu_workspace_cuda_free(ctx, field.x);
         field.x = nullptr;
         return false;
     }
     if (!alloc_component(&field.z, "z")) {
-        fullmag_fdm_untracked_cuda_free(field.x);
-        fullmag_fdm_untracked_cuda_free(field.y);
+        context_gpu_workspace_cuda_free(ctx, field.x);
+        context_gpu_workspace_cuda_free(ctx, field.y);
         field.x = nullptr;
         field.y = nullptr;
         return false;
@@ -1702,10 +1699,10 @@ bool context_preflight_multilayer_workspace_v2(
 
     const uint64_t scalar_bytes = scalar_size(ctx.precision);
     const uint64_t complex_bytes = complex_size(ctx.precision);
-    // h_rotated_dmi is enabled by a separate setter after plan upload. Reserve
-    // one per-layer vector field in the initial budget even when inactive so
-    // the late setter cannot bypass the preflight memory gate.
-    constexpr uint64_t layer_vector_component_count = 12 * 3;
+    // The optional rotated-DMI field is allocated only for plans that enable
+    // the interaction; keep the preflight estimate aligned with that path.
+    const uint64_t layer_vector_component_count =
+        (11 + (plan.has_rotated_interfacial_dmi != 0 ? 1 : 0)) * 3;
     for (uint32_t layer_index = 0;
          layer_index < plan.layer_count;
          ++layer_index)
