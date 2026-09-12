@@ -320,8 +320,15 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
     runs_root = _assert_within(Path(layout["runs_root"]), Path(layout["storage_root"]))
     output_root = _assert_within(Path(args.output_root) if args.output_root else runs_root / "bimeron-rdmi-frozen-spins", runs_root)
     output_root.mkdir(parents=True, exist_ok=True)
+    git_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    git_branch = subprocess.check_output(["git", "branch", "--show-current"], cwd=repo, text=True).strip()
+    branch_id = git_branch or f"detached@{git_head[:12]}"
+    for case in cases:
+        case["branch_id"] = branch_id
     source = {
-        "git_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip(),
+        "git_head": git_head,
+        "git_branch": git_branch,
+        "branch_id": branch_id,
         "worktree_status": subprocess.check_output(["git", "status", "--short"], cwd=repo, text=True),
         "profile": PROFILE,
         "device": args.device,
