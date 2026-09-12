@@ -100,9 +100,8 @@ field nor rDMI energy.
 - For nonzero $D$, open boundaries require positive exchange stiffness so that exchange and rDMI
   use the coupled natural boundary law. This includes material-mask edges and
   the resolved local stiffness from material fields, not just an enabled
-  `Exchange` term. FDM treats $D=0$ as a no-op and does not require exchange
-  for this boundary law; FEM still requires an enabled `Exchange` term when
-  rDMI is present.
+  `Exchange` term. FDM and FEM treat $D=0$ as a no-op and do not require exchange
+  for this boundary law; the explicitly authored term remains in provenance.
 - A finite $D$ is required; positive, negative, and zero values are valid.
 - Spatially varying or tensor-valued DMI, atomistic frustration, temperature,
   and spin-orbit torque are separate models.
@@ -222,7 +221,7 @@ residual and projects the field using
 {\mu_0M_{s,a}M_a^{\mathrm{lump}}}.
 ```
 
-FEM GPU uses the same element residual in device kernels. Static-periodic FEM rDMI
+FEM GPU uses the same element residual in device kernels. Nonzero static-periodic FEM rDMI
 is rejected until residual and mass reduction over periodic node classes is
 implemented; the periodic Göbel qualification therefore uses FDM. Source
 implementation or a successful build is not scientific runtime qualification.

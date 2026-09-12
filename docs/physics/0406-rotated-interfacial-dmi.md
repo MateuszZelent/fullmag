@@ -108,8 +108,8 @@ DMI.
 - Dla niezerowego $D$ naturalny warunek brzegowy wymaga dodatniej stałej wymiany $A$ na otwartej
   granicy, również na granicy maski. Samo włączenie `Exchange` nie wystarcza:
   planner FDM sprawdza lokalną, rozwiązaną wartość $A$, także z pola materiałowego.
-  FDM traktuje $D=0$ jako no-op bez tego wymagania; FEM nadal wymaga
-  włączonego `Exchange` przy obecności rDMI. Niekompletna mapa PBC lub
+  FDM i FEM traktują $D=0$ jako no-op bez tego wymagania, zachowując
+  jawnie zadany term w provenance. Niekompletna mapa PBC lub
   niespełnione wymaganie exchange kończy planowanie błędem.
 - Model nie obejmuje atomistycznej sfrustrowanej wymiany, temperatury ani SOT.
   Te mechanizmy mogą być osobnymi interakcjami, lecz nie zmieniają definicji
@@ -259,7 +259,7 @@ wymiany do tej ścieżki.
 Właścicielem jest osobny moduł interakcji w `backends/fem/cpu/mfem`, a nie
 `Context` ani `mfem_bridge.cpp`. MFEM składa równanie
 {eq}`rdmi-first-variation` w P1 dla `tet4`, `prism6` i `pyramid5`, wykorzystując
-tę samą kwadraturę do residualu i energii. Airbox jest pomijany. rDMI z PBC
+tę samą kwadraturę do residualu i energii. Airbox jest pomijany. Niezerowe rDMI z PBC
 jest obecnie odrzucane przez planner i natywne ABI: redukcja residualu oraz
 projekcji masy do periodycznych true DOF nie jest jeszcze zaimplementowana.
 

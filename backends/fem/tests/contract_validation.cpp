@@ -217,5 +217,22 @@ int main() {
         rotated_abi,
         "FEM RotatedInterfacialDmi with periodic node pairs is unsupported until the weak residual and mass projection are reduced over periodic node classes");
 
+    // A zero coefficient retains the requested term but contributes no natural
+    // boundary or periodic residual. Both signs of zero must reach the later
+    // P1 validation without requiring Exchange or a periodic DMI operator.
+    for (double d : {0.0, -0.0}) {
+        fullmag_fem_plan_desc_v2 rotated_zero = {};
+        rotated_zero.abi_version = FULLMAG_FEM_PLAN_DESC_V2_ABI_VERSION;
+        rotated_zero.struct_size = sizeof(rotated_zero);
+        rotated_zero.base = make_plan(m0);
+        rotated_zero.base.fe_order = 2;
+        rotated_zero.base.enable_exchange = 0;
+        rotated_zero.has_rotated_interfacial_dmi = 1;
+        rotated_zero.rotated_interfacial_dmi_constant = d;
+        expect_create_v3_error(rotated_zero, "fe_order = 1");
+        rotated_zero.base.mesh.periodic_node_pairs_len = 1;
+        expect_create_v3_error(rotated_zero, "fe_order = 1");
+    }
+
     return 0;
 }

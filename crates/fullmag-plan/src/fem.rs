@@ -3302,7 +3302,10 @@ pub(crate) fn plan_fem(
             .iter()
             .any(|axis| matches!(axis, fullmag_ir::AxisBoundary::Open))
     });
-    if rotated_interfacial_dmi.is_some() && has_open_magnetic_boundary && !enable_exchange {
+    if rotated_interfacial_dmi.is_some_and(|d| d != 0.0)
+        && has_open_magnetic_boundary
+        && !enable_exchange
+    {
         errors.push(
             "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition"
                 .to_string(),
@@ -3488,7 +3491,7 @@ pub(crate) fn plan_fem(
             ],
         });
     }
-    if rotated_interfacial_dmi.is_some() && !mesh.periodic_node_pairs.is_empty() {
+    if rotated_interfacial_dmi.is_some_and(|d| d != 0.0) && !mesh.periodic_node_pairs.is_empty() {
         return Err(PlanError {
             reasons: vec![
                 "FEM RotatedInterfacialDmi with periodic node pairs is unsupported until the weak residual and mass projection are reduced over periodic node classes"

@@ -4524,6 +4524,7 @@ fullmag_fem_backend *fullmag_fem_backend_create_v3(
         return nullptr;
     }
     if (plan->has_rotated_interfacial_dmi != 0 &&
+        plan->rotated_interfacial_dmi_constant != 0.0 &&
         plan->base.mesh.periodic_node_pairs_len != 0u) {
         fullmag_fem_set_global_error(
             "FEM RotatedInterfacialDmi with periodic node pairs is unsupported until the weak residual and mass projection are reduced over periodic node classes");
@@ -4532,10 +4533,11 @@ fullmag_fem_backend *fullmag_fem_backend_create_v3(
     // Rotated interfacial DMI contributes a natural surface term.  The
     // public ABI must enforce the same fail-closed boundary contract as the
     // planner before importing the term or starting any runtime resources:
-    // an open magnetic boundary requires the coupled Exchange operator.
+    // a nonzero term at an open magnetic boundary requires Exchange.
     const bool open_magnetic_boundary =
         plan->base.mesh.periodic_node_pairs_len == 0u;
     if (plan->has_rotated_interfacial_dmi != 0 &&
+        plan->rotated_interfacial_dmi_constant != 0.0 &&
         open_magnetic_boundary && plan->base.enable_exchange == 0) {
         fullmag_fem_set_global_error(
             "RotatedInterfacialDmi with open magnetic boundaries requires Exchange "

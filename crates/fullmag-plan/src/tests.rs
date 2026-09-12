@@ -4826,6 +4826,23 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
         other => panic!("expected FEM plan, got {:?}", other),
     }
 
+    for d in [0.0_f64, -0.0_f64] {
+        let mut zero_dmi = ir.clone();
+        zero_dmi.energy_terms = vec![EnergyTermIR::RotatedInterfacialDmi { d }];
+        zero_dmi.study.sampling_mut().outputs = vec![OutputIR::Field {
+            name: "m".to_string(),
+            every_seconds: 1e-12,
+        }];
+        let planned = plan(&zero_dmi)
+            .expect("zero rotated DMI must not require Exchange or periodic residual support");
+        let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+            panic!("expected FEM plan");
+        };
+        assert!(!fem.enable_exchange);
+        assert_eq!(fem.mesh.periodic_node_pairs.len(), 3);
+        assert_eq!(fem.rotated_interfacial_dmi.unwrap().to_bits(), d.to_bits());
+    }
+
     let mut z_pbc_with_x_mesh = ir.clone();
     z_pbc_with_x_mesh.pbc = Some(fullmag_ir::FdmPeriodicityIR {
         axes: [
@@ -7294,6 +7311,27 @@ fn multilayer_rotated_interfacial_dmi_accepts_positive_open_boundary_aex() {
         panic!("expected a multilayer FDM plan");
     };
     assert_eq!(multilayer.rotated_interfacial_dmi, Some(3.0e-3));
+}
+
+#[test]
+fn fem_zero_rotated_interfacial_dmi_is_preserved_without_exchange() {
+    for d in [0.0_f64, -0.0_f64] {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.backend_policy.requested_backend = BackendTarget::Fem;
+        attach_unit_fem_domain_mesh(&mut ir);
+        ir.energy_terms = vec![EnergyTermIR::RotatedInterfacialDmi { d }];
+        ir.study.sampling_mut().outputs = vec![OutputIR::Field {
+            name: "m".to_string(),
+            every_seconds: 1e-12,
+        }];
+
+        let planned = plan(&ir).expect("zero rotated DMI is a no-op at open boundaries");
+        let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+            panic!("expected FEM plan");
+        };
+        assert!(!fem.enable_exchange);
+        assert_eq!(fem.rotated_interfacial_dmi.unwrap().to_bits(), d.to_bits());
+    }
 }
 
 #[test]
