@@ -12144,6 +12144,9 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
             realization: fullmag_ir::RequestedFemDemagIR::Auto,
         },
     ];
+    ir.materials[0].ms_field = Some(vec![
+        760_000.0, 760_000.0, 780_000.0, 790_000.0, 800_000.0, 810_000.0, 820_000.0, 830_000.0,
+    ]);
     ir.study = fullmag_ir::StudyIR::Eigenmodes {
         dynamics: ir.study.dynamics().clone(),
         operator: fullmag_ir::EigenOperatorConfigIR {
@@ -12211,6 +12214,11 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
             assert_eq!(
                 fem.domain_mesh_mode,
                 fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
+            );
+            assert_eq!(
+                fem.material.ms_field.as_ref().map(Vec::len),
+                Some(8),
+                "the bounded shared-domain provider must retain nodal Ms"
             );
         }
         other => panic!("expected FEM eigen plan, got {other:?}"),

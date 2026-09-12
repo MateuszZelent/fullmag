@@ -5703,6 +5703,10 @@ fn shared_domain_builder_rejects_missing_accepted_linearization_state() {
         .set_tri3_facets(vec![[0, 1, 2], [3, 5, 4], [6, 7, 8], [9, 11, 10]]);
     plan.mesh.boundary_markers = vec![10, 11, 20, 21];
     plan.equilibrium_magnetization = vec![[1.0, 0.0, 0.0]; 12];
+    plan.material.ms_field = Some(vec![
+        760_000.0, 770_000.0, 780_000.0, 760_000.0, 770_000.0, 780_000.0, 800_000.0, 810_000.0,
+        820_000.0, 800_000.0, 810_000.0, 820_000.0,
+    ]);
     plan.mesh.periodic_node_pairs = vec![
         fullmag_ir::MeshPeriodicNodePairIR {
             pair_id: "magnetic".to_string(),

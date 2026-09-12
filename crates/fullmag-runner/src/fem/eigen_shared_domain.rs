@@ -765,12 +765,6 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
             message: "shared-domain modal payload requires full2x2 dynamic demag".to_string(),
         });
     }
-    if plan.material.ms_field.is_some() {
-        return Err(RunError {
-            message: "shared-domain modal production scope currently requires uniform material Ms"
-                .to_string(),
-        });
-    }
     validate_shared_domain_modal_scope(plan, topology, equilibrium, observables)?;
     let has_magnetic_region = topology
         .magnetic_element_mask
@@ -961,6 +955,8 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
             linearization_h_eff0_xyz.as_slice(),
             external_field_h_ext0_xyz.as_slice(),
             alpha_per_node.as_slice(),
+            ms_values.as_slice(),
+            plan.material.saturation_magnetisation,
         ),
     )?;
     let certificate_binding_v6 = build_owned_modal_certificate_v6_binding(
