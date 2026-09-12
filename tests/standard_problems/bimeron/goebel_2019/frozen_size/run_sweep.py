@@ -365,21 +365,16 @@ def _write_profile_csv(path: Path, results: list[dict[str, Any]]) -> None:
         released_measurement = released.get("measurement") if isinstance(released, dict) and isinstance(released.get("measurement"), dict) else {}
         frozen = result.get("frozen_runtime") if isinstance(result.get("frozen_runtime"), dict) else {}
         verification_status = result.get("verification_status")
-        verification_path: Path | None = None
-        if verification_status is None:
-            artifact_root = result.get("artifact_root")
-            verification_path = Path(artifact_root) / "verification.json" if artifact_root else None
-            if verification_path is not None and verification_path.is_file():
-                try:
-                    verification_status = json.loads(verification_path.read_text(encoding="utf-8")).get("status")
-                except (OSError, json.JSONDecodeError):
-                    verification_status = None
+        artifact_root = result.get("artifact_root")
+        verification_path = Path(artifact_root) / "verification.json" if artifact_root else None
         verification_payload: dict[str, Any] = {}
         if verification_path is not None and verification_path.is_file():
             try:
                 loaded_verification = json.loads(verification_path.read_text(encoding="utf-8"))
                 if isinstance(loaded_verification, dict):
                     verification_payload = loaded_verification
+                    if verification_status is None:
+                        verification_status = verification_payload.get("status")
             except (OSError, json.JSONDecodeError):
                 verification_payload = {}
         rows.append(

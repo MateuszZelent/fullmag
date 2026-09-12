@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import csv
 from pathlib import Path
 
 from tests.standard_problems.bimeron.goebel_2019.frozen_size import run_sweep
@@ -78,3 +79,45 @@ def test_runtime_manifest_rejects_skipped_local_changes(tmp_path: Path, monkeypa
     assert not run_sweep._managed_runtime_matches_source(
         tmp_path, layout, device="cpu"
     )
+
+
+def test_profile_csv_keeps_verification_diagnostics_when_status_is_embedded(tmp_path: Path) -> None:
+    case_root = tmp_path / "case"
+    case_root.mkdir()
+    (case_root / "verification.json").write_text(
+        json.dumps(
+            {
+                "status": "not_converged",
+                "radius_error_nm": 0.3,
+                "radius_tolerance_nm": 0.25,
+                "energy_window_relative_span": 0.002,
+                "energy_balance_relative": 1e-12,
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = {
+        "artifact_root": str(case_root),
+        "verification_status": "not_converged",
+        "protocol": {
+            "case_id": "R3-p3",
+            "target_radius_nm": 3.0,
+            "preset_radius_nm": 1.75,
+            "wall_width_nm": 3.0,
+            "protocol": "p3",
+        },
+        "profile_energy": {},
+        "energy": {},
+        "states": {},
+        "frozen_runtime": {},
+    }
+
+    output = tmp_path / "profile.csv"
+    run_sweep._write_profile_csv(output, [result])
+    with output.open(newline="", encoding="utf-8") as stream:
+        row = next(csv.DictReader(stream))
+    assert row["verification_status"] == "not_converged"
+    assert row["radius_error_nm"] == "0.3"
+    assert row["radius_tolerance_nm"] == "0.25"
+    assert row["energy_window_relative_span"] == "0.002"
+    assert row["energy_balance_relative"] == "1e-12"
