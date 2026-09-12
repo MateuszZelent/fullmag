@@ -159,6 +159,81 @@ def _binary_path(repo: Path, layout: dict[str, Any]) -> Path:
     return target / "release" / "fullmag"
 
 
+def _runtime_manifest_path(layout: dict[str, Any]) -> Path:
+    return Path(layout["build_root"]) / "windows-runtime" / "build-manifest.json"
+
+
+def _source_identity(repo: Path) -> dict[str, Any] | None:
+    """Capture the same source identity consumed by the Windows launcher.
+
+    The sweep must decide whether ``BuildMode=true`` is needed before it
+    invokes the launcher.  Returning ``None`` on a probe failure is
+    intentionally conservative: the launcher will then rebuild or emit its
+    own source-identity error instead of silently reusing an unknown binary.
+    """
+
+    command = [
+        _python(),
+        str(repo / "scripts" / "capture_source_snapshot_identity.py"),
+        "--repo-root",
+        str(repo),
+        "--ignore-non-runtime-dirty",
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        value = json.loads(completed.stdout)
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _managed_runtime_matches_source(
+    repo: Path,
+    layout: dict[str, Any],
+    *,
+    device: str,
+) -> bool:
+    """Return whether the cached Windows runtime is safe to reuse.
+
+    A present executable is insufficient because the launcher binds source
+    identity, CUDA residency, and the exact snapshot to every receipt.  Keep
+    this preflight deliberately smaller than the launcher, while covering the
+    fields that decide whether a rebuild is required.
+    """
+
+    manifest_path = _runtime_manifest_path(layout)
+    binary = _binary_path(repo, layout)
+    if not binary.is_file() or not manifest_path.is_file():
+        return False
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(manifest, dict):
+        return False
+    identity = _source_identity(repo)
+    if identity is None:
+        return False
+    expected_commit = identity.get("head_commit_full")
+    expected_snapshot = identity.get("source_snapshot_sha256")
+    expected_state = "dirty" if identity.get("source_snapshot_dirty") else "clean"
+    if manifest.get("git_commit") != expected_commit:
+        return False
+    if manifest.get("source_snapshot_sha256") != expected_snapshot:
+        return False
+    if manifest.get("worktree_state") != expected_state:
+        return False
+    if device == "gpu" and manifest.get("cuda") is not True:
+        return False
+    return manifest.get("local_changes_check") != "skipped"
+
+
 def _run_process(command: list[str], *, cwd: Path, env: dict[str, str], log: Path) -> None:
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("w", encoding="utf-8") as stream:
@@ -352,7 +427,11 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
     # Reuse the compatible managed binary when the profile has already been
     # prepared.  This keeps a resumed sweep from rebuilding or allocating a
     # second target tree solely because a new case was added.
-    built = _binary_path(repo, layout).is_file()
+    # Reuse only a runtime whose source and CUDA identity match this checkout.
+    # The Windows launcher performs the authoritative check again; this
+    # preflight prevents a stale binary from being selected for the first case
+    # and turning an otherwise resumable sweep into a predictable failure.
+    built = _managed_runtime_matches_source(repo, layout, device=args.device)
     if args.with_background:
         background_path = output_root / f"background-h{args.cell_nm:g}nm".replace(".", "p")
         background_path = _assert_within(background_path, runs_root)
