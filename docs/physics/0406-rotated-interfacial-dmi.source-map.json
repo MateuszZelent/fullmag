@@ -27,7 +27,7 @@
       "solver": "FEM",
       "device": "GPU",
       "status": "implemented",
-      "reason": "The CUDA element residual and managed build contract are tested; the Goebel FEM GPU runtime is not verified."
+      "reason": "The CUDA element residual has historical operator-test evidence; the current cancellation-bound CUDA regression and Goebel FEM GPU runtime are not verified."
     }
   ],
   "sources": [
@@ -36,14 +36,14 @@
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class RotatedInterfacialDMI",
       "responsibility": "Validate the public D coefficient and lower it to canonical ProblemIR.",
-      "evidence_status": "planned_contract"
+      "evidence_status": "implemented_source_test"
     },
     {
       "id": "ir-term",
       "path": "crates/fullmag-ir/src/study.rs",
       "symbol": "EnergyTermIR",
       "responsibility": "Own the backend-neutral serialized physical interaction.",
-      "evidence_status": "planned_contract"
+      "evidence_status": "implemented_source_test"
     },
     {
       "id": "fdm-shared",

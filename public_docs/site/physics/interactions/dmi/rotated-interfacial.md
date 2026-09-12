@@ -97,8 +97,12 @@ field nor rDMI energy.
 - The v1 public term accepts one spatially constant scalar $D$ per problem.
 - The operator differentiates in $x$ and $y$, but film thickness remains part of
   the volume integral.
-- Open boundaries require positive exchange stiffness so that exchange and rDMI
-  use the coupled natural boundary law.
+- For nonzero $D$, open boundaries require positive exchange stiffness so that exchange and rDMI
+  use the coupled natural boundary law. This includes material-mask edges and
+  the resolved local stiffness from material fields, not just an enabled
+  `Exchange` term. FDM treats $D=0$ as a no-op and does not require exchange
+  for this boundary law; FEM still requires an enabled `Exchange` term when
+  rDMI is present.
 - A finite $D$ is required; positive, negative, and zero values are valid.
 - Spatially varying or tensor-valued DMI, atomistic frustration, temperature,
   and spin-orbit torque are separate models.
@@ -180,7 +184,8 @@ Only one rotated-interfacial term may be authored in a problem.
 Python authoring, UI authoring, script export, and reload preserve the interaction
 kind and signed bit value of `D`. Requested solver/device/precision remain distinct
 from resolved and executed runtime provenance. Non-finite coefficients, duplicate
-terms, invalid periodicity, an open boundary without exchange, or an unavailable
+terms, mixed conventional/rotated DMI (including object-scoped terms), invalid
+periodicity, an unsatisfied exchange boundary requirement, or an unavailable
 strict lane fail before execution. Fullmag never substitutes conventional
 interfacial DMI, bulk DMI, or a CPU fallback.
 
@@ -194,6 +199,14 @@ The canonical quantities are `H_rotated_dmi` in $\mathrm{A\,m^{-1}}$,
 Requesting them without an active rotated-interfacial term is rejected. The
 current FEM path also rejects the two field quantities until their separate
 materialization path exists; global `E_rotated_dmi` remains available.
+
+`E_dmi` and `eden_dmi` include the rotated component; `E_total` and `eden_total`
+count it only once. A completed-run manifest stores aggregate `final_e_dmi`.
+The API uses it for `E_rotated_dmi` only when the saved plan proves that rDMI
+is the sole DMI term. FDM supports on-demand `eden_rotated_dmi` materialization,
+but scheduled snapshots and field autosave of that scalar field are currently
+rejected. FEM eigenmode and frequency-response profiles reject rDMI and do not
+advertise its quantities.
 
 (rotated-interfacial-dmi-discrete-realization)=
 ## Discrete realization and backend status
@@ -214,12 +227,16 @@ is rejected until residual and mass reduction over periodic node classes is
 implemented; the periodic Göbel qualification therefore uses FDM. Source
 implementation or a successful build is not scientific runtime qualification.
 
+The FDM planner validates resolved cellwise exchange stiffness, but native CUDA
+still rejects cellwise material fields. This validation does not add native
+CUDA support for spatially varying exchange coefficients.
+
 | Solver | Device | Implementation status | Scientific runtime status |
 |---|---|---|---|
 | FDM | CPU | implemented and operator-tested | Göbel bimeron run **not verified** |
-| FDM | GPU | FP64/FP32 implemented and operator-tested | Göbel FP64 CUDA run validated |
+| FDM | GPU | FP64/FP32 implemented and operator-tested | historical 15-check report; current 18-check run **not verified** |
 | FEM | CPU | MFEM weak form implemented and tested | Göbel bimeron run **not verified** |
-| FEM | GPU | CUDA residual implemented and tested | Göbel bimeron run **not verified** |
+| FEM | GPU | CUDA residual implemented; historical operator tests | current cancellation-bound CUDA regression and Göbel bimeron run **not verified** |
 
 (rotated-interfacial-dmi-implementation-mapping)=
 ## Implementation mapping
@@ -231,7 +248,7 @@ validation criteria are shared; FDM/FEM and CPU/GPU keep separate numerical owne
 (rotated-interfacial-dmi-validation)=
 ## Göbel 2019 validation
 
-The qualified case is a $500\times40\times0.5\,\mathrm{nm^3}$ film with one
+The reference case is a $500\times40\times0.5\,\mathrm{nm^3}$ film with one
 $0.5\,\mathrm{nm}$ FDM cell through thickness, periodic $x$, $M_s=0.58\,
 \mathrm{MA\,m^{-1}}$, $A=15\,\mathrm{pJ\,m^{-1}}$, $D=3\,
 \mathrm{mJ\,m^{-2}}$, $K_x=0.8\,\mathrm{MJ\,m^{-3}}$, and $\alpha=0.3$.
@@ -290,6 +307,8 @@ velocity results in Fig. 3 of the paper.
 | ProblemIR validation | `crates/fullmag-ir/src/validation.rs` | `validate_dmi_energy_terms` | finite-value and duplicate-term validation |
 | FDM planning | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm` | legality, boundary, and runtime selection |
 | FEM planning | `crates/fullmag-plan/src/fem.rs` | `plan_fem` | legality and backend plan |
+| Scalar artifacts | `crates/fullmag-api/src/quantities.rs` | `run_manifest_scalar_value` | plan-guarded completed-run energy fallback |
+| Modal capabilities | `crates/fullmag-runner/src/capabilities.rs` | `capabilities_for_fem_eigen_engine` | reject unsupported rDMI modal quantities |
 | FDM CPU | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `rotated_interfacial_dmi_field` | reference field and energy |
 | FDM CPU energy | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `rotated_interfacial_dmi_energy_from_vectors` | reference interaction energy |
 | FDM CUDA | `backends/fdm/gpu/cuda/interactions/demag_fp64.cu` | `combine_effective_field_fp64_kernel` | FP64 field and boundary correction |

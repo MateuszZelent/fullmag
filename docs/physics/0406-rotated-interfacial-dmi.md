@@ -1,8 +1,8 @@
 # Obrócone interfejsowe DMI stabilizujące bimerony
 
-- Status: zaakceptowany kontrakt fizyczny; realizacje planowane, niezakwalifikowane
+- Status: zaakceptowany kontrakt fizyczny; realizacje zaimplementowane, bieżąca kwalifikacja bimeronu `NOT VERIFIED`
 - Owners: Fullmag physics and backend teams
-- Last updated: 2026-08-31
+- Last updated: 2026-09-12
 - Related design: `docs/superpowers/specs/2026-08-31-rotated-interfacial-dmi-bimeron-design.md`
 - Primary reference: Göbel et al., *Phys. Rev. B* **99**, 060407(R) (2019), DOI `10.1103/PhysRevB.99.060407`
 
@@ -59,7 +59,7 @@ wyłącznie silną postacią pola:
 =\int_{\Omega_m}D\left[
 v_z\partial_xm_x+m_z\partial_xv_x-v_x\partial_xm_z-m_x\partial_xv_z
 +v_x\partial_ym_y+m_x\partial_yv_y-v_y\partial_ym_x-m_y\partial_yv_x
-\right],\mathrm dV.
+\right]\,\mathrm dV.
 ```
 
 Po połączeniu z energią wymiany swobodna powierzchnia magnetyka o normalnej
@@ -105,8 +105,12 @@ DMI.
   aktywnej domeny. Pola regionalne, skokowe i tensorowe pozostają poza zakresem.
 - Operator zawiera pochodne po $x$ i $y$, ale nie po $z$; grubość warstwy nadal
   wchodzi do całki objętościowej.
-- Naturalny warunek brzegowy wymaga dodatniej stałej wymiany $A$ na otwartej
-  granicy. Niekompletna mapa PBC lub brak exchange kończy planowanie błędem.
+- Dla niezerowego $D$ naturalny warunek brzegowy wymaga dodatniej stałej wymiany $A$ na otwartej
+  granicy, również na granicy maski. Samo włączenie `Exchange` nie wystarcza:
+  planner FDM sprawdza lokalną, rozwiązaną wartość $A$, także z pola materiałowego.
+  FDM traktuje $D=0$ jako no-op bez tego wymagania; FEM nadal wymaga
+  włączonego `Exchange` przy obecności rDMI. Niekompletna mapa PBC lub
+  niespełnione wymaganie exchange kończy planowanie błędem.
 - Model nie obejmuje atomistycznej sfrustrowanej wymiany, temperatury ani SOT.
   Te mechanizmy mogą być osobnymi interakcjami, lecz nie zmieniają definicji
   rDMI.
@@ -220,6 +224,14 @@ jeszcze osobnych pól `H_rotated_dmi` ani `eden_rotated_dmi`, dlatego takie
 żądania również odrzuca; energia globalna pozostaje rozdzielona jako
 `E_rotated_dmi`.
 
+`E_dmi` i `eden_dmi` są agregatami DMI; osobny składnik rDMI nie jest ponownie
+dodawany do `E_total` ani `eden_total`. Manifest zakończonego przebiegu zapisuje
+agregat `final_e_dmi`: API może użyć go jako `E_rotated_dmi` tylko przy
+jednoznacznym planie zawierającym wyłącznie rDMI. W FDM `eden_rotated_dmi` jest
+dostępne przez materializację on-demand, lecz nie przez harmonogram snapshotów
+ani field autosave; takie żądanie jest odrzucane. FEM eigenmodes i frequency
+response nie obsługują rDMI i nie ogłaszają jego wielkości w capabilities.
+
 (discrete-realization)=
 ## Realizacje dyskretne
 
@@ -238,13 +250,18 @@ we wszystkich wspieranych integratorach i relaksacji. Magnetyzacja, maska,
 PBC, coefficient i redukcje pozostają na urządzeniu w hot loop. Pełne
 transfery pola, hostowe obliczenie operatora i CPU fallback są błędem.
 
+Natywna ścieżka CUDA nadal odrzuca pola materiałowe per-cell. Walidacja lokalnego
+$A$ w plannerze nie oznacza dodania obsługi przestrzennie zmiennego współczynnika
+wymiany do tej ścieżki.
+
 ### FEM CPU/MFEM
 
 Właścicielem jest osobny moduł interakcji w `backends/fem/cpu/mfem`, a nie
 `Context` ani `mfem_bridge.cpp`. MFEM składa równanie
 {eq}`rdmi-first-variation` w P1 dla `tet4`, `prism6` i `pyramid5`, wykorzystując
-tę samą kwadraturę do residualu i energii. Airbox jest pomijany. PBC są
-redukowane w tej samej przestrzeni true DOF co exchange.
+tę samą kwadraturę do residualu i energii. Airbox jest pomijany. rDMI z PBC
+jest obecnie odrzucane przez planner i natywne ABI: redukcja residualu oraz
+projekcji masy do periodycznych true DOF nie jest jeszcze zaimplementowana.
 
 Jeśli $g_a=\partial E/\partial\mathbf m_a$ jest residualem węzłowym, pole jest
 projekcją z lumped mass:
@@ -273,7 +290,7 @@ pozostaje dlatego wyłącznie ścieżką FDM.
 | FDM | CPU | zatwierdzony | operator i pochodna energii zweryfikowane; bimeron runtime `NOT VERIFIED` | pełna reprodukcja bimeronu CPU |
 | FDM | GPU | zatwierdzony | historyczny FP64 CUDA bimeron 15/15; bieżący raport 18-check `NOT VERIFIED` | powtórzony raport 18-check, FP32 parity i sanitizer |
 | FEM | CPU | zatwierdzony | operator MFEM, weak derivative i build zweryfikowane; bimeron runtime `NOT VERIFIED` | reprodukcja bimeronu FEM CPU |
-| FEM | GPU | zatwierdzony | operator CUDA, pochodna i managed build zweryfikowane; bimeron runtime `NOT VERIFIED` | reprodukcja bimeronu FEM GPU |
+| FEM | GPU | zatwierdzony | historyczne testy residualu CUDA; bieżąca regresja skali błędu przy kasowaniu składników i bimeron runtime `NOT VERIFIED` | managed test pochodnej energii oraz reprodukcja bimeronu FEM GPU |
 
 (implementation-mapping)=
 ## Granice implementacji i provenance
@@ -366,8 +383,9 @@ opisanego wyżej open-boundary wariantu FEM.
 - reprodukcja ruchu SOT i prędkości z Fig. 3 pracy Göbela;
 - eksperymentalna identyfikacja materiału na podstawie samej symulacji.
 
-Promocja FDM GPU dotyczy wyłącznie powyższego przebiegu FP64. Pozostałe lane'y
-i ruch SOT zachowują status wskazany w macierzy wsparcia.
+Historyczny przebieg FP64 nie promuje bieżącej implementacji bez aktualnego
+raportu 18-check. Pozostałe lane'y i ruch SOT zachowują status wskazany
+w macierzy wsparcia.
 
 (scientific-bibliography)=
 ## Bibliografia naukowa
@@ -388,6 +406,6 @@ i ruch SOT zachowują status wskazany w macierzy wsparcia.
 | residual FEM | `backends/fem/src/dmi_weak_residual.cpp` | `dmi_accumulate_rotated_interfacial_residual` | wspólna pierwsza wariacja | FEM CPU/GPU | implemented, source test; runtime not verified |
 
 Publiczna source map wskazuje także rzeczywiste symbole CUDA, plannera,
-quantities, runnera i walidatora scenariusza. Kwalifikacja naukowa pozostaje
-ograniczona do udokumentowanego przebiegu FDM CUDA FP64; runtime FDM CPU i FEM
-nie jest przez tę notę promowany.
+quantities, runnera i walidatora scenariusza. Kwalifikacja naukowa bieżącego
+bimeronu pozostaje `NOT VERIFIED`; historyczny przebieg FDM CUDA FP64 nie
+promuje runtime FDM CPU ani FEM.
