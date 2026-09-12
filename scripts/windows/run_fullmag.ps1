@@ -41,7 +41,14 @@ if (-not (Test-Path -LiteralPath $StorageAdapter -PathType Leaf)) {
 }
 . $StorageAdapter
 $StorageDevice = if ($Device -eq "gpu") { "gpu" } else { "cpu" }
-$StorageProfile = "windows-native-fdm-$StorageDevice"
+# A registered task may provide its own profile so builds and run artifacts
+# remain isolated from the shared default FDM lanes.  The storage resolver
+# validates the value and all paths before the managed entrypoint is entered.
+$StorageProfile = if ($env:FULLMAG_STORAGE_PROFILE -and $env:FULLMAG_STORAGE_PROFILE.Trim()) {
+  $env:FULLMAG_STORAGE_PROFILE.Trim()
+} else {
+  "windows-native-fdm-$StorageDevice"
+}
 
 if ($env:FULLMAG_STORAGE_MANAGED_ENTRY -ne "1") {
   $managedArguments = @(
