@@ -9,7 +9,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 - Baza `master`: `5084a94ed14b151fc865e8def5a5c28401e98b44`.
 - Branch: `codex/eigensolve-dispersion-plan-20260912`.
 - Worktree: `C:/git/fullmag/worktrees/eigensolve-dispersion-plan-20260912`.
-- Ostatni zapisany kodowy przyrost: `c511cb413` (`feat(eigensolve): bind nodal Ms in shared-domain demag`), nad testem wymuszonego GPU `71ce348b0`, routingiem Γ `1114e1aa0` i podłączeniem providera `f2acf7b9b425733899bdfde63cb0566d16d74a59`.
+- Ostatni zapisany kodowy przyrost: `e3fa509db` (`feat(eigensolve): route Floquet dynamic demag through exact CPU engine`), nad zmianą nodalnego `Ms` `c511cb413`, testem wymuszonego GPU `71ce348b0`, routingiem Γ `1114e1aa0` i podłączeniem providera `f2acf7b9b425733899bdfde63cb0566d16d74a59`.
 - Właściciel: `codex:01a0941c-eb15-7261-a7ee-7cf099385525`.
 - Rejestr: `eigensolve-dispersion-plan-20260-c5dfad6d7f548079`; reaktywowany do implementacji.
 - Fizyczne źródła COMSOL: oba lokalne podręczniki modułu mikromagnetycznego wymienione w planie; szczególnie s. PDF 21–28 i 40–43. Przykład RF jest wzorem sprzężenia pól, a nie gotowym dowodem modalnym.
@@ -312,7 +312,7 @@ Regresje `fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path`
 (`fullmag-plan`) oraz `shared_domain_builder_rejects_missing_accepted_linearization_state`
 i `native_cpu_modal_window_accepts_nonzero_floquet_airbox_demag_path`
 (`fullmag-runner`) przeszły; szerokie przebiegi dały odpowiednio `461/461` i
-`139/139` testów, exit 0. Nodalne `Aex`, anizotropia, DMI i damping nadal są
+`142/142` testów, exit 0. Nodalne `Aex`, anizotropia, DMI i damping nadal są
 jawnie poza tym bounded wariantem.
 
 To jest bramka planowania i routingu, a nie kwalifikacja fizyczna. Nadal brak
@@ -321,3 +321,41 @@ oryginalnego układu, zbieżności paddingu oraz porównania COMSOL/TetraX. Damp
 i GPU pozostają poza otwartym wariantem. Worktree pozostaje
 niezintegrowany z `master`; push/PR/merge są zablokowane przez brak poprawnego
 uwierzytelnienia GitHub i wcześniejszą odmowę automatycznego review.
+
+### Przyrost dokładnej rozdzielczości wykonania non-k0 — `e3fa509db`
+
+Wprowadzono osobny token `floquet_airbox_cpu_schur_slepc` w `FemEigenEngineIR`.
+Planner nadaje go wyłącznie ścisłemu, podwójnej precyzji wariantowi
+`Full2x2 + Floquet + include_demag + nonzero-k + FloquetAirbox + Poisson` i
+publikuje rozróżnienie żądania urządzenia, urządzenia rozwiązanego, fallbacku
+oraz przyczyny wyboru. Jawne GPU, GPU z runtime override i nieznany fallback są
+odrzucane; `auto` może zapisać tylko udokumentowany fallback GPU→CPU dla tej
+samej fizyki. Runner sprawdza zgodność silnika z zakresem planu i nie pozwala
+użyć dynamicznego tokenu dla zwykłego K0. Punkt Γ na ścieżce może zachować
+top-level Floquet resolution, ale wykonuje się przez certyfikowany alias K0.
+
+W natywnym solverze C++ naprawiono granicę właścicieli: wynik bounded
+shared-domain providera `D(k)` jest przekazywany do `effective_request`, a ten
+sam envelope trafia do adaptera dense SLEPc, digestu pencila i diagnostyki.
+Kompletny dostarczony dynamiczny payload również otrzymuje osobny engine ID,
+więc nie może zostać opisany jako ogólny `production_cpu_modal_eigen_unavailable`.
+Regresja C++ została rozszerzona o tę asercję; nie wykonano jej na tym hoście,
+ponieważ repozytoryjna recepta zatrzymuje się w preflight z
+`Container profile allow-list mismatch`.
+
+Dowody źródłowe tego przyrostu:
+
+- `cargo +nightly check --locked -p fullmag-plan -p fullmag-runner -p fullmag-ir` — exit 0;
+- `cargo +nightly test --locked -p fullmag-ir --lib` — `102 passed`, exit 0;
+- `cargo +nightly test --locked -p fullmag-plan --lib` — `461 passed`, exit 0;
+- `cargo +nightly test --locked -p fullmag-runner fem::eigen_tests --lib` — `142 passed`, exit 0;
+- ukierunkowane testy dynamicznego engine/attestation — `3 passed`, exit 0;
+- ukierunkowany `rustfmt --check` i `git diff --check` — exit 0.
+
+Brama `just verify-fem-modal-floquet-airbox-cpu` nie doszła do kompilacji C++:
+`ensure-managed-fem-runtime` wymaga ścieżki zarządzanego build runnera, a
+`python scripts/local_runner_cli.py container-status` zwraca
+`local-runner: Container profile allow-list mismatch`. Brak receiptu oznacza,
+że managed MFEM/SLEPc, wykonanie na rzeczywistej siatce, residuale, zbieżność
+paddingu/warunku otwartego oraz porównanie liczbowe z COMSOL/TetraX nadal mają
+status **NOT VERIFIED**. Nie wykonano push/PR/merge ani usunięcia worktree.
