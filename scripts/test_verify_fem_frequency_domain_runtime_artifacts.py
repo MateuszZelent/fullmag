@@ -3774,6 +3774,7 @@ def test_validator_rejects_periodic_airbox_gpu_solved_with_zero_demag_probe_outp
 ) -> None:
     write_periodic_airbox_cpu_demag_solve_error_fixture(tmp_path)
     convert_periodic_airbox_fixture_to_schur_coupled_block(tmp_path)
+    add_gpu_periodic_airbox_operator_parity_probe_fixture(tmp_path)
 
     diagnostics_path = tmp_path / "response" / "diagnostics" / "solver.v1.json"
     diagnostics = json.loads(diagnostics_path.read_text())

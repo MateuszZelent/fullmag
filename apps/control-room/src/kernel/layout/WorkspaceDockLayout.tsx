@@ -164,7 +164,7 @@ export function WorkspaceDockLayout() {
 
   if (!restored) {
     return (
-      <div className="fm-workspace-body" data-dock-hydration-pending="true">
+      <div className="fm-workspace-body" data-dock-hydration-pending="true" id="fm-main-content" tabIndex={-1}>
         {panelVisible.left ? (
           <div className="fm-dock-column">
             <div className="fm-dock-column__handle">
@@ -205,7 +205,7 @@ export function WorkspaceDockLayout() {
   }
 
   return (
-    <div className="fm-workspace-body">
+    <div className="fm-workspace-body" id="fm-main-content" tabIndex={-1}>
       <ResizablePanelGroup
         autoSaveId={mainAutoSaveId}
         direction="vertical"

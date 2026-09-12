@@ -182,6 +182,7 @@ mod tests {
                     residual_linf: Some(1.0e-9),
                     tangent_leakage_mean_abs: Some(1.0e-12),
                     tangent_leakage_max_abs: Some(2.0e-12),
+                    tangent_leakage_weighted_relative_l2: Some(1.5e-12),
                     dominant_polarization: "linear".to_string(),
                     reduced_vector: Some(vec![Complex64::new(1.0, 0.0)]),
                     lifted_real: Some(vec![[1.0, 0.0, 0.0]]),
@@ -189,10 +190,20 @@ mod tests {
                     amplitude: Some(vec![1.0]),
                     phase: Some(vec![0.0]),
                     node_mass_weights: None,
+                    component_participation:
+                        crate::eigen::ModalParticipationObservable::unavailable_without_context(
+                            "cpu",
+                        ),
                 }],
                 relaxation_steps: 0,
                 solver_model: EigenSolverModel::ReferenceScalarTangent,
                 solver_notes: vec!["fake solver".to_string()],
+                solver_diagnostics: Some(serde_json::json!({
+                    "mesh_id": "mesh:orchestrator-test",
+                    "mesh_generation_id": "mesh-generation:orchestrator-test",
+                    "mesh_revision": 1,
+                    "topology_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                })),
             })
         }
     }
@@ -260,6 +271,7 @@ mod tests {
             target: EigenTargetIR::Lowest,
             equilibrium: EquilibriumSourceIR::Provided,
             k_sampling,
+            bias_field_samples: Vec::new(),
             normalization: EigenNormalizationIR::UnitL2,
             damping_policy: EigenDampingPolicyIR::Ignore,
             enable_exchange: true,
@@ -351,6 +363,7 @@ mod tests {
                     residual_linf: Some(1.0e-9),
                     tangent_leakage_mean_abs: Some(1.0e-12),
                     tangent_leakage_max_abs: Some(2.0e-12),
+                    tangent_leakage_weighted_relative_l2: Some(1.5e-12),
                     dominant_polarization: "linear".to_string(),
                     reduced_vector: Some(vec![Complex64::new(1.0, 0.0)]),
                     lifted_real: Some(vec![[1.0, 0.0, 0.0]]),
@@ -358,10 +371,15 @@ mod tests {
                     amplitude: Some(vec![1.0]),
                     phase: Some(vec![0.0]),
                     node_mass_weights: None,
+                    component_participation:
+                        crate::eigen::ModalParticipationObservable::unavailable_without_context(
+                            "cpu",
+                        ),
                 }],
                 relaxation_steps: 0,
                 solver_model: self.models[sample.sample_index],
                 solver_notes: vec!["sample model fixture".to_string()],
+                solver_diagnostics: None,
             })
         }
     }

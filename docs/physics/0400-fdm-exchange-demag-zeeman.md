@@ -602,6 +602,14 @@ $$
 \mathbf{H}_{\mathrm{ext},i} = \mathbf{H}_{\mathrm{ext}}(\mathbf{r}_i,t).
 $$
 
+The CUDA scalar reduction and the per-cell `eden_ext`/`eden_total` materialization use the same
+resolved external field: the uniform component, an optional static sampled profile, and active
+regional field drives at the current solver time. For partial boundary cells, non-DMI energy-density
+terms are multiplied by `volume_fraction` so their cell-volume sum agrees with the corresponding
+global reduction. The existing DMI reduction still uses full structured-cell volume, so its density
+map retains that measure until the DMI boundary-volume contract changes. These are source-level
+contracts; CUDA runtime and CPU/GPU parity remain `NOT VERIFIED` in this change.
+
 Implementation paths:
 
 - **uniform static field**: keep one host/device vector and broadcast in the update kernel,
@@ -895,7 +903,9 @@ For this topic, `Exchange + Demag + Zeeman` are now executable in the public FDM
 | FDM effective field | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `effective_field_from_vectors` | CPU reference assembly of the effective field. | FDM CPU | runtime implementation; qualification is lane-specific |
 | Runner observable assembly | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `observe_state_with_antenna_field` | Assembles same-state observables and reconstructs active/airbox effective fields. | FDM CPU | source-level owner; no terminal-batch qualification |
 | Airbox visualization field | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `reconstruct_inactive_fdm_visual_effective_field` | Reconstructs full-domain visualization fields outside magnetic support. | FDM CPU | target-only observation contract |
-| Full-grid materialization | `crates/fullmag-runner/src/interactive_runtime.rs` | `build_full_grid_materialized_fields` | Selectively builds live fields from one observable state. | FDM CPU | part of current path, not proof of an atomic terminal generation/batch |
+| Full-grid materialization | `crates/fullmag-runner/src/interactive_runtime.rs` | `build_cached_grid_preview_fields` | Selectively builds live fields from one observable state. | FDM CPU | part of current path, not proof of an atomic terminal generation/batch |
+| CUDA external-energy reduction | `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` | `reduce_external_energy_fp64` | Reduces uniform, sampled, and regional external fields with partial-cell volume weighting. | FDM GPU | source-level contract; runtime parity `NOT VERIFIED` |
+| CUDA energy-density materialization | `backends/fdm/gpu/cuda/interactions/energy_density_fp64.cu` | `launch_energy_density_observable` | Materializes external and total density using the resolved field sources and current volume measure. | FDM GPU | source-level contract; runtime parity `NOT VERIFIED` |
 | CPU terminal outcome | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_reference_fdm` | Returns CPU run outcome and scheduled fields. | FDM CPU | part of current path, not proof of an atomic terminal generation/batch |
 | Preview-disable switch | `crates/fullmag-cli/src/live_workspace.rs` | `feature_flags` | Reads the benchmark/display preview configuration. | CLI control plane | does not qualify or replace terminal field finalization |
 | Session field promotion | `crates/fullmag-cli/src/live_workspace.rs` | `ingest_preview_fields_from_update` | Promotes incoming fields individually into session state. | CLI control plane | part of current path, not proof of an atomic terminal generation/batch |

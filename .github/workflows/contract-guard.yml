@@ -6,6 +6,21 @@ on:
   pull_request:
 
 jobs:
+  storage-guards:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Check storage paths, links and concurrent writers
+        run: python -B scripts/test_fullmag_storage.py
+      - name: Check Windows launcher refusal before writes
+        run: python -B scripts/test_windows_storage_preflight.py
+      - name: Check frontend cleanup boundaries
+        run: node --test scripts/clean-control-room-next.test.mjs
+
   canonicalization-guards:
     runs-on: ubuntu-latest
     steps:

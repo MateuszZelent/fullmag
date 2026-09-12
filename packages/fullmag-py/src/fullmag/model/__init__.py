@@ -69,6 +69,7 @@ from .energy import (
     Demag,
     Exchange,
     InterfacialDMI,
+    RotatedInterfacialDMI,
     Magnetoelastic,
     OerstedField,
     OerstedCylinder,
@@ -174,6 +175,7 @@ from .structure import (
 )
 from .study import Eigenmodes, FieldAutosave, FloquetBC, FrequencyResponse, FrequencyResponseSolverPolicy, GammaResponseAnalysis, PeriodicBC, RelaxStop, Relaxation, StageAutosave, TableAutosave, TimeEvolution, FieldOrientation, MeasurementAxis, HysteresisAngularVariant, HysteresisAngularFamily, SaturationProbe, HysteresisStorage, MinorLoop, FieldSegment, PiecewiseFieldSchedule, FieldWindow, AdaptiveRefinement, SettleStep, RelaxStep, MinimizeStep, DynamicsSettleStep, SettleBranch, SettlePipeline, SettleTree, Hysteresis
 from .eigen import (
+    BiasFieldSweep,
     DispersionValidationScenario,
     K0KittelFieldSample,
     K0KittelFieldSweepValidation,
@@ -340,6 +342,7 @@ __all__ = [
     "FrequencyResponse",
     "FrequencyResponseSolverPolicy",
     "FrozenSpins",
+    "BiasFieldSweep",
     "DispersionValidationScenario",
     "K0KittelFieldSample",
     "K0KittelFieldSweepValidation",

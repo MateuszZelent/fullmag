@@ -10,6 +10,7 @@ import {
   type Viewport3DScalarColorRange,
   type Viewport3DVectorColorMode,
 } from "./viewport3dVectorColoring";
+import { isDivergingScalarPalette } from "../../shared/visualization/scalarColorPalette";
 
 export interface ScalarRange {
   max: number;
@@ -27,6 +28,7 @@ export interface ScalarRangeDiagnostics extends ScalarRange {
 }
 
 export interface ScalarColorBuffer {
+  amplitudeScale?: number;
   buildKey?: string;
   colors: Float32Array;
   colorMode?: string;
@@ -34,6 +36,12 @@ export interface ScalarColorBuffer {
   complexImagValues?: Float32Array;
   complexPhaseRad?: number;
   complexRealValues?: Float32Array;
+  complexRepresentation?:
+    | "phase_rotated_real"
+    | "real"
+    | "imag"
+    | "abs"
+    | "phase";
   wavevectorKf?: [number, number, number];
   cellOrigin?: [number, number, number];
   floquetSpatialConvention?: string;
@@ -168,7 +176,7 @@ export function buildSampledScalarColors(
     return null;
   }
 
-  const range = resolveScalarRange(fieldVector, resolvedColorMode);
+  const range = resolveScalarRange(fieldVector, resolvedColorMode, colorPalette);
   const colors = new Float32Array(pointIndices.length * 3);
   const scalarValues = shaderScalarModeSupports(resolvedColorMode)
     ? new Float32Array(pointIndices.length)
@@ -184,7 +192,10 @@ export function buildSampledScalarColors(
       continue;
     }
     if (scalarValues) {
-      scalarValues[index] = scalarAt(fieldVector, pointIndex, resolvedColorMode);
+      scalarValues[index] = normalizeScalarValueForShaderAttribute(
+        scalarAt(fieldVector, pointIndex, resolvedColorMode),
+        range,
+      );
     }
     const [red, green, blue] = colorAt(
       fieldVector,
@@ -256,7 +267,7 @@ export function buildFdmSampledScalarColors(
 
   const range =
     resolveProvidedScalarRange(scalarRange) ??
-    resolveScalarRange(fieldVector, resolvedColorMode);
+    resolveScalarRange(fieldVector, resolvedColorMode, colorPalette);
   const colors = new Float32Array(cellOrdinals.length * 3);
   const scalarValues = shaderScalarModeSupports(resolvedColorMode)
     ? new Float32Array(cellOrdinals.length)
@@ -267,7 +278,10 @@ export function buildFdmSampledScalarColors(
     const target = index * 3;
     if (fieldIndex === null) return null;
     if (scalarValues) {
-      scalarValues[index] = scalarAt(fieldVector, fieldIndex, resolvedColorMode);
+      scalarValues[index] = normalizeScalarValueForShaderAttribute(
+        scalarAt(fieldVector, fieldIndex, resolvedColorMode),
+        range,
+      );
     }
     const [red, green, blue] = colorAt(
       fieldVector,
@@ -322,7 +336,7 @@ export function buildMappedVertexScalarColors(
 
   const range =
     resolveProvidedScalarRange(scalarRange) ??
-    resolveScalarRange(fieldVector, resolvedColorMode);
+    resolveScalarRange(fieldVector, resolvedColorMode, colorPalette);
   const colors = new Float32Array(vertexCount * 3);
   const scalarValues = shaderScalarModeSupports(resolvedColorMode)
     ? new Float32Array(vertexCount)
@@ -334,7 +348,10 @@ export function buildMappedVertexScalarColors(
       continue;
     }
     if (scalarValues) {
-      scalarValues[nodeIndex] = scalarAt(fieldVector, index, resolvedColorMode);
+      scalarValues[nodeIndex] = normalizeScalarValueForShaderAttribute(
+        scalarAt(fieldVector, index, resolvedColorMode),
+        range,
+      );
     }
     const [red, green, blue] = colorAt(
       fieldVector,
@@ -480,7 +497,10 @@ export function buildSurfaceFaceScalarColors(
       colors[colorOffset + 1] = rgb[1];
       colors[colorOffset + 2] = rgb[2];
       if (scalarValues) {
-        scalarValues[targetIndex] = scalar;
+        scalarValues[targetIndex] = normalizeScalarValueForShaderAttribute(
+          scalar,
+          range,
+        );
       }
       if (vectorValues) {
         vectorValues[colorOffset] = x;
@@ -634,7 +654,10 @@ export function buildThicknessAverageZScalarColors(
       colors[colorOffset + 1] = rgb[1];
       colors[colorOffset + 2] = rgb[2];
       if (scalarValues) {
-        scalarValues[targetIndex] = scalar;
+        scalarValues[targetIndex] = normalizeScalarValueForShaderAttribute(
+          scalar,
+          range,
+        );
       }
       if (vectorValues) {
         vectorValues[colorOffset] = x;
@@ -696,6 +719,7 @@ export async function buildVertexScalarColorsChunked(
         (await resolveScalarRangeChunked(
             fieldVector,
             colorMode,
+            colorPalette,
             chunkSize,
             options.signal,
             yieldToMain,
@@ -791,6 +815,28 @@ function resolveProvidedScalarRange(
 }
 
 /**
+ * Auto-symmetrizes a scalar range around zero for signed component color
+ * modes (x/y/z) when a diverging palette (e.g. "coolwarm") is selected.
+ * Diverging palettes rely on their midpoint mapping to zero; an
+ * asymmetric range would shift that midpoint away from zero and make the
+ * palette misleading. Sequential palettes and magnitude-style modes are
+ * left untouched (S-11).
+ */
+function resolveDivergingSymmetricRange(
+  range: ScalarRange,
+  colorMode: Viewport3DVectorColorMode,
+  colorPalette: string,
+): ScalarRange {
+  const isSignedComponent =
+    colorMode === "x" || colorMode === "y" || colorMode === "z";
+  if (!isSignedComponent || !isDivergingScalarPalette(colorPalette)) {
+    return range;
+  }
+  const extent = Math.max(Math.abs(range.min), Math.abs(range.max));
+  return { max: extent, min: -extent };
+}
+
+/**
  * Chunked version of resolveScalarRange that yields to main thread between
  * chunks.  Prevents the synchronous O(N) range scan from blocking the UI
  * for large meshes (> 50K points).
@@ -798,6 +844,7 @@ function resolveProvidedScalarRange(
 async function resolveScalarRangeChunked(
   fieldVector: DecodedFieldVector,
   colorMode: string,
+  colorPalette: string,
   chunkSize: number,
   signal?: AbortSignal,
   yieldToMain?: () => Promise<void>,
@@ -806,14 +853,16 @@ async function resolveScalarRangeChunked(
     colorMode,
     "magnitude",
   );
+  const safeChunkSize = Math.max(Math.floor(chunkSize || 10_000), 1);
   let min = Infinity;
   let max = -Infinity;
 
-  for (let start = 0; start < fieldVector.pointCount; start += chunkSize) {
+  for (let start = 0; start < fieldVector.pointCount; start += safeChunkSize) {
     throwIfAborted(signal);
-    const end = Math.min(start + chunkSize, fieldVector.pointCount);
+    const end = Math.min(start + safeChunkSize, fieldVector.pointCount);
     for (let index = start; index < end; index += 1) {
       const value = scalarAt(fieldVector, index, resolvedColorMode);
+      if (!Number.isFinite(value)) continue;
       if (value < min) min = value;
       if (value > max) max = value;
     }
@@ -826,12 +875,17 @@ async function resolveScalarRangeChunked(
     return { max: 0, min: 0 };
   }
 
-  return { max, min };
+  return resolveDivergingSymmetricRange(
+    { max, min },
+    resolvedColorMode,
+    colorPalette,
+  );
 }
 
 export function resolveScalarRange(
   fieldVector: DecodedFieldVector,
   colorMode = "magnitude",
+  colorPalette = "viridis",
 ): ScalarRange {
   const resolvedColorMode = normalizeViewport3DVectorColorMode(
     colorMode,
@@ -842,6 +896,7 @@ export function resolveScalarRange(
 
   for (let index = 0; index < fieldVector.pointCount; index += 1) {
     const value = scalarAt(fieldVector, index, resolvedColorMode);
+    if (!Number.isFinite(value)) continue;
     min = Math.min(min, value);
     max = Math.max(max, value);
   }
@@ -850,7 +905,11 @@ export function resolveScalarRange(
     return { max: 0, min: 0 };
   }
 
-  return { max, min };
+  return resolveDivergingSymmetricRange(
+    { max, min },
+    resolvedColorMode,
+    colorPalette,
+  );
 }
 
 export function resolveScalarRangeDiagnostics(
@@ -1325,7 +1384,7 @@ function buildVertexScalarColorsUnchecked(
 ): ScalarColorBuffer {
   const range =
     resolveProvidedScalarRange(scalarRange) ??
-    resolveScalarRange(fieldVector, colorMode);
+    resolveScalarRange(fieldVector, colorMode, colorPalette);
   const colors = new Float32Array(vertexCount * 3);
   const scalarValues = shaderScalarModeSupports(colorMode)
     ? new Float32Array(vertexCount)
@@ -1374,7 +1433,10 @@ function writeScalarColors(
       writeVectorValue(fieldVector, index, vectorValues, index);
     }
     if (scalarValues) {
-      scalarValues[index] = scalarAt(fieldVector, index, colorMode);
+      scalarValues[index] = normalizeScalarValueForShaderAttribute(
+        scalarAt(fieldVector, index, colorMode),
+        range,
+      );
     }
     if (colors.length > 0) {
       const [red, green, blue] = colorAt(
@@ -1469,9 +1531,43 @@ function normalizeScalarValue(
   value: number,
   range: Viewport3DScalarColorRange,
 ): number {
-  if (!Number.isFinite(value)) return 0.5;
-  const span = Math.max(range.max - range.min, 1e-12);
+  if (
+    !range ||
+    !Number.isFinite(value) ||
+    !Number.isFinite(range.min) ||
+    !Number.isFinite(range.max)
+  ) {
+    return 0.5;
+  }
+  const scale = Math.max(Math.abs(range.max), Math.abs(range.min));
+  const span = range.max - range.min;
+  if (span <= 1e-6 * Math.max(scale, 1)) return 0.5;
   return Math.min(Math.max((value - range.min) / span, 0), 1);
+}
+
+/**
+ * S-07 — CPU-side (float64) normalization for the value written into the
+ * `scalarValues` GPU attribute, reusing the exact same precision-preserving
+ * formula already used for the CPU-rasterized `colors` output above (see
+ * normalizeScalarValue). Previously the RAW physical value (e.g. ~8e5 for a
+ * narrow exchange-field window) was downcast into a Float32Array unmodified,
+ * and normalization was deferred to the GPU fragment shader as
+ * `(v - fmScalarMin) / span` on two float32 numbers — a catastrophic
+ * cancellation when the interesting span is small relative to the absolute
+ * magnitude. Normalizing here instead, in full float64 precision, and
+ * shipping an already-clamped t in [0, 1] to the GPU eliminates that
+ * precision loss.
+ *
+ * NaN / overflow sentinels are deliberately passed through UNNORMALIZED so
+ * the fragment shader's existing per-vertex "bad value" detection
+ * (`!(v == v) || abs(v) > 3.0e38`) keeps working unchanged.
+ */
+function normalizeScalarValueForShaderAttribute(
+  value: number,
+  range: Viewport3DScalarColorRange,
+): number {
+  if (!Number.isFinite(value) || Math.abs(value) > 3.0e38) return value;
+  return normalizeScalarValue(value, range);
 }
 
 function shaderScalarModeSupports(mode: Viewport3DVectorColorMode): boolean {
@@ -1484,3 +1580,8 @@ function shaderVectorModeSupports(
 ): boolean {
   return mode === "orientation" && fieldVector.nComp >= 3;
 }
+
+export const resolveScalarRangeChunkedForTests = resolveScalarRangeChunked;
+export const scalarRangeFromValuesForTests = scalarRangeFromValues;
+export const normalizeScalarValueFieldMappingForTests = normalizeScalarValue;
+export const normalizeScalarValueForShaderAttributeFieldMappingForTests = normalizeScalarValueForShaderAttribute;

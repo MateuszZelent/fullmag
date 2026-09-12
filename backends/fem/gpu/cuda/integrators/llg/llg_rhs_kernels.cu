@@ -56,9 +56,14 @@ __global__ void llg_rhs_fused_kernel(
         dmy[i] = ry;
         dmz[i] = rz;
 
-        local_norm = sqrt(rx * rx + ry * ry + rz * rz);
+        if (block_max_rhs != nullptr) {
+            local_norm = sqrt(rx * rx + ry * ry + rz * rz);
+        }
     }
 
+    if (block_max_rhs == nullptr) {
+        return;
+    }
     typedef cub::BlockReduce<double, 256> BlockReduce;
     __shared__ typename BlockReduce::TempStorage temp_storage;
     double block_max = BlockReduce(temp_storage).Reduce(local_norm, cub::Max());

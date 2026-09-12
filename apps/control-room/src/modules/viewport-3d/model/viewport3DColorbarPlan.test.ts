@@ -4,6 +4,7 @@ import {
   buildViewport3DColorbarGroupKey,
   planViewport3DColorbars,
   resolveViewport3DColorbarRangeStates,
+  scalarColorBufferMatchesColorbarRequest,
   type Viewport3DColorbarPlan,
 } from "./viewport3DColorbarPlan";
 import {
@@ -68,6 +69,23 @@ function airboxPlan(
 }
 
 describe("viewport3DColorbarPlan", () => {
+  it("accepts an analysis mode scalar buffer for an m colorbar request", () => {
+    expect(
+      scalarColorBufferMatchesColorbarRequest({
+        buffer: {
+          colors: new Float32Array(3),
+          colorMode: "magnitude",
+          colorPalette: "coolwarm",
+          quantityId: "analysis:eigen:sample-0000:mode-0000",
+          range: { max: 1, min: -1 },
+        },
+        colorMode: "magnitude",
+        colorPalette: "coolwarm",
+        quantityId: "m",
+      }),
+    ).toBe(true);
+  });
+
   it("keeps a requested viewport colorbar planned when range is unavailable", () => {
     const plans = planViewport3DColorbars({
       targets: [objectPlan("object:film")],

@@ -499,6 +499,55 @@ function EigenmodesStageDraftFields({
   );
 }
 
+function BiasFieldSweepDraftFields({
+  draft,
+  onUpdate,
+}: {
+  draft: StudyStageDraft;
+  onUpdate: (patch: Partial<StudyStageDraft>) => void;
+}) {
+  return (
+    <>
+      <FormField
+        label="Bias field sweep samples"
+        hint="Canonical unit A/m; enter one [Hx, Hy, Hz] vector per line. Leave empty for a single-field solve."
+        type="textarea"
+        rows={4}
+        value={draft.biasFieldSamplesApm}
+        onChange={(event) =>
+          onUpdate({ biasFieldSamplesApm: event.target.value })
+        }
+      />
+      <FormField
+        label="Bias field equilibrium policy"
+        hint="Each sample must publish its own accepted equilibrium before modal solve."
+        type="select"
+        value={draft.biasFieldEquilibriumPolicy}
+        onChange={(event) =>
+          onUpdate({ biasFieldEquilibriumPolicy: event.target.value })
+        }
+      >
+        <option value="relax_each">Relax each sample</option>
+        <option value="continuation">Continue from previous sample</option>
+      </FormField>
+      <FormField
+        label="Bias field continuation seed"
+        hint="The seed applies to the first sample; continuation then uses the previous accepted equilibrium."
+        type="select"
+        value={draft.biasFieldContinuationSeed}
+        onChange={(event) =>
+          onUpdate({ biasFieldContinuationSeed: event.target.value })
+        }
+      >
+        <option value="initial_state">Initial state</option>
+        <option value="previous_accepted_equilibrium">
+          Previous accepted equilibrium
+        </option>
+      </FormField>
+    </>
+  );
+}
+
 function EigenmodeTargetFields({
   draft,
   onUpdate,
@@ -747,12 +796,19 @@ function SpectralStageDraftFields({
   const showOperator =
     view === "overview" || view === "operator" || view === "solver";
   const showBoundary =
-    view === "overview" || view === "boundary" || view === "periodic_pairs";
+    view === "overview" ||
+    view === "setup" ||
+    view === "boundary" ||
+    view === "periodic_pairs";
   const showKSampling =
     view === "overview" ||
+    view === "setup" ||
     view === "k_sampling" ||
     view === "k_path" ||
     view === "k_grid";
+  const showBiasFieldSweep =
+    draft.kind === "eigenmodes" &&
+    (view === "overview" || view === "setup");
   return (
     <>
       {showOperator ? (
@@ -769,27 +825,10 @@ function SpectralStageDraftFields({
             </FormField>
           ) : null}
           {draft.kind === "frequency_response" ? (
-            <FormField
-              label="Solver method"
-              type="select"
-              value={draft.solverMethod}
-              onChange={(event) =>
-                onUpdate({ solverMethod: event.target.value })
-              }
-            >
-              <option value="auto">Auto</option>
-              <option value="dense_reference">Dense reference</option>
-              <option value="cpu_sparse_direct">CPU sparse direct</option>
-              <option value="full_coupled_field_split">
-                Full coupled field split
-              </option>
-              <option value="schur_reduced">Schur reduced</option>
-              <option value="modal_reduced">Modal reduced</option>
-              <option value="gpu_operator_host_krylov">
-                GPU operator host Krylov
-              </option>
-              <option value="gpu_device_krylov">GPU device Krylov</option>
-            </FormField>
+            <div className="fm-study-stage-note">
+              Solver implementation is resolved from device, precision, certificates,
+              and active capabilities.
+            </div>
           ) : null}
           <FormField
             label="Include demag"
@@ -873,6 +912,9 @@ function SpectralStageDraftFields({
           ) : null}
         </>
       ) : null}
+      {showBiasFieldSweep ? (
+        <BiasFieldSweepDraftFields draft={draft} onUpdate={onUpdate} />
+      ) : null}
       {showBoundary ? (
         <>
           <FormField
@@ -881,7 +923,7 @@ function SpectralStageDraftFields({
             value={draft.bc}
             onChange={(event) => onUpdate({ bc: event.target.value })}
           />
-          {draft.kind === "frequency_response" ? (
+          {draft.kind === "eigenmodes" || draft.kind === "frequency_response" ? (
             <FormField
               label="Magnetostatic BC"
               type="select"

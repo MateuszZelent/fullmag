@@ -226,6 +226,7 @@ def _configure_axis_periodic_surfaces(
             raise ValueError(
                 f"unsupported periodic_pair_ids entry {pair_id!r}; expected x_faces, y_faces, or z_faces"
             )
+        axis_label = ("x", "y", "z")[axis]
         if span[axis] <= tol:
             raise ValueError(f"periodic pair '{pair_id}' has zero domain span")
         min_surfaces = [
@@ -306,6 +307,7 @@ def _configure_axis_periodic_surfaces(
                     "slave_tag": int(slave_tag),
                     "marker_a": int(master_tag),
                     "marker_b": int(slave_tag),
+                    "axis_hint": axis_label,
                     "translation": list(translation),
                     "tolerance_m": tol,
                 }

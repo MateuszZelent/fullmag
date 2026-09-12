@@ -45,6 +45,8 @@ lattice translation and orientation transform within tolerance. It emits one
 representative-to-member constraint per nonrepresentative member. Contradictory
 duplicate constraints, path-dependent corner phases, incomplete side coverage,
 or one DOF assigned to multiple representatives reject the certificate.
+duplicate periodic node pairs are rejected before the transitive closure is
+hashed into the periodic mesh certificate.
 
 The target certificate contains at least:
 
@@ -95,6 +97,10 @@ With `delta_m = T q`, the magnetic transfer is exactly:
 G_pair = T_dst^T R_orient T_src
 q_dst = exp(-i*k dot R_lattice) G_pair q_src
 ```
+
+Using the contract's `kF`, `delta_r`, and `R` notation, the same transfer is
+`q_dst = exp(-i kF · delta_r) T_dst^T R T_src q_src`.
+For the compact phase/pair notation this is `q_dst = phase * G_pair q_src`.
 
 Phase-only scalar periodicity must not be imposed on tangent coordinates `q`
 unless `G_pair` is certified as identity within tolerance.

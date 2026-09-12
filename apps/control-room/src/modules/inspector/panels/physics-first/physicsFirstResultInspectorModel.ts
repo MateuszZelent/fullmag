@@ -7,6 +7,8 @@ export interface PhysicsFirstResultInspectorModel {
 
 const models: Readonly<Record<string, PhysicsFirstResultInspectorModel>> = {
   "results.dynamics.root": model("Dynamics Results", "Time-domain results and spectral analysis", "Dynamics", "Runtime observables"),
+  "results.time_domain.spectral_feature": model("Legacy Gamma Feature", "A selected Gamma FFT feature from the legacy time-domain reader", "Time-domain spectrum", "Legacy / partial"),
+  "results.time_domain.dsf_point": model("Legacy DSF Point", "A selected finite-k dynamic-structure-factor point from the legacy reader", "Dynamic structure factor", "Legacy / partial"),
   "results.resonance.root": model("Resonance & FMR", "Modal and driven resonance results", "Resonance", "Mixed products"),
   "results.resonance.modal.stage": model("Eigenmodes Result Stage", "Modal eigensolve result stage and its published products", "Modal resonance", "Modal eigensolve"),
   "results.resonance.modal.spectrum": model("Eigenfrequency Spectrum", "Eigenfrequencies at zero wavevector with modal quality evidence", "Modal resonance", "Modal eigensolve"),

@@ -63,6 +63,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         demag_realization: None,
         fdm: None,
         external_field: None,
+        rotated_interfacial_dmi: None,
         solver: fullmag_authoring::ScriptBuilderSolverState {
             integrator: "rk45".to_string(),
             fixed_timestep: String::new(),
@@ -1036,6 +1037,9 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
                     kind: None,
                     status: StageLifecycleState::Completed,
                     command_id: Some("cmd-stage-0".into()),
+                    mesh_generation_id: None,
+                    mesh_topology_fingerprint: None,
+                    mesh_revision: None,
                     started_at_unix_ms: Some(1_700_000_000_000),
                     completed_at_unix_ms: Some(1_700_000_001_000),
                     reason: None,
@@ -1068,6 +1072,9 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
                     kind: None,
                     status: StageLifecycleState::Running,
                     command_id: Some("cmd-stage-1".into()),
+                    mesh_generation_id: None,
+                    mesh_topology_fingerprint: None,
+                    mesh_revision: None,
                     started_at_unix_ms: Some(1_700_000_002_000),
                     completed_at_unix_ms: None,
                     reason: None,
@@ -2076,6 +2083,7 @@ fn sample_scalar_row(step: u64, time: f64, e_total: f64) -> ScalarRow {
         e_ext: 3.0,
         e_ani: 0.4,
         e_dmi: 0.5,
+        e_rotated_dmi: 0.0,
         e_total,
         max_dm_dt: 0.01,
         max_h_eff: 100.0,
@@ -2261,6 +2269,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 e_ext: 3.0,
                 e_ani: 4.0,
                 e_dmi: 5.0,
+                e_rotated_dmi: 0.0,
                 e_total: 15.0,
                 max_dm_dt: 10.0,
                 max_h_eff: 11.0,
@@ -2303,6 +2312,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 e_ext: 2.9,
                 e_ani: 3.9,
                 e_dmi: 4.9,
+                e_rotated_dmi: 0.0,
                 e_total: 14.5,
                 max_dm_dt: 10.0,
                 max_h_eff: 11.0,
@@ -2331,6 +2341,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 e_ext: 3.0,
                 e_ani: 4.0,
                 e_dmi: 5.0,
+                e_rotated_dmi: 0.0,
                 e_total: 15.0,
                 max_dm_dt: 10.0,
                 max_h_eff: 11.0,
@@ -2350,6 +2361,9 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                     kind: None,
                     status: StageLifecycleState::Completed,
                     command_id: Some("cmd-stage-0".into()),
+                    mesh_generation_id: Some("mesh-generation-0".into()),
+                    mesh_topology_fingerprint: Some("sha256:stage-topology-0".into()),
+                    mesh_revision: Some(7),
                     started_at_unix_ms: Some(1_700_000_000_000),
                     completed_at_unix_ms: Some(1_700_000_001_000),
                     reason: None,
@@ -2382,6 +2396,9 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                     kind: None,
                     status: StageLifecycleState::Running,
                     command_id: Some("cmd-stage-1".into()),
+                    mesh_generation_id: Some("mesh-generation-1".into()),
+                    mesh_topology_fingerprint: Some("sha256:stage-topology-1".into()),
+                    mesh_revision: Some(9),
                     started_at_unix_ms: Some(1_700_000_002_000),
                     completed_at_unix_ms: None,
                     reason: None,
@@ -2708,6 +2725,9 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
             .as_nanos(),
     ));
     fs::create_dir_all(&repo_root).expect("failed to create temp repo root");
+    let script_path = repo_root.join("test.py");
+    fs::write(&script_path, b"study = fullmag.Study()\n")
+        .expect("canonical script fixture should be written");
 
     let (control_events_tx, _rx) = watch::channel(0u64);
 
@@ -2763,7 +2783,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         run_id: "test-run".into(),
         status: "running".into(),
         interactive_session_requested: false,
-        script_path: "test.py".into(),
+        script_path: script_path.display().to_string(),
         problem_name: "contract-test".into(),
         requested_backend: "cpu-fdm".into(),
         explicit_selection: false,
@@ -2808,6 +2828,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
                 e_ext: 3.0,
                 e_ani: 4.0,
                 e_dmi: 5.0,
+                e_rotated_dmi: 0.0,
                 e_total: 15.0,
                 max_dm_dt: 10.0,
                 max_h_eff: 11.0,
@@ -3580,7 +3601,7 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
             .as_object()
             .expect("operation capability map")
             .len(),
-        33
+        34
     );
     assert!(active_lane["operations"]["study.frequency_response"]["reason"].is_string());
     assert!(active_lane["operations"]["study.frequency_response"]["requires"].is_array());
@@ -3842,6 +3863,7 @@ fn active_lane_operation_catalog_covers_the_canonical_interaction_catalog() {
         "interaction.stt",
         "interaction.sot",
         "interaction.interfacial_dmi",
+        "interaction.rotated_interfacial_dmi",
         "interaction.bulk_dmi",
         "interaction.uniaxial_anisotropy",
         "interaction.cubic_anisotropy",
@@ -3970,6 +3992,7 @@ async fn domain_meta_uses_fdm_physical_cell_size_for_grid_and_bounds() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -4815,6 +4838,7 @@ async fn domain_meta_accepts_planar_fdm_zero_spacing_axis() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -5392,6 +5416,7 @@ async fn field_vector_returns_pending_metadata_for_materializer_request() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -5549,6 +5574,7 @@ async fn field_vector_keeps_unknown_scope_not_found_while_materialization_is_pen
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -5632,6 +5658,7 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
                         e_ext: 0.0,
                         e_ani: 0.0,
                         e_dmi: 0.0,
+                        e_rotated_dmi: 0.0,
                         e_total: 0.0,
                         max_dm_dt: 0.0,
                         max_h_eff: 0.0,
@@ -8163,6 +8190,7 @@ async fn scalar_history_returns_windowed_columnar_rows() {
             sample_scalar_row(1, 1e-12, 6.9),
             sample_scalar_row(2, 2e-12, 7.3),
         ];
+        snapshot.scalar_rows[1].e_rotated_dmi = -7.5e-21;
         snapshot.scalar_revision = 2;
     }
     let app = build_v2_router().with_state(state);
@@ -8170,7 +8198,7 @@ async fn scalar_history_returns_windowed_columnar_rows() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/v2/sessions/current/data/scalars?since_revision=1&limit=1&columns=time,e_total,mx")
+                .uri("/v2/sessions/current/data/scalars?since_revision=1&limit=1&columns=time,e_total,e_rotated_dmi,mx")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -8185,9 +8213,12 @@ async fn scalar_history_returns_windowed_columnar_rows() {
     assert_eq!(json["returned_rows"], 1);
     assert_eq!(
         json["columns"],
-        serde_json::json!(["step", "time", "e_total", "mx"])
+        serde_json::json!(["step", "time", "e_total", "e_rotated_dmi", "mx"])
     );
-    assert_eq!(json["rows"], serde_json::json!([[2.0, 2e-12, 7.3, 0.2]]));
+    assert_eq!(
+        json["rows"],
+        serde_json::json!([[2.0, 2e-12, 7.3, -7.5e-21, 0.2]])
+    );
     assert_eq!(json["observation_frames"].as_array().map(Vec::len), Some(1));
     assert_eq!(json["observation_frames"][0]["source_step"], 2);
     assert_eq!(json["observation_frames"][0]["source_time_seconds"], 2e-12);
@@ -8326,6 +8357,109 @@ async fn table_rows_resource_returns_cursor_window_and_column_metadata() {
         ])
     );
     assert_eq!(json["rows"], serde_json::json!([[2.0, 2e-12, 7.3, 2.0]]));
+}
+
+#[tokio::test]
+async fn completed_rotated_dmi_scalar_preview_uses_plan_gated_manifest_fallback() {
+    use fullmag_ir::{
+        BackendPlanIR, BackendTarget, CommonPlanMeta, ExecutionMode, ExecutionPlanIR, FdmPlanIR,
+        OutputPlanIR, ProvenancePlanIR,
+    };
+
+    let state = test_app_state_with_live_session().await;
+    let mut guard = state.current_live_state.write().await;
+    let snapshot = guard.as_mut().expect("test live session");
+    snapshot.scalar_rows.clear();
+    snapshot.live_state = None;
+    snapshot.run = Some(
+        serde_json::from_value(serde_json::json!({
+            "run_id": "completed-rdmi", "session_id": "test", "status": "completed",
+            "total_steps": 10, "final_e_dmi": -2.5e-18, "artifact_dir": "."
+        }))
+        .unwrap(),
+    );
+    let plan = ExecutionPlanIR {
+        common: CommonPlanMeta {
+            ir_version: "test".to_string(),
+            requested_backend: BackendTarget::Fdm,
+            resolved_backend: BackendTarget::Fdm,
+            execution_mode: ExecutionMode::Strict,
+            material_field_plans: Vec::new(),
+        },
+        backend_plan: BackendPlanIR::Fdm(FdmPlanIR {
+            rotated_interfacial_dmi: Some(3.0e-3),
+            ..FdmPlanIR::default()
+        }),
+        output_plan: OutputPlanIR {
+            outputs: Vec::new(),
+        },
+        provenance: ProvenancePlanIR {
+            notes: Vec::new(),
+            integrator_resolution: None,
+            fem_eigen_execution_resolution: None,
+            physics_graph: None,
+        },
+    };
+    snapshot.metadata = Some(serde_json::json!({ "execution_plan": plan }));
+    assert_eq!(
+        crate::current_global_scalar_value(snapshot, "E_rotated_dmi"),
+        Some(-2.5e-18)
+    );
+
+    // Missing or corrupt legacy provenance cannot relabel an aggregate as a
+    // rotated component; the aggregate remains readable in both cases.
+    for metadata in [None, Some(serde_json::json!({ "execution_plan": {} }))] {
+        snapshot.metadata = metadata;
+        assert_eq!(
+            crate::current_global_scalar_value(snapshot, "E_rotated_dmi"),
+            None
+        );
+        assert_eq!(
+            crate::current_global_scalar_value(snapshot, "E_dmi"),
+            Some(-2.5e-18)
+        );
+    }
+}
+
+#[tokio::test]
+async fn table_rows_expose_rotated_dmi_energy_as_an_independent_global_scalar() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard
+            .as_mut()
+            .expect("test live session should be initialized");
+        let mut row = sample_scalar_row(1, 1e-12, 6.9);
+        row.e_rotated_dmi = -7.5e-21;
+        snapshot.metadata = Some(serde_json::json!({
+            "table_autosave": {
+                "kind": "table_autosave",
+                "table_id": "default",
+                "every_steps": 1,
+                "quantities": ["step", "e_rotated_dmi"]
+            }
+        }));
+        snapshot.scalar_rows = vec![row];
+        snapshot.scalar_revision = 1;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/tables/default/rows?columns=e_rotated_dmi")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    assert_eq!(json["columns"][1]["column_id"], "e_rotated_dmi");
+    assert_eq!(json["columns"][1]["unit"], "J");
+    assert_eq!(json["rows"], serde_json::json!([[1.0, -7.5e-21]]));
 }
 
 #[tokio::test]
@@ -20622,6 +20756,52 @@ async fn authoring_object_interaction_get_returns_interfacial_dmi() {
 }
 
 #[tokio::test]
+async fn authoring_object_interaction_patch_rejects_study_scoped_rotated_dmi() {
+    let scene = sample_scene_document();
+    let object_id = scene.objects[0].id.clone();
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/v2/sessions/current/model/objects/{object_id}/interactions/rotated_interfacial_dmi"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "present": true,
+                        "enabled": true,
+                        "params": {"d": -0.003}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(response).await;
+    assert!(json.to_string().contains("study-scoped"));
+
+    let guard = state.current_live_state.read().await;
+    let committed = guard
+        .as_ref()
+        .and_then(|snapshot| snapshot.scene_document.as_ref())
+        .expect("scene document committed");
+    let interaction = committed.objects[0].physics_stack.iter().find(|entry| {
+        entry.kind == fullmag_authoring::ScriptBuilderMagneticInteractionKind::RotatedInterfacialDmi
+    });
+    assert!(interaction.is_none());
+}
+
+#[tokio::test]
 async fn authoring_object_interaction_patch_updates_uniaxial_params() {
     let scene = sample_scene_document();
     let object_id = scene.objects[0].id.clone();
@@ -21857,6 +22037,7 @@ async fn commands_endpoint_keeps_compute_enabled_during_wait_for_compute_gate() 
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -22112,6 +22293,9 @@ async fn commands_endpoint_invalidates_hysteresis_stage_resources() {
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hysteresis-run".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -22311,6 +22495,9 @@ async fn commands_endpoint_validates_runtime_precondition_against_effective_stat
                 kind: Some("relax".into()),
                 status: StageLifecycleState::Cancelled,
                 command_id: Some("cmd-solve".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_000_000),
                 completed_at_unix_ms: Some(1_700_000_001_000),
                 reason: Some(fullmag_ir::StageStopReason::UserCancelled),
@@ -22818,6 +23005,9 @@ async fn command_detail_endpoint_exposes_stage_state_linkage() {
                 kind: None,
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-stage-0".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_000_000),
                 completed_at_unix_ms: Some(1_700_000_001_000),
                 reason: None,
@@ -23547,6 +23737,12 @@ async fn stage_execution_endpoint_returns_current_stage_tree() {
     assert_eq!(json["stages"][0]["index"], 0);
     assert_eq!(json["stages"][0]["label"], "Stage 1");
     assert_eq!(json["stages"][0]["command_id"], "cmd-stage-0");
+    assert_eq!(json["stages"][0]["mesh_generation_id"], "mesh-generation-0");
+    assert_eq!(
+        json["stages"][0]["mesh_topology_fingerprint"],
+        "sha256:stage-topology-0"
+    );
+    assert_eq!(json["stages"][0]["mesh_revision"], 7);
     assert_eq!(
         json["stages"][0]["started_at_unix_ms"],
         1_700_000_000_000u64
@@ -23570,6 +23766,12 @@ async fn stage_execution_endpoint_returns_current_stage_tree() {
     assert_eq!(json["stages"][1]["stage_id"], "stage-001");
     assert_eq!(json["stages"][1]["kind"], "relax");
     assert_eq!(json["stages"][1]["command_id"], "cmd-stage-1");
+    assert_eq!(json["stages"][1]["mesh_generation_id"], "mesh-generation-1");
+    assert_eq!(
+        json["stages"][1]["mesh_topology_fingerprint"],
+        "sha256:stage-topology-1"
+    );
+    assert_eq!(json["stages"][1]["mesh_revision"], 9);
     assert_eq!(
         json["stages"][1]["started_at_unix_ms"],
         1_700_000_002_000u64
@@ -23628,6 +23830,9 @@ async fn stage_execution_endpoint_projects_frequency_response_live_progress() {
                 kind: Some("flat_frequency_response".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-stage-3".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_010_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -23673,6 +23878,7 @@ async fn stage_execution_endpoint_projects_frequency_response_live_progress() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 1.0,
@@ -24075,6 +24281,9 @@ async fn hysteresis_progress_endpoint_returns_current_stage_progress() {
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -24170,6 +24379,9 @@ async fn hysteresis_progress_endpoint_reports_active_first_point_before_completi
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -24255,6 +24467,9 @@ async fn hysteresis_progress_endpoint_projects_live_magnetization_for_sample_ang
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -24333,6 +24548,9 @@ async fn hysteresis_progress_endpoint_uses_measurement_axis_for_live_projection(
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -24418,6 +24636,9 @@ async fn hysteresis_progress_endpoint_averages_only_magnetic_fem_nodes() {
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -24504,6 +24725,9 @@ async fn hysteresis_progress_endpoint_uses_fem_element_volume_weights_for_live_a
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -24590,6 +24814,9 @@ async fn hysteresis_progress_endpoint_uses_snapshot_fem_mesh_for_live_average() 
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -24716,6 +24943,9 @@ async fn hysteresis_execution_tree_returns_windowed_active_points() {
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -24868,6 +25098,9 @@ async fn hysteresis_bookmarks_round_trip_through_resource_and_execution_tree() {
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: Some(1_700_000_003_000),
                 reason: None,
@@ -25012,6 +25245,9 @@ async fn hysteresis_execution_tree_marks_missing_snapshot_payloads() {
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: Some(1_700_000_003_000),
                 reason: None,
@@ -25191,6 +25427,9 @@ async fn hysteresis_execution_tree_uses_settle_trace_status_for_completed_points
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: Some(1_700_000_003_000),
                 reason: None,
@@ -25367,6 +25606,9 @@ async fn hysteresis_execution_tree_exposes_runtime_branch_nodes() {
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -25483,6 +25725,9 @@ async fn stage_execution_endpoint_exposes_completed_relaxation_stop_metric() {
                 kind: Some("relax".into()),
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-relax".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_000_000u64),
                 completed_at_unix_ms: Some(1_700_000_010_000u64),
                 reason: Some(fullmag_ir::StageStopReason::Torque),
@@ -25678,6 +25923,7 @@ async fn solver_status_does_not_infer_convergence_from_finished_sample() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 2.0,
                 max_h_eff: 3.0,
@@ -25708,6 +25954,9 @@ async fn solver_status_does_not_infer_convergence_from_finished_sample() {
                 kind: Some("relax".into()),
                 status: StageLifecycleState::Completed,
                 command_id: None,
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: None,
                 completed_at_unix_ms: None,
                 reason: Some(fullmag_ir::StageStopReason::MaxSteps),
@@ -25776,6 +26025,7 @@ async fn solver_status_endpoint_prefers_waiting_for_compute_gate_over_stale_live
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -25911,6 +26161,7 @@ async fn object_metrics_endpoint_prefers_per_object_solver_scalars() {
                 e_ext: 3.0,
                 e_ani: 4.0,
                 e_dmi: 5.0,
+                e_rotated_dmi: 0.0,
                 e_total: 15.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -25991,6 +26242,7 @@ async fn object_metrics_keep_step_and_energy_without_inventing_magnetization() {
                 e_ext: 3.0,
                 e_ani: 4.0,
                 e_dmi: 5.0,
+                e_rotated_dmi: 0.0,
                 e_total: 23.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -26053,6 +26305,7 @@ async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_node
                 e_ext: 3.0,
                 e_ani: 4.0,
                 e_dmi: 5.0,
+                e_rotated_dmi: 0.0,
                 e_total: 15.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -26180,6 +26433,37 @@ async fn session_export_returns_404_without_session() {
 }
 
 #[tokio::test]
+async fn session_export_rejects_missing_canonical_script_before_creating_a_snapshot() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.script_path = repo_root.join("missing.py").display().to_string();
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/exports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "profile": "compact" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let error = body_json(response).await;
+    assert_eq!(error["code"], "invalid_script");
+    assert!(!repo_root
+        .join(".fullmag/local-live/session-store/runs/test-run/run_manifest.json")
+        .exists());
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
 async fn session_export_returns_fms_payload_with_session() {
     let (app, repo_root) = test_router_with_session_store().await;
     let response = app
@@ -26208,6 +26492,27 @@ async fn session_export_returns_fms_payload_with_session() {
         .as_str()
         .is_some_and(|value| !value.is_empty()));
     assert!(json["size_bytes"].as_u64().unwrap_or(0) > 0);
+
+    use base64::Engine;
+    let fms_bytes = base64::engine::general_purpose::STANDARD
+        .decode(
+            json["fms_base64"]
+                .as_str()
+                .expect("export response must contain fms_base64"),
+        )
+        .expect("exported fms base64 must decode");
+    let preflight = fullmag_session::preflight_fms(std::io::Cursor::new(fms_bytes), &[])
+        .expect("exported fms must pass preflight");
+    let script = b"study = fullmag.Study()\n";
+    assert_eq!(
+        preflight.documents.get("project/main.py"),
+        Some(&script.to_vec()),
+        "project/main.py must retain its exact source bytes"
+    );
+    assert_eq!(
+        preflight.workspace.script_sha256,
+        fullmag_session::hex_sha256(script)
+    );
 
     let _ = fs::remove_dir_all(&repo_root);
 }
@@ -26315,6 +26620,767 @@ async fn session_import_commit_round_trips_exported_session() {
     let json = body_json(commit_response).await;
     assert_eq!(json["session_id"], "test-session");
     assert_eq!(json["restore_class"], "config_only");
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn session_import_restore_mode_is_typed_defaulted_and_rejects_unknown_values() {
+    use crate::session_persistence::{SessionImportCommitRequest, SessionRestoreMode};
+
+    let defaulted: SessionImportCommitRequest = serde_json::from_value(serde_json::json!({
+        "fms_base64": "Zm1z"
+    }))
+    .expect("missing restore mode must use visualization_only");
+    assert_eq!(
+        defaulted.restore_mode,
+        SessionRestoreMode::VisualizationOnly
+    );
+
+    for (value, expected) in [
+        ("visualization_only", SessionRestoreMode::VisualizationOnly),
+        ("replace_project", SessionRestoreMode::ReplaceProject),
+        ("resume", SessionRestoreMode::Resume),
+    ] {
+        let request: SessionImportCommitRequest = serde_json::from_value(serde_json::json!({
+            "fms_base64": "Zm1z",
+            "restore_mode": value,
+        }))
+        .expect("supported restore mode must deserialize");
+        assert_eq!(request.restore_mode, expected);
+    }
+
+    assert!(
+        serde_json::from_value::<SessionImportCommitRequest>(serde_json::json!({
+            "fms_base64": "Zm1z",
+            "restore_mode": "initial_condition",
+        }))
+        .is_err()
+    );
+
+    let (app, repo_root) = test_router_with_session_store().await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/imports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "fms_base64": "Zm1z",
+                        "restore_mode": "initial_condition",
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn session_import_replace_project_reports_semantic_differences_without_comparing_scripts() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let source_script = repo_root.join("different-model.py");
+    fs::write(
+        &source_script,
+        b"study = fullmag.Study(name='different-model')\n",
+    )
+    .expect("different source script fixture should be written");
+
+    let active_snapshot = {
+        let mut current = state.current_live_state.write().await;
+        let current = current.as_mut().expect("fixture must have active state");
+        current.scene_document = Some(sample_scene_document());
+        current.clone()
+    };
+
+    let mut imported_snapshot = active_snapshot.clone();
+    imported_snapshot.session.script_path = source_script.display().to_string();
+    let imported_scene = imported_snapshot
+        .scene_document
+        .as_mut()
+        .expect("fixture scene must be present");
+    imported_scene.objects[0].geometry.geometry_params = serde_json::json!({
+        "size": [2.0, 1.0, 1.0]
+    });
+    *state.current_live_state.write().await = Some(imported_snapshot);
+
+    let export_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/exports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "profile": "compact" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(export_response.status(), StatusCode::OK);
+    let fms_base64 = body_json(export_response).await["fms_base64"]
+        .as_str()
+        .expect("export must include fms payload")
+        .to_string();
+
+    *state.current_live_state.write().await = Some(active_snapshot);
+    let import_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/imports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "fms_base64": fms_base64,
+                        "restore_mode": "replace_project",
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(import_response.status(), StatusCode::OK);
+    let imported = body_json(import_response).await;
+    assert_eq!(imported["restore_mode"], "replace_project");
+    assert_eq!(imported["compatibility"]["geometry"]["basis"], "available");
+    assert_eq!(
+        imported["compatibility"]["geometry"]["differences"],
+        serde_json::json!(["geometry differs"])
+    );
+    assert!(imported["warnings"]
+        .as_array()
+        .expect("warnings must be an array")
+        .iter()
+        .any(|warning| warning == "non-blocking semantic difference in geometry"));
+
+    let restored = state
+        .current_live_state
+        .read()
+        .await
+        .clone()
+        .expect("replace_project must publish the imported snapshot");
+    let restored_script = PathBuf::from(&restored.session.script_path);
+    let restored_artifacts = PathBuf::from(&restored.session.artifact_dir);
+    assert!(
+        restored_script.starts_with(repo_root.join(".fullmag/local-live/session-store/imports")),
+        "replace_project must rebase script_path into the published import"
+    );
+    assert!(
+        restored_artifacts.starts_with(repo_root.join(".fullmag/local-live/session-store/imports")),
+        "replace_project must rebase artifact_dir into the published import"
+    );
+    assert_eq!(
+        fs::read(&restored_script).expect("published script must be readable"),
+        b"study = fullmag.Study(name='different-model')\n"
+    );
+    assert_eq!(
+        restored.runtime_status.code, "imported_read_only",
+        "replace_project must not retain the previous executable runtime"
+    );
+    assert!(!restored.runtime_status.can_accept_commands);
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn session_import_resume_without_backend_restore_leaves_active_snapshot_unchanged() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let active_before = serde_json::to_value(
+        state
+            .current_live_state
+            .read()
+            .await
+            .clone()
+            .expect("fixture must have active state"),
+    )
+    .expect("active snapshot must serialize");
+    let selection_before =
+        serde_json::to_value(state.current_display_selection.read().await.clone())
+            .expect("selection must serialize");
+    let presentation_before =
+        serde_json::to_value(state.current_display_presentation.read().await.clone())
+            .expect("presentation must serialize");
+
+    let export_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/exports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "profile": "compact" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let fms_base64 = body_json(export_response).await["fms_base64"]
+        .as_str()
+        .expect("export must include fms payload")
+        .to_string();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/imports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "fms_base64": fms_base64,
+                        "restore_mode": "resume",
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(response).await["code"],
+        "checkpoint_restore_unsupported"
+    );
+    assert_eq!(
+        serde_json::to_value(
+            state
+                .current_live_state
+                .read()
+                .await
+                .clone()
+                .expect("active snapshot must remain present"),
+        )
+        .expect("active snapshot must serialize"),
+        active_before
+    );
+    assert_eq!(
+        serde_json::to_value(state.current_display_selection.read().await.clone())
+            .expect("selection must serialize"),
+        selection_before
+    );
+    assert_eq!(
+        serde_json::to_value(state.current_display_presentation.read().await.clone())
+            .expect("presentation must serialize"),
+        presentation_before
+    );
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn session_import_missing_snapshot_rejects_before_mutating_state_or_store() {
+    use std::io::Cursor;
+
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let active_before = serde_json::to_value(
+        state
+            .current_live_state
+            .read()
+            .await
+            .clone()
+            .expect("fixture must have active state"),
+    )
+    .expect("active snapshot must serialize");
+    let source_store =
+        fullmag_session::SessionStore::open(repo_root.join("missing-snapshot-source"))
+            .expect("source store should open");
+    let session = fullmag_session::FmsSessionManifest::new(
+        "missing-snapshot-session",
+        "missing snapshot",
+        fullmag_session::SaveProfile::Compact,
+    );
+    let script = b"study = fullmag.Study()\n".to_vec();
+    let workspace = fullmag_session::FmsWorkspaceManifest {
+        workspace_id: "missing-snapshot".to_string(),
+        problem_name: "missing snapshot".to_string(),
+        project_ref: "project/".to_string(),
+        script_ref: "project/main.py".to_string(),
+        script_sha256: fullmag_session::hex_sha256(&script),
+        ui_state_ref: "project/ui_state.json".to_string(),
+        scene_document_ref: "project/scene_document.json".to_string(),
+        script_builder_ref: None,
+        model_builder_graph_ref: None,
+        asset_index_ref: None,
+    };
+    let documents = HashMap::from([
+        ("main.py".to_string(), script),
+        ("ui_state.json".to_string(), b"{}".to_vec()),
+    ]);
+    let mut archive = Cursor::new(Vec::new());
+    fullmag_session::pack_fms(
+        &mut archive,
+        &source_store,
+        &session,
+        &workspace,
+        &fullmag_session::FmsExportProfile::for_profile(fullmag_session::SaveProfile::Compact),
+        &documents,
+        &fullmag_session::PackOptions::default(),
+    )
+    .expect("fixture archive should pack");
+    use base64::Engine;
+    let fms_base64 = base64::engine::general_purpose::STANDARD.encode(archive.into_inner());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/imports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "fms_base64": fms_base64 }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        serde_json::to_value(
+            state
+                .current_live_state
+                .read()
+                .await
+                .clone()
+                .expect("active snapshot must remain present"),
+        )
+        .expect("active snapshot must serialize"),
+        active_before
+    );
+    assert!(
+        !repo_root.join(".fullmag/local-live/session-store").exists(),
+        "preflight failure must not initialize the active SessionStore"
+    );
+
+    let mut corrupt_documents = documents;
+    corrupt_documents.insert(
+        "current_live_snapshot.json".to_string(),
+        b"{not valid JSON".to_vec(),
+    );
+    let mut corrupt_archive = Cursor::new(Vec::new());
+    fullmag_session::pack_fms(
+        &mut corrupt_archive,
+        &source_store,
+        &session,
+        &workspace,
+        &fullmag_session::FmsExportProfile::for_profile(fullmag_session::SaveProfile::Compact),
+        &corrupt_documents,
+        &fullmag_session::PackOptions::default(),
+    )
+    .expect("corrupt snapshot fixture archive should pack");
+    let corrupt_fms_base64 =
+        base64::engine::general_purpose::STANDARD.encode(corrupt_archive.into_inner());
+    let corrupt_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/imports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "fms_base64": corrupt_fms_base64 }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(corrupt_response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        serde_json::to_value(
+            state
+                .current_live_state
+                .read()
+                .await
+                .clone()
+                .expect("active snapshot must remain present"),
+        )
+        .expect("active snapshot must serialize"),
+        active_before
+    );
+    assert!(
+        !repo_root.join(".fullmag/local-live/session-store").exists(),
+        "corrupt snapshot must not initialize the active SessionStore"
+    );
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn session_import_rejects_late_run_snapshot_mismatch_without_publishing_or_mutating_live_state(
+) {
+    use base64::Engine;
+    use std::io::Cursor;
+
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let active_before = serde_json::to_value(
+        state
+            .current_live_state
+            .read()
+            .await
+            .clone()
+            .expect("fixture must have active state"),
+    )
+    .expect("active snapshot must serialize");
+    let selection_before =
+        serde_json::to_value(state.current_display_selection.read().await.clone())
+            .expect("selection must serialize");
+    let presentation_before =
+        serde_json::to_value(state.current_display_presentation.read().await.clone())
+            .expect("presentation must serialize");
+
+    let export_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/exports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "profile": "compact" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(export_response.status(), StatusCode::OK);
+    let fms_bytes = base64::engine::general_purpose::STANDARD
+        .decode(
+            body_json(export_response).await["fms_base64"]
+                .as_str()
+                .expect("export must include fms payload"),
+        )
+        .expect("exported fms must decode");
+    let preflight = fullmag_session::preflight_fms(Cursor::new(fms_bytes), &[])
+        .expect("exported fixture must preflight");
+    let source_store = fullmag_session::SessionStore::open(repo_root.join("late-entry-source"))
+        .expect("source session store should open");
+    let mut documents = HashMap::new();
+    for (path, bytes) in &preflight.documents {
+        if let Some(name) = path.strip_prefix("project/") {
+            documents.insert(name.to_string(), bytes.clone());
+        } else if path.starts_with("runs/") || path.starts_with("objects/sha256/") {
+            source_store
+                .write_document(path, bytes)
+                .expect("run fixture entry should persist");
+        }
+    }
+    let snapshot = documents
+        .get_mut("current_live_snapshot.json")
+        .expect("export must contain the persisted live snapshot");
+    let mut snapshot_json: serde_json::Value =
+        serde_json::from_slice(snapshot).expect("snapshot fixture must be JSON");
+    snapshot_json["session"]["run_id"] = serde_json::json!("undeclared-run");
+    *snapshot = serde_json::to_vec(&snapshot_json).expect("mismatched snapshot must serialize");
+    let mut malformed_archive = Cursor::new(Vec::new());
+    fullmag_session::pack_fms(
+        &mut malformed_archive,
+        &source_store,
+        &preflight.session,
+        &preflight.workspace,
+        &preflight.export_profile,
+        &documents,
+        &fullmag_session::PackOptions::default(),
+    )
+    .expect("late-mismatch fixture archive should pack");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/imports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "fms_base64": base64::engine::general_purpose::STANDARD
+                            .encode(malformed_archive.into_inner()),
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        serde_json::to_value(
+            state
+                .current_live_state
+                .read()
+                .await
+                .clone()
+                .expect("failed import must retain active snapshot"),
+        )
+        .expect("active snapshot must serialize"),
+        active_before
+    );
+    assert_eq!(
+        serde_json::to_value(state.current_display_selection.read().await.clone())
+            .expect("selection must serialize"),
+        selection_before
+    );
+    assert_eq!(
+        serde_json::to_value(state.current_display_presentation.read().await.clone())
+            .expect("presentation must serialize"),
+        presentation_before
+    );
+    let imports_dir = repo_root.join(".fullmag/local-live/session-store/imports");
+    assert!(
+        !imports_dir.exists()
+            || fs::read_dir(&imports_dir)
+                .expect("imports directory should be readable")
+                .next()
+                .is_none(),
+        "late validation failure must not leave a published import"
+    );
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn solved_session_export_restores_frequency_artifacts_after_source_history_is_removed() {
+    use base64::Engine;
+
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    set_running_stage_execution(&state, 17).await;
+    let source_artifact_dir = repo_root.join("artifacts");
+    let candidate_identity = serde_json::json!({
+        "schema_version": "frequency_domain_candidate_identity.v1",
+        "mesh_id": "periodic-antidot",
+        "mesh_generation_id": "mesh-generation-persisted",
+        "topology_fingerprint": "sha256:topology-persisted",
+        "equilibrium_artifact_sha256": "sha256:equilibrium-persisted",
+        "engine_id": "native_fem.frequency_domain.k0_poisson_airbox_cpu_schur_slepc.v1",
+        "device": "cpu",
+        "source_identity": {"source_snapshot_sha256": "sha256:source-persisted"}
+    });
+    let spectrum = serde_json::to_vec(&serde_json::json!({
+        "schema_version": "eigen_spectrum.v2",
+        "engine_id": "native_fem.frequency_domain.k0_poisson_airbox_cpu_schur_slepc.v1",
+        "solve_succeeded": true,
+        "fields_available": true,
+        "spectrum_completeness": "complete_window",
+        "window_complete": true,
+        "candidate_identity": candidate_identity.clone(),
+        "samples": [],
+        "marker": "persisted"
+    }))
+    .expect("spectrum fixture should serialize");
+    let spectrum_revision = format!("sha256:{:x}", Sha256::digest(&spectrum));
+    let mode_metadata = serde_json::to_vec(&serde_json::json!({
+        "schema_version": "eigen_mode.v2",
+        "sample_index": 0,
+        "raw_mode_index": 0,
+        "candidate_identity": candidate_identity,
+        "source_spectrum_revision": spectrum_revision
+    }))
+    .expect("mode metadata fixture should serialize");
+    let mode_bytes = b"exact-mode-payload-bytes";
+    fs::create_dir_all(source_artifact_dir.join("eigen/modes/sample_0000"))
+        .expect("source eigen artifact directory should exist");
+    fs::write(
+        source_artifact_dir.join("eigen/spectrum.v2.json"),
+        &spectrum,
+    )
+    .expect("source spectrum should be written");
+    fs::write(
+        source_artifact_dir.join("eigen/modes/sample_0000/mode_0000.json"),
+        &mode_metadata,
+    )
+    .expect("source mode metadata should be written");
+    fs::write(
+        source_artifact_dir.join("eigen/modes/sample_0000/mode_0000.bin"),
+        mode_bytes,
+    )
+    .expect("source mode payload should be written");
+    let export_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/exports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "profile": "solved" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(export_response.status(), StatusCode::OK);
+    let exported = body_json(export_response).await;
+    let fms_base64 = exported["fms_base64"]
+        .as_str()
+        .expect("solved export must include fms payload")
+        .to_string();
+    let fms_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&fms_base64)
+        .expect("exported fms base64 must decode");
+    let preflight = fullmag_session::preflight_fms(std::io::Cursor::new(&fms_bytes), &[])
+        .expect("solved fms must pass preflight");
+    assert_eq!(
+        preflight
+            .documents
+            .get("runs/test-run/artifacts/eigen/spectrum.v2.json"),
+        Some(&spectrum),
+        "the exact spectrum metadata must be embedded in the fms"
+    );
+    assert_eq!(
+        preflight
+            .documents
+            .get("runs/test-run/artifacts/eigen/modes/sample_0000/mode_0000.json"),
+        Some(&mode_metadata),
+        "the exact mode metadata and candidate binding must be embedded in the fms"
+    );
+    assert_eq!(
+        preflight
+            .documents
+            .get("runs/test-run/artifacts/eigen/modes/sample_0000/mode_0000.bin"),
+        Some(&mode_bytes.to_vec()),
+        "the exact binary mode field must be embedded in the fms"
+    );
+
+    let inspect_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/imports/inspections")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "fms_base64": fms_base64 }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(inspect_response.status(), StatusCode::OK);
+    let inspection = body_json(inspect_response).await;
+    assert_eq!(inspection["inspection"]["warnings"], serde_json::json!([]));
+
+    fs::remove_dir_all(&source_artifact_dir)
+        .expect("simulated local-live history should be removable after save");
+    assert!(!source_artifact_dir.exists());
+    *state.current_live_state.write().await = None;
+
+    let import_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/imports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "fms_base64": base64::engine::general_purpose::STANDARD.encode(&fms_bytes),
+                        "restore_mode": "visualization_only",
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(import_response.status(), StatusCode::OK);
+
+    let restored_artifact_dir = {
+        let current = state.current_live_state.read().await;
+        let restored = current
+            .as_ref()
+            .expect("session import must restore the active snapshot");
+        assert_eq!(restored.runtime_status.code, "imported_read_only");
+        assert!(!restored.runtime_status.can_accept_commands);
+        assert!(restored.stage_execution.as_ref().is_some_and(|execution| {
+            execution.runtime_state == RuntimeLifecycleState::Completed
+                && execution.active_stage_index.is_none()
+                && execution
+                    .stage_statuses
+                    .iter()
+                    .all(|status| *status == StageLifecycleState::Completed)
+                && execution
+                    .stages
+                    .iter()
+                    .all(|stage| stage.status == StageLifecycleState::Completed)
+        }));
+        let script_path = PathBuf::from(&restored.session.script_path);
+        assert!(
+            script_path.starts_with(repo_root.join(".fullmag/local-live/session-store/imports"))
+        );
+        assert_eq!(
+            fs::read(script_path).expect("published imported script must be readable"),
+            b"study = fullmag.Study()\n"
+        );
+        PathBuf::from(&restored.session.artifact_dir)
+    };
+    assert_ne!(restored_artifact_dir, source_artifact_dir);
+    assert_eq!(
+        fs::read(restored_artifact_dir.join("eigen/modes/sample_0000/mode_0000.bin"))
+            .expect("imported mode bytes must survive history deletion"),
+        mode_bytes
+    );
+
+    let spectrum_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(spectrum_response.status(), StatusCode::OK);
+    let spectrum_resource = body_json(spectrum_response).await;
+    assert_eq!(spectrum_resource["status"], "ready");
+    assert_eq!(spectrum_resource["payload"]["marker"], "persisted");
+    assert_eq!(
+        spectrum_resource["payload"]["candidate_identity"]["mesh_generation_id"],
+        "mesh-generation-persisted"
+    );
+    assert_eq!(
+        spectrum_resource["payload"]["spectrum_completeness"],
+        "complete_window"
+    );
+    assert_eq!(spectrum_resource["payload"]["window_complete"], true);
+    assert_eq!(
+        spectrum_resource["content_digest"],
+        format!("sha256:{:x}", Sha256::digest(&spectrum))
+    );
+
+    let command_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "kind": "solve" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(command_response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(command_response).await["code"],
+        "imported_read_only"
+    );
+    assert!(
+        state.current_command_ledger.lock().await.is_empty(),
+        "read-only rejection must happen before a runtime command is recorded"
+    );
 
     let _ = fs::remove_dir_all(&repo_root);
 }
@@ -31477,6 +32543,7 @@ async fn test_router_with_live_magnetization() -> axum::Router {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -32705,6 +33772,9 @@ async fn hysteresis_analysis_resolves_stage_directory_artifact_refs() {
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Completed,
                 command_id: None,
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_000_000),
                 completed_at_unix_ms: Some(1_700_000_001_000),
                 reason: None,
@@ -32859,6 +33929,9 @@ async fn hysteresis_analysis_accepts_active_hysteresis_kind_when_record_kind_is_
                 kind: Some("relax".into()),
                 status: StageLifecycleState::Running,
                 command_id: None,
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_000_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -32980,6 +34053,9 @@ async fn hysteresis_analysis_reads_flat_live_artifact_with_active_stage_executio
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_000_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -33074,6 +34150,9 @@ async fn hysteresis_analysis_points_conflicts_when_progress_reports_completed_po
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_000_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -33147,6 +34226,9 @@ async fn hysteresis_analysis_points_returns_empty_for_running_stage_before_first
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_000_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -33696,6 +34778,9 @@ async fn field_vector_snapshot_id_validates_optional_hysteresis_stage_scope() {
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_002_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -34247,6 +35332,7 @@ async fn field_meta_component_query_uses_live_magnetization_before_stale_latest_
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -34312,6 +35398,7 @@ async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -34974,6 +36061,7 @@ async fn v2_field_catalog_rejects_non_finite_live_magnetization() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -35052,6 +36140,7 @@ async fn v2_field_catalog_rejects_fem_live_magnetization_with_wrong_point_count(
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -35149,6 +36238,7 @@ async fn v2_field_vector_accepts_fem_live_magnetization_on_magnetic_nodes() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -35299,6 +36389,7 @@ async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -35805,6 +36896,7 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -35945,6 +37037,7 @@ async fn v2_fdm_vector_respects_max_samples_when_preview_would_be_downscaled() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -36152,6 +37245,7 @@ async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -36288,6 +37382,7 @@ async fn v2_h_demag_meta_prefers_equal_generation_latest_with_source_time() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -36364,6 +37459,7 @@ async fn v2_terminal_eden_demag_metadata_keeps_final_solver_provenance() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -36449,6 +37545,7 @@ async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -36716,6 +37813,7 @@ async fn topological_charge_reports_empty_support_when_m_field_exists_without_us
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -36788,6 +37886,7 @@ async fn topological_charge_computes_uniform_fdm_grid_without_fem_mesh() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -36875,6 +37974,7 @@ async fn topological_charge_cache_key_tracks_field_revision() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -37006,6 +38106,7 @@ async fn topological_charge_default_fdm_support_uses_one_midplane_of_thinnest_ax
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -40492,6 +41593,9 @@ fn openapi_relaxation_contract_is_typed() {
     assert!(stage_schema.contains("StageMetricKind"));
     assert!(stage_schema.contains("StageMetricUnit"));
     assert!(stage_schema.contains("converged"));
+    assert!(stage_schema.contains("mesh_generation_id"));
+    assert!(stage_schema.contains("mesh_topology_fingerprint"));
+    assert!(stage_schema.contains("mesh_revision"));
 
     let solver_schema = schemas
         .get("SolverStatusResource")
@@ -41982,14 +43086,25 @@ fn schema_property_names(
     schemas: &serde_json::Map<String, serde_json::Value>,
     schema_name: &str,
 ) -> BTreeSet<String> {
-    schemas
+    let schema = schemas
         .get(schema_name)
-        .and_then(|schema| schema.get("properties"))
-        .and_then(|properties| properties.as_object())
-        .unwrap_or_else(|| panic!("schema `{schema_name}` must expose object properties"))
-        .keys()
-        .cloned()
-        .collect()
+        .unwrap_or_else(|| panic!("schema `{schema_name}` must be present"));
+    let mut names = BTreeSet::new();
+    if let Some(properties) = schema.get("properties").and_then(|value| value.as_object()) {
+        names.extend(properties.keys().cloned());
+    }
+    if let Some(all_of) = schema.get("allOf").and_then(|value| value.as_array()) {
+        for part in all_of {
+            if let Some(properties) = part.get("properties").and_then(|value| value.as_object()) {
+                names.extend(properties.keys().cloned());
+            }
+        }
+    }
+    assert!(
+        !names.is_empty(),
+        "schema `{schema_name}` must expose object properties"
+    );
+    names
 }
 
 #[test]
@@ -42069,9 +43184,536 @@ fn openapi_frequency_domain_text_artifact_schema_exposes_path_metadata() {
     );
 }
 
+#[test]
+fn openapi_frequency_domain_json_artifact_schema_is_typed_and_revisioned() {
+    let value = crate::openapi_v2::openapi_json();
+    let schemas = value
+        .get("components")
+        .and_then(|value| value.get("schemas"))
+        .and_then(|value| value.as_object())
+        .expect("OpenAPI schemas must be present");
+    let schema = schemas
+        .get("FrequencyDomainJsonArtifactResource")
+        .expect("FrequencyDomainJsonArtifactResource schema must be present");
+    let payload = schema
+        .get("properties")
+        .and_then(|properties| properties.get("payload"))
+        .expect("typed artifact resource must expose payload schema");
+    assert!(
+        payload.get("oneOf").is_some() || payload.get("anyOf").is_some(),
+        "frequency-domain payload must be represented as an OpenAPI union"
+    );
+    let properties = schema
+        .get("properties")
+        .and_then(|properties| properties.as_object())
+        .expect("artifact resource properties must be present");
+    assert!(properties.contains_key("revision"));
+    assert!(properties.contains_key("content_digest"));
+    for (schema_name, field) in [
+        ("FrequencyDomainSpectrumSamplePayload", "sample_id"),
+        ("FrequencyDomainSpectrumModePayload", "mode_id"),
+        ("FrequencyDomainResponsePointPayload", "point_id"),
+        ("FrequencyDomainFmrPeakPayload", "sample_id"),
+        ("FrequencyDomainFmrPeakPayload", "mode_id"),
+    ] {
+        assert!(
+            schema_property_names(schemas, schema_name).contains(field),
+            "{schema_name} must expose stable identity `{field}`"
+        );
+    }
+    for schema_name in [
+        "FrequencyDomainSpectrumSamplePayload",
+        "FrequencyDomainResponsePointPayload",
+        "FrequencyDomainFmrPeakPayload",
+    ] {
+        let payload_schema = schemas
+            .get(schema_name)
+            .expect("typed payload schema must be present");
+        let allows_additional_properties = payload_schema
+            .get("additionalProperties")
+            .is_some_and(|value| value != &serde_json::Value::Bool(false))
+            || payload_schema
+                .get("allOf")
+                .and_then(|value| value.as_array())
+                .map(|all_of| {
+                    all_of.iter().any(|part| {
+                        part.get("$ref").and_then(|value| value.as_str())
+                            == Some("#/components/schemas/FrequencyDomainArtifactExtras")
+                            || part
+                                .get("additionalProperties")
+                                .is_some_and(|value| value != &serde_json::Value::Bool(false))
+                    })
+                })
+                .unwrap_or(false);
+        assert!(
+            allows_additional_properties,
+            "{schema_name} must allow forward-compatible JSON properties"
+        );
+    }
+}
+
+#[test]
+fn openapi_frequency_domain_fmr_and_field_sweep_resources_are_registered() {
+    let value = crate::openapi_v2::openapi_json();
+    let paths = value
+        .get("paths")
+        .and_then(|value| value.as_object())
+        .expect("OpenAPI paths must be present");
+    for path in [
+        "/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep",
+        "/v2/sessions/current/analysis/frequency-domain/fmr/peaks",
+        "/v2/sessions/current/analysis/frequency-domain/fmr/resonance-fits",
+        "/v2/sessions/current/analysis/frequency-domain/fmr/kittel-fit",
+    ] {
+        assert!(
+            paths.get(path).and_then(|item| item.get("get")).is_some(),
+            "missing OpenAPI GET {path}"
+        );
+    }
+}
+
+#[test]
+fn openapi_field_sweep_schema_exposes_typed_dataset_and_sample_contract() {
+    let value = crate::openapi_v2::openapi_json();
+    let schemas = value
+        .get("components")
+        .and_then(|value| value.get("schemas"))
+        .and_then(|value| value.as_object())
+        .expect("OpenAPI schemas must be present");
+
+    for (schema_name, fields) in [
+        (
+            "FrequencyDomainFieldSweepArtifactPayload",
+            &[
+                "source",
+                "source_revision",
+                "revision",
+                "requested_sample_count",
+                "completed_sample_count",
+                "scan_axis",
+                "units",
+                "topology",
+                "requested_execution",
+                "resolved_execution",
+                "cross_artifact_refs",
+            ][..],
+        ),
+        (
+            "FrequencyDomainFieldSweepSamplePayload",
+            &[
+                "sample_id",
+                "sample_index",
+                "scan_axis",
+                "bias_field_a_per_m",
+                "bias_field_mu0_t",
+                "topology",
+                "branch_ids",
+                "modes",
+            ][..],
+        ),
+        (
+            "FrequencyDomainFieldSweepModePayload",
+            &[
+                "sample_id",
+                "mode_id",
+                "raw_mode_index",
+                "frequency_hz",
+                "angular_frequency_rad_per_s",
+                "mode_artifact_path",
+                "mode_field_id",
+                "mode_field_resource_key",
+                "source_revision",
+                "status",
+            ][..],
+        ),
+    ] {
+        let properties = schema_property_names(schemas, schema_name);
+        for field in fields {
+            assert!(
+                properties.contains(*field),
+                "{schema_name} must expose typed field `{field}`"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn frequency_domain_artifact_revision_changes_for_same_length_content_change() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let eigen_dir = artifact_dir.join("eigen");
+    fs::create_dir_all(&eigen_dir).expect("eigen artifact directory should exist");
+    let artifact_path = eigen_dir.join("spectrum.v2.json");
+    let first = br#"{"schema_version":"eigen_spectrum.v2","samples":[],"marker":"a"}"#;
+    let second = br#"{"schema_version":"eigen_spectrum.v2","samples":[],"marker":"b"}"#;
+    assert_eq!(first.len(), second.len());
+    fs::write(&artifact_path, first).expect("first spectrum artifact should be written");
+
+    let request = || {
+        Request::builder()
+            .method("GET")
+            .uri("/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2")
+            .body(Body::empty())
+            .unwrap()
+    };
+    let response = app.clone().oneshot(request()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let first_payload = body_json(response).await;
+    let first_revision = first_payload["revision"]
+        .as_str()
+        .expect("ready resource must expose content revision")
+        .to_string();
+    assert_eq!(first_payload["content_digest"], first_payload["revision"]);
+
+    fs::write(&artifact_path, second).expect("second spectrum artifact should be written");
+    let response = app.oneshot(request()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let second_payload = body_json(response).await;
+    assert_ne!(
+        first_revision,
+        second_payload["revision"]
+            .as_str()
+            .expect("ready resource must expose content revision")
+    );
+}
+
+#[tokio::test]
+async fn frequency_domain_artifact_rejects_malformed_typed_payload() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let eigen_dir = artifact_dir.join("eigen");
+    fs::create_dir_all(&eigen_dir).expect("eigen artifact directory should exist");
+    fs::write(eigen_dir.join("spectrum.v2.json"), b"null")
+        .expect("malformed spectrum artifact should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn frequency_domain_artifact_identity_uses_top_level_fem_mesh_generation() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        let snapshot = snapshot.as_mut().expect("session snapshot should exist");
+        snapshot.stage_execution = None;
+        snapshot.live_state = None;
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+    }
+    let eigen_dir = artifact_dir.join("eigen");
+    fs::create_dir_all(&eigen_dir).expect("eigen artifact directory should be created");
+    fs::write(
+        eigen_dir.join("spectrum.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "eigen_spectrum.v2",
+            "samples": [],
+        }))
+        .expect("spectrum fixture should serialize"),
+    )
+    .expect("spectrum fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = body_json(response).await;
+    assert_eq!(payload["mesh_generation_id"], "42");
+    assert!(payload["stage_id"].is_null());
+}
+
+#[tokio::test]
+async fn frequency_domain_field_sweep_and_fmr_resources_serve_typed_payloads() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let eigen_dir = artifact_dir.join("eigen");
+    let fmr_dir = artifact_dir.join("fmr");
+    fs::create_dir_all(&eigen_dir).expect("eigen artifact directory should exist");
+    fs::create_dir_all(&fmr_dir).expect("fmr artifact directory should exist");
+    let field_sweep_payload = serde_json::json!({
+        "schema_version": "eigen/field_sweep.v1",
+        "artifact_id": "analysis:eigen:field-sweep",
+        "source": {
+            "kind": "modal_eigensolve",
+            "artifact": "eigen/spectrum.v2.json",
+            "revision": "sha256:spectrum"
+        },
+        "source_revision": "sha256:spectrum",
+        "revision": "sha256:field-sweep",
+        "requested_sample_count": 1,
+        "completed_sample_count": 1,
+        "complete": true,
+        "scan_axis": {
+            "kind": "bias_field",
+            "coordinate": "bias_field_a_per_m",
+            "unit": "A/m",
+            "display_conversions": [{"name": "mu0_H", "unit": "T", "scale": 0.0000012566370614}]
+        },
+        "units": {
+            "frequency": "Hz",
+            "angular_frequency": "rad/s",
+            "bias_field": "A/m",
+            "bias_field_display": "T"
+        },
+        "topology": {
+            "mesh_id": "mesh:test",
+            "topology_revision": "mesh-rev:1",
+            "indexing": "global_xyz",
+            "sample_axis": "sample",
+            "mode_axis": "mode",
+            "node_count": 4
+        },
+        "requested_execution": {
+            "backend": "fem",
+            "device": "cpu",
+            "precision": "double",
+            "execution_mode": "native",
+            "engine": "reference",
+            "status": "complete"
+        },
+        "resolved_execution": {
+            "backend": "fem",
+            "device": "cpu",
+            "precision": "double",
+            "execution_mode": "native",
+            "engine": "reference",
+            "status": "complete"
+        },
+        "samples": [{
+            "sample_id": "bias-field-sample-0000",
+            "sample_index": 0,
+            "bias_field_a_per_m": [40000.0, 0.0, 0.0],
+            "bias_field_mu0_t": [0.050265482456, 0.0, 0.0],
+            "topology": {
+                "mesh_id": "mesh:test",
+                "topology_revision": "mesh-rev:1",
+                "indexing": "global_xyz",
+                "sample_axis": "sample",
+                "mode_axis": "mode",
+                "node_count": 4
+            },
+            "branch_ids": [0],
+            "modes": [{
+                "sample_id": "bias-field-sample-0000",
+                "mode_id": "sample-0000/mode-0000",
+                "raw_mode_index": 0,
+                "branch_id": 0,
+                "frequency_hz": 1000000000.0,
+                "angular_frequency_rad_per_s": 6283185307.179586,
+                "mode_artifact_path": "eigen/modes/sample_0000/mode_0000.json",
+                "mode_field_id": "analysis:eigen:sample-0000:mode-0000",
+                "mode_field_resource_key": "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector",
+                "residual_relative_l2": 0.00000001,
+                "source_revision": "sha256:spectrum",
+                "field_status": "ready",
+                "status": "complete"
+            }],
+            "status": "complete"
+        }],
+        "cross_artifact_refs": [
+            {"relation": "source_spectrum", "artifact": "eigen/spectrum.v2.json", "revision": "sha256:spectrum"},
+            {"relation": "source_branches", "artifact": "eigen/branches.v2.json", "revision": "sha256:branches"}
+        ]
+    });
+    let fixtures = [
+        (
+            "eigen/field_sweep.v1.json",
+            field_sweep_payload,
+            "/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep",
+        ),
+        (
+            "fmr/peaks.v1.json",
+            serde_json::json!({"schema_version":"fmr/peaks.v1","peaks":[]}),
+            "/v2/sessions/current/analysis/frequency-domain/fmr/peaks",
+        ),
+        (
+            "fmr/resonance_fits.v1.json",
+            serde_json::json!({"schema_version":"fmr/resonance_fits.v1","fits":[]}),
+            "/v2/sessions/current/analysis/frequency-domain/fmr/resonance-fits",
+        ),
+        (
+            "fmr/kittel_fit.v1.json",
+            serde_json::json!({"schema_version":"fmr/kittel_fit.v1","points":[]}),
+            "/v2/sessions/current/analysis/frequency-domain/fmr/kittel-fit",
+        ),
+    ];
+    for (relative_path, payload, uri) in fixtures {
+        let path = artifact_dir.join(relative_path);
+        fs::write(
+            path,
+            serde_json::to_vec(&payload).expect("artifact fixture should serialize"),
+        )
+        .expect("typed artifact fixture should be written");
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "GET {uri}");
+        let response_payload = body_json(response).await;
+        assert_eq!(response_payload["status"], "ready", "GET {uri}");
+        assert!(
+            response_payload["payload"].is_object(),
+            "GET {uri} payload must be typed object"
+        );
+        assert!(
+            response_payload["revision"].as_str().is_some(),
+            "GET {uri} must expose revision"
+        );
+    }
+}
+
+#[tokio::test]
+async fn frequency_domain_field_sweep_rejects_unpaired_typed_field_reference() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let eigen_dir = artifact_dir.join("eigen");
+    fs::create_dir_all(&eigen_dir).expect("eigen artifact directory should exist");
+    let payload = serde_json::json!({
+        "schema_version": "eigen/field_sweep.v1",
+        "artifact_id": "analysis:eigen:field-sweep",
+        "source": {
+            "kind": "modal_eigensolve",
+            "artifact": "eigen/spectrum.v2.json",
+            "revision": "sha256:spectrum"
+        },
+        "source_revision": "sha256:spectrum",
+        "revision": "sha256:field-sweep",
+        "requested_sample_count": 1,
+        "completed_sample_count": 1,
+        "scan_axis": {
+            "kind": "bias_field",
+            "coordinate": "bias_field_a_per_m",
+            "unit": "A/m",
+            "display_conversions": [{"name": "mu0_H", "unit": "T", "scale": 0.0000012566370614}]
+        },
+        "units": {
+            "frequency": "Hz",
+            "angular_frequency": "rad/s",
+            "bias_field": "A/m",
+            "bias_field_display": "T"
+        },
+        "topology": {
+            "mesh_id": "mesh:test",
+            "topology_revision": "mesh-rev:1",
+            "indexing": "global_xyz",
+            "sample_axis": "sample",
+            "mode_axis": "mode",
+            "node_count": 4
+        },
+        "requested_execution": {
+            "backend": "fem",
+            "device": "cpu",
+            "precision": "double",
+            "execution_mode": "native",
+            "engine": "reference",
+            "status": "complete"
+        },
+        "resolved_execution": {
+            "backend": "fem",
+            "device": "cpu",
+            "precision": "double",
+            "execution_mode": "native",
+            "engine": "reference",
+            "status": "complete"
+        },
+        "samples": [{
+            "sample_id": "bias-field-sample-0000",
+            "sample_index": 0,
+            "scan_axis": {
+                "kind": "bias_field",
+                "coordinate": "bias_field_a_per_m",
+                "unit": "A/m",
+                "display_conversions": []
+            },
+            "bias_field_a_per_m": [40000.0, 0.0, 0.0],
+            "bias_field_mu0_t": [0.0502654824574, 0.0, 0.0],
+            "topology": {
+                "mesh_id": "mesh:test",
+                "topology_revision": "mesh-rev:1",
+                "indexing": "global_xyz",
+                "sample_axis": "sample",
+                "mode_axis": "mode",
+                "node_count": 4
+            },
+            "branch_ids": [0],
+            "modes": [{
+                "sample_id": "bias-field-sample-0000",
+                "mode_id": "sample-0000/mode-0000",
+                "raw_mode_index": 0,
+                "frequency_hz": 1000000000.0,
+                "angular_frequency_rad_per_s": 6283185307.179586,
+                "mode_artifact_path": "eigen/modes/sample_0000/mode_0000.json",
+                "mode_field_id": "analysis:eigen:sample-0000:mode-0000",
+                "source_revision": "sha256:spectrum",
+                "status": "complete"
+            }],
+            "status": "complete"
+        }],
+        "cross_artifact_refs": []
+    });
+    fs::write(
+        eigen_dir.join("field_sweep.v1.json"),
+        serde_json::to_vec(&payload).expect("field sweep fixture should serialize"),
+    )
+    .expect("field sweep fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
 #[tokio::test]
 async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
-    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let current_mesh = sample_fem_mesh_payload();
+    let current_topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(&current_mesh);
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        let snapshot = snapshot.as_mut().expect("session snapshot should exist");
+        snapshot.mesh_revision = 9;
+        snapshot.fem_mesh = Some(current_mesh);
+    }
+    set_running_stage_execution(&state, 10).await;
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        let execution = snapshot
+            .as_mut()
+            .and_then(|snapshot| snapshot.stage_execution.as_mut())
+            .expect("stage execution should exist");
+        execution.stages[0].stage_id = Some("eigen-stage".into());
+        execution.stages[0].kind = Some("flat_eigenmodes".into());
+        execution.stages[0].mesh_generation_id = Some("mesh-generation-eigen".into());
+        execution.stages[1].stage_id = Some("later-active-stage".into());
+        execution.stages[1].kind = Some("relax".into());
+        execution.stages[1].mesh_generation_id = Some("mesh-generation-later".into());
+    }
     write_response_sweep_bundle(&artifact_dir, &frequency_domain_response_sweep_fixture(2))
         .expect("response sweep bundle should be written");
     let progress_path = artifact_dir.join("response").join("progress.v1.json");
@@ -42101,6 +43743,21 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         eigen_dir.join("spectrum.v2.json"),
         serde_json::to_vec(&serde_json::json!({
             "schema_version": "eigen_spectrum.v2",
+            "engine_id": "native_fem.frequency_domain.k0_poisson_airbox_cpu_schur_slepc.v1",
+            "solve_succeeded": true,
+            "fields_available": true,
+            "spectrum_completeness": "selected_only",
+            "window_complete": false,
+            "candidate_identity": {
+                "schema_version": "frequency_domain_candidate_identity.v1",
+                "mesh_id": "periodic-antidot",
+                "mesh_generation_id": "mesh-generation-artifact",
+                "topology_fingerprint": "sha256:topology",
+                "equilibrium_artifact_sha256": "sha256:equilibrium",
+                "engine_id": "native_fem.frequency_domain.k0_poisson_airbox_cpu_schur_slepc.v1",
+                "device": "cpu",
+                "source_identity": {"source_snapshot_sha256": "sha256:source"}
+            },
             "samples": [{
                 "sample_index": 0,
                 "path_s": 0.0,
@@ -42163,14 +43820,21 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
             "schema_version": "eigen_mode.v2",
             "sample_index": 0,
             "raw_mode_index": 3,
+            "source_mesh_identity": {
+                "mesh_generation_id": "42",
+                "mesh_revision": 9,
+                "topology_fingerprint": current_topology_fingerprint,
+                "indexing": "full_domain_node_order",
+                "node_count": 4
+            },
             "value_kind": "complex_spatial_vector",
             "component_basis": "global_xyz",
             "component_count": 3,
             "components": ["x", "y", "z"],
             "payload_encoding": "f64_interleaved_real_imag_xyz",
             "binary_layout": "complex_f64_pairs_little_endian",
-            "complex_pair_count": 3,
-            "payload_value_count": 6,
+            "complex_pair_count": 12,
+            "payload_value_count": 24,
             "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
             "default_view": "phase_rotated_real",
             "default_phase_rad": 0.0
@@ -42371,7 +44035,19 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["status"], "ready");
     assert_eq!(payload["artifact_path"], "eigen/spectrum.v2.json");
+    assert_eq!(payload["session_id"], "test-session");
+    assert_eq!(payload["run_id"], "test-run");
+    assert_eq!(payload["stage_id"], "eigen-stage");
+    assert_eq!(payload["mesh_generation_id"], "mesh-generation-eigen");
     assert_eq!(payload["payload"]["schema_version"], "eigen_spectrum.v2");
+    assert_eq!(payload["payload"]["solve_succeeded"], true);
+    assert_eq!(payload["payload"]["fields_available"], true);
+    assert_eq!(payload["payload"]["spectrum_completeness"], "selected_only");
+    assert_eq!(payload["payload"]["window_complete"], false);
+    assert_eq!(
+        payload["payload"]["candidate_identity"]["mesh_generation_id"],
+        "mesh-generation-artifact"
+    );
     assert_eq!(
         payload["payload"]["samples"][0]["modes"][0]["raw_mode_index"],
         3
@@ -42472,8 +44148,8 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     assert_eq!(payload["components"], serde_json::json!(["x", "y", "z"]));
     assert_eq!(payload["payload_encoding"], "f64_interleaved_real_imag_xyz");
     assert_eq!(payload["binary_layout"], "complex_f64_pairs_little_endian");
-    assert_eq!(payload["complex_pair_count"], 3);
-    assert_eq!(payload["payload_value_count"], 6);
+    assert_eq!(payload["complex_pair_count"], 12);
+    assert_eq!(payload["payload_value_count"], 24);
     assert_eq!(payload["default_view"], "phase_rotated_real");
     assert_eq!(payload["default_phase_rad"], 0.0);
     assert_eq!(
@@ -42498,7 +44174,10 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         .join("mode_0003");
     fs::create_dir_all(&mode_field_dir).expect("mode field directory should be created");
     let mut mode_field_bytes = Vec::new();
-    for value in [1.0f64, 0.0, 0.0, 1.0, 3.0, 4.0] {
+    for value in [
+        1.0f64, 0.0, 0.0, 1.0, 3.0, 4.0, 2.0, 0.0, 4.0, 0.0, 6.0, 0.0, 3.0, 0.0, 5.0, 0.0, 7.0,
+        0.0, 4.0, 0.0, 6.0, 0.0, 8.0, 0.0,
+    ] {
         mode_field_bytes.extend_from_slice(&value.to_le_bytes());
     }
     fs::write(mode_field_dir.join("vector.bin"), mode_field_bytes)
@@ -42525,8 +44204,8 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     assert_eq!(payload["components"], serde_json::json!(["x", "y", "z"]));
     assert_eq!(payload["payload_encoding"], "f64_interleaved_real_imag_xyz");
     assert_eq!(payload["binary_layout"], "complex_f64_pairs_little_endian");
-    assert_eq!(payload["complex_pair_count"], 3);
-    assert_eq!(payload["payload_value_count"], 6);
+    assert_eq!(payload["complex_pair_count"], 12);
+    assert_eq!(payload["payload_value_count"], 24);
 
     let response = app
         .clone()
@@ -42575,11 +44254,15 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         Some("3")
     );
     let body = body_bytes(response).await;
-    let values: Vec<f64> = body[48..]
+    let metadata_length = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
+    let values: Vec<f64> = body[48 + metadata_length..]
         .chunks_exact(8)
         .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
         .collect();
-    assert_eq!(values, vec![1.0, 0.0, 3.0]);
+    assert_eq!(
+        values,
+        vec![1.0, 0.0, 3.0, 2.0, 4.0, 6.0, 3.0, 5.0, 7.0, 4.0, 6.0, 8.0]
+    );
 
     fs::write(
         eigen_dir
@@ -42841,8 +44524,89 @@ async fn frequency_domain_eigen_mode_field_meta_rejects_invalid_complex_xyz_payl
 }
 
 #[tokio::test]
+async fn frequency_domain_eigen_mode_field_rejects_stale_topology_with_same_node_count() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let current_mesh = sample_fem_mesh_payload();
+    let mut source_mesh = current_mesh.clone();
+    source_mesh.cells = fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 3, 2]]);
+    assert_eq!(source_mesh.nodes.len(), current_mesh.nodes.len());
+    let source_topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(&source_mesh);
+    assert_ne!(
+        source_topology_fingerprint,
+        fullmag_runner::fem_mesh_topology_fingerprint(&current_mesh)
+    );
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        let snapshot = snapshot.as_mut().expect("session snapshot should exist");
+        snapshot.mesh_revision = 9;
+        snapshot.fem_mesh = Some(current_mesh);
+    }
+
+    let mode_dir = artifact_dir.join("eigen/modes/sample_0000");
+    let payload_dir = artifact_dir.join("eigen/mode_fields/sample_0000/mode_0000");
+    fs::create_dir_all(&mode_dir).expect("mode metadata directory should be created");
+    fs::create_dir_all(&payload_dir).expect("mode payload directory should be created");
+    fs::write(
+        mode_dir.join("mode_0000.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "eigen_mode.v2",
+            "sample_index": 0,
+            "raw_mode_index": 0,
+            "source_mesh_identity": {
+                "mesh_generation_id": "42",
+                "mesh_revision": 9,
+                "topology_fingerprint": source_topology_fingerprint,
+                "indexing": "full_domain_node_order",
+                "node_count": 4
+            },
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "complex_pair_count": 12,
+            "payload_value_count": 24,
+            "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        }))
+        .expect("mode metadata should serialize"),
+    )
+    .expect("mode metadata should be written");
+    let mut payload = Vec::new();
+    for value in 0..24 {
+        payload.extend_from_slice(&f64::from(value).to_le_bytes());
+    }
+    fs::write(payload_dir.join("vector.bin"), payload).expect("mode payload should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let payload = body_json(response).await;
+    assert_eq!(payload["code"], "mode_field_mesh_topology_mismatch");
+}
+
+#[tokio::test]
 async fn frequency_domain_eigen_mode_field_prefers_zarr_payload_path() {
-    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let current_mesh = sample_fem_mesh_payload();
+    let current_topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(&current_mesh);
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        let snapshot = snapshot.as_mut().expect("session snapshot should exist");
+        snapshot.mesh_revision = 9;
+        snapshot.fem_mesh = Some(current_mesh);
+    }
     let mode_dir = artifact_dir.join("eigen").join("modes").join("sample_0000");
     fs::create_dir_all(&mode_dir).expect("mode metadata directory should be created");
     let zarr_array_dir = artifact_dir
@@ -42859,6 +44623,13 @@ async fn frequency_domain_eigen_mode_field_prefers_zarr_payload_path() {
             "schema_version": "eigen_mode.v2",
             "sample_index": 0,
             "raw_mode_index": 3,
+            "source_mesh_identity": {
+                "mesh_generation_id": "42",
+                "mesh_revision": 9,
+                "topology_fingerprint": current_topology_fingerprint,
+                "indexing": "full_domain_node_order",
+                "node_count": 4
+            },
             "value_kind": "complex_spatial_vector",
             "component_basis": "global_xyz",
             "component_count": 3,
@@ -42868,14 +44639,14 @@ async fn frequency_domain_eigen_mode_field_prefers_zarr_payload_path() {
             "zarr_array_path": "eigen/mode_fields.zarr/sample_0000/mode_0003/vector_xyz_complex",
             "zarr_chunk_path": zarr_chunk_path,
             "zarr_dtype": "<f8",
-            "zarr_shape": [1, 3, 2],
-            "zarr_chunk_shape": [1, 3, 2],
+            "zarr_shape": [4, 3, 2],
+            "zarr_chunk_shape": [4, 3, 2],
             "zarr_compressor": null,
             "compatibility_binary_payload_path": "eigen/mode_fields/sample_0000/mode_0003/vector.bin",
             "payload_encoding": "f64_interleaved_real_imag_xyz",
             "binary_layout": "complex_f64_pairs_little_endian",
-            "complex_pair_count": 3,
-            "payload_value_count": 6,
+            "complex_pair_count": 12,
+            "payload_value_count": 24,
             "available_views": ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
             "default_view": "phase_rotated_real",
             "default_phase_rad": 0.0
@@ -42884,7 +44655,10 @@ async fn frequency_domain_eigen_mode_field_prefers_zarr_payload_path() {
     )
     .expect("mode metadata should be written");
     let mut zarr_chunk_bytes = Vec::new();
-    for value in [2.0f64, 0.0, 0.0, 2.0, 5.0, 12.0] {
+    for value in [
+        2.0f64, 0.0, 0.0, 2.0, 5.0, 12.0, 3.0, 0.0, 4.0, 0.0, 6.0, 0.0, 4.0, 0.0, 5.0, 0.0, 7.0,
+        0.0, 5.0, 0.0, 6.0, 0.0, 8.0, 0.0,
+    ] {
         zarr_chunk_bytes.extend_from_slice(&value.to_le_bytes());
     }
     fs::write(zarr_array_dir.join("0.0.0"), zarr_chunk_bytes)
@@ -42919,11 +44693,15 @@ async fn frequency_domain_eigen_mode_field_prefers_zarr_payload_path() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_bytes(response).await;
-    let values: Vec<f64> = body[48..]
+    let metadata_length = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
+    let values: Vec<f64> = body[48 + metadata_length..]
         .chunks_exact(8)
         .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
         .collect();
-    assert_eq!(values, vec![2.0, 0.0, 5.0]);
+    assert_eq!(
+        values,
+        vec![2.0, 0.0, 5.0, 3.0, 4.0, 6.0, 4.0, 5.0, 7.0, 5.0, 6.0, 8.0]
+    );
 }
 
 #[tokio::test]
@@ -43204,6 +44982,7 @@ async fn frequency_domain_progress_fallback_uses_v2_linked_frequency_point_paths
         linked_dir.join("frequency_0001.json"),
         serde_json::to_vec(&serde_json::json!({
             "schema_version": "frequency_response_point.v1",
+            "point_id": "frequency-point-0001",
             "frequency_index": 1,
             "point": {
                 "frequency_hz": 4.2e9
@@ -43377,6 +45156,7 @@ async fn frequency_domain_response_frequency_point_uses_v2_linked_artifact_path(
         serde_json::to_vec(&serde_json::json!({
             "schema_version": "frequency_response_point.v1",
             "frequency_index": 1,
+            "point_id": "frequency-point-0001",
             "point": {
                 "frequency_hz": 4.2e9
             },
@@ -43438,6 +45218,7 @@ async fn frequency_domain_response_frequency_point_uses_v2_linked_artifact_path(
         payload["artifact_path"],
         "response/frequency_points/linked/frequency_0001.json"
     );
+    assert_eq!(payload["payload"]["point_id"], "frequency-point-0001");
     assert_eq!(payload["payload"]["point"]["frequency_hz"], 4.2e9);
 }
 
@@ -45322,6 +47103,7 @@ fn frequency_domain_response_sweep_fixture(point_count: usize) -> FieldDrivenRes
             .map(|index| {
                 let frequency_hz = (index + 1) as f64 * 1.0e9;
                 FieldDrivenResponseSweepPointArtifact {
+                    point_id: format!("frequency-point-{index:04}"),
                     frequency_hz,
                     angular_frequency_rad_per_s: frequency_hz * 2.0 * std::f64::consts::PI,
                     m_complex: vec![[0.0, -1.0], [0.25, 0.0], [0.0, 0.5]],
@@ -45385,6 +47167,9 @@ async fn frozen_spins_test_state() -> Arc<AppState> {
     let mut scene = sample_scene_document();
     scene.revision = 12;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        // This fixture models idle authoring; hot-apply tests explicitly start a stage.
+        snapshot.session.status = "awaiting_command".into();
+        crate::session::refresh_runtime_status(snapshot);
         snapshot.scene_document = Some(scene);
         snapshot.metadata = Some(serde_json::json!({
             "artifact_layout": {

@@ -19,6 +19,7 @@ def _git_sha(*pathspecs: str) -> str:
             "git",
             "log",
             "--first-parent",
+            "--no-merges",
             "-1",
             "--format=%H",
             "--",

@@ -77,18 +77,16 @@ pub(crate) fn relaxation_stop_criteria_satisfied(
     energy_plateau_range_j: Option<EnergyPlateauRangeJ>,
     max_torque_apm: f64,
 ) -> bool {
-    let Some(torque_threshold) = control.stop.torque_tolerance_apm else {
-        return false;
-    };
+    let torque_ok = control
+        .stop
+        .torque_tolerance_apm
+        .is_some_and(|threshold| max_torque_apm.is_finite() && max_torque_apm <= threshold);
+    let energy_ok = matches!(
+        (control.stop.energy_tolerance_j, energy_plateau_range_j),
+        (Some(threshold), Some(range)) if range.value.is_finite() && range.value <= threshold
+    );
 
-    let torque_ok = max_torque_apm.is_finite() && max_torque_apm <= torque_threshold;
-    let energy_ok = match (control.stop.energy_tolerance_j, energy_plateau_range_j) {
-        (Some(threshold), Some(range)) => range.value <= threshold,
-        (Some(_), None) => false,
-        (None, _) => true,
-    };
-
-    torque_ok && energy_ok
+    torque_ok || energy_ok
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -118,13 +116,22 @@ impl RelaxationTorqueConfirmation {
         energy_plateau_range_j: Option<EnergyPlateauRangeJ>,
         max_torque_apm: f64,
     ) -> bool {
-        if relaxation_stop_criteria_satisfied(control, energy_plateau_range_j, max_torque_apm) {
+        let torque_ok = control
+            .stop
+            .torque_tolerance_apm
+            .is_some_and(|threshold| max_torque_apm.is_finite() && max_torque_apm <= threshold);
+        if torque_ok {
             self.consecutive_samples =
                 (self.consecutive_samples + 1).min(RELAXATION_TORQUE_CONFIRMATION_STEPS);
         } else {
             self.consecutive_samples = 0;
         }
-        self.consecutive_samples >= RELAXATION_TORQUE_CONFIRMATION_STEPS
+        self.confirmed()
+            || matches!(
+                (control.stop.energy_tolerance_j, energy_plateau_range_j),
+                (Some(threshold), Some(range))
+                    if range.value.is_finite() && range.value <= threshold
+            )
     }
 
     /// Observe a convergence sample tied to one accepted solver state.
@@ -269,27 +276,29 @@ pub(crate) fn resolve_stage_completion(
     if let (Some(threshold), Some(max_torque_apm)) =
         (control.stop.torque_tolerance_apm, metrics.max_torque_apm)
     {
-        let energy_ok = match (
-            control.stop.energy_tolerance_j,
-            metrics.accepted_energy_plateau_range_j,
-        ) {
-            (Some(energy_threshold), Some(range)) => {
-                range.value.is_finite() && range.value <= energy_threshold
-            }
-            (Some(_), None) => false,
-            (None, _) => true,
-        };
-        if metrics.torque_confirmed
-            && max_torque_apm.is_finite()
-            && max_torque_apm <= threshold
-            && energy_ok
-        {
+        if metrics.torque_confirmed && max_torque_apm.is_finite() && max_torque_apm <= threshold {
             return stage_completion(
                 status_label,
                 true,
                 Some(StageStopReason::Torque),
                 Some(StageMetricKind::MaxTorqueApm),
                 Some(max_torque_apm),
+                Some(threshold),
+            );
+        }
+    }
+
+    if let (Some(threshold), Some(range)) = (
+        control.stop.energy_tolerance_j,
+        metrics.accepted_energy_plateau_range_j,
+    ) {
+        if range.value.is_finite() && range.value <= threshold {
+            return stage_completion(
+                status_label,
+                true,
+                Some(StageStopReason::Energy),
+                Some(StageMetricKind::TotalEnergyPlateauRangeJ),
+                Some(range.value),
                 Some(threshold),
             );
         }
@@ -466,37 +475,76 @@ mod tests {
     }
 
     #[test]
-    fn energy_plateau_without_torque_never_proves_equilibrium() {
+    fn torque_criterion_satisfies_stop_when_energy_does_not() {
         let control = RelaxationControlIR {
             algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
             stop: RelaxStopIR {
-                torque_tolerance_apm: None,
-                energy_tolerance_j: Some(1.0e-18),
+                torque_tolerance_apm: Some(2.0),
+                energy_tolerance_j: Some(0.5),
                 max_steps: Some(50_000),
                 max_relaxation_time_s: None,
             },
         };
 
-        assert!(!relaxation_stop_criteria_satisfied(
+        assert!(relaxation_stop_criteria_satisfied(
             &control,
-            Some(EnergyPlateauRangeJ { value: 0.0 }),
-            0.0,
+            Some(EnergyPlateauRangeJ { value: 1.0 }),
+            1.0,
         ));
 
         let completion = resolve_stage_completion(
             RunStatus::Completed,
             Some(&control),
             RelaxationCompletionMetrics {
-                max_torque_apm: Some(0.0),
-                torque_confirmed: false,
-                accepted_energy_plateau_range_j: Some(EnergyPlateauRangeJ { value: 0.0 }),
+                max_torque_apm: Some(1.0),
+                torque_confirmed: true,
+                accepted_energy_plateau_range_j: Some(EnergyPlateauRangeJ { value: 1.0 }),
                 steps: 50,
                 relaxation_time_s: None,
                 numerical_stagnation: false,
             },
         );
-        assert!(!completion.converged);
-        assert_ne!(completion.reason, Some(StageStopReason::Energy));
+        assert!(completion.converged);
+        assert_eq!(completion.reason, Some(StageStopReason::Torque));
+        assert_eq!(completion.metric, Some(StageMetricKind::MaxTorqueApm));
+    }
+
+    #[test]
+    fn energy_criterion_satisfies_stop_when_torque_does_not() {
+        let control = RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: Some(2.0),
+                energy_tolerance_j: Some(0.5),
+                max_steps: Some(50_000),
+                max_relaxation_time_s: None,
+            },
+        };
+
+        assert!(relaxation_stop_criteria_satisfied(
+            &control,
+            Some(EnergyPlateauRangeJ { value: 0.25 }),
+            3.0,
+        ));
+
+        let completion = resolve_stage_completion(
+            RunStatus::Completed,
+            Some(&control),
+            RelaxationCompletionMetrics {
+                max_torque_apm: Some(3.0),
+                torque_confirmed: false,
+                accepted_energy_plateau_range_j: Some(EnergyPlateauRangeJ { value: 0.25 }),
+                steps: 50,
+                relaxation_time_s: None,
+                numerical_stagnation: false,
+            },
+        );
+        assert!(completion.converged);
+        assert_eq!(completion.reason, Some(StageStopReason::Energy));
+        assert_eq!(
+            completion.metric,
+            Some(StageMetricKind::TotalEnergyPlateauRangeJ)
+        );
     }
 
     #[test]

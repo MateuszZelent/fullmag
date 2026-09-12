@@ -31,6 +31,17 @@ describe("control room module registry", () => {
     ]);
   });
 
+  it("registers Results Navigator as the Results-activated panel-left module", () => {
+    expect(
+      ALL_MODULES.find((module) => module.id === "results-navigator"),
+    ).toMatchObject({
+      id: "results-navigator",
+      slots: ["panel-left"],
+      title: "Results",
+      activationTab: "results",
+    });
+  });
+
   it("keeps Live Charts when 3D is disabled", () => {
     expect(
       resolveControlRoomModules({ disableViewport3D: true }).map(

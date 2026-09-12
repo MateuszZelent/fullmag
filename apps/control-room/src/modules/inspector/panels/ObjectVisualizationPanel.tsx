@@ -1,5 +1,6 @@
 "use client";
 
+import { Eye } from "lucide-react";
 import React, {
   useCallback,
   useEffect,
@@ -80,6 +81,7 @@ import {
 import { FieldRow } from "../primitives/FieldRow";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { EmptyState } from "@/shared/ui/EmptyState";
 import {
   buildVisualizationPanelSections,
   canonicalVisualizationStateForBaseline,
@@ -1238,9 +1240,12 @@ export function VisualizationTargetInspectorPanel({
     return (
       <div className="fm-inspector-panel fm-scientific-inspector" data-inspector-owner={owner.id}>
         {scientificInspectorIdentity}
-        <InspectorGroup title="Visualization">
-          <FieldRow label="Target" value="No visualization target" />
-        </InspectorGroup>
+        <EmptyState
+          description={`Select an Explorer node that supports ${owner.targetLabel} visualization.`}
+          heading="No visualization target selected"
+          icon={<Eye aria-hidden="true" size={20} strokeWidth={1.5} />}
+          size="compact"
+        />
         {scientificInspectorContext}
       </div>
     );

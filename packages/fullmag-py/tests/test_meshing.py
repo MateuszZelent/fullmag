@@ -1879,6 +1879,7 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(specs[0]["pair_id"], "x_faces")
         self.assertEqual(specs[0]["master_tag"], 1)
         self.assertEqual(specs[0]["slave_tag"], 2)
+        self.assertEqual(specs[0]["axis_hint"], "x")
         self.assertEqual(gmsh.model.mesh.calls[0][0], [2])
         self.assertEqual(gmsh.model.mesh.calls[0][1], [1])
 
@@ -1937,8 +1938,10 @@ class MeshScaffoldTests(unittest.TestCase):
             def getPeriodicNodes(self, dim: int, slave_tag: int):
                 assert dim == 2
                 data = {
-                    18: (14, [180, 181], [140, 141], []),
-                    20: (16, [200, 201], [160, 161], []),
+                    # Deliberately return the pairs out of node order.  The
+                    # Gmsh API does not promise an ordering across processes.
+                    18: (14, [181, 180], [141, 140], []),
+                    20: (16, [201, 200], [161, 160], []),
                 }
                 return data[slave_tag]
 
@@ -5072,6 +5075,7 @@ class MeshScaffoldTests(unittest.TestCase):
                     "pair_id": "x_faces",
                     "marker_a": 10,
                     "marker_b": 11,
+                    "axis_hint": "x",
                     "translation": [2.0, 0.0, 0.0],
                     "tolerance_m": 2.0e-6,
                 },
@@ -5079,6 +5083,7 @@ class MeshScaffoldTests(unittest.TestCase):
                     "pair_id": "y_faces",
                     "marker_a": 10,
                     "marker_b": 11,
+                    "axis_hint": "y",
                     "translation": [0.0, 1.0, 0.0],
                     "tolerance_m": 2.0e-6,
                 },
@@ -5086,6 +5091,7 @@ class MeshScaffoldTests(unittest.TestCase):
                     "pair_id": "z_faces",
                     "marker_a": 10,
                     "marker_b": 11,
+                    "axis_hint": "z",
                     "translation": [0.0, 0.0, 1.0],
                     "tolerance_m": 2.0e-6,
                 },
@@ -7188,7 +7194,7 @@ class MeshScaffoldTests(unittest.TestCase):
                     "mesh_options": {
                         "algorithm_3d": ALGO_3D_DELAUNAY,
                         "smoothing_steps": 0,
-                        "optimize_iters": 0,
+                        "optimize": None,
                     },
                 },
             )
@@ -7221,7 +7227,7 @@ class MeshScaffoldTests(unittest.TestCase):
                 "mesh_options": {
                     "algorithm_3d": ALGO_3D_DELAUNAY,
                     "smoothing_steps": 0,
-                    "optimize_iters": 0,
+                    "optimize": None,
                 },
             },
         )
@@ -7250,7 +7256,7 @@ class MeshScaffoldTests(unittest.TestCase):
                     "mesh_options": {
                         "algorithm_3d": ALGO_3D_DELAUNAY,
                         "smoothing_steps": 0,
-                        "optimize_iters": 0,
+                        "optimize": None,
                     },
                 },
             )
@@ -9550,17 +9556,26 @@ class FieldStackAcceptanceTests(unittest.TestCase):
             "airbox_hmin": 20e-9,
         }
 
-        mesh, region_markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
-            geometries=[cylinder, waveguide],
-            hints=fm.FEM(order=1, hmax=120e-9),
-            study_universe=study_universe,
-            per_object_recipes=per_object_recipes,
-        )
+        progress_messages: list[str] = []
+        with patch(
+            "fullmag.meshing.asset_pipeline.emit_progress",
+            side_effect=progress_messages.append,
+        ):
+            mesh, region_markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
+                geometries=[cylinder, waveguide],
+                hints=fm.FEM(order=1, hmax=120e-9),
+                study_universe=study_universe,
+                per_object_recipes=per_object_recipes,
+            )
 
         self.assertGreater(mesh.n_nodes, 0)
         self.assertGreater(mesh.n_elements, 0)
         self.assertEqual(len(region_markers), 2)
-        self.assertEqual(report.build_mode, "conformal_occ")
+        self.assertEqual(
+            report.build_mode,
+            "conformal_occ",
+            msg="\n".join(progress_messages),
+        )
         self.assertFalse(report.degraded)
         self.assertTrue(
             set(report.fallbacks_triggered).issubset(
@@ -11174,7 +11189,7 @@ class RegionMeshPolicyTests(unittest.TestCase):
             if element_markers[i] != waveguide_marker:
                 continue
             centroid = nodes[tet].mean(axis=0)
-            # Center of cylinder is [0, 0, 0], radius is 15e-9
+            # Match the authored finite cylinder, not an infinite XY column.
             dist_xy = math.sqrt(centroid[0]**2 + centroid[1]**2)
 
             edges = [
@@ -11183,7 +11198,7 @@ class RegionMeshPolicyTests(unittest.TestCase):
             ]
             for u, v in edges:
                 length = np.linalg.norm(nodes[u] - nodes[v])
-                if dist_xy <= 15e-9:
+                if dist_xy <= 15e-9 and abs(centroid[2]) <= 5e-9:
                     region_edge_lengths.append(length)
                 else:
                     bulk_edge_lengths.append(length)

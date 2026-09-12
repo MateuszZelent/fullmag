@@ -110,6 +110,15 @@ pub struct StageExecutionRecordResource {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command_id: Option<String>,
+    /// Stable generation identity of the solver mesh used by this stage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_generation_id: Option<String>,
+    /// Content-derived topology fingerprint of the solver mesh used by this stage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_topology_fingerprint: Option<String>,
+    /// Mesh resource revision observed when this stage mesh was published.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_revision: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at_unix_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]

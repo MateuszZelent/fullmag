@@ -1,5 +1,7 @@
 "use client";
 
+import { restoreMeshHistoryToDraft } from "@/kernel/authoring/meshBuildHistoryRestore";
+
 import { useCallback, useMemo } from "react";
 
 import type { JsonObject, LiveStatusResource, MeshSharedDomainManifestResource } from "@/kernel/api/apiTypes";
@@ -512,16 +514,9 @@ export function useMeshDetailsModel(
   }, [buildContext, femLane, kernel.commands]);
   const restoreBuildToDraft = useCallback(
     (entry: MeshBuildHistoryEntry) => {
-      if (!entry.restorable || !entry.canonicalPolicySnapshot) return;
-      kernel.bus.emit("mesh:build-history-restore-requested", {
-        buildId: entry.buildId ?? undefined,
-        commandId: entry.commandId ?? undefined,
-        entryId: entry.id,
-        meshTarget: entry.meshTarget,
-        snapshot: entry.canonicalPolicySnapshot,
-      });
+      restoreMeshHistoryToDraft(kernel, entry);
     },
-    [kernel.bus],
+    [kernel],
   );
 
   return {

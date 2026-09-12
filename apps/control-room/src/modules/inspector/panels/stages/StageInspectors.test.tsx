@@ -182,6 +182,9 @@ function stage(kind: string): StudyStageModel {
     kind,
     label: kind,
     maxSteps: null,
+    meshGenerationId: null,
+    meshRevision: null,
+    meshTopologyFingerprint: null,
     progressPercent: 0,
     runtimeMetric: null,
     stageId: `${kind}-1`,
@@ -302,6 +305,24 @@ function hysteresisFamilyVariantPointsRef(
 }
 
 describe("Study stage inspectors", () => {
+  it("exposes the periodic-airbox magnetostatic control for eigenmode authoring", () => {
+    const frameProps = props("eigenmodes");
+    const html = render(
+      <EigenmodesStageInspector
+        {...frameProps}
+        authoringView="boundary"
+        draft={{
+          ...frameProps.draft!,
+          bc: "periodic",
+          magnetostaticBc: "periodic_airbox_k0",
+        }}
+      />,
+      ["authoring", "eigenmodes-boundary-detail"],
+    );
+
+    expect(html).toContain("Magnetostatic BC");
+    expect(html).toContain("Periodic airbox k=0");
+  });
   it("renders a dedicated inspector for every supported study stage kind", () => {
     expect(render(<RelaxStageInspector {...props("relax")} />)).toContain(
       "Stop Criteria",
@@ -1016,6 +1037,20 @@ describe("Study stage inspectors", () => {
     expect(html).toContain("Expected result family");
     expect(html).toContain("FMR modal spectrum / free modes / dispersion");
     expect(html).not.toContain("Driven Response Setup Contract");
+  });
+
+  it("keeps K0 boundary and k controls editable in the eigenmodes setup view", () => {
+    const html = render(
+      <EigenmodesStageInspector
+        {...props("eigenmodes")}
+        authoringView="setup"
+      />,
+      ["authoring", "eigenmodes-setup-detail"],
+    );
+
+    expect(html).toContain('aria-label="BC"');
+    expect(html).toContain('aria-label="k vector"');
+    expect(html).toContain('aria-label="Magnetostatic BC"');
   });
 
   it("renders modal solver lane semantics in the eigenmodes solver child view", () => {

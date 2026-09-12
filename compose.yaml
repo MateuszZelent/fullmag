@@ -8,11 +8,45 @@ services:
     command: sleep infinity
     volumes:
       - ./:/workspace
-      - cargo-cache:/usr/local/cargo/registry
-      - target-cache:/workspace/target
-      - pnpm-store:/pnpm/store
+      - type: bind
+        source: ${FULLMAG_BUILD_ROOT:?resolve FULLMAG_BUILD_ROOT before running Compose}
+        target: /workspace/.fullmag-build
+      - type: bind
+        source: ${FULLMAG_CARGO_TARGET_DIR:?resolve FULLMAG_CARGO_TARGET_DIR before running Compose}
+        target: /workspace/target
+      - type: bind
+        source: ${FULLMAG_CACHE_ROOT:?resolve FULLMAG_CACHE_ROOT before running Compose}
+        target: /workspace/.fullmag-cache
+      - type: bind
+        source: ${FULLMAG_RUNTIME_ROOT:?resolve FULLMAG_RUNTIME_ROOT before running Compose}
+        target: /workspace/.fullmag
+      - type: bind
+        source: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
+        target: /fullmag-frontend
+      # Compatibility links in the checkout retain the host's absolute
+      # frontend target. Mount the same source at that absolute path inside
+      # the container so /workspace/apps/control-room symlinks are live.
+      - type: bind
+        source: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
+        target: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
     environment:
       RUST_LOG: ${RUST_LOG:-info}
+      FULLMAG_BUILD_ROOT: /workspace/.fullmag-build
+      FULLMAG_CARGO_TARGET_DIR: /workspace/target
+      CARGO_TARGET_DIR: /workspace/target
+      FULLMAG_CACHE_ROOT: /workspace/.fullmag-cache
+      CARGO_HOME: /workspace/.fullmag-cache/cargo
+      PNPM_HOME: /workspace/.fullmag-cache/pnpm-home
+      npm_config_store_dir: /workspace/.fullmag-cache/pnpm-store
+      npm_config_cache: /workspace/.fullmag-cache/npm
+      COREPACK_HOME: /workspace/.fullmag-cache/corepack
+      FULLMAG_RUNTIME_ROOT: /workspace/.fullmag
+      FULLMAG_FRONTEND_ROOT: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
+      CUDA_CACHE_PATH: /workspace/.fullmag-cache/cuda
+      PIP_CACHE_DIR: /workspace/.fullmag-cache/pip
+      UV_CACHE_DIR: /workspace/.fullmag-cache/uv
+      PLAYWRIGHT_BROWSERS_PATH: /workspace/.fullmag-cache/playwright-browsers
+      PYTHONPYCACHEPREFIX: /workspace/.fullmag-cache/python-bytecode
       POSTGRES_URL: postgres://fullmag:${POSTGRES_PASSWORD}@postgres:5432/fullmag
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER}
@@ -36,11 +70,42 @@ services:
     command: sleep infinity
     volumes:
       - ./:/workspace
-      - cargo-cache:/usr/local/cargo/registry
-      - target-cache:/workspace/target
-      - pnpm-store:/pnpm/store
+      - type: bind
+        source: ${FULLMAG_BUILD_ROOT:?resolve FULLMAG_BUILD_ROOT before running Compose}
+        target: /workspace/.fullmag-build
+      - type: bind
+        source: ${FULLMAG_CARGO_TARGET_DIR:?resolve FULLMAG_CARGO_TARGET_DIR before running Compose}
+        target: /workspace/target
+      - type: bind
+        source: ${FULLMAG_CACHE_ROOT:?resolve FULLMAG_CACHE_ROOT before running Compose}
+        target: /workspace/.fullmag-cache
+      - type: bind
+        source: ${FULLMAG_RUNTIME_ROOT:?resolve FULLMAG_RUNTIME_ROOT before running Compose}
+        target: /workspace/.fullmag
+      - type: bind
+        source: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
+        target: /fullmag-frontend
+      - type: bind
+        source: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
+        target: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
     environment:
       RUST_LOG: ${RUST_LOG:-info}
+      FULLMAG_BUILD_ROOT: /workspace/.fullmag-build
+      FULLMAG_CARGO_TARGET_DIR: /workspace/target
+      CARGO_TARGET_DIR: /workspace/target
+      FULLMAG_CACHE_ROOT: /workspace/.fullmag-cache
+      CARGO_HOME: /workspace/.fullmag-cache/cargo
+      PNPM_HOME: /workspace/.fullmag-cache/pnpm-home
+      npm_config_store_dir: /workspace/.fullmag-cache/pnpm-store
+      npm_config_cache: /workspace/.fullmag-cache/npm
+      COREPACK_HOME: /workspace/.fullmag-cache/corepack
+      FULLMAG_RUNTIME_ROOT: /workspace/.fullmag
+      FULLMAG_FRONTEND_ROOT: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
+      CUDA_CACHE_PATH: /workspace/.fullmag-cache/cuda
+      PIP_CACHE_DIR: /workspace/.fullmag-cache/pip
+      UV_CACHE_DIR: /workspace/.fullmag-cache/uv
+      PLAYWRIGHT_BROWSERS_PATH: /workspace/.fullmag-cache/playwright-browsers
+      PYTHONPYCACHEPREFIX: /workspace/.fullmag-cache/python-bytecode
       FULLMAG_PYTHON: /usr/bin/python3
       FULLMAG_USE_MFEM_STACK: "ON"
       FULLMAG_FEM_REQUIRE_CEED: "1"
@@ -57,6 +122,69 @@ services:
       - fem
       - fem-gpu
 
+  # The modal CPU production lane uses the same pinned PETSc/SLEPc image as
+  # fem-gpu, but must not request a Docker GPU device.  Keeping this as a
+  # separate service prevents a host without an NVIDIA driver from blocking a
+  # strict CPU qualification run while leaving the GPU lane fail-closed.
+  fem-modal-cpu:
+    image: ${FULLMAG_FEM_GPU_IMAGE:-fullmag/fem-gpu:local}
+    working_dir: /workspace
+    command: sleep infinity
+    volumes:
+      - ./:/workspace
+      - type: bind
+        source: ${FULLMAG_BUILD_ROOT:?resolve FULLMAG_BUILD_ROOT before running Compose}
+        target: /workspace/.fullmag-build
+      - type: bind
+        source: ${FULLMAG_CARGO_TARGET_DIR:?resolve FULLMAG_CARGO_TARGET_DIR before running Compose}
+        target: /workspace/target
+      - type: bind
+        source: ${FULLMAG_CACHE_ROOT:?resolve FULLMAG_CACHE_ROOT before running Compose}
+        target: /workspace/.fullmag-cache
+      - type: bind
+        source: ${FULLMAG_RUNTIME_ROOT:?resolve FULLMAG_RUNTIME_ROOT before running Compose}
+        target: /workspace/.fullmag
+      - type: bind
+        source: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
+        target: /fullmag-frontend
+      - type: bind
+        source: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
+        target: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+      FULLMAG_BUILD_ROOT: /workspace/.fullmag-build
+      FULLMAG_CARGO_TARGET_DIR: /workspace/target
+      CARGO_TARGET_DIR: /workspace/target
+      FULLMAG_CACHE_ROOT: /workspace/.fullmag-cache
+      CARGO_HOME: /workspace/.fullmag-cache/cargo
+      PNPM_HOME: /workspace/.fullmag-cache/pnpm-home
+      npm_config_store_dir: /workspace/.fullmag-cache/pnpm-store
+      npm_config_cache: /workspace/.fullmag-cache/npm
+      COREPACK_HOME: /workspace/.fullmag-cache/corepack
+      FULLMAG_RUNTIME_ROOT: /workspace/.fullmag
+      FULLMAG_FRONTEND_ROOT: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
+      CUDA_CACHE_PATH: /workspace/.fullmag-cache/cuda
+      PIP_CACHE_DIR: /workspace/.fullmag-cache/pip
+      UV_CACHE_DIR: /workspace/.fullmag-cache/uv
+      PLAYWRIGHT_BROWSERS_PATH: /workspace/.fullmag-cache/playwright-browsers
+      PYTHONPYCACHEPREFIX: /workspace/.fullmag-cache/python-bytecode
+      FULLMAG_PYTHON: /usr/bin/python3
+      FULLMAG_USE_MFEM_STACK: "ON"
+      FULLMAG_FEM_REQUIRE_CEED: "1"
+      FULLMAG_FEM_WITH_SLEPC: "ON"
+      FULLMAG_FEM_GPU_MIN_NODES: "0"
+      FULLMAG_FEM_MFEM_DEVICE: cpu
+      CMAKE_PREFIX_PATH: /opt/fullmag-deps
+      PKG_CONFIG_PATH: /opt/fullmag-deps/lib/pkgconfig:/opt/fullmag-deps/lib64/pkgconfig
+      # The shared managed binary is CUDA-capable even in the modal CPU lane,
+      # so its ELF dependency closure still needs a loadable libcuda.so.1.
+      # The image-owned compatibility library satisfies loading on hosts with
+      # no NVIDIA driver; the service deliberately requests no GPU device and
+      # FULLMAG_FEM_MFEM_DEVICE=cpu keeps execution fail-closed on the CPU lane.
+      LD_LIBRARY_PATH: /usr/local/cuda/compat:/opt/fullmag-deps/lib
+    profiles:
+      - fem-modal-cpu
+
   fem-cpu:
     build:
       context: .
@@ -66,10 +194,42 @@ services:
     command: sleep infinity
     volumes:
       - ./:/workspace
-      - fem-cpu-cargo-cache:/usr/local/cargo/registry
-      - fem-cpu-target-cache:/workspace/target
+      - type: bind
+        source: ${FULLMAG_BUILD_ROOT:?resolve FULLMAG_BUILD_ROOT before running Compose}
+        target: /workspace/.fullmag-build
+      - type: bind
+        source: ${FULLMAG_CARGO_TARGET_DIR:?resolve FULLMAG_CARGO_TARGET_DIR before running Compose}
+        target: /workspace/target
+      - type: bind
+        source: ${FULLMAG_CACHE_ROOT:?resolve FULLMAG_CACHE_ROOT before running Compose}
+        target: /workspace/.fullmag-cache
+      - type: bind
+        source: ${FULLMAG_RUNTIME_ROOT:?resolve FULLMAG_RUNTIME_ROOT before running Compose}
+        target: /workspace/.fullmag
+      - type: bind
+        source: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
+        target: /fullmag-frontend
+      - type: bind
+        source: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
+        target: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
     environment:
       RUST_LOG: ${RUST_LOG:-info}
+      FULLMAG_BUILD_ROOT: /workspace/.fullmag-build
+      FULLMAG_CARGO_TARGET_DIR: /workspace/target
+      CARGO_TARGET_DIR: /workspace/target
+      FULLMAG_CACHE_ROOT: /workspace/.fullmag-cache
+      CARGO_HOME: /workspace/.fullmag-cache/cargo
+      PNPM_HOME: /workspace/.fullmag-cache/pnpm-home
+      npm_config_store_dir: /workspace/.fullmag-cache/pnpm-store
+      npm_config_cache: /workspace/.fullmag-cache/npm
+      COREPACK_HOME: /workspace/.fullmag-cache/corepack
+      FULLMAG_RUNTIME_ROOT: /workspace/.fullmag
+      FULLMAG_FRONTEND_ROOT: ${FULLMAG_FRONTEND_ROOT:?resolve FULLMAG_FRONTEND_ROOT before running Compose}
+      CUDA_CACHE_PATH: /workspace/.fullmag-cache/cuda
+      PIP_CACHE_DIR: /workspace/.fullmag-cache/pip
+      UV_CACHE_DIR: /workspace/.fullmag-cache/uv
+      PLAYWRIGHT_BROWSERS_PATH: /workspace/.fullmag-cache/playwright-browsers
+      PYTHONPYCACHEPREFIX: /workspace/.fullmag-cache/python-bytecode
       FULLMAG_PYTHON: /usr/bin/python3
       FULLMAG_USE_MFEM_STACK: "ON"
       FULLMAG_FEM_REQUIRE_GPU: "0"
@@ -119,10 +279,5 @@ services:
       - "8222:8222"
 
 volumes:
-  cargo-cache:
-  target-cache:
-  fem-cpu-cargo-cache:
-  fem-cpu-target-cache:
-  pnpm-store:
   postgres-data:
   minio-data:

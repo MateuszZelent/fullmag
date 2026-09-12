@@ -93,6 +93,11 @@ void demag_phi_snapshot_contract_is_declared() {
     check(
         state_io.find("potential->GetNodalValues(nodal_values)") != std::string::npos,
         "P2 demag phi snapshots must evaluate the scalar potential at mesh vertices");
+    check(
+        state_io.find("FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER") != std::string::npos &&
+            state_io.find("ctx.demag_fem_bem.workspace") != std::string::npos &&
+            state_io.find("total_potential") != std::string::npos,
+        "Fredkin-Koehler demag phi snapshots must read the solved FEM/BEM total potential");
 }
 
 void gpu_snapshot_preserves_full_domain_observable_fields() {

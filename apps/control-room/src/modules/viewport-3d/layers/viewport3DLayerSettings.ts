@@ -58,6 +58,13 @@ export function resolveMeshPartSurfaceMaterialColor(
   return surfaceMaterialColorFromSettings(settings, fallback, hasVertexColors);
 }
 
+export function resolveMeshPartMagnetizationTexturePreviewColor(
+  analysisOverlayActive: boolean,
+  magnetizationTexturePreviewColor: ColorRepresentation | null,
+): ColorRepresentation | null {
+  return analysisOverlayActive ? null : magnetizationTexturePreviewColor;
+}
+
 export function shaderUsesVertexColors(
   settings: VisualizationTargetSettings,
 ): boolean {

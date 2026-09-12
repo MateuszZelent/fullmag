@@ -293,6 +293,8 @@ def _validate_tree_symlinks(entries: dict[str, dict[str, object]]) -> None:
             target = entry.get("target")
             if not isinstance(target, str):
                 raise SourceIdentityError(f"source symlink has invalid target: {current}")
+            if not target:
+                raise SourceIdentityError(f"source symlink has empty target: {current}")
             if posixpath.isabs(target):
                 raise SourceIdentityError(
                     f"unsafe source symlink has absolute target: {current}"
@@ -410,6 +412,23 @@ def _snapshot_entries(snapshot_root: Path) -> dict[str, dict[str, object]]:
                 }
     _validate_tree_symlinks(entries)
     return entries
+
+
+def _snapshot_mismatch_detail(
+    actual: dict[str, dict[str, object]],
+    expected: dict[str, dict[str, object]],
+) -> str:
+    missing = sorted(expected.keys() - actual.keys())
+    unexpected = sorted(actual.keys() - expected.keys())
+    changed = sorted(
+        path for path in actual.keys() & expected.keys() if actual[path] != expected[path]
+    )
+    summarize = lambda paths: ",".join(paths[:5]) or "none"
+    return (
+        f"missing=[{summarize(missing)}]; "
+        f"unexpected=[{summarize(unexpected)}]; "
+        f"changed=[{summarize(changed)}]"
+    )
 
 
 def _parse_status_records(parts: bytes) -> list[dict[str, object]]:
@@ -860,6 +879,8 @@ def materialize(
         snapshot_root.mkdir(parents=True)
     archive_command = (
         "git",
+        "-c",
+        "core.autocrlf=false",
         "archive",
         "--format=tar",
         str(identity["head_commit_full"]),
@@ -941,9 +962,11 @@ def verify_materialized(
             entry["target"] = target
         expected[relative] = entry
     _validate_tree_symlinks(expected)
-    if _snapshot_entries(snapshot_root) != expected:
+    actual = _snapshot_entries(snapshot_root)
+    if actual != expected:
         raise SourceIdentityError(
-            "materialized source snapshot differs from captured identity"
+            "materialized source snapshot differs from captured identity: "
+            + _snapshot_mismatch_detail(actual, expected)
         )
 
 
@@ -994,7 +1017,8 @@ def verify_materialized_snapshot(
     _validate_tree_symlinks(expected)
     if actual != expected:
         raise SourceIdentityError(
-            "materialized source snapshot differs from captured identity"
+            "materialized source snapshot differs from captured identity: "
+            + _snapshot_mismatch_detail(actual, expected)
         )
 
 

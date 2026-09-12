@@ -254,6 +254,52 @@ def validate_parity_energy_contract(
     return {field: str(cpu_contract[field]) for field in fields}
 
 
+def validate_relax_to_run_increment_parity(
+    cpu: dict[str, Any], gpu: dict[str, Any]
+) -> float:
+    cpu_case = cpu.get("relax_to_run")
+    gpu_case = gpu.get("relax_to_run")
+    require(
+        isinstance(cpu_case, dict) and isinstance(gpu_case, dict),
+        "both parity inputs must declare relax-to-run evidence",
+    )
+    cpu_dt = float(cpu_case["accepted_dt_s"])
+    gpu_dt = float(gpu_case["accepted_dt_s"])
+    require(
+        abs(cpu_dt - gpu_dt) <= 1.0e-24,
+        "relax-to-run lanes must compare at a common physical time",
+    )
+    cpu_handoff = cpu_case.get("handoff_m")
+    gpu_handoff = gpu_case.get("handoff_m")
+    cpu_endpoint = cpu_case.get("endpoint_m")
+    gpu_endpoint = gpu_case.get("endpoint_m")
+    for name, value in (
+        ("CPU handoff_m", cpu_handoff),
+        ("GPU handoff_m", gpu_handoff),
+        ("CPU endpoint_m", cpu_endpoint),
+        ("GPU endpoint_m", gpu_endpoint),
+    ):
+        require(isinstance(value, list), f"{name} must be a vector")
+    require(
+        len(cpu_handoff) == len(cpu_endpoint) == len(gpu_handoff) == len(gpu_endpoint),
+        "relax-to-run vectors must have equal lengths",
+    )
+    cpu_increment = [
+        float(endpoint) - float(handoff)
+        for endpoint, handoff in zip(cpu_endpoint, cpu_handoff, strict=True)
+    ]
+    gpu_increment = [
+        float(endpoint) - float(handoff)
+        for endpoint, handoff in zip(gpu_endpoint, gpu_handoff, strict=True)
+    ]
+    difference = vector_distance(cpu_increment, gpu_increment)
+    require(
+        difference <= 5.0e-8,
+        "relax-to-run CPU/GPU common-time increment parity budget exceeded",
+    )
+    return difference
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cpu", type=Path, required=True)
@@ -287,7 +333,7 @@ def main() -> int:
             require(abs(cpu_row["time_s"] - gpu_row["time_s"]) <= 1.0e-24, "exchange lanes must compare at common physical time")
             exchange_differences.append(vector_distance(cpu_row["mode"], gpu_row["mode"]))
         require(max(exchange_differences) <= 5.0e-8, "exchange CPU/GPU FP64 parity budget exceeded")
-        require(vector_distance(cpu["relax_to_run"]["endpoint_m"], gpu["relax_to_run"]["endpoint_m"]) <= 5.0e-8, "relax-to-run CPU/GPU endpoint parity budget exceeded")
+        increment_difference = validate_relax_to_run_increment_parity(cpu, gpu)
         result = {
             "schema_version": "fem_llg_time_domain_parity.v1",
             "status": "pass",
@@ -301,7 +347,7 @@ def main() -> int:
             "applied_validator": "fem_llg_time_domain_cpu_gpu_parity.v1",
             "macrospin_max_vector_difference": max(macrospin_differences),
             "exchange_max_mode_difference": max(exchange_differences),
-            "relax_to_run_endpoint_difference": vector_distance(cpu["relax_to_run"]["endpoint_m"], gpu["relax_to_run"]["endpoint_m"]),
+            "relax_to_run_common_time_increment_difference": increment_difference,
         }
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")

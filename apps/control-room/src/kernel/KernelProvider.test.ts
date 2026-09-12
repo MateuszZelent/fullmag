@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 const kernelProviderSource = readFileSync(
   join(process.cwd(), "src/kernel/KernelProvider.tsx"),
   "utf8",
-);
+).replace(/\r\n/g, "\n");
 
 describe("KernelProvider performance contracts", () => {
   it("keeps the global shortcut listener stable across runtime resource updates", () => {

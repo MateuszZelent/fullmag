@@ -57,6 +57,34 @@ session-scoped v2 meshing resources under `/v2/sessions/current/meshing/...`:
 
 These resources remain thin and revisioned; heavy geometry stays on binary topology lanes.
 
+### Stage continuation and modal handoff
+
+An implicit Study transition may reuse a field only when the source and target
+carry the same canonical discretization identity. For FEM this means the full
+`sha256:` topology fingerprint, including node ordering, typed connectivity,
+markers, boundary facets and periodic pairs. For FDM it additionally means the
+same origin, cell counts, cell size, active mask, region mask and grid
+certificate fingerprint. Equal vector length or equal node count is not an
+identity proof.
+
+The normal `relax -> dynamics/eigen/frequency-response` path is fail-closed:
+
+- an unsupported transition is rejected before planning or state mutation;
+- FDM-to-FEM is rejected unless a dedicated, explicit backend-transfer stage is
+  selected;
+- FEM-to-FEM with changed topology is rejected rather than interpolated;
+- FDM-to-FDM direct reuse is legal only for an identical structured grid;
+- adaptive remeshing of `SharedDomainMeshWithAir` is rejected until an
+  airbox-preserving remesher and transfer certificate exist.
+
+An explicit remesh or backend-transfer operation may produce a new realization,
+but it must publish source and target identities plus transfer provenance. It
+must never be represented as ordinary continuation.
+
+Stage history publishes `mesh_generation_id`, `mesh_topology_fingerprint` and,
+when owned by the stage, `mesh_revision`. A missing legacy value means
+`unknown`; it must not be synthesized from a mesh name or element counts.
+
 ## 5. Round-Trip Contract
 
 Round-trip is valid only if:

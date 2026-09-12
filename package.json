@@ -8,7 +8,7 @@
   "packageManager": "pnpm@10.8.1",
   "scripts": {
     "web:dev": "pnpm --dir apps/control-room dev",
-    "web:clean": "rm -rf apps/control-room/.next",
+    "web:clean": "node scripts/clean-control-room-next.mjs",
     "web:generate-api": "pnpm --dir apps/control-room generate:api",
     "web:generate-openapi": "pnpm --dir apps/control-room generate:openapi-v2",
     "web:generate-api-types": "pnpm --dir apps/control-room generate:api-v2-types",

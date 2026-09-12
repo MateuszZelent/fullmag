@@ -81,25 +81,6 @@ export function numberArray(value: unknown): number[] {
     : [];
 }
 
-export function susceptibilityPairCount(value: unknown): string {
-  if (!Array.isArray(value) || value.length === 0) return "not available";
-  return String(value.length);
-}
-
-export function maxAbsComplexPairs(value: unknown): number | null {
-  if (!Array.isArray(value)) return null;
-  let maxValue: number | null = null;
-  for (const pair of value) {
-    if (!Array.isArray(pair)) continue;
-    const real = finiteNumber(pair[0]);
-    const imag = finiteNumber(pair[1]);
-    if (real == null || imag == null) continue;
-    const magnitude = Math.hypot(real, imag);
-    maxValue = maxValue == null ? magnitude : Math.max(maxValue, magnitude);
-  }
-  return maxValue;
-}
-
 export function formatScalar(value: number | null | undefined, unit = ""): string {
   if (value == null || !Number.isFinite(value)) return "not available";
   if (Math.abs(value) < 1e-12) return `0${unit}`;

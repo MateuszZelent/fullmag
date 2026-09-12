@@ -34,7 +34,7 @@ function SessionCollectionLoading() {
   return (
     <main
       className="grid min-h-0 flex-1 place-items-center p-8"
-      data-state="session-loading"
+      id="fm-main-content" tabIndex={-1} data-state="session-loading"
       role="status"
     >
       <section className="grid max-w-md gap-2 text-center">
@@ -51,7 +51,7 @@ function SessionCollectionError({ onRetry }: { readonly onRetry: () => void }) {
   return (
     <main
       className="grid min-h-0 flex-1 place-items-center p-8"
-      data-state="session-error"
+      id="fm-main-content" tabIndex={-1} data-state="session-error"
       role="alert"
     >
       <section className="grid max-w-md gap-3 text-center">

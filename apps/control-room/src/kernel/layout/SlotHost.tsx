@@ -12,12 +12,22 @@ import {
 } from "react";
 
 import { useKernel } from "../KernelContext";
+import { useLayoutSelector } from "./useLayout";
 import type { ModuleConfig, ModuleManifest, ModuleProps, SlotId } from "../types";
 
 interface SlotHostProps {
   slotId: SlotId;
   /** Explicit manifest override — if null, auto-discover from kernel registry. */
   moduleManifest?: ModuleManifest | null;
+}
+
+export function resolveSlotModuleManifest(
+  registered: readonly ModuleManifest[],
+  activeModuleTab: string,
+): ModuleManifest | null {
+  return registered.find((candidate) => candidate.activationTab === activeModuleTab) ??
+    registered[0] ??
+    null;
 }
 
 /**
@@ -140,13 +150,14 @@ export function MountedModule({
  */
 export function SlotHost({ slotId, moduleManifest }: SlotHostProps) {
   const kernel = useKernel();
+  const activeModuleTab = useLayoutSelector((layout) => layout.activeModuleTab);
 
   let manifest: ModuleManifest | null = null;
   if (moduleManifest !== undefined) {
     manifest = moduleManifest;
   } else {
     const registered = kernel.modules.forSlot(slotId);
-    manifest = registered[0] ?? null;
+    manifest = resolveSlotModuleManifest(registered, activeModuleTab);
   }
 
   if (!manifest) {

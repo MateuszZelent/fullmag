@@ -1,7 +1,14 @@
 use fullmag_fem_sys as ffi;
 use fullmag_ir::{StageCompletionIR, StageMetricKind, StageStopReason};
 
-use crate::types::{FemGpuExecutionClass, FemGpuExecutionReceipt, RunError};
+use crate::fem::execution_receipt::{
+    validate_fem_gpu_performance_snapshot, FemGpuPerformanceSnapshotSummary,
+    FemGpuPerformanceSnapshotValidationError, FEM_GPU_PERFORMANCE_SNAPSHOT_ABI_V1,
+    FEM_GPU_PERFORMANCE_SNAPSHOT_V1_SIZE,
+};
+use crate::types::{
+    FemBemDemagProvenance, FemGpuExecutionClass, FemGpuExecutionReceipt, RunError,
+};
 
 use std::ffi::CStr;
 
@@ -234,6 +241,128 @@ impl NativeFemDataResidency {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct NativeFemDemagFemBemProvenance {
+    pub(crate) operator_mode: String,
+    pub(crate) operator_fingerprint: String,
+    pub(crate) boundary_node_count: u64,
+    pub(crate) boundary_triangle_count: u64,
+    pub(crate) near_block_count: u64,
+    pub(crate) far_block_count: u64,
+    pub(crate) near_entry_count: u64,
+    pub(crate) far_row_count: u64,
+    pub(crate) max_rank: u32,
+    pub(crate) relative_error_estimate: f64,
+    pub(crate) resident_bytes: u64,
+    pub(crate) device_bytes: u64,
+    pub(crate) operator_build_count: u64,
+    pub(crate) operator_upload_count: u64,
+    pub(crate) apply_count: u64,
+}
+
+impl NativeFemDemagFemBemProvenance {
+    fn is_sha256_fingerprint(value: &str) -> bool {
+        let digest = value.strip_prefix("sha256:").unwrap_or(value);
+        digest.len() == 64
+            && digest.bytes().all(|byte| {
+                matches!(
+                    byte,
+                    b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F'
+                )
+            })
+    }
+
+    pub(crate) fn from_ffi(
+        raw: ffi::fullmag_fem_demag_fem_bem_provenance_v1,
+    ) -> Result<Option<Self>, RunError> {
+        if raw.abi_version != ffi::FULLMAG_FEM_DEMAG_FEM_BEM_PROVENANCE_V1_ABI_VERSION
+            || raw.struct_size
+                != std::mem::size_of::<ffi::fullmag_fem_demag_fem_bem_provenance_v1>() as u32
+        {
+            return Err(receipt_error("demag_fem_bem_provenance_abi_mismatch"));
+        }
+        if raw.available == 0 {
+            return Ok(None);
+        }
+
+        fn bounded_string(
+            bytes: &[std::ffi::c_char],
+            label: &str,
+        ) -> Result<String, RunError> {
+            let Some(end) = bytes.iter().position(|byte| *byte == 0) else {
+                return Err(receipt_error(&format!(
+                    "demag_fem_bem_provenance_{label}_not_terminated"
+                )));
+            };
+            let value = std::str::from_utf8(unsafe {
+                std::slice::from_raw_parts(bytes.as_ptr().cast::<u8>(), end)
+            })
+            .map_err(|_| receipt_error(&format!("demag_fem_bem_provenance_{label}_not_utf8")))?
+            .to_string();
+            if value.is_empty() {
+                return Err(receipt_error(&format!(
+                    "demag_fem_bem_provenance_{label}_empty"
+                )));
+            }
+            Ok(value)
+        }
+
+        let operator_mode = bounded_string(&raw.operator_mode, "operator_mode")?;
+        if !matches!(operator_mode.as_str(), "hierarchical_h2" | "device_hypre_fem_bem") {
+            return Err(receipt_error("demag_fem_bem_provenance_unknown_operator_mode"));
+        }
+        let operator_fingerprint = bounded_string(&raw.operator_fingerprint, "fingerprint")?;
+        if !Self::is_sha256_fingerprint(&operator_fingerprint) {
+            return Err(receipt_error("demag_fem_bem_provenance_fingerprint_not_sha256"));
+        }
+        if raw.boundary_node_count == 0
+            || raw.boundary_triangle_count == 0
+            || raw.operator_build_count == 0
+            || !raw.relative_error_estimate.is_finite()
+            || raw.relative_error_estimate < 0.0
+        {
+            return Err(receipt_error("demag_fem_bem_provenance_invalid_metrics"));
+        }
+        Ok(Some(Self {
+            operator_mode,
+            operator_fingerprint,
+            boundary_node_count: raw.boundary_node_count,
+            boundary_triangle_count: raw.boundary_triangle_count,
+            near_block_count: raw.near_block_count,
+            far_block_count: raw.far_block_count,
+            near_entry_count: raw.near_entry_count,
+            far_row_count: raw.far_row_count,
+            max_rank: raw.max_rank,
+            relative_error_estimate: raw.relative_error_estimate,
+            resident_bytes: raw.resident_bytes,
+            device_bytes: raw.device_bytes,
+            operator_build_count: raw.operator_build_count,
+            operator_upload_count: raw.operator_upload_count,
+            apply_count: raw.apply_count,
+        }))
+    }
+
+    pub(crate) fn into_provenance(self) -> FemBemDemagProvenance {
+        FemBemDemagProvenance {
+            operator_mode: self.operator_mode,
+            operator_fingerprint: self.operator_fingerprint,
+            boundary_node_count: self.boundary_node_count,
+            boundary_triangle_count: self.boundary_triangle_count,
+            near_block_count: self.near_block_count,
+            far_block_count: self.far_block_count,
+            near_entry_count: self.near_entry_count,
+            far_row_count: self.far_row_count,
+            max_rank: self.max_rank,
+            relative_error_estimate: self.relative_error_estimate,
+            resident_bytes: self.resident_bytes,
+            device_bytes: self.device_bytes,
+            operator_build_count: self.operator_build_count,
+            operator_upload_count: self.operator_upload_count,
+            apply_count: self.apply_count,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct NativeFemGpuStateInfo {
     pub(crate) allocated: bool,
@@ -433,6 +562,87 @@ impl NativeFemGpuExecutionReceipt {
             // may publish true only after that successful query.
             accounting_valid: true,
         }
+    }
+}
+
+/// Validated native performance evidence.  The raw append-only ABI is kept
+/// alongside the compact summary so diagnostics can expose every counter
+/// without inventing a second counter vocabulary in Rust.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NativeFemGpuPerformanceSnapshot {
+    pub(crate) summary: FemGpuPerformanceSnapshotSummary,
+    pub(crate) raw: ffi::fullmag_fem_gpu_performance_snapshot_v1,
+}
+
+impl NativeFemGpuPerformanceSnapshot {
+    pub(crate) fn from_ffi(
+        snapshot: ffi::fullmag_fem_gpu_performance_snapshot_v1,
+    ) -> Result<Self, RunError> {
+        let execution_class = match snapshot.execution_class {
+            value
+                if value
+                    == ffi::fullmag_fem_gpu_execution_class_v1::
+                        FULLMAG_FEM_GPU_EXECUTION_DEVICE_RESIDENT
+                        as u32 => FemGpuExecutionClass::DeviceResident,
+            value
+                if value
+                    == ffi::fullmag_fem_gpu_execution_class_v1::
+                        FULLMAG_FEM_GPU_EXECUTION_GPU_OPERATOR_HOST_SOLVER
+                        as u32 => FemGpuExecutionClass::GpuOperatorHostSolver,
+            value
+                if value
+                    == ffi::fullmag_fem_gpu_execution_class_v1::
+                        FULLMAG_FEM_GPU_EXECUTION_HYBRID_CPU_POISSON
+                        as u32 => FemGpuExecutionClass::HybridCpuPoisson,
+            value
+                if value
+                    == ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_CPU
+                        as u32 => FemGpuExecutionClass::Cpu,
+            _ => return Err(receipt_error("performance_snapshot_unknown_execution_class")),
+        };
+        let summary = FemGpuPerformanceSnapshotSummary {
+            abi_version: snapshot.abi_version,
+            struct_size: snapshot.struct_size,
+            available: snapshot.available != 0,
+            execution_class,
+            completed_step: snapshot.completed_step,
+            completed_attempt_count: snapshot.completed_attempt_count,
+            rejected_attempt_count: snapshot.rejected_attempt_count,
+            failed_attempt_count: snapshot.failed_attempt_count,
+            physical_rhs_evaluations: snapshot.physical_rhs_evaluations,
+            accepted_rhs_evaluations: snapshot.accepted_rhs_evaluations,
+            physical_device_to_device_bytes: snapshot.physical_device_to_device_bytes,
+            accepted_device_to_device_bytes: snapshot.accepted_device_to_device_bytes,
+        };
+        validate_fem_gpu_performance_snapshot(&summary).map_err(|error| {
+            let token = match error {
+                FemGpuPerformanceSnapshotValidationError::AbiMismatch => {
+                    "performance_snapshot_abi_mismatch"
+                }
+                FemGpuPerformanceSnapshotValidationError::Unavailable => {
+                    "performance_snapshot_unavailable"
+                }
+                FemGpuPerformanceSnapshotValidationError::ExecutionClassMismatch => {
+                    "performance_snapshot_execution_class_mismatch"
+                }
+                FemGpuPerformanceSnapshotValidationError::NoCompletedStep => {
+                    "performance_snapshot_no_completed_step"
+                }
+                FemGpuPerformanceSnapshotValidationError::AcceptedCountersExceedPhysical => {
+                    "performance_snapshot_accounting_invalid"
+                }
+            };
+            receipt_error(token)
+        })?;
+        Ok(Self {
+            summary,
+            raw: snapshot,
+        })
+    }
+
+    pub(crate) fn abi_is_current(&self) -> bool {
+        self.summary.abi_version == FEM_GPU_PERFORMANCE_SNAPSHOT_ABI_V1
+            && self.summary.struct_size == FEM_GPU_PERFORMANCE_SNAPSHOT_V1_SIZE
     }
 }
 
@@ -646,6 +856,74 @@ mod tests {
         }
     }
 
+    fn bem_provenance_fixture() -> ffi::fullmag_fem_demag_fem_bem_provenance_v1 {
+        fn text<const N: usize>(value: &str) -> [std::ffi::c_char; N] {
+            let mut output = [0; N];
+            for (slot, byte) in output.iter_mut().zip(value.as_bytes()) {
+                *slot = *byte as std::ffi::c_char;
+            }
+            output
+        }
+
+        ffi::fullmag_fem_demag_fem_bem_provenance_v1 {
+            abi_version: ffi::FULLMAG_FEM_DEMAG_FEM_BEM_PROVENANCE_V1_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_demag_fem_bem_provenance_v1>()
+                as u32,
+            available: 1,
+            reserved: 0,
+            operator_mode: text("hierarchical_h2"),
+            operator_fingerprint: text(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            ),
+            boundary_node_count: 128,
+            boundary_triangle_count: 252,
+            near_block_count: 32,
+            far_block_count: 64,
+            near_entry_count: 2048,
+            far_row_count: 512,
+            max_rank: 12,
+            reserved2: 0,
+            relative_error_estimate: 1.0e-7,
+            resident_bytes: 1_048_576,
+            device_bytes: 0,
+            operator_build_count: 1,
+            operator_upload_count: 0,
+            apply_count: 4,
+        }
+    }
+
+    #[test]
+    fn demag_fem_bem_provenance_maps_metrics_and_fails_closed() {
+        let mut raw = bem_provenance_fixture();
+        let parsed = NativeFemDemagFemBemProvenance::from_ffi(raw)
+            .unwrap()
+            .expect("available BEM provenance should map");
+        assert_eq!(parsed.operator_mode, "hierarchical_h2");
+        assert_eq!(parsed.boundary_node_count, 128);
+        assert_eq!(parsed.boundary_triangle_count, 252);
+        assert_eq!(parsed.near_block_count, 32);
+        assert_eq!(parsed.far_block_count, 64);
+        assert_eq!(parsed.max_rank, 12);
+        assert_eq!(parsed.apply_count, 4);
+
+        raw.available = 0;
+        assert!(NativeFemDemagFemBemProvenance::from_ffi(raw)
+            .unwrap()
+            .is_none());
+
+        let mut invalid = bem_provenance_fixture();
+        invalid.relative_error_estimate = f64::NAN;
+        assert!(NativeFemDemagFemBemProvenance::from_ffi(invalid).is_err());
+
+        let mut invalid_fingerprint = bem_provenance_fixture();
+        invalid_fingerprint.operator_fingerprint[0] = b'x' as std::ffi::c_char;
+        assert!(NativeFemDemagFemBemProvenance::from_ffi(invalid_fingerprint).is_err());
+
+        let mut unterminated = bem_provenance_fixture();
+        unterminated.operator_mode = [b'x' as std::ffi::c_char; 64];
+        assert!(NativeFemDemagFemBemProvenance::from_ffi(unterminated).is_err());
+    }
+
     #[test]
     fn gpu_execution_receipt_maps_only_native_executed_evidence() {
         let parsed = NativeFemGpuExecutionReceipt::from_ffi(execution_receipt_fixture()).unwrap();
@@ -697,6 +975,37 @@ mod tests {
             }
             assert!(NativeFemGpuExecutionReceipt::from_ffi(raw).is_err());
         }
+    }
+
+    #[test]
+    fn performance_snapshot_maps_and_validates_native_evidence() {
+        let mut raw = ffi::fullmag_fem_gpu_performance_snapshot_v1 {
+            abi_version: FEM_GPU_PERFORMANCE_SNAPSHOT_ABI_V1,
+            struct_size: FEM_GPU_PERFORMANCE_SNAPSHOT_V1_SIZE,
+            available: 1,
+            execution_class:
+                ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_DEVICE_RESIDENT
+                    as u32,
+            precision: ffi::fullmag_fem_precision::FULLMAG_FEM_PRECISION_DOUBLE as u32,
+            integrator: ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_RK23_BS as u32,
+            device_ordinal: 0,
+            completed_step: 1,
+            completed_attempt_count: 1,
+            physical_rhs_evaluations: 4,
+            accepted_rhs_evaluations: 3,
+            physical_device_to_device_bytes: 96,
+            accepted_device_to_device_bytes: 72,
+            ..Default::default()
+        };
+        let parsed = NativeFemGpuPerformanceSnapshot::from_ffi(raw).unwrap();
+        assert!(parsed.abi_is_current());
+        assert_eq!(
+            parsed.summary.execution_class,
+            FemGpuExecutionClass::DeviceResident
+        );
+        assert_eq!(parsed.summary.accepted_rhs_evaluations, 3);
+        raw.available = 0;
+        assert!(NativeFemGpuPerformanceSnapshot::from_ffi(raw).is_err());
     }
 
     fn metric_name(name: &str) -> [i8; 64] {

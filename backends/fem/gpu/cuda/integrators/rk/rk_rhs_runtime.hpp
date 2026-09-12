@@ -25,7 +25,8 @@ bool gpu_rk_compute_rhs_for_magnetization(
     int n,
     double evaluation_time_s,
     const char *label,
-    std::string &reason);
+    std::string &reason,
+    bool compute_metric = false);
 
 bool gpu_rk_compute_effective_field_for_magnetization(
     Context &ctx,

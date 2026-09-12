@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import type { SceneResource } from "@/kernel/api/apiTypes";
+
 import {
   BACKEND_INTERACTION_IDS,
   buildObjectInteractionPatchFromDraft,
@@ -22,6 +24,7 @@ describe("physics interaction catalog", () => {
       "current_transport",
       "spin_torque",
       "interfacial_dmi",
+      "rotated_interfacial_dmi",
       "bulk_dmi",
       "uniaxial_anisotropy",
       "cubic_anisotropy",
@@ -203,6 +206,36 @@ describe("physics interaction catalog", () => {
     ).toEqual({
       patch: { study: { external_field: [0.01, 0, -0.002] } },
     });
+    for (const d of [0.003, -0.003, 0]) {
+      expect(
+        buildStudyInteractionPatchFromDraft({
+          enabled: true,
+          id: "rotated_interfacial_dmi",
+          present: true,
+          values: { d: String(d) },
+        }),
+      ).toEqual({
+        patch: { study: { rotated_interfacial_dmi: d } },
+      });
+    }
+    for (const draft of [
+      {
+        enabled: false,
+        id: "rotated_interfacial_dmi" as const,
+        present: true,
+        values: { d: "" },
+      },
+      {
+        enabled: true,
+        id: "rotated_interfacial_dmi" as const,
+        present: false,
+        values: { d: "" },
+      },
+    ]) {
+      expect(buildStudyInteractionPatchFromDraft(draft)).toEqual({
+        patch: { study: { rotated_interfacial_dmi: null } },
+      });
+    }
   });
 
   it("rejects invalid typed drafts before hitting the API", () => {
@@ -226,6 +259,133 @@ describe("physics interaction catalog", () => {
     });
   });
 
+  it("rejects study-level rotated DMI when an object-scoped DMI is active", () => {
+    for (const kind of ["interfacial_dmi", "bulk_dmi"] as const) {
+      const scene = {
+        objects: [
+          {
+            id: "free-layer",
+            physics_stack: [{ kind, enabled: true }],
+          },
+        ],
+      } as unknown as SceneResource;
+
+      const result = buildStudyInteractionPatchFromDraft(
+        {
+          enabled: true,
+          id: "rotated_interfacial_dmi",
+          present: true,
+          values: { d: "0.003" },
+        },
+        scene,
+      );
+
+      expect(result).toEqual({
+        error:
+          `Rotated interfacial DMI conflicts with active object-scoped ${kind}. ` +
+          "Disable or remove the object-scoped DMI before applying the study-level term.",
+      });
+      expect("patch" in result).toBe(false);
+    }
+  });
+
+  it("requires global Exchange for nonzero rotated DMI on open-boundary scenes", () => {
+    const scene = {
+      objects: [],
+      study: { exchange_enabled: false },
+    } as unknown as SceneResource;
+    const draft = {
+      enabled: true,
+      id: "rotated_interfacial_dmi" as const,
+      present: true,
+      values: { d: "0.003" },
+    };
+
+    expect(buildStudyInteractionPatchFromDraft(draft, scene)).toEqual({
+      error:
+        "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition",
+    });
+    expect(
+      buildStudyInteractionPatchFromDraft(
+        { enabled: true, id: "rotated_interfacial_dmi", present: true, values: { d: "0" } },
+        scene,
+      ),
+    ).toEqual({ patch: { study: { rotated_interfacial_dmi: 0 } } });
+  });
+
+  it("does not allow disabling Exchange while rotated DMI remains active", () => {
+    const scene = {
+      objects: [],
+      study: { exchange_enabled: true, rotated_interfacial_dmi: -0.003 },
+    } as unknown as SceneResource;
+
+    expect(
+      buildStudyInteractionPatchFromDraft(
+        { enabled: false, id: "exchange", present: true, values: {} },
+        scene,
+      ),
+    ).toEqual({
+      error:
+        "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition",
+    });
+  });
+
+  it("ignores active DMI entries on auxiliary scene objects", () => {
+    for (const kind of ["interfacial_dmi", "bulk_dmi"] as const) {
+      const scene = {
+        objects: [
+          {
+            id: "antenna",
+            physics_stack: [{ kind, enabled: true }],
+            role: "antenna",
+          },
+        ],
+        revision: 7,
+        study: {},
+      } as unknown as SceneResource;
+
+      expect(
+        buildStudyInteractionPatchFromDraft(
+          {
+            enabled: true,
+            id: "rotated_interfacial_dmi",
+            present: true,
+            values: { d: "0.003" },
+          },
+          scene,
+        ),
+      ).toEqual({
+        patch: { study: { rotated_interfacial_dmi: 0.003 } },
+      });
+    }
+  });
+
+  it("rejects object-scoped DMI when study-level rotated DMI is active", () => {
+    const scene = {
+      objects: [],
+      study: { rotated_interfacial_dmi: -0.003 },
+    } as unknown as SceneResource;
+
+    for (const id of ["interfacial_dmi", "bulk_dmi"] as const) {
+      const result = buildObjectInteractionPatchFromDraft(
+        {
+          enabled: true,
+          id,
+          present: true,
+          values: id === "interfacial_dmi" ? { dind: "0.003" } : { d_bulk: "0.003" },
+        },
+        scene,
+      );
+
+      expect(result).toEqual({
+        error:
+          `Object-scoped ${id} conflicts with active study-level rotated interfacial DMI. ` +
+          "Disable or remove the study-level term before applying the object-scoped DMI.",
+      });
+      expect("patch" in result).toBe(false);
+    }
+  });
+
   it("creates default drafts with documented units", () => {
     expect(defaultDraftForInteraction("zeeman")).toMatchObject({
       id: "zeeman",
@@ -234,6 +394,10 @@ describe("physics interaction catalog", () => {
     expect(findInteractionSpec("zeeman")?.fields[0]).toMatchObject({
       label: "B_ext",
       unit: "T",
+    });
+    expect(defaultDraftForInteraction("rotated_interfacial_dmi")).toMatchObject({
+      id: "rotated_interfacial_dmi",
+      values: { d: "0.003" },
     });
   });
 

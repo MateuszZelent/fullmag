@@ -8,6 +8,7 @@ import {
   exportChartData,
   exportChartPng,
 } from "./ChartExportControls";
+import type { ChartExportRequest } from "./chartExport";
 import { EChartsCanvasSurface } from "./EChartsCanvasSurface";
 import { PointsTableDialog } from "./PointsTableDialog";
 import type { ChartRendererInstance, ChartRendererOwner, ChartRenderModel } from "./chartRenderer";
@@ -17,6 +18,7 @@ export interface ChartInteractionCallbacks {
   onExportRequested?: (format: "csv" | "tsv" | "png") => void;
   onPointSelected?: (seriesId: string, pointIndex: number) => void;
   onRangeSelected?: (fromSI: number, toSI: number) => void;
+  onRequestedExportFailed?: () => void;
 }
 
 export interface InteractiveChartSurfaceIdentity {
@@ -33,6 +35,8 @@ export interface InteractiveChartSurfaceIdentity {
 
 export interface InteractiveChartSurfaceProps extends ChartInteractionCallbacks {
   allSeries?: readonly ChartSeries[];
+  /** Optional model used by CSV/TSV controls when the visible pane is only a view. */
+  dataExportModel?: ChartRenderModel;
   dataStatus?: string;
   diagnostics?: {
     instanceCreated?: (instance: ChartRendererInstance) => void;
@@ -44,7 +48,7 @@ export interface InteractiveChartSurfaceProps extends ChartInteractionCallbacks 
   fitRequest?: number;
   initialRange?: { fromValue: number; toValue: number } | null;
   presentation?: ChartDataPresentationState;
-  requestedExportFormat?: "csv" | "tsv" | "png" | null;
+  requestedExportRequest?: ChartExportRequest | null;
   series: readonly ChartSeries[];
   surface: InteractiveChartSurfaceIdentity;
   ownerStatus?: string;
@@ -55,6 +59,7 @@ export interface InteractiveChartSurfaceProps extends ChartInteractionCallbacks 
 export function InteractiveChartSurface({
   allSeries,
   dataStatus,
+  dataExportModel,
   diagnostics,
   fitRequest = 0,
   initialRange = null,
@@ -62,15 +67,20 @@ export function InteractiveChartSurface({
   onPointSelected,
   onRangeSelected,
   onRequestedExportHandled,
+  onRequestedExportFailed,
   presentation,
-  requestedExportFormat = null,
+  requestedExportRequest,
   series,
   surface,
   ownerStatus,
   xAxisLabel,
 }: InteractiveChartSurfaceProps) {
   const [isTableOpen, setIsTableOpen] = useState(false);
+  const [rendererReady, setRendererReady] = useState(false);
   const exportRef = useRef<ChartRendererOwner | null>(null);
+  const rendererErrorRef = useRef(false);
+  const handledExportRequestRef = useRef<string | null>(null);
+  const exportRequest = requestedExportRequest ?? null;
   const model = useMemo(
     () => chartSeriesRenderModel(series, allSeries ?? series, surface, xAxisLabel, dataStatus, presentation),
     [allSeries, dataStatus, presentation, series, surface, xAxisLabel],
@@ -78,17 +88,37 @@ export function InteractiveChartSurface({
 
   useEffect(() => {
     if (fitRequest > 0) exportRef.current?.fitView();
-  }, [fitRequest]);
+  }, [fitRequest, rendererReady]);
   useEffect(() => {
-    if (!requestedExportFormat) return;
-    onExportRequested?.(requestedExportFormat);
-    if (requestedExportFormat === "png") {
-      exportChartPng(model, exportRef);
-    } else {
-      exportChartData(model, requestedExportFormat);
+    if (!exportRequest) {
+      handledExportRequestRef.current = null;
+      return;
+    }
+    if (handledExportRequestRef.current === exportRequest.requestId) return;
+    if (exportRequest.format === "png" && rendererErrorRef.current) {
+      handledExportRequestRef.current = exportRequest.requestId;
+      acknowledgeExportFailure(onRequestedExportFailed, onRequestedExportHandled);
+      return;
+    }
+    if (exportRequest.format === "png" && !rendererReady) return;
+    let exported = false;
+    try {
+      onExportRequested?.(exportRequest.format);
+      if (exportRequest.format === "png") {
+        exported = exportChartPng(model, exportRef);
+      } else {
+        exported = exportChartData(dataExportModel ?? model, exportRequest.format);
+      }
+    } catch {
+      exported = false;
+    }
+    handledExportRequestRef.current = exportRequest.requestId;
+    if (!exported) {
+      acknowledgeExportFailure(onRequestedExportFailed, onRequestedExportHandled);
+      return;
     }
     onRequestedExportHandled?.();
-  }, [model, onExportRequested, onRequestedExportHandled, requestedExportFormat]);
+  }, [dataExportModel, exportRequest, model, onExportRequested, onRequestedExportFailed, onRequestedExportHandled, rendererReady]);
 
   return (
     <div className="fm-analysis-plots__chart-frame">
@@ -97,6 +127,17 @@ export function InteractiveChartSurface({
         exportRef={exportRef}
         initialRange={initialRange}
         model={model}
+        onRendererReady={() => {
+          rendererErrorRef.current = false;
+          setRendererReady(true);
+        }}
+        onRendererError={() => {
+          rendererErrorRef.current = true;
+          if (exportRequest?.format === "png" && handledExportRequestRef.current !== exportRequest.requestId) {
+            handledExportRequestRef.current = exportRequest.requestId;
+            acknowledgeExportFailure(onRequestedExportFailed, onRequestedExportHandled);
+          }
+        }}
         presentation={presentation}
         ownerStatus={ownerStatus}
         onClick={(event) => {
@@ -110,6 +151,8 @@ export function InteractiveChartSurface({
       />
       <ChartExportControls
         model={model}
+        dataModel={dataExportModel}
+        pngReady={rendererReady}
         rendererRef={exportRef}
         onExportRequested={onExportRequested}
         onOpenPointsTable={() => setIsTableOpen(true)}
@@ -124,6 +167,19 @@ export function InteractiveChartSurface({
   );
 }
 
+function acknowledgeExportFailure(
+  onRequestedExportFailed: (() => void) | undefined,
+  onRequestedExportHandled: (() => void) | undefined,
+): void {
+  if (onRequestedExportFailed) {
+    onRequestedExportFailed();
+  } else {
+    // A request must always reach a terminal acknowledgement. Callers that do
+    // not expose a failure channel still need to release their command queue.
+    onRequestedExportHandled?.();
+  }
+}
+
 export function chartSeriesRenderModel(
   series: readonly ChartSeries[],
   allSeries: readonly ChartSeries[],
@@ -135,6 +191,10 @@ export function chartSeriesRenderModel(
   const units = [...new Set(allSeries.map((item) => item.unit))].slice(0, 2);
   const allSeriesHaveSamples = allSeries.some((item) => item.points.length > 0);
   const xUnit = series.find((item) => item.xUnit)?.xUnit ?? allSeries.find((item) => item.xUnit)?.xUnit ?? "";
+  const colorIndexBySeriesId = new Map<string, number>();
+  allSeries.forEach((item, index) => {
+    if (!colorIndexBySeriesId.has(item.id)) colorIndexBySeriesId.set(item.id, index);
+  });
   const status = renderStatusForPresentation(
     presentation,
     dataStatus,
@@ -144,14 +204,17 @@ export function chartSeriesRenderModel(
     ariaLabel: surface.ariaLabel,
     key: surface.chartId,
     provenance: surface.provenance,
-    series: series.map((item) => ({
-      id: item.id,
-      kind: "line" as const,
-      label: item.label || item.quantity,
-      points: item.points,
-      unit: item.unit,
-      yAxis: Math.max(0, units.indexOf(item.unit)),
-    })),
+    series: series.map((item, visibleIndex) => {
+      return {
+        colorIndex: colorIndexBySeriesId.get(item.id) ?? visibleIndex,
+        id: item.id,
+        kind: "line" as const,
+        label: item.label || item.quantity,
+        points: item.points,
+        unit: item.unit,
+        yAxis: Math.max(0, units.indexOf(item.unit)),
+      };
+    }),
     status,
     statusMessage: presentationMessage(
       presentation,

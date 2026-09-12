@@ -1,99 +1,85 @@
 ---
 name: scientific-documentation-contract
-description: Use when creating, changing, reviewing, restructuring, or publishing Fullmag documentation about physics, numerical methods, FEM/FDM solvers, CPU/GPU realizations, interactions, Python APIs, ProblemIR, or scientific implementation claims.
+description: "Use when creating, changing, reviewing, restructuring, or publishing Fullmag documentation about physics, numerical methods, FEM/FDM solvers, CPU/GPU realizations, interactions, Python APIs, ProblemIR, or scientific implementation claims."
 ---
 
 # Scientific Documentation Contract
 
+Use this skill for a terminal physics, solver, backend, interaction, numerical-method, Python API, ProblemIR, or scientific implementation page. It is the canonical documentation contract and does not require `physics-publication` back.
+
+The user instruction and root `AGENTS.md` take precedence. Reuse already loaded skills and do not reread them unless a file changed or a required reference is missing.
+
 ## Core rule
 
-Make publication documentation physics-first and prove every scientific and API claim from current code. Use **one canonical scientific owner per physical interaction**. Common physics, equations, symbols, SI units, Python API, and `ProblemIR` semantics belong there once; solver and device realizations do not own duplicate interaction pages. A page is incomplete when equations, symbols, SI units, realization distinctions, Python API, `ProblemIR`, source anchors, evidence, bibliography, or source-code index are missing.
+Use one canonical scientific owner per physical interaction. Common physics, equations, symbols, SI units, Python API, and `ProblemIR` semantics belong there once; solver/device pages contain only material realization differences. A terminal page is incomplete when equations, symbols, SI units, realization distinctions, Python API, `ProblemIR`, source anchors, evidence, bibliography, or source-code index are missing.
 
-For physics or numerics work, **REQUIRED SUB-SKILL:** use `physics-publication`. Read [references/page-contract.md](references/page-contract.md) completely before writing or reviewing a terminal page.
+Read `references/page-contract.md` completely before writing or reviewing a terminal page. Read `assets/source-map.example.json` when creating a source map.
 
-## Manual-inspired authoring standard
+## Authoring standard
 
-Use the public manuals as layout references, not as sources of implementation truth:
-
-- Follow NeuralMag's progressive executable path: import and setup, geometry and material, state, interaction, stage, observables, output, and a complete end-to-end script. Keep examples in copyable `# %%` cells, in execution order, and make each cell understandable when run from a clean session. The Fullmag script must follow the repository-owned stage-scenario pattern, not a direct structural `Problem` constructor.
-- Follow TetraX's modular interaction catalog: each interaction has one discoverable owner page or subtree with its API, parameters, energy, effective field, observables, backend realizations, qualification state, and scientific references. Link the catalog level to the detailed interaction pages.
-- Make the first user-facing example workflow-oriented and runnable. Put reference/API detail after the working path; never leave an isolated parameter table without showing where the parameter is used. The canonical form starts with `fm.study(...)`, configures engine/device/mode and geometry/material state, registers the interaction, and ends with `study.stages.add_*` (and outputs/autosave where applicable), following `tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py`.
-- Treat every code block as a contract: execute it or record the exact failure, validate expected outputs or rejection semantics, and label unavailable, planned, experimental, and unqualified paths explicitly.
-- Do not copy external manual code or claims. Translate the useful presentation pattern into Fullmag's `fm.study(...).stages`, canonical `ProblemIR`, source-map, provenance, and four-lane qualification contracts.
-- Never put `fm.Problem(...)` in a public `public_docs/site` code block. All public simulation
-  examples use the stage-first `fm.study(...).stages` workflow. If the public stage builder lacks
-  the interaction hook, show the individual interaction objects with `to_ir()` and state the exact
-  API boundary; do not invent a top-level constructor or hide the gap in a structural snapshot.
+- Use public manuals as presentation references, never as implementation truth.
+- Make the first example executable and workflow-oriented, using `# %%` cells in execution order.
+- The canonical Fullmag example starts with `fm.study(...)`, explicit engine/device/mode, geometry/material state, interaction registration, ordered `study.stages.add_*`, and relevant output/autosave.
+- Use `tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py` as the style reference.
+- Treat every code block as a contract: execute it or record the exact failure, expected output, and support state.
+- Never put `fm.Problem(...)` in `public_docs/site`. Use object-level `to_ir()` fragments only when a public stage builder cannot represent the interaction graph.
+- Do not copy external manual code or claims.
 
 ## Required workflow
 
-1. Inspect the current public Python constructors, validators, lowering, `ProblemIR`, planner capabilities, solver sources, and tests. Never reconstruct behavior from memory.
-2. Place the page under the canonical interaction and cover FDM CPU, FDM GPU, FEM CPU, and FEM GPU in an explicit support and qualification matrix. Add separate realization sections or subchapters only for material implementation differences. Give scientifically large topics focused subtrees instead of duplicating them by solver or device.
-3. Write every production equation in complete LaTeX. Define every symbol, including SI unit, in a MathJax-rendered table. Do not replace implemented terms with pedagogical approximations.
-4. Add a complete Python authoring chapter: every public parameter, a copyable executable `python` example organized with `# %%` cells, validation/failure behavior, and backend support. The primary and all user-facing simulation examples MUST use the repository-owned stage scenario pattern (`fm.study(...)`, explicit engine/device/mode and geometry/material state, interaction registration, and `study.stages.add_*`). Never put `fm.Problem(...)` in `public_docs/site`, even as a low-level snapshot. If the current public stage builder cannot represent the interaction graph, document the exact API boundary, provide individual object-level `to_ir()` fragments or a source-backed scenario reference, and mark the missing stage integration as an explicit limitation.
-5. Add the canonical `ProblemIR` representation, exhaustive Python-to-IR mapping, normalization, requested intent, planner-resolved execution, and unsupported-combination semantics.
-6. Map equations and API claims to stable `path + symbol` identities. Generated line links may supplement them; handwritten line ranges never replace them.
-7. End every terminal page with primary scientific references and a source-code index covering each equation and implementation claim.
-8. Store an adjacent `<page>.source-map.json` based on [assets/source-map.example.json](assets/source-map.example.json).
-9. Run the validator and focused tests:
+1. Inspect current constructors, validators, lowering, `ProblemIR`, planner capabilities, solver sources, and tests.
+2. Place the page under one canonical interaction owner and provide a support and qualification matrix with one row for FDM CPU, FDM GPU, FEM CPU, and FEM GPU.
+3. Write production equations in complete LaTeX and define every symbol, exact token, scientific meaning, and SI unit in a MathJax-rendered table.
+4. Add a complete Python authoring chapter with public parameters, defaults, validation/failure behavior, executable `# %%` example, and backend support.
+5. Add canonical `ProblemIR`, exhaustive Python-to-IR mapping, normalization, requested intent, resolved execution, provenance, and unsupported-combination semantics.
+6. Map every equation and nontrivial API/IR claim to a stable `path + symbol` or `DOC-ANCHOR`.
+7. End the page with primary scientific references and a source-code index.
+8. Store an adjacent `<page>.source-map.json` based on the example.
 
-```bash
-python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
-  <page>.source-map.json --repo-root .
-python3 -m unittest discover \
-  -s .agents/skills/scientific-documentation-contract/scripts -p 'test_*.py'
-```
+## Required validation
 
-For a pull request or branch diff, require every changed scientific page to carry
-its adjacent source map:
+For a changed terminal page, run the focused validator and contract tests:
 
-```bash
-python3 .agents/skills/scientific-documentation-contract/scripts/validate_changed_scientific_docs.py \
-  --base <base-sha> --head HEAD --repo-root .
-```
+~~~powershell
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py <page>.source-map.json --repo-root .
+python3 -m unittest discover -s .agents/skills/scientific-documentation-contract/scripts -p "test_*.py"
+~~~
 
-The public-documentation workflow runs both validator test suites, the changed-page
-gate, source validation, strict Sphinx, and rendered-HTML validation. The repository-wide
-contract guard revalidates every published source map on code changes so a renamed or removed
-implementation symbol cannot leave a silently stale scientific page.
+For changed-page review, also run:
 
-10. Build Sphinx with warnings as errors. Then validate rendered HTML so inline symbols are MathJax nodes and code blocks expose copy controls:
+~~~powershell
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_changed_scientific_docs.py --base <base-sha> --head HEAD --repo-root .
+~~~
 
-```bash
-python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
-  <page>.source-map.json --repo-root . --rendered-html <page>.html
-```
+The public-documentation workflow additionally runs the public-example guard, strict Sphinx, and rendered-HTML checks. Use those when publishing or when the changed page requires rendered proof; do not rerun the repository-wide suite after an unchanged green result.
 
 ## Non-negotiable gates
 
-- Use `$...$` for inline math under MyST `dollarmath`; reject raw `\(...\)` delimiters.
-- Use labelled `{math}` blocks for governing, weak-form, discrete, field, energy, torque, and update equations.
-- Give every symbol an exact LaTeX token, scientific meaning, and SI unit rendered as LaTeX (`$1$` for dimensionless quantities).
-- Keep shared physics in the canonical interaction page; never copy common equations into backend-specific pages.
-- Use one row for each of FDM CPU, FDM GPU, FEM CPU, and FEM GPU in the support and qualification matrix, including unsupported, planned, and unqualified states without overclaiming them.
-- Create separate realization sections or subchapters when algorithms, discretization, precision, memory ownership, libraries, boundaries, convergence, support, failure semantics, or validation materially differ. Do not split merely because solver or device names differ.
-- Give scientifically large topics such as demagnetization and DMI dedicated subtrees organized by independently useful physical or numerical boundaries.
-- Document actual approximations completely: equation, derivation or citation, validity domain, error regime, and implementation.
-- Provide complete parameter tables. Every row includes type, default, SI unit, validation domain, meaning, backend support, and `ProblemIR` destination.
+- Use `$...$` for inline MathJax and labelled `{math}` blocks for governing, weak-form, discrete, field, energy, torque, and update equations.
+- Give every symbol an exact LaTeX token, scientific meaning, and SI unit rendered as LaTeX; use `$1$` for dimensionless quantities.
+- Keep shared physics in the canonical interaction page and include material implementation differences in explicit realization sections.
+- Cover FDM CPU, FDM GPU, FEM CPU, and FEM GPU in the support and qualification matrix, including unsupported, planned, and unqualified states with reasons.
+- Add separate realization sections only for material implementation differences such as algorithms, discretization, precision, memory, libraries, boundaries, convergence, failure semantics, or validation.
+- Give scientifically large topics focused subtrees organized by independently useful physical or numerical boundaries.
+- Document approximations with equation, derivation or citation, validity domain, error regime, and implementation mapping.
+- Give every parameter type, default, SI unit, validation domain, meaning, backend support, and `ProblemIR` destination.
 - Preserve requested intent separately from resolved execution and provenance.
-- Cite repository-relative path and unique symbol or `DOC-ANCHOR`; reject file-only and line-only citations.
-- Require runtime/device evidence for GPU execution claims. Source presence, compilation, and skipped tests are not parity proof.
-- Keep internal development plans in `docs/`; publish user-facing material only through `public_docs/site/`.
+- Cite repository-relative `path + symbol` or `DOC-ANCHOR`; file-only and line-only citations are insufficient.
+- Require runtime/device evidence for GPU claims; source presence, compilation, and skipped tests are not parity proof.
+- Publish user-facing material only through `public_docs/site/`; keep internal plans in `docs/`.
 
 ## Stop conditions
 
-Stop and report the exact blocker when a public parameter cannot be mapped, an equation or symbol is incomplete, a source symbol is ambiguous, a backend difference is collapsed, or validation evidence does not support the claim. Never fill scientific gaps by inference and never publish with `TODO`, `TBD`, or “to be documented”.
+Stop and report the exact blocker for publication when a public parameter cannot be mapped, an equation or symbol is incomplete, a source symbol is ambiguous, a backend difference is collapsed, or validation evidence does not support the claim. For read-only audits and planning, report the gap and continue without claiming publication readiness.
 
 ## Common mistakes
 
-| Mistake | Required correction |
-|---|---|
-| Four backend-owned copies of one interaction | Keep one canonical interaction owner and express all lanes in its realization matrix. |
-| One “implementation” section hides material lane differences | Add explicit realization sections only for the differing FEM/FDM or CPU/GPU behavior. |
-| `demag.cu lines 500–600` | Cite repository path plus stable function/class/anchor; generate lines from the revision. |
-| Plain-text units such as `J/m` | Render the unit as LaTeX, for example `$\mathrm{J\,m^{-1}}$`. |
-| Minimal Python snippet | Provide complete `# %%` cells and every used constructor parameter. |
-| JSON shown without provenance | Show canonical serialized `ProblemIR`, mapping, normalization, and requested/resolved semantics. |
-| Structural validator treated as scientific proof | Require semantic review and numerical/runtime evidence as separate gates. |
+- Four backend-owned copies of one interaction: keep one canonical owner and a realization matrix.
+- One implementation section hiding lane differences: add explicit realization sections.
+- `demag.cu lines 500–600`: cite path plus stable symbol or anchor.
+- Plain-text units: render SI units as LaTeX.
+- Minimal Python snippet: use complete `# %%` cells and every used parameter.
+- JSON without provenance: show canonical serialized `ProblemIR`, mapping, normalization, and requested/resolved semantics.
+- Structural validation as scientific proof: keep semantic review and numerical/runtime evidence separate.
 
-When changing this skill or its validator, repeat the RED/GREEN scenarios in [references/validation-evidence.md](references/validation-evidence.md).
+When changing this skill or its validator, rerun the RED/GREEN scenarios in `references/validation-evidence.md`.

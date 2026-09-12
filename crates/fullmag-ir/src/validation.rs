@@ -2058,12 +2058,15 @@ pub(crate) fn validate_oersted_energy_terms(problem: &ProblemIR, errors: &mut Ve
 }
 
 pub(crate) fn validate_dmi_energy_terms(problem: &ProblemIR, errors: &mut Vec<String>) {
+    let mut rotated_interfacial_dmi_count = 0usize;
+    let mut conventional_dmi_count = 0usize;
     for (index, term) in problem.energy_terms.iter().enumerate() {
         match term {
             EnergyTermIR::InterfacialDmi {
                 d,
                 interface_normal,
             } => {
+                conventional_dmi_count += 1;
                 if !d.is_finite() {
                     errors.push(format!(
                         "energy_terms[{index}] interfacial_dmi D must be finite"
@@ -2085,13 +2088,31 @@ pub(crate) fn validate_dmi_energy_terms(problem: &ProblemIR, errors: &mut Vec<St
                     }
                 }
             }
+            EnergyTermIR::RotatedInterfacialDmi { d } => {
+                rotated_interfacial_dmi_count += 1;
+                if !d.is_finite() {
+                    errors.push(format!(
+                        "energy_terms[{index}] rotated_interfacial_dmi D must be finite"
+                    ));
+                }
+            }
             EnergyTermIR::BulkDmi { d } => {
+                conventional_dmi_count += 1;
                 if !d.is_finite() {
                     errors.push(format!("energy_terms[{index}] bulk_dmi D must be finite"));
                 }
             }
             _ => {}
         }
+    }
+    if rotated_interfacial_dmi_count > 1 {
+        errors.push("at most one rotated_interfacial_dmi energy term is supported".to_string());
+    }
+    if rotated_interfacial_dmi_count > 0 && conventional_dmi_count > 0 {
+        errors.push(
+            "rotated_interfacial_dmi cannot be combined with interfacial_dmi or bulk_dmi until independent field and energy observables are materialized"
+                .to_string(),
+        );
     }
 }
 
@@ -3874,9 +3895,30 @@ pub(crate) fn validate_runtime_selection(problem: &crate::ProblemIR, errors: &mu
                     .to_string(),
             );
         }
+        if let Some(fallback_reason) = override_value.get("fallback_reason") {
+            if !fallback_reason
+                .as_str()
+                .is_some_and(|reason| !reason.trim().is_empty())
+            {
+                errors.push(
+                    "runtime_metadata.runtime_device_override.fallback_reason must be a non-empty string when provided"
+                        .to_string(),
+                );
+            }
+            if override_value
+                .get("device")
+                .and_then(|value| value.as_str())
+                != Some("cpu")
+            {
+                errors.push(
+                    "runtime_metadata.runtime_device_override.fallback_reason is valid only for device='cpu'"
+                        .to_string(),
+                );
+            }
+        }
         let unexpected = override_value
             .keys()
-            .filter(|key| !matches!(key.as_str(), "device" | "source"))
+            .filter(|key| !matches!(key.as_str(), "device" | "source" | "fallback_reason"))
             .cloned()
             .collect::<Vec<_>>();
         if !unexpected.is_empty() {

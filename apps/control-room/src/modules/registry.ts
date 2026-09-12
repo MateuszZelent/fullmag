@@ -13,6 +13,7 @@ import { inspectorManifest } from "./inspector/manifest";
 import { liveChartsManifest } from "./live-charts/manifest";
 import { overlayManifest } from "./overlay/manifest";
 import { ribbonManifest } from "./ribbon/manifest";
+import { resultsNavigatorManifest } from "./results-navigator/manifest";
 import { statusBarManifest } from "./status-bar/manifest";
 import { viewport3dManifest } from "./viewport-3d/manifest";
 
@@ -20,6 +21,9 @@ const REGISTERED_MODULES: ModuleManifest[] = [
   appMenuManifest,
   ribbonManifest,
   explorerManifest,
+  // Shared panel-left slot; SlotHost selects this manifest when the Results
+  // ribbon tab is active and preserves Explorer as the default fallback.
+  resultsNavigatorManifest,
   viewport3dManifest,
   fieldMapManifest,
   liveChartsManifest,

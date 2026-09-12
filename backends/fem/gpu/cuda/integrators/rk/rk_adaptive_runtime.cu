@@ -69,6 +69,9 @@ bool gpu_rk_restore_adaptive_reject_magnetization_device(
     std::string &reason)
 {
     gpu.rk.fsal_valid = false;
+    gpu.rk.endpoint_valid = false;
+    gpu.rk.endpoint_consumed = true;
+    gpu.rk.endpoint_operator_signature = 0;
     return gpu_rk_copy_component_device(
         gpu.rk.m_backup,
         gpu.magnetization.m,

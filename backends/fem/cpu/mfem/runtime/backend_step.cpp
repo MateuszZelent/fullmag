@@ -28,6 +28,7 @@
 #include "gpu/cuda/integrators/rk/rk_step_preflight.hpp"
 #endif
 #include "gpu/cuda/runtime/execution_receipt.hpp"
+#include "gpu/cuda/runtime/performance_counters.hpp"
 #include "gpu/cuda/relaxation/nonlinear_cg.hpp"
 #include "gpu/cuda/relaxation/pgbb.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
@@ -125,6 +126,7 @@ int run_backend_step_attempt(
         if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
             gpu_execution_receipt_fail_attempt(ctx.gpu_state.execution_receipt);
         }
+        gpu_performance_fail_attempt(ctx.gpu_state.performance_counters);
         const std::string original_error = error;
         std::string callback_error;
         if (!rollback_transport_stage_attempt(ctx, callback_error)) {
@@ -279,6 +281,7 @@ int run_backend_step_attempt(
             if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
                 gpu_execution_receipt_reject_attempt(ctx.gpu_state.execution_receipt);
             }
+            gpu_performance_reject_attempt(ctx.gpu_state.performance_counters);
             rollback();
             energy_rejected = true;
             refresh_transaction_stats();
@@ -348,6 +351,7 @@ int run_backend_step_attempt(
         }
     }
     transaction.commit();
+    gpu_performance_commit_attempt(ctx.gpu_state.performance_counters);
     refresh_transaction_stats();
     return FULLMAG_FEM_OK;
 #else

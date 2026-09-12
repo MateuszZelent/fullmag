@@ -106,6 +106,7 @@ export interface KernelEventMap {
     message?: string;
     meshRevision?: number;
   };
+  "mesh:build-history-editor-ready": { target: string };
   "mesh:build-history-restore-requested": {
     buildId?: string;
     commandId?: string;
@@ -155,6 +156,7 @@ export interface KernelEventMap {
   "analysis-plots:export-requested": {
     chartId: string;
     format: "csv" | "tsv" | "png";
+    requestId?: string;
     source: ModuleId;
   };
   "analysis-plots:add-series-requested": {

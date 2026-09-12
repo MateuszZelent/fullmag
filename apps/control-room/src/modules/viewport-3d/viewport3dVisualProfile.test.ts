@@ -87,11 +87,22 @@ describe("viewport3d visual profiles", () => {
     });
   });
 
-  it("keeps native canvas antialiasing profile-owned", () => {
+  it("honors antialias override while preserving profile veto (S-15)", () => {
     expect(
       resolveViewport3DCanvasGlOptions(
         getViewport3DVisualProfile("interactive"),
         false,
+      ),
+    ).toMatchObject({ antialias: false });
+    expect(
+      resolveViewport3DCanvasGlOptions(
+        getViewport3DVisualProfile("interactive"),
+        true,
+      ),
+    ).toMatchObject({ antialias: true });
+    expect(
+      resolveViewport3DCanvasGlOptions(
+        getViewport3DVisualProfile("interactive"),
       ),
     ).toMatchObject({ antialias: true });
     expect(

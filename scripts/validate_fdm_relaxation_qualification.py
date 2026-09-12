@@ -143,7 +143,15 @@ def git(repo_root: Path, *args: str) -> str:
 
 def source_identity(repo_root: Path) -> tuple[str, str]:
     top_level = Path(git(repo_root, "rev-parse", "--show-toplevel")).resolve()
-    require(top_level == repo_root.resolve(), "repo_root is not the Git worktree root")
+    candidate_root = repo_root.resolve()
+    try:
+        same_root = top_level.samefile(candidate_root)
+    except OSError:
+        # Git may return a normal Win32 path while the caller uses an
+        # extended-length path (\\?\...).  Keep the strict textual fallback
+        # for platforms where samefile is unavailable.
+        same_root = top_level == candidate_root
+    require(same_root, "repo_root is not the Git worktree root")
     flagged = [
         line
         for line in git(repo_root, "ls-files", "-v").splitlines()

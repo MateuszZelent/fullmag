@@ -31,7 +31,7 @@ __global__ void adaptive_error_norm_blocks_kernel(
     double b_lo4, double b_lo5, double b_lo6,
     double dt, double adaptive_atol, double adaptive_rtol,
     bool has_norm_tolerance, double norm_tolerance,
-    bool has_max_spin_rotation, double max_spin_rotation,
+    bool has_max_spin_rotation, double max_spin_rotation_cos,
     double *__restrict__ block_max_scaled_error,
     double *__restrict__ block_max_norm_defect,
     double *__restrict__ block_max_spin_rotation,
@@ -41,7 +41,7 @@ __global__ void adaptive_error_norm_blocks_kernel(
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     double local_max = 0.0;
     double local_norm_defect = 0.0;
-    double local_spin_rotation = 0.0;
+    double local_spin_cosine = 1.0;
     if (i < N && (magnetic_node_mask == nullptr || magnetic_node_mask[i] != 0u)) {
         const double c0 = stages > 0 ? b_hi0 - b_lo0 : 0.0;
         const double c1 = stages > 1 ? b_hi1 - b_lo1 : 0.0;
@@ -106,12 +106,16 @@ __global__ void adaptive_error_norm_blocks_kernel(
                 ((old_mx[i] * new_mx[i] + old_my[i] * new_my[i] +
                   old_mz[i] * new_mz[i]) / old_state_norm) /
                 high_order_state_norm));
-            local_spin_rotation = acos(normalized_dot);
+            local_spin_cosine = normalized_dot;
             if (has_norm_tolerance) {
                 local_max = fmax(local_max, local_norm_defect / norm_tolerance);
             }
             if (has_max_spin_rotation) {
-                local_max = fmax(local_max, local_spin_rotation / max_spin_rotation);
+                // Compare cos(theta) directly. The angle is reconstructed
+                // once after the block reduction, never per node.
+                if (normalized_dot < max_spin_rotation_cos) {
+                    local_max = CUDART_INF;
+                }
             }
         }
     }
@@ -122,7 +126,7 @@ __global__ void adaptive_error_norm_blocks_kernel(
     __shared__ typename BlockReduce::TempStorage rotation_storage;
     const double block_max = BlockReduce(error_storage).Reduce(local_max, cub::Max());
     const double block_norm_defect = BlockReduce(norm_storage).Reduce(local_norm_defect, cub::Max());
-    const double block_spin_rotation = BlockReduce(rotation_storage).Reduce(local_spin_rotation, cub::Max());
+    const double block_spin_rotation = BlockReduce(rotation_storage).Reduce(local_spin_cosine, cub::Min());
     if (threadIdx.x == 0) {
         block_max_scaled_error[blockIdx.x] = block_max;
         block_max_norm_defect[blockIdx.x] = block_norm_defect;
@@ -171,12 +175,52 @@ void fullmag_cuda_adaptive_error_norm_blocks(
         b_lo0, b_lo1, b_lo2, b_lo3, b_lo4, b_lo5, b_lo6,
         dt, adaptive_atol, adaptive_rtol,
         has_norm_tolerance, norm_tolerance,
-        has_max_spin_rotation, max_spin_rotation,
+        has_max_spin_rotation,
+        has_max_spin_rotation ? cos(max_spin_rotation) : -1.0,
         block_max_scaled_error,
         block_max_norm_defect,
         block_max_spin_rotation,
         stages,
         N);
+}
+
+__global__ void finalize_spin_rotation_kernel(double *__restrict__ value)
+{
+    if (blockIdx.x == 0 && threadIdx.x == 0) {
+        const double cosine = fmin(1.0, fmax(-1.0, value[0]));
+        value[0] = acos(cosine);
+    }
+}
+
+__global__ void merge_spin_rotation_error_kernel(
+    double *__restrict__ error_norm,
+    const double *__restrict__ max_spin_rotation,
+    double max_spin_rotation_limit)
+{
+    if (blockIdx.x == 0 && threadIdx.x == 0) {
+        const double rotation = max_spin_rotation[0];
+        const double ratio = rotation / max_spin_rotation_limit;
+        error_norm[0] = fmax(error_norm[0], ratio);
+    }
+}
+
+void fullmag_cuda_finalize_spin_rotation(
+    double *reduced_min_cosine,
+    cudaStream_t stream)
+{
+    finalize_spin_rotation_kernel<<<1, 1, 0, stream>>>(reduced_min_cosine);
+}
+
+void fullmag_cuda_merge_spin_rotation_error(
+    double *error_norm,
+    const double *max_spin_rotation,
+    double max_spin_rotation_limit,
+    cudaStream_t stream)
+{
+    merge_spin_rotation_error_kernel<<<1, 1, 0, stream>>>(
+        error_norm,
+        max_spin_rotation,
+        max_spin_rotation_limit);
 }
 
 } // namespace fullmag::fem

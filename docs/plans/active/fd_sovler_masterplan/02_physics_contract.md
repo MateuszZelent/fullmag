@@ -36,6 +36,10 @@ H_eff(r,t) = h_eff0(r) + Re(delta_h_eff(r) exp(+i omega t))
 gamma0 = mu0 * abs(gamma)
 ```
 
+The corresponding complex phasor shorthand is
+`m(r,t) = m0(r) + delta_m(r) exp(+i omega t)`; the physical real field is
+obtained by taking the real part shown above.
+
 All effective fields and drive phasors are in `A/m`. Here `gamma` is the
 gyromagnetic ratio magnitude in `rad/(s T)` and `gamma0` is the coefficient for
 `A/m` fields, in `rad s^-1 per (A/m)`.

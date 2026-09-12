@@ -1,0 +1,7 @@
+*
+!fullmag_storage.py
+!capture_source_snapshot_identity.py
+!local_runner
+local_runner/*
+!local_runner/*.py
+!local_runner/Dockerfile.coordinator

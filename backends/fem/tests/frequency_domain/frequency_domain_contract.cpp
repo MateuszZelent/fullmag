@@ -33,6 +33,7 @@
 #include "cpu/frequency_domain/engines/field_split/full_coupled_field_split_engine.hpp"
 #include "cpu/frequency_domain/engines/sparse_direct/cpu_sparse_direct_engine.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -75,6 +76,15 @@ std::string read_text_file(const char *path)
     return std::string(
         std::istreambuf_iterator<char>(input),
         std::istreambuf_iterator<char>());
+}
+
+std::string read_source_text_file(const char *path)
+{
+    std::string source = read_text_file(path);
+    source.erase(
+        std::remove(source.begin(), source.end(), '\r'),
+        source.end());
+    return source;
 }
 
 bool file_exists(const char *path)
@@ -1058,7 +1068,7 @@ void static_periodic_driven_response_is_explicitly_available()
 void driven_response_solver_accepts_fmr_env_aliases_source_contract()
 {
     const std::string source =
-        read_text_file("backends/fem/src/frequency_domain/driven_response_solver.cpp");
+        read_source_text_file("backends/fem/src/frequency_domain/driven_response_solver.cpp");
 
     check(
         contains(source.c_str(), "env_positive_double_alias"),
@@ -1086,7 +1096,7 @@ void driven_response_solver_accepts_fmr_env_aliases_source_contract()
 void periodic_airbox_reduced_response_keeps_block_jacobi_fallback_source_contract()
 {
     const std::string source =
-        read_text_file("backends/fem/src/frequency_domain/driven_response_solver.cpp");
+        read_source_text_file("backends/fem/src/frequency_domain/driven_response_solver.cpp");
 
     check(
         !contains(source.c_str(), "!static_periodic_reduced_magnetic_solve &&\n"
@@ -1100,7 +1110,7 @@ void periodic_airbox_reduced_response_keeps_block_jacobi_fallback_source_contrac
 void periodic_airbox_reduced_response_uses_schur_residual_preconditioner_source_contract()
 {
     const std::string source =
-        read_text_file("backends/fem/src/frequency_domain/driven_response_solver.cpp");
+        read_source_text_file("backends/fem/src/frequency_domain/driven_response_solver.cpp");
 
     check(
         contains(source.c_str(), "apply_static_periodic_reduced_mfem_schur_residual_right_preconditioner"),
@@ -1580,7 +1590,7 @@ void frequency_solve_planner_selects_first_real_backend_without_runtime_side_eff
 void driven_response_diagnostics_publish_honest_krylov_residency()
 {
     const std::string source =
-        read_text_file("backends/fem/src/frequency_domain/driven_response_solver.cpp");
+        read_source_text_file("backends/fem/src/frequency_domain/driven_response_solver.cpp");
 
     check(
         contains(source.c_str(), "\"krylov_vector_location\":\"host\""),
@@ -5966,6 +5976,8 @@ void accepted_equilibrium_builds_linearization_state_with_tangent_diagnostics()
     const double h_demag_x[] = {0.0, 0.25};
     const double h_demag_y[] = {0.0, 0.0};
     const double h_demag_z[] = {0.25, 0.0};
+    const double phi0[] = {0.0, 0.0};
+    const double tangent_lumped_mass[] = {2.0, 3.0};
 
     fd::EquilibriumArtifactDescriptor artifact{};
     artifact.equilibrium_id = "eq:accepted";
@@ -5975,12 +5987,24 @@ void accepted_equilibrium_builds_linearization_state_with_tangent_diagnostics()
     artifact.material_snapshot_id = "mat:v1";
     artifact.physics_snapshot_id = "physics:v1";
     artifact.boundary_snapshot_id = "bc:v1";
+    artifact.producer_run_id = "run:equilibrium";
+    artifact.content_sha256 = "sha256:equilibrium-v7";
     artifact.m0_unit = {m0_x, m0_y, m0_z, 2};
     artifact.h_eff0_a_per_m = {h_eff_x, h_eff_y, h_eff_z, 2};
     artifact.h_demag0_a_per_m = {h_demag_x, h_demag_y, h_demag_z, 2};
+    artifact.phi0 = phi0;
+    artifact.tangent_lumped_mass = tangent_lumped_mass;
     artifact.magnetic_node_count = 2;
     artifact.airbox_node_count = 2;
+    artifact.tangent_lumped_mass_count = 2;
     artifact.accepted_for_linearization = true;
+    artifact.acceptance = {
+        "torque",
+        "max_torque_apm",
+        "A/m",
+        0.25,
+        0.5,
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"};
     artifact.demag_model = "poisson_airbox_dirichlet";
 
     fd::LinearizationBuildOptions options{};
@@ -5998,14 +6022,28 @@ void accepted_equilibrium_builds_linearization_state_with_tangent_diagnostics()
     check(state.m0_xyz.size() == 6, "linearization state packs m0 xyz");
     check(state.h_eff0_xyz.size() == 6, "linearization state packs h_eff0 xyz");
     check(state.h_demag0_xyz.size() == 6, "linearization state packs h_demag0 xyz");
+    check(state.phi0.size() == 2, "linearization state preserves airbox phi0");
+    check(state.schema_version == "LinearizationState.v6", "linearization state preserves v6 schema");
+    check(state.producer_run_id == "run:equilibrium", "linearization state preserves producer run id");
     check(state.equilibrium_id == "eq:accepted", "linearization state preserves equilibrium id");
-    check(!state.linearization_signature_hash.empty(), "linearization state emits signature hash");
+    check(state.linearization_signature_hash.rfind("sha256:", 0) == 0 &&
+              state.linearization_signature_hash.size() == 71,
+          "linearization state emits a canonical SHA-256 identity");
+    check(state.tangent_lumped_mass == std::vector<double>({2.0, 3.0}),
+          "linearization state preserves FE lumped-mass weights");
+    check(state.acceptance_criterion == "torque", "linearization state preserves acceptance criterion");
+    check(state.acceptance_metric_kind == "max_torque_apm", "linearization state preserves acceptance metric");
+    check(state.acceptance_unit == "A/m", "linearization state preserves acceptance unit");
+    check(state.acceptance_metric_value == 0.25 && state.acceptance_threshold == 0.5,
+          "linearization state preserves acceptance values");
+    check(state.acceptance_certificate_sha256 == artifact.acceptance.certificate_sha256,
+          "linearization state preserves acceptance certificate identity");
     check(diagnostics.static_demag_available, "linearization diagnostics report static demag availability");
     check(diagnostics.max_m0_norm_error <= options.m0_norm_tolerance, "linearization diagnostics bound m0 norm error");
-    check(
-        diagnostics.max_m0_cross_heff0_relative <=
-            options.equilibrium_torque_relative_tolerance,
-        "linearization diagnostics bound equilibrium torque residual");
+    check(diagnostics.weighted_m0_cross_heff0_relative_l2 <= 1.0e-12,
+          "linearization diagnostics publish the FE-weighted equilibrium torque norm");
+    check(std::strlen(diagnostics.acceptance_certificate_sha256) > 0,
+          "linearization diagnostics retain acceptance certificate identity");
     check(
         std::fabs(fd::dot3(state.tangent_frames[1].m, state.tangent_frames[1].e1)) < 1.0e-12,
         "linearization tangent frame e1 is orthogonal to m0");
@@ -6042,6 +6080,8 @@ void linearization_state_reports_v5_reject_reasons_and_signature_mismatches()
     const double h_demag_x[] = {0.0};
     const double h_demag_y[] = {0.0};
     const double h_demag_z[] = {0.25};
+    const double phi0[] = {0.0};
+    const double tangent_lumped_mass[] = {2.0};
 
     fd::EquilibriumArtifactDescriptor artifact{};
     artifact.equilibrium_id = "eq:accepted";
@@ -6051,21 +6091,77 @@ void linearization_state_reports_v5_reject_reasons_and_signature_mismatches()
     artifact.material_snapshot_id = "mat:v1";
     artifact.physics_snapshot_id = "physics:v1";
     artifact.boundary_snapshot_id = "bc:v1";
+    artifact.producer_run_id = "run:equilibrium";
+    artifact.content_sha256 = "sha256:equilibrium-v7";
     artifact.m0_unit = {m0_x, m0_y, m0_z, 1};
     artifact.h_eff0_a_per_m = {h_parallel_x, h_parallel_y, h_parallel_z, 1};
     artifact.h_demag0_a_per_m = {h_demag_x, h_demag_y, h_demag_z, 1};
+    artifact.phi0 = phi0;
+    artifact.tangent_lumped_mass = tangent_lumped_mass;
     artifact.magnetic_node_count = 1;
     artifact.airbox_node_count = 1;
+    artifact.tangent_lumped_mass_count = 1;
     artifact.accepted_for_linearization = true;
+    artifact.acceptance = {
+        "energy",
+        "total_energy_plateau_range_j",
+        "J",
+        2.5e-19,
+        1.0e-18,
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"};
     artifact.demag_model = "periodic_airbox_k0";
 
     fd::LinearizationBuildOptions options{};
     options.expected_mesh_snapshot_id = "mesh:v1";
     options.expected_material_snapshot_id = "mat:v1";
     options.expected_physics_snapshot_id = "physics:v1";
+    options.expected_boundary_snapshot_id = "bc:v1";
 
     fd::LinearizationStateNative state{};
     fd::LinearizationDiagnostics diagnostics{};
+    fd::EquilibriumArtifactDescriptor missing_lumped_mass = artifact;
+    missing_lumped_mass.tangent_lumped_mass = nullptr;
+    missing_lumped_mass.tangent_lumped_mass_count = 0;
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            missing_lumped_mass,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects a missing FE lumped mass");
+    check(std::strcmp(
+              diagnostics.reject_reason,
+              "equilibrium_tangent_lumped_mass_missing") == 0,
+          "missing FE lumped mass has a stable reject reason");
+
+    const double invalid_tangent_lumped_mass[] = {0.0};
+    fd::EquilibriumArtifactDescriptor invalid_lumped_mass = artifact;
+    invalid_lumped_mass.tangent_lumped_mass = invalid_tangent_lumped_mass;
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            invalid_lumped_mass,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects a non-positive FE lumped mass");
+    check(std::strcmp(
+              diagnostics.reject_reason,
+              "equilibrium_tangent_lumped_mass_invalid") == 0,
+          "invalid FE lumped mass has a stable reject reason");
+
+    const double nonunit_m0_z[] = {1.0 + 1.0e-6};
+    fd::EquilibriumArtifactDescriptor nonunit_m0 = artifact;
+    nonunit_m0.m0_unit = {m0_x, m0_y, nonunit_m0_z, 1};
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            nonunit_m0,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects non-unit m0 by default instead of silently renormalizing it");
+    check(contains(diagnostics.error_message, "m0 norm"),
+          "non-unit m0 rejection explains the representation-integrity failure");
+
     fd::EquilibriumArtifactDescriptor rejected_artifact = artifact;
     rejected_artifact.accepted_for_linearization = false;
     check(
@@ -6080,6 +6176,87 @@ void linearization_state_reports_v5_reject_reasons_and_signature_mismatches()
             diagnostics.reject_reason,
             "equilibrium_artifact_not_accepted_for_linearization") == 0,
         "linearization builder reports exact unaccepted artifact reject reason");
+
+    fd::EquilibriumArtifactDescriptor missing_certificate = artifact;
+    missing_certificate.acceptance.certificate_sha256 = nullptr;
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            missing_certificate,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects a missing acceptance certificate");
+    check(std::strcmp(
+              diagnostics.reject_reason,
+              "equilibrium_acceptance_certificate_missing") == 0,
+          "missing certificate rejection has a stable reason");
+
+    fd::EquilibriumArtifactDescriptor forged_certificate = artifact;
+    forged_certificate.acceptance.certificate_sha256 = "sha256:forged";
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            forged_certificate,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects a forged acceptance certificate digest");
+    check(std::strcmp(
+              diagnostics.reject_reason,
+              "equilibrium_acceptance_certificate_digest_invalid") == 0,
+          "forged certificate rejection has a stable reason");
+
+    fd::EquilibriumArtifactDescriptor nonfinite_certificate = artifact;
+    nonfinite_certificate.acceptance.metric_value =
+        std::numeric_limits<double>::infinity();
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            nonfinite_certificate,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects a non-finite acceptance metric");
+
+    fd::EquilibriumArtifactDescriptor unsatisfied_certificate = artifact;
+    unsatisfied_certificate.acceptance.metric_value = 2.0e-18;
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            unsatisfied_certificate,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects an unsatisfied acceptance threshold");
+    check(std::strcmp(
+              diagnostics.reject_reason,
+              "equilibrium_acceptance_certificate_metric_invalid") == 0,
+          "unsatisfied certificate rejection has a stable reason");
+
+    fd::EquilibriumArtifactDescriptor negative_certificate = artifact;
+    negative_certificate.acceptance.metric_value = -1.0e-19;
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            negative_certificate,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects a negative acceptance metric");
+    check(std::strcmp(
+              diagnostics.reject_reason,
+              "equilibrium_acceptance_certificate_metric_invalid") == 0,
+          "negative certificate rejection has a stable reason");
+
+    fd::EquilibriumArtifactDescriptor incoherent_certificate = artifact;
+    incoherent_certificate.acceptance.unit = "A/m";
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            incoherent_certificate,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects an incoherent criterion/metric/unit tuple");
+    check(std::strcmp(
+              diagnostics.reject_reason,
+              "equilibrium_acceptance_certificate_incoherent") == 0,
+          "incoherent certificate rejection has a stable reason");
 
     fd::LinearizationBuildOptions mesh_mismatch_options = options;
     mesh_mismatch_options.expected_mesh_snapshot_id = "mesh:v2";
@@ -6120,6 +6297,32 @@ void linearization_state_reports_v5_reject_reasons_and_signature_mismatches()
         std::strcmp(diagnostics.reject_reason, "equilibrium_physics_hash_mismatch") == 0,
         "linearization builder reports exact physics mismatch reject reason");
 
+    fd::LinearizationBuildOptions boundary_mismatch_options = options;
+    boundary_mismatch_options.expected_boundary_snapshot_id = "bc:v2";
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            artifact,
+            boundary_mismatch_options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects boundary signature mismatch");
+    check(
+        std::strcmp(diagnostics.reject_reason, "equilibrium_boundary_hash_mismatch") == 0,
+        "linearization builder reports exact boundary mismatch reject reason");
+
+    fd::LinearizationBuildOptions equilibrium_mismatch_options = options;
+    equilibrium_mismatch_options.expected_equilibrium_id = "eq:other";
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            artifact,
+            equilibrium_mismatch_options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects equilibrium signature mismatch");
+    check(
+        std::strcmp(diagnostics.reject_reason, "equilibrium_id_mismatch") == 0,
+        "linearization builder reports exact equilibrium mismatch reject reason");
+
     fd::EquilibriumArtifactDescriptor missing_static_demag_artifact = artifact;
     missing_static_demag_artifact.h_demag0_a_per_m = {};
     check(
@@ -6142,13 +6345,52 @@ void linearization_state_reports_v5_reject_reasons_and_signature_mismatches()
             torque_artifact,
             options,
             state,
-            diagnostics) == fd::FrequencyDomainStatus::validation_error,
-        "linearization builder rejects large equilibrium torque residual");
+            diagnostics) == fd::FrequencyDomainStatus::ok,
+        "relative torque diagnostic must not reject certified equilibrium");
     check(
-        std::strcmp(
-            diagnostics.reject_reason,
-            "equilibrium_torque_residual_too_large") == 0,
-        "linearization builder reports exact torque residual reject reason");
+        diagnostics.max_m0_cross_heff0_relative > 1.0e-6,
+        "fixture must exercise the removed hidden gate");
+    check(std::strlen(diagnostics.acceptance_certificate_sha256) > 0,
+          "native diagnostics retain certificate identity");
+
+    fd::EquilibriumArtifactDescriptor legacy_artifact = artifact;
+    legacy_artifact.schema_version = "equilibrium_artifact.v5";
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            legacy_artifact,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects legacy equilibrium artifact without fabricating v7 state");
+    check(
+        std::strcmp(diagnostics.reject_reason, "equilibrium_artifact_schema_not_v7") == 0,
+        "legacy equilibrium rejection names v7 contract");
+
+    fd::EquilibriumArtifactDescriptor missing_provenance = artifact;
+    missing_provenance.content_sha256 = nullptr;
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            missing_provenance,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects a v7 artifact without content provenance");
+    check(
+        std::strcmp(diagnostics.reject_reason, "equilibrium_artifact_provenance_missing") == 0,
+        "missing equilibrium provenance names the v7 requirement");
+
+    fd::EquilibriumArtifactDescriptor missing_phi = artifact;
+    missing_phi.phi0 = nullptr;
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            missing_phi,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects airbox demag artifact without phi0");
+    check(
+        std::strcmp(diagnostics.reject_reason, "equilibrium_phi0_required_but_missing") == 0,
+        "missing phi0 rejection names airbox requirement");
 }
 
 void symmetric_mesh_certificate_accepts_bijective_periodic_pairs_and_rejects_duplicates()
@@ -6548,8 +6790,14 @@ void symmetric_mesh_certificate_records_stable_pair_map_fingerprints_and_schema(
         fd::build_mesh_symmetry_certificate(request, first) == fd::FrequencyDomainStatus::ok,
         "mesh symmetry certificate accepts fingerprint fixture");
     check(
-        std::strcmp(first.schema_version, "periodic_mesh_certificate.v5") == 0,
-        "mesh symmetry certificate records v5 schema version");
+        std::strcmp(first.schema_version, "periodic_mesh_certificate.v6") == 0,
+        "mesh symmetry certificate records v6 schema version");
+    check(
+        std::strncmp(first.certificate_id, "periodic_mesh_certificate.v6:", 29) == 0,
+        "mesh symmetry certificate materializes a v6 certificate id");
+    check(
+        std::strncmp(first.content_sha256, "sha256:", 7) == 0,
+        "mesh symmetry certificate materializes a content hash");
     check(
         first.magnetic_pair_map_fingerprint_available,
         "mesh symmetry certificate records magnetic pair-map fingerprint availability");
@@ -6614,6 +6862,214 @@ void symmetric_mesh_certificate_records_stable_pair_map_fingerprints_and_schema(
     check(
         std::strcmp(first.magnetic_pair_map_sha256, swapped.magnetic_pair_map_sha256) != 0,
         "mesh symmetry magnetic pair-map sha256 changes when mapping changes");
+    check(
+        std::strcmp(first.certificate_id, swapped.certificate_id) != 0,
+        "mesh symmetry certificate id changes when mesh mapping changes");
+
+    request.schema_version = "periodic_mesh_certificate.v5";
+    fd::MeshSymmetryCertificate legacy{};
+    check(
+        fd::build_mesh_symmetry_certificate(request, legacy) == fd::FrequencyDomainStatus::validation_error,
+        "mesh symmetry builder rejects legacy certificates instead of fabricating v6 identity");
+    check(
+        std::strcmp(legacy.rejection_reason, "periodic_mesh_certificate_schema_not_v6") == 0,
+        "legacy mesh certificate rejection names v6 contract");
+}
+
+void symmetric_mesh_certificate_verifies_canonical_map_binding_before_native_assembly()
+{
+    const fd::PeriodicNodePair mesh_magnetic_pairs[] = {{0, 0}, {1, 1}};
+    const fd::PeriodicNodePair payload_magnetic_pairs[] = {{1, 1}, {0, 0}};
+    const fd::PeriodicNodePair mesh_airbox_pairs[] = {{0, 0}};
+    const fd::PeriodicNodePair payload_airbox_pairs[] = {{0, 0}};
+    const std::uint32_t magnetic_source_regions[] = {7, 8};
+    const std::uint32_t magnetic_destination_regions[] = {7, 8};
+    const std::uint32_t airbox_source_regions[] = {100};
+    const std::uint32_t airbox_destination_regions[] = {100};
+
+    fd::MeshSymmetryCertificateMapBindingRequest request{};
+    request.mesh_magnetic = {
+        mesh_magnetic_pairs,
+        2,
+        2,
+        2,
+        magnetic_source_regions,
+        magnetic_destination_regions,
+    };
+    request.payload_magnetic = {
+        payload_magnetic_pairs,
+        2,
+        2,
+        2,
+        nullptr,
+        nullptr,
+    };
+    request.mesh_airbox = {
+        mesh_airbox_pairs,
+        1,
+        1,
+        1,
+        airbox_source_regions,
+        airbox_destination_regions,
+    };
+    request.payload_airbox = {
+        payload_airbox_pairs,
+        1,
+        1,
+        1,
+        nullptr,
+        nullptr,
+    };
+    request.mesh_magnetic_part_identity = "magnetic:film:mesh-v1";
+    request.payload_magnetic_part_identity = "magnetic:film:mesh-v1";
+    request.mesh_airbox_part_identity = "airbox:poisson:mesh-v1";
+    request.payload_airbox_part_identity = "airbox:poisson:mesh-v1";
+
+    fd::MeshSymmetryCertificateMapBinding missing_digest{};
+    check(
+        fd::verify_mesh_symmetry_certificate_map_binding(request, missing_digest) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "map binding rejects a payload without a supplied digest");
+    check(
+        !missing_digest.accepted,
+        "map binding remains fail-closed when the digest is absent");
+    check(
+        std::strcmp(
+            missing_digest.rejection_reason,
+            "periodic_mesh_map_binding_digest_missing") == 0,
+        "map binding reports the stable missing-digest reason");
+    check(
+        std::strncmp(missing_digest.canonical_preimage_sha256, "sha256:", 7) == 0,
+        "map binding exposes the canonical preimage digest for diagnostics");
+
+    fd::MeshSymmetryCertificateMapBinding missing_markers{};
+    fd::MeshSymmetryCertificateMapBindingRequest markerless_request = request;
+    markerless_request.mesh_magnetic.source_region_ids = nullptr;
+    check(
+        fd::verify_mesh_symmetry_certificate_map_binding(markerless_request, missing_markers) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "map binding rejects authoritative mesh input without region markers");
+    check(
+        std::strcmp(
+            missing_markers.rejection_reason,
+            "periodic_mesh_map_binding_region_markers_missing") == 0,
+        "map binding reports missing authoritative region markers");
+
+    request.payload_map_binding_digest = missing_digest.canonical_preimage_sha256;
+    fd::MeshSymmetryCertificateMapBinding accepted{};
+    check(
+        fd::verify_mesh_symmetry_certificate_map_binding(request, accepted) ==
+            fd::FrequencyDomainStatus::ok,
+        "map binding accepts an identical canonical mesh/payload map");
+    check(accepted.accepted, "accepted map binding is explicitly marked accepted");
+    check(accepted.magnetic_pair_count == 2, "map binding records magnetic map count");
+    check(accepted.airbox_pair_count == 1, "map binding records airbox map count");
+    check(
+        std::strcmp(
+            accepted.canonical_preimage_sha256,
+            missing_digest.canonical_preimage_sha256) == 0,
+        "map binding digest is stable across repeated verification");
+
+    char stale_digest[96] = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    request.payload_map_binding_digest = stale_digest;
+    fd::MeshSymmetryCertificateMapBinding digest_rejected{};
+    check(
+        fd::verify_mesh_symmetry_certificate_map_binding(request, digest_rejected) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "map binding rejects a well-formed but stale digest");
+    check(
+        std::strcmp(
+            digest_rejected.rejection_reason,
+            "periodic_mesh_map_binding_digest_mismatch") == 0,
+        "map binding reports the stable digest-mismatch reason");
+    request.payload_map_binding_digest = missing_digest.canonical_preimage_sha256;
+
+    const fd::PeriodicNodePair tampered_magnetic_pairs[] = {{1, 0}, {0, 1}};
+    request.payload_magnetic.pairs = tampered_magnetic_pairs;
+    fd::MeshSymmetryCertificateMapBinding map_rejected{};
+    check(
+        fd::verify_mesh_symmetry_certificate_map_binding(request, map_rejected) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "map binding rejects a payload map that differs from the mesh map");
+    check(
+        std::strcmp(
+            map_rejected.rejection_reason,
+            "periodic_mesh_map_binding_map_mismatch") == 0,
+        "map binding reports the stable map-mismatch reason");
+
+    request.payload_magnetic.pairs = payload_magnetic_pairs;
+    request.payload_airbox_part_identity = "airbox:poisson:stale-v0";
+    fd::MeshSymmetryCertificateMapBinding identity_rejected{};
+    check(
+        fd::verify_mesh_symmetry_certificate_map_binding(request, identity_rejected) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "map binding rejects stale airbox part identity");
+    check(
+        std::strcmp(
+            identity_rejected.rejection_reason,
+            "periodic_mesh_map_binding_airbox_part_identity_mismatch") == 0,
+        "map binding reports the stable airbox identity reason");
+
+    request.payload_airbox_part_identity = "airbox:poisson:mesh-v1";
+    const fd::PeriodicNodePair duplicate_airbox_pairs[] = {{0, 0}, {0, 0}};
+    request.payload_airbox.pairs = duplicate_airbox_pairs;
+    request.payload_airbox.pair_count = 2;
+    request.payload_airbox.source_node_count = 2;
+    request.payload_airbox.destination_node_count = 2;
+    fd::MeshSymmetryCertificateMapBinding duplicate_rejected{};
+    check(
+        fd::verify_mesh_symmetry_certificate_map_binding(request, duplicate_rejected) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "map binding rejects duplicate payload nodes before digest comparison");
+    check(
+        std::strcmp(
+            duplicate_rejected.rejection_reason,
+            "periodic_mesh_map_binding_duplicate_node") == 0,
+        "map binding reports the stable duplicate-node reason");
+
+    request.payload_airbox.pairs = payload_airbox_pairs;
+    request.payload_airbox.pair_count = 1;
+    request.payload_airbox.source_node_count = 1;
+    request.payload_airbox.destination_node_count = 1;
+    const fd::PeriodicNodePair out_of_range_pairs[] = {{2, 0}, {0, 1}};
+    request.payload_magnetic.pairs = out_of_range_pairs;
+    fd::MeshSymmetryCertificateMapBinding range_rejected{};
+    check(
+        fd::verify_mesh_symmetry_certificate_map_binding(request, range_rejected) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "map binding rejects out-of-range payload nodes before digest comparison");
+    check(
+        std::strcmp(
+            range_rejected.rejection_reason,
+            "periodic_mesh_map_binding_pair_out_of_range") == 0,
+        "map binding reports the stable out-of-range reason");
+
+    request.payload_magnetic.pairs = payload_magnetic_pairs;
+    const std::uint32_t mismatched_destination_regions[] = {7, 9};
+    request.mesh_magnetic.destination_region_ids = mismatched_destination_regions;
+    fd::MeshSymmetryCertificateMapBinding region_rejected{};
+    check(
+        fd::verify_mesh_symmetry_certificate_map_binding(request, region_rejected) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "map binding rejects a mesh region-marker seam mismatch");
+    check(
+        std::strcmp(
+            region_rejected.rejection_reason,
+            "periodic_mesh_map_binding_region_marker_mismatch") == 0,
+        "map binding reports the stable region-marker reason");
+
+    request.mesh_magnetic.destination_region_ids = magnetic_destination_regions;
+    request.schema_version = "periodic_mesh_certificate.v5";
+    fd::MeshSymmetryCertificateMapBinding schema_rejected{};
+    check(
+        fd::verify_mesh_symmetry_certificate_map_binding(request, schema_rejected) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "map binding rejects a legacy certificate schema");
+    check(
+        std::strcmp(
+            schema_rejected.rejection_reason,
+            "periodic_mesh_map_binding_schema_not_v6") == 0,
+        "map binding reports the stable schema reason");
 }
 
 void full_coupled_field_split_prototype_improves_residual_and_reuses_poisson_setup()
@@ -18087,6 +18543,7 @@ int main()
     symmetric_mesh_certificate_rejects_m0_seam_mismatch();
     symmetric_mesh_certificate_checks_static_demag_seam_and_gauge_policy();
     symmetric_mesh_certificate_records_stable_pair_map_fingerprints_and_schema();
+    symmetric_mesh_certificate_verifies_canonical_map_binding_before_native_assembly();
     excitation_projects_uniform_field_into_tangent_space();
     dynamic_field_drive_projection_applies_llg_torque_sign();
     dynamic_field_drive_projection_accepts_zero_physical_drive_with_warning();

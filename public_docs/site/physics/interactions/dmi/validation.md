@@ -172,6 +172,20 @@ accepted reference solution. The validation therefore focuses on:
 | FEM CPU MFEM | Residual consistency, energy derivative, tilted normal, `Dind_field` | Source contracts pass; managed runtime tests exist |
 | FEM GPU CUDA | Element residual kernel parity with CPU residual | Device-capable contracts present |
 
+## Rotated interfacial DMI: Göbel 2019 bimeron
+
+The dedicated {doc}`rotated-interfacial` page records a paper-based thin-film
+reproduction with $D=3\,\mathrm{mJ\,m^{-2}}$. The stored strict FDM CUDA FP64
+report was produced before the verifier gained its current 19 gates: it
+historically passed 15/15, preserved $|Q|>0.999$ through a 100 ps zero-current
+hold, retained two opposite-sign $m_z$ cores, and decreased the total energy.
+Until the run is repeated with the current verifier, this historical evidence
+is **NOT VERIFIED** for the current 19-gate contract, including the minimum
+20 ps relaxation duration. Its execution receipt
+identifies an NVIDIA GeForce RTX 4080 SUPER, device operator mask 159/159, and
+zero fallback; those fields do not replace a fresh verification. The
+corresponding FDM CPU and FEM bimeron runtimes remain **not verified**.
+
 ## Interfacial DMI tests
 
 The key analytic checks for interfacial DMI:
@@ -205,8 +219,10 @@ $D\,\mathbf{m}\cdot(\nabla\times\mathbf{m})$:
 (dmi-validation-limitations)=
 ## Limitations and known gaps
 
-- No muMAG-style standard problem exists for DMI validation.
-- FDM GPU device identity is not captured in current test evidence.
+- No muMAG-style standard problem exists for DMI validation; the Göbel case is
+  a paper reproduction with an explicit Fullmag acceptance contract.
+- Executed-device identity is captured for the rotated-DMI Göbel FP64 case, but
+  not retroactively for every conventional interfacial or bulk DMI test.
 - FEM GPU mixed-P1 element qualification for DMI is incomplete.
 - Cross-solver (FDM vs FEM) quantitative convergence comparison has not been published.
 
@@ -217,7 +233,12 @@ $D\,\mathbf{m}\cdot(\nabla\times\mathbf{m})$:
    the presence of Dzyaloshinskii-Moriya interaction," *Physical Review B* **88**, 184422
    (2013). [doi:10.1103/PhysRevB.88.184422](https://doi.org/10.1103/PhysRevB.88.184422).
 2. FullMag internal notes: `docs/physics/0404-interfacial-dmi.md`,
-   `docs/physics/0405-bulk-dmi.md`, `docs/physics/0812-fem-dmi-weak-residual-proof-fixture.md`.
+   `docs/physics/0405-bulk-dmi.md`, `docs/physics/0406-rotated-interfacial-dmi.md`,
+   `docs/physics/0812-fem-dmi-weak-residual-proof-fixture.md`.
+3. B. Göbel, A. Mook, J. Henk, I. Mertig, and O. A. Tretiakov, “Magnetic
+   bimerons as skyrmion analogues in in-plane magnets,” *Physical Review B*
+   **99**, 060407(R) (2019),
+   [doi:10.1103/PhysRevB.99.060407](https://doi.org/10.1103/PhysRevB.99.060407).
 
 (dmi-validation-source-code-index)=
 
@@ -240,6 +261,9 @@ Use the scientific bibliography and source-code index on the linked terminal pag
 |---|---|---|---|---|
 | Interfacial API | packages/fullmag-py/src/fullmag/model/energy.py | class InterfacialDMI | coefficient and normal lowering | Python |
 | Bulk API | packages/fullmag-py/src/fullmag/model/energy.py | class BulkDMI | coefficient lowering | Python |
+| Rotated API | packages/fullmag-py/src/fullmag/model/energy.py | class RotatedInterfacialDMI | coefficient lowering | Python |
 | Interfacial FEM field | backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp | compute_interfacial_dmi_field | FEM residual/field | FEM CPU |
 | Bulk FEM field | backends/fem/cpu/mfem/interactions/dmi_bulk.cpp | compute_bulk_dmi_field | FEM residual/field | FEM CPU |
 | Device DMI field/energy | backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu | fullmag_cuda_dmi_field_energy | CUDA field and energy | FEM GPU |
+| Göbel scenario | tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py | study | canonical thin-film reproduction | FDM GPU |
+| Göbel verifier | tests/standard_problems/bimeron/goebel_2019/verify.py | verify_bundle | topology, energy, and device-receipt gates | FDM GPU |

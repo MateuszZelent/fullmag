@@ -134,6 +134,7 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         QuantityId::HAni => fdm_has_uniaxial_anisotropy(&plan.material),
         QuantityId::HAniCubic => fdm_has_cubic_anisotropy(&plan.material),
         QuantityId::HDmi => plan.interfacial_dmi.is_some(),
+        QuantityId::HDmiRotated => plan.rotated_interfacial_dmi.is_some(),
         QuantityId::HDmiBulk => plan.bulk_dmi.is_some(),
         QuantityId::HMel => plan.mel_b1.is_some() || plan.mel_b2.is_some(),
         QuantityId::HTherm => plan
@@ -146,7 +147,12 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         QuantityId::EdenAni => {
             fdm_has_uniaxial_anisotropy(&plan.material) || fdm_has_cubic_anisotropy(&plan.material)
         }
-        QuantityId::EdenDmi => plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some(),
+        QuantityId::EdenDmi => {
+            plan.interfacial_dmi.is_some()
+                || plan.rotated_interfacial_dmi.is_some()
+                || plan.bulk_dmi.is_some()
+        }
+        QuantityId::EdenRotatedDmi => plan.rotated_interfacial_dmi.is_some(),
         QuantityId::EdenTotal => true,
         QuantityId::MatMs | QuantityId::MatAex | QuantityId::MatAlpha => true,
         QuantityId::HAnt => !plan.antenna_zeeman_masks.is_empty(),
@@ -161,6 +167,7 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         | QuantityId::EDrive
         | QuantityId::EAni
         | QuantityId::EDmi
+        | QuantityId::ERotatedDmi
         | QuantityId::EEl
         | QuantityId::EKinEl
         | QuantityId::ETotal
@@ -201,8 +208,14 @@ fn fdm_multilayer_quantity_is_active(plan: &FdmMultilayerPlanIR, id: QuantityId)
                 || layer.material.cubic_anisotropy_kc3.is_some()
         }),
         QuantityId::HDmi => plan.interfacial_dmi.is_some(),
+        QuantityId::HDmiRotated => plan.rotated_interfacial_dmi.is_some(),
         QuantityId::HDmiBulk => plan.bulk_dmi.is_some(),
-        QuantityId::EdenDmi => plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some(),
+        QuantityId::EdenDmi => {
+            plan.interfacial_dmi.is_some()
+                || plan.rotated_interfacial_dmi.is_some()
+                || plan.bulk_dmi.is_some()
+        }
+        QuantityId::EdenRotatedDmi => plan.rotated_interfacial_dmi.is_some(),
         // The multilayer IR does not yet retain drive, antenna, thermal,
         // magnetoelastic, transport, or electric-field terms.  They must stay
         // unavailable rather than being inferred from another plan family.
@@ -225,6 +238,7 @@ fn fdm_multilayer_quantity_is_active(plan: &FdmMultilayerPlanIR, id: QuantityId)
         | QuantityId::EDrive
         | QuantityId::EAni
         | QuantityId::EDmi
+        | QuantityId::ERotatedDmi
         | QuantityId::EEl
         | QuantityId::EKinEl
         | QuantityId::ETotal
@@ -265,6 +279,7 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         QuantityId::HAni => material_has_uniaxial_anisotropy(&plan.material),
         QuantityId::HAniCubic => material_has_cubic_anisotropy(&plan.material),
         QuantityId::HDmi => plan.interfacial_dmi.is_some() || has_values(&plan.dind_field),
+        QuantityId::HDmiRotated => plan.rotated_interfacial_dmi.is_some(),
         QuantityId::HDmiBulk => plan.bulk_dmi.is_some() || has_values(&plan.dbulk_field),
         QuantityId::HMel => plan.magnetoelastic.is_some(),
         QuantityId::HOe => {
@@ -286,9 +301,13 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         QuantityId::EdenDmi => {
             plan.interfacial_dmi.is_some()
                 || has_values(&plan.dind_field)
+                || plan.rotated_interfacial_dmi.is_some()
                 || plan.bulk_dmi.is_some()
                 || has_values(&plan.dbulk_field)
         }
+        // Native FEM publishes rotated interfacial DMI through the aggregate
+        // DMI observable; it has no separate rotated energy-density field.
+        QuantityId::EdenRotatedDmi => false,
         QuantityId::EdenTotal => true,
         QuantityId::VElectric
         | QuantityId::JCharge
@@ -304,6 +323,7 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         | QuantityId::EDrive
         | QuantityId::EAni
         | QuantityId::EDmi
+        | QuantityId::ERotatedDmi
         | QuantityId::EEl
         | QuantityId::EKinEl
         | QuantityId::ETotal
@@ -346,7 +366,8 @@ fn material_has_cubic_anisotropy(material: &MaterialIR) -> bool {
 mod tests {
     use super::*;
     use fullmag_ir::{
-        DriveActivationIR, ExchangeBoundaryCondition, ExecutionPrecision, FemDomainMeshModeIR,
+        DriveActivationIR, ExchangeBoundaryCondition, ExecutionPrecision, FdmLayerPlanIR,
+        FdmMaterialIR, FdmMultilayerPlanIR, FdmMultilayerSummaryIR, FemDomainMeshModeIR,
         FieldDriveKindIR, FieldSpatialProfileIR, FieldTargetIR, FieldTimeOriginIR,
         IntegratorChoice, MeshIR, RegionalFieldDriveIR, ResolvedFrozenSpinsPlanIR,
         SelectionAuthoredFingerprintIR, SelectionCertificateIR, TimeDependenceIR,
@@ -359,6 +380,69 @@ mod tests {
             enable_exchange: true,
             enable_demag: false,
             ..FdmPlanIR::default()
+        }
+    }
+
+    fn fdm_multilayer_plan() -> FdmMultilayerPlanIR {
+        let layer = FdmLayerPlanIR {
+            magnet_name: "layer".to_string(),
+            layer_id: "layer:layer".to_string(),
+            object_id: "layer".to_string(),
+            native_grid: [1, 1, 1],
+            native_cell_size: [1.0, 1.0, 1.0],
+            native_origin: [0.0, 0.0, 0.0],
+            native_active_mask: None,
+            native_region_mask: None,
+            native_region_legend: None,
+            initial_magnetization: vec![[1.0, 0.0, 0.0]],
+            material: FdmMaterialIR {
+                name: "Py".to_string(),
+                saturation_magnetisation: 8.0e5,
+                exchange_stiffness: 1.3e-11,
+                damping: 0.02,
+                ..FdmMaterialIR::default()
+            },
+            convolution_grid: [1, 1, 1],
+            convolution_cell_size: [1.0, 1.0, 1.0],
+            convolution_origin: [0.0, 0.0, 0.0],
+            transfer_kind: "identity".to_string(),
+        };
+
+        FdmMultilayerPlanIR {
+            mode: "three_d".to_string(),
+            common_cells: [1, 1, 1],
+            requested_common_cell_size: None,
+            grid_certificate: None,
+            layers: vec![layer],
+            frozen_spins: None,
+            enable_exchange: true,
+            enable_demag: false,
+            fft: None,
+            external_field: None,
+            interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
+            bulk_dmi: None,
+            gyromagnetic_ratio: 2.211e5,
+            precision: ExecutionPrecision::Double,
+            precision_policy: fullmag_ir::FdmPrecisionPolicyIR::default(),
+            exchange_bc: ExchangeBoundaryCondition::Neumann,
+            periodicity: None,
+            resolved_periodic_images: None,
+            integrator: IntegratorChoice::Heun,
+            fixed_timestep: Some(1e-13),
+            field_refresh: None,
+            relaxation: None,
+            planner_summary: FdmMultilayerSummaryIR {
+                requested_strategy: "multilayer_convolution".to_string(),
+                selected_strategy: "multilayer_convolution".to_string(),
+                requested_mode: "three_d".to_string(),
+                resolved_mode: "three_d".to_string(),
+                eligibility: "eligible".to_string(),
+                estimated_pair_kernels: 0,
+                estimated_unique_kernels: 0,
+                estimated_kernel_bytes: 0,
+                warnings: Vec::new(),
+            },
         }
     }
 
@@ -479,6 +563,7 @@ mod tests {
             demag_realization: None,
             air_box_config: None,
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             dmi_interface_normal: None,
             bulk_dmi: None,
             dind_field: None,
@@ -712,6 +797,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn rotated_dmi_energy_density_uses_fdm_aggregate_and_fem_aggregate_only() {
+        let mut fdm = fdm_plan();
+        assert!(!fdm_plan_enables_quantity(&fdm, QuantityId::EdenDmi));
+        fdm.rotated_interfacial_dmi = Some(3.0e-3);
+        assert!(fdm_plan_enables_quantity(&fdm, QuantityId::EdenDmi));
+        for engine in [FdmEngine::CpuReference, FdmEngine::CudaFdm] {
+            assert_eq!(
+                active_fdm_preview_quantities(engine, &fdm, &["eden_dmi"]),
+                vec!["eden_dmi"]
+            );
+        }
+
+        let mut multilayer = fdm_multilayer_plan();
+        assert!(!fdm_multilayer_quantity_is_active(
+            &multilayer,
+            QuantityId::EdenDmi
+        ));
+        multilayer.rotated_interfacial_dmi = Some(3.0e-3);
+        assert_eq!(
+            active_fdm_multilayer_preview_quantities(&multilayer, &["eden_dmi"]),
+            vec!["eden_dmi"]
+        );
+
+        let mut fem = fem_plan();
+        fem.rotated_interfacial_dmi = Some(3.0e-3);
+        assert!(fem_plan_enables_quantity(&fem, QuantityId::EdenDmi));
+        assert!(!fem_plan_enables_quantity(&fem, QuantityId::EdenRotatedDmi));
+    }
+
     fn regional_field_drive() -> RegionalFieldDriveIR {
         RegionalFieldDriveIR {
             id: "drive".to_string(),
@@ -806,5 +921,33 @@ mod tests {
             active_fem_preview_quantities(FemEngine::CpuNative, &plan, &quantities),
             vec!["H_dmi", "H_dmi_bulk"]
         );
+    }
+
+    #[test]
+    fn rotated_dmi_quantities_are_plan_gated_and_exposed_only_by_materialized_lanes() {
+        let quantities = ["H_rotated_dmi", "eden_rotated_dmi"];
+
+        let mut fdm = fdm_plan();
+        assert!(!fdm_plan_enables_quantity(&fdm, QuantityId::HDmiRotated));
+        fdm.rotated_interfacial_dmi = Some(3.0e-3);
+        assert!(fdm_plan_enables_quantity(&fdm, QuantityId::HDmiRotated));
+        assert!(fdm_plan_enables_quantity(&fdm, QuantityId::EdenRotatedDmi));
+        assert_eq!(
+            active_fdm_preview_quantities(FdmEngine::CpuReference, &fdm, &quantities),
+            vec!["H_rotated_dmi", "eden_rotated_dmi"]
+        );
+        assert_eq!(
+            active_fdm_preview_quantities(FdmEngine::CudaFdm, &fdm, &quantities),
+            vec!["H_rotated_dmi", "eden_rotated_dmi"]
+        );
+
+        let mut fem = fem_plan();
+        assert!(!fem_plan_enables_quantity(&fem, QuantityId::HDmiRotated));
+        fem.rotated_interfacial_dmi = Some(3.0e-3);
+        assert!(fem_plan_enables_quantity(&fem, QuantityId::HDmiRotated));
+        assert!(fem_plan_enables_quantity(&fem, QuantityId::EdenDmi));
+        assert!(!fem_plan_enables_quantity(&fem, QuantityId::EdenRotatedDmi));
+        assert!(active_fem_preview_quantities(FemEngine::CpuNative, &fem, &quantities).is_empty());
+        assert!(active_fem_preview_quantities(FemEngine::NativeGpu, &fem, &quantities).is_empty());
     }
 }

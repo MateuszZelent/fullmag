@@ -1,5 +1,7 @@
 "use client";
 
+import { meshHistoryRestoreTarget } from "@/kernel/authoring/meshBuildHistoryRestore";
+
 import { useMemo, useState } from "react";
 
 import {
@@ -210,14 +212,14 @@ export function MeshBuildHistoryView({
               {entry.meshTarget ? ` / target ${entry.meshTarget}` : ""}
               {entry.durationSeconds === null ? "" : ` / ${formatValue(entry.durationSeconds)} s`}
             </small>
-            {entry.restorable && onRestore ? (
+            {entry.restorable && meshHistoryRestoreTarget(entry) && onRestore ? (
               <Button
                 size="sm"
                 type="button"
                 variant="secondary"
                 onClick={() => onRestore(entry)}
               >
-                Restore policy to draft
+                {meshHistoryRestoreTarget(entry) === "universe" ? "Restore Airbox policy to draft" : "Restore object policy to draft"}
               </Button>
             ) : (
               <small>

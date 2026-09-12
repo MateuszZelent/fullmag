@@ -3,7 +3,11 @@
 # FEM is executed in a Linux container managed by Docker Desktop.  This
 # launcher is called from Windows PowerShell and deliberately does not invoke
 # wsl.exe or require a WSL checkout.  The historical run_fullmag_wsl.ps1 name
-# is retained as a compatibility implementation for older scripts.
+# is retained as a compatibility implementation for older scripts. Storage is
+# resolved by that implementation through scripts/fullmag_storage.py and the
+# validated FULLMAG_PROJECT_STORAGE_ROOT.
+
+Write-Host "[Fullmag] FEM launcher started: $($MyInvocation.MyCommand.Path)" -ForegroundColor Cyan
 
 $ErrorActionPreference = "Stop"
 

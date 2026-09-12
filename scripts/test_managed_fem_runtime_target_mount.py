@@ -17,6 +17,8 @@ CANONICAL_STORAGE_ROOT = "/zfn2/mateuszz/git/fullmag"
 CANONICAL_IMAGE = f"{CANONICAL_STORAGE_ROOT}/build-volumes/fullmag-native.ext4"
 MOUNT_VIEW = "/mnt/fullmag-zfn2-native"
 TARGET_ROOT = f"{MOUNT_VIEW}/managed-fem-runtime"
+NATIVE_2_IMAGE = f"{CANONICAL_STORAGE_ROOT}/build-volumes/fullmag-native-2.ext4"
+NATIVE_2_MOUNT_VIEW = "/mnt/fullmag-zfn2-native-2"
 REMOUNT_COMMAND = (
     "wsl.exe -d Ubuntu2 -u root -- mount -o remount,rw,noatime "
     f"{MOUNT_VIEW}"
@@ -24,6 +26,40 @@ REMOUNT_COMMAND = (
 
 
 class ManagedFemRuntimeTargetMountTest(unittest.TestCase):
+    @staticmethod
+    def _resolve_storage_profile(
+        profile: str | None = None,
+        **overrides: str,
+    ) -> subprocess.CompletedProcess[str]:
+        environment = os.environ.copy()
+        environment.update(overrides)
+        if profile is None:
+            environment.pop("FULLMAG_NATIVE_STORAGE_PROFILE", None)
+        else:
+            environment["FULLMAG_NATIVE_STORAGE_PROFILE"] = profile
+        return subprocess.run(
+            [
+                "bash",
+                "-euo",
+                "pipefail",
+                "-c",
+                (
+                    'source "$1"; resolve_managed_fem_native_storage_profile; '
+                    'printf "%s\\n%s\\n%s\\n%s\\n" '
+                    '"$FULLMAG_NATIVE_STORAGE_PROFILE" '
+                    '"$FULLMAG_NATIVE_BUILD_STORAGE_ROOT" '
+                    '"$FULLMAG_NATIVE_BUILD_IMAGE" '
+                    '"$FULLMAG_NATIVE_MOUNT_VIEW"'
+                ),
+                "bash",
+                str(STORAGE_HELPER),
+            ],
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
     @staticmethod
     def _target_for(repo_root: Path) -> str:
         slug = re.sub(r"[^A-Za-z0-9._-]", "-", repo_root.name)
@@ -63,6 +99,17 @@ class ManagedFemRuntimeTargetMountTest(unittest.TestCase):
             f'readonly FULLMAG_NATIVE_MOUNT_VIEW="{MOUNT_VIEW}"',
             source,
         )
+        self.assertIn("resolve_managed_fem_native_storage_profile", source)
+        self.assertIn(CANONICAL_IMAGE, storage_source)
+        self.assertIn(NATIVE_2_IMAGE, storage_source)
+        self.assertIn(NATIVE_2_MOUNT_VIEW, storage_source)
+        for variable in (
+            "FULLMAG_NATIVE_BUILD_STORAGE_ROOT",
+            "FULLMAG_NATIVE_BUILD_IMAGE",
+            "FULLMAG_NATIVE_MOUNT_VIEW",
+            "FULLMAG_CONTAINER_TARGET_DIR",
+        ):
+            self.assertNotIn(f'"${{{variable}:=', source)
         self.assertIn('findmnt -n -o FSTYPE --target "${probe_path}"', storage_source)
         self.assertIn('findmnt -n -o SOURCE --target "${probe_path}"', storage_source)
         self.assertIn('/loop/backing_file', storage_source)
@@ -77,6 +124,85 @@ class ManagedFemRuntimeTargetMountTest(unittest.TestCase):
             source.index("validate_container_target_dir"),
             source.index('build_managed_fem_image "${docker_build_ref}"'),
         )
+
+    def test_missing_profile_selects_exact_canonical_storage_pair(self) -> None:
+        result = self._resolve_storage_profile(
+            FULLMAG_NATIVE_BUILD_STORAGE_ROOT="/evil/root",
+            FULLMAG_NATIVE_BUILD_IMAGE="/evil/image.ext4",
+            FULLMAG_NATIVE_MOUNT_VIEW="/evil/mount",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            ["canonical", CANONICAL_STORAGE_ROOT, CANONICAL_IMAGE, MOUNT_VIEW],
+        )
+
+    def test_native_2_profile_selects_exact_approved_storage_pair(self) -> None:
+        result = self._resolve_storage_profile("native-2")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            ["native-2", CANONICAL_STORAGE_ROOT, NATIVE_2_IMAGE, NATIVE_2_MOUNT_VIEW],
+        )
+
+    def test_unknown_profile_fails_without_running_external_io(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            marker = root / "external-command-called"
+            for command in ("mkdir", "tar", "docker", "findmnt"):
+                executable = fake_bin / command
+                executable.write_text(
+                    f'#!/bin/sh\ntouch "{marker}"\nexit 91\n',
+                    encoding="utf-8",
+                )
+                executable.chmod(0o755)
+
+            result = self._resolve_storage_profile(
+                "unknown",
+                PATH=f"{fake_bin}:{os.environ['PATH']}",
+            )
+
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn("unknown managed FEM native storage profile", result.stderr)
+            self.assertFalse(marker.exists())
+
+    def test_exporter_rejects_unknown_profile_before_mkdir_tar_or_docker(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            marker = root / "write-command-called"
+            for command in ("mkdir", "tar", "docker"):
+                executable = fake_bin / command
+                executable.write_text(
+                    f'#!/bin/sh\ntouch "{marker}"\nexit 91\n',
+                    encoding="utf-8",
+                )
+                executable.chmod(0o755)
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "FULLMAG_NATIVE_STORAGE_PROFILE": "unknown",
+                    "PATH": f"{fake_bin}:{environment['PATH']}",
+                }
+            )
+
+            result = subprocess.run(
+                ["bash", str(EXPORTER)],
+                cwd=REPO_ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn("unknown managed FEM native storage profile", result.stderr)
+            self.assertFalse(marker.exists())
 
     def test_non_ext4_target_fails_before_any_docker_command(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
@@ -242,6 +368,71 @@ class ManagedFemRuntimeTargetMountTest(unittest.TestCase):
             self.assertEqual(result.returncode, 2, result.stderr)
             self.assertIn(CANONICAL_IMAGE, result.stderr)
             self.assertIn(str(wrong_image), result.stderr)
+            self.assertFalse(docker_marker.exists(), "Docker ran before backing-image validation")
+
+    def test_native_2_wrong_loop_backing_fails_before_any_docker_command(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            docker_marker = root / "docker-called"
+            mkdir = fake_bin / "mkdir"
+            mkdir.write_text(
+                "#!/bin/sh\n"
+                'case "$*" in\n'
+                '  *".fullmag/runtimes"*) exec /usr/bin/mkdir "$@" ;;\n'
+                "  *) exit 0 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            mkdir.chmod(0o755)
+            findmnt = fake_bin / "findmnt"
+            findmnt.write_text(
+                "#!/bin/sh\n"
+                'case "$*" in\n'
+                '  *"-o FSTYPE"*) echo ext4 ;;\n'
+                '  *"-o SOURCE"*) echo /dev/loop99 ;;\n'
+                "  *) exit 3 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            findmnt.chmod(0o755)
+            docker = fake_bin / "docker"
+            docker.write_text(
+                '#!/bin/sh\ntouch "$DOCKER_MARKER"\nexit 99\n',
+                encoding="utf-8",
+            )
+            docker.chmod(0o755)
+            sysfs_root = root / "sys/class/block"
+            loop_dir = sysfs_root / "loop99/loop"
+            loop_dir.mkdir(parents=True)
+            (loop_dir / "backing_file").write_text(
+                f"{CANONICAL_IMAGE}\n",
+                encoding="utf-8",
+            )
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "DOCKER_MARKER": str(docker_marker),
+                    "FULLMAG_NATIVE_STORAGE_PROFILE": "native-2",
+                    "FULLMAG_LOOP_SYSFS_ROOT": str(sysfs_root),
+                    "PATH": f"{fake_bin}:{environment['PATH']}",
+                }
+            )
+
+            result = subprocess.run(
+                ["bash", str(EXPORTER)],
+                cwd=REPO_ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn(NATIVE_2_IMAGE, result.stderr)
+            self.assertIn(CANONICAL_IMAGE, result.stderr)
+            self.assertIn(NATIVE_2_MOUNT_VIEW, result.stderr)
             self.assertFalse(docker_marker.exists(), "Docker ran before backing-image validation")
 
     def test_separate_worktrees_resolve_distinct_canonical_target_directories(self) -> None:

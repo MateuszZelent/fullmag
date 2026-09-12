@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
@@ -11,6 +11,10 @@ import {
 import type { ChartDataPresentationState } from "@/shared/analysis-charts/chartPresentationState";
 import type { ChartSeries } from "@/shared/domain/analysis/chartSeries";
 import type { InteractiveChartSurfaceIdentity } from "@/shared/analysis-charts/InteractiveChartSurface";
+import type {
+  ChartResultExportContext,
+} from "@/shared/analysis-charts/chartRenderer";
+import type { ChartExportRequest } from "@/shared/analysis-charts/chartExport";
 
 import {
   chartCursorPointFromEChartsClick,
@@ -36,6 +40,7 @@ interface EChartsSurfaceProps {
   dataStatus?: string;
   descriptorId?: string;
   displayUnits?: Readonly<Record<string, string>>;
+  exportProvenance?: ChartResultExportContext;
   fitRequest?: number;
   initialRange?: ChartValueRange | null;
   onPointSelect?: (point: ChartCursorPoint) => void;
@@ -52,6 +57,7 @@ export function EChartsSurface({
   dataStatus,
   descriptorId,
   displayUnits,
+  exportProvenance,
   fitRequest,
   initialRange,
   onPointSelect,
@@ -60,14 +66,35 @@ export function EChartsSurface({
   series,
   xAxisLabel,
 }: EChartsSurfaceProps) {
-  const [requestedExportFormat, setRequestedExportFormat] = useState<"csv" | "tsv" | "png" | null>(null);
+  const [requestedExportRequest, setRequestedExportRequest] = useState<ChartExportRequest | null>(null);
+  const exportRequestSequenceRef = useRef(0);
+  const queuedExportRequestsRef = useRef<ChartExportRequest[]>([]);
+  const activeExportRequestRef = useRef<ChartExportRequest | null>(null);
   const rangeCommitTimerRef = useRef<number | null>(null);
+  const enqueueExportRequest = useCallback((request: ChartExportRequest) => {
+    if (
+      activeExportRequestRef.current?.requestId === request.requestId ||
+      queuedExportRequestsRef.current.some((queued) => queued.requestId === request.requestId)
+    ) return;
+    if (activeExportRequestRef.current) {
+      queuedExportRequestsRef.current.push(request);
+      return;
+    }
+    activeExportRequestRef.current = request;
+    setRequestedExportRequest(request);
+  }, []);
+  const acknowledgeExportRequest = useCallback((requestId: string | null) => {
+    if (!requestId || activeExportRequestRef.current?.requestId !== requestId) return;
+    const next = queuedExportRequestsRef.current.shift() ?? null;
+    activeExportRequestRef.current = next;
+    setRequestedExportRequest(next);
+  }, []);
   const surfaceStatus = presentation?.kind === "refreshing" && series.some((entry) => entry.points.length > 0)
     ? "refreshing"
     : undefined;
   const surface = useMemo(
-    () => analysisChartSurfaceIdentity(series, xAxisLabel, dataStatus, presentation, chartId, displayUnits, descriptorId),
-    [chartId, dataStatus, descriptorId, displayUnits, presentation, series, xAxisLabel],
+    () => analysisChartSurfaceIdentity(series, xAxisLabel, dataStatus, presentation, chartId, displayUnits, descriptorId, exportProvenance),
+    [chartId, dataStatus, descriptorId, displayUnits, exportProvenance, presentation, series, xAxisLabel],
   );
 
   useEffect(() => () => cancelRangeCommit(rangeCommitTimerRef), [rangeCommitTimerRef]);
@@ -75,9 +102,14 @@ export function EChartsSurface({
     if (!bus) return;
     const acceptedChartId = chartId ?? series[0]?.source.tableId ?? "default";
     return bus.subscribe("analysis-plots:export-requested", (request) => {
-      if (request.chartId === acceptedChartId) setRequestedExportFormat(request.format);
+      if (request.chartId === acceptedChartId) {
+        enqueueExportRequest({
+          format: request.format,
+          requestId: request.requestId ?? `analysis-chart-export-${acceptedChartId}-${++exportRequestSequenceRef.current}`,
+        });
+      }
     });
-  }, [bus, chartId, series]);
+  }, [bus, chartId, enqueueExportRequest, series]);
 
   return (
     <InteractiveChartSurface
@@ -102,7 +134,7 @@ export function EChartsSurface({
       fitRequest={fitRequest}
       initialRange={initialRange}
       presentation={presentation}
-      requestedExportFormat={requestedExportFormat}
+       requestedExportRequest={requestedExportRequest}
       series={series}
       surface={surface}
       ownerStatus={surfaceStatus}
@@ -118,7 +150,8 @@ export function EChartsSurface({
         const range = chartRangeFromDataZoomEvent({ endValue: toValue, startValue: fromValue });
         if (range) scheduleRangeCommit(rangeCommitTimerRef, () => onRangeChange?.(range));
       }}
-      onRequestedExportHandled={() => setRequestedExportFormat(null)}
+       onRequestedExportHandled={() => acknowledgeExportRequest(requestedExportRequest?.requestId ?? null)}
+       onRequestedExportFailed={() => acknowledgeExportRequest(requestedExportRequest?.requestId ?? null)}
     />
   );
 }
@@ -131,6 +164,7 @@ function analysisChartSurfaceIdentity(
   chartId?: string,
   displayUnits?: Readonly<Record<string, string>>,
   descriptorId?: string,
+  exportProvenance?: ChartResultExportContext,
 ): InteractiveChartSurfaceIdentity {
   return {
     ariaLabel: "Analysis chart",
@@ -146,6 +180,8 @@ function analysisChartSurfaceIdentity(
       loading: "Loading table samples",
     },
     provenance: {
+      ...series[0]?.sourceIdentity,
+      ...exportProvenance,
       dataRevision: series[0]?.dataRevision ?? null,
       decimation: "minmax_lttb",
       descriptorId: descriptorId ?? `analysis:data-table:${series[0]?.source.tableId ?? "default"}`,

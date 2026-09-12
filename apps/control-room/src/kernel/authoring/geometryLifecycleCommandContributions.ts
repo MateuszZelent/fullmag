@@ -1,3 +1,4 @@
+import { ControlRoomApiError } from "../api/ControlRoomApi";
 import {
   MESHING_BUILDS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
@@ -632,6 +633,18 @@ export async function restoreMeshBuildObservation(
   return resumeMeshBuildObservation(context);
 }
 
+function meshSubmissionRejection(
+  context: CommandContext,
+  operation: MeshBuildOperation,
+  error: unknown,
+): CommandResult | null {
+  if (!(error instanceof ControlRoomApiError) || error.status < 400 || error.status >= 500 || error.status === 408) {
+    return null;
+  }
+  const result: CommandResult = { message: error.message, status: "failed" };
+  context.bus?.emit("mesh:build-observed", { ...result, requestId: operation.requestId });
+  return result;
+}
 function runMeshBuildOperation(
   context: CommandContext,
   registryCommandId: MeshBuildConfirmCommandId,
@@ -680,7 +693,9 @@ function runMeshBuildOperation(
         return result;
       }
       operation.commandId = response.command_id;
-    } catch {
+    } catch (error) {
+      const rejection = meshSubmissionRejection(context, operation, error);
+      if (rejection) return rejection;
       // A lost POST response cannot prove rejection. Reconcile by intent before any further action.
     }
     return observeMeshBuildOperation(context, operation);
@@ -744,7 +759,9 @@ export function runFdmGridRefreshOperation(
         return result;
       }
       operation.commandId = response.command_id;
-    } catch {
+    } catch (error) {
+      const rejection = meshSubmissionRejection(context, operation, error);
+      if (rejection) return rejection;
       // Reconcile a possibly accepted command by client intent before allowing a retry.
     }
     return observeMeshBuildOperation(context, operation);

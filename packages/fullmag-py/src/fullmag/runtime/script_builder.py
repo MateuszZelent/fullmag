@@ -55,7 +55,7 @@ from fullmag.model.dynamics import (
     DEFAULT_GAMMA,
     LLG,
 )
-from fullmag.model.energy import BulkDMI, Constant, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, Pulse, SincPulse, Sinusoidal, ThermalNoise, UniaxialAnisotropy, Zeeman
+from fullmag.model.energy import BulkDMI, Constant, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, Pulse, RotatedInterfacialDMI, SincPulse, Sinusoidal, ThermalNoise, UniaxialAnisotropy, Zeeman
 from fullmag.model.eigen import serialize_k_sampling
 from fullmag.model.geometry import (
     ArchWaveguide,
@@ -256,6 +256,7 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "demag_enabled": _problem_has_demag(base_problem),
         "demag_realization": _export_demag_realization(base_problem),
         "external_field": _problem_external_field(base_problem),
+        "rotated_interfacial_dmi": _problem_rotated_interfacial_dmi(base_problem),
         "solver": {
             "integrator": base_dynamics.integrator if base_dynamics is not None else None,
             "fixed_timestep": _text_number(base_dynamics.fixed_timestep) if base_dynamics is not None else None,
@@ -433,6 +434,14 @@ def render_loaded_problem_as_script(
             surface=surface,
         )
     )
+    rotated_dmi_lines = _render_rotated_interfacial_dmi(
+        base_problem,
+        overrides=overrides,
+        surface=surface,
+    )
+    if rotated_dmi_lines:
+        lines.append("")
+        lines.extend(rotated_dmi_lines)
     region_owned_lines, region_vars = _render_region_owned_authoring(
         base_problem,
         magnet_vars,
@@ -1323,6 +1332,7 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             "eigen_k_path": _text_k_path(study.k_sampling),
             "eigen_spin_wave_bc": _spin_wave_bc_kind(study.spin_wave_bc),
             "eigen_spin_wave_bc_config": _spin_wave_bc_config(study.spin_wave_bc),
+            "eigen_magnetostatic_bc": study.magnetostatic_bc,
         }
     if isinstance(study, FrequencyResponse):
         return {
@@ -2653,6 +2663,7 @@ _GEOMETRY_INTERACTION_ORDER = (
     "exchange",
     "demag",
     "interfacial_dmi",
+    "rotated_interfacial_dmi",
     "bulk_dmi",
     "uniaxial_anisotropy",
 )
@@ -2669,6 +2680,10 @@ def _normalize_geometry_interaction_entry(
     kind = str(raw.get("kind") or "").strip()
     if kind not in _GEOMETRY_INTERACTION_ORDER:
         return None
+    if kind == "rotated_interfacial_dmi":
+        raise ValueError(
+            "rotated_interfacial_dmi is study-scoped and cannot appear in object physics_stack"
+        )
     if kind in {"exchange", "demag"}:
         return {"kind": kind, "enabled": bool(raw.get("enabled", True)), "params": None}
     params = raw.get("params") if isinstance(raw.get("params"), dict) else {}  # type: ignore[assignment]
@@ -5871,6 +5886,11 @@ def _render_stages(
                 )
             if spin_wave_bc != "free":
                 call_parts.append(f"bc={_render_spin_wave_bc_expr(spin_wave_bc)}")
+            magnetostatic_bc = _override_string(
+                stage_override, "eigen_magnetostatic_bc", study.magnetostatic_bc
+            ) or study.magnetostatic_bc
+            if magnetostatic_bc != "open":
+                call_parts.append(f"magnetostatic_bc={_py_repr(magnetostatic_bc)}")
             k_vector_raw = _override_string(stage_override, "eigen_k_vector", None)
             k_path_expr = _render_stage_k_path_expr(
                 _override_string(stage_override, "eigen_k_path", None)
@@ -5890,6 +5910,14 @@ def _render_stages(
                 k_sampling_expr = _render_k_sampling_expr(study.k_sampling)
                 if k_sampling_expr is not None:
                     call_parts.append(f"k_sampling={k_sampling_expr}")
+            if study.bias_field_sweep is not None:
+                sweep = study.bias_field_sweep
+                call_parts.append(
+                    "bias_field_sweep=fm.BiasFieldSweep("
+                    f"samples_a_per_m={_py_bias_field_sweep_samples_literal(sweep.samples_a_per_m)}, "
+                    f"equilibrium_policy={_py_repr(sweep.equilibrium_policy)}, "
+                    f"continuation_seed={_py_repr(sweep.continuation_seed)})"
+                )
             if is_study_surface:
                 lines.append(f"study.stages.add_eigenmodes({', '.join(call_parts)})")
             else:
@@ -7943,11 +7971,19 @@ def _script_api_surface(
     surface = runtime_metadata.get("script_api_surface")
     couplings_override = (overrides or {}).get("couplings")
     monitors_override = (overrides or {}).get("planar_monitors")
+    rotated_dmi_override = (overrides or {}).get("rotated_interfacial_dmi")
+    # Rotated interfacial DMI is a study-level term in the public API.  A
+    # legacy ``fm.Problem``/``problem`` entry point can still author it
+    # directly, so promote that flat source to the canonical study surface
+    # instead of rendering an invalid ``fm.terms`` call (or dropping it).
+    has_rotated_dmi = any(
+        isinstance(term, RotatedInterfacialDMI) for term in problem.energy
+    ) or _number_or_none(rotated_dmi_override) is not None
     if problem.couplings or (
         isinstance(couplings_override, list) and len(couplings_override) > 0
     ) or problem.monitors or (
         isinstance(monitors_override, list) and len(monitors_override) > 0
-    ):
+    ) or has_rotated_dmi:
         return "study"
     return "study" if surface == "study" else "flat"
 
@@ -7986,6 +8022,31 @@ def _problem_external_field(problem: Problem) -> list[float] | None:
         if isinstance(term, Zeeman):
             return [float(term.B[0]), float(term.B[1]), float(term.B[2])]
     return None
+
+
+def _problem_rotated_interfacial_dmi(problem: Problem) -> float | None:
+    for term in problem.energy:
+        if isinstance(term, RotatedInterfacialDMI):
+            return term.D
+    return None
+
+
+def _render_rotated_interfacial_dmi(
+    problem: Problem,
+    *,
+    overrides: Mapping[str, object],
+    surface: str,
+) -> list[str]:
+    value = _number_or_none(overrides.get("rotated_interfacial_dmi"))
+    if "rotated_interfacial_dmi" not in overrides:
+        value = _problem_rotated_interfacial_dmi(problem)
+    if value is None:
+        return []
+    if surface != "study":
+        raise ValueError("rotated interfacial DMI requires the canonical study API surface")
+    return [
+        f"study.terms.add(fm.RotatedInterfacialDMI(D={_py_float_roundtrip(value)}))"
+    ]
 
 
 def _override_external_field(value: object) -> tuple[float, float, float] | None:
@@ -8470,6 +8531,18 @@ def _py_number(value: float) -> str:
     return format(float(value), ".12g")
 
 
+def _py_float_roundtrip(value: float) -> str:
+    """Render a float as a Python literal that preserves its IEEE-754 value."""
+    return repr(float(value))
+
+
+def _py_bias_field_sweep_samples_literal(samples: Sequence[Sequence[float]]) -> str:
+    return "[" + ", ".join(
+        "(" + ", ".join(repr(float(component)) for component in sample) + ")"
+        for sample in samples
+    ) + "]"
+
+
 def _py_sampling_period(value: SamplingPeriod) -> str:
     return _py_repr("auto") if value == "auto" else _py_number(value)
 
@@ -8843,7 +8916,7 @@ def _validate_energy_terms(problem: Problem) -> None:
         if isinstance(term, Zeeman):
             zeeman_count += 1
             continue
-        if isinstance(term, InterfacialDMI):
+        if isinstance(term, (InterfacialDMI, RotatedInterfacialDMI)):
             dmi_count += 1
             continue
         if isinstance(term, Demag):

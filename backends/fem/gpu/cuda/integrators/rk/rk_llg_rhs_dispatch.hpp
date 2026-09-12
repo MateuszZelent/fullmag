@@ -23,7 +23,8 @@ bool gpu_rk_compute_llg_rhs(
     FemGpuComponentField &rhs,
     cudaStream_t stream,
     int n,
-    std::string &reason);
+    std::string &reason,
+    bool compute_metric = false);
 
 } // namespace fullmag::fem
 #endif

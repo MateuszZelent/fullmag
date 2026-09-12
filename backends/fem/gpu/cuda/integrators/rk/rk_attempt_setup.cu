@@ -15,6 +15,7 @@
 #include "gpu/cuda/constraints/frozen_spins.cuh"
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
+#include "gpu/cuda/integrators/rk/rk_attempt_control_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_stage_predictor_kernels.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
@@ -57,7 +58,12 @@ bool gpu_rk_prepare_stage_attempt(
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
-    fsal_reused = fsal_method && gpu.rk.fsal_valid;
+    // Periodic projection is applied at the RHS boundary. Until the projected
+    // candidate and the final-stage endpoint have a device identity proof, do
+    // not carry an FSAL token across periodic steps.
+    fsal_reused = fsal_method &&
+        !gpu.mesh_regions.has_periodic_reduced_nodes &&
+        gpu.rk.fsal_valid;
 
     if (!gpu_rk_copy_component_device(
             gpu.magnetization.m,
@@ -67,6 +73,14 @@ bool gpu_rk_prepare_stage_attempt(
             "cudaMemcpyAsync GPU RK backup magnetization device copy",
             reason)) {
         gpu.rk.fsal_valid = false;
+        return false;
+    }
+    if (gpu.rk.attempt_control.device == nullptr) {
+        reason = "GPU RK attempt-control packet is not allocated";
+        return false;
+    }
+    fullmag_cuda_reset_attempt_control_packet(gpu.rk.attempt_control.device, stream);
+    if (!cuda_launch_ok("launch GPU RK attempt-control reset", reason)) {
         return false;
     }
     if (!fsal_reused) {
@@ -92,15 +106,14 @@ bool gpu_rk_prepare_stage_attempt(
         is_heun ? active_dt : (is_rk45 ? 0.2 * active_dt : 0.5 * active_dt),
         n,
         stream);
-    if (!fullmag_cuda_normalize_vectors(
-            gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z,
-            gpu.mesh_regions.magnetic_node_mask,
-            gpu.reductions.scalar_result,
-            n,
-            stream,
-            reason)) {
-        return false;
-    }
+    fullmag_cuda_normalize_vectors_deferred(
+        gpu.rk.m_stage,
+        gpu.rk.m_backup,
+        gpu.mesh_regions.magnetic_node_mask,
+        gpu.rk.attempt_control.device,
+        n,
+        stream,
+        &ctx.gpu_state.performance_counters);
     if (!cuda_launch_ok("launch GPU RK predictor/normalize", reason)) {
         return false;
     }

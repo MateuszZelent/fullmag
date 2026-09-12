@@ -68,6 +68,47 @@ __global__ void demag_recovery_csr_kernel(
     h_component[row] = value;
 }
 
+__global__ void demag_recovery_xyz_csr_kernel(
+    const uint32_t *__restrict__ csr_row_offsets,
+    const uint32_t *__restrict__ csr_col_indices,
+    const double *__restrict__ csr_values_x,
+    const double *__restrict__ csr_values_y,
+    const double *__restrict__ csr_values_z,
+    const double *__restrict__ u,
+    const uint8_t *__restrict__ magnetic_node_mask,
+    double *__restrict__ h_x,
+    double *__restrict__ h_y,
+    double *__restrict__ h_z,
+    int rows)
+{
+    const int row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row >= rows) {
+        return;
+    }
+    if (magnetic_node_mask != nullptr && magnetic_node_mask[row] == 0u) {
+        h_x[row] = 0.0;
+        h_y[row] = 0.0;
+        h_z[row] = 0.0;
+        return;
+    }
+
+    double value_x = 0.0;
+    double value_y = 0.0;
+    double value_z = 0.0;
+    const uint32_t begin = csr_row_offsets[row];
+    const uint32_t end = csr_row_offsets[row + 1];
+    for (uint32_t cursor = begin; cursor < end; ++cursor) {
+        const uint32_t column = csr_col_indices[cursor];
+        const double potential = u[column];
+        value_x += csr_values_x[cursor] * potential;
+        value_y += csr_values_y[cursor] * potential;
+        value_z += csr_values_z[cursor] * potential;
+    }
+    h_x[row] = value_x;
+    h_y[row] = value_y;
+    h_z[row] = value_z;
+}
+
 __global__ void lift_periodic_reduced_scalar_to_full_kernel(
     const double *__restrict__ reduced_values,
     const uint32_t *__restrict__ periodic_reduced_node,
@@ -224,6 +265,35 @@ void fullmag_cuda_demag_recovery_csr(
         u,
         magnetic_node_mask,
         h_component,
+        rows);
+}
+
+void fullmag_cuda_demag_recovery_xyz_csr(
+    const uint32_t *csr_row_offsets,
+    const uint32_t *csr_col_indices,
+    const double *csr_values_x,
+    const double *csr_values_y,
+    const double *csr_values_z,
+    const double *u,
+    const uint8_t *magnetic_node_mask,
+    double *h_x,
+    double *h_y,
+    double *h_z,
+    int rows,
+    cudaStream_t stream)
+{
+    const int num_blocks = (rows + kBlockSize - 1) / kBlockSize;
+    demag_recovery_xyz_csr_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
+        csr_row_offsets,
+        csr_col_indices,
+        csr_values_x,
+        csr_values_y,
+        csr_values_z,
+        u,
+        magnetic_node_mask,
+        h_x,
+        h_y,
+        h_z,
         rows);
 }
 

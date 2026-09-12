@@ -24,6 +24,7 @@ const SERIES_IDS = Object.freeze(["mx", "my", "mz"]);
 const VISIBILITY_COMBINATIONS = 2 ** 3;
 const REVISION_STRESS_COUNT = 100;
 const LIFECYCLE_SWITCH_COUNT = 100;
+const IDLE_OBSERVATION_MS = 3_000;
 const TABLE_ROWS_PATTERN = /^\/v2\/sessions\/current\/data\/tables\/default\/rows\.bin(?:\?|$)/;
 const LIVE_CHARTS_OWNED_RESOURCE_PATTERNS = Object.freeze([
   /^\/v2\/sessions\/current\/data\/tables(?:\/|\?|$)/,
@@ -55,7 +56,7 @@ async function main() {
     if (useFixture) await installLiveChartsFixtureRoutes(page, fixture, evidence);
     attachPageEvidence(page, evidence);
     await page.goto(workspaceUrl, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
-    await page.locator("main").waitFor({ state: "visible", timeout: timeoutMs });
+    await page.locator("main").first().waitFor({ state: "visible", timeout: timeoutMs });
     await openLiveCharts(page);
     await waitForReadyLiveChart(page);
     await verifyLiveChartsInspector(page);
@@ -66,18 +67,25 @@ async function main() {
     await verifyExactScientificValues(page);
     await verifyTooltipValues(page);
     await verifyVisibilityMatrix(page, evidence);
+    await verifySignalSearchAndBulkSelection(page, evidence);
     await verifyCanonicalCsvExport(page);
+    await verifyDirectExportFailureRecovery(page);
     await verifyKeyboardInteractions(page, evidence);
+    await verifyRepeatedPngCommands(page);
     await runRevisionStress(page, fixture, evidence);
     await verifyIrrelevantRevisionBudget(page, fixture, evidence);
     await keyboardPauseAndFollow(page, fixture, evidence);
     const lifecycleBaseline = await runLifecycleStress(page);
     await verifyLifecycleCounters(page, lifecycleBaseline);
+    await verifyOneVisibleCanvas(page);
+    const axisRangeProof = await verifyAxisAndRangeRegression(browser);
+    await verifyOneVisibleCanvas(page);
     await verifyNoVisibleErrorNotifications(page);
+    const idleProof = await verifyIdleStability(page, evidence);
     await captureVisualVariants(page);
     await captureZoomScreenshot(browser);
 
-    const proof = await collectProof(page, evidence, initialRequests);
+    const proof = await collectProof(page, evidence, initialRequests, { axisRangeProof, idleProof });
     const failures = validateProof(proof, evidence);
     if (failures.length > 0) {
       throw new Error(`Live Charts smoke failed:\n${failures.join("\n")}`);
@@ -85,6 +93,13 @@ async function main() {
     console.log(`Live Charts proof: ${JSON.stringify(proof)}`);
     console.log(`Live Charts screenshots: ${artifactRoot}`);
     console.log(`Live Charts smoke passed at ${workspaceUrl}.`);
+  } catch (error) {
+    try {
+      await page.screenshot({ fullPage: true, path: resolve(artifactRoot, "live-charts-failure.png") });
+    } catch (screenshotError) {
+      console.error(`Live Charts failure screenshot unavailable: ${screenshotError instanceof Error ? screenshotError.message : String(screenshotError)}`);
+    }
+    throw error;
   } finally {
     await context.close();
     await browser.close();
@@ -100,8 +115,8 @@ function createEvidence() {
   };
 }
 
-function createFixtureState() {
-  return { revision: 1, rowCount: 256 };
+function createFixtureState({ includeTimeColumn = false } = {}) {
+  return { includeTimeColumn, revision: 1, rowCount: 256 };
 }
 
 async function installBrowserInstrumentation(page, preferredTheme) {
@@ -263,12 +278,16 @@ async function installBrowserInstrumentation(page, preferredTheme) {
       return nativeAnchorClick.call(this);
     };
 
+    const NativeWebSocket = window.WebSocket;
     class FixtureWebSocket extends EventTarget {
       static CONNECTING = 0;
       static OPEN = 1;
       static CLOSING = 2;
       static CLOSED = 3;
       constructor(url, protocols) {
+        if (NativeWebSocket && String(url).includes("/_next/webpack-hmr")) {
+          return new NativeWebSocket(url, protocols);
+        }
         super();
         this.binaryType = "blob";
         this.bufferedAmount = 0;
@@ -391,12 +410,32 @@ function attachPageEvidence(page, evidence) {
 }
 
 async function installLiveChartsFixtureRoutes(page, fixture, evidence) {
-  const columns = [
-    { column_id: "step", component: null, dimension: "count", label: "step", quantity_id: "step", reduction: null, unit: "1", value_type: "integer" },
-    { column_id: "mx", component: "x", dimension: "dimensionless", label: "mx", quantity_id: "mx", reduction: "mean", unit: "1", value_type: "float" },
-    { column_id: "my", component: "y", dimension: "dimensionless", label: "my", quantity_id: "my", reduction: "mean", unit: "1", value_type: "float" },
-    { column_id: "mz", component: "z", dimension: "dimensionless", label: "mz", quantity_id: "mz", reduction: "mean", unit: "1", value_type: "float" },
-  ];
+  const columns = fixtureColumns(fixture.includeTimeColumn);
+  const sessionCors = {
+    "access-control-allow-origin": "*",
+    "access-control-expose-headers": "x-api-contract-version",
+    "x-api-contract-version": "1.0.0",
+  };
+  await page.route("**/v2/sessions**", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.fulfill({ body: "", headers: sessionCors, status: 204 });
+      return;
+    }
+    await route.fulfill({
+      body: JSON.stringify({
+        schema_version: "1.0.0",
+        sessions: [{
+          current: true,
+          name: "live-charts-fixture",
+          session_id: "live-charts-fixture",
+          status: "ready",
+        }],
+      }),
+      contentType: "application/json",
+      headers: sessionCors,
+      status: 200,
+    });
+  });
   await page.route("**/v2/sessions/current/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -438,6 +477,15 @@ async function installLiveChartsFixtureRoutes(page, fixture, evidence) {
     }
     if (url.pathname === "/v2/sessions/current/data/tables/default/columns") {
       await route.fulfill({ body: JSON.stringify(columns), contentType: "application/json", headers: cors, status: 200 });
+      return;
+    }
+    if (url.pathname === "/v2/sessions/current/data/scalars") {
+      await route.fulfill({
+        body: JSON.stringify(liveChartsScalarWindowFixture(url.searchParams)),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
       return;
     }
     if (url.pathname === "/v2/sessions/current/data/tables/default/rows.bin") {
@@ -482,6 +530,24 @@ async function installLiveChartsFixtureRoutes(page, fixture, evidence) {
       });
       return;
     }
+    if (url.pathname === "/v2/sessions/current/model/readiness") {
+      await route.fulfill({
+        body: JSON.stringify(liveChartsReadinessFixture(fixture.revision)),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (url.pathname === "/v2/sessions/current/visualization/mode-compositions/active") {
+      await route.fulfill({
+        body: JSON.stringify(liveChartsModeCompositionFixture(fixture.revision)),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
     if (isLiveChartsOwnedPath(url.pathname)) {
       await route.fulfill({
         body: JSON.stringify({ error: "owned Live Charts fixture resource is not implemented" }),
@@ -493,6 +559,16 @@ async function installLiveChartsFixtureRoutes(page, fixture, evidence) {
     }
     await route.fulfill({ body: "", headers: cors, status: 204 });
   });
+}
+
+function fixtureColumns(includeTimeColumn) {
+  return [
+    { column_id: "step", component: null, dimension: "count", label: "step", quantity_id: "step", reduction: null, unit: "1", value_type: "integer" },
+    ...(includeTimeColumn ? [{ column_id: "t", component: null, dimension: "time", label: "t", quantity_id: "t", reduction: null, unit: "s", value_type: "float" }] : []),
+    { column_id: "mx", component: "x", dimension: "dimensionless", label: "mx", quantity_id: "mx", reduction: "mean", unit: "1", value_type: "float" },
+    { column_id: "my", component: "y", dimension: "dimensionless", label: "my", quantity_id: "my", reduction: "mean", unit: "1", value_type: "float" },
+    { column_id: "mz", component: "z", dimension: "dimensionless", label: "mz", quantity_id: "mz", reduction: "mean", unit: "1", value_type: "float" },
+  ];
 }
 
 function isLiveChartsOwnedPath(pathname) {
@@ -656,6 +732,59 @@ function liveChartsUniverseFixture() {
   };
 }
 
+function liveChartsReadinessFixture(sceneRevision) {
+  const capability = { available: true, reason: null };
+  return {
+    blockers: [],
+    capabilities: { move: capability, rotate: capability, scale: capability },
+    checks: [],
+    ready_to_export: true,
+    ready_to_run: true,
+    scene_revision: sceneRevision,
+  };
+}
+
+function liveChartsModeCompositionFixture(revision) {
+  return {
+    artifact_revision: "live-charts-fixture-artifact",
+    composition_id: "live-charts-fixture-composition",
+    layers: [],
+    lifecycle: {
+      artifact_revision: revision,
+      mesh_revision: revision,
+      run_id: null,
+      session_id: "live-charts-fixture",
+    },
+    phase_clock: { master_rate_hz: 0, synchronized: false },
+    revision,
+    run_id: "live-charts-fixture-run",
+    schema_version: "mode-composition.v1",
+    stage_id: "live-charts-fixture-stage",
+  };
+}
+
+function liveChartsScalarWindowFixture(searchParams) {
+  const columns = (searchParams.get("columns") ?? "step,time,mx,my,mz,e_total")
+    .split(",")
+    .filter(Boolean);
+  const rows = [[
+    ...columns.map((column) => {
+      if (column === "step") return 255;
+      if (column === "time" || column === "t") return 255e-9;
+      if (column in EXACT_VALUES) return EXACT_VALUES[column];
+      return 0;
+    }),
+  ]];
+  return {
+    columns,
+    observation_frames: [],
+    returned_rows: rows.length,
+    revision: 1,
+    rows,
+    total_rows: rows.length,
+  };
+}
+
 function makeRowsFixture(columns, rowCount, revision) {
   const buffer = Buffer.alloc(60 + rowCount * columns.length * 8);
   buffer.write("FMTB", 0, "ascii");
@@ -674,6 +803,8 @@ function makeRowsFixture(columns, rowCount, revision) {
     for (const column of columns) {
       const value = column === "step"
         ? row
+        : column === "t"
+          ? row * 1e-9
         : column === "mx"
           ? row === rowCount - 1 ? EXACT_VALUES.mx : 0.85 + (EXACT_VALUES.mx - 0.85) * progress
           : column === "my"
@@ -697,13 +828,83 @@ async function openLiveCharts(page) {
 }
 
 async function waitForReadyLiveChart(page) {
-  await page.waitForFunction(() => {
+  await page.waitForFunction((requiredSeriesIds) => {
     const root = document.querySelector(".fm-live-charts");
     const canvas = root?.querySelector(".fm-analysis-chart-surface canvas");
     const readings = root?.querySelectorAll(".fm-chart-legend__latest") ?? [];
-    return canvas instanceof HTMLCanvasElement && canvas.width > 0 && canvas.height > 0 && readings.length === 3;
-  }, undefined, { timeout: timeoutMs });
+    const availableSeriesIds = Array.from(root?.querySelectorAll(".fm-chart-legend__label") ?? [])
+      .map((node) => node.textContent?.trim());
+    return canvas instanceof HTMLCanvasElement && canvas.width > 0 && canvas.height > 0 && readings.length >= requiredSeriesIds.length && requiredSeriesIds.every((id) => availableSeriesIds.includes(id));
+  }, [...SERIES_IDS], { timeout: timeoutMs });
   await waitForQuietFrames(page);
+}
+
+async function verifyAxisAndRangeRegression(browser) {
+  const context = await browser.newContext({
+    acceptDownloads: true,
+    colorScheme: "dark",
+    viewport: { height: 1000, width: 1440 },
+  });
+  const page = await context.newPage();
+  const evidence = createEvidence();
+  const fixture = createFixtureState({ includeTimeColumn: true });
+  try {
+    await installBrowserInstrumentation(page, "dark");
+    if (useFixture) await installLiveChartsFixtureRoutes(page, fixture, evidence);
+    attachPageEvidence(page, evidence);
+    await page.goto(workspaceUrl, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
+    await page.locator("main").first().waitFor({ state: "visible", timeout: timeoutMs });
+    await openLiveCharts(page);
+    await waitForReadyLiveChart(page);
+
+    const axisTrigger = page.getByRole("combobox", { name: "Horizontal axis" });
+    await axisTrigger.waitFor({ state: "visible", timeout: timeoutMs });
+    if (await axisTrigger.isDisabled()) throw new Error("Live Charts horizontal-axis selector is disabled with Step and Time columns.");
+    await waitForLiveChartSelectValue(page, "Horizontal axis", "Step");
+    const axisTransitions = ["Step"];
+    await selectLiveChartOption(page, "Horizontal axis", "Time (s)");
+    axisTransitions.push("Time (s)");
+    await verifyOneVisibleCanvas(page);
+    await selectLiveChartOption(page, "Horizontal axis", "Step");
+    axisTransitions.push("Step");
+
+    await waitForLiveChartSelectValue(page, "Sample window", "Latest samples");
+    const rangeTransitions = ["Latest samples"];
+    await selectLiveChartOption(page, "Sample window", "Last 5,000 samples (decimated)");
+    rangeTransitions.push("Last 5,000 samples (decimated)");
+    await verifyOneVisibleCanvas(page);
+    await selectLiveChartOption(page, "Sample window", "Latest samples");
+    rangeTransitions.push("Latest samples");
+    await verifyOneVisibleCanvas(page);
+    await verifyExactScientificValues(page);
+    if (evidence.failedResponses.length > 0 || evidence.failedRowsResponses.length > 0 || evidence.consoleErrors.length > 0) {
+      throw new Error(`Axis/range fixture evidence failed: ${JSON.stringify({ consoleErrors: evidence.consoleErrors, failedResponses: evidence.failedResponses, failedRowsResponses: evidence.failedRowsResponses })}`);
+    }
+    return {
+      axes: axisTransitions,
+      failedResponses: evidence.failedResponses.length,
+      failedRowsResponses: evidence.failedRowsResponses.length,
+      range: rangeTransitions,
+      requests: resourceRequestSnapshot(evidence),
+    };
+  } finally {
+    await context.close();
+  }
+}
+
+async function selectLiveChartOption(page, label, option) {
+  const trigger = page.getByRole("combobox", { name: label });
+  await trigger.click();
+  const item = page.getByRole("option", { name: option, exact: true });
+  await item.waitFor({ state: "visible", timeout: timeoutMs });
+  await item.click();
+  await waitForLiveChartSelectValue(page, label, option);
+  await waitForQuietFrames(page);
+}
+
+async function waitForLiveChartSelectValue(page, label, value) {
+  await page.waitForFunction(({ expectedLabel, expectedValue }) => Array.from(document.querySelectorAll('[role="combobox"]'))
+    .some((node) => node.getAttribute("aria-label") === expectedLabel && (node.textContent ?? "").includes(expectedValue)), { expectedLabel: label, expectedValue: value }, { timeout: timeoutMs });
 }
 
 async function verifyLiveChartsInspector(page) {
@@ -716,9 +917,11 @@ async function verifyLiveChartsInspector(page) {
     if (!text.includes(marker)) throw new Error(`Live Charts Inspector is missing ${marker}.`);
   }
   const signalControls = inspector.getByRole("checkbox");
-  if (await signalControls.count() !== 3) throw new Error("Live Charts Inspector must expose mx, my, and mz signal controls.");
-  if (!(await inspector.getByRole("checkbox", { name: "Show mx" }).isVisible())) {
-    throw new Error("Live Charts Inspector does not expose the mx visibility control.");
+  if (await signalControls.count() < SERIES_IDS.length) throw new Error("Live Charts Inspector must expose mx, my, and mz signal controls.");
+  for (const quantity of SERIES_IDS) {
+    if (!(await inspector.getByRole("checkbox", { name: `Show ${quantity}` }).isVisible())) {
+      throw new Error(`Live Charts Inspector does not expose the ${quantity} visibility control.`);
+    }
   }
 }
 
@@ -815,14 +1018,16 @@ async function verifyVisibilityMatrix(page, evidence) {
 }
 
 async function verifyCanonicalCsvExport(page) {
+  const before = await page.evaluate(() => window.__FULLMAG_LIVE_CHARTS_SMOKE__.downloads.length);
   await keyboardExport(page);
-  await page.waitForFunction(() =>
-    window.__FULLMAG_LIVE_CHARTS_SMOKE__?.downloads?.some((entry) => entry.filename.endsWith(".csv") && typeof entry.content === "string"),
-    undefined,
+  await page.waitForFunction((before) =>
+    window.__FULLMAG_LIVE_CHARTS_SMOKE__?.downloads?.slice(before).some((entry) => entry.filename.endsWith(".csv") && typeof entry.content === "string"),
+    before,
     { timeout: timeoutMs },
   );
-  const csv = await page.evaluate(() =>
-    window.__FULLMAG_LIVE_CHARTS_SMOKE__.downloads.find((entry) => entry.filename.endsWith(".csv") && typeof entry.content === "string")?.content ?? "",
+  const csv = await page.evaluate((before) =>
+    window.__FULLMAG_LIVE_CHARTS_SMOKE__.downloads.slice(before).find((entry) => entry.filename.endsWith(".csv") && typeof entry.content === "string")?.content ?? "",
+    before,
   );
   const rows = csv.split(/\r?\n/).filter(Boolean).map((row) => row.split(","));
   const header = rows[0] ?? [];
@@ -836,6 +1041,81 @@ async function verifyCanonicalCsvExport(page) {
       throw new Error(`Canonical CSV ${quantity} differs: ${JSON.stringify(final)}`);
     }
   }
+}
+
+async function verifyDirectExportFailureRecovery(page) {
+  const controls = page.locator(".fm-live-charts .fm-analysis-chart-export").first();
+  const before = await page.evaluate(() => window.__FULLMAG_LIVE_CHARTS_SMOKE__.downloads.length);
+  await page.evaluate(() => {
+    const smoke = window.__FULLMAG_LIVE_CHARTS_SMOKE__;
+    smoke.createObjectURLBeforeFailure = URL.createObjectURL;
+    URL.createObjectURL = () => { throw new Error("Controlled download failure"); };
+  });
+  try {
+    await controls.getByRole("button", { name: "CSV", exact: true }).click();
+    await controls.getByRole("alert").filter({ hasText: "CSV export failed" }).waitFor();
+  } finally {
+    await page.evaluate(() => {
+      const smoke = window.__FULLMAG_LIVE_CHARTS_SMOKE__;
+      URL.createObjectURL = smoke.createObjectURLBeforeFailure;
+      delete smoke.createObjectURLBeforeFailure;
+    });
+  }
+  await controls.getByRole("button", { name: "CSV", exact: true }).click();
+  await controls.getByRole("alert").waitFor({ state: "hidden" });
+  await page.waitForFunction((count) => window.__FULLMAG_LIVE_CHARTS_SMOKE__.downloads.length > count, before);
+}
+
+async function verifyRepeatedPngCommands(page) {
+  const canvas = await page.locator(".fm-live-charts canvas").first().elementHandle();
+  if (!canvas) throw new Error("PNG command verification requires a mounted canvas.");
+  for (let index = 0; index < 2; index += 1) {
+    await page.keyboard.press("Control+Shift+P");
+    const palette = page.getByRole("dialog", { name: "Command palette", exact: true });
+    await palette.getByPlaceholder("Search commands").fill("Export Live Chart PNG");
+    const downloaded = page.waitForEvent("download", { timeout: timeoutMs });
+    await palette.getByRole("option").filter({ hasText: "Export Live Chart PNG" }).click();
+    const download = await downloaded;
+    if (!download.suggestedFilename().endsWith(".png")) {
+      throw new Error("Live Chart PNG command produced an unexpected file.");
+    }
+    await palette.waitFor({ state: "hidden" });
+    await waitForQuietFrames(page);
+    if (!(await canvas.evaluate((node) => node.isConnected && node.width > 0 && node.height > 0))) {
+      throw new Error("PNG export replaced the chart canvas or lost its drawing buffer.");
+    }
+  }
+  await canvas.dispose();
+}
+
+async function verifySignalSearchAndBulkSelection(page, evidence) {
+  const requestStart = evidence.requests.length;
+  const search = page.getByRole("searchbox", { name: "Search signals" });
+  await search.fill("mx");
+  await page.waitForFunction(() => document.querySelectorAll(".fm-live-charts .fm-chart-legend__item").length === 1);
+  // Search changes only the catalog, never which curves are selected.
+  await verifyOneVisibleCanvas(page);
+  await search.fill("no-such-signal");
+  await page.getByText("No matching signals", { exact: true }).waitFor();
+  await search.fill("");
+  const signals = page.getByRole("complementary", { name: "Signal selection" });
+  const noneButton = signals.getByRole("button", { name: "None", exact: true });
+  await noneButton.focus();
+  await page.keyboard.press("Enter");
+  await page.getByText("Select at least one signal", { exact: true }).waitFor();
+  const allButton = signals.getByRole("button", { name: "All", exact: true });
+  await allButton.focus();
+  await page.keyboard.press("Enter");
+  await waitForReadyLiveChart(page);
+  await verifyExactScientificValues(page);
+  assertNoRequestsSince(evidence, requestStart, "signal search and bulk visibility");
+
+  const before = await page.evaluate(() => window.__FULLMAG_LIVE_CHARTS_SMOKE__.downloads.filter((entry) => entry.filename.endsWith(".csv")).length);
+  await page.locator(".fm-live-charts .fm-analysis-chart-export").getByRole("button", { name: "CSV", exact: true }).click();
+  await page.waitForFunction((count) => window.__FULLMAG_LIVE_CHARTS_SMOKE__.downloads.filter((entry) => entry.filename.endsWith(".csv")).length > count, before);
+  await waitForQuietFrames(page);
+  const after = await page.evaluate(() => window.__FULLMAG_LIVE_CHARTS_SMOKE__.downloads.filter((entry) => entry.filename.endsWith(".csv")).length);
+  if (after !== before + 1) throw new Error(`One CSV click produced ${after - before} downloads.`);
 }
 
 async function verifyKeyboardInteractions(page, evidence) {
@@ -1076,20 +1356,33 @@ async function verifyLifecycleCounters(page, baseline) {
 }
 
 async function captureVisualVariants(page) {
+  await verifyOneVisibleCanvas(page);
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "no-preference" });
   await setTheme(page, "dark");
+  await verifyOneVisibleCanvas(page);
   await verifyNoVisibleErrorNotifications(page);
   await page.screenshot({ fullPage: true, path: resolve(artifactRoot, "live-charts-mocha.png") });
 
   await page.emulateMedia({ colorScheme: "light", reducedMotion: "no-preference" });
   await setTheme(page, "light");
+  await verifyOneVisibleCanvas(page);
   await verifyNoVisibleErrorNotifications(page);
   await page.screenshot({ fullPage: true, path: resolve(artifactRoot, "live-charts-latte.png") });
 
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
   await setTheme(page, "dark");
+  await verifyOneVisibleCanvas(page);
   await verifyNoVisibleErrorNotifications(page);
   await page.screenshot({ fullPage: true, path: resolve(artifactRoot, "live-charts-reduced-motion.png") });
+
+  await page.setViewportSize({ width: 1100, height: 900 });
+  await waitForQuietFrames(page);
+  await verifyOneVisibleCanvas(page);
+  const overflow = await page.locator(".fm-live-charts").evaluate((node) => node.scrollWidth > node.clientWidth + 1);
+  if (overflow) throw new Error("Narrow Live Charts workspace overflows horizontally.");
+  await page.screenshot({ fullPage: true, path: resolve(artifactRoot, "live-charts-narrow.png") });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await waitForQuietFrames(page);
 }
 
 async function captureZoomScreenshot(browser) {
@@ -1107,7 +1400,7 @@ async function captureZoomScreenshot(browser) {
     if (useFixture) await installLiveChartsFixtureRoutes(page, fixture, evidence);
     attachPageEvidence(page, evidence);
     await page.goto(workspaceUrl, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
-    await page.locator("main").waitFor({ state: "visible", timeout: timeoutMs });
+    await page.locator("main").first().waitFor({ state: "visible", timeout: timeoutMs });
     await openLiveCharts(page);
     await waitForReadyLiveChart(page);
     await verifyOneVisibleCanvas(page);
@@ -1173,18 +1466,20 @@ async function setTheme(page, theme) {
   await waitForQuietFrames(page);
 }
 
-async function collectProof(page, evidence, initialRequests) {
+async function collectProof(page, evidence, initialRequests, { axisRangeProof, idleProof }) {
   const geometry = await liveChartGeometry(page);
   const counters = await page.evaluate(() => window.__FULLMAG_LIVE_CHARTS_SMOKE__.counters);
   const readings = await legendReadings(page);
   return {
     apiBase,
+    axisRange: axisRangeProof,
     artifactRoot,
     canvas: geometry,
     counters,
     exactValues: EXACT_VALUES,
     failedResponses: evidence.failedResponses.length,
     failedRowsResponses: evidence.failedRowsResponses.length,
+    idle: idleProof,
     initialRequests,
     readings,
     totalRequests: resourceRequestSnapshot(evidence),
@@ -1202,6 +1497,12 @@ function validateProof(proof, evidence) {
   if (evidence.consoleErrors.length > 0) failures.push(`Browser errors: ${evidence.consoleErrors.join(" | ")}`);
   if (proof.counters.chartInstances !== 1) failures.push(`final ECharts owners=${proof.counters.chartInstances}`);
   if (proof.visibilityCombinations !== 8) failures.push("Visibility matrix did not cover all eight combinations.");
+  if (!proof.axisRange || proof.axisRange.axes?.join("->") !== "Step->Time (s)->Step" || proof.axisRange.range?.join("->") !== "Latest samples->Last 5,000 samples (decimated)->Latest samples") {
+    failures.push("Axis/range browser regression did not cover Step->Time->Step and Last 5,000 samples (decimated)->Latest samples.");
+  }
+  const idleDelta = proof.idle?.chartDiagnostics?.delta;
+  if (!idleDelta || Object.values(idleDelta).some((delta) => delta !== 0)) failures.push(`idle chart diagnostics changed: ${JSON.stringify(idleDelta)}`);
+  if ((proof.idle?.resourceRequests?.length ?? 0) !== 0) failures.push(`idle resource requests=${proof.idle.resourceRequests.length}`);
   return failures;
 }
 
@@ -1248,6 +1549,42 @@ async function liveChartGeometry(page) {
 async function waitForQuietFrames(page) {
   await page.waitForTimeout(150);
   await page.waitForFunction(() => window.__FULLMAG_LIVE_CHARTS_SMOKE__?.counters.activeAnimationFrames === 0, undefined, { timeout: timeoutMs });
+}
+
+async function verifyIdleStability(page, evidence) {
+  await verifyOneVisibleCanvas(page);
+  await waitForQuietFrames(page);
+  const requestStart = evidence.requests.length;
+  const before = await chartDiagnosticsSnapshot(page);
+  await page.waitForTimeout(IDLE_OBSERVATION_MS);
+  await waitForQuietFrames(page);
+  const after = await chartDiagnosticsSnapshot(page);
+  const diagnosticsDelta = Object.fromEntries(Object.keys(before).map((key) => [key, after[key] - before[key]]));
+  const resourceRequests = liveChartsOwnedRequestsSince(evidence, requestStart);
+  const changedDiagnostics = Object.entries(diagnosticsDelta).filter(([, delta]) => delta !== 0);
+  if (changedDiagnostics.length > 0 || resourceRequests.length > 0) {
+    throw new Error(`Live Charts idle stability budget exceeded: ${JSON.stringify({ diagnosticsDelta, resourceRequests })}`);
+  }
+  return {
+    chartDiagnostics: { after, before, delta: diagnosticsDelta },
+    durationMs: IDLE_OBSERVATION_MS,
+    resourceRequests,
+  };
+}
+
+async function chartDiagnosticsSnapshot(page) {
+  const snapshot = await page.evaluate(() => {
+    const diagnostics = window.__FULLMAG_CHART_DIAGNOSTICS__;
+    return {
+      modelBuilds: diagnostics?.modelBuilds,
+      resizeCalls: diagnostics?.resizeCalls,
+      setOptionCalls: diagnostics?.setOptionCalls,
+    };
+  });
+  if (Object.values(snapshot).some((value) => typeof value !== "number" || !Number.isFinite(value))) {
+    throw new Error(`Live Charts chart diagnostics are unavailable: ${JSON.stringify(snapshot)}`);
+  }
+  return snapshot;
 }
 
 function resourceRequestSnapshot(evidence) {

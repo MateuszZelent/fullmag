@@ -2,6 +2,59 @@
 
 use crate::types::{FemGpuExecutionClass, FemGpuExecutionReceipt};
 
+pub(crate) const FEM_GPU_PERFORMANCE_SNAPSHOT_ABI_V1: u32 = 1;
+pub(crate) const FEM_GPU_PERFORMANCE_SNAPSHOT_V1_SIZE: u32 = 480;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FemGpuPerformanceSnapshotValidationError {
+    AbiMismatch,
+    Unavailable,
+    ExecutionClassMismatch,
+    NoCompletedStep,
+    AcceptedCountersExceedPhysical,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FemGpuPerformanceSnapshotSummary {
+    pub(crate) abi_version: u32,
+    pub(crate) struct_size: u32,
+    pub(crate) available: bool,
+    pub(crate) execution_class: FemGpuExecutionClass,
+    pub(crate) completed_step: u64,
+    pub(crate) completed_attempt_count: u64,
+    pub(crate) rejected_attempt_count: u64,
+    pub(crate) failed_attempt_count: u64,
+    pub(crate) physical_rhs_evaluations: u64,
+    pub(crate) accepted_rhs_evaluations: u64,
+    pub(crate) physical_device_to_device_bytes: u64,
+    pub(crate) accepted_device_to_device_bytes: u64,
+}
+
+pub(crate) fn validate_fem_gpu_performance_snapshot(
+    snapshot: &FemGpuPerformanceSnapshotSummary,
+) -> Result<(), FemGpuPerformanceSnapshotValidationError> {
+    if snapshot.abi_version != FEM_GPU_PERFORMANCE_SNAPSHOT_ABI_V1
+        || snapshot.struct_size != FEM_GPU_PERFORMANCE_SNAPSHOT_V1_SIZE
+    {
+        return Err(FemGpuPerformanceSnapshotValidationError::AbiMismatch);
+    }
+    if !snapshot.available {
+        return Err(FemGpuPerformanceSnapshotValidationError::Unavailable);
+    }
+    if snapshot.execution_class != FemGpuExecutionClass::DeviceResident {
+        return Err(FemGpuPerformanceSnapshotValidationError::ExecutionClassMismatch);
+    }
+    if snapshot.completed_step == 0 || snapshot.completed_attempt_count == 0 {
+        return Err(FemGpuPerformanceSnapshotValidationError::NoCompletedStep);
+    }
+    if snapshot.accepted_rhs_evaluations > snapshot.physical_rhs_evaluations
+        || snapshot.accepted_device_to_device_bytes > snapshot.physical_device_to_device_bytes
+    {
+        return Err(FemGpuPerformanceSnapshotValidationError::AcceptedCountersExceedPhysical);
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FemGpuExecutionReceiptValidationError {
     AccountingInvalid,
@@ -82,6 +135,23 @@ pub(crate) fn validate_strict_fem_gpu_execution_receipt(
 mod tests {
     use super::*;
 
+    fn performance_snapshot_fixture() -> FemGpuPerformanceSnapshotSummary {
+        FemGpuPerformanceSnapshotSummary {
+            abi_version: FEM_GPU_PERFORMANCE_SNAPSHOT_ABI_V1,
+            struct_size: FEM_GPU_PERFORMANCE_SNAPSHOT_V1_SIZE,
+            available: true,
+            execution_class: FemGpuExecutionClass::DeviceResident,
+            completed_step: 1,
+            completed_attempt_count: 1,
+            rejected_attempt_count: 0,
+            failed_attempt_count: 0,
+            physical_rhs_evaluations: 4,
+            accepted_rhs_evaluations: 4,
+            physical_device_to_device_bytes: 96,
+            accepted_device_to_device_bytes: 96,
+        }
+    }
+
     fn strict_receipt_fixture() -> FemGpuExecutionReceipt {
         FemGpuExecutionReceipt {
             requested: "strict_device".into(),
@@ -159,5 +229,26 @@ mod tests {
             );
             assert!(expected.token().starts_with("fem_gpu_receipt_"));
         }
+    }
+
+    #[test]
+    fn accepts_transactional_performance_snapshot_summary() {
+        assert!(validate_fem_gpu_performance_snapshot(&performance_snapshot_fixture()).is_ok());
+    }
+
+    #[test]
+    fn rejects_unavailable_or_non_monotonic_performance_snapshot() {
+        let mut snapshot = performance_snapshot_fixture();
+        snapshot.available = false;
+        assert_eq!(
+            validate_fem_gpu_performance_snapshot(&snapshot),
+            Err(FemGpuPerformanceSnapshotValidationError::Unavailable)
+        );
+        let mut snapshot = performance_snapshot_fixture();
+        snapshot.accepted_rhs_evaluations = 5;
+        assert_eq!(
+            validate_fem_gpu_performance_snapshot(&snapshot),
+            Err(FemGpuPerformanceSnapshotValidationError::AcceptedCountersExceedPhysical)
+        );
     }
 }

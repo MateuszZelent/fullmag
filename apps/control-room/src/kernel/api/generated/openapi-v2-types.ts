@@ -324,6 +324,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_eigen_field_sweep"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/{sample_index}/{mode_index}/meta": {
         parameters: {
             query?: never;
@@ -340,6 +356,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/analysis/frequency-domain/eigen/modes/{sample_index}/{mode_index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_eigen_modes_sample_index_mode_index"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2": {
         parameters: {
             query?: never;
@@ -348,6 +380,70 @@ export interface paths {
             cookie?: never;
         };
         get: operations["analysis_get_sessions_current_analysis_frequency_domain_eigen_spectrum_v2"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v3": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_eigen_spectrum_v3"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/frequency-domain/fmr/kittel-fit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_fmr_kittel_fit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/frequency-domain/fmr/peaks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_fmr_peaks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/frequency-domain/fmr/resonance-fits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_fmr_resonance_fits"];
         put?: never;
         post?: never;
         delete?: never;
@@ -380,6 +476,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["analysis_get_sessions_current_analysis_frequency_domain_response_cancel_requested_v1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_response_diagnostics_v1"];
         put?: never;
         post?: never;
         delete?: never;
@@ -684,6 +796,198 @@ export interface paths {
             cookie?: never;
         };
         get: operations["analysis_get_sessions_current_analysis_hysteresis_stage_id_steps_point_id_settle_trace"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/axes/{axis_id}/values": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_axes_axis_id_values"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/branches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_branches"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/branches/{branch_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_branches_branch_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/branches/{branch_id}/points": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_branches_branch_id_points"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_items"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/items/{item_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_items_item_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/projections/{projection_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_projections_projection_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/relations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_relations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/relations/{relation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_relations_relation_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/samples": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_samples"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3547,6 +3851,22 @@ export interface paths {
         patch: operations["visualization_patch_sessions_current_visualization_display"];
         trace?: never;
     };
+    "/v2/sessions/current/visualization/mode-compositions/active": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["visualization_get_sessions_current_visualization_mode_compositions_active"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["visualization_patch_sessions_current_visualization_mode_compositions_active"];
+        trace?: never;
+    };
     "/v2/sessions/current/visualization/state": {
         parameters: {
             query?: never;
@@ -3721,6 +4041,374 @@ export interface components {
             vectors: components["schemas"]["VectorLayerState"];
             visible: boolean;
             wireframe: components["schemas"]["BasicLayerState"];
+        };
+        AnalysisResultAxisProjection: {
+            label: string;
+            operation: string;
+            projection_id: string;
+            unit: string;
+        };
+        AnalysisResultAxisResource: {
+            axis_id: string;
+            /** Format: int64 */
+            cardinality: number;
+            inline_values?: components["schemas"]["AnalysisResultAxisValueResource"][] | null;
+            label: string;
+            ordering: string;
+            preferred_display_units: string[];
+            projections: components["schemas"]["AnalysisResultAxisProjection"][];
+            role: string;
+            semantic_id: string;
+            symbol?: string | null;
+            unit_si?: string | null;
+            value_kind: string;
+            values_resource_key?: string | null;
+        };
+        AnalysisResultAxisValueResource: {
+            category?: string | null;
+            entity_ref?: string | null;
+            label?: string | null;
+            /** Format: double */
+            scalar_si?: number | null;
+            status: string;
+            token: string;
+            vector3_si?: number[] | null;
+        };
+        AnalysisResultAxisValuesResource: {
+            axis_id: string;
+            cursor?: string | null;
+            dataset_id: string;
+            dataset_revision: string;
+            limit: number;
+            next_cursor?: string | null;
+            run_id: string;
+            schema_version: string;
+            /** Format: int64 */
+            total_count: number;
+            values: components["schemas"]["AnalysisResultAxisValueResource"][];
+        };
+        AnalysisResultBranchPageResource: {
+            cursor?: string | null;
+            dataset_id: string;
+            dataset_revision: string;
+            items: components["schemas"]["AnalysisResultBranchSummaryResource"][];
+            limit: number;
+            next_cursor?: string | null;
+            run_id: string;
+            schema_version: string;
+            /** Format: int64 */
+            total_count: number;
+            unsupported_reason?: string | null;
+        };
+        AnalysisResultBranchPointPageResource: {
+            branch_id: string;
+            cursor?: string | null;
+            dataset_id: string;
+            dataset_revision: string;
+            items: components["schemas"]["AnalysisResultBranchPointResource"][];
+            limit: number;
+            next_cursor?: string | null;
+            run_id: string;
+            schema_version: string;
+            /** Format: int64 */
+            total_count: number;
+            unsupported_reason?: string | null;
+        };
+        AnalysisResultBranchPointResource: {
+            branch_id: string;
+            /** Format: double */
+            frequency_hz?: number | null;
+            item_id: string;
+            /** Format: int64 */
+            raw_mode_index?: number | null;
+            sample_id: string;
+            /** Format: int64 */
+            sample_index?: number | null;
+            source_revision: string;
+            status: components["schemas"]["AnalysisResultStatusFacets"];
+        };
+        AnalysisResultBranchResource: {
+            branch_id: string;
+            dataset_id: string;
+            dataset_revision: string;
+            label: string;
+            /** Format: int64 */
+            point_count: number;
+            points_resource: string;
+            run_id: string;
+            schema_version: string;
+            source_revision: string;
+            status: components["schemas"]["AnalysisResultStatusFacets"];
+        };
+        AnalysisResultBranchSummaryResource: {
+            branch_id: string;
+            label: string;
+            /** Format: int64 */
+            point_count: number;
+            points_resource: string;
+            source_revision: string;
+            status: components["schemas"]["AnalysisResultStatusFacets"];
+        };
+        AnalysisResultCoordinateResource: {
+            axis_id: string;
+            category?: string | null;
+            entity_ref?: string | null;
+            label?: string | null;
+            /** Format: double */
+            scalar_si?: number | null;
+            token: string;
+            vector3_si?: number[] | null;
+        };
+        AnalysisResultDatasetCapabilities: {
+            branch_tracking: boolean;
+            comparison: boolean;
+            export: boolean;
+            fields: boolean;
+            item_paging: boolean;
+            live_partial_results: boolean;
+            result_meshes: boolean;
+            sample_paging: boolean;
+            server_filtering: boolean;
+            server_sorting: boolean;
+        };
+        AnalysisResultDatasetCatalogResource: {
+            items: components["schemas"]["AnalysisResultDatasetSummaryResource"][];
+            next_cursor?: string | null;
+            revision: string;
+            run_id: string;
+            schema_version: string;
+            status: string;
+            /** Format: int64 */
+            total_count: number;
+            unsupported_reason?: string | null;
+        };
+        AnalysisResultDatasetManifestResource: {
+            axes: components["schemas"]["AnalysisResultAxisResource"][];
+            capabilities: components["schemas"]["AnalysisResultDatasetCapabilities"];
+            dataset_id: string;
+            dataset_revision: string;
+            default_cursor: components["schemas"]["AnalysisResultDefaultCursor"];
+            description?: string | null;
+            item_index_resource: string;
+            item_kinds: components["schemas"]["AnalysisResultItemKind"][];
+            product_kind: components["schemas"]["AnalysisResultProductKind"];
+            projections: components["schemas"]["AnalysisResultProjectionDescriptor"][];
+            provenance: {
+                [key: string]: string;
+            };
+            run_id: string;
+            sample_index_resource: string;
+            schema_version: string;
+            source_artifacts: components["schemas"]["AnalysisResultSourceArtifactRef"][];
+            stage_id: string;
+            status: components["schemas"]["AnalysisResultStatusFacets"];
+            title: string;
+            topology_policy: string;
+            units_policy: string;
+        };
+        AnalysisResultDatasetSummaryResource: {
+            dataset_id: string;
+            dataset_revision: string;
+            /** Format: int64 */
+            item_count: number;
+            manifest_resource_key: string;
+            product_kind: components["schemas"]["AnalysisResultProductKind"];
+            run_id: string;
+            /** Format: int64 */
+            sample_count: number;
+            stage_id: string;
+            status: components["schemas"]["AnalysisResultStatusFacets"];
+            title: string;
+        };
+        AnalysisResultDefaultCursor: {
+            item_id?: string | null;
+            sample_id?: string | null;
+        };
+        AnalysisResultFieldRef: {
+            field_id: string;
+            field_revision: string;
+            mesh_ref?: null | components["schemas"]["AnalysisResultMeshRef"];
+            quantity_id?: string | null;
+            representation?: string | null;
+            resource_key: string;
+            status: string;
+        };
+        /** @enum {string} */
+        AnalysisResultItemKind: "eigen_mode" | "driven_frequency_point" | "spectral_feature" | "dsf_point";
+        AnalysisResultItemPageResource: {
+            cursor?: string | null;
+            dataset_id: string;
+            dataset_revision: string;
+            items: components["schemas"]["AnalysisResultSpectralItemSummary"][];
+            limit: number;
+            next_cursor?: string | null;
+            run_id: string;
+            schema_version: string;
+            /** Format: int64 */
+            total_count: number;
+        };
+        AnalysisResultItemRelation: {
+            /** Format: double */
+            frequency_delta_hz?: number | null;
+            method?: string | null;
+            qualification: string;
+            relation: string;
+            /** Format: double */
+            score?: number | null;
+            source_revision: string;
+            target_dataset_id?: string | null;
+            target_item_id?: string | null;
+            target_revision?: string | null;
+            target_sample_id?: string | null;
+        };
+        AnalysisResultMeshRef: {
+            mesh_id: string;
+            mesh_revision?: string | null;
+            topology_fingerprint?: string | null;
+        };
+        /** @enum {string} */
+        AnalysisResultProductKind: "modal_eigen" | "driven_response" | "time_domain_spectrum" | "dynamic_structure_factor";
+        AnalysisResultProjectionDescriptor: {
+            kind: string;
+            projection_id: string;
+            resource_key: string;
+            selectable: boolean;
+            title: string;
+            x_axis_id?: string | null;
+            y_axis_id?: string | null;
+        };
+        AnalysisResultProjectionPoint: {
+            branch_id?: string | null;
+            item_id?: string | null;
+            /** Format: int64 */
+            ordinal: number;
+            sample_id?: string | null;
+            status: string;
+            /** Format: double */
+            value?: number | null;
+            /** Format: double */
+            x?: number | null;
+            /** Format: double */
+            y?: number | null;
+        };
+        AnalysisResultProjectionResource: {
+            axis_labels: {
+                [key: string]: string;
+            };
+            axis_mapping: {
+                [key: string]: string;
+            };
+            axis_units: {
+                [key: string]: string;
+            };
+            dataset_id: string;
+            dataset_revision: string;
+            fixed_coordinates: components["schemas"]["AnalysisResultCoordinateResource"][];
+            projection_id: string;
+            projection_revision: string;
+            run_id: string;
+            schema_version: string;
+            selection_index: components["schemas"]["AnalysisResultProjectionSelectionEntry"][];
+            series: components["schemas"]["AnalysisResultProjectionSeries"][];
+            status: components["schemas"]["AnalysisResultStatusFacets"];
+            unsupported_reason?: string | null;
+        };
+        AnalysisResultProjectionSelectionEntry: {
+            branch_id?: string | null;
+            item_id?: string | null;
+            item_kind?: null | components["schemas"]["AnalysisResultItemKind"];
+            /** Format: int64 */
+            ordinal: number;
+            sample_id?: string | null;
+        };
+        AnalysisResultProjectionSeries: {
+            label: string;
+            points: components["schemas"]["AnalysisResultProjectionPoint"][];
+            series_id: string;
+        };
+        AnalysisResultQualitySummary: {
+            qualification: string;
+            /** Format: double */
+            residual_relative_l2?: number | null;
+            /** Format: double */
+            tracking_score?: number | null;
+        };
+        AnalysisResultRelationPageResource: {
+            cursor?: string | null;
+            dataset_id: string;
+            dataset_revision: string;
+            items: components["schemas"]["AnalysisResultRelationResource"][];
+            limit: number;
+            next_cursor?: string | null;
+            run_id: string;
+            schema_version: string;
+            /** Format: int64 */
+            total_count: number;
+            unsupported_reason?: string | null;
+        };
+        AnalysisResultRelationResource: {
+            relation: components["schemas"]["AnalysisResultItemRelation"];
+            relation_id: string;
+            source_item_id: string;
+            source_sample_id: string;
+        };
+        AnalysisResultSampleIndexEntry: {
+            /** Format: int64 */
+            branch_count?: number | null;
+            coordinates: components["schemas"]["AnalysisResultCoordinateResource"][];
+            equilibrium_ref?: null | components["schemas"]["AnalysisResultSourceArtifactRef"];
+            /** Format: int64 */
+            item_count: number;
+            items_resource: string;
+            linearization_ref?: null | components["schemas"]["AnalysisResultSourceArtifactRef"];
+            mesh_ref?: null | components["schemas"]["AnalysisResultMeshRef"];
+            sample_id: string;
+            /** Format: int64 */
+            sample_index?: number | null;
+            source_revision: string;
+            status: components["schemas"]["AnalysisResultStatusFacets"];
+        };
+        AnalysisResultSamplePageResource: {
+            cursor?: string | null;
+            dataset_id: string;
+            dataset_revision: string;
+            items: components["schemas"]["AnalysisResultSampleIndexEntry"][];
+            limit: number;
+            next_cursor?: string | null;
+            run_id: string;
+            schema_version: string;
+            /** Format: int64 */
+            total_count: number;
+        };
+        AnalysisResultSourceArtifactRef: {
+            artifact: string;
+            relation: string;
+            revision: string;
+        };
+        AnalysisResultSpectralItemSummary: {
+            branch_id?: string | null;
+            detail_resource: string;
+            /** Format: int64 */
+            display_index?: number | null;
+            field_ref?: null | components["schemas"]["AnalysisResultFieldRef"];
+            /** Format: double */
+            frequency_hz?: number | null;
+            item_id: string;
+            item_kind: components["schemas"]["AnalysisResultItemKind"];
+            quality: components["schemas"]["AnalysisResultQualitySummary"];
+            relations: components["schemas"]["AnalysisResultItemRelation"][];
+            sample_id: string;
+            source_revision: string;
+            status: components["schemas"]["AnalysisResultStatusFacets"];
+            wavevector_kf?: number[] | null;
+        };
+        AnalysisResultStatusFacets: {
+            completeness: string;
+            detail?: string | null;
+            execution: string;
+            qualification: string;
+            reason_code?: string | null;
+            resource: string;
         };
         ApiErrorDiagnosticResponse: {
             code: string;
@@ -4519,6 +5207,18 @@ export interface components {
             wavevector_count: number;
             wavevector_unit: string;
             x_m: number[];
+        };
+        EigenModeResourceRef: {
+            artifact_revision: string;
+            branch_id?: string | null;
+            mode_id: string;
+            /** Format: int32 */
+            raw_mode_index?: number | null;
+            run_id: string;
+            sample_id: string;
+            /** Format: int32 */
+            sample_index?: number | null;
+            stage_id: string;
         };
         /** @enum {string} */
         EmptySelectionPolicySchema: "error" | "allow_noop";
@@ -5443,6 +6143,9 @@ export interface components {
         };
         /** @enum {string} */
         FixedSolverIntegratorRequest: "auto" | "heun" | "rk4" | "rk23" | "rk45" | "abm3";
+        FrequencyDomainArtifactExtras: {
+            [key: string]: unknown;
+        };
         FrequencyDomainAvailabilitySummaryResource: {
             diagnostics_json: string;
             driven_response_available: boolean;
@@ -5462,6 +6165,34 @@ export interface components {
             periodic_pair_diagnostics: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             static_periodic: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
         };
+        FrequencyDomainBranchPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            /** Format: int64 */
+            branch_id?: number | null;
+            points?: components["schemas"]["FrequencyDomainBranchPointPayload"][] | null;
+        };
+        FrequencyDomainBranchPointPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            /** Format: double */
+            frequency_hz?: number | null;
+            /** Format: int64 */
+            raw_mode_index?: number | null;
+            /** Format: int64 */
+            sample_index?: number | null;
+        };
+        FrequencyDomainBranchesArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            branches: components["schemas"]["FrequencyDomainBranchPayload"][];
+            diagnostics?: null | components["schemas"]["FrequencyDomainTrackingDiagnosticsPayload"];
+            schema_version: string;
+        };
+        FrequencyDomainCandidateIdentityPayload: {
+            device?: string | null;
+            engine_id?: string | null;
+            equilibrium_artifact_sha256?: string | null;
+            mesh_generation_id?: string | null;
+            mesh_id?: string | null;
+            schema_version: string;
+            source_identity: Record<string, never>;
+            topology_fingerprint?: string | null;
+        };
         FrequencyDomainCapabilityEntryResource: {
             reason: string;
             status: string;
@@ -5479,6 +6210,12 @@ export interface components {
         FrequencyDomainDemagCapabilitiesResource: {
             floquet_dynamic_k: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             static_periodic_pbc: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+        };
+        FrequencyDomainDiagnosticsArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            complete?: boolean | null;
+            interrupted?: boolean | null;
+            schema_version: string;
+            status?: string | null;
         };
         FrequencyDomainDispersionCapabilitiesResource: {
             branch_tracking: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
@@ -5499,6 +6236,8 @@ export interface components {
             /** Format: int64 */
             component_count?: number | null;
             components: string[];
+            /** @description SHA-256 digest of the immutable field payload bytes. */
+            content_digest?: string | null;
             /** Format: double */
             default_phase_rad?: number | null;
             default_view: string;
@@ -5509,6 +6248,8 @@ export interface components {
             payload_value_count?: number | null;
             quantity: string;
             resource_key: string;
+            /** @description Content-addressed revision of the immutable field payload bytes. */
+            revision?: string | null;
             schema_version: string;
             source_family: string;
             status: string;
@@ -5533,12 +6274,163 @@ export interface components {
             zarr_shape?: number[] | null;
             zarr_store_path?: string | null;
         };
+        FrequencyDomainFieldSweepArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            artifact_id?: string | null;
+            complete?: boolean | null;
+            /** Format: int64 */
+            completed_sample_count?: number | null;
+            content_sha256?: string | null;
+            cross_artifact_refs?: components["schemas"]["FrequencyDomainFieldSweepReferencePayload"][] | null;
+            interrupted?: boolean | null;
+            requested_execution?: null | components["schemas"]["FrequencyDomainFieldSweepExecutionPayload"];
+            /** Format: int64 */
+            requested_sample_count?: number | null;
+            resolved_execution?: null | components["schemas"]["FrequencyDomainFieldSweepExecutionPayload"];
+            revision?: string | null;
+            run_id?: string | null;
+            runtime_id?: string | null;
+            samples?: components["schemas"]["FrequencyDomainFieldSweepSamplePayload"][] | null;
+            scan_axis?: null | components["schemas"]["FrequencyDomainFieldSweepAxisPayload"];
+            schema_version: string;
+            scope_id?: string | null;
+            source?: null | components["schemas"]["FrequencyDomainFieldSweepSourcePayload"];
+            source_revision?: string | null;
+            stage_id?: string | null;
+            status?: string | null;
+            stop_reason?: string | null;
+            topology?: null | components["schemas"]["FrequencyDomainFieldSweepTopologyPayload"];
+            units?: null | components["schemas"]["FrequencyDomainFieldSweepUnitsPayload"];
+        };
+        FrequencyDomainFieldSweepAxisPayload: {
+            coordinate: string;
+            display_conversions: components["schemas"]["FrequencyDomainFieldSweepDisplayConversionPayload"][];
+            kind: string;
+            unit: string;
+        };
+        FrequencyDomainFieldSweepDisplayConversionPayload: {
+            name: string;
+            /** Format: double */
+            scale: number;
+            unit: string;
+        };
+        FrequencyDomainFieldSweepExecutionPayload: {
+            backend: string;
+            device: string;
+            engine: string;
+            execution_mode: string;
+            fallback_reason?: string | null;
+            fallback_used?: boolean | null;
+            implementation_id?: string | null;
+            precision: string;
+            status: string;
+        };
+        FrequencyDomainFieldSweepModePayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            /** Format: double */
+            angular_frequency_rad_per_s: number;
+            /** Format: int64 */
+            branch_id?: number | null;
+            field_status?: string | null;
+            /** Format: double */
+            frequency_hz: number;
+            mode_artifact_path?: string | null;
+            mode_field_id?: string | null;
+            mode_field_resource_key?: string | null;
+            mode_id: string;
+            /** Format: int64 */
+            raw_mode_index: number;
+            /** Format: double */
+            residual_relative_l2?: number | null;
+            sample_id: string;
+            source_revision: string;
+            status: string;
+        };
+        FrequencyDomainFieldSweepReferencePayload: {
+            artifact: string;
+            relation: string;
+            revision: string;
+        };
+        FrequencyDomainFieldSweepSamplePayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            bias_field_a_per_m?: number[] | null;
+            bias_field_mu0_t?: number[] | null;
+            branch_ids?: number[] | null;
+            equilibrium_artifact_sha256?: string | null;
+            linearization_state_sha256?: string | null;
+            modes?: components["schemas"]["FrequencyDomainFieldSweepModePayload"][] | null;
+            operator_input_signature_sha256?: string | null;
+            sample_id?: string | null;
+            /** Format: int64 */
+            sample_index?: number | null;
+            scan_axis?: null | components["schemas"]["FrequencyDomainFieldSweepAxisPayload"];
+            status?: string | null;
+            stop_reason?: string | null;
+            topology?: null | components["schemas"]["FrequencyDomainFieldSweepTopologyPayload"];
+        };
+        FrequencyDomainFieldSweepSourcePayload: {
+            artifact: string;
+            kind: string;
+            revision: string;
+        };
+        FrequencyDomainFieldSweepTopologyPayload: {
+            indexing: string;
+            mesh_generation_id?: string | null;
+            mesh_id: string;
+            mode_axis: string;
+            /** Format: int64 */
+            node_count?: number | null;
+            sample_axis: string;
+            topology_fingerprint?: string | null;
+            topology_revision: string;
+        };
+        FrequencyDomainFieldSweepUnitsPayload: {
+            angular_frequency: string;
+            bias_field: string;
+            bias_field_display: string;
+            covariance?: string | null;
+            frequency: string;
+            linewidth?: string | null;
+            q_factor?: string | null;
+            response_amplitude?: string | null;
+        };
+        FrequencyDomainFmrPeakPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            /** Format: double */
+            frequency_hz?: number | null;
+            mode_id?: string | null;
+            peak_id?: string | null;
+            sample_id?: string | null;
+            status?: string | null;
+        };
+        FrequencyDomainFmrPeaksArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            complete?: boolean | null;
+            interrupted?: boolean | null;
+            peaks?: components["schemas"]["FrequencyDomainFmrPeakPayload"][] | null;
+            schema_version: string;
+            status?: string | null;
+        };
+        /**
+         * @description Typed control-plane payloads published by the frequency-domain artifact
+         *     family.  The enum is intentionally untagged so the JSON body remains
+         *     backward compatible with the existing artifact files: the artifact's
+         *     `schema_version` remains the discriminator on the wire.
+         */
+        FrequencyDomainJsonArtifactPayload: components["schemas"]["FrequencyDomainManifestArtifactPayload"] | components["schemas"]["FrequencyDomainSpectrumV3ArtifactPayload"] | components["schemas"]["FrequencyDomainSpectrumArtifactPayload"] | components["schemas"]["FrequencyDomainBranchesArtifactPayload"] | components["schemas"]["FrequencyDomainFieldSweepArtifactPayload"] | components["schemas"]["FrequencyDomainDiagnosticsArtifactPayload"] | components["schemas"]["FrequencyDomainModeArtifactPayload"] | components["schemas"]["FrequencyDomainResponseSweepArtifactPayload"] | components["schemas"]["FrequencyDomainResponsePointPayload"] | components["schemas"]["FrequencyDomainFmrPeaksArtifactPayload"] | components["schemas"]["FrequencyDomainResonanceFitsArtifactPayload"] | components["schemas"]["FrequencyDomainKittelFitArtifactPayload"];
         FrequencyDomainJsonArtifactResource: {
             artifact_path: string;
+            /** @description SHA-256 digest of the immutable JSON artifact bytes. */
+            content_digest?: string | null;
+            /** @description Runtime mesh generation bound to the publishing stage. */
+            mesh_generation_id?: string | null;
             missing_reason?: string | null;
-            payload?: unknown;
+            payload?: null | components["schemas"]["FrequencyDomainJsonArtifactPayload"];
             resource_key: string;
+            /** @description Content-addressed revision of the immutable JSON artifact bytes. */
+            revision?: string | null;
+            /** @description Actual run that owns the current immutable artifact directory. */
+            run_id?: string | null;
             schema_version: string;
+            /** @description Actual session that owns the current immutable artifact directory. */
+            session_id?: string | null;
+            /** @description Actual stage that published the artifact, when available in live state. */
+            stage_id?: string | null;
             status: string;
         };
         FrequencyDomainKPathControlPointResource: {
@@ -5553,6 +6445,31 @@ export interface components {
             kind: string;
             points: components["schemas"]["FrequencyDomainKPathControlPointResource"][];
             samples_per_segment: number[];
+        };
+        FrequencyDomainKittelFitArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            complete?: boolean | null;
+            points?: components["schemas"]["FrequencyDomainKittelFitPointPayload"][] | null;
+            schema_version: string;
+            status?: string | null;
+            validation_status?: string | null;
+        };
+        FrequencyDomainKittelFitPointPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            /** Format: double */
+            relative_frequency_error?: number | null;
+            sample_id?: string | null;
+            /** Format: double */
+            solved_frequency_hz?: number | null;
+        };
+        FrequencyDomainManifestArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            analysis_family?: string | null;
+            candidate_identity?: null | components["schemas"]["FrequencyDomainCandidateIdentityPayload"];
+            engine_id?: string | null;
+            fields_available?: boolean | null;
+            schema_version: string;
+            solve_succeeded?: boolean | null;
+            spectrum_completeness?: string | null;
+            study_product?: string | null;
+            window_complete?: boolean | null;
         };
         FrequencyDomainManifestResource: {
             capabilities: components["schemas"]["FrequencyDomainCapabilitySnapshotResource"];
@@ -5578,6 +6495,89 @@ export interface components {
             production_gpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             reference_cpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
         };
+        FrequencyDomainModalObjectParticipationPayload: {
+            components: components["schemas"]["FrequencyDomainModalParticipationFractionsPayload"];
+            object_id: string;
+            /** Format: double */
+            total_fraction: number;
+        };
+        FrequencyDomainModalParticipationFractionsPayload: {
+            /** Format: double */
+            total: number;
+            /** Format: double */
+            x: number;
+            /** Format: double */
+            y: number;
+            /** Format: double */
+            z: number;
+        };
+        FrequencyDomainModalParticipationPayload: {
+            component_basis: string;
+            definition_id: string;
+            global?: null | components["schemas"]["FrequencyDomainModalParticipationFractionsPayload"];
+            integration_method: string;
+            objects?: components["schemas"]["FrequencyDomainModalObjectParticipationPayload"][];
+            provenance: components["schemas"]["FrequencyDomainModalParticipationProvenancePayload"];
+            qualification: string;
+            quantity_id: string;
+            quantity_symbol: string;
+            schema_version: string;
+            status: components["schemas"]["FrequencyDomainModalParticipationStatus"];
+            unavailable?: null | components["schemas"]["FrequencyDomainModalParticipationUnavailablePayload"];
+            unit: string;
+        };
+        FrequencyDomainModalParticipationProvenancePayload: {
+            observable_lane: string;
+            solver_device: string;
+            source_mesh_identity?: null | components["schemas"]["FrequencyDomainModeSourceMeshIdentityPayload"];
+        };
+        /** @enum {string} */
+        FrequencyDomainModalParticipationStatus: "ready" | "unavailable";
+        FrequencyDomainModalParticipationUnavailablePayload: {
+            detail: string;
+            reason_code: string;
+        };
+        FrequencyDomainModeArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            candidate_identity?: null | components["schemas"]["FrequencyDomainCandidateIdentityPayload"];
+            component_basis?: string | null;
+            engine_id?: string | null;
+            fields_available?: boolean | null;
+            /** Format: double */
+            frequency_hz?: number | null;
+            /** Format: int64 */
+            raw_mode_index?: number | null;
+            /** Format: int64 */
+            sample_index?: number | null;
+            schema_version: string;
+            solve_succeeded?: boolean | null;
+            source_mesh_identity?: null | components["schemas"]["FrequencyDomainModeSourceMeshIdentityPayload"];
+            source_spectrum_revision?: string | null;
+            spectrum_completeness?: string | null;
+            value_kind?: string | null;
+            window_complete?: boolean | null;
+        };
+        FrequencyDomainModeSourceMeshIdentityPayload: {
+            indexing: string;
+            mesh_generation_id?: string | null;
+            mesh_id?: string | null;
+            /** Format: int64 */
+            mesh_revision?: number | null;
+            /** Format: int64 */
+            node_count: number;
+            topology_fingerprint: string;
+        };
+        FrequencyDomainResonanceFitPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            fit_id?: string | null;
+            model?: string | null;
+            /** Format: double */
+            peak_frequency_hz?: number | null;
+        };
+        FrequencyDomainResonanceFitsArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            complete?: boolean | null;
+            fits?: components["schemas"]["FrequencyDomainResonanceFitPayload"][] | null;
+            schema_version: string;
+            status?: string | null;
+        };
         FrequencyDomainResponseCapabilitiesResource: {
             frequency_sweep: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             magnetic_cpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
@@ -5585,6 +6585,84 @@ export interface components {
             magnetoelastic_elastodynamic: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             magnetoelastic_quasistatic: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             mode_projected: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+        };
+        FrequencyDomainResponsePointPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            /** Format: double */
+            frequency_hz?: number | null;
+            /** Format: int64 */
+            frequency_index?: number | null;
+            /** @description Stable response-point identity; `frequency_index` is presentation order only. */
+            point_id?: string | null;
+        };
+        FrequencyDomainResponseSweepArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            complete?: boolean | null;
+            interrupted?: boolean | null;
+            points?: components["schemas"]["FrequencyDomainResponsePointPayload"][] | null;
+            schema_version: string;
+            status?: string | null;
+        };
+        FrequencyDomainSpectrumArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            candidate_identity?: null | components["schemas"]["FrequencyDomainCandidateIdentityPayload"];
+            engine_id?: string | null;
+            fields_available?: boolean | null;
+            samples: components["schemas"]["FrequencyDomainSpectrumSamplePayload"][];
+            schema_version: string;
+            solve_succeeded?: boolean | null;
+            spectrum_completeness?: string | null;
+            window_complete?: boolean | null;
+        };
+        FrequencyDomainSpectrumModePayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            /** Format: int64 */
+            branch_id?: number | null;
+            /** Format: double */
+            frequency_hz?: number | null;
+            /** Format: double */
+            frequency_real_hz?: number | null;
+            /** @description Stable mode identity within a spectrum sample. */
+            mode_id?: string | null;
+            /** Format: int64 */
+            raw_mode_index?: number | null;
+        };
+        FrequencyDomainSpectrumSamplePayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            modes?: components["schemas"]["FrequencyDomainSpectrumModePayload"][] | null;
+            /** @description Stable sample identity; `sample_index` is presentation order only. */
+            sample_id?: string | null;
+            /** Format: int64 */
+            sample_index?: number | null;
+        };
+        /**
+         * @description Per-object modal-spectrum contract. Unlike `eigen_spectrum.v2`, this
+         *     version owns stable sample/mode identities and component participation.
+         */
+        FrequencyDomainSpectrumV3ArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            candidate_identity?: null | components["schemas"]["FrequencyDomainCandidateIdentityPayload"];
+            engine_id?: string | null;
+            fields_available?: boolean | null;
+            samples: components["schemas"]["FrequencyDomainSpectrumV3SamplePayload"][];
+            schema_version: string;
+            solve_succeeded?: boolean | null;
+            spectrum_completeness?: string | null;
+            window_complete?: boolean | null;
+        };
+        FrequencyDomainSpectrumV3ModePayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            /** Format: int64 */
+            branch_id?: number | null;
+            component_participation: components["schemas"]["FrequencyDomainModalParticipationPayload"];
+            /** Format: double */
+            frequency_hz: number;
+            mode_field_id?: string | null;
+            mode_field_resource_key?: string | null;
+            mode_id: string;
+            /** Format: int64 */
+            raw_mode_index: number;
+            /** Format: double */
+            residual_relative_l2: number;
+        };
+        FrequencyDomainSpectrumV3SamplePayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            modes: components["schemas"]["FrequencyDomainSpectrumV3ModePayload"][];
+            sample_id: string;
+            /** Format: int64 */
+            sample_index: number;
         };
         FrequencyDomainSweepProgressResource: {
             complete: boolean;
@@ -5618,6 +6696,10 @@ export interface components {
             schema_version: string;
             status: string;
             text?: string | null;
+        };
+        FrequencyDomainTrackingDiagnosticsPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            modal_overlap_available?: boolean | null;
+            tracking_score_source?: string | null;
         };
         FrequencyDomainValidationCapabilitiesResource: {
             fmr_k0: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
@@ -7544,6 +8626,107 @@ export interface components {
             /** Format: int64 */
             uptime_seconds: number;
         };
+        ModeCompositionDatasetPatch: {
+            artifact_revision: string;
+            run_id: string;
+            stage_id: string;
+        };
+        ModeCompositionLayer: {
+            /** Format: double */
+            amplitude_scale: number;
+            animation: components["schemas"]["ModeLayerAnimation"];
+            appearance: components["schemas"]["ModeLayerAppearance"];
+            component: components["schemas"]["ModeFieldComponent"];
+            enabled: boolean;
+            field_id: string;
+            layer_id: string;
+            mode: components["schemas"]["EigenModeResourceRef"];
+            normalization: components["schemas"]["ModeFieldNormalization"];
+            object_id: string;
+            /** Format: double */
+            phase_rad: number;
+            representation: components["schemas"]["ModeFieldRepresentation"];
+            target_id: string;
+        };
+        ModeCompositionLifecycle: {
+            /** Format: int64 */
+            artifact_revision: number;
+            /** Format: int64 */
+            mesh_revision: number;
+            run_id?: string | null;
+            session_id: string;
+        };
+        ModeCompositionOperation: {
+            layer: components["schemas"]["ModeCompositionLayer"];
+            /** @enum {string} */
+            op: "upsert_layer";
+        } | {
+            layer_id: string;
+            /** @enum {string} */
+            op: "remove_layer";
+        } | {
+            /** @enum {string} */
+            op: "clear_layers";
+        };
+        ModeCompositionPatch: {
+            /** Format: int64 */
+            base_revision: number;
+            dataset?: null | components["schemas"]["ModeCompositionDatasetPatch"];
+            operations?: components["schemas"]["ModeCompositionOperation"][];
+            phase_clock?: null | components["schemas"]["ModeCompositionPhaseClock"];
+        };
+        ModeCompositionPhaseClock: {
+            /** Format: double */
+            master_rate_hz: number;
+            synchronized: boolean;
+        };
+        ModeCompositionResource: {
+            artifact_revision: string;
+            composition_id: string;
+            layers: components["schemas"]["ModeCompositionLayer"][];
+            /**
+             * @description Runtime identity that owns this ephemeral visualization resource. It is
+             *     intentionally distinct from the immutable mode-artifact identity.
+             */
+            lifecycle: components["schemas"]["ModeCompositionLifecycle"];
+            phase_clock: components["schemas"]["ModeCompositionPhaseClock"];
+            /** Format: int64 */
+            revision: number;
+            run_id: string;
+            schema_version: string;
+            stage_id: string;
+        };
+        /** @enum {string} */
+        ModeFieldComponent: "vector" | "magnitude" | "x" | "y" | "z";
+        /** @enum {string} */
+        ModeFieldNormalization: "mode_global_max" | "object_max" | "manual";
+        /** @enum {string} */
+        ModeFieldRepresentation: "phase_rotated_real" | "real" | "imag" | "abs" | "phase";
+        ModeLayerAnimation: {
+            enabled: boolean;
+            /** Format: double */
+            phase_offset_rad: number;
+            /** Format: double */
+            rate_hz: number;
+            synchronized: boolean;
+        };
+        ModeLayerAppearance: {
+            auto_range: boolean;
+            colorbar_visible: boolean;
+            colormap: string;
+            /** Format: double */
+            opacity: number;
+            /** Format: double */
+            range_max?: number | null;
+            /** Format: double */
+            range_min?: number | null;
+            symmetric_zero: boolean;
+            /** Format: int32 */
+            vector_budget: number;
+            /** Format: double */
+            vector_length_scale: number;
+            vectors_visible: boolean;
+        };
         ModelAuthoringCapabilities: {
             move: components["schemas"]["ModelAuthoringCapability"];
             rotate: components["schemas"]["ModelAuthoringCapability"];
@@ -8545,6 +9728,11 @@ export interface components {
             mesh_build_revision: number;
             /** Format: int64 */
             mesh_revision: number;
+            /**
+             * Format: int64
+             * @description Independent revision of the lightweight per-object modal visualization composition.
+             */
+            mode_composition_revision: number;
             /** Format: int64 */
             region_coefficients_revision: number;
             /** Format: int64 */
@@ -9661,11 +10849,13 @@ export interface components {
         SessionImportCommitRequest: {
             /** @description Base64-encoded `.fms` file content. */
             fms_base64: string;
-            /** @description Restore mode: "resume", "initial_condition", "config_only". */
-            restore_mode?: string | null;
+            /** @description Requested import behavior. Defaults to a visualization-only restore. */
+            restore_mode?: components["schemas"]["SessionRestoreMode"];
         };
         SessionImportCommitResponse: {
+            compatibility: components["schemas"]["SessionRestoreCompatibility"];
             restore_class: components["schemas"]["RestoreClass"];
+            restore_mode: components["schemas"]["SessionRestoreMode"];
             session_id: string;
             ui_state?: unknown;
             warnings: string[];
@@ -9707,6 +10897,30 @@ export interface components {
         };
         /** @enum {string} */
         SessionResourceLifecycle: "active" | "tombstoned";
+        /** @description Semantic compatibility report returned with every accepted FMS import. */
+        SessionRestoreCompatibility: {
+            execution: components["schemas"]["SessionRestoreCompatibilityCategory"];
+            geometry: components["schemas"]["SessionRestoreCompatibilityCategory"];
+            materials_physics: components["schemas"]["SessionRestoreCompatibilityCategory"];
+            mesh: components["schemas"]["SessionRestoreCompatibilityCategory"];
+            problem_ir: components["schemas"]["SessionRestoreCompatibilityCategory"];
+            study_stages: components["schemas"]["SessionRestoreCompatibilityCategory"];
+        };
+        /**
+         * @description Whether a semantic category could be compared from both snapshots.
+         * @enum {string}
+         */
+        SessionRestoreCompatibilityBasis: "available" | "unavailable";
+        /** @description Non-blocking semantic differences in one restore category. */
+        SessionRestoreCompatibilityCategory: {
+            basis: components["schemas"]["SessionRestoreCompatibilityBasis"];
+            differences: string[];
+        };
+        /**
+         * @description Explicit import behavior for an FMS archive.
+         * @enum {string}
+         */
+        SessionRestoreMode: "visualization_only" | "replace_project" | "resume";
         SessionSummary: {
             created_at: string;
             name: string;
@@ -10428,6 +11642,15 @@ export interface components {
             /** Format: int64 */
             last_progress_unix_ms?: number | null;
             loaded_state_ref?: string | null;
+            /** @description Stable generation identity of the solver mesh used by this stage. */
+            mesh_generation_id?: string | null;
+            /**
+             * Format: int64
+             * @description Mesh resource revision observed when this stage mesh was published.
+             */
+            mesh_revision?: number | null;
+            /** @description Content-derived topology fingerprint of the solver mesh used by this stage. */
+            mesh_topology_fingerprint?: string | null;
             metric_kind?: null | components["schemas"]["StageMetricKind"];
             metric_name?: string | null;
             metric_unit?: null | components["schemas"]["StageMetricUnit"];
@@ -11967,6 +13190,26 @@ export interface operations {
             };
         };
     };
+    analysis_get_sessions_current_analysis_frequency_domain_eigen_field_sweep: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain eigen field sweep resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainJsonArtifactResource"];
+                };
+            };
+        };
+    };
     analysis_get_sessions_current_analysis_frequency_domain_eigen_mode_field_sample_index_mode_index_meta: {
         parameters: {
             query?: never;
@@ -11992,6 +13235,31 @@ export interface operations {
             };
         };
     };
+    analysis_get_sessions_current_analysis_frequency_domain_eigen_modes_sample_index_mode_index: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description K-path sample index */
+                sample_index: number;
+                /** @description Raw mode index within the sample */
+                mode_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revisioned frequency-domain eigen mode resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainJsonArtifactResource"];
+                };
+            };
+        };
+    };
     analysis_get_sessions_current_analysis_frequency_domain_eigen_spectrum_v2: {
         parameters: {
             query?: never;
@@ -12002,6 +13270,86 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Frequency-domain eigen spectrum v2 resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainJsonArtifactResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_domain_eigen_spectrum_v3: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain eigen spectrum v3 resource with per-object component participation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainJsonArtifactResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_domain_fmr_kittel_fit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain FMR Kittel fit resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainJsonArtifactResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_domain_fmr_peaks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain FMR peaks resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainJsonArtifactResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_domain_fmr_resonance_fits: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain FMR resonance fits resource */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -12048,6 +13396,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FrequencyDomainSweepProgressResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_domain_response_diagnostics_v1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain response diagnostics compatibility resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainJsonArtifactResource"];
                 };
             };
         };
@@ -12588,6 +13956,413 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HysteresisSettleTraceEntrySchema"][];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                stage_id?: string;
+                product_kind?: string;
+                search?: string;
+                from_si?: number;
+                to_si?: number;
+                sample_id?: string;
+                item_kind?: string;
+                branch_id?: string;
+                status?: string;
+                has_field?: boolean;
+                has_fields?: boolean;
+                frequency_min_hz?: number;
+                frequency_max_hz?: number;
+                residual_max?: number;
+                sort?: string;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Run-scoped result dataset catalog */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultDatasetCatalogResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Result dataset manifest */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultDatasetManifestResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_axes_axis_id_values: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                stage_id?: string;
+                product_kind?: string;
+                search?: string;
+                from_si?: number;
+                to_si?: number;
+                sample_id?: string;
+                item_kind?: string;
+                branch_id?: string;
+                status?: string;
+                has_field?: boolean;
+                has_fields?: boolean;
+                frequency_min_hz?: number;
+                frequency_max_hz?: number;
+                residual_max?: number;
+                sort?: string;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+                axis_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded result axis values */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultAxisValuesResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_branches: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                stage_id?: string;
+                product_kind?: string;
+                search?: string;
+                from_si?: number;
+                to_si?: number;
+                sample_id?: string;
+                item_kind?: string;
+                branch_id?: string;
+                status?: string;
+                has_field?: boolean;
+                has_fields?: boolean;
+                frequency_min_hz?: number;
+                frequency_max_hz?: number;
+                residual_max?: number;
+                sort?: string;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paged tracked result branches */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultBranchPageResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_branches_branch_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+                branch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tracked result branch */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultBranchResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_branches_branch_id_points: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                stage_id?: string;
+                product_kind?: string;
+                search?: string;
+                from_si?: number;
+                to_si?: number;
+                sample_id?: string;
+                item_kind?: string;
+                branch_id?: string;
+                status?: string;
+                has_field?: boolean;
+                has_fields?: boolean;
+                frequency_min_hz?: number;
+                frequency_max_hz?: number;
+                residual_max?: number;
+                sort?: string;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+                branch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paged tracked result branch points */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultBranchPointPageResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_items: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                stage_id?: string;
+                product_kind?: string;
+                search?: string;
+                from_si?: number;
+                to_si?: number;
+                sample_id?: string;
+                item_kind?: string;
+                branch_id?: string;
+                status?: string;
+                has_field?: boolean;
+                has_fields?: boolean;
+                frequency_min_hz?: number;
+                frequency_max_hz?: number;
+                residual_max?: number;
+                sort?: string;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paged result items */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultItemPageResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_items_item_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Result item detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultSpectralItemSummary"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_projections_projection_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+                projection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded result projection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultProjectionResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_relations: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                stage_id?: string;
+                product_kind?: string;
+                search?: string;
+                from_si?: number;
+                to_si?: number;
+                sample_id?: string;
+                item_kind?: string;
+                branch_id?: string;
+                status?: string;
+                has_field?: boolean;
+                has_fields?: boolean;
+                frequency_min_hz?: number;
+                frequency_max_hz?: number;
+                residual_max?: number;
+                sort?: string;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paged result relations */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultRelationPageResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_relations_relation_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+                relation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Result relation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultRelationResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_samples: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                stage_id?: string;
+                product_kind?: string;
+                search?: string;
+                from_si?: number;
+                to_si?: number;
+                sample_id?: string;
+                item_kind?: string;
+                branch_id?: string;
+                status?: string;
+                has_field?: boolean;
+                has_fields?: boolean;
+                frequency_min_hz?: number;
+                frequency_max_hz?: number;
+                residual_max?: number;
+                sort?: string;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paged result samples */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultSamplePageResource"];
                 };
             };
         };
@@ -18876,7 +20651,7 @@ export interface operations {
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
-                /** @description Interaction kind: exchange | demag | interfacial_dmi | uniaxial_anisotropy */
+                /** @description Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy */
                 interaction_kind: string;
             };
             cookie?: never;
@@ -18908,7 +20683,7 @@ export interface operations {
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
-                /** @description Interaction kind: exchange | demag | interfacial_dmi | uniaxial_anisotropy */
+                /** @description Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy */
                 interaction_kind: string;
             };
             cookie?: never;
@@ -21522,6 +23297,64 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    visualization_get_sessions_current_visualization_mode_compositions_active: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Active per-object eigenmode visualization composition */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModeCompositionResource"];
+                };
+            };
+        };
+    };
+    visualization_patch_sessions_current_visualization_mode_compositions_active: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModeCompositionPatch"];
+            };
+        };
+        responses: {
+            /** @description Active composition patched */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModeCompositionResource"];
+                };
+            };
+            /** @description Invalid composition patch */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Composition revision or dataset conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

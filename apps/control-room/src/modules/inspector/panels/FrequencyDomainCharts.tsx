@@ -6,10 +6,7 @@ import { Eye } from "lucide-react";
 import { EChartsCanvasSurface } from "@/shared/analysis-charts/EChartsCanvasSurface";
 import { ChartExportControls } from "@/shared/analysis-charts/ChartExportControls";
 import type { ChartRendererOwner, ChartRenderModel } from "@/shared/analysis-charts/chartRenderer";
-import {
-  frequencySeriesRenderModel,
-  frequencySpectrumRenderModel,
-} from "@/shared/analysis-charts/frequencyRenderModels";
+import { frequencySeriesRenderModel } from "@/shared/analysis-charts/frequencyRenderModels";
 
 import type {
   EigenDispersionPoint,
@@ -29,6 +26,17 @@ function formatNumber(value: number): string {
   return Number(value.toPrecision(5)).toLocaleString("en-US");
 }
 
+/** Preserve the modal artifact axes: display mode rank versus physical Hz. */
+export function frequencyDomainSpectrumChartRenderModel(
+  model: FrequencyDomainChartBuildResult<EigenSpectrumPoint>,
+): ChartRenderModel {
+  return frequencySeriesRenderModel(
+    model.series,
+    "FMR / eigen modal spectrum",
+    "mode rank",
+  );
+}
+
 export function FrequencyDomainSpectrumChart({
   model,
   onPlotMode,
@@ -40,34 +48,15 @@ export function FrequencyDomainSpectrumChart({
   onSelectMode?: (point: EigenSpectrumPoint) => void;
   selectedModeKey?: string | null;
 }) {
-  const frequencySeries = model.series.find(
-    (series) => series.quantity === "frequency",
-  );
-  const frequencyUnit = frequencySeries?.unit ?? "Hz";
+  const chartModel = frequencyDomainSpectrumChartRenderModel(model);
   const data = model.points.map((point, rowIndex) => {
-    const frequencySeriesPoint = frequencySeries?.points.find(
-      (seriesPoint) => seriesPoint.rowIndex === rowIndex,
-    );
-    const frequencyValue = frequencySeriesPoint?.y ?? point.frequencyHz;
-    const frequencyScale =
-      point.frequencyHz !== 0 && frequencySeriesPoint?.y != null
-        ? frequencySeriesPoint.y / point.frequencyHz
-        : 1;
     return {
-      dampingRateHz:
-        point.dampingRateHz == null
-          ? null
-          : point.dampingRateHz * frequencyScale,
-      dampingRateLabel:
-        point.dampingRateHz == null
-          ? null
-          : formatFrequencyHz(point.dampingRateHz),
-      frequencyLabel: `${formatNumber(frequencyValue)} ${frequencyUnit}`,
-      frequencyValue,
+      dampingRateHz: point.dampingRateHz,
+      frequencyLabel: formatFrequencyHz(point.frequencyHz),
       hasField: Boolean(point.modeFieldId),
       leakage: point.tangentLeakageMax,
-      mode: point.rawModeIndex,
-      name: `mode ${point.rawModeIndex}`,
+      mode: point.displayModeIndex,
+      name: `mode ${point.displayModeIndex}`,
       rowIndex,
       residualNorm: point.residualNorm,
       sample: point.sampleIndex,
@@ -76,23 +65,34 @@ export function FrequencyDomainSpectrumChart({
     };
   });
   const resolvePoint = (event: unknown) => {
-    const rowIndex = spectrumPointIndexFromChartEvent(event);
+    const rowIndex = frequencyDomainSeriesPointIndexFromChartEvent(event);
     return rowIndex == null ? null : model.points[rowIndex] ?? null;
   };
 
   return (
     <FrequencyDomainEChartsFrame
+      model={chartModel}
       droppedPointCount={model.droppedPointCount}
       onChartClick={(event) => {
         const point = resolvePoint(event);
         if (point) onSelectMode?.(point);
       }}
-      model={frequencySpectrumRenderModel(data, frequencyUnit)}
-      pointCount={data.length}
+      pointCount={chartModel.series.reduce(
+        (count, series) => count + series.points.length,
+        0,
+      )}
       title="FMR / eigen modal spectrum"
     >
+      {chartModel.series.slice(0, 4).map((series) => (
+        <span key={series.id}>
+          {series.label}: {series.points.length} samples
+        </span>
+      ))}
       {data.map((point) => (
-        <div className="fm-frequency-domain-chart__point-actions" key={`:`}>
+        <div
+          className="fm-frequency-domain-chart__point-actions"
+          key={`${point.sample}:${point.mode}:${point.rowIndex}`}
+        >
         <Button
           aria-label={`Select mode ${point.mode} at ${point.frequencyLabel}, ${point.hasField ? "3D field available" : "3D field missing"}`}
           className="fm-frequency-domain-chart__mode"
@@ -112,7 +112,7 @@ export function FrequencyDomainSpectrumChart({
               ? ` | residual ${formatNumber(point.residualNorm)}`
               : ""}
             {point.dampingRateHz != null
-              ? ` | damping ${point.dampingRateLabel}`
+              ? ` | damping ${formatFrequencyHz(point.dampingRateHz)}`
               : ""}
             {point.leakage != null
               ? ` | leakage ${formatNumber(point.leakage)}`

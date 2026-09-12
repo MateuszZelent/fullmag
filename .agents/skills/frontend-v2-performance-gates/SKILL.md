@@ -1,44 +1,50 @@
 ---
 name: frontend-v2-performance-gates
-description: Use when making frontend v2 performance, memory, profiler, rendering, diagnostics, cache, worker, or optimization changes.
+description: "Use when making apps/control-room performance, memory, profiler, rendering, diagnostics, cache, worker, or optimization changes."
 ---
 
 # Frontend v2 Performance Gates
 
-Use this before claiming a frontend v2 performance improvement or memory fix.
+Use this skill before claiming a measured performance or memory improvement in `apps/control-room`. The user instruction and root `AGENTS.md` take precedence. Reuse already loaded frontend skills and do not read them twice in one turn.
 
-## Required Checks
+## Required evidence
 
-1. Read `docs/specs/frontend-v2/17-performance-memory-profiler.md`.
-2. Define the scenario, baseline, metric, and expected improvement before changing code.
-3. Instrument render reasons, resource counts, or request timings where needed.
-4. Verify idle behavior separately from active interaction behavior.
-5. Use stress loops for leak claims.
-6. For chart work, define the artifact size, point count, series count, update cadence, and expected idle redraw
-   count before changing code.
-7. Report measurements, not impressions.
+1. Define the scenario, baseline, metric, workload, and expected improvement before changing code.
+2. Instrument only the affected render reasons, resource counts, request timings, or memory counters.
+3. Measure idle separately from active interaction.
+4. Use a bounded stress loop for leak claims.
+5. For charts, record artifact size, point/series counts, update cadence, and expected idle redraw count.
+6. Report measurements and uncertainty, not impressions.
 
-## Banned Patterns
+Choose only the relevant verification for the changed path:
+
+- `audit:idle-performance` for idle rendering or refresh;
+- `audit:compute-performance` or `audit:chart-performance` for the corresponding hot path;
+- a focused Vitest test for resource hooks, viewport memory, chart models, or stores;
+- a browser smoke when rendering or lifecycle behavior is user-visible.
+
+Do not repeat a green measurement without a new change, failure, or unresolved question.
+
+## Banned patterns
 
 - performance claims without before/after evidence;
 - sampling loops that create their own performance problem;
 - `setInterval` for resource refresh;
 - unbounded diagnostic logs;
 - memoization used to hide wrong state ownership;
-- profiler code left always-on in production paths.
-- rebuilding chart models from raw artifacts on every render;
+- profiler code left always-on in production paths;
+- rebuilding chart models from raw artifacts on unrelated renders;
 - spreading large arrays into `Math.min`, `Math.max`, or similar variadic calls;
-- chart libraries that keep instances, observers, workers, or buffers alive after unmount;
-- hidden `slice(0, n)` UI truncation as a substitute for pagination, virtualization, or decimation.
+- chart libraries that retain instances, observers, workers, or buffers after unmount;
+- hidden `slice(0, n)` truncation instead of pagination, virtualization, or decimation.
 
-## Verification
+## Repository commands
 
-```bash
+~~~powershell
 pnpm --dir apps/control-room audit:idle-performance
-pnpm --dir apps/control-room test -- --run resource-hooks
-pnpm --dir apps/control-room test -- --run viewport-memory-stress
-pnpm --dir apps/control-room test -- --run chart
-npx -y react-doctor@latest apps/control-room --verbose --diff
-```
+pnpm --dir apps/control-room audit:compute-performance
+pnpm --dir apps/control-room audit:chart-performance
+pnpm --dir apps/control-room test -- --run <focused-test>
+~~~
 
-If a command is unavailable, state the missing command and add it as a gate.
+Use the smallest command set that proves the changed behavior. If a repository gate is unavailable, record the missing evidence; do not invent a pass or require unrelated suites.

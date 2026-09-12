@@ -1,7 +1,7 @@
 {
   "schema_version": "frequency_domain_documentation_manifest.v3",
   "package_version": "COMSOL-aligned v5.1 deterministic static contract",
-  "updated_at": "2026-07-10",
+  "updated_at": "2026-08-09",
   "entrypoint": "00_README_CANONICAL_FULL_READ.md",
   "full_pack": "fd_solver_plan_FULL_PACK_COMSOL_ALIGNED_V5.md",
   "full_pack_generated": true,
@@ -9,6 +9,21 @@
   "full_pack_regeneration": {
     "owner_task": 10,
     "condition": "Run scripts/build_fd_solver_masterplan_full_pack.py --check to detect drift and --write only when intentionally regenerating the declared full_pack output."
+  },
+  "production_scope_assertions.v1": {
+    "status": "normative requirements; not current qualification evidence",
+    "managed_runtime": ["libpetsc-real-dev", "libslepc-real-dev"],
+    "spectral_target": {
+      "spectral_scalar_mode": "real_split",
+      "spectral_pencil_kind": "real_frequency_rotated",
+      "complex_target": "sigma=i*omega_target",
+      "real_target": "tau=omega_target",
+      "forbidden": "real EPSSetTarget(omega_target) on the original lambda=i omega pencil"
+    },
+    "required_cpu_stages": ["K0-P1", "K0-P2", "K0-P3", "K0-P4", "K0-P5", "K0-P6"],
+    "required_gpu_stages": ["K0-G1", "K0-G2", "K0-G3", "K0-G4"],
+    "required_product_surfaces": ["Spectrum", "native q/phi mode fields", "unified viewport proof"],
+    "required_definition_of_done": ["DOD-01", "DOD-02", "DOD-03", "DOD-04", "DOD-05", "DOD-06", "DOD-07", "DOD-08", "DOD-09", "DOD-10", "DOD-11", "DOD-12", "DOD-13", "DOD-14"]
   },
   "production_claim_schema": {
     "required_fields": ["implementation_state", "validation_state", "validated_scope"],
@@ -53,7 +68,8 @@
     {"order": 23, "path": "23_floquet_airbox_nonzero_k_cpu_gpu_implementation.md", "role": "normative", "include_in_full_pack": true, "availability": "planned; created by Task 7"},
     {"order": 24, "path": "24_production_definition_of_done.md", "role": "normative", "include_in_full_pack": true, "availability": "planned; created by Task 8"},
     {"order": 25, "path": "25_frequency_domain_readiness_matrix.json", "role": "implementation_status", "include_in_full_pack": false, "availability": "consume-only readiness matrix created by Task 9"},
-    {"order": 26, "path": "25_frequency_domain_readiness_scope_catalog.json", "role": "implementation_status", "include_in_full_pack": false, "availability": "consume-only readiness scope catalog created by Task 9"}
+    {"order": 26, "path": "25_frequency_domain_readiness_scope_catalog.json", "role": "implementation_status", "include_in_full_pack": false, "availability": "consume-only readiness scope catalog created by Task 9"},
+    {"order": 27, "path": "27_fem_k0_eigensolve_production_completion_and_control_room.md", "role": "implementation_plan", "include_in_full_pack": true, "availability": "current production-completion audit and parallel execution plan; not qualification evidence"}
   ],
   "historical_roots": ["old/"],
   "readiness_matrix": "25_frequency_domain_readiness_matrix.json",

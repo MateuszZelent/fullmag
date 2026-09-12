@@ -1,6 +1,13 @@
-import { readFileSync } from "node:fs";
+import { readFileSync as readFileSyncRaw } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+function readFileSync(filePath, encoding) {
+  const contents = readFileSyncRaw(filePath, encoding);
+  return typeof contents === "string"
+    ? contents.replace(/\r\n/g, "\n")
+    : contents;
+}
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const runtimeCommandsPath = path.join(
@@ -1024,10 +1031,18 @@ function checkMeshBuildDialogSessionStatusSelector() {
     "meshBuildDialogRuntimeStatusEquals",
     "useSessionStatusSelector",
     "runtimeStatus",
-    "shouldLoadRuntimeMeshBuild(state.open, runtimeStatus)",
-    "shouldLoadRuntimeMeshSummary(state.open, runtimeStatus)",
-    "shouldLoadRuntimeMeshManifest(state.open, runtimeStatus)",
+
   ]);
+  const compact = source.replace(/\s+/g, "");
+  requireTokens(compact, "MeshBuildDialog open FEM resource gate", [
+    'returnopen&&lane==="fem";',
+    "constexplicitFemLane=shouldLoadMeshBuildDialogFemResources(state.open,lane,);",
+    "useMeshBuildCurrent({enabled:explicitFemLane,})",
+    "useMeshBuildLatestSuccessful({enabled:explicitFemLane,})",
+    "useMeshSummaryResource({enabled:explicitFemLane,})",
+    "useMeshSharedDomainManifestResource({enabled:explicitFemLane,})",
+  ]);
+  forbidTokens(source, "MeshBuildDialog idle polling", ["setInterval("]);
   forbidTokens(source, "MeshBuildDialog session status selector", [
     "import { useSessionStatus }",
     "const sessionStatus = useSessionStatus()",

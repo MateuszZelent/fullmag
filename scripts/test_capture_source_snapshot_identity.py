@@ -786,6 +786,32 @@ def test_materialize_rejects_unsafe_committed_symlink_graph(
     assert expected_detail in result.stderr
 
 
+def test_materialize_rejects_committed_symlink_with_empty_target(
+    tmp_path: Path,
+) -> None:
+    repo = _repository(tmp_path)
+    empty_object = subprocess.run(
+        ("git", "hash-object", "-w", "--stdin"),
+        cwd=repo,
+        input=b"",
+        capture_output=True,
+        check=True,
+    ).stdout.decode("ascii").strip()
+    _git(
+        repo,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        f"120000,{empty_object},empty-link",
+    )
+    _git(repo, "commit", "-qm", "add empty symlink target")
+
+    result = _materialize(repo, tmp_path / "snapshot", tmp_path / "identity.json")
+
+    assert result.returncode == 2
+    assert "source symlink has empty target: empty-link" in result.stderr
+
+
 def test_verify_materialized_binds_identity_to_exact_snapshot_content_and_mode(
     tmp_path: Path,
 ) -> None:
@@ -858,3 +884,35 @@ def test_materialized_snapshot_is_normalized_and_independent_of_worktree(
 
     tracked.write_text("later mutation\n", encoding="utf-8")
     assert (snapshot / "tracked.txt").read_text(encoding="utf-8") == "captured tracked\n"
+
+
+def test_materialize_uses_committed_bytes_when_parent_git_enables_autocrlf(
+    tmp_path: Path,
+) -> None:
+    repo = _repository(tmp_path)
+    snapshot = tmp_path / "snapshot-autocrlf"
+    identity_path = tmp_path / "identity-autocrlf.json"
+    environment = os.environ.copy()
+    environment["GIT_CONFIG_COUNT"] = "1"
+    environment["GIT_CONFIG_KEY_0"] = "core.autocrlf"
+    environment["GIT_CONFIG_VALUE_0"] = "true"
+
+    captured = subprocess.run(
+        (
+            sys.executable,
+            str(CAPTURE),
+            "--repo-root",
+            str(repo),
+            "--output",
+            str(identity_path),
+            "--materialize",
+            str(snapshot),
+        ),
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert captured.returncode == 0, captured.stderr
+    assert (snapshot / "tracked.txt").read_bytes() == b"committed\n"

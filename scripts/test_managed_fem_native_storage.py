@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -13,28 +14,32 @@ RESTORER = REPO_ROOT / "scripts/restore_persistent_fem_runtime.sh"
 
 def _resolve(profile: str | None = None) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
-    if profile is None:
-        environment.pop("FULLMAG_NATIVE_STORAGE_PROFILE", None)
-    else:
-        environment["FULLMAG_NATIVE_STORAGE_PROFILE"] = profile
-    return subprocess.run(
-        [
-            "bash",
-            "--noprofile",
-            "--norc",
-            "-euo",
-            "pipefail",
-            "-c",
-            'source "$1"; resolve_managed_fem_native_storage; printf "%s\\n" "$FULLMAG_NATIVE_BUILD_STORAGE_ROOT" "$FULLMAG_NATIVE_BUILD_IMAGE" "$FULLMAG_NATIVE_MOUNT_VIEW"',
-            "bash",
-            str(HELPER),
-        ],
-        cwd=REPO_ROOT,
-        env=environment,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    # Exercise the legacy helper fallback in an isolated fixture.  A real
+    # checkout containing fullmag_storage.py must use the common resolver.
+    with tempfile.TemporaryDirectory() as fixture:
+        environment["FULLMAG_REPO_ROOT"] = fixture
+        if profile is None:
+            environment.pop("FULLMAG_NATIVE_STORAGE_PROFILE", None)
+        else:
+            environment["FULLMAG_NATIVE_STORAGE_PROFILE"] = profile
+        return subprocess.run(
+            [
+                "bash",
+                "--noprofile",
+                "--norc",
+                "-euo",
+                "pipefail",
+                "-c",
+                'source "$1"; resolve_managed_fem_native_storage; printf "%s\\n" "$FULLMAG_NATIVE_BUILD_STORAGE_ROOT" "$FULLMAG_NATIVE_BUILD_IMAGE" "$FULLMAG_NATIVE_MOUNT_VIEW"',
+                "bash",
+                str(HELPER),
+            ],
+            cwd=REPO_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
 
 def test_default_profile_resolves_existing_canonical_storage() -> None:

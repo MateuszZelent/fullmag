@@ -1,14 +1,21 @@
+use super::eigen_anisotropy::volume_anisotropy_field;
+use super::eigen_math::{add_vector, cross, dot, norm, normalize_vector};
+use super::eigen_reduction::{
+    add_complex_tangent_block, project_local_tangent_block_to_reduced, tangent_transport_to_root,
+    ReductionMap,
+};
 use crate::eigen::assembly_scalar::AssembledScalarOperator;
-use crate::fem::eigen_anisotropy::volume_anisotropy_field;
-use crate::fem::eigen_output::{add_vector, cross, dot, norm, normalize_vector};
-use crate::fem::eigen_reduction::ReductionMap;
 use fullmag_engine::fem::MeshTopology;
-use fullmag_engine::{sub, EffectiveFieldObservables, Vector3, MU0};
-use fullmag_ir::{FemEigenPlanIR, KSamplingIR};
+use fullmag_engine::sub;
+use fullmag_engine::EffectiveFieldObservables;
+use fullmag_engine::Vector3;
+use fullmag_engine::MU0;
+use fullmag_ir::FemEigenPlanIR;
+use fullmag_ir::KSamplingIR;
 use nalgebra::DMatrix;
 use num_complex::Complex64;
 
-pub(crate) fn assemble_projected_scalar_operator_real(
+pub(super) fn assemble_projected_scalar_operator_real(
     plan: &FemEigenPlanIR,
     topology: &MeshTopology,
     reduction: &ReductionMap,
@@ -18,6 +25,7 @@ pub(crate) fn assemble_projected_scalar_operator_real(
     let active_count = reduction.active_nodes.len();
     let mut stiffness = DMatrix::<f64>::zeros(active_count, active_count);
     let mut mass = DMatrix::<f64>::zeros(active_count, active_count);
+    let exchange_coeff = exchange_field_coefficient(plan);
     let parallel_field = observables
         .magnetization
         .iter()
@@ -33,6 +41,7 @@ pub(crate) fn assemble_projected_scalar_operator_real(
             if plan.external_field.is_some() {
                 selected_field = add_vector(selected_field, observables.external_field[index]);
             }
+            // Volume anisotropy (uniaxial + cubic) contribution to parallel field
             selected_field = add_vector(selected_field, volume_anisotropy_field(*m, plan));
             dot(*m, selected_field).max(0.0)
         })
@@ -85,7 +94,8 @@ pub(crate) fn assemble_projected_scalar_operator_real(
                 };
                 mass[(row, col)] += local_mass[i][j];
                 if plan.enable_exchange {
-                    stiffness[(row, col)] += topology.element_stiffness[element_index][i][j];
+                    stiffness[(row, col)] +=
+                        exchange_coeff * topology.element_stiffness[element_index][i][j];
                 }
                 let shift = 0.5 * (local_shift[i] + local_shift[j]);
                 stiffness[(row, col)] += local_mass[i][j] * shift;
@@ -99,9 +109,9 @@ pub(crate) fn assemble_projected_scalar_operator_real(
     AssembledScalarOperator::new(stiffness, mass)
 }
 
-/// Assemble the full 2x2 Herring-Kittel block operator.
+/// Assemble the full 2×2 Herring–Kittel block operator.
 ///
-/// The operator is 2N x 2N with blocks:
+/// The operator is 2N × 2N with blocks:
 /// ```text
 ///   K = [ K_11  K_12 ]    M_block = [ M  0 ]
 ///       [ K_21  K_22 ]              [ 0  M ]
@@ -109,7 +119,48 @@ pub(crate) fn assemble_projected_scalar_operator_real(
 ///
 /// Block layout: rows/cols [0..N) correspond to the e1 tangent component,
 /// rows/cols [N..2N) correspond to the e2 tangent component.
-pub(crate) fn assemble_full_2x2_operator_real(
+///
+/// For exchange: the exchange stiffness is isotropic in the tangent plane,
+/// so it contributes equally to K_11 and K_22 diagonals and does NOT couple
+/// K_12/K_21.
+///
+/// For the effective-field Hessian: the full field linearisation at each node
+/// projects the per-node effective field into the tangent basis, producing
+/// diagonal parallel-field shifts on K_11/K_22 AND off-diagonal couplings on
+/// K_12/K_21 from the perpendicular field components.
+pub(super) fn assemble_tangent_mass_matrix(
+    topology: &MeshTopology,
+    reduction: &ReductionMap,
+) -> DMatrix<f64> {
+    let n = reduction.active_nodes.len();
+    let mut mass = DMatrix::<f64>::zeros(2 * n, 2 * n);
+    for (element_index, element) in topology.elements.iter().enumerate() {
+        if !topology.magnetic_element_mask[element_index] {
+            continue;
+        }
+        let volume = topology.element_volumes[element_index];
+        for i in 0..4 {
+            let Some(row) = reduction.node_map[element[i] as usize] else {
+                continue;
+            };
+            for j in 0..4 {
+                let Some(col) = reduction.node_map[element[j] as usize] else {
+                    continue;
+                };
+                let value = if i == j {
+                    2.0 * volume / 20.0
+                } else {
+                    volume / 20.0
+                };
+                mass[(row, col)] += value;
+                mass[(row + n, col + n)] += value;
+            }
+        }
+    }
+    mass
+}
+
+pub(super) fn assemble_full_2x2_operator_real(
     plan: &FemEigenPlanIR,
     topology: &MeshTopology,
     reduction: &ReductionMap,
@@ -120,7 +171,251 @@ pub(crate) fn assemble_full_2x2_operator_real(
     let n = reduction.active_nodes.len();
     let dim = 2 * n;
     let mut stiffness = DMatrix::<f64>::zeros(dim, dim);
-    let mut mass = DMatrix::<f64>::zeros(dim, dim);
+    let mass = assemble_tangent_mass_matrix(topology, reduction);
+    let exchange_coeff = exchange_field_coefficient(plan);
+
+    // Compute local effective-field tangent-plane projection at each node.
+    // For the full 2×2 operator we need all four components:
+    //   h_11 = e1 · H_eff'[e1]   (parallel field along e1 direction)
+    //   h_22 = e2 · H_eff'[e2]   (parallel field along e2 direction)
+    //   h_12 = e1 · H_eff'[e2]   (cross-coupling e2 → e1)
+    //   h_21 = e2 · H_eff'[e1]   (cross-coupling e1 → e2)
+    //
+    // For uniform equilibrium h_11 = h_22 = h_parallel and h_12 = h_21 = 0,
+    // recovering the scalar operator.
+    let field_blocks: Vec<[f64; 4]> = observables
+        .magnetization
+        .iter()
+        .enumerate()
+        .map(|(idx, m)| {
+            let mut h_eff = [0.0, 0.0, 0.0];
+            if plan.enable_exchange {
+                h_eff = add_vector(h_eff, observables.exchange_field[idx]);
+            }
+            if plan.enable_demag {
+                h_eff = add_vector(h_eff, observables.demag_field[idx]);
+            }
+            if plan.external_field.is_some() {
+                h_eff = add_vector(h_eff, observables.external_field[idx]);
+            }
+            h_eff = add_vector(h_eff, volume_anisotropy_field(*m, plan));
+
+            let (e1, e2) = bases[idx];
+            // Project effective field into tangent basis.
+            // The diagonal components are the parallel field projections,
+            // and the off-diagonal components capture the Hessian coupling.
+            let h_parallel = dot(*m, h_eff).max(0.0);
+            // For the cross terms, we project H_eff components perpendicular to m₀.
+            // The effective-field Hessian ∂H/∂m in the tangent plane gives the 2×2 block.
+            // For the MVP, we use the h_parallel on the diagonal and compute cross terms
+            // from the tangent projections of H_eff itself.
+            let h_e1 = dot(e1, h_eff);
+            let h_e2 = dot(e2, h_eff);
+            // The 2×2 effective field tensor in the tangent basis is:
+            //   T_αβ = δ_αβ * h_parallel + correction from non-uniform field
+            // For the first-order Herring–Kittel form with dipole coupling,
+            // the cross terms arise from the component of H_eff perpendicular to m₀.
+            // In the uniform case h_e1 = h_e2 = 0, so the off-diagonal vanishes.
+            [
+                h_parallel,                            // h_11
+                h_e1 * h_e2 / (h_parallel.max(1e-30)), // h_12 (cross coupling)
+                h_e1 * h_e2 / (h_parallel.max(1e-30)), // h_21 = h_12 (symmetric)
+                h_parallel,                            // h_22
+            ]
+        })
+        .collect();
+
+    for (element_index, element) in topology.elements.iter().enumerate() {
+        if !topology.magnetic_element_mask[element_index] {
+            continue;
+        }
+        let volume = topology.element_volumes[element_index];
+        let local_mass = [
+            [
+                2.0 * volume / 20.0,
+                volume / 20.0,
+                volume / 20.0,
+                volume / 20.0,
+            ],
+            [
+                volume / 20.0,
+                2.0 * volume / 20.0,
+                volume / 20.0,
+                volume / 20.0,
+            ],
+            [
+                volume / 20.0,
+                volume / 20.0,
+                2.0 * volume / 20.0,
+                volume / 20.0,
+            ],
+            [
+                volume / 20.0,
+                volume / 20.0,
+                volume / 20.0,
+                2.0 * volume / 20.0,
+            ],
+        ];
+        for i in 0..4 {
+            let node_i = element[i] as usize;
+            let Some(row) = reduction.node_map[node_i] else {
+                continue;
+            };
+            for j in 0..4 {
+                let node_j = element[j] as usize;
+                let Some(col) = reduction.node_map[node_j] else {
+                    continue;
+                };
+                let m_ij = local_mass[i][j];
+                let fb_i = &field_blocks[node_i];
+                let fb_j = &field_blocks[node_j];
+
+                // Exchange stiffness: isotropic → K_11 and K_22 only
+                if plan.enable_exchange {
+                    let ex = exchange_coeff * topology.element_stiffness[element_index][i][j];
+                    stiffness[(row, col)] += ex;
+                    stiffness[(row + n, col + n)] += ex;
+                }
+
+                // Field shift contribution (averaged between nodes i and j):
+                // K_11: h_11 shift
+                let h11 = 0.5 * (fb_i[0] + fb_j[0]);
+                stiffness[(row, col)] += m_ij * h11;
+
+                // K_22: h_22 shift
+                let h22 = 0.5 * (fb_i[3] + fb_j[3]);
+                stiffness[(row + n, col + n)] += m_ij * h22;
+
+                // K_12: cross-coupling e2 → e1
+                let h12 = 0.5 * (fb_i[1] + fb_j[1]);
+                stiffness[(row, col + n)] += m_ij * h12;
+
+                // K_21: cross-coupling e1 → e2
+                let h21 = 0.5 * (fb_i[2] + fb_j[2]);
+                stiffness[(row + n, col)] += m_ij * h21;
+            }
+        }
+    }
+
+    // Apply surface anisotropy to both diagonal blocks
+    add_surface_anisotropy_2x2(plan, topology, reduction, equilibrium, &mut stiffness, n);
+    // Apply DMI to both diagonal blocks
+    add_dmi_2x2(plan, topology, reduction, &mut stiffness, n);
+
+    (stiffness, mass)
+}
+
+pub(super) fn assemble_projected_scalar_operator_complex(
+    plan: &FemEigenPlanIR,
+    topology: &MeshTopology,
+    reduction: &ReductionMap,
+    observables: &EffectiveFieldObservables,
+    equilibrium: &[Vector3],
+) -> (Vec<Vec<Complex64>>, Vec<Vec<Complex64>>) {
+    let active_count = reduction.active_nodes.len();
+    let mut stiffness = vec![vec![Complex64::new(0.0, 0.0); active_count]; active_count];
+    let mut mass = vec![vec![Complex64::new(0.0, 0.0); active_count]; active_count];
+    let exchange_coeff = exchange_field_coefficient(plan);
+    let parallel_field = observables
+        .magnetization
+        .iter()
+        .enumerate()
+        .map(|(index, m)| {
+            let mut selected_field = [0.0, 0.0, 0.0];
+            if plan.enable_exchange {
+                selected_field = add_vector(selected_field, observables.exchange_field[index]);
+            }
+            if plan.enable_demag {
+                selected_field = add_vector(selected_field, observables.demag_field[index]);
+            }
+            if plan.external_field.is_some() {
+                selected_field = add_vector(selected_field, observables.external_field[index]);
+            }
+            // Volume anisotropy (uniaxial + cubic) contribution to parallel field
+            selected_field = add_vector(selected_field, volume_anisotropy_field(*m, plan));
+            dot(*m, selected_field).max(0.0)
+        })
+        .collect::<Vec<_>>();
+
+    for (element_index, element) in topology.elements.iter().enumerate() {
+        if !topology.magnetic_element_mask[element_index] {
+            continue;
+        }
+        let volume = topology.element_volumes[element_index];
+        let local_mass = [
+            [
+                2.0 * volume / 20.0,
+                volume / 20.0,
+                volume / 20.0,
+                volume / 20.0,
+            ],
+            [
+                volume / 20.0,
+                2.0 * volume / 20.0,
+                volume / 20.0,
+                volume / 20.0,
+            ],
+            [
+                volume / 20.0,
+                volume / 20.0,
+                2.0 * volume / 20.0,
+                volume / 20.0,
+            ],
+            [
+                volume / 20.0,
+                volume / 20.0,
+                volume / 20.0,
+                2.0 * volume / 20.0,
+            ],
+        ];
+        let local_shift = [
+            parallel_field[element[0] as usize],
+            parallel_field[element[1] as usize],
+            parallel_field[element[2] as usize],
+            parallel_field[element[3] as usize],
+        ];
+        for i in 0..4 {
+            let node_i = element[i] as usize;
+            let Some(row) = reduction.node_map[node_i] else {
+                continue;
+            };
+            let phase_i = reduction.node_phases[node_i];
+            for j in 0..4 {
+                let node_j = element[j] as usize;
+                let Some(col) = reduction.node_map[node_j] else {
+                    continue;
+                };
+                let phase_j = reduction.node_phases[node_j];
+                let coeff = phase_i.conj() * phase_j;
+                mass[row][col] += coeff * local_mass[i][j];
+                if plan.enable_exchange {
+                    stiffness[row][col] +=
+                        coeff * exchange_coeff * topology.element_stiffness[element_index][i][j];
+                }
+                let shift = 0.5 * (local_shift[i] + local_shift[j]);
+                stiffness[row][col] += coeff * (local_mass[i][j] * shift);
+            }
+        }
+    }
+
+    add_surface_anisotropy_complex(plan, topology, reduction, equilibrium, &mut stiffness);
+    add_dmi_complex(plan, reduction, &mut stiffness, plan.k_sampling.as_ref());
+    (stiffness, mass)
+}
+
+pub(super) fn assemble_projected_full_2x2_operator_complex(
+    plan: &FemEigenPlanIR,
+    topology: &MeshTopology,
+    reduction: &ReductionMap,
+    observables: &EffectiveFieldObservables,
+    equilibrium: &[Vector3],
+    bases: &[(Vector3, Vector3)],
+) -> (Vec<Vec<Complex64>>, Vec<Vec<Complex64>>) {
+    let n = reduction.active_nodes.len();
+    let dim = 2 * n;
+    let mut stiffness = vec![vec![Complex64::new(0.0, 0.0); dim]; dim];
+    let mut mass = vec![vec![Complex64::new(0.0, 0.0); dim]; dim];
+    let exchange_coeff = exchange_field_coefficient(plan);
 
     let field_blocks: Vec<[f64; 4]> = observables
         .magnetization
@@ -188,137 +483,72 @@ pub(crate) fn assemble_full_2x2_operator_real(
             let Some(row) = reduction.node_map[node_i] else {
                 continue;
             };
+            let phase_i = reduction.node_phases[node_i];
+            let row_root = reduction.active_nodes[row];
+            let row_transport = tangent_transport_to_root(node_i, row_root, bases);
             for j in 0..4 {
                 let node_j = element[j] as usize;
                 let Some(col) = reduction.node_map[node_j] else {
                     continue;
                 };
+                let coeff = phase_i.conj() * reduction.node_phases[node_j];
+                let col_root = reduction.active_nodes[col];
+                let col_transport = tangent_transport_to_root(node_j, col_root, bases);
                 let m_ij = local_mass[i][j];
                 let fb_i = &field_blocks[node_i];
                 let fb_j = &field_blocks[node_j];
 
-                mass[(row, col)] += m_ij;
-                mass[(row + n, col + n)] += m_ij;
+                add_complex_tangent_block(
+                    &mut mass,
+                    n,
+                    row,
+                    col,
+                    project_local_tangent_block_to_reduced(
+                        coeff,
+                        row_transport,
+                        [[m_ij, 0.0], [0.0, m_ij]],
+                        col_transport,
+                    ),
+                );
 
                 if plan.enable_exchange {
-                    let ex = topology.element_stiffness[element_index][i][j];
-                    stiffness[(row, col)] += ex;
-                    stiffness[(row + n, col + n)] += ex;
+                    let ex = exchange_coeff * topology.element_stiffness[element_index][i][j];
+                    add_complex_tangent_block(
+                        &mut stiffness,
+                        n,
+                        row,
+                        col,
+                        project_local_tangent_block_to_reduced(
+                            coeff,
+                            row_transport,
+                            [[ex, 0.0], [0.0, ex]],
+                            col_transport,
+                        ),
+                    );
                 }
 
                 let h11 = 0.5 * (fb_i[0] + fb_j[0]);
-                stiffness[(row, col)] += m_ij * h11;
-
-                let h22 = 0.5 * (fb_i[3] + fb_j[3]);
-                stiffness[(row + n, col + n)] += m_ij * h22;
-
                 let h12 = 0.5 * (fb_i[1] + fb_j[1]);
-                stiffness[(row, col + n)] += m_ij * h12;
-
                 let h21 = 0.5 * (fb_i[2] + fb_j[2]);
-                stiffness[(row + n, col)] += m_ij * h21;
+                let h22 = 0.5 * (fb_i[3] + fb_j[3]);
+                add_complex_tangent_block(
+                    &mut stiffness,
+                    n,
+                    row,
+                    col,
+                    project_local_tangent_block_to_reduced(
+                        coeff,
+                        row_transport,
+                        [[m_ij * h11, m_ij * h12], [m_ij * h21, m_ij * h22]],
+                        col_transport,
+                    ),
+                );
             }
         }
     }
 
-    add_surface_anisotropy_2x2(plan, topology, reduction, equilibrium, &mut stiffness, n);
-    add_dmi_2x2(plan, topology, reduction, &mut stiffness, n);
-
-    (stiffness, mass)
-}
-
-pub(crate) fn assemble_projected_scalar_operator_complex(
-    plan: &FemEigenPlanIR,
-    topology: &MeshTopology,
-    reduction: &ReductionMap,
-    observables: &EffectiveFieldObservables,
-    equilibrium: &[Vector3],
-) -> (Vec<Vec<Complex64>>, Vec<Vec<Complex64>>) {
-    let active_count = reduction.active_nodes.len();
-    let mut stiffness = vec![vec![Complex64::new(0.0, 0.0); active_count]; active_count];
-    let mut mass = vec![vec![Complex64::new(0.0, 0.0); active_count]; active_count];
-    let parallel_field = observables
-        .magnetization
-        .iter()
-        .enumerate()
-        .map(|(index, m)| {
-            let mut selected_field = [0.0, 0.0, 0.0];
-            if plan.enable_exchange {
-                selected_field = add_vector(selected_field, observables.exchange_field[index]);
-            }
-            if plan.enable_demag {
-                selected_field = add_vector(selected_field, observables.demag_field[index]);
-            }
-            if plan.external_field.is_some() {
-                selected_field = add_vector(selected_field, observables.external_field[index]);
-            }
-            selected_field = add_vector(selected_field, volume_anisotropy_field(*m, plan));
-            dot(*m, selected_field).max(0.0)
-        })
-        .collect::<Vec<_>>();
-
-    for (element_index, element) in topology.elements.iter().enumerate() {
-        if !topology.magnetic_element_mask[element_index] {
-            continue;
-        }
-        let volume = topology.element_volumes[element_index];
-        let local_mass = [
-            [
-                2.0 * volume / 20.0,
-                volume / 20.0,
-                volume / 20.0,
-                volume / 20.0,
-            ],
-            [
-                volume / 20.0,
-                2.0 * volume / 20.0,
-                volume / 20.0,
-                volume / 20.0,
-            ],
-            [
-                volume / 20.0,
-                volume / 20.0,
-                2.0 * volume / 20.0,
-                volume / 20.0,
-            ],
-            [
-                volume / 20.0,
-                volume / 20.0,
-                volume / 20.0,
-                2.0 * volume / 20.0,
-            ],
-        ];
-        let local_shift = [
-            parallel_field[element[0] as usize],
-            parallel_field[element[1] as usize],
-            parallel_field[element[2] as usize],
-            parallel_field[element[3] as usize],
-        ];
-        for i in 0..4 {
-            let node_i = element[i] as usize;
-            let Some(row) = reduction.node_map[node_i] else {
-                continue;
-            };
-            let phase_i = reduction.node_phases[node_i];
-            for j in 0..4 {
-                let node_j = element[j] as usize;
-                let Some(col) = reduction.node_map[node_j] else {
-                    continue;
-                };
-                let phase_j = reduction.node_phases[node_j];
-                let coeff = phase_i.conj() * phase_j;
-                mass[row][col] += coeff * local_mass[i][j];
-                if plan.enable_exchange {
-                    stiffness[row][col] += coeff * topology.element_stiffness[element_index][i][j];
-                }
-                let shift = 0.5 * (local_shift[i] + local_shift[j]);
-                stiffness[row][col] += coeff * (local_mass[i][j] * shift);
-            }
-        }
-    }
-
-    add_surface_anisotropy_complex(plan, topology, reduction, equilibrium, &mut stiffness);
-    add_dmi_complex(plan, reduction, &mut stiffness, plan.k_sampling.as_ref());
+    add_surface_anisotropy_2x2_complex(plan, topology, reduction, equilibrium, &mut stiffness, n);
+    add_dmi_2x2_complex(plan, reduction, &mut stiffness, plan.k_sampling.as_ref(), n);
     (stiffness, mass)
 }
 
@@ -332,10 +562,11 @@ fn add_surface_anisotropy_real(
     let Some((axis, coefficient)) = surface_anisotropy_config(plan) else {
         return;
     };
-    let faces = plan.mesh.require_tri3_boundary_faces().expect(
-        "FEM surface anisotropy requires tri3 facets; mixed-facet execution is unavailable",
-    );
-    for face in &faces {
+    let boundary_faces = plan
+        .mesh
+        .require_tri3_boundary_faces()
+        .expect("surface anisotropy requires tri3 facets; planner must reject mixed facets");
+    for face in &boundary_faces {
         let local = triangle_surface_matrix(face, &plan.mesh.nodes, axis, equilibrium, coefficient);
         for i in 0..3 {
             let Some(row) = reduction.node_map[face[i] as usize] else {
@@ -361,10 +592,11 @@ fn add_surface_anisotropy_complex(
     let Some((axis, coefficient)) = surface_anisotropy_config(plan) else {
         return;
     };
-    let faces = plan.mesh.require_tri3_boundary_faces().expect(
-        "FEM surface anisotropy requires tri3 facets; mixed-facet execution is unavailable",
-    );
-    for face in &faces {
+    let boundary_faces = plan
+        .mesh
+        .require_tri3_boundary_faces()
+        .expect("surface anisotropy requires tri3 facets; planner must reject mixed facets");
+    for face in &boundary_faces {
         let local = triangle_surface_matrix(face, &plan.mesh.nodes, axis, equilibrium, coefficient);
         for i in 0..3 {
             let node_i = face[i] as usize;
@@ -447,6 +679,74 @@ fn add_dmi_complex(
     }
 }
 
+fn add_surface_anisotropy_2x2_complex(
+    plan: &FemEigenPlanIR,
+    _topology: &MeshTopology,
+    reduction: &ReductionMap,
+    equilibrium: &[Vector3],
+    stiffness: &mut [Vec<Complex64>],
+    n: usize,
+) {
+    let Some((axis, coefficient)) = surface_anisotropy_config(plan) else {
+        return;
+    };
+    let boundary_faces = plan
+        .mesh
+        .require_tri3_boundary_faces()
+        .expect("surface anisotropy requires tri3 facets; planner must reject mixed facets");
+    for face in &boundary_faces {
+        let local = triangle_surface_matrix(face, &plan.mesh.nodes, axis, equilibrium, coefficient);
+        for i in 0..3 {
+            let node_i = face[i] as usize;
+            let Some(row) = reduction.node_map[node_i] else {
+                continue;
+            };
+            let phase_i = reduction.node_phases[node_i];
+            for j in 0..3 {
+                let node_j = face[j] as usize;
+                let Some(col) = reduction.node_map[node_j] else {
+                    continue;
+                };
+                let coeff = phase_i.conj() * reduction.node_phases[node_j] * local[i][j];
+                stiffness[row][col] += coeff;
+                stiffness[row + n][col + n] += coeff;
+            }
+        }
+    }
+}
+
+fn add_dmi_2x2_complex(
+    plan: &FemEigenPlanIR,
+    reduction: &ReductionMap,
+    stiffness: &mut [Vec<Complex64>],
+    k_sampling: Option<&KSamplingIR>,
+    n: usize,
+) {
+    let interfacial = plan.interfacial_dmi.unwrap_or(0.0);
+    let bulk = plan.bulk_dmi.unwrap_or(0.0);
+    if interfacial == 0.0 && bulk == 0.0 {
+        return;
+    }
+    let k = match k_sampling {
+        Some(KSamplingIR::Single { k_vector }) => *k_vector,
+        Some(KSamplingIR::Path { .. }) => [0.0, 0.0, 0.0],
+        None => [0.0, 0.0, 0.0],
+    };
+    let ms = plan.material.saturation_magnetisation.max(1e-30);
+    let interfacial_coeff = interfacial / (MU0 * ms);
+    let bulk_coeff = bulk / (MU0 * ms);
+    let nonreciprocal_shift = interfacial_coeff * (k[0] + k[1]) + bulk_coeff * (k[0] + k[1] + k[2]);
+    if nonreciprocal_shift.abs() <= 0.0 {
+        return;
+    }
+    for index in 0..reduction.active_nodes.len() {
+        stiffness[index][index] += Complex64::new(nonreciprocal_shift, 0.0);
+        stiffness[index + n][index + n] += Complex64::new(nonreciprocal_shift, 0.0);
+    }
+}
+
+/// Apply surface anisotropy to the 2×2 block operator.
+/// Both diagonal blocks (K_11, K_22) get the same surface anisotropy term.
 fn add_surface_anisotropy_2x2(
     plan: &FemEigenPlanIR,
     _topology: &MeshTopology,
@@ -458,10 +758,11 @@ fn add_surface_anisotropy_2x2(
     let Some((axis, coefficient)) = surface_anisotropy_config(plan) else {
         return;
     };
-    let faces = plan.mesh.require_tri3_boundary_faces().expect(
-        "FEM surface anisotropy requires tri3 facets; mixed-facet execution is unavailable",
-    );
-    for face in &faces {
+    let boundary_faces = plan
+        .mesh
+        .require_tri3_boundary_faces()
+        .expect("surface anisotropy requires tri3 facets; planner must reject mixed facets");
+    for face in &boundary_faces {
         let local = triangle_surface_matrix(face, &plan.mesh.nodes, axis, equilibrium, coefficient);
         for i in 0..3 {
             let Some(row) = reduction.node_map[face[i] as usize] else {
@@ -471,6 +772,7 @@ fn add_surface_anisotropy_2x2(
                 let Some(col) = reduction.node_map[face[j] as usize] else {
                     continue;
                 };
+                // Both diagonal blocks
                 stiffness[(row, col)] += local[i][j];
                 stiffness[(row + n, col + n)] += local[i][j];
             }
@@ -478,6 +780,8 @@ fn add_surface_anisotropy_2x2(
     }
 }
 
+/// Apply DMI to the 2×2 block operator.
+/// Both diagonal blocks get the same DMI skew contribution.
 fn add_dmi_2x2(
     plan: &FemEigenPlanIR,
     topology: &MeshTopology,
@@ -508,11 +812,17 @@ fn add_dmi_2x2(
                 let skew = coeff
                     * (gradients[i][0] * gradients[j][1] - gradients[i][1] * gradients[j][0])
                     * topology.element_volumes[element_index];
+                // Both diagonal blocks
                 stiffness[(row, col)] += skew;
                 stiffness[(row + n, col + n)] += skew;
             }
         }
     }
+}
+
+fn exchange_field_coefficient(plan: &FemEigenPlanIR) -> f64 {
+    2.0 * plan.material.exchange_stiffness
+        / (MU0 * plan.material.saturation_magnetisation.max(1e-30))
 }
 
 fn surface_anisotropy_config(plan: &FemEigenPlanIR) -> Option<(Vector3, f64)> {
@@ -553,20 +863,4 @@ fn triangle_surface_matrix(
         }
     }
     local
-}
-
-pub(crate) fn tangent_bases(equilibrium: &[Vector3]) -> Vec<(Vector3, Vector3)> {
-    equilibrium
-        .iter()
-        .map(|m| {
-            let reference = if m[2].abs() < 0.9 {
-                [0.0, 0.0, 1.0]
-            } else {
-                [0.0, 1.0, 0.0]
-            };
-            let e1 = normalize_vector(cross(reference, *m));
-            let e2 = normalize_vector(cross(*m, e1));
-            (e1, e2)
-        })
-        .collect()
 }

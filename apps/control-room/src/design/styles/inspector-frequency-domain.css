@@ -1,6 +1,7 @@
 .fm-frequency-domain-chart {
   display: grid;
   gap: var(--fm-space-2);
+  min-width: 0;
   width: 100%;
   min-height: 160px;
   padding: var(--fm-space-3);
@@ -14,9 +15,17 @@
   align-items: baseline;
   justify-content: space-between;
   gap: var(--fm-space-2);
+  min-width: 0;
   color: var(--fm-text-primary);
   font-size: var(--fm-font-size-sm);
   font-weight: 650;
+}
+
+.fm-frequency-domain-chart__header > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fm-frequency-domain-chart__header small {
@@ -27,14 +36,31 @@
 }
 
 .fm-frequency-domain-chart__canvas {
+  display: block;
   width: 100%;
+  height: 180px;
   min-height: 180px;
+  min-width: 0;
+}
+
+/* EChartsCanvasSurface owns the chart mount and renders the point controls as
+   children of the same surface. Give that surface explicit rows so the
+   controls participate in normal flow instead of being painted over the
+   canvas when the Inspector is narrow. */
+.fm-frequency-domain-chart > .fm-analysis-chart-surface {
+  display: grid;
+  grid-template-rows: 180px auto;
+  align-content: start;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  min-height: 0;
 }
 
 .fm-frequency-domain-chart__summary {
   display: grid;
   gap: var(--fm-space-2);
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  min-width: 0;
   max-height: var(--fm-inspector-freq-domain-max-height);
   overflow: auto;
   padding-right: var(--fm-space-1);
@@ -43,7 +69,7 @@
   font-size: var(--fm-font-size-xs);
 }
 
-.fm-frequency-domain-chart__summary span,
+.fm-frequency-domain-chart__summary > span,
 .fm-frequency-domain-chart__mode {
   padding: var(--fm-space-1) var(--fm-space-2);
   border: 1px solid var(--fm-border-subtle);
@@ -77,6 +103,8 @@
 .fm-frequency-domain-chart__mode {
   display: grid;
   gap: var(--fm-space-1);
+  min-width: 0;
+  width: 100%;
   color: var(--fm-text-muted);
   cursor: pointer;
   font: inherit;
@@ -97,6 +125,40 @@
   line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.fm-frequency-domain-chart__point-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: var(--fm-space-1);
+  min-width: 0;
+}
+
+.fm-frequency-domain-chart__point-actions > .fm-frequency-domain-chart__mode {
+  min-width: 0;
+}
+
+.fm-frequency-domain-chart__point-actions > .fm-frequency-domain-chart__mode:last-child {
+  width: max-content;
+  min-width: max-content;
+}
+
+@container (max-width: 360px) {
+  .fm-frequency-domain-chart__header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--fm-space-1);
+  }
+
+  .fm-frequency-domain-chart__point-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .fm-frequency-domain-chart__point-actions > .fm-frequency-domain-chart__mode:last-child {
+    width: 100%;
+    min-width: 0;
+  }
 }
 
 .fm-frequency-domain-chart__mode:hover {
@@ -121,6 +183,110 @@
   place-items: center;
   color: var(--fm-text-muted);
   font-size: var(--fm-font-size-sm);
+}
+
+.fm-mode-composition-inspector {
+  display: grid;
+  gap: var(--fm-space-3);
+  min-width: 0;
+}
+
+.fm-mode-composition-inspector__controls {
+  display: grid;
+  gap: var(--fm-space-2);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 168px), 1fr));
+  min-width: 0;
+}
+
+.fm-mode-composition-inspector__control {
+  display: grid;
+  gap: var(--fm-space-1);
+  min-width: 0;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 600;
+}
+
+.fm-mode-composition-inspector__inline-control,
+.fm-mode-composition-inspector__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--fm-space-2);
+  min-width: 0;
+}
+
+.fm-mode-composition-inspector__inline-control {
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-sm);
+}
+
+.fm-mode-composition-inspector__actions {
+  margin-top: var(--fm-space-2);
+}
+
+.fm-mode-composition-inspector__number {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--fm-control-height-regular);
+  padding: 0 var(--fm-space-2);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-surface);
+  color: var(--fm-text-primary);
+  font: inherit;
+}
+
+.fm-mode-composition-inspector__number:focus-visible {
+  outline: none;
+  box-shadow: var(--fm-focus-ring);
+}
+
+.fm-mode-composition-inspector__table-wrap {
+  overflow: auto;
+  max-height: var(--fm-inspector-freq-domain-max-height);
+}
+
+.fm-mode-composition-inspector__table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-mode-composition-inspector__table th,
+.fm-mode-composition-inspector__table td {
+  padding: var(--fm-space-2);
+  border-bottom: 1px solid var(--fm-border-subtle);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.fm-mode-composition-inspector__table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-muted);
+  font-weight: 650;
+}
+
+.fm-mode-composition-inspector__table tr[data-selected="true"] {
+  background: color-mix(in srgb, var(--fm-accent) 12%, transparent);
+  color: var(--fm-text-primary);
+}
+
+.fm-mode-composition-inspector__unavailable {
+  margin: 0;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-sm);
+}
+
+@container (max-width: 360px) {
+  .fm-mode-composition-inspector__actions > * {
+    width: 100%;
+  }
 }
 
 .fm-frequency-domain-active-peak {

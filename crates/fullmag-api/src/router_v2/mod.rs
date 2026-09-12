@@ -749,6 +749,11 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .post(handlers::visualization::post_visualization_client_ack),
         )
         .route(
+            "/v2/sessions/current/visualization/mode-compositions/active",
+            get(handlers::visualization::get_active_mode_composition)
+                .patch(handlers::visualization::patch_active_mode_composition),
+        )
+        .route(
             "/v2/sessions/current/workspace/layout",
             get(handlers::workspace::get_workspace_layout)
                 .put(handlers::workspace::replace_workspace_layout),
@@ -825,8 +830,16 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::analysis::get_frequency_domain_eigen_spectrum_v2),
         )
         .route(
+            "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v3",
+            get(handlers::analysis::get_frequency_domain_eigen_spectrum_v3),
+        )
+        .route(
             "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
             get(handlers::analysis::get_frequency_domain_eigen_branches_v2),
+        )
+        .route(
+            "/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep",
+            get(handlers::analysis::get_frequency_domain_eigen_field_sweep),
         )
         .route(
             "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
@@ -837,8 +850,24 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::analysis::get_frequency_domain_eigen_diagnostics_v2),
         )
         .route(
+            "/v2/sessions/current/analysis/frequency-domain/eigen/modes/:sample_index/:mode_index",
+            get(handlers::analysis::get_frequency_domain_eigen_mode),
+        )
+        .route(
             "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/:sample_index/:mode_index/meta",
             get(handlers::analysis::get_frequency_domain_eigen_mode_field_meta),
+        )
+        .route(
+            "/v2/sessions/current/analysis/frequency-domain/fmr/peaks",
+            get(handlers::analysis::get_frequency_domain_fmr_peaks),
+        )
+        .route(
+            "/v2/sessions/current/analysis/frequency-domain/fmr/resonance-fits",
+            get(handlers::analysis::get_frequency_domain_fmr_resonance_fits),
+        )
+        .route(
+            "/v2/sessions/current/analysis/frequency-domain/fmr/kittel-fit",
+            get(handlers::analysis::get_frequency_domain_fmr_kittel_fit),
         )
         .route(
             "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",
@@ -867,6 +896,54 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/sessions/current/analysis/frequency-domain/response/field/:frequency_index/meta",
             get(handlers::analysis::get_frequency_domain_response_field_meta),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets",
+            get(handlers::analysis::get_analysis_result_dataset_catalog),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id/axes/:axis_id/values",
+            get(handlers::analysis::get_analysis_result_axis_values),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id/samples",
+            get(handlers::analysis::get_analysis_result_samples),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id/items/:item_id",
+            get(handlers::analysis::get_analysis_result_item),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id/items",
+            get(handlers::analysis::get_analysis_result_items),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id/branches",
+            get(handlers::analysis::get_analysis_result_branches),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id/branches/:branch_id",
+            get(handlers::analysis::get_analysis_result_branch),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id/branches/:branch_id/points",
+            get(handlers::analysis::get_analysis_result_branch_points),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id/relations",
+            get(handlers::analysis::get_analysis_result_relations),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id/relations/:relation_id",
+            get(handlers::analysis::get_analysis_result_relation),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id/projections/:projection_id",
+            get(handlers::analysis::get_analysis_result_projection),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id",
+            get(handlers::analysis::get_analysis_result_dataset_manifest),
         )
         .route(
             "/v2/sessions/current/analysis/hysteresis/:stage_id/points",

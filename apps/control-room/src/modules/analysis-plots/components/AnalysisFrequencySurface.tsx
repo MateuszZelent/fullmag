@@ -31,6 +31,19 @@ import {
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import type { AnalysisFrequencyPresentationState } from "../hooks/useAnalysisFrequencyData";
 
+const UNKNOWN_FREQUENCY_SOURCE_IDENTITY = {
+  artifactPath: null,
+  backend: null,
+  contentDigest: null,
+  device: null,
+  precision: null,
+  provenance: null,
+  qualification: "unknown",
+  runId: null,
+  schemaVersion: null,
+  stageId: null,
+} as const;
+
 export function AnalysisFrequencySurface({
   chartId,
   calculationMode,
@@ -144,7 +157,12 @@ export function AnalysisFrequencySurface({
     return (
       <ChartSection
         title={surfaceTitle}
-        status={{ presentation, primary: status, trust: "unknown" }}
+        status={{
+          presentation,
+          primary: status,
+          sourceIdentity: UNKNOWN_FREQUENCY_SOURCE_IDENTITY,
+          trust: "unknown",
+        }}
       >
         {physicalMetadata}
         <div className="fm-analysis-plots__empty" role="status">
@@ -253,6 +271,8 @@ export function AnalysisFrequencySurface({
         presentation,
         primary: status === "ready" ? "Ready" : status,
         revision: series[0]?.dataRevision ?? null,
+        sourceIdentity:
+          series[0]?.sourceIdentity ?? UNKNOWN_FREQUENCY_SOURCE_IDENTITY,
         // Trust remains unknown until a dedicated validation resource is published.
         trust: "unknown",
         pointSummary: formatSeriesCount(series.length),

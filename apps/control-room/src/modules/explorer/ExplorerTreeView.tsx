@@ -443,6 +443,11 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
       {node.activeAnalysisField ? (
         <span className="fm-explorer-tree-row__active-field">active</span>
       ) : null}
+      {node.badge ? (
+        <span className="fm-explorer-tree-row__badge" title={node.badge}>
+          {node.badge}
+        </span>
+      ) : null}
     </div>
   );
 

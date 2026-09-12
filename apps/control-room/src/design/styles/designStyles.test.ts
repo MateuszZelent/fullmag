@@ -15,7 +15,10 @@ const locallyScopedCssVars = new Set([
 ]);
 
 function readAppFile(relativePath: string): string {
-  return readFileSync(path.join(appRoot, relativePath), "utf8");
+  return readFileSync(path.join(appRoot, relativePath), "utf8").replace(
+    /\r\n/g,
+    "\n",
+  );
 }
 
 describe("control-room design styles", () => {

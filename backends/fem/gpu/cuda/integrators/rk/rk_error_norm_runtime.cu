@@ -5,6 +5,7 @@
 // kernels, interaction kernels, or C ABI entrypoints.
 
 #include "gpu/cuda/integrators/rk/rk_error_norm_runtime.hpp"
+#include "gpu/cuda/integrators/rk/adaptive_error_policy.hpp"
 
 #include "context.hpp"
 #include "gpu/cuda/integrators/rk/adaptive_error_kernels.hpp"
@@ -94,24 +95,56 @@ bool gpu_rk_reduce_adaptive_error_norm_device(
         return false;
     }
 
-    fullmag_cuda_device_max(
-        gpu.reductions.scalar_workspace + blocks,
-        std::max(1, blocks),
-        gpu.reductions.scalar_result + 1,
-        gpu.reductions.temp_storage,
-        reduce_bytes,
-        stream);
-    if (!cuda_launch_ok("launch GPU RK norm-defect reduction", reason)) {
+    const auto mode = resolve_adaptive_error_evaluation_mode(
+        ctx.adaptive_dt.has_norm_tolerance,
+        ctx.adaptive_dt.has_max_spin_rotation);
+    const bool evaluate_norm =
+        mode == AdaptiveErrorEvaluationMode::ErrorAndNorm ||
+        mode == AdaptiveErrorEvaluationMode::ErrorNormAndRotation;
+    if (evaluate_norm) {
+        fullmag_cuda_device_max(
+            gpu.reductions.scalar_workspace + blocks,
+            std::max(1, blocks),
+            gpu.reductions.scalar_result + 1,
+            gpu.reductions.temp_storage,
+            reduce_bytes,
+            stream);
+        if (!cuda_launch_ok("launch GPU RK norm-defect reduction", reason)) {
+            return false;
+        }
+    } else if (!cuda_ok(
+                   cudaMemsetAsync(gpu.reductions.scalar_result + 1, 0, sizeof(double), stream),
+                   "cudaMemsetAsync GPU RK norm-defect metric reset",
+                   reason)) {
         return false;
     }
-    fullmag_cuda_device_max(
-        gpu.reductions.scalar_workspace + 2 * blocks,
-        std::max(1, blocks),
-        gpu.reductions.scalar_result + 2,
-        gpu.reductions.temp_storage,
-        reduce_bytes,
-        stream);
-    if (!cuda_launch_ok("launch GPU RK spin-rotation reduction", reason)) {
+    if (ctx.adaptive_dt.has_max_spin_rotation) {
+        fullmag_cuda_device_min(
+            gpu.reductions.scalar_workspace + 2 * blocks,
+            std::max(1, blocks),
+            gpu.reductions.scalar_result + 2,
+            gpu.reductions.temp_storage,
+            reduce_bytes,
+            stream);
+        if (!cuda_launch_ok("launch GPU RK spin-rotation cosine reduction", reason)) {
+            return false;
+        }
+        fullmag_cuda_finalize_spin_rotation(gpu.reductions.scalar_result + 2, stream);
+        if (!cuda_launch_ok("launch GPU RK spin-rotation angle publication", reason)) {
+            return false;
+        }
+        fullmag_cuda_merge_spin_rotation_error(
+            gpu.reductions.scalar_result,
+            gpu.reductions.scalar_result + 2,
+            ctx.adaptive_dt.max_spin_rotation,
+            stream);
+        if (!cuda_launch_ok("launch GPU RK spin-rotation acceptance merge", reason)) {
+            return false;
+        }
+    } else if (!cuda_ok(
+                   cudaMemsetAsync(gpu.reductions.scalar_result + 2, 0, sizeof(double), stream),
+                   "cudaMemsetAsync GPU RK spin-rotation metric reset",
+                   reason)) {
         return false;
     }
 

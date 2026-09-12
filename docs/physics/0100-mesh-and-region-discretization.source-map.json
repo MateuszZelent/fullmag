@@ -152,7 +152,7 @@
   "sources": [
     {
       "id": "interactive-remesh-transaction",
-      "path": "crates/fullmag-cli/src/orchestrator.rs",
+      "path": "crates/fullmag-cli/src/orchestrator/manual_remesh.rs",
       "symbol": "execute_manual_interactive_remesh",
       "responsibility": "Prepares a mesh/runtime candidate before commit and explicitly reinitializes magnetization from the authored model.",
       "evidence_status": "implementation_in_progress"
@@ -229,7 +229,7 @@
     },
     {
       "id": "mixed-volume-evidence-validation",
-      "path": "crates/fullmag-ir/src/mesh_assets.rs",
+      "path": "crates/fullmag-ir/src/mixed_certificate.rs",
       "symbol": "validate_mixed_certificate_evidence_against_mesh",
       "responsibility": "Recomputes mixed-mesh certificate evidence and applies the dedicated cross-language relative-volume comparison boundary.",
       "evidence_status": "implemented"

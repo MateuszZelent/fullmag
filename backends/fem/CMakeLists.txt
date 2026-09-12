@@ -36,12 +36,15 @@ set(FEM_SOURCES
     core/fem_state.cpp
     cpu/mfem/transport/steady_transport_c_api.cpp
     gpu/cuda/exchange/exchange_plan.cpp
+    gpu/cuda/exchange/exchange_operator.cpp
     gpu/cuda/exchange/exchange_upload.cpp
     gpu/cuda/fields/field_buffer_memory.cpp
     gpu/cuda/fields/field_buffer_upload.cpp
     gpu/cuda/demag_poisson/hypre_stream_interop.cpp
     gpu/cuda/integrators/rk/rk_fsal_policy.cpp
+    gpu/cuda/integrators/rk/rk_attempt_control_memory.cpp
     gpu/cuda/integrators/rk/rk_plan.cpp
+    gpu/cuda/integrators/rk/adaptive_error_policy.cpp
     gpu/cuda/integrators/rk/rk_snapshot.cpp
     gpu/cuda/integrators/rk/rk_step_stats.cpp
     gpu/cuda/integrators/rk/rk_step_stats_publication.cpp
@@ -54,6 +57,7 @@ set(FEM_SOURCES
     gpu/cuda/relaxation/direct_energy_increment.cpp
     gpu/cuda/relaxation/nonlinear_cg.cpp
     gpu/cuda/relaxation/pgbb.cpp
+    gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp
     gpu/cuda/relaxation/relaxation_memory.cpp
     gpu/cuda/state/device_memory.cpp
     gpu/cuda/state/gpu_state.cpp
@@ -154,6 +158,7 @@ set(FEM_SOURCES
     cpu/mfem/runtime/field_refresh.cpp
     gpu/cuda/runtime/gpu_state_runtime.cpp
     gpu/cuda/runtime/execution_receipt.cpp
+    gpu/cuda/runtime/performance_counters.cpp
     cpu/mfem/runtime/interrupt.cpp
     cpu/mfem/runtime/mfem_context.cpp
     cpu/mfem/runtime/mfem_device.cpp
@@ -165,12 +170,14 @@ set(FEM_SOURCES
     cpu/mfem/runtime/step_metrics.cpp
     cpu/frequency_domain/dense_poisson_airbox_eigen_oracle.cpp
     cpu/frequency_domain/floquet_bloch_scalar.cpp
+    cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp
     cpu/frequency_domain/poisson_airbox_modal_eigen.cpp
     cpu/frequency_domain/poisson_airbox_schur_matshell.cpp
     cpu/frequency_domain/dense_driven_response.cpp
     cpu/frequency_domain/modal_response.cpp
     cpu/frequency_domain/engines/field_split/full_coupled_field_split_engine.cpp
     cpu/frequency_domain/engines/sparse_direct/assemble_real_split_csr.cpp
+    src/frequency_domain/real_frequency_rotated_pencil.cpp
     cpu/frequency_domain/engines/sparse_direct/cpu_sparse_direct_engine.cpp
     cpu/frequency_domain/contour_interval_solver.cpp
     cpu/frequency_domain/contour_quadrature.cpp
@@ -182,9 +189,12 @@ set(FEM_SOURCES
     cpu/frequency_domain/slepc_modal_eigen.cpp
     cpu/frequency_domain/spectral_transform.cpp
     gpu/cuda/demag_poisson/hypre_device_solver.cpp
+    gpu/cuda/demag_poisson/hypre_validation_policy.cpp
+    gpu/cuda/runtime/hypre_device_policy.cpp
     gpu/cuda/demag_poisson/operators.cpp
     gpu/cuda/demag_poisson/poisson.cpp
     gpu/cuda/demag_poisson/stage_compute.cpp
+    gpu/cuda/demag_fem_bem/fem_bem.cpp
     cpu/frequency_domain/mfem_exchange_operator.cpp
     cpu/frequency_domain/mfem_linearized_operator.cpp
     cpu/frequency_domain/mfem_operator_context.cpp
@@ -239,6 +249,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/exchange/exchange_kernels.cu
             gpu/cuda/fields/vector_field_kernels.cu
             gpu/cuda/frequency_domain/driven_response_gpu.cu
+            gpu/cuda/frequency_domain/modal_krylov.cu
             gpu/cuda/integrators/llg/llg_rhs_kernels.cu
             gpu/cuda/integrators/rk/adaptive_error_kernels.cu
             gpu/cuda/integrators/rk/heun_stage_sequence.cu
@@ -248,6 +259,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/integrators/rk/rk_anisotropy_energy_reductions.cu
             gpu/cuda/integrators/rk/rk_attempt_loop.cu
             gpu/cuda/integrators/rk/rk_attempt_setup.cu
+            gpu/cuda/integrators/rk/rk_attempt_control_kernels.cu
             gpu/cuda/integrators/rk/rk_bs23_accept_kernel.cu
             gpu/cuda/integrators/rk/rk_component_copy.cu
             gpu/cuda/integrators/rk/rk_demag_energy_reductions.cu
@@ -300,12 +312,19 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/interactions/zeeman/zeeman_kernels.cu
             gpu/cuda/interactions/zeeman/regional_field_kernels.cu
             gpu/cuda/demag_poisson/demag_kernels.cu
+            gpu/cuda/demag_fem_bem/fem_bem_kernels.cu
             gpu/cuda/observables/observable_kernels.cu
             gpu/cuda/relaxation/pgbb_kernels.cu
             gpu/cuda/reductions/reduction_kernels.cu
             gpu/cuda/transfer/transfer_kernels.cu
             gpu/cuda/integrators/rk/rk_step.cu
         )
+        if(FULLMAG_FEM_WITH_SLEPC)
+            # The GPU modal lane calls PETSc/SLEPc directly.  Keep it out of
+            # demag-only builds, whose contract intentionally disables the
+            # PETSc/SLEPc dependency slice.
+            list(APPEND FEM_SOURCES gpu/frequency_domain/modal_petsc_slepc.cpp)
+        endif()
     endif()
 endif()
 
@@ -696,6 +715,37 @@ add_test(NAME fem_cuda_demag_robin_energy_contract COMMAND fem_cuda_demag_robin_
 add_executable(fem_cuda_demag_timing_contract tests/cuda_demag_timing_contract.cpp)
 add_test(NAME fem_cuda_demag_timing_contract COMMAND fem_cuda_demag_timing_contract)
 
+add_executable(
+    fem_cuda_demag_field_only_contract
+    tests/cuda_demag_field_only_contract.cpp
+)
+add_test(
+    NAME fem_cuda_demag_field_only_contract
+    COMMAND fem_cuda_demag_field_only_contract
+)
+
+add_executable(fem_adaptive_error_policy_contract tests/adaptive_error_policy_contract.cpp)
+target_link_libraries(fem_adaptive_error_policy_contract PRIVATE fullmag_fem)
+target_include_directories(fem_adaptive_error_policy_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_adaptive_error_policy_contract COMMAND fem_adaptive_error_policy_contract)
+
+add_executable(
+    fem_hypre_validation_policy_contract
+    tests/hypre_validation_policy_contract.cpp
+)
+target_link_libraries(fem_hypre_validation_policy_contract PRIVATE fullmag_fem)
+target_include_directories(fem_hypre_validation_policy_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(
+    NAME fem_hypre_validation_policy_contract
+    COMMAND fem_hypre_validation_policy_contract
+)
+
 add_executable(fem_cuda_periodic_demag_contract tests/cuda_periodic_demag_contract.cpp)
 target_link_libraries(fem_cuda_periodic_demag_contract PRIVATE fullmag_fem)
 if(FULLMAG_USE_MFEM_STACK)
@@ -716,6 +766,41 @@ add_test(NAME fem_cuda_periodic_demag_contract COMMAND fem_cuda_periodic_demag_c
 
 add_executable(fem_cuda_periodic_exchange_contract tests/cuda_periodic_exchange_contract.cpp)
 add_test(NAME fem_cuda_periodic_exchange_contract COMMAND fem_cuda_periodic_exchange_contract)
+
+add_executable(fem_exchange_operator_contract tests/exchange_operator_contract.cpp)
+target_link_libraries(fem_exchange_operator_contract PRIVATE fullmag_fem)
+target_include_directories(fem_exchange_operator_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_exchange_operator_contract COMMAND fem_exchange_operator_contract)
+
+add_executable(
+    fem_gpu_relaxation_preconditioner_contract
+    tests/gpu_relaxation_preconditioner_contract.cpp
+)
+target_link_libraries(fem_gpu_relaxation_preconditioner_contract PRIVATE fullmag_fem)
+target_include_directories(fem_gpu_relaxation_preconditioner_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(
+    NAME fem_gpu_relaxation_preconditioner_contract
+    COMMAND fem_gpu_relaxation_preconditioner_contract
+)
+
+add_executable(
+    fem_gpu_rk_attempt_control_packet_contract
+    tests/gpu_rk_attempt_control_packet_contract.cpp
+)
+target_include_directories(fem_gpu_rk_attempt_control_packet_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(
+    NAME fem_gpu_rk_attempt_control_packet_contract
+    COMMAND fem_gpu_rk_attempt_control_packet_contract
+)
 
 add_executable(fem_transfer_audit tests/transfer_audit.cpp)
 target_link_libraries(fem_transfer_audit PRIVATE fullmag_fem)
@@ -805,6 +890,10 @@ add_fem_source_facade_contract(
     tests/frequency_domain/linearized_dynamic_pencil_test.cpp
 )
 add_fem_source_facade_contract(
+    fem_real_frequency_rotated_pencil_contract
+    tests/frequency_domain/real_frequency_rotated_pencil_test.cpp
+)
+add_fem_source_facade_contract(
     fem_operator_contract
     tests/frequency_domain/operator_contract_test.cpp
 )
@@ -821,13 +910,104 @@ add_fem_source_facade_contract(
     tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp
 )
 add_fem_source_facade_contract(
+    fem_poisson_airbox_real_split_cpu_contract
+    tests/frequency_domain/poisson_airbox_real_split_cpu_test.cpp
+)
+add_fem_source_facade_contract(
     fem_poisson_airbox_schur_matshell_contract
     tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp
 )
+if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_FEM_WITH_SLEPC)
+    find_package(MPI REQUIRED COMPONENTS CXX)
+    add_executable(
+        fem_gpu_petsc_slepc_runtime_contract
+        tests/frequency_domain/gpu_petsc_slepc_runtime_test.cpp
+    )
+    target_link_libraries(
+        fem_gpu_petsc_slepc_runtime_contract
+        PRIVATE
+            PETSC::petsc
+            SLEPC::slepc
+            MPI::MPI_CXX
+    )
+    add_test(
+        NAME fem_gpu_petsc_slepc_runtime_contract
+        COMMAND fem_gpu_petsc_slepc_runtime_contract
+    )
+    add_executable(
+        fem_gpu_k0_modal_petsc_slepc_contract
+        tests/frequency_domain/gpu_k0_modal_petsc_slepc_test.cpp
+    )
+    target_link_libraries(
+        fem_gpu_k0_modal_petsc_slepc_contract
+        PRIVATE
+            fullmag_fem
+            PETSC::petsc
+            SLEPC::slepc
+            MPI::MPI_CXX
+    )
+    target_include_directories(
+        fem_gpu_k0_modal_petsc_slepc_contract
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    # This contract intentionally keeps several ~800 KiB diagnostics records
+    # alive in distinct test functions. Release inlining can merge them into a
+    # multi-megabyte main frame and overflow the standard container stack
+    # before the GPU assertions run.
+    target_compile_options(
+        fem_gpu_k0_modal_petsc_slepc_contract
+        PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang>:-fno-inline>
+            $<$<CXX_COMPILER_ID:MSVC>:/Ob0>
+    )
+    add_test(
+        NAME fem_gpu_k0_modal_petsc_slepc_contract
+        COMMAND fem_gpu_k0_modal_petsc_slepc_contract
+    )
+    add_executable(
+        fem_gpu_hypre_device_policy_contract
+        tests/frequency_domain/gpu_hypre_device_policy_test.cpp
+    )
+    target_link_libraries(
+        fem_gpu_hypre_device_policy_contract
+        PRIVATE
+            fullmag_fem
+            PETSC::petsc
+            SLEPC::slepc
+            MPI::MPI_CXX
+    )
+    target_include_directories(
+        fem_gpu_hypre_device_policy_contract
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(
+        NAME fem_gpu_hypre_device_policy_contract
+        COMMAND fem_gpu_hypre_device_policy_contract
+    )
+endif()
 add_fem_source_facade_contract(
     fem_floquet_bloch_scalar_contract
     tests/frequency_domain/floquet_bloch_scalar_test.cpp
 )
+add_fem_source_facade_contract(
+    fem_poisson_airbox_shared_domain_contract
+    tests/frequency_domain/poisson_airbox_shared_domain_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_mesh_symmetry_certificate_v6_contract
+    tests/frequency_domain/mesh_symmetry_certificate_v6_test.cpp
+)
+if(FULLMAG_USE_MFEM_STACK)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_poisson_airbox_shared_domain_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_poisson_airbox_shared_domain_contract PRIVATE mfem)
+    endif()
+endif()
 if(FULLMAG_USE_MFEM_STACK)
     if(TARGET MFEM::mfem)
         target_link_libraries(fem_floquet_bloch_scalar_contract PRIVATE MFEM::mfem)
@@ -957,6 +1137,21 @@ target_include_directories(fem_dmi_contract PRIVATE
 )
 add_test(NAME fem_dmi_contract COMMAND fem_dmi_contract)
 
+add_executable(
+    fem_rotated_dmi_absolute_scale_contract
+    tests/rotated_dmi_absolute_scale_contract.cpp
+)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(
+        fem_rotated_dmi_absolute_scale_contract PRIVATE
+        -Wall -Wextra -Wpedantic -Werror
+    )
+endif()
+add_test(
+    NAME fem_rotated_dmi_absolute_scale_contract
+    COMMAND fem_rotated_dmi_absolute_scale_contract
+)
+
 add_executable(fem_llg_rhs_contract tests/llg_rhs_contract.cpp)
 target_link_libraries(fem_llg_rhs_contract PRIVATE fullmag_fem)
 target_include_directories(fem_llg_rhs_contract PRIVATE
@@ -1073,6 +1268,21 @@ target_include_directories(fem_gpu_execution_receipt_contract PRIVATE
 add_test(
     NAME fem_gpu_execution_receipt_contract
     COMMAND fem_gpu_execution_receipt_contract
+)
+
+add_executable(
+    fem_gpu_performance_snapshot_contract
+    tests/gpu_performance_snapshot_contract.cpp
+)
+target_link_libraries(fem_gpu_performance_snapshot_contract PRIVATE fullmag_fem)
+target_include_directories(fem_gpu_performance_snapshot_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/native/include
+)
+add_test(
+    NAME fem_gpu_performance_snapshot_contract
+    COMMAND fem_gpu_performance_snapshot_contract
 )
 
 add_executable(
@@ -1335,6 +1545,24 @@ target_include_directories(fem_demag_fem_bem_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_demag_fem_bem_contract COMMAND fem_demag_fem_bem_contract)
+
+add_executable(fem_demag_fem_bem_gpu_contract tests/demag_fem_bem_gpu_contract.cpp)
+target_link_libraries(fem_demag_fem_bem_gpu_contract PRIVATE fullmag_fem)
+if(FULLMAG_USE_MFEM_STACK)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_demag_fem_bem_gpu_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_demag_fem_bem_gpu_contract PRIVATE mfem)
+    endif()
+    if(FULLMAG_ENABLE_CUDA)
+        target_link_libraries(fem_demag_fem_bem_gpu_contract PRIVATE CUDA::cudart)
+    endif()
+endif()
+target_include_directories(fem_demag_fem_bem_gpu_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_demag_fem_bem_gpu_contract COMMAND fem_demag_fem_bem_gpu_contract)
 
 add_executable(fem_demag_contract tests/demag_contract.cpp)
 target_link_libraries(fem_demag_contract PRIVATE fullmag_fem)

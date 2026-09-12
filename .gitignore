@@ -33,6 +33,17 @@ node_modules/
 # projects that explicitly declare npm as their package manager.
 /package-lock.json
 .next/
+.fullmag-frontend/
+# Managed compatibility links are files to Git on Linux; slash-only directory
+# patterns do not ignore them. Their targets live in external project storage.
+/.fullmag
+/target
+/node_modules
+/apps/control-room/node_modules
+/apps/control-room/.fullmag-frontend
+/apps/control-room/out
+/apps/control-room/.artifacts
+/apps/control-room/storybook-static
 storybook-static/
 out/
 *.tsbuildinfo
@@ -76,6 +87,8 @@ Thumbs.db
 
 # === Data & artifacts ===
 artifacts/
+!crates/fullmag-runner/src/eigen/artifacts/
+!crates/fullmag-runner/src/eigen/artifacts/*.rs
 *.zarr/
 # data/
 tmp/
@@ -148,3 +161,7 @@ playwright-browsers/
 antenna-implementation-target/
 storage/
 task-storage/
+.rotated-review/
+.target*
+.tmp*
+.codex*

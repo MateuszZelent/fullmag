@@ -35,7 +35,7 @@ bool has_any_field_or_direct_torque_term(const Context &ctx)
         || ctx.zeeman.has_external_field
         || !ctx.zeeman.regional_drives.empty()
         || ctx.anisotropy.uniaxial_enabled
-        || ctx.dmi.interfacial_enabled
+        || ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled
         || ctx.dmi.bulk_enabled
         || ctx.anisotropy.cubic_enabled
         || ctx.oersted.has_cylinder
@@ -58,7 +58,8 @@ bool refresh_initial_effective_field_from_plan(
     if (plan.eager_initial_effective_field == 0) {
         return true;
     }
-    if (plan.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
+    if (plan.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
+        plan.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
         return true;
     }
     return context_refresh_exchange_field_mfem(ctx, error);
@@ -138,7 +139,7 @@ bool compute_effective_fields_for_magnetization(
         }
 
         double dmi = 0.0;
-        if (ctx.dmi.interfacial_enabled) {
+        if (ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled) {
             if (!compute_interfacial_dmi_field(
                     ctx, m_xyz, ctx.dmi.h_interfacial_xyz, &dmi, error)) {
                 return false;

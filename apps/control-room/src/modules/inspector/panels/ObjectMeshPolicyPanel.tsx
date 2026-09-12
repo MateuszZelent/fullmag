@@ -930,7 +930,7 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
   }
 
   useEffect(() => {
-    return kernel.bus.on("mesh:build-history-restore-requested", (event) => {
+    const offRestore = kernel.bus.on("mesh:build-history-restore-requested", (event) => {
       if (!objectId || event.meshTarget !== null && !event.meshTarget.endsWith(`:${objectId}`)) {
         return;
       }
@@ -954,7 +954,9 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
         message: `Build ${event.buildId ?? event.entryId} restored to the object draft. Apply the policy before building.`,
       });
     });
-  }, [baseDraft, draftKey, draftIdentityKey, effectiveTarget, kernel.bus, objectId, resource]);
+    if (objectId && policy.status === "ready") kernel.bus.emit("mesh:build-history-editor-ready", { target: `object:${objectId}` });
+    return offRestore;
+  }, [baseDraft, draftKey, draftIdentityKey, effectiveTarget, kernel.bus, objectId, policy.status, resource]);
 
   const applyPolicy = useCallback(async ({
     silentSuccess = false,

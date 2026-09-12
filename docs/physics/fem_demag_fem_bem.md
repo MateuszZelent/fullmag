@@ -1,123 +1,446 @@
-# FEM/BEM Open-Boundary Demag
+# FEM Fredkin–Koehler: demagnetyzacja otwartej granicy
 
-- Status: native FEM CPU dense-reference module contract, active MFEM solve path requires runtime validation
-- Last updated: 2026-05-18
-- Implementation:
-  `native/backends/fem/cpu/mfem/interactions/demag_fem_bem.hpp/.cpp`,
-  `demag_fem_bem_energy.hpp/.cpp`, `demag_fem_bem_solve.hpp/.cpp`,
-  `demag_fem_bem_surface.hpp/.cpp`, `demag_fem_bem_operator.hpp/.cpp`,
-  `demag_fem_bem_linear_solve.hpp/.cpp`,
-  `demag_fem_bem_boundary_values.hpp/.cpp`,
-  `demag_fem_bem_workspace.hpp/.cpp`,
-  `demag_fem_bem_potential.hpp/.cpp`, `demag_fem_bem_telemetry.hpp/.cpp`,
-  and `demag_fem_bem_rhs.hpp/.cpp`
-- Test: `native/backends/fem/tests/demag_fem_bem_contract.cpp`
-- Architecture reference: `docs/physics/0870-fem-bem-demag-open-boundary.md`
+- Status: implementacja operatora hierarchicznego FEM/BEM CPU oraz ścisłego
+  operatora device-resident GPU; managed runtime i walidacja fizyczna filmu
+  500 x 500 x 10 nm pozostają NOT VERIFIED do czasu świeżego receiptu
+- Wersja dokumentu: 2026-09-02
+- Zakres: body-only tet4, skalarne FEM P1, hierarchiczny BEM CPU i CUDA/Hypre
+  BEM GPU
+- Powiązane dokumenty: docs/physics/fem_demag_poisson.md,
+  docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md,
+  docs/physics/0870-fem-bem-demag-open-boundary.md,
+  docs/specs/capability-matrix-v0.md
+- Source map: docs/physics/fem_demag_fem_bem.source-map.json
 
-## Pole
+(problem-statement)=
+## 1. Problem fizyczny
 
-The FEM/BEM module is an open-boundary demagnetizing-field path for body-only
-tetrahedral meshes. It is separate from the airbox Poisson demag module:
-FEM/BEM does not require an airbox and instead couples a volume FEM solve to a
-boundary integral operator on the exterior magnetic surface.
+Jednorodny lub niejednorodny magnetyk zajmuje domenę $\Omega_m$ bez sztucznego
+airboxa. Szukane pole demagnetyzujące ma spełniać warunek otwartej przestrzeni
+oraz zanikać w nieskończoności. Realizacja Fredkina–Koehlera rozdziela problem
+na objętościowy problem Neumanna FEM i korektę harmoniczną wyznaczaną przez
+operator całkowy na rzeczywistej granicy $\Gamma=\partial\Omega_m$.
 
-The recovered field is `H_demag` in `A/m`. The LLG stepper consumes it as an
-effective-field contribution; this module does not apply gamma, damping, or
-direct-torque scaling.
+W Fullmag jest to osobna rodzina od Poisson–Robin na domenie magnetyk + airbox.
+Nie wolno utożsamiać zgodności solvera z jedną granicą, jednym rzędem lub
+jednym artefaktem z konwergencją rozwiązania w otwartej przestrzeni.
 
-## Energia
+Aktualny kontrakt wykonawczy jest celowo wąski: aktywny magnetyk musi mieć
+typowane elementy tet4, skalarna przestrzeń potencjału jest P1, a produkcyjna
+realizacja CPU używa operatora hierarchicznego H2. Mały
+DenseDemagBemOperator pozostaje wyłącznie oracle’em referencyjnym. GPU ma
+osobną, spłaszczoną realizację CUDA z device Hypre dla obu potencjałów i nie
+może przejść na CPU. prism6, pyramid5 i P2 są poza kontraktem FK.
 
-FEM/BEM uses the same demag energy convention as the Poisson demag module:
+(governing-equations)=
+## 2. Równania i konwencja znaków
+
+### 2.1. Magnetostatyka
+
+Niech $\mathbf m$ będzie zredukowaną magnetyzacją, a
+$\mathbf M=M_s\mathbf m$ magnetyzacją w jednostkach SI. W domenie bez prądu
+swobodnego:
+
+```{math}
+:label: eq-fem-bem-magnetostatics
+\nabla\cdot(\mathbf H_\mathrm{demag}+\mathbf M)=0,
+\qquad
+\mathbf H_\mathrm{demag}=-\nabla u,
+\qquad
+\Delta u=\nabla\cdot\mathbf M.
+```
+
+Potencjał skalarny $u$ ma jednostkę $\mathrm A$, a jego gradient jest polem w
+$\mathrm{A\,m^{-1}}$. Energia demagnetyzacji używana przez FEM/BEM jest:
+
+```{math}
+:label: eq-fem-bem-energy
+E_\mathrm d=-\frac{\mu_0}{2}
+\int_{\Omega_m}M_s\,\mathbf m\cdot\mathbf H_\mathrm{demag}\,\mathrm dV.
+```
+
+Współczynnik $1/2$ zapobiega podwójnemu zliczeniu energii pola własnego.
+
+### 2.2. Rozdział Fredkina–Koehlera
+
+Pierwszy potencjał $u_1$ rozwiązuje objętościowy problem Neumanna z tym samym
+źródłem $\nabla\cdot\mathbf M$ i naturalnym strumieniem magnetycznym na
+$\Gamma$. Jest określony z dokładnością do stałej; dla każdej spójnej
+składowej magnetyka wprowadzany jest osobny warunek gauge.
+
+Drugi potencjał $u_2$ jest harmoniczny w $\Omega_m$:
+
+```{math}
+:label: eq-fem-bem-harmonic-correction
+\Delta u_2=0\quad\text{w } \Omega_m,
+\qquad
+u=u_1+u_2,
+\qquad
+\mathbf H_\mathrm{demag}=-\nabla(u_1+u_2).
+```
+
+Jego wartości brzegowe wynikają z reprezentacji całkowej Green’a z
+$G(\mathbf x,\mathbf y)=1/(4\pi\lVert\mathbf x-\mathbf y\rVert)$ oraz z
+wartości $u_1$ na $\Gamma$. W dyskretyzacji Fullmag near-blocki przechowują
+dokładny kernel Lindholma, a admissible far-blocki deterministyczne czynniki
+ACA $UV^T$. Globalna macierz $N_b\times N_b$ nie jest tworzona w ścieżce
+produkcyjnej; DenseDemagBemOperator jest tylko małym oracle’em.
+
+### 2.3. Kontrast z Poisson–Robin
+
+Poisson–Robin rozwiązuje pojedynczy potencjał na domenie z airboxem i stosuje
+warunek truncacji na sztucznej granicy $\Gamma_R$:
+
+```{math}
+:label: eq-poisson-robin-truncation
+\Delta u=\nabla\cdot\mathbf M\quad\text{w } \Omega_m\cup\Omega_a,
+\qquad
+a_Ru+b_R\,\partial_nu=0\quad\text{na } \Gamma_R.
+```
+
+Parametry $a_R,b_R$ należą do kontraktu airbox i nie są parametrami FK.
+Mieszana topologia prism6+pyramid5+tet4 pozostaje w bieżącym solverze
+Poisson jawnym kontraktem P1. Specjalny fem_demag_accuracy_contract wymaga
+all-tet i potencjału P2; planner odrzuca piramidy przed uruchomieniem zamiast
+udawać P2 przez ciche obniżenie rzędu.
+
+(symbols-and-si-units)=
+## 3. Symbole i jednostki SI
+
+| Symbol / nazwa | Znaczenie | Jednostka SI |
+|---|---|---:|
+| $\Omega_m$ | domena magnetyczna | $\mathrm{m^3}$ |
+| $\Gamma$ | zewnętrzna granica magnetyka | $\mathrm{m^2}$ |
+| $\mathbf m$ | zredukowana magnetyzacja | $1$ |
+| $M_s$ | magnetyzacja nasycenia | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf M$ | magnetyzacja, $M_s\mathbf m$ | $\mathrm{A\,m^{-1}}$ |
+| $u,u_1,u_2$ | potencjał skalarny | $\mathrm A$ |
+| $\mathbf H_\mathrm{demag}$ | pole demagnetyzujące | $\mathrm{A\,m^{-1}}$ |
+| $\mu_0$ | przenikalność próżni | $\mathrm{H\,m^{-1}}$ |
+| $G$ | funkcja Green’a 3D | $\mathrm{m^{-1}}$ |
+| $N_b$ | liczba węzłów granicy BEM | $1$ |
+| $E_\mathrm d$ | energia demagnetyzacji | $\mathrm J$ |
+| $a_R,b_R$ | współczynniki warunku Robin | zależne od normalizacji |
+
+W kodzie długości są przechowywane w metrach. Nie wolno zastępować
+względnych tolerancji geometrycznych stałymi absolutnymi dobranymi dla jednej
+skali nanometrowej.
+
+(assumptions-and-validity)=
+## 4. Założenia i granice ważności
+
+- brak prądu swobodnego i skalarna reprezentacja pola w domenie objętości;
+- body-only: brak elementów airbox w tym operatorze;
+- aktywna topologia: tet4, bez zduplikowanych węzłów elementu i z dodatnią
+  objętością;
+- potencjał: P1, bez niejawnego mapowania wielomianowego rzędu wyższego;
+- granica: dokładny zbiór faset count == 1 aktywnych tetraedrów, zamknięty
+  krawędziowo i wierzchołkowo;
+- materiał i magnetyzacja spoza $\Omega_m$ nie są dodawane do RHS ani energii;
+- dense BEM służy do małych przypadków referencyjnych; limit alokacji jest
+  sprawdzany przed utworzeniem macierzy;
+- hierarchiczny CPU BEM raportuje deterministyczny fingerprint, near/far
+  blocks, observed rank, resident bytes i estymatę błędu z niezależnych probes;
+  estymata nie jest dowodem analitycznego error bound;
+- GPU uploaduje spłaszczone near/far blocks raz w setupie. Apply, oba solve’y,
+  recovery i redukcja energii pozostają w ścieżce device; receipt z niezerowym
+  host-operator mask lub transferem hot-loop kończy kwalifikację;
+- model nie jest dowodem jakości meshera ani dowodem zbieżności dla filmu
+  500 x 500 x 10 nm.
+
+(python-api)=
+## 5. Python DSL
+
+Publiczny wybór realizacji zachowuje istniejący kontrakt:
+
+```python
+# %%
+import fullmag as fm
+
+fm.Demag(model="fredkin_koehler")
+# równoważnie:
+fm.Demag(realization="fredkin_koehler")
+```
+
+| Python | Typ | Domyślnie | Jednostka SI | Walidacja | Znaczenie | Wsparcie backendu | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| Demag.model | str or None | None | 1 | airbox, bem, fredkin_koehler lub fmm | żądany model demagnetyzacji | FEM CPU | energy_terms[kind=demag].realization |
+| Demag.variant | str or None | None | 1 | auto, dirichlet lub robin wyłącznie dla airbox | wariant modelu airbox | FEM CPU | energy_terms[kind=demag].realization |
+| Demag.realization | str or None | None | 1 | istniejąca nazwa realization; nie łączyć z model | zgodność wsteczna wyboru realizacji | FEM CPU | energy_terms[kind=demag].realization |
+
+Kanoniczny fragment IR jest:
+
+```json
+{"kind": "demag", "realization": "fredkin_koehler"}
+```
+
+Python nie przyjmuje osobnego przełącznika na dense/H2/FMM. To jest szczegół
+resolved realization, capability i provenance, a nie nowa semantyka fizyczna.
+
+(problem-ir)=
+## 6. ProblemIR, planner i provenance
+
+RequestedFemDemagIR::FredkinKoehler wymaga body-only mesh i nie wymaga
+airboxa. Planner rozwiązuje go do
+ResolvedFemDemagIR::FredkinKoehler. CPU i GPU są osobnymi realizacjami tego
+samego modelu: CPU używa hierarchii H2, a GPU używa spłaszczonych bloków
+near/far oraz Hypre na device. Plan powinien zachować requested model,
+resolved model, device, precision, topology, FE order, boundary-node count i
+operator mode; sama obecność resolved planu nie jest dowodem runtime ani
+walidacji fizycznej.
+
+Metadata fem_demag_accuracy_contract ma schemat
+fullmag.fem.demag_accuracy.v1. Wymaga Poisson airbox,
+required_potential_order=2, required_topology=all_tet i odrzuca każdą
+piramidę oraz PBC. Jest to osobny profil dokładności, nie automatyczna zmiana
+ścieżki zwykłego mieszanego P1.
+
+(round-trip-and-failure-semantics)=
+## 7. Round-trip i semantyka błędów
+
+Eksport i ponowne wczytanie zachowują nazwę fredkin_koehler; brak airboxa nie
+może zostać zamieniony na airbox bez jawnej decyzji planner’a. Walidacja
+kończy się przed złożeniem macierzy, jeżeli:
+
+Kontrakt rozróżnia `requested intent` od `resolved execution`; `validation errors`
+opisują odrzucone dane, a `unsupported combinations` kończą się
+fail-closed zamiast niejawnego fallbacku.
+
+- CSR elementów lub faset jest niekompletny, niezgodny typowo albo ma indeks
+  poza zakresem;
+- aktywny element nie jest TET4, ma powtórzony węzeł, niefinitywne punkty lub
+  zerową/zdegenerowaną objętość;
+- jawne fasety są niepełne, zdublowane, wewnętrzne, dodatkowe albo nie tworzą
+  dokładnie zewnętrznego zbioru;
+- powierzchnia ma krawędź o liczności innej niż dwa, niespójne orientacje lub
+  rozspojony link wierzchołka;
+- dense reference przekracza dense_reference_max_boundary_nodes albo
+  przepełnia rozmiar/budżet bajtów;
+- hierarchiczny operator przekracza budżet bloków/pamięci albo probe błędu
+  przekracza tolerancję;
+- liczba gauge nie pasuje do spójnych składowych Neumanna.
+
+Każdy taki przypadek zwraca opisany błąd. Nie wolno zastępować błędu pustą
+macierzą, zerowym kątem bryłowym, zerowymi wagami ani cichym CPU fallbackiem
+dla żądania GPU.
+
+(discrete-realization)=
+## 8. Dyskretna realizacja
+
+### 8.1. Ekstrakcja granicy
+
+build_demag_boundary_surface buduje rekordy czterech ścian każdego aktywnego
+TET4. Klucz ściany jest posortowaną trójką węzłów; ściany występujące raz są
+zewnętrzne, a występujące dwa razy są wewnętrzne. Trzeci właściciel jest
+nie-manifold i kończy się błędem.
+
+Jeżeli wejście zawiera jawne fasety, ich zbiór kluczy musi być identyczny ze
+zbiorem ścian zewnętrznych. Kolejność węzłów może być permutowana lub
+odwrócona, ponieważ normalna jest ponownie orientowana względem węzła
+przeciwległego tetraedru. Wynik publikuje:
+
+- boundary_nodes — globalne węzły granicy;
+- global_to_boundary — mapowanie węzeł → gęsty wiersz lub -1;
+- triangles — zewnętrzne trójkąty z normalną na zewnątrz;
+- unit_normals — skończone normalne jednostkowe;
+- triangle_areas — dodatnie pola;
+- charakterystyczną długość używaną przez testy względnej geometrii.
+
+Po ekstrakcji sprawdzane są krawędzie bez orientacji, przeciwne kierunki
+każdej pary oraz ciągłość linku każdego wierzchołka. Sam fakt znalezienia
+faset count == 1 nie jest dowodem watertight surface.
+
+### 8.2. Gauge Neumanna
+
+Graf aktywnych tetraedrów łączy elementy przez wspólny węzeł. Dla każdej
+spójnej składowej wybierany jest deterministycznie najmniejszy globalny węzeł.
+Workspace mapuje go na prawidłowy true DOF P1, a operator Neumanna eliminuje
+wszystkie te DOF-y. RHS kopiuje wspólny demag RHS i zeruje dokładnie tę listę.
+
+### 8.3. Operator hierarchiczny CPU
+
+`HierarchicalDemagBemOperator` buduje medianowe drzewa klastrów węzłów
+docelowych i trójkątów źródłowych. Pary nieadmissible zapisują dokładne wpisy
+Lindholma w blokach near. Pary admissible są kompresowane deterministycznym
+ACA do czynników $UV^T$ z limitem rzędu i kontrolą pivotu. Diagonalny wkład
+kątów bryłowych pozostaje jawny; globalna macierz $N_b^2$ nie jest
+materializowana. Workspace operatora zawiera scratch dla `apply`, więc
+powtórne zastosowanie nie alokuje buforów zależnych od liczby węzłów.
+
+DenseDemagBemOperator składa macierz wierszami. Diagonalny wkład używa sumy
+kątów bryłowych przy węźle granicy, a pozadiagonalne wkłady liniowych funkcji
+kształtu trójkąta w formulacji Lindholma. Wszelkie przypadki pokrywającego się
+wierzchołka, zerowej krawędzi, niedozwolonego logarytmu lub niefinitycznego
+wyniku są błędem kontrolowanym.
+
+Dense reference ma złożoność i pamięć $O(N_b^2)$ i jest chroniony guardem
+przed `matrix_.assign`; nie jest fallbackiem operatora hierarchicznego.
+Kontrola jakości hierarchii wykonuje ograniczoną, deterministyczną serię
+niezależnych probes/residual estimates. `relative_error_estimate` jest
+estymatą diagnostyczną, nie analityczną gwarancją błędu; przekroczenie
+tolerancji kończy budowę błędem. Budżety pamięci, liczby bloków i wpisów są
+sprawdzane przed alokacją.
+
+### 8.4. Operator device-resident GPU
+
+`GpuDemagFemBemWorkspace` spłaszcza te same deterministyczne bloki near/far
+oraz fingerprint CPU do buforów CUDA. Setup wykonuje jeden upload operatora;
+kernel liczy near sumy i $U(V^Tx)$ dla far blocks. Dwa układy Hypre rozwiązują
+$u_1$ i $u_2$, a recovery pola i redukcja energii są wykonywane na device.
+W hot loop nie ma pełnego wektora H2D/D2H ani wywołania CPU FK. Receipt
+`device_resident` musi pokrywać wszystkie wymagane maski, mieć zero fallbacków,
+zero host-operatorów i zero transferów/synchronizacji obliczeniowych;
+przeciwny stan oznacza `NOT VERIFIED`.
+
+(implementation-mapping)=
+## 9. Mapa implementacji i własność modułów
+
+| Odpowiedzialność | Plik | Symbol |
+|---|---|---|
+| typed mesh i topologia | backends/fem/core/fem_mesh.hpp/.cpp | FemMesh, element_topology |
+| granica BEM | backends/fem/cpu/mfem/interactions/demag_fem_bem_surface.hpp/.cpp | build_demag_boundary_surface |
+| oracle dense i operator hierarchiczny | backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.hpp/.cpp | DenseDemagBemOperator oraz HierarchicalDemagBemOperator::build, apply |
+| RHS Neumanna | backends/fem/cpu/mfem/interactions/demag_fem_bem_rhs.hpp/.cpp | prepare_demag_fem_bem_neumann_rhs |
+| workspace i gauge | backends/fem/cpu/mfem/interactions/demag_fem_bem_workspace.hpp/.cpp | DemagFemBemWorkspace, initialize_demag_fem_bem_workspace |
+| solve | backends/fem/cpu/mfem/interactions/demag_fem_bem_solve.hpp/.cpp | context_compute_demag_fem_bem |
+| wartości brzegowe | backends/fem/cpu/mfem/interactions/demag_fem_bem_boundary_values.* | boundary transfer |
+| potencjał | backends/fem/cpu/mfem/interactions/demag_fem_bem_potential.* | potential combine |
+| odzysk pola i energia | backends/fem/cpu/mfem/interactions/demag_poisson_recovery.*, demag_fem_bem_energy.* | H_demag, E_d |
+| operator GPU i Hypre | backends/fem/gpu/cuda/demag_fem_bem/fem_bem.* | GpuDemagFemBemWorkspace, device FK apply |
+| provenance ABI | native/include/fullmag_fem.h, backends/fem/src/api.cpp, crates/fullmag-fem-sys | fullmag_fem_backend_demag_fem_bem_provenance_v1 |
+| kontrakt testowy | backends/fem/tests/demag_fem_bem_contract.cpp | fem_demag_fem_bem_contract |
+
+Operator FK nie dodaje nowej fizyki do Context ani mfem_bridge.cpp.
+Poisson, FK CPU i przyszłe lane’y GPU współdzielą tylko kontrakt fizyczny;
+realizacje MFEM/CUDA pozostają osobne.
+
+(validation)=
+## 10. Plan i dowód walidacji
+
+### 10.1. Testy źródłowe i kontraktowe
+
+Kanoniczny target sprawdza kompilację i uruchamia:
 
 ```text
-E_d = -0.5 mu0 integral_Omega_m Ms m.H_demag dV
+just --shell 'C:\Program Files\Git\bin\bash.exe' --shell-arg -lc verify-fem-demag-poisson-contract-focused
 ```
 
-`demag_fem_bem_energy_from_field(...)` delegates this scalar convention to the
-shared demag energy implementation so Poisson and FEM/BEM report consistent
-sign, units, lumped-mass weighting, and magnetic-node masking.
-The wrapper is owned by `demag_fem_bem_energy.*`; `demag_fem_bem.*` is only the
-aggregate include/translation-unit surface.
+fem_demag_fem_bem_contract musi obejmować granicę kompletną, fasety
+niepoprawne, nie-manifold, skalowanie, typy/CSR, gauge wielu składowych,
+zgodność dense-oracle z hierarchią i brak alokacji per `apply`. Osobny target
+GPU sprawdza upload, prawidłowe true-DOF mapowanie i device apply. Istniejące
+testy energii, skończoności macierzy i własności modułów pozostają aktywne.
 
-## Boundary Operator
+### 10.2. Walidacja fizyczna
 
-The local reference implementation extracts a `DemagBoundarySurface` from the
-magnetic tetrahedral body mesh:
+Wymagane są niezależne artefakty dla:
 
-- `boundary_nodes`: global mesh nodes that participate in the BEM surface
-- `global_to_boundary`: global-node to dense-boundary-row map
-- `triangles`: oriented exterior boundary triangles
-- `unit_normals`: outward unit normals
-- `triangle_areas`: triangle areas
+- jednorodnej kuli — czynnik demagnetyzacji i zbieżność;
+- elipsoidy — czynniki Osborna i suma osi;
+- prostopadłościanu/filmu i pręta — kierunkowa zależność pola;
+- siatek o rosnącej rozdzielczości oraz przeskalowanych geometrii;
+- dwóch rozspojonych ciał — niezależność gauge;
+- pochodnej kierunkowej energii względem pola;
+- porównania z Poisson-airbox, FDM i zewnętrznym fixture Tetmag po ustaleniu
+  identycznej geometrii, magnetyzacji, jednostek i scope.
 
-`DenseDemagBemOperator` assembles a dense O(Nb^2) boundary matrix. This is a
-correctness/reference operator, not a production compressed BEM/H2/FMM path.
+Aktualny skrypt tests/fem_demag_validation/fem_bem_body_validation.py jest
+przygotowany do serii sferycznej, ale istniejący CSV zawiera NaN; dopóki
+świeży managed receipt nie zawiera skończonych wyników, status wynosi
+NOT VERIFIED.
 
-## Jednostki
+### 10.3. Macierz lane’ów
 
-| Quantity | Symbol | Solver unit |
-|---|---:|---:|
-| reduced magnetization | `m` | `1` |
-| saturation magnetization | `Ms` | `A/m` |
-| demag field | `H_demag` | `A/m` |
-| demag energy | `E_d` | `J` |
-| boundary potential | `u` | MFEM scalar potential convention |
+| Lane | Implementacja | Walidacja runtime | Status |
+|---|---|---|---|
+| FEM CPU + tet4 + P1 + hierarchia H2 | kod, kontrakt i metryki BEM | wymagany managed receipt | implemented, physics NOT VERIFIED |
+| FEM CPU + all-tet/P2 Poisson accuracy | osobny planner contract | brak świeżego artefaktu filmu | NOT VERIFIED |
+| FEM GPU strict/device-resident FK | osobny CUDA/Hypre operator i receipt | brak świeżego artefaktu filmu | implemented, physics NOT VERIFIED |
+| H2/FMM lub skalowalny BEM | H2 zaimplementowany; FMM poza zakresem | brak świeżego artefaktu filmu | H2 source-verified, runtime NOT VERIFIED |
 
-## Warunki brzegowe
+Przejście do physics_validated lub production_qualified wymaga źródłowej
+tożsamości, managed receipt, artefaktu, validatora i pełnego scope. Test
+kompilacji ani dowód, że istnieje funkcja build, nie jest takim przejściem.
 
-FEM/BEM demag is the open-boundary realization for body-only magnetic meshes.
-The boundary condition at infinity is represented by the Fredkin-Koehler split:
-the volume Neumann problem computes `u1`, the dense reference BEM operator maps
-the exterior boundary trace to Dirichlet correction values, and the interior
-Laplace correction computes `u2`. The recovered demag field uses the combined
-potential.
+(limitations)=
+## 11. Ograniczenia i prace odroczone
 
-This path does not use an airbox Dirichlet or Robin truncation boundary; those
-belong to `fem_demag_poisson.md`.
+- dense BEM nie skaluje się do dużych powierzchni; limit chroni pamięć, ale nie
+  jest benchmarkiem produkcyjnego rozmiaru;
+- CPU H2 i GPU device-resident FK mają implementację oraz kontrakt źródłowy,
+  ale capability/production qualification wymaga nadal świeżego managed
+  receiptu i artefaktu filmu; FMM pozostaje poza zakresem;
+- dopasowanie pojedynczego wyniku filmu 500 x 500 x 10 nm nie rozstrzyga, czy
+  przyczyną rozbieżności jest rząd P1, topologia piramid, grading, granica czy
+  błąd energii;
+- mieszany Poisson P1 pozostaje wspieranym kontraktem topology-specific, a
+  niezależny profil P2 wymaga all-tet; nie wolno mieszać tych statusów;
+- brak aktualnego artefaktu lub nieudany runtime oznacza NOT VERIFIED, nie
+  „prawdopodobnie poprawne”.
 
-## Dyskretyzacja FEM
+Odroczone są: analityczny error bound i adaptacja hierarchii, FMM,
+automatyczny wybór rzędu, większa macierz filmu oraz pełna kwalifikacja filmu
+na managed CPU i GPU.
 
-The active path uses P1 tetrahedral FEM spaces on the magnetic body mesh:
+(scientific-bibliography)=
+## 12. Bibliografia naukowa
 
-```text
-extract exterior magnetic boundary surface
-solve Neumann volume potential u1
-apply dense reference BEM operator on boundary nodes
-solve Dirichlet correction u2
-combine u = u1 + u2
-recover H_demag = -grad(u)
-integrate E_d = -0.5 mu0 integral Ms m.H_demag dV
-```
+1. A. A. Fredkin i T. R. Koehler, A boundary element solution for
+   micromagnetic problems, IEEE Transactions on Magnetics 23 (1987),
+   3385–3387, DOI: 10.1109/TMAG.1987.1065289.
+2. J. A. Osborn, Demagnetizing factors of the general ellipsoid, Physical
+   Review 67 (1945), 351–357, DOI: 10.1103/PhysRev.67.351.
+3. R. Hertel, Tetmag, zewnętrzny fixture porównawczy w
+   external_solvers/tetmag; kod nie jest źródłem implementacji Fullmag.
 
-Boundary extraction, dense-operator assembly, boundary-value transfer,
-workspace lifecycle, potential combination, solve orchestration, telemetry, and
-energy are owned by separate `demag_fem_bem_*.*` modules.
+(source-code-index)=
+## 13. Indeks źródeł
 
-## Ograniczenia capability
+| Plik | Symbol | Odpowiedzialność |
+|---|---|---|
+| packages/fullmag-py/src/fullmag/model/energy.py | class Demag | publiczny wybór modelu i aliasu realization |
+| crates/fullmag-ir/src/plan.rs | enum ResolvedFemDemagIR | kanoniczna realizacja resolved |
+| crates/fullmag-plan/src/fem.rs | validate_fem_demag_accuracy_contract | fail-closed profil all-tet/P2 Poisson |
+| backends/fem/cpu/mfem/interactions/demag_fem_bem_surface.cpp | build_demag_boundary_surface | typed TET4 i watertight boundary |
+| backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.hpp/.cpp | class DenseDemagBemOperator, HierarchicalDemagBemOperator | dense oracle, hierarchia H2 i limit budżetu |
+| backends/fem/cpu/mfem/interactions/demag_fem_bem_workspace.cpp | initialize_demag_fem_bem_workspace | przestrzeń P1 i wielokrotny gauge |
+| backends/fem/cpu/mfem/interactions/demag_fem_bem_rhs.cpp | prepare_demag_fem_bem_neumann_rhs | zerowanie gauge w RHS |
+| backends/fem/cpu/mfem/interactions/demag_fem_bem_potential.cpp | combine_demag_fem_bem_total_potential | suma potencjałów u1 i u2 |
+| backends/fem/cpu/mfem/interactions/demag_fem_bem_energy.cpp | demag_fem_bem_energy_from_field | energia demagnetyzacji |
+| backends/fem/tests/demag_fem_bem_contract.cpp | main | wykonywalny kontrakt testowy |
 
-- Active FEM/BEM demag requires `FULLMAG_HAS_MFEM_STACK`.
-- The initial active path requires an MPI/Hypre-enabled MFEM runtime.
-- Periodic FEM/BEM demag is explicitly unsupported.
-- The dense BEM operator is validation/reference scale only.
-- Production qualification still requires analytic sphere/thin-film fixtures and
-  comparison against converged Poisson airbox demag.
-- Per-step Fredkin-Koehler solve orchestration is owned by
-  `demag_fem_bem_solve.*`.
+- backends/fem/cpu/mfem/interactions/demag_fem_bem_surface.cpp — rekordy
+  ścian, orientacja, mapowanie węzłów i kontrola zamknięcia;
+- backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.cpp — kąty
+  bryłowe, wagi Lindholma, dense oracle, hierarchia H2, apply i limity pamięci;
+- backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp — device-resident FK,
+  spłaszczone bloki near/far i upload operatora;
+- backends/fem/gpu/cuda/demag_fem_bem/fem_bem_kernels.cu — kernel near/far
+  oraz mapa scalar true DOF;
+- native/include/fullmag_fem.h oraz backends/fem/src/api.cpp — ABI
+  provenance operatora CPU/GPU;
+- backends/fem/cpu/mfem/interactions/demag_fem_bem_workspace.cpp — MFEM P1,
+  workspace, operatory Neumanna/Dirichleta i gauge;
+- backends/fem/cpu/mfem/interactions/demag_fem_bem_rhs.cpp — transformacja
+  RHS i zerowanie gauge;
+- backends/fem/cpu/mfem/interactions/demag_fem_bem_solve.cpp — kolejność
+  u1 → BEM → u2 → pole → energia;
+- crates/fullmag-ir/src/plan.rs — requested/resolved demag IR;
+- crates/fullmag-plan/src/fem.rs — planner i
+  validate_fem_demag_accuracy_contract;
+- backends/fem/tests/demag_fem_bem_contract.cpp — executable contract gate;
+- tests/fem_demag_validation/fem_bem_body_validation.py — fizyczny producer,
+  obecnie bez aktualnego skończonego receipt.
 
-## Testy
+## 14. Checklist kompletności
 
-Current local gate:
-
-```bash
-cmake --build native/build --target fem_demag_fem_bem_contract
-ctest --test-dir native/build/backends/fem -R fem_demag_fem_bem_contract --output-on-failure
-```
-
-The current contract checks body-only boundary-surface extraction, finite dense
-BEM matrix/apply behavior, constant-potential sanity on a unit tetrahedron, and
-energy parity with the shared demag convention. It also checks source ownership
-for the energy and solve modules so those definitions do not return to the
-aggregate `demag_fem_bem.cpp`. The gate also pins top-level source-contract
-docstrings for the aggregate, surface, dense-operator, linear-solve,
-boundary-values, workspace, potential, telemetry, RHS, solve, and energy
-modules, including each module's non-owning boundary.
+- [x] problem fizyczny i rozdział od Poisson–Robin;
+- [x] równania, znaki, jednostki SI i energia;
+- [x] założenia, zakres P1/TET4 i ograniczenia;
+- [x] Python DSL, ProblemIR, planner i round-trip;
+- [x] realizacja dyskretna, ownership i semantyka błędów;
+- [x] osobne lane’y CPU, GPU, P2 i hierarchiczny H2/FMM z jawnym statusem
+  implementacji oraz walidacji;
+- [x] plan walidacji i statusy bez nieuprawnionej promocji;
+- [x] bibliografia i source index;
+- [x] machine-readable source map.

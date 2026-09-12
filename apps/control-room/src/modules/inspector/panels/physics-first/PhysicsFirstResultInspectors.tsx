@@ -59,6 +59,31 @@ export function DynamicsResultInspector(props: InspectorPanelProps) {
   );
 }
 
+export function LegacyTimeDomainResultInspector({
+  selection,
+}: InspectorPanelProps) {
+  const ref = selection.ref?.type === "frequency-domain" ? selection.ref : null;
+  const isDsf = selection.kind === "results.time_domain.dsf_point";
+  return (
+    <PhysicsFirstResultInspectorFrame selection={selection}>
+      <InspectorGroup title="Legacy time-domain selection" badge="legacy/partial">
+        <FieldRow label="Selected item" mono value={ref?.pointId ?? selection.nodeId ?? "Unavailable"} />
+        <FieldRow label="Sample" mono value={ref?.sampleId ?? "Unavailable"} />
+        <FieldRow label="Frequency" value={formatLegacyFrequency(ref?.frequencyHz)} />
+        <FieldRow label="Frequency bin" value={formatLegacyValue(ref?.frequencyIndex)} />
+        {isDsf ? (
+          <>
+            <FieldRow label="k context" value={ref?.kContextKind ?? "Unavailable"} />
+            <FieldRow label="Wavevector" value={formatLegacyWavevector(ref?.kPathCoordinateRadPerM)} />
+          </>
+        ) : null}
+        <FieldRow label="Field payload" value="Unavailable from legacy reader" />
+        <FieldRow label="Canonical dataset" value="Not published; keep this selection legacy/partial" />
+      </InspectorGroup>
+    </PhysicsFirstResultInspectorFrame>
+  );
+}
+
 export function ResonanceOverviewResultInspector(props: InspectorPanelProps) {
   return (
     <PhysicsFirstResultInspectorFrame selection={props.selection}>
@@ -78,6 +103,22 @@ export function ResonanceOverviewResultInspector(props: InspectorPanelProps) {
       </InspectorGroup>
     </PhysicsFirstResultInspectorFrame>
   );
+}
+
+function formatLegacyFrequency(value: number | undefined): string {
+  return value == null || !Number.isFinite(value)
+    ? "Unavailable"
+    : `${value.toExponential(6)} Hz`;
+}
+
+function formatLegacyValue(value: number | string | undefined): string {
+  return value == null ? "Unavailable" : String(value);
+}
+
+function formatLegacyWavevector(value: number | undefined): string {
+  return value == null || !Number.isFinite(value)
+    ? "Unavailable"
+    : `${value.toExponential(6)} rad/m`;
 }
 
 export function ResonanceModalStageResultInspector(props: InspectorPanelProps) {

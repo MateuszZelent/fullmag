@@ -19,6 +19,12 @@ void fullmag_cuda_device_max(
     void *temp_storage, size_t &temp_storage_bytes,
     cudaStream_t stream = nullptr);
 
+/// Query/execute CUB device-wide min reduction.
+void fullmag_cuda_device_min(
+    const double *data, int N, double *result,
+    void *temp_storage, size_t &temp_storage_bytes,
+    cudaStream_t stream = nullptr);
+
 /// Query/execute CUB device-wide sum reduction.
 void fullmag_cuda_device_sum(
     const double *data, int N, double *result,

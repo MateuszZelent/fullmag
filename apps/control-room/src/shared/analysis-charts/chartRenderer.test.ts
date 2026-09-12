@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { chartRenderModelToEChartsOption, createChartRendererOwner, type ChartRendererEngine, type ChartRenderModel } from "./chartRenderer";
+import { DEFAULT_CHART_TOKENS } from "./fullmagChartTokens";
 
 const model: ChartRenderModel = {
   ariaLabel: "Magnetization dynamics",
@@ -68,6 +69,44 @@ describe("chart renderer owner", () => {
     });
 
     expect(option.yAxis).toEqual(expect.arrayContaining([expect.objectContaining({ name: "Period [ns]" })]));
+  });
+
+  it("keeps explicit invalid points as visual gaps instead of connecting branches", () => {
+    const option = chartRenderModelToEChartsOption({
+      ...model,
+      series: [{
+        ...model.series[0]!,
+        points: [
+          { rowIndex: 0, x: 1, y: 0.25 },
+          { rowIndex: 1, x: Number.NaN, y: Number.NaN },
+          { rowIndex: 2, x: 3, y: 0.5 },
+        ],
+      }],
+    });
+
+    expect(option.series).toEqual([
+      expect.objectContaining({ connectNulls: false }),
+    ]);
+  });
+
+  it("pins a series color to its stable model slot when earlier series are hidden", () => {
+    const option = chartRenderModelToEChartsOption(
+      {
+        ...model,
+        series: [{
+          ...model.series[0]!,
+          colorIndex: 1,
+        }],
+      },
+      { ...DEFAULT_CHART_TOKENS, palette: ["red", "green", "blue"] },
+    );
+
+    expect(option.series).toEqual([
+      expect.objectContaining({
+        itemStyle: { color: "green" },
+        lineStyle: { color: "green", width: 1.5 },
+      }),
+    ]);
   });
 
   it("computes axis scales without flattening every chart point into temporary arrays", () => {

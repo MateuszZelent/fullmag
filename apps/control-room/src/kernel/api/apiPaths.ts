@@ -59,6 +59,54 @@ export const ANALYSIS_DYNAMIC_STRUCTURE_FACTOR_V1_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/spin-wave/dynamic-structure-factor.v1",
 );
 
+export const ANALYSIS_RESULT_DATASETS_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets",
+);
+
+export const ANALYSIS_RESULT_DATASET_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}",
+);
+
+export const ANALYSIS_RESULT_AXIS_VALUES_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/axes/{axis_id}/values",
+);
+
+export const ANALYSIS_RESULT_SAMPLES_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/samples",
+);
+
+export const ANALYSIS_RESULT_ITEMS_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/items",
+);
+
+export const ANALYSIS_RESULT_ITEM_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/items/{item_id}",
+);
+
+export const ANALYSIS_RESULT_BRANCHES_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/branches",
+);
+
+export const ANALYSIS_RESULT_BRANCH_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/branches/{branch_id}",
+);
+
+export const ANALYSIS_RESULT_BRANCH_POINTS_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/branches/{branch_id}/points",
+);
+
+export const ANALYSIS_RESULT_RELATIONS_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/relations",
+);
+
+export const ANALYSIS_RESULT_RELATION_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/relations/{relation_id}",
+);
+
+export const ANALYSIS_RESULT_PROJECTION_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/projections/{projection_id}",
+);
+
 export const ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge",
 );
@@ -71,6 +119,14 @@ export const ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
 );
 
+export const ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V3_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v3",
+);
+
+export const ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep",
+);
+
 export const ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
 );
@@ -81,6 +137,10 @@ export const ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH = openApiV2Path(
 
 export const ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2",
+);
+
+export const ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/frequency-domain/eigen/modes/{sample_index}/{mode_index}",
 );
 
 export const ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH = openApiV2Path(
@@ -106,6 +166,11 @@ export const ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH =
     "/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1",
   );
 
+export const ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_COMPAT_V1_PATH =
+  openApiV2Path(
+    "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1",
+  );
+
 export const ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FREQUENCY_POINT_PATH =
   openApiV2Path(
     "/v2/sessions/current/analysis/frequency-domain/response/frequency-points/{frequency_index}",
@@ -113,6 +178,18 @@ export const ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FREQUENCY_POINT_PATH =
 
 export const ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/frequency-domain/response/field/{frequency_index}/meta",
+);
+
+export const ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/frequency-domain/fmr/peaks",
+);
+
+export const ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/frequency-domain/fmr/resonance-fits",
+);
+
+export const ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/frequency-domain/fmr/kittel-fit",
 );
 
 export const ANALYSIS_HYSTERESIS_POINTS_PATH = openApiV2Path(
@@ -779,6 +856,10 @@ export const VISUALIZATION_DISPLAY_PATH = openApiV2Path(
 
 export const VISUALIZATION_CLIENT_ACKS_PATH = openApiV2Path(
   "/v2/sessions/current/visualization/client-acks",
+);
+
+export const VISUALIZATION_MODE_COMPOSITION_ACTIVE_PATH = openApiV2Path(
+  "/v2/sessions/current/visualization/mode-compositions/active",
 );
 
 export const WORKSPACE_LAYOUT_PATH = openApiV2Path(

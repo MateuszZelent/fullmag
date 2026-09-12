@@ -314,6 +314,8 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
         cuda_runtime_version: None,
         lossy_fallback_used: false,
         resolved_fallback: None,
+        fem_eigen_execution_resolution: None,
+        fem_eigen_native_execution_attestation: None,
         fem_crossover_decision: None,
         ignored_terms: Vec::new(),
         random_seed: None,
@@ -370,6 +372,7 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
         fem_poisson_demag: None,
+        fem_bem_demag: None,
     };
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
@@ -1000,6 +1003,7 @@ fn build_multilayer_scalar_fields(
         ("eden_ext", Vec::new()),
         ("eden_ani", Vec::new()),
         ("eden_dmi", Vec::new()),
+        ("eden_rotated_dmi", Vec::new()),
         ("eden_total", Vec::new()),
         ("mat_ms", Vec::new()),
         ("mat_aex", Vec::new()),
@@ -1039,6 +1043,9 @@ fn build_multilayer_scalar_fields(
             .external_energy_density_from_fields(m, &local.external_field);
         let ani = context.problem.anisotropy_energy_density_from_vectors(m);
         let dmi = context.problem.dmi_energy_density_from_vectors(m);
+        let rotated_dmi = context
+            .problem
+            .rotated_interfacial_dmi_energy_density_from_vectors(m);
         let total = (0..count)
             .map(|index| ex[index] + demag[index] + ext[index] + ani[index] + dmi[index])
             .collect::<Vec<_>>();
@@ -1047,6 +1054,10 @@ fn build_multilayer_scalar_fields(
         fields.get_mut("eden_ext").unwrap().extend(ext);
         fields.get_mut("eden_ani").unwrap().extend(ani);
         fields.get_mut("eden_dmi").unwrap().extend(dmi);
+        fields
+            .get_mut("eden_rotated_dmi")
+            .unwrap()
+            .extend(rotated_dmi);
         fields.get_mut("eden_total").unwrap().extend(total);
         fields
             .get_mut("mat_ms")
@@ -1140,6 +1151,7 @@ fn build_contexts_and_states(
                             .unwrap_or([0.0, 1.0, 0.0]),
                     }),
                 interfacial_dmi: plan.interfacial_dmi,
+                rotated_interfacial_dmi: plan.rotated_interfacial_dmi,
                 bulk_dmi: plan.bulk_dmi,
                 zhang_li_stt: None,
                 slonczewski_stt: None,
@@ -1453,6 +1465,7 @@ fn observe_multilayer(
     let mut anisotropy_field = Vec::new();
     let mut cubic_anisotropy_field = Vec::new();
     let mut dmi_field = Vec::new();
+    let mut rotated_dmi_field = Vec::new();
     let mut bulk_dmi_field = Vec::new();
     let mut effective_field = Vec::new();
     let mut exchange_energy = 0.0;
@@ -1460,6 +1473,7 @@ fn observe_multilayer(
     let mut external_energy = 0.0;
     let mut anisotropy_energy = 0.0;
     let mut dmi_energy = 0.0;
+    let mut rotated_dmi_energy = 0.0;
     let mut max_dm_dt: f64 = 0.0;
     let mut max_h_eff: f64 = 0.0;
     let mut max_h_demag: f64 = 0.0;
@@ -1483,6 +1497,9 @@ fn observe_multilayer(
             .problem
             .anisotropy_field_components(state.magnetization());
         let mut local_dmi = context.problem.interfacial_dmi_field(state.magnetization());
+        let mut local_rotated_dmi = context
+            .problem
+            .rotated_interfacial_dmi_field(state.magnetization());
         let mut local_bulk_dmi = context.problem.bulk_dmi_field(state.magnetization());
         let local_exchange = local_observables.exchange_field;
         let mut local_external = local_observables.external_field;
@@ -1496,6 +1513,10 @@ fn observe_multilayer(
             context.problem.active_mask.as_deref(),
         );
         zero_outside_active(&mut local_dmi, context.problem.active_mask.as_deref());
+        zero_outside_active(
+            &mut local_rotated_dmi,
+            context.problem.active_mask.as_deref(),
+        );
         zero_outside_active(&mut local_bulk_dmi, context.problem.active_mask.as_deref());
         let mut local_effective = local_observables.effective_field;
         for cell in 0..local_effective.len() {
@@ -1526,11 +1547,15 @@ fn observe_multilayer(
             .sum::<f64>();
         let local_anisotropy_energy = local_observables.anisotropy_energy_joules;
         let local_dmi_energy = local_observables.dmi_energy_joules;
+        let local_rotated_dmi_energy = context
+            .problem
+            .rotated_interfacial_dmi_energy_from_vectors(state.magnetization());
         exchange_energy += local_exchange_energy;
         demag_energy += local_demag_energy;
         external_energy += local_external_energy;
         anisotropy_energy += local_anisotropy_energy;
         dmi_energy += local_dmi_energy;
+        rotated_dmi_energy += local_rotated_dmi_energy;
         max_dm_dt = max_dm_dt.max(max_norm(&rhs));
         max_h_eff = max_h_eff.max(max_norm(&local_effective));
         max_h_demag = max_h_demag.max(max_norm(&local_demag));
@@ -1567,6 +1592,7 @@ fn observe_multilayer(
                 ("e_ext".to_string(), local_external_energy),
                 ("e_ani".to_string(), local_anisotropy_energy),
                 ("e_dmi".to_string(), local_dmi_energy),
+                ("e_rotated_dmi".to_string(), local_rotated_dmi_energy),
                 (
                     "e_total".to_string(),
                     local_exchange_energy
@@ -1589,6 +1615,7 @@ fn observe_multilayer(
         anisotropy_field.extend(local_anisotropy);
         cubic_anisotropy_field.extend(local_cubic_anisotropy);
         dmi_field.extend(local_dmi);
+        rotated_dmi_field.extend(local_rotated_dmi);
         bulk_dmi_field.extend(local_bulk_dmi);
         effective_field.extend(local_effective);
     }
@@ -1612,6 +1639,7 @@ fn observe_multilayer(
         effective_field,
         anisotropy_field,
         dmi_field,
+        rotated_dmi_field,
         magnetoelastic_field: Vec::new(),
         cubic_anisotropy_field,
         bulk_dmi_field,
@@ -1623,6 +1651,7 @@ fn observe_multilayer(
         drive_energy: 0.0,
         anisotropy_energy,
         dmi_energy,
+        rotated_dmi_energy,
         total_energy: exchange_energy
             + demag_energy
             + external_energy
@@ -2535,6 +2564,7 @@ mod tests {
             fft: None,
             external_field: None,
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             bulk_dmi: None,
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
@@ -3657,6 +3687,63 @@ mod tests {
         assert!(
             rhs.iter().any(|layer| max_norm(layer) > 0.0),
             "global DMI must contribute to the multilayer RHS"
+        );
+    }
+
+    #[test]
+    fn multilayer_reference_cpu_materializes_rotated_dmi_in_energy_and_rhs() {
+        let mut plan = make_plan(false);
+        plan.enable_exchange = false;
+        plan.interfacial_dmi = None;
+        plan.bulk_dmi = None;
+        plan.rotated_interfacial_dmi = Some(3.0e-3);
+        for layer in &mut plan.layers {
+            let layer_nx = layer.native_grid[0] as usize;
+            for (index, value) in layer.initial_magnetization.iter_mut().enumerate() {
+                let x = (index % layer_nx) as f64;
+                let y = (index / layer_nx) as f64;
+                *value = [0.25 + 0.04 * x, -0.3 + 0.03 * y, 0.5 - 0.02 * x];
+            }
+        }
+
+        let (contexts, states) =
+            build_contexts_and_states(&plan, fullmag_engine::TimeIntegrator::Heun, false)
+                .expect("rotated-DMI multilayer contexts should build");
+        assert!(contexts
+            .iter()
+            .all(|context| { context.problem.terms.rotated_interfacial_dmi == Some(3.0e-3) }));
+
+        let observables = observe_multilayer(&contexts, &states, None)
+            .expect("rotated-DMI observables should compute");
+        assert!(
+            max_norm(&observables.effective_field) > 0.0,
+            "rotated DMI must contribute to the multilayer effective field"
+        );
+        assert!(
+            max_norm(&observables.rotated_dmi_field) > 0.0,
+            "rotated DMI must be exposed as a separate multilayer field"
+        );
+        assert_eq!(
+            select_state_observable_field(&observables, "H_rotated_dmi", false)
+                .expect("scheduled rotated multilayer field"),
+            observables.rotated_dmi_field
+        );
+        assert!(
+            observables.dmi_energy.abs() > 0.0,
+            "rotated DMI must contribute to multilayer DMI energy"
+        );
+        assert!(observables.rotated_dmi_energy.abs() > 0.0);
+        assert_eq!(observables.dmi_energy, observables.rotated_dmi_energy);
+
+        let magnetizations = states
+            .iter()
+            .map(|state| state.magnetization().to_vec())
+            .collect::<Vec<_>>();
+        let rhs = llg_rhs_multilayer(&contexts, &magnetizations, None)
+            .expect("rotated-DMI multilayer RHS should compute");
+        assert!(
+            rhs.iter().any(|layer| max_norm(layer) > 0.0),
+            "rotated DMI must contribute to the multilayer RHS"
         );
     }
 

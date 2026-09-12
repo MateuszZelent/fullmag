@@ -24,6 +24,12 @@ struct FemGpuDemagPoissonDeviceState {
     std::vector<double> hybrid_stage_m_xyz;
     std::vector<double> hybrid_demag_xyz;
     double hybrid_demag_energy_joules = 0.0;
+    // Last successful typed evaluation and cumulative mode counts.  These are
+    // host-visible runtime metadata, not device buffers or physics state.
+    std::uint8_t last_evaluation_mode = 0;
+    std::uint8_t last_evaluation_purpose = 0;
+    std::uint64_t field_only_evaluation_count = 0;
+    std::uint64_t field_and_energy_evaluation_count = 0;
 };
 
 } // namespace fullmag::fem

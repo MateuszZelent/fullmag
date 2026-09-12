@@ -300,6 +300,46 @@ def test_cpu_gpu_parity_rejects_mismatched_energy_balance_contracts() -> None:
         llg_compare.validate_parity_energy_contract(cpu, gpu)
 
 
+def test_cpu_gpu_parity_compares_common_time_increment_not_relaxed_endpoint() -> None:
+    cpu = {
+        "relax_to_run": {
+            "accepted_dt_s": 1.0e-15,
+            "handoff_m": [0.0, 0.0, 1.0],
+            "endpoint_m": [1.0e-4, 0.0, 1.0],
+        }
+    }
+    gpu = {
+        "relax_to_run": {
+            "accepted_dt_s": 1.0e-15,
+            "handoff_m": [0.2, 0.0, 0.98],
+            "endpoint_m": [0.2001, 0.0, 0.98],
+        }
+    }
+    assert (
+        llg_compare.validate_relax_to_run_increment_parity(cpu, gpu)
+        <= 5.0e-8
+    )
+
+
+def test_cpu_gpu_parity_rejects_common_time_increment_mismatch() -> None:
+    cpu = {
+        "relax_to_run": {
+            "accepted_dt_s": 1.0e-15,
+            "handoff_m": [0.0, 0.0, 1.0],
+            "endpoint_m": [1.0e-4, 0.0, 1.0],
+        }
+    }
+    gpu = {
+        "relax_to_run": {
+            "accepted_dt_s": 1.0e-15,
+            "handoff_m": [0.2, 0.0, 0.98],
+            "endpoint_m": [0.2002, 0.0, 0.98],
+        }
+    }
+    with pytest.raises(RuntimeError, match="common-time increment parity budget"):
+        llg_compare.validate_relax_to_run_increment_parity(cpu, gpu)
+
+
 @pytest.mark.parametrize("kind", ["externally_driven", "spin_torque_driven"])
 def test_driven_artifact_without_complete_power_balance_is_rejected(kind: str) -> None:
     validator = {

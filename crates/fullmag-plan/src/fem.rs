@@ -1,7 +1,8 @@
 use fullmag_ir::{
     BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR, DomainFrameIR,
     EnergyTermIR, ExchangeBoundaryCondition, ExecutionPlanIR, ExecutionPrecision,
-    FemEigenDispersionValidationIR, FemEigenK0KittelValidationIR, FemEigenPlanIR,
+    FemEigenBiasFieldSamplePlanIR, FemEigenDispersionValidationIR, FemEigenEngineIR,
+    FemEigenExecutionResolutionIR, FemEigenK0KittelValidationIR, FemEigenPlanIR,
     FemFrequencyDomainEquilibriumProvenanceIR, FemFrequencyResponsePlanIR, FemMagnetoelasticPlanIR,
     FemMechanicalModeIR, FemMechanicalPlanIR, FemPlanIR, GeometryEntryIR, MagnetostrictionLawIR,
     MechanicalLoadIR, OutputPlanIR, ProblemIR, ProvenancePlanIR, SeedPolicy, ThermalSeedConfig,
@@ -711,6 +712,9 @@ fn first_unsupported_elementwise_ms_cpu_owner(plan: &FemPlanIR) -> Option<&'stat
     if plan.interfacial_dmi.is_some() || plan.dind_field.is_some() {
         return Some("interfacial DMI");
     }
+    if plan.rotated_interfacial_dmi.is_some() {
+        return Some("rotated interfacial DMI");
+    }
     if plan.bulk_dmi.is_some() || plan.dbulk_field.is_some() {
         return Some("bulk DMI");
     }
@@ -794,6 +798,96 @@ fn exclusive_coefficient_realization_error(
             "FEM material coefficient 'A' has conflicting nodal P1 'material.a_field' and element DG0 'a_element_field' realizations"
                 .to_string(),
         );
+    }
+    None
+}
+
+fn rotated_dmi_exchange_stiffness_error(
+    rotated_interfacial_dmi: Option<f64>,
+    has_open_magnetic_boundary: bool,
+    enable_exchange: bool,
+    mesh: &fullmag_ir::MeshIR,
+    material: &fullmag_ir::MaterialIR,
+    a_element_field: Option<&[f64]>,
+) -> Option<String> {
+    if !rotated_interfacial_dmi.is_some_and(|d| d != 0.0) || !has_open_magnetic_boundary {
+        return None;
+    }
+    if !enable_exchange {
+        return Some(
+            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition"
+                .to_string(),
+        );
+    }
+    if !(material.exchange_stiffness.is_finite() && material.exchange_stiffness > 0.0) {
+        return Some(
+            "RotatedInterfacialDmi with open magnetic boundaries requires a strictly positive finite resolved FEM exchange stiffness A"
+                .to_string(),
+        );
+    }
+
+    let classified = match mesh.cells.mesh_parts.len() {
+        0 => false,
+        count if count == mesh.cells.len() => true,
+        _ => {
+            return Some(
+                "RotatedInterfacialDmi with open magnetic boundaries requires complete FEM cell material-part classification to resolve exchange stiffness A"
+                    .to_string(),
+            )
+        }
+    };
+    let mut magnetic_nodes = BTreeSet::new();
+    let mut magnetic_cells = 0usize;
+    for cell in mesh.cells.iter() {
+        let magnetic = !classified
+            || matches!(
+                mesh.cells.mesh_parts.get(cell.ordinal),
+                Some(fullmag_ir::FemCellMeshPartIR::Magnetic)
+            );
+        if !magnetic {
+            continue;
+        }
+        magnetic_cells += 1;
+        for node in cell.nodes.iter().copied() {
+            magnetic_nodes.insert(node as usize);
+        }
+        if let Some(values) = a_element_field {
+            let Some(value) = values.get(cell.ordinal) else {
+                return Some(
+                    "RotatedInterfacialDmi with open magnetic boundaries requires an A_element_field value for every magnetic FEM cell"
+                        .to_string(),
+                );
+            };
+            if !(value.is_finite() && *value > 0.0) {
+                return Some(
+                    "RotatedInterfacialDmi with open magnetic boundaries requires strictly positive finite A_element_field values on every magnetic FEM cell"
+                        .to_string(),
+                );
+            }
+        }
+    }
+    if magnetic_cells == 0 {
+        return Some(
+            "RotatedInterfacialDmi with open magnetic boundaries requires at least one magnetic FEM cell with resolved exchange stiffness A"
+                .to_string(),
+        );
+    }
+    if let Some(values) = material.a_field.as_deref() {
+        if values.len() != mesh.nodes.len() {
+            return Some(
+                "RotatedInterfacialDmi with open magnetic boundaries requires a nodal material.a_field covering every FEM node"
+                    .to_string(),
+            );
+        }
+        if magnetic_nodes
+            .iter()
+            .any(|node| !(values[*node].is_finite() && values[*node] > 0.0))
+        {
+            return Some(
+                "RotatedInterfacialDmi with open magnetic boundaries requires strictly positive finite material.a_field values on every magnetic boundary support"
+                    .to_string(),
+            );
+        }
     }
     None
 }
@@ -1019,6 +1113,31 @@ mod fem_exchange_stiffness_tests {
         assert!((estimate.max_exchange_stiffness_j_per_m - 20.0e-12).abs() < 1.0e-24);
         assert!((estimate.min_saturation_magnetisation_a_per_m - 700.0e3).abs() < 1.0e-6);
     }
+
+    #[test]
+    fn rotated_dmi_open_boundary_requires_positive_resolved_exchange() {
+        let mesh = tet_mesh(1.0);
+        let material = ProblemIR::bootstrap_example().materials[0].clone();
+        assert!(rotated_dmi_exchange_stiffness_error(
+            Some(3e-3),
+            true,
+            true,
+            &mesh,
+            &material,
+            Some(&[material.exchange_stiffness]),
+        )
+        .is_none());
+        let error = rotated_dmi_exchange_stiffness_error(
+            Some(3e-3),
+            true,
+            true,
+            &mesh,
+            &material,
+            Some(&[0.0]),
+        )
+        .expect("zero A must be rejected for open-boundary rotated DMI");
+        assert!(error.contains("strictly positive"));
+    }
 }
 
 fn domain_mesh_workflow_mode(problem: &ProblemIR) -> Option<String> {
@@ -1171,6 +1290,49 @@ fn validate_eigen_k0_kittel_validation(
     } else {
         Err(PlanError { reasons: errors })
     }
+}
+
+fn bias_field_sweep_kittel_mapping_errors(
+    sweep: &fullmag_ir::BiasFieldSweepIR,
+    validation: &FemEigenK0KittelValidationIR,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    if sweep.samples_a_per_m.len() != validation.samples.len() {
+        errors.push(format!(
+            concat!(
+                "eigenmodes.bias_field_sweep_kittel_sample_count_mismatch: ",
+                "bias_field_sweep has {} samples but k0_kittel_validation has {}; ",
+                "fallback=none",
+            ),
+            sweep.samples_a_per_m.len(),
+            validation.samples.len(),
+        ));
+    }
+    for (position, field_a_per_m) in sweep.samples_a_per_m.iter().enumerate() {
+        let Some(validation_sample) = validation.samples.get(position) else {
+            continue;
+        };
+        if validation_sample.sample_index as usize != position {
+            errors.push(format!(
+                concat!(
+                    "eigenmodes.bias_field_sweep_kittel_sample_index_mismatch: ",
+                    "position {} has k0 sample_index {}; fallback=none",
+                ),
+                position, validation_sample.sample_index,
+            ));
+        }
+        if validation_sample.bias_field != *field_a_per_m {
+            errors.push(format!(
+                concat!(
+                    "eigenmodes.bias_field_sweep_kittel_field_mismatch: position {} ",
+                    "bias_field_sweep={:?}, ",
+                    "k0_kittel_validation={:?}; fallback=none",
+                ),
+                position, field_a_per_m, validation_sample.bias_field,
+            ));
+        }
+    }
+    errors
 }
 
 fn validate_eigen_dispersion_validation(
@@ -3104,6 +3266,7 @@ pub(crate) fn plan_fem(
     let mut demag_realization = fullmag_ir::RequestedFemDemagIR::Auto;
     let mut interfacial_dmi: Option<f64> = None;
     let mut interfacial_dmi_normal: Option<[f64; 3]> = None;
+    let mut rotated_interfacial_dmi: Option<f64> = None;
     let mut bulk_dmi: Option<f64> = None;
     let mut has_magnetoelastic = false;
     let mut has_thermal_noise = false;
@@ -3178,6 +3341,11 @@ pub(crate) fn plan_fem(
                 }
                 bulk_dmi = Some(*d);
             }
+            fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d } => {
+                if rotated_interfacial_dmi.replace(*d).is_some() {
+                    errors.push("RotatedInterfacialDmi is declared more than once".to_string());
+                }
+            }
             fullmag_ir::EnergyTermIR::OerstedCylinder { .. }
             | fullmag_ir::EnergyTermIR::OerstedField { .. } => {
                 // Oersted field: extracted separately below.
@@ -3218,17 +3386,43 @@ pub(crate) fn plan_fem(
                 .as_ref()
                 .is_some_and(|values: &Vec<f64>| !values.is_empty())
     });
+    if rotated_interfacial_dmi.is_some()
+        && (interfacial_dmi.is_some()
+            || bulk_dmi.is_some()
+            || has_material_interfacial_dmi
+            || has_material_bulk_dmi)
+    {
+        errors.push(
+            "RotatedInterfacialDmi cannot be combined with InterfacialDmi or BulkDmi until independent native field and energy channels are implemented"
+                .to_string(),
+        );
+    }
     if !(enable_exchange
         || enable_demag
         || external_field.is_some()
         || interfacial_dmi.is_some()
+        || rotated_interfacial_dmi.is_some()
         || bulk_dmi.is_some()
         || has_material_interfacial_dmi
         || has_material_bulk_dmi
         || has_magnetoelastic)
     {
         errors.push(
-            "the current FEM planning baseline requires at least one of Exchange, Demag, Zeeman, InterfacialDmi, BulkDmi, or Magnetoelastic"
+            "the current FEM planning baseline requires at least one of Exchange, Demag, Zeeman, InterfacialDmi, RotatedInterfacialDmi, BulkDmi, or Magnetoelastic"
+                .to_string(),
+        );
+    }
+    let has_open_magnetic_boundary = problem.pbc.as_ref().is_none_or(|pbc| {
+        pbc.axes
+            .iter()
+            .any(|axis| matches!(axis, fullmag_ir::AxisBoundary::Open))
+    });
+    if rotated_interfacial_dmi.is_some_and(|d| d != 0.0)
+        && has_open_magnetic_boundary
+        && !enable_exchange
+    {
+        errors.push(
+            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition"
                 .to_string(),
         );
     }
@@ -3247,6 +3441,8 @@ pub(crate) fn plan_fem(
         }),
         interfacial_dmi.is_some() || has_material_interfacial_dmi,
         bulk_dmi.is_some() || has_material_bulk_dmi,
+        false,
+        rotated_interfacial_dmi.is_some(),
         true,
         has_magnetoelastic,
         problem
@@ -3410,6 +3606,14 @@ pub(crate) fn plan_fem(
             ],
         });
     }
+    if rotated_interfacial_dmi.is_some_and(|d| d != 0.0) && !mesh.periodic_node_pairs.is_empty() {
+        return Err(PlanError {
+            reasons: vec![
+                "FEM RotatedInterfacialDmi with periodic node pairs is unsupported until the weak residual and mass projection are reduced over periodic node classes"
+                    .to_string(),
+            ],
+        });
+    }
     if requested_static_pbc && mesh.periodic_node_pairs.is_empty() {
         return Err(PlanError {
             reasons: vec![
@@ -3563,6 +3767,18 @@ pub(crate) fn plan_fem(
     if let Some(reason) =
         exclusive_coefficient_realization_error(&material, &ms_element_field, &a_element_field)
     {
+        return Err(PlanError {
+            reasons: vec![reason],
+        });
+    }
+    if let Some(reason) = rotated_dmi_exchange_stiffness_error(
+        rotated_interfacial_dmi,
+        has_open_magnetic_boundary,
+        enable_exchange,
+        &mesh,
+        &material,
+        a_element_field.as_deref(),
+    ) {
         return Err(PlanError {
             reasons: vec![reason],
         });
@@ -3849,6 +4065,7 @@ pub(crate) fn plan_fem(
         demag_realization: resolved_demag_realization,
         air_box_config,
         interfacial_dmi,
+        rotated_interfacial_dmi,
         dmi_interface_normal: interfacial_dmi_normal,
         bulk_dmi,
         dind_field,
@@ -4136,9 +4353,155 @@ pub(crate) fn plan_fem(
                     resolved_integrator: integrator,
                 }
             }),
+            fem_eigen_execution_resolution: None,
             physics_graph: None,
         },
     })
+}
+
+fn parse_fem_eigen_runtime_device(
+    value: Option<&str>,
+    metadata_key: &str,
+) -> Result<fullmag_ir::ExecutionDevice, PlanError> {
+    match value.unwrap_or("auto") {
+        "auto" => Ok(fullmag_ir::ExecutionDevice::Auto),
+        "cpu" => Ok(fullmag_ir::ExecutionDevice::Cpu),
+        "cuda" | "gpu" => Ok(fullmag_ir::ExecutionDevice::Gpu),
+        value => Err(PlanError {
+            reasons: vec![format!(
+                "fem_eigen.k0_periodic_airbox_unsupported_device: {metadata_key}.device='{value}'; expected auto, cpu, cuda, or gpu; fallback=none"
+            )],
+        }),
+    }
+}
+
+fn resolve_k0_periodic_airbox_execution(
+    problem: &ProblemIR,
+) -> Result<FemEigenExecutionResolutionIR, PlanError> {
+    const GPU_UNAVAILABLE_FALLBACK_REASON: &str = "gpu_modal_device_krylov_unavailable";
+    if problem.validation_profile.execution_mode != fullmag_ir::ExecutionMode::Strict {
+        return Err(PlanError {
+            reasons: vec![
+                "fem_eigen.k0_periodic_airbox_requires_strict_execution_mode; fallback=none"
+                    .to_string(),
+            ],
+        });
+    }
+    if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
+        return Err(PlanError {
+            reasons: vec![
+                "fem_eigen.k0_periodic_airbox_requires_double_precision; fallback=none".to_string(),
+            ],
+        });
+    }
+
+    let requested_device = parse_fem_eigen_runtime_device(
+        problem
+            .problem_meta
+            .runtime_metadata
+            .get("runtime_selection")
+            .and_then(|value| value.get("device"))
+            .and_then(serde_json::Value::as_str),
+        "runtime_selection",
+    )?;
+    let runtime_device = parse_fem_eigen_runtime_device(
+        problem
+            .problem_meta
+            .runtime_metadata
+            .get("runtime_device_override")
+            .and_then(|value| value.get("device"))
+            .and_then(serde_json::Value::as_str),
+        "runtime_device_override",
+    )?;
+    let runtime_fallback_reason = problem
+        .problem_meta
+        .runtime_metadata
+        .get("runtime_device_override")
+        .and_then(|value| value.get("fallback_reason"))
+        .and_then(serde_json::Value::as_str);
+
+    let (resolved_device, resolved_engine, fallback_reason, selection_reason) =
+        match requested_device {
+            fullmag_ir::ExecutionDevice::Cpu => (
+                fullmag_ir::ExecutionDevice::Cpu,
+                FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc,
+                None,
+                "fem_eigen.k0_periodic_airbox.explicit_cpu",
+            ),
+            fullmag_ir::ExecutionDevice::Gpu => (
+                fullmag_ir::ExecutionDevice::Gpu,
+                FemEigenEngineIR::GpuModalDeviceKrylov,
+                None,
+                "fem_eigen.k0_periodic_airbox.explicit_gpu",
+            ),
+            fullmag_ir::ExecutionDevice::Auto => match runtime_device {
+                fullmag_ir::ExecutionDevice::Gpu => (
+                    fullmag_ir::ExecutionDevice::Gpu,
+                    FemEigenEngineIR::GpuModalDeviceKrylov,
+                    None,
+                    "fem_eigen.k0_periodic_airbox.auto_runtime_gpu",
+                ),
+                fullmag_ir::ExecutionDevice::Cpu => match runtime_fallback_reason {
+                    None => (
+                        fullmag_ir::ExecutionDevice::Cpu,
+                        FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc,
+                        None,
+                        "fem_eigen.k0_periodic_airbox.auto_runtime_cpu",
+                    ),
+                    Some(GPU_UNAVAILABLE_FALLBACK_REASON) => (
+                        fullmag_ir::ExecutionDevice::Cpu,
+                        FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc,
+                        Some(GPU_UNAVAILABLE_FALLBACK_REASON.to_string()),
+                        "fem_eigen.k0_periodic_airbox.auto_gpu_unavailable_cpu_fallback",
+                    ),
+                    Some(reason) => {
+                        return Err(PlanError {
+                        reasons: vec![format!(
+                            "fem_eigen.k0_periodic_airbox_unsupported_fallback_reason: '{reason}'; fallback=none"
+                        )],
+                        });
+                    }
+                },
+                fullmag_ir::ExecutionDevice::Auto => (
+                    fullmag_ir::ExecutionDevice::Cpu,
+                    FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc,
+                    None,
+                    "fem_eigen.k0_periodic_airbox.auto_default_cpu",
+                ),
+            },
+        };
+
+    Ok(FemEigenExecutionResolutionIR {
+        requested_device,
+        resolved_device,
+        requested_precision: problem.backend_policy.execution_precision,
+        resolved_precision: ExecutionPrecision::Double,
+        requested_engine: FemEigenEngineIR::Auto,
+        resolved_engine,
+        fallback_used: fallback_reason.is_some(),
+        fallback_reason,
+        selection_reason: selection_reason.to_string(),
+    })
+}
+
+/// Return whether a FEM eigen plan needs the bounded periodic-airbox K0
+/// execution contract even when the study-level magnetostatic boundary token
+/// remains `open`.
+///
+/// The K0-3 field sweep is represented by validation metadata on the stage
+/// and is deliberately accepted by the runner as a shared-domain modal
+/// request. Keep the planner predicate identical to the runner predicate so
+/// the typed execution resolution is always present before dispatch.
+fn k0_kittel_periodic_airbox_execution_requested(
+    magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR,
+    validation: Option<&FemEigenK0KittelValidationIR>,
+) -> bool {
+    magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0
+        || validation.is_some_and(|validation| {
+            validation.kind == "k0_kittel_field_sweep"
+                && validation.case_id.as_deref() == Some("K0-3")
+                && validation.demag_kind.as_deref() == Some("periodic_airbox_k0")
+        })
 }
 
 pub(crate) fn plan_fem_eigen(
@@ -4166,15 +4529,93 @@ pub(crate) fn plan_fem_eigen(
         target,
         equilibrium,
         k_sampling,
+        bias_field_sweep,
         normalization,
         damping_policy,
         spin_wave_bc,
+        magnetostatic_bc,
         mode_tracking,
         ..
     } = &problem.study
     else {
         unreachable!("plan_fem_eigen is only called for StudyIR::Eigenmodes");
     };
+
+    if bias_field_sweep.is_some() {
+        let mut reasons = Vec::new();
+        if let Some(sweep) = bias_field_sweep.as_ref() {
+            if sweep.equilibrium_policy == fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::RelaxEach
+                && sweep.continuation_seed
+                    == fullmag_ir::BiasFieldSweepContinuationSeedIR::PreviousAcceptedEquilibrium
+            {
+                reasons.push(
+                    "eigenmodes.bias_field_sweep_relax_each_requires_initial_state_seed; fallback=none"
+                        .to_string(),
+                );
+            }
+        }
+        if !operator.include_demag
+            || !problem
+                .energy_terms
+                .iter()
+                .any(|term| matches!(term, EnergyTermIR::Demag { .. }))
+        {
+            reasons.push("eigenmodes.bias_field_sweep_requires_demag; fallback=none".to_string());
+        }
+        if *magnetostatic_bc != fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
+            reasons.push(
+                "eigenmodes.bias_field_sweep_requires_periodic_airbox_k0; fallback=none"
+                    .to_string(),
+            );
+        }
+        if !matches!(
+            k_sampling,
+            Some(fullmag_ir::KSamplingIR::Single {
+                k_vector: [0.0, 0.0, 0.0]
+            })
+        ) {
+            reasons.push(
+                "eigenmodes.bias_field_sweep_requires_single_gamma; fallback=none".to_string(),
+            );
+        }
+        if *damping_policy != fullmag_ir::EigenDampingPolicyIR::Ignore {
+            reasons
+                .push("eigenmodes.bias_field_sweep_requires_alpha_zero; fallback=none".to_string());
+        }
+        if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
+            reasons.push(
+                "eigenmodes.bias_field_sweep_requires_double_precision; fallback=none".to_string(),
+            );
+        }
+        if problem.validation_profile.execution_mode != fullmag_ir::ExecutionMode::Strict {
+            reasons.push(
+                "eigenmodes.bias_field_sweep_requires_strict_execution_mode; fallback=none"
+                    .to_string(),
+            );
+        }
+        match &problem.pbc {
+            Some(periodicity)
+                if periodicity.axes
+                    == [
+                        fullmag_ir::AxisBoundary::Periodic,
+                        fullmag_ir::AxisBoundary::Periodic,
+                        fullmag_ir::AxisBoundary::Open,
+                    ] => {}
+            Some(periodicity) if periodicity.axes[2] == fullmag_ir::AxisBoundary::Periodic => {
+                reasons.push(
+                    "eigenmodes.bias_field_sweep_rejects_fully_periodic_3d; fallback=none"
+                        .to_string(),
+                );
+            }
+            _ => reasons.push(
+                "eigenmodes.bias_field_sweep_requires_xy_periodic_open_z; fallback=none"
+                    .to_string(),
+            ),
+        }
+        if !reasons.is_empty() {
+            return Err(PlanError { reasons });
+        }
+    }
 
     let geometry_by_name: BTreeMap<&str, &GeometryEntryIR> = problem
         .geometry
@@ -4385,6 +4826,11 @@ pub(crate) fn plan_fem_eigen(
                 }
                 bulk_dmi = Some(*d);
             }
+            fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { .. } => {
+                errors.push(
+                    "RotatedInterfacialDmi is not implemented for eigen execution".to_string(),
+                );
+            }
             other => {
                 errors.push(format!(
                     "energy term '{:?}' is not yet executable in the FEM eigen baseline",
@@ -4432,6 +4878,11 @@ pub(crate) fn plan_fem_eigen(
             None
         }
     };
+    if let (Some(sweep), Some(validation)) =
+        (bias_field_sweep.as_ref(), k0_kittel_validation.as_ref())
+    {
+        errors.extend(bias_field_sweep_kittel_mapping_errors(sweep, validation));
+    }
     if operator.include_demag
         && matches!(
             spin_wave_bc.kind(),
@@ -4587,6 +5038,13 @@ pub(crate) fn plan_fem_eigen(
 
     let material =
         selected_material.expect("validation should have caught missing FEM eigen material");
+    if bias_field_sweep.is_some() && material.damping != 0.0 {
+        return Err(PlanError {
+            reasons: vec![
+                "eigenmodes.bias_field_sweep_requires_alpha_zero; fallback=none".to_string(),
+            ],
+        });
+    }
     let geometry_to_object_id = geometry_to_object_id_map(&magnet_entries);
     let (mesh, raw_object_segments, mesh_source, mut equilibrium_magnetization) =
         if let Some(domain_asset) = resolved_domain_mesh_asset.as_ref() {
@@ -4742,6 +5200,42 @@ pub(crate) fn plan_fem_eigen(
         });
     }
 
+    let execution_resolution = if k0_kittel_periodic_airbox_execution_requested(
+        *magnetostatic_bc,
+        k0_kittel_validation.as_ref(),
+    ) {
+        Some(resolve_k0_periodic_airbox_execution(problem)?)
+    } else {
+        None
+    };
+    let bias_execution = bias_field_sweep.as_ref().map(|_| {
+        execution_resolution
+            .as_ref()
+            .expect("validated bias-field sweeps always resolve periodic-airbox K0 execution")
+            .clone()
+    });
+    let bias_field_samples = bias_field_sweep
+        .as_ref()
+        .map(|sweep| {
+            sweep
+                .samples_a_per_m
+                .iter()
+                .enumerate()
+                .map(
+                    |(sample_index, field_a_per_m)| FemEigenBiasFieldSamplePlanIR {
+                        sample_index: sample_index as u32,
+                        field_a_per_m: *field_a_per_m,
+                        equilibrium_policy: sweep.equilibrium_policy,
+                        continuation_seed: sweep.continuation_seed,
+                        execution: bias_execution
+                            .clone()
+                            .expect("bias-field sample has an execution binding"),
+                    },
+                )
+                .collect()
+        })
+        .unwrap_or_default();
+
     let fem_plan = FemEigenPlanIR {
         mesh_name: mesh_name.clone(),
         mesh_source,
@@ -4760,6 +5254,7 @@ pub(crate) fn plan_fem_eigen(
         target: target.clone(),
         equilibrium: equilibrium.clone(),
         k_sampling: k_sampling.clone(),
+        bias_field_samples,
         normalization: *normalization,
         damping_policy: *damping_policy,
         enable_exchange,
@@ -4799,8 +5294,18 @@ pub(crate) fn plan_fem_eigen(
             external_field.is_some()
         ),
         study_note,
-        "FEM eigen execution currently targets the transitional CPU FEM baseline; native MFEM/SLEPc integration remains future work"
-            .to_string(),
+        execution_resolution.as_ref().map_or_else(
+            || "FEM eigen execution currently targets the transitional CPU FEM baseline; native MFEM/SLEPc integration remains future work".to_string(),
+            |resolution| format!(
+                "FEM K0 periodic-airbox execution resolved: requested_device={:?}, resolved_device={:?}, requested_engine={:?}, resolved_engine={:?}, fallback_used={}, selection_reason={}",
+                resolution.requested_device,
+                resolution.resolved_device,
+                resolution.requested_engine,
+                resolution.resolved_engine,
+                resolution.fallback_used,
+                resolution.selection_reason,
+            ),
+        ),
     ];
     for field_plan in &material_field_plans {
         provenance_notes.extend(field_plan.warnings.iter().cloned());
@@ -4821,6 +5326,7 @@ pub(crate) fn plan_fem_eigen(
         provenance: ProvenancePlanIR {
             notes: provenance_notes,
             integrator_resolution: None,
+            fem_eigen_execution_resolution: execution_resolution,
             physics_graph: None,
         },
     })
@@ -4830,6 +5336,18 @@ pub(crate) fn plan_fem_frequency_response(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
 ) -> Result<ExecutionPlanIR, PlanError> {
+    if problem
+        .energy_terms
+        .iter()
+        .any(|term| matches!(term, EnergyTermIR::RotatedInterfacialDmi { .. }))
+    {
+        return Err(PlanError {
+            reasons: vec![
+                "RotatedInterfacialDmi is not implemented for frequency-domain execution"
+                    .to_string(),
+            ],
+        });
+    }
     let fullmag_ir::StudyIR::FrequencyResponse {
         dynamics,
         operator,
@@ -4946,9 +5464,11 @@ pub(crate) fn plan_fem_frequency_response(
         target: fullmag_ir::EigenTargetIR::Lowest,
         equilibrium: equilibrium.clone(),
         k_sampling: eigen_proxy_k_sampling,
+        bias_field_sweep: None,
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: *damping_policy,
         spin_wave_bc: eigen_proxy_spin_wave_bc,
+        magnetostatic_bc: *magnetostatic_bc,
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             stage_autosave: None,
@@ -5050,6 +5570,7 @@ pub(crate) fn plan_fem_frequency_response(
         provenance: ProvenancePlanIR {
             notes: provenance_notes,
             integrator_resolution: None,
+            fem_eigen_execution_resolution: None,
             physics_graph: None,
         },
     })

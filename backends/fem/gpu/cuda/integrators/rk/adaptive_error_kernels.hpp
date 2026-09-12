@@ -45,5 +45,20 @@ void fullmag_cuda_adaptive_error_norm_blocks(
     int N,
     cudaStream_t stream = nullptr);
 
+/// Convert the reduced minimum cosine to one published maximum angle.
+/// This keeps the expensive acos out of the per-node adaptive kernel.
+void fullmag_cuda_finalize_spin_rotation(
+    double *reduced_min_cosine,
+    cudaStream_t stream = nullptr);
+
+/// Merge the published maximum spin angle into the adaptive acceptance metric.
+/// The operation is device-side so host policy still receives the same
+/// max(error_norm, angle/max_rotation) value without per-node acos calls.
+void fullmag_cuda_merge_spin_rotation_error(
+    double *error_norm,
+    const double *max_spin_rotation,
+    double max_spin_rotation_limit,
+    cudaStream_t stream = nullptr);
+
 } // namespace fullmag::fem
 #endif

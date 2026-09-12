@@ -701,6 +701,15 @@ fn merge_stage_record_linkage(
     existing: &StageExecutionRecord,
     incoming: &mut StageExecutionRecord,
 ) {
+    if incoming.mesh_generation_id.is_none() {
+        incoming.mesh_generation_id = existing.mesh_generation_id.clone();
+    }
+    if incoming.mesh_topology_fingerprint.is_none() {
+        incoming.mesh_topology_fingerprint = existing.mesh_topology_fingerprint.clone();
+    }
+    if incoming.mesh_revision.is_none() {
+        incoming.mesh_revision = existing.mesh_revision;
+    }
     for artifact_ref in &existing.artifact_refs {
         if !incoming
             .artifact_refs
@@ -2873,6 +2882,7 @@ mod tests {
             e_ext: 0.0,
             e_ani: 0.0,
             e_dmi: 0.0,
+            e_rotated_dmi: 0.0,
             e_total,
             max_dm_dt: 0.0,
             max_h_eff: 0.0,
@@ -2898,6 +2908,7 @@ mod tests {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -3523,6 +3534,9 @@ mod tests {
                 kind: None,
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-stage-0".into()),
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_000_000),
                 completed_at_unix_ms: Some(1_700_000_001_000),
                 reason: None,
@@ -3665,6 +3679,7 @@ mod tests {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -3724,6 +3739,7 @@ mod tests {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -4255,6 +4271,9 @@ mod tests {
                 kind: None,
                 status: StageLifecycleState::Paused,
                 command_id: Some("cmd-stage-0".into()),
+                mesh_generation_id: Some("mesh-generation-preserved".into()),
+                mesh_topology_fingerprint: Some("sha256:stage-topology-preserved".into()),
+                mesh_revision: Some(23),
                 started_at_unix_ms: Some(1_700_000_000_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -4304,6 +4323,9 @@ mod tests {
                         kind: None,
                         status: StageLifecycleState::Completed,
                         command_id: Some("cmd-stage-0".into()),
+                        mesh_generation_id: None,
+                        mesh_topology_fingerprint: None,
+                        mesh_revision: None,
                         started_at_unix_ms: Some(1_700_000_000_000),
                         completed_at_unix_ms: Some(1_700_000_001_000),
                         reason: None,
@@ -4347,6 +4369,15 @@ mod tests {
             .as_ref()
             .and_then(|state| state.stages.first())
             .expect("stage execution record should be present");
+        assert_eq!(
+            record.mesh_generation_id.as_deref(),
+            Some("mesh-generation-preserved")
+        );
+        assert_eq!(
+            record.mesh_topology_fingerprint.as_deref(),
+            Some("sha256:stage-topology-preserved")
+        );
+        assert_eq!(record.mesh_revision, Some(23));
         assert_eq!(record.checkpoint_ref.as_deref(), Some("cp-000042"));
         assert_eq!(record.loaded_state_ref.as_deref(), Some("cp-common-state"));
         assert_eq!(
@@ -4721,6 +4752,7 @@ mod tests {
                         e_ext: 0.0,
                         e_ani: 0.0,
                         e_dmi: 0.0,
+                        e_rotated_dmi: 0.0,
                         e_total: 0.0,
                         max_dm_dt: 0.0,
                         max_h_eff: 0.0,
@@ -4855,6 +4887,9 @@ mod tests {
                 kind: None,
                 status: stage_status,
                 command_id: None,
+                mesh_generation_id: None,
+                mesh_topology_fingerprint: None,
+                mesh_revision: None,
                 started_at_unix_ms: Some(1_700_000_000_000),
                 completed_at_unix_ms: None,
                 reason: None,
@@ -4919,6 +4954,7 @@ mod tests {
                     e_ext: 0.0,
                     e_ani: 0.0,
                     e_dmi: 0.0,
+                    e_rotated_dmi: 0.0,
                     e_total: 0.0,
                     max_dm_dt: 0.0,
                     max_h_eff: 0.0,
@@ -5055,6 +5091,7 @@ mod tests {
                     e_ext: 0.0,
                     e_ani: 0.0,
                     e_dmi: 0.0,
+                    e_rotated_dmi: 0.0,
                     e_total: 0.0,
                     max_dm_dt: 0.0,
                     max_h_eff: 0.0,
@@ -5729,6 +5766,7 @@ mod tests {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -5817,6 +5855,7 @@ mod tests {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -5857,6 +5896,7 @@ mod tests {
                         e_ext: 0.0,
                         e_ani: 0.0,
                         e_dmi: 0.0,
+                        e_rotated_dmi: 0.0,
                         e_total: 0.0,
                         max_dm_dt: 0.0,
                         max_h_eff: 0.0,

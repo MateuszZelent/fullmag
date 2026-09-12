@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 static void check(bool condition, const char *msg) {
@@ -90,6 +91,15 @@ static void expect_create_error(fullmag_fem_plan_desc &plan, const char *needle)
     check(error != nullptr && std::strstr(error, needle) != nullptr, needle);
 }
 
+static void expect_create_v3_error(
+    const fullmag_fem_plan_desc_v2 &plan,
+    const char *needle) {
+    fullmag_fem_backend *handle = fullmag_fem_backend_create_v3(&plan, nullptr);
+    check(handle == nullptr, "fullmag_fem_backend_create_v3 should reject invalid plan");
+    const char *error = fullmag_fem_backend_last_error(nullptr);
+    check(error != nullptr && std::strstr(error, needle) != nullptr, needle);
+}
+
 int main() {
     fullmag_fem_availability_info availability = {};
     check(
@@ -142,6 +152,87 @@ int main() {
     plan = make_plan(m0);
     plan.adaptive_config = &adaptive;
     expect_create_error(plan, "max_reject");
+
+    fullmag_fem_plan_desc_v2 rotated_open = {};
+    rotated_open.abi_version = FULLMAG_FEM_PLAN_DESC_V2_ABI_VERSION;
+    rotated_open.struct_size = sizeof(rotated_open);
+    rotated_open.base.enable_exchange = 0;
+    rotated_open.base.mesh.periodic_node_pairs_len = 0;
+    rotated_open.has_rotated_interfacial_dmi = 1;
+    rotated_open.rotated_interfacial_dmi_constant = 3.0e-3;
+    expect_create_v3_error(
+        rotated_open,
+        "RotatedInterfacialDmi with open magnetic boundaries requires Exchange");
+
+    fullmag_fem_plan_desc_v2 rotated_abi = {};
+    rotated_abi.abi_version = FULLMAG_FEM_PLAN_DESC_V2_ABI_VERSION;
+    rotated_abi.struct_size = sizeof(rotated_abi);
+    // Keep this fixture away from the independent open-boundary gate so each
+    // case below exercises the rDMI ABI/composition validation itself.
+    rotated_abi.base.enable_exchange = 1;
+    rotated_abi.base.mesh.periodic_node_pairs_len = 0;
+
+    rotated_abi.has_rotated_interfacial_dmi = 2;
+    rotated_abi.rotated_interfacial_dmi_constant = 3.0e-3;
+    expect_create_v3_error(
+        rotated_abi,
+        "fullmag_fem_backend_create_v3 rotated-interfacial DMI flag must be 0 or 1");
+
+    rotated_abi.has_rotated_interfacial_dmi = 1;
+    rotated_abi.rotated_interfacial_dmi_constant =
+        std::numeric_limits<double>::quiet_NaN();
+    expect_create_v3_error(
+        rotated_abi,
+        "fullmag_fem_backend_create_v3 rotated-interfacial DMI constant must be finite");
+
+    rotated_abi.rotated_interfacial_dmi_constant =
+        std::numeric_limits<double>::infinity();
+    expect_create_v3_error(
+        rotated_abi,
+        "fullmag_fem_backend_create_v3 rotated-interfacial DMI constant must be finite");
+
+    rotated_abi.has_rotated_interfacial_dmi = 0;
+    rotated_abi.rotated_interfacial_dmi_constant =
+        std::numeric_limits<double>::quiet_NaN();
+    expect_create_v3_error(
+        rotated_abi,
+        "fullmag_fem_backend_create_v3 rotated-interfacial DMI constant must be finite");
+
+    rotated_abi.has_rotated_interfacial_dmi = 1;
+    rotated_abi.rotated_interfacial_dmi_constant = 3.0e-3;
+    rotated_abi.base.has_interfacial_dmi = 1;
+    expect_create_v3_error(
+        rotated_abi,
+        "fullmag_fem_backend_create_v3 rotated-interfacial DMI cannot be combined with interfacial or bulk DMI");
+
+    rotated_abi.base.has_interfacial_dmi = 0;
+    rotated_abi.base.has_bulk_dmi = 1;
+    expect_create_v3_error(
+        rotated_abi,
+        "fullmag_fem_backend_create_v3 rotated-interfacial DMI cannot be combined with interfacial or bulk DMI");
+
+    rotated_abi.base.has_bulk_dmi = 0;
+    rotated_abi.base.mesh.periodic_node_pairs_len = 1;
+    expect_create_v3_error(
+        rotated_abi,
+        "FEM RotatedInterfacialDmi with periodic node pairs is unsupported until the weak residual and mass projection are reduced over periodic node classes");
+
+    // A zero coefficient retains the requested term but contributes no natural
+    // boundary or periodic residual. Both signs of zero must reach the later
+    // P1 validation without requiring Exchange or a periodic DMI operator.
+    for (double d : {0.0, -0.0}) {
+        fullmag_fem_plan_desc_v2 rotated_zero = {};
+        rotated_zero.abi_version = FULLMAG_FEM_PLAN_DESC_V2_ABI_VERSION;
+        rotated_zero.struct_size = sizeof(rotated_zero);
+        rotated_zero.base = make_plan(m0);
+        rotated_zero.base.fe_order = 2;
+        rotated_zero.base.enable_exchange = 0;
+        rotated_zero.has_rotated_interfacial_dmi = 1;
+        rotated_zero.rotated_interfacial_dmi_constant = d;
+        expect_create_v3_error(rotated_zero, "fe_order = 1");
+        rotated_zero.base.mesh.periodic_node_pairs_len = 1;
+        expect_create_v3_error(rotated_zero, "fe_order = 1");
+    }
 
     return 0;
 }

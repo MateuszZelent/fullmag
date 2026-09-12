@@ -102,6 +102,36 @@ describe("inactiveViewportResourcePolicy", () => {
     expect(releasePause).toHaveBeenCalledTimes(2);
   });
 
+  it("does not classify ordinary field vectors as planar-monitor resources", () => {
+    const layout = new LayoutController(new EventBus<KernelEventMap>());
+    const predicates: Array<(resourceKey: string) => boolean> = [];
+    const runtimeStore = {
+      beginPauseMatching: vi.fn((predicate: (resourceKey: string) => boolean) => {
+        predicates.push(predicate);
+        return vi.fn();
+      }),
+    };
+
+    const dispose = createViewport3DInactiveResourcePauseController({
+      layout,
+      runtimeStore,
+    });
+
+    const eigenFieldKey =
+      `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "analysis%3Aeigen%3Asample-0000%3Amode-0002")}?component=full&scope_kind=full`;
+    expect(predicates[0]?.(eigenFieldKey)).toBe(false);
+    expect(
+      predicates[0]?.(
+        DATA_PLANAR_FIELD_META_PATH.replace("{quantity_id}", "m").replace(
+          "{monitor_id}",
+          "monitor-1",
+        ),
+      ),
+    ).toBe(true);
+
+    dispose();
+  });
+
   it("starts paused when the initial active center tab is non-3D and releases on dispose", () => {
     const layout = new LayoutController(new EventBus<KernelEventMap>());
     layout.setActiveViewportMainModule("cross-section-image");

@@ -2,6 +2,7 @@ import type {
   JsonObject,
   ObjectInteractionKind,
   ObjectInteractionPatchRequest,
+  SceneResource,
 } from "@/kernel/api/apiTypes";
 
 export const BACKEND_INTERACTION_IDS = [
@@ -11,6 +12,7 @@ export const BACKEND_INTERACTION_IDS = [
   "current_transport",
   "spin_torque",
   "interfacial_dmi",
+  "rotated_interfacial_dmi",
   "bulk_dmi",
   "uniaxial_anisotropy",
   "cubic_anisotropy",
@@ -101,6 +103,9 @@ const FDM_DEMAG_METHOD_OPTIONS: InteractionFieldOption[] = [
 const FEM_DEMAG_METHOD_OPTIONS = DEMAG_METHOD_OPTIONS.filter(
   (option) => option.value !== "multilayer_convolution",
 );
+
+const ROTATED_DMI_EXCHANGE_ERROR =
+  "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition";
 
 const DEMAG_METHOD_VALUES_BY_LANE: Record<
   Exclude<InteractionDiscretization, "unknown">,
@@ -309,6 +314,26 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
     label: "Interfacial DMI",
     scope: "object_or_region",
     storage: "object_interaction",
+  },
+  {
+    availability: "study",
+    description:
+      "Göbel rotated interfacial DMI with D21 = D32 = D for in-plane bimerons.",
+    fields: [
+      {
+        defaultValue: "0.003",
+        description: "Signed rotated interfacial DMI coefficient.",
+        id: "d",
+        kind: "number",
+        label: "D",
+        required: true,
+        unit: "J/m^2",
+      },
+    ],
+    id: "rotated_interfacial_dmi",
+    label: "Rotated interfacial DMI",
+    scope: "global",
+    storage: "study",
   },
   {
     availability: "study",
@@ -696,8 +721,21 @@ export function draftFromObjectInteractionResource(
 
 export function buildObjectInteractionPatchFromDraft(
   draft: PhysicsInteractionDraft,
+  scene?: SceneResource | null,
 ): ObjectInteractionPatchResult {
   const spec = requireInteractionSpec(draft.id);
+  if (
+    (draft.id === "interfacial_dmi" || draft.id === "bulk_dmi") &&
+    draft.enabled &&
+    draft.present &&
+    activeStudyRotatedDmi(scene)
+  ) {
+    return {
+      error:
+        `Object-scoped ${draft.id} conflicts with active study-level rotated interfacial DMI. ` +
+        "Disable or remove the study-level term before applying the object-scoped DMI.",
+    };
+  }
   if (spec.storage !== "object_interaction" || !isObjectInteractionKind(draft.id)) {
     return { error: deferredMessage(spec) };
   }
@@ -719,6 +757,7 @@ export function buildObjectInteractionPatchFromDraft(
 
 export function buildStudyInteractionPatchFromDraft(
   draft: PhysicsInteractionDraft,
+  scene?: SceneResource | null,
 ): StudyInteractionPatchResult {
   const spec = requireInteractionSpec(draft.id);
   if (spec.storage !== "study") {
@@ -736,6 +775,12 @@ export function buildStudyInteractionPatchFromDraft(
     };
   }
   if (draft.id === "exchange") {
+    if (
+      (!draft.enabled || !draft.present) &&
+      activeStudyRotatedDmi(scene)
+    ) {
+      return { error: ROTATED_DMI_EXCHANGE_ERROR };
+    }
     return {
       patch: {
         study: {
@@ -755,7 +800,86 @@ export function buildStudyInteractionPatchFromDraft(
       },
     };
   }
+  if (draft.id === "rotated_interfacial_dmi") {
+    if (!draft.enabled || !draft.present) {
+      return {
+        patch: {
+          study: {
+            rotated_interfacial_dmi: null,
+          },
+        },
+      };
+    }
+    const conflictingInteraction = activeObjectScopedDmi(scene);
+    if (conflictingInteraction) {
+      return {
+        error:
+          `Rotated interfacial DMI conflicts with active object-scoped ${conflictingInteraction}. ` +
+          "Disable or remove the object-scoped DMI before applying the study-level term.",
+      };
+    }
+    const d = parseNumber(draft.values.d, "D");
+    if ("error" in d) return d;
+    if (d.value !== 0 && studyExchangeExplicitlyDisabled(scene)) {
+      return { error: ROTATED_DMI_EXCHANGE_ERROR };
+    }
+    return {
+      patch: {
+        study: {
+          rotated_interfacial_dmi:
+            draft.enabled && draft.present ? d.value : null,
+        },
+      },
+    };
+  }
   return { error: deferredMessage(spec) };
+}
+
+function activeObjectScopedDmi(
+  scene: SceneResource | null | undefined,
+): "interfacial_dmi" | "bulk_dmi" | null {
+  if (!Array.isArray(scene?.objects)) return null;
+
+  for (const object of scene.objects) {
+    const role = (object as Record<string, unknown>).role;
+    if (typeof role === "string" && role !== "magnet") continue;
+    if (!Array.isArray(object.physics_stack)) continue;
+    for (const entry of object.physics_stack) {
+      if (!entry || typeof entry !== "object") continue;
+      const record = entry as Record<string, unknown>;
+      const kind = record.kind;
+      if (
+        (kind === "interfacial_dmi" || kind === "bulk_dmi") &&
+        record.enabled !== false
+      ) {
+        return kind;
+      }
+    }
+  }
+
+  return null;
+}
+
+function activeStudyRotatedDmi(scene: SceneResource | null | undefined): boolean {
+  const study = scene?.study;
+  if (!study || typeof study !== "object" || Array.isArray(study)) return false;
+  const value = (study as Record<string, unknown>).rotated_interfacial_dmi;
+  if (typeof value === "number") return Number.isFinite(value) && value !== 0;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed !== 0;
+  }
+  return false;
+}
+
+function studyExchangeExplicitlyDisabled(
+  scene: SceneResource | null | undefined,
+): boolean {
+  const study = scene?.study;
+  if (!study || typeof study !== "object" || Array.isArray(study)) return false;
+  const value = (study as Record<string, unknown>).exchange_enabled;
+  return value === false ||
+    (typeof value === "string" && value.trim().toLowerCase() === "false");
 }
 
 function valuesFromParams(
@@ -818,8 +942,7 @@ function isObjectInteractionKind(id: string): id is ObjectInteractionKind {
   return (
     id === "exchange" ||
     id === "demag" ||
-    id === "interfacial_dmi" ||
-    id === "uniaxial_anisotropy"
+    id === "interfacial_dmi" || id === "uniaxial_anisotropy"
   );
 }
 

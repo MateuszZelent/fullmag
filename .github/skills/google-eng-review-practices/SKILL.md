@@ -1,59 +1,44 @@
 ---
 name: google-eng-review-practices
-description: Use when reviewing a pull request, commit, branch, patch, or working-tree diff; preparing a PR or commit description; deciding whether a change is too large; writing review comments; or responding to reviewer feedback. Adapts Google's Engineering Practices code review guidance to Fullmag.
+description: "Use when reviewing a pull request, commit, branch, patch, or working-tree diff; preparing a PR or commit description; deciding whether a change is too large; writing review comments; or responding to reviewer feedback."
 ---
 
 # Google-Style Review Practice for Fullmag
 
-Source and attribution: adapted from Google's public Engineering Practices documentation:
+Use this skill for review and review-writing work. The user instruction and root `AGENTS.md` take precedence. Reuse any already loaded domain skill and do not read it twice in one turn.
 
-- <https://google.github.io/eng-practices/review/reviewer/>
-- <https://google.github.io/eng-practices/review/developer/>
+## Review standard
 
-Keep this skill procedural. Do not paste long excerpts from the source docs into review output.
+Approve a change when it improves system health and meets the relevant Fullmag correctness, architecture, verification, security, accessibility, and reproducibility gates. Do not block on taste or perfection. Block correctness, maintainability, canonical physics semantics, resource-first API, security, accessibility, or reproducibility regressions.
 
-## Review Standard
+Technical facts, tests, benchmarks, specs, ADRs, physics notes, and project conventions outweigh personal preference. Label polish as a suggestion or nit.
 
-Approve a change when it clearly improves the health of the system and meets Fullmag's correctness, architecture, and verification gates. Do not block on perfection. Do block changes that degrade correctness, maintainability, canonical physics semantics, resource-first API contracts, security, accessibility, or reproducibility.
+## Reviewer workflow
 
-Technical facts, tests, benchmarks, specs, ADRs, physics notes, and existing project conventions outweigh taste or personal preference. If a point is polish rather than required, label it as a nit or suggestion.
+1. Read the request, issue, PR description, or diff summary and state the intended behavior.
+2. Find main files first; review design and behavior before mechanical files.
+3. Read tests early enough to verify that they would fail for the claimed bug or contract break.
+4. Review every human-written line in scope, or state the narrower scope explicitly.
+5. Evaluate design, functionality, Fullmag invariants, complexity, tests, naming, documentation, and style.
+6. Require visual/browser proof for changed UI behavior and OpenAPI/resource checks for changed resource/API behavior.
+7. If the size prevents confident review, identify the highest-risk surface and request a split only when the split is necessary for reliable review. A large but coherent change may be reviewed as one unit.
 
-## Reviewer Workflow
+## Comment severity
 
-1. Start with the change intent: read the PR/commit description, issue, user request, or diff summary. If the change should not exist, say that before line-by-line review and explain the better direction.
-2. Find the main files first. Review design and behavior there before spending time on mechanical or peripheral files.
-3. Read tests early enough to understand expected behavior, but verify that the tests would fail for the bug or contract break they claim to cover.
-4. Review every human-written line in the requested scope. If reviewing only part of a change, state the scope explicitly.
-5. Evaluate in this order: design, functionality, Fullmag invariants, complexity, tests, naming, comments/docs, style, consistency.
-6. For UI changes, require visual or browser verification when behavior or layout changes. For resource/API changes, require OpenAPI/resource-hook/API hygiene checks where applicable.
-7. If the change is too large to review confidently, ask for a split or review only the highest-risk design surface first so the author can act quickly.
+Use direct labels:
 
-## Comment Severity
+- `Blocker:` must be fixed before merge;
+- `Required:` should be fixed in this change unless there is a strong technical reason;
+- `Suggestion:` likely improvement;
+- `Nit:` polish that should not block;
+- `FYI:` context for later.
 
-Use direct labels so authors know what must change:
+Comments address code and explain the technical reason where needed.
 
-- `Blocker:` must be fixed before merge.
-- `Required:` should be fixed in this change unless there is a strong technical reason not to.
-- `Suggestion:` likely improvement, author may choose another sound approach.
-- `Nit:` polish or local consistency; should not block.
-- `FYI:` context for later, not required in this change.
+## Author workflow
 
-Write comments about the code, not the author. Explain the technical reason when it is not obvious. Prefer asking for clearer code over accepting a review-thread explanation that future readers will not see.
+Keep changes small and self-contained. Separate behavior changes from broad refactors, generated churn, or formatting sweeps unless the cleanup directly supports the change. Descriptions state what changed, why, tradeoffs, user-visible behavior, tests, and known limits. Do not repeat a passing check without a new change, failure, or unresolved concern.
 
-## Author Workflow
+## Feedback
 
-Keep changes small and self-contained. A change should do one thing, include the related tests, leave the system working after merge, and carry enough context in its description for reviewers and future readers.
-
-Separate behavior changes from broad refactors, file moves, generated churn, or formatting sweeps unless the local cleanup is small and directly supports the requested change.
-
-For PR or commit descriptions:
-
-- First line: short imperative summary of what changed.
-- Body: why the change exists, key tradeoffs, user-visible behavior, tests/verification, and any known limits.
-- Avoid vague descriptions such as "fix bug", "update files", or "phase 1".
-
-## Handling Feedback
-
-First make sure you understand the reviewer request. If it points to unclear code, improve the code or add a targeted code comment rather than only explaining in the review thread.
-
-When disagreeing, answer with tradeoffs and evidence: explain why the current approach serves the goal better, what alternative was considered, and which assumption the reviewer may want to change. If consensus stalls, escalate to the relevant owner, maintainer, ADR, or project spec instead of letting the review drift.
+Understand the reviewer request before changing code. When disagreeing, answer with tradeoffs and evidence, and escalate to the relevant owner, ADR, or spec if consensus stalls.

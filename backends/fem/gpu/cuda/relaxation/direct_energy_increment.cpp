@@ -151,7 +151,8 @@ bool unpack_energy_snapshot(
     add(GpuFinalScalarSlot::DriveEnergy, !ctx.zeeman.regional_drives.empty());
     add(GpuFinalScalarSlot::AnisotropyEnergy, ctx.anisotropy.uniaxial_enabled);
     add(GpuFinalScalarSlot::CubicAnisotropyEnergy, ctx.anisotropy.cubic_enabled);
-    add(GpuFinalScalarSlot::DmiEnergy, ctx.dmi.interfacial_enabled);
+    add(GpuFinalScalarSlot::DmiEnergy,
+        ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled);
     add(GpuFinalScalarSlot::BulkDmiEnergy, ctx.dmi.bulk_enabled);
     add(GpuFinalScalarSlot::MagnetoelasticEnergy, ctx.magnetoelastic.enabled);
     if (!std::isfinite(snapshot.total_energy_j)) {
@@ -239,22 +240,54 @@ bool direct_difference(
     }
 
     if (ctx.exchange.enabled) {
-        fullmag_cuda_legacy_sparse_exchange_difference_blocks(
-            gpu.legacy_exchange.csr_row_offsets,
-            gpu.legacy_exchange.csr_col_indices,
-            gpu.legacy_exchange.csr_values,
-            base_m.x, base_m.y, base_m.z,
-            gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
-            gpu.reductions.scalar_workspace,
-            gpu.rk.k[1].x,
-            node_count, stream);
+        int exchange_reduction_blocks = block_count;
+        if (gpu.mesh_regions.has_periodic_reduced_nodes) {
+            if (!gpu.legacy_exchange.periodic_reduced_ready ||
+                gpu.legacy_exchange.periodic_reduced_row_offsets == nullptr ||
+                gpu.legacy_exchange.periodic_reduced_col_indices == nullptr ||
+                gpu.legacy_exchange.periodic_reduced_values == nullptr ||
+                gpu.mesh_regions.periodic_reduced_representative_nodes == nullptr ||
+                gpu.legacy_exchange.periodic_reduced_rows == 0u ||
+                gpu.legacy_exchange.periodic_reduced_rows >
+                    static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+                reason =
+                    "GPU periodic exchange difference requires a precomputed reduced CSR and representative map";
+                return false;
+            }
+            const int reduced_rows =
+                static_cast<int>(gpu.legacy_exchange.periodic_reduced_rows);
+            fullmag_cuda_periodic_reduced_exchange_difference_blocks(
+                gpu.legacy_exchange.periodic_reduced_row_offsets,
+                gpu.legacy_exchange.periodic_reduced_col_indices,
+                gpu.legacy_exchange.periodic_reduced_values,
+                gpu.mesh_regions.periodic_reduced_representative_nodes,
+                base_m.x, base_m.y, base_m.z,
+                gpu.magnetization.m.x,
+                gpu.magnetization.m.y,
+                gpu.magnetization.m.z,
+                gpu.reductions.scalar_workspace,
+                gpu.rk.k[1].x,
+                reduced_rows,
+                stream);
+            exchange_reduction_blocks = (reduced_rows + 255) / 256;
+        } else {
+            fullmag_cuda_legacy_sparse_exchange_difference_blocks(
+                gpu.legacy_exchange.csr_row_offsets,
+                gpu.legacy_exchange.csr_col_indices,
+                gpu.legacy_exchange.csr_values,
+                base_m.x, base_m.y, base_m.z,
+                gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
+                gpu.reductions.scalar_workspace,
+                gpu.rk.k[1].x,
+                node_count, stream);
+        }
         if (!cuda_launch_ok("launch GPU direct minimizer exchange difference", reason) ||
             !reduce_scalar_sum(
-                ctx, stream, gpu.reductions.scalar_workspace, block_count,
+                ctx, stream, gpu.reductions.scalar_workspace, exchange_reduction_blocks,
                 tail + kDirectExchangeDeltaTailSlot,
                 "launch GPU direct minimizer exchange delta reduction", reason) ||
             !reduce_scalar_sum(
-                ctx, stream, gpu.rk.k[1].x, block_count,
+                ctx, stream, gpu.rk.k[1].x, exchange_reduction_blocks,
                 tail + kDirectExchangeAbsoluteTailSlot,
                 "launch GPU direct minimizer exchange absolute reduction", reason)) {
             return false;
@@ -265,7 +298,8 @@ bool direct_difference(
         bool bulk_mode,
         size_t delta_tail_slot,
         size_t absolute_tail_slot) -> bool {
-        if (!(bulk_mode ? ctx.dmi.bulk_enabled : ctx.dmi.interfacial_enabled)) {
+        if (!(bulk_mode ? ctx.dmi.bulk_enabled :
+              (ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled))) {
             return true;
         }
         fullmag_cuda_dmi_energy_difference(
@@ -277,10 +311,12 @@ bool direct_difference(
             tail + delta_tail_slot,
             tail + absolute_tail_slot,
             bulk_mode ? ctx.dmi.bulk_D : ctx.dmi.interfacial_D,
+            bulk_mode ? 0.0 : ctx.dmi.rotated_interfacial_D,
             ctx.dmi.interface_normal[0], ctx.dmi.interface_normal[1],
             ctx.dmi.interface_normal[2],
             bulk_mode ? !ctx.material_fields.Dbulk_field.empty()
                       : !ctx.material_fields.Dind_field.empty(),
+            !bulk_mode && ctx.dmi.rotated_interfacial_enabled,
             bulk_mode, static_cast<int>(ctx.mesh.n_elements), stream);
         if (!cuda_launch_ok("launch GPU direct minimizer DMI difference", reason)) {
             return false;
@@ -478,8 +514,9 @@ GpuEnergyIncrementOwner gpu_energy_increment_owner(
             ? GpuEnergyIncrementOwner::EndpointResidual
             : GpuEnergyIncrementOwner::NotEnergy;
     case GpuFinalScalarSlot::DmiEnergy:
-        return ctx.dmi.interfacial_enabled ? GpuEnergyIncrementOwner::Direct
-                                           : GpuEnergyIncrementOwner::NotEnergy;
+        return (ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled)
+            ? GpuEnergyIncrementOwner::Direct
+            : GpuEnergyIncrementOwner::NotEnergy;
     case GpuFinalScalarSlot::BulkDmiEnergy:
         return ctx.dmi.bulk_enabled ? GpuEnergyIncrementOwner::Direct
                                     : GpuEnergyIncrementOwner::NotEnergy;
@@ -523,7 +560,7 @@ bool gpu_direct_energy_reduction_counts(
         (ctx.exchange.enabled &&
          (!checked_add_scaled(counts.exchange, exchange_nnz, 16u) ||
           !checked_add_scaled(counts.exchange, node_count, 32u))) ||
-        (ctx.dmi.interfacial_enabled &&
+        ((ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled) &&
          !checked_add_scaled(counts.interfacial_dmi, element_count, 512u)) ||
         (ctx.dmi.bulk_enabled &&
          !checked_add_scaled(counts.bulk_dmi, element_count, 512u))) {

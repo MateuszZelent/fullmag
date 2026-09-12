@@ -1,0 +1,7 @@
+ARG BASE_IMAGE=python@sha256:db3ff2e1800a8581e2c48a27c3995339d47bdf046da21c7627accd3d51053a93
+FROM ${BASE_IMAGE}
+WORKDIR /opt/runner/scripts
+COPY fullmag_storage.py capture_source_snapshot_identity.py ./
+COPY local_runner/*.py ./local_runner/
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ENTRYPOINT ["python3", "-m", "local_runner.container_main"]

@@ -24,13 +24,12 @@ namespace fullmag::fem {
  * It does not extract boundary surfaces, solve sparse systems, combine potentials, recover fields, compute energy, or publish telemetry.
  */
 bool set_demag_fem_bem_boundary_values(
-    const std::vector<uint32_t> &boundary_nodes,
+    const std::vector<int> &boundary_tdofs,
     const std::vector<double> &boundary_values,
     mfem::Vector &boundary_values_global,
     std::string &error);
 
 bool prepare_demag_fem_bem_dirichlet_rhs(
-    const std::vector<uint32_t> &boundary_nodes,
     const std::vector<int> &boundary_tdofs,
     const std::vector<double> &boundary_values,
     mfem::BilinearForm &stiffness_form,

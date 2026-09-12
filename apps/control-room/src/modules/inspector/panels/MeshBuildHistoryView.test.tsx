@@ -60,14 +60,15 @@ describe("MeshBuildHistoryView", () => {
         mesh_name: "mesh-a",
         node_count: 10,
         element_count: 20,
-        canonical_policy_snapshot: { shared_domain: { hmax: 1e-6 } },
+        mesh_target: "study_domain",
+        canonical_policy_snapshot: { universe: { airbox_hmax: 1e-6 } },
       },
       { build_id: "legacy-b", mesh_name: "mesh-b", node_count: 14, element_count: 28 },
     ]);
     const html = renderToStaticMarkup(
       <MeshBuildHistoryView entries={entries} onRestore={() => undefined} />,
     );
-    expect(html).toContain("Restore policy to draft");
+    expect(html).toContain("Restore Airbox policy to draft");
     expect(html).toContain("Configuration snapshot unavailable");
     expect(html).toContain('data-build-id="build-a"');
   });

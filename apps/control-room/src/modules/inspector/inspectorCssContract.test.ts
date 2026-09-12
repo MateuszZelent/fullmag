@@ -108,7 +108,7 @@ describe("Inspector visual contract", () => {
     expect(studyPanel).toContain("useRegisterInspectorEditSession");
     expect(studyPanel).toContain('type: "revertStageDrafts"');
     expect(stageRouter).toContain("useRegisterInspectorEditSession");
-    expect(stageRouter).toContain('useRegisterInspectorEditSession(\n    "staged"');
+    expect(stageRouter).toMatch(/useRegisterInspectorEditSession\(\s*"staged"/);
   });
 
   it("keeps visualization Reset relative to the applied target baseline", () => {

@@ -8,6 +8,7 @@ import type { CommandRegistry } from "./commands/CommandRegistry";
 import type { EventBus } from "./events/EventBus";
 import type { KernelEventMap } from "./events/eventTypes";
 import type { LayoutController } from "./layout/LayoutController";
+import type { RibbonTabId } from "./layout/layoutTypes";
 import type { ModuleRegistry } from "./module/ModuleRegistry";
 import type { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridge";
 import type { RealtimeConnectionController } from "./realtime/RealtimeConnectionController";
@@ -19,6 +20,7 @@ import type { AnalysisFieldOverlayController } from "./visualization/AnalysisFie
 import type { ChartViewportHandoffController } from "./visualization/ChartViewportHandoffController";
 import type { CameraRegistryController } from "./visualization/CameraRegistryController";
 import type { ObjectVisualizationController } from "./visualization/ObjectVisualizationController";
+import type { ModeCompositionController } from "./visualization/ModeCompositionController";
 import type { VisualizationDebugController } from "./visualization/VisualizationDebugController";
 import type { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
 
@@ -46,6 +48,8 @@ export interface ModuleProps {
 }
 
 export interface ModuleManifest {
+  /** Optional ribbon tab that selects this module when its slot is shared. */
+  activationTab?: RibbonTabId;
   id: ModuleId;
   title: string;
   version: string;
@@ -80,4 +84,5 @@ export interface KernelApi {
   readonly visualizationDebug: VisualizationDebugController;
   readonly visualizationSync: VisualizationRegistrySyncController;
   readonly layout: LayoutController;
+  readonly modeComposition: ModeCompositionController;
 }

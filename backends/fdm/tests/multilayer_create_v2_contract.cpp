@@ -16,6 +16,9 @@
 #include <cmath>
 #include <vector>
 
+extern "C" int fullmag_fdm_test_inject_rotated_dmi_refresh_failure_once(
+    fullmag_fdm_backend *handle);
+
 namespace {
 
 void check(bool condition, const char *msg) {
@@ -119,6 +122,168 @@ void invalid_transfer_kind_reports_validation_error() {
     check(handle != nullptr, "invalid transfer_kind should return an error handle");
     check_error_contains(handle, "unknown layer transfer_kind in v2 plan");
     fullmag_fdm_backend_destroy(handle);
+}
+
+void rotated_dmi_setter_requires_positive_boundary_aex() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("rotated-DMI boundary Aex setter check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    const double magnetization[3] = {1.0, 0.0, 0.0};
+    const uint8_t active_mask[1] = {1};
+    fullmag_fdm_layer_desc_v2 layer = make_layer(0, magnetization);
+    layer.material.exchange_stiffness = 0.0;
+    layer.active_mask = active_mask;
+    layer.active_mask_len = 1;
+    fullmag_fdm_multilayer_plan_desc_v2 plan = make_plan(&layer, 1);
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create_v2(&plan);
+    check(handle != nullptr,
+          "zero boundary Aex setter check should return an error-capable handle");
+    check_error_contains(handle, "uploaded 1 layers");
+
+    const fullmag_fdm_rotated_interfacial_dmi_desc_v1 nonzero = {
+        FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1,
+        sizeof(fullmag_fdm_rotated_interfacial_dmi_desc_v1),
+        1,
+        0,
+        2.0e-3,
+    };
+    check(fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
+              handle, &nonzero) == FULLMAG_FDM_ERR_INVALID,
+          "rotated-DMI setter must reject zero Aex on an active open boundary");
+    check_error_contains(handle, "strictly positive finite Aex");
+
+    const fullmag_fdm_rotated_interfacial_dmi_desc_v1 zero = {
+        FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1,
+        sizeof(fullmag_fdm_rotated_interfacial_dmi_desc_v1),
+        1,
+        0,
+        0.0,
+    };
+    check(fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
+              handle, &zero) == FULLMAG_FDM_OK,
+          "D=0 rotated-DMI setter must remain a no-op for zero boundary Aex");
+    fullmag_fdm_backend_destroy(handle);
+}
+
+void rotated_dmi_setter_rolls_back_failed_refresh() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("rotated-DMI setter rollback check skipped: CUDA backend unavailable\n");
+        return;
+    }
+    const double magnetization[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    const fullmag_fdm_observable fields[] = {
+        FULLMAG_FDM_OBSERVABLE_M, FULLMAG_FDM_OBSERVABLE_H_EX,
+        FULLMAG_FDM_OBSERVABLE_H_DMI, FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI,
+        FULLMAG_FDM_OBSERVABLE_H_EFF,
+    };
+    for (const auto precision : {FULLMAG_FDM_PRECISION_DOUBLE, FULLMAG_FDM_PRECISION_SINGLE}) {
+        // Exercise enable, change, and disable; a failed enable must also clear
+        // the candidate DMI buffers when the previous state had no DMI.
+        for (int mutation = 0; mutation < 3; ++mutation) {
+            fullmag_fdm_layer_desc_v2 layers[2] = {
+                make_layer(0, magnetization), make_layer(1, magnetization),
+            };
+            for (auto &layer : layers) {
+                layer.native_grid.nx = 3;
+                layer.convolution_grid.nx = 3;
+                layer.initial_magnetization_len = 9;
+            }
+            auto plan = make_plan(layers, 2);
+            plan.precision = precision;
+            plan.stats_mode = FULLMAG_FDM_STATS_FULL;
+            auto *handle = fullmag_fdm_backend_create_v2(&plan);
+            check(handle != nullptr, "setter rollback fixture creation failed");
+            check_error_contains(handle, "uploaded 2 layers");
+            fullmag_fdm_rotated_interfacial_dmi_desc_v1 descriptor = {
+                FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1,
+                sizeof(fullmag_fdm_rotated_interfacial_dmi_desc_v1),
+                1, 0, 1.0e-3,
+            };
+            if (mutation != 0) {
+                check(fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
+                          handle, &descriptor) == FULLMAG_FDM_OK,
+                      "initial rotated DMI setup failed");
+            }
+            const auto read_fields = [&]() {
+                std::vector<double> values;
+                for (uint32_t layer = 0; layer < 2; ++layer) {
+                    for (const auto field : fields) {
+                        double value[9]{};
+                        check(fullmag_fdm_backend_copy_layer_field_f64(
+                                  handle, layer, field, value, 9) == FULLMAG_FDM_OK,
+                              "setter rollback field copy failed");
+                        for (double component : value) {
+                            check(std::isfinite(component), "setter returned a non-finite field");
+                            values.push_back(component);
+                        }
+                    }
+                }
+                return values;
+            };
+            const auto before_fields = read_fields();
+            fullmag_fdm_step_stats before_stats{};
+            check(fullmag_fdm_backend_snapshot_stats(handle, &before_stats) == FULLMAG_FDM_OK,
+                  "setter rollback initial stats failed");
+
+            descriptor.has_rotated_interfacial_dmi = mutation == 2 ? 0 : 1;
+            descriptor.dmi_D_rotated_interfacial = mutation == 2 ? 0.0 : -3.0e-3;
+            check(fullmag_fdm_test_inject_rotated_dmi_refresh_failure_once(handle) == FULLMAG_FDM_OK,
+                  "setter refresh fault injection failed");
+            check(fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
+                      handle, &descriptor) == FULLMAG_FDM_ERR_CUDA,
+                  "injected setter refresh failure must be returned");
+            check_error_contains(handle, "injected rotated DMI observable refresh failure");
+            const auto after_fields = read_fields();
+            const double tolerance = precision == FULLMAG_FDM_PRECISION_DOUBLE ? 1e-12 : 2e-6;
+            for (std::size_t index = 0; index < before_fields.size(); ++index) {
+                check_close(after_fields[index], before_fields[index],
+                            tolerance * std::max(1.0, std::fabs(before_fields[index])),
+                            "failed DMI setter changed an observable field");
+            }
+            fullmag_fdm_step_stats after_stats{};
+            check(fullmag_fdm_backend_snapshot_stats(handle, &after_stats) == FULLMAG_FDM_OK,
+                  "setter rollback restored stats failed");
+            check(after_stats.step == before_stats.step &&
+                      after_stats.time_seconds == before_stats.time_seconds,
+                  "failed DMI setter advanced the simulation");
+            check(std::isfinite(after_stats.dmi_energy_joules) &&
+                      std::isfinite(after_stats.total_energy_joules),
+                  "failed DMI setter left non-finite energies");
+            check_close(after_stats.dmi_energy_joules, before_stats.dmi_energy_joules,
+                        tolerance * std::max(1e-30, std::fabs(before_stats.dmi_energy_joules)),
+                        "failed DMI setter changed DMI energy");
+            check_close(after_stats.total_energy_joules, before_stats.total_energy_joules,
+                        tolerance * std::max(1e-30, std::fabs(before_stats.total_energy_joules)),
+                        "failed DMI setter changed total energy");
+
+            check(fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
+                      handle, &descriptor) == FULLMAG_FDM_OK,
+                  "setter must recover after its one-shot failure");
+            const auto committed_fields = read_fields();
+            bool changed = false;
+            for (std::size_t index = 0; index < before_fields.size(); ++index) {
+                changed = changed || std::fabs(committed_fields[index] - before_fields[index]) > 1.0;
+            }
+            check(changed, "rollback fixture did not exercise a nontrivial field mutation");
+            if (mutation == 2) {
+                for (uint32_t layer = 0; layer < 2; ++layer) {
+                    double rotated[9]{};
+                    check(fullmag_fdm_backend_copy_layer_field_f64(
+                              handle, layer, FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI,
+                              rotated, 9) == FULLMAG_FDM_OK,
+                          "disabled rotated field copy failed");
+                    for (double value : rotated) {
+                        check(value == 0.0, "disabling DMI left a stale rotated field");
+                    }
+                }
+            }
+            fullmag_fdm_backend_destroy(handle);
+        }
+    }
+    std::printf("rotated-DMI setter rollback: enable/change/disable FP64/FP32 PASS\n");
 }
 
 void check_failed_before_workspace_setup(fullmag_fdm_backend *handle) {
@@ -1185,6 +1350,8 @@ void repeated_create_destroy_reclaims_cuda_workspace() {
 int main() {
     invalid_plan_reports_validation_error();
     invalid_transfer_kind_reports_validation_error();
+    rotated_dmi_setter_requires_positive_boundary_aex();
+    rotated_dmi_setter_rolls_back_failed_refresh();
     overflowed_single_grid_is_rejected_before_workspace_setup();
     overflowed_fft_spectrum_is_rejected_before_workspace_setup();
     overflowed_grid_is_rejected_before_workspace_setup();

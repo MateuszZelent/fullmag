@@ -173,6 +173,9 @@ uint64_t ncg_configuration_signature(const Context &ctx) noexcept
     signature = mix_signature(
         signature, static_cast<uint64_t>(ctx.dmi.interfacial_enabled));
     signature = mix_signature(
+        signature, static_cast<uint64_t>(ctx.dmi.rotated_interfacial_enabled));
+    signature = mix_signature(signature, double_signature(ctx.dmi.rotated_interfacial_D));
+    signature = mix_signature(
         signature, static_cast<uint64_t>(ctx.dmi.bulk_enabled));
     signature = mix_signature(
         signature, static_cast<uint64_t>(ctx.magnetoelastic.enabled));
@@ -1017,6 +1020,9 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
          recovery_cycle < kArmijoRecoveryCycles;
          ++recovery_cycle) {
         gpu.relaxation.nonlinear_cg_direction_valid = false;
+        gpu.rk.endpoint_valid = false;
+        gpu.rk.endpoint_consumed = true;
+        gpu.rk.endpoint_operator_signature = 0;
         if (!gpu_relax_prepare_descent_direction(
                 ctx,
                 stream,

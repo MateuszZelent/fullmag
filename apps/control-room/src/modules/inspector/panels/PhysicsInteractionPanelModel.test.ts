@@ -25,6 +25,7 @@ describe("PhysicsInteractionPanelModel", () => {
       "current_transport",
       "spin_torque",
       "interfacial_dmi",
+      "rotated_interfacial_dmi",
       "bulk_dmi",
       "uniaxial_anisotropy",
       "cubic_anisotropy",
@@ -109,6 +110,23 @@ describe("PhysicsInteractionPanelModel", () => {
       patch: { study: { external_field: [0.01, 0, -0.002] } },
       storage: "study",
     });
+
+    const rotated = draftFromStudyScene("rotated_interfacial_dmi", {
+      ...scene,
+      study: { ...scene.study, rotated_interfacial_dmi: -0.003 },
+    } as unknown as SceneResource);
+    expect(rotated).toMatchObject({
+      enabled: true,
+      present: true,
+      values: { d: "-0.003" },
+    });
+    expect(buildInteractionApplyPatch(rotated)).toEqual({
+      patch: { study: { rotated_interfacial_dmi: -0.003 } },
+      storage: "study",
+    });
+    expect(
+      draftFromStudyScene("rotated_interfacial_dmi", scene),
+    ).toMatchObject({ enabled: false, present: false });
   });
 
   it("rejects deferred backend terms before hitting the API", () => {
@@ -131,6 +149,63 @@ describe("PhysicsInteractionPanelModel", () => {
       error:
         "Oersted field is not writable from the current control-room authoring surface.",
     });
+  });
+
+  it("fails closed before applying rotated DMI over an active object-scoped DMI", () => {
+    for (const kind of ["interfacial_dmi", "bulk_dmi"] as const) {
+      const scene = {
+        objects: [
+          {
+            id: "free-layer",
+            physics_stack: [{ kind, enabled: true }],
+          },
+        ],
+        revision: 7,
+        study: {},
+      } as unknown as SceneResource;
+
+      const result = buildInteractionApplyPatch(
+        {
+          enabled: true,
+          id: "rotated_interfacial_dmi",
+          present: true,
+          values: { d: "0.003" },
+        },
+        scene,
+      );
+
+      expect(result).toEqual({
+        error:
+          `Rotated interfacial DMI conflicts with active object-scoped ${kind}. ` +
+          "Disable or remove the object-scoped DMI before applying the study-level term.",
+      });
+      expect("patch" in result).toBe(false);
+    }
+  });
+
+  it("fails closed before applying object-scoped interfacial DMI over active rotated DMI", () => {
+    const scene = {
+      objects: [],
+      revision: 7,
+      study: { rotated_interfacial_dmi: -0.003 },
+    } as unknown as SceneResource;
+
+    const result = buildInteractionApplyPatch(
+      {
+        enabled: true,
+        id: "interfacial_dmi",
+        present: true,
+        values: { dind: "0.003" },
+      },
+      scene,
+    );
+
+    expect(result).toEqual({
+      error:
+        "Object-scoped interfacial_dmi conflicts with active study-level rotated interfacial DMI. " +
+        "Disable or remove the study-level term before applying the object-scoped DMI.",
+    });
+    expect("patch" in result).toBe(false);
   });
 
   it("uses stable draft keys for scene-backed global settings", () => {

@@ -49,9 +49,13 @@ bool gpu_rk_accumulate_effective_field(
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
-    fullmag_cuda_accumulate_heff(gpu.fields.h_ex.x, gpu.fields.h_demag.x, gpu.fields.h_ext.x, gpu.fields.h_eff.x, n, true, stream);
-    fullmag_cuda_accumulate_heff(gpu.fields.h_ex.y, gpu.fields.h_demag.y, gpu.fields.h_ext.y, gpu.fields.h_eff.y, n, true, stream);
-    fullmag_cuda_accumulate_heff(gpu.fields.h_ex.z, gpu.fields.h_demag.z, gpu.fields.h_ext.z, gpu.fields.h_eff.z, n, true, stream);
+    // The resolved plan, not buffer allocation, owns whether the uniform
+    // external field participates in H_eff. Regional drives are materialized
+    // separately below and must not be inferred from this flag.
+    const bool has_external_field = ctx.zeeman.has_external_field;
+    fullmag_cuda_accumulate_heff(gpu.fields.h_ex.x, gpu.fields.h_demag.x, gpu.fields.h_ext.x, gpu.fields.h_eff.x, n, has_external_field, stream);
+    fullmag_cuda_accumulate_heff(gpu.fields.h_ex.y, gpu.fields.h_demag.y, gpu.fields.h_ext.y, gpu.fields.h_eff.y, n, has_external_field, stream);
+    fullmag_cuda_accumulate_heff(gpu.fields.h_ex.z, gpu.fields.h_demag.z, gpu.fields.h_ext.z, gpu.fields.h_eff.z, n, has_external_field, stream);
     if (!cuda_launch_ok(base_label, reason)) {
         return false;
     }
@@ -75,7 +79,7 @@ bool gpu_rk_accumulate_effective_field(
             return false;
         }
     }
-    if (ctx.dmi.interfacial_enabled) {
+    if (ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled) {
         fullmag_cuda_add_field_inplace(gpu.fields.h_dmi.x, gpu.fields.h_eff.x, n, stream);
         fullmag_cuda_add_field_inplace(gpu.fields.h_dmi.y, gpu.fields.h_eff.y, n, stream);
         fullmag_cuda_add_field_inplace(gpu.fields.h_dmi.z, gpu.fields.h_eff.z, n, stream);

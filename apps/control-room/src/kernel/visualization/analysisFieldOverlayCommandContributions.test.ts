@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH } from "../api/apiPaths";
 
 import { CommandRegistry } from "../commands/CommandRegistry";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import { LayoutController } from "../layout/LayoutController";
 import { SelectionController } from "../selection/SelectionController";
+import { analysisResultSelectionRef } from "@/shared/domain/analysis/results";
 
 import { AnalysisFieldOverlayController } from "./AnalysisFieldOverlayController";
 import { ANALYSIS_FIELD_OVERLAY_COMMANDS } from "./analysisFieldOverlayCommandContributions";
@@ -17,7 +19,191 @@ function commandRegistry(): CommandRegistry {
   return commands;
 }
 
+const analysisResultFieldRef = {
+  field_id: "analysis:eigen:sample-0001:mode-0002",
+  field_revision: "sha256:field-v1",
+  mesh_ref: {
+    mesh_id: "mesh:shared-domain",
+    mesh_revision: "41",
+    topology_fingerprint: "sha256:topology-v1",
+  },
+  quantity_id: "m",
+  representation: "complex-vector-xyz",
+  resource_key: "data/fields/analysis-eigen-sample-0001-mode-0002",
+  status: "ready",
+} as const;
+
+function analysisResultSelection(
+  itemKind: "eigen_mode" | "spectral_feature" = "eigen_mode",
+) {
+  return analysisResultSelectionRef({
+    datasetId: "result:run-result:stage-result:modal-eigen",
+    datasetRevision: "sha256:dataset-v1",
+    fieldId: analysisResultFieldRef.field_id,
+    fieldRef: analysisResultFieldRef,
+    fieldRevision: analysisResultFieldRef.field_revision,
+    focus: "item",
+    itemId: itemKind === "eigen_mode" ? "mode-0002" : "peak-0002",
+    itemKind,
+    runId: "run-result",
+    sampleId: "sample-0001",
+    sampleIndex: 1,
+    stageId: "stage-result",
+  });
+}
+
 describe("analysis field overlay commands", () => {
+  it("hands a result item field reference to the shared eigen overlay intent", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const ref = analysisResultSelection();
+    selection.set(
+      {
+        kind: "analysis.result",
+        label: "Mode 2",
+        nodeId: ref.nodeId,
+        objectId: null,
+        ref,
+      },
+      "results-navigator",
+    );
+
+    const result = await commands.execute("analysis.eigen.plot-mode-3d", {
+      analysisFieldOverlay: overlay,
+      selection,
+      source: "test",
+    });
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()).toMatchObject({
+      analysisResultFieldIntent: {
+        datasetId: ref.datasetId,
+        datasetRevision: ref.datasetRevision,
+        fieldId: analysisResultFieldRef.field_id,
+        fieldRevision: analysisResultFieldRef.field_revision,
+        itemId: ref.itemId,
+        source: "eigen-mode",
+      },
+      provenance: {
+        datasetId: ref.datasetId,
+        datasetRevision: ref.datasetRevision,
+        fieldRevision: analysisResultFieldRef.field_revision,
+        runId: ref.runId,
+        stageId: ref.stageId,
+      },
+      source: "eigen-mode",
+    });
+  });
+
+  it("fails closed for a spectrum-only result item", () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const ref = analysisResultSelectionRef({
+      datasetId: "result:run-result:stage-result:modal-eigen",
+      datasetRevision: "sha256:dataset-v1",
+      focus: "item",
+      itemId: "mode-only",
+      itemKind: "eigen_mode",
+      runId: "run-result",
+      sampleId: "sample-0001",
+      stageId: "stage-result",
+    });
+    selection.set(
+      {
+        kind: "analysis.result",
+        label: "Spectrum only",
+        nodeId: ref.nodeId,
+        objectId: null,
+        ref,
+      },
+      "results-navigator",
+    );
+    const context = { analysisFieldOverlay: overlay, selection, source: "test" } as const;
+
+    expect(commands.isEnabled("analysis.eigen.plot-mode-3d", context)).toBe(false);
+    expect(
+      commands.get("analysis.eigen.plot-mode-3d")?.disabledReason?.(context),
+    ).toBe("Selected result item has no published spatial field reference.");
+  });
+
+  it("maps a typed spectral feature field to the time-domain response source", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const ref = analysisResultSelection("spectral_feature");
+    selection.set(
+      {
+        kind: "analysis.result",
+        label: "Spectral peak",
+        nodeId: ref.nodeId,
+        objectId: null,
+        ref,
+      },
+      "results-navigator",
+    );
+
+    const result = await commands.execute(
+      "analysis.time-domain.plot-response-field-3d-abs",
+      { analysisFieldOverlay: overlay, selection, source: "test" },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()).toMatchObject({
+      analysisResultFieldIntent: { itemKind: "spectral_feature", source: "time-domain-response" },
+      source: "time-domain-response",
+      provenance: { studyProduct: "time_domain_spectrum" },
+      query: { view: "abs" },
+    });
+  });
+
+  it("keeps a legacy time-domain selection scoped to time-domain commands", () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const ref = {
+      artifactPath: ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH,
+      artifactRevision: "spin_wave_response.gamma.v1:sha256:gamma-1",
+      availability: "partial",
+      executionState: "completed",
+      frequencyHz: 12.5e9,
+      frequencyIndex: 7,
+      kind: "results.time_domain.spectral_feature",
+      nodeId: "analysis:legacy:time-domain:legacy%3Agamma%3Apeak%3A7",
+      pointId: "legacy:gamma:peak:7",
+      resourceRef: ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH,
+      resourceState: "ready",
+      sampleId: "gamma-spectrum-sample-0000",
+      sampleIndex: 0,
+      source: "time-domain-response",
+      studyProduct: "time_domain_spectrum",
+      type: "frequency-domain",
+    } as const;
+    selection.set(
+      {
+        kind: ref.kind,
+        label: ref.pointId,
+        nodeId: ref.nodeId,
+        objectId: null,
+        ref,
+      },
+      "analysis-plots",
+    );
+    const context = { analysisFieldOverlay: overlay, selection, source: "test" } as const;
+
+    expect(
+      commands.get("analysis.eigen.plot-mode-3d")?.disabledReason?.(context),
+    ).toBe("Selected analysis field is not a modal eigen field.");
+    expect(
+      commands.get("analysis.frequency-response.plot-response-field-3d")?.disabledReason?.(context),
+    ).toBe("Selected analysis field is not a driven response field.");
+    expect(commands.isEnabled("analysis.time-domain.plot-response-field-3d", context)).toBe(false);
+    expect(
+      commands.get("analysis.time-domain.plot-response-field-3d")?.disabledReason?.(context),
+    ).toBe("No analysis field is selected.");
+  });
+
   it("plots an eigen mode field through the shared analysis field controller", async () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();
@@ -130,6 +316,50 @@ describe("analysis field overlay commands", () => {
         view: "imag",
       },
       source: "eigen-mode",
+    });
+  });
+
+  it("hands a canonical eigenmode SelectionRef to the overlay as a stable mode intent", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    selection.set(
+      {
+        kind: "results.eigen.mode",
+        label: "Mode 2",
+        nodeId: "results:eigen:sample-k0:mode-2",
+        objectId: null,
+        ref: {
+          analysisRunId: "run-k0",
+          analysisStageId: "stage-eigen",
+          artifactRevision: "sha256:artifact-v1",
+          fieldId: "analysis:eigen:sample-k0:mode-2:delta_m_xyz",
+          kind: "results.eigen.mode",
+          modeId: "mode-2",
+          modeIndex: 2,
+          nodeId: "results:eigen:sample-k0:mode-2",
+          sampleId: "sample-k0",
+          sampleIndex: 0,
+          type: "frequency-domain",
+        },
+      },
+      "test",
+    );
+
+    const result = await commands.execute(
+      "analysis.eigen.plot-mode-3d",
+      {
+        analysisFieldOverlay: overlay,
+        selection,
+        source: "test",
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()?.modeIntent).toMatchObject({
+      artifactRevision: "sha256:artifact-v1",
+      modeId: "mode-2",
+      sampleId: "sample-k0",
     });
   });
 

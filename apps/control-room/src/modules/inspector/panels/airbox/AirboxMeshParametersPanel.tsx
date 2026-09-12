@@ -169,18 +169,12 @@ export function AirboxMeshParametersPanel({
     );
 
   useEffect(() => {
-    return kernel.bus.on("mesh:build-history-restore-requested", (event) => {
-      if (!event.meshTarget || !/(study_domain|shared_domain|universe)/.test(event.meshTarget)) {
+    const offRestore = kernel.bus.on("mesh:build-history-restore-requested", (event) => {
+      if (!event.meshTarget || !/^(study_domain|shared_domain|universe|airbox)$/.test(event.meshTarget)) {
         return;
       }
-      const hasUniverse = Object.hasOwn(event.snapshot, "universe");
-      const hasSharedDomain = Object.hasOwn(event.snapshot, "shared_domain");
-      if (!hasUniverse && !hasSharedDomain) {
-        return;
-      }
-      const snapshotValue = hasUniverse
-        ? event.snapshot.universe
-        : event.snapshot.shared_domain;
+      if (!Object.hasOwn(event.snapshot, "universe")) return;
+      const snapshotValue = event.snapshot.universe;
       const restoredConfig = snapshotValue === null
         ? null
         : snapshotValue && typeof snapshotValue === "object" && !Array.isArray(snapshotValue)
@@ -202,7 +196,9 @@ export function AirboxMeshParametersPanel({
         message: `Build ${event.buildId ?? event.entryId} restored to the Airbox draft. Apply the policy before building.`,
       });
     });
-  }, [baseDraft, baseKey, identityKey, kernel.bus, resource]);
+    if (policy.status === "ready") kernel.bus.emit("mesh:build-history-editor-ready", { target: "universe" });
+    return offRestore;
+  }, [baseDraft, baseKey, identityKey, kernel.bus, policy.status, resource]);
 
   const applyPolicy = async ({ silent = false } = {}) => {
     setPending(true);

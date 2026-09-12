@@ -85,6 +85,44 @@ def _fixture() -> tuple[MeshData, dict[str, object], dict[str, object]]:
     return mesh, certificate, payload["expected_evidence"]
 
 
+class PythonCertificateRoundoffTests(unittest.TestCase):
+    def test_metric_maps_accept_binary64_roundoff_but_reject_changed_evidence(self):
+        mesh, payload, _ = _fixture()
+        certificate = MixedLayerTopologyCertificate.from_dict(payload)
+        for field in (
+            "jacobian_minima_m3_by_family",
+            "scaled_jacobian_minima_by_family",
+            "scaled_jacobian_p05_by_family",
+        ):
+            claimed = getattr(certificate, field)
+            rounded = {key: float(np.nextafter(value, np.inf)) for key, value in claimed.items()}
+            with self.subTest(field=field, case="roundoff"):
+                mesh._validate_mixed_layer_topology_certificate_evidence(certificate, {field: rounded})
+            for changed in (
+                {key: value * 2.0 for key, value in claimed.items()},
+                {**claimed, "unknown_family": 1.0},
+                {key: float("nan") for key in claimed},
+            ):
+                with self.subTest(field=field, case="invalid"):
+                    with self.assertRaisesRegex(ValueError, field + " is stale"):
+                        mesh._validate_mixed_layer_topology_certificate_evidence(certificate, {field: changed})
+
+    def test_only_documented_dimensionless_fields_get_epsilon_allowance(self):
+        mesh, payload, _ = _fixture()
+        certificate = MixedLayerTopologyCertificate.from_dict(payload)
+        for field in ("magnetic_relative_volume_error", "shared_domain_relative_volume_error"):
+            actual = getattr(certificate, field) + 8 * np.finfo(np.float64).eps
+            mesh._validate_mixed_layer_topology_certificate_evidence(certificate, {field: actual})
+        # Dimensional determinants must never inherit a unit-scale epsilon floor.
+        field = "jacobian_minima_m3_by_family"
+        small = {key: 1e-27 for key in getattr(certificate, field)}
+        object.__setattr__(certificate, field, small)
+        with self.assertRaisesRegex(ValueError, field + " is stale"):
+            mesh._validate_mixed_layer_topology_certificate_evidence(
+                certificate, {field: {key: 2e-27 for key in small}}
+            )
+
+
 def _scaled_fixture(scale: float) -> tuple[MeshData, dict[str, object]]:
     mesh, certificate, _ = _fixture()
     mesh = replace(mesh, nodes=mesh.nodes * scale)

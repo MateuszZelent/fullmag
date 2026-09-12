@@ -1,11 +1,14 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import type { SelectionRef } from "@/kernel/selection/selectionTypes";
+import { ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH } from "@/kernel/api/apiPaths";
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import {
   DispersionOverviewResultInspector,
   DynamicsResultInspector,
   HysteresisResultInspector,
+  LegacyTimeDomainResultInspector,
   ResonanceOverviewResultInspector,
 } from "./PhysicsFirstResultInspectors";
 
@@ -31,6 +34,41 @@ describe("physics-first result root Inspectors", () => {
     expect(html).toContain("Time-domain observables");
     expect(html).toContain("Temporal Spectrum");
     expect(html).toContain("Spin-Wave Spectrum");
+  });
+
+  it("makes a legacy spectral selection inspectable without promoting its field", () => {
+    const ref: Extract<SelectionRef, { type: "frequency-domain" }> = {
+      artifactPath: ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH,
+      artifactRevision: "spin_wave_response.gamma.v1:sha256:gamma-1",
+      availability: "partial",
+      executionState: "completed",
+      frequencyHz: 12.5e9,
+      frequencyIndex: 7,
+      kind: "results.time_domain.spectral_feature",
+      nodeId: "analysis:legacy:time-domain:legacy%3Agamma%3Apeak%3A7",
+      pointId: "legacy:gamma:peak:7",
+      resourceRef: ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH,
+      resourceState: "ready",
+      sampleId: "gamma-spectrum-sample-0000",
+      sampleIndex: 0,
+      source: "time-domain-response",
+      studyProduct: "time_domain_spectrum",
+      type: "frequency-domain",
+    };
+    const html = renderToStaticMarkup(
+      <LegacyTimeDomainResultInspector
+        selection={{
+          ...selection(ref.kind, "legacy:gamma:peak:7"),
+          ref,
+        }}
+      />,
+    );
+
+    expect(html).toContain("Legacy time-domain selection");
+    expect(html).toContain("legacy/partial");
+    expect(html).toContain("1.250000e+10 Hz");
+    expect(html).toContain("Unavailable from legacy reader");
+    expect(html).toContain("Not published; keep this selection legacy/partial");
   });
 
   it("separates modal and driven products in the Resonance root", () => {

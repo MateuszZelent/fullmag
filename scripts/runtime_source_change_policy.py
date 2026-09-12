@@ -21,6 +21,7 @@ NON_RUNTIME_PREFIXES = (
     ".fullmag-cargo/",
     ".fullmag-rustup/",
     ".agents/",
+    ".claude/",
     ".codex/",
     # Codex-Usage is a local tooling checkout, not runtime source.
     "Codex-Usage/",

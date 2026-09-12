@@ -1,0 +1,1 @@
+export { FmrPeaksInspectorPanel } from "./FrequencyDomainResultInspectors";

@@ -1,43 +1,49 @@
 ---
 name: adr-check
-description: "Use when creating, reviewing, or updating Fullmag ADRs, especially decisions touching OpenAPI, workspace/ribbon architecture, unified viewport, runtime semantics, execution selection, or long-lived migrations."
+description: "Use when creating, reviewing, or updating a Fullmag ADR or making a durable architecture, public-contract, or migration decision."
 ---
 
 # Fullmag ADR Check
 
-Use this skill when a change may alter product architecture, public contracts, or cross-layer behavior.
+Use this skill when a change makes a durable decision about product architecture, canonical semantics, public contracts, runtime ownership, or a long-lived migration. Do not create an ADR for a routine implementation, generated-file refresh, bug fix, or test-only change unless it records a new durable decision.
 
-## Decision Gate
+The user instruction and root `AGENTS.md` take precedence over this skill. If the relevant shared routing file exists, use `../../instructions/contracts.md`; do not reload a skill already read in the current turn unless it changed or a required reference is missing.
 
-Create or update an ADR when the change:
+## ADR gate
 
-- changes canonical semantics, `ProblemIR`, execution selection, or provenance,
-- changes OpenAPI, generated types, API modules, resource hooks, codecs, or realtime contracts,
-- changes the workspace shell, ribbon command model, docking model, or unified viewport routing,
-- introduces, removes, or extends a backend capability or runtime stage lifecycle,
-- keeps a transitional path alive long enough to affect future work.
+Create or update an ADR only when the change:
 
-## Required Checks
+- changes canonical physical semantics, `ProblemIR`, execution selection, provenance, or capability vocabulary;
+- changes the public OpenAPI/resource contract or the ownership boundary between runtime and browser;
+- changes the unified workspace, ribbon, docking, viewport, or module-kernel architecture;
+- introduces, removes, or extends a backend capability or runtime stage lifecycle;
+- keeps a compatibility bridge or transitional path long enough to affect future work.
 
-1. State the product problem in physics and workflow terms, not only implementation terms.
-2. Identify the invariant being protected: one Python DSL, one `ProblemIR`, one planner vocabulary, one OpenAPI control-plane contract, one unified viewport tree.
-3. Record requested intent vs resolved execution reality for any backend/runtime decision.
-4. Preserve the OpenAPI-first browser contract: generated types, typed API client, resource hooks, binary codecs for heavy data, and revision-aware resources.
-5. Preserve the workspace direction: one ribbon command surface, docked panels, unified FDM/FEM viewport routing, no Build/Analyze/Study app split.
-6. Name all legacy concepts being retired or isolated: bootstrap blobs, poll session blobs, preview mutation for quantity switching, direct component `fetch()`, duplicated FDM/FEM UI trees.
-7. Explain migration scope, compatibility, and removal criteria for any temporary bridge.
-8. List the exact docs, code modules, tests, and generated artifacts that must change.
-9. Be honest about what is implemented now, what is planned, and what remains unsafe.
+A routine endpoint/schema implementation follows the existing ADR and updates its contract, tests, and generated artifacts without creating another ADR.
 
-## ADR Shape
+## Required decision record
 
-Keep ADRs short and decision-oriented:
+Record only the sections relevant to the decision:
 
-- context,
-- decision,
-- consequences,
-- implementation obligations,
-- rollback or migration plan,
+1. product problem in physics and workflow terms;
+2. invariant being protected: one Python DSL, one `ProblemIR`, one planner vocabulary, one OpenAPI control-plane contract, and one unified viewport tree;
+3. requested intent versus resolved execution reality for backend/runtime decisions;
+4. affected OpenAPI, generated types, resource hooks, codecs, realtime events, commands, and viewport consumers;
+5. legacy or transitional paths, owner, compatibility scope, and removal criterion;
+6. exact documentation, source modules, tests, and generated artifacts that must change;
+7. implemented, planned, unsafe, and rollback states.
+
+If the decision has no effect on a listed area, omit it instead of filling a template.
+
+## Shape
+
+Keep the ADR decision-oriented:
+
+- context;
+- decision;
+- consequences;
+- implementation obligations;
+- migration or rollback plan;
 - tests and validation.
 
-Do not write ADRs as roadmap essays. If the work is not implementation-ready, say so directly.
+Do not write a roadmap essay.

@@ -14,6 +14,7 @@ from scripts.analysis.compare_fdm_fem_mumax3_sinc_layer import (
     _build_parser,
     assert_no_field_snapshots,
     compare_tables,
+    load_lane_stage,
     parse_fullmag_scalars,
     parse_mumax_table,
 )
@@ -128,6 +129,60 @@ class ScalarComparisonParserTests(unittest.TestCase):
         self.assertEqual(args.fdm_gpu, Path("fdm-gpu.csv"))
         self.assertEqual(args.fem, Path("fem-cpu.csv"))
         self.assertEqual(args.fem_gpu, Path("fem-gpu.csv"))
+
+    def test_cli_accepts_named_poisson_robin_and_fredkin_koehler_lanes(self) -> None:
+        args = _build_parser().parse_args([
+            "--fdm", "fdm-cpu.csv",
+            "--fdm-gpu", "fdm-gpu.csv",
+            "--fem-pr-cpu", "fem-pr-cpu.zarr",
+            "--fem-pr-gpu", "fem-pr-gpu.zarr",
+            "--fem-fk-cpu", "fem-fk-cpu.zarr",
+            "--fem-fk-gpu", "fem-fk-gpu.zarr",
+            "--mumax", "mumax.txt",
+            "--verify-only",
+        ])
+        self.assertEqual(args.fem_pr_cpu, Path("fem-pr-cpu.zarr"))
+        self.assertEqual(args.fem_pr_gpu, Path("fem-pr-gpu.zarr"))
+        self.assertEqual(args.fem_fk_cpu, Path("fem-fk-cpu.zarr"))
+        self.assertEqual(args.fem_fk_gpu, Path("fem-fk-gpu.zarr"))
+
+    def test_cli_can_require_passed_fem_fk_qualification_reports(self) -> None:
+        args = _build_parser().parse_args([
+            "--fdm", "fdm-cpu.csv",
+            "--fem-fk-cpu", "fem-fk-cpu.zarr",
+            "--fem-fk-gpu", "fem-fk-gpu.zarr",
+            "--mumax", "mumax.txt",
+            "--require-qualified-fk",
+            "--verify-only",
+        ])
+        self.assertTrue(args.require_qualified_fk)
+
+    def test_bundle_loader_separates_relaxation_and_dynamic_tables(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fem-pr-cpu.zarr"
+            relaxation = root / "artifacts" / "tables" / "relaxation" / "table.csv"
+            dynamic = root / "artifacts" / "tables" / "default" / "table.csv"
+            relaxation.parent.mkdir(parents=True)
+            dynamic.parent.mkdir(parents=True)
+            header = "step,time,mx,my,mz,E_ex,E_demag,E_ext,E_drive,E_ani,E_dmi,E_total\n"
+            relaxation.write_text(
+                header + "0,0,1,0,0,1e-20,2e-20,-3e-20,0,0,0,-1e-20\n"
+                "4,2e-12,.99,1e-3,0,1e-20,2e-20,-3e-20,0,0,0,-1e-20\n",
+                encoding="utf-8",
+            )
+            dynamic.write_text(
+                header + "0,0,.99,1e-3,0,1e-20,2e-20,-3e-20,0,0,0,-1e-20\n"
+                "5,4e-9,.98,2e-3,0,1e-20,2e-20,-3e-20,0,0,0,-1e-20\n",
+                encoding="utf-8",
+            )
+
+            static = load_lane_stage(root, "fem_pr_cpu", "relaxation")
+            dynamic_table = load_lane_stage(root, "fem_pr_cpu", "dynamic")
+
+        self.assertEqual(len(static.rows), 2)
+        self.assertEqual(static.last_time_s, 2e-12)
+        self.assertEqual(len(dynamic_table.rows), 2)
+        self.assertEqual(dynamic_table.last_time_s, 4e-9)
 
     def test_multi_lane_cli_uses_stable_backend_ids(self) -> None:
         with TemporaryDirectory() as tmp:

@@ -40,7 +40,7 @@ from fullmag.model.current_transport import CurrentTransport
 from fullmag.model.discretization import DiscretizationHints, FEM, PerObjectMeshRecipe
 from fullmag.model.dynamics import LLG
 from fullmag.model.domain_frame import build_domain_frame, geometry_bounds
-from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, StaticFieldMap, ThermalNoise, UniaxialAnisotropy, Zeeman
+from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, RotatedInterfacialDMI, StaticFieldMap, ThermalNoise, UniaxialAnisotropy, Zeeman
 from fullmag.model.spin_torque import (
     LegacySpinTorque,
     PrescribedSpinOrbitTorque,
@@ -212,6 +212,11 @@ class FdmPbc:
                 "FdmPbc.demag must be 'open', 'truncated_images', or 'periodic_airbox_k0'"
             )
         object.__setattr__(self, "demag", demag)
+
+        if demag == "periodic_airbox_k0" and axes != (True, True, False):
+            raise ValueError(
+                "FdmPbc.demag='periodic_airbox_k0' requires x/y periodic axes and open z"
+            )
 
         if demag != "truncated_images" and self.image_counts is not None:
             raise ValueError("FdmPbc.image_counts require demag='truncated_images'")
@@ -648,6 +653,14 @@ def _fem_cache_write_lock(
             pass
 
 
+def _file_content_sha256(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _geometry_cache_fingerprint(geometry: object) -> dict[str, object]:
     from fullmag.model.geometry import ImportedGeometry
 
@@ -667,11 +680,7 @@ def _geometry_cache_fingerprint(geometry: object) -> dict[str, object]:
             # a file in place while preserving size and timestamps. Include a
             # content digest in the key; the chunked read keeps peak memory
             # bounded for large STEP/STL/MSH inputs.
-            digest = sha256()
-            with source_path.open("rb") as stream:
-                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                    digest.update(chunk)
-            fingerprint["source_sha256"] = digest.hexdigest()
+            fingerprint["source_sha256"] = _file_content_sha256(source_path)
     return fingerprint
 
 
@@ -1479,7 +1488,7 @@ def _geometry_asset_cache_key(
     """
     payload: dict[str, object] = {
         "requested_backend": requested_backend.value,
-        "geometries": [geometry.to_ir() for geometry in geometries],
+        "geometries": [_geometry_cache_fingerprint(geometry) for geometry in geometries],
         "discretization": discretization.to_ir(),
         "study_universe": study_universe,
     }
@@ -1746,7 +1755,7 @@ class RuntimeSelection:
 backend = RuntimeSelection()
 
 
-EnergyTerm = Exchange | Demag | InterfacialDMI | BulkDMI | Zeeman | StaticFieldMap | Magnetoelastic | UniaxialAnisotropy | OerstedCylinder | OerstedField | CubicAnisotropy | ThermalNoise
+EnergyTerm = Exchange | Demag | InterfacialDMI | RotatedInterfacialDMI | BulkDMI | Zeeman | StaticFieldMap | Magnetoelastic | UniaxialAnisotropy | OerstedCylinder | OerstedField | CubicAnisotropy | ThermalNoise
 CurrentModule = AntennaFieldSource | CurrentTransport
 LegacyOutputSpec = SaveField | SaveScalar | Snapshot
 OutputSpec = LegacyOutputSpec | SaveSpectrum | SaveMode | SaveDispersion

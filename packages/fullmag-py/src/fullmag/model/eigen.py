@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Mapping, Sequence
 
 from fullmag._validation import require_non_empty, require_positive
 
 KVector = tuple[float, float, float]
+
+_BIAS_FIELD_SWEEP_EQUILIBRIUM_POLICIES = {"relax_each", "continuation"}
+_BIAS_FIELD_SWEEP_CONTINUATION_SEEDS = {
+    "previous_accepted_equilibrium",
+    "initial_state",
+}
 
 SUPPORTED_TRACKING_METHODS = {
     "overlap_greedy",
@@ -37,6 +44,40 @@ def _normalize_vec3(value: Sequence[float], name: str) -> KVector:
     if len(value) != 3:
         raise ValueError(f"{name} must have exactly three components")
     return (float(value[0]), float(value[1]), float(value[2]))
+
+
+@dataclass(frozen=True, slots=True)
+class BiasFieldSweep:
+    """Declared physical bias-field samples in SI ``A/m`` for modal K0 scans."""
+
+    samples_a_per_m: Sequence[Sequence[float]]
+    equilibrium_policy: str = "relax_each"
+    continuation_seed: str = "initial_state"
+
+    def __post_init__(self) -> None:
+        samples = tuple(
+            _normalize_vec3(sample, f"samples_a_per_m[{index}]")
+            for index, sample in enumerate(self.samples_a_per_m)
+        )
+        if not samples:
+            raise ValueError("samples_a_per_m must not be empty")
+        if not all(math.isfinite(component) for sample in samples for component in sample):
+            raise ValueError("samples_a_per_m must contain finite A/m values")
+        if self.equilibrium_policy not in _BIAS_FIELD_SWEEP_EQUILIBRIUM_POLICIES:
+            raise ValueError("equilibrium_policy must be 'relax_each' or 'continuation'")
+        if self.continuation_seed not in _BIAS_FIELD_SWEEP_CONTINUATION_SEEDS:
+            raise ValueError(
+                "continuation_seed must be 'previous_accepted_equilibrium' or 'initial_state'"
+            )
+        object.__setattr__(self, "samples_a_per_m", samples)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "samples_a_per_m": [list(sample) for sample in self.samples_a_per_m],
+            "equilibrium_policy": self.equilibrium_policy,
+            "ordering": "declared",
+            "continuation_seed": self.continuation_seed,
+        }
 
 
 def _tuple_of_positive_ints(values: Sequence[int], name: str) -> tuple[int, ...]:

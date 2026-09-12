@@ -1,0 +1,1 @@
+export { FmrComparisonInspectorPanel } from "./FrequencyDomainResultInspectors";

@@ -2,12 +2,13 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+function readSource(url: URL): string {
+  return readFileSync(url, "utf8").replace(/\r\n/g, "\n");
+}
+
 describe("RegionsListPanel region creation wiring", () => {
   it("passes the resolved discretization lane into the regions model", () => {
-    const source = readFileSync(
-      new URL("./RegionsListPanel.tsx", import.meta.url),
-      "utf8",
-    );
+    const source = readSource(new URL("./RegionsListPanel.tsx", import.meta.url));
 
     expect(source).toContain("useSessionStatusSelector(");
     expect(source).toContain("resolveMeshInspectorLane(sessionDiscretization)");
@@ -15,10 +16,7 @@ describe("RegionsListPanel region creation wiring", () => {
   });
 
   it("uses compact Inspector groups without the legacy accordion shell", () => {
-    const source = readFileSync(
-      new URL("./RegionsListPanel.tsx", import.meta.url),
-      "utf8",
-    );
+    const source = readSource(new URL("./RegionsListPanel.tsx", import.meta.url));
 
     expect(source).toContain("InspectorGroup");
     expect(source).not.toContain("InspectorSection");
@@ -26,10 +24,7 @@ describe("RegionsListPanel region creation wiring", () => {
   });
 
   it("selects a newly created region from the committed scene response", () => {
-    const source = readFileSync(
-      new URL("./RegionsListPanel.tsx", import.meta.url),
-      "utf8",
-    );
+    const source = readSource(new URL("./RegionsListPanel.tsx", import.meta.url));
     const selectRegionStart = source.indexOf("function selectRegion");
     const createRegionStart = source.indexOf("async function createRegion");
     const renderStart = source.indexOf("\n  return (", createRegionStart);

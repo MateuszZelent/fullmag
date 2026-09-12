@@ -18,7 +18,10 @@ describe("airbox field routing smoke script", () => {
     );
     expect(existsSync(smokeScriptUrl)).toBe(true);
 
-    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8").replace(
+      /\r\n/g,
+      "\n",
+    );
     expect(smokeScript).toContain("CONTROL_ROOM_AIRBOX_FIELD_OBJECT_ID");
     expect(smokeScript).toContain("CONTROL_ROOM_AIRBOX_FIELD_OBJECT_QUANTITY_ID");
     expect(smokeScript).toContain("CONTROL_ROOM_AIRBOX_FIELD_AIRBOX_QUANTITY_ID");
@@ -135,7 +138,10 @@ describe("airbox field routing smoke script", () => {
   });
 
   it("enables the canonical region target while keeping its field transport part-scoped", () => {
-    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8").replace(
+      /\r\n/g,
+      "\n",
+    );
 
     expect(smokeScript).toContain(
       'entry.scope === "region" &&\n          entry.scope_id === regionScenario.targetId',

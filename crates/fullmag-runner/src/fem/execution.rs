@@ -6,6 +6,9 @@ use crate::artifact_pipeline::ArtifactPipelineSender;
 #[cfg(feature = "fem-gpu")]
 use crate::artifact_pipeline::ArtifactRecorder;
 use crate::fem::eigen_path::execute_fem_eigen_path;
+use crate::fem::eigen_execution_resolution::{
+    FemEigenExecutionLane, PlannedFemEigenExecution,
+};
 use crate::fem::pbc::{
     fem_static_periodic_decision, validate_periodic_region_material_certificate, FemStaticPbcLane,
 };
@@ -121,16 +124,45 @@ pub(crate) fn execute_fem<'a>(
     }
 }
 
+const LEGACY_FEM_EIGEN_SWEEP_REJECTION: &str =
+    "legacy_fem_eigen_entrypoint_requires_canonical_bias_field_sweep_dispatch";
+
+/// Keep the retired execution facade from silently turning a physical sweep
+/// into a single baseline solve if it is ever wired back into the crate.
+///
+/// The compiled owner is `dispatch::execute_fem_eigen`, which routes
+/// `BiasFieldSweepIR` through the canonical CPU/GPU sweep executors.  This
+/// source file is intentionally not registered by `fem/mod.rs`; the guard is
+/// nevertheless required at this compatibility boundary so a future module
+/// registration cannot reintroduce the old baseline bypass.
+fn reject_legacy_bias_field_sweep(plan: &FemEigenPlanIR) -> Result<(), RunError> {
+    if !plan.bias_field_samples.is_empty() {
+        return Err(RunError {
+            message: LEGACY_FEM_EIGEN_SWEEP_REJECTION.to_string(),
+        });
+    }
+    Ok(())
+}
+
 pub(crate) fn execute_fem_eigen(
     engine: FemEngine,
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
 ) -> Result<ExecutedRun, RunError> {
+    reject_legacy_bias_field_sweep(plan)?;
+
     // Route Path k-sampling through the multi-k orchestrator, which calls
     // the single-k solver for each sample point and then performs branch
     // tracking and writes V2 artifacts.
     if matches!(plan.k_sampling, Some(fullmag_ir::KSamplingIR::Path { .. })) {
-        return execute_fem_eigen_path(engine, plan, outputs);
+        return execute_fem_eigen_path(
+            PlannedFemEigenExecution::legacy(match engine {
+                FemEngine::CpuNative => FemEigenExecutionLane::Cpu,
+                FemEngine::NativeGpu => FemEigenExecutionLane::Gpu,
+            }),
+            plan,
+            outputs,
+        );
     }
 
     match engine {
@@ -139,7 +171,7 @@ pub(crate) fn execute_fem_eigen(
             // GPU-accelerated dense eigensolver (Etap A4) — TRANSITIONAL.
             // `execute_gpu_fem_eigen` uses cuSolverDN; returns error if GPU
             // is unavailable (no silent fallback to CPU).
-            fem_eigen::execute_gpu_fem_eigen(plan, outputs)
+            fem_eigen::execute_gpu_fem_eigen(plan, outputs, None)
         }
     }
 }
@@ -240,6 +272,13 @@ fn execute_native_fem(
         StepStats::default()
     };
     let initial_stats = needs_initial_snapshot.then_some(&current_stats);
+    let fem_bem_demag = if plan.demag_realization
+        == Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler)
+    {
+        backend.demag_fem_bem_provenance()?.map(|value| value.into_provenance())
+    } else {
+        None
+    };
     // FEM-013 fix: serialize resolved demag realization and integrator in provenance.
     let resolved_demag = plan
         .demag_realization
@@ -287,6 +326,7 @@ fn execute_native_fem(
             (stats.effective_fem_omp_threads > 0).then_some(stats.effective_fem_omp_threads as u32)
         }),
         fem_poisson_demag: fem_poisson_demag_provenance(plan, initial_stats),
+        fem_bem_demag,
         ..Default::default()
     };
     apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());

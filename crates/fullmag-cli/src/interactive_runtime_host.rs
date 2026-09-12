@@ -654,13 +654,15 @@ impl InteractiveRuntimeHost {
     /// Build the replacement privately. Failure must leave the retained runtime intact.
     pub(super) fn prepare_base_problem(
         base_problem: ProblemIR,
-        backend_plan: &BackendPlanIR,
+        plan: &ExecutionPlanIR,
     ) -> Result<PreparedInteractiveBase> {
+        let backend_plan = &plan.backend_plan;
         let resolver = fullmag_runner::ObservationProviderResolver::from_backend_plan(backend_plan);
         let runtime_capable = resolver.retains_idle_runtime();
         let runtime = if runtime_capable {
-            Some(create_interactive_preview_runtime_from_problem(
+            Some(fullmag_runner::create_planned_interactive_runtime(
                 &base_problem,
+                plan,
                 None,
             )?)
         } else {

@@ -1,0 +1,48 @@
+{
+  "build_identity": {
+    "built_at_utc": "2026-09-02T13:41:05Z",
+    "git_commit": "d5335841031981249aa0c5914ea25b73c985bb45",
+    "source_snapshot_sha256": "4d7eddcca9d455ef2e0f8364ac091019ba0a7c648c724230c44198ddc1f79a8c",
+    "worktree_state": "dirty"
+  },
+  "fallback": null,
+  "requested_periodicity": null,
+  "resolved": {
+    "axes": [
+      false,
+      false,
+      false
+    ],
+    "cell_m": [
+      2.5e-9,
+      2.5e-9,
+      1e-8
+    ],
+    "counts": [
+      200,
+      200,
+      1
+    ],
+    "demag": null,
+    "fft_backend": "cuFFT",
+    "fft_kernel": "tensor_fft_newell",
+    "grid_fingerprint": "a2d4c9663a6f57abeec3e18d775e709b40fac028fdb8226f3f9e13743598c883",
+    "origin_m": [
+      -2.5e-7,
+      -2.5e-7,
+      -5e-9
+    ],
+    "padded_counts": [
+      400,
+      400,
+      2
+    ],
+    "period_m": [
+      5e-7,
+      5e-7,
+      1e-8
+    ],
+    "periodic_images": null
+  },
+  "schema_version": "fdm_pbc_provenance.v1"
+}

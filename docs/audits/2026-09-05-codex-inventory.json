@@ -1,0 +1,716 @@
+[
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\adr-check\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 2261,
+    "after_bytes": 2459
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\backend-golden-masterplan\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 5934,
+    "after_bytes": 3699
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\brainstorming\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 10435,
+    "after_bytes": 1370
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\capability-matrix-check\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 3959,
+    "after_bytes": 2835
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\dispatching-parallel-agents\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 6644,
+    "after_bytes": 1527
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\executing-plans\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 2588,
+    "after_bytes": 1442
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\fem-native-backend-architecture\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 6837,
+    "after_bytes": 3823
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\finishing-a-development-branch\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 6832,
+    "after_bytes": 1340
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\frontend-apple-style\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 22722,
+    "after_bytes": 3211
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\frontend-v2-api-hygiene\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 1606,
+    "after_bytes": 2087
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\frontend-v2-cutover-governance\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 1659,
+    "after_bytes": 2143
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\frontend-v2-module-architecture\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 1975,
+    "after_bytes": 2203
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\frontend-v2-performance-gates\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 1872,
+    "after_bytes": 2468
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\frontend-v2-state-hygiene\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 1436,
+    "after_bytes": 1903
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\frontend-v2-viewport-lifecycle\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 2085,
+    "after_bytes": 2640
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\full-output-enforcement\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 4745,
+    "after_bytes": 2078
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\google-eng-review-practices\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 4173,
+    "after_bytes": 2757
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\gpt-taste\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 3140,
+    "after_bytes": 2352
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\high-end-visual-design\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 5848,
+    "after_bytes": 2819
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\physics-publication\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 4931,
+    "after_bytes": 4196
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\problem-ir-design\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 2146,
+    "after_bytes": 2432
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\python-api-class\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 1842,
+    "after_bytes": 1673
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\react-doctor\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 3275,
+    "after_bytes": 2011
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\receiving-code-review\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 6382,
+    "after_bytes": 1165
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\requesting-code-review\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 2826,
+    "after_bytes": 1308
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\resource-first-api-check\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 11711,
+    "after_bytes": 6608
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\scientific-documentation-contract\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 9793,
+    "after_bytes": 6700
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\subagent-driven-development\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 21647,
+    "after_bytes": 2211
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\systematic-debugging\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 9885,
+    "after_bytes": 1685
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\test-driven-development\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 9894,
+    "after_bytes": 1538
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\using-git-worktrees\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 7472,
+    "after_bytes": 1910
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\using-superpowers\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 3063,
+    "after_bytes": 1322
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\verification-before-completion\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 4201,
+    "after_bytes": 1473
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\writing-plans\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 7092,
+    "after_bytes": 1299
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\.agents\\skills\\writing-skills\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 26431,
+    "after_bytes": 2058
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\skills\\.system\\imagegen\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 19516,
+    "after_bytes": 19516
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\skills\\.system\\openai-docs\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 5484,
+    "after_bytes": 5484
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\skills\\.system\\plugin-creator\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 11716,
+    "after_bytes": 11716
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\skills\\.system\\review-agent\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 2718,
+    "after_bytes": 2718
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\skills\\.system\\skill-creator\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 15540,
+    "after_bytes": 15540
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\skills\\.system\\skill-installer\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 3425,
+    "after_bytes": 3425
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-bundled\\computer-use\\26.901.41600\\skills\\computer-use\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 1497,
+    "after_bytes": 1497
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-bundled\\computer-use\\26.901.41600\\.codex-plugin\\plugin.json",
+    "kind": "manifest",
+    "status": "unchanged",
+    "before_bytes": 2153,
+    "after_bytes": 2153
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-bundled\\visualize\\1.0.29\\skills\\visualize\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 31437,
+    "after_bytes": 31553
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-bundled\\visualize\\1.0.29\\.codex-plugin\\plugin.json",
+    "kind": "manifest",
+    "status": "unchanged",
+    "before_bytes": 1720,
+    "after_bytes": 1720
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-bundled\\sites\\0.1.57\\skills\\sites-building\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 31104,
+    "after_bytes": 31104
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-bundled\\sites\\0.1.57\\skills\\sites-hosting\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 6721,
+    "after_bytes": 6721
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-bundled\\sites\\0.1.57\\.codex-plugin\\plugin.json",
+    "kind": "manifest",
+    "status": "unchanged",
+    "before_bytes": 1827,
+    "after_bytes": 1827
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-bundled\\unified-computer-use\\26.901.41600\\.codex-plugin\\plugin.json",
+    "kind": "manifest",
+    "status": "unchanged",
+    "before_bytes": 157,
+    "after_bytes": 157
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-bundled\\browser\\26.901.41600\\.codex-plugin\\plugin.json",
+    "kind": "manifest",
+    "status": "unchanged",
+    "before_bytes": 2616,
+    "after_bytes": 2616
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-bundled\\chrome\\26.901.41600\\.codex-plugin\\plugin.json",
+    "kind": "manifest",
+    "status": "unchanged",
+    "before_bytes": 2487,
+    "after_bytes": 2487
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-bundled\\codex-app-tools\\0.1.3\\.codex-plugin\\plugin.json",
+    "kind": "manifest",
+    "status": "unchanged",
+    "before_bytes": 213,
+    "after_bytes": 213
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-curated-remote\\superpowers\\6.3.0\\skills\\brainstorming\\SKILL.md",
+    "kind": "skill",
+    "status": "absent",
+    "before_bytes": 15456,
+    "after_bytes": null
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-curated-remote\\superpowers\\6.3.0\\skills\\dispatching-parallel-agents\\SKILL.md",
+    "kind": "skill",
+    "status": "absent",
+    "before_bytes": 6078,
+    "after_bytes": null
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-curated-remote\\superpowers\\6.3.0\\skills\\executing-plans\\SKILL.md",
+    "kind": "skill",
+    "status": "absent",
+    "before_bytes": 2305,
+    "after_bytes": null
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-curated-remote\\superpowers\\6.3.0\\skills\\finishing-a-development-branch\\SKILL.md",
+    "kind": "skill",
+    "status": "absent",
+    "before_bytes": 7781,
+    "after_bytes": null
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-curated-remote\\superpowers\\6.3.0\\skills\\receiving-code-review\\SKILL.md",
+    "kind": "skill",
+    "status": "absent",
+    "before_bytes": 6203,
+    "after_bytes": null
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-curated-remote\\superpowers\\6.3.0\\skills\\requesting-code-review\\SKILL.md",
+    "kind": "skill",
+    "status": "absent",
+    "before_bytes": 2956,
+    "after_bytes": null
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-curated-remote\\superpowers\\6.3.0\\skills\\subagent-driven-development\\SKILL.md",
+    "kind": "skill",
+    "status": "absent",
+    "before_bytes": 32339,
+    "after_bytes": null
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-curated-remote\\superpowers\\6.3.0\\skills\\systematic-debugging\\SKILL.md",
+    "kind": "skill",
+    "status": "absent",
+    "before_bytes": 9465,
+    "after_bytes": null
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-curated-remote\\superpowers\\6.3.0\\skills\\test-driven-development\\SKILL.md",
+    "kind": "skill",
+    "status": "absent",
+    "before_bytes": 9015,
+    "after_bytes": null
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-curated-remote\\superpowers\\6.3.0\\skills\\using-git-worktrees\\SKILL.md",
+    "kind": "skill",
+    "status": "absent",
+    "before_bytes": 6813,
+    "after_bytes": null
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-curated-remote\\superpowers\\6.3.0\\skills\\using-superpowers\\SKILL.md",
+    "kind": "skill",
+    "status": "absent",
+    "before_bytes": 3108,
+    "after_bytes": null
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-curated-remote\\superpowers\\6.3.0\\skills\\verification-before-completion\\SKILL.md",
+    "kind": "skill",
+    "status": "absent",
+    "before_bytes": 3646,
+    "after_bytes": null
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-curated-remote\\superpowers\\6.3.0\\skills\\writing-plans\\SKILL.md",
+    "kind": "skill",
+    "status": "absent",
+    "before_bytes": 7053,
+    "after_bytes": null
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-curated-remote\\superpowers\\6.3.0\\skills\\writing-skills\\SKILL.md",
+    "kind": "skill",
+    "status": "absent",
+    "before_bytes": 26360,
+    "after_bytes": null
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-curated-remote\\superpowers\\6.3.0\\.codex-plugin\\plugin.json",
+    "kind": "manifest",
+    "status": "absent",
+    "before_bytes": 1723,
+    "after_bytes": null
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-curated-remote\\plugin-management\\0.1.0\\skills\\plugin-management\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 2983,
+    "after_bytes": 2409
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-curated-remote\\plugin-management\\0.1.0\\.codex-plugin\\plugin.json",
+    "kind": "manifest",
+    "status": "unchanged",
+    "before_bytes": 1538,
+    "after_bytes": 1538
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-curated-remote\\deep-research-work\\0.1.14\\skills\\deep-research\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 12344,
+    "after_bytes": 12396
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-curated-remote\\deep-research-work\\0.1.14\\.codex-plugin\\plugin.json",
+    "kind": "manifest",
+    "status": "unchanged",
+    "before_bytes": 1925,
+    "after_bytes": 1925
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-primary-runtime\\documents\\26.904.11930\\skills\\documents\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 42428,
+    "after_bytes": 42428
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-primary-runtime\\documents\\26.904.11930\\.codex-plugin\\plugin.json",
+    "kind": "manifest",
+    "status": "unchanged",
+    "before_bytes": 1561,
+    "after_bytes": 1561
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-primary-runtime\\spreadsheets\\26.904.11930\\skills\\excel-live-control\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 27897,
+    "after_bytes": 27897
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-primary-runtime\\spreadsheets\\26.904.11930\\skills\\spreadsheets\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 16435,
+    "after_bytes": 16435
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-primary-runtime\\spreadsheets\\26.904.11930\\.codex-plugin\\plugin.json",
+    "kind": "manifest",
+    "status": "unchanged",
+    "before_bytes": 1998,
+    "after_bytes": 1998
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-primary-runtime\\presentations\\26.904.11930\\skills\\presentations\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 29500,
+    "after_bytes": 29500
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-primary-runtime\\presentations\\26.904.11930\\.codex-plugin\\plugin.json",
+    "kind": "manifest",
+    "status": "unchanged",
+    "before_bytes": 1911,
+    "after_bytes": 1911
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-primary-runtime\\pdf\\26.904.11930\\skills\\pdf\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 7269,
+    "after_bytes": 7269
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-primary-runtime\\pdf\\26.904.11930\\.codex-plugin\\plugin.json",
+    "kind": "manifest",
+    "status": "unchanged",
+    "before_bytes": 1485,
+    "after_bytes": 1485
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-primary-runtime\\template-creator\\26.904.11930\\skills\\template-creator\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 19242,
+    "after_bytes": 19242
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\openai-primary-runtime\\template-creator\\26.904.11930\\.codex-plugin\\plugin.json",
+    "kind": "manifest",
+    "status": "unchanged",
+    "before_bytes": 2047,
+    "after_bytes": 2047
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\ponytail\\ponytail\\4.9.0\\.openclaw\\skills\\ponytail\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 6065,
+    "after_bytes": 6065
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\ponytail\\ponytail\\4.9.0\\.openclaw\\skills\\ponytail-audit\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 1471,
+    "after_bytes": 1471
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\ponytail\\ponytail\\4.9.0\\.openclaw\\skills\\ponytail-debt\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 1540,
+    "after_bytes": 1540
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\ponytail\\ponytail\\4.9.0\\.openclaw\\skills\\ponytail-gain\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 1900,
+    "after_bytes": 1900
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\ponytail\\ponytail\\4.9.0\\.openclaw\\skills\\ponytail-help\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 2803,
+    "after_bytes": 2803
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\ponytail\\ponytail\\4.9.0\\.openclaw\\skills\\ponytail-review\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 2170,
+    "after_bytes": 2170
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\ponytail\\ponytail\\4.9.0\\skills\\ponytail\\SKILL.md",
+    "kind": "skill",
+    "status": "changed",
+    "before_bytes": 6757,
+    "after_bytes": 4404
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\ponytail\\ponytail\\4.9.0\\skills\\ponytail-audit\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 1693,
+    "after_bytes": 1693
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\ponytail\\ponytail\\4.9.0\\skills\\ponytail-debt\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 1747,
+    "after_bytes": 1747
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\ponytail\\ponytail\\4.9.0\\skills\\ponytail-gain\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 2023,
+    "after_bytes": 2023
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\ponytail\\ponytail\\4.9.0\\skills\\ponytail-help\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 2867,
+    "after_bytes": 2867
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\ponytail\\ponytail\\4.9.0\\skills\\ponytail-review\\SKILL.md",
+    "kind": "skill",
+    "status": "unchanged",
+    "before_bytes": 2440,
+    "after_bytes": 2440
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\ponytail\\ponytail\\4.9.0\\.codex-plugin\\plugin.json",
+    "kind": "manifest",
+    "status": "unchanged",
+    "before_bytes": 1312,
+    "after_bytes": 1312
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\ponytail\\ponytail\\4.9.0\\hooks\\claude-codex-hooks.json",
+    "kind": "hooks",
+    "status": "unchanged",
+    "before_bytes": 1007,
+    "after_bytes": 1007
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\ponytail\\ponytail\\4.9.0\\hooks\\copilot-hooks.json",
+    "kind": "hooks",
+    "status": "unchanged",
+    "before_bytes": 560,
+    "after_bytes": 560
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\plugins\\cache\\ponytail\\ponytail\\4.9.0\\hooks\\qoder-hooks.json",
+    "kind": "hooks",
+    "status": "unchanged",
+    "before_bytes": 730,
+    "after_bytes": 730
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\AGENTS.md",
+    "kind": "instructions",
+    "status": "changed",
+    "before_bytes": 65838,
+    "after_bytes": 9427
+  },
+  {
+    "path": "C:\\git\\fullmag\\fullmag\\wiki\\AGENTS.md",
+    "kind": "instructions",
+    "status": "changed",
+    "before_bytes": 1711,
+    "after_bytes": 1039
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\AGENTS.md",
+    "kind": "instructions",
+    "status": "changed",
+    "before_bytes": 0,
+    "after_bytes": 2098
+  },
+  {
+    "path": "C:\\Users\\Mateusz\\.codex\\config.toml",
+    "kind": "config",
+    "status": "changed",
+    "before_bytes": 7319,
+    "after_bytes": 7319
+  }
+]

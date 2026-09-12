@@ -60,7 +60,11 @@ bool context_compute_demag_fem_bem(
         workspace->fresh_initial_guess_required = false;
     }
     mfem::Vector rhs_neumann(rhs->Size());
-    if (!prepare_demag_fem_bem_neumann_rhs(*rhs, rhs_neumann, error)) {
+    if (!prepare_demag_fem_bem_neumann_rhs(
+            *rhs,
+            workspace->neumann_gauge_tdofs,
+            rhs_neumann,
+            error)) {
         return false;
     }
     const uint64_t assemble_ns = elapsed_ns(assemble_start);
@@ -83,23 +87,24 @@ bool context_compute_demag_fem_bem(
         return false;
     }
 
-    std::vector<double> u1_boundary;
     if (!extract_demag_fem_bem_boundary_trace(
-            workspace->surface.boundary_nodes,
+            workspace->boundary_tdofs_by_row,
             *workspace->u1,
-            u1_boundary,
+            workspace->boundary_u1,
             error)) {
         return false;
     }
-    std::vector<double> u2_boundary;
-    if (!workspace->boundary_operator.apply(u1_boundary, u2_boundary, error)) {
+    if (!workspace->boundary_operator.apply(
+            workspace->boundary_u1,
+            workspace->boundary_u2,
+            error)) {
         return false;
     }
+    workspace->boundary_operator_apply_count += 1u;
 
     if (!prepare_demag_fem_bem_dirichlet_rhs(
-            workspace->surface.boundary_nodes,
             workspace->boundary_tdofs,
-            u2_boundary,
+            workspace->boundary_u2,
             *workspace->stiffness_form,
             *workspace->boundary_values_global,
             *workspace->laplace_rhs,

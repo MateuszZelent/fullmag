@@ -17,6 +17,7 @@
       --grid: #313244;
       --fdm: #a6e3a1;
       --fem: #89b4fa;
+      --fem-fk: #cba6f7;
       --mumax: #f9e2af;
       --good: #a6e3a1;
       --warn: #f9e2af;
@@ -129,6 +130,11 @@
       <div id="method-grid" class="method-grid"></div>
     </section>
 
+    <section aria-labelledby="relaxation-title">
+      <div class="section-head"><h2 id="relaxation-title">Relaksacja — wartości końcowe</h2><span>ostatni punkt etapu relax · bezwymiarowa</span></div>
+      <div id="relaxation-grid" class="chart-grid"></div>
+    </section>
+
     <section aria-labelledby="magnetization-title">
       <div class="section-head"><h2 id="magnetization-title">Średnia magnetyzacja</h2><span>wartość bezwymiarowa · t [ns]</span></div>
       <div id="magnetization-grid" class="chart-grid"></div>
@@ -147,7 +153,7 @@
           <tbody id="latest-body"><tr><td colspan="7" class="muted">Brak danych.</td></tr></tbody>
         </table>
       </div>
-      <p class="footer-note">Fullmag CPU/GPU: strumieniowany <code>stages/*/table</code>, potem <code>artifacts/scalars.csv</code> i <code>artifacts/tables/default/table.csv</code>. MuMax3: zweryfikowany artefakt <code>results/mumax3_aligned_v3/table.txt</code> z builda v3.12.3-20260819. Na wykresie „zewnętrzna / Zeeman” Fullmag używa <code>E_ext</code> (bias + drive), a MuMax3 <code>E_zeeman</code>. Każda seria ma osobny przełącznik w legendzie; brakujący artefakt pozostaje oznaczony jako „oczekuje”.</p>
+      <p class="footer-note">Fullmag CPU/GPU: strumieniowany <code>stages/*/table</code>, potem <code>artifacts/scalars.csv</code> i <code>artifacts/tables/default/table.csv</code>. FEM jest rozdzielony na Poisson–Robin oraz Fredkin–Köhler. MuMax3: bieżący artefakt <code>mumax3_case.zarr/table.txt</code> z builda v3.12.3-20260819. Na wykresie „zewnętrzna / Zeeman” Fullmag używa <code>E_ext</code> (bias + drive), a MuMax3 <code>E_zeeman</code>. Każda seria ma osobny przełącznik w legendzie; brakujący artefakt pozostaje oznaczony jako „oczekuje”.</p>
     </section>
   </main>
 
@@ -156,13 +162,16 @@
       "use strict";
 
       const BACKENDS = [
-        { id: "fdm_cpu", label: "Fullmag FDM · CPU · double", color: "var(--fdm)", lineStyle: "solid", strokeDasharray: null, kind: "fullmag", queryKeys: ["fdm_cpu", "fdm"], roots: ["fdm_case.zarr", "fullmag_case.zarr", "results/fdm/fullmag_case.zarr"], liveCsv: ["fdm_case.zarr/artifacts/scalars.csv", "fullmag_case.zarr/artifacts/scalars.csv"], csv: ["fdm_case.zarr/artifacts/tables/default/table.csv", "fdm_case.zarr/tables/default/table.csv", "fullmag_case.zarr/artifacts/tables/default/table.csv", "fullmag_case.zarr/tables/default/table.csv", "results/fdm/fullmag_case.zarr/artifacts/tables/default/table.csv"] },
-        { id: "fdm_gpu", label: "Fullmag FDM · GPU · double", color: "var(--fdm)", lineStyle: "dashed", strokeDasharray: "8 5", kind: "fullmag", roots: ["fdm_gpu_case.zarr", "results/fdm_gpu/fullmag_case.zarr"], liveCsv: ["fdm_gpu_case.zarr/artifacts/scalars.csv"], csv: ["fdm_gpu_case.zarr/artifacts/tables/default/table.csv", "results/fdm_gpu/fullmag_case.zarr/artifacts/tables/default/table.csv"] },
-        { id: "fem_cpu", label: "Fullmag FEM · CPU · double", color: "var(--fem)", lineStyle: "solid", strokeDasharray: null, kind: "fullmag", queryKeys: ["fem_cpu", "fem"], roots: ["fem_cpu_case.zarr", "results/fem_cpu/fullmag_case.zarr"], liveCsv: ["fem_cpu_case.zarr/artifacts/scalars.csv"], csv: ["fem_cpu_case.zarr/artifacts/tables/default/table.csv", "results/fem_cpu/fullmag_case.zarr/artifacts/tables/default/table.csv"] },
-        { id: "fem_gpu", label: "Fullmag FEM · GPU · double", color: "var(--fem)", lineStyle: "dashed", strokeDasharray: "8 5", kind: "fullmag", roots: ["fem_gpu_case.zarr", "results/fem_gpu/fullmag_case.zarr"], liveCsv: ["fem_gpu_case.zarr/artifacts/scalars.csv"], csv: ["fem_gpu_case.zarr/artifacts/tables/default/table.csv", "results/fem_gpu/fullmag_case.zarr/artifacts/tables/default/table.csv"] },
-        { id: "mumax3", label: "MuMax3 · v3.12.3-20260819 · GPU", color: "var(--mumax)", lineStyle: "dotted", strokeDasharray: "1 6", kind: "mumax", paths: ["results/mumax3_aligned_v3/table.txt"] },
+        { id: "fdm_cpu", shortLabel: "FDM CPU", label: "Fullmag FDM · CPU · double", color: "var(--fdm)", lineStyle: "solid", strokeDasharray: null, kind: "fullmag", queryKeys: ["fdm_cpu", "fdm"], roots: ["results/current/fdm_cpu", "fdm_case.zarr", "fullmag_case.zarr", "results/fdm/fullmag_case.zarr"], liveCsv: ["results/current/fdm_cpu/artifacts/scalars.csv", "fdm_case.zarr/artifacts/scalars.csv", "fullmag_case.zarr/artifacts/scalars.csv"], csv: ["results/current/fdm_cpu/artifacts/tables/default/table.csv", "fdm_case.zarr/artifacts/tables/default/table.csv", "fdm_case.zarr/tables/default/table.csv", "fullmag_case.zarr/artifacts/tables/default/table.csv", "fullmag_case.zarr/tables/default/table.csv", "results/fdm/fullmag_case.zarr/artifacts/tables/default/table.csv"], relaxationRoots: ["results/current/fdm_cpu", "fdm_case.zarr", "fullmag_case.zarr", "results/fdm/fullmag_case.zarr"], relaxationLiveCsv: [], relaxationCsv: ["results/current/fdm_cpu/artifacts/tables/relaxation/table.csv", "results/current/fdm_cpu/tables/relaxation/table.csv", "fdm_case.zarr/artifacts/tables/relaxation/table.csv", "fullmag_case.zarr/artifacts/tables/relaxation/table.csv"] },
+        { id: "fdm_gpu", shortLabel: "FDM GPU", label: "Fullmag FDM · GPU · double", color: "var(--fdm)", lineStyle: "dashed", strokeDasharray: "8 5", kind: "fullmag", roots: ["results/current/fdm_gpu_dt50fs_diagnostic_retry"], liveCsv: ["results/current/fdm_gpu_dt50fs_diagnostic_retry/artifacts/scalars.csv", "results/current/fdm_gpu_dt50fs_diagnostic_retry/scalars.csv"], csv: ["results/current/fdm_gpu_dt50fs_diagnostic_retry/artifacts/tables/default/table.csv", "results/current/fdm_gpu_dt50fs_diagnostic_retry/tables/default/table.csv"], relaxationRoots: ["results/current/fdm_gpu_dt50fs_diagnostic_retry"], relaxationLiveCsv: [], relaxationCsv: ["results/current/fdm_gpu_dt50fs_diagnostic_retry/artifacts/tables/relaxation/table.csv", "results/current/fdm_gpu_dt50fs_diagnostic_retry/tables/relaxation/table.csv"] },
+        { id: "fem_pr_cpu", shortLabel: "FEM PR CPU", label: "Fullmag FEM · Poisson–Robin · CPU · double", color: "var(--fem)", lineStyle: "solid", strokeDasharray: null, kind: "fullmag", queryKeys: ["fem_pr_cpu", "fem_cpu", "fem"], roots: ["results/current/fem_pr_cpu", "fem_cpu_case.zarr", "results/fem_cpu/fullmag_case.zarr"], liveCsv: ["results/current/fem_pr_cpu/artifacts/scalars.csv", "fem_cpu_case.zarr/artifacts/scalars.csv"], csv: ["results/current/fem_pr_cpu/artifacts/tables/default/table.csv", "fem_cpu_case.zarr/artifacts/tables/default/table.csv", "results/fem_cpu/fullmag_case.zarr/artifacts/tables/default/table.csv"], relaxationRoots: ["results/current/fem_pr_cpu", "fem_cpu_case.zarr", "results/fem_cpu/fullmag_case.zarr"], relaxationLiveCsv: [], relaxationCsv: ["results/current/fem_pr_cpu/artifacts/tables/relaxation/table.csv", "results/current/fem_pr_cpu/tables/relaxation/table.csv", "fem_cpu_case.zarr/artifacts/tables/relaxation/table.csv"] },
+        { id: "fem_pr_gpu", shortLabel: "FEM PR GPU", label: "Fullmag FEM · Poisson–Robin · GPU · double", color: "var(--fem)", lineStyle: "dashed", strokeDasharray: "8 5", kind: "fullmag", queryKeys: ["fem_pr_gpu", "fem_gpu"], roots: ["results/current/fem_pr_gpu", "fem_gpu_case.zarr", "results/fem_gpu/fullmag_case.zarr"], liveCsv: ["results/current/fem_pr_gpu/artifacts/scalars.csv", "fem_gpu_case.zarr/artifacts/scalars.csv"], csv: ["results/current/fem_pr_gpu/artifacts/tables/default/table.csv", "fem_gpu_case.zarr/artifacts/tables/default/table.csv", "results/fem_gpu/fullmag_case.zarr/artifacts/tables/default/table.csv"], relaxationRoots: ["results/current/fem_pr_gpu", "fem_gpu_case.zarr", "results/fem_gpu/fullmag_case.zarr"], relaxationLiveCsv: [], relaxationCsv: ["results/current/fem_pr_gpu/artifacts/tables/relaxation/table.csv", "results/current/fem_pr_gpu/tables/relaxation/table.csv", "fem_gpu_case.zarr/artifacts/tables/relaxation/table.csv"] },
+        { id: "fem_fk_cpu", shortLabel: "FEM FK CPU", label: "Fullmag FEM · Fredkin–Köhler · CPU · double", color: "var(--fem-fk)", lineStyle: "solid", strokeDasharray: null, kind: "fullmag", availability: "pending", availabilityDetail: "FEM Fredkin–Köhler CPU: brak świeżego, zweryfikowanego artefaktu managed dla dokładnego benchmarku.", qualification: ["results/current/fem_fk_cpu/qualification.json"], roots: ["results/current/fem_fk_cpu"], liveCsv: ["results/current/fem_fk_cpu/artifacts/scalars.csv"], csv: ["results/current/fem_fk_cpu/artifacts/tables/default/table.csv"], relaxationRoots: ["results/current/fem_fk_cpu"], relaxationLiveCsv: [], relaxationCsv: ["results/current/fem_fk_cpu/artifacts/tables/relaxation/table.csv"] },
+        { id: "fem_fk_gpu", shortLabel: "FEM FK GPU", label: "Fullmag FEM · Fredkin–Köhler · GPU · double", color: "var(--fem-fk)", lineStyle: "dashed", strokeDasharray: "8 5", kind: "fullmag", availability: "pending", availabilityDetail: "FEM Fredkin–Köhler GPU: brak świeżego, zweryfikowanego artefaktu managed dla dokładnego benchmarku.", qualification: ["results/current/fem_fk_gpu/qualification.json"], roots: ["results/current/fem_fk_gpu"], liveCsv: ["results/current/fem_fk_gpu/artifacts/scalars.csv"], csv: ["results/current/fem_fk_gpu/artifacts/tables/default/table.csv"], relaxationRoots: ["results/current/fem_fk_gpu"], relaxationLiveCsv: [], relaxationCsv: ["results/current/fem_fk_gpu/artifacts/tables/relaxation/table.csv"] },
+        { id: "mumax3", shortLabel: "MuMax3", label: "MuMax3 · v3.12.3-20260819 · GPU", color: "var(--mumax)", lineStyle: "dotted", strokeDasharray: "1 6", kind: "mumax", paths: ["mumax3_case.zarr/table.txt"], relaxationPaths: ["results/mumax3_relax_v2/table.txt", "results/mumax3_relax_v1/table.txt"] },
       ];
       const STAGE_CANDIDATES = Array.from({ length: 8 }, (_, index) => `stages/stage_${String(index).padStart(4, "0")}_dynamic`);
+      const RELAXATION_STAGE_CANDIDATES = Array.from({ length: 8 }, (_, index) => `stages/stage_${String(index).padStart(4, "0")}_relax`);
       const MAGNETIZATION = ["mx", "my", "mz"];
       const ENERGIES = [
         { id: "e_ex", label: "E exchange" },
@@ -173,7 +182,7 @@
         { id: "e_dmi", label: "E DMI" },
         { id: "e_total", label: "E total" },
       ];
-      const state = { backends: {}, refreshing: false, refreshNumber: 0, hiddenBackends: new Set() };
+      const state = { backends: {}, relaxation: {}, refreshing: false, refreshNumber: 0, hiddenBackends: new Set() };
       const query = new URLSearchParams(window.location.search);
 
       function applyQueryOverride(definition) {
@@ -182,9 +191,9 @@
         const override = query.get(overrideKey);
         if (!override) return definition;
         const root = override.replace(/\/$/, "");
-        if (definition.kind === "mumax") return { ...definition, paths: [root] };
-        if (root.toLowerCase().endsWith(".csv")) return { ...definition, roots: [], csv: [root] };
-        return { ...definition, roots: [root], csv: [`${root}/artifacts/tables/default/table.csv`, `${root}/tables/default/table.csv`] };
+        if (definition.kind === "mumax") return { ...definition, paths: [root], relaxationPaths: [root] };
+        if (root.toLowerCase().endsWith(".csv")) return { ...definition, roots: [], csv: [root], relaxationRoots: [], relaxationCsv: [root] };
+        return { ...definition, roots: [root], csv: [`${root}/artifacts/tables/default/table.csv`, `${root}/tables/default/table.csv`], relaxationRoots: [root], relaxationCsv: [`${root}/artifacts/tables/relaxation/table.csv`, `${root}/tables/relaxation/table.csv`] };
       }
 
       function cacheBusted(url) {
@@ -203,6 +212,21 @@
 
       async function fetchJson(url) {
         return (await fetchResponse(url)).json();
+      }
+
+      async function requireQualification(definition) {
+        if (!Array.isArray(definition.qualification)) return;
+        let lastError = "brak qualification.json";
+        for (const path of definition.qualification) {
+          try {
+            const report = await fetchJson(path);
+            if (!report || report.status !== "PASS") throw new Error(`status=${report && report.status ? report.status : "brak"}`);
+            return;
+          } catch (error) {
+            lastError = `kwalifikacja FEM/BEM FK nie jest PASS (${path}: ${error.message || error})`;
+          }
+        }
+        throw new Error(lastError);
       }
 
       function canonicalHeader(raw) {
@@ -234,6 +258,29 @@
         }
         if (!rows.length) throw new Error("Tabela Fullmag nie ma pełnego wiersza");
         return normalizeRows(rows, "fullmag");
+      }
+
+      function parseFullmagRelaxationCsv(text) {
+        const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+        if (lines.length < 2) throw new Error("Tabela relaksacji Fullmag nie ma jeszcze wierszy");
+        const headers = lines[0].split(",").map(canonicalHeader);
+        const required = ["time_s", ...MAGNETIZATION];
+        const missing = required.filter((column) => !headers.includes(column));
+        if (missing.length) throw new Error(`Brak kolumn relaksacji: ${missing.join(", ")}`);
+        const rows = [];
+        for (let index = 1; index < lines.length; index += 1) {
+          const values = lines[index].split(",");
+          if (values.length !== headers.length) continue;
+          try {
+            const row = {};
+            headers.forEach((header, columnIndex) => { row[header] = finiteNumber(values[columnIndex], `${index + 1}:${header}`); });
+            rows.push(row);
+          } catch (error) {
+            // The producer may still be flushing the last partial row.
+          }
+        }
+        if (!rows.length) throw new Error("Tabela relaksacji Fullmag nie ma pełnego wiersza");
+        return normalizeRows(rows, "fullmag_relaxation");
       }
 
       function parseFullmagLiveCsv(text) {
@@ -290,6 +337,8 @@
             normalized.e_drive = null;
             normalized.e_dmi = null;
             normalized.e_external_total = row.e_zeeman;
+          } else if (kind === "fullmag_relaxation") {
+            normalized.e_external_total = Number.isFinite(row.e_ext) ? row.e_ext : null;
           } else if (kind === "fullmag_live") {
             normalized.e_ext = row.e_ext;
             normalized.e_drive = null;
@@ -303,8 +352,9 @@
         }).sort((left, right) => left.time_s - right.time_s);
       }
 
-      async function readZarrTable(root) {
-        for (const stage of STAGE_CANDIDATES) {
+      async function readZarrTable(root, stageKind = "dynamic") {
+        const stageCandidates = stageKind === "relaxation" ? RELAXATION_STAGE_CANDIDATES : STAGE_CANDIDATES;
+        for (const stage of stageCandidates) {
           const base = `${root}/${stage}/table`;
           try {
             const [attrs, array] = await Promise.all([fetchJson(`${base}/.zattrs`), fetchJson(`${base}/.zarray`)]);
@@ -327,7 +377,7 @@
                 break;
               }
             }
-            if (rows.length) return { rows: normalizeRows(rows, "fullmag"), source: `${base}/*`, live: true, complete: false };
+            if (rows.length) return { rows: normalizeRows(rows, stageKind === "relaxation" ? "fullmag_relaxation" : "fullmag"), source: `${base}/*`, live: true, complete: false };
             throw new Error("strumieniowana tabela nie ma jeszcze wierszy");
           } catch (error) {
             // Try the next stage index; a missing stage is normal before a run starts.
@@ -336,24 +386,30 @@
         throw new Error("brak strumieniowanej tabeli");
       }
 
-      async function readFullmag(definition) {
-        for (const path of definition.csv || []) {
+      async function readFullmag(definition, stageKind = "dynamic") {
+        const relaxation = stageKind === "relaxation";
+        const csvPaths = relaxation ? definition.relaxationCsv : definition.csv;
+        const liveCsvPaths = relaxation ? definition.relaxationLiveCsv : definition.liveCsv;
+        const roots = relaxation ? definition.relaxationRoots : definition.roots;
+        const csvParser = relaxation ? parseFullmagRelaxationCsv : parseFullmagCsv;
+        const liveParser = relaxation ? parseFullmagRelaxationCsv : parseFullmagLiveCsv;
+        for (const path of csvPaths || []) {
           try {
-            return { rows: parseFullmagCsv(await fetchText(path)), source: path, live: false, complete: true };
+            return { rows: csvParser(await fetchText(path)), source: path, live: false, complete: true };
           } catch (error) {
             // Fall through while the producer is still preparing its artifact.
           }
         }
-        for (const path of definition.liveCsv || []) {
+        for (const path of liveCsvPaths || []) {
           try {
-            return { rows: parseFullmagLiveCsv(await fetchText(path)), source: path, live: true, complete: false };
+            return { rows: liveParser(await fetchText(path)), source: path, live: true, complete: false };
           } catch (error) {
             // Fall through while the producer is still preparing its artifact.
           }
         }
-        for (const root of definition.roots || []) {
+        for (const root of roots || []) {
           try {
-            return await readZarrTable(root);
+            return await readZarrTable(root, stageKind);
           } catch (error) {
             // Fall through to the next root while the producer is still preparing its artifact.
           }
@@ -361,14 +417,16 @@
         throw new Error("brak tabeli Fullmag");
       }
 
-      async function readBackend(definition) {
+      async function readBackend(definition, stageKind = "dynamic") {
         if (definition.kind === "mumax") {
-          for (const path of definition.paths || []) {
+          const paths = stageKind === "relaxation" ? definition.relaxationPaths : definition.paths;
+          for (const path of paths || []) {
             try { return { rows: parseMuMaxTable(await fetchText(path)), source: path, live: false, complete: true }; } catch (error) { /* try next path */ }
           }
           throw new Error("brak tabeli MuMax3");
         }
-        return readFullmag(definition);
+        await requireQualification(definition);
+        return readFullmag(definition, stageKind);
       }
 
       function formatNumber(value, digits = 4) {
@@ -401,8 +459,8 @@
         const stateElement = card.querySelector(".method-state");
         const detailElement = card.querySelector(".method-detail");
         if (result.error) {
-          stateElement.textContent = "oczekuje";
-          detailElement.textContent = result.error;
+          stateElement.textContent = definition.availability === "not_applicable" ? "niedostępne" : "oczekuje";
+          detailElement.textContent = definition.availability === "not_applicable" ? definition.availabilityDetail : result.error;
           return;
         }
         stateElement.textContent = result.complete ? "gotowe" : "na żywo";
@@ -421,6 +479,29 @@
         if (state.hiddenBackends.has(backendId)) state.hiddenBackends.delete(backendId);
         else state.hiddenBackends.add(backendId);
         renderCharts();
+      }
+
+      function appendLegend(card, seriesList) {
+        const legend = document.createElement("div"); legend.className = "legend";
+        seriesList.forEach((series) => {
+          const item = document.createElement("button");
+          const status = series.availability === "not_applicable" ? "brak składowej" : "oczekuje";
+          const label = series.available ? series.label : `${series.label} · ${status}`;
+          item.type = "button";
+          item.className = `legend-item${series.visible ? "" : " is-hidden"}`;
+          item.disabled = !series.available;
+          item.setAttribute("aria-pressed", String(series.visible));
+          item.setAttribute("aria-disabled", String(!series.available));
+          item.setAttribute("aria-label", `${series.available ? (series.visible ? "Ukryj" : "Pokaż") : "Niedostępna seria"} ${label}`);
+          item.innerHTML = `<span class="legend-swatch"></span><span></span>`;
+          const swatch = item.querySelector(".legend-swatch");
+          swatch.style.setProperty("--series-color", series.color);
+          swatch.dataset.lineStyle = series.lineStyle;
+          item.querySelector("span:last-child").textContent = label;
+          if (series.available) item.addEventListener("click", () => toggleBackend(series.id));
+          legend.append(item);
+        });
+        card.append(legend);
       }
 
       function chartCard(title, unit, seriesList) {
@@ -485,26 +566,7 @@
           svg.append(lines);
           card.append(svg);
         }
-        const legend = document.createElement("div"); legend.className = "legend";
-        seriesList.forEach((series) => {
-          const item = document.createElement("button");
-          const status = series.availability === "not_applicable" ? "brak składowej" : "oczekuje";
-          const label = series.available ? series.label : `${series.label} · ${status}`;
-          item.type = "button";
-          item.className = `legend-item${series.visible ? "" : " is-hidden"}`;
-          item.disabled = !series.available;
-          item.setAttribute("aria-pressed", String(series.visible));
-          item.setAttribute("aria-disabled", String(!series.available));
-          item.setAttribute("aria-label", `${series.available ? (series.visible ? "Ukryj" : "Pokaż") : "Niedostępna seria"} ${label}`);
-          item.innerHTML = `<span class="legend-swatch"></span><span></span>`;
-          const swatch = item.querySelector(".legend-swatch");
-          swatch.style.setProperty("--series-color", series.color);
-          swatch.dataset.lineStyle = series.lineStyle;
-          item.querySelector("span:last-child").textContent = label;
-          if (series.available) item.addEventListener("click", () => toggleBackend(series.id));
-          legend.append(item);
-        });
-        card.append(legend);
+        appendLegend(card, seriesList);
         return card;
       }
 
@@ -513,9 +575,79 @@
           const result = state.backends[definition.id];
           const rows = result && !result.error && Array.isArray(result.rows) ? result.rows : [];
           const hasData = rows.some((row) => Number.isFinite(row[column]));
-          const availability = hasData ? "ready" : result && !result.error ? "not_applicable" : "pending";
+          const availability = hasData ? "ready" : definition.availability || (result && !result.error ? "not_applicable" : "pending");
           return { id: definition.id, label: definition.label, color: definition.color, lineStyle: definition.lineStyle, visible: !state.hiddenBackends.has(definition.id), available: hasData, availability, strokeDasharray: definition.strokeDasharray || null, column, rows };
         });
+      }
+
+      function relaxationSeries(column) {
+        return BACKENDS.map((definition) => {
+          const result = state.relaxation[definition.id];
+          const rows = result && !result.error && Array.isArray(result.rows) ? result.rows : [];
+          const last = rows[rows.length - 1];
+          const value = last && Number.isFinite(last[column]) ? last[column] : null;
+          const hasData = Number.isFinite(value);
+          const availability = hasData ? "ready" : definition.availability || (result && !result.error ? "not_applicable" : "pending");
+          return { id: definition.id, label: definition.label, shortLabel: definition.shortLabel || definition.label, color: definition.color, lineStyle: definition.lineStyle, visible: !state.hiddenBackends.has(definition.id), available: hasData, availability, strokeDasharray: definition.strokeDasharray || null, column, value };
+        });
+      }
+
+      function relaxationCard(title, unit, seriesList) {
+        const card = document.createElement("article");
+        card.className = "chart-card";
+        const heading = document.createElement("div");
+        heading.className = "chart-card-title";
+        heading.innerHTML = `<h3></h3><span></span>`;
+        heading.querySelector("h3").textContent = title;
+        heading.querySelector("span").textContent = unit;
+        card.append(heading);
+        const visibleSeries = seriesList.filter((series) => series.visible && series.available);
+        const pendingSeries = seriesList.some((series) => series.visible && !series.available);
+        if (!visibleSeries.length) {
+          const empty = document.createElement("div");
+          empty.className = "empty";
+          empty.textContent = pendingSeries ? "Oczekiwanie na dane relaksacji…" : "Wybierz co najmniej jedną serię…";
+          card.append(empty);
+        } else {
+          const width = 640;
+          const height = 230;
+          const padding = { top: 12, right: 12, bottom: 48, left: 52 };
+          const values = visibleSeries.map((series) => series.value);
+          let yMin = Math.min(...values), yMax = Math.max(...values);
+          if (yMin === yMax) { const delta = Math.max(Math.abs(yMin) * 0.1, 1e-12); yMin -= delta; yMax += delta; }
+          const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+          svg.classList.add("chart");
+          svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+          svg.setAttribute("role", "img");
+          svg.setAttribute("aria-label", `${title}, porównanie wartości po relaksacji`);
+          const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+          for (let tick = 0; tick <= 4; tick += 1) {
+            const ratio = tick / 4;
+            const y = padding.top + ratio * (height - padding.top - padding.bottom);
+            const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            line.classList.add("grid-line"); line.setAttribute("x1", padding.left); line.setAttribute("x2", width - padding.right); line.setAttribute("y1", y); line.setAttribute("y2", y); group.append(line);
+            const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            label.setAttribute("x", padding.left - 7); label.setAttribute("y", y + 3); label.setAttribute("text-anchor", "end"); label.textContent = formatNumber(yMax - ratio * (yMax - yMin), 3); group.append(label);
+          }
+          const axis = document.createElementNS("http://www.w3.org/2000/svg", "line");
+          axis.classList.add("axis"); axis.setAttribute("x1", padding.left); axis.setAttribute("x2", width - padding.right); axis.setAttribute("y1", height - padding.bottom); axis.setAttribute("y2", height - padding.bottom); group.append(axis);
+          visibleSeries.forEach((series, index) => {
+            const x = padding.left + ((index + 0.5) / visibleSeries.length) * (width - padding.left - padding.right);
+            const y = padding.top + (1 - ((series.value - yMin) / (yMax - yMin || 1))) * (height - padding.top - padding.bottom);
+            const stem = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            stem.classList.add("series"); stem.style.stroke = series.color; if (series.strokeDasharray) stem.setAttribute("stroke-dasharray", series.strokeDasharray); stem.setAttribute("x1", x); stem.setAttribute("x2", x); stem.setAttribute("y1", height - padding.bottom); stem.setAttribute("y2", y); group.append(stem);
+            const point = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            point.setAttribute("cx", x); point.setAttribute("cy", y); point.setAttribute("r", "4"); point.style.fill = series.color; point.style.stroke = series.color; group.append(point);
+            const name = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            name.setAttribute("x", x); name.setAttribute("y", height - 27); name.setAttribute("text-anchor", "middle"); name.textContent = series.shortLabel; group.append(name);
+            const value = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            value.setAttribute("x", x); value.setAttribute("y", Math.max(10, y - 8)); value.setAttribute("text-anchor", "middle"); value.textContent = formatNumber(series.value, 3); group.append(value);
+          });
+          svg.append(group);
+          card.append(svg);
+        }
+        appendLegend(card, seriesList);
+        return card;
       }
 
       function renderCharts() {
@@ -523,6 +655,12 @@
         const energyGrid = document.getElementById("energy-grid");
         magnetizationGrid.replaceChildren(...MAGNETIZATION.map((column) => chartCard(column, "m", methodSeries(column))));
         energyGrid.replaceChildren(...ENERGIES.map((energy) => chartCard(energy.label, "J", methodSeries(energy.id))));
+        renderRelaxation();
+      }
+
+      function renderRelaxation() {
+        const relaxationGrid = document.getElementById("relaxation-grid");
+        relaxationGrid.replaceChildren(...MAGNETIZATION.map((column) => relaxationCard(column, "wartość po relaksacji", relaxationSeries(column))));
       }
 
       function renderLatest() {
@@ -554,11 +692,13 @@
         const refreshNumber = ++state.refreshNumber;
         const definitions = BACKENDS.map(applyQueryOverride);
         const values = await Promise.all(definitions.map(async (definition) => {
-          try { return [definition.id, await readBackend(definition)]; }
-          catch (error) { return [definition.id, { error: error instanceof Error ? error.message : "błąd odczytu", rows: [] }]; }
+          const read = (stage) => readBackend(definition, stage).catch((error) => ({ error: error instanceof Error ? error.message : "błąd odczytu", rows: [] }));
+          const [dynamic, relaxation] = await Promise.all([read("dynamic"), read("relaxation")]);
+          return [definition.id, { dynamic, relaxation }];
         }));
         if (refreshNumber === state.refreshNumber) {
-          state.backends = Object.fromEntries(values);
+          state.backends = Object.fromEntries(values.map(([id, value]) => [id, value.dynamic]));
+          state.relaxation = Object.fromEntries(values.map(([id, value]) => [id, value.relaxation]));
           definitions.forEach((definition) => renderMethodState(definition, state.backends[definition.id]));
           renderOverall(); renderCharts(); renderLatest();
           setText("last-refresh", `Ostatni odczyt: ${new Date().toLocaleTimeString("pl-PL")}`);

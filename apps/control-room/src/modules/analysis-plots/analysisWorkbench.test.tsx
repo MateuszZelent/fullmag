@@ -4,15 +4,43 @@ import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 
 import type { DynamicStructureFactorResource, SpinWaveGammaResource } from "@/kernel/api/apiTypes";
-import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
+import {
+  findElements,
+  installSimulationPreparationTestDom,
+} from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import type { KernelApi } from "@/kernel/types";
 import type { AnalysisSubview } from "@/kernel/workspace/analysisViewPreferences";
 import { chartTableWindowFromBinary } from "@/shared/domain/analysis/chartDataPlan";
+import type { AnalysisResultProjectionSurfaceProps } from "./components/AnalysisResultProjectionSurface";
+import type { DynamicStructureFactorPointSelection } from "./dynamicStructureFactorModel";
+import type { SpinWaveGammaFeatureSelection } from "./spinWaveGammaModel";
 
 const controllerMocks = vi.hoisted(() => ({
   activeSurface: "dynamics",
   activeSubview: "dynamics.time-traces",
   dynamicStructureFactorEnabled: [] as boolean[],
+}));
+const legacySelectionFixtures = vi.hoisted(() => ({
+  dsf: {
+    frequencyHz: 2e9,
+    frequencyIndex: 1,
+    itemId: "legacy:dsf:1:0",
+    itemKind: "dsf_point" as const,
+    kRadPerM: 10,
+    ordinal: 2,
+    power: 3,
+    sampleId: "dsf-sample-0000",
+    wavevectorIndex: 0,
+  },
+  gamma: {
+    frequencyHz: 12.5e9,
+    itemId: "legacy:gamma:peak:7",
+    itemKind: "spectral_feature" as const,
+    ordinal: 7,
+    peakIndex: 7,
+    power: 0.25,
+    sampleId: "gamma-spectrum-sample-0000",
+  },
 }));
 
 vi.mock("@/kernel/resources/spinWaveResources", () => ({
@@ -79,15 +107,29 @@ vi.mock("./hooks/useAnalysisFrequencyData", () => ({
     frequencyDomainUnavailableReason: null,
   }),
 }));
+vi.mock("@/shared/ui/Select", () => ({
+  Select: ({ children, onValueChange }: { children: React.ReactNode; onValueChange: (value: string) => void }) => <div onClick={() => onValueChange("table-c")}>{children}</div>,
+  SelectContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  SelectItem: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  SelectTrigger: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => <button {...props} type="button">{children}</button>,
+  SelectValue: () => null,
+}));
 
 vi.mock("./DynamicStructureFactorView", () => ({
-  DynamicStructureFactorView: () => <div data-analysis-panel="dynamics.s-k-f">Dynamic structure factor controls</div>,
+  DynamicStructureFactorView: ({ onPointSelect }: { onPointSelect?: (selection: DynamicStructureFactorPointSelection) => void }) => <div data-analysis-panel="dynamics.s-k-f">
+    <button type="button" data-legacy-dsf-point="true" onClick={() => onPointSelect?.(legacySelectionFixtures.dsf)}>Select DSF point</button>
+  </div>,
 }));
 vi.mock("./SpinWaveGammaView", () => ({
-  SpinWaveGammaView: () => <div data-analysis-panel="dynamics.temporal-fft">Response FFT sampling parameters</div>,
+  SpinWaveGammaView: ({ onFeatureSelect }: { onFeatureSelect?: (selection: SpinWaveGammaFeatureSelection) => void }) => <div data-analysis-panel="dynamics.temporal-fft">
+    <button type="button" data-legacy-gamma-feature="true" onClick={() => onFeatureSelect?.(legacySelectionFixtures.gamma)}>Select Gamma feature</button>
+  </div>,
 }));
 
-import { AnalysisPlotsView } from "./AnalysisPlotsView";
+import {
+  AnalysisPlotsView,
+  resultProjectionSelectionFromLegacyPoint,
+} from "./AnalysisPlotsView";
 import { useAnalysisPlotsController } from "./useAnalysisPlotsController";
 
 const props = {
@@ -95,8 +137,8 @@ const props = {
   kernel: {} as KernelApi, onDatasetRefChange: vi.fn(), onSurfaceChange: vi.fn(), selectedDatasetRef: null, selectedStageId: null, spinWaveGamma: null, spinWaveGammaStatus: "idle", table: null, tableStatus: "idle", tableUnsupportedReason: null,
 };
 
-const dynamicStructureFactor = {} as DynamicStructureFactorResource;
-const spinWaveGamma = {} as SpinWaveGammaResource;
+const dynamicStructureFactor = { schema_version: "dynamic_structure_factor.1d.v1:sha256:dsf-1" } as DynamicStructureFactorResource;
+const spinWaveGamma = { schema_version: "spin_wave_response.gamma.v1:sha256:gamma-1" } as SpinWaveGammaResource;
 
 function tableFixture(tableId: string, revision: number) {
   return chartTableWindowFromBinary({
@@ -107,6 +149,23 @@ function tableFixture(tableId: string, revision: number) {
 }
 
 describe("Analysis workbench", () => {
+  it("maps legacy FFT/DSF clicks to the canonical result point identity", () => {
+    expect(
+      resultProjectionSelectionFromLegacyPoint({
+        itemId: "legacy:dsf:2:4",
+        itemKind: "dsf_point",
+        ordinal: 204,
+        sampleId: "dsf-sample-0000",
+      }),
+    ).toEqual({
+      branchId: null,
+      itemId: "legacy:dsf:2:4",
+      itemKind: "dsf_point",
+      ordinal: 204,
+      sampleId: "dsf-sample-0000",
+    });
+  });
+
   it("exposes the five physics-first workbench surfaces", () => {
     const html = renderToStaticMarkup(<AnalysisPlotsView {...props} activeSurface="dynamics" />);
     for (const label of ["Dynamics", "Resonance &amp; FMR", "Dispersion", "Hysteresis", "Comparison"]) expect(html).toContain(`>${label}</button>`);
@@ -156,6 +215,126 @@ describe("Analysis workbench", () => {
 
     expect(html).toContain('data-analysis-panel="dynamics.s-k-f"');
     expect(html).not.toContain('data-analysis-panel="dynamics.temporal-fft"');
+  });
+
+  it("routes a legacy Gamma click to the kernel selection controller", async () => {
+    const setSelection = vi.fn();
+    const kernel = { selection: { set: setSelection } } as unknown as KernelApi;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <AnalysisPlotsView
+          {...props}
+          activeSurface="dynamics"
+          activeSubview="dynamics.temporal-fft"
+          kernel={kernel}
+          spinWaveGamma={spinWaveGamma}
+        />,
+      ));
+      const feature = findElements(container, (element) => element.getAttribute("data-legacy-gamma-feature") === "true")[0];
+      expect(feature).toBeDefined();
+
+      await act(async () => feature.click());
+
+      expect(setSelection).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "results.time_domain.spectral_feature",
+          label: "legacy:gamma:peak:7",
+          nodeId: "analysis:legacy:time-domain:legacy%3Agamma%3Apeak%3A7",
+          objectId: null,
+          ref: expect.objectContaining({ source: "time-domain-response" }),
+        }),
+        "analysis-plots",
+      );
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("routes a legacy DSF click to the kernel selection controller", async () => {
+    const setSelection = vi.fn();
+    const kernel = { selection: { set: setSelection } } as unknown as KernelApi;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <AnalysisPlotsView
+          {...props}
+          activeSurface="dynamics"
+          activeSubview="dynamics.s-k-f"
+          dynamicStructureFactor={dynamicStructureFactor}
+          kernel={kernel}
+        />,
+      ));
+      const point = findElements(container, (element) => element.getAttribute("data-legacy-dsf-point") === "true")[0];
+      expect(point).toBeDefined();
+
+      await act(async () => point.click());
+
+      expect(setSelection).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "results.time_domain.dsf_point",
+          label: "legacy:dsf:1:0",
+          nodeId: "analysis:legacy:time-domain:legacy%3Adsf%3A1%3A0",
+          objectId: null,
+          ref: expect.objectContaining({
+            kContextKind: "k_path",
+            kPathCoordinateRadPerM: 10,
+            source: "time-domain-response",
+          }),
+        }),
+        "analysis-plots",
+      );
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("does not use a legacy click fallback while canonical result projection is present", async () => {
+    const setSelection = vi.fn();
+    const kernel = { selection: { set: setSelection } } as unknown as KernelApi;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const resultProjection = {
+      kernel,
+      model: { selectionBySeriesId: {}, series: [] },
+      onPointSelect: vi.fn(),
+      onProjectionSelect: vi.fn(),
+      projections: [],
+      productKind: null,
+      resource: null,
+      selectedProjectionId: null,
+      selectedSelection: null,
+      status: "loading",
+    } as unknown as AnalysisResultProjectionSurfaceProps;
+    try {
+      await act(async () => root.render(
+        <AnalysisPlotsView
+          {...props}
+          activeSurface="dynamics"
+          activeSubview="dynamics.temporal-fft"
+          kernel={kernel}
+          resultProjection={resultProjection}
+          spinWaveGamma={spinWaveGamma}
+        />,
+      ));
+      const feature = findElements(container, (element) => element.getAttribute("data-legacy-gamma-feature") === "true")[0];
+      expect(feature).toBeDefined();
+
+      await act(async () => feature.click());
+
+      expect(setSelection).not.toHaveBeenCalled();
+      expect(resultProjection.onPointSelect).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
   });
 
   it("keeps dispersion.modal on the frequency surface when no modal artifact is active", () => {

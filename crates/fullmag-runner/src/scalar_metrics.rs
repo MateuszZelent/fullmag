@@ -2,9 +2,6 @@ use crate::schedules::{is_due, OutputSchedule};
 use crate::types::StepStats;
 use std::collections::HashMap;
 
-#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
-const ENERGY_KEYS: [&str; 6] = ["e_ex", "e_demag", "e_ext", "e_ani", "e_dmi", "e_total"];
-
 pub(crate) fn average_magnetization_components(values: &[[f64; 3]]) -> [f64; 3] {
     average_magnetization_components_with_active_mask(values, None)
 }
@@ -113,6 +110,7 @@ pub(crate) fn scalar_snapshot_from_step(stats: &StepStats) -> HashMap<String, f6
     scalars.insert("e_demag".to_string(), stats.e_demag);
     scalars.insert("e_ext".to_string(), stats.e_ext);
     scalars.insert("e_ani".to_string(), stats.e_ani);
+    scalars.insert("e_rotated_dmi".to_string(), stats.e_rotated_dmi);
     scalars.insert("e_dmi".to_string(), stats.e_dmi);
     scalars.insert("e_total".to_string(), stats.e_total);
     scalars.insert("mx".to_string(), stats.mx);
@@ -140,47 +138,14 @@ pub(crate) fn single_object_scalars(
 
 #[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
 pub(crate) fn weighted_object_scalars(
-    stats: &StepStats,
+    _stats: &StepStats,
     weights: &[(String, f64)],
 ) -> HashMap<String, HashMap<String, f64>> {
     let normalized = normalized_weights(weights);
-    if normalized.is_empty() {
-        return HashMap::new();
-    }
-
-    let global = scalar_snapshot_from_step(stats);
-    let mut out: HashMap<String, HashMap<String, f64>> = HashMap::new();
-
-    for (name, frac) in &normalized {
-        let mut values = global.clone();
-        for key in ENERGY_KEYS {
-            if let Some(value) = values.get_mut(key) {
-                *value *= *frac;
-            }
-        }
-        out.insert(name.clone(), values);
-    }
-
-    // Enforce Σ(per-object term) ~= global term for energy terms.
-    let Some((first_name, _)) = normalized.first() else {
-        return out;
-    };
-    for key in ENERGY_KEYS {
-        let target = global.get(key).copied().unwrap_or(0.0);
-        let current_sum = out
-            .values()
-            .map(|values| values.get(key).copied().unwrap_or(0.0))
-            .sum::<f64>();
-        let correction = target - current_sum;
-        if correction.abs() > 0.0 {
-            if let Some(first_values) = out.get_mut(first_name) {
-                let entry = first_values.entry(key.to_string()).or_insert(0.0);
-                *entry += correction;
-            }
-        }
-    }
-
-    out
+    normalized
+        .into_iter()
+        .map(|(name, _)| (name, HashMap::new()))
+        .collect()
 }
 
 pub(crate) fn weighted_average_m_from_object_scalars(
@@ -272,7 +237,8 @@ pub(crate) fn scalar_outputs_request_average_m(schedules: &[OutputSchedule]) -> 
 mod tests {
     use super::{
         apply_average_m_to_step_stats, apply_weighted_average_m_to_step_stats,
-        weighted_average_magnetization_components,
+        scalar_snapshot_from_step, weighted_average_magnetization_components,
+        weighted_object_scalars,
     };
     use crate::types::StepStats;
 
@@ -288,6 +254,18 @@ mod tests {
     }
 
     #[test]
+    fn rotated_dmi_energy_is_present_in_scalar_snapshots() {
+        let stats = StepStats {
+            e_rotated_dmi: 2.5e-20,
+            ..StepStats::default()
+        };
+        assert_eq!(
+            scalar_snapshot_from_step(&stats).get("e_rotated_dmi"),
+            Some(&2.5e-20)
+        );
+    }
+
+    #[test]
     fn weighted_average_magnetization_keeps_zero_magnetization_with_positive_weight() {
         let values = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]];
         let weights = [3.0, 1.0];
@@ -296,6 +274,22 @@ mod tests {
             weighted_average_magnetization_components(&values, &weights),
             [0.25, 0.0, 0.0]
         );
+    }
+
+    #[test]
+    fn object_slots_do_not_invent_local_energies_from_global_reductions() {
+        let stats = StepStats {
+            e_total: 42.0,
+            ..StepStats::default()
+        };
+        let per_object = weighted_object_scalars(
+            &stats,
+            &[("left".to_string(), 1.0), ("right".to_string(), 2.0)],
+        );
+
+        assert_eq!(per_object.len(), 2);
+        assert!(per_object["left"].is_empty());
+        assert!(per_object["right"].is_empty());
     }
 
     #[test]

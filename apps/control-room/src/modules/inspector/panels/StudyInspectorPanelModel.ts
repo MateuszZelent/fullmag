@@ -62,6 +62,9 @@ export type StudyStageModel = StudyStageSnapshot & {
   converged?: boolean | null;
   label: string;
   lastProgressUnixMs?: number | null;
+  meshGenerationId: string | null;
+  meshRevision: number | null;
+  meshTopologyFingerprint: string | null;
   startedAtUnixMs?: number | null;
   progressDetail?: string | null;
   progressLabel?: string | null;
@@ -270,6 +273,9 @@ export function resolveStudyInspectorModel({
           : null,
       label: stageLabel(stage),
       lastProgressUnixMs: runtimeRecord?.last_progress_unix_ms ?? null,
+      meshGenerationId: runtimeRecord?.mesh_generation_id ?? null,
+      meshRevision: runtimeRecord?.mesh_revision ?? null,
+      meshTopologyFingerprint: runtimeRecord?.mesh_topology_fingerprint ?? null,
       startedAtUnixMs: runtimeRecord?.started_at_unix_ms ?? null,
       progressDetail: runtimeRecord?.progress_detail ?? null,
       progressLabel: runtimeRecord?.progress_label ?? null,

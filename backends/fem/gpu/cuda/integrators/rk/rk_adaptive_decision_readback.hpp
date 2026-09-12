@@ -10,6 +10,7 @@
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include "gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp"
+#include "gpu/cuda/integrators/rk/rk_attempt_control_state.hpp"
 
 #include <cuda_runtime.h>
 
@@ -25,6 +26,12 @@ struct GpuAdaptiveDecisionReadback {
     double max_norm_defect;
     double max_spin_rotation;
 };
+
+bool gpu_rk_read_attempt_control_packet(
+    Context &ctx,
+    cudaStream_t stream,
+    GpuRkAttemptControlPacket &packet,
+    std::string &reason);
 
 bool gpu_rk_read_adaptive_error_norm_decision_host(
     Context &ctx,

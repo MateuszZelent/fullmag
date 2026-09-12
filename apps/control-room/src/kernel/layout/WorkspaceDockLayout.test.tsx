@@ -17,6 +17,7 @@ import { SelectionController } from "../selection/SelectionController";
 import { ObjectMoveToolController } from "../authoring/ObjectMoveToolController";
 import type { KernelApi } from "../types";
 import { AnalysisFieldOverlayController } from "../visualization/AnalysisFieldOverlayController";
+import { ModeCompositionController } from "../visualization/ModeCompositionController";
 import { ChartViewportHandoffController } from "@/kernel/visualization/ChartViewportHandoffController";
 import { CameraRegistryController } from "../visualization/CameraRegistryController";
 import { ObjectVisualizationController } from "../visualization/ObjectVisualizationController";
@@ -49,6 +50,12 @@ function makeKernel(): KernelApi {
     layout: new LayoutController(bus),
     modules: new ModuleRegistry(),
     objectMoveTool: new ObjectMoveToolController(),
+    modeComposition: new ModeCompositionController({
+      getActiveModeComposition: (options) =>
+        api.visualization.modeComposition.active(options),
+      patchActiveModeComposition: (patch, options) =>
+        api.visualization.modeComposition.patch(patch, options),
+    }),
     realtime: new RealtimeInvalidationBridge(resources),
     realtimeConnection: new RealtimeConnectionController(),
     resources,

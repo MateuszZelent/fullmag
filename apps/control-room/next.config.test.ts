@@ -1,10 +1,48 @@
-import { readFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+} from "node:fs";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 
 import { describe, expect, it } from "vitest";
 
-import nextConfig, { resolveControlRoomDistDir } from "./next.config";
+import nextConfig, {
+  resolveControlRoomDistDir,
+  validateManagedControlRoomStorage,
+} from "./next.config";
 
 describe("control-room Next dev proxy config", () => {
+  it("redirects the bootstrap root before lazily compiling the workspace", async () => {
+    await expect(nextConfig.redirects?.()).resolves.toContainEqual({
+      source: "/",
+      destination: "/workspace",
+      permanent: false,
+    });
+  });
+
+  it("uses the managed export child so Next cleans storage instead of a repo directory", () => {
+    expect(
+      resolveControlRoomDistDir({
+        auditBuild: false,
+        managedStorage: true,
+        staticExport: true,
+      }),
+    ).toBe(".fullmag-frontend/out");
+  });
+
+  it("keeps the legacy static export directory when managed storage is absent", () => {
+    expect(
+      resolveControlRoomDistDir({
+        auditBuild: false,
+        staticExport: true,
+      }),
+    ).toBe(".next");
+  });
+
   it("assigns a distinct dev distDir to each runtime port", () => {
     expect(
       resolveControlRoomDistDir({
@@ -38,6 +76,56 @@ describe("control-room Next dev proxy config", () => {
     expect(configSource).toContain("FULLMAG_NEXT_DIST_DIR");
     expect(configSource).toContain("isIsolatedSmokeDistDir");
     expect(configSource).toContain("resolveControlRoomDistDir");
+    expect(configSource).toContain("FULLMAG_FRONTEND_ROOT");
+    expect(configSource).toContain(".fullmag-frontend/out");
+  });
+
+  it("rejects an unprepared managed storage link before Next can write", () => {
+    expect(() =>
+      validateManagedControlRoomStorage({
+        appRoot: process.cwd(),
+        distDir: ".next",
+        frontendRoot: resolve(
+          process.cwd(),
+          "..",
+          "..",
+          "..",
+          "missing-managed-storage",
+        ),
+        staticExport: false,
+      }),
+    ).toThrow(/Managed Control Room storage is not prepared/);
+  });
+
+  it("validates the managed links used by a static export", () => {
+    const root = mkdtempSync(join(tmpdir(), "fullmag-next-config-"));
+    const appRoot = join(root, "repo", "apps", "control-room");
+    const frontendRoot = join(root, "storage", "frontend");
+    const linkType = process.platform === "win32" ? "junction" : "dir";
+
+    try {
+      mkdirSync(appRoot, { recursive: true });
+      mkdirSync(join(frontendRoot, "out"), { recursive: true });
+      mkdirSync(join(frontendRoot, "next", "default"), { recursive: true });
+      symlinkSync(frontendRoot, join(appRoot, ".fullmag-frontend"), linkType);
+      symlinkSync(join(frontendRoot, "out"), join(appRoot, "out"), linkType);
+      symlinkSync(
+        join(frontendRoot, "next", "default"),
+        join(appRoot, ".next"),
+        linkType,
+      );
+
+      expect(() =>
+        validateManagedControlRoomStorage({
+          appRoot,
+          distDir: ".fullmag-frontend/out",
+          frontendRoot,
+          staticExport: true,
+        }),
+      ).not.toThrow();
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
   });
 
   it("keeps generated Next route types stable across dev and audit builds", () => {
@@ -54,9 +142,7 @@ describe("control-room Next dev proxy config", () => {
       "utf8",
     );
 
-    expect(nextEnvSource).toContain(
-      './.next-control-room-3100/dev/types/routes.d.ts',
-    );
+    expect(nextEnvSource).toContain('./.next/types/routes.d.ts');
     expect(packageSource).toContain(
       '"build:audit:webpack": "node scripts/build-audit-control-room.mjs"',
     );

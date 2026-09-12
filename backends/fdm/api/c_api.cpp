@@ -22,6 +22,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <vector>
 
 using namespace fullmag::fdm;
 
@@ -156,6 +157,12 @@ void context_record_adaptive_numerics_terminal(
 
 namespace {
 
+// The existing step-transaction injection slot is also used by the native
+// setter regression below.  Keep the marker out of the public ABI and reserve
+// the all-ones value, which cannot be a valid StepTransactionPhase.
+constexpr uint32_t ROTATED_DMI_REFRESH_FAILURE_TEST_INJECTION =
+    std::numeric_limits<uint32_t>::max();
+
 bool reject_step_transaction_mutation(Context &ctx, const char *operation)
 {
     if (!ctx.gpu_workspace_step_active) return false;
@@ -229,7 +236,9 @@ bool select_cuda_device_if_requested(Context &ctx) {
     return true;
 }
 
-bool refresh_multilayer_transaction_observables(Context &ctx)
+bool refresh_multilayer_transaction_observables(
+    Context &ctx,
+    bool force_dmi_observable_refresh = false)
 {
     ctx.last_error.clear();
     if (ctx.enable_demag) {
@@ -248,7 +257,8 @@ bool refresh_multilayer_transaction_observables(Context &ctx)
         }
         if (!ctx.last_error.empty()) return false;
     }
-    if (ctx.has_interfacial_dmi || ctx.has_bulk_dmi) {
+    if (force_dmi_observable_refresh || ctx.has_interfacial_dmi ||
+        ctx.has_rotated_interfacial_dmi || ctx.has_bulk_dmi) {
         const bool ok = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
             ? launch_multilayer_dmi_field_fp64(ctx)
             : launch_multilayer_dmi_field_fp32(ctx);
@@ -268,6 +278,85 @@ bool refresh_multilayer_transaction_observables(Context &ctx)
     return ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
         ? launch_multilayer_effective_field_fp64(ctx)
         : launch_multilayer_effective_field_fp32(ctx);
+}
+
+struct RotatedDmiMutationSnapshot {
+    bool has_rotated_interfacial_dmi = false;
+    double D_rotated_interfacial = 0.0;
+    bool observables_valid = false;
+    EndpointFieldCache endpoint_field_cache{};
+    MultilayerDemagStageCounters multilayer_demag_stage_counters{};
+    uint64_t pending_device_operator_mask = 0;
+};
+
+RotatedDmiMutationSnapshot capture_rotated_dmi_mutation_snapshot(
+    const Context &ctx)
+{
+    RotatedDmiMutationSnapshot snapshot{};
+    snapshot.has_rotated_interfacial_dmi = ctx.has_rotated_interfacial_dmi;
+    snapshot.D_rotated_interfacial = ctx.D_rotated_interfacial;
+    snapshot.observables_valid = ctx.observables_valid;
+    snapshot.endpoint_field_cache = ctx.endpoint_field_cache;
+    snapshot.multilayer_demag_stage_counters =
+        ctx.multilayer_demag_stage_counters;
+    if (ctx.execution_receipt) {
+        const auto &receipt = *ctx.execution_receipt;
+        std::lock_guard<std::mutex> lock(receipt.accounting_mutex);
+        snapshot.pending_device_operator_mask =
+            receipt.pending_device_operator_mask;
+    }
+    return snapshot;
+}
+
+void restore_rotated_dmi_pending_receipt(
+    Context &ctx,
+    uint64_t pending_device_operator_mask)
+{
+    if (!ctx.execution_receipt) return;
+    auto &receipt = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(receipt.accounting_mutex);
+    receipt.pending_device_operator_mask = pending_device_operator_mask;
+}
+
+bool rollback_rotated_dmi_mutation(
+    Context &ctx,
+    const RotatedDmiMutationSnapshot &snapshot,
+    const std::string &primary_error)
+{
+    ctx.has_rotated_interfacial_dmi = snapshot.has_rotated_interfacial_dmi;
+    ctx.D_rotated_interfacial = snapshot.D_rotated_interfacial;
+
+    // Recompute the old observable fields before restoring cache metadata.  A
+    // forced DMI launch is required when the old state had no DMI: the kernel
+    // then clears stale buffers produced by the failed candidate update.
+    context_invalidate_observables(ctx);
+    const bool observables_restored =
+        refresh_multilayer_transaction_observables(ctx, true);
+
+    ctx.multilayer_demag_stage_counters =
+        snapshot.multilayer_demag_stage_counters;
+    if (observables_restored) {
+        ctx.endpoint_field_cache = snapshot.endpoint_field_cache;
+        ctx.observables_valid = snapshot.observables_valid;
+    } else {
+        // Never advertise the old cache as fresh when the device restore did
+        // not complete.
+        context_invalidate_observables(ctx);
+    }
+    restore_rotated_dmi_pending_receipt(
+        ctx, snapshot.pending_device_operator_mask);
+    ctx.last_error = primary_error;
+    return observables_restored;
+}
+
+bool consume_rotated_dmi_refresh_failure_injection(Context &ctx)
+{
+    if (ctx.step_transaction_test_failure_phase !=
+        ROTATED_DMI_REFRESH_FAILURE_TEST_INJECTION) {
+        return false;
+    }
+    ctx.step_transaction_test_failure_phase = 0;
+    return true;
 }
 
 bool rollback_step_transaction(Context &ctx)
@@ -682,9 +771,11 @@ bool validate_multilayer_plan_v2(
                 + ", got " + std::to_string(layer.initial_magnetization_len);
             return false;
         }
-        if (layer.active_mask != nullptr &&
-            layer.active_mask_len != native_cell_count)
-        {
+        if ((layer.active_mask == nullptr) != (layer.active_mask_len == 0)) {
+            error = "layer active_mask and active_mask_len must be provided together";
+            return false;
+        }
+        if (layer.active_mask != nullptr && layer.active_mask_len != native_cell_count) {
             error = "layer active_mask_len mismatch: expected "
                 + std::to_string(native_cell_count)
                 + ", got " + std::to_string(layer.active_mask_len);
@@ -741,6 +832,122 @@ bool validate_multilayer_plan_v2(
 
     return true;
 }
+
+#if FULLMAG_HAS_CUDA
+bool validate_rotated_dmi_multilayer_boundary_exchange_stiffness(
+    const Context &ctx,
+    std::string &error)
+{
+    if (ctx.multilayer_layers.empty()) {
+        error =
+            "RotatedInterfacialDmi boundary Aex validation requires at least one uploaded layer";
+        return false;
+    }
+
+    for (const auto &layer : ctx.multilayer_layers) {
+        const auto &grid = layer.native_grid;
+        uint64_t checked_cell_count = 0;
+        if (grid.nx == 0 || grid.ny == 0 || grid.nz == 0 ||
+            !checked_grid_cell_count(grid, checked_cell_count)) {
+            error =
+                "RotatedInterfacialDmi boundary Aex validation found an invalid layer grid";
+            return false;
+        }
+        const uint64_t plane = static_cast<uint64_t>(grid.nx) * grid.ny;
+        const uint64_t cell_count = plane * grid.nz;
+        if (checked_cell_count != cell_count || layer.cell_count != cell_count ||
+            cell_count > std::numeric_limits<std::size_t>::max()) {
+            error =
+                "RotatedInterfacialDmi boundary Aex validation found an unaddressable layer grid";
+            return false;
+        }
+
+        // A finite positive layer coefficient is valid for every possible
+        // boundary topology.  Avoid a device-to-host mask read in the common
+        // valid case; only a non-positive/non-finite value needs topology.
+        if (std::isfinite(layer.material.exchange_stiffness) &&
+            layer.material.exchange_stiffness > 0.0) {
+            continue;
+        }
+        if (!layer.has_active_mask) {
+            error =
+                "RotatedInterfacialDmi with open boundaries requires strictly positive finite Aex on every active boundary cell (layer "
+                + std::to_string(layer.layer_index) + ")";
+            return false;
+        }
+        if (layer.has_active_mask) {
+            if (layer.active_mask == nullptr) {
+                error =
+                    "RotatedInterfacialDmi boundary Aex validation found a missing layer active mask";
+                return false;
+            }
+        }
+        std::vector<uint8_t> active_mask;
+        try {
+            active_mask.assign(static_cast<std::size_t>(cell_count), 1);
+            const cudaError_t mask_status = cudaMemcpy(
+                active_mask.data(),
+                layer.active_mask,
+                static_cast<std::size_t>(cell_count) * sizeof(uint8_t),
+                cudaMemcpyDeviceToHost);
+            if (mask_status != cudaSuccess) {
+                error =
+                    "RotatedInterfacialDmi boundary Aex validation could not read a layer active mask: "
+                    + std::string(cudaGetErrorString(mask_status));
+                return false;
+            }
+        } catch (const std::exception &exception) {
+            error =
+                "RotatedInterfacialDmi boundary Aex validation could not stage a layer active mask: "
+                + std::string(exception.what());
+            return false;
+        } catch (...) {
+            error =
+                "RotatedInterfacialDmi boundary Aex validation could not stage a layer active mask";
+            return false;
+        }
+
+        const uint64_t dimensions[3] = {grid.nx, grid.ny, grid.nz};
+        const uint64_t strides[3] = {1, grid.nx, plane};
+        for (uint64_t z = 0; z < grid.nz; ++z) {
+            for (uint64_t y = 0; y < grid.ny; ++y) {
+                for (uint64_t x = 0; x < grid.nx; ++x) {
+                    const uint64_t coordinates[3] = {x, y, z};
+                    const uint64_t index = z * plane + y * grid.nx + x;
+                    if (active_mask[index] == 0) continue;
+
+                    bool touches_boundary = false;
+                    for (int axis = 0; axis < 3; ++axis) {
+                        const uint64_t coordinate = coordinates[axis];
+                        const uint64_t dimension = dimensions[axis];
+                        const uint64_t stride = strides[axis];
+                        if (coordinate == 0 || coordinate + 1 == dimension) {
+                            touches_boundary = true;
+                        }
+                        if (coordinate > 0 && active_mask[index - stride] == 0) {
+                            touches_boundary = true;
+                        }
+                        if (coordinate + 1 < dimension &&
+                            active_mask[index + stride] == 0) {
+                            touches_boundary = true;
+                        }
+                    }
+
+                    if (touches_boundary &&
+                        !(std::isfinite(layer.material.exchange_stiffness) &&
+                          layer.material.exchange_stiffness > 0.0)) {
+                        error =
+                            "RotatedInterfacialDmi with open or active-mask boundaries requires strictly positive finite Aex on every active boundary cell (layer "
+                            + std::to_string(layer.layer_index) + ")";
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+#endif
 
 } // namespace
 
@@ -892,6 +1099,8 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     // DMI
     ctx->has_interfacial_dmi = plan->has_interfacial_dmi != 0;
     ctx->D_interfacial = plan->dmi_D_interfacial;
+    ctx->has_rotated_interfacial_dmi = false;
+    ctx->D_rotated_interfacial = 0.0;
     ctx->has_bulk_dmi = plan->has_bulk_dmi != 0;
     ctx->D_bulk = plan->dmi_D_bulk;
 
@@ -1509,6 +1718,28 @@ int fullmag_fdm_backend_create_time_policy_v2_checked(
     auto *ctx = reinterpret_cast<Context *>(handle);
     if (!ctx->last_error.empty()) return FULLMAG_FDM_OK;
 
+    ctx->has_rotated_interfacial_dmi = plan->has_rotated_interfacial_dmi != 0;
+    ctx->D_rotated_interfacial = plan->dmi_D_rotated_interfacial;
+    if (ctx->has_rotated_interfacial_dmi) {
+        if (!context_ensure_rotated_dmi_workspace(*ctx)) {
+            return FULLMAG_FDM_OK;
+        }
+        // The legacy constructor has already populated the observable cache
+        // from the base descriptor, which cannot carry rDMI. Invalidate that
+        // snapshot before recomputing with the v2 extension enabled.
+        context_invalidate_observables(*ctx);
+        if (!context_refresh_observables(*ctx)) {
+            return FULLMAG_FDM_OK;
+        }
+        fullmag_fdm_commit_operator_residency(*ctx);
+    }
+    // The legacy constructor cannot see the v2 rotated-DMI extension.  Rebuild
+    // the dependency identity after importing it so checkpoint/workspace
+    // compatibility is keyed by the complete material interaction state.
+    if (!context_build_workspace_dependency_identity_v1(*ctx, plan->base)) {
+        return FULLMAG_FDM_OK;
+    }
+
     const auto &policy = plan->time_policy;
     ctx->adaptive_enabled = policy.adaptive_enabled != 0;
     if (!ctx->adaptive_enabled) {
@@ -1669,6 +1900,92 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
 #else
     (void)plan;
     return nullptr;
+#endif
+}
+
+int fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_rotated_interfacial_dmi_desc_v1 *descriptor)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !descriptor) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    if (descriptor->abi_version != FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1 ||
+        descriptor->struct_size != sizeof(*descriptor) ||
+        descriptor->reserved0 != 0 ||
+        (descriptor->has_rotated_interfacial_dmi != 0 &&
+         descriptor->has_rotated_interfacial_dmi != 1) ||
+        !std::isfinite(descriptor->dmi_D_rotated_interfacial))
+    {
+        ctx->last_error = "rotated_interfacial_dmi_v1_abi_mismatch";
+        return FULLMAG_FDM_ERR_ABI;
+    }
+    if (!ctx->has_multilayer_plan_v2) {
+        ctx->last_error =
+            "rotated_interfacial_dmi_v1_requires_multilayer_v2_handle";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (ctx->accepted_step_pending || ctx->step_count != 0 ||
+        ctx->current_time != 0.0) {
+        ctx->last_error =
+            "rotated_interfacial_dmi_v1_must_be_set_before_first_step";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (descriptor->has_rotated_interfacial_dmi != 0 &&
+        (ctx->has_interfacial_dmi || ctx->has_bulk_dmi))
+    {
+        ctx->last_error =
+            "rotated_interfacial_dmi_v1_conflicts_with_conventional_dmi";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (descriptor->has_rotated_interfacial_dmi != 0 &&
+        descriptor->dmi_D_rotated_interfacial != 0.0 &&
+        !ctx->enable_exchange)
+    {
+        ctx->last_error =
+            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (descriptor->has_rotated_interfacial_dmi != 0 &&
+        descriptor->dmi_D_rotated_interfacial != 0.0) {
+        std::string boundary_error;
+        if (!validate_rotated_dmi_multilayer_boundary_exchange_stiffness(
+                *ctx, boundary_error)) {
+            ctx->last_error = boundary_error;
+            return FULLMAG_FDM_ERR_INVALID;
+        }
+    }
+
+    const auto snapshot = capture_rotated_dmi_mutation_snapshot(*ctx);
+    const bool inject_refresh_failure = consume_rotated_dmi_refresh_failure_injection(*ctx);
+    ctx->has_rotated_interfacial_dmi =
+        descriptor->has_rotated_interfacial_dmi != 0;
+    ctx->D_rotated_interfacial = descriptor->dmi_D_rotated_interfacial;
+    if (ctx->has_rotated_interfacial_dmi &&
+        !context_ensure_rotated_dmi_workspace(*ctx)) {
+        ctx->has_rotated_interfacial_dmi = snapshot.has_rotated_interfacial_dmi;
+        ctx->D_rotated_interfacial = snapshot.D_rotated_interfacial;
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+    context_invalidate_observables(*ctx);
+    bool refreshed = refresh_multilayer_transaction_observables(*ctx, true);
+    if (refreshed && inject_refresh_failure) {
+        ctx->last_error = "injected rotated DMI observable refresh failure";
+        refreshed = false;
+    }
+    if (!refreshed) {
+        const std::string primary_error = ctx->last_error;
+        if (!rollback_rotated_dmi_mutation(*ctx, snapshot, primary_error)) {
+            ctx->last_error += "; rollback observable refresh failed; cache invalidated";
+        }
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+    fullmag_fdm_commit_operator_residency(*ctx);
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle;
+    (void)descriptor;
+    return FULLMAG_FDM_ERR_CUDA;
 #endif
 }
 
@@ -1989,6 +2306,22 @@ extern "C" int fullmag_fdm_test_force_gpu_transport_adaptive_retry(
         return FULLMAG_FDM_ERR_INVALID;
     ctx->gpu_transport_test_force_adaptive_retry = true;
     return FULLMAG_FDM_OK;
+}
+
+extern "C" int fullmag_fdm_test_inject_rotated_dmi_refresh_failure_once(
+    fullmag_fdm_backend *handle)
+{
+#if FULLMAG_HAS_CUDA
+    if (handle == nullptr) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    if (!ctx->has_multilayer_plan_v2) return FULLMAG_FDM_ERR_INVALID;
+    ctx->step_transaction_test_failure_phase =
+        ROTATED_DMI_REFRESH_FAILURE_TEST_INJECTION;
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
 }
 
 extern "C" int fullmag_fdm_test_inject_step_transaction_failure_once(

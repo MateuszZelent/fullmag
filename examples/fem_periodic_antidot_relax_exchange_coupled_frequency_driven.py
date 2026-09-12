@@ -58,7 +58,7 @@ body = study.geometry(film - hole, name="periodic_antidot_film")
 body.Ms = 800e3
 body.Aex = 13e-12
 body.alpha = 0.02
-if run_stage == "response":
+if fixture_config.relaxed_state_path:
     body.m = fm.load_magnetization(fixture_config.relaxed_state_path, format="json")
 else:
     body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
@@ -145,7 +145,14 @@ study.objects.mesh.defaults(
     size_from_curvature=8,
     narrow_regions=1,
 )
-study.build_domain_mesh()
+if fixture_config.domain_mesh_path:
+    study.domain_mesh(
+        fixture_config.domain_mesh_path,
+        region_markers={"periodic_antidot_film": 1},
+        object_region_markers={"periodic_antidot_film:r1": 2},
+    )
+else:
+    study.build_domain_mesh()
 study.solver(dt=1e-13, g=2.115)
 study.tableautosave(
     1e-12,

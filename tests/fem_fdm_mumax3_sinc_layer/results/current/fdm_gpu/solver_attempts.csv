@@ -1,0 +1,1 @@
+attempt,target_step,t_s,dt_attempt_s,eta,max_norm_defect,max_spin_rotation_rad,decision,reason,dt_next_s,demag_solves,demag_iterations,demag_residual,rhs_evals,estimator_order,adaptive_controller_policy_version,error_norm_type,active_node_count,active_measure,normalization_denominator,max_scaled_error,weighted_rms_error

@@ -230,6 +230,87 @@ def parse_mumax_table(path: str | Path) -> ScalarTable:
     )
 
 
+def _table_with_rows(table: ScalarTable, rows: Sequence[dict[str, float]], source: Path) -> ScalarTable:
+    if not rows:
+        raise ValueError(f"{source}: selected stage contains no scalar rows")
+    return ScalarTable(
+        backend=table.backend,
+        source=source,
+        columns=table.columns,
+        rows=tuple(dict(row) for row in rows),
+        native_columns=table.native_columns,
+    )
+
+
+def _fullmag_stage_candidates(root: Path, stage: str) -> list[Path]:
+    if root.is_file():
+        return [root]
+    if not root.is_dir():
+        raise ValueError(f"Fullmag {stage} bundle does not exist: {root}")
+    if stage == "relaxation":
+        candidates = [
+            root / "artifacts" / "tables" / "relaxation" / "table.csv",
+            root / "tables" / "relaxation" / "table.csv",
+        ]
+        candidates.extend(sorted(root.glob("stages/*/tables/relaxation/table.csv")))
+        candidates.extend(
+            path
+            for path in sorted(root.glob("stages/*/scalars.csv"))
+            if "relax" in path.parent.name.lower()
+        )
+        return candidates
+    if stage != "dynamic":
+        raise ValueError(f"unsupported Fullmag stage: {stage!r}")
+    candidates = [
+        root / "artifacts" / "tables" / "default" / "table.csv",
+        root / "tables" / "default" / "table.csv",
+    ]
+    candidates.extend(
+        path
+        for path in sorted(root.glob("stages/*/tables/default/table.csv"))
+        if any(token in path.parent.parent.name.lower() for token in ("dynamic", "table_autosave"))
+    )
+    candidates.extend([root / "artifacts" / "scalars.csv", root / "scalars.csv"])
+    return candidates
+
+
+def load_fullmag_stage(path: str | Path, stage: str) -> ScalarTable:
+    root = Path(path)
+    if root.is_dir():
+        assert_no_field_snapshots(root)
+    candidates = _fullmag_stage_candidates(root, stage)
+    errors: list[str] = []
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        try:
+            return parse_fullmag_scalars(candidate)
+        except ValueError as exc:
+            errors.append(str(exc))
+    detail = f"; last error: {errors[-1]}" if errors else ""
+    raise ValueError(f"{root}: Fullmag {stage} scalar table is unavailable{detail}")
+
+
+def load_lane_stage(path: str | Path, lane: str, stage: str) -> ScalarTable:
+    if lane == "mumax3":
+        candidate = Path(path)
+        if candidate.is_dir():
+            table_candidates = [candidate / "table.txt", candidate / "table.tsv"]
+            candidate = next((item for item in table_candidates if item.is_file()), candidate)
+        table = parse_mumax_table(candidate)
+        if stage == "relaxation":
+            zero_rows = [row for row in table.rows if row["time_s"] == 0.0]
+            if not zero_rows:
+                raise ValueError(f"{candidate}: MuMax3 relaxation endpoint is unavailable")
+            return _table_with_rows(table, [zero_rows[-1]], candidate)
+        if stage == "dynamic":
+            zero_indices = [index for index, row in enumerate(table.rows) if row["time_s"] == 0.0]
+            start = zero_indices[-1] if zero_indices else 0
+            return _table_with_rows(table, table.rows[start:], candidate)
+        raise ValueError(f"unsupported MuMax3 stage: {stage!r}")
+    return load_fullmag_stage(path, stage)
+
+
 def assert_no_field_snapshots(root: str | Path) -> None:
     root = Path(root)
     if not root.exists():
@@ -391,11 +472,41 @@ def write_outputs(output_dir: str | Path, comparison: Mapping[str, object]) -> N
     if not isinstance(aligned_rows, list) or not aligned_rows:
         raise ValueError("comparison does not contain aligned rows")
     _write_csv(output_dir / "aligned_scalar_comparison.csv", aligned_rows)
+    relaxation = comparison.get("relaxation")
+    if isinstance(relaxation, Mapping):
+        relaxation_rows = relaxation.get("aligned_rows")
+        if isinstance(relaxation_rows, list) and relaxation_rows:
+            _write_csv(output_dir / "aligned_relaxation_comparison.csv", relaxation_rows)
     payload = {key: value for key, value in comparison.items() if key != "aligned_rows"}
+    if isinstance(relaxation, Mapping):
+        payload["relaxation"] = {
+            key: value for key, value in relaxation.items() if key != "aligned_rows"
+        }
     (output_dir / "comparison.json").write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def _require_fem_fk_qualification(path: str | Path, lane: str) -> None:
+    root = Path(path)
+    if not root.is_dir():
+        raise ValueError(
+            f"{lane}: --require-qualified-fk wymaga bundle katalogowego z qualification.json: {root}"
+        )
+    candidates = (root / "qualification.json", root / "artifacts" / "qualification.json")
+    report_path = next((candidate for candidate in candidates if candidate.is_file()), None)
+    if report_path is None:
+        raise ValueError(f"{lane}: brak qualification.json w {root}")
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{lane}: nie można odczytać {report_path}: {exc}") from exc
+    if not isinstance(report, Mapping) or report.get("status") != "PASS":
+        status = report.get("status") if isinstance(report, Mapping) else None
+        raise ValueError(f"{lane}: kwalifikacja FEM/BEM FK nie ma statusu PASS (status={status!r})")
+    if report.get("lane") != ("gpu" if lane == "fem_fk_gpu" else "cpu"):
+        raise ValueError(f"{lane}: qualification.json ma niezgodny lane={report.get('lane')!r}")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -404,6 +515,26 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fdm-gpu", dest="fdm_gpu", type=Path, help="Fullmag FDM GPU scalar table")
     parser.add_argument("--fem", "--fem-cpu", dest="fem", type=Path, help="Fullmag FEM CPU scalar table")
     parser.add_argument("--fem-gpu", dest="fem_gpu", type=Path, help="Fullmag FEM GPU scalar table")
+    parser.add_argument(
+        "--fem-pr-cpu", "--fem-poisson-robin-cpu",
+        dest="fem_pr_cpu", type=Path,
+        help="Fullmag FEM CPU Poisson-Robin scalar bundle/table",
+    )
+    parser.add_argument(
+        "--fem-pr-gpu", "--fem-poisson-robin-gpu",
+        dest="fem_pr_gpu", type=Path,
+        help="Fullmag FEM GPU Poisson-Robin scalar bundle/table",
+    )
+    parser.add_argument(
+        "--fem-fk-cpu", "--fem-fredkin-koehler-cpu",
+        dest="fem_fk_cpu", type=Path,
+        help="Fullmag FEM CPU Fredkin-Koehler scalar bundle/table",
+    )
+    parser.add_argument(
+        "--fem-fk-gpu", "--fem-fredkin-koehler-gpu",
+        dest="fem_fk_gpu", type=Path,
+        help="Fullmag FEM GPU Fredkin-Koehler scalar bundle/table",
+    )
     parser.add_argument("--mumax", type=Path, required=True, help="MuMax3 table.txt")
     parser.add_argument("--output-dir", type=Path, default=Path("comparison"))
     parser.add_argument(
@@ -416,33 +547,68 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="align static relaxation tables by row index instead of time",
     )
+    parser.add_argument(
+        "--require-qualified-fk",
+        dest="require_qualified_fk",
+        action="store_true",
+        help="require PASS qualification.json for every supplied FEM Fredkin-Koehler lane",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    roots = {args.fdm.parent, args.mumax.parent}
-    if args.fdm_gpu is not None:
-        roots.add(args.fdm_gpu.parent)
-    if args.fem is not None:
-        roots.add(args.fem.parent)
-    if args.fem_gpu is not None:
-        roots.add(args.fem_gpu.parent)
-    for root in roots:
-        assert_no_field_snapshots(root)
-    tables = {"fdm_cpu": parse_fullmag_scalars(args.fdm)}
-    if args.fdm_gpu is not None:
-        tables["fdm_gpu"] = parse_fullmag_scalars(args.fdm_gpu)
-    if args.fem is not None:
-        tables["fem_cpu"] = parse_fullmag_scalars(args.fem)
-    if args.fem_gpu is not None:
-        tables["fem_gpu"] = parse_fullmag_scalars(args.fem_gpu)
-    tables["mumax3"] = parse_mumax_table(args.mumax)
+    lane_paths: dict[str, Path] = {"fdm_cpu": args.fdm}
+    for lane, path in (
+        ("fdm_gpu", args.fdm_gpu),
+        ("fem_cpu", args.fem),
+        ("fem_gpu", args.fem_gpu),
+        ("fem_pr_cpu", args.fem_pr_cpu),
+        ("fem_pr_gpu", args.fem_pr_gpu),
+        ("fem_fk_cpu", args.fem_fk_cpu),
+        ("fem_fk_gpu", args.fem_fk_gpu),
+    ):
+        if path is not None:
+            lane_paths[lane] = path
+    lane_paths["mumax3"] = args.mumax
+    if args.require_qualified_fk:
+        for lane in ("fem_fk_cpu", "fem_fk_gpu"):
+            if lane in lane_paths:
+                _require_fem_fk_qualification(lane_paths[lane], lane)
+    for path in lane_paths.values():
+        if path.is_dir():
+            assert_no_field_snapshots(path)
+    tables = {
+        lane: load_lane_stage(path, lane, "dynamic")
+        for lane, path in lane_paths.items()
+    }
     comparison = compare_tables(
         tables,
         reference_backend="fdm_cpu",
         alignment="row" if args.align_by_row else "time",
     )
+    fullmag_paths = [path for lane, path in lane_paths.items() if lane != "mumax3"]
+    if fullmag_paths and all(path.is_dir() for path in fullmag_paths):
+        try:
+            relaxation_tables = {
+                lane: load_lane_stage(path, lane, "relaxation")
+                for lane, path in lane_paths.items()
+            }
+            comparison["relaxation"] = compare_tables(
+                relaxation_tables,
+                reference_backend="fdm_cpu",
+                alignment="row" if args.align_by_row else "time",
+            )
+        except ValueError as exc:
+            comparison["relaxation"] = {
+                "status": "NOT VERIFIED",
+                "reason": str(exc),
+            }
+    else:
+        comparison["relaxation"] = {
+            "status": "NOT VERIFIED",
+            "reason": "relaxation comparison requires Fullmag bundle directories, not only CSV paths",
+        }
     if not args.verify_only:
         write_outputs(args.output_dir, comparison)
     print(json.dumps({key: value for key, value in comparison.items() if key != "aligned_rows"}, indent=2, sort_keys=True))

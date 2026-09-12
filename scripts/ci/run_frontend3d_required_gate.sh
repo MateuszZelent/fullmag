@@ -26,6 +26,10 @@ run_gate() {
       cargo test -p fullmag-quantities --no-fail-fast
       cargo test -p fullmag-plan --test magnetization_textures_v2_parity --test mumax3_texture_compatibility --no-fail-fast
       cargo test -p fullmag-runner quantities --no-fail-fast
+      # Keep cross-layer rDMI regressions in the standard source/unit gate;
+      # these do not claim managed FEM or CUDA physics qualification.
+      cargo test -p fullmag-plan -p fullmag-engine -p fullmag-runner -p fullmag-api -p fullmag-authoring rotated --no-fail-fast
+      cargo test -p fullmag-runner capabilities::tests --no-fail-fast
       cargo test -p fullmag-api router_v2 --no-fail-fast
       cargo test -p fullmag-cli interactive_runtime_host --no-fail-fast
       ;;

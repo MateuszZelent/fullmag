@@ -1177,7 +1177,7 @@ export function ColorField({
       >
         <input
           aria-label={`${label} picker`}
-          className="h-fm-control-sm w-fm-control-sm shrink-0 cursor-pointer rounded-fm-control border border-fm-subtle bg-fm-canvas p-1 disabled:cursor-not-allowed disabled:border-fm-disabled-border disabled:bg-fm-disabled disabled:opacity-100"
+          className="fm-viz-color-swatch h-fm-control-sm w-fm-control-sm shrink-0 cursor-pointer rounded-fm-control border border-fm-subtle bg-fm-canvas p-1 disabled:cursor-not-allowed disabled:border-fm-disabled-border disabled:bg-fm-disabled disabled:opacity-100"
           disabled={disabled}
           id={inputId}
           type="color"

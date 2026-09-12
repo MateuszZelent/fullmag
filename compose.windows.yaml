@@ -43,6 +43,9 @@ services:
         source: ${FULLMAG_WINDOWS_CONTROL_ROOM_NODE_MODULES_ROOT:?set by scripts/windows/run_fullmag_fem.ps1}
         target: /workspace/apps/control-room/node_modules
       - type: bind
+        source: ${FULLMAG_WINDOWS_FRONTEND_ROOT:?set by scripts/windows/run_fullmag_fem.ps1}
+        target: /fullmag-frontend
+      - type: bind
         source: ${FULLMAG_WINDOWS_TEMP_ROOT:?set by scripts/windows/run_fullmag_fem.ps1}
         target: /tmp/fullmag-windows
     environment:
@@ -67,7 +70,10 @@ services:
       FULLMAG_SOURCE_GIT_COMMIT: "${FULLMAG_SOURCE_GIT_COMMIT:-}"
       FULLMAG_SOURCE_WORKTREE_STATE: "${FULLMAG_SOURCE_WORKTREE_STATE:-}"
       FULLMAG_SOURCE_SNAPSHOT_SHA256: "${FULLMAG_SOURCE_SNAPSHOT_SHA256:-}"
-      FULLMAG_PYTHON: /usr/bin/python3
+      # The GPU image installs the scientific stack into the source-built
+      # Python under /usr/local.  /usr/bin/python3 is the distro interpreter
+      # and does not see numpy/gmsh/meshio required by the scene helper.
+      FULLMAG_PYTHON: /usr/local/bin/python3
       FULLMAG_USE_MFEM_STACK: "ON"
       FULLMAG_FEM_REQUIRE_GPU: "1"
       FULLMAG_FEM_REQUIRE_CEED: "1"
@@ -82,6 +88,7 @@ services:
       PNPM_HOME: /pnpm
       npm_config_store_dir: /pnpm/store
       COREPACK_HOME: /workspace/.fullmag-cache/corepack
+      FULLMAG_FRONTEND_ROOT: /fullmag-frontend
       CUDA_CACHE_PATH: /workspace/.fullmag-cache/cuda
       PLAYWRIGHT_BROWSERS_PATH: /workspace/.fullmag-cache/playwright-browsers
       PYTHONPYCACHEPREFIX: /workspace/.fullmag-cache/python-bytecode
@@ -129,6 +136,9 @@ services:
         source: ${FULLMAG_WINDOWS_CONTROL_ROOM_NODE_MODULES_ROOT:?set by scripts/windows/run_fullmag_fem.ps1}
         target: /workspace/apps/control-room/node_modules
       - type: bind
+        source: ${FULLMAG_WINDOWS_FRONTEND_ROOT:?set by scripts/windows/run_fullmag_fem.ps1}
+        target: /fullmag-frontend
+      - type: bind
         source: ${FULLMAG_WINDOWS_TEMP_ROOT:?set by scripts/windows/run_fullmag_fem.ps1}
         target: /tmp/fullmag-windows
     environment:
@@ -161,6 +171,7 @@ services:
       PNPM_HOME: /pnpm
       npm_config_store_dir: /pnpm/store
       COREPACK_HOME: /workspace/.fullmag-cache/corepack
+      FULLMAG_FRONTEND_ROOT: /fullmag-frontend
       PLAYWRIGHT_BROWSERS_PATH: /workspace/.fullmag-cache/playwright-browsers
       PYTHONPYCACHEPREFIX: /workspace/.fullmag-cache/python-bytecode
       TMPDIR: /tmp/fullmag-windows

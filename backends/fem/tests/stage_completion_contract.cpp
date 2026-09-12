@@ -329,32 +329,25 @@ void plateau_tightens_controller_and_floor_is_explicit() {
     check(ctx.stage_completion.relax_controller_at_floor, "controller floor is explicit");
 }
 
-void energy_plateau_requires_torque_but_reports_torque_convergence() {
+void torque_has_reporting_priority_when_both_criteria_hold() {
     fullmag::fem::Context ctx;
     ctx.stage_completion.relax_stop.has_energy_tolerance_j = 1;
     ctx.stage_completion.relax_stop.energy_tolerance_j = 0.25;
     ctx.stage_completion.relax_stop.has_torque_tolerance_apm = 1;
     ctx.stage_completion.relax_stop.torque_tolerance_apm = 5.0;
 
-    for (uint32_t i = 0; i + 1 < fullmag::fem::RELAX_ENERGY_PLATEAU_WINDOW_STEPS; ++i) {
+    for (uint32_t i = 0; i + 3 < fullmag::fem::RELAX_ENERGY_PLATEAU_WINDOW_STEPS; ++i) {
         fullmag_fem_step_stats stats{};
         stats.total_energy_joules = 10.0 + 0.001 * static_cast<double>(i % 3);
-        stats.max_torque_Apm = 3.0;
+        stats.max_torque_Apm = 8.0;
         stats.dt_seconds = 1.0;
         fullmag::fem::update_stage_completion_from_stats(ctx, stats);
         check(ctx.stage_completion.snapshot.has_reason == 0, "energy plateau needs full sample window");
     }
     check(ctx.stage_completion.relax_previous_total_energy_valid, "energy samples update previous energy");
     check(
-        ctx.stage_completion.relax_energy_window_count == fullmag::fem::RELAX_ENERGY_PLATEAU_WINDOW_STEPS - 1,
+        ctx.stage_completion.relax_energy_window_count == fullmag::fem::RELAX_ENERGY_PLATEAU_WINDOW_STEPS - 3,
         "energy plateau records samples before completion");
-
-    fullmag_fem_step_stats high_torque{};
-    high_torque.total_energy_joules = 10.001;
-    high_torque.max_torque_Apm = 8.0;
-    high_torque.dt_seconds = 1.0;
-    fullmag::fem::update_stage_completion_from_stats(ctx, high_torque);
-    check(ctx.stage_completion.snapshot.has_reason == 0, "energy plateau still respects torque gate");
 
     fullmag_fem_step_stats low_torque{};
     low_torque.total_energy_joules = 10.002;
@@ -366,19 +359,21 @@ void energy_plateau_requires_torque_but_reports_torque_convergence() {
     check(ctx.stage_completion.snapshot.has_reason == 0, "second fresh torque confirmation is insufficient");
     fullmag::fem::update_stage_completion_from_stats(ctx, low_torque);
 
-    check(ctx.stage_completion.snapshot.has_reason == 1, "torque plus energy plateau stops");
+    check(ctx.stage_completion.snapshot.has_reason == 1, "both criteria stop the stage");
     check(ctx.stage_completion.snapshot.reason == FULLMAG_FEM_STAGE_STOP_REASON_TORQUE, "torque stop reason");
     check(
         std::strcmp(ctx.stage_completion.snapshot.metric_name, "max_torque_apm") == 0,
         "torque metric name");
     check(ctx.stage_completion.snapshot.metric_value <= 5.0, "torque metric value");
-    check(std::fabs(ctx.stage_completion.relax_pseudotime_s - 54.5) < 1e-12, "pseudotime accumulates");
+    check(std::fabs(ctx.stage_completion.relax_pseudotime_s - 51.5) < 1e-12, "pseudotime accumulates");
 }
 
-void energy_plateau_uses_unsigned_range_for_signed_total_energy() {
+void energy_plateau_independently_reports_energy_convergence() {
     fullmag::fem::Context ctx;
     ctx.stage_completion.relax_stop.has_energy_tolerance_j = 1;
     ctx.stage_completion.relax_stop.energy_tolerance_j = 0.25;
+    ctx.stage_completion.relax_stop.has_torque_tolerance_apm = 1;
+    ctx.stage_completion.relax_stop.torque_tolerance_apm = 2.0;
 
     for (uint32_t i = 0; i < fullmag::fem::RELAX_ENERGY_PLATEAU_WINDOW_STEPS; ++i) {
         fullmag_fem_step_stats stats{};
@@ -388,7 +383,13 @@ void energy_plateau_uses_unsigned_range_for_signed_total_energy() {
         fullmag::fem::update_stage_completion_from_stats(ctx, stats);
     }
 
-    check(ctx.stage_completion.snapshot.has_reason == 0, "energy-only plateau never converges");
+    check(ctx.stage_completion.snapshot.has_reason == 1, "energy plateau independently stops");
+    check(ctx.stage_completion.snapshot.reason == FULLMAG_FEM_STAGE_STOP_REASON_ENERGY, "energy stop reason");
+    check(
+        std::strcmp(ctx.stage_completion.snapshot.metric_name, "total_energy_plateau_range_J") == 0,
+        "energy metric name");
+    check(ctx.stage_completion.snapshot.metric_value <= 0.25, "energy metric value");
+    check(ctx.stage_completion.snapshot.threshold == 0.25, "energy threshold");
 }
 
 void current_snapshot_completion_reports_non_plateau_stop_criteria() {
@@ -645,8 +646,8 @@ int main() {
     no_criteria_only_updates_previous_energy_and_pseudotime_is_unchanged();
     relaxation_energy_acceptance_is_budgeted_and_fail_closed();
     plateau_tightens_controller_and_floor_is_explicit();
-    energy_plateau_requires_torque_but_reports_torque_convergence();
-    energy_plateau_uses_unsigned_range_for_signed_total_energy();
+    torque_has_reporting_priority_when_both_criteria_hold();
+    energy_plateau_independently_reports_energy_convergence();
     current_snapshot_completion_reports_non_plateau_stop_criteria();
     torque_confirmation_pending_is_torque_only_and_bounded();
     torque_physical_time_pseudotime_and_step_stops_are_reported();

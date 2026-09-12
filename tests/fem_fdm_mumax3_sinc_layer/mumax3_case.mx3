@@ -15,8 +15,8 @@ alpha = 0.01
 Temp = 0
 m = uniform(1, 0, 0)
 
-// The built-in MuMax sinc is sin(x)/x, matching Fullmag's normalized sinc.
-B_ext = vector(100e-3, 1e-3*sinc(2*pi*fcut*(t-t0)), 0)
+// Relax against the static bias first; the transverse drive is dynamic-only.
+B_ext = vector(100e-3, 0, 0)
 // MuMax3 uses gamma in rad/(T*s); Fullmag uses mu0*gamma in m/(A*s).
 GammaLL = 2.211e5/(4*pi*1e-7)
 SetSolver(5)
@@ -24,11 +24,19 @@ MinDt = 1e-15
 MaxDt = 2e-12
 MaxErr = 1e-7
 
-// Start the dynamic benchmark directly from the declared uniform state.
 tableadd(E_exch)
 tableadd(E_demag)
 tableadd(E_zeeman)
 tableadd(E_anis)
 tableadd(E_total)
+MinimizerStop = 1e-5
+MinimizeMaxSteps = 50000
+MinimizerSamples = 10
+minimize()
+
+tableSave()
+
+// The built-in MuMax sinc is sin(x)/x, matching Fullmag's normalized sinc.
+B_ext = vector(100e-3, 1e-3*sinc(2*pi*fcut*(t-t0)), 0)
 tableautosave(1/(2*1.3*fcut))
 run(40/fcut)

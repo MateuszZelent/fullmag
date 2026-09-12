@@ -1311,6 +1311,10 @@ describe("viewport3dRenderModel", () => {
           values: new Float64Array(24),
         },
         scalarColorModes: new Set(["magnitude"]),
+        modeOverlay: {
+          phasorAmplitudeMax: 2.5,
+          representation: "phase_rotated_real",
+        },
         visualizationPhaseRad: 1.25,
       },
     );
@@ -1321,6 +1325,29 @@ describe("viewport3dRenderModel", () => {
       quantityId: "analysis:eigen:sample-0000:mode-0002",
     });
     expect(model?.visualizationPhaseRad).toBe(1.25);
+    expect(model?.modeOverlay).toEqual({
+      phasorAmplitudeMax: 2.5,
+      phasorPhaseRad: 1.25,
+      representation: "phase_rotated_real",
+    });
+  });
+
+  it("keeps the analysis handoff active while the binary mode payload is loading", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [],
+      [],
+    );
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      null,
+      0.5,
+      { analysisOverlayActive: true },
+    );
+
+    expect(model?.analysisOverlayActive).toBe(true);
+    expect(model?.modeOverlay).toBeNull();
   });
 
   it("projects complex analysis fields locally using visualization phase", () => {
@@ -1362,10 +1389,20 @@ describe("viewport3dRenderModel", () => {
 
     expect(
       Array.from(phaseZero?.scalarColorsByMode.get("x")?.scalarValues ?? []),
-    ).toEqual([1, 3, 5, 7]);
+    ).toEqual([
+      0,
+      expect.closeTo(1 / 3, 4),
+      expect.closeTo(2 / 3, 4),
+      1,
+    ]);
     expect(
       Array.from(phaseQuarter?.scalarColorsByMode.get("x")?.scalarValues ?? []),
-    ).toEqual([-2, -4, -6, -8]);
+    ).toEqual([
+      1,
+      expect.closeTo(2 / 3, 4),
+      expect.closeTo(1 / 3, 4),
+      0,
+    ]);
     expect(
       Array.from(
         phaseQuarter?.scalarColorsByMode.get("x")?.complexRealValues ?? [],
@@ -2401,7 +2438,7 @@ describe("viewport3dRenderModel", () => {
       rangeSource: "face_values",
     });
     expect(Array.from(surface?.scalarColors?.scalarValues ?? [])).toEqual([
-      3, 3, 3,
+      0.5, 0.5, 0.5,
     ]);
   });
 
@@ -2935,7 +2972,7 @@ describe("viewport3dRenderModel", () => {
         model?.scalarColorsByPartAndMode.get("part-a")?.get("x")?.scalarValues ??
           [],
       ),
-    ).toEqual([1, 0.5, -0.5, -1]);
+    ).toEqual([1, 0.75, 0.25, 0]);
   });
 
   it("rejects scoped per-part scalar colors without explicit node indices", () => {

@@ -16,6 +16,7 @@
 #include "gpu/cuda/integrators/rk/rk_step_transaction_device.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats_publication.hpp"
 #include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
+#include "gpu/cuda/runtime/performance_counters.hpp"
 
 #include <cuda_runtime.h>
 
@@ -499,6 +500,18 @@ bool finalize_step_stats_impl(
     if (!collect_gpu_rk_phase_timing_events(ctx, stats, reason)) {
         return false;
     }
+
+    const auto &timings = ctx.gpu_state.rk_phase_timings;
+    GpuPerformanceCounterDelta timing_delta{};
+    timing_delta.exchange_elapsed_ns = timings.exchange_wall_time_ns;
+    timing_delta.demag_assemble_elapsed_ns =
+        timings.demag_assemble_wall_time_ns;
+    timing_delta.demag_recover_elapsed_ns =
+        timings.demag_recover_wall_time_ns;
+    timing_delta.demag_energy_elapsed_ns =
+        timings.demag_energy_wall_time_ns;
+    timing_delta.rhs_elapsed_ns = timings.rhs_wall_time_ns;
+    gpu_performance_note(ctx.gpu_state.performance_counters, timing_delta);
 
     std::array<double, kGpuFinalScalarSlots> scalars{};
     std::copy_n(scalar_storage.begin(), kGpuFinalScalarSlots, scalars.begin());

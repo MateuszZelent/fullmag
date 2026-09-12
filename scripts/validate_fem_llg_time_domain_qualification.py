@@ -133,6 +133,10 @@ def validate_relax_to_run(case: Any) -> None:
     require(isinstance(endpoint_m, list) and len(endpoint_m) == 12, "relax-to-run endpoint_m must contain the four-node vector field")
     for component in endpoint_m:
         finite_number(component, "relax_to_run.endpoint_m")
+    handoff_m = case.get("handoff_m")
+    require(isinstance(handoff_m, list) and len(handoff_m) == 12, "relax-to-run handoff_m must contain the four-node vector field")
+    for component in handoff_m:
+        finite_number(component, "relax_to_run.handoff_m")
 
 
 def validate(document: Any, expected_device: str) -> None:

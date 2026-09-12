@@ -1725,8 +1725,36 @@ class MeshData:
             )
         for name, actual in evidence.items():
             claimed = getattr(certificate, name)
+            # Match the cross-language binary64 contract in physics note 0106.
+            # Only these dimensionless fields get an epsilon-scale floor;
+            # dimensional determinants keep their SI-scale absolute tolerance.
+            absolute_tolerance = (
+                16 * np.finfo(np.float64).eps
+                if name in {
+                    "scaled_jacobian_minima_by_family",
+                    "scaled_jacobian_p05_by_family",
+                    "magnetic_relative_volume_error",
+                    "shared_domain_relative_volume_error",
+                }
+                else 1.0e-30
+            )
             if isinstance(actual, Mapping):
-                matches = claimed == actual
+                if name in {
+                    "jacobian_minima_m3_by_family",
+                    "scaled_jacobian_minima_by_family",
+                    "scaled_jacobian_p05_by_family",
+                }:
+                    matches = set(claimed) == set(actual) and all(
+                        math.isfinite(float(claimed[key]))
+                        and math.isfinite(float(value))
+                        and math.isclose(
+                            float(claimed[key]), float(value),
+                            rel_tol=1.0e-12, abs_tol=absolute_tolerance,
+                        )
+                        for key, value in actual.items()
+                    )
+                else:
+                    matches = claimed == actual
             elif isinstance(actual, tuple):
                 matches = len(claimed) == len(actual) and np.allclose(
                     claimed, actual, rtol=0.0, atol=max(
@@ -1737,7 +1765,8 @@ class MeshData:
                 matches = claimed == actual
             else:
                 matches = math.isclose(
-                    float(claimed), float(actual), rel_tol=1.0e-12, abs_tol=1.0e-30
+                    float(claimed), float(actual), rel_tol=1.0e-12,
+                    abs_tol=absolute_tolerance,
                 )
             if not matches:
                 raise ValueError(f"mixed layer topology certificate {name} is stale")
@@ -4893,6 +4922,7 @@ def _infer_axis_aligned_periodic_pairs(
                 "pair_id": pair_id,
                 "marker_a": marker_a,
                 "marker_b": marker_b,
+                "axis_hint": axis_label,
                 "translation": translation,
                 "tolerance_m": tol,
             }

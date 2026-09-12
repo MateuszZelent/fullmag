@@ -1,0 +1,162 @@
+{
+  "document": {
+    "path": "docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source_visible / unvalidated"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source_visible / unvalidated"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "This page introduces no FDM frequency-domain realization; an FDM solver requires a separate numerical owner."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "This page introduces no FDM frequency-domain realization; an FDM solver requires a separate numerical owner."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-fem-dynamic-ansatz",
+      "symbols": ["position", "time", "magnetization", "tangent_maps", "q", "omega", "gamma", "mu0", "complex_operators"],
+      "sources": ["source-dynamic-pencil", "source-contract-regression"]
+    },
+    {
+      "id": "eq-fem-dynamic-pencil",
+      "symbols": ["q", "lambda_shift", "omega", "restoring_operators", "mass_operators", "harmonic_operator", "drive", "tangent_maps", "gamma", "magnetization", "effective_fields", "complex_operators"],
+      "sources": ["source-dynamic-pencil", "source-cpu-schur", "source-gpu-petsc", "source-native-response", "source-contract-regression"]
+    },
+    {
+      "id": "eq-fem-gyrotropic-pencil",
+      "symbols": ["potential", "omega", "restoring_operators", "mass_operators", "complex_operators"],
+      "sources": ["source-rotated-pencil", "source-cpu-schur", "source-gpu-petsc", "source-contract-regression"]
+    },
+    {
+      "id": "eq-fem-eigen-frequency-mapping",
+      "symbols": ["lambda_shift", "omega", "frequency", "time", "complex_operators"],
+      "sources": ["source-rotated-pencil", "source-cpu-schur", "source-gpu-petsc", "source-contract-regression"]
+    },
+    {
+      "id": "eq-fem-dynamic-descriptor",
+      "symbols": ["q", "potential", "restoring_operators", "Aqphi", "Aphiq", "poisson", "mass_operators", "lambda_shift", "gauge", "complex_operators"],
+      "sources": ["source-cpu-schur", "source-gpu-petsc", "source-modal-payload-ownership"]
+    },
+    {
+      "id": "eq-fem-dynamic-original-residual",
+      "symbols": ["q", "potential", "restoring_operators", "Aqphi", "Aphiq", "poisson", "mass_operators", "lambda_shift", "gauge", "residuals", "normalized_residuals", "norm_operators"],
+      "sources": ["source-cpu-schur", "source-gpu-petsc", "source-native-response"]
+    },
+    {
+      "id": "eq-fem-dynamic-petrov-galerkin",
+      "symbols": ["q", "rom_basis", "harmonic_operator", "drive", "residuals", "complex_operators"],
+      "sources": ["source-dynamic-pencil", "source-response-method-policy", "source-native-response"]
+    },
+    {
+      "id": "eq-fem-dynamic-floquet-constraint",
+      "symbols": ["phase", "wave_vector", "translation", "tangent_maps", "q", "periodic_transform", "potential", "complex_operators"],
+      "sources": ["source-floquet-validation", "source-modal-payload-ownership", "source-contract-regression"]
+    }
+  ],
+  "symbols": [
+    {"id": "position", "latex": "$\\mathbf r$", "meaning": "spatial position", "si_unit": "$\\mathrm{m}$"},
+    {"id": "time", "latex": "$t$", "meaning": "time", "si_unit": "$\\mathrm{s}$"},
+    {"id": "magnetization", "latex": "$\\mathbf m$, $\\mathbf m_0$, $\\delta\\mathbf m$", "meaning": "normalized magnetization, accepted equilibrium and tangent perturbation", "si_unit": "$1$"},
+    {"id": "tangent_maps", "latex": "$T$, $T_{\\mathrm{src}}$, $T_{\\mathrm{dst}}$", "meaning": "tangent-frame maps from local coefficients to physical perturbations", "si_unit": "$1$"},
+    {"id": "q", "latex": "$q$, $q_{\\mathrm{src}}$, $q_{\\mathrm{dst}}$", "meaning": "tangent-plane coefficient vectors", "si_unit": "$1$"},
+    {"id": "effective_fields", "latex": "$\\mathbf H_{\\mathrm{eff},0}$, $\\delta\\mathbf h$", "meaning": "static effective field and RF field phasor", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "gamma", "latex": "$\\gamma$, $\\gamma_0$", "meaning": "gyromagnetic ratio and $\\mu_0|\\gamma|$ in the A/m convention", "si_unit": "$\\mathrm{rad\\,s^{-1}\\,T^{-1}}$, $\\mathrm{rad\\,s^{-1}\\,(A\\,m^{-1})^{-1}}$"},
+    {"id": "omega", "latex": "$\\omega$, $\\omega_r$, $\\Gamma$, $\\omega_{\\mathrm{target}}$, $\\tau$", "meaning": "complex angular frequency, oscillation part, decay rate, requested angular target and rotated target", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
+    {"id": "frequency", "latex": "$f$", "meaning": "cyclic frequency, $f=\\operatorname{Re}(\\omega)/(2\\pi)$", "si_unit": "$\\mathrm{Hz}$"},
+    {"id": "lambda_shift", "latex": "$\\lambda$, $\\sigma$", "meaning": "generalized eigenvalue and complex spectral shift", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "shift_parts", "latex": "$\\sigma_{\\mathrm{R}}$, $\\sigma_{\\mathrm{I}}$", "meaning": "real and imaginary parts of the spectral shift", "si_unit": "$\\mathrm{s^{-1}}$, $\\mathrm{rad\\,s^{-1}}$"},
+    {"id": "restoring_operators", "latex": "$L$, $K$, $A_{qq}$", "meaning": "dynamic, energy-Hessian and magnetic restoring operators", "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"},
+    {"id": "mass_operators", "latex": "$B_\\alpha$, $B_{qq}$, $G$", "meaning": "damped gyrotropic/mass operators", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "harmonic_operator", "latex": "$A_\\omega$", "meaning": "driven harmonic operator $\\mathrm{i}\\omega B_\\alpha-L$", "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"},
+    {"id": "drive", "latex": "$b$", "meaning": "projected tangent RF drive", "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"},
+    {"id": "potential", "latex": "$\\phi$, $\\delta\\phi$", "meaning": "scalar-potential coefficient vector and perturbation", "si_unit": "$\\mathrm{A}$"},
+    {"id": "Aqphi", "latex": "$A_{q\\phi}$", "meaning": "potential-to-magnetic coupling block", "si_unit": "$\\mathrm{m^3\\,A^{-1}\\,s^{-1}}$"},
+    {"id": "Aphiq", "latex": "$A_{\\phi q}$", "meaning": "magnetic-to-potential coupling block", "si_unit": "$\\mathrm{A\\,m}$"},
+    {"id": "poisson", "latex": "$P$", "meaning": "scalar Poisson block", "si_unit": "$\\mathrm{m}$"},
+    {"id": "gauge", "latex": "$c$, $\\eta$", "meaning": "mean-zero gauge vector and Lagrange multiplier", "si_unit": "$\\mathrm{m^3}$, $\\mathrm{A\\,m^{-2}}$"},
+    {"id": "residuals", "latex": "$r_q$, $r_\\phi$, $r_g$", "meaning": "magnetic, scalar and gauge residuals", "si_unit": "$\\mathrm{m^3\\,s^{-1}}$, $\\mathrm{A\\,m}$, $\\mathrm{A\\,m^3}$"},
+    {"id": "normalized_residuals", "latex": "$\\epsilon_q$, $\\epsilon_\\phi$, $\\epsilon_g$, $\\epsilon_{\\mathrm{full}}$", "meaning": "normalized block and full original-operator residuals", "si_unit": "$1$"},
+    {"id": "rom_basis", "latex": "$V$, $W$, $y$", "meaning": "trial basis, test basis and reduced coordinates", "si_unit": "$1$"},
+    {"id": "periodic_transform", "latex": "$Q$", "meaning": "physical vector transformation across a periodic map", "si_unit": "$1$"},
+    {"id": "wave_vector", "latex": "$\\mathbf k$", "meaning": "Bloch wave vector", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
+    {"id": "translation", "latex": "$\\Delta\\mathbf r$", "meaning": "periodic lattice translation", "si_unit": "$\\mathrm{m}$"},
+    {"id": "phase", "latex": "$p=\\exp(-\\mathrm{i}\\mathbf k\\cdot\\Delta\\mathbf r)$", "meaning": "Floquet phase", "si_unit": "$1$"},
+    {"id": "beta", "latex": "$\\beta$", "meaning": "Robin boundary coefficient", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "complex_operators", "latex": "$\\operatorname{Re}$, $\\exp$, $\\mathrm{i}$, $\\pi$, $(\\cdot)^{\\mathsf T}$, $(\\cdot)^{\\mathsf H}$, $\\times$, $\\cdot$", "meaning": "real-part map, exponential, imaginary unit, circle constant, transpose, Hermitian transpose, cross product and contraction", "si_unit": "$1$"},
+    {"id": "norm_operators", "latex": "$\\lVert\\cdot\\rVert_2$, $|\\cdot|$, $\\max$", "meaning": "norm, absolute-value and maximum operators", "si_unit": "$1$"}
+  ],
+  "sources": [
+    {"id": "source-python-eigen-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "eigenmodes_stage", "responsibility": "Capture the public stage-first modal request."},
+    {"id": "source-python-response-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "frequency_response_stage", "responsibility": "Capture the public stage-first driven-response request and solver policy."},
+    {"id": "source-python-eigenmodes", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class Eigenmodes", "responsibility": "Validate modal parameters and serialize the canonical modal study IR."},
+    {"id": "source-python-frequency-response", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FrequencyResponse", "responsibility": "Validate driven parameters and serialize the canonical frequency-response study IR."},
+    {"id": "source-python-response-policy", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FrequencyResponseSolverPolicy", "responsibility": "Validate and lower the requested response method, preconditioner and Krylov controls."},
+    {"id": "source-ir-eigen-roundtrip", "path": "crates/fullmag-ir/tests/ir_tests.rs", "symbol": "eigenmodes_with_spectrum_and_mode_outputs_validate", "responsibility": "Test Rust modal IR deserialization and sampling validation."},
+    {"id": "source-ir-response-roundtrip", "path": "crates/fullmag-ir/tests/ir_tests.rs", "symbol": "frequency_response_round_trips_as_first_class_study", "responsibility": "Test Rust frequency-response IR round-trip as a first-class study."},
+    {"id": "source-dynamic-pencil", "path": "backends/fem/include/frequency_domain/linearized_dynamic_pencil.hpp", "symbol": "apply_Aomega", "responsibility": "Declare the canonical harmonic action i omega B_alpha minus L."},
+    {"id": "source-rotated-pencil", "path": "backends/fem/src/frequency_domain/real_frequency_rotated_pencil.cpp", "symbol": "assemble_real_frequency_rotated_pencil", "responsibility": "Assemble the source-visible real-frequency rotated generalized pencil."},
+    {"id": "source-cpu-schur", "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp", "symbol": "solve_poisson_airbox_modal_eigen_cpu_schur", "responsibility": "Declare the source-visible CPU Schur descriptor solver and original residual certification."},
+    {"id": "source-gpu-petsc", "path": "backends/fem/include/frequency_domain/modal_gpu_krylov.hpp", "symbol": "solve_poisson_airbox_modal_eigen_gpu_petsc_slepc", "responsibility": "Declare the source-visible GPU PETSc/SLEPc modal adapter without runtime qualification."},
+    {"id": "source-modal-payload-ownership", "path": "crates/fullmag-runner/src/native_fem/frequency_domain.rs", "symbol": "validate_native_modal_request_payload_ownership", "responsibility": "Reject ambiguous or missing native modal operator payload ownership."},
+    {"id": "source-response-method-policy", "path": "crates/fullmag-runner/src/frequency_response.rs", "symbol": "frequency_response_solver_method_rejection_reason", "responsibility": "Reject unavailable response method and device combinations before fallback."},
+    {"id": "source-native-response", "path": "crates/fullmag-runner/src/frequency_response.rs", "symbol": "try_execute_fem_frequency_response_native_production_cpu", "responsibility": "Build the native FEM CPU response request and preserve explicit failure and provenance."},
+    {"id": "source-floquet-validation", "path": "backends/fem/src/frequency_domain/driven_response_solver.cpp", "symbol": "validate_driven_response_floquet_phase_constraints", "responsibility": "Validate Floquet phase cycles, tangent-frame matching and drive consistency."},
+    {"id": "source-contract-regression", "path": "scripts/test_frequency_domain_math_contract_docs.py", "symbol": "test_canonical_fem_dynamic_solver_contract_freezes_algebra_units_and_claims", "responsibility": "Freeze the text-level algebra, units, lane names and honest status vocabulary; this is not numerical evidence."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "`add_eigenmodes.count`", "type": "`int`", "default": "`10`", "si_unit": "$1$", "validation": "Positive; non-positive values raise `ValueError`.", "meaning": "Maximum requested mode count.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.count` as an integer."},
+      {"python": "`add_eigenmodes.target`", "type": "`str`", "default": "`\"lowest\"`", "si_unit": "$1$", "validation": "One of `lowest`, `nearest`, `frequency_window`; other values raise `ValueError`.", "meaning": "Spectral selection policy.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.target.kind`."},
+      {"python": "`add_eigenmodes.target_frequency`", "type": "`float | None`", "default": "`None`", "si_unit": "$\\mathrm{Hz}$", "validation": "Required and positive for `nearest`; positive if supplied. With `frequency_window` it is currently accepted but not serialized and therefore must not be relied on.", "meaning": "Nearest-frequency target.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.target.frequency_hz` only for `target=\"nearest\"`; absent for `frequency_window`."},
+      {"python": "`add_eigenmodes.frequency_min`", "type": "`float | None`", "default": "`None`", "si_unit": "$\\mathrm{Hz}$", "validation": "Required, finite-positive through `require_positive`, and less than `frequency_max` for `frequency_window`; rejected for other targets.", "meaning": "Lower frequency-window bound.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.target.frequency_min_hz`."},
+      {"python": "`add_eigenmodes.frequency_max`", "type": "`float | None`", "default": "`None`", "si_unit": "$\\mathrm{Hz}$", "validation": "Required, finite-positive through `require_positive`, and greater than `frequency_min` for `frequency_window`; rejected for other targets.", "meaning": "Upper frequency-window bound.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.target.frequency_max_hz`."},
+      {"python": "`add_eigenmodes.operator`", "type": "`str`", "default": "`\"linearized_llg\"`", "si_unit": "$1$", "validation": "One of `linearized_llg`, `full_2x2`; other values raise `ValueError`.", "meaning": "Physical linearized operator family.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.operator.kind`."},
+      {"python": "`add_eigenmodes.include_demag`", "type": "`bool`", "default": "`True`", "si_unit": "$1$", "validation": "Boolean authoring value; `periodic_airbox_k0` requires `True`.", "meaning": "Include the dynamic-demag derivative.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.operator.include_demag`."},
+      {"python": "`add_eigenmodes.equilibrium_source`", "type": "`str`", "default": "`\"relax\"`", "si_unit": "$1$", "validation": "One of `provided`, `relax`, `artifact`; other values raise `ValueError`.", "meaning": "Accepted equilibrium source.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.equilibrium.kind`; `relax` normalizes to `relaxed_initial_state`."},
+      {"python": "`add_eigenmodes.equilibrium_artifact`", "type": "`str | None`", "default": "`None`", "si_unit": "$1$", "validation": "Required and non-empty for `equilibrium_source=\"artifact\"`; a supplied value is always normalized as non-empty.", "meaning": "Immutable equilibrium artifact path.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.equilibrium.path` for the artifact variant."},
+      {"python": "`add_eigenmodes.normalization`", "type": "`str`", "default": "`\"unit_l2\"`", "si_unit": "$1$", "validation": "One of `unit_l2`, `unit_max_amplitude`; other values raise `ValueError`.", "meaning": "Mode normalization request.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.normalization`."},
+      {"python": "`add_eigenmodes.damping_policy`", "type": "`str`", "default": "`\"ignore\"`", "si_unit": "$1$", "validation": "One of `ignore`, `include`; `periodic_airbox_k0` requires `ignore`.", "meaning": "Whether Gilbert damping participates in the modal pencil.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.damping_policy`."},
+      {"python": "`add_eigenmodes.k_vector`", "type": "`tuple[float, float, float] | None`", "default": "`None`", "si_unit": "$\\mathrm{rad\\,m^{-1}}$", "validation": "Legacy single-$\\mathbf k$ alias; finite three-vector; conflicts with a non-equivalent `k_sampling`; `periodic_airbox_k0` requires exact zero.", "meaning": "Single Bloch wave vector.", "backend_support": "FEM CPU/GPU authoring; nonzero-k demag remains unsupported", "problem_ir": "`study.k_sampling={\"kind\":\"single\",\"k_vector\":[...]}`."},
+      {"python": "`add_eigenmodes.k_sampling`", "type": "`object | None`", "default": "`None`", "si_unit": "$1$", "validation": "Must lower through `coerce_k_sampling`; a simultaneous non-equivalent `k_vector` is rejected.", "meaning": "Single point, path or declared wave-vector sampling.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.k_sampling`."},
+      {"python": "`add_eigenmodes.bias_field_sweep`", "type": "`BiasFieldSweep | None`", "default": "`None`", "si_unit": "$1$", "validation": "Must be `BiasFieldSweep`; requires single Gamma, demag, `periodic_airbox_k0`, periodic spin-wave BC and ignored damping.", "meaning": "Ordered physical bias-field sweep.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.bias_field_sweep`."},
+      {"python": "`add_eigenmodes.bc`", "type": "`str | PeriodicBC | FloquetBC | dict`", "default": "`\"free\"`", "si_unit": "$1$", "validation": "Must serialize as a supported spin-wave BC; periodic/floquet objects require non-empty pair IDs.", "meaning": "Dynamic magnetic boundary condition.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.spin_wave_bc`."},
+      {"python": "`add_eigenmodes.magnetostatic_bc`", "type": "`str`", "default": "`\"open\"`", "si_unit": "$1$", "validation": "One of `open`, `periodic_airbox_k0`, `floquet_airbox`; `periodic_airbox_k0` additionally requires demag, periodic BC, zero $\\mathbf k$ and ignored damping.", "meaning": "Dynamic magnetostatic boundary model.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.magnetostatic_bc`."},
+      {"python": "`add_frequency_response.frequencies_hz`", "type": "`Sequence[float]`", "default": "required", "si_unit": "$\\mathrm{Hz}$", "validation": "Non-empty sequence of finite positive values; otherwise `ValueError`.", "meaning": "Requested driven-frequency samples.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.frequencies_hz.values_hz` as floats."},
+      {"python": "`add_frequency_response.excitation_field_au_per_m`", "type": "`tuple[float, float, float]`", "default": "`(0.0, 0.0, 1.0)`", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "Exactly three finite components; otherwise `ValueError`.", "meaning": "Complex-drive amplitude before the separate phase.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.excitation.field_au_per_m`."},
+      {"python": "`add_frequency_response.excitation_phase_rad`", "type": "`float`", "default": "`0.0`", "si_unit": "$\\mathrm{rad}$", "validation": "Finite after float conversion; non-finite values raise `ValueError`.", "meaning": "Global RF-drive phase.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.excitation.phase_rad`."},
+      {"python": "`add_frequency_response.observable`", "type": "`str`", "default": "`\"susceptibility_tensor\"`", "si_unit": "$1$", "validation": "Must be accepted by `SaveResponse` when it supplies the implicit response output. Explicit `study.save_response` owns the output instead.", "meaning": "Default driven-response observable.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.sampling.outputs[].observable` only for the implicit response output."},
+      {"python": "`add_frequency_response.include_demag`", "type": "`bool`", "default": "`True`", "si_unit": "$1$", "validation": "Boolean authoring value; unsupported physical combinations fail in planning/runtime.", "meaning": "Include the dynamic-demag derivative.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.operator.include_demag`; operator kind is `linearized_llg`."},
+      {"python": "`add_frequency_response.equilibrium_source`", "type": "`str`", "default": "`\"provided\"`", "si_unit": "$1$", "validation": "One of `provided`, `relax`, `artifact`; other values raise `ValueError`.", "meaning": "Accepted equilibrium source.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.equilibrium.kind`; `relax` normalizes to `relaxed_initial_state`."},
+      {"python": "`add_frequency_response.equilibrium_artifact`", "type": "`str | None`", "default": "`None`", "si_unit": "$1$", "validation": "Required and non-empty for `equilibrium_source=\"artifact\"`; a supplied value is always normalized as non-empty.", "meaning": "Immutable equilibrium artifact path.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.equilibrium.path` for the artifact variant."},
+      {"python": "`add_frequency_response.normalization`", "type": "`str`", "default": "`\"unit_l2\"`", "si_unit": "$1$", "validation": "One of `unit_l2`, `unit_max_amplitude`; other values raise `ValueError`.", "meaning": "Response-state normalization convention.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.normalization`."},
+      {"python": "`add_frequency_response.damping_policy`", "type": "`str`", "default": "`\"ignore\"`", "si_unit": "$1$", "validation": "One of `ignore`, `include`; other values raise `ValueError`.", "meaning": "Whether Gilbert damping participates in $B_\\alpha$.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.damping_policy`."},
+      {"python": "`add_frequency_response.k_vector`", "type": "`tuple[float, float, float] | None`", "default": "`None`", "si_unit": "$\\mathrm{rad\\,m^{-1}}$", "validation": "Legacy single-$\\mathbf k$ alias; finite three-vector; conflicts with a non-equivalent `k_sampling`.", "meaning": "Single Bloch wave vector.", "backend_support": "FEM CPU/GPU authoring; nonzero-k demag remains unsupported", "problem_ir": "`study.k_sampling={\"kind\":\"single\",\"k_vector\":[...]}`."},
+      {"python": "`add_frequency_response.k_sampling`", "type": "`object | None`", "default": "`None`", "si_unit": "$1$", "validation": "Must lower through `coerce_k_sampling`; a simultaneous non-equivalent `k_vector` is rejected.", "meaning": "Single point or wave-vector sampling request.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.k_sampling`."},
+      {"python": "`add_frequency_response.bc`", "type": "`str | PeriodicBC | FloquetBC | dict`", "default": "`\"free\"`", "si_unit": "$1$", "validation": "Must serialize as a supported spin-wave BC; periodic/floquet objects require non-empty pair IDs.", "meaning": "Dynamic magnetic boundary condition.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.spin_wave_bc`."},
+      {"python": "`add_frequency_response.magnetostatic_bc`", "type": "`str`", "default": "`\"open\"`", "si_unit": "$1$", "validation": "One of `open`, `periodic_airbox_k0`, `floquet_airbox`; unsupported combinations fail closed later.", "meaning": "Dynamic magnetostatic boundary model.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.magnetostatic_bc`."},
+      {"python": "`add_frequency_response.solver_method`", "type": "`str | None`", "default": "`None`", "si_unit": "$1$", "validation": "One of `auto`, `dense_reference`, `cpu_sparse_direct`, `full_coupled_field_split`, `schur_reduced`, `modal_reduced`, `gpu_operator_host_krylov`, `gpu_device_krylov`; invalid names raise `ValueError`.", "meaning": "Requested numerical method, not resolved execution.", "backend_support": "FEM CPU/GPU authoring; runtime rejects unavailable engines", "problem_ir": "`study.solver_policy.method`; omitted when `None`."},
+      {"python": "`add_frequency_response.solver_preconditioner`", "type": "`str | None`", "default": "`None`", "si_unit": "$1$", "validation": "One of `auto`, `graph_demag_coarse`, `demag_coarse`, `block_jacobi`, `none`; invalid names raise `ValueError`.", "meaning": "Requested preconditioner.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.solver_policy.preconditioner`; omitted when `None`."},
+      {"python": "`add_frequency_response.solver_rtol`", "type": "`float | None`", "default": "`None`", "si_unit": "$1$", "validation": "Finite and positive; otherwise `ValueError`.", "meaning": "Requested relative Krylov tolerance.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.solver_policy.rtol`; omitted when `None`."},
+      {"python": "`add_frequency_response.solver_max_iterations`", "type": "`int | None`", "default": "`None`", "si_unit": "$1$", "validation": "Positive non-boolean integer; otherwise `TypeError` or `ValueError`.", "meaning": "Requested iteration limit.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.solver_policy.max_iterations`; omitted when `None`."},
+      {"python": "`add_frequency_response.solver_restart_iterations`", "type": "`int | None`", "default": "`None`", "si_unit": "$1$", "validation": "Positive non-boolean integer and not greater than `solver_max_iterations`; otherwise `TypeError` or `ValueError`.", "meaning": "Requested Krylov restart length.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "`study.solver_policy.restart_iterations`; omitted when `None`."},
+      {"python": "`add_frequency_response.MAX_ITERATIONS`", "type": "`int | None`", "default": "`None`", "si_unit": "$1$", "validation": "Compatibility alias; conflicts with a different `solver_max_iterations` and then raises `ValueError`.", "meaning": "Legacy spelling of the iteration limit.", "backend_support": "FEM CPU/GPU authoring; runtime capability-gated", "problem_ir": "Normalized to `study.solver_policy.max_iterations`; never retained as a separate field."}
+    ]
+  }
+}

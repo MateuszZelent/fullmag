@@ -38,9 +38,12 @@ import {
   quantityCatalogSupportsQuantity,
   quantityCatalogEntrySupportsSpatialVisualization,
   resolveCanonicalQuantityId,
-  sameQuantityId,
+  sameRenderableFieldQuantityId,
 } from "@/kernel/api/quantityIds";
 import { useCrossSectionResource } from "@/kernel/resources/crossSectionResources";
+import { useModeCompositionFieldLayerResources } from "@/kernel/resources/modeCompositionFieldLayerResources";
+import { useModeCompositionControllerResource } from "@/kernel/resources/modeCompositionResources";
+import { useModeFieldOverlayIntentResource } from "@/kernel/resources/modeFieldOverlayResources";
 import {
   useFdmRegionMembershipBinaryResource,
   useFdmMultilayerLayerActiveMasksResource,
@@ -116,7 +119,9 @@ import {
   useRenderableAnalysisFieldOverlay,
   type AnalysisFieldOverlayAppearanceState,
 } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import { isAnalysisResultFieldOverlayIntent } from "@/kernel/visualization/AnalysisResultFieldOverlayIntent";
 import { startAnalysisFieldOverlayPhaseAnimation } from "@/kernel/visualization/AnalysisFieldOverlayPhaseAnimation";
+import { useModeCompositionPhaseClock } from "@/kernel/visualization/ModeCompositionPhaseClock";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { resolveVisualizationEffectiveRenderMode } from "@/kernel/visualization/useVisualizationClientAck";
 import { resolveCrossSectionQueryFromVisualizationState } from "@/shared/domain/mesh/crossSectionQuery";
@@ -223,6 +228,7 @@ import {
   shouldRequestFdmMultilayerAirboxField,
 } from "../model/viewport3DFdmMultilayerAirbox";
 import { buildViewport3DFdmCuboidJobKey } from "../build-engine/viewport3dBuildJobKeys";
+import { modeCompositionTargetIdForMeshPart } from "../model/modeCompositionViewportProjection";
 import { Viewport3DScene } from "../layers/Viewport3DScene";
 import { buildClipPlaneIntersectionMarkerBuffers } from "../layers/clipPlaneModel";
 import {
@@ -304,6 +310,35 @@ export function resolveViewport3DAirboxVectorSampleBudget(
       Math.floor(requestedBudget),
       Math.floor(availableAirOnlyNodeCount),
     ),
+  );
+}
+
+function analysisResultOverlayMatchesSelection(
+  overlay: ReturnType<typeof useRenderableAnalysisFieldOverlay>,
+  selection: Selection,
+): boolean {
+  const intent = overlay?.analysisResultFieldIntent;
+  const ref = selection.ref;
+  if (!intent) return true;
+  if (!isAnalysisResultFieldOverlayIntent(intent) || ref?.type !== "analysis-result") {
+    return false;
+  }
+  return (
+    ref.runId === intent.analysisRunId &&
+    ref.stageId === intent.analysisStageId &&
+    ref.datasetId === intent.datasetId &&
+    ref.datasetRevision === intent.datasetRevision &&
+    ref.sampleId === intent.sampleId &&
+    ref.itemId === intent.itemId &&
+    ref.itemKind === intent.itemKind &&
+    ref.fieldId === intent.fieldId &&
+    ref.fieldRevision === intent.fieldRevision &&
+    ref.fieldRef?.resource_key === intent.fieldRef.resource_key &&
+    ref.fieldRef?.mesh_ref?.mesh_id === intent.fieldRef.mesh_ref?.mesh_id &&
+    ref.fieldRef?.mesh_ref?.mesh_revision ===
+      intent.fieldRef.mesh_ref?.mesh_revision &&
+    ref.fieldRef?.mesh_ref?.topology_fingerprint ===
+      intent.fieldRef.mesh_ref?.topology_fingerprint
   );
 }
 import {
@@ -1847,7 +1882,7 @@ export function resolveViewport3DDisplayedLiveValue<TValue>(
 }
 
 export function sameViewport3DQuantityId(left: string, right: string): boolean {
-  return sameQuantityId(left, right);
+  return sameRenderableFieldQuantityId(left, right);
 }
 
 export function applyViewport3DFieldLayerDiagnosticOverrides(
@@ -2624,7 +2659,33 @@ export function useViewport3DSceneModel({
 }) {
   const primitiveDraftOverlay = usePrimitiveDraftOverlay();
   const { analysisFieldOverlay } = useKernel();
-  const analysisOverlay = useRenderableAnalysisFieldOverlay(analysisFieldOverlay);
+  const analysisOverlaySnapshot =
+    useRenderableAnalysisFieldOverlay(analysisFieldOverlay);
+  const analysisOverlay = useMemo(
+    () =>
+      analysisResultOverlayMatchesSelection(
+        analysisOverlaySnapshot,
+        selection,
+      )
+        ? analysisOverlaySnapshot
+        : null,
+    [analysisOverlaySnapshot, selection],
+  );
+  useEffect(() => {
+    if (
+      analysisOverlaySnapshot?.analysisResultFieldIntent &&
+      !analysisResultOverlayMatchesSelection(
+        analysisOverlaySnapshot,
+        selection,
+      )
+    ) {
+      analysisFieldOverlay.clear();
+    }
+  }, [analysisFieldOverlay, analysisOverlaySnapshot, selection]);
+  const modeCompositionController = useModeCompositionControllerResource();
+  const modeCompositionPhaseClock = useModeCompositionPhaseClock(
+    modeCompositionController.controller.resource,
+  );
   useEffect(() => {
     const handle = startAnalysisFieldOverlayPhaseAnimation(analysisFieldOverlay);
     return () => {
@@ -3122,6 +3183,60 @@ export function useViewport3DSceneModel({
   const fieldCompatibleTopologyRenderModel = topologyCurrent
     ? fieldTopologyRenderModel
     : null;
+  const modeCompositionTopologyByTarget = useMemo(() => {
+    if (
+      !fieldCompatibleTopologyRenderModel?.meshGenerationId ||
+      !fieldCompatibleTopologyRenderModel.meshTopologyHash ||
+      fieldCompatibleTopologyRenderModel.meshRevision == null
+    ) {
+      return {};
+    }
+    const topologyIdentity = {
+      domainGenerationId: fieldCompatibleTopologyRenderModel.meshGenerationId,
+      meshTopologyHash: fieldCompatibleTopologyRenderModel.meshTopologyHash,
+      meshTopologyRevision: String(fieldCompatibleTopologyRenderModel.meshRevision),
+    };
+    return Object.fromEntries(
+      fieldCompatibleTopologyRenderModel.magneticParts.flatMap(({ part }) => {
+        const targetId = modeCompositionTargetIdForMeshPart(part);
+        return targetId ? [[targetId, topologyIdentity]] : [];
+      }),
+    );
+  }, [fieldCompatibleTopologyRenderModel]);
+  const modeCompositionFieldLayers = useModeCompositionFieldLayerResources({
+    composition: modeCompositionController.controller.resource,
+    enabled: Boolean(fieldCompatibleTopologyRenderModel),
+    topologyByTarget: modeCompositionTopologyByTarget,
+  });
+  const modeFieldOverlayTopology = useMemo(() => {
+    if (
+      !fieldCompatibleTopologyRenderModel?.meshGenerationId ||
+      !fieldCompatibleTopologyRenderModel.meshTopologyHash ||
+      fieldCompatibleTopologyRenderModel.meshRevision == null
+    ) {
+      return null;
+    }
+    return {
+      domainGenerationId: fieldCompatibleTopologyRenderModel.meshGenerationId,
+      meshId: sharedDomainManifest.data?.mesh_id ?? null,
+      meshTopologyHash: fieldCompatibleTopologyRenderModel.meshTopologyHash,
+      meshTopologyRevision: String(fieldCompatibleTopologyRenderModel.meshRevision),
+      pointCount: fieldCompatibleTopologyRenderModel.nodeCount,
+    };
+  }, [
+    fieldCompatibleTopologyRenderModel,
+    sharedDomainManifest.data?.mesh_id,
+  ]);
+  const modeFieldOverlay = useModeFieldOverlayIntentResource({
+    enabled: Boolean(
+      analysisOverlay?.analysisResultFieldIntent ?? analysisOverlay?.modeIntent,
+    ),
+    intent:
+      analysisOverlay?.analysisResultFieldIntent ?? analysisOverlay?.modeIntent,
+    topology: modeFieldOverlayTopology,
+  });
+  const analysisFieldIntent =
+    analysisOverlay?.analysisResultFieldIntent ?? analysisOverlay?.modeIntent;
   const clipCrossSectionQuery = useMemo(() => {
     const query = resolveCrossSectionQueryFromVisualizationState(renderingState);
     return {
@@ -4069,6 +4184,7 @@ export function useViewport3DSceneModel({
   const fdmInstanceModelNeedsFieldVector =
     fdmVoxelMagnitudeThreshold > 0 || fdmTopographyEnabled;
   const primaryFieldVectorEnabled =
+    !analysisFieldIntent &&
     Boolean(fdmDomain || fieldCompatibleTopologyRenderModel) &&
     (Boolean(analysisOverlay) ||
       (viewport3DFieldQuantityAvailable(
@@ -4082,24 +4198,25 @@ export function useViewport3DSceneModel({
           fieldRenderOptions: primaryFieldDataOptions,
           selectedSnapshotId,
         })));
-  const primaryFieldDemandPlan = useMemo(
-    () => {
-      if (analysisOverlay) {
-        const request: Viewport3DFieldResourceRequest = {
-          consumers: ["primary-field-vector"],
-          quantityId: primaryFieldQuantityId,
-          query: analysisOverlay.query,
-          requestId: buildViewport3DFieldResourceRequestId(
-            primaryFieldQuantityId,
-            analysisOverlay.query,
-          ),
-        };
-        return {
-          demands: [],
-          request,
-        };
-      }
-      return resolveViewport3DPrimaryFieldDemandPlan({
+  const analysisPrimaryFieldDemandPlan = useMemo(() => {
+    if (!analysisOverlay) return null;
+    const request: Viewport3DFieldResourceRequest = {
+      consumers: ["primary-field-vector"],
+      quantityId: primaryFieldQuantityId,
+      query: analysisOverlay.query,
+      requestId: buildViewport3DFieldResourceRequestId(
+        primaryFieldQuantityId,
+        analysisOverlay.query,
+      ),
+    };
+    return {
+      demands: [],
+      request,
+    };
+  }, [analysisOverlay, primaryFieldQuantityId]);
+  const livePrimaryFieldDemandPlan = useMemo(
+    () =>
+      resolveViewport3DPrimaryFieldDemandPlan({
         fdmInstanceModelNeedsFieldVector,
         fdmSurfaceColorMode,
         fdmTopographyEnabled,
@@ -4108,10 +4225,8 @@ export function useViewport3DSceneModel({
         primaryFieldQuantityId,
         snapshotId: selectedSnapshotId,
         snapshotQuery: selectedSnapshotQuery,
-      });
-    },
+      }),
     [
-      analysisOverlay,
       fdmInstanceModelNeedsFieldVector,
       // The React Compiler cannot prove these derived lane values are immutable;
       // the explicit dependency list is intentional for the viewport model.
@@ -4125,6 +4240,8 @@ export function useViewport3DSceneModel({
       selectedSnapshotQuery,
     ],
   );
+  const primaryFieldDemandPlan =
+    analysisPrimaryFieldDemandPlan ?? livePrimaryFieldDemandPlan;
   const primaryFieldRequest = primaryFieldDemandPlan.request;
   const fieldDemandDiagnostics = useMemo<Viewport3DFieldDemandDiagnosticSummary[]>(
     () =>
@@ -4374,6 +4491,7 @@ export function useViewport3DSceneModel({
     primaryFieldQuantityId,
     analysisComplexFieldQuery,
     Boolean(analysisOverlay) &&
+      !analysisFieldIntent &&
       analysisComplexProjectionEnabled &&
       fieldVectorEnabled,
   );
@@ -4422,8 +4540,11 @@ export function useViewport3DSceneModel({
       primaryFieldQuantityId,
     ],
   );
-  const committedFieldVector = displayedFieldVector;
-  const primaryFieldRevision = displayedFieldVectorEnvelope?.etag ?? null;
+  const committedFieldVector = modeFieldOverlay.binary ?? displayedFieldVector;
+  const primaryFieldRevision =
+    modeFieldOverlay.metadata?.resourceRevision ??
+    displayedFieldVectorEnvelope?.etag ??
+    null;
   const fieldRenderOptionsWithPrimaryTargetBuffers = useMemo(
     () =>
       mergeViewport3DPrimaryTargetFieldBuffers({
@@ -4453,13 +4574,17 @@ export function useViewport3DSceneModel({
       topology.revision,
     ],
   );
-  const analysisComplexField = useMemo(
-    () =>
-      analysisComplexProjectionEnabled
-        ? asDecodedComplexFieldVector(analysisComplexFieldVector.data)
-        : null,
-    [analysisComplexFieldVector.data, analysisComplexProjectionEnabled],
-  );
+  const analysisComplexField = useMemo(() => {
+    if (analysisFieldIntent) return modeFieldOverlay.field;
+    return analysisComplexProjectionEnabled
+      ? asDecodedComplexFieldVector(analysisComplexFieldVector.data)
+      : null;
+  }, [
+    analysisComplexFieldVector.data,
+    analysisComplexProjectionEnabled,
+    analysisFieldIntent,
+    modeFieldOverlay.field,
+  ]);
   const fdmUsesPrimaryField = sameViewport3DQuantityId(
     fdmSettings.activeQuantityId,
     primaryFieldQuantityId,
@@ -5911,6 +6036,7 @@ export function useViewport3DSceneModel({
       globalFieldRenderOptionsWithPrimaryTargetBuffers,
     ],
   );
+  const analysisOverlayActive = Boolean(analysisOverlay);
   const fieldRenderModel = useMemo(() => {
     const model = measureViewport3DModelBuild(
       "fullmag.viewport3d.buildViewport3DFieldRenderModel",
@@ -5921,10 +6047,22 @@ export function useViewport3DSceneModel({
           vectorScale,
           {
             ...fieldRenderModelBuildOptions,
+            analysisOverlayActive,
             buildDomainId: "shared-domain",
             buildSessionId: "current",
             complexFieldVector: analysisComplexField,
             fieldRevision: primaryFieldRevision,
+            legacyResponseOverlayActive:
+              analysisOverlay?.source === "frequency-response",
+            modeOverlay:
+              analysisFieldIntent &&
+              modeFieldOverlay.phasorAmplitudeMax !== null
+                ? {
+                    phasorAmplitudeMax: modeFieldOverlay.phasorAmplitudeMax,
+                    representation:
+                      modeFieldOverlay.metadata?.availableViews[0] ?? "complex",
+                  }
+                : null,
             scalarRangesByMode: fieldScalarRangesByMode,
             targetVisualizationRevision: renderingState?.revision ?? null,
             topologyRevision: topology.revision,
@@ -5947,6 +6085,7 @@ export function useViewport3DSceneModel({
     committedFieldVector,
     fieldCompatibleTopologyRenderModel,
     analysisComplexField,
+    analysisOverlayActive,
     fieldRenderModelBuildOptions,
     fieldScalarRangesByMode,
     primaryFieldRevision,
@@ -5958,6 +6097,10 @@ export function useViewport3DSceneModel({
     analysisOverlay?.floquetSpatialConvention,
     analysisOverlay?.phasorConvention,
     analysisOverlay?.wavevectorKf,
+    analysisFieldIntent,
+    analysisOverlay?.source,
+    modeFieldOverlay.metadata?.availableViews,
+    modeFieldOverlay.phasorAmplitudeMax,
   ]);
   const visualizationDebugTargets = viewportVisualizationTargets.map((target) => {
         const carrierIds = new Set(
@@ -6042,7 +6185,7 @@ export function useViewport3DSceneModel({
     (renderingState?.clip?.enabled ? clipCrossSection.error?.message : null) ??
     (meshQualityOverlayVisible ? meshQualityData.error?.message : null) ??
     fieldVector.error?.message ??
-    (fdmFieldCompatibility?.status === "mismatch"
+    (fdmLaneActive && fdmFieldCompatibility?.status === "mismatch"
       ? `FDM field degraded: ${fdmFieldCompatibility.reason}`
       : null) ??
     magneticPartFieldVectors.error?.message ??
@@ -6368,6 +6511,10 @@ export function useViewport3DSceneModel({
     meshSizeHighlightModel,
     meshQualityRange: meshQualityColors?.range ?? null,
     meshRegionOverlays,
+    modeCompositionFieldLayers,
+    modeCompositionId:
+      modeCompositionController.controller.resource?.composition_id ?? null,
+    modeCompositionPhaseByLayerId: modeCompositionPhaseClock.phaseByLayerId,
     primitiveModel,
     sceneRefetch: scene.refetch,
     sceneRevision: primitiveModel.sceneRevision,

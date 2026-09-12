@@ -75,6 +75,12 @@ void cuda_materialization_contract_is_present() {
     check(kernel.find("kind == FULLMAG_FDM_OBSERVABLE_EDEN_DRIVE && include_drive") !=
               std::string::npos,
           "regional drive density must not be folded into eden_total implicitly");
+    check(kernel.find("ctx.has_static_external_field_profile ||") != std::string::npos,
+          "external energy density must include static field profiles");
+    check(kernel.find("regional_field_drive_component(") != std::string::npos,
+          "external energy density must include regional fields");
+    check(kernel.find("phi_i * density + dmi_density") != std::string::npos,
+          "energy density must apply partial-cell volume consistently");
 }
 
 } // namespace

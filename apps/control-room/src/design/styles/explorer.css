@@ -1,10 +1,16 @@
 /* ── Explorer panel shell ── */
 .fm-explorer {
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
+  container-type: inline-size;
+  container-name: fm-explorer-panel;
   height: 100%;
   min-height: 0;
   background: var(--fm-bg-panel);
+}
+
+.fm-explorer > :not(.fm-explorer-tree) {
+  flex-shrink: 0;
 }
 
 /* ── Tab bar: underline style scoped to Explorer ── */
@@ -170,6 +176,7 @@
 
 /* ── Tree container ── */
 .fm-explorer-tree {
+  flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
   padding: var(--fm-space-1) var(--fm-space-1);
@@ -183,7 +190,7 @@
 
   position: relative;
   display: grid;
-  grid-template-columns: var(--fm-space-4) var(--fm-icon-sm) minmax(0, 1fr) auto;
+  grid-template-columns: var(--fm-space-4) var(--fm-icon-sm) minmax(0, 1fr) auto auto auto;
   min-height: var(--fm-control-height-compact);
   align-items: center;
   gap: var(--fm-space-1);
@@ -395,6 +402,7 @@
 }
 
 .fm-explorer-tree-row__label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -546,4 +554,23 @@
 .fm-explorer-toolbar__action:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-accent) 30%, transparent);
+}
+
+/* The explorer is frequently docked below 360px. Keep long result labels
+   horizontally scrollable instead of letting status badges consume them. */
+@container fm-explorer-panel (max-width: 360px) {
+  .fm-explorer-tree-row {
+    width: max-content;
+    min-width: 100%;
+  }
+
+  .fm-explorer-toolbar__action {
+    width: var(--fm-control-height-compact);
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .fm-explorer-toolbar__action > span {
+    display: none;
+  }
 }

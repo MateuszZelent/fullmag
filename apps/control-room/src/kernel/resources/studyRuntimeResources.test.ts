@@ -4,13 +4,17 @@ import { describe, expect, it } from "vitest";
 
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
-  ANALYSIS_EIGEN_MODE_V2_PATH,
   ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
   ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
   ANALYSIS_HYSTERESIS_BOOKMARKS_PATH,
@@ -39,15 +43,18 @@ import {
   DATA_TABLES_PATH,
 } from "../api/apiPaths";
 import type { LiveStatusResource } from "../api/apiTypes";
+import { ControlRoomApiError } from "../api/ControlRoomApi";
 import { activeLaneCapabilityFixture } from "./activeLaneCapabilityFixture.testSupport";
 
 import {
   STUDY_RUNTIME_CONTROL_RESOURCE_KEYS,
   readyCommandResourceData,
+  frequencyDomainJsonArtifactRevision,
   frequencyDomainManifestRevision,
   frequencyDomainSweepProgressRevision,
   frequencyDomainTextArtifactRevision,
   fieldMetaFreshnessRevision,
+  ignoreMissingResource,
   resolveHysteresisExecutionTreeResourceKey,
   resolveFieldMetaResourceKey,
   runtimeCommandControlSessionStatusEquals,
@@ -171,6 +178,7 @@ const baseResources: LiveStatusResource["resources"] = {
   fields_revision: 0,
   mesh_build_revision: 0,
   mesh_revision: 0,
+  mode_composition_revision: 0,
   region_coefficients_revision: 0,
   region_initial_state_revision: 0,
   region_membership_revision: 0,
@@ -277,6 +285,19 @@ describe("study runtime command resource bundles", () => {
     expect(readyCommandResourceData(retained, "loading")).toBeNull();
     expect(readyCommandResourceData(retained, "error")).toBeNull();
   });
+  it("treats a missing frequency-domain artifact as missing while surfacing other failures", () => {
+    expect(
+      ignoreMissingResource<unknown>(
+        new ControlRoomApiError("FMR peaks artifact is not available", 404),
+      ),
+    ).toBeNull();
+    expect(() =>
+      ignoreMissingResource<unknown>(
+        new ControlRoomApiError("frequency-domain artifact failed", 500),
+      ),
+    ).toThrow("frequency-domain artifact failed");
+  });
+
   it("measures the sampled solver trace at load and commit without polling", () => {
     const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
     const profileHook = source.slice(
@@ -1060,12 +1081,12 @@ describe("study runtime command resource bundles", () => {
     ).toBeTruthy();
     expect(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH).toBeTruthy();
     expect(ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH).toBeTruthy();
-    expect(ANALYSIS_EIGEN_MODE_V2_PATH).toBeTruthy();
+    expect(ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_PATH).toBeTruthy();
     expect(hookSource).toMatch(/frequencyDomain\.eigenSpectrumV2/);
     expect(hookSource).toMatch(/frequencyDomain\.eigenBranchesV2/);
     expect(hookSource).toMatch(/frequencyDomain\.eigenDiagnosticsV2/);
     expect(hookSource).toMatch(/frequencyDomain\.eigenDispersion/);
-    expect(hookSource).toMatch(/analysis\.eigen\s*\.modeV2/);
+    expect(hookSource).toMatch(/frequencyDomain\s*\.eigenMode/);
     expect(hookSource).toMatch(/frequencyDomain\.responseMagneticSweep/);
     expect(hookSource).toMatch(/frequencyDomain\s*\.responseCancelRequestedV1/);
     expect(hookSource).toMatch(/frequencyDomain\.responseProgressV1/);
@@ -1088,7 +1109,7 @@ describe("study runtime command resource bundles", () => {
     expect(hookSource).toContain(
       "ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH",
     );
-    expect(hookSource).toContain("ANALYSIS_EIGEN_MODE_V2_PATH");
+    expect(hookSource).toContain("ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_PATH");
   });
 
   it("keeps frequency-domain resource hooks free of raw v2 endpoint strings", () => {
@@ -1316,5 +1337,60 @@ describe("study runtime command resource bundles", () => {
     expect(DATA_TABLE_ROWS_PATH).toBe(
       ["", "v2", "sessions", "current", "data", "tables", "{table_id}", "rows"].join("/"),
     );
+  });
+
+  it("exposes dedicated field-sweep and FMR hooks with status-gated resource keys", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const hookSource = source.slice(
+      source.indexOf("export function useFrequencyDomainEigenFieldSweepResource"),
+      source.indexOf("export function useHysteresisPointsResource"),
+    );
+
+    expect(ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH).toBeTruthy();
+    expect(ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH).toBeTruthy();
+    expect(ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH).toBeTruthy();
+    expect(ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH).toBeTruthy();
+    expect(hookSource).toMatch(/frequencyDomain\s*\.\s*eigenFieldSweep/);
+    expect(hookSource).toMatch(/frequencyDomain\s*\.\s*fmrPeaks/);
+    expect(hookSource).toMatch(/frequencyDomain\s*\.\s*fmrResonanceFits/);
+    expect(hookSource).toMatch(/frequencyDomain\s*\.\s*fmrKittelFit/);
+    expect(hookSource).toContain("ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH");
+    expect(hookSource).toContain("ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH");
+    expect(hookSource).toContain("ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH");
+    expect(hookSource).toContain("ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH");
+    expect(hookSource).toContain("shouldLoadFrequencyDomainManifest(enabled, sessionStatus)");
+    expect(hookSource).toContain("ignoreMissingResource<FrequencyDomainJsonArtifactResource>");
+  });
+
+  it("changes dedicated frequency-domain artifact revisions when payload identity or reason changes", () => {
+    const baseArtifact = {
+      artifact_path: "frequency-domain/fmr/peaks.json",
+      content_digest: "sha256:one",
+      missing_reason: null,
+      resource_key: ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH,
+      revision: "artifact-revision-1",
+      schema_version: "frequency_domain_json_artifact.v1",
+      status: "partial",
+    };
+    const revision = frequencyDomainJsonArtifactRevision(baseArtifact);
+
+    expect(
+      frequencyDomainJsonArtifactRevision({
+        ...baseArtifact,
+        missing_reason: "Only the first peak was published.",
+      }),
+    ).not.toBe(revision);
+    expect(
+      frequencyDomainJsonArtifactRevision({
+        ...baseArtifact,
+        revision: "artifact-revision-2",
+      }),
+    ).not.toBe(revision);
+    expect(
+      frequencyDomainJsonArtifactRevision({
+        ...baseArtifact,
+        content_digest: "sha256:two",
+      }),
+    ).not.toBe(revision);
   });
 });

@@ -5,6 +5,7 @@ use crate::schemas::commands::{
 };
 use crate::schemas::diagnostics::SolverProfileResource;
 use crate::schemas::hysteresis::HysteresisBookmarkSchema;
+use crate::schemas::mode_composition::ModeCompositionResource;
 use crate::schemas::realtime::RealtimeResourceChange;
 use crate::schemas::runtime::FieldMaterializationRequirement;
 use crate::schemas::visualization_state::{
@@ -67,6 +68,8 @@ pub(crate) struct DisplayPresentationState {
     /// Bounded restore diagnostics for presentation-schema migrations.
     #[serde(default)]
     pub visualization_restore_warnings: Vec<String>,
+    #[serde(default)]
+    pub mode_composition: ModeCompositionResource,
 }
 
 impl Default for DisplayPresentationState {
@@ -88,6 +91,7 @@ impl Default for DisplayPresentationState {
             visualization_vector_style: None,
             visualization_overrides: None,
             visualization_restore_warnings: Vec::new(),
+            mode_composition: ModeCompositionResource::default(),
         }
     }
 }
@@ -523,6 +527,8 @@ pub(crate) struct ScalarRow {
     pub e_ani: f64,
     #[serde(default)]
     pub e_dmi: f64,
+    #[serde(default)]
+    pub e_rotated_dmi: f64,
     pub e_total: f64,
     pub max_dm_dt: f64,
     pub max_h_eff: f64,
@@ -572,6 +578,8 @@ pub(crate) struct StepUpdateView {
     pub e_ani: f64,
     #[serde(default)]
     pub e_dmi: f64,
+    #[serde(default, alias = "E_rotated_dmi")]
+    pub e_rotated_dmi: f64,
     pub e_total: f64,
     pub max_dm_dt: f64,
     pub max_h_eff: f64,
@@ -649,6 +657,7 @@ impl StepUpdateView {
             e_ext: self.e_ext,
             e_ani: self.e_ani,
             e_dmi: self.e_dmi,
+            e_rotated_dmi: self.e_rotated_dmi,
             e_total: self.e_total,
             max_dm_dt: self.max_dm_dt,
             max_h_eff: self.max_h_eff,
@@ -1207,6 +1216,12 @@ pub(crate) struct StageExecutionRecord {
     #[serde(default)]
     pub command_id: Option<String>,
     #[serde(default)]
+    pub mesh_generation_id: Option<String>,
+    #[serde(default)]
+    pub mesh_topology_fingerprint: Option<String>,
+    #[serde(default)]
+    pub mesh_revision: Option<u64>,
+    #[serde(default)]
     pub started_at_unix_ms: Option<u64>,
     #[serde(default)]
     pub completed_at_unix_ms: Option<u64>,
@@ -1533,6 +1548,7 @@ mod tests {
             demag_realization: None,
             fdm: None,
             external_field: None,
+            rotated_interfacial_dmi: None,
             solver: fullmag_authoring::ScriptBuilderSolverState {
                 integrator: "rk45".to_string(),
                 fixed_timestep: String::new(),
@@ -1759,6 +1775,7 @@ mod tests {
             e_ext: 0.0,
             e_ani: 0.0,
             e_dmi: 0.0,
+            e_rotated_dmi: 0.0,
             e_total: 0.0,
             max_dm_dt: 0.0,
             max_h_eff: 0.0,

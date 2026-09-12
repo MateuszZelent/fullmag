@@ -8,13 +8,22 @@ import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationP
 
 const renderedFormats: Array<string | null> = [];
 const renderedRequests: Array<{ chartId: string; format: string | null }> = [];
+const renderedRequestIds: Array<string | null> = [];
+const renderedHandledCallbacks = new Map<string, () => void>();
 const renderedRanges: Array<{ fromValue: number; toValue: number } | null> = [];
+const renderedProvenance: Array<Record<string, unknown> | undefined> = [];
 
 vi.mock("@/shared/analysis-charts/InteractiveChartSurface", () => ({
-  InteractiveChartSurface: ({ initialRange, requestedExportFormat, surface }: { initialRange: { fromValue: number; toValue: number } | null; requestedExportFormat: string | null; surface: { chartId: string } }) => {
-    renderedFormats.push(requestedExportFormat);
-    renderedRequests.push({ chartId: surface.chartId, format: requestedExportFormat });
+  InteractiveChartSurface: ({ initialRange, onRequestedExportHandled, requestedExportRequest, surface }: { initialRange: { fromValue: number; toValue: number } | null; onRequestedExportHandled?: () => void; requestedExportRequest?: { format: string; requestId: string } | null; surface: { chartId: string; provenance?: Record<string, unknown> } }) => {
+    const format = requestedExportRequest?.format ?? null;
+    renderedFormats.push(format);
+    renderedRequests.push({ chartId: surface.chartId, format });
+    renderedRequestIds.push(requestedExportRequest?.requestId ?? null);
+    if (requestedExportRequest?.requestId && onRequestedExportHandled) {
+      renderedHandledCallbacks.set(requestedExportRequest.requestId, onRequestedExportHandled);
+    }
     renderedRanges.push(initialRange);
+    renderedProvenance.push(surface.provenance);
     return <div />;
   },
   chartSeriesRenderModel: vi.fn(),
@@ -52,6 +61,54 @@ describe("Analysis chart export routing", () => {
     }
   });
 
+  it("retains distinct identities for consecutive same-format bus requests", async () => {
+    renderedFormats.length = 0;
+    renderedRequests.length = 0;
+    renderedRequestIds.length = 0;
+    renderedHandledCallbacks.clear();
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    const bus = new EventBus<KernelEventMap>();
+    try {
+      await act(async () => root.render(<EChartsSurface bus={bus} chartId="dynamics:table-a" series={series} xAxisLabel="step" />));
+      await act(async () => bus.emit("analysis-plots:export-requested", { chartId: "dynamics:table-a", format: "csv", source: "analysis-plots" }));
+      const firstRequestId = renderedRequestIds.find((requestId): requestId is string => requestId !== null);
+      await act(async () => firstRequestId && renderedHandledCallbacks.get(firstRequestId)?.());
+      await act(async () => bus.emit("analysis-plots:export-requested", { chartId: "dynamics:table-a", format: "csv", source: "analysis-plots" }));
+      expect(renderedFormats.filter((format) => format === "csv")).toHaveLength(2);
+      const csvRequestIds = renderedRequestIds.filter((requestId): requestId is string => requestId !== null);
+      expect(csvRequestIds).toHaveLength(2);
+      expect(csvRequestIds[0]).not.toBe(csvRequestIds[1]);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("queues batched bus requests and drains the next request after acknowledgement", async () => {
+    renderedFormats.length = 0;
+    renderedRequests.length = 0;
+    renderedRequestIds.length = 0;
+    renderedHandledCallbacks.clear();
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    const bus = new EventBus<KernelEventMap>();
+    try {
+      await act(async () => root.render(<EChartsSurface bus={bus} chartId="dynamics:table-a" series={series} xAxisLabel="step" />));
+      await act(async () => {
+        bus.emit("analysis-plots:export-requested", { chartId: "dynamics:table-a", format: "csv", requestId: "batched-1", source: "analysis-plots" });
+        bus.emit("analysis-plots:export-requested", { chartId: "dynamics:table-a", format: "csv", requestId: "batched-2", source: "analysis-plots" });
+      });
+      expect(renderedRequestIds).toContain("batched-1");
+      expect(renderedRequestIds).not.toContain("batched-2");
+      await act(async () => renderedHandledCallbacks.get("batched-1")?.());
+      expect(renderedRequestIds).toContain("batched-2");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("routes a right comparison-pane export only to its secondary chart identity", async () => {
     renderedRequests.length = 0;
     const dom = installSimulationPreparationTestDom();
@@ -74,6 +131,41 @@ describe("Analysis chart export routing", () => {
     try {
       await act(async () => root.render(<EChartsSurface initialRange={{ fromValue: 1e-9, toValue: 2e-9 }} series={series} />));
       expect(renderedRanges).toContainEqual({ fromValue: 1e-9, toValue: 2e-9 });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("carries result projection export provenance into the shared chart surface", async () => {
+    renderedProvenance.length = 0;
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <EChartsSurface
+          exportProvenance={{
+            datasetId: "dataset-1",
+            datasetRevision: "dataset-revision-1",
+            fixedCoordinates: [],
+            projectionId: "response-spectrum",
+            projectionRevision: "projection-revision-1",
+            runId: "run-1",
+            selectionRefs: [],
+            stageId: "stage-1",
+          }}
+          series={series}
+        />,
+      ));
+
+      expect(renderedProvenance[0]).toMatchObject({
+        datasetId: "dataset-1",
+        datasetRevision: "dataset-revision-1",
+        projectionId: "response-spectrum",
+        projectionRevision: "projection-revision-1",
+        runId: "run-1",
+        stageId: "stage-1",
+      });
     } finally {
       await act(async () => root.unmount());
       dom.restore();

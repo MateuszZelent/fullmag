@@ -21,7 +21,7 @@ namespace fullmag::fem {
  * compute energy, or orchestrate one update.
  */
 bool extract_demag_fem_bem_boundary_trace(
-    const std::vector<uint32_t> &boundary_nodes,
+    const std::vector<int> &boundary_tdofs,
     const mfem::Vector &potential,
     std::vector<double> &boundary_trace,
     std::string &error);

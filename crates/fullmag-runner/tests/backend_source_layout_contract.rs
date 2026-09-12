@@ -265,6 +265,10 @@ fn fem_eigen_path_workflow_has_fem_owner() {
     let owner = source(&owner_path);
 
     assert!(
+        dispatch.contains("pub(crate) fn execute_fem<"),
+        "production_source(dispatch.rs) must retain production declarations after imports; otherwise this ownership check can be vacuous"
+    );
+    assert!(
         owner_path.exists(),
         "missing FEM eigen path owner: {}",
         owner_path.display()
@@ -278,6 +282,24 @@ fn fem_eigen_path_workflow_has_fem_owner() {
             owner.contains(needle),
             "{} must own FEM eigen path workflow detail: {needle}",
             owner_path.display()
+        );
+    }
+}
+
+#[test]
+fn fem_eigen_path_children_stay_below_monolith_threshold() {
+    let root = crate_root();
+    for name in [
+        "eigen_path_guards.rs",
+        "eigen_path_artifacts.rs",
+        "eigen_path_manifest.rs",
+    ] {
+        let path = root.join("src/fem").join(name);
+        let line_count = source(&path).lines().count();
+        assert!(
+            line_count < 2000,
+            "{} must stay below the 2000-line monolith threshold; got {line_count}",
+            path.display()
         );
     }
 }
@@ -909,8 +931,10 @@ fn fem_eigen_output_and_reduction_helpers_have_owners() {
     let monolith_path = root.join("src/fem_eigen.rs");
     let monolith = production_source(&monolith_path);
     let output_path = root.join("src/fem/eigen_output.rs");
+    let native_artifacts_path = root.join("src/fem/eigen_native_artifacts.rs");
     let reduction_path = root.join("src/fem/eigen_reduction.rs");
     let output = source(&output_path);
+    let native_artifacts = source(&native_artifacts_path);
     let reduction = source(&reduction_path);
 
     let line_count = source(&monolith_path).lines().count();
@@ -922,7 +946,6 @@ fn fem_eigen_output_and_reduction_helpers_have_owners() {
     for needle in [
         "fn json_artifact(",
         "fn solver_kind_label(",
-        "fn execution_provenance(",
         "fn dispersion_v2_csv(",
         "fn classify_polarization(",
     ] {
@@ -936,6 +959,16 @@ fn fem_eigen_output_and_reduction_helpers_have_owners() {
             output_path.display()
         );
     }
+    let native_artifacts_needle = "fn execution_provenance(";
+    assert!(
+        !monolith.contains(native_artifacts_needle),
+        "fem_eigen.rs must not own FEM eigen native execution provenance: {native_artifacts_needle}"
+    );
+    assert!(
+        native_artifacts.contains(native_artifacts_needle),
+        "{} must own FEM eigen native execution provenance: {native_artifacts_needle}",
+        native_artifacts_path.display()
+    );
 
     for needle in [
         "struct ReductionMap",
@@ -979,10 +1012,8 @@ fn fem_eigen_equilibrium_helpers_have_owner() {
     );
 
     for needle in [
-        "pub(crate) fn materialize_equilibrium(",
+        "pub(super) fn materialize_equilibrium(",
         "fn load_equilibrium_artifact(",
-        "const RELAX_DT: f64",
-        "const RELAX_MAX_STEPS: u64",
     ] {
         assert!(
             !monolith.contains(needle),
@@ -991,6 +1022,13 @@ fn fem_eigen_equilibrium_helpers_have_owner() {
         assert!(
             owner.contains(needle),
             "{} must own FEM eigen equilibrium detail: {needle}",
+            owner_path.display()
+        );
+    }
+    for forbidden in ["const RELAX_DT: f64", "const RELAX_MAX_STEPS: u64"] {
+        assert!(
+            !owner.contains(forbidden),
+            "{} must consume a certified equilibrium handoff without hardcoded internal relaxation: {forbidden}",
             owner_path.display()
         );
     }
@@ -1024,7 +1062,7 @@ fn fem_eigen_volume_anisotropy_helpers_have_owner() {
     );
 
     for needle in [
-        "pub(crate) fn volume_anisotropy_field(",
+        "pub(super) fn volume_anisotropy_field(",
         "fn uniaxial_anisotropy_field(",
         "fn cubic_anisotropy_field(",
     ] {
@@ -1051,6 +1089,7 @@ fn fem_eigen_operator_assembly_has_owner() {
     let monolith_path = root.join("src/fem_eigen.rs");
     let monolith = production_source(&monolith_path);
     let owner_path = root.join("src/fem/eigen_operator.rs");
+    let projection_path = root.join("src/fem/eigen_projection.rs");
     let fem_mod_path = root.join("src/fem/mod.rs");
     let fem_mod = source(&fem_mod_path);
 
@@ -1060,6 +1099,7 @@ fn fem_eigen_operator_assembly_has_owner() {
         owner_path.display()
     );
     let owner = source(&owner_path);
+    let projection = source(&projection_path);
 
     let line_count = source(&monolith_path).lines().count();
     assert!(
@@ -1068,9 +1108,9 @@ fn fem_eigen_operator_assembly_has_owner() {
     );
 
     for needle in [
-        "pub(crate) fn assemble_projected_scalar_operator_real(",
-        "pub(crate) fn assemble_full_2x2_operator_real(",
-        "pub(crate) fn assemble_projected_scalar_operator_complex(",
+        "pub(super) fn assemble_projected_scalar_operator_real(",
+        "pub(super) fn assemble_full_2x2_operator_real(",
+        "pub(super) fn assemble_projected_scalar_operator_complex(",
         "fn add_surface_anisotropy_real(",
         "fn add_surface_anisotropy_complex(",
         "fn add_dmi_real(",
@@ -1079,7 +1119,6 @@ fn fem_eigen_operator_assembly_has_owner() {
         "fn add_dmi_2x2(",
         "fn surface_anisotropy_config(",
         "fn triangle_surface_matrix(",
-        "pub(crate) fn tangent_bases(",
     ] {
         assert!(
             !monolith.contains(needle),
@@ -1091,6 +1130,16 @@ fn fem_eigen_operator_assembly_has_owner() {
             owner_path.display()
         );
     }
+    let projection_needle = "pub(super) fn tangent_bases(";
+    assert!(
+        !monolith.contains(projection_needle),
+        "fem_eigen.rs must not own FEM eigen tangent projection detail: {projection_needle}"
+    );
+    assert!(
+        projection.contains(projection_needle),
+        "{} must own FEM eigen tangent projection detail: {projection_needle}",
+        projection_path.display()
+    );
     assert!(
         fem_mod.contains("pub(crate) mod eigen_operator;"),
         "{} must register the FEM eigen operator assembly owner",
@@ -1131,6 +1180,166 @@ fn fem_eigen_solver_backend_details_have_fem_owner() {
             "{} must own FEM eigen solver backend detail: {needle}",
             owner_path.display()
         );
+    }
+}
+
+#[test]
+fn modal_eigen_owner_dependency_graph_is_acyclic() {
+    let owner_root = crate_root().join("src/fem");
+    let owners = std::fs::read_dir(&owner_root)
+        .expect("read FEM owner directory")
+        .map(|entry| entry.expect("read FEM owner entry").file_name())
+        .filter_map(|name| name.into_string().ok())
+        .filter(|name| name.starts_with("eigen_") && name.ends_with(".rs"))
+        .map(|name| name.trim_end_matches(".rs").to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut graph = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for owner in &owners {
+        let owner_source = source(&owner_root.join(format!("{owner}.rs")));
+        let dependencies = owner_source
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("use super::eigen_"))
+            .filter_map(|suffix| suffix.split([':', ';']).next())
+            .map(|suffix| format!("eigen_{suffix}"))
+            .filter(|dependency| owners.contains(dependency))
+            .collect::<Vec<_>>();
+        graph.insert(owner.clone(), dependencies);
+    }
+
+    fn visit(
+        owner: &str,
+        graph: &std::collections::BTreeMap<String, Vec<String>>,
+        stack: &mut Vec<String>,
+        complete: &mut std::collections::BTreeSet<String>,
+    ) {
+        if complete.contains(owner) {
+            return;
+        }
+        if let Some(start) = stack.iter().position(|active| active == owner) {
+            let mut cycle = stack[start..].to_vec();
+            cycle.push(owner.to_string());
+            panic!("FEM eigen owner dependency cycle: {}", cycle.join(" -> "));
+        }
+        stack.push(owner.to_string());
+        if let Some(dependencies) = graph.get(owner) {
+            for dependency in dependencies {
+                visit(dependency, graph, stack, complete);
+            }
+        }
+        stack.pop();
+        complete.insert(owner.to_string());
+    }
+
+    let mut complete = std::collections::BTreeSet::new();
+    for owner in &owners {
+        visit(owner, &graph, &mut Vec::new(), &mut complete);
+    }
+    assert!(
+        !source(&owner_root.join("eigen_reduction.rs")).contains("use super::eigen_output"),
+        "FEM eigen reduction must not depend on output formatting"
+    );
+}
+
+#[test]
+fn modal_eigen_owner_crate_visibility_matches_compatibility_facade() {
+    let owner_root = crate_root().join("src/fem");
+    assert!(
+        owner_root.join("eigen_execution_resolution.rs").is_file(),
+        "the exact FEM eigen execution-resolution owner must use an eigen_*.rs name so this contract scans it"
+    );
+    assert!(
+        !owner_root.join("planned_eigen_execution.rs").exists(),
+        "the execution-resolution owner must not evade the eigen_*.rs source-layout scan"
+    );
+    let allowed = [
+        "eigen_certificate::OwnedModalCertificateV6Binding",
+        "eigen_certificate::OwnedModalCertificateV6ClassDigest",
+        "eigen_certificate::OwnedModalCertificateV6RegionRole",
+        "eigen_certificate::OwnedModalCertificateV6Relation",
+        "eigen_certificate::OwnedModalCertificateV6View",
+        "eigen_constants::SHARED_DOMAIN_K0_RUNTIME_UNAVAILABLE_REASON",
+        "eigen_equilibrium_contract::AcceptedFemEigenEquilibriumHandoff",
+        "eigen_equilibrium_contract::accepted_relax_to_eigen_handoff_from_run",
+        "eigen_execution::execute_baseline_fem_eigen",
+        "eigen_execution::execute_baseline_fem_eigen_with_progress",
+        "eigen_execution::execute_cpu_fem_eigen",
+        "eigen_execution::execute_cpu_fem_eigen_with_handoff",
+        "eigen_execution::execute_cpu_fem_eigen_with_progress",
+        "eigen_execution::execute_cpu_fem_eigen_with_progress_and_stage_handoff",
+        "eigen_execution::execute_gpu_fem_eigen",
+        "eigen_execution::execute_gpu_fem_eigen_with_handoff",
+        "eigen_execution::execute_gpu_fem_eigen_with_progress_and_stage_handoff",
+        "eigen_execution::execute_planned_fem_eigen",
+        "eigen_execution::execute_planned_fem_eigen_with_handoff",
+        "eigen_execution::execute_planned_fem_eigen_with_progress",
+        "eigen_execution::execute_planned_fem_eigen_with_progress_and_stage_handoff",
+        "eigen_execution::reject_unsupported_floquet_dynamic_demag",
+        "eigen_execution_resolution::FemEigenExecutionLane",
+        "eigen_execution_resolution::PlannedFemEigenExecution",
+        "eigen_execution_resolution::resolve_fem_eigen_execution_resolution",
+        "eigen_execution_resolution::resolve_planned_fem_eigen_execution",
+        "eigen_execution_resolution::validate_bias_field_sample_execution_resolutions",
+        "eigen_path::execute_fem_eigen_path",
+        "eigen_native_result::NativePoissonAirboxK0MetricsInput",
+        "eigen_native_result::native_poisson_airbox_k0_metrics_from_result_json",
+        "eigen_output::modal_tangent_transport_diagnostics",
+        "eigen_progress::FemEigenProgress",
+        "eigen_progress::FemEigenProgressCallback",
+        "eigen_capability::insert_native_cpu_modal_window_rejection_contract",
+        "eigen_capability::native_cpu_modal_window_rejection_reason",
+        "eigen_capability::native_cpu_modal_window_rejection_scope",
+        "eigen_shared_domain::native_shared_domain_magnetic_assembly_available",
+    ]
+    .into_iter()
+    .collect::<std::collections::BTreeSet<_>>();
+
+    for entry in std::fs::read_dir(&owner_root).expect("read FEM owner directory") {
+        let path = entry.expect("read FEM owner entry").path();
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !file_name.starts_with("eigen_") || !file_name.ends_with(".rs") {
+            continue;
+        }
+        let owner = file_name.trim_end_matches(".rs");
+        for (line_index, line) in source(&path).lines().enumerate() {
+            let Some(declaration) = line.strip_prefix("pub(crate) ") else {
+                if line.starts_with("    pub(crate) ")
+                    && !line.trim_start().starts_with("pub(crate) fn ")
+                    && !line.trim_start().starts_with("pub(crate) const ")
+                    && line.contains(':')
+                {
+                    panic!(
+                        "{}:{} exposes an owner-internal field at crate scope: {}",
+                        path.display(),
+                        line_index + 1,
+                        line.trim()
+                    );
+                }
+                continue;
+            };
+            let symbol = ["const ", "type ", "struct ", "enum ", "fn "]
+                .into_iter()
+                .find_map(|kind| declaration.strip_prefix(kind))
+                .and_then(|rest| {
+                    let name = rest
+                        .split(|character: char| {
+                            !(character.is_ascii_alphanumeric() || character == '_')
+                        })
+                        .next()?;
+                    (!name.is_empty()).then_some(name)
+                });
+            let Some(symbol) = symbol else {
+                continue;
+            };
+            let qualified = format!("{owner}::{symbol}");
+            assert!(
+                allowed.contains(qualified.as_str()),
+                "{}:{} exposes non-facade symbol at crate scope: {qualified}",
+                path.display(),
+                line_index + 1,
+            );
+        }
     }
 }
 

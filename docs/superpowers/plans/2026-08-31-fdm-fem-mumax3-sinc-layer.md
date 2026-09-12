@@ -3,12 +3,14 @@
 > **Dla wykonawców agentowych:** przed zakończeniem każdej fazy uruchom wskazaną weryfikację i zachowaj jej wynik w artefaktach eksperymentu.
 
 **Cel:** uruchomić identyczny problem `500 nm x 500 nm x 10 nm` bez PBC w FDM,
-FEM i MuMax3, zebrać wyłącznie uśrednione `mx/my/mz` oraz energie i przygotować
-porównanie na wspólnej osi czasu.
+FEM i MuMax3, najpierw wykonać tę samą relaksację, zapisać stan końcowy oraz
+porównać energie po relaksacji i po dokładnie `4 ns` dynamicznego przebiegu.
 
-**Architektura:** wspólny skrypt Fullmag przełącza tylko jawny backend (`fdm` lub
-`fem`); niezależny skrypt MuMax3 odwzorowuje ten sam wzór pola. FDM działa na
-CPU, FEM na zarządzanym GPU Windows/Docker, a MuMax3 na dostępnej karcie GPU.
+**Architektura:** wspólny skrypt Fullmag przełącza jawny backend, urządzenie i
+realizację demagu; niezależny skrypt MuMax3 odwzorowuje ten sam wzór pola. W
+macierzy porównawczej są FDM CPU/GPU, FEM Poisson–Robin CPU/GPU, FEM
+Fredkin–Köhler CPU/GPU oraz MuMax3 GPU. Geometria i fizyka pozostają wspólne;
+różnią się tylko dyskretyzacja FDM/FEM oraz wybrana realizacja demagu.
 Wyniki są parsowane do tabel skalarów poza checkoutem.
 
 **Technologie:** Python DSL Fullmag, canonical ProblemIR, managed FEM
@@ -35,9 +37,17 @@ Najpierw napisać test, który ładuje `fullmag_case.py` dla obu jawnych backend
 i asercjami sprawdza IR: `500e-9`, `2.5e-9`, `200x200x1`, brak PBC, materiał Py,
 `B=(0.1,0,0)`, globalny uniform `RegionalFieldDrive`, `cutoff=10e9`,
 `t0=2e-9`, aktywację tylko w dynamicznym stage, automatyczny Nyquist guard
-`1.3`, `T=4e-9`, listę energii i brak wyjść typu field. Dla FEM test wymaga
-`prismatic`, `prism`, `through_thickness_elements=1`, `order=1`, `sweep_direction=auto`
-i `exact_layer_count=true`.
+`1.3`, `T=4e-9`, listę energii i brak wyjść typu field. Test musi również
+wymagać identycznej kolejności `relax → save_state → table_autosave → run`
+dla FDM i FEM, algorytmu `llg_overdamped`, `tolT=1e-5`, `max_steps=50000`,
+zapisu artefaktu `relaxed_state` oraz tego samego zestawu kolumn tabeli.
+Dla FEM test wymaga zachowania pierwotnego układu: Poisson–Robin używa jednej
+warstwy elementów `prism6` przez grubość, z trójkątną siatką ściany i bez
+zmiany rozmiaru komórki 2.5 nm w płaszczyźnie. Fredkin–Köhler jest osobnym
+wariantem body-only z jawną siatką tetraedryczną; jego inna siatka i operator
+demagu są jedynymi zamierzonymi różnicami względem Poisson–Robin. Nie wolno
+podmieniać wariantu prism na all-tet/P2 tylko po to, aby uzyskać inny profil
+dokładności.
 
 **Weryfikacja:** uruchomić test przed implementacją i potwierdzić kontrolowaną
 czerwoną fazę, następnie po implementacji:
@@ -51,19 +61,21 @@ python -m unittest tests.fem_fdm_mumax3_sinc_layer.test_contract
 **Plik:** `tests/fem_fdm_mumax3_sinc_layer/fullmag_case.py`
 
 Zaimplementować jedną funkcję konfigurującą wspólny problem. Backend wybierać
-wyłącznie przez `FULLMAG_SINC_LAYER_BACKEND`; brak lub inna wartość ma kończyć
-się błędem. Dla FDM ustawić `engine("fdm")`, `device("cpu", double)`,
-manual universe dokładnie wielkości warstwy, `cell(2.5 nm, 2.5 nm, 10 nm)` i
-otwarty demag. Dla FEM ustawić `engine("fem")`, jawny device z env,
-`poisson_robin`, airbox `1 um`, jego mesh `50..100 nm`, oraz obiektowy mesh
-`2.5 nm`, `swept_prism`, `prismatic`, `prism`, `z`, jedna warstwa, P1 i
-`pyramid_to_tetrahedra`.
+wyłącznie przez `FULLMAG_SINC_LAYER_BACKEND`, realizację FEM przez
+`FULLMAG_SINC_LAYER_DEMAG`; brak lub inna wartość ma kończyć się błędem. Dla
+FDM ustawić `engine("fdm")`, jawny device w double, manual universe dokładnie
+wielkości warstwy, `cell(2.5 nm, 2.5 nm, 10 nm)` i otwarty demag. Dla FEM
+Poisson–Robin ustawić `engine("fem")`, jawny device z env, airbox `1 um`, jego
+mesh `50..100 nm` oraz swept-prism mesh: `2.5 nm`, `through_thickness_elements=1`,
+`sweep_face_meshing="triangular"`, `element_family="prism"` i `order=1`.
+Dla Fredkin–Köhler jawnie wyłączyć airbox i użyć body-only free-tetrahedral
+mesh P1. Brak wykonawczego operatora FK nie może być maskowany fallbackiem do
+Poisson–Robin ani CPU przy żądaniu GPU.
 
 Zdefiniować `Py`, stan `+x`, bias `+x` oraz poprzeczny uniform sinc `1 mT +y`.
-Dynamiczny benchmark FDM i FEM startuje bezpośrednio z tego samego,
-zadeklarowanego `m0`; relaksacja jest osobnym badaniem (`fdm_relax_case.py` i
-`mumax3_relax_case.mx3`) i nie może być dołączona tylko do jednego backendu.
-Po stanie początkowym uruchomić tabelę i bieg `until=4e-9`. Tabela ma tylko
+FDM i FEM wykonują w tym samym skrypcie relaksację z wyłączonym napędem,
+zapisują `relaxed_state`, a następnie uruchamiają dynamiczny benchmark od tego
+stanu przez dokładnie 5000 kroków do `until=4e-9` (`dt=0.8 ps`). Tabela ma tylko
 kolumny skalarne: czas/krok, trzy średnie magnetyzacji i wszystkie terminy
 energii. Nie wywoływać żadnego zapisu pola.
 
@@ -76,11 +88,13 @@ uruchomienie loadera bez solve.
 
 Ustawić `SetGridSize(200,200,1)`, `SetCellSize(2.5e-9,2.5e-9,10e-9)`,
 `SetPBC(0,0,0)`, parametry Py, `m=uniform(1,0,0)`, bias `100 mT` i
-`B_ext=vector(100e-3, 1e-3*sinc(2*pi*10e9*(t-20/fcut)), 0)`. Nie wykonywać
-relaksacji w dynamicznym przebiegu, aby stan początkowy był identyczny z FDM
-i FEM; relaksacja pozostaje osobnym skryptem. Następnie użyć
-`tableautosave(1/(2*1.3*fcut))` oraz `run(40/fcut)`. Dodać do tabeli magnetyzację i `E_exch`, `E_demag`,
-`E_zeeman`, `E_anis`, `E_total`; nie używać `save(m)` ani `autosave(m)`.
+`B_ext=vector(100e-3, 1e-3*sinc(2*pi*10e9*(t-20/fcut)), 0)`. Wykonać
+`minimize()` z `MinimizerStop=1e-5` i `MinimizeMaxSteps=50000`, zapisać
+wiersz końca relaksacji, a następnie uruchomić identyczny dynamiczny czas
+`40/fcut` przez 5000 kroków (`FixDt=0.8 ps`) z
+`tableautosave(1/(2*1.3*fcut))`. Dodać do tabeli magnetyzację i `E_exch`,
+`E_demag`, `E_zeeman`, `E_anis`, `E_total`; nie używać `save(m)` ani
+`autosave(m)`.
 
 **Weryfikacja:** parser tekstu sprawdza brak `PBC` innych niż zero, brak zapisów
 pola, obecność wzoru sinc i nominalnego okresu tabeli.
@@ -107,11 +121,14 @@ Najpierw sprawdzić aktywne procesy i wolne miejsce. Następnie użyć:
 just ensure-managed-fem-runtime
 ```
 
-FEM uruchomić przez kanoniczny `scripts/windows/run_fullmag_fem.ps1` z `BuildMode=false`,
-`Backend=fem`, `Device=gpu`, `RunMode=headless`, po przygotowaniu runtime
-container-backed. FDM uruchomić przez repozytoryjny headless launcher z
-`FULLMAG_SINC_LAYER_BACKEND=fdm` i device CPU. MuMax3 uruchomić z WSL przez
-`mumax3 -gpu 0` i dedykowany katalog wyników poza checkoutem.
+FEM Poisson–Robin uruchomić przez kanoniczny
+`scripts/windows/run_fullmag_fem.ps1` z `BuildMode=true` (a po zbudowaniu
+ponownie `BuildMode=false`), `Backend=fem`, osobno dla CPU i GPU,
+`RunMode=headless`, po przygotowaniu runtime container-backed. FDM uruchomić
+przez repozytoryjny headless launcher osobno dla CPU i GPU. MuMax3 uruchomić z
+`mumax3 -gpu 0` i dedykowany katalog wyników poza checkoutem. Warianty FEM
+Fredkin–Köhler pozostają `NOT VERIFIED`, dopóki runtime nie ma gotowego
+operatora CPU/GPU dla tego przypadku.
 
 Nie zatrzymywać istniejących kontenerów innych prac. Każdy przebieg zapisać z
 logiem stdout/stderr, źródłem, manifestem urządzenia i ścieżką tabeli.
@@ -124,8 +141,10 @@ z tabelami skalarów, logami i metadanymi. Opcjonalny raport repozytoryjny:
 rzeczywistym przebiegu.
 
 Raport ma zawierać parametry, trasy wykonania, hash źródła/runtime, liczbę
-wierszy, kolumny, czas końcowy, tabelę `avg mx/my/mz` oraz tabelę wszystkich
-energii. Każda niepełna lub nieporównywalna część otrzymuje `NOT VERIFIED`.
+wierszy, kolumny, czas końcowy, osobną tabelę `po relaksacji` i osobną tabelę
+`po 4 ns` dla `avg mx/my/mz` oraz wszystkich energii. Każda niepełna lub
+nieporównywalna część, w szczególności FEM Fredkin–Köhler przed implementacją
+operatora, otrzymuje `NOT VERIFIED`.
 
 **Weryfikacja końcowa:**
 

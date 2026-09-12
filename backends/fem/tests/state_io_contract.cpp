@@ -120,6 +120,39 @@ void observable_copy_prefers_visual_demag_and_effective_fields() {
     check(out[0] == 31.0 && out[5] == 36.0, "effective field copy must prefer visual field");
 }
 
+void linearization_copy_uses_llg_demag_and_effective_fields() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 2;
+    ctx.demag.h_xyz = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
+    ctx.demag.h_visual_xyz = {11.0, 12.0, 13.0, 14.0, 15.0, 16.0};
+    ctx.effective_field.h_xyz = {21.0, 22.0, 23.0, 24.0, 25.0, 26.0};
+    ctx.effective_field.h_visual_xyz = {31.0, 32.0, 33.0, 34.0, 35.0, 36.0};
+
+    double out[6] = {};
+    std::string error;
+    check(
+        fullmag::fem::context_copy_linearization_field_f64(
+            ctx,
+            FULLMAG_FEM_OBSERVABLE_H_DEMAG,
+            out,
+            6,
+            error) == FULLMAG_FEM_OK,
+        "linearization demag field copy should succeed");
+    check(out[0] == 1.0 && out[5] == 6.0,
+          "linearization demag copy must use the magnetic-domain LLG field");
+
+    check(
+        fullmag::fem::context_copy_linearization_field_f64(
+            ctx,
+            FULLMAG_FEM_OBSERVABLE_H_EFF,
+            out,
+            6,
+            error) == FULLMAG_FEM_OK,
+        "linearization effective field copy should succeed");
+    check(out[0] == 21.0 && out[5] == 26.0,
+          "linearization effective-field copy must use the magnetic-domain LLG field");
+}
+
 void upload_magnetization_updates_host_state_and_invalidates_runtime_caches() {
     fullmag::fem::Context ctx;
     ctx.mesh.n_nodes = 2;
@@ -227,6 +260,7 @@ void torque_observable_is_computed_in_native_state_io() {
 int main() {
     context_state_io_is_owned_by_runtime_module();
     observable_copy_prefers_visual_demag_and_effective_fields();
+    linearization_copy_uses_llg_demag_and_effective_fields();
     upload_magnetization_updates_host_state_and_invalidates_runtime_caches();
     upload_rejects_zero_active_magnetization();
     torque_observable_is_computed_in_native_state_io();

@@ -55,7 +55,14 @@ void reset_metadata(FemGpuState &state)
     state.residency.device_state = FemGpuSyncState::HostStale;
     state.runtime_coefficients.uploaded = false;
     state.rk.fsal_valid = false;
+    state.rk.endpoint_valid = false;
+    state.rk.endpoint_integrator = 0;
+    state.rk.endpoint_generation = 0;
+    state.rk.endpoint_time_seconds = 0.0;
+    state.rk.endpoint_operator_signature = 0;
+    state.rk.endpoint_consumed = false;
     state.legacy_exchange.uploaded = false;
+    state.legacy_exchange.row_scale_ready = false;
     state.legacy_exchange.rows = 0;
     state.legacy_exchange.cols = 0;
     state.legacy_exchange.nnz = 0;
@@ -66,6 +73,7 @@ void reset_metadata(FemGpuState &state)
     state.mesh_metrics.device_bytes = 0;
     state.mesh_regions.node_count = 0;
     state.mesh_regions.has_periodic_reduced_nodes = false;
+    state.mesh_regions.periodic_reduced_node_count = 0;
     state.mesh_regions.stt_active_node_mask = nullptr;
     state.mesh_regions.stt_active_node_count = 0;
     state.mesh_regions.stt_active_element_mask = nullptr;
@@ -83,6 +91,17 @@ void reset_metadata(FemGpuState &state)
     state.demag_poisson.hybrid_stage_m_xyz.clear();
     state.demag_poisson.hybrid_demag_xyz.clear();
     state.demag_poisson.hybrid_demag_energy_joules = 0.0;
+    state.demag_poisson.last_evaluation_mode = 0;
+    state.demag_poisson.last_evaluation_purpose = 0;
+    state.demag_poisson.field_only_evaluation_count = 0;
+    state.demag_poisson.field_and_energy_evaluation_count = 0;
+}
+
+void invalidate_rk_endpoint(FemGpuState &state)
+{
+    state.rk.endpoint_valid = false;
+    state.rk.endpoint_consumed = true;
+    state.rk.endpoint_operator_signature = 0;
 }
 
 } // namespace
@@ -135,6 +154,7 @@ bool gpu_state_upload_magnetization_aos(
     state.residency.host_state = FemGpuSyncState::HostClean;
     state.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_HOST_SOURCE_OF_TRUTH;
     state.rk.fsal_valid = false;
+    invalidate_rk_endpoint(state);
     state.fields.accepted_observables_valid = false;
     state.relaxation.nonlinear_cg_direction_valid = false;
     gpu_relax_note_external_state_change(state.relaxation);
@@ -202,6 +222,8 @@ bool gpu_state_upload_effective_fields_aos(
         return false;
     }
     state.residency.device_state = FemGpuSyncState::DeviceClean;
+    state.rk.fsal_valid = false;
+    invalidate_rk_endpoint(state);
     gpu_relax_note_external_state_change(state.relaxation);
     return true;
 }
@@ -213,13 +235,18 @@ bool gpu_state_upload_demag_field_aos(
     TransferAudit &audit,
     std::string &error)
 {
-    return gpu_field_buffers_upload_demag_field_aos(
+    const bool uploaded = gpu_field_buffers_upload_demag_field_aos(
         state.lifecycle,
         state.fields,
         h_demag_xyz,
         len,
         audit,
         error);
+    if (uploaded) {
+        state.rk.fsal_valid = false;
+        invalidate_rk_endpoint(state);
+    }
+    return uploaded;
 }
 
 bool gpu_state_upload_local_vector_fields_aos(
@@ -253,6 +280,8 @@ bool gpu_state_upload_local_vector_fields_aos(
         return false;
     }
     state.residency.device_state = FemGpuSyncState::DeviceClean;
+    state.rk.fsal_valid = false;
+    invalidate_rk_endpoint(state);
     return true;
 }
 
@@ -263,13 +292,18 @@ bool gpu_state_upload_magnetoelastic_strain(
     TransferAudit &audit,
     std::string &error)
 {
-    return gpu_magnetoelastic_upload_strain(
+    const bool uploaded = gpu_magnetoelastic_upload_strain(
         state.lifecycle,
         state.magnetoelastic,
         strain_voigt,
         strain_len,
         audit,
         error);
+    if (uploaded) {
+        state.rk.fsal_valid = false;
+        invalidate_rk_endpoint(state);
+    }
+    return uploaded;
 }
 
 bool gpu_state_upload_mesh_geometry(
@@ -283,7 +317,7 @@ bool gpu_state_upload_mesh_geometry(
     TransferAudit &audit,
     std::string &error)
 {
-    return gpu_mesh_geometry_upload(
+    const bool uploaded = gpu_mesh_geometry_upload(
         state.lifecycle,
         state.mesh_geometry,
         nodes_xyz,
@@ -294,6 +328,11 @@ bool gpu_state_upload_mesh_geometry(
         magnetic_element_mask_len,
         audit,
         error);
+    if (uploaded) {
+        state.rk.fsal_valid = false;
+        invalidate_rk_endpoint(state);
+    }
+    return uploaded;
 }
 
 bool gpu_state_upload_runtime_coefficients(
@@ -341,7 +380,8 @@ bool gpu_state_upload_runtime_coefficients(
     TransferAudit &audit,
     std::string &error)
 {
-    return gpu_runtime_coefficients_upload(
+    state.legacy_exchange.row_scale_ready = false;
+    const bool uploaded = gpu_runtime_coefficients_upload(
         state.lifecycle,
         state.runtime_coefficients,
         state.materials,
@@ -389,6 +429,11 @@ bool gpu_state_upload_runtime_coefficients(
         periodic_representative_nodes_len,
         audit,
         error);
+    if (uploaded) {
+        state.rk.fsal_valid = false;
+        invalidate_rk_endpoint(state);
+    }
+    return uploaded;
 }
 
 bool gpu_state_upload_stt_target_mask(
@@ -414,6 +459,9 @@ bool gpu_state_upload_stt_target_mask(
     if (!state.lifecycle.allocated) {
         return true;
     }
+
+    state.rk.fsal_valid = false;
+    invalidate_rk_endpoint(state);
 
 #if FULLMAG_HAS_CUDA_RUNTIME
     auto &mesh_regions = state.mesh_regions;
@@ -485,6 +533,9 @@ bool gpu_state_upload_stt_element_mask(
     if (!state.lifecycle.allocated) {
         return true;
     }
+
+    state.rk.fsal_valid = false;
+    invalidate_rk_endpoint(state);
 
 #if FULLMAG_HAS_CUDA_RUNTIME
     auto &mesh_regions = state.mesh_regions;
@@ -567,6 +618,9 @@ bool gpu_state_upload_frozen_spins(
     if (!state.lifecycle.allocated) {
         return true;
     }
+
+    state.rk.fsal_valid = false;
+    invalidate_rk_endpoint(state);
 
 #if FULLMAG_HAS_CUDA_RUNTIME
     auto &mesh_regions = state.mesh_regions;
@@ -666,6 +720,7 @@ bool gpu_state_upload_frozen_spins(
     mesh_regions.frozen_reference_y = d_ry;
     mesh_regions.frozen_reference_z = d_rz;
     mesh_regions.frozen_node_count = frozen_mask_len;
+    invalidate_rk_endpoint(state);
     return true;
 #else
     (void)magnetic_node_mask;
@@ -691,9 +746,14 @@ bool gpu_state_upload_exchange_legacy_sparse(
     const double *inv_lumped_mass,
     uint64_t inv_lumped_mass_len,
     TransferAudit &audit,
-    std::string &error)
+    std::string &error,
+    const uint32_t *periodic_reduced_node,
+    uint64_t periodic_reduced_node_len,
+    const uint32_t *periodic_representative_nodes,
+    uint64_t periodic_representative_nodes_len,
+    uint64_t periodic_reduced_node_count)
 {
-    return gpu_exchange_upload_legacy_sparse(
+    const bool uploaded = gpu_exchange_upload_legacy_sparse(
         state.lifecycle,
         state.legacy_exchange,
         state.mesh_metrics,
@@ -710,7 +770,17 @@ bool gpu_state_upload_exchange_legacy_sparse(
         inv_lumped_mass,
         inv_lumped_mass_len,
         audit,
-        error);
+        error,
+        periodic_reduced_node,
+        periodic_reduced_node_len,
+        periodic_representative_nodes,
+        periodic_representative_nodes_len,
+        periodic_reduced_node_count);
+    if (uploaded) {
+        state.rk.fsal_valid = false;
+        invalidate_rk_endpoint(state);
+    }
+    return uploaded;
 }
 
 bool gpu_state_initialize(

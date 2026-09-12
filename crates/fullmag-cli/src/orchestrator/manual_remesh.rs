@@ -113,7 +113,7 @@ fn prepare_fdm_grid_refresh(
     let runtime = if prepare_runtime {
         Some(InteractiveRuntimeHost::prepare_base_problem(
             candidate_stages[0].ir.clone(),
-            &candidate_plans[0].backend_plan,
+            &candidate_plans[0],
         )?)
     } else {
         None
@@ -814,6 +814,7 @@ fn prepare_manual_interactive_remesh(
                     &remesh_result.object_region_markers,
                     current_adaptive_runtime_state.as_ref(),
                     Some(remeshed_plan.clone()),
+                    mesh_source_scene_revision(&opts),
                 )?;
                 let plan_summary = prepared_remesh.stages[0]
                     .ir
@@ -822,7 +823,7 @@ fn prepare_manual_interactive_remesh(
                 let runtime = if prepare_runtime {
                     Some(InteractiveRuntimeHost::prepare_base_problem(
                         prepared_remesh.stages[0].ir.clone(),
-                        &prepared_remesh.stage_execution_plans[0].backend_plan,
+                        &prepared_remesh.stage_execution_plans[0],
                     )?)
                 } else {
                     None
@@ -858,6 +859,11 @@ fn prepare_manual_interactive_remesh(
                     "quality_data_artifact": remesh_result.quality_data_artifact.clone(),
                 }));
                 let mut candidate_state = live_workspace.snapshot();
+                candidate_state.metadata = Some(current_live_metadata(
+                    &prepared_remesh.stages[0].ir,
+                    &prepared_remesh.stage_execution_plans[0],
+                    workspace_status,
+                ));
                 {
                     let state = &mut candidate_state;
                     state.live_state.latest_step.fem_mesh_generation_id =

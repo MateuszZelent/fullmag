@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { ControlRoomApiError } from "../api/ControlRoomApi";
 
 import {
   MESHING_BUILDS_CURRENT_PATH,
@@ -988,6 +989,30 @@ describe("geometry lifecycle command contributions", () => {
     expect(observed).toHaveBeenCalledWith(expect.objectContaining({ commandId: "cmd-failed", status: "failed" }));
   });
 
+  it.each(["fem", "fdm"])("releases the %s submission lock after HTTP 409 so a corrected request can succeed", async (lane) => {
+    const registry = registryWithLifecycleCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const observed = vi.fn();
+    bus.on("mesh:build-observed", observed);
+    const submit = vi.fn()
+      .mockRejectedValueOnce(new ControlRoomApiError("scene_revision precondition failed", 409))
+      .mockResolvedValue({ accepted: true, command_id: "cmd-retry" });
+    const list = vi.fn(async () => ({ commands: [] }));
+    const detail = vi.fn(async () => ({
+      command_id: "cmd-retry", status: "completed", seq: 10,
+      resource_invalidations: [{ resource_key: "data/domain/topology", revision: 10 }],
+    }));
+    const context = { api: { commands: { submit, detail, list } } as never,
+      bus, resourceData: sessionStatus(lane), source: "test" as const };
+    const run = () => lane === "fem"
+      ? registry.execute("mesh.build-shared-domain", context)
+      : runFdmGridRefreshOperation(context, { kind: "fdm_grid_refresh" });
+    expect(await run()).toMatchObject({ status: "failed", message: "scene_revision precondition failed" });
+    expect(list).not.toHaveBeenCalled();
+    expect(observed).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
+    expect(await run()).toEqual({ commandId: "cmd-retry", status: "completed" });
+    expect(submit).toHaveBeenCalledTimes(2);
+  });
   it("reconciles a lost submission ACK by client intent and never retries the POST", async () => {
     const registry = registryWithLifecycleCommands();
     let intentId: string | undefined;

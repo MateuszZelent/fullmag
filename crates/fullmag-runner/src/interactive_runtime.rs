@@ -2696,6 +2696,8 @@ impl CpuInteractiveFdmPreviewRuntime {
                 report,
                 0,
                 self.state.magnetization(),
+                self.problem
+                    .rotated_interfacial_dmi_energy_from_vectors(self.state.magnetization()),
             ));
         }
 
@@ -2906,6 +2908,8 @@ impl CpuInteractiveFdmPreviewRuntime {
                 &report,
                 wall_elapsed,
                 self.state.magnetization(),
+                self.problem
+                    .rotated_interfacial_dmi_energy_from_vectors(self.state.magnetization()),
             );
             let mut local_stats = total_stats.clone();
             local_stats.step -= base_step;
@@ -3240,6 +3244,8 @@ impl CpuInteractiveFdmPreviewRuntime {
                 &report,
                 wall_elapsed,
                 self.state.magnetization(),
+                self.problem
+                    .rotated_interfacial_dmi_energy_from_vectors(self.state.magnetization()),
             );
             let mut local_stats = total_stats.clone();
             local_stats.step -= base_step;
@@ -4459,6 +4465,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 &report,
                 wall_elapsed,
                 self.state.magnetization(),
+                0.0,
             );
             let mut local_stats = total_stats.clone();
             local_stats.step -= base_step;
@@ -4784,6 +4791,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 &report,
                 wall_elapsed,
                 self.state.magnetization(),
+                0.0,
             );
             let mut local_stats = total_stats.clone();
             local_stats.step -= base_step;
@@ -6228,6 +6236,8 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         cuda_runtime_version: None,
         lossy_fallback_used: false,
         resolved_fallback: None,
+        fem_eigen_execution_resolution: None,
+        fem_eigen_native_execution_attestation: None,
         fem_crossover_decision: None,
         ignored_terms: Vec::new(),
         random_seed: None,
@@ -6287,6 +6297,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
         fem_poisson_demag: None,
+        fem_bem_demag: None,
     })
 }
 
@@ -6318,6 +6329,8 @@ fn cuda_execution_provenance(
         fdm_gpu_step_transaction_telemetry: None,
         fdm_gpu_observation_policy: None,
         fdm_gpu_endpoint_cache_telemetry: None,
+        fem_eigen_execution_resolution: None,
+        fem_eigen_native_execution_attestation: None,
         fdm_cpu_step_transaction_telemetry: None,
         fdm_cpu_evaluation_telemetry: None,
         fdm_fft_execution,
@@ -6418,6 +6431,7 @@ fn cuda_execution_provenance(
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
         fem_poisson_demag: None,
+        fem_bem_demag: None,
     })
 }
 
@@ -6456,6 +6470,8 @@ fn fem_gpu_execution_provenance(
         fdm_cpu_evaluation_telemetry: None,
         fdm_fft_execution: None,
         fem_gpu_execution_receipt: None,
+        fem_eigen_execution_resolution: None,
+        fem_eigen_native_execution_attestation: None,
         executed_physics_kinds: if timestep_policy.is_some() && plan.spin_torque_contract.is_some()
         {
             vec!["spin_torque".to_string()]
@@ -6590,6 +6606,7 @@ fn fem_gpu_execution_provenance(
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
         fem_poisson_demag: None,
+        fem_bem_demag: None,
     };
     crate::relaxation::apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
     crate::relaxation::apply_fem_direct_minimizer_policy_provenance(
@@ -6647,6 +6664,11 @@ fn make_step_stats(
         wall_time_ns,
         ..StepStats::default()
     };
+    stats.set_dmi_energy_components(
+        observables.dmi_energy - observables.rotated_dmi_energy,
+        0.0,
+        observables.rotated_dmi_energy,
+    );
     crate::scalar_metrics::apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
     stats.per_object_scalars = observables.per_object_scalars.clone();
     stats
@@ -6661,6 +6683,7 @@ fn make_step_stats_from_report(
     report: &fullmag_engine::StepReport,
     wall_time_ns: u64,
     magnetization: &[[f64; 3]],
+    rotated_dmi_energy: f64,
 ) -> StepStats {
     let mut stats = StepStats {
         step,
@@ -6681,6 +6704,11 @@ fn make_step_stats_from_report(
         wall_time_ns,
         ..StepStats::default()
     };
+    stats.set_dmi_energy_components(
+        report.dmi_energy_joules - rotated_dmi_energy,
+        0.0,
+        rotated_dmi_energy,
+    );
     crate::scalar_metrics::apply_average_m_to_step_stats(&mut stats, magnetization);
     stats
 }

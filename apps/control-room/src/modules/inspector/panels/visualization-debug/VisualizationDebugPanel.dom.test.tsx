@@ -105,7 +105,12 @@ describe("VisualizationDebugPanel mounted interaction", () => {
 
     expect(container.textContent).toContain("Evidence export");
     expect(container.textContent).toContain("Snapshot is stale");
-    expect(container.textContent).toContain("Evidence is internally consistent.");
+    expect(container.textContent).toContain("Health is unknown because evidence is incomplete.");
+    expect(container.textContent).not.toContain("Evidence is internally consistent.");
+    const health = findElements(container, (element) =>
+      element.getAttribute("class")?.includes("fm-visualization-debug-health") ?? false,
+    )[0];
+    expect(health?.getAttribute("data-disposition")).toBe("unknown");
     expect(container.textContent).toContain("Requested componentfull");
     expect(container.textContent).toContain("Decoded component— (not encoded)");
 
@@ -684,7 +689,10 @@ function createInspectableTimers() {
 
 async function settleMountedPanel(container: TestElement): Promise<void> {
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    if (container.textContent.includes("Evidence is internally consistent")) {
+    if (
+      container.textContent.includes("Evidence is internally consistent") ||
+      container.textContent.includes("Health is unknown because evidence is incomplete.")
+    ) {
       return;
     }
     await act(async () => {
@@ -692,7 +700,7 @@ async function settleMountedPanel(container: TestElement): Promise<void> {
       await Promise.resolve();
     });
   }
-  throw new Error("VisualizationDebugPanel did not reach the ready state.");
+  throw new Error("VisualizationDebugPanel did not settle its evidence state.");
 }
 
 function findButton(container: TestElement, name: string): TestElement {

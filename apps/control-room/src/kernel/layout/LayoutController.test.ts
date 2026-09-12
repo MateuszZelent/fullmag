@@ -66,6 +66,22 @@ describe("LayoutController", () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
+  it("applies the kernel-owned frequency-domain Results preset without a second shell", () => {
+    const { controller } = setup();
+    controller.setPanelVisible("left", false);
+    controller.setPanelVisible("right", false);
+    controller.setPanelVisible("bottom", false);
+
+    controller.applyPreset("workspace.results.frequency-domain");
+
+    expect(controller.get()).toMatchObject({
+      activeModuleTab: "results",
+      activeViewportMainModuleId: "analysis-plots",
+      focusedSlot: "panel-left",
+      panelVisible: { left: true, right: true, bottom: true },
+    });
+  });
+
   it("setActiveViewportMainModule() changes center viewport surface and emits layout-changed", () => {
     const { bus, controller } = setup();
     const listener = vi.fn();
