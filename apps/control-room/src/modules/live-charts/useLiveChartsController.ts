@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { liveChartsWorkspaceStore } from "@/kernel/workspace/liveChartsWorkspace";
 import { useLiveChartPreferencesHydration } from "@/kernel/workspace/useLiveChartPreferencesHydration";
@@ -32,6 +32,8 @@ type LiveChartPreferencesActions = Pick<
   ReturnType<typeof useLiveChartPreferencesHydration>,
   "setDescriptorLiveMode" | "setDescriptorRange" | "setDescriptorSelectedSeriesIds"
 >;
+type LiveChartsStateSetter<T> = (value: T | ((current: T) => T)) => void;
+let liveChartsLocalExportSequence = 0;
 
 export function createLiveChartSelectionHandlers({
   descriptorId,
@@ -117,7 +119,13 @@ export function useLiveChartsController(selection: SelectionController) {
   const [localFitRequest, setLocalFitRequest] = useState(0);
   const [localExportRequest, setLocalExportRequest] = useState<LiveChartsExportRequest | null>(null);
   const [exportErrorFormat, setExportErrorFormat] = useState<LiveChartsExportRequest["format"] | null>(null);
-  const localExportSequenceRef = useRef(0);
+  const onExport = (format: LiveChartsExportRequest["format"]) => {
+    setExportErrorFormat(null);
+    setLocalExportRequest({
+      format,
+      requestId: `live-charts-local-export-${++liveChartsLocalExportSequence}`,
+    });
+  };
   const fitRequest = commandFitRequest + localFitRequest;
   const commandExportRequest: LiveChartsExportRequest | null = commandAction?.kind === "export"
     ? {
@@ -179,21 +187,71 @@ export function useLiveChartsController(selection: SelectionController) {
     visibleRevision: descriptorId === "energy" ? energyData.resource.data?.revision ?? null : tableData.table?.revision ?? null,
   }, { latestKnownRevision: resource.revision, paused });
   const effectiveXAxisId = descriptorId === "energy" ? "t" : effectiveTableXAxisId;
+  const viewActions = createLiveChartsViewActions({
+    commandExportRequest,
+    descriptorId,
+    effectiveXAxisId,
+    onExport,
+    paused,
+    preferences,
+    requestedExportRequest,
+    requestedExportRequestId,
+    setExportErrorFormat,
+    setLocalExportRequest,
+    setLocalFitRequest,
+  });
   return {
+    ...viewActions,
+    ...selectionHandlers,
     descriptorId,
     exportErrorFormat,
     fitRequest,
     isFollowing: !paused,
+    range: descriptorId === "energy" ? descriptor.range : tableData.range,
+    xAxisId: effectiveXAxisId,
+    xAxisOptions: descriptorId === "energy" ? [{ id: "t", label: "Time (s)" }] : liveChartXAxisOptions(tableData.columns.data ?? []),
+    presentation,
+    requestedExportRequest,
+    series,
+    selectedSeriesIds,
+    title: liveChartPreset(descriptorId).title,
+    xAxisLabel: effectiveXAxisId === "t" || effectiveXAxisId === "time"
+      ? "Time"
+      : effectiveXAxisId === "step"
+        ? "Step"
+        : effectiveXAxisId,
+  };
+}
+
+function createLiveChartsViewActions({
+  commandExportRequest,
+  descriptorId,
+  effectiveXAxisId,
+  onExport,
+  paused,
+  preferences,
+  requestedExportRequest,
+  requestedExportRequestId,
+  setExportErrorFormat,
+  setLocalExportRequest,
+  setLocalFitRequest,
+}: {
+  commandExportRequest: LiveChartsExportRequest | null;
+  descriptorId: LiveChartPresetId;
+  effectiveXAxisId: string;
+  onExport: (format: LiveChartsExportRequest["format"]) => void;
+  paused: boolean;
+  preferences: LiveChartPreferencesActions;
+  requestedExportRequest: LiveChartsExportRequest | null;
+  requestedExportRequestId: string | null;
+  setExportErrorFormat: LiveChartsStateSetter<LiveChartsExportRequest["format"] | null>;
+  setLocalExportRequest: LiveChartsStateSetter<LiveChartsExportRequest | null>;
+  setLocalFitRequest: LiveChartsStateSetter<number>;
+}) {
+  return {
     onDescriptorChange: (next: LiveChartPresetId) => liveChartsWorkspaceStore.setSelectedDescriptorId(next),
-    onExport: (format: "csv" | "tsv" | "png") => {
-      setExportErrorFormat(null);
-      setLocalExportRequest({
-        format,
-        requestId: `live-charts-local-export-${++localExportSequenceRef.current}`,
-      });
-    },
+    onExport,
     onFit: () => setLocalFitRequest((value) => value + 1),
-    ...selectionHandlers,
     onRangeSelected: (fromSI: number, toSI: number) => {
       if (descriptorId !== "energy" && !isLiveChartTimeXAxisId(effectiveXAxisId)) return;
       liveChartsWorkspaceStore.setRange({ fromSI, toSI });
@@ -231,19 +289,6 @@ export function useLiveChartsController(selection: SelectionController) {
       preferences.setDescriptorRange(descriptorId, normalizeLiveChartRangeForXAxis(range, effectiveXAxisId));
       setLocalFitRequest((value) => value + 1);
     },
-    range: descriptorId === "energy" ? descriptor.range : tableData.range,
-    xAxisId: effectiveXAxisId,
-    xAxisOptions: descriptorId === "energy" ? [{ id: "t", label: "Time (s)" }] : liveChartXAxisOptions(tableData.columns.data ?? []),
-    presentation,
-    requestedExportRequest,
-    series,
-    selectedSeriesIds,
-    title: liveChartPreset(descriptorId).title,
-    xAxisLabel: effectiveXAxisId === "t" || effectiveXAxisId === "time"
-      ? "Time"
-      : effectiveXAxisId === "step"
-        ? "Step"
-        : effectiveXAxisId,
   };
 }
 
