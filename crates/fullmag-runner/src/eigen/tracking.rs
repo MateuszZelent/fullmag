@@ -57,6 +57,87 @@ fn normalized_complex_overlap(a: &[Complex64], b: &[Complex64]) -> Option<f64> {
     overlap.is_finite().then(|| overlap.clamp(0.0, 1.0))
 }
 
+/// Compute the normalized modal overlap in the FE mass metric when the
+/// solver supplied one positive weight for every active node.  The tracking
+/// vectors contain the same number of per-node components as the lifted mode
+/// representation (three Cartesian components for the native FEM path), so
+/// the component count is inferred from the vector length.  Returning
+/// `None` keeps the Euclidean overlap as an explicit compatibility fallback
+/// for legacy artifacts and reduced vectors without an aligned mass metric.
+fn normalized_mass_weighted_complex_overlap(
+    a: &[Complex64],
+    b: &[Complex64],
+    weights_a: &[f64],
+    weights_b: &[f64],
+) -> Option<f64> {
+    if a.is_empty()
+        || b.is_empty()
+        || a.len() != b.len()
+        || weights_a.is_empty()
+        || weights_a.len() != weights_b.len()
+        || a.len() % weights_a.len() != 0
+    {
+        return None;
+    }
+    let components_per_node = a.len() / weights_a.len();
+    if components_per_node == 0 {
+        return None;
+    }
+
+    let mut scale_a = 0.0_f64;
+    let mut scale_b = 0.0_f64;
+    for (lhs, rhs) in a.iter().zip(b) {
+        if !lhs.re.is_finite() || !lhs.im.is_finite() || !rhs.re.is_finite() || !rhs.im.is_finite()
+        {
+            return None;
+        }
+        scale_a = scale_a.max(lhs.norm());
+        scale_b = scale_b.max(rhs.norm());
+    }
+    if !(scale_a.is_finite() && scale_a > 0.0 && scale_b.is_finite() && scale_b > 0.0) {
+        return None;
+    }
+
+    let mut numerator = Complex64::new(0.0, 0.0);
+    let mut norm_a = 0.0_f64;
+    let mut norm_b = 0.0_f64;
+    for node in 0..weights_a.len() {
+        let weight_a = weights_a[node];
+        let weight_b = weights_b[node];
+        if !(weight_a.is_finite() && weight_b.is_finite() && weight_a > 0.0 && weight_b > 0.0) {
+            return None;
+        }
+        // A mode pair is comparable only when both artifacts describe the
+        // same FE metric.  Do not silently average or otherwise alter a
+        // mismatched mass diagonal.
+        if (weight_a - weight_b).abs() > 1.0e-12 * weight_a.max(weight_b) {
+            return None;
+        }
+        let weight = 0.5 * (weight_a + weight_b);
+        let start = node * components_per_node;
+        for component in 0..components_per_node {
+            let lhs = a[start + component] / scale_a;
+            let rhs = b[start + component] / scale_b;
+            numerator += weight * lhs.conj() * rhs;
+            norm_a += weight * lhs.norm_sqr();
+            norm_b += weight * rhs.norm_sqr();
+        }
+    }
+    let denominator = norm_a.sqrt() * norm_b.sqrt();
+    if !(norm_a.is_finite()
+        && norm_b.is_finite()
+        && denominator.is_finite()
+        && denominator > 0.0
+        && numerator.re.is_finite()
+        && numerator.im.is_finite())
+    {
+        return None;
+    }
+
+    let overlap = numerator.norm() / denominator;
+    overlap.is_finite().then(|| overlap.clamp(0.0, 1.0))
+}
+
 fn complex_overlap(a: &[Complex64], b: &[Complex64]) -> f64 {
     normalized_complex_overlap(a, b).unwrap_or(0.0)
 }
@@ -105,7 +186,13 @@ fn frequency_score(
 
 fn modal_overlap(prev: &SingleKModeResult, current: &SingleKModeResult) -> Option<f64> {
     match (&prev.reduced_vector, &current.reduced_vector) {
-        (Some(a), Some(b)) => normalized_complex_overlap(a, b),
+        (Some(a), Some(b)) => match (&prev.node_mass_weights, &current.node_mass_weights) {
+            (Some(weights_a), Some(weights_b)) => {
+                normalized_mass_weighted_complex_overlap(a, b, weights_a, weights_b)
+                    .or_else(|| normalized_complex_overlap(a, b))
+            }
+            _ => normalized_complex_overlap(a, b),
+        },
         _ => None,
     }
 }
@@ -902,6 +989,63 @@ mod tests {
         assert_eq!(result.samples[1].modes[0].branch_id, Some(0));
         assert_eq!(result.branches[0].points.len(), 2);
         assert!((result.branches[0].points[1].tracking_confidence - 1.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn modal_overlap_uses_the_fe_node_mass_metric_when_available() {
+        let mut previous = mode(0, 1.0, [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)]);
+        let mut current = mode(0, 1.0, [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)]);
+        // Three Cartesian entries per active node, matching the native FEM
+        // lifted mode artifact layout.
+        previous.reduced_vector = Some(vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ]);
+        current.reduced_vector = Some(vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(-1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ]);
+        previous.node_mass_weights = Some(vec![100.0, 1.0]);
+        current.node_mass_weights = Some(vec![100.0, 1.0]);
+
+        let euclidean = normalized_complex_overlap(
+            previous.reduced_vector.as_ref().unwrap(),
+            current.reduced_vector.as_ref().unwrap(),
+        )
+        .unwrap();
+        let weighted = modal_overlap(&previous, &current).unwrap();
+        assert!(euclidean.abs() < 1.0e-12);
+        assert!((weighted - 99.0 / 101.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn modal_overlap_falls_back_to_euclidean_for_unaligned_mass_metadata() {
+        let mut previous = mode(0, 1.0, [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)]);
+        let mut current = previous.clone();
+        previous.reduced_vector = Some(vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ]);
+        current.reduced_vector = Some(vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ]);
+        previous.node_mass_weights = Some(vec![1.0, 2.0, 3.0]);
+        current.node_mass_weights = Some(vec![1.0, 2.0]);
+
+        assert!((modal_overlap(&previous, &current).unwrap() - 1.0).abs() < 1.0e-12);
     }
 
     #[test]
