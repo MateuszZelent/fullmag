@@ -1751,7 +1751,11 @@ fn snapshot_native_multilayer_observables(
         let mut h_ex = backend.copy_layer_h_ex(layer_index as u32, cell_count)?;
         let mut h_ani = backend.copy_layer_h_ani(layer_index as u32, cell_count)?;
         let mut h_dmi = backend.copy_layer_h_dmi(layer_index as u32, cell_count)?;
-        let mut h_rotated_dmi = backend.copy_layer_h_rotated_dmi(layer_index as u32, cell_count)?;
+        let mut h_rotated_dmi = if plan.rotated_interfacial_dmi.is_some() {
+            backend.copy_layer_h_rotated_dmi(layer_index as u32, cell_count)?
+        } else {
+            vec![[0.0; 3]; cell_count]
+        };
         let mut native_h_eff = backend.copy_layer_h_eff(layer_index as u32, cell_count)?;
         let active_mask = context.problem.active_mask.as_deref();
         // The native multilayer ABI materializes the uniform Zeeman field in
@@ -1773,7 +1777,16 @@ fn snapshot_native_multilayer_observables(
                     .collect::<Vec<_>>()
             })
             .unwrap_or_else(|| vec![[0.0; 3]; cell_count]);
-        for _ in 0..7 {
+        // H_rotated_dmi is a real native observable only when the plan
+        // contains the rotated term.  Keep the receipt count exact for
+        // conventional-DMI snapshots (six fields) while retaining the
+        // seventh device-to-host vector for an active rDMI term.
+        let observed_vector_fields = if plan.rotated_interfacial_dmi.is_some() {
+            7
+        } else {
+            6
+        };
+        for _ in 0..observed_vector_fields {
             transfer_counters.record_observed_snapshot_d2h_vector(cell_count);
         }
         for field in [

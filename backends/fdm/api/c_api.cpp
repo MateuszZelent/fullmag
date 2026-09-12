@@ -1980,6 +1980,13 @@ int fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
         }
         return FULLMAG_FDM_ERR_CUDA;
     }
+    // The setter is a pre-step configuration boundary.  Keep the receipt's
+    // DMI requirement synchronized with the post-mutation Hamiltonian rather
+    // than retaining a stale bit from an earlier enable operation.
+    const bool dmi_required = ctx->has_interfacial_dmi ||
+        ctx->has_rotated_interfacial_dmi || ctx->has_bulk_dmi;
+    fullmag_fdm_set_operator_device_requirement(
+        *ctx->execution_receipt, FULLMAG_FDM_OPERATOR_DMI, dmi_required);
     fullmag_fdm_commit_operator_residency(*ctx);
     return FULLMAG_FDM_OK;
 #else

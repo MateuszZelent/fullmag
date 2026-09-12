@@ -4609,6 +4609,7 @@ mod tests {
                     final_e_ext: None,
                     final_e_ani: None,
                     final_e_dmi: None,
+                    final_e_rotated_dmi: None,
                     final_e_total: None,
                     artifact_dir: artifact_dir.display().to_string(),
                 }),

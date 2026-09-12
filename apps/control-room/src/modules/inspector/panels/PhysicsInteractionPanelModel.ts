@@ -139,14 +139,22 @@ export function draftFromStudyScene(
 
   if (id === "rotated_interfacial_dmi") {
     const value = study?.rotated_interfacial_dmi;
-    const present = typeof value === "number" && Number.isFinite(value);
+    const parsedValue =
+      typeof value === "number"
+        ? Number.isFinite(value)
+          ? value
+          : null
+        : typeof value === "string" && value.trim() !== ""
+          ? Number(value)
+          : null;
+    const present = parsedValue !== null && Number.isFinite(parsedValue);
     return {
       ...draft,
       enabled: present,
       present,
       values: {
         ...draft.values,
-        d: present ? String(value) : "0.003",
+        d: present ? String(parsedValue) : "0.003",
       },
     };
   }

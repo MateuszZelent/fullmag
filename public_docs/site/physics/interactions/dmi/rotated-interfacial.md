@@ -201,9 +201,11 @@ current FEM path also rejects the two field quantities until their separate
 materialization path exists; global `E_rotated_dmi` remains available.
 
 `E_dmi` and `eden_dmi` include the rotated component; `E_total` and `eden_total`
-count it only once. A completed-run manifest stores aggregate `final_e_dmi`.
-The API uses it for `E_rotated_dmi` only when the saved plan proves that rDMI
-is the sole DMI term. FDM supports on-demand `eden_rotated_dmi` materialization,
+count it only once. A completed-run manifest stores both aggregate
+`final_e_dmi` and the separate `final_e_rotated_dmi` component. The API prefers
+the separate component; for legacy manifests it uses `final_e_dmi` for
+`E_rotated_dmi` only when the saved plan proves that rDMI is the sole DMI term.
+FDM supports on-demand `eden_rotated_dmi` materialization,
 but scheduled snapshots and field autosave of that scalar field are currently
 rejected. FEM eigenmode and frequency-response profiles reject rDMI and do not
 advertise its quantities.

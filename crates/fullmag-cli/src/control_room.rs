@@ -1880,6 +1880,7 @@ mod live_delta_routing_tests {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 1.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,

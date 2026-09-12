@@ -191,13 +191,16 @@ pub(crate) fn run_manifest_scalar_value(
         "e_ext" => run.and_then(|manifest| manifest.final_e_ext),
         "e_ani" => run.and_then(|manifest| manifest.final_e_ani),
         "e_dmi" => run.and_then(|manifest| manifest.final_e_dmi),
-        // Completed-run manifests expose the aggregate DMI value only. It is
-        // also the exact rotated component for a rotated-only plan; mixed DMI
-        // plans remain unavailable until manifests persist component splits.
-        "e_rotated_dmi" => plan
-            .is_some_and(plan_is_rotated_dmi_only)
-            .then(|| run.and_then(|manifest| manifest.final_e_dmi))
-            .flatten(),
+        // Prefer the component written by the runner.  Keep the legacy
+        // aggregate fallback only for old rotated-only manifests, where the
+        // aggregate is mathematically identical to the rotated component.
+        "e_rotated_dmi" => run
+            .and_then(|manifest| manifest.final_e_rotated_dmi)
+            .or_else(|| {
+                plan.is_some_and(plan_is_rotated_dmi_only)
+                    .then(|| run.and_then(|manifest| manifest.final_e_dmi))
+                    .flatten()
+            }),
         "e_total" => run.and_then(|manifest| manifest.final_e_total),
         _ => None,
     }
@@ -603,5 +606,33 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[test]
+    fn rotated_dmi_manifest_component_takes_precedence_over_aggregate() {
+        let run: RunManifest = serde_json::from_value(serde_json::json!({
+            "run_id": "completed-rdmi-component",
+            "session_id": "test",
+            "status": "completed",
+            "total_steps": 10,
+            "final_e_dmi": -2.5e-18,
+            "final_e_rotated_dmi": -1.25e-18,
+            "artifact_dir": "."
+        }))
+        .unwrap();
+        let mixed_plan = completed_run_plan(BackendPlanIR::Fdm(FdmPlanIR {
+            rotated_interfacial_dmi: Some(3.0e-3),
+            bulk_dmi: Some(1.0e-3),
+            ..FdmPlanIR::default()
+        }));
+
+        assert_eq!(
+            run_manifest_scalar_value(Some(&run), "e_rotated_dmi", Some(&mixed_plan)),
+            run.final_e_rotated_dmi
+        );
+        assert_eq!(
+            run_manifest_scalar_value(Some(&run), "e_rotated_dmi", None),
+            run.final_e_rotated_dmi
+        );
     }
 }

@@ -334,6 +334,8 @@ pub(crate) struct RunManifest {
     pub final_e_ani: Option<f64>,
     #[serde(default)]
     pub final_e_dmi: Option<f64>,
+    #[serde(default)]
+    pub final_e_rotated_dmi: Option<f64>,
     pub final_e_total: Option<f64>,
     pub artifact_dir: String,
 }

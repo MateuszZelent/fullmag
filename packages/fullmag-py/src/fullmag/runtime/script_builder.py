@@ -8908,7 +8908,8 @@ def _validate_energy_terms(problem: Problem) -> None:
     exchange_count = 0
     demag_count = 0
     zeeman_count = 0
-    dmi_count = 0
+    conventional_dmi_count = 0
+    rotated_dmi_count = 0
     for term in problem.energy:
         if isinstance(term, Exchange):
             exchange_count += 1
@@ -8916,8 +8917,11 @@ def _validate_energy_terms(problem: Problem) -> None:
         if isinstance(term, Zeeman):
             zeeman_count += 1
             continue
-        if isinstance(term, (InterfacialDMI, RotatedInterfacialDMI)):
-            dmi_count += 1
+        if isinstance(term, InterfacialDMI):
+            conventional_dmi_count += 1
+            continue
+        if isinstance(term, RotatedInterfacialDMI):
+            rotated_dmi_count += 1
             continue
         if isinstance(term, Demag):
             demag_count += 1
@@ -8935,7 +8939,10 @@ def _validate_energy_terms(problem: Problem) -> None:
                     "canonical flat-script rewrite does not yet support explicit demag realizations"
                 )
             continue
-        if isinstance(term, (BulkDMI, OerstedCylinder, OerstedField, Magnetoelastic, UniaxialAnisotropy, CubicAnisotropy, ThermalNoise)):
+        if isinstance(term, BulkDMI):
+            conventional_dmi_count += 1
+            continue
+        if isinstance(term, (OerstedCylinder, OerstedField, Magnetoelastic, UniaxialAnisotropy, CubicAnisotropy, ThermalNoise)):
             continue
         raise ValueError(
             f"canonical flat-script rewrite does not yet support energy term {type(term).__name__}"
@@ -8944,9 +8951,13 @@ def _validate_energy_terms(problem: Problem) -> None:
         raise ValueError(
             "canonical flat-script rewrite currently supports at most one exchange term and one demag term"
         )
-    if zeeman_count > 1 or dmi_count > 1:
+    if zeeman_count > 1 or conventional_dmi_count + rotated_dmi_count > 1:
         raise ValueError(
             "canonical flat-script rewrite does not yet support multiple Zeeman or DMI terms"
+        )
+    if conventional_dmi_count and rotated_dmi_count:
+        raise ValueError(
+            "canonical flat-script rewrite does not support mixed conventional and rotated DMI terms"
         )
 
 

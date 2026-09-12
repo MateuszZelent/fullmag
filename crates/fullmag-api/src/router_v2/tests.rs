@@ -2253,6 +2253,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
             final_e_ext: Some(3.0),
             final_e_ani: Some(4.0),
             final_e_dmi: Some(5.0),
+            final_e_rotated_dmi: None,
             final_e_total: Some(15.0),
             artifact_dir: "/tmp/fullmag-tests".into(),
         });
@@ -3426,6 +3427,7 @@ async fn status_exposes_fem_auto_device_crossover_decision() {
             final_e_ext: None,
             final_e_ani: None,
             final_e_dmi: None,
+            final_e_rotated_dmi: None,
             final_e_total: None,
             artifact_dir: "/tmp/fullmag-tests".into(),
         });

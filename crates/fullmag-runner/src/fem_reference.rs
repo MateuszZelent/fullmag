@@ -176,6 +176,7 @@ pub(crate) fn fem_energy_density_values(
     saturation_magnetisation: f64,
     active_mask: Option<&[bool]>,
 ) -> Result<Option<Vec<f64>>, RunError> {
+    let aggregate_dmi_field = aggregate_dmi_field(observables)?;
     let values = match quantity {
         "eden_ex" => field_dot_energy_density(
             &observables.magnetization,
@@ -211,7 +212,7 @@ pub(crate) fn fem_energy_density_values(
         )?,
         "eden_dmi" => field_dot_energy_density(
             &observables.magnetization,
-            &observables.dmi_field,
+            &aggregate_dmi_field,
             saturation_magnetisation,
             -0.5,
             active_mask,
@@ -236,6 +237,36 @@ pub(crate) fn fem_energy_density_values(
         _ => return Ok(None),
     };
     Ok(Some(values))
+}
+
+fn aggregate_dmi_field(observables: &StateObservables) -> Result<Vec<[f64; 3]>, RunError> {
+    let node_count = observables.magnetization.len();
+    let mut aggregate = vec![[0.0, 0.0, 0.0]; node_count];
+    for (label, field) in [
+        ("conventional DMI", &observables.dmi_field),
+        ("rotated DMI", &observables.rotated_dmi_field),
+        ("bulk DMI", &observables.bulk_dmi_field),
+    ] {
+        if field.is_empty() {
+            continue;
+        }
+        if field.len() != node_count {
+            return Err(RunError {
+                message: format!(
+                    "FEM aggregate DMI field requires {} nodes for {}, got {}",
+                    node_count,
+                    label,
+                    field.len()
+                ),
+            });
+        }
+        for (target, source) in aggregate.iter_mut().zip(field) {
+            target[0] += source[0];
+            target[1] += source[1];
+            target[2] += source[2];
+        }
+    }
+    Ok(aggregate)
 }
 
 fn field_dot_energy_density(
@@ -1459,6 +1490,22 @@ pub(crate) fn observe_state(
         problem.material.damping,
         problem.dynamics.precession_enabled,
     );
+    let rotated_dmi_field = problem
+        .rotated_interfacial_dmi_field_from_vectors(&observables.magnetization);
+    let rotated_dmi_energy = problem
+        .rotated_interfacial_dmi_energy_from_vectors(&observables.magnetization);
+    let conventional_dmi_field = observables
+        .dmi_field
+        .iter()
+        .zip(rotated_dmi_field.iter())
+        .map(|(total, rotated)| {
+            [
+                total[0] - rotated[0],
+                total[1] - rotated[1],
+                total[2] - rotated[2],
+            ]
+        })
+        .collect();
     Ok(StateObservables {
         magnetization: observables.magnetization,
         torque_field,
@@ -1469,8 +1516,8 @@ pub(crate) fn observe_state(
         drive_field: vec![[0.0, 0.0, 0.0]; observables.effective_field.len()],
         effective_field: observables.effective_field,
         anisotropy_field: Vec::new(),
-        dmi_field: Vec::new(),
-        rotated_dmi_field: Vec::new(),
+        dmi_field: conventional_dmi_field,
+        rotated_dmi_field,
         magnetoelastic_field: Vec::new(),
         cubic_anisotropy_field: Vec::new(),
         bulk_dmi_field: Vec::new(),
@@ -1481,8 +1528,8 @@ pub(crate) fn observe_state(
         external_energy: observables.external_energy_joules,
         drive_energy: 0.0,
         anisotropy_energy: 0.0,
-        dmi_energy: 0.0,
-        rotated_dmi_energy: 0.0,
+        dmi_energy: observables.dmi_energy_joules - rotated_dmi_energy,
+        rotated_dmi_energy,
         total_energy: observables.total_energy_joules,
         max_dm_dt: observables.max_rhs_amplitude,
         max_rhs_all_norm_per_s: observables.max_rhs_all_amplitude,
@@ -1532,6 +1579,11 @@ fn make_step_stats(
         &mut stats,
         &observables.magnetization,
         magnetic_node_volumes,
+    );
+    stats.set_dmi_energy_components(
+        observables.dmi_energy,
+        0.0,
+        observables.rotated_dmi_energy,
     );
     stats.per_object_scalars = fem_per_object_scalars(
         object_segments,
@@ -2640,6 +2692,38 @@ mod tests {
                 .iter()
                 .any(|value| value.abs() > 0.0),
             "expected FEM eden_total preview to contain nonzero scalar values"
+        );
+    }
+
+    #[test]
+    fn fem_snapshot_eden_dmi_includes_rotated_interfacial_component() {
+        let mut plan = make_test_plan(false);
+        plan.enable_exchange = false;
+        plan.rotated_interfacial_dmi = Some(3e-3);
+        plan.initial_magnetization = vec![
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ];
+
+        let fields = snapshot_vector_fields(
+            &plan,
+            &["eden_dmi"],
+            &crate::LivePreviewRequest::default(),
+        )
+        .expect("FEM rotated-DMI energy-density preview should succeed");
+        let dmi = fields
+            .iter()
+            .find(|field| field.quantity == "eden_dmi")
+            .expect("eden_dmi preview should be present");
+        assert_eq!(dmi.spatial_kind, "mesh");
+        assert_eq!(dmi.vector_field_values.len(), plan.mesh.nodes.len());
+        assert!(
+            dmi.vector_field_values
+                .iter()
+                .any(|value| value.abs() > 0.0),
+            "rotated interfacial DMI must be represented in FEM eden_dmi"
         );
     }
 

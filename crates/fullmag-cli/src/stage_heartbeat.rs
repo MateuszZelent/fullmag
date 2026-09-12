@@ -74,6 +74,7 @@ impl StageHeartbeatProgress {
         run.final_e_ext = Some(self.stats.e_ext);
         run.final_e_ani = Some(self.stats.e_ani);
         run.final_e_dmi = Some(self.stats.e_dmi);
+        run.final_e_rotated_dmi = Some(self.stats.e_rotated_dmi);
         run.final_e_total = Some(self.stats.e_total);
     }
 }

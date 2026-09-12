@@ -263,6 +263,31 @@ def _goebel_plan_has_only_expected_physics(plan: dict[str, object]) -> bool:
     return all(is_empty(plan.get(key)) for key in disallowed)
 
 
+def _goebel_material_has_only_expected_physics(material: object) -> bool:
+    """Require the Göbel material record to contain only its five source terms."""
+
+    if not isinstance(material, dict):
+        return False
+    allowed = {
+        "name",
+        "saturation_magnetisation",
+        "exchange_stiffness",
+        "damping",
+        "uniaxial_anisotropy_ku1",
+        "anisotropy_axis",
+    }
+    if any(key not in allowed for key in material):
+        return False
+    required = {
+        "saturation_magnetisation",
+        "exchange_stiffness",
+        "damping",
+        "uniaxial_anisotropy_ku1",
+        "anisotropy_axis",
+    }
+    return required.issubset(material)
+
+
 def _initial_energy_from_log(path: Path) -> float:
     pattern = re.compile(r"stage 1/4 .*?step\s+0 .*?E_total=([-+0-9.eE]+)")
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -316,7 +341,13 @@ def verify_bundle(
     receipt = execution["fdm_gpu_execution_receipt"]
     if not runtime_log.is_file():
         raise ValueError(f"runtime log is missing: {runtime_log}")
-    initial_energy = _initial_energy_from_log(runtime_log)
+    # The first scalar row is the authoritative energy of the saved initial
+    # state.  Keep the runtime log as a bound receipt by requiring its stage-0
+    # value to agree with that row; never let an unrelated log select the
+    # comparison baseline.
+    relax_initial_scalars = _first_scalar(relax / "scalars.csv")
+    initial_energy = relax_initial_scalars["E_total"]
+    runtime_log_initial_energy = _initial_energy_from_log(runtime_log)
     plan = metadata["execution_plan"]["backend_plan"]
     material = plan["material"]
     periodicity = plan["periodicity"]
@@ -394,6 +425,7 @@ def verify_bundle(
             and plan.get("enable_demag") is True
             and plan.get("temperature", 0.0) == 0.0
             and _goebel_plan_has_only_expected_physics(plan)
+            and _goebel_material_has_only_expected_physics(material)
             and material["saturation_magnetisation"] == 0.58e6
             and material["exchange_stiffness"] == 15e-12
             and material["damping"] == 0.3
@@ -420,7 +452,15 @@ def verify_bundle(
             and hold_receipt["executed_host_operator_mask"] == 0
             and hold_receipt["executed_unknown_operator_mask"] == 0
         ),
-        "energy_decreased": hold_scalars["E_total"] < initial_energy,
+        "energy_decreased": (
+            math.isclose(
+                runtime_log_initial_energy,
+                initial_energy,
+                rel_tol=5.0e-4,
+                abs_tol=1.0e-30,
+            )
+            and hold_scalars["E_total"] < initial_energy
+        ),
         "initial_charge": abs(float(initial["topological_charge"])) >= thresholds["min_abs_topological_charge"],
         "relaxed_charge": abs(float(relaxed["topological_charge"])) >= thresholds["min_abs_topological_charge"],
         "held_charge": abs(float(held["topological_charge"])) >= thresholds["min_abs_topological_charge"],
