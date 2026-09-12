@@ -4315,6 +4315,7 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
     assert!(spectrum_v2["samples"][0]["modes"][0]
         .get("component_participation")
         .is_none());
+    assert_eq!(spectrum_v2["samples"][0]["sample_id"], "k-sample-0000");
     assert_eq!(spectrum_v2["solve_succeeded"], true);
     assert_eq!(spectrum_v2["fields_available"], true);
     assert_eq!(spectrum_v2["spectrum_completeness"], "selected_only");
@@ -4337,6 +4338,7 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
         spectrum_v3["samples"][0]["modes"][0]["component_participation"]["status"],
         "unavailable"
     );
+    assert_eq!(spectrum_v3["samples"][0]["sample_id"], "k-sample-0000");
     let manifest = artifacts
         .iter()
         .find(|artifact| artifact.relative_path == "frequency_domain/manifest.v1.json")

@@ -82,6 +82,18 @@ pub(super) fn mode_field_resource_key(sample_index: usize, raw_mode_index: u64) 
     )
 }
 
+fn modal_sample_id(plan: &FemEigenPlanIR, sample_index: usize) -> String {
+    let prefix = if !plan.bias_field_samples.is_empty() {
+        "bias-field-sample"
+    } else {
+        match plan.k_sampling {
+            Some(KSamplingIR::Path { .. }) => "k-path-sample",
+            Some(KSamplingIR::Single { .. }) | None => "k-sample",
+        }
+    };
+    format!("{prefix}-{sample_index:04}")
+}
+
 fn mode_meta_resource_key(sample_index: usize, raw_mode_index: u64) -> String {
     format!(
         "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/{sample_index}/{raw_mode_index}/meta"
@@ -546,6 +558,7 @@ pub(super) fn write_eigen_v2_bundle(
         "sample_count": 1,
         "mode_count": spectrum_v2_modes.len(),
         "samples": [{
+            "sample_id": modal_sample_id(plan, sample_index),
             "sample_index": sample_index,
             "label": label,
             "k_vector": k_vector,
@@ -630,7 +643,7 @@ pub(super) fn write_eigen_v2_bundle(
         "sample_count": 1,
         "mode_count": spectrum_v3_modes.len(),
         "samples": [{
-            "sample_id": format!("bias-field-sample-{sample_index:04}"),
+            "sample_id": modal_sample_id(plan, sample_index),
             "sample_index": sample_index,
             "label": label,
             "k_vector": k_vector,
