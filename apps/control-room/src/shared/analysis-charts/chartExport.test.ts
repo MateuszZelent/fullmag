@@ -170,4 +170,15 @@ describe("chart export", () => {
     expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:chart");
     vi.unstubAllGlobals();
   });
+
+  it("reports a failed download when the browser cannot create a blob URL", () => {
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => {
+        throw new Error("blob URLs unavailable");
+      }),
+      revokeObjectURL: vi.fn(),
+    });
+    expect(downloadChartBlob({ content: "x", filename: "x.csv", mimeType: "text/csv" })).toBe(false);
+    vi.unstubAllGlobals();
+  });
 });

@@ -70,6 +70,7 @@ async function main() {
     await verifySignalSearchAndBulkSelection(page, evidence);
     await verifyCanonicalCsvExport(page);
     await verifyKeyboardInteractions(page, evidence);
+    await verifyRepeatedPngCommands(page);
     await runRevisionStress(page, fixture, evidence);
     await verifyIrrelevantRevisionBudget(page, fixture, evidence);
     await keyboardPauseAndFollow(page, fixture, evidence);
@@ -866,8 +867,8 @@ async function verifyAxisAndRangeRegression(browser) {
 
     await waitForLiveChartSelectValue(page, "Sample window", "Latest samples");
     const rangeTransitions = ["Latest samples"];
-    await selectLiveChartOption(page, "Sample window", "Full history");
-    rangeTransitions.push("Full history");
+    await selectLiveChartOption(page, "Sample window", "Last 5,000 samples (decimated)");
+    rangeTransitions.push("Last 5,000 samples (decimated)");
     await verifyOneVisibleCanvas(page);
     await selectLiveChartOption(page, "Sample window", "Latest samples");
     rangeTransitions.push("Latest samples");
@@ -1037,6 +1038,28 @@ async function verifyCanonicalCsvExport(page) {
       throw new Error(`Canonical CSV ${quantity} differs: ${JSON.stringify(final)}`);
     }
   }
+}
+
+async function verifyRepeatedPngCommands(page) {
+  const canvas = await page.locator(".fm-live-charts canvas").first().elementHandle();
+  if (!canvas) throw new Error("PNG command verification requires a mounted canvas.");
+  for (let index = 0; index < 2; index += 1) {
+    await page.keyboard.press("Control+Shift+P");
+    const palette = page.getByRole("dialog", { name: "Command palette", exact: true });
+    await palette.getByPlaceholder("Search commands").fill("Export Live Chart PNG");
+    const downloaded = page.waitForEvent("download", { timeout: timeoutMs });
+    await palette.getByRole("option").filter({ hasText: "Export Live Chart PNG" }).click();
+    const download = await downloaded;
+    if (!download.suggestedFilename().endsWith(".png")) {
+      throw new Error("Live Chart PNG command produced an unexpected file.");
+    }
+    await palette.waitFor({ state: "hidden" });
+    await waitForQuietFrames(page);
+    if (!(await canvas.evaluate((node) => node.isConnected && node.width > 0 && node.height > 0))) {
+      throw new Error("PNG export replaced the chart canvas or lost its drawing buffer.");
+    }
+  }
+  await canvas.dispose();
 }
 
 async function verifySignalSearchAndBulkSelection(page, evidence) {
@@ -1444,8 +1467,8 @@ function validateProof(proof, evidence) {
   if (evidence.consoleErrors.length > 0) failures.push(`Browser errors: ${evidence.consoleErrors.join(" | ")}`);
   if (proof.counters.chartInstances !== 1) failures.push(`final ECharts owners=${proof.counters.chartInstances}`);
   if (proof.visibilityCombinations !== 8) failures.push("Visibility matrix did not cover all eight combinations.");
-  if (!proof.axisRange || proof.axisRange.axes?.join("->") !== "Step->Time (s)->Step" || proof.axisRange.range?.join("->") !== "Latest samples->Full history->Latest samples") {
-    failures.push("Axis/range browser regression did not cover Step->Time->Step and Full history->Latest samples.");
+  if (!proof.axisRange || proof.axisRange.axes?.join("->") !== "Step->Time (s)->Step" || proof.axisRange.range?.join("->") !== "Latest samples->Last 5,000 samples (decimated)->Latest samples") {
+    failures.push("Axis/range browser regression did not cover Step->Time->Step and Last 5,000 samples (decimated)->Latest samples.");
   }
   const idleDelta = proof.idle?.chartDiagnostics?.delta;
   if (!idleDelta || Object.values(idleDelta).some((delta) => delta !== 0)) failures.push(`idle chart diagnostics changed: ${JSON.stringify(idleDelta)}`);

@@ -5,6 +5,9 @@ import {
   compatibleLiveChartPanes,
   liveChartDescriptorDefaults,
   liveChartPreset,
+  normalizeLiveChartRangeForXAxis,
+  resolveLiveChartAxisAndRange,
+  resolveLiveChartXAxisId,
 } from "./liveChartsModel";
 
 describe("liveChartsModel", () => {
@@ -45,7 +48,48 @@ describe("liveChartsModel", () => {
     const tailTime = buildLiveChartsTableQuery({ columns: ["t", "mx"], cursor: 12, latestX: 4e-9, range: { mode: "tailTime", durationS: 1e-9 }, targetPoints: 800, xAxisId: "t" });
     expect(tailTime).toMatchObject({ toT: 4e-9, includeTail: false });
     expect(tailTime.fromT).toBeCloseTo(3e-9);
-    expect(buildLiveChartsTableQuery({ columns: ["step", "mx"], cursor: 12, latestX: 10, range: { mode: "fixed", fromSI: 3, toSI: 8 }, targetPoints: 800, xAxisId: "step" })).toMatchObject({ fromRow: 3, toRow: 8, includeTail: false });
-    expect(buildLiveChartsTableQuery({ columns: ["step", "mx"], cursor: 12, latestX: 10, range: { mode: "fullDecimated" }, targetPoints: 800, xAxisId: "step" })).toMatchObject({ includeTail: false, limit: 800, targetPoints: 800 });
+    const stepFixed = buildLiveChartsTableQuery({ columns: ["step", "mx"], cursor: 12, latestX: 10, range: { mode: "fixed", fromSI: 3, toSI: 8 }, targetPoints: 800, xAxisId: "step" });
+    expect(stepFixed).toMatchObject({ cursor: 12, includeTail: true });
+    expect(stepFixed.fromRow).toBeUndefined();
+    expect(stepFixed.toRow).toBeUndefined();
+    expect(buildLiveChartsTableQuery({ columns: ["t", "mx"], cursor: 12, latestX: 10, range: { mode: "fixed", fromSI: 3, toSI: 8 }, targetPoints: 800, xAxisId: "t" })).toMatchObject({ fromT: 3, toT: 8, includeTail: false });
+    expect(buildLiveChartsTableQuery({ columns: ["step", "mx"], cursor: 12, latestX: 10, range: { mode: "fullDecimated" }, targetPoints: 800, xAxisId: "step" })).toMatchObject({ includeTail: false, limit: 5_000, targetPoints: 800 });
+  });
+
+  it("fails closed instead of treating an arbitrary observable axis as row coordinates", () => {
+    const query = buildLiveChartsTableQuery({
+      columns: ["step", "mx"],
+      cursor: 12,
+      latestX: 10,
+      range: { mode: "fixed", fromSI: 3, toSI: 8 },
+      targetPoints: 800,
+      xAxisId: "mx",
+    });
+    expect(query).toMatchObject({ cursor: 12, includeTail: true, limit: 5_000 });
+    expect(query.fromRow).toBeUndefined();
+    expect(query.toRow).toBeUndefined();
+    expect(query.fromT).toBeUndefined();
+    expect(query.toT).toBeUndefined();
+  });
+
+  it("resolves only published server-query axes and resets ranges after an axis fallback", () => {
+    expect(resolveLiveChartXAxisId(["step", "t", "mx"], "mx")).toBe("step");
+    expect(resolveLiveChartXAxisId(["t", "mx"], "removed-axis")).toBe("t");
+    expect(resolveLiveChartXAxisId(["mx"], "removed-axis")).toBe("mx");
+
+    expect(resolveLiveChartAxisAndRange(["step", "t", "mx"], "mx", { mode: "fixed", fromSI: 3, toSI: 8 })).toEqual({
+      axisChanged: true,
+      range: { mode: "follow" },
+      xAxisId: "step",
+    });
+    expect(resolveLiveChartAxisAndRange(["step", "t", "mx"], "removed-axis", { mode: "tailTime", durationS: 1e-9 })).toEqual({
+      axisChanged: true,
+      range: { mode: "follow" },
+      xAxisId: "step",
+    });
+    expect(normalizeLiveChartRangeForXAxis({ mode: "tailTime", durationS: 1e-9 }, "step")).toEqual({ mode: "follow" });
+    expect(normalizeLiveChartRangeForXAxis({ mode: "fixed", fromSI: 3, toSI: 8 }, "step")).toEqual({ mode: "follow" });
+    expect(normalizeLiveChartRangeForXAxis({ mode: "fixed", fromSI: 3, toSI: 8 }, "mx")).toEqual({ mode: "follow" });
+    expect(normalizeLiveChartRangeForXAxis({ mode: "tailRows", rows: 120 }, "mx")).toEqual({ mode: "tailRows", rows: 120 });
   });
 });

@@ -14,6 +14,7 @@ import type { InteractiveChartSurfaceIdentity } from "@/shared/analysis-charts/I
 import type {
   ChartResultExportContext,
 } from "@/shared/analysis-charts/chartRenderer";
+import type { ChartExportRequest } from "@/shared/analysis-charts/chartExport";
 
 import {
   chartCursorPointFromEChartsClick,
@@ -65,7 +66,8 @@ export function EChartsSurface({
   series,
   xAxisLabel,
 }: EChartsSurfaceProps) {
-  const [requestedExportFormat, setRequestedExportFormat] = useState<"csv" | "tsv" | "png" | null>(null);
+  const [requestedExportRequest, setRequestedExportRequest] = useState<ChartExportRequest | null>(null);
+  const exportRequestSequenceRef = useRef(0);
   const rangeCommitTimerRef = useRef<number | null>(null);
   const surfaceStatus = presentation?.kind === "refreshing" && series.some((entry) => entry.points.length > 0)
     ? "refreshing"
@@ -80,9 +82,14 @@ export function EChartsSurface({
     if (!bus) return;
     const acceptedChartId = chartId ?? series[0]?.source.tableId ?? "default";
     return bus.subscribe("analysis-plots:export-requested", (request) => {
-      if (request.chartId === acceptedChartId) setRequestedExportFormat(request.format);
+      if (request.chartId === acceptedChartId) {
+        setRequestedExportRequest({
+          format: request.format,
+          requestId: request.requestId ?? `analysis-chart-export-${acceptedChartId}-${++exportRequestSequenceRef.current}`,
+        });
+      }
     });
-  }, [bus, chartId, series]);
+  }, [bus, chartId, series, exportRequestSequenceRef]);
 
   return (
     <InteractiveChartSurface
@@ -107,7 +114,7 @@ export function EChartsSurface({
       fitRequest={fitRequest}
       initialRange={initialRange}
       presentation={presentation}
-      requestedExportFormat={requestedExportFormat}
+       requestedExportRequest={requestedExportRequest}
       series={series}
       surface={surface}
       ownerStatus={surfaceStatus}
@@ -123,7 +130,8 @@ export function EChartsSurface({
         const range = chartRangeFromDataZoomEvent({ endValue: toValue, startValue: fromValue });
         if (range) scheduleRangeCommit(rangeCommitTimerRef, () => onRangeChange?.(range));
       }}
-      onRequestedExportHandled={() => setRequestedExportFormat(null)}
+       onRequestedExportHandled={() => setRequestedExportRequest(null)}
+       onRequestedExportFailed={() => setRequestedExportRequest(null)}
     />
   );
 }

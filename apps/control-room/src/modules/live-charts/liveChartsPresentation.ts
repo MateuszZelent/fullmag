@@ -1,7 +1,7 @@
 import { chartColorNameForIndex, type ChartLegendItem } from "@/shared/analysis-charts/ChartLegend";
 import { createChartDisplayTransform, formatChartDisplayValue } from "@/shared/analysis-charts/chartScalePolicy";
 import type { ChartSeries } from "@/shared/domain/analysis/chartSeries";
-import { compatibleLiveChartPanes } from "./liveChartsModel";
+import { compatibleLiveChartPanes, isLiveChartServerXAxisId } from "./liveChartsModel";
 import { chartSeriesRenderModel } from "@/shared/analysis-charts/InteractiveChartSurface";
 import type { ChartDataPresentationState } from "@/shared/analysis-charts/chartPresentationState";
 
@@ -21,10 +21,9 @@ export function liveChartExportModel(series: readonly ChartSeries[], title: stri
   };
 }
 
-export function liveChartXAxisOptions(columns: readonly { column_id: string; label: string; unit: string }[], currentId: string) {
-  const axisIds = new Set(["step", "t", "time", currentId]);
+export function liveChartXAxisOptions(columns: readonly { column_id: string; label: string; unit: string }[]) {
   return columns.reduce<{ id: string; label: string }[]>((options, column) => {
-    if (!axisIds.has(column.column_id)) return options;
+    if (!isLiveChartServerXAxisId(column.column_id)) return options;
     options.push({
       id: column.column_id,
       label: column.column_id === "step" ? "Step" : column.column_id === "t" || column.column_id === "time" ? `Time (${column.unit})` : `${column.label}${column.unit && column.unit !== "1" ? ` (${column.unit})` : ""}`,

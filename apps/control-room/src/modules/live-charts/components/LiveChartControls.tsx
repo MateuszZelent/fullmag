@@ -37,7 +37,7 @@ export function LiveChartControls({ descriptorId, isFollowing, onDescriptorChang
           <SelectTrigger aria-label="Sample window"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="follow">Latest samples</SelectItem>
-            <SelectItem value="fullDecimated">Full history</SelectItem>
+            <SelectItem value="fullDecimated">Last 5,000 samples (decimated)</SelectItem>
             {rangeValue === "fixed" ? <SelectItem value="fixed" disabled>Selected range</SelectItem> : null}
             {rangeValue === "tailTime" || rangeValue === "tailRows" ? <SelectItem value={rangeValue} disabled>Custom window</SelectItem> : null}
           </SelectContent>

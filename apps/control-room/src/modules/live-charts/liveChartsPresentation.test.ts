@@ -8,15 +8,15 @@ const series: ChartSeries[] = [
 ];
 
 describe("Live Charts presentation", () => {
-  it("offers only published time/step axes and preserves a configured custom axis", () => {
+  it("offers only published time/step axes", () => {
     const columns = [
       { column_id: "step", label: "Iteration", unit: "1" },
       { column_id: "t", label: "t", unit: "s" },
       { column_id: "mx", label: "mx", unit: "1" },
     ];
-    expect(liveChartXAxisOptions(columns, "step")).toEqual([{ id: "step", label: "Step" }, { id: "t", label: "Time (s)" }]);
-    expect(liveChartXAxisOptions(columns.slice(0, 1), "step")).toEqual([{ id: "step", label: "Step" }]);
-    expect(liveChartXAxisOptions(columns, "mx").at(-1)).toEqual({ id: "mx", label: "mx" });
+    expect(liveChartXAxisOptions(columns)).toEqual([{ id: "step", label: "Step" }, { id: "t", label: "Time (s)" }]);
+    expect(liveChartXAxisOptions(columns.slice(0, 1))).toEqual([{ id: "step", label: "Step" }]);
+    expect(liveChartXAxisOptions(columns)).toEqual([{ id: "step", label: "Step" }, { id: "t", label: "Time (s)" }]);
   });
   it("only allocates chart space for selected quantities and preserves separate units", () => {
     expect(visibleLiveChartPanes(series, ["mx"]).map((pane) => pane.unit)).toEqual(["1"]);
