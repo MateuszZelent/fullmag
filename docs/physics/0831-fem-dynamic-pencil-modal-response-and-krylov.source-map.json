@@ -50,7 +50,7 @@
     {
       "id": "eq-fem-dynamic-descriptor",
       "symbols": ["q", "potential", "restoring_operators", "Aqphi", "Aphiq", "poisson", "mass_operators", "lambda_shift", "gauge", "complex_operators"],
-      "sources": ["source-cpu-schur", "source-gpu-petsc", "source-modal-payload-ownership"]
+      "sources": ["source-cpu-schur", "source-gpu-petsc", "source-modal-payload-ownership", "source-floquet-dynamic-demag-k"]
     },
     {
       "id": "eq-fem-dynamic-original-residual",
@@ -85,7 +85,7 @@
     {
       "id": "eq-fem-waveguide-envelope-demag",
       "symbols": ["shifted_gradient", "wave_number", "propagation_axis", "potential", "dynamic_magnetization_transverse", "demag_field", "gradient", "complex_operators"],
-      "sources": ["source-waveguide-envelope-contract", "source-tetrax-boundary"]
+      "sources": ["source-waveguide-envelope-contract", "source-tetrax-boundary", "source-floquet-waveguide-demag-k"]
     }
   ],
   "symbols": [
@@ -158,7 +158,9 @@
     {"id": "source-tetrax-boundary", "path": "docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md", "symbol": "DOC-ANCHOR:waveguide-envelope-operator-contract", "responsibility": "Bound the TetraX comparison to a presentation reference; no source-code claim is made.", "evidence_status": "planned_contract"},
     {"id": "source-shared-domain", "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp", "symbol": "assemble_poisson_airbox_shared_domain", "responsibility": "Own the existing shared-domain Poisson assembly boundary; nonzero-k dynamic demagnetization remains unvalidated."},
     {"id": "source-floquet-native-prolongation", "path": "backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp", "symbol": "class FloquetTangentProlongation", "responsibility": "Provide the newly added foundational tangent-space Floquet prolongation contract; it is uncompiled, unvalidated and not connected to the solver ABI."},
-    {"id": "source-floquet-native-reduced-operator", "path": "backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp", "symbol": "class FloquetReducedMagneticOperator", "responsibility": "Provide the newly added foundational C^H A C operator boundary; it is uncompiled, unvalidated and not connected to the solver ABI."}
+    {"id": "source-floquet-native-reduced-operator", "path": "backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp", "symbol": "class FloquetReducedMagneticOperator", "responsibility": "Provide the newly added foundational C^H A C operator boundary; it is uncompiled, unvalidated and not connected to the solver ABI."},
+    {"id": "source-floquet-dynamic-demag-k", "path": "backends/fem/include/frequency_domain/floquet_dynamic_demag_k.hpp", "symbol": "build_floquet_dynamic_demag_k_real_split", "responsibility": "Provide the bounded dense Schur oracle for complex nonzero-k dynamic demagnetization; mesh assembly and production qualification remain separate.", "evidence_status": "source_visible / unvalidated"},
+    {"id": "source-floquet-waveguide-demag-k", "path": "backends/fem/include/frequency_domain/floquet_waveguide_demag_k.hpp", "symbol": "build_floquet_waveguide_demag_k_real_split", "responsibility": "Provide the bounded 2.5D modified-Helmholtz and Schur oracle; transverse MFEM assembly and open-boundary convergence remain separate.", "evidence_status": "source_visible / unvalidated"}
   ],
   "public_api": {
     "parameters": [

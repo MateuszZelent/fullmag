@@ -55,7 +55,8 @@
       ],
       "sources": [
         "source-full-bloch-contract",
-        "source-shared-domain"
+        "source-shared-domain",
+        "source-floquet-dynamic-demag-k"
       ]
     },
     {
@@ -119,7 +120,8 @@
       ],
       "sources": [
         "source-waveguide-envelope-contract",
-        "source-tetrax-boundary"
+        "source-tetrax-boundary",
+        "source-floquet-waveguide-demag-k"
       ]
     },
     {
@@ -465,6 +467,20 @@
       "path": "backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp",
       "symbol": "class FloquetReducedMagneticOperator",
       "responsibility": "Provide the foundational C^H A C operator boundary; source is uncompiled and disconnected from the solver ABI."
+    },
+    {
+      "id": "source-floquet-dynamic-demag-k",
+      "path": "backends/fem/include/frequency_domain/floquet_dynamic_demag_k.hpp",
+      "symbol": "build_floquet_dynamic_demag_k_real_split",
+      "responsibility": "Provide the bounded dense Schur oracle for complex nonzero-k dynamic demagnetization; mesh assembly and production qualification remain separate.",
+      "evidence_status": "source_visible / unvalidated"
+    },
+    {
+      "id": "source-floquet-waveguide-demag-k",
+      "path": "backends/fem/include/frequency_domain/floquet_waveguide_demag_k.hpp",
+      "symbol": "build_floquet_waveguide_demag_k_real_split",
+      "responsibility": "Provide the bounded 2.5D modified-Helmholtz and Schur oracle; transverse MFEM assembly and open-boundary convergence remain separate.",
+      "evidence_status": "source_visible / unvalidated"
     },
     {
       "id": "source-dynamic-pencil",
