@@ -7909,6 +7909,28 @@ def _magnet_bulk_dmi(problem: Problem, magnet_name: str) -> float | None:
     return None
 
 
+def _material_dmi_mirror_matches(
+    problem: Problem,
+    *,
+    parameter: str,
+    explicit_value: float,
+) -> bool:
+    """Return whether one explicit DMI term mirrors every material value.
+
+    The legacy flat API promotes a material ``Dind``/``Dbulk`` assignment to
+    one energy term while retaining the material coefficient.  Canonical
+    rendering can preserve that representation only when all referenced
+    magnets carry the same scalar value as the explicit term; otherwise the
+    explicit-first renderer would silently overwrite a per-magnet value.
+    """
+    values = [
+        getattr(magnet.material, parameter)
+        for magnet in problem.magnets
+        if getattr(magnet.material, parameter) is not None
+    ]
+    return bool(values) and all(value == explicit_value for value in values)
+
+
 def _snapshot_quantity_string(snapshot: Snapshot) -> str:
     if snapshot.component == "3D":
         return snapshot.field
@@ -8990,15 +9012,31 @@ def _validate_energy_terms(
         raise ValueError(
             "canonical flat-script rewrite does not support mixed conventional and rotated DMI terms"
         )
-    explicit_interfacial_present = any(
-        isinstance(term, InterfacialDMI) for term in problem.energy
-    )
-    explicit_bulk_present = any(isinstance(term, BulkDMI) for term in problem.energy)
-    if explicit_interfacial_present and material_dind_present:
+    explicit_interfacial_terms = [
+        term for term in problem.energy if isinstance(term, InterfacialDMI)
+    ]
+    explicit_bulk_terms = [term for term in problem.energy if isinstance(term, BulkDMI)]
+    if (
+        material_dind_present
+        and explicit_interfacial_terms
+        and not _material_dmi_mirror_matches(
+            problem,
+            parameter="Dind",
+            explicit_value=explicit_interfacial_terms[0].D,
+        )
+    ):
         raise ValueError(
             "canonical flat-script rewrite does not support combining explicit and material interfacial DMI"
         )
-    if explicit_bulk_present and material_dbulk_present:
+    if (
+        material_dbulk_present
+        and explicit_bulk_terms
+        and not _material_dmi_mirror_matches(
+            problem,
+            parameter="Dbulk",
+            explicit_value=explicit_bulk_terms[0].D,
+        )
+    ):
         raise ValueError(
             "canonical flat-script rewrite does not support combining explicit and material bulk DMI"
         )
