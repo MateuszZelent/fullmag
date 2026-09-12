@@ -151,6 +151,20 @@
   ],
   "sources": [
     {
+      "id": "interactive-remesh-transaction",
+      "path": "crates/fullmag-cli/src/orchestrator.rs",
+      "symbol": "execute_manual_interactive_remesh",
+      "responsibility": "Prepares a mesh/runtime candidate before commit and explicitly reinitializes magnetization from the authored model.",
+      "evidence_status": "implementation_in_progress"
+    },
+    {
+      "id": "interactive-remesh-command-outcome",
+      "path": "crates/fullmag-api/src/session.rs",
+      "symbol": "remesh_command_completion",
+      "responsibility": "Reconciles only the structured terminal outcome carrying the matching command identity.",
+      "evidence_status": "implementation_in_progress"
+    },
+    {
       "id": "study-mesh",
       "path": "packages/fullmag-py/src/fullmag/world.py",
       "symbol": "class StudyMeshHandle",

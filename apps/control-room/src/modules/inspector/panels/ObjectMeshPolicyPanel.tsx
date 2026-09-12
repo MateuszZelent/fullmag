@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import type { JsonObject } from "@/kernel/api/apiTypes";
@@ -58,6 +58,8 @@ import {
   draftIdentityKeyForObjectMeshPolicyResource,
   draftKeyForObjectMeshPolicyResource,
   objectMeshPolicyDraftDirty,
+  objectMeshPolicyJsonError,
+  updateObjectMeshPolicyDraft,
   nodePlaneCount,
   resolveObjectMeshTopologyCapabilities,
   validateObjectMeshTopologyCapabilities,
@@ -71,7 +73,7 @@ import {
 
 type Feedback =
   | {
-      kind: "error" | "success";
+      kind: "error" | "success" | "warning";
       message: string;
     }
   | null;
@@ -400,20 +402,23 @@ function ObjectMeshPresetSection({
 export function ObjectMeshSizeSemanticsSection({
   draft,
   updateDraft,
+  validationError,
 }: {
   draft: ObjectMeshPolicyDraft;
   updateDraft: UpdateObjectMeshPolicyDraft;
+  validationError?: string | null;
 }) {
+  const fieldError = (label: string) => validationError?.startsWith(label) ? validationError : undefined;
   return (
     <InspectorGroup title="Element Size Parameters" badge="solver policy">
-      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.maximumElementSize} label="Maximum element size" type="number" unit="m" value={draft.maximumElementSize} onChange={(event) => updateDraft({ maximumElementSize: event.target.value })} />
-      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.minimumElementSize} label="Minimum element size" type="number" unit="m" value={draft.minimumElementSize} onChange={(event) => updateDraft({ minimumElementSize: event.target.value })} />
-      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.maximumElementGrowthRate} label="Maximum growth rate" type="number" value={draft.maximumElementGrowthRate} onChange={(event) => updateDraft({ maximumElementGrowthRate: event.target.value })} />
-      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.curvatureFactor} label="Curvature factor" type="number" value={draft.curvatureFactor} onChange={(event) => updateDraft({ curvatureFactor: event.target.value })} />
-      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sizeFromCurvature} label="Size from curvature" type="number" value={draft.sizeFromCurvature} onChange={(event) => updateDraft({ sizeFromCurvature: event.target.value })} />
-      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.narrowRegions} label="Narrow regions" type="number" value={draft.narrowRegions} onChange={(event) => updateDraft({ narrowRegions: event.target.value })} />
-      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.narrowRegionResolution} label="Narrow region resolution" type="number" value={draft.narrowRegionResolution} onChange={(event) => updateDraft({ narrowRegionResolution: event.target.value })} />
-      <FormField disabled={!draft.present || draft.meshStrategy === "swept_prism"} help={OBJECT_MESH_HELP.order} label="FEM order" type="number" value={draft.order} onChange={(event) => updateDraft({ order: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.maximumElementSize} label="Maximum element size" error={fieldError("Maximum element size")} type="text" inputMode="decimal" unit="m" value={draft.maximumElementSize} onChange={(event) => updateDraft({ maximumElementSize: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.minimumElementSize} label="Minimum element size" error={fieldError("Minimum element size")} type="text" inputMode="decimal" unit="m" value={draft.minimumElementSize} onChange={(event) => updateDraft({ minimumElementSize: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.maximumElementGrowthRate} label="Maximum growth rate" error={fieldError("Maximum element growth rate")} type="text" inputMode="decimal" value={draft.maximumElementGrowthRate} onChange={(event) => updateDraft({ maximumElementGrowthRate: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.curvatureFactor} label="Curvature factor" error={fieldError("Curvature factor")} type="text" inputMode="decimal" value={draft.curvatureFactor} onChange={(event) => updateDraft({ curvatureFactor: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sizeFromCurvature} label="Size from curvature" error={fieldError("Size from curvature")} type="text" inputMode="decimal" value={draft.sizeFromCurvature} onChange={(event) => updateDraft({ sizeFromCurvature: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.narrowRegions} label="Narrow regions" error={fieldError("Narrow regions")} type="text" inputMode="decimal" value={draft.narrowRegions} onChange={(event) => updateDraft({ narrowRegions: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.narrowRegionResolution} label="Narrow region resolution" error={fieldError("Narrow region resolution")} type="text" inputMode="decimal" value={draft.narrowRegionResolution} onChange={(event) => updateDraft({ narrowRegionResolution: event.target.value })} />
+      <FormField disabled={!draft.present || draft.meshStrategy === "swept_prism"} help={OBJECT_MESH_HELP.order} label="FEM order" error={fieldError("FEM order")} type="text" inputMode="decimal" value={draft.order} onChange={(event) => updateDraft({ order: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.source} label="Mesh source" type="text" value={draft.source} onChange={(event) => updateDraft({ source: event.target.value })} />
     </InspectorGroup>
   );
@@ -757,9 +762,10 @@ function ObjectMeshAdvancedJsonSection({
   draft: ObjectMeshPolicyDraft;
   updateDraft: UpdateObjectMeshPolicyDraft;
 }) {
+  const jsonError = objectMeshPolicyJsonError(draft.configText);
   return (
     <InspectorGroup title="Advanced JSON" collapsible defaultOpen={false}>
-      <FormField disabled={!draft.present} label="Policy JSON" rows={8} type="textarea" value={draft.configText} onChange={(event) => updateDraft({ configText: event.target.value })} />
+      <FormField disabled={!draft.present} label="Policy JSON" error={jsonError ?? undefined} hint="JSON and structured controls edit the same draft. Resolve invalid JSON before using structured controls." rows={8} type="textarea" value={draft.configText} onChange={(event) => updateDraft({ configText: event.target.value })} />
     </InspectorGroup>
   );
 }
@@ -773,7 +779,11 @@ export function ObjectMeshTransactionsSection({
   buildLabel,
   onRevert,
   pending,
+  buildPending = false,
+  validationError,
 }: {
+  buildPending?: boolean;
+  validationError?: string | null;
   buildLabel: string;
   feedback: Feedback;
   isDirty: boolean;
@@ -792,16 +802,17 @@ export function ObjectMeshTransactionsSection({
         />
       ) : null}
       <div className="fm-inspector-toolbar">
-        <Button disabled={pending || !objectId} size="sm" type="button" variant="primary" onClick={onApply}>
+        <Button disabled={pending || !objectId || Boolean(validationError)} size="sm" type="button" variant="primary" onClick={onApply}>
           Apply Policy
         </Button>
-        <Button disabled={pending || !objectId} size="sm" type="button" variant="secondary" onClick={onBuild}>
-          {buildLabel}
+        <Button disabled={pending || buildPending || !objectId || Boolean(validationError)} size="sm" type="button" variant="secondary" onClick={onBuild}>
+          {buildPending ? "Waiting for mesh build…" : buildLabel}
         </Button>
         <Button disabled={pending} size="sm" type="button" variant="ghost" onClick={onRevert}>
           Revert
         </Button>
       </div>
+      {validationError ? <FeedbackBanner kind="error" message={validationError} /> : null}
       {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
     </InspectorGroup>
   );
@@ -865,6 +876,8 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
   );
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [pending, setPending] = useState(false);
+  const [buildPending, setBuildPending] = useState(false);
+  const buildInFlight = useRef(false);
   const { dirty: isDirty, draft } = resolveInspectorDraftState({
     baseDraft,
     baseKey: draftKey,
@@ -911,10 +924,37 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
         currentDraft: draft,
         identityKey: draftIdentityKey,
         isDirty: objectMeshPolicyDraftDirty,
-        patch,
+        patch: updateObjectMeshPolicyDraft(draft, patch),
       }),
     );
   }
+
+  useEffect(() => {
+    return kernel.bus.on("mesh:build-history-restore-requested", (event) => {
+      if (!objectId || event.meshTarget !== null && !event.meshTarget.endsWith(`:${objectId}`)) {
+        return;
+      }
+      const objectSnapshots = asRecord(event.snapshot.objects);
+      if (!objectSnapshots || !Object.hasOwn(objectSnapshots, objectId)) return;
+      const snapshotValue = objectSnapshots[objectId];
+      const objectSnapshot = snapshotValue === null ? null : asRecord(snapshotValue);
+      if (snapshotValue !== null && !objectSnapshot) return;
+      const restored = draftFromObjectMeshPolicyResource(
+        { ...resource, config: objectSnapshot as JsonObject | null },
+        { effectiveTarget },
+      );
+      setDraftState({
+        baseKey: draftKey,
+        dirty: objectMeshPolicyDraftDirty(restored, baseDraft),
+        draft: restored,
+        identityKey: draftIdentityKey,
+      });
+      setFeedback({
+        kind: "success",
+        message: `Build ${event.buildId ?? event.entryId} restored to the object draft. Apply the policy before building.`,
+      });
+    });
+  }, [baseDraft, draftKey, draftIdentityKey, effectiveTarget, kernel.bus, objectId, resource]);
 
   const applyPolicy = useCallback(async ({
     silentSuccess = false,
@@ -980,6 +1020,7 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
   }, [api, draft, explicitFdm, meshLane, objectId, resources, topologyCapabilities]);
 
   async function buildMesh(): Promise<void> {
+    if (pending || buildInFlight.current) return;
     if (meshLane !== "fem") {
       setFeedback({
         kind: "error",
@@ -1004,21 +1045,24 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
       return;
     }
 
-    if (isDirty) {
-      const applied = await applyPolicy({ silentSuccess: true });
-      if (!applied.ok) return;
-    }
-
+    buildInFlight.current = true;
+    setBuildPending(true);
     try {
-      await commands.execute("mesh.build-selected", commandContext);
+      if (isDirty && !(await applyPolicy({ silentSuccess: true })).ok) return;
+      const result = await commands.execute("mesh.build-selected", commandContext);
       setFeedback({
-        kind: "success",
-        message: isDirty
-          ? "Policy saved. Object mesh build submitted."
-          : "Object mesh build submitted. The Mesh Build monitor will track the command.",
+        kind: result.status === "completed" ? "success" : result.status === "failed" ? "error" : "warning",
+        message: result.message ?? (result.status === "completed"
+          ? "Object mesh build completed."
+          : result.status === "failed" ? "Object mesh build failed."
+          : result.status === "pending" ? "Build remains active; see Mesh Jobs."
+          : "Mesh build was not submitted."),
       });
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
+    } finally {
+      buildInFlight.current = false;
+      setBuildPending(false);
     }
   }
 
@@ -1051,6 +1095,7 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
     resetInspectorDraft,
   );
   const activeTab = useInspectorActiveTab();
+  const jsonError = objectMeshPolicyJsonError(draft.configText);
 
   if (explicitFdm) {
     return (
@@ -1065,58 +1110,11 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
   }
 
   return (
-    <div className="fm-inspector-panel">
+    <div className="fm-inspector-panel" data-mesh-policy-draft="object">
       <Tabs value={activeTab} className="fm-inspector-tabs">
 
         <TabsContent value="policy" className="fm-tabs-content">
-          <ObjectMeshPolicySummarySection
-            hasConfig={Boolean(resource.config)}
-            objectId={objectId}
-            policyRevision={resource.revision}
-            policyStatus={policy.status}
-            qualityStatus={quality.status}
-            reportStatus={report.status}
-          />
-          <ObjectMeshEffectiveTargetSection
-            effectiveTarget={effectiveTarget}
-            report={reportRecord}
-            reportStatus={report.status}
-          />
-          <ObjectMeshPresetSection draft={draft} updateDraft={updateDraft} />
-          <ObjectMeshSizeSemanticsSection draft={draft} updateDraft={updateDraft} />
-          <ObjectMeshSweepStrategySection
-            capabilities={topologyCapabilities}
-            draft={draft}
-            updateDraft={updateDraft}
-          />
-          <ObjectMeshInterfaceTransitionSection draft={draft} updateDraft={updateDraft} />
-          <ObjectMeshBackendParametersSection
-            draft={draft}
-            updateDraft={updateDraft}
-            sizeFieldKinds={sizeFieldKinds}
-            sizeFieldsLength={sizeFields.length}
-          />
-          <ObjectMeshCoreRelaxationSection draft={draft} updateDraft={updateDraft} />
-          <ObjectMeshManualSizeFieldSection draft={draft} updateDraft={updateDraft} />
-          <ObjectMeshEdgeCornerSection draft={draft} updateDraft={updateDraft} />
           <ObjectMeshOverrideSection draft={draft} updateDraft={updateDraft} />
-          <ObjectMeshAdvancedJsonSection draft={draft} updateDraft={updateDraft} />
-        </TabsContent>
-
-        <TabsContent value="quality" className="fm-tabs-content">
-          <ObjectMeshTopologyQualitySection
-            qualityRecord={qualityRecord}
-            qualityRevision={quality.data?.revision}
-            qualityStatus={quality.status}
-            topology={topology}
-          />
-          <ObjectMeshQualityStatisticsSection
-            statistics={qualityStatistics}
-            onHoverSizeDistributionBin={hoverSizeDistributionBin}
-          />
-        </TabsContent>
-
-        <TabsContent value="history" className="fm-tabs-content">
           <ObjectMeshTransactionsSection
             buildLabel={isDirty ? "Apply & Build Mesh" : "Build Mesh"}
             feedback={feedback}
@@ -1135,8 +1133,58 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
               setFeedback(null);
             }}
             pending={pending}
+            buildPending={buildPending}
+            validationError={"error" in validation ? validation.error : topologyCapabilityError}
           />
+          <ObjectMeshPolicySummarySection
+            hasConfig={Boolean(resource.config)}
+            objectId={objectId}
+            policyRevision={resource.revision}
+            policyStatus={policy.status}
+            qualityStatus={quality.status}
+            reportStatus={report.status}
+          />
+          <ObjectMeshEffectiveTargetSection
+            effectiveTarget={effectiveTarget}
+            report={reportRecord}
+            reportStatus={report.status}
+          />
+          <fieldset disabled={jsonError !== null} className="fm-mesh-policy-fields contents">
+            <ObjectMeshPresetSection draft={draft} updateDraft={updateDraft} />
+            <ObjectMeshSizeSemanticsSection draft={draft} updateDraft={updateDraft} validationError={"error" in validation ? validation.error : null} />
+            <ObjectMeshSweepStrategySection
+              capabilities={topologyCapabilities}
+              draft={draft}
+              updateDraft={updateDraft}
+            />
+            <ObjectMeshInterfaceTransitionSection draft={draft} updateDraft={updateDraft} />
+            <ObjectMeshBackendParametersSection
+              draft={draft}
+              updateDraft={updateDraft}
+              sizeFieldKinds={sizeFieldKinds}
+              sizeFieldsLength={sizeFields.length}
+            />
+            <ObjectMeshCoreRelaxationSection draft={draft} updateDraft={updateDraft} />
+            <ObjectMeshManualSizeFieldSection draft={draft} updateDraft={updateDraft} />
+            <ObjectMeshEdgeCornerSection draft={draft} updateDraft={updateDraft} />
+          </fieldset>
+          <ObjectMeshAdvancedJsonSection draft={draft} updateDraft={updateDraft} />
+        </TabsContent>
 
+        <TabsContent value="quality" className="fm-tabs-content">
+          <ObjectMeshTopologyQualitySection
+            qualityRecord={qualityRecord}
+            qualityRevision={quality.data?.revision}
+            qualityStatus={quality.status}
+            topology={topology}
+          />
+          <ObjectMeshQualityStatisticsSection
+            statistics={qualityStatistics}
+            onHoverSizeDistributionBin={hoverSizeDistributionBin}
+          />
+        </TabsContent>
+
+        <TabsContent value="history" className="fm-tabs-content">
           <div className="grid min-w-0 gap-fm-inspector-group">
             <JsonResourceSection sectionValue="json-report" title="Object Mesh Report JSON" value={report.data} />
             <JsonResourceSection sectionValue="json-quality" title="Object Mesh Quality JSON" value={quality.data} />

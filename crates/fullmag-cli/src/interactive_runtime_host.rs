@@ -509,6 +509,14 @@ pub(super) struct InteractiveRuntimeHost {
     multilayer_idle_snapshot: bool,
 }
 
+pub(super) struct PreparedInteractiveBase {
+    base_problem: ProblemIR,
+    runtime: Option<fullmag_runner::InteractiveRuntime>,
+    runtime_capable: bool,
+    dynamic_idle_preview_supported: bool,
+    multilayer_idle_snapshot: bool,
+}
+
 impl InteractiveRuntimeHost {
     pub(super) fn new(
         control: CurrentLiveDisplaySelectionHandle,
@@ -641,6 +649,48 @@ impl InteractiveRuntimeHost {
     pub(super) fn replace_base_problem(&mut self, base_problem: ProblemIR) {
         self.base_problem = base_problem;
         self.runtime = None;
+    }
+
+    /// Build the replacement privately. Failure must leave the retained runtime intact.
+    pub(super) fn prepare_base_problem(
+        base_problem: ProblemIR,
+        backend_plan: &BackendPlanIR,
+    ) -> Result<PreparedInteractiveBase> {
+        let resolver = fullmag_runner::ObservationProviderResolver::from_backend_plan(backend_plan);
+        let runtime_capable = resolver.retains_idle_runtime();
+        let runtime = if runtime_capable {
+            Some(create_interactive_preview_runtime_from_problem(
+                &base_problem,
+                None,
+            )?)
+        } else {
+            None
+        };
+        Ok(PreparedInteractiveBase {
+            dynamic_idle_preview_supported: supports_dynamic_idle_preview(
+                &base_problem,
+                backend_plan,
+            ),
+            multilayer_idle_snapshot: resolver.uses_deterministic_reconstruction(),
+            runtime_capable,
+            runtime,
+            base_problem,
+        })
+    }
+
+    pub(super) fn commit_base_problem(&mut self, candidate: PreparedInteractiveBase) {
+        self.base_problem = candidate.base_problem;
+        self.runtime = candidate.runtime;
+        self.runtime_capable = candidate.runtime_capable;
+        self.dynamic_idle_preview_supported = candidate.dynamic_idle_preview_supported;
+        self.multilayer_idle_snapshot = candidate.multilayer_idle_snapshot;
+        let mut preview = self
+            .preview_source
+            .lock()
+            .expect("preview source mutex poisoned");
+        preview.continuation_magnetization = None;
+        preview.status = InteractivePreviewStatus::AwaitingCommand;
+        preview.generation = preview.generation.saturating_add(1);
     }
 
     pub(super) fn handle_display_sync(

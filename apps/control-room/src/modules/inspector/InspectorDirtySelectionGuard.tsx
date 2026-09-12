@@ -1,7 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
+import { useKernel } from "@/kernel/KernelContext";
+import { registerMeshBuildDraftGuard } from "@/kernel/authoring/meshBuildConfirmation";
 import type { SelectionController } from "@/kernel/selection/SelectionController";
 import { selectionRefEquals, type Selection } from "@/kernel/selection/selectionTypes";
 import { Button } from "@/shared/ui/Button";
@@ -49,6 +51,11 @@ export function InspectorDirtySelectionGuard({
   selection: Selection;
 }) {
   const session = useInspectorEditSession();
+  const { bus } = useKernel();
+  const [pendingBuild, setPendingBuild] = useState(false);
+  const buildDecision = useRef<((confirmed: boolean) => void) | null>(null);
+  const sessionRef = useRef(session);
+  useLayoutEffect(() => { sessionRef.current = session; }, [session]);
   const [pending, setPending] = useState<Selection | null>(null);
   const bypass = useRef<Selection | null>(null);
 
@@ -64,6 +71,24 @@ export function InspectorDirtySelectionGuard({
     });
   }, [controller, session, session?.dirty, session?.mode]);
 
+  useEffect(() => {
+    const unregister = registerMeshBuildDraftGuard(bus, async () => {
+      if (!shouldGuardInspectorSelection(sessionRef.current)) return true;
+      return new Promise<boolean>((resolve) => {
+        buildDecision.current?.(false);
+        buildDecision.current = resolve;
+        setPendingBuild(true);
+      });
+    });
+    return () => { unregister(); buildDecision.current?.(false); buildDecision.current = null; };
+  }, [bus]);
+
+  function finishBuild(confirmed: boolean): void {
+    setPendingBuild(false);
+    buildDecision.current?.(confirmed);
+    buildDecision.current = null;
+  }
+
   const accept = useCallback((next: Selection) => {
     bypass.current = next;
     setPending(null);
@@ -73,22 +98,23 @@ export function InspectorDirtySelectionGuard({
   return (
     <>
       {children(selection)}
-      <Dialog open={pending !== null} onOpenChange={(open) => { if (!open) setPending(null); }}>
+      <Dialog open={pending !== null || pendingBuild} onOpenChange={(open) => { if (!open) { setPending(null); finishBuild(false); } }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Unapplied Inspector changes</DialogTitle>
             <DialogDescription>
-              Apply or discard the current draft before changing the Explorer selection.
+              {pendingBuild ? "Apply or discard the current draft before reviewing the mesh build." : "Apply or discard the current draft before changing the Explorer selection."}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setPending(null)}>Cancel</Button>
+            <Button variant="ghost" onClick={() => { setPending(null); finishBuild(false); }}>Cancel</Button>
             <Button
               variant="secondary"
               onClick={async () => {
-                if (!pending || !session) return;
+                if ((!pending && !pendingBuild) || !session) return;
                 await session.reset();
-                accept(pending);
+                if (pendingBuild) finishBuild(true);
+                else if (pending) accept(pending);
               }}
             >
               Discard
@@ -97,9 +123,12 @@ export function InspectorDirtySelectionGuard({
               disabled={!session?.valid || session?.applying}
               variant="primary"
               onClick={async () => {
-                if (!pending || !session) return;
+                if ((!pending && !pendingBuild) || !session) return;
                 const applied = await applyInspectorSessionAndShouldContinue(session);
-                if (applied) accept(pending);
+                if (applied) {
+                  if (pendingBuild) finishBuild(true);
+                  else if (pending) accept(pending);
+                }
               }}
             >
               Apply and continue

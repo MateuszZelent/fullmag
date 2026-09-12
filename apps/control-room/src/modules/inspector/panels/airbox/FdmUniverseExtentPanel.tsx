@@ -86,8 +86,8 @@ export function FdmUniverseExtentPanelView({
         badge="read-only"
         description={
           membership
-            ? "The current FDM grid and membership mask are published by the execution plan. Re-run or re-plan the study to obtain a new extent."
-            : "The FDM grid descriptor is available from authoring, but the membership mask is not materialized. Re-plan or run the study to publish it."
+            ? "The current FDM grid and membership mask are published by the execution plan. Use Study → Apply Grid to obtain a new extent."
+            : "The FDM grid descriptor is available from authoring, but the membership mask is not materialized. Use Study → Apply Grid or run the study to publish it."
         }
       >
         <FieldRow label="Grid lifecycle" value="Published structured-grid artifact" />
@@ -95,7 +95,7 @@ export function FdmUniverseExtentPanelView({
           label="Membership mask"
           value={membership ? "Published with the grid" : "Not materialized"}
         />
-        <FieldRow label="Standalone refresh" value="Unavailable for the current plan" />
+        <FieldRow label="Grid replan" value="Available via Study → Apply Grid" />
       </InspectorGroup>
       <InspectorGroup
         title="Magnetic support owners and regions"

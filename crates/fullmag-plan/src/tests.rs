@@ -14611,8 +14611,16 @@ fn fdm_cuda_regional_field_drive_is_plannable_for_native_runtime() {
         panic!("FDM plan");
     };
     assert_eq!(fdm.regional_field_drive_bases.len(), 1);
-    let cell_count = fdm.grid.cells.iter().map(|&value| value as usize).product::<usize>();
-    assert_eq!(fdm.regional_field_drive_bases[0].field_xyz.len(), cell_count);
+    let cell_count = fdm
+        .grid
+        .cells
+        .iter()
+        .map(|&value| value as usize)
+        .product::<usize>();
+    assert_eq!(
+        fdm.regional_field_drive_bases[0].field_xyz.len(),
+        cell_count
+    );
 }
 
 fn fem_minimal_test_ir() -> ProblemIR {
@@ -15640,8 +15648,8 @@ fn fem_planner_accepts_mixed_p1_time_evolution_with_uniform_regional_drive() {
         migration: None,
     });
 
-    let planned = plan(&ir)
-        .expect("qualified mixed P1 time evolution with a regional drive must plan");
+    let planned =
+        plan(&ir).expect("qualified mixed P1 time evolution with a regional drive must plan");
     let BackendPlanIR::Fem(fem) = planned.backend_plan else {
         panic!("mixed P1 time evolution must resolve to FEM");
     };

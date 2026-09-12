@@ -83,6 +83,16 @@ await page.addInitScript((baseUrl) => {
 }, new URL(workspaceUrl).origin);
 await installInspectorFixtureApi(page, fixture);
 
+if (process.env.CONTROL_ROOM_INSPECTOR_MESH_ONLY === "1") {
+  try {
+    const { qualifyMeshPolicyEditing } = await import("./lib/mesh-policy-browser.mjs");
+    await qualifyMeshPolicyEditing({ page, fixture, outputDir, workspaceUrl, fulfillJson, fulfillTopology });
+  } finally {
+    await browser.close();
+  }
+  process.exit(0);
+}
+
 try {
   await page.goto(workspaceUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
   const inspector = page.locator(".fm-inspector");
@@ -1556,6 +1566,10 @@ async function installInspectorFixtureApi(page, fixture) {
         405,
       );
     }
+    if (path === "/v2/sessions") return fulfillJson(route, {
+      schema_version: "2.0.0",
+      sessions: [{ current: true, name: "Inspector routing smoke", session_id: "inspector-routing-smoke", status: "active" }],
+    });
     if (path === "/v2/sessions/current/status") return fulfillJson(route, inspectorSessionStatus(fixture));
     if (path === "/v2/sessions/current/data/quantities") return fulfillJson(route, {
       quantities: [{

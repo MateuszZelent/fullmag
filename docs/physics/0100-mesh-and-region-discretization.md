@@ -2,7 +2,7 @@
 
 - Status: implemented for FEM linear-mesh persistence, COMSOL MPHTXT v4, and Gmsh 4.1 interchange
 - Owners: Fullmag core
-- Last updated: 2026-08-27
+- Last updated: 2026-09-12
 - Related specs: `docs/specs/mesh-roundtrip-semantics-v1.md`, `docs/specs/geometry-policy-v0.md`, `docs/specs/material-assignment-and-spatial-fields-v0.md`
 - Governing ADR: `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md`
 
@@ -205,6 +205,44 @@ remains planner-owned. Validation errors reject malformed artifacts,
 and unsupported combinations fail explicitly without CPU/GPU or FDM/FEM
 fallback.
 
+### 7.1 Transakcja ręcznej przebudowy w sesji interaktywnej
+
+Ręczna przebudowa FEM jest zmianą dyskretyzacji w bezczynnym runtime,
+dopuszczalną wyłącznie w `awaiting_command` albo `waiting_for_compute`.
+Stan `paused` wymaga wcześniejszego zakończenia etapu; samo wstrzymanie
+nie upoważnia do zastąpienia siatki używanej przez wznowienie. API i zasób
+gotowości komend korzystają z tej samej reguły. Druga aktywna operacja mesh
+lub compute blokuje przyjęcie nowej przebudowy.
+
+Jedyną polityką stanu tej operacji jest `reinitialize_from_model`: nowy plan
+próbkuje autorską definicję magnetyzacji początkowej na nowej siatce.
+Nie jest to interpolacja magnetyzacji po relaksacji ani transfer bieżącego
+stanu. Jednostki, równania, publiczne konstruktory Python i obniżanie do
+`ProblemIR` pozostają bez zmian. Parametry universe, object i region
+zachowują odrębne znaczenie; końcowy solver FEM używa siatki shared-domain.
+
+Kandydat obejmuje siatkę, markery, certyfikaty PBC, wszystkie plany etapów,
+magnetyzację początkową oraz wymaganą realizację runtime. Przygotowanie
+kandydata nie modyfikuje poprzedniej siatki, stanu kontynuacji ani jej
+pochodzenia. Błąd dowolnego kroku kończy konkretną operację jako odrzuconą
+lub nieudaną. Dopiero zatwierdzony kandydat zastępuje działający stan i
+unieważnia kontynuację wcześniejszej dyskretyzacji.
+
+Wynik zapisuje `command_id`, `build_id`, politykę stanu i identyfikator nowej
+generacji. Ograniczony rejestr wyników zachowuje zakończenia pomiędzy
+publikacjami snapshotów; tekst loga nie stanowi potwierdzenia komendy.
+Historia zawiera snapshot żądanych parametrów, zakres i wynik realizacji.
+Komunikat sukcesu oznacza zatwierdzenie backendu; pobranie zasobów i render
+pozostają osobnymi stanami UI. Ta reguła jest wspólna dla FEM CPU/GPU,
+natomiast utworzenie runtime zachowuje jawnie wybraną realizację urządzenia.
+FDM wymaga osobnej transakcji grid/membership i nie używa meshera FEM.
+
+Status kwalifikacji: kontrakt implementowany w ramach audytu UI mesh;
+testy fault injection i izolacji komend są wymagane przed zamknięciem,
+a dowód uruchomienia FEM i przeglądarki powstaje wyłącznie w kanonicznej
+ścieżce kontenerowej `just`. Transfer bieżącej magnetyzacji pozostaje
+odrębną funkcją numeryczną i nie jest deklarowany przez tę zmianę.
+
 (discrete-realization)=
 ## 8. Discrete realization
 
@@ -272,6 +310,12 @@ markers, conformity, and quality evidence retain their existing stricter
 checks. The comparison applies identically before FEM CPU and FEM GPU planning;
 FDM CPU and FDM GPU use the separate structured-grid certificate.
 
+Regresje transakcji interaktywnej muszą objąć awarię generowania, PBC,
+markerów, planowania i tworzenia runtime, zachowanie poprzedniej generacji
+i kontynuacji, izolację dwóch identyfikatorów komend oraz koaleskowanie ich
+wyników. Macierz admission musi obejmować running, paused i oba dozwolone
+stany bezczynności, również bez opcjonalnych preconditions.
+
 (limitations)=
 ## 11. Limitations
 
@@ -318,3 +362,5 @@ FDM CPU and FDM GPU use the separate structured-grid certificate.
 | Typed topology | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `class MeshData` | Canonical arrays, validation, fingerprints, quality serialization | FEM CPU/GPU | Persistence and meshing tests |
 | IR ingress | `packages/fullmag-py/src/fullmag/model/problem.py` | `build_geometry_assets_for_request` | Inline persisted mesh in `FemDomainMeshAssetIR` | FEM CPU/GPU | Materialization test |
 | Canonical mesh policy | `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md` | `DOC-ANCHOR:canonical-fem-mesh-policy` | Planowana algebra stref, upper/lower bounds, curvature i migracja | Cross-layer contract | planned contract |
+| Ręczna transakcja remeshu | `crates/fullmag-cli/src/orchestrator.rs` | `execute_manual_interactive_remesh` | Kandydat, commit i jawna inicjalizacja z modelu | FEM CPU/GPU | kwalifikacja implementacji w toku |
+| Izolacja wyniku komendy | `crates/fullmag-api/src/session.rs` | `remesh_command_completion` | Odczyt strukturalnego wyniku właściwej operacji | Control plane | kwalifikacja implementacji w toku |

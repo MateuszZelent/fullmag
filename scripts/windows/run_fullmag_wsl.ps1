@@ -23,12 +23,22 @@ param(
 
   [switch]$BuildOnly,
 
+  [ValidateSet("fullmag-session", "fullmag-api", "fullmag-cli", "fullmag-runner")]
+  [string]$TestPackage,
+
+  [ValidatePattern("^[A-Za-z0-9_:.-]*$")]
+  [string]$TestFilter = "",
+
   [ValidateRange(1, 65535)]
   [int]$WebPort = 3100
 )
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+
+if ($TestPackage -and ($BuildMode -ne "true" -or -not $BuildOnly)) {
+  throw "Targeted FEM tests require -BuildMode true -BuildOnly"
+}
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $RepoDriveRoot = [System.IO.Path]::GetPathRoot($RepoRoot)
@@ -387,9 +397,18 @@ $env:FULLMAG_WINDOWS_CONTROL_ROOM_NODE_MODULES_ROOT = To-ComposePath $ControlRoo
 $env:FULLMAG_WINDOWS_WEB_PORT = $WebPort.ToString()
 $containerWebPort = 3100
 $env:COMPOSE_PROJECT_NAME = $ComposeProjectName
-$identityPython = Get-Command "python" -ErrorAction SilentlyContinue
-if (-not $identityPython) {
-  throw "Python is required to capture the exact Fullmag source identity"
+$identityPythonPath = if ($env:FULLMAG_IDENTITY_PYTHON) {
+  $env:FULLMAG_IDENTITY_PYTHON
+} else {
+  $identityPython = Get-Command "python" -ErrorAction SilentlyContinue
+  if ($identityPython) { $identityPython.Path } else { $null }
+}
+if (-not $identityPythonPath -or -not (Test-Path -LiteralPath $identityPythonPath -PathType Leaf)) {
+  throw "Python is required to capture the exact Fullmag source identity; set FULLMAG_IDENTITY_PYTHON to a Python executable"
+}
+& $identityPythonPath --version *> $null
+if ($LASTEXITCODE -ne 0) {
+  throw "Python at $identityPythonPath is not runnable; set FULLMAG_IDENTITY_PYTHON to a Python executable"
 }
 $previousGitOptionalLocks = $env:GIT_OPTIONAL_LOCKS
 $identityOutput = $null
@@ -400,7 +419,7 @@ try {
   # with the launcher over .git/index.lock.  Restore the caller's setting
   # immediately after the capture; mandatory Git locks remain unaffected.
   $env:GIT_OPTIONAL_LOCKS = "0"
-  $identityOutput = (& $identityPython.Path (Join-Path $RepoRoot "scripts\capture_source_snapshot_identity.py") --repo-root $RepoRoot --ignore-non-runtime-dirty | Out-String)
+  $identityOutput = (& $identityPythonPath (Join-Path $RepoRoot "scripts\capture_source_snapshot_identity.py") --repo-root $RepoRoot --ignore-non-runtime-dirty | Out-String)
   $identityExitCode = $LASTEXITCODE
 }
 finally {
@@ -467,7 +486,26 @@ try {
     }
     Write-Host "Acquired Fullmag Windows build lock"
     Invoke-DockerImageBuild
-    $buildCommand = if ($Device -eq "gpu") { @"
+    $testFeatureArgs = if ($TestPackage -eq "fullmag-session") {
+      ""
+    } elseif ($Device -eq "gpu") {
+      "--features 'cuda fem-gpu'"
+    } else {
+      "--features fem-gpu"
+    }
+    $buildCommand = if ($TestPackage) { @"
+set -euo pipefail
+cd /workspace
+mkdir -p /workspace/.fullmag-build/cargo-targets/$TargetKey/mesh-tests /tmp/fullmag-windows
+rustup toolchain install nightly --profile minimal --no-self-update
+export CARGO_TARGET_DIR=/workspace/.fullmag-build/cargo-targets/$TargetKey/mesh-tests
+export CARGO_INCREMENTAL=0
+export PYTHONPATH=/workspace/packages/fullmag-py/src
+export FULLMAG_FEM_EXECUTION=$Device
+export FULLMAG_RELAX_DEVICE=$Device
+cargo +nightly test --locked -p '$TestPackage' --no-default-features $testFeatureArgs '$TestFilter' -- --nocapture
+"@
+    } elseif ($Device -eq "gpu") { @"
 set -euo pipefail
 cd /workspace
 mkdir -p /workspace/.fullmag-build/cargo-targets/$TargetKey /workspace/.fullmag-cache /workspace/.fullmag-cargo /workspace/.fullmag-rustup /tmp/fullmag-windows
@@ -501,6 +539,10 @@ grep -Fxq fem-cpu /workspace/.fullmag/local/launcher-build-mode
     $buildCommandBase64 = [Convert]::ToBase64String($buildCommandBytes)
     $buildCommandPayload = "printf '%s' '$buildCommandBase64' | base64 --decode | bash"
     Invoke-DockerCompose @("run", "--rm", "--no-deps", $ServiceName, "bash", "-lc", $buildCommandPayload)
+    if ($TestPackage) {
+      Write-Host "Windows FEM $Device targeted tests completed: $TestPackage $TestFilter"
+      exit 0
+    }
   } elseif (-not (Test-Path -LiteralPath $RuntimeBinaryPath -PathType Leaf) -or
       -not (Test-Path -LiteralPath $RuntimeApiPath -PathType Leaf)) {
     throw "Container-local FEM $Device launcher is missing at $StateRoot\local\bin\fullmag; rerun with build=True"

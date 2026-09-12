@@ -32,7 +32,10 @@ import {
   normalizeMeshPipelineStatus,
   resolveMeshBuildStatusLabel,
 } from "@/shared/domain/mesh/buildPipeline";
-import { normalizeMeshBuildHistory } from "@/shared/domain/mesh/meshBuildHistory";
+import {
+  normalizeMeshBuildHistory,
+  type MeshBuildHistoryEntry,
+} from "@/shared/domain/mesh/meshBuildHistory";
 import {
   type MeshPolicyDiffRow,
   diffMeshPolicies,
@@ -140,6 +143,7 @@ export interface MeshDetailsModel {
   onHoverSizeDistributionBin: (bin: MeshSizeDistributionHoverBin | null) => void;
   onOpenBuildDetails: () => void;
   onRefineWorstElement: () => void;
+  onRestoreBuildToDraft: (entry: MeshBuildHistoryEntry) => void;
   onSelectMetric: (metric: MeshQualityMetric["id"]) => void;
   onSelectWorstElement: (element: MeshWorstElement) => void;
 }
@@ -506,6 +510,19 @@ export function useMeshDetailsModel(
     if (!femLane) return;
     void kernel.commands.execute("mesh.build-shared-domain", buildContext);
   }, [buildContext, femLane, kernel.commands]);
+  const restoreBuildToDraft = useCallback(
+    (entry: MeshBuildHistoryEntry) => {
+      if (!entry.restorable || !entry.canonicalPolicySnapshot) return;
+      kernel.bus.emit("mesh:build-history-restore-requested", {
+        buildId: entry.buildId ?? undefined,
+        commandId: entry.commandId ?? undefined,
+        entryId: entry.id,
+        meshTarget: entry.meshTarget,
+        snapshot: entry.canonicalPolicySnapshot,
+      });
+    },
+    [kernel.bus],
+  );
 
   return {
     activeBuildRevision: activeBuild.data?.revision,
@@ -585,6 +602,7 @@ export function useMeshDetailsModel(
         "mesh",
       ),
     onRefineWorstElement: refineWorstQualityElement,
+    onRestoreBuildToDraft: restoreBuildToDraft,
     onSelectMetric: selectQualityMetric,
     onSelectWorstElement: selectWorstElement,
   };
