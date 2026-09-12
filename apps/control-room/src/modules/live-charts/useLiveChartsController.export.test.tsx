@@ -165,6 +165,32 @@ describe("useLiveChartsController export ownership", () => {
     }
   });
 
+  it("clears a previous local export error when a command export succeeds", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as HTMLElement);
+    let command: Promise<"completed" | "failed"> | undefined;
+    try {
+      await act(async () => root.render(<ControllerHarness />));
+      await act(async () => latestController?.onExport("csv"));
+      await act(async () => latestController?.onRequestedExportFailed?.());
+      expect(latestController?.exportErrorFormat).toBe("csv");
+
+      await act(async () => {
+        command = liveChartsCommandRequests.request({ kind: "export", format: "png" });
+        await Promise.resolve();
+      });
+      expect(latestController?.exportErrorFormat).toBeNull();
+
+      await act(async () => latestController?.onRequestedExportHandled());
+      await expect(command).resolves.toBe("completed");
+      expect(latestController?.exportErrorFormat).toBeNull();
+    } finally {
+      liveChartsCommandRequests.fail();
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("ignores a stale failure callback after a newer export request", async () => {
     const dom = installSimulationPreparationTestDom();
     const root = createRoot(dom.document.createElement("div") as unknown as HTMLElement);

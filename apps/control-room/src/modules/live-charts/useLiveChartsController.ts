@@ -157,7 +157,7 @@ export function useLiveChartsController(selection: SelectionController) {
   }, [descriptor.range, descriptor.xAxisId, descriptorId, preferences.isHydrated, tableData.range, tableData.xAxisId]);
   useEffect(() => {
     if (!commandAction) return;
-    applyLiveChartsCommand({ action: commandAction, descriptorId, preferences, tableXAxisId: tableData.xAxisId });
+    applyLiveChartsCommand({ action: commandAction, descriptorId, preferences, setLocalExportState, tableXAxisId: tableData.xAxisId });
   }, [commandAction, descriptorId, preferences, tableData.xAxisId]);
   const effectiveTableXAxisId = tableData.xAxisId;
   const tableSeries = useMemo(
@@ -334,6 +334,7 @@ function createLiveChartsViewActions({
     onSeriesChange: (ids: string[]) => preferences.setDescriptorSelectedSeriesIds(descriptorId, ids),
     onRequestedExportHandled: () => {
       if (commandExportRequest && isCurrentExportCommand(commandExportRequest.requestId)) {
+        clearLiveChartsExportError(setLocalExportState);
         liveChartsCommandRequests.complete();
       } else if (!commandExportRequest && requestedExportRequestId) {
         setLocalExportState((current) => current.request?.requestId === requestedExportRequestId
@@ -368,18 +369,31 @@ function createLiveChartsViewActions({
   };
 }
 
+function clearLiveChartsExportError(
+  setLocalExportState: LiveChartsStateSetter<LiveChartsLocalExportState>,
+): void {
+  setLocalExportState((current) => current.errorFormat === null
+    ? current
+    : { ...current, errorFormat: null });
+}
+
 function applyLiveChartsCommand({
   action,
   descriptorId,
   preferences,
+  setLocalExportState,
   tableXAxisId,
 }: {
   action: Exclude<NonNullable<ReturnType<typeof liveChartsCommandRequests.getSnapshot>>, null>;
   descriptorId: string;
   preferences: LiveChartPreferencesActions;
+  setLocalExportState: LiveChartsStateSetter<LiveChartsLocalExportState>;
   tableXAxisId: string;
 }): void {
-  if (action.kind === "export") return;
+  if (action.kind === "export") {
+    clearLiveChartsExportError(setLocalExportState);
+    return;
+  }
   if (action.kind === "fit") {
     liveChartsCommandRequests.complete();
     return;
