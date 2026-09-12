@@ -16277,11 +16277,13 @@ mod tests {
         state.live_state.latest_step.preview_field = Some(test_preview_field("h_eff", 1, 2.0));
         let mut update = test_step_update(9);
         update.stats.e_total = 42.0;
+        update.stats.e_rotated_dmi = 17.0;
         let progress = crate::stage_heartbeat::StageHeartbeatProgress::new(&update);
 
         progress.apply_to_live_step(&mut state.live_state.latest_step);
 
         assert_eq!(state.live_state.latest_step.step, 9);
+        assert_eq!(state.live_state.latest_step.e_rotated_dmi, 17.0);
         assert_eq!(state.live_state.latest_step.e_total, 42.0);
         assert_eq!(state.live_state.latest_step.grid, [17, 19, 23]);
         assert_eq!(

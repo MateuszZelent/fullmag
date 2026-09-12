@@ -64,7 +64,16 @@ pub(crate) fn build_quantities(
                                 .is_some_and(|mag| !mag.is_empty()))
                 }
                 QuantityShape::GlobalScalar => spec.scalar_metric_key.is_some_and(|metric_key| {
-                    scalar_metric_is_active(execution_plan.as_ref(), metric_key)
+                    (scalar_metric_is_active(execution_plan.as_ref(), metric_key)
+                        // A persisted component is authoritative even when a
+                        // legacy session has no decodable execution plan.  Do
+                        // not let the missing provenance hide a value that
+                        // the run manifest explicitly carries.
+                        || (execution_plan.is_none()
+                            && metric_key == "e_rotated_dmi"
+                            && run
+                                .and_then(|manifest| manifest.final_e_rotated_dmi)
+                                .is_some()))
                         && scalar_available(run_manifest_scalar_value(
                             run,
                             metric_key,
@@ -634,5 +643,34 @@ mod tests {
             run_manifest_scalar_value(Some(&run), "e_rotated_dmi", None),
             run.final_e_rotated_dmi
         );
+
+        let quantities = build_quantities(
+            &LatestFields::default(),
+            &CachedPreviewFields::default(),
+            None,
+            Some(&run),
+            None,
+            &[],
+            "cell",
+        );
+        assert!(quantities
+            .iter()
+            .any(|quantity| quantity.id == "E_rotated_dmi" && quantity.available));
+
+        let malformed_metadata = serde_json::json!({
+            "execution_plan": {"backend_plan": {"unknown": true}}
+        });
+        let quantities = build_quantities(
+            &LatestFields::default(),
+            &CachedPreviewFields::default(),
+            None,
+            Some(&run),
+            Some(&malformed_metadata),
+            &[],
+            "cell",
+        );
+        assert!(quantities
+            .iter()
+            .any(|quantity| quantity.id == "E_rotated_dmi" && quantity.available));
     }
 }

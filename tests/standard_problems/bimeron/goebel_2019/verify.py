@@ -149,12 +149,40 @@ def _last_scalar(path: Path) -> dict[str, float]:
     return {key: float(value) for key, value in rows[-1].items()}
 
 
-def _first_scalar(path: Path) -> dict[str, float]:
+def _explicit_initial_scalar(path: Path) -> dict[str, float] | None:
+    """Return a scalar row that explicitly identifies the stage-0 state.
+
+    Accepted-step autosaves can omit step 0, leaving the first row as a
+    post-relaxation sample.  Only a row carrying step 0 and (when present)
+    time 0 is safe to use as the initial-energy baseline; callers can fall
+    back to the stage-0 runtime receipt when no such row was persisted.
+    """
+
     with path.open(newline="", encoding="utf-8") as stream:
-        row = next(csv.DictReader(stream), None)
-    if row is None:
-        raise ValueError(f"no scalar rows in {path}")
-    return {key: float(value) for key, value in row.items()}
+        reader = csv.DictReader(stream)
+        for row in reader:
+            if "step" not in row:
+                continue
+            try:
+                step = float(row["step"])
+            except (TypeError, ValueError):
+                continue
+            if step != 0.0:
+                continue
+            if "time" in row or "t" in row:
+                time_value = row.get("time", row.get("t"))
+                try:
+                    if not math.isclose(float(time_value), 0.0, abs_tol=1.0e-30):
+                        continue
+                except (TypeError, ValueError):
+                    continue
+            if "E_total" not in row:
+                raise ValueError(f"initial scalar row is missing E_total in {path}")
+            try:
+                return {key: float(value) for key, value in row.items()}
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"initial scalar row is not numeric in {path}") from exc
+    return None
 
 
 def _stage_duration_s(
@@ -341,13 +369,18 @@ def verify_bundle(
     receipt = execution["fdm_gpu_execution_receipt"]
     if not runtime_log.is_file():
         raise ValueError(f"runtime log is missing: {runtime_log}")
-    # The first scalar row is the authoritative energy of the saved initial
-    # state.  Keep the runtime log as a bound receipt by requiring its stage-0
-    # value to agree with that row; never let an unrelated log select the
-    # comparison baseline.
-    relax_initial_scalars = _first_scalar(relax / "scalars.csv")
-    initial_energy = relax_initial_scalars["E_total"]
+    # Prefer an explicitly identified step-0 scalar row.  Accepted-step
+    # autosaves commonly start at step 10, however, so the first row is not a
+    # reliable initial-state sample.  In that case the stage-0 runtime receipt
+    # is the only associated artifact carrying the initial energy and becomes
+    # the baseline instead of being compared to a post-relaxation row.
+    relax_initial_scalars = _explicit_initial_scalar(relax / "scalars.csv")
     runtime_log_initial_energy = _initial_energy_from_log(runtime_log)
+    initial_energy = (
+        relax_initial_scalars["E_total"]
+        if relax_initial_scalars is not None
+        else runtime_log_initial_energy
+    )
     plan = metadata["execution_plan"]["backend_plan"]
     material = plan["material"]
     periodicity = plan["periodicity"]
@@ -453,11 +486,14 @@ def verify_bundle(
             and hold_receipt["executed_unknown_operator_mask"] == 0
         ),
         "energy_decreased": (
-            math.isclose(
-                runtime_log_initial_energy,
-                initial_energy,
-                rel_tol=5.0e-4,
-                abs_tol=1.0e-30,
+            (
+                relax_initial_scalars is None
+                or math.isclose(
+                    runtime_log_initial_energy,
+                    initial_energy,
+                    rel_tol=5.0e-4,
+                    abs_tol=1.0e-30,
+                )
             )
             and hold_scalars["E_total"] < initial_energy
         ),
@@ -499,6 +535,11 @@ def verify_bundle(
         "relaxed": relaxed,
         "held": held,
         "initial_energy_j": initial_energy,
+        "initial_energy_source": (
+            "relax_scalars_step_0"
+            if relax_initial_scalars is not None
+            else "runtime_log_stage_0"
+        ),
         "relaxed_energy_j": relax_scalars["E_total"],
         "held_energy_j": hold_scalars["E_total"],
         "relax_duration_s": relax_duration_s,

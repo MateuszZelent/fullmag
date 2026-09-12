@@ -1498,28 +1498,52 @@ pub(crate) fn observe_state(
         .terms
         .rotated_interfacial_dmi
         .is_some_and(|d| d.abs() > ZERO_THRESHOLD);
-    let (rotated_dmi_field, rotated_dmi_energy, conventional_dmi_field) =
-        if has_rotated_dmi {
-            let rotated_dmi_field = problem
-                .rotated_interfacial_dmi_field_from_vectors(&observables.magnetization);
-            let rotated_dmi_energy = problem
-                .rotated_interfacial_dmi_energy_from_vectors(&observables.magnetization);
-            let conventional_dmi_field = observables
-                .dmi_field
-                .iter()
-                .zip(rotated_dmi_field.iter())
-                .map(|(total, rotated)| {
-                    [
-                        total[0] - rotated[0],
-                        total[1] - rotated[1],
-                        total[2] - rotated[2],
-                    ]
-                })
-                .collect();
-            (rotated_dmi_field, rotated_dmi_energy, conventional_dmi_field)
-        } else {
-            (Vec::new(), 0.0, observables.dmi_field)
-        };
+    let has_bulk_dmi = problem
+        .terms
+        .bulk_dmi
+        .is_some_and(|d| d.abs() > ZERO_THRESHOLD);
+    let rotated_dmi_field = if has_rotated_dmi {
+        problem.rotated_interfacial_dmi_field_from_vectors(&observables.magnetization)
+    } else {
+        Vec::new()
+    };
+    let bulk_dmi_field = if has_bulk_dmi {
+        problem.bulk_dmi_field_from_vectors(&observables.magnetization)
+    } else {
+        Vec::new()
+    };
+    let rotated_dmi_energy = if has_rotated_dmi {
+        problem.rotated_interfacial_dmi_energy_from_vectors(&observables.magnetization)
+    } else {
+        0.0
+    };
+    // `FemLlgProblem::observe` returns the aggregate interfacial + rotated +
+    // bulk DMI field. Remove each independently materialized component so
+    // `H_dmi`, `H_rotated_dmi`, and `H_dmi_bulk` remain disjoint observables.
+    let conventional_dmi_field = if has_rotated_dmi || has_bulk_dmi {
+        observables
+            .dmi_field
+            .iter()
+            .enumerate()
+            .map(|(index, total)| {
+                let rotated = rotated_dmi_field
+                    .get(index)
+                    .copied()
+                    .unwrap_or([0.0, 0.0, 0.0]);
+                let bulk = bulk_dmi_field
+                    .get(index)
+                    .copied()
+                    .unwrap_or([0.0, 0.0, 0.0]);
+                [
+                    total[0] - rotated[0] - bulk[0],
+                    total[1] - rotated[1] - bulk[1],
+                    total[2] - rotated[2] - bulk[2],
+                ]
+            })
+            .collect()
+    } else {
+        observables.dmi_field
+    };
     Ok(StateObservables {
         magnetization: observables.magnetization,
         torque_field,
@@ -1534,7 +1558,7 @@ pub(crate) fn observe_state(
         rotated_dmi_field,
         magnetoelastic_field: Vec::new(),
         cubic_anisotropy_field: Vec::new(),
-        bulk_dmi_field: Vec::new(),
+        bulk_dmi_field,
         oersted_field: Vec::new(),
         thermal_field: Vec::new(),
         exchange_energy: observables.exchange_energy_joules,
@@ -2608,6 +2632,27 @@ mod tests {
             last.max_h_eff > 1e-6,
             "DMI terms should contribute to H_eff, got {}",
             last.max_h_eff
+        );
+
+        let (problem, state) = build_problem_and_state(&plan)
+            .expect("FEM DMI problem should build for observable separation");
+        let observables = observe_state(&problem, &state, &[])
+            .expect("FEM DMI observables should be separable");
+        assert!(
+            observables
+                .dmi_field
+                .iter()
+                .flatten()
+                .any(|value| value.abs() > 0.0),
+            "interfacial DMI field should remain in H_dmi"
+        );
+        assert!(
+            observables
+                .bulk_dmi_field
+                .iter()
+                .flatten()
+                .any(|value| value.abs() > 0.0),
+            "bulk DMI field should be exposed separately as H_dmi_bulk"
         );
     }
 
