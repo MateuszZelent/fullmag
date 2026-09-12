@@ -72,6 +72,7 @@ from fullmag.model.energy import (
     Demag,
     Exchange,
     InterfacialDMI,
+    RotatedInterfacialDMI,
     OerstedCylinder,
     OerstedField,
     TimeDependence,
@@ -2455,6 +2456,7 @@ class _WorldState:
     _spin_torque_activation: dict[str, bool] = field(default_factory=dict)
     _spin_transports: list[SpinDriftDiffusion] = field(default_factory=list)
     _oersted_terms: list[OerstedCylinder | OerstedField] = field(default_factory=list)
+    _explicit_energy_terms: list[RotatedInterfacialDMI] = field(default_factory=list)
     _excitation_analysis: SpinWaveExcitationAnalysis | None = None
     _last_result: Any | None = None
     _last_step: Any | None = None
@@ -2590,6 +2592,7 @@ _SCALAR_QUANTITY_ATTRS: Mapping[str, str] = {
     "E_ext": "e_ext",
     "E_ani": "e_ani",
     "E_dmi": "e_dmi",
+    "E_rotated_dmi": "e_rotated_dmi",
     "E_total": "e_total",
     "mx": "mx",
     "my": "my",
@@ -2609,6 +2612,7 @@ _VECTOR_QUANTITIES = {
     "H_eff",
     "H_ani",
     "H_dmi",
+    "H_rotated_dmi",
     "H_mel",
     "H_ani_cubic",
     "H_dmi_bulk",
@@ -3479,6 +3483,7 @@ E_demag = QuantityHandle("E_demag", kind="scalar")
 E_ext = QuantityHandle("E_ext", kind="scalar")
 E_ani = QuantityHandle("E_ani", kind="scalar")
 E_dmi = QuantityHandle("E_dmi", kind="scalar")
+E_rotated_dmi = QuantityHandle("E_rotated_dmi", kind="scalar")
 E_total = QuantityHandle("E_total", kind="scalar")
 mx = QuantityHandle("mx", kind="scalar")
 my = QuantityHandle("my", kind="scalar")
@@ -5293,6 +5298,26 @@ class StudyFieldDriveRegistry:
         return tuple(_state._field_drives)
 
 
+class StudyEnergyTermRegistry:
+    """Explicit global energy terms that do not belong to material handles."""
+
+    def add(self, term: RotatedInterfacialDMI) -> RotatedInterfacialDMI:
+        if not isinstance(term, RotatedInterfacialDMI):
+            raise TypeError(
+                "study.terms.add() currently requires RotatedInterfacialDMI"
+            )
+        if any(
+            isinstance(existing, RotatedInterfacialDMI)
+            for existing in _state._explicit_energy_terms
+        ):
+            raise ValueError("rotated_interfacial_dmi may be authored only once")
+        _state._explicit_energy_terms.append(term)
+        return term
+
+    def items(self) -> tuple[RotatedInterfacialDMI, ...]:
+        return tuple(_state._explicit_energy_terms)
+
+
 class StudyBuilder:
     """Study-root facade over the current script-local world state."""
 
@@ -5300,6 +5325,7 @@ class StudyBuilder:
         _state._api_surface = "study"
         self.stages = StudyStagesBuilder()
         self.field_drives = StudyFieldDriveRegistry()
+        self.terms = StudyEnergyTermRegistry()
         self.monitors = StudyMonitorRegistry(_state._planar_monitors)
         self.universe = StudyUniverseHandle(self)
         self.airbox = StudyAirboxHandle(self)
@@ -8127,6 +8153,7 @@ _SCALAR_QUANTITIES = {
     "E_ext",
     "E_ani",
     "E_dmi",
+    "E_rotated_dmi",
     "E_total",
     "time",
     "step",
@@ -8531,6 +8558,7 @@ def _build_problem(
         if h.Dbulk is not None:
             energy.append(BulkDMI(D=h.Dbulk))
             break
+    energy.extend(s._explicit_energy_terms)
     if s._b_ext is not None:
         energy.append(Zeeman(B=s._b_ext))
     energy.extend(s._oersted_terms)

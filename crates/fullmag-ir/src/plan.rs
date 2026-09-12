@@ -898,6 +898,9 @@ pub struct FdmPlanIR {
     /// Interfacial DMI constant D [J/m²]. None = disabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interfacial_dmi: Option<f64>,
+    /// Rotated interfacial DMI constant D [J/m²]. None = disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotated_interfacial_dmi: Option<f64>,
     /// Bulk (Bloch) DMI constant D [J/m²]. None = disabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bulk_dmi: Option<f64>,
@@ -1332,6 +1335,8 @@ pub struct FemPlanIR {
     pub air_box_config: Option<AirBoxConfigIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interfacial_dmi: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotated_interfacial_dmi: Option<f64>,
     /// Interface normal direction for interfacial DMI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dmi_interface_normal: Option<[f64; 3]>,
@@ -1479,6 +1484,7 @@ impl Default for FemPlanIR {
             demag_realization: None,
             air_box_config: None,
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             dmi_interface_normal: None,
             bulk_dmi: None,
             dind_field: None,

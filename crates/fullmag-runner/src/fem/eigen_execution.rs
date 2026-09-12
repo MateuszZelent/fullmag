@@ -330,6 +330,7 @@ fn bias_field_relax_plan(plan: &FemEigenPlanIR) -> fullmag_ir::FemPlanIR {
         demag_realization: plan.demag_realization,
         air_box_config: plan.air_box_config.clone(),
         interfacial_dmi: plan.interfacial_dmi,
+        rotated_interfacial_dmi: None,
         dmi_interface_normal: plan.dmi_interface_normal,
         bulk_dmi: plan.bulk_dmi,
         dind_field: None,

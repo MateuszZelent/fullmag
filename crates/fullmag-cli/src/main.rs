@@ -1246,6 +1246,7 @@ mod tests {
             demag_realization: None,
             air_box_config: None,
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             bulk_dmi: None,
             dmi_interface_normal: None,
             dind_field: None,

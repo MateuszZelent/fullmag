@@ -5,8 +5,9 @@ use crate::{
     SceneOerstedTimeDependence, ScenePrescribedSotDrive, SceneReactionLength, SceneRegionRef,
     SceneSpinBoundary, SceneSpinInterface, SceneSpinTorque, SceneSpinTransport,
     SceneSpinTransportMode, SceneStructuredCurrentClosure, SceneStructuredCurrentDrive,
-    SceneSurfaceRef, SceneTimeEnvelope, SceneTransportCoupling, SlonczewskiFormulaVersion,
-    StudyPipelineDocument, StudyPipelineNode,
+    SceneSurfaceRef, SceneTimeEnvelope, SceneTransportCoupling,
+    ScriptBuilderMagneticInteractionKind, SlonczewskiFormulaVersion, StudyPipelineDocument,
+    StudyPipelineNode,
 };
 use fullmag_ir::{
     CouplingEndpointIR, CouplingIR, CouplingKindIR, CouplingParametersIR, DriveActivationIR,
@@ -67,6 +68,7 @@ fn validate_scene_document_with_mode(
     if scene.version == "scene.v1" {
         validate_scene_v1_has_no_region_owned_payloads(scene)?;
     }
+    validate_dmi_scope_exclusivity(scene)?;
     if !matches!(
         scene.study.requested_mode.as_str(),
         "" | "strict" | "extended" | "hybrid"
@@ -200,6 +202,85 @@ fn validate_scene_document_with_mode(
     validate_scene_magnetization_constraints(scene, &object_ids)?;
 
     Ok(())
+}
+
+fn validate_dmi_scope_exclusivity(
+    scene: &SceneDocument,
+) -> Result<(), SceneDocumentValidationError> {
+    // SceneDocument currently has no periodicity field, so its magnetic
+    // boundary is conservatively treated as open.  The FDM planner remains
+    // the source of truth for the fully-periodic exception once PBC is in IR.
+    if scene
+        .study
+        .rotated_interfacial_dmi
+        .is_some_and(|d| d != 0.0)
+        && !scene.study.exchange_enabled
+    {
+        return Err(SceneDocumentValidationError::new(
+            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition",
+        ));
+    }
+    let mut conflicts = BTreeSet::new();
+    for object in &scene.objects {
+        let mut interfacial_present = false;
+        let mut interfacial_enabled = false;
+        let mut bulk_present = false;
+        let mut bulk_enabled = false;
+        for interaction in &object.physics_stack {
+            match interaction.kind {
+                ScriptBuilderMagneticInteractionKind::RotatedInterfacialDmi => {
+                    return Err(SceneDocumentValidationError::new(
+                        "rotated_interfacial_dmi is study-scoped and cannot appear in object physics_stack",
+                    ));
+                }
+                ScriptBuilderMagneticInteractionKind::InterfacialDmi => {
+                    interfacial_present = true;
+                    interfacial_enabled = interaction.enabled;
+                }
+                ScriptBuilderMagneticInteractionKind::BulkDmi => {
+                    bulk_present = true;
+                    bulk_enabled = interaction.enabled;
+                }
+                _ => {}
+            }
+        }
+
+        if object.role != "magnet" {
+            continue;
+        }
+        let material = scene
+            .materials
+            .iter()
+            .find(|material| material.id == object.material_ref);
+        if !interfacial_present {
+            interfacial_enabled = material
+                .and_then(|material| material.properties.dind)
+                .is_some_and(|value| value != 0.0);
+        }
+        if !bulk_present {
+            bulk_enabled = material
+                .and_then(|material| material.properties.dbulk)
+                .is_some_and(|value| value != 0.0);
+        }
+        if scene.study.rotated_interfacial_dmi.is_none() {
+            continue;
+        }
+        if interfacial_enabled {
+            conflicts.insert("interfacial_dmi");
+        }
+        if bulk_enabled {
+            conflicts.insert("bulk_dmi");
+        }
+    }
+
+    if conflicts.is_empty() {
+        return Ok(());
+    }
+
+    Err(SceneDocumentValidationError::new(format!(
+        "rotated_interfacial_dmi is study-scoped and cannot coexist with active object-scoped {}",
+        conflicts.into_iter().collect::<Vec<_>>().join(", ")
+    )))
 }
 
 fn validate_scene_magnetization_constraints(
@@ -3381,6 +3462,150 @@ mod tests {
             }]
         }))
         .expect("test scene should deserialize")
+    }
+
+    #[test]
+    fn rotated_interfacial_dmi_rejects_active_object_scoped_dmi() {
+        for kind in [
+            crate::ScriptBuilderMagneticInteractionKind::InterfacialDmi,
+            crate::ScriptBuilderMagneticInteractionKind::BulkDmi,
+        ] {
+            let mut scene = region_owned_scene();
+            scene.study.rotated_interfacial_dmi = Some(-3.0e-3);
+            scene.study.exchange_enabled = true;
+            scene.objects[0]
+                .physics_stack
+                .push(crate::ScriptBuilderMagneticInteractionEntry {
+                    kind,
+                    enabled: true,
+                    params: None,
+                });
+
+            let error = validate_scene_document(&scene)
+                .expect_err("active object-scoped DMI must conflict with study rDMI");
+            assert!(
+                error.message.contains("study-scoped") && error.message.contains("cannot coexist"),
+                "{}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn rotated_interfacial_dmi_rejects_material_derived_object_dmi() {
+        for (kind, dind, dbulk) in [
+            (
+                crate::ScriptBuilderMagneticInteractionKind::InterfacialDmi,
+                Some(3.0e-3),
+                None,
+            ),
+            (
+                crate::ScriptBuilderMagneticInteractionKind::BulkDmi,
+                None,
+                Some(3.0e-3),
+            ),
+        ] {
+            let mut scene = region_owned_scene();
+            scene.materials[0].properties.dind = dind;
+            scene.materials[0].properties.dbulk = dbulk;
+            scene.study.rotated_interfacial_dmi = Some(-3.0e-3);
+            scene.study.exchange_enabled = true;
+
+            let error = validate_scene_document(&scene)
+                .expect_err("material-derived object DMI must conflict with study rDMI");
+            assert!(
+                error.message.contains("study-scoped") && error.message.contains("cannot coexist"),
+                "{}",
+                error.message
+            );
+
+            scene.objects[0]
+                .physics_stack
+                .push(crate::ScriptBuilderMagneticInteractionEntry {
+                    kind,
+                    enabled: false,
+                    params: None,
+                });
+            validate_scene_document(&scene)
+                .expect("explicitly disabled object DMI must suppress material injection");
+        }
+    }
+
+    #[test]
+    fn object_scoped_rotated_interfacial_dmi_is_rejected_without_study_term() {
+        for enabled in [false, true] {
+            let mut scene = region_owned_scene();
+            scene.objects[0]
+                .physics_stack
+                .push(crate::ScriptBuilderMagneticInteractionEntry {
+                    kind: crate::ScriptBuilderMagneticInteractionKind::RotatedInterfacialDmi,
+                    enabled,
+                    params: None,
+                });
+
+            let error = validate_scene_document(&scene)
+                .expect_err("object-scoped rotated DMI must be rejected unconditionally");
+            assert!(error
+                .message
+                .contains("cannot appear in object physics_stack"));
+        }
+    }
+
+    #[test]
+    fn rotated_interfacial_dmi_conflict_can_be_recovered_by_disabling_or_removing_object_dmi() {
+        for kind in [
+            crate::ScriptBuilderMagneticInteractionKind::InterfacialDmi,
+            crate::ScriptBuilderMagneticInteractionKind::BulkDmi,
+        ] {
+            let mut scene = region_owned_scene();
+            scene.study.rotated_interfacial_dmi = Some(-3.0e-3);
+            scene.study.exchange_enabled = true;
+            scene.objects[0]
+                .physics_stack
+                .push(crate::ScriptBuilderMagneticInteractionEntry {
+                    kind,
+                    enabled: true,
+                    params: None,
+                });
+
+            scene.objects[0].physics_stack[0].enabled = false;
+            validate_scene_document(&scene)
+                .expect("disabling object-scoped DMI must allow study rDMI");
+
+            scene.objects[0].physics_stack.clear();
+            validate_scene_document(&scene)
+                .expect("removing object-scoped DMI must allow study rDMI");
+        }
+    }
+
+    #[test]
+    fn nonzero_rotated_interfacial_dmi_requires_study_exchange_even_with_object_exchange() {
+        let mut scene = region_owned_scene();
+        scene.study.rotated_interfacial_dmi = Some(-3.0e-3);
+        scene.study.exchange_enabled = false;
+        scene.objects[0]
+            .physics_stack
+            .push(crate::ScriptBuilderMagneticInteractionEntry {
+                kind: crate::ScriptBuilderMagneticInteractionKind::Exchange,
+                enabled: true,
+                params: None,
+            });
+
+        let error = validate_scene_document_for_authoring(&scene)
+            .expect_err("object-scoped Exchange must not satisfy the global boundary coupling");
+        assert_eq!(
+            error.message,
+            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition"
+        );
+
+        scene.study.exchange_enabled = true;
+        validate_scene_document_for_authoring(&scene)
+            .expect("global Exchange must make nonzero open-boundary rDMI authorable");
+
+        scene.study.exchange_enabled = false;
+        scene.study.rotated_interfacial_dmi = Some(0.0);
+        validate_scene_document_for_authoring(&scene)
+            .expect("zero rotated DMI is a no-op and must not require Exchange");
     }
 
     fn valid_closed_current_view_value() -> Value {

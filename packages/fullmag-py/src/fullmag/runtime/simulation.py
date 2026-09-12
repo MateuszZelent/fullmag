@@ -28,6 +28,7 @@ class StepStats:
     mz: float = 0.0
     e_ani: float = 0.0
     e_dmi: float = 0.0
+    e_rotated_dmi: float = 0.0
     max_h_demag: float = 0.0
     max_torque_Apm: float = 0.0
     max_torque_T: float = 0.0
@@ -234,6 +235,7 @@ def result_from_run_payload(
                 mz=s.get("mz", 0.0),
                 e_ani=s.get("e_ani", 0.0),
                 e_dmi=s.get("e_dmi", 0.0),
+                e_rotated_dmi=s.get("e_rotated_dmi", 0.0),
                 max_h_demag=s.get("max_h_demag", 0.0),
                 max_torque_Apm=s.get("max_torque_Apm", 0.0),
                 max_torque_T=s.get("max_torque_T", 0.0),
@@ -298,6 +300,7 @@ _SCALAR_QUANTITY_ALIASES: Mapping[str, str] = {
     "e_ext": "e_ext",
     "e_ani": "e_ani",
     "e_dmi": "e_dmi",
+    "e_rotated_dmi": "e_rotated_dmi",
     "e_total": "e_total",
     "mx": "mx",
     "my": "my",
@@ -315,6 +318,9 @@ _SCALAR_QUANTITY_DESCRIPTORS: Mapping[str, ScalarQuantityDescriptor] = {
     "e_ext": ScalarQuantityDescriptor("e_ext", "External Energy", "J", "e_ext"),
     "e_ani": ScalarQuantityDescriptor("e_ani", "Anisotropy Energy", "J", "e_ani"),
     "e_dmi": ScalarQuantityDescriptor("e_dmi", "DMI Energy", "J", "e_dmi"),
+    "e_rotated_dmi": ScalarQuantityDescriptor(
+        "e_rotated_dmi", "Rotated DMI Energy", "J", "e_rotated_dmi"
+    ),
     "e_total": ScalarQuantityDescriptor("e_total", "Total Energy", "J", "e_total"),
     "mx": ScalarQuantityDescriptor("m", "m_x avg", "dimensionless", "mx", kind="derived"),
     "my": ScalarQuantityDescriptor("m", "m_y avg", "dimensionless", "my", kind="derived"),
@@ -332,6 +338,7 @@ _SCALAR_QUANTITY_ORDER: tuple[str, ...] = (
     "e_ext",
     "e_ani",
     "e_dmi",
+    "e_rotated_dmi",
     "e_total",
     "mx",
     "my",

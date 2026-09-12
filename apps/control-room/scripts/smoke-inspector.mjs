@@ -11,11 +11,15 @@ const INSPECTOR_REQUEST_TIMEOUT_MS = 5_000;
 const INSPECTOR_MAX_REQUESTS_PER_PATH = 8;
 const INSPECTOR_REQUEST_LIMITS = new Map([
   [
-    "PATCH /v2/sessions/current/model/magnetization-assets/mag%3Afilm%3Avortex_wall",
-    1,
+    "GET /v2/sessions/current/model/regions",
+    10,
   ],
   [
-    "PATCH /v2/sessions/current/model/objects/film",
+    "GET /v2/sessions/current/analysis/frequency-domain/response/progress.v1",
+    10,
+  ],
+  [
+    "POST /v2/sessions/current/model/transactions",
     1,
   ],
   [
@@ -59,12 +63,18 @@ await mkdir(outputDir, { recursive: true });
 const browser = await playwright.chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
 const consoleErrors = [];
+const notFoundResponses = [];
 const previewRequests = [];
 
 page.on("console", (message) => {
   if (message.type() === "error") consoleErrors.push(message.text());
 });
 page.on("pageerror", (error) => consoleErrors.push(error.stack ?? error.message));
+page.on("response", (response) => {
+  if (response.status() === 404) {
+    notFoundResponses.push(`${response.request().method()} ${response.url()}`);
+  }
+});
 page.on("request", (request) => {
   const url = request.url();
   if (/inspector.*(?:thumbnail|screenshot|snapshot)|(?:thumbnail|screenshot).*inspector/i.test(url)) {
@@ -591,11 +601,13 @@ try {
     );
   }
 
+  await qualifyPhysicsScopeExclusivity(page, inspector, fixture);
+
   assert((await inspector.locator("img, canvas").count()) === 0, "Inspector rendered preview media.");
   await waitForInspectorRequestQuiet(page, fixture);
   assert(
     fixture.requestBudgetViolation === null,
-    `Inspector request budget exceeded: ${JSON.stringify(fixture.requestBudgetViolation)}`,
+    `Inspector request budget exceeded: ${JSON.stringify(fixture.requestBudgetViolation)}; counts: ${JSON.stringify(Object.fromEntries(fixture.requestCounts))}`,
   );
   assert(
     fixture.unknownGetPaths.length === 0,
@@ -642,6 +654,7 @@ try {
         consoleErrors: consoleErrors.length,
         dirtySelectionGuard: "verified",
         previewRequests: previewRequests.length,
+        physicsScopeExclusivity: "verified; both directions blocked before mutation",
         screenshots: screenshotFiles,
         tabs: expectedTabs,
         themes: ["light", "dark"],
@@ -904,11 +917,15 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
   const mutationRequests = fixture.requests.slice(requestStart);
   assert(mutationRequests.length <= 12,
     `Magnetic texture request budget exceeded: ${JSON.stringify(mutationRequests)}.`);
+  const transactionMutationCount = mutationRequests.filter(
+    (entry) => entry === "POST /v2/sessions/current/model/transactions",
+  ).length;
+  const syncMutationCount = mutationRequests.filter(
+    (entry) => entry === "POST /v2/sessions/current/model/syncs",
+  ).length;
   assert(
-    mutationRequests.filter((entry) => entry === "PATCH /v2/sessions/current/model/magnetization-assets/mag%3Afilm%3Avortex_wall").length === 1 &&
-      mutationRequests.filter((entry) => entry === "PATCH /v2/sessions/current/model/objects/film").length === 1 &&
-      mutationRequests.filter((entry) => entry === "POST /v2/sessions/current/model/syncs").length === 1,
-    `Magnetic texture request budget did not contain exactly one mutation transaction: ${JSON.stringify(mutationRequests)}.`,
+    transactionMutationCount === 1 && syncMutationCount === 1,
+    `Magnetic texture request budget did not contain exactly one model transaction and sync: ${JSON.stringify(mutationRequests)}.`,
   );
   fixture.texturePatchDelayMs = 0;
   fixture.manifest = fixtureSnapshot.manifest;
@@ -922,9 +939,125 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
   );
   assert(
     unexpectedResetErrors.length === 0,
-    `Unexpected browser errors before fixture reset: ${unexpectedResetErrors.join("\n")}`,
+    `Unexpected browser errors before fixture reset: ${unexpectedResetErrors.join("\n")}\n404 responses: ${notFoundResponses.join("\n")}`,
   );
   consoleErrors.length = 0;
+}
+
+async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
+  fixture.physicsGuardEnabled = true;
+  await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
+  await inspector.waitFor({ state: "visible", timeout: 30_000 });
+
+  const objectDmiNodeId = "model:object:film:magnetic-parameters:interfacial_dmi";
+  const globalRotatedNodeId = "model:physics:rotated_interfacial_dmi";
+
+  // The ribbon command is the canonical producer of global interaction
+  // selections (model:physics:${interactionId}); exercise that route rather
+  // than fabricating a tree row for a global term.
+  await page.getByRole("tab", { name: "Physics", exact: true }).click();
+  const globalPhysics = page.locator('button[data-action-id="physics-global"]');
+  await globalPhysics.waitFor({ state: "visible", timeout: 60_000 });
+  await globalPhysics.click();
+  const globalRotatedItem = page.getByRole("menuitem", {
+    name: "Rotated interfacial DMI",
+    exact: true,
+  });
+  await globalRotatedItem.waitFor({ state: "visible", timeout: 60_000 });
+  await globalRotatedItem.click();
+  await page.waitForFunction(
+    (expectedNodeId) => {
+      const inspector = document.querySelector(".fm-inspector");
+      return inspector?.getAttribute("data-inspector-owner") === "physics-interaction" &&
+        Array.from(
+          inspector.querySelectorAll(".fm-inspector__metadata-item dd[title]"),
+        ).some((node) => node.getAttribute("title") === expectedNodeId);
+    },
+    globalRotatedNodeId,
+    { timeout: 60_000 },
+  );
+  const globalNodeMetadata = inspector
+    .locator(".fm-inspector__metadata-item")
+    .filter({ hasText: "Node" });
+  await globalNodeMetadata
+    .locator(`dd[title="${globalRotatedNodeId}"]`)
+    .waitFor({ state: "attached", timeout: 60_000 });
+
+  const rotatedToggle = inspector.getByRole("checkbox", {
+    name: /^Rotated interfacial DMI(?:\s|$)/,
+  });
+  await rotatedToggle.check();
+  const apply = inspector.getByRole("button", {
+    name: "Apply Interaction",
+    exact: true,
+  });
+  assert(!(await apply.isDisabled()), "Rotated DMI guard fixture did not enable Apply.");
+
+  const requestStart = fixture.requests.length;
+  await apply.click();
+  await inspector
+    .getByText(
+      /Rotated interfacial DMI conflicts with active object-scoped interfacial_dmi/,
+    )
+    .waitFor({ state: "visible", timeout: 5_000 });
+  await page.waitForTimeout(200);
+  const guardRequests = fixture.requests
+    .slice(requestStart)
+    .filter((request) => /^(PATCH|POST|PUT|DELETE) /.test(request));
+  assert(
+    guardRequests.length === 0,
+    `Rotated DMI guard emitted a mutation: ${JSON.stringify(guardRequests)}.`,
+  );
+  assert(
+    fixture.scene.study.rotated_interfacial_dmi === undefined,
+    "Rotated DMI guard changed the fixture study without an API transaction.",
+  );
+
+  const object = fixture.scene.objects[0];
+  const objectDmi = object.physics_stack.find(
+    (entry) => entry.kind === "interfacial_dmi",
+  );
+  assert(objectDmi, "Physics guard fixture lost its interfacial DMI entry.");
+  objectDmi.enabled = false;
+  fixture.scene.study.rotated_interfacial_dmi = -0.003;
+
+  await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
+  await inspector.waitFor({ state: "visible", timeout: 30_000 });
+  await expandInspectorNode(page, "model:objects");
+  await expandInspectorNode(page, "model:object:film");
+  await expandInspectorNode(page, "model:object:film:magnetic-parameters");
+  await selectInspectorNode(page, inspector, objectDmiNodeId, {
+    owner: "physics-interaction",
+    label: "Object interfacial DMI recovery",
+  });
+  const interfacialToggle = inspector.getByRole("checkbox", {
+    name: /^Interfacial DMI(?:\s|$)/,
+  });
+  await interfacialToggle.check();
+  const inverseApply = inspector.getByRole("button", {
+    name: "Apply Interaction",
+    exact: true,
+  });
+  assert(!(await inverseApply.isDisabled()), "Object DMI inverse guard did not enable Apply.");
+  const inverseRequestStart = fixture.requests.length;
+  await inverseApply.click();
+  await inspector
+    .getByText(
+      /Object-scoped interfacial_dmi conflicts with active study-level rotated interfacial DMI/,
+    )
+    .waitFor({ state: "visible", timeout: 5_000 });
+  await page.waitForTimeout(200);
+  const inverseRequests = fixture.requests
+    .slice(inverseRequestStart)
+    .filter((request) => /^(PATCH|POST|PUT|DELETE) /.test(request));
+  assert(
+    inverseRequests.length === 0,
+    `Object DMI inverse guard emitted a mutation: ${JSON.stringify(inverseRequests)}.`,
+  );
+  assert(
+    objectDmi.enabled === false,
+    "Object DMI inverse guard changed the fixture without an API transaction.",
+  );
 }
 
 async function qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles, fixture) {
@@ -1328,6 +1461,13 @@ function createInspectorFixture() {
         region_name: "film",
         regions: [],
         role: "magnet",
+        physics_stack: [
+          {
+            enabled: true,
+            kind: "interfacial_dmi",
+            params: { dind: 0.003 },
+          },
+        ],
         tags: ["mesh:ready"],
         transform: {
           pivot: [0, 0, 0],
@@ -1388,6 +1528,7 @@ function createInspectorFixture() {
     topology: inspectorTopologyBuffer(),
     texturePatchDelayMs: 0,
     textureMutationBodies: [],
+    physicsGuardEnabled: false,
     visualizationPatchDelayMs: 0,
     visualizationPatchRejectOnce: false,
     visualization: inspectorVisualizationState(),
@@ -1460,6 +1601,25 @@ function inspectorVisualizationState() {
   };
 }
 
+function inspectorModeComposition(fixture) {
+  return {
+    artifact_revision: "",
+    composition_id: "active",
+    layers: [],
+    lifecycle: {
+      artifact_revision: 0,
+      mesh_revision: fixture.manifest.revision,
+      run_id: null,
+      session_id: "inspector-routing-smoke",
+    },
+    phase_clock: { master_rate_hz: 1, synchronized: true },
+    revision: fixture.revision,
+    run_id: "",
+    schema_version: "mode-composition.v1",
+    stage_id: "",
+  };
+}
+
 async function installInspectorFixtureApi(page, fixture) {
   await page.route("**/v2/**", async (route) => {
     const request = route.request();
@@ -1486,6 +1646,31 @@ async function installInspectorFixtureApi(page, fixture) {
       );
     }
     if (request.method() === "OPTIONS") return fulfillEmpty(route, 204);
+    if (path === "/v2/sessions" && request.method() === "GET") {
+      return fulfillJson(route, {
+        schema_version: "2.0.0",
+        sessions: [{
+          current: true,
+          name: "Inspector routing smoke",
+          session_id: "inspector-routing-smoke",
+          status: "active",
+        }],
+      });
+    }
+    if (path === "/v2/sessions/current/visualization/mode-compositions/active") {
+      if (request.method() === "GET") {
+        return fulfillJson(route, inspectorModeComposition(fixture));
+      }
+      if (request.method() === "PATCH") {
+        const patch = request.postDataJSON() ?? {};
+        const composition = inspectorModeComposition(fixture);
+        return fulfillJson(route, {
+          ...composition,
+          revision: composition.revision + 1,
+          ...(patch.phase_clock ? { phase_clock: patch.phase_clock } : {}),
+        });
+      }
+    }
     if (path === "/v2/sessions/current/visualization/state" && request.method() === "PATCH") {
       const patch = request.postDataJSON() ?? {};
       fixture.visualizationMutationBodies.push(patch);
@@ -1511,41 +1696,58 @@ async function installInspectorFixtureApi(page, fixture) {
         status: body.status ?? "ready",
       });
     }
-    if (
-      path === "/v2/sessions/current/model/magnetization-assets/mag%3Afilm%3Avortex_wall" &&
-      request.method() === "PATCH"
-    ) {
+    if (path === "/v2/sessions/current/model/transactions" && request.method() === "POST") {
       const body = request.postDataJSON() ?? {};
+      if (body.kind !== "patch_magnetization" || body.object_id !== "film") {
+        fixture.unknownMutationPaths.push(`${request.method()} ${path}${url.search}`);
+        return fulfillJson(
+          route,
+          { error: { code: "inspector_fixture_unknown_transaction", kind: body.kind ?? null } },
+          422,
+        );
+      }
       fixture.textureMutationBodies.push(body);
       if (fixture.texturePatchDelayMs > 0) {
         await new Promise((resolveDelay) => setTimeout(resolveDelay, fixture.texturePatchDelayMs));
       }
-      const asset = body.asset ?? fixture.scene.magnetization_assets[0];
+      const asset = body.asset ?? null;
       fixture.revision += 1;
       fixture.scene.revision = fixture.revision;
       fixture.manifest.source_scene_revision = fixture.revision;
       fixture.visualization.revision = fixture.revision;
-      fixture.scene.magnetization_assets = [asset];
-      return fulfillJson(route, { asset, scene_revision: fixture.revision });
-    }
-    if (path === "/v2/sessions/current/model/objects/film" && request.method() === "PATCH") {
-      const body = request.postDataJSON() ?? {};
-      fixture.textureMutationBodies.push(body);
-      fixture.revision += 1;
-      fixture.scene.revision = fixture.revision;
-      fixture.manifest.source_scene_revision = fixture.revision;
-      fixture.visualization.revision = fixture.revision;
+      fixture.scene.magnetization_assets = asset ? [asset] : [];
       fixture.scene.objects[0] = {
         ...fixture.scene.objects[0],
-        magnetization_ref:
-          body.magnetization_ref ?? fixture.scene.objects[0].magnetization_ref,
+        magnetization_ref: body.magnetization_ref ?? null,
       };
-      return fulfillJson(route, fixture.scene);
+      return fulfillJson(route, {
+        committed_scene: fixture.scene,
+        scene_revision: fixture.revision,
+        transaction_kind: body.kind,
+      });
     }
     if (path === "/v2/sessions/current/model/syncs" && request.method() === "POST") {
       return fulfillJson(route, {
         revision: fixture.revision,
         status: "synced",
+      });
+    }
+    const objectInteractionMatch =
+      /^\/v2\/sessions\/current\/model\/objects\/([^/]+)\/interactions\/([^/]+)$/.exec(path);
+    if (objectInteractionMatch && request.method() === "GET") {
+      const objectId = decodeURIComponent(objectInteractionMatch[1]);
+      const interactionKind = decodeURIComponent(objectInteractionMatch[2]);
+      const object = fixture.scene.objects.find((candidate) => candidate.id === objectId);
+      const entry = object?.physics_stack?.find(
+        (candidate) => candidate.kind === interactionKind,
+      );
+      return fulfillJson(route, {
+        enabled: Boolean(entry && entry.enabled !== false),
+        interaction_kind: interactionKind,
+        object_id: objectId,
+        params: entry?.params ?? {},
+        present: Boolean(entry),
+        scene_revision: fixture.revision,
       });
     }
     if (request.method() !== "GET") {
@@ -1600,6 +1802,18 @@ async function installInspectorFixtureApi(page, fixture) {
       });
     }
     if (path === "/v2/sessions/current/model/scene") return fulfillJson(route, fixture.scene);
+    if (path === "/v2/sessions/current/model/readiness") return fulfillJson(route, {
+      blockers: [],
+      capabilities: {
+        move: { available: true, reason: null },
+        rotate: { available: true, reason: null },
+        scale: { available: true, reason: null },
+      },
+      checks: [],
+      ready_to_export: true,
+      ready_to_run: false,
+      scene_revision: fixture.revision,
+    });
     if (path === "/v2/sessions/current/model/frozen-spins") return fulfillJson(route, {
       count: 0,
       definitions: [],
@@ -1772,6 +1986,9 @@ function inspectorSessionStatus(fixture) {
       preview_3d: true,
       scalar_history: true,
       structured_grid: false,
+      ...(fixture.physicsGuardEnabled
+        ? { active_lane: inspectorPhysicsGuardLane() }
+        : {}),
     },
     display: { active_quantity_id: "m", field_component: "magnitude", view_mode: "3d", vector_glyphs: true },
     domain: { cell_count: 3, discretization: "fem", generation_id: 1 },
@@ -1803,6 +2020,64 @@ function inspectorSessionStatus(fixture) {
     runtime_bundle_version: "inspector-routing-smoke",
     session: { created_at: "2026-08-11T00:00:00.000Z", name: "Inspector routing smoke", session_id: "inspector-routing-smoke", workspace_root: "/tmp/fullmag-inspector-routing-smoke" },
     solver: { state: "idle" },
+  };
+}
+
+function inspectorPhysicsGuardLane() {
+  const supported = (reason) => ({
+    reason,
+    reason_code: "capability_supported",
+    requires: ["discretization:fem"],
+    state: "supported",
+  });
+  return {
+    authored: {
+      backend: "fem",
+      discretization: "fem",
+      device: "cpu",
+      mode: "strict",
+      precision: "double",
+    },
+    operations: {
+      "interaction.bulk_dmi": supported("Bulk DMI is visible in the FEM authoring catalog."),
+      "interaction.cubic_anisotropy": supported("Cubic anisotropy is visible in the FEM authoring catalog."),
+      "interaction.demag": supported("Demagnetization is supported by the FEM fixture lane."),
+      "interaction.exchange": supported("Exchange is supported by the FEM fixture lane."),
+      "interaction.interfacial_dmi": supported("Interfacial DMI is supported by the FEM fixture lane."),
+      "interaction.magnetoelastic": supported("Magnetoelasticity is visible in the FEM authoring catalog."),
+      "interaction.oersted_field": supported("Oersted fields are visible in the FEM authoring catalog."),
+      "interaction.rotated_interfacial_dmi": supported("Rotated interfacial DMI is supported by the FEM fixture lane."),
+      "interaction.spin_torque": supported("Spin torque is visible in the FEM authoring catalog."),
+      "interaction.current_transport": supported("Current transport is visible in the FEM authoring catalog."),
+      "interaction.uniaxial_anisotropy": supported("Uniaxial anisotropy is supported by the FEM fixture lane."),
+      "interaction.zeeman": supported("Zeeman field is supported by the FEM fixture lane."),
+    },
+    qualification: {
+      reason: "Smoke fixture checks authoring guards only; scientific qualification is not asserted.",
+      status: "not_asserted",
+    },
+    requested: {
+      backend: "fem",
+      discretization: "fem",
+      device: "cpu",
+      mode: "strict",
+      precision: "double",
+    },
+    resolved: {
+      backend: "fem",
+      discretization: "fem",
+      device: "cpu",
+      mode: "strict",
+      precision: "double",
+    },
+    schema_version: "active-lane-capabilities.v2",
+    source: {
+      authored_intent: "problem_ir.runtime_selection",
+      capability_profile_version: "inspector-smoke",
+      effective_request: "session.runtime_resolution",
+      engine_id: "fem_cpu_reference",
+      kind: "fixture",
+    },
   };
 }
 

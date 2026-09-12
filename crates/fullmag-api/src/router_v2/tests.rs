@@ -63,6 +63,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         demag_realization: None,
         fdm: None,
         external_field: None,
+        rotated_interfacial_dmi: None,
         solver: fullmag_authoring::ScriptBuilderSolverState {
             integrator: "rk45".to_string(),
             fixed_timestep: String::new(),
@@ -2082,6 +2083,7 @@ fn sample_scalar_row(step: u64, time: f64, e_total: f64) -> ScalarRow {
         e_ext: 3.0,
         e_ani: 0.4,
         e_dmi: 0.5,
+        e_rotated_dmi: 0.0,
         e_total,
         max_dm_dt: 0.01,
         max_h_eff: 100.0,
@@ -2267,6 +2269,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 e_ext: 3.0,
                 e_ani: 4.0,
                 e_dmi: 5.0,
+                e_rotated_dmi: 0.0,
                 e_total: 15.0,
                 max_dm_dt: 10.0,
                 max_h_eff: 11.0,
@@ -2309,6 +2312,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 e_ext: 2.9,
                 e_ani: 3.9,
                 e_dmi: 4.9,
+                e_rotated_dmi: 0.0,
                 e_total: 14.5,
                 max_dm_dt: 10.0,
                 max_h_eff: 11.0,
@@ -2337,6 +2341,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 e_ext: 3.0,
                 e_ani: 4.0,
                 e_dmi: 5.0,
+                e_rotated_dmi: 0.0,
                 e_total: 15.0,
                 max_dm_dt: 10.0,
                 max_h_eff: 11.0,
@@ -2823,6 +2828,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
                 e_ext: 3.0,
                 e_ani: 4.0,
                 e_dmi: 5.0,
+                e_rotated_dmi: 0.0,
                 e_total: 15.0,
                 max_dm_dt: 10.0,
                 max_h_eff: 11.0,
@@ -3592,7 +3598,7 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
             .as_object()
             .expect("operation capability map")
             .len(),
-        33
+        34
     );
     assert!(active_lane["operations"]["study.frequency_response"]["reason"].is_string());
     assert!(active_lane["operations"]["study.frequency_response"]["requires"].is_array());
@@ -3854,6 +3860,7 @@ fn active_lane_operation_catalog_covers_the_canonical_interaction_catalog() {
         "interaction.stt",
         "interaction.sot",
         "interaction.interfacial_dmi",
+        "interaction.rotated_interfacial_dmi",
         "interaction.bulk_dmi",
         "interaction.uniaxial_anisotropy",
         "interaction.cubic_anisotropy",
@@ -3982,6 +3989,7 @@ async fn domain_meta_uses_fdm_physical_cell_size_for_grid_and_bounds() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -4827,6 +4835,7 @@ async fn domain_meta_accepts_planar_fdm_zero_spacing_axis() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -5404,6 +5413,7 @@ async fn field_vector_returns_pending_metadata_for_materializer_request() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -5561,6 +5571,7 @@ async fn field_vector_keeps_unknown_scope_not_found_while_materialization_is_pen
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -5644,6 +5655,7 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
                         e_ext: 0.0,
                         e_ani: 0.0,
                         e_dmi: 0.0,
+                        e_rotated_dmi: 0.0,
                         e_total: 0.0,
                         max_dm_dt: 0.0,
                         max_h_eff: 0.0,
@@ -8175,6 +8187,7 @@ async fn scalar_history_returns_windowed_columnar_rows() {
             sample_scalar_row(1, 1e-12, 6.9),
             sample_scalar_row(2, 2e-12, 7.3),
         ];
+        snapshot.scalar_rows[1].e_rotated_dmi = -7.5e-21;
         snapshot.scalar_revision = 2;
     }
     let app = build_v2_router().with_state(state);
@@ -8182,7 +8195,7 @@ async fn scalar_history_returns_windowed_columnar_rows() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/v2/sessions/current/data/scalars?since_revision=1&limit=1&columns=time,e_total,mx")
+                .uri("/v2/sessions/current/data/scalars?since_revision=1&limit=1&columns=time,e_total,e_rotated_dmi,mx")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -8197,9 +8210,12 @@ async fn scalar_history_returns_windowed_columnar_rows() {
     assert_eq!(json["returned_rows"], 1);
     assert_eq!(
         json["columns"],
-        serde_json::json!(["step", "time", "e_total", "mx"])
+        serde_json::json!(["step", "time", "e_total", "e_rotated_dmi", "mx"])
     );
-    assert_eq!(json["rows"], serde_json::json!([[2.0, 2e-12, 7.3, 0.2]]));
+    assert_eq!(
+        json["rows"],
+        serde_json::json!([[2.0, 2e-12, 7.3, -7.5e-21, 0.2]])
+    );
     assert_eq!(json["observation_frames"].as_array().map(Vec::len), Some(1));
     assert_eq!(json["observation_frames"][0]["source_step"], 2);
     assert_eq!(json["observation_frames"][0]["source_time_seconds"], 2e-12);
@@ -8338,6 +8354,109 @@ async fn table_rows_resource_returns_cursor_window_and_column_metadata() {
         ])
     );
     assert_eq!(json["rows"], serde_json::json!([[2.0, 2e-12, 7.3, 2.0]]));
+}
+
+#[tokio::test]
+async fn completed_rotated_dmi_scalar_preview_uses_plan_gated_manifest_fallback() {
+    use fullmag_ir::{
+        BackendPlanIR, BackendTarget, CommonPlanMeta, ExecutionMode, ExecutionPlanIR, FdmPlanIR,
+        OutputPlanIR, ProvenancePlanIR,
+    };
+
+    let state = test_app_state_with_live_session().await;
+    let mut guard = state.current_live_state.write().await;
+    let snapshot = guard.as_mut().expect("test live session");
+    snapshot.scalar_rows.clear();
+    snapshot.live_state = None;
+    snapshot.run = Some(
+        serde_json::from_value(serde_json::json!({
+            "run_id": "completed-rdmi", "session_id": "test", "status": "completed",
+            "total_steps": 10, "final_e_dmi": -2.5e-18, "artifact_dir": "."
+        }))
+        .unwrap(),
+    );
+    let plan = ExecutionPlanIR {
+        common: CommonPlanMeta {
+            ir_version: "test".to_string(),
+            requested_backend: BackendTarget::Fdm,
+            resolved_backend: BackendTarget::Fdm,
+            execution_mode: ExecutionMode::Strict,
+            material_field_plans: Vec::new(),
+        },
+        backend_plan: BackendPlanIR::Fdm(FdmPlanIR {
+            rotated_interfacial_dmi: Some(3.0e-3),
+            ..FdmPlanIR::default()
+        }),
+        output_plan: OutputPlanIR {
+            outputs: Vec::new(),
+        },
+        provenance: ProvenancePlanIR {
+            notes: Vec::new(),
+            integrator_resolution: None,
+            fem_eigen_execution_resolution: None,
+            physics_graph: None,
+        },
+    };
+    snapshot.metadata = Some(serde_json::json!({ "execution_plan": plan }));
+    assert_eq!(
+        crate::current_global_scalar_value(snapshot, "E_rotated_dmi"),
+        Some(-2.5e-18)
+    );
+
+    // Missing or corrupt legacy provenance cannot relabel an aggregate as a
+    // rotated component; the aggregate remains readable in both cases.
+    for metadata in [None, Some(serde_json::json!({ "execution_plan": {} }))] {
+        snapshot.metadata = metadata;
+        assert_eq!(
+            crate::current_global_scalar_value(snapshot, "E_rotated_dmi"),
+            None
+        );
+        assert_eq!(
+            crate::current_global_scalar_value(snapshot, "E_dmi"),
+            Some(-2.5e-18)
+        );
+    }
+}
+
+#[tokio::test]
+async fn table_rows_expose_rotated_dmi_energy_as_an_independent_global_scalar() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard
+            .as_mut()
+            .expect("test live session should be initialized");
+        let mut row = sample_scalar_row(1, 1e-12, 6.9);
+        row.e_rotated_dmi = -7.5e-21;
+        snapshot.metadata = Some(serde_json::json!({
+            "table_autosave": {
+                "kind": "table_autosave",
+                "table_id": "default",
+                "every_steps": 1,
+                "quantities": ["step", "e_rotated_dmi"]
+            }
+        }));
+        snapshot.scalar_rows = vec![row];
+        snapshot.scalar_revision = 1;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/tables/default/rows?columns=e_rotated_dmi")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    assert_eq!(json["columns"][1]["column_id"], "e_rotated_dmi");
+    assert_eq!(json["columns"][1]["unit"], "J");
+    assert_eq!(json["rows"], serde_json::json!([[1.0, -7.5e-21]]));
 }
 
 #[tokio::test]
@@ -20479,6 +20598,52 @@ async fn authoring_object_interaction_get_returns_interfacial_dmi() {
 }
 
 #[tokio::test]
+async fn authoring_object_interaction_patch_rejects_study_scoped_rotated_dmi() {
+    let scene = sample_scene_document();
+    let object_id = scene.objects[0].id.clone();
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/v2/sessions/current/model/objects/{object_id}/interactions/rotated_interfacial_dmi"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "present": true,
+                        "enabled": true,
+                        "params": {"d": -0.003}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(response).await;
+    assert!(json.to_string().contains("study-scoped"));
+
+    let guard = state.current_live_state.read().await;
+    let committed = guard
+        .as_ref()
+        .and_then(|snapshot| snapshot.scene_document.as_ref())
+        .expect("scene document committed");
+    let interaction = committed.objects[0].physics_stack.iter().find(|entry| {
+        entry.kind == fullmag_authoring::ScriptBuilderMagneticInteractionKind::RotatedInterfacialDmi
+    });
+    assert!(interaction.is_none());
+}
+
+#[tokio::test]
 async fn authoring_object_interaction_patch_updates_uniaxial_params() {
     let scene = sample_scene_document();
     let object_id = scene.objects[0].id.clone();
@@ -21708,6 +21873,7 @@ async fn commands_endpoint_keeps_compute_enabled_during_wait_for_compute_gate() 
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -23548,6 +23714,7 @@ async fn stage_execution_endpoint_projects_frequency_response_live_progress() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 1.0,
@@ -25592,6 +25759,7 @@ async fn solver_status_does_not_infer_convergence_from_finished_sample() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 2.0,
                 max_h_eff: 3.0,
@@ -25693,6 +25861,7 @@ async fn solver_status_endpoint_prefers_waiting_for_compute_gate_over_stale_live
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -25828,6 +25997,7 @@ async fn object_metrics_endpoint_prefers_per_object_solver_scalars() {
                 e_ext: 3.0,
                 e_ani: 4.0,
                 e_dmi: 5.0,
+                e_rotated_dmi: 0.0,
                 e_total: 15.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -25908,6 +26078,7 @@ async fn object_metrics_keep_step_and_energy_without_inventing_magnetization() {
                 e_ext: 3.0,
                 e_ani: 4.0,
                 e_dmi: 5.0,
+                e_rotated_dmi: 0.0,
                 e_total: 23.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -25970,6 +26141,7 @@ async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_node
                 e_ext: 3.0,
                 e_ani: 4.0,
                 e_dmi: 5.0,
+                e_rotated_dmi: 0.0,
                 e_total: 15.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -32207,6 +32379,7 @@ async fn test_router_with_live_magnetization() -> axum::Router {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -34995,6 +35168,7 @@ async fn field_meta_component_query_uses_live_magnetization_before_stale_latest_
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -35060,6 +35234,7 @@ async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -35722,6 +35897,7 @@ async fn v2_field_catalog_rejects_non_finite_live_magnetization() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -35800,6 +35976,7 @@ async fn v2_field_catalog_rejects_fem_live_magnetization_with_wrong_point_count(
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -35897,6 +36074,7 @@ async fn v2_field_vector_accepts_fem_live_magnetization_on_magnetic_nodes() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -36047,6 +36225,7 @@ async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -36553,6 +36732,7 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -36693,6 +36873,7 @@ async fn v2_fdm_vector_respects_max_samples_when_preview_would_be_downscaled() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -36900,6 +37081,7 @@ async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -37036,6 +37218,7 @@ async fn v2_h_demag_meta_prefers_equal_generation_latest_with_source_time() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -37112,6 +37295,7 @@ async fn v2_terminal_eden_demag_metadata_keeps_final_solver_provenance() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -37197,6 +37381,7 @@ async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -37464,6 +37649,7 @@ async fn topological_charge_reports_empty_support_when_m_field_exists_without_us
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -37536,6 +37722,7 @@ async fn topological_charge_computes_uniform_fdm_grid_without_fem_mesh() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -37623,6 +37810,7 @@ async fn topological_charge_cache_key_tracks_field_revision() {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -37754,6 +37942,7 @@ async fn topological_charge_default_fdm_support_uses_one_midplane_of_thinnest_ax
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,

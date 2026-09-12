@@ -170,6 +170,7 @@ struct DeviceMultilayerLayer {
     DeviceVectorField h_ex;
     DeviceVectorField h_demag;
     DeviceVectorField h_dmi;
+    DeviceVectorField h_rotated_dmi;
     DeviceVectorField h_ani;
     DeviceVectorField tmp;
     DeviceVectorField k1;
@@ -379,6 +380,8 @@ struct Context {
     // DMI
     bool has_interfacial_dmi = false;
     double D_interfacial = 0.0;
+    bool has_rotated_interfacial_dmi = false;
+    double D_rotated_interfacial = 0.0;
     bool has_bulk_dmi = false;
     double D_bulk = 0.0;
 
@@ -582,6 +585,7 @@ struct Context {
     // cells with the unmasked demag field in the Airbox.
     DeviceVectorField h_eff_visual;
     DeviceVectorField h_ani;  // anisotropy field
+    DeviceVectorField h_rotated_dmi; // rotated interfacial DMI observable field
     // Per-cell energy-density observable scratch [J/m^3], one scalar/cell.
     void *energy_density = nullptr;
     DeviceVectorField k1;     // RHS stage 1 (all integrators)
@@ -2112,7 +2116,7 @@ inline uint64_t fullmag_fdm_required_operator_mask(const Context &ctx) {
     }
     if (ctx.enable_exchange) required_operator_mask |= FULLMAG_FDM_OPERATOR_EXCHANGE;
     if (ctx.enable_demag) required_operator_mask |= FULLMAG_FDM_OPERATOR_DEMAG;
-    if (ctx.has_interfacial_dmi || ctx.has_bulk_dmi) {
+    if (ctx.has_interfacial_dmi || ctx.has_rotated_interfacial_dmi || ctx.has_bulk_dmi) {
         required_operator_mask |= FULLMAG_FDM_OPERATOR_DMI;
     }
     if (ctx.has_uniaxial_anisotropy || ctx.has_cubic_anisotropy) {
@@ -2428,7 +2432,7 @@ inline void fullmag_fdm_note_operator_device_execution(
 inline void fullmag_fdm_note_multilayer_rhs_device_execution(Context &ctx) {
     fullmag_fdm_note_operator_device_execution(
         ctx, FULLMAG_FDM_OPERATOR_MULTILAYER_INTERACTIONS);
-    if (ctx.has_interfacial_dmi || ctx.has_bulk_dmi) {
+    if (ctx.has_interfacial_dmi || ctx.has_rotated_interfacial_dmi || ctx.has_bulk_dmi) {
         fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_DMI);
     }
     if (ctx.has_uniaxial_anisotropy || ctx.has_cubic_anisotropy) {
@@ -2708,6 +2712,11 @@ inline bool abort_step_from_tmp(Context &ctx, bool invalidate_fsal = true) {
 bool context_alloc_device(Context &ctx);
 bool context_preflight_single_grid_workspace(
     Context &ctx, const fullmag_fdm_plan_desc &plan);
+
+/// Materialize the optional rotated-DMI observable storage after a v2 plan has
+/// been imported.  When setup accounting is already sealed this may extend the
+/// baseline exactly once, before the first public step.
+bool context_ensure_rotated_dmi_workspace(Context &ctx);
 
 /// Reject a v2 multilayer plan whose complete setup-owned CUDA workspace does
 /// not fit before the first device allocation or cuFFT plan creation.

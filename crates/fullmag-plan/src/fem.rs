@@ -712,6 +712,9 @@ fn first_unsupported_elementwise_ms_cpu_owner(plan: &FemPlanIR) -> Option<&'stat
     if plan.interfacial_dmi.is_some() || plan.dind_field.is_some() {
         return Some("interfacial DMI");
     }
+    if plan.rotated_interfacial_dmi.is_some() {
+        return Some("rotated interfacial DMI");
+    }
     if plan.bulk_dmi.is_some() || plan.dbulk_field.is_some() {
         return Some("bulk DMI");
     }
@@ -795,6 +798,96 @@ fn exclusive_coefficient_realization_error(
             "FEM material coefficient 'A' has conflicting nodal P1 'material.a_field' and element DG0 'a_element_field' realizations"
                 .to_string(),
         );
+    }
+    None
+}
+
+fn rotated_dmi_exchange_stiffness_error(
+    rotated_interfacial_dmi: Option<f64>,
+    has_open_magnetic_boundary: bool,
+    enable_exchange: bool,
+    mesh: &fullmag_ir::MeshIR,
+    material: &fullmag_ir::MaterialIR,
+    a_element_field: Option<&[f64]>,
+) -> Option<String> {
+    if !rotated_interfacial_dmi.is_some_and(|d| d != 0.0) || !has_open_magnetic_boundary {
+        return None;
+    }
+    if !enable_exchange {
+        return Some(
+            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition"
+                .to_string(),
+        );
+    }
+    if !(material.exchange_stiffness.is_finite() && material.exchange_stiffness > 0.0) {
+        return Some(
+            "RotatedInterfacialDmi with open magnetic boundaries requires a strictly positive finite resolved FEM exchange stiffness A"
+                .to_string(),
+        );
+    }
+
+    let classified = match mesh.cells.mesh_parts.len() {
+        0 => false,
+        count if count == mesh.cells.len() => true,
+        _ => {
+            return Some(
+                "RotatedInterfacialDmi with open magnetic boundaries requires complete FEM cell material-part classification to resolve exchange stiffness A"
+                    .to_string(),
+            )
+        }
+    };
+    let mut magnetic_nodes = BTreeSet::new();
+    let mut magnetic_cells = 0usize;
+    for cell in mesh.cells.iter() {
+        let magnetic = !classified
+            || matches!(
+                mesh.cells.mesh_parts.get(cell.ordinal),
+                Some(fullmag_ir::FemCellMeshPartIR::Magnetic)
+            );
+        if !magnetic {
+            continue;
+        }
+        magnetic_cells += 1;
+        for node in cell.nodes.iter().copied() {
+            magnetic_nodes.insert(node as usize);
+        }
+        if let Some(values) = a_element_field {
+            let Some(value) = values.get(cell.ordinal) else {
+                return Some(
+                    "RotatedInterfacialDmi with open magnetic boundaries requires an A_element_field value for every magnetic FEM cell"
+                        .to_string(),
+                );
+            };
+            if !(value.is_finite() && *value > 0.0) {
+                return Some(
+                    "RotatedInterfacialDmi with open magnetic boundaries requires strictly positive finite A_element_field values on every magnetic FEM cell"
+                        .to_string(),
+                );
+            }
+        }
+    }
+    if magnetic_cells == 0 {
+        return Some(
+            "RotatedInterfacialDmi with open magnetic boundaries requires at least one magnetic FEM cell with resolved exchange stiffness A"
+                .to_string(),
+        );
+    }
+    if let Some(values) = material.a_field.as_deref() {
+        if values.len() != mesh.nodes.len() {
+            return Some(
+                "RotatedInterfacialDmi with open magnetic boundaries requires a nodal material.a_field covering every FEM node"
+                    .to_string(),
+            );
+        }
+        if magnetic_nodes
+            .iter()
+            .any(|node| !(values[*node].is_finite() && values[*node] > 0.0))
+        {
+            return Some(
+                "RotatedInterfacialDmi with open magnetic boundaries requires strictly positive finite material.a_field values on every magnetic boundary support"
+                    .to_string(),
+            );
+        }
     }
     None
 }
@@ -1019,6 +1112,31 @@ mod fem_exchange_stiffness_tests {
         assert!((estimate.h_min_m - 1.0).abs() < 1.0e-12);
         assert!((estimate.max_exchange_stiffness_j_per_m - 20.0e-12).abs() < 1.0e-24);
         assert!((estimate.min_saturation_magnetisation_a_per_m - 700.0e3).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn rotated_dmi_open_boundary_requires_positive_resolved_exchange() {
+        let mesh = tet_mesh(1.0);
+        let material = ProblemIR::bootstrap_example().materials[0].clone();
+        assert!(rotated_dmi_exchange_stiffness_error(
+            Some(3e-3),
+            true,
+            true,
+            &mesh,
+            &material,
+            Some(&[material.exchange_stiffness]),
+        )
+        .is_none());
+        let error = rotated_dmi_exchange_stiffness_error(
+            Some(3e-3),
+            true,
+            true,
+            &mesh,
+            &material,
+            Some(&[0.0]),
+        )
+        .expect("zero A must be rejected for open-boundary rotated DMI");
+        assert!(error.contains("strictly positive"));
     }
 }
 
@@ -3148,6 +3266,7 @@ pub(crate) fn plan_fem(
     let mut demag_realization = fullmag_ir::RequestedFemDemagIR::Auto;
     let mut interfacial_dmi: Option<f64> = None;
     let mut interfacial_dmi_normal: Option<[f64; 3]> = None;
+    let mut rotated_interfacial_dmi: Option<f64> = None;
     let mut bulk_dmi: Option<f64> = None;
     let mut has_magnetoelastic = false;
     let mut has_thermal_noise = false;
@@ -3222,6 +3341,11 @@ pub(crate) fn plan_fem(
                 }
                 bulk_dmi = Some(*d);
             }
+            fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d } => {
+                if rotated_interfacial_dmi.replace(*d).is_some() {
+                    errors.push("RotatedInterfacialDmi is declared more than once".to_string());
+                }
+            }
             fullmag_ir::EnergyTermIR::OerstedCylinder { .. }
             | fullmag_ir::EnergyTermIR::OerstedField { .. } => {
                 // Oersted field: extracted separately below.
@@ -3262,17 +3386,43 @@ pub(crate) fn plan_fem(
                 .as_ref()
                 .is_some_and(|values: &Vec<f64>| !values.is_empty())
     });
+    if rotated_interfacial_dmi.is_some()
+        && (interfacial_dmi.is_some()
+            || bulk_dmi.is_some()
+            || has_material_interfacial_dmi
+            || has_material_bulk_dmi)
+    {
+        errors.push(
+            "RotatedInterfacialDmi cannot be combined with InterfacialDmi or BulkDmi until independent native field and energy channels are implemented"
+                .to_string(),
+        );
+    }
     if !(enable_exchange
         || enable_demag
         || external_field.is_some()
         || interfacial_dmi.is_some()
+        || rotated_interfacial_dmi.is_some()
         || bulk_dmi.is_some()
         || has_material_interfacial_dmi
         || has_material_bulk_dmi
         || has_magnetoelastic)
     {
         errors.push(
-            "the current FEM planning baseline requires at least one of Exchange, Demag, Zeeman, InterfacialDmi, BulkDmi, or Magnetoelastic"
+            "the current FEM planning baseline requires at least one of Exchange, Demag, Zeeman, InterfacialDmi, RotatedInterfacialDmi, BulkDmi, or Magnetoelastic"
+                .to_string(),
+        );
+    }
+    let has_open_magnetic_boundary = problem.pbc.as_ref().is_none_or(|pbc| {
+        pbc.axes
+            .iter()
+            .any(|axis| matches!(axis, fullmag_ir::AxisBoundary::Open))
+    });
+    if rotated_interfacial_dmi.is_some_and(|d| d != 0.0)
+        && has_open_magnetic_boundary
+        && !enable_exchange
+    {
+        errors.push(
+            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition"
                 .to_string(),
         );
     }
@@ -3291,6 +3441,8 @@ pub(crate) fn plan_fem(
         }),
         interfacial_dmi.is_some() || has_material_interfacial_dmi,
         bulk_dmi.is_some() || has_material_bulk_dmi,
+        false,
+        rotated_interfacial_dmi.is_some(),
         true,
         has_magnetoelastic,
         problem
@@ -3454,6 +3606,14 @@ pub(crate) fn plan_fem(
             ],
         });
     }
+    if rotated_interfacial_dmi.is_some_and(|d| d != 0.0) && !mesh.periodic_node_pairs.is_empty() {
+        return Err(PlanError {
+            reasons: vec![
+                "FEM RotatedInterfacialDmi with periodic node pairs is unsupported until the weak residual and mass projection are reduced over periodic node classes"
+                    .to_string(),
+            ],
+        });
+    }
     if requested_static_pbc && mesh.periodic_node_pairs.is_empty() {
         return Err(PlanError {
             reasons: vec![
@@ -3607,6 +3767,18 @@ pub(crate) fn plan_fem(
     if let Some(reason) =
         exclusive_coefficient_realization_error(&material, &ms_element_field, &a_element_field)
     {
+        return Err(PlanError {
+            reasons: vec![reason],
+        });
+    }
+    if let Some(reason) = rotated_dmi_exchange_stiffness_error(
+        rotated_interfacial_dmi,
+        has_open_magnetic_boundary,
+        enable_exchange,
+        &mesh,
+        &material,
+        a_element_field.as_deref(),
+    ) {
         return Err(PlanError {
             reasons: vec![reason],
         });
@@ -3893,6 +4065,7 @@ pub(crate) fn plan_fem(
         demag_realization: resolved_demag_realization,
         air_box_config,
         interfacial_dmi,
+        rotated_interfacial_dmi,
         dmi_interface_normal: interfacial_dmi_normal,
         bulk_dmi,
         dind_field,
@@ -4653,6 +4826,11 @@ pub(crate) fn plan_fem_eigen(
                 }
                 bulk_dmi = Some(*d);
             }
+            fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { .. } => {
+                errors.push(
+                    "RotatedInterfacialDmi is not implemented for eigen execution".to_string(),
+                );
+            }
             other => {
                 errors.push(format!(
                     "energy term '{:?}' is not yet executable in the FEM eigen baseline",
@@ -5158,6 +5336,18 @@ pub(crate) fn plan_fem_frequency_response(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
 ) -> Result<ExecutionPlanIR, PlanError> {
+    if problem
+        .energy_terms
+        .iter()
+        .any(|term| matches!(term, EnergyTermIR::RotatedInterfacialDmi { .. }))
+    {
+        return Err(PlanError {
+            reasons: vec![
+                "RotatedInterfacialDmi is not implemented for frequency-domain execution"
+                    .to_string(),
+            ],
+        });
+    }
     let fullmag_ir::StudyIR::FrequencyResponse {
         dynamics,
         operator,

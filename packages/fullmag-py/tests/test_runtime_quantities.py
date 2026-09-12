@@ -3,9 +3,11 @@ from __future__ import annotations
 import unittest
 import warnings
 
+import fullmag as fm
+
 from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision
 from fullmag.model.structure import Material
-from fullmag.runtime.simulation import Result, StepStats
+from fullmag.runtime.simulation import Result, StepStats, result_from_run_payload
 
 
 class RuntimeQuantityTests(unittest.TestCase):
@@ -36,6 +38,48 @@ class RuntimeQuantityTests(unittest.TestCase):
         self.assertEqual(desc.unit, "1/s")
         self.assertEqual(desc.scalar_key, "max_dm_dt")
         self.assertTrue(any(item.scalar_key == "e_total" for item in result.scalar_descriptors()))
+
+    def test_result_exposes_rotated_dmi_energy_quantity(self) -> None:
+        result = result_from_run_payload(
+            {
+                "status": "completed",
+                "steps": [
+                    {
+                        "step": 1,
+                        "time": 1.0e-12,
+                        "dt": 1.0e-12,
+                        "e_ex": 1.0,
+                        "e_total": 2.0,
+                        "e_rotated_dmi": -0.25,
+                        "max_dm_dt": 0.0,
+                        "max_h_eff": 0.0,
+                        "wall_time_ns": 1,
+                    }
+                ],
+            },
+            backend=BackendTarget.FDM,
+            mode=ExecutionMode.STRICT,
+            precision=ExecutionPrecision.DOUBLE,
+            output_dir=None,
+        )
+
+        self.assertEqual(result.series("E_rotated_dmi"), [-0.25])
+        self.assertEqual(result.last("e_rotated_dmi"), -0.25)
+        descriptor = result.scalar_descriptor("E_rotated_dmi")
+        self.assertEqual(descriptor.label, "Rotated DMI Energy")
+        self.assertEqual(descriptor.unit, "J")
+
+    def test_rotated_dmi_field_and_energy_outputs_are_public_but_density_is_not(self) -> None:
+        self.assertEqual(
+            fm.SaveScalar("E_rotated_dmi", every=1.0e-12).to_ir()["name"],
+            "E_rotated_dmi",
+        )
+        self.assertEqual(
+            fm.SaveField("H_rotated_dmi", every=1.0e-12).to_ir()["name"],
+            "H_rotated_dmi",
+        )
+        with self.assertRaisesRegex(ValueError, "eden_rotated_dmi"):
+            fm.SaveField("eden_rotated_dmi", every=1.0e-12)
 
     def test_material_warns_for_suspicious_non_si_ranges(self) -> None:
         with warnings.catch_warnings(record=True) as captured:

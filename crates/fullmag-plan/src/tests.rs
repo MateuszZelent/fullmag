@@ -4826,6 +4826,23 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
         other => panic!("expected FEM plan, got {:?}", other),
     }
 
+    for d in [0.0_f64, -0.0_f64] {
+        let mut zero_dmi = ir.clone();
+        zero_dmi.energy_terms = vec![EnergyTermIR::RotatedInterfacialDmi { d }];
+        zero_dmi.study.sampling_mut().outputs = vec![OutputIR::Field {
+            name: "m".to_string(),
+            every_seconds: 1e-12,
+        }];
+        let planned = plan(&zero_dmi)
+            .expect("zero rotated DMI must not require Exchange or periodic residual support");
+        let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+            panic!("expected FEM plan");
+        };
+        assert!(!fem.enable_exchange);
+        assert_eq!(fem.mesh.periodic_node_pairs.len(), 3);
+        assert_eq!(fem.rotated_interfacial_dmi.unwrap().to_bits(), d.to_bits());
+    }
+
     let mut z_pbc_with_x_mesh = ir.clone();
     z_pbc_with_x_mesh.pbc = Some(fullmag_ir::FdmPeriodicityIR {
         axes: [
@@ -7000,6 +7017,582 @@ fn fem_dmi_field_outputs_require_matching_dmi_terms() {
         .reasons
         .iter()
         .any(|reason| reason.contains("field output 'H_dmi_bulk' requires BulkDmi")));
+}
+
+#[test]
+fn rotated_interfacial_dmi_plans_for_fdm_cpu_and_cuda_time_domain() {
+    for device in [None, Some("cuda")] {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.backend_policy.requested_backend = BackendTarget::Fdm;
+        ir.energy_terms = vec![
+            EnergyTermIR::Exchange,
+            EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        ];
+        if let Some(device) = device {
+            ir.problem_meta.runtime_metadata.insert(
+                "runtime_selection".to_string(),
+                serde_json::json!({"device": device, "device_index": 0}),
+            );
+        }
+
+        let planned = plan(&ir).expect("rotated DMI must plan for FDM time-domain");
+        let BackendPlanIR::Fdm(fdm) = planned.backend_plan else {
+            panic!("expected FDM plan");
+        };
+        assert_eq!(fdm.rotated_interfacial_dmi, Some(3.0e-3));
+    }
+}
+
+#[test]
+fn rotated_interfacial_dmi_plans_for_fem_cpu_and_gpu_time_domain() {
+    for device in ["cpu", "gpu"] {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.backend_policy.requested_backend = BackendTarget::Fem;
+        attach_unit_fem_domain_mesh(&mut ir);
+        ir.energy_terms = vec![
+            EnergyTermIR::Exchange,
+            EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        ];
+        ir.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": device, "precision": "double"}),
+        );
+
+        let planned = plan(&ir).expect("rotated DMI must plan for FEM time-domain");
+        let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+            panic!("expected FEM plan");
+        };
+        assert_eq!(fem.rotated_interfacial_dmi, Some(3.0e-3));
+    }
+}
+
+#[test]
+fn rotated_interfacial_dmi_rejects_open_boundary_without_exchange() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fdm;
+    ir.energy_terms = vec![EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 }];
+
+    let error = plan(&ir).expect_err("open-boundary rotated DMI requires exchange");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("RotatedInterfacialDmi")
+            && reason.contains("open magnetic boundaries")
+            && reason.contains("Exchange")
+    }));
+}
+
+#[test]
+fn rotated_interfacial_dmi_rejects_active_mask_boundary_without_exchange() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fdm;
+    ir.geometry.entries = vec![GeometryEntryIR::ImportedGeometry {
+        name: "strip".to_string(),
+        source: "strip.stl".to_string(),
+        format: "stl".to_string(),
+        scale: fullmag_ir::ImportedGeometryScaleIR::Uniform(1.0),
+    }];
+    ir.regions[0].geometry = "strip".to_string();
+    ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: vec![fullmag_ir::FdmGridAssetIR {
+            geometry_name: "strip".to_string(),
+            cells: [2, 1, 1],
+            cell_size: [2e-9, 2e-9, 2e-9],
+            origin: [0.0, 0.0, 0.0],
+            active_mask: vec![true, false],
+        }],
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: None,
+    });
+    ir.energy_terms = vec![EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 }];
+
+    let error = plan(&ir).expect_err("active-mask rotated DMI requires exchange");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("RotatedInterfacialDmi")
+            && reason.contains("active-mask material boundary")
+            && reason.contains("Exchange")
+    }));
+}
+
+#[test]
+fn rotated_interfacial_dmi_rejects_zero_resolved_aex_on_open_boundary() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fdm;
+    ir.energy_terms = vec![
+        EnergyTermIR::Exchange,
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+    ir.materials[0].exchange_stiffness = 0.0;
+
+    let error = plan(&ir).expect_err("zero boundary Aex must fail closed for rotated DMI");
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("RotatedInterfacialDmi")
+                && reason.contains("resolved Aex")
+                && reason.contains("active boundary")
+        }),
+        "unexpected planner reasons: {:?}",
+        error.reasons
+    );
+}
+
+#[test]
+fn rotated_interfacial_dmi_zero_is_noop_for_open_boundary_validation() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fdm;
+    ir.energy_terms = vec![EnergyTermIR::RotatedInterfacialDmi { d: 0.0 }];
+    ir.materials[0].exchange_stiffness = 0.0;
+    if let fullmag_ir::StudyIR::TimeEvolution { sampling, .. } = &mut ir.study {
+        sampling.outputs.clear();
+    }
+
+    let planned = plan(&ir).expect("zero rotated DMI must not require an open-boundary stencil");
+    let BackendPlanIR::Fdm(fdm) = planned.backend_plan else {
+        panic!("expected a single-grid FDM plan");
+    };
+    assert_eq!(fdm.rotated_interfacial_dmi, Some(0.0));
+}
+
+#[test]
+fn rotated_interfacial_dmi_allows_zero_resolved_aex_away_from_open_boundary() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fdm;
+    ir.energy_terms = vec![
+        EnergyTermIR::Exchange,
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+    ir.material_parameter_fields
+        .push(fullmag_ir::MaterialParameterAssignmentIR {
+            assignment_id: "central_zero_aex".to_string(),
+            owner_object: "strip".to_string(),
+            region_id: None,
+            parameter: fullmag_ir::MaterialParameterNameIR::Aex,
+            value: fullmag_ir::MaterialParameterFieldIR::Radial {
+                center: [0.0, 0.0, 0.0],
+                radius: 1.9e-9,
+                inside: 0.0,
+                outside: 13.0e-12,
+                frame: fullmag_ir::RegionFrameIR::Object,
+                unit: Some("J/m".to_string()),
+            },
+            priority: 10,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        });
+
+    let planned = plan(&ir).expect("zero Aex away from an open boundary must be legal");
+    let BackendPlanIR::Fdm(fdm) = planned.backend_plan else {
+        panic!("expected a single-grid FDM plan");
+    };
+    let aex = fdm
+        .material
+        .a_field
+        .as_ref()
+        .expect("non-uniform Aex field must be retained in the plan");
+    assert!(
+        aex.iter().any(|value| *value == 0.0),
+        "fixture must contain a zero-Aex interior cell"
+    );
+    assert!(
+        aex.iter().any(|value| *value > 0.0),
+        "fixture must contain positive boundary Aex cells"
+    );
+}
+
+#[test]
+fn rotated_interfacial_dmi_rejects_zero_resolved_aex_on_active_mask_boundary() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fdm;
+    ir.geometry.entries = vec![GeometryEntryIR::ImportedGeometry {
+        name: "strip".to_string(),
+        source: "strip.stl".to_string(),
+        format: "stl".to_string(),
+        scale: fullmag_ir::ImportedGeometryScaleIR::Uniform(1.0),
+    }];
+    ir.regions[0].geometry = "strip".to_string();
+    ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: vec![fullmag_ir::FdmGridAssetIR {
+            geometry_name: "strip".to_string(),
+            cells: [3, 1, 1],
+            cell_size: [2e-9, 2e-9, 2e-9],
+            origin: [0.0, 0.0, 0.0],
+            active_mask: vec![true, false, true],
+        }],
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: None,
+    });
+    ir.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+        axes: [
+            fullmag_ir::AxisBoundary::Periodic,
+            fullmag_ir::AxisBoundary::Periodic,
+            fullmag_ir::AxisBoundary::Periodic,
+        ],
+        demag: fullmag_ir::FdmDemagPeriodicityIR::Open,
+        image_counts: None,
+    });
+    ir.energy_terms = vec![
+        EnergyTermIR::Exchange,
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+    ir.materials[0].exchange_stiffness = 0.0;
+
+    let error = plan(&ir).expect_err("zero Aex at an active-mask boundary must fail closed");
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("RotatedInterfacialDmi")
+                && reason.contains("active-mask boundaries")
+                && reason.contains("resolved Aex")
+        }),
+        "unexpected planner reasons: {:?}",
+        error.reasons
+    );
+}
+
+#[test]
+fn rotated_interfacial_dmi_allows_zero_resolved_aex_on_fully_periodic_grid() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fdm;
+    ir.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+        axes: [
+            fullmag_ir::AxisBoundary::Periodic,
+            fullmag_ir::AxisBoundary::Periodic,
+            fullmag_ir::AxisBoundary::Periodic,
+        ],
+        demag: fullmag_ir::FdmDemagPeriodicityIR::Open,
+        image_counts: None,
+    });
+    ir.energy_terms = vec![
+        EnergyTermIR::Exchange,
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+    ir.materials[0].exchange_stiffness = 0.0;
+
+    let planned = plan(&ir).expect("a fully periodic grid has no natural open boundary");
+    let BackendPlanIR::Fdm(fdm) = planned.backend_plan else {
+        panic!("expected a single-grid FDM plan");
+    };
+    assert!(
+        fdm.material
+            .a_field
+            .as_ref()
+            .is_none_or(|field| field.iter().all(|value| *value == 0.0)),
+        "uniform zero Aex should remain represented as the material constant"
+    );
+}
+
+#[test]
+fn rotated_interfacial_dmi_allows_zero_resolved_aex_with_open_film_surfaces() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fdm;
+    ir.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+        axes: [
+            fullmag_ir::AxisBoundary::Periodic,
+            fullmag_ir::AxisBoundary::Periodic,
+            fullmag_ir::AxisBoundary::Open,
+        ],
+        demag: fullmag_ir::FdmDemagPeriodicityIR::Open,
+        image_counts: None,
+    });
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+    ir.materials[0].exchange_stiffness = 0.0;
+
+    let planned =
+        plan(&ir).expect("zero in-plane Aex is legal when only the film surfaces are open");
+    let BackendPlanIR::Fdm(fdm) = planned.backend_plan else {
+        panic!("expected a single-grid FDM plan");
+    };
+    assert_eq!(fdm.rotated_interfacial_dmi, Some(3.0e-3));
+}
+
+#[test]
+fn multilayer_rotated_interfacial_dmi_rejects_zero_resolved_aex_on_open_boundary() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+    ir.materials[0].exchange_stiffness = 0.0;
+
+    let error = plan(&ir).expect_err("zero multilayer boundary Aex must fail closed");
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("RotatedInterfacialDmi")
+                && reason.contains("resolved Aex")
+                && reason.contains("active boundary")
+        }),
+        "unexpected multilayer planner reasons: {:?}",
+        error.reasons
+    );
+}
+
+#[test]
+fn multilayer_rotated_interfacial_dmi_accepts_positive_open_boundary_aex() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+
+    let planned = plan(&ir).expect("positive multilayer boundary Aex must remain legal");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("expected a multilayer FDM plan");
+    };
+    assert_eq!(multilayer.rotated_interfacial_dmi, Some(3.0e-3));
+}
+
+#[test]
+fn fem_zero_rotated_interfacial_dmi_is_preserved_without_exchange() {
+    for d in [0.0_f64, -0.0_f64] {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.backend_policy.requested_backend = BackendTarget::Fem;
+        attach_unit_fem_domain_mesh(&mut ir);
+        ir.energy_terms = vec![EnergyTermIR::RotatedInterfacialDmi { d }];
+        ir.study.sampling_mut().outputs = vec![OutputIR::Field {
+            name: "m".to_string(),
+            every_seconds: 1e-12,
+        }];
+
+        let planned = plan(&ir).expect("zero rotated DMI is a no-op at open boundaries");
+        let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+            panic!("expected FEM plan");
+        };
+        assert!(!fem.enable_exchange);
+        assert_eq!(fem.rotated_interfacial_dmi.unwrap().to_bits(), d.to_bits());
+    }
+}
+
+#[test]
+fn fem_rotated_interfacial_dmi_rejects_periodic_node_pairs() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    attach_unit_fem_domain_mesh(&mut ir);
+    let mesh = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+        .expect("unit FEM domain mesh");
+    mesh.facets = fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 2, 3], [1, 2, 3]]);
+    mesh.boundary_markers = vec![10, 11];
+    mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+        pair_id: "x_periodic".to_string(),
+        source_marker: None,
+        destination_marker: None,
+        marker_a: 10,
+        marker_b: 11,
+        translation: Some([1.0, 0.0, 0.0]),
+        tolerance: Some(1e-12),
+        axis_hint: Some("x".to_string()),
+        orientation: None,
+        pairing_policy: None,
+    }];
+    mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
+        pair_id: "x_periodic".to_string(),
+        node_a: 0,
+        node_b: 1,
+    }];
+    ir.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+        axes: [
+            fullmag_ir::AxisBoundary::Periodic,
+            fullmag_ir::AxisBoundary::Open,
+            fullmag_ir::AxisBoundary::Open,
+        ],
+        demag: fullmag_ir::FdmDemagPeriodicityIR::Open,
+        image_counts: None,
+    });
+    ir.energy_terms = vec![
+        EnergyTermIR::Exchange,
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+
+    let error = plan(&ir).expect_err("periodic FEM rotated DMI must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("FEM RotatedInterfacialDmi")
+            && reason.contains("periodic node pairs")
+            && reason.contains("periodic node classes")
+    }));
+}
+
+#[test]
+fn rotated_interfacial_dmi_rejects_mixed_dmi_energy_channels() {
+    for conventional in [
+        EnergyTermIR::InterfacialDmi {
+            d: 1.0e-3,
+            interface_normal: None,
+        },
+        EnergyTermIR::BulkDmi { d: 1.0e-3 },
+    ] {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.energy_terms = vec![
+            EnergyTermIR::Exchange,
+            conventional,
+            EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        ];
+        let error = plan(&ir).expect_err("mixed DMI must fail closed");
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("cannot be combined")));
+    }
+}
+
+#[test]
+fn fem_rotated_dmi_field_outputs_fail_until_materialized() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    attach_unit_fem_domain_mesh(&mut ir);
+    ir.energy_terms = vec![
+        EnergyTermIR::Exchange,
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+    ir.study = fullmag_ir::StudyIR::TimeEvolution {
+        dynamics: ir.study.dynamics().clone(),
+        sampling: fullmag_ir::SamplingIR {
+            table_autosave: None,
+            stage_autosave: None,
+            outputs: vec![OutputIR::Field {
+                name: "H_rotated_dmi".to_string(),
+                every_seconds: 1e-12,
+            }],
+        },
+    };
+
+    let error = plan(&ir).expect_err("FEM rotated DMI field is not materialized");
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("H_rotated_dmi")));
+}
+
+#[test]
+fn fem_rotated_dmi_energy_output_is_allowed_without_rotated_field_materialization() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    attach_unit_fem_domain_mesh(&mut ir);
+    ir.energy_terms = vec![
+        EnergyTermIR::Exchange,
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+    ir.study = fullmag_ir::StudyIR::TimeEvolution {
+        dynamics: ir.study.dynamics().clone(),
+        sampling: fullmag_ir::SamplingIR {
+            table_autosave: None,
+            stage_autosave: None,
+            outputs: vec![OutputIR::Scalar {
+                name: "E_rotated_dmi".to_string(),
+                every_seconds: 1e-12,
+            }],
+        },
+    };
+
+    let planned = plan(&ir).expect(
+        "FEM must allow the global rotated-DMI energy output even when H_rotated_dmi is not materialized",
+    );
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    assert_eq!(fem.rotated_interfacial_dmi, Some(3.0e-3));
+}
+
+#[test]
+fn rotated_dmi_energy_density_snapshot_is_rejected_until_scalar_field_scheduling_exists() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.energy_terms = vec![
+        EnergyTermIR::Exchange,
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+    ir.study = fullmag_ir::StudyIR::TimeEvolution {
+        dynamics: ir.study.dynamics().clone(),
+        sampling: fullmag_ir::SamplingIR {
+            table_autosave: None,
+            stage_autosave: None,
+            outputs: vec![OutputIR::Snapshot {
+                field: "eden_rotated_dmi".to_string(),
+                component: "3D".to_string(),
+                every_seconds: 1e-12,
+                layer: None,
+            }],
+        },
+    };
+
+    let error = plan(&ir).expect_err(
+        "rotated-DMI energy density snapshots must fail closed until scalar-field scheduling exists",
+    );
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("eden_rotated_dmi") && reason.contains("not executable")
+    }));
+}
+
+#[test]
+fn rotated_interfacial_dmi_rejects_eigen_and_frequency_domain_execution() {
+    let mut frequency = fem_frequency_response_mesh_asset_problem();
+    frequency
+        .energy_terms
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 });
+    let error = plan(&frequency).expect_err("frequency-domain rotated DMI must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("RotatedInterfacialDmi")
+            && reason.contains("not implemented for frequency-domain execution")
+    }));
+
+    let mut eigen = fem_frequency_response_mesh_asset_problem();
+    eigen
+        .energy_terms
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 });
+    eigen.study = fullmag_ir::StudyIR::Eigenmodes {
+        dynamics: eigen.study.dynamics().clone(),
+        operator: fullmag_ir::EigenOperatorConfigIR {
+            kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+            include_demag: false,
+        },
+        count: 5,
+        target: fullmag_ir::EigenTargetIR::Lowest,
+        equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+        k_sampling: None,
+        bias_field_sweep: None,
+        normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
+        damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
+        sampling: fullmag_ir::SamplingIR {
+            table_autosave: None,
+            stage_autosave: None,
+            outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".to_string(),
+            }],
+        },
+        mode_tracking: None,
+    };
+    let error = plan(&eigen).expect_err("eigen rotated DMI must fail closed");
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("RotatedInterfacialDmi")
+                && reason.contains("not implemented for eigen execution")
+        }),
+        "unexpected eigen rejection reasons: {:?}",
+        error.reasons
+    );
+}
+
+#[test]
+fn rotated_interfacial_dmi_field_output_requires_active_term() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = fullmag_ir::StudyIR::TimeEvolution {
+        dynamics: ir.study.dynamics().clone(),
+        sampling: fullmag_ir::SamplingIR {
+            table_autosave: None,
+            stage_autosave: None,
+            outputs: vec![OutputIR::Field {
+                name: "H_rotated_dmi".to_string(),
+                every_seconds: 1e-12,
+            }],
+        },
+    };
+
+    let error = plan(&ir).expect_err("rotated DMI field requires active interaction");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("field output 'H_rotated_dmi' requires RotatedInterfacialDmi(...)")
+    }));
 }
 
 #[test]

@@ -943,5 +943,7 @@ export interface BinaryRequestOptions extends RequestOptions {
 export function isOptionalObjectInteractionKind(
   kind: ObjectInteractionKind,
 ): boolean {
-  return kind === "interfacial_dmi" || kind === "uniaxial_anisotropy";
+  return (
+    kind === "interfacial_dmi" || kind === "uniaxial_anisotropy"
+  );
 }

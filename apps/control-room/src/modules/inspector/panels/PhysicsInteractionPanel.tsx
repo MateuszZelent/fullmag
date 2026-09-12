@@ -58,6 +58,7 @@ import {
   isDeferredInteraction,
   isWritableObjectInteraction,
   isWritableStudyInteraction,
+  interactionIdFromSelection,
   physicsInteractionDraftDirty,
   type PhysicsInteractionDraft,
   type PhysicsInteractionId,
@@ -356,7 +357,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
       return false;
     }
 
-    const result = buildInteractionApplyPatch(draft);
+    const result = buildInteractionApplyPatch(draft, scene.data ?? null);
     if ("error" in result) {
       dispatch({
         type: "setMutation",
@@ -1129,26 +1130,4 @@ function statusLabel(availability: string): string {
   if (availability === "object") return "Writable per object";
   if (availability === "study") return "Writable globally";
   return "Backend supported, authoring deferred";
-}
-
-function interactionIdFromSelection(
-  nodeId: string | null,
-): PhysicsInteractionId | null {
-  const raw = nodeId?.split(":").at(-1);
-  if (
-    raw === "exchange" ||
-    raw === "demag" ||
-    raw === "zeeman" ||
-    raw === "current_transport" ||
-    raw === "spin_torque" ||
-    raw === "interfacial_dmi" ||
-    raw === "bulk_dmi" ||
-    raw === "uniaxial_anisotropy" ||
-    raw === "cubic_anisotropy" ||
-    raw === "oersted_field" ||
-    raw === "magnetoelastic"
-  ) {
-    return raw;
-  }
-  return null;
 }

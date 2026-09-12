@@ -26,6 +26,11 @@ pub(crate) fn make_step_stats(
         wall_time_ns,
         ..StepStats::default()
     };
+    stats.set_dmi_energy_components(
+        observables.dmi_energy - observables.rotated_dmi_energy,
+        0.0,
+        observables.rotated_dmi_energy,
+    );
     crate::scalar_metrics::apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
     stats.per_object_scalars = observables.per_object_scalars.clone();
     stats

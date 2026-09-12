@@ -1790,6 +1790,7 @@ pub(crate) async fn restore_checkpoint(
     live_state.latest_step.e_ext = common_state.energies.zeeman;
     live_state.latest_step.e_ani = common_state.energies.anisotropy;
     live_state.latest_step.e_dmi = common_state.energies.dmi;
+    live_state.latest_step.e_rotated_dmi = common_state.energies.rotated_dmi;
     live_state.latest_step.e_total = common_state.energies.total;
     live_state.latest_step.magnetization = Some(flat_magnetization);
     snapshot.coupled_checkpoint = coupled_checkpoint;
@@ -2194,6 +2195,7 @@ impl LiveCheckpointProvider {
                 zeeman: latest.e_ext,
                 anisotropy: latest.e_ani,
                 dmi: latest.e_dmi,
+                rotated_dmi: latest.e_rotated_dmi,
                 total: latest.e_total,
             },
             magnetization,

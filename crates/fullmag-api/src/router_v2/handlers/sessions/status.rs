@@ -440,7 +440,7 @@ pub(crate) fn session_epoch(
     }
 }
 
-pub(crate) const ACTIVE_LANE_OPERATION_IDS: [&str; 33] = [
+pub(crate) const ACTIVE_LANE_OPERATION_IDS: [&str; 34] = [
     "grid_build",
     "shared_mesh_build",
     "field_quantity",
@@ -460,6 +460,7 @@ pub(crate) const ACTIVE_LANE_OPERATION_IDS: [&str; 33] = [
     "interaction.sot",
     "interaction.stt",
     "interaction.interfacial_dmi",
+    "interaction.rotated_interfacial_dmi",
     "interaction.bulk_dmi",
     "interaction.uniaxial_anisotropy",
     "interaction.cubic_anisotropy",
@@ -891,7 +892,11 @@ fn active_lane_operations(
         (
             "interaction.dmi".into(),
             term_operation(
-                has_term(&["interfacial_dmi", "bulk_dmi"]),
+                has_term(&[
+                    "interfacial_dmi",
+                    "rotated_interfacial_dmi",
+                    "bulk_dmi",
+                ]),
                 "interaction:dmi",
             ),
         ),
@@ -923,6 +928,13 @@ fn active_lane_operations(
             term_operation(
                 has_term(&["interfacial_dmi"]),
                 "interaction:interfacial_dmi",
+            ),
+        ),
+        (
+            "interaction.rotated_interfacial_dmi".into(),
+            supported(
+                "Study-scoped rotated interfacial DMI authoring is available; execution qualification remains lane-specific.",
+                &["authoring:study.rotated_interfacial_dmi"],
             ),
         ),
         (

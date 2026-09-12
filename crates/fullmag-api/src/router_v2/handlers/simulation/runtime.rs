@@ -2277,6 +2277,7 @@ fn latest_energy_row(snapshot: &SessionStateResponse) -> Option<ScalarRow> {
             e_ext: live_state.latest_step.e_ext,
             e_ani: live_state.latest_step.e_ani,
             e_dmi: live_state.latest_step.e_dmi,
+            e_rotated_dmi: live_state.latest_step.e_rotated_dmi,
             e_total: live_state.latest_step.e_total,
             max_dm_dt: live_state.latest_step.max_dm_dt,
             max_h_eff: live_state.latest_step.max_h_eff,

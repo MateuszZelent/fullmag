@@ -2696,6 +2696,8 @@ impl CpuInteractiveFdmPreviewRuntime {
                 report,
                 0,
                 self.state.magnetization(),
+                self.problem
+                    .rotated_interfacial_dmi_energy_from_vectors(self.state.magnetization()),
             ));
         }
 
@@ -2906,6 +2908,8 @@ impl CpuInteractiveFdmPreviewRuntime {
                 &report,
                 wall_elapsed,
                 self.state.magnetization(),
+                self.problem
+                    .rotated_interfacial_dmi_energy_from_vectors(self.state.magnetization()),
             );
             let mut local_stats = total_stats.clone();
             local_stats.step -= base_step;
@@ -3240,6 +3244,8 @@ impl CpuInteractiveFdmPreviewRuntime {
                 &report,
                 wall_elapsed,
                 self.state.magnetization(),
+                self.problem
+                    .rotated_interfacial_dmi_energy_from_vectors(self.state.magnetization()),
             );
             let mut local_stats = total_stats.clone();
             local_stats.step -= base_step;
@@ -4459,6 +4465,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 &report,
                 wall_elapsed,
                 self.state.magnetization(),
+                0.0,
             );
             let mut local_stats = total_stats.clone();
             local_stats.step -= base_step;
@@ -4784,6 +4791,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 &report,
                 wall_elapsed,
                 self.state.magnetization(),
+                0.0,
             );
             let mut local_stats = total_stats.clone();
             local_stats.step -= base_step;
@@ -6656,6 +6664,11 @@ fn make_step_stats(
         wall_time_ns,
         ..StepStats::default()
     };
+    stats.set_dmi_energy_components(
+        observables.dmi_energy - observables.rotated_dmi_energy,
+        0.0,
+        observables.rotated_dmi_energy,
+    );
     crate::scalar_metrics::apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
     stats.per_object_scalars = observables.per_object_scalars.clone();
     stats
@@ -6670,6 +6683,7 @@ fn make_step_stats_from_report(
     report: &fullmag_engine::StepReport,
     wall_time_ns: u64,
     magnetization: &[[f64; 3]],
+    rotated_dmi_energy: f64,
 ) -> StepStats {
     let mut stats = StepStats {
         step,
@@ -6690,6 +6704,11 @@ fn make_step_stats_from_report(
         wall_time_ns,
         ..StepStats::default()
     };
+    stats.set_dmi_energy_components(
+        report.dmi_energy_joules - rotated_dmi_energy,
+        0.0,
+        rotated_dmi_energy,
+    );
     crate::scalar_metrics::apply_average_m_to_step_stats(&mut stats, magnetization);
     stats
 }

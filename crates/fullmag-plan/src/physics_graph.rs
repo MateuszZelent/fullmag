@@ -1640,6 +1640,7 @@ mod tests {
             fft: None,
             external_field: None,
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             bulk_dmi: None,
             gyromagnetic_ratio: 1.0,
             precision: fullmag_ir::ExecutionPrecision::Double,

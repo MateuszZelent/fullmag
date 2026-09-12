@@ -157,7 +157,7 @@ ensure-python:
       if [ -f "$stamp" ] && cmp -s <(printf '%s\n' "$fingerprint") "$stamp"; then \
         echo "Reusing Fullmag Python dependencies (stamp unchanged)."; \
       else \
-        "{{repo_python}}" -m pip install 'numpy>=1.24' 'scipy>=1.10' 'gmsh>=4.12' 'meshio>=5.3' 'trimesh>=4.2' 'h5py>=3.8' 'zarr>=2.18,<3' 'rich>=13.7' 'matplotlib>=3.7' 'pytest>=9,<10'; \
+        "{{repo_python}}" -m pip install 'numpy>=1.24' 'scipy>=1.10' 'gmsh>=4.12' 'meshio>=5.3' 'trimesh>=4.2' 'h5py>=3.8' 'zarr>=2.18,<3' 'rich>=13.7' 'matplotlib>=3.7' 'Pillow>=10,<13' 'pytest>=9,<10'; \
         printf '%s\n' "$fingerprint" > "$stamp"; \
       fi
 

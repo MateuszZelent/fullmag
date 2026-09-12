@@ -52,6 +52,7 @@ extern "C" {
 #define FULLMAG_FDM_FROZEN_SPINS_ABI_V1 1u
 #define FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1 (UINT64_C(1) << 0)
 #define FULLMAG_FDM_PLAN_DESC_ABI_V2 UINT32_C(2)
+#define FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1 UINT32_C(1)
 #define FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V1 UINT32_C(1)
 
 /* ── Enums ── */
@@ -96,6 +97,8 @@ typedef enum {
     FULLMAG_FDM_OBSERVABLE_EDEN_ANI   = 13,
     FULLMAG_FDM_OBSERVABLE_EDEN_DMI   = 14,
     FULLMAG_FDM_OBSERVABLE_EDEN_TOTAL = 15,
+    FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI = 16,
+    FULLMAG_FDM_OBSERVABLE_EDEN_ROTATED_DMI = 17,
 } fullmag_fdm_observable;
 
 typedef enum {
@@ -485,6 +488,19 @@ typedef struct {
     uint32_t                   stats_stride;
 } fullmag_fdm_multilayer_plan_desc_v2;
 
+/*
+ * Versioned multilayer rDMI extension.  The v2 descriptor above is a frozen
+ * 160-byte ABI used by existing clients; rotated interfacial DMI is carried by
+ * the separate setter below so it cannot change the v2 wire layout.
+ */
+typedef struct {
+    uint32_t                         abi_version;
+    uint32_t                         struct_size;
+    int                              has_rotated_interfacial_dmi;
+    uint32_t                         reserved0;
+    double                           dmi_D_rotated_interfacial; /* D_21 = D_32 (J/m^2) */
+} fullmag_fdm_rotated_interfacial_dmi_desc_v1;
+
 typedef struct {
     fullmag_fdm_grid_desc      grid;
     fullmag_fdm_material_desc  material;
@@ -762,6 +778,9 @@ typedef struct {
     uint32_t struct_size;
     fullmag_fdm_plan_desc base;
     fullmag_fdm_time_policy_desc_v2 time_policy;
+    /* Optional append-only extension; absent when struct_size is the legacy 1384 bytes. */
+    int has_rotated_interfacial_dmi;
+    double dmi_D_rotated_interfacial; /* D_21 = D_32 (J/m^2) */
 } fullmag_fdm_plan_desc_v2;
 
 /* Append-only native CUDA extension for resolved regional field drives. */
@@ -1334,10 +1353,21 @@ int fullmag_fdm_plan_ingestion_v2_create_checked(
     const fullmag_fdm_plan_desc_v2 *plan,
     fullmag_fdm_plan_ingestion_v2 **out_ingestion);
 
-/* Copy the ingested semantic fields into a caller-owned receipt. */
+/*
+ * Copy the ingested semantic fields into a caller-owned legacy receipt.  This
+ * symbol is permanently limited to the historical 1384-byte prefix and never
+ * writes the append-only extension.  Use the explicit sized form below when
+ * a complete 1400-byte receipt is available.
+ */
 int fullmag_fdm_plan_ingestion_v2_receipt(
     const fullmag_fdm_plan_ingestion_v2 *ingestion,
     fullmag_fdm_plan_desc_v2 *out_receipt);
+
+/* Explicit capacity form for callers that cannot initialize the output header. */
+int fullmag_fdm_plan_ingestion_v2_receipt_sized(
+    const fullmag_fdm_plan_ingestion_v2 *ingestion,
+    fullmag_fdm_plan_desc_v2 *out_receipt,
+    uint32_t out_receipt_size);
 
 /* Destroy the plan-input owner.  No backend or hot-loop state is affected. */
 void fullmag_fdm_plan_ingestion_v2_destroy(
@@ -1359,6 +1389,16 @@ int fullmag_fdm_backend_create_time_policy_v2_checked(
  */
 fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     const fullmag_fdm_multilayer_plan_desc_v2 *plan);
+
+/*
+ * Configure rotated interfacial DMI on a v2 multilayer handle.  This must be
+ * called after fullmag_fdm_backend_create_v2 and before the first step.  The
+ * operation is versioned and self-describing; the v2 multilayer descriptor
+ * remains the historical 160-byte ABI.
+ */
+int fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_rotated_interfacial_dmi_desc_v1 *descriptor);
 
 int fullmag_fdm_backend_set_stats_policy_v1(
     fullmag_fdm_backend *handle,

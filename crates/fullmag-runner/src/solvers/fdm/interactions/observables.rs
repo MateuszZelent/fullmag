@@ -23,12 +23,14 @@ fn fdm_quantity_is_active(engine: FdmEngine, plan: &FdmPlanIR, id: QuantityId) -
                 | QuantityId::Torque
                 | QuantityId::HAni
                 | QuantityId::HDmi
+                | QuantityId::HDmiRotated
                 | QuantityId::HEff
                 | QuantityId::EdenEx
                 | QuantityId::EdenDemag
                 | QuantityId::EdenExt
                 | QuantityId::EdenAni
                 | QuantityId::EdenDmi
+                | QuantityId::EdenRotatedDmi
                 | QuantityId::EdenTotal
         ),
         FdmEngine::CudaFdm => matches!(
@@ -39,8 +41,10 @@ fn fdm_quantity_is_active(engine: FdmEngine, plan: &FdmPlanIR, id: QuantityId) -
                 | QuantityId::HExt
                 | QuantityId::Torque
                 | QuantityId::HAni
+                | QuantityId::HDmiRotated
                 | QuantityId::HEff
                 | QuantityId::HOe
+                | QuantityId::EdenRotatedDmi
         ),
     };
     engine_exposes && fdm_plan_enables_quantity(plan, id)
@@ -56,6 +60,7 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         QuantityId::HAni => fdm_has_uniaxial_anisotropy(&plan.material),
         QuantityId::HAniCubic => fdm_has_cubic_anisotropy(&plan.material),
         QuantityId::HDmi => plan.interfacial_dmi.is_some(),
+        QuantityId::HDmiRotated => plan.rotated_interfacial_dmi.is_some(),
         QuantityId::HDmiBulk => plan.bulk_dmi.is_some(),
         QuantityId::HMel => plan.mel_b1.is_some() || plan.mel_b2.is_some(),
         QuantityId::HTherm => plan
@@ -68,6 +73,7 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
             fdm_has_uniaxial_anisotropy(&plan.material) || fdm_has_cubic_anisotropy(&plan.material)
         }
         QuantityId::EdenDmi => plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some(),
+        QuantityId::EdenRotatedDmi => plan.rotated_interfacial_dmi.is_some(),
         QuantityId::EdenTotal => true,
         QuantityId::HAnt
         | QuantityId::U

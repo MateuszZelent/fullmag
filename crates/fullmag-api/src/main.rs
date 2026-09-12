@@ -1264,6 +1264,7 @@ mod realtime_change_tests {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
+                e_rotated_dmi: 0.0,
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -5366,7 +5367,17 @@ fn current_global_scalar_value(current: &SessionStateResponse, quantity: &str) -
                 .as_ref()
                 .and_then(|state| live_step_metric_value(&state.latest_step, metric_key))
         })
-        .or_else(|| run_manifest_scalar_value(current.run.as_ref(), metric_key))
+        .or_else(|| {
+            // Only the component fallback needs plan provenance. Do not clone
+            // mesh/material arrays on live reads or unrelated scalar requests.
+            let plan = (metric_key == "e_rotated_dmi")
+                .then(|| current.metadata.as_ref()?.get("execution_plan"))
+                .flatten()
+                .and_then(|value| {
+                    serde_json::from_value::<fullmag_ir::ExecutionPlanIR>(value.clone()).ok()
+                });
+            run_manifest_scalar_value(current.run.as_ref(), metric_key, plan.as_ref())
+        })
 }
 
 fn scalar_row_metric_value(row: &ScalarRow, metric_key: &str) -> Option<f64> {
@@ -5376,6 +5387,7 @@ fn scalar_row_metric_value(row: &ScalarRow, metric_key: &str) -> Option<f64> {
         "e_ext" => Some(row.e_ext),
         "e_ani" => Some(row.e_ani),
         "e_dmi" => Some(row.e_dmi),
+        "e_rotated_dmi" => Some(row.e_rotated_dmi),
         "e_total" => Some(row.e_total),
         _ => None,
     }

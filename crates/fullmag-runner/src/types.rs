@@ -545,6 +545,8 @@ pub struct StepStats {
     pub e_drive: f64,
     pub e_ani: f64,
     pub e_dmi: f64,
+    #[serde(default, alias = "E_rotated_dmi")]
+    pub e_rotated_dmi: f64,
     pub e_total: f64,
     pub max_dm_dt: f64,
     /// Maximum total dynamic RHS norm in 1/s.
@@ -949,6 +951,7 @@ impl Default for StepStats {
             e_drive: 0.0,
             e_ani: 0.0,
             e_dmi: 0.0,
+            e_rotated_dmi: 0.0,
             e_total: 0.0,
             max_dm_dt: 0.0,
             max_rhs_norm_per_s: 0.0,
@@ -1622,7 +1625,24 @@ mod all_in_gpu_fem_transfer_audit_tests {
     }
 }
 
+/// Native reducers expose aggregate DMI energy. In a rotated-only plan the
+/// aggregate is also the exact rotated component; it must not be zeroed.
+#[cfg(any(test, feature = "cuda", feature = "fem-gpu"))]
+pub(crate) fn split_rotated_only_dmi_energy(rotated_dmi_only: bool, aggregate: f64) -> (f64, f64) {
+    (aggregate, if rotated_dmi_only { aggregate } else { 0.0 })
+}
+
 impl StepStats {
+    pub(crate) fn set_dmi_energy_components(
+        &mut self,
+        interfacial_dmi: f64,
+        bulk_dmi: f64,
+        rotated_interfacial_dmi: f64,
+    ) {
+        self.e_rotated_dmi = rotated_interfacial_dmi;
+        self.e_dmi = interfacial_dmi + bulk_dmi + rotated_interfacial_dmi;
+    }
+
     /// Extract solver diagnostics (non-physics telemetry).
     pub fn to_diagnostics(&self) -> fullmag_quantities::StepDiagnostics {
         fullmag_quantities::StepDiagnostics {
@@ -1690,6 +1710,7 @@ impl StepStats {
             e_drive: self.e_drive,
             e_ani: self.e_ani,
             e_dmi: self.e_dmi,
+            e_rotated_dmi: self.e_rotated_dmi,
             e_el: 0.0,
             e_kin_el: 0.0,
             e_total: self.e_total,
@@ -1701,6 +1722,73 @@ impl StepStats {
             max_torque_T: self.max_torque_T,
             per_object_scalars: self.per_object_scalars.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod rotated_dmi_energy_tests {
+    use super::{split_rotated_only_dmi_energy, StepStats};
+
+    #[test]
+    fn native_rotated_only_dmi_split_preserves_aggregate_and_component_in_both_lanes() {
+        for aggregate in [-2.5, 0.0, 1.25] {
+            assert_eq!(
+                split_rotated_only_dmi_energy(true, aggregate),
+                (aggregate, aggregate)
+            );
+            assert_eq!(
+                split_rotated_only_dmi_energy(false, aggregate),
+                (aggregate, 0.0)
+            );
+        }
+        for source in [
+            include_str!("native_fem.rs"),
+            include_str!("fdm/gpu/cuda/native.rs"),
+        ] {
+            let splitter = source
+                .split("    fn split_dmi_energy(")
+                .nth(1)
+                .and_then(|body| body.split("\n    }").next())
+                .expect("native energy splitter");
+            assert!(splitter.contains("crate::types::split_rotated_only_dmi_energy("));
+        }
+    }
+
+    #[test]
+    fn rotated_dmi_energy_is_reported_separately_and_in_total_dmi() {
+        let mut stats = StepStats::default();
+        stats.set_dmi_energy_components(1.25, -0.5, 0.75);
+
+        assert_eq!(stats.e_rotated_dmi, 0.75);
+        assert_eq!(stats.e_dmi, 1.5);
+        assert_eq!(
+            stats.to_quantity_row().scalar_value("e_rotated_dmi"),
+            Some(0.75)
+        );
+        let json = serde_json::to_value(&stats).unwrap();
+        assert_eq!(json["e_rotated_dmi"], serde_json::json!(0.75));
+        assert!(json.get("E_rotated_dmi").is_none());
+        let legacy: StepStats = serde_json::from_value(serde_json::json!({
+            "E_rotated_dmi": 0.75,
+            "e_dmi": 0.75,
+            "e_total": 0.0,
+            "step": 1,
+            "time": 0.0,
+            "dt": 0.0,
+            "mx": 0.0,
+            "my": 0.0,
+            "mz": 1.0,
+            "e_ex": 0.0,
+            "e_demag": 0.0,
+            "e_ext": 0.0,
+            "e_ani": 0.0,
+            "max_dm_dt": 0.0,
+            "max_h_eff": 0.0,
+            "max_h_demag": 0.0,
+            "wall_time_ns": 0
+        }))
+        .expect("legacy uppercase rotated-DMI key should remain an input alias");
+        assert_eq!(legacy.e_rotated_dmi, 0.75);
     }
 }
 
@@ -4548,6 +4636,7 @@ pub(crate) struct StateObservables {
     // PH-02: extended vector observables
     pub anisotropy_field: Vec<[f64; 3]>,
     pub dmi_field: Vec<[f64; 3]>,
+    pub rotated_dmi_field: Vec<[f64; 3]>,
     pub magnetoelastic_field: Vec<[f64; 3]>,
     pub cubic_anisotropy_field: Vec<[f64; 3]>,
     pub bulk_dmi_field: Vec<[f64; 3]>,
@@ -4559,6 +4648,7 @@ pub(crate) struct StateObservables {
     pub drive_energy: f64,
     pub anisotropy_energy: f64,
     pub dmi_energy: f64,
+    pub rotated_dmi_energy: f64,
     pub total_energy: f64,
     pub max_dm_dt: f64,
     pub max_rhs_all_norm_per_s: f64,
@@ -4687,6 +4777,7 @@ mod tests {
             demag_realization: None,
             air_box_config: None,
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             dmi_interface_normal: None,
             bulk_dmi: None,
             dind_field: None,

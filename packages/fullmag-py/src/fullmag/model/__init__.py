@@ -69,6 +69,7 @@ from .energy import (
     Demag,
     Exchange,
     InterfacialDMI,
+    RotatedInterfacialDMI,
     Magnetoelastic,
     OerstedField,
     OerstedCylinder,

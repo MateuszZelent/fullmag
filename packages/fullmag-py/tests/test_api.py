@@ -802,6 +802,100 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(ir["materials"][0]["anisotropy_axis"], [0.0, 1.0, 0.0])
         self.assertEqual(ir["energy_terms"], [{"kind": "exchange"}])
 
+    def test_flat_problem_with_rotated_dmi_rewrites_to_study_surface(self) -> None:
+        script = textwrap.dedent(
+            """
+            import fullmag as fm
+
+            DEFAULT_UNTIL = 1e-12
+
+            def build():
+                geometry = fm.Box(size=(20e-9, 10e-9, 5e-9), name="film")
+                material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.02)
+                magnet = fm.Ferromagnet(
+                    name="film",
+                    geometry=geometry,
+                    material=material,
+                    m0=fm.texture.uniform((1.0, 0.0, 0.0)),
+                )
+                return fm.Problem(
+                    name="flat_rotated_dmi",
+                    magnets=[magnet],
+                    energy=[fm.Exchange(), fm.RotatedInterfacialDMI(D=3e-3)],
+                    study=fm.TimeEvolution(
+                        dynamics=fm.LLG(),
+                        outputs=[fm.SaveField("m", every=1e-12)],
+                    ),
+                )
+            """
+        )
+
+        with TemporaryDirectory() as tmp_dir:
+            source_path = Path(tmp_dir) / "flat_rotated_dmi.py"
+            source_path.write_text(script, encoding="utf-8")
+            loaded = load_problem_from_script(source_path, lightweight_assets=True)
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten_path = Path(tmp_dir) / "rewritten.py"
+            rewritten_path.write_text(rendered, encoding="utf-8")
+            reloaded = load_problem_from_script(rewritten_path, lightweight_assets=True)
+
+        self.assertIn('study = fm.study("flat_rotated_dmi")', rendered)
+        self.assertIn("study.terms.add(fm.RotatedInterfacialDMI(D=0.003))", rendered)
+        self.assertNotIn("fm.Problem(", rendered)
+        self.assertEqual(
+            reloaded.problem.to_ir(include_geometry_assets=False)["energy_terms"],
+            [
+                {"kind": "exchange"},
+                {"kind": "rotated_interfacial_dmi", "D": 3e-3},
+            ],
+        )
+
+    def test_rotated_interfacial_dmi_rewrite_preserves_float_round_trip(self) -> None:
+        d = 0.0012345678901234567
+        script = textwrap.dedent(
+            f"""
+            import fullmag as fm
+
+            DEFAULT_UNTIL = 1e-12
+
+            def build():
+                geometry = fm.Box(size=(20e-9, 10e-9, 5e-9), name="film")
+                material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.02)
+                magnet = fm.Ferromagnet(
+                    name="film",
+                    geometry=geometry,
+                    material=material,
+                    m0=fm.texture.uniform((1.0, 0.0, 0.0)),
+                )
+                return fm.Problem(
+                    name="flat_rotated_dmi_precision",
+                    magnets=[magnet],
+                    energy=[fm.Exchange(), fm.RotatedInterfacialDMI(D={d!r})],
+                    study=fm.TimeEvolution(
+                        dynamics=fm.LLG(),
+                        outputs=[fm.SaveField("m", every=1e-12)],
+                    ),
+                )
+            """
+        )
+
+        with TemporaryDirectory() as tmp_dir:
+            source_path = Path(tmp_dir) / "flat_rotated_dmi_precision.py"
+            source_path.write_text(script, encoding="utf-8")
+            loaded = load_problem_from_script(source_path, lightweight_assets=True)
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten_path = Path(tmp_dir) / "rewritten.py"
+            rewritten_path.write_text(rendered, encoding="utf-8")
+            reloaded = load_problem_from_script(rewritten_path, lightweight_assets=True)
+
+        self.assertIn(
+            f"study.terms.add(fm.RotatedInterfacialDMI(D={d!r}))",
+            rendered,
+        )
+        rewritten_terms = reloaded.problem.to_ir(include_geometry_assets=False)["energy_terms"]
+        rewritten_d = rewritten_terms[1]["D"]
+        self.assertEqual(rewritten_d.hex(), d.hex())
+
     def test_flat_api_object_region_lowers_to_ir(self) -> None:
         fm.reset()
         fm.engine("fem")
@@ -2246,6 +2340,18 @@ class ProblemApiTests(unittest.TestCase):
             fm.BulkDMI(D=-2e-3).to_ir(),
             {"kind": "bulk_dmi", "D": -2e-3},
         )
+
+    def test_rotated_interfacial_dmi_serializes_exact_contract(self) -> None:
+        self.assertEqual(
+            fm.RotatedInterfacialDMI(D=-3.0e-3).to_ir(),
+            {"kind": "rotated_interfacial_dmi", "D": -3.0e-3},
+        )
+
+    def test_rotated_interfacial_dmi_rejects_non_finite_d(self) -> None:
+        for value in (float("nan"), float("inf"), -float("inf")):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "D must be finite"):
+                    fm.RotatedInterfacialDMI(D=value)
 
     def test_interfacial_dmi_rejects_invalid_interface_normal_shape(self) -> None:
         with self.assertRaises(ValueError):

@@ -802,6 +802,7 @@ mod tests {
         let sy = problem.cell_size.dx * problem.cell_size.dz;
         let sz = problem.cell_size.dx * problem.cell_size.dy;
         let interfacial = problem.terms.interfacial_dmi.unwrap_or(0.0);
+        let rotated = problem.terms.rotated_interfacial_dmi.unwrap_or(0.0);
         let bulk = problem.terms.bulk_dmi.unwrap_or(0.0);
         let face_energy = |left: Vector3, right: Vector3, axis: usize, surface: f64| {
             let average = [
@@ -813,10 +814,12 @@ mod tests {
             let density_integral = match axis {
                 0 => {
                     interfacial * (average[2] * jump[0] - average[0] * jump[2])
+                        + rotated * (average[2] * jump[0] - average[0] * jump[2])
                         + bulk * (average[2] * jump[1] - average[1] * jump[2])
                 }
                 1 => {
                     interfacial * (average[2] * jump[1] - average[1] * jump[2])
+                        + rotated * (average[0] * jump[1] - average[1] * jump[0])
                         + bulk * (average[0] * jump[2] - average[2] * jump[0])
                 }
                 2 => bulk * (average[1] * jump[0] - average[0] * jump[1]),
@@ -1112,6 +1115,7 @@ mod tests {
                 exchange: false,
                 demag: false,
                 interfacial_dmi: Some(0.7 * MU0),
+                rotated_interfacial_dmi: Some(0.3 * MU0),
                 bulk_dmi: Some(-0.4 * MU0),
                 magnetoelastic: None,
                 ..Default::default()
@@ -1184,6 +1188,91 @@ mod tests {
     }
 
     #[test]
+    fn rotated_interfacial_dmi_field_matches_gobel_formula_at_interior_cell() {
+        let grid = GridShape::new(3, 3, 1).expect("valid grid");
+        let problem = ExchangeLlgProblem::with_terms(
+            grid,
+            CellSize::new(2.0, 4.0, 1.0).expect("valid cell size"),
+            MaterialParameters::new(2.0, 0.5 * MU0, 0.2).expect("valid material"),
+            LlgConfig::new(1.0, TimeIntegrator::Heun).expect("valid llg config"),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                rotated_interfacial_dmi: Some(0.5 * MU0),
+                ..Default::default()
+            },
+        );
+        let magnetization = (0..grid.cell_count())
+            .map(|flat| {
+                let x = (flat % grid.nx) as f64;
+                let y = ((flat / grid.nx) % grid.ny) as f64;
+                [
+                    0.1 + 2.0 * x + 3.0 * y,
+                    -0.2 + 5.0 * x + 7.0 * y,
+                    0.3 + 11.0 * x + 13.0 * y,
+                ]
+            })
+            .collect::<Vec<_>>();
+
+        let field = problem.rotated_interfacial_dmi_field(&magnetization);
+
+        assert_vector_close(field[grid.index(1, 1, 0)], [1.875, 0.375, -0.5], 1.0e-12);
+    }
+
+    #[test]
+    fn rotated_interfacial_dmi_is_wired_into_aos_soa_and_energy_density() {
+        let grid = GridShape::new(3, 3, 1).expect("valid grid");
+        let problem = ExchangeLlgProblem::with_terms(
+            grid,
+            CellSize::new(1.0, 1.5, 0.5).expect("valid cell size"),
+            MaterialParameters::new(2.0, 0.5 * MU0, 0.2).expect("valid material"),
+            LlgConfig::new(1.0, TimeIntegrator::Heun).expect("valid llg config"),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                rotated_interfacial_dmi: Some(0.4 * MU0),
+                ..Default::default()
+            },
+        );
+        let magnetization = (0..grid.cell_count())
+            .map(|flat| {
+                let x = (flat % grid.nx) as f64;
+                let y = ((flat / grid.nx) % grid.ny) as f64;
+                [0.2 + 0.1 * x, -0.3 + 0.2 * y, 0.4 - 0.07 * x + 0.05 * y]
+            })
+            .collect::<Vec<_>>();
+        let state = problem
+            .new_state(magnetization.clone())
+            .expect("valid state");
+        let direct = problem.rotated_interfacial_dmi_field(state.magnetization());
+
+        assert_eq!(problem.dmi_field(&state).expect("DMI field"), direct);
+        assert_eq!(
+            problem.effective_field(&state).expect("effective field"),
+            direct
+        );
+
+        let soa_magnetization = VectorFieldSoA::from_aos(state.magnetization());
+        let mut soa_field = VectorFieldSoA::zeros(grid.cell_count());
+        let mut workspace = problem.create_workspace();
+        problem.effective_field_into_soa_ws_at(
+            &soa_magnetization,
+            0.0,
+            &mut workspace,
+            &mut soa_field,
+        );
+        assert_eq!(soa_field.gather_to_aos(), direct);
+
+        let density = problem
+            .dmi_energy_density(&state)
+            .expect("DMI energy density");
+        let integrated = density.iter().sum::<f64>() * problem.cell_size.volume();
+        assert!(
+            (integrated - problem.dmi_energy_from_vectors(state.magnetization())).abs() <= 1.0e-12
+        );
+    }
+
+    #[test]
     fn fdm_dmi_face_energy_matches_field_directional_derivative_on_open_and_mask_boundaries() {
         let grid = GridShape::new(3, 2, 2).expect("valid grid");
         let masks = [
@@ -1195,14 +1284,16 @@ mod tests {
             ),
         ];
         let dmi_values = [
-            (0.7 * MU0, 0.0),
-            (-0.7 * MU0, 0.0),
-            (0.0, 0.9 * MU0),
-            (0.0, -0.9 * MU0),
+            (0.7 * MU0, 0.0, 0.0),
+            (-0.7 * MU0, 0.0, 0.0),
+            (0.0, 0.8 * MU0, 0.0),
+            (0.0, -0.8 * MU0, 0.0),
+            (0.0, 0.0, 0.9 * MU0),
+            (0.0, 0.0, -0.9 * MU0),
         ];
 
         for mask in masks {
-            for (interfacial_dmi, bulk_dmi) in dmi_values {
+            for (interfacial_dmi, rotated_interfacial_dmi, bulk_dmi) in dmi_values {
                 let problem = ExchangeLlgProblem::with_terms_and_mask(
                     grid,
                     CellSize::new(1.0, 1.5, 0.75).expect("valid cell size"),
@@ -1212,6 +1303,7 @@ mod tests {
                         exchange: false,
                         demag: false,
                         interfacial_dmi: Some(interfacial_dmi),
+                        rotated_interfacial_dmi: Some(rotated_interfacial_dmi),
                         bulk_dmi: Some(bulk_dmi),
                         ..Default::default()
                     },
@@ -1246,16 +1338,18 @@ mod tests {
                     })
                     .collect::<Vec<_>>();
                 let interfacial_field = problem.interfacial_dmi_field(&magnetization);
+                let rotated_field = problem.rotated_interfacial_dmi_field(&magnetization);
                 let bulk_field = problem.bulk_dmi_field(&magnetization);
                 let predicted = -problem.material.saturation_magnetisation
                     * MU0
                     * problem.cell_size.volume()
                     * interfacial_field
                         .iter()
+                        .zip(&rotated_field)
                         .zip(&bulk_field)
                         .zip(&variation)
-                        .map(|((interfacial, bulk), variation)| {
-                            dot(add(*interfacial, *bulk), *variation)
+                        .map(|(((interfacial, rotated), bulk), variation)| {
+                            dot(add(add(*interfacial, *rotated), *bulk), *variation)
                         })
                         .sum::<f64>();
                 let epsilon = 1.0e-7;
