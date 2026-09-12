@@ -16,7 +16,7 @@ describe("Live Charts presentation", () => {
     ];
     expect(liveChartXAxisOptions(columns)).toEqual([{ id: "step", label: "Step" }, { id: "t", label: "Time (s)" }]);
     expect(liveChartXAxisOptions(columns.slice(0, 1))).toEqual([{ id: "step", label: "Step" }]);
-    expect(liveChartXAxisOptions(columns)).toEqual([{ id: "step", label: "Step" }, { id: "t", label: "Time (s)" }]);
+    expect(liveChartXAxisOptions([{ column_id: "mx", label: "mx", unit: "1" }])).toEqual([]);
   });
   it("only allocates chart space for selected quantities and preserves separate units", () => {
     expect(visibleLiveChartPanes(series, ["mx"]).map((pane) => pane.unit)).toEqual(["1"]);

@@ -1,13 +1,13 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
-import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
-import { exportChartData } from "@/shared/analysis-charts/ChartExportControls";
+import { findElements, installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
+import { exportChartData } from "@/shared/analysis-charts/chartExport";
 import { LiveChartSurface } from "./components/LiveChartSurface";
 
 const rendererCompletions = vi.hoisted(() => new Map<string, () => void>());
 const rendererDataModels = vi.hoisted(() => new Map<string, import("@/shared/analysis-charts/chartRenderer").ChartRenderModel>());
-vi.mock("@/shared/analysis-charts/ChartExportControls", () => ({ exportChartData: vi.fn(() => true) }));
+vi.mock("@/shared/analysis-charts/chartExport", () => ({ exportChartData: vi.fn(() => true) }));
 vi.mock("@/shared/analysis-charts/InteractiveChartSurface", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/shared/analysis-charts/InteractiveChartSurface")>(),
   InteractiveChartSurface: (props: import("@/shared/analysis-charts/InteractiveChartSurface").InteractiveChartSurfaceProps) => {
@@ -125,7 +125,8 @@ describe("Live Charts export ownership", () => {
 
   it("fails a data export command when serialization or download reports failure", async () => {
     const dom = installSimulationPreparationTestDom();
-    const root = createRoot(dom.document.createElement("div") as unknown as HTMLElement);
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as HTMLElement);
     const handled = vi.fn();
     const failed = vi.fn();
     const series = [{
@@ -140,10 +141,14 @@ describe("Live Charts export ownership", () => {
         onPointSelected={() => undefined} onRangeSelected={() => undefined} onSeriesChange={() => undefined}
         onRequestedExportFailed={failed} onRequestedExportHandled={handled} presentation={{ kind: "ready", revision: 1 }}
         requestedExportRequest={{ format: "csv", requestId: "csv-failure-1" }}
-        series={series} selectedSeriesIds={series.map((item) => item.id)} title="Custom" xAxisLabel="Time"
+        exportErrorFormat="csv" series={series} selectedSeriesIds={series.map((item) => item.id)} title="Custom" xAxisLabel="Time"
       />));
       expect(handled).not.toHaveBeenCalled();
       expect(failed).toHaveBeenCalledOnce();
+      const alerts = findElements(container, (element) => element.getAttribute("role") === "alert");
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0]?.textContent).toContain("CSV export failed");
+      expect(container.querySelector(".fm-live-charts__workspace > [role=alert]")).toBeNull();
     } finally {
       vi.mocked(exportChartData).mockReturnValue(true);
       await act(async () => root.unmount());

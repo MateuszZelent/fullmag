@@ -18,6 +18,7 @@ export interface LiveChartsViewProps {
   onRangeSelected: (fromSI: number, toSI: number) => void;
   onRequestedExportHandled: () => void;
   onRequestedExportFailed?: () => void;
+  exportErrorFormat?: LiveChartsExportRequest["format"] | null;
   onSeriesChange: (ids: string[]) => void;
   onToggleFollow: () => void;
   presentation: ChartDataPresentationState;

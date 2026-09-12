@@ -18,6 +18,9 @@ vi.mock("./ChartExportControls", () => ({
     harness.pngReady = pngReady ?? null;
     return null;
   },
+}));
+
+vi.mock("./chartExport", () => ({
   exportChartData: harness.exportChartData,
   exportChartPng: harness.exportChartPng,
 }));

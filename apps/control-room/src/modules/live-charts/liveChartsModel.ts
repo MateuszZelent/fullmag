@@ -94,11 +94,14 @@ export function resolveLiveChartAxisAndRange(
   const xAxisId = columnIds.length > 0
     ? resolveLiveChartXAxisId(columnIds, requestedXAxisId)
     : requestedXAxisId;
+  const axisChanged = xAxisId !== requestedXAxisId;
+  const axisAliases = isLiveChartTimeXAxisId(xAxisId) && isLiveChartTimeXAxisId(requestedXAxisId);
+  const rangeAfterAxisChange = axisChanged && !axisAliases && range.mode !== "follow" && range.mode !== "tailRows" && range.mode !== "fullDecimated"
+    ? { mode: "follow" as const }
+    : normalizeLiveChartRangeForXAxis(range, xAxisId);
   return {
-    axisChanged: xAxisId !== requestedXAxisId,
-    range: xAxisId !== requestedXAxisId
-      ? { mode: "follow" }
-      : normalizeLiveChartRangeForXAxis(range, xAxisId),
+    axisChanged,
+    range: rangeAfterAxisChange,
     xAxisId,
   };
 }
