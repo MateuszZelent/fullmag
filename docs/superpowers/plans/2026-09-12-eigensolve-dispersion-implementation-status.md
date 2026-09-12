@@ -26,7 +26,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 | S06 — śledzenie gałęzi | W TRAKCIE | Hungarian/gaps i metryka masy FE są gotowe; pozostają fizyczne podprzestrzenie zdegenerowane |
 | S07 — artefakty i API | W TRAKCIE | Stabilne ID, faza/obwiednia, selektory, binarne pola |
 | S08 — Control Room | DO WYKONANIA | Authoring, dyspersja, wybór modu i przestrzenna faza; browser/WebGL |
-| S09 — falowód 2.5D | DO WYKONANIA | Modified Helmholtz i normalizacja na długość |
+| S09 — falowód 2.5D | W TRAKCIE | Bounded algebraic provider `K⊥ + k²M` i axial transverse Schur oracle są zapisane; pozostają assembler przekroju MFEM, open boundary, normalizacja na długość i porównania TetraX/3D |
 | S10 — interakcje | DO WYKONANIA | Anizotropia, DMI seams, Gilbert i legalność |
 | S11 — GPU | DO WYKONANIA | Jawna trasa double bez fallbacku, residency i parytet |
 | S12 — kwalifikacja i integracja | DO WYKONANIA | Managed benchmarki, review, commity, PR, merge, weryfikacja mastera |
@@ -123,6 +123,15 @@ problemów walidacyjnych i zwraca `[[Re D,-Im D],[Im D,Re D]]`, gdzie
 finite `k`, nie maskuje osobliwości `P(k)`, a `pin_first_dof` jest jawny. Nie
 ma jeszcze assemblera bloków na siatce MFEM ani podłączenia tego provider'a do
 shared-domain modal path; runner nadal odrzuca non-k0 z demag-k.
+
+W S09 dodano analogiczny, jawnie oddzielony provider 2.5D
+`floquet_waveguide_demag_k`. Buduje on `P(k)=K⊥+k²M`, przyjmuje osobne
+poprzeczne i osiowe sprzężenia `A_qphi`/`A_phiq`, zachowuje znak źródła `−ik
+δM_z` w danych wejściowych i zwraca ten sam real-split Schur w przestrzeni
+`[Re(q), Im(q)]`. Test kontraktu obejmuje wartość `k²`, granicę `k=0`, pinowanie
+gauge oraz błędne kształty/budżet. Jest to bounded oracle dla algebry
+falowodu, nie assembler siatki przekroju ani dowód otwartej granicy; kompilacja
+i wykonanie testu pozostają **NOT VERIFIED** przez managed runner.
 
 ### Walidacja po domknięciu przyrostu
 
