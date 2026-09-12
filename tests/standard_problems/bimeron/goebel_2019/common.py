@@ -27,8 +27,25 @@ HOLD_SAMPLE_PERIOD = float(
 )
 
 
-def requested_device() -> str:
-    device = os.environ.get("FULLMAG_GOEBEL_DEVICE", "gpu").strip().lower()
+def _requested_device(default: str) -> str:
+    device = os.environ.get("FULLMAG_GOEBEL_DEVICE", default).strip().lower()
     if device not in {"cpu", "gpu"}:
         raise ValueError("FULLMAG_GOEBEL_DEVICE must be 'cpu' or 'gpu'")
+    return device
+
+
+def requested_device() -> str:
+    """Resolve the Goebel FDM device, retaining its GPU default."""
+    return _requested_device("gpu")
+
+
+def requested_fem_device() -> str:
+    """Resolve the Goebel FEM device, rejecting unsupported mixed-DMI GPU."""
+    device = _requested_device("cpu")
+    if device == "gpu":
+        raise ValueError(
+            "FULLMAG_GOEBEL_DEVICE=gpu is unsupported for the Goebel 2019 FEM "
+            "mixed-topology rotated-DMI scenario; refusing the request without "
+            "a CPU fallback; use FULLMAG_GOEBEL_DEVICE=cpu"
+        )
     return device

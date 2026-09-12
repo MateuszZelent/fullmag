@@ -19,11 +19,11 @@ from tests.standard_problems.bimeron.goebel_2019.common import (
     RELAX_MAX_STEPS,
     RELAX_TIME,
     TRACK_SIZE,
-    requested_device,
+    requested_fem_device,
 )
 
 
-REQUESTED_DEVICE = requested_device()
+REQUESTED_DEVICE = requested_fem_device()
 
 study = fm.study("goebel_2019_bimeron_fem")
 study.engine("fem")
@@ -69,6 +69,7 @@ relax = study.stages.add_relax(
     dt=LLG_DT,
     max_steps=RELAX_MAX_STEPS,
     max_physical_time_s=RELAX_TIME,
+    relax_alpha=ALPHA,
     tolT=1e-6,
 )
 relax.autosave(

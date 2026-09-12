@@ -207,6 +207,19 @@ fn validate_scene_document_with_mode(
 fn validate_dmi_scope_exclusivity(
     scene: &SceneDocument,
 ) -> Result<(), SceneDocumentValidationError> {
+    // SceneDocument currently has no periodicity field, so its magnetic
+    // boundary is conservatively treated as open.  The FDM planner remains
+    // the source of truth for the fully-periodic exception once PBC is in IR.
+    if scene
+        .study
+        .rotated_interfacial_dmi
+        .is_some_and(|d| d != 0.0)
+        && !scene.study.exchange_enabled
+    {
+        return Err(SceneDocumentValidationError::new(
+            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition",
+        ));
+    }
     let mut conflicts = BTreeSet::new();
     for object in &scene.objects {
         let mut interfacial_present = false;
@@ -3459,6 +3472,7 @@ mod tests {
         ] {
             let mut scene = region_owned_scene();
             scene.study.rotated_interfacial_dmi = Some(-3.0e-3);
+            scene.study.exchange_enabled = true;
             scene.objects[0]
                 .physics_stack
                 .push(crate::ScriptBuilderMagneticInteractionEntry {
@@ -3495,6 +3509,7 @@ mod tests {
             scene.materials[0].properties.dind = dind;
             scene.materials[0].properties.dbulk = dbulk;
             scene.study.rotated_interfacial_dmi = Some(-3.0e-3);
+            scene.study.exchange_enabled = true;
 
             let error = validate_scene_document(&scene)
                 .expect_err("material-derived object DMI must conflict with study rDMI");
@@ -3544,6 +3559,7 @@ mod tests {
         ] {
             let mut scene = region_owned_scene();
             scene.study.rotated_interfacial_dmi = Some(-3.0e-3);
+            scene.study.exchange_enabled = true;
             scene.objects[0]
                 .physics_stack
                 .push(crate::ScriptBuilderMagneticInteractionEntry {
@@ -3560,6 +3576,36 @@ mod tests {
             validate_scene_document(&scene)
                 .expect("removing object-scoped DMI must allow study rDMI");
         }
+    }
+
+    #[test]
+    fn nonzero_rotated_interfacial_dmi_requires_study_exchange_even_with_object_exchange() {
+        let mut scene = region_owned_scene();
+        scene.study.rotated_interfacial_dmi = Some(-3.0e-3);
+        scene.study.exchange_enabled = false;
+        scene.objects[0]
+            .physics_stack
+            .push(crate::ScriptBuilderMagneticInteractionEntry {
+                kind: crate::ScriptBuilderMagneticInteractionKind::Exchange,
+                enabled: true,
+                params: None,
+            });
+
+        let error = validate_scene_document_for_authoring(&scene)
+            .expect_err("object-scoped Exchange must not satisfy the global boundary coupling");
+        assert_eq!(
+            error.message,
+            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition"
+        );
+
+        scene.study.exchange_enabled = true;
+        validate_scene_document_for_authoring(&scene)
+            .expect("global Exchange must make nonzero open-boundary rDMI authorable");
+
+        scene.study.exchange_enabled = false;
+        scene.study.rotated_interfacial_dmi = Some(0.0);
+        validate_scene_document_for_authoring(&scene)
+            .expect("zero rotated DMI is a no-op and must not require Exchange");
     }
 
     fn valid_closed_current_view_value() -> Value {

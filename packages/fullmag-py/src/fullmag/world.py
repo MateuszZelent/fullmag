@@ -2592,6 +2592,7 @@ _SCALAR_QUANTITY_ATTRS: Mapping[str, str] = {
     "E_ext": "e_ext",
     "E_ani": "e_ani",
     "E_dmi": "e_dmi",
+    "E_rotated_dmi": "e_rotated_dmi",
     "E_total": "e_total",
     "mx": "mx",
     "my": "my",
@@ -2611,6 +2612,7 @@ _VECTOR_QUANTITIES = {
     "H_eff",
     "H_ani",
     "H_dmi",
+    "H_rotated_dmi",
     "H_mel",
     "H_ani_cubic",
     "H_dmi_bulk",
@@ -3481,6 +3483,7 @@ E_demag = QuantityHandle("E_demag", kind="scalar")
 E_ext = QuantityHandle("E_ext", kind="scalar")
 E_ani = QuantityHandle("E_ani", kind="scalar")
 E_dmi = QuantityHandle("E_dmi", kind="scalar")
+E_rotated_dmi = QuantityHandle("E_rotated_dmi", kind="scalar")
 E_total = QuantityHandle("E_total", kind="scalar")
 mx = QuantityHandle("mx", kind="scalar")
 my = QuantityHandle("my", kind="scalar")
@@ -8150,6 +8153,7 @@ _SCALAR_QUANTITIES = {
     "E_ext",
     "E_ani",
     "E_dmi",
+    "E_rotated_dmi",
     "E_total",
     "time",
     "step",

@@ -104,6 +104,9 @@ const FEM_DEMAG_METHOD_OPTIONS = DEMAG_METHOD_OPTIONS.filter(
   (option) => option.value !== "multilayer_convolution",
 );
 
+const ROTATED_DMI_EXCHANGE_ERROR =
+  "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition";
+
 const DEMAG_METHOD_VALUES_BY_LANE: Record<
   Exclude<InteractionDiscretization, "unknown">,
   readonly string[]
@@ -772,6 +775,12 @@ export function buildStudyInteractionPatchFromDraft(
     };
   }
   if (draft.id === "exchange") {
+    if (
+      (!draft.enabled || !draft.present) &&
+      activeStudyRotatedDmi(scene)
+    ) {
+      return { error: ROTATED_DMI_EXCHANGE_ERROR };
+    }
     return {
       patch: {
         study: {
@@ -811,6 +820,9 @@ export function buildStudyInteractionPatchFromDraft(
     }
     const d = parseNumber(draft.values.d, "D");
     if ("error" in d) return d;
+    if (d.value !== 0 && studyExchangeExplicitlyDisabled(scene)) {
+      return { error: ROTATED_DMI_EXCHANGE_ERROR };
+    }
     return {
       patch: {
         study: {
@@ -852,11 +864,22 @@ function activeStudyRotatedDmi(scene: SceneResource | null | undefined): boolean
   const study = scene?.study;
   if (!study || typeof study !== "object" || Array.isArray(study)) return false;
   const value = (study as Record<string, unknown>).rotated_interfacial_dmi;
-  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "number") return Number.isFinite(value) && value !== 0;
   if (typeof value === "string" && value.trim() !== "") {
-    return Number.isFinite(Number(value));
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed !== 0;
   }
   return false;
+}
+
+function studyExchangeExplicitlyDisabled(
+  scene: SceneResource | null | undefined,
+): boolean {
+  const study = scene?.study;
+  if (!study || typeof study !== "object" || Array.isArray(study)) return false;
+  const value = (study as Record<string, unknown>).exchange_enabled;
+  return value === false ||
+    (typeof value === "string" && value.trim().toLowerCase() === "false");
 }
 
 function valuesFromParams(

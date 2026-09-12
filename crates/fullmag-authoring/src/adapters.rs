@@ -2722,6 +2722,46 @@ mod tests {
     }
 
     #[test]
+    fn scene_document_projection_requires_global_exchange_for_nonzero_rotated_dmi() {
+        let mut builder = sample_builder();
+        builder.geometries[0].physics_stack.retain(|interaction| {
+            !matches!(
+                interaction.kind,
+                ScriptBuilderMagneticInteractionKind::InterfacialDmi
+                    | ScriptBuilderMagneticInteractionKind::BulkDmi
+            )
+        });
+        builder.exchange_enabled = false;
+        builder.rotated_interfacial_dmi = Some(-3.0e-3);
+
+        let scene = scene_document_from_script_builder(&builder);
+        assert!(scene.objects[0].physics_stack.iter().any(|interaction| {
+            interaction.kind == ScriptBuilderMagneticInteractionKind::Exchange
+                && interaction.enabled
+        }));
+        let error = scene_document_problem_projection(&scene)
+            .expect_err("object-scoped Exchange must not satisfy global rDMI boundary coupling");
+        assert_eq!(
+            error.message,
+            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition"
+        );
+
+        builder.exchange_enabled = true;
+        let exchange_enabled_scene = scene_document_from_script_builder(&builder);
+        let projection = scene_document_problem_projection(&exchange_enabled_scene)
+            .expect("global Exchange must lower with nonzero open-boundary rDMI");
+        assert!(projection.builder.exchange_enabled);
+
+        builder.exchange_enabled = false;
+        builder.rotated_interfacial_dmi = Some(0.0);
+        let zero_scene = scene_document_from_script_builder(&builder);
+        let projection = scene_document_problem_projection(&zero_scene)
+            .expect("zero rotated DMI must remain a no-op without Exchange");
+        assert!(!projection.builder.exchange_enabled);
+        assert_eq!(projection.builder.rotated_interfacial_dmi, Some(0.0));
+    }
+
+    #[test]
     fn scene_document_to_script_builder_rejects_object_scoped_rotated_dmi_without_study() {
         let mut scene = scene_document_from_script_builder(&sample_builder());
         scene.objects[0]
