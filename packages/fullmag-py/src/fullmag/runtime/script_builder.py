@@ -726,10 +726,34 @@ def _render_scene_document_bootstrap(builder: Mapping[str, object]) -> str:
         )
         handles.append(handle)
         material = raw_object.get("material")
+        physics_stack = raw_object.get("physics_stack")
+        explicit_dmi_kinds = (
+            {
+                str(entry.get("kind"))
+                for entry in physics_stack
+                if isinstance(entry, Mapping)
+                and entry.get("enabled", True) is not False
+                and str(entry.get("kind")) in {"interfacial_dmi", "bulk_dmi"}
+            }
+            if isinstance(physics_stack, list)
+            else set()
+        )
         if isinstance(material, Mapping):
             for key in ("Ms", "Aex", "alpha", "Dind", "Dbulk", "Ku1", "Kc1"):
                 value = _finite_number(material.get(key))
                 if value is not None:
+                    if (
+                        key == "Dind"
+                        and value == 0.0
+                        and "interfacial_dmi" not in explicit_dmi_kinds
+                    ):
+                        continue
+                    if (
+                        key == "Dbulk"
+                        and value == 0.0
+                        and "bulk_dmi" not in explicit_dmi_kinds
+                    ):
+                        continue
                     lines.append(f"{handle}.{key} = {_python_literal(value)}")
             anis_u = material.get("anisU") or material.get("anis_u")
             if isinstance(anis_u, (list, tuple)) and len(anis_u) == 3:
