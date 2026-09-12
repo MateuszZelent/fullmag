@@ -129,6 +129,23 @@ fn require_tetrahedral_conductor_mesh(mesh: &MeshIR, object_id: &str) -> Result<
     Ok(())
 }
 
+fn require_tetrahedral_field_sampling_mesh(
+    mesh: &MeshIR,
+    carrier_kind: &str,
+) -> Result<(), PlanError> {
+    if mesh.cells.is_empty() {
+        return Err(fail(format!(
+            "antenna field-sampling carrier '{carrier_kind}' has no cells; a non-empty tet4 P1 topology is required for the executable FEM sampling lane"
+        )));
+    }
+    mesh.cells.require_tet4().map_err(|error| {
+        fail(format!(
+            "unsupported antenna field-sampling topology in carrier '{carrier_kind}': tet4 P1 connectivity is required and mixed/non-tet topology cannot be downgraded to identity sampling ({error})"
+        ))
+    })?;
+    Ok(())
+}
+
 fn resolve_field_sampling(
     problem: &ProblemIR,
     target: &FieldTargetIR,
@@ -177,6 +194,7 @@ fn resolve_field_sampling(
             "antenna field-sampling carrier must contain finite sample positions",
         ));
     }
+    require_tetrahedral_field_sampling_mesh(&mesh, &carrier_kind)?;
     Ok(AntennaFieldSamplingPlanIR {
         domain: target.clone(),
         carrier_kind,
@@ -387,9 +405,9 @@ pub(crate) fn plan_antenna_field_solve_v03(
 
 #[cfg(test)]
 mod tests {
-    use super::preflight_direct_oersted_pair_budget;
+    use super::{preflight_direct_oersted_pair_budget, require_tetrahedral_field_sampling_mesh};
     use fullmag_ir::{
-        ANTENNA_DIRECT_OERSTED_BUDGET_POLICY_V1,
+        FemCellTypeIR, FemConnectivityIR, MeshIR, ANTENNA_DIRECT_OERSTED_BUDGET_POLICY_V1,
         ANTENNA_DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS,
     };
 
@@ -417,5 +435,39 @@ mod tests {
             .reasons
             .iter()
             .any(|reason| reason.contains("pair count overflows")));
+    }
+
+    #[test]
+    fn field_sampling_topology_rejects_empty_carrier() {
+        let error = require_tetrahedral_field_sampling_mesh(&MeshIR::default(), "test-carrier")
+            .expect_err("empty field-sampling topology must fail closed");
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("has no cells")));
+    }
+
+    #[test]
+    fn field_sampling_topology_rejects_mixed_cells() {
+        let mut mesh = MeshIR {
+            cells: FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
+            ..MeshIR::default()
+        };
+        mesh.cells.types[0] = FemCellTypeIR::Hex8;
+        let error = require_tetrahedral_field_sampling_mesh(&mesh, "test-carrier")
+            .expect_err("mixed field-sampling topology must fail closed");
+        let message = error.reasons.join("; ");
+        assert!(message.contains("unsupported antenna field-sampling topology"));
+        assert!(message.contains("cannot be downgraded to identity sampling"));
+    }
+
+    #[test]
+    fn field_sampling_topology_accepts_non_empty_tet4_carrier() {
+        let mesh = MeshIR {
+            cells: FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
+            ..MeshIR::default()
+        };
+        require_tetrahedral_field_sampling_mesh(&mesh, "test-carrier")
+            .expect("tet4 field-sampling topology should be accepted");
     }
 }

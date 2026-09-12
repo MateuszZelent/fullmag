@@ -78,6 +78,25 @@ pub(crate) fn execute_native_fem_antenna_field_solve_plan(
     )
 }
 
+fn resolve_antenna_sample_topology(
+    cells: &fullmag_ir::FemConnectivityIR,
+) -> Result<Option<Vec<[u32; 4]>>, RunError> {
+    if cells.is_empty() {
+        // Keep deserialization compatibility for pre-topology point-only
+        // assets. New plans are rejected by the planner before reaching this
+        // lane and publish identity_coordinates_v1 explicitly.
+        return Ok(None);
+    }
+    cells
+        .require_tet4()
+        .map(Some)
+        .map_err(|error| RunError {
+            message: format!(
+                "unsupported antenna field-sampling topology: tet4 P1 connectivity is required; mixed/non-tet topology cannot be downgraded to identity sampling ({error})"
+            ),
+        })
+}
+
 fn execute_native_fem_charge_transport(
     mesh: &MeshIR,
     charge_transport_plans: &[ResolvedChargeTransportPlanIR],
@@ -98,6 +117,10 @@ fn execute_native_fem_charge_transport(
             message: "FEM charge/Oersted execution requires finite field-sampling positions".into(),
         });
     }
+    let antenna_sample_tet4_cells = match antenna_plan {
+        Some(plan) => Some(resolve_antenna_sample_topology(&plan.field_sampling.cells)?),
+        None => None,
+    };
     let prepared = preflight_charge_transport_plans(mesh, charge_transport_plans)?;
     let method = match oersted_realization {
         Some(fullmag_ir::OerstedRealization::FemVectorPotential) => {
@@ -233,12 +256,7 @@ fn execute_native_fem_charge_transport(
                             signatures,
                             conductor_positions_xyz_m: mesh.nodes.clone(),
                             sample_positions_xyz_m: field_sample_positions_xyz_m.to_vec(),
-                            sample_tet4_cells: antenna_plan
-                                .field_sampling
-                                .cells
-                                .require_tet4()
-                                .ok()
-                                .filter(|cells| !cells.is_empty()),
+                            sample_tet4_cells: antenna_sample_tet4_cells.clone().flatten(),
                             bases: vec![AntennaFieldBasisInput {
                                 port_mode_id: request.port_mode_id.clone(),
                                 measured_positive_terminal_current_a,
@@ -1048,6 +1066,26 @@ mod tests {
         assert!(production_source.contains("fullmag_fem_solve_charge_transport_v2"));
         assert!(!production_source.contains("ffi::fullmag_fem_solve_steady_transport_v1"));
         assert!(!production_source.contains("solve_native_fem_steady_transport(&"));
+    }
+
+    #[test]
+    fn antenna_runtime_rejects_mixed_sampling_topology_instead_of_identity_downgrade() {
+        let mut cells = fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]);
+        cells.types[0] = fullmag_ir::FemCellTypeIR::Hex8;
+        let error = resolve_antenna_sample_topology(&cells)
+            .expect_err("mixed sampling topology must fail before native execution");
+        assert!(error
+            .message
+            .contains("cannot be downgraded to identity sampling"));
+    }
+
+    #[test]
+    fn antenna_runtime_keeps_empty_legacy_sampling_topology_as_explicit_identity_mode() {
+        let cells = fullmag_ir::FemConnectivityIR::empty();
+        assert_eq!(
+            resolve_antenna_sample_topology(&cells).expect("empty legacy topology is readable"),
+            None
+        );
     }
 
     #[test]
