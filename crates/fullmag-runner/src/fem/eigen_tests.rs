@@ -6827,6 +6827,45 @@ fn native_cpu_modal_window_accepts_nonzero_floquet_airbox_demag_path() {
         "nonzero-k Floquet Full2x2 airbox demag should enter the bounded native CPU provider path"
     );
     assert_eq!(native_cpu_modal_window_rejection_reason(&plan), None);
+
+    plan.k_sampling = Some(fullmag_ir::KSamplingIR::Path {
+        points: vec![
+            fullmag_ir::KPointIR {
+                label: Some("Γ".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            },
+            fullmag_ir::KPointIR {
+                label: Some("X".to_string()),
+                k_vector: [1.0e7, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![2],
+        closed: false,
+    });
+    assert!(
+        native_cpu_modal_window_enabled(&plan),
+        "a path containing Gamma and nonzero-k samples should keep the CPU provider lane"
+    );
+
+    let gamma_point = crate::eigen::KSampleDescriptor {
+        sample_index: 0,
+        label: Some("Γ".to_string()),
+        segment_index: Some(0),
+        path_s: 0.0,
+        t_in_segment: 0.0,
+        k_vector: [0.0, 0.0, 0.0],
+    };
+    let point_plan = super::eigen_path::test_support::eigen_path_single_k_point_plan(
+        &plan,
+        &gamma_point,
+        false,
+        None,
+    )
+    .expect("Gamma point should materialize as a periodic K0 execution plan");
+    assert_eq!(
+        point_plan.spin_wave_bc.kind(),
+        SpinWaveBoundaryKindIR::Periodic
+    );
 }
 
 #[test]

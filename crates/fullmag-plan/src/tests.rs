@@ -12216,6 +12216,32 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
         other => panic!("expected FEM eigen plan, got {other:?}"),
     }
 
+    if let fullmag_ir::StudyIR::Eigenmodes { k_sampling, .. } = &mut ir.study {
+        *k_sampling = Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![
+                fullmag_ir::KPointIR {
+                    label: Some("Γ".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                fullmag_ir::KPointIR {
+                    label: Some("X".to_string()),
+                    k_vector: [1.0e7, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![2],
+            closed: false,
+        });
+    }
+    let path_planned =
+        plan(&ir).expect("Γ-to-X Floquet airbox path should keep Gamma on the qualified K0 lane");
+    match path_planned.backend_plan {
+        BackendPlanIR::FemEigen(fem) => assert!(matches!(
+            fem.k_sampling,
+            Some(fullmag_ir::KSamplingIR::Path { .. })
+        )),
+        other => panic!("expected FEM eigen path plan, got {other:?}"),
+    }
+
     ir.problem_meta.runtime_metadata.insert(
         "dispersion_validation".to_string(),
         serde_json::json!({

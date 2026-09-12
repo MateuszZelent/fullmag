@@ -93,10 +93,12 @@ pub(crate) fn native_cpu_modal_window_has_floquet_dynamic_demag_path(
         }
         Some(fullmag_ir::KSamplingIR::Path { points, .. }) => {
             !points.is_empty()
-                && points.iter().all(|point| {
-                    point.k_vector.iter().all(|value| value.is_finite())
-                        && point.k_vector.iter().any(|value| value.abs() > 1.0e-12)
-                })
+                && points
+                    .iter()
+                    .all(|point| point.k_vector.iter().all(|value| value.is_finite()))
+                && points
+                    .iter()
+                    .any(|point| point.k_vector.iter().any(|value| value.abs() > 1.0e-12))
         }
         None => false,
     }

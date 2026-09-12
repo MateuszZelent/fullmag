@@ -1393,13 +1393,17 @@ fn floquet_airbox_dynamic_demag_cpu_plan_supported(
         }
         Some(fullmag_ir::KSamplingIR::Path { points, .. }) => {
             // The current single-k runner is invoked once per path sample.
-            // Requiring every control point to be nonzero prevents a path from
-            // silently switching to the unqualified gamma-point demag lane.
+            // Gamma samples are normalized to the qualified periodic K0 lane
+            // by the path orchestrator; at least one nonzero point is still
+            // required so this predicate cannot open a K0-only path as the
+            // dynamic demag-k provider.
             !points.is_empty()
-                && points.iter().all(|point| {
-                    point.k_vector.iter().all(|value| value.is_finite())
-                        && point.k_vector.iter().any(|value| value.abs() > 1.0e-12)
-                })
+                && points
+                    .iter()
+                    .all(|point| point.k_vector.iter().all(|value| value.is_finite()))
+                && points
+                    .iter()
+                    .any(|point| point.k_vector.iter().any(|value| value.abs() > 1.0e-12))
         }
         None => false,
     };

@@ -96,6 +96,41 @@ pub(super) fn periodic_airbox_k0_physical_plan(plan: &FemEigenPlanIR) -> bool {
         && !plan.mesh.periodic_boundary_pairs.is_empty()
 }
 
+fn normalize_gamma_floquet_point_to_periodic_k0(
+    source_plan: &FemEigenPlanIR,
+    point_plan: &mut FemEigenPlanIR,
+    sample: &crate::eigen::KSampleDescriptor,
+) {
+    let gamma = sample
+        .k_vector
+        .iter()
+        .all(|component| component.is_finite() && component.abs() <= 1.0e-12);
+    if !gamma
+        || !crate::fem::eigen_capability::native_cpu_modal_window_has_floquet_dynamic_demag_path(
+            source_plan,
+        )
+    {
+        return;
+    }
+
+    // Γ is the same physical periodic problem with zero phase.  Route only
+    // this point through the already qualified shared-domain K0 importer;
+    // nonzero samples keep the Floquet dynamic-demag provider.  The public
+    // path and sample metadata remain unchanged.
+    point_plan.spin_wave_bc = match &source_plan.spin_wave_bc {
+        fullmag_ir::SpinWaveBoundaryConditionIR::Config(config) => {
+            let mut periodic_config = config.clone();
+            periodic_config.kind = fullmag_ir::SpinWaveBoundaryKindIR::Periodic;
+            fullmag_ir::SpinWaveBoundaryConditionIR::Config(periodic_config)
+        }
+        fullmag_ir::SpinWaveBoundaryConditionIR::Legacy(_) => {
+            fullmag_ir::SpinWaveBoundaryConditionIR::Legacy(
+                fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
+            )
+        }
+    };
+}
+
 pub(super) fn eigen_path_single_k_point_plan(
     plan: &FemEigenPlanIR,
     sample: &crate::eigen::KSampleDescriptor,
@@ -106,6 +141,7 @@ pub(super) fn eigen_path_single_k_point_plan(
     point_plan.k_sampling = Some(fullmag_ir::KSamplingIR::Single {
         k_vector: sample.k_vector,
     });
+    normalize_gamma_floquet_point_to_periodic_k0(plan, &mut point_plan, sample);
     if bias_field_sweep_requested(plan) {
         let declared_sample = plan
             .bias_field_samples
