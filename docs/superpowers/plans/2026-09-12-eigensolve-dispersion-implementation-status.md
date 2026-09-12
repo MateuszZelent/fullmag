@@ -9,7 +9,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 - Baza `master`: `5084a94ed14b151fc865e8def5a5c28401e98b44`.
 - Branch: `codex/eigensolve-dispersion-plan-20260912`.
 - Worktree: `C:/git/fullmag/worktrees/eigensolve-dispersion-plan-20260912`.
-- Ostatni zapisany kodowy przyrost: `8d266d778` (`feat(eigensolve): gate nonzero-k Floquet demag provider path`), nad wcześniejszym podłączeniem providera `f2acf7b9b425733899bdfde63cb0566d16d74a59`.
+- Ostatni zapisany kodowy przyrost: `71ce348b0` (`test(eigensolve): guard Floquet provider against forced GPU`), nad routingiem Γ `1114e1aa0` i podłączeniem providera `f2acf7b9b425733899bdfde63cb0566d16d74a59`.
 - Właściciel: `codex:01a0941c-eb15-7261-a7ee-7cf099385525`.
 - Rejestr: `eigensolve-dispersion-plan-20260-c5dfad6d7f548079`; reaktywowany do implementacji.
 - Fizyczne źródła COMSOL: oba lokalne podręczniki modułu mikromagnetycznego wymienione w planie; szczególnie s. PDF 21–28 i 40–43. Przykład RF jest wzorem sprzężenia pól, a nie gotowym dowodem modalnym.
@@ -294,6 +294,7 @@ publikuje notę provenance o bounded CPU Poisson-airbox Schur providerze.
 Weryfikacja tego przyrostu:
 
 - test planera `fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path` — `1 passed`, exit 0;
+- pełny `fullmag-plan --lib` — `461 passed`, exit 0;
 - testy runnera ścieżki non-k0 — `4 passed`, exit 0;
 - `runner_rejects_floquet_dynamic_demag_gate` — `1 passed`, exit 0;
 - `fem_eigen_path_rejects_floquet_dynamic_demag_before_sample_solves` — `1 passed`, exit 0;
