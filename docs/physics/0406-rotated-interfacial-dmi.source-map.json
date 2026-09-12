@@ -15,7 +15,7 @@
       "solver": "FDM",
       "device": "GPU",
       "status": "not-verified",
-      "reason": "The stored strict FP64 CUDA Goebel run passed 15/15 gates before the verifier gained its current 18 checks; a fresh periodic FDM report is required before qualification."
+      "reason": "The stored strict FP64 CUDA Goebel run passed 15/15 gates before the verifier gained its current 19 checks, including a minimum relaxation duration; a fresh periodic FDM report is required before qualification."
     },
     {
       "solver": "FEM",

@@ -7,7 +7,7 @@
   },
   "backend_matrix": [
     {"solver": "FDM", "device": "CPU", "status": "implemented", "reason": "Double-precision field, energy, boundary, and directional-derivative tests pass; the Göbel CPU runtime is not verified."},
-    {"solver": "FDM", "device": "GPU", "status": "not-verified", "reason": "The stored strict FP64 CUDA Göbel report passed 15/15 gates before the verifier grew to 18 checks; a fresh run is required before current qualification."},
+    {"solver": "FDM", "device": "GPU", "status": "not-verified", "reason": "The stored strict FP64 CUDA Göbel report passed 15/15 gates before the verifier grew to 19 checks, including a minimum relaxation duration; a fresh run is required before current qualification."},
     {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "The MFEM weak residual and energy derivative are tested; the Göbel FEM CPU runtime is not verified."},
     {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "The CUDA element residual has historical operator-test evidence; the current cancellation-bound CUDA regression and Göbel FEM GPU runtime are not verified."}
   ],
@@ -24,7 +24,7 @@
     {"id": "fdm-gpu-field", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "combine_effective_field_fp64_kernel", "responsibility": "Compute the FP64 CUDA field and open-boundary correction."},
     {"id": "fdm-gpu-boundary", "path": "backends/fdm/gpu/cuda/interactions/dmi_boundary.cuh", "symbol": "add_rotated_interfacial_dmi_boundary_correction", "responsibility": "Apply the rotated exchange+DMI ghost correction."},
     {"id": "fem-weak", "path": "backends/fem/src/dmi_weak_residual.cpp", "symbol": "dmi_accumulate_rotated_interfacial_residual", "responsibility": "Assemble the shared first-variation algebra."},
-    {"id": "fem-cpu", "path": "backends/fem/cpu/mfem/interactions/dmi.cpp", "symbol": "initialize_dmi_plan_fields", "responsibility": "Import the resolved coefficient into the MFEM context."},
+    {"id": "fem-cpu", "path": "backends/fem/cpu/mfem/interactions/dmi.cpp", "symbol": "initialize_rotated_dmi_plan_fields", "responsibility": "Import the rotated coefficient from the extended ABI into the MFEM context."},
     {"id": "fem-gpu", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu", "symbol": "dmi_element_residual_kernel", "responsibility": "Assemble the device element residual and energy."},
     {"id": "scenario", "path": "tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py", "symbol": "study", "responsibility": "Define the canonical thin-film Göbel reproduction."},
     {"id": "verifier", "path": "tests/standard_problems/bimeron/goebel_2019/verify.py", "symbol": "verify_bundle", "responsibility": "Verify topology, energy, geometry, runtime identity, and no fallback."}

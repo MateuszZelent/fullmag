@@ -14,6 +14,30 @@ from typing import Sequence
 
 ROOT = Path(__file__).resolve().parent
 DMI_OPERATOR_BIT = 1 << 3
+MIN_RELAX_TIME_S = 20e-12
+_TIME_COMPARISON_TOLERANCE = 1.0e-12
+VERIFICATION_SCHEMA_VERSION = "goebel-bimeron-verification.v1"
+VERIFICATION_CHECK_NAMES = (
+    "strict_fp64_cuda",
+    "no_fallback",
+    "device_receipt_validated",
+    "source_geometry",
+    "source_physics",
+    "hold_starts_from_relaxed_state",
+    "hold_provenance_matches_relax",
+    "energy_decreased",
+    "initial_charge",
+    "relaxed_charge",
+    "held_charge",
+    "charge_sign_preserved",
+    "two_relaxed_cores",
+    "two_held_cores",
+    "background_preserved",
+    "cores_resolved",
+    "cores_inside_central_80_percent",
+    "relax_duration",
+    "hold_duration",
+)
 
 
 def _dot(a: Sequence[float], b: Sequence[float]) -> float:
@@ -133,6 +157,38 @@ def _first_scalar(path: Path) -> dict[str, float]:
     return {key: float(value) for key, value in row.items()}
 
 
+def _stage_duration_s(
+    initial_payload: dict[str, object], final_payload: dict[str, object]
+) -> float:
+    """Return a finite, non-negative duration recorded by two stage states."""
+
+    try:
+        initial_time = float(initial_payload["time"])
+        final_time = float(final_payload["time"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("stage state time is missing or not numeric") from exc
+    if not math.isfinite(initial_time) or not math.isfinite(final_time):
+        raise ValueError("stage state time must be finite")
+    duration = final_time - initial_time
+    if duration < 0.0:
+        raise ValueError(
+            f"stage state time moved backwards: {initial_time:.17g} -> {final_time:.17g}"
+        )
+    return duration
+
+
+def _stage_meets_minimum_duration(
+    initial_payload: dict[str, object],
+    final_payload: dict[str, object],
+    minimum_s: float,
+) -> bool:
+    if not math.isfinite(minimum_s) or minimum_s <= 0.0:
+        raise ValueError("minimum stage duration must be finite and positive")
+    return _stage_duration_s(initial_payload, final_payload) >= minimum_s * (
+        1.0 - _TIME_COMPARISON_TOLERANCE
+    )
+
+
 def _initial_energy_from_log(path: Path) -> float:
     pattern = re.compile(r"stage 1/4 .*?step\s+0 .*?E_total=([-+0-9.eE]+)")
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -164,6 +220,8 @@ def verify_bundle(
     bundle: Path,
     runtime_log: Path,
     thresholds_path: Path = ROOT / "thresholds.v1.json",
+    *,
+    raise_on_failure: bool = True,
 ) -> dict[str, object]:
     thresholds = json.loads(thresholds_path.read_text(encoding="utf-8"))
     relax = bundle / "stages" / "stage_00_flat_relax"
@@ -172,8 +230,9 @@ def verify_bundle(
     relaxed_payload, relaxed = _read_state(relax / "m_final.json")
     hold_initial_payload, _hold_initial = _read_state(hold / "m_initial.json")
     held_payload, held = _read_state(hold / "m_final.json")
+    relax_duration_s = _stage_duration_s(initial_payload, relaxed_payload)
+    hold_duration_s = _stage_duration_s(relaxed_payload, held_payload)
     relax_scalars = _last_scalar(relax / "scalars.csv")
-    relax_initial_scalars = _first_scalar(relax / "scalars.csv")
     hold_scalars = _last_scalar(hold / "scalars.csv")
     metadata = json.loads((relax / "metadata.json").read_text(encoding="utf-8"))
     hold_metadata = json.loads((hold / "metadata.json").read_text(encoding="utf-8"))
@@ -183,7 +242,7 @@ def verify_bundle(
     receipt = execution["fdm_gpu_execution_receipt"]
     if not runtime_log.is_file():
         raise ValueError(f"runtime log is missing: {runtime_log}")
-    initial_energy = relax_initial_scalars["E_total"]
+    initial_energy = _initial_energy_from_log(runtime_log)
     plan = metadata["execution_plan"]["backend_plan"]
     material = plan["material"]
     periodicity = plan["periodicity"]
@@ -195,6 +254,18 @@ def verify_bundle(
         layout["grid_cells"][axis] * layout["cell_size"][axis]
         for axis in range(3)
     ]
+
+    expected_layout = {
+        "grid_cells": [1000, 80, 1],
+        "cell_size": [0.5e-9, 0.5e-9, 0.5e-9],
+        "origin_m": [-250e-9, -20e-9, -0.25e-9],
+    }
+
+    def layout_matches_source(payload: dict[str, object]) -> bool:
+        candidate = payload.get("layout")
+        return isinstance(candidate, dict) and all(
+            candidate.get(key) == value for key, value in expected_layout.items()
+        )
 
     def core_is_central(core: object) -> bool:
         point = list(core)
@@ -231,14 +302,23 @@ def verify_bundle(
             and receipt["executed_unknown_operator_mask"] == 0
         ),
         "source_geometry": (
-            initial_payload["layout"]["grid_cells"] == [1000, 80, 1]
-            and initial_payload["layout"]["cell_size"] == [0.5e-9, 0.5e-9, 0.5e-9]
+            all(
+                layout_matches_source(payload)
+                for payload in (
+                    initial_payload,
+                    relaxed_payload,
+                    hold_initial_payload,
+                    held_payload,
+                )
+            )
         ),
         "source_physics": (
             plan["rotated_interfacial_dmi"] == 3e-3
             and plan.get("interfacial_dmi") is None
             and plan.get("bulk_dmi") is None
+            and plan.get("enable_exchange") is True
             and plan.get("enable_demag") is True
+            and plan.get("temperature", 0.0) == 0.0
             and material["saturation_magnetisation"] == 0.58e6
             and material["exchange_stiffness"] == 15e-12
             and material["damping"] == 0.3
@@ -287,15 +367,18 @@ def verify_bundle(
             core_is_central(held["max_mz_core_m"])
             and core_is_central(held["min_mz_core_m"])
         ),
-        "hold_duration": (
-            float(held_payload["time"]) - float(relaxed_payload["time"])
-            >= float(thresholds["min_hold_time_s"]) * (1.0 - 1.0e-12)
+        "relax_duration": _stage_meets_minimum_duration(
+            initial_payload, relaxed_payload, MIN_RELAX_TIME_S
+        ),
+        "hold_duration": _stage_meets_minimum_duration(
+            relaxed_payload, held_payload, float(thresholds["min_hold_time_s"])
         ),
     }
 
     report = {
-        "schema_version": "goebel-bimeron-verification.v1",
+        "schema_version": VERIFICATION_SCHEMA_VERSION,
         "status": "passed" if all(checks.values()) else "failed",
+        "check_count": len(checks),
         "checks": checks,
         "initial": initial,
         "relaxed": relaxed,
@@ -303,6 +386,8 @@ def verify_bundle(
         "initial_energy_j": initial_energy,
         "relaxed_energy_j": relax_scalars["E_total"],
         "held_energy_j": hold_scalars["E_total"],
+        "relax_duration_s": relax_duration_s,
+        "hold_duration_s": hold_duration_s,
         "verified_state_sha256": {
             "initial": hashlib.sha256((relax / "m_initial.json").read_bytes()).hexdigest(),
             "relaxed": hashlib.sha256((relax / "m_final.json").read_bytes()).hexdigest(),
@@ -318,7 +403,7 @@ def verify_bundle(
             "executed_device_operator_mask": receipt["executed_device_operator_mask"],
         },
     }
-    if report["status"] != "passed":
+    if report["status"] != "passed" and raise_on_failure:
         failed = ", ".join(name for name, passed in checks.items() if not passed)
         raise ValueError(f"Göbel bimeron verification failed: {failed}")
     return report

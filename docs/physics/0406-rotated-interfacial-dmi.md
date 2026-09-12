@@ -288,7 +288,7 @@ pozostaje dlatego wyłącznie ścieżką FDM.
 | Solver | Device | Stan kontraktu | Stan runtime | Wymagany dowód przed promocją |
 |---|---|---|---|---|
 | FDM | CPU | zatwierdzony | operator i pochodna energii zweryfikowane; bimeron runtime `NOT VERIFIED` | pełna reprodukcja bimeronu CPU |
-| FDM | GPU | zatwierdzony | historyczny FP64 CUDA bimeron 15/15; bieżący raport 18-check `NOT VERIFIED` | powtórzony raport 18-check, FP32 parity i sanitizer |
+| FDM | GPU | zatwierdzony | historyczny FP64 CUDA bimeron 15/15; bieżący raport 19-check `NOT VERIFIED` | powtórzony raport 19-check, FP32 parity i sanitizer |
 | FEM | CPU | zatwierdzony | operator MFEM, weak derivative i build zweryfikowane; bimeron runtime `NOT VERIFIED` | reprodukcja bimeronu FEM CPU |
 | FEM | GPU | zatwierdzony | historyczne testy residualu CUDA; bieżąca regresja skali błędu przy kasowaniu składników i bimeron runtime `NOT VERIFIED` | managed test pochodnej energii oraz reprodukcja bimeronu FEM GPU |
 
@@ -348,7 +348,8 @@ benchmarku FDM ani dowód równoważności PBC. Wspólne parametry pozwalają na
 porównanie jakościowe tekstury, natomiast warunki brzegowe, operator
 demagnetyzacji i siatka pozostają lane-specific.
 
-Akceptacja wymaga spadku energii, skończonych pól, zachowania normy, dwóch
+Akceptacja wymaga co najmniej 20 ps relaksacji i 100 ps bezprądowego hold,
+liczonych z czasów stanów w artefaktach, oraz spadku energii, skończonych pól, zachowania normy, dwóch
 rozdzielonych rdzeni o przeciwnych znakach $m_z$, $|Q|\ge0.8$, tła wzdłuż
 $+x$ oraz braku anihilacji podczas bezprądowego etapu LLG. Parity FDM CPU/GPU
 i FEM CPU/GPU jest sprawdzane wewnątrz tej samej dyskretyzacji; FDM/FEM mają
@@ -369,7 +370,7 @@ $\langle m_x\rangle=0.9858318$. Energia spadła z
 $-7.7736\times10^{-18}\,\mathrm J$ do
 $-8.1467871427\times10^{-18}\,\mathrm J$. Receipt wykazał maskę operatorów
 CUDA $159/159$, zero operatorów host/unknown i `fallback_count=0`.
-Raport powstał przed rozszerzeniem weryfikatora do 18 bramek i dlatego pozostaje
+Raport powstał przed rozszerzeniem weryfikatora do 19 bramek i dlatego pozostaje
 `NOT VERIFIED` dla bieżącego kontraktu; przed promocją wymagane jest powtórzenie
 tego okresowego benchmarku z aktualnym weryfikatorem. Wynik nie kwalifikuje
 opisanego wyżej open-boundary wariantu FEM.
@@ -384,7 +385,7 @@ opisanego wyżej open-boundary wariantu FEM.
 - eksperymentalna identyfikacja materiału na podstawie samej symulacji.
 
 Historyczny przebieg FP64 nie promuje bieżącej implementacji bez aktualnego
-raportu 18-check. Pozostałe lane'y i ruch SOT zachowują status wskazany
+raportu 19-check. Pozostałe lane'y i ruch SOT zachowują status wskazany
 w macierzy wsparcia.
 
 (scientific-bibliography)=

@@ -21,7 +21,9 @@ def _load_renderer():
     return module
 
 
-def _state(nx: int, ny: int, core_offset: int) -> dict[str, object]:
+def _state(
+    nx: int, ny: int, core_offset: int, *, time_s: float = 0.0
+) -> dict[str, object]:
     values: list[list[float]] = []
     for y_index in range(ny):
         for x_index in range(nx):
@@ -32,7 +34,7 @@ def _state(nx: int, ny: int, core_offset: int) -> dict[str, object]:
             mz = plus - minus
             values.append([max(0.0, 1.0 - abs(mz)), 0.15 * mz, mz])
     return {
-        "time": 0.0,
+        "time": time_s,
         "layout": {
             "grid_cells": [nx, ny, 1],
             "cell_size": [0.5e-9, 0.5e-9, 0.5e-9],
@@ -58,17 +60,19 @@ class GoebelFigureRendererTests(unittest.TestCase):
                 "held": hold / "m_final.json",
             }
             state_paths["initial"].write_text(
-                json.dumps(_state(48, 24, 7)), encoding="utf-8"
+                json.dumps(_state(48, 24, 7, time_s=5e-12)), encoding="utf-8"
             )
             state_paths["relaxed"].write_text(
-                json.dumps(_state(48, 24, 5)), encoding="utf-8"
+                json.dumps(_state(48, 24, 5, time_s=30e-12)), encoding="utf-8"
             )
             state_paths["held"].write_text(
-                json.dumps(_state(48, 24, 3)), encoding="utf-8"
+                json.dumps(_state(48, 24, 3, time_s=140e-12)), encoding="utf-8"
             )
 
             report = {
+                "schema_version": "goebel-bimeron-verification.v1",
                 "status": "passed",
+                "check_count": 19,
                 "initial": {"topological_charge": -0.99, "core_separation_m": 7e-9},
                 "relaxed": {"topological_charge": -0.98, "core_separation_m": 5e-9},
                 "held": {
@@ -87,7 +91,9 @@ class GoebelFigureRendererTests(unittest.TestCase):
                     "required_operator_mask": 159,
                     "executed_device_operator_mask": 159,
                 },
-                "checks": {f"check_{index}": True for index in range(18)},
+                "checks": {
+                    name: True for name in renderer.VERIFICATION_CHECK_NAMES
+                },
                 "verified_state_sha256": {
                     key: hashlib.sha256(path.read_bytes()).hexdigest()
                     for key, path in state_paths.items()
@@ -106,13 +112,71 @@ class GoebelFigureRendererTests(unittest.TestCase):
             self.assertGreaterEqual(height, 1400)
             self.assertGreater(len(data), 100_000)
 
+    def test_figure_labels_and_footer_durations_use_state_times(self) -> None:
+        renderer = _load_renderer()
+        states = [
+            {"time_s": 5e-12},
+            {"time_s": 30e-12},
+            {"time_s": 140e-12},
+        ]
+
+        self.assertEqual(
+            renderer._state_titles(states),
+            ("Initial state · 5 ps", "Relaxed · 30 ps", "Held · 140 ps"),
+        )
+        self.assertEqual(renderer._stage_duration_ps(states[0], states[1]), "25")
+        self.assertEqual(renderer._stage_duration_ps(states[1], states[2]), "110")
+
     def test_rejects_failed_verification_report(self) -> None:
         renderer = _load_renderer()
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             report_path = root / "verification.json"
-            report_path.write_text(json.dumps({"status": "failed"}), encoding="utf-8")
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": renderer.VERIFICATION_SCHEMA_VERSION,
+                        "status": "failed",
+                        "check_count": 19,
+                        "checks": {name: True for name in renderer.VERIFICATION_CHECK_NAMES},
+                    }
+                ),
+                encoding="utf-8",
+            )
             with self.assertRaisesRegex(ValueError, "passed verification report"):
+                renderer.render_figure(root / "missing.zarr", report_path, root / "figure.png")
+
+    def test_rejects_reports_with_wrong_schema_or_check_set(self) -> None:
+        renderer = _load_renderer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            report_path = root / "verification.json"
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "goebel-bimeron-verification.v0",
+                        "status": "passed",
+                        "check_count": 19,
+                        "checks": {name: True for name in renderer.VERIFICATION_CHECK_NAMES},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "schema"):
+                renderer.render_figure(root / "missing.zarr", report_path, root / "figure.png")
+
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": renderer.VERIFICATION_SCHEMA_VERSION,
+                        "status": "passed",
+                        "check_count": 19,
+                        "checks": {"unexpected": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "check set"):
                 renderer.render_figure(root / "missing.zarr", report_path, root / "figure.png")
 
 

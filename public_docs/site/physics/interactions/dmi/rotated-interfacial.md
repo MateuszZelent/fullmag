@@ -233,7 +233,7 @@ CUDA support for spatially varying exchange coefficients.
 | Solver | Device | Implementation status | Scientific runtime status |
 |---|---|---|---|
 | FDM | CPU | implemented and operator-tested | Göbel bimeron run **not verified** |
-| FDM | GPU | FP64/FP32 implemented and operator-tested | historical 15-check report; current 18-check run **not verified** |
+| FDM | GPU | FP64/FP32 implemented and operator-tested | historical 15-check report; current 19-check run **not verified** |
 | FEM | CPU | MFEM weak form implemented and tested | Göbel bimeron run **not verified** |
 | FEM | GPU | CUDA residual implemented; historical operator tests | current cancellation-bound CUDA regression and Göbel bimeron run **not verified** |
 
@@ -253,7 +253,7 @@ $0.5\,\mathrm{nm}$ FDM cell through thickness, periodic $x$, $M_s=0.58\,
 \mathrm{mJ\,m^{-2}}$, $K_x=0.8\,\mathrm{MJ\,m^{-3}}$, and $\alpha=0.3$.
 
 The stored strict FP64 CUDA report was generated before the verifier gained its
-current 18 checks. It previously passed 15/15 checks after 20 ps relaxation and
+current 19 checks. It previously passed 15/15 checks after 20 ps relaxation and
 a 100 ps zero-current hold, but that historical report is **NOT VERIFIED**
 against the current verifier until the run is repeated. The historical result
 reported topological charge changing from $-0.9996834$ initially to
@@ -262,7 +262,12 @@ resolved, the background reached $\langle m_x\rangle=0.9858318$, and total
 energy decreased from $-7.7736\times10^{-18}\,\mathrm J$ to
 $-8.1467871\times10^{-18}\,\mathrm J$. Its device receipt reported the
 required CUDA operator mask 159/159 and no host, unknown, or fallback
-execution; those values do not replace a fresh 18-check verification.
+execution; those values do not replace a fresh 19-check verification.
+
+The current verifier requires at least 20 ps of relaxation and 100 ps of
+zero-current hold, measured from the saved state times. The figure generator
+uses those actual times for its panel labels and stage durations. Its Pillow
+dependency is declared in the Python `figures` extra and in `just ensure-python`.
 
 ```{figure} ../../../_static/images/validation/goebel-2019-rotated-dmi-bimeron.png
 :alt: Initial, relaxed, and held out-of-plane magnetization of a Göbel 2019 bimeron, with a full-track view and validation metrics.
@@ -272,12 +277,12 @@ execution; those values do not replace a fresh 18-check verification.
 Historical FDM CUDA FP64 stabilization artifact. Color encodes $m_z$; arrows in
 the held-state close-up show the in-plane magnetization. The figure is
 generated from the stored scenario bundle and its fail-closed verification
-report by `scripts/render_goebel_2019_bimeron_figure.py`; current 18-check
+report by `scripts/render_goebel_2019_bimeron_figure.py`; current 19-check
 qualification remains **NOT VERIFIED** until a fresh run.
 ```
 
 See {doc}`validation` for the cross-variant DMI validation matrix. A fresh
-18-check report is required before this artifact can qualify the stated FDM
+19-check report is required before this artifact can qualify the stated FDM
 CUDA FP64 case; FDM CPU and both FEM bimeron runtimes remain **not verified**.
 
 (rotated-interfacial-dmi-limitations)=
@@ -313,7 +318,7 @@ velocity results in Fig. 3 of the paper.
 | FDM CUDA | `backends/fdm/gpu/cuda/interactions/demag_fp64.cu` | `combine_effective_field_fp64_kernel` | FP64 field and boundary correction |
 | FDM CUDA boundary | `backends/fdm/gpu/cuda/interactions/dmi_boundary.cuh` | `add_rotated_interfacial_dmi_boundary_correction` | rotated exchange+DMI ghost correction |
 | FEM weak residual | `backends/fem/src/dmi_weak_residual.cpp` | `dmi_accumulate_rotated_interfacial_residual` | first variation shared by FEM realizations |
-| FEM plan import | `backends/fem/cpu/mfem/interactions/dmi.cpp` | `initialize_dmi_plan_fields` | import the resolved coefficient into the MFEM context |
+| FEM plan import | `backends/fem/cpu/mfem/interactions/dmi.cpp` | `initialize_rotated_dmi_plan_fields` | import the rotated coefficient from the extended ABI into the MFEM context |
 | FEM CUDA | `backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu` | `dmi_element_residual_kernel` | device element residual |
 | Göbel scenario | `tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py` | `study` | canonical public reproduction |
 | Göbel verifier | `tests/standard_problems/bimeron/goebel_2019/verify.py` | `verify_bundle` | topology, energy, and execution receipt gates |
