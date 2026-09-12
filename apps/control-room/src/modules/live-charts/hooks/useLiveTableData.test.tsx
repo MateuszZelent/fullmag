@@ -64,12 +64,42 @@ describe("useLiveTableData", () => {
     });
   });
 
+  it("keeps a tail-row snapshot at its requested N-row bound", () => {
+    const requestedRows = 120;
+    const makeSnapshot = (cursorStart: number, cursorEnd: number): ChartTableWindow => ({
+      columnCount: 1,
+      columns: [{ column_id: "step", label: "step", unit: "1" }],
+      cursorEnd,
+      cursorStart,
+      resyncRequired: false,
+      revision: cursorEnd,
+      rowCount: requestedRows,
+      schemaRevision: 1,
+      tableId: "default",
+      totalRows: cursorEnd,
+      values: new Float64Array(requestedRows),
+    });
+    const initialTable = makeSnapshot(8_881, 9_000);
+    const nextTable = makeSnapshot(8_882, 9_001);
+    const initial = { cursor: 9_000, queryKey: "tailRows", table: initialTable };
+
+    const result = liveTableReducer(initial, {
+      queryKey: "tailRows",
+      replace: shouldReplaceLiveTableSnapshot({ mode: "tailRows", rows: requestedRows }),
+      table: nextTable,
+    });
+
+    expect(result.table).toBe(nextTable);
+    expect(result.table?.rowCount).toBe(requestedRows);
+    expect(result.table?.rowCount).toBeLessThanOrEqual(requestedRows);
+  });
+
   it.each([
     [{ mode: "fullDecimated" }, true],
     [{ mode: "fixed", fromSI: 1, toSI: 2 }, true],
     [{ mode: "tailTime", durationS: 1 }, true],
+    [{ mode: "tailRows", rows: 100 }, true],
     [{ mode: "follow" }, false],
-    [{ mode: "tailRows", rows: 100 }, false],
   ] as const)("classifies %o as a %s snapshot update", (range, replace) => {
     expect(shouldReplaceLiveTableSnapshot(range)).toBe(replace);
   });

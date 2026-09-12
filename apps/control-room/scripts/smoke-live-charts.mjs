@@ -69,6 +69,7 @@ async function main() {
     await verifyVisibilityMatrix(page, evidence);
     await verifySignalSearchAndBulkSelection(page, evidence);
     await verifyCanonicalCsvExport(page);
+    await verifyDirectExportFailureRecovery(page);
     await verifyKeyboardInteractions(page, evidence);
     await verifyRepeatedPngCommands(page);
     await runRevisionStress(page, fixture, evidence);
@@ -1040,6 +1041,29 @@ async function verifyCanonicalCsvExport(page) {
       throw new Error(`Canonical CSV ${quantity} differs: ${JSON.stringify(final)}`);
     }
   }
+}
+
+async function verifyDirectExportFailureRecovery(page) {
+  const controls = page.locator(".fm-live-charts .fm-analysis-chart-export").first();
+  const before = await page.evaluate(() => window.__FULLMAG_LIVE_CHARTS_SMOKE__.downloads.length);
+  await page.evaluate(() => {
+    const smoke = window.__FULLMAG_LIVE_CHARTS_SMOKE__;
+    smoke.createObjectURLBeforeFailure = URL.createObjectURL;
+    URL.createObjectURL = () => { throw new Error("Controlled download failure"); };
+  });
+  try {
+    await controls.getByRole("button", { name: "CSV", exact: true }).click();
+    await controls.getByRole("alert").filter({ hasText: "CSV export failed" }).waitFor();
+  } finally {
+    await page.evaluate(() => {
+      const smoke = window.__FULLMAG_LIVE_CHARTS_SMOKE__;
+      URL.createObjectURL = smoke.createObjectURLBeforeFailure;
+      delete smoke.createObjectURLBeforeFailure;
+    });
+  }
+  await controls.getByRole("button", { name: "CSV", exact: true }).click();
+  await controls.getByRole("alert").waitFor({ state: "hidden" });
+  await page.waitForFunction((count) => window.__FULLMAG_LIVE_CHARTS_SMOKE__.downloads.length > count, before);
 }
 
 async function verifyRepeatedPngCommands(page) {

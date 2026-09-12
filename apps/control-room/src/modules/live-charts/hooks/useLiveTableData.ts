@@ -31,7 +31,7 @@ export function shouldPauseLiveTableRows({ active, hasRows, paused }: { active: 
  * treating the decimated points as an append-only stream can discard updates.
  */
 export function shouldReplaceLiveTableSnapshot(range: ChartRangePreference): boolean {
-  return range.mode === "fullDecimated" || range.mode === "fixed" || range.mode === "tailTime";
+  return range.mode === "fullDecimated" || range.mode === "fixed" || range.mode === "tailTime" || range.mode === "tailRows";
 }
 
 export function liveTableUnsupportedReason(columns: readonly { column_id: string }[] | null, status: string): string | null {

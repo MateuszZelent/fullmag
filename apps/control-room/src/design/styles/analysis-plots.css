@@ -427,6 +427,13 @@
   padding-block: var(--fm-space-1);
 }
 
+.fm-analysis-chart-export__error {
+  flex: 1 0 100%;
+  margin: 0;
+  color: var(--fm-danger);
+  font-size: var(--fm-font-size-xs);
+}
+
 /* ===== ChartSection ===== */
 
 .fm-chart-section {

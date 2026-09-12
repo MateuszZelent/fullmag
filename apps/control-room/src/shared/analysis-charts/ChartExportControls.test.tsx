@@ -109,4 +109,29 @@ describe("ChartExportControls", () => {
       dom.restore();
     }
   });
+
+  it("shows an accessible local error when a direct export has no failure callback", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as HTMLElement);
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => {
+        throw new Error("downloads unavailable");
+      }),
+      revokeObjectURL: vi.fn(),
+    });
+    try {
+      await act(async () => root.render(
+        <ChartExportControls model={model} rendererRef={{ current: null }} />,
+      ));
+      await act(async () => findElements(container, (element) => element.tagName === "BUTTON")[0]?.click());
+      const alerts = findElements(container, (element) => element.getAttribute("role") === "alert");
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0]?.textContent).toContain("CSV export failed");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
 });

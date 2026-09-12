@@ -132,9 +132,16 @@ export function buildLiveChartsTableQuery({
 }): LiveTableRowsQuery {
   const normalizedRange = normalizeLiveChartRangeForXAxis(range, xAxisId);
   const query = (patch: Partial<LiveTableRowsQuery> = {}): LiveTableRowsQuery => ({ columns, cursor, decimation: "minmax_lttb", includeTail: true, limit: LIVE_CHART_TABLE_ROW_LIMIT, targetPoints, ...patch });
-  if (normalizedRange.mode === "tailRows") return query({ includeTail: true, limit: normalizedRange.rows, targetPoints: normalizedRange.rows });
+  if (normalizedRange.mode === "tailRows") {
+    // Tail rows is a bounded snapshot. A cursor would turn the requested
+    // window into an append-only stream and let it grow past the user's N.
+    return query({ cursor: undefined, includeTail: true, limit: normalizedRange.rows, targetPoints: normalizedRange.rows });
+  }
   if (normalizedRange.mode === "tailTime" && isLiveChartTimeXAxisId(xAxisId) && latestX !== null) {
-    return query({ cursor: undefined, fromT: latestX - normalizedRange.durationS, includeTail: false, toT: latestX });
+    // Keep the lower bound stable while new samples arrive. The previous
+    // latestX is stale by the time an invalidation refetch runs, so carrying
+    // it as toT would exclude the appended rows.
+    return query({ cursor: undefined, fromT: latestX - normalizedRange.durationS, includeTail: false, limit: LIVE_CHART_TABLE_ROW_LIMIT });
   }
   if (normalizedRange.mode === "fixed") {
     const from = Math.min(normalizedRange.fromSI, normalizedRange.toSI);

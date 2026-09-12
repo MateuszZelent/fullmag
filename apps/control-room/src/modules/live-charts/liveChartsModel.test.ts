@@ -44,16 +44,46 @@ describe("liveChartsModel", () => {
   });
 
   it("maps Tail rows, Tail time, Fixed range, and Full decimated to bounded queries", () => {
-    expect(buildLiveChartsTableQuery({ columns: ["step", "mx"], cursor: 12, latestX: 4e-9, range: { mode: "tailRows", rows: 120 }, targetPoints: 800, xAxisId: "step" })).toMatchObject({ includeTail: true, limit: 120, targetPoints: 120 });
+    const tailRows = buildLiveChartsTableQuery({ columns: ["step", "mx"], cursor: 12, latestX: 4e-9, range: { mode: "tailRows", rows: 120 }, targetPoints: 800, xAxisId: "step" });
+    expect(tailRows).toMatchObject({ cursor: undefined, includeTail: true, limit: 120, targetPoints: 120 });
+    expect(tailRows.cursor).toBeUndefined();
     const tailTime = buildLiveChartsTableQuery({ columns: ["t", "mx"], cursor: 12, latestX: 4e-9, range: { mode: "tailTime", durationS: 1e-9 }, targetPoints: 800, xAxisId: "t" });
-    expect(tailTime).toMatchObject({ toT: 4e-9, includeTail: false });
+    expect(tailTime).toMatchObject({ includeTail: false, limit: 5_000 });
     expect(tailTime.fromT).toBeCloseTo(3e-9);
+    expect(tailTime.toT).toBeUndefined();
     const stepFixed = buildLiveChartsTableQuery({ columns: ["step", "mx"], cursor: 12, latestX: 10, range: { mode: "fixed", fromSI: 3, toSI: 8 }, targetPoints: 800, xAxisId: "step" });
     expect(stepFixed).toMatchObject({ cursor: 12, includeTail: true });
     expect(stepFixed.fromRow).toBeUndefined();
     expect(stepFixed.toRow).toBeUndefined();
     expect(buildLiveChartsTableQuery({ columns: ["t", "mx"], cursor: 12, latestX: 10, range: { mode: "fixed", fromSI: 3, toSI: 8 }, targetPoints: 800, xAxisId: "t" })).toMatchObject({ fromT: 3, toT: 8, includeTail: false });
     expect(buildLiveChartsTableQuery({ columns: ["step", "mx"], cursor: 12, latestX: 10, range: { mode: "fullDecimated" }, targetPoints: 800, xAxisId: "step" })).toMatchObject({ includeTail: false, limit: 5_000, targetPoints: 800 });
+  });
+
+  it("keeps a tail-time window open for a row appended after the first fetch", () => {
+    const range = { mode: "tailTime" as const, durationS: 1e-9 };
+    const firstFetch = buildLiveChartsTableQuery({
+      columns: ["t", "mx"],
+      cursor: undefined,
+      latestX: 4e-9,
+      range,
+      targetPoints: 800,
+      xAxisId: "t",
+    });
+    const afterAppend = buildLiveChartsTableQuery({
+      columns: ["t", "mx"],
+      cursor: 4_000,
+      latestX: 5e-9,
+      range,
+      targetPoints: 800,
+      xAxisId: "t",
+    });
+
+    expect(firstFetch).toMatchObject({ cursor: undefined, includeTail: false, limit: 5_000 });
+    expect(afterAppend).toMatchObject({ cursor: undefined, includeTail: false, limit: 5_000 });
+    expect(firstFetch.fromT).toBeCloseTo(3e-9);
+    expect(afterAppend.fromT).toBeCloseTo(4e-9);
+    expect(firstFetch.toT).toBeUndefined();
+    expect(afterAppend.toT).toBeUndefined();
   });
 
   it("fails closed instead of treating an arbitrary observable axis as row coordinates", () => {
