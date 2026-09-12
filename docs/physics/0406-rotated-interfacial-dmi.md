@@ -377,6 +377,34 @@ Raport powstał przed rozszerzeniem weryfikatora do 19 bramek i dlatego pozostaj
 tego okresowego benchmarku z aktualnym weryfikatorem. Wynik nie kwalifikuje
 opisanego wyżej open-boundary wariantu FEM.
 
+(audit-corrections-2026-09-12)=
+## Audyt korekcyjny — 2026-09-12
+
+Po przeglądzie PR #86 sprawdzono wszystkie dwanaście zgłoszonych ścieżek
+regresji. Korekty są fail-closed i nie zmieniają zakresu fizycznego Göbela:
+
+| ID | Zakres | Korekta i regresja |
+|---|---|---|
+| P1 | FEM reference/live | `StepStats` rozdziela agregat `E_dmi` i `E_rotated_dmi`. |
+| P2 | CLI transport | scalar-row zachowuje `e_rotated_dmi`. |
+| P3 | FEM equilibrium identity | źródło z dowolnym DMI jest odrzucane, zamiast pomijać fizykę. |
+| P4 | CUDA workspace | częściowe alokacje rDMI są zwalniane transakcyjnie, a retry ma nową bazę księgowania. |
+| P5 | FEM material A | nodal/element `A` zasila estymatę bez fałszywego wymogu dodatniego skalaru. |
+| P6 | capability/API | status lane'u wyprowadza rDMI z rozwiązanego planu, nie z deklaracji stałej. |
+| P7 | mixed-P1 | CPU z rDMI jest akceptowany, GPU bez kwalifikowanego kernela jest odrzucane. |
+| P8 | Python rewrite | `BulkDMI` + rDMI oraz materiałowe DMI nie są gubione; pola przestrzenne kończą się błędem. |
+| P9 | quantities | alias `e_rotated_dmi` zapisuje kanoniczne `E_rotated_dmi`. |
+| P10 | Göbel source physics | verifier odrzuca dodatkowe kanały `Ku2` i cubic anisotropy. |
+| P11 | multilayer telemetry | licznik snapshotów wynosi 6 bazowo i 7 z polem rDMI. |
+| P12 | Control Room | obecny, także zerowy, study-level rDMI blokuje konflikt z object-scoped DMI. |
+
+Dowody korekty obejmują punktowe testy Rust (`fullmag-plan`, `fullmag-runner`,
+`fullmag-api`, `fullmag-cli`), testy Python API/mixed-P1/verifier, 17 testów
+Vitest dla katalogu interakcji oraz walidację JSON/source-map. Nie uruchamiano
+`manage-fem-qualification` zgodnie z zakresem zadania. Nie ma nowego managed
+19-check receiptu ani świeżej reprodukcji 20 ps + 100 ps; kwalifikacja runtime
+Göbela pozostaje `NOT VERIFIED`.
+
 (limitations)=
 ## Ograniczenia i prace odroczone
 
@@ -405,8 +433,18 @@ w macierzy wsparcia.
 |---|---|---|---|---|---|
 | Python API | `packages/fullmag-py/src/fullmag/model/energy.py` | `class RotatedInterfacialDMI` | walidacja i lowering | wspólny | implemented, source test |
 | `ProblemIR` | `crates/fullmag-ir/src/study.rs` | `EnergyTermIR` | wariant `RotatedInterfacialDmi` i kanoniczna serializacja | wspólny | implemented, source test |
+| walidacja DMI | `crates/fullmag-ir/src/validation.rs` | `validate_dmi_energy_terms` | konflikt rDMI z konwencjonalnym i materiałowym DMI | wspólny | implemented, source test |
+| Python canonical rewrite | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_validate_energy_terms`, `_magnet_bulk_dmi` | zachowanie materiałowego DMI i fail-closed dla pól przestrzennych/mieszania | wspólny | implemented, source test |
 | energia i pole FDM | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `rotated_interfacial_dmi_field` | referencyjna algebra dyskretna | FDM CPU | implemented, source test |
+| FEM planner | `crates/fullmag-plan/src/fem.rs` | `estimate_fem_exchange_stiffness` | lokalny exchange z nodal/element `A` dla warunku naturalnego | FEM CPU/GPU | implemented, source test |
 | residual FEM | `backends/fem/src/dmi_weak_residual.cpp` | `dmi_accumulate_rotated_interfacial_residual` | wspólna pierwsza wariacja | FEM CPU/GPU | implemented, source test; runtime not verified |
+| FEM reference telemetry | `crates/fullmag-runner/src/fem_reference.rs` | `rotated_dmi_energy_from_magnetization` | rozdzielenie energii rDMI w live/relaxation stats | FEM CPU | implemented, source test; runtime not verified |
+| FEM equilibrium identity | `crates/fullmag-runner/src/fem/equilibrium_identity.rs` | `validate_supported_relax_source` | odrzucenie DMI poza zakresem tożsamości modalnej | FEM | implemented, source test |
+| CUDA rDMI workspace | `backends/fdm/gpu/cuda/runtime/context.cu` | `context_ensure_rotated_dmi_workspace` | transakcyjne alokacje i retry accounting | FDM GPU | implemented, managed runtime not verified |
+| multilayer snapshot telemetry | `crates/fullmag-runner/src/fdm/gpu/cuda/multilayer.rs` | `observed_snapshot_vector_field_count` | licznik transferów D2H zgodny z obecnością pola rDMI | FDM GPU | implemented, source test |
+| CLI live transport | `crates/fullmag-cli/src/live_workspace.rs` | `scalar_row_from_stats_with_active_runtime` | przeniesienie komponentu `e_rotated_dmi` | FDM/FEM | implemented, source test |
+| Control Room authoring | `apps/control-room/src/shared/domain/physics/interactions.ts` | `function studyHasRotatedDmi` | konflikt obecnego, także zerowego, rDMI z object-scoped DMI | UI | implemented, Vitest |
+| Göbel verifier | `tests/standard_problems/bimeron/goebel_2019/verify.py` | `_goebel_material_has_only_expected_physics` | ścisła lista fizyki źródłowej scenariusza | benchmark | implemented, source test; runtime not verified |
 
 Publiczna source map wskazuje także rzeczywiste symbole CUDA, plannera,
 quantities, runnera i walidatora scenariusza. Kwalifikacja naukowa bieżącego

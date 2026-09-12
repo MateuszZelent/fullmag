@@ -101,6 +101,35 @@ def test_mixed_p1_preflight_rejects_gpu_dmi_with_stable_predicate() -> None:
     assert "fallback=none" in str(error.value)
 
 
+def test_mixed_p1_preflight_accepts_cpu_rotated_dmi() -> None:
+    material = Material(name="Py", Ms=8.0e5, A=1.3e-11, alpha=0.02)
+
+    _validate_mixed_p1(
+        device="cpu",
+        material=material,
+        energy_terms=[
+            Exchange(),
+            Demag(realization="poisson_robin"),
+            RotatedInterfacialDMI(3.0e-3),
+        ],
+    )
+
+
+def test_mixed_p1_preflight_rejects_nonzero_rotated_dmi_on_gpu() -> None:
+    material = Material(name="Py", Ms=8.0e5, A=1.3e-11, alpha=0.02)
+
+    with pytest.raises(ValueError, match="gpu_dmi_kernel_not_mixed_p1"):
+        _validate_mixed_p1(
+            device="gpu",
+            material=material,
+            energy_terms=[
+                Exchange(),
+                Demag(realization="poisson_dirichlet"),
+                RotatedInterfacialDMI(3.0e-3),
+            ],
+        )
+
+
 def test_mixed_p1_preflight_ignores_zero_rotated_dmi_on_gpu() -> None:
     material = Material(name="Py", Ms=8.0e5, A=1.3e-11, alpha=0.02)
 

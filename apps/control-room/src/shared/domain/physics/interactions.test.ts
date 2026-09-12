@@ -330,7 +330,7 @@ describe("physics interaction catalog", () => {
     });
   });
 
-  it("treats a string or zero rotated-DMI value as present but not active", () => {
+  it("treats a string or zero rotated-DMI value as present for DMI conflicts", () => {
     const zeroScene = {
       objects: [],
       study: { exchange_enabled: false, rotated_interfacial_dmi: "0" },
@@ -345,7 +345,11 @@ describe("physics interaction catalog", () => {
         },
         zeroScene,
       ),
-    ).not.toHaveProperty("error");
+    ).toEqual({
+      error:
+        "Object-scoped interfacial_dmi conflicts with active study-level rotated interfacial DMI. " +
+        "Disable or remove the study-level term before applying the object-scoped DMI.",
+    });
     expect(
       buildStudyInteractionPatchFromDraft(
         {

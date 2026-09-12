@@ -4,6 +4,7 @@
     "title": "Rotated interfacial Dzyaloshinskii-Moriya interaction",
     "interaction": "rotated interfacial DMI for bimeron stabilization"
   },
+  "audited_source_revision": "fa5744bf370e08b93dbd9c3116967455e1d4512d",
   "backend_matrix": [
     {
       "solver": "FDM",
@@ -46,10 +47,31 @@
       "evidence_status": "implemented_source_test"
     },
     {
+      "id": "ir-validator",
+      "path": "crates/fullmag-ir/src/validation.rs",
+      "symbol": "validate_dmi_energy_terms",
+      "responsibility": "Reject mixed conventional/material and rotated DMI channels, including referenced material records.",
+      "evidence_status": "implemented_source_test"
+    },
+    {
+      "id": "python-rewrite",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_validate_energy_terms",
+      "responsibility": "Keep material DMI in canonical script export and fail closed for unsupported spatial/mixed channels.",
+      "evidence_status": "implemented_source_test"
+    },
+    {
       "id": "fdm-shared",
       "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
       "symbol": "rotated_interfacial_dmi_field",
       "responsibility": "Define the reference discrete FDM field and energy algebra.",
+      "evidence_status": "implemented_source_test"
+    },
+    {
+      "id": "fem-planner",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "estimate_fem_exchange_stiffness",
+      "responsibility": "Resolve local exchange stiffness from nodal/element material A for the rDMI natural boundary.",
       "evidence_status": "implemented_source_test"
     },
     {
@@ -58,6 +80,55 @@
       "symbol": "dmi_accumulate_rotated_interfacial_residual",
       "responsibility": "Define the shared FEM first-variation algebra used by CPU and GPU realizations.",
       "evidence_status": "implemented_source_test"
+    },
+    {
+      "id": "fem-reference-telemetry",
+      "path": "crates/fullmag-runner/src/fem_reference.rs",
+      "symbol": "rotated_dmi_energy_from_magnetization",
+      "responsibility": "Materialize the rotated-DMI energy component in FEM live and relaxation statistics.",
+      "evidence_status": "implemented_source_test; runtime_not_verified"
+    },
+    {
+      "id": "fem-equilibrium-identity",
+      "path": "crates/fullmag-runner/src/fem/equilibrium_identity.rs",
+      "symbol": "validate_supported_relax_source",
+      "responsibility": "Reject DMI-bearing relaxation sources that the modal equilibrium identity cannot reproduce.",
+      "evidence_status": "implemented_source_test"
+    },
+    {
+      "id": "cuda-rdmi-workspace",
+      "path": "backends/fdm/gpu/cuda/runtime/context.cu",
+      "symbol": "context_ensure_rotated_dmi_workspace",
+      "responsibility": "Allocate rotated-DMI observables transactionally and preserve retry accounting.",
+      "evidence_status": "implemented_source_contract; managed_runtime_not_verified"
+    },
+    {
+      "id": "multilayer-transfer-telemetry",
+      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/multilayer.rs",
+      "symbol": "observed_snapshot_vector_field_count",
+      "responsibility": "Keep D2H snapshot transfer counts consistent with rotated-DMI field materialization.",
+      "evidence_status": "implemented_source_test"
+    },
+    {
+      "id": "cli-live-transport",
+      "path": "crates/fullmag-cli/src/live_workspace.rs",
+      "symbol": "scalar_row_from_stats_with_active_runtime",
+      "responsibility": "Transport the rotated-DMI scalar component through live CLI rows.",
+      "evidence_status": "implemented_source_test"
+    },
+    {
+      "id": "ui-authoring-conflict",
+      "path": "apps/control-room/src/shared/domain/physics/interactions.ts",
+      "symbol": "function studyHasRotatedDmi",
+      "responsibility": "Treat present zero and nonzero study rDMI as occupying the DMI channel for UI conflict checks.",
+      "evidence_status": "implemented_vitest"
+    },
+    {
+      "id": "goebel-verifier",
+      "path": "tests/standard_problems/bimeron/goebel_2019/verify.py",
+      "symbol": "_goebel_material_has_only_expected_physics",
+      "responsibility": "Keep the Göbel source-physics gate closed to extra anisotropy channels.",
+      "evidence_status": "implemented_source_test; runtime_not_verified"
     }
   ],
   "symbols": [

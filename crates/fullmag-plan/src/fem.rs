@@ -931,10 +931,17 @@ pub(crate) fn estimate_fem_exchange_stiffness(
     a_element_field: Option<&[f64]>,
     gyromagnetic_ratio: f64,
 ) -> Option<FemExchangeStiffnessEstimate> {
+    // A spatial A realization is the resolved exchange coefficient for the
+    // mesh.  Do not reject it merely because the legacy scalar field is zero
+    // (or otherwise absent); the scalar is required only when no spatial
+    // realization was supplied.  The per-cell/per-node values are validated
+    // below before they can contribute to the estimate.
+    let has_spatial_exchange = a_element_field.is_some() || material.a_field.is_some();
     if !(gyromagnetic_ratio.is_finite() && gyromagnetic_ratio > 0.0)
         || !(material.saturation_magnetisation.is_finite()
             && material.saturation_magnetisation > 0.0)
-        || !(material.exchange_stiffness.is_finite() && material.exchange_stiffness > 0.0)
+        || (!has_spatial_exchange
+            && !(material.exchange_stiffness.is_finite() && material.exchange_stiffness > 0.0))
     {
         return None;
     }
@@ -945,7 +952,11 @@ pub(crate) fn estimate_fem_exchange_stiffness(
         _ => return None,
     };
     let mut h_min_m = f64::INFINITY;
-    let mut max_exchange_stiffness_j_per_m = material.exchange_stiffness;
+    let mut max_exchange_stiffness_j_per_m = if has_spatial_exchange {
+        0.0
+    } else {
+        material.exchange_stiffness
+    };
     let mut min_saturation_magnetisation_a_per_m = material.saturation_magnetisation;
     let mut magnetic_cell_count = 0_usize;
 
@@ -1125,6 +1136,20 @@ mod fem_exchange_stiffness_tests {
         assert!((estimate.h_min_m - 1.0).abs() < 1.0e-12);
         assert!((estimate.max_exchange_stiffness_j_per_m - 20.0e-12).abs() < 1.0e-24);
         assert!((estimate.min_saturation_magnetisation_a_per_m - 700.0e3).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn exchange_stiffness_estimate_accepts_nodal_a_field_without_positive_scalar() {
+        let mesh = tet_mesh(1.0);
+        let mut material = ProblemIR::bootstrap_example().materials[0].clone();
+        material.exchange_stiffness = 0.0;
+        material.a_field = Some(vec![2.0e-12, 3.0e-12, 4.0e-12, 5.0e-12]);
+
+        let estimate = estimate_fem_exchange_stiffness(&mesh, &material, None, None, 2.211e5)
+            .expect("a valid nodal A field must supply the exchange estimate");
+
+        assert!((estimate.max_exchange_stiffness_j_per_m - 5.0e-12).abs() < 1.0e-24);
+        assert!(estimate.explicit_dt_limit_s.is_finite());
     }
 
     #[test]
