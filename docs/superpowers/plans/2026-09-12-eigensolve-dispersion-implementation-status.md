@@ -170,6 +170,12 @@ wykonywano ręcznej mutacji pliku ani obchodzenia blokady. Następny krok to
 zwolnienie/rozliczenie dokładnego lease runnera, a potem ponowienie
 `worktree-finish`.
 
+Kontrolny odczyt `python scripts/local_runner_cli.py container-status` oraz
+`status b5200ded44964953a03491183dffaae1` po ostatnim commicie zakończył się
+exit 1 z komunikatem `Container profile allow-list mismatch`; nie utworzono
+nowego joba i nie uzyskano dodatkowego receipt. Managed kompilacja C++/runtime
+bieżącego worktree pozostaje zatem **NOT VERIFIED**.
+
 Stan integracji pozostaje **W TRAKCIE**. Commity mają przejrzany staged diff;
 otwarte pozostają PR, managed C++/SLEPc, provider `A_{q\phi}(k)`/`P(k)`/
 `A_{\phi q}(k)`, walidacja fizyczna oraz ścieżki Control Room/GPU.
