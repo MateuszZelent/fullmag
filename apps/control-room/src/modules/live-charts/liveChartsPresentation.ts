@@ -22,12 +22,15 @@ export function liveChartExportModel(series: readonly ChartSeries[], title: stri
 }
 
 export function liveChartXAxisOptions(columns: readonly { column_id: string; label: string; unit: string }[], currentId: string) {
-  return columns
-    .filter((column) => ["step", "t", "time", currentId].includes(column.column_id))
-    .map((column) => ({
+  const axisIds = new Set(["step", "t", "time", currentId]);
+  return columns.reduce<{ id: string; label: string }[]>((options, column) => {
+    if (!axisIds.has(column.column_id)) return options;
+    options.push({
       id: column.column_id,
       label: column.column_id === "step" ? "Step" : column.column_id === "t" || column.column_id === "time" ? `Time (${column.unit})` : `${column.label}${column.unit && column.unit !== "1" ? ` (${column.unit})` : ""}`,
-    }));
+    });
+    return options;
+  }, []);
 }
 
 export function visibleLiveChartPanes(series: readonly ChartSeries[], selectedSeriesIds: readonly string[]) {
