@@ -590,6 +590,48 @@ def _resolved_frozen_metrics(
     return current
 
 
+def _state_reference_drift(
+    state_values: dict[str, list[tuple[float, float, float]]],
+    frozen_runtime: dict[str, Any],
+) -> float | None:
+    """Compare constrained checkpoints with the captured initial reference.
+
+    The native trace may not expose a drift reduction, but the frozen mask and
+    named state artifacts are sufficient for an explicit host-side audit.  We
+    compare only constrained stages; a released state is expected to move.
+    ``None`` means that the required state or resolved mask was unavailable.
+    """
+
+    indices = frozen_runtime.get("frozen_cell_indices")
+    initial = state_values.get("initial")
+    if not isinstance(indices, list) or not indices or initial is None:
+        return None
+    constrained = [
+        state_values.get(label)
+        for label in ("constrained_relaxed", "constrained_held")
+        if state_values.get(label) is not None
+    ]
+    if not constrained:
+        return None
+    maximum = 0.0
+    for values in constrained:
+        assert values is not None
+        for raw_index in indices:
+            try:
+                index = int(raw_index)
+            except (TypeError, ValueError):
+                return None
+            if index < 0 or index >= len(initial) or index >= len(values):
+                return None
+            reference = initial[index]
+            current = values[index]
+            drift = math.sqrt(
+                sum((float(current[i]) - float(reference[i])) ** 2 for i in range(3))
+            )
+            maximum = max(maximum, drift)
+    return maximum
+
+
 def _runtime_provenance(metadata: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key in (
@@ -646,6 +688,7 @@ def analyze_case(
         profile_energy = dict(energy)
 
     states: dict[str, Any] = {}
+    state_values: dict[str, list[tuple[float, float, float]]] = {}
     for label, stem in (
         ("initial", "initial_m"),
         ("constrained_relaxed", "constrained_relaxed_m"),
@@ -659,6 +702,8 @@ def analyze_case(
             continue
         try:
             values = _state_values(path)
+            if label in {"initial", "constrained_relaxed", "constrained_held"}:
+                state_values[label] = values
             states[label] = {"path": str(path), "measurement": _measure(values, nx=nx, ny=ny, nz=nz, cell=(hx, hy, hz))}
         except Exception as error:
             states[label] = {"path": str(path), "measurement_error": str(error)}
@@ -666,6 +711,11 @@ def analyze_case(
     frozen_runtime = _resolved_frozen_metrics(
         root, workspace_root, _frozen_metrics(final_row)
     )
+    if frozen_runtime.get("frozen_reference_max_drift") is None:
+        derived_drift = _state_reference_drift(state_values, frozen_runtime)
+        if derived_drift is not None:
+            frozen_runtime["frozen_reference_max_drift"] = derived_drift
+            frozen_runtime["frozen_reference_drift_source"] = "state_artifact_comparison"
     summary = {
         "schema_version": "bimeron_frozen_size.analysis.v1",
         "artifact_root": str(root),
