@@ -850,6 +850,42 @@ class ProblemApiTests(unittest.TestCase):
             ],
         )
 
+    def test_rotated_dmi_override_validates_effective_mixed_terms(self) -> None:
+        script = textwrap.dedent(
+            """
+            import fullmag as fm
+
+            def build():
+                geometry = fm.Box(size=(20e-9, 10e-9, 5e-9), name="film")
+                material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.02)
+                magnet = fm.Ferromagnet(
+                    name="film",
+                    geometry=geometry,
+                    material=material,
+                    m0=fm.texture.uniform((1.0, 0.0, 0.0)),
+                )
+                return fm.Problem(
+                    name="flat_conventional_dmi",
+                    magnets=[magnet],
+                    energy=[fm.Exchange(), fm.InterfacialDMI(D=3e-3)],
+                    study=fm.TimeEvolution(
+                        dynamics=fm.LLG(),
+                        outputs=[fm.SaveField("m", every=1e-12)],
+                    ),
+                )
+            """
+        )
+
+        with TemporaryDirectory() as tmp_dir:
+            source_path = Path(tmp_dir) / "flat_conventional_dmi.py"
+            source_path.write_text(script, encoding="utf-8")
+            loaded = load_problem_from_script(source_path, lightweight_assets=True)
+            with self.assertRaisesRegex(ValueError, "mixed conventional and rotated DMI"):
+                rewrite_loaded_problem_script(
+                    loaded,
+                    overrides={"rotated_interfacial_dmi": 3e-3},
+                )
+
     def test_rotated_interfacial_dmi_rewrite_preserves_float_round_trip(self) -> None:
         d = 0.0012345678901234567
         script = textwrap.dedent(

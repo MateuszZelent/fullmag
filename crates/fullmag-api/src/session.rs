@@ -2871,7 +2871,7 @@ mod tests {
             e_ext: 0.0,
             e_ani: 0.0,
             e_dmi: 0.0,
-            e_rotated_dmi: 0.0,
+            e_rotated_dmi: Some(0.0),
             e_total,
             max_dm_dt: 0.0,
             max_h_eff: 0.0,

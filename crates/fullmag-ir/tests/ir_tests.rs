@@ -6767,6 +6767,20 @@ fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
 }
 
 #[test]
+fn empty_material_dmi_fields_do_not_conflict_with_rotated_dmi() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.energy_terms
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 });
+    ir.materials[0].dind_field = Some(Vec::new());
+    ir.materials[0].dbulk_field = Some(Vec::new());
+
+    assert!(
+        ir.validate().is_ok(),
+        "empty material DMI field placeholders must remain inactive"
+    );
+}
+
+#[test]
 fn validation_rejects_invalid_material_dmi_values() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.materials[0].interfacial_dmi = Some(f64::NAN);

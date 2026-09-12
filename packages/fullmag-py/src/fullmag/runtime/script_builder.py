@@ -424,7 +424,7 @@ def render_loaded_problem_as_script(
 
     lines.extend(_render_runtime(base_problem, overrides=overrides, surface=surface))
     lines.append("")
-    _validate_energy_terms(base_problem)
+    _validate_energy_terms(base_problem, overrides=overrides)
     lines.extend(
         _render_geometry_and_materials(
             base_problem,
@@ -8904,12 +8904,17 @@ def _relativize_path(path_value: str, source_root: Path) -> str:
         return path_value
 
 
-def _validate_energy_terms(problem: Problem) -> None:
+def _validate_energy_terms(
+    problem: Problem,
+    *,
+    overrides: Mapping[str, object] | None = None,
+) -> None:
     exchange_count = 0
     demag_count = 0
     zeeman_count = 0
     conventional_dmi_count = 0
     rotated_dmi_count = 0
+    rotated_override_present = overrides is not None and "rotated_interfacial_dmi" in overrides
     for term in problem.energy:
         if isinstance(term, Exchange):
             exchange_count += 1
@@ -8925,6 +8930,11 @@ def _validate_energy_terms(problem: Problem) -> None:
                 conventional_dmi_count += 1
             continue
         if isinstance(term, RotatedInterfacialDMI):
+            # A rotated-DMI override replaces the authored term during
+            # canonical rendering, so validate the effective term set rather
+            # than counting the shadowed base value as well.
+            if rotated_override_present:
+                continue
             if term.D != 0.0:
                 rotated_dmi_count += 1
             continue
@@ -8953,17 +8963,21 @@ def _validate_energy_terms(problem: Problem) -> None:
         raise ValueError(
             f"canonical flat-script rewrite does not yet support energy term {type(term).__name__}"
         )
+    if rotated_override_present:
+        override_d = _number_or_none(overrides.get("rotated_interfacial_dmi"))
+        if override_d is not None and override_d != 0.0:
+            rotated_dmi_count += 1
     if exchange_count > 1 or demag_count > 1:
         raise ValueError(
             "canonical flat-script rewrite currently supports at most one exchange term and one demag term"
         )
-    if zeeman_count > 1 or conventional_dmi_count + rotated_dmi_count > 1:
-        raise ValueError(
-            "canonical flat-script rewrite does not yet support multiple Zeeman or DMI terms"
-        )
     if conventional_dmi_count and rotated_dmi_count:
         raise ValueError(
             "canonical flat-script rewrite does not support mixed conventional and rotated DMI terms"
+        )
+    if zeeman_count > 1 or conventional_dmi_count + rotated_dmi_count > 1:
+        raise ValueError(
+            "canonical flat-script rewrite does not yet support multiple Zeeman or DMI terms"
         )
 
 

@@ -54,6 +54,8 @@ use crate::types::{
 
 use std::time::Instant;
 
+const ZERO_THRESHOLD: f64 = 1.0e-30;
+
 pub(crate) fn execute_reference_fem(
     plan: &FemPlanIR,
     until_seconds: f64,
@@ -176,7 +178,6 @@ pub(crate) fn fem_energy_density_values(
     saturation_magnetisation: f64,
     active_mask: Option<&[bool]>,
 ) -> Result<Option<Vec<f64>>, RunError> {
-    let aggregate_dmi_field = aggregate_dmi_field(observables)?;
     let values = match quantity {
         "eden_ex" => field_dot_energy_density(
             &observables.magnetization,
@@ -210,14 +211,17 @@ pub(crate) fn fem_energy_density_values(
             active_mask,
             quantity,
         )?,
-        "eden_dmi" => field_dot_energy_density(
-            &observables.magnetization,
-            &aggregate_dmi_field,
-            saturation_magnetisation,
-            -0.5,
-            active_mask,
-            quantity,
-        )?,
+        "eden_dmi" => {
+            let aggregate_dmi_field = aggregate_dmi_field(observables)?;
+            field_dot_energy_density(
+                &observables.magnetization,
+                &aggregate_dmi_field,
+                saturation_magnetisation,
+                -0.5,
+                active_mask,
+                quantity,
+            )?
+        }
         "eden_total" => {
             let mut total = vec![0.0; observables.magnetization.len()];
             for term in ["eden_ex", "eden_demag", "eden_ext", "eden_ani", "eden_dmi"] {
@@ -1490,22 +1494,32 @@ pub(crate) fn observe_state(
         problem.material.damping,
         problem.dynamics.precession_enabled,
     );
-    let rotated_dmi_field = problem
-        .rotated_interfacial_dmi_field_from_vectors(&observables.magnetization);
-    let rotated_dmi_energy = problem
-        .rotated_interfacial_dmi_energy_from_vectors(&observables.magnetization);
-    let conventional_dmi_field = observables
-        .dmi_field
-        .iter()
-        .zip(rotated_dmi_field.iter())
-        .map(|(total, rotated)| {
-            [
-                total[0] - rotated[0],
-                total[1] - rotated[1],
-                total[2] - rotated[2],
-            ]
-        })
-        .collect();
+    let has_rotated_dmi = problem
+        .terms
+        .rotated_interfacial_dmi
+        .is_some_and(|d| d.abs() > ZERO_THRESHOLD);
+    let (rotated_dmi_field, rotated_dmi_energy, conventional_dmi_field) =
+        if has_rotated_dmi {
+            let rotated_dmi_field = problem
+                .rotated_interfacial_dmi_field_from_vectors(&observables.magnetization);
+            let rotated_dmi_energy = problem
+                .rotated_interfacial_dmi_energy_from_vectors(&observables.magnetization);
+            let conventional_dmi_field = observables
+                .dmi_field
+                .iter()
+                .zip(rotated_dmi_field.iter())
+                .map(|(total, rotated)| {
+                    [
+                        total[0] - rotated[0],
+                        total[1] - rotated[1],
+                        total[2] - rotated[2],
+                    ]
+                })
+                .collect();
+            (rotated_dmi_field, rotated_dmi_energy, conventional_dmi_field)
+        } else {
+            (Vec::new(), 0.0, observables.dmi_field)
+        };
     Ok(StateObservables {
         magnetization: observables.magnetization,
         torque_field,

@@ -4435,6 +4435,13 @@
               "null"
             ]
           },
+          "final_rotated_dmi_energy": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "final_total_energy": {
             "format": "double",
             "type": [

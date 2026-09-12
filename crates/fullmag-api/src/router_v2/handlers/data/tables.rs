@@ -740,7 +740,7 @@ fn table_column_value(row: &ScalarRow, column: &str) -> Option<f64> {
         "e_ext" => row.e_ext,
         "e_ani" => row.e_ani,
         "e_dmi" => row.e_dmi,
-        "e_rotated_dmi" => row.e_rotated_dmi,
+        "e_rotated_dmi" => row.e_rotated_dmi.unwrap_or(0.0),
         "e_total" => row.e_total,
         "max_dm_dt" | "max_rhs_norm_per_s" => row.max_dm_dt,
         "max_h_eff" => row.max_h_eff,

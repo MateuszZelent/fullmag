@@ -2083,7 +2083,7 @@ fn sample_scalar_row(step: u64, time: f64, e_total: f64) -> ScalarRow {
         e_ext: 3.0,
         e_ani: 0.4,
         e_dmi: 0.5,
-        e_rotated_dmi: 0.0,
+        e_rotated_dmi: Some(0.0),
         e_total,
         max_dm_dt: 0.01,
         max_h_eff: 100.0,
@@ -2313,7 +2313,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 e_ext: 2.9,
                 e_ani: 3.9,
                 e_dmi: 4.9,
-                e_rotated_dmi: 0.0,
+                e_rotated_dmi: Some(0.0),
                 e_total: 14.5,
                 max_dm_dt: 10.0,
                 max_h_eff: 11.0,
@@ -2342,7 +2342,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 e_ext: 3.0,
                 e_ani: 4.0,
                 e_dmi: 5.0,
-                e_rotated_dmi: 0.0,
+                e_rotated_dmi: Some(0.0),
                 e_total: 15.0,
                 max_dm_dt: 10.0,
                 max_h_eff: 11.0,
@@ -8189,7 +8189,7 @@ async fn scalar_history_returns_windowed_columnar_rows() {
             sample_scalar_row(1, 1e-12, 6.9),
             sample_scalar_row(2, 2e-12, 7.3),
         ];
-        snapshot.scalar_rows[1].e_rotated_dmi = -7.5e-21;
+        snapshot.scalar_rows[1].e_rotated_dmi = Some(-7.5e-21);
         snapshot.scalar_revision = 2;
     }
     let app = build_v2_router().with_state(state);
@@ -8429,7 +8429,7 @@ async fn table_rows_expose_rotated_dmi_energy_as_an_independent_global_scalar() 
             .as_mut()
             .expect("test live session should be initialized");
         let mut row = sample_scalar_row(1, 1e-12, 6.9);
-        row.e_rotated_dmi = -7.5e-21;
+        row.e_rotated_dmi = Some(-7.5e-21);
         snapshot.metadata = Some(serde_json::json!({
             "table_autosave": {
                 "kind": "table_autosave",

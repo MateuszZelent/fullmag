@@ -529,8 +529,8 @@ pub(crate) struct ScalarRow {
     pub e_ani: f64,
     #[serde(default)]
     pub e_dmi: f64,
-    #[serde(default)]
-    pub e_rotated_dmi: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub e_rotated_dmi: Option<f64>,
     pub e_total: f64,
     pub max_dm_dt: f64,
     pub max_h_eff: f64,
@@ -1537,6 +1537,27 @@ pub(crate) fn uuid_v4_hex() -> String {
 mod tests {
     use super::*;
     use fullmag_authoring::scene_document_from_script_builder;
+
+    #[test]
+    fn legacy_scalar_row_without_rotated_dmi_keeps_component_missing() {
+        let row: ScalarRow = serde_json::from_value(serde_json::json!({
+            "step": 1,
+            "time": 0.0,
+            "solver_dt": 1.0e-12,
+            "mx": 0.0,
+            "my": 0.0,
+            "mz": 1.0,
+            "e_ex": 0.0,
+            "e_demag": 0.0,
+            "e_ext": 0.0,
+            "e_total": 0.0,
+            "max_dm_dt": 0.0,
+            "max_h_eff": 0.0,
+            "max_h_demag": 0.0
+        }))
+        .expect("legacy scalar row should remain readable");
+        assert_eq!(row.e_rotated_dmi, None);
+    }
 
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {

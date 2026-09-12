@@ -53,6 +53,8 @@ pub struct CurrentRunResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub final_dmi_energy: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_rotated_dmi_energy: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub final_total_energy: Option<f64>,
     pub artifact_dir: String,
     pub requested_backend: String,

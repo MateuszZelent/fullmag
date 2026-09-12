@@ -2120,8 +2120,14 @@ pub(crate) fn validate_dmi_energy_terms(problem: &ProblemIR, errors: &mut Vec<St
         }
         if material.interfacial_dmi.is_some()
             || material.bulk_dmi.is_some()
-            || material.dind_field.is_some()
-            || material.dbulk_field.is_some()
+            || material
+                .dind_field
+                .as_ref()
+                .is_some_and(|values| !values.is_empty())
+            || material
+                .dbulk_field
+                .as_ref()
+                .is_some_and(|values| !values.is_empty())
         {
             conventional_dmi_count += 1;
         }
