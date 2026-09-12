@@ -12069,7 +12069,7 @@ fn fem_eigen_floquet_bc_with_pairs_and_k_sampling_plans_successfully() {
 }
 
 #[test]
-fn fem_eigen_floquet_dynamic_demag_is_rejected() {
+fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;
     ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
@@ -12182,8 +12182,39 @@ fn fem_eigen_floquet_dynamic_demag_is_rejected() {
 
     let err = plan(&ir).expect_err("Floquet FEM eigen with dynamic demag is unsupported");
     assert!(err.reasons.iter().any(|reason| {
-        reason.contains("dynamic demag for Floquet periodic FEM is not implemented yet")
+        reason.contains("dynamic demag for Floquet periodic FEM requires magnetostatic_bc")
     }));
+
+    if let fullmag_ir::StudyIR::Eigenmodes {
+        operator,
+        target,
+        magnetostatic_bc,
+        ..
+    } = &mut ir.study
+    {
+        operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        *target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 100.0e6,
+            frequency_max_hz: 25.0e9,
+        };
+        *magnetostatic_bc = fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox;
+    }
+    let planned = plan(&ir)
+        .expect("explicit nonzero-k CPU Floquet airbox demag should pass the planner gate");
+    match planned.backend_plan {
+        BackendPlanIR::FemEigen(fem) => {
+            assert_eq!(fem.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2);
+            assert_eq!(
+                fem.demag_realization,
+                Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin)
+            );
+            assert_eq!(
+                fem.domain_mesh_mode,
+                fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
+            );
+        }
+        other => panic!("expected FEM eigen plan, got {other:?}"),
+    }
 
     ir.problem_meta.runtime_metadata.insert(
         "dispersion_validation".to_string(),

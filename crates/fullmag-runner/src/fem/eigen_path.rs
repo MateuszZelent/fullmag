@@ -6,8 +6,9 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashSet};
 
 use crate::dispatch::FemEngine;
-use crate::eigen::KSampleDescriptor;
 use crate::eigen::output_selection::{select_eigen_outputs, SampleModeId};
+use crate::eigen::KSampleDescriptor;
+use crate::fem::eigen_capability::native_cpu_modal_window_enabled;
 use crate::fem::eigen_execution_resolution::{FemEigenExecutionLane, PlannedFemEigenExecution};
 use crate::fem_eigen;
 use crate::types::{AuxiliaryArtifact, ExecutedRun, RunError};
@@ -25,10 +26,7 @@ use eigen_path_manifest::*;
 fn eigen_path_sample_id(plan: &FemEigenPlanIR, sample: &KSampleDescriptor) -> String {
     let prefix = if bias_field_sweep_requested(plan) {
         "bias-field-sample"
-    } else if matches!(
-        plan.k_sampling,
-        Some(fullmag_ir::KSamplingIR::Path { .. })
-    ) {
+    } else if matches!(plan.k_sampling, Some(fullmag_ir::KSamplingIR::Path { .. })) {
         "k-path-sample"
     } else {
         "k-sample"
@@ -285,8 +283,11 @@ pub(crate) fn execute_fem_eigen_path(
     if engine == FemEngine::NativeGpu && !gpu_modal_k0_kittel_path_supported(plan) {
         return Err(gpu_modal_dispersion_path_unavailable_error(plan));
     }
+    let native_cpu_floquet_demag_path =
+        engine == FemEngine::CpuNative && native_cpu_modal_window_enabled(plan);
     if !de_bv_low_k_analytic_reference_enabled(plan)
         && !(k0_kittel_synthetic_demag_factor_enabled(plan) && !bias_field_sweep_requested(plan))
+        && !native_cpu_floquet_demag_path
     {
         fem_eigen::reject_unsupported_floquet_dynamic_demag(
             &plan.spin_wave_bc,

@@ -6801,6 +6801,52 @@ fn native_cpu_modal_window_accepts_nonzero_floquet_single_k_with_bloch_payload_p
 }
 
 #[test]
+fn native_cpu_modal_window_accepts_nonzero_floquet_airbox_demag_path() {
+    let mut plan = minimal_native_modal_plan();
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = true;
+    plan.enable_demag = true;
+    plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+    plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+    plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+        factor: 2.0,
+        grading: 1.2,
+        boundary_marker: 99,
+        bc_kind: Some("robin".to_string()),
+        robin_beta_mode: Some("dipole".to_string()),
+        robin_beta_factor: Some(2.0),
+        shape: Some("bbox".to_string()),
+        factor_source: Some("test".to_string()),
+        boundary_marker_source: Some("test".to_string()),
+    });
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    add_x_floquet_pair_to_plan(&mut plan);
+
+    assert!(
+        native_cpu_modal_window_enabled(&plan),
+        "nonzero-k Floquet Full2x2 airbox demag should enter the bounded native CPU provider path"
+    );
+    assert_eq!(native_cpu_modal_window_rejection_reason(&plan), None);
+}
+
+#[test]
+fn native_cpu_modal_window_rejects_nonzero_floquet_demag_without_airbox_contract() {
+    let mut plan = minimal_native_modal_plan();
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = true;
+    plan.enable_demag = true;
+    plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    add_x_floquet_pair_to_plan(&mut plan);
+
+    assert!(!native_cpu_modal_window_enabled(&plan));
+    assert_eq!(
+        native_cpu_modal_window_rejection_reason(&plan),
+        Some("production_cpu_modal_dynamic_demag_k_operator_missing")
+    );
+}
+
+#[test]
 fn reference_modal_diagnostics_name_nonzero_k_production_cpu_rejection() {
     let mut plan = minimal_native_modal_plan();
     plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
@@ -6937,7 +6983,7 @@ fn runner_rejects_floquet_dynamic_demag_gate() {
         .expect_err("Floquet dynamic demag must be blocked before execution");
     assert!(err
         .message
-        .contains("dynamic demag for Floquet periodic FEM is not implemented yet"));
+        .contains("requires the validated native CPU Poisson-airbox provider"));
 }
 
 #[test]

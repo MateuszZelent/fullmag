@@ -3851,7 +3851,7 @@ fn fem_eigen_path_rejects_floquet_dynamic_demag_before_sample_solves() {
     assert!(
         error
             .message
-            .contains("dynamic demag for Floquet periodic FEM is not implemented yet"),
+            .contains("requires the validated native CPU Poisson-airbox provider"),
         "unexpected Floquet dynamic-demag rejection: {}",
         error.message
     );

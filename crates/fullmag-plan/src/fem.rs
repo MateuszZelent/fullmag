@@ -1373,6 +1373,49 @@ fn allows_k0_kittel_synthetic_demag_factor(
     })
 }
 
+/// Return whether the narrow, production-owned nonzero-k Floquet demag lane
+/// is explicitly requested by the problem.  The native runner owns a bounded
+/// Poisson-airbox Schur provider for this slice; all other combinations stay
+/// fail-closed until their operator and runtime contracts are qualified.
+fn floquet_airbox_dynamic_demag_cpu_plan_supported(
+    problem: &ProblemIR,
+    operator: &fullmag_ir::EigenOperatorConfigIR,
+    spin_wave_bc: &fullmag_ir::SpinWaveBoundaryConditionIR,
+    magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR,
+    k_sampling: &Option<fullmag_ir::KSamplingIR>,
+    enable_demag: bool,
+    requested_demag_realization: fullmag_ir::RequestedFemDemagIR,
+) -> bool {
+    let nonzero_k = match k_sampling {
+        Some(fullmag_ir::KSamplingIR::Single { k_vector }) => {
+            k_vector.iter().all(|value| value.is_finite())
+                && k_vector.iter().any(|value| value.abs() > 1.0e-12)
+        }
+        Some(fullmag_ir::KSamplingIR::Path { points, .. }) => {
+            // The current single-k runner is invoked once per path sample.
+            // Requiring every control point to be nonzero prevents a path from
+            // silently switching to the unqualified gamma-point demag lane.
+            !points.is_empty()
+                && points.iter().all(|point| {
+                    point.k_vector.iter().all(|value| value.is_finite())
+                        && point.k_vector.iter().any(|value| value.abs() > 1.0e-12)
+                })
+        }
+        None => false,
+    };
+
+    operator.include_demag
+        && enable_demag
+        && matches!(operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
+        && spin_wave_bc.kind() == fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+        && magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox
+        && nonzero_k
+        && problem.backend_policy.execution_precision == ExecutionPrecision::Double
+        && problem.validation_profile.execution_mode == fullmag_ir::ExecutionMode::Strict
+        && !runtime_requests_cuda(problem)
+        && requested_demag_realization.requires_airbox()
+}
+
 fn vector_dot(lhs: [f64; 3], rhs: [f64; 3]) -> f64 {
     lhs[0] * rhs[0] + lhs[1] * rhs[1] + lhs[2] * rhs[2]
 }
@@ -4705,6 +4748,15 @@ pub(crate) fn plan_fem_eigen(
     {
         errors.extend(bias_field_sweep_kittel_mapping_errors(sweep, validation));
     }
+    let floquet_airbox_dynamic_demag_cpu_path = floquet_airbox_dynamic_demag_cpu_plan_supported(
+        problem,
+        operator,
+        spin_wave_bc,
+        *magnetostatic_bc,
+        k_sampling,
+        enable_demag,
+        requested_demag_realization,
+    );
     if operator.include_demag
         && matches!(
             spin_wave_bc.kind(),
@@ -4712,11 +4764,19 @@ pub(crate) fn plan_fem_eigen(
         )
         && !allows_low_k_de_bv_analytic_reference(&dispersion_validation)
         && !allows_k0_kittel_synthetic_demag_factor(&k0_kittel_validation, &k_sampling)
+        && !floquet_airbox_dynamic_demag_cpu_path
     {
-        errors.push(
-            "dynamic demag for Floquet periodic FEM is not implemented yet. Disable demag or use k=0/free boundary."
-                .to_string(),
-        );
+        if *magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox {
+            errors.push(
+                "magnetostatic_bc=floquet_airbox dynamic demag requires a strict double-precision CPU FEM plan with operator.kind='full_2x2', a nonzero-k Single/path sampling, and an airbox Poisson Demag realization"
+                    .to_string(),
+            );
+        } else {
+            errors.push(
+                "dynamic demag for Floquet periodic FEM requires magnetostatic_bc='floquet_airbox' and the validated CPU Poisson-airbox path; disable demag or use an analytic/reference lane"
+                    .to_string(),
+            );
+        }
     }
     match spin_wave_bc.kind() {
         fullmag_ir::SpinWaveBoundaryKindIR::Periodic => {
@@ -5129,6 +5189,12 @@ pub(crate) fn plan_fem_eigen(
             ),
         ),
     ];
+    if floquet_airbox_dynamic_demag_cpu_path {
+        provenance_notes.push(
+            "FEM nonzero-k Floquet dynamic demag resolved to the bounded CPU Poisson-airbox Schur provider; GPU and non-airbox realizations remain fail-closed"
+                .to_string(),
+        );
+    }
     for field_plan in &material_field_plans {
         provenance_notes.extend(field_plan.warnings.iter().cloned());
     }

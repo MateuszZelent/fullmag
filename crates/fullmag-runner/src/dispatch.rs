@@ -1162,6 +1162,16 @@ pub(crate) fn resolve_planned_fem_eigen_execution<'a>(
     {
         return Ok(execution);
     }
+    // The nonzero-k Floquet airbox provider is CPU-only. Pin an otherwise
+    // automatic request to that lane so registry GPU availability cannot
+    // silently select an unsupported implementation. Explicit GPU requests
+    // are rejected by the planner/runner guards instead.
+    if crate::fem::eigen_capability::native_cpu_modal_window_has_floquet_dynamic_demag_path(fem)
+        && !strict_fem_gpu_requested(problem)
+        && !fem_gpu_execution_forced()
+    {
+        return Ok(PlannedFemEigenExecution::legacy(FemEigenExecutionLane::Cpu));
+    }
     let lane = match resolve_fem_engine(problem)? {
         FemEngine::CpuNative => FemEigenExecutionLane::Cpu,
         FemEngine::NativeGpu => FemEigenExecutionLane::Gpu,
