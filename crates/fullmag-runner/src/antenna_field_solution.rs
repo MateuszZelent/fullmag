@@ -1,3 +1,4 @@
+use crate::antenna_spectrum::FieldTetraBvh;
 use crate::types::{AuxiliaryArtifact, RunError};
 use fullmag_ir::{
     AntennaFieldSolveStageIR, AntennaSpectrumRequestIR, AntennaTargetProjectionRefIR, FdmPlanIR,
@@ -554,11 +555,12 @@ pub fn load_solved_antenna_drive_basis(
 /// Load a solved basis and apply the qualified identity nodal projection from
 /// the immutable field-sampling carrier to a target FEM nodal carrier.
 ///
-/// This first production projection is deliberately conservative: every
-/// target node must be present at the same serialized coordinate in the source
-/// carrier.  A different topology therefore works when it is only a node
-/// reordering or a strict subset, while arbitrary interpolation remains an
-/// explicit unsupported capability instead of a silent broadcast.
+/// This production projection first reuses exact source coordinates and then
+/// uses the immutable tet4 carrier for deterministic P1 interpolation.  A
+/// different topology therefore works when it is a node reordering, strict
+/// subset, or a point inside the certified source carrier.  Point locations
+/// outside that carrier and legacy point-only assets remain fail-closed rather
+/// than falling back to nearest-node lookup or broadcasting.
 pub fn load_solved_antenna_drive_basis_projected(
     manifest_bytes: &[u8],
     payloads: &[AuxiliaryArtifact],
@@ -669,6 +671,15 @@ pub fn load_solved_antenna_drive_basis_projected(
                 ),
             });
         }
+        if target_positions
+            .iter()
+            .flatten()
+            .any(|value| !value.is_finite())
+        {
+            return Err(RunError {
+                message: "antenna target projection requires finite target FEM coordinates".into(),
+            });
+        }
         if manifest.sample_positions.value_count % 3 != 0
             || manifest.sample_positions.value_count / 3 != source_field_xyz_apm_per_a.len()
             || manifest.sample_positions.scalar_type != "float64_le"
@@ -701,6 +712,38 @@ pub fn load_solved_antenna_drive_basis_projected(
             &sample_positions_payload.bytes,
             manifest.sample_positions.value_count,
         )?;
+        let sample_tet4_cells = manifest
+            .sample_topology
+            .as_ref()
+            .map(|reference| {
+                let payload = payloads
+                    .iter()
+                    .find(|artifact| artifact.relative_path == reference.path)
+                    .ok_or_else(|| RunError {
+                        message: format!(
+                            "missing antenna field topology payload '{}'",
+                            reference.path
+                        ),
+                    })?;
+                verify_tet4_topology_ref(reference, payloads, source_positions.len())?;
+                decode_tet4_u32_le(
+                    &payload.bytes,
+                    reference.value_count,
+                    source_positions.len(),
+                )
+            })
+            .transpose()?;
+        let coordinate_scale = source_positions
+            .iter()
+            .chain(target_positions.iter())
+            .flatten()
+            .map(|value| value.abs())
+            .fold(0.0_f64, f64::max)
+            .max(f64::MIN_POSITIVE);
+        let tetra_bvh = sample_tet4_cells
+            .as_deref()
+            .map(|cells| FieldTetraBvh::build(&source_positions, cells, coordinate_scale * 1.0e-12))
+            .transpose()?;
         let mut source_by_coordinate =
             std::collections::HashMap::with_capacity(source_positions.len());
         for (index, position) in source_positions.iter().copied().enumerate() {
@@ -714,25 +757,69 @@ pub fn load_solved_antenna_drive_basis_projected(
             }
         }
         let mut projected = Vec::with_capacity(target_positions.len());
-        let mut mapping = Vec::with_capacity(target_positions.len());
+        let mut mapping = Vec::with_capacity(target_positions.len().saturating_mul(5));
+        let mut used_interpolation = false;
         for (target_index, position) in target_positions.iter().copied().enumerate() {
             if target_mask.is_some_and(|mask| !mask[target_index]) {
                 projected.push([0.0; 3]);
                 mapping.push(u64::MAX);
                 continue;
             }
-            let source_index = source_by_coordinate
-                .get(&coordinate_key(position))
-                .copied()
+            if let Some(source_index) = source_by_coordinate.get(&coordinate_key(position)).copied()
+            {
+                projected.push(source_field_xyz_apm_per_a[source_index]);
+                mapping.push(source_index as u64);
+                continue;
+            }
+            let (tetra_index, weights) = tetra_bvh
+                .as_ref()
+                .and_then(|bvh| {
+                    sample_tet4_cells.as_deref().and_then(|cells| {
+                        bvh.locate(position, &source_positions, cells)
+                    })
+                })
                 .ok_or_else(|| RunError {
                     message: format!(
-                        "antenna target projection requires an explicit interpolation for target FEM node {target_index}; no source field sample has the same coordinate"
+                        "antenna target projection requires an explicit interpolation for target FEM node {target_index}; no source node or containing tet4 element was found"
                     ),
                 })?;
-            projected.push(source_field_xyz_apm_per_a[source_index]);
-            mapping.push(source_index as u64);
+            let cell = sample_tet4_cells
+                .as_deref()
+                .and_then(|cells| cells.get(tetra_index).copied())
+                .ok_or_else(|| RunError {
+                    message: format!(
+                        "antenna target projection interpolation selected missing tet4 element {tetra_index}"
+                    ),
+                })?;
+            let value = std::array::from_fn(|component| {
+                weights
+                    .iter()
+                    .copied()
+                    .zip(cell)
+                    .map(|(weight, node)| {
+                        weight * source_field_xyz_apm_per_a[node as usize][component]
+                    })
+                    .sum::<f64>()
+            });
+            if value.iter().any(|component| !component.is_finite()) {
+                return Err(RunError {
+                    message: format!(
+                        "antenna target projection produced a non-finite P1 value at target FEM node {target_index}"
+                    ),
+                });
+            }
+            projected.push(value);
+            mapping.push(tetra_index as u64);
+            mapping.extend(weights.iter().copied().map(f64::to_bits));
+            used_interpolation = true;
         }
-        (projected, sha256_u64(&mapping))
+        let mapping_digest = sha256_u64(&mapping);
+        let mapping_digest = if used_interpolation {
+            format!("p1:{mapping_digest}")
+        } else {
+            mapping_digest
+        };
+        (projected, mapping_digest)
     } else {
         if field_ref.value_count != expected_sample_count.saturating_mul(3) {
             return Err(RunError {
@@ -2072,6 +2159,46 @@ mod tests {
         )
         .expect_err("unmatched target nodes must not be broadcast or extrapolated");
         assert!(error.message.contains("explicit interpolation"));
+    }
+
+    #[test]
+    fn projects_a_field_basis_with_deterministic_tet4_p1_interpolation() {
+        let mut fixture = input(1.0);
+        fixture.sample_positions_xyz_m = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ];
+        fixture.bases[0].magnetic_field_xyz_apm = vec![
+            [0.0, 0.0, 0.0],
+            [4.0, 0.0, 0.0],
+            [0.0, 8.0, 0.0],
+            [0.0, 0.0, 12.0],
+        ];
+        fixture.sample_tet4_cells = Some(vec![[0, 1, 2, 3]]);
+        let artifacts = build_antenna_field_solution_artifacts(&fixture).unwrap();
+        let manifest = artifacts.last().unwrap();
+        let digest = manifest_digest(&manifest.bytes);
+        let target_positions = vec![[0.25, 0.25, 0.25]];
+        let resolved = load_solved_antenna_drive_basis_projected(
+            &manifest.bytes,
+            &artifacts[..artifacts.len() - 1],
+            drive(),
+            "solution_1",
+            "antenna_1",
+            &digest,
+            target_positions.len(),
+            Some(&target_positions),
+            None,
+        )
+        .unwrap();
+        assert_eq!(resolved.field_xyz_apm_per_a.len(), 1);
+        let value = resolved.field_xyz_apm_per_a[0];
+        assert!((value[0] - 1.0).abs() < 1.0e-12);
+        assert!((value[1] - 2.0).abs() < 1.0e-12);
+        assert!((value[2] - 3.0).abs() < 1.0e-12);
+        assert!(resolved.projection_signature.contains(":p1:"));
     }
 
     #[test]

@@ -91,6 +91,12 @@
       "responsibility": "Construct the declared centred plane lattice; perform tet4 BVH/P1 interpolation with lowest-topology-ordinal shared-face ownership or bounded legacy identity-coordinate sampling; reject unsupported interpolation."
     },
     {
+      "id": "antenna-target-projection",
+      "path": "crates/fullmag-runner/src/antenna_field_solution.rs",
+      "symbol": "load_solved_antenna_drive_basis_projected",
+      "responsibility": "Project an immutable per-ampere field basis onto a FEM/FDM target carrier using exact-coordinate reuse or the verified tet4 BVH/P1 realization, applying target masks before lookup and failing closed outside the certified carrier."
+    },
+    {
       "id": "antenna-spectrum-preflight",
       "path": "crates/fullmag-runner/src/antenna_spectrum.rs",
       "symbol": "validated_uniform_plane_lattice",

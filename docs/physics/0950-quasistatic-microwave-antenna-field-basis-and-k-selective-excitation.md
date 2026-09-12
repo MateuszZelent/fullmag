@@ -662,6 +662,19 @@ The field sampling domain must not be truncated to the ferromagnet. Its purpose
 is to show range and decay in air. The target projection is the buffer used by
 LLG and is separately invalidated when the magnetic mesh/grid changes.
 
+When a target FEM or FDM carrier differs from the immutable field-sampling
+carrier, the executable projection first reuses identical source coordinates
+and otherwise performs deterministic tet4 point location followed by affine P1
+barycentric interpolation. The stored topology ordering owns points on shared
+faces by the lowest element ordinal. An inactive target mask is applied before
+point location and receives an explicit zero. A point outside every certified
+tetrahedron, a missing active sample, an invalid topology payload, or a legacy
+point-only carrier without an exact coordinate match fails closed; nearest-node
+substitution and point-count broadcasting are forbidden. The projection
+signature records the interpolation realization and mapping digest. Direct
+RT0 reevaluation and native MFEM transfer remain separate, not silently
+substituted by this stored-basis projection.
+
 (antenna-fdm-interpretation)=
 ### 6.4 FDM consumption
 

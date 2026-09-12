@@ -406,11 +406,12 @@ target selection             reuse       reuse       stale
 
 **Pliki:** planner `antenna_projection.rs`, runner `antenna_field_solution.rs`, native nowe `transfer/antenna_field_projection.*`, istniejący direct tetra operator, ABI i sys wrappers.
 
-- [ ] Najpierw lokalnie naprawić kolejność: utworzyć wektor zerowy pełnej długości targetu; dla `mask[i]==false` pominąć lookup. Dla aktywnego węzła brak próbki nadal zwraca błąd.
-- [ ] Test RED/GREEN: source posiada próbkę tylko w `[0,0,0]`; target posiada `[0,0,0]` i `[1,0,0]`; maska `[true,false]` daje pierwsze pole i zero. `[true,true]` nadal odrzuca brak danych.
+- [x] Najpierw lokalnie naprawić kolejność: utworzyć wektor zerowy pełnej długości targetu; dla `mask[i]==false` pominąć lookup. Dla aktywnego węzła brak próbki nadal zwraca błąd.
+- [x] Test RED/GREEN: source posiada próbkę tylko w `[0,0,0]`; target posiada `[0,0,0]` i `[1,0,0]`; maska `[true,false]` daje pierwsze pole i zero. `[true,true]` nadal odrzuca brak danych.
 - [ ] Zdefiniować trzy odrębne realizacje: `identity_coordinates_v1`, `fem_p1_interpolation_v1`, `direct_rt0_evaluation_v1`. Nie nazywać lookupu `fem_element`.
-- [ ] W nowej wersji field carrier zachować topology/element ordering i sampling scope potrzebne do point location; albo zachować w binarnym artefakcie RT0 + conductor mesh i closure do ponownej ewaluacji. Same pozycje i H nie wystarczają do klasyfikacji wnętrza.
-- [ ] Dla P1 użyć barycentrycznych współrzędnych poprawnego elementu; boundary tolerance skalować geometrią. Zdefiniować deterministic ownership dla punktów na współdzielonej ścianie. Nie używać nearest node jako interpolacji FEM.
+- [x] W nowej wersji field carrier zachować topology/element ordering i sampling scope potrzebne do point location. Same pozycje i H nie wystarczają do klasyfikacji wnętrza.
+- [ ] Dla osobnej realizacji `direct_rt0_evaluation_v1` zachować w artefakcie RT0, mesh przewodnika i closure do ponownej ewaluacji.
+- [x] Dla P1 użyć barycentrycznych współrzędnych poprawnego elementu; boundary tolerance skalować geometrią. Zdefiniować deterministic ownership dla punktów na współdzielonej ścianie. Nie używać nearest node jako interpolacji FEM.
 - [ ] Zwracać rozróżnione stany `inside`, `outside_domain`, `missing_payload`, `unsupported_topology`. Tylko `outside_domain` może być objęte outside-zero. Uszkodzone dane nie mogą dać zera.
 - [ ] Obliczenia numeryczne umieścić w native MFEM transfer, runner przekazuje request i zapisuje wynik. Nie powielać solwera interpolacji w React, API i Rust.
 - [ ] Sprawdzić constant i affine vector fields, obroty, mikrometrowe/nanometrowe skale, interface nodes, maski regions, remesh i target FDM cell centers. Zachować błąd projection jako element proweniencji.
@@ -429,6 +430,18 @@ for each target index i:
 ```
 
 **Bramki:** `projection`, `artifact`, następnie `native-field`. Nowy ABI i carrier wymagają migracji wersji, nie reinterpretacji starych manifestów. Stary point-only asset może działać tylko w identity mode.
+
+**Uzupełnienie implementacyjne 2026-09-12:** `load_solved_antenna_drive_basis_projected`
+korzysta z tego samego deterministycznego `FieldTetraBvh` co sampler FFT.
+Najpierw wykonywany jest szybki lookup identycznych współrzędnych, a dla nowego
+węzła — point location w zweryfikowanym `tet4_connectivity` i interpolacja
+barycentryczna P1. Maska targetu jest rozstrzygana przed lookupem; nieaktywne
+węzły pozostają zerowe. Podpis projekcji rozróżnia wynik interpolowany przez
+realizację `p1:<digest>`. Dodano test affine P1 na tet4 oraz pełny zestaw 13
+testów ładowania/projekcji; regresja FFT pozostaje 18/18. Nadal otwarte są
+`direct_rt0_evaluation_v1`, transfer do natywnego MFEM, formalnie typowane
+stany `inside/outside/missing/unsupported` w API oraz kwalifikacja dużych i
+mieszanych topologii.
 
 ## T10. Ujednolicić analizę k, fazę i równowagę
 

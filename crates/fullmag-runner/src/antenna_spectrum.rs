@@ -356,12 +356,16 @@ enum FieldBvhNode {
     },
 }
 
-struct FieldTetraBvh {
+pub(crate) struct FieldTetraBvh {
     root: Option<FieldBvhNode>,
 }
 
 impl FieldTetraBvh {
-    fn build(positions: &[[f64; 3]], cells: &[[u32; 4]], margin: f64) -> Result<Self, RunError> {
+    pub(crate) fn build(
+        positions: &[[f64; 3]],
+        cells: &[[u32; 4]],
+        margin: f64,
+    ) -> Result<Self, RunError> {
         if cells.is_empty() {
             return Ok(Self { root: None });
         }
@@ -411,7 +415,7 @@ impl FieldTetraBvh {
         }
     }
 
-    fn locate(
+    pub(crate) fn locate(
         &self,
         position: [f64; 3],
         sample_positions: &[[f64; 3]],
