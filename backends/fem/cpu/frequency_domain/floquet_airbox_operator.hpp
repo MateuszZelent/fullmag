@@ -35,6 +35,45 @@ struct FloquetAirboxDynamicDemagKResult {
     FloquetDynamicDemagKDiagnostics diagnostics{};
 };
 
+/*
+ * Mesh-level block producer for the full-field Floquet representation.  The
+ * producer owns only the small MFEM block objects; the Schur bridge below
+ * remains responsible for bounded dense elimination.  A future shared-domain
+ * modal owner can use this seam after importing its accepted mesh/state
+ * payload, without moving assembly into the Rust runner.
+ */
+struct FloquetAirboxSharedDomainBlockRequest {
+    mfem::FiniteElementSpace *scalar_space = nullptr;
+    const TangentFrameNode *tangent_frames = nullptr;
+    std::uint64_t tangent_frame_count = 0;
+    const std::uint8_t *magnetic_element_mask = nullptr;
+    std::uint64_t magnetic_element_count = 0;
+    const double *saturation_magnetization_a_per_m = nullptr;
+    std::uint64_t saturation_magnetization_count = 0;
+    double uniform_saturation_magnetization_a_per_m = 0.0;
+    const std::uint32_t *scalar_reduced_node = nullptr;
+    std::uint64_t scalar_reduced_node_count = 0;
+    const std::uint32_t *magnetic_reduced_node = nullptr;
+    std::uint64_t magnetic_reduced_node_count = 0;
+    const FrequencyDomainFloquetPeriodicPair *periodic_pairs = nullptr;
+    std::uint64_t periodic_pair_count = 0;
+    std::array<double, 3> k_rad_per_m{};
+    double robin_beta = 0.0;
+    mfem::Array<int> *robin_boundary_marker = nullptr;
+};
+
+struct FloquetAirboxSharedDomainBlockResult {
+    std::unique_ptr<mfem::ComplexSparseMatrix> scalar_operator{};
+    std::unique_ptr<mfem::ComplexSparseMatrix> scalar_constraint{};
+    std::unique_ptr<mfem::ComplexSparseMatrix> tangent_source{};
+    std::unique_ptr<mfem::ComplexSparseMatrix> tangent_constraint{};
+    char error_message[256]{};
+};
+
+FrequencyDomainStatus assemble_floquet_airbox_shared_domain_blocks(
+    const FloquetAirboxSharedDomainBlockRequest &request,
+    FloquetAirboxSharedDomainBlockResult *out_result) noexcept;
+
 // Materialize
 //
 //     P(k)       = C(k)^H P_full(k) C(k),

@@ -74,6 +74,8 @@ struct FloquetBlochScalarTangentSourceRequest {
     const TangentFrameNode *tangent_frames = nullptr;
     std::uint64_t tangent_frame_count = 0;
     double saturation_magnetization_a_per_m = 0.0;
+    const double *saturation_magnetization_field = nullptr;
+    std::uint64_t saturation_magnetization_field_count = 0;
     std::array<double, 3> k_rad_per_m{};
     FloquetBlochScalarRepresentation representation =
         FloquetBlochScalarRepresentation::shifted_envelope;

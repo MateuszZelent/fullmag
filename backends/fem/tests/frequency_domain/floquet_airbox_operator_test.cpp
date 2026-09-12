@@ -12,6 +12,7 @@
 #include <initializer_list>
 #include <memory>
 #include <tuple>
+#include <vector>
 
 namespace fd = fullmag::fem::frequency_domain;
 
@@ -165,6 +166,122 @@ void applies_the_magnetic_floquet_constraint_before_schur_elimination()
                 "magnetic phase reduction scales the Schur imag-imag entry");
 }
 
+void assembles_shared_domain_floquet_blocks_with_one_phase_graph()
+{
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
+        1,
+        1,
+        1,
+        mfem::Element::TETRAHEDRON,
+        1.0,
+        1.0,
+        1.0);
+    mfem::H1_FECollection collection(1, mesh.Dimension());
+    mfem::FiniteElementSpace scalar_space(&mesh, &collection);
+    const std::uint64_t node_count = static_cast<std::uint64_t>(scalar_space.GetVSize());
+    check(node_count >= 2u, "shared-domain Floquet fixture has two nodes");
+
+    std::vector<fd::TangentFrameNode> frames(static_cast<std::size_t>(node_count));
+    std::vector<std::uint8_t> magnetic_mask(static_cast<std::size_t>(mesh.GetNE()), 1u);
+    std::vector<double> saturation_magnetization(static_cast<std::size_t>(node_count), 1.0);
+    std::vector<std::uint32_t> scalar_classes(static_cast<std::size_t>(node_count));
+    std::vector<std::uint32_t> magnetic_classes(static_cast<std::size_t>(node_count));
+    scalar_classes[0] = 0u;
+    scalar_classes[1] = 0u;
+    magnetic_classes[0] = 0u;
+    magnetic_classes[1] = 0u;
+    for (std::uint64_t node = 2u; node < node_count; ++node) {
+        scalar_classes[static_cast<std::size_t>(node)] =
+            static_cast<std::uint32_t>(node - 1u);
+        magnetic_classes[static_cast<std::size_t>(node)] =
+            static_cast<std::uint32_t>(node - 1u);
+    }
+    const std::uint64_t reduced_node_count = node_count - 1u;
+    fd::FrequencyDomainFloquetPeriodicPair pair{};
+    pair.node_a = 0u;
+    pair.node_b = 1u;
+    pair.has_translation = true;
+    pair.translation_m[0] = 1.0;
+    pair.has_phase = true;
+    pair.phase_rad = -0.5;
+
+    mfem::Array<int> robin_marker(mesh.bdr_attributes.Max());
+    robin_marker = 1;
+    fd::FloquetAirboxSharedDomainBlockRequest request{};
+    request.scalar_space = &scalar_space;
+    request.tangent_frames = frames.data();
+    request.tangent_frame_count = node_count;
+    request.magnetic_element_mask = magnetic_mask.data();
+    request.magnetic_element_count = magnetic_mask.size();
+    request.saturation_magnetization_a_per_m = saturation_magnetization.data();
+    request.saturation_magnetization_count = saturation_magnetization.size();
+    request.scalar_reduced_node = scalar_classes.data();
+    request.scalar_reduced_node_count = reduced_node_count;
+    request.magnetic_reduced_node = magnetic_classes.data();
+    request.magnetic_reduced_node_count = reduced_node_count;
+    request.periodic_pairs = &pair;
+    request.periodic_pair_count = 1u;
+    request.k_rad_per_m[0] = 0.5;
+    request.robin_beta = 1.0;
+    request.robin_boundary_marker = &robin_marker;
+
+    fd::FloquetAirboxSharedDomainBlockResult blocks{};
+    check(
+        fd::assemble_floquet_airbox_shared_domain_blocks(request, &blocks) ==
+            fd::FrequencyDomainStatus::ok,
+        "shared-domain Floquet block producer assembles ordinary-gradient blocks");
+    check(blocks.scalar_operator != nullptr && blocks.scalar_constraint != nullptr &&
+              blocks.tangent_source != nullptr && blocks.tangent_constraint != nullptr,
+          "shared-domain Floquet block producer returns all four blocks");
+    check(blocks.scalar_constraint->real().Width() == static_cast<int>(reduced_node_count),
+          "shared-domain scalar constraint uses the reduced class count");
+    check(blocks.tangent_source->real().Width() == static_cast<int>(2u * node_count),
+          "shared-domain tangent source retains full q columns before phase reduction");
+    check(blocks.tangent_constraint->real().Height() == static_cast<int>(2u * node_count) &&
+              blocks.tangent_constraint->real().Width() ==
+                  static_cast<int>(2u * reduced_node_count),
+          "shared-domain tangent constraint has component-wise q dimensions");
+    check(std::abs(blocks.scalar_constraint->imag()(1, 0)) > 0.0,
+          "shared-domain scalar constraint carries the requested nonzero phase");
+    for (int row = 0; row < blocks.scalar_operator->imag().Height(); ++row) {
+        for (int column = 0; column < blocks.scalar_operator->imag().Width(); ++column) {
+            check(std::abs(blocks.scalar_operator->imag()(row, column)) < 1.0e-12,
+                  "shared-domain full-field scalar operator has no shifted k block");
+        }
+    }
+
+    fd::FloquetAirboxDynamicDemagKProblem schur_request{};
+    schur_request.scalar_operator = blocks.scalar_operator.get();
+    schur_request.scalar_constraint = blocks.scalar_constraint.get();
+    schur_request.tangent_source = blocks.tangent_source.get();
+    schur_request.tangent_constraint = blocks.tangent_constraint.get();
+    schur_request.k_rad_per_m[0] = 0.5;
+    fd::FloquetAirboxDynamicDemagKResult schur_result{};
+    check(
+        fd::assemble_floquet_airbox_dynamic_demag_k(schur_request, &schur_result) ==
+            fd::FrequencyDomainStatus::ok,
+        "shared-domain Floquet blocks feed the phase-aware Schur bridge");
+    const std::size_t q_real_split = static_cast<std::size_t>(4u * reduced_node_count);
+    check(schur_result.real_split_row_major.size() == q_real_split * q_real_split,
+          "shared-domain Floquet Schur result has the reduced real-split q shape");
+
+    pair.phase_rad = 0.0;
+    fd::FloquetAirboxSharedDomainBlockResult invalid_blocks{};
+    check(
+        fd::assemble_floquet_airbox_shared_domain_blocks(request, &invalid_blocks) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "shared-domain Floquet block producer rejects phase inconsistent with k dot translation");
+    pair.phase_rad = -0.5;
+
+    request.periodic_pairs = nullptr;
+    request.periodic_pair_count = 0u;
+    fd::FloquetAirboxSharedDomainBlockResult missing_pairs{};
+    check(
+        fd::assemble_floquet_airbox_shared_domain_blocks(request, &missing_pairs) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "shared-domain Floquet block producer rejects nonzero k without translation pairs");
+}
+
 #endif
 
 } // namespace
@@ -174,6 +291,7 @@ int main()
 #if FULLMAG_HAS_MFEM_STACK
     reduces_phase_constrained_airbox_blocks_before_schur_elimination();
     applies_the_magnetic_floquet_constraint_before_schur_elimination();
+    assembles_shared_domain_floquet_blocks_with_one_phase_graph();
     rejects_missing_floquet_airbox_blocks_without_fallback();
 #endif
     return 0;

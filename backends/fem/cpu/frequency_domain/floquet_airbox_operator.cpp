@@ -3,10 +3,15 @@
 #if FULLMAG_HAS_MFEM_STACK
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <complex>
 #include <cstring>
+#include <exception>
 #include <limits>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace fullmag::fem::frequency_domain {
 namespace {
@@ -115,7 +120,375 @@ FrequencyDomainStatus fail(
     return status;
 }
 
+void copy_block_error(FloquetAirboxSharedDomainBlockResult *result, const char *message) noexcept
+{
+    if (result == nullptr) {
+        return;
+    }
+    std::strncpy(result->error_message, message != nullptr ? message : "", 255u);
+    result->error_message[255] = '\0';
+}
+
+struct PhaseEdge {
+    std::uint64_t target = 0;
+    std::array<double, 3> translation{};
+};
+
+double dot3_array(const std::array<double, 3> &left, const std::array<double, 3> &right) noexcept
+{
+    return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
+}
+
+bool finite_array(const std::array<double, 3> &value) noexcept
+{
+    return std::isfinite(value[0]) && std::isfinite(value[1]) && std::isfinite(value[2]);
+}
+
+bool build_phase_entries(
+    const std::uint32_t *node_classes,
+    std::uint64_t node_count,
+    std::uint64_t class_count,
+    bool allow_inactive,
+    const FrequencyDomainFloquetPeriodicPair *periodic_pairs,
+    std::uint64_t periodic_pair_count,
+    const std::array<double, 3> &k_rad_per_m,
+    std::vector<FloquetBlochScalarConstraintEntry> &out_entries,
+    std::string &error)
+{
+    constexpr std::uint32_t inactive = std::numeric_limits<std::uint32_t>::max();
+    constexpr double two_pi = 2.0 * 3.14159265358979323846264338327950288;
+    if (node_classes == nullptr || node_count == 0u || class_count == 0u ||
+        class_count > node_count ||
+        (periodic_pair_count > 0u && periodic_pairs == nullptr)) {
+        error = "Floquet shared-domain class or periodic-pair input is invalid";
+        return false;
+    }
+    std::vector<std::vector<PhaseEdge>> adjacency(static_cast<std::size_t>(node_count));
+    for (std::uint64_t index = 0u; index < node_count; ++index) {
+        const std::uint32_t class_id = node_classes[index];
+        if (class_id == inactive) {
+            if (!allow_inactive) {
+                error = "Floquet scalar class map contains an inactive node";
+                return false;
+            }
+        } else if (class_id >= class_count) {
+            error = "Floquet class map contains an out-of-range class";
+            return false;
+        }
+    }
+    for (std::uint64_t index = 0u; index < periodic_pair_count; ++index) {
+        const FrequencyDomainFloquetPeriodicPair &pair = periodic_pairs[index];
+        if (pair.node_a >= node_count || pair.node_b >= node_count ||
+            pair.node_a == pair.node_b) {
+            error = "Floquet periodic pair has an invalid node endpoint";
+            return false;
+        }
+        std::array<double, 3> translation = {
+            pair.translation_m[0], pair.translation_m[1], pair.translation_m[2]};
+        if (!pair.has_translation || !finite_array(translation)) {
+            error = "Floquet periodic pair requires a finite translation";
+            return false;
+        }
+        if (pair.has_phase) {
+            if (!std::isfinite(pair.phase_rad)) {
+                error = "Floquet periodic pair has a non-finite phase";
+                return false;
+            }
+            const double expected_phase = -dot3_array(k_rad_per_m, translation);
+            const double phase_residual = std::remainder(pair.phase_rad - expected_phase, two_pi);
+            if (!std::isfinite(phase_residual) || std::abs(phase_residual) > 1.0e-10) {
+                error = "Floquet periodic pair phase does not match -k dot translation";
+                return false;
+            }
+        }
+        const std::uint32_t class_a = node_classes[pair.node_a];
+        const std::uint32_t class_b = node_classes[pair.node_b];
+        if (class_a == inactive || class_b == inactive) {
+            if (!allow_inactive || (class_a == inactive) != (class_b == inactive)) {
+                error = "Floquet periodic pair crosses an inactive class";
+                return false;
+            }
+            // Air-only rows have no source contribution.  Keep their phase
+            // graph out of the magnetic class reduction.
+            continue;
+        }
+        if (class_a != class_b) {
+            error = "Floquet periodic pair endpoints belong to different classes";
+            return false;
+        }
+        adjacency[static_cast<std::size_t>(pair.node_a)].push_back(
+            PhaseEdge{pair.node_b, translation});
+        adjacency[static_cast<std::size_t>(pair.node_b)].push_back(
+            PhaseEdge{
+                pair.node_a,
+                {-translation[0], -translation[1], -translation[2]}});
+    }
+
+    const std::uint64_t unset = std::numeric_limits<std::uint64_t>::max();
+    std::vector<std::uint64_t> class_seed(static_cast<std::size_t>(class_count), unset);
+    std::vector<std::uint8_t> visited(static_cast<std::size_t>(node_count), 0u);
+    std::vector<std::array<double, 3>> node_translation(
+        static_cast<std::size_t>(node_count), {0.0, 0.0, 0.0});
+    for (std::uint64_t node = 0u; node < node_count; ++node) {
+        const std::uint32_t class_id = node_classes[node];
+        if (class_id == inactive) {
+            continue;
+        }
+        if (class_seed[static_cast<std::size_t>(class_id)] != unset) {
+            continue;
+        }
+        class_seed[static_cast<std::size_t>(class_id)] = node;
+        std::vector<std::uint64_t> queue{node};
+        visited[static_cast<std::size_t>(node)] = 1u;
+        while (!queue.empty()) {
+            const std::uint64_t current = queue.back();
+            queue.pop_back();
+            for (const PhaseEdge &edge : adjacency[static_cast<std::size_t>(current)]) {
+                const std::uint32_t target_class = node_classes[edge.target];
+                if (target_class == inactive || target_class != class_id) {
+                    continue;
+                }
+                std::array<double, 3> candidate = {
+                    node_translation[static_cast<std::size_t>(current)][0] + edge.translation[0],
+                    node_translation[static_cast<std::size_t>(current)][1] + edge.translation[1],
+                    node_translation[static_cast<std::size_t>(current)][2] + edge.translation[2]};
+                if (!finite_array(candidate)) {
+                    error = "Floquet periodic translation accumulation is non-finite";
+                    return false;
+                }
+                if (visited[static_cast<std::size_t>(edge.target)] != 0u) {
+                    const auto &known = node_translation[static_cast<std::size_t>(edge.target)];
+                    for (int axis = 0; axis < 3; ++axis) {
+                        if (std::abs(known[static_cast<std::size_t>(axis)] -
+                                     candidate[static_cast<std::size_t>(axis)]) > 1.0e-10) {
+                            error = "Floquet periodic graph has inconsistent translations";
+                            return false;
+                        }
+                    }
+                    continue;
+                }
+                node_translation[static_cast<std::size_t>(edge.target)] = candidate;
+                visited[static_cast<std::size_t>(edge.target)] = 1u;
+                queue.push_back(edge.target);
+            }
+        }
+    }
+    for (std::uint64_t node = 0u; node < node_count; ++node) {
+        if (node_classes[node] != inactive && visited[static_cast<std::size_t>(node)] == 0u) {
+            error = "Floquet class map is not connected by the supplied periodic pairs";
+            return false;
+        }
+    }
+    for (std::uint64_t class_id = 0u; class_id < class_count; ++class_id) {
+        if (class_seed[static_cast<std::size_t>(class_id)] == unset) {
+            error = "Floquet class map omits a reduced class";
+            return false;
+        }
+    }
+
+    out_entries.assign(static_cast<std::size_t>(node_count), {});
+    for (std::uint64_t node = 0u; node < node_count; ++node) {
+        std::uint32_t class_id = node_classes[node];
+        if (class_id == inactive) {
+            // Inactive magnetic nodes have identically zero source columns.
+            // Map their unused constraint rows to class zero to keep the
+            // rectangular q constraint complete without inventing a field.
+            class_id = 0u;
+            node_translation[static_cast<std::size_t>(node)] = {0.0, 0.0, 0.0};
+        }
+        FloquetBlochScalarConstraintEntry &entry = out_entries[static_cast<std::size_t>(node)];
+        entry.full_dof = node;
+        entry.reduced_dof = class_id;
+        entry.translation_m = node_translation[static_cast<std::size_t>(node)];
+    }
+    return true;
+}
+
+std::unique_ptr<mfem::ComplexSparseMatrix> build_tangent_constraint_matrix(
+    const std::vector<FloquetBlochScalarConstraintEntry> &entries,
+    std::uint64_t reduced_node_count,
+    const std::array<double, 3> &k_rad_per_m)
+{
+    const int full_node_count = static_cast<int>(entries.size());
+    const int reduced_count = static_cast<int>(reduced_node_count);
+    auto real = std::make_unique<mfem::SparseMatrix>(2 * full_node_count, 2 * reduced_count);
+    auto imaginary = std::make_unique<mfem::SparseMatrix>(2 * full_node_count, 2 * reduced_count);
+    for (const FloquetBlochScalarConstraintEntry &entry : entries) {
+        double phase_argument = 0.0;
+        for (int axis = 0; axis < 3; ++axis) {
+            phase_argument += k_rad_per_m[static_cast<std::size_t>(axis)] *
+                entry.translation_m[static_cast<std::size_t>(axis)];
+        }
+        const double phase_real = std::cos(phase_argument);
+        const double phase_imaginary = -std::sin(phase_argument);
+        for (int component = 0; component < 2; ++component) {
+            real->Add(
+                2 * static_cast<int>(entry.full_dof) + component,
+                2 * static_cast<int>(entry.reduced_dof) + component,
+                phase_real);
+            imaginary->Add(
+                2 * static_cast<int>(entry.full_dof) + component,
+                2 * static_cast<int>(entry.reduced_dof) + component,
+                phase_imaginary);
+        }
+    }
+    real->Finalize();
+    imaginary->Finalize();
+    return std::make_unique<mfem::ComplexSparseMatrix>(
+        real.release(),
+        imaginary.release(),
+        true,
+        true,
+        mfem::ComplexOperator::HERMITIAN);
+}
+
 } // namespace
+
+FrequencyDomainStatus assemble_floquet_airbox_shared_domain_blocks(
+    const FloquetAirboxSharedDomainBlockRequest &request,
+    FloquetAirboxSharedDomainBlockResult *out_result) noexcept
+{
+    if (out_result == nullptr) {
+        return FrequencyDomainStatus::validation_error;
+    }
+    *out_result = FloquetAirboxSharedDomainBlockResult{};
+    if (request.scalar_space == nullptr || request.scalar_space->GetMesh() == nullptr ||
+        request.tangent_frames == nullptr || request.tangent_frame_count == 0u ||
+        request.scalar_space->GetMesh()->Dimension() != 3) {
+        copy_block_error(out_result, "Floquet shared-domain block request has no 3D scalar space");
+        return FrequencyDomainStatus::validation_error;
+    }
+    const std::uint64_t node_count =
+        static_cast<std::uint64_t>(request.scalar_space->GetVSize());
+    if (node_count == 0u || node_count != request.tangent_frame_count ||
+        node_count > static_cast<std::uint64_t>(std::numeric_limits<int>::max() / 2) ||
+        request.scalar_reduced_node == nullptr || request.scalar_reduced_node_count == 0u ||
+        request.magnetic_reduced_node == nullptr || request.magnetic_reduced_node_count == 0u ||
+        request.magnetic_element_mask == nullptr ||
+        request.magnetic_element_count !=
+            static_cast<std::uint64_t>(request.scalar_space->GetMesh()->GetNE())) {
+        copy_block_error(out_result, "Floquet shared-domain block request dimensions are invalid");
+        return FrequencyDomainStatus::validation_error;
+    }
+    for (double component : request.k_rad_per_m) {
+        if (!std::isfinite(component)) {
+            copy_block_error(out_result, "Floquet shared-domain block wavevector is non-finite");
+            return FrequencyDomainStatus::validation_error;
+        }
+    }
+    const double k_squared =
+        request.k_rad_per_m[0] * request.k_rad_per_m[0] +
+        request.k_rad_per_m[1] * request.k_rad_per_m[1] +
+        request.k_rad_per_m[2] * request.k_rad_per_m[2];
+    if (k_squared > 0.0 && request.periodic_pair_count == 0u) {
+        copy_block_error(
+            out_result,
+            "nonzero-k Floquet shared-domain blocks require periodic translation pairs");
+        return FrequencyDomainStatus::validation_error;
+    }
+
+    try {
+        std::vector<FloquetBlochScalarConstraintEntry> scalar_entries;
+        std::vector<FloquetBlochScalarConstraintEntry> magnetic_entries;
+        std::string error;
+        if (!build_phase_entries(
+                request.scalar_reduced_node,
+                node_count,
+                request.scalar_reduced_node_count,
+                false,
+                request.periodic_pairs,
+                request.periodic_pair_count,
+                request.k_rad_per_m,
+                scalar_entries,
+                error) ||
+            !build_phase_entries(
+                request.magnetic_reduced_node,
+                node_count,
+                request.magnetic_reduced_node_count,
+                true,
+                request.periodic_pairs,
+                request.periodic_pair_count,
+                request.k_rad_per_m,
+                magnetic_entries,
+                error)) {
+            copy_block_error(out_result, error.c_str());
+            return FrequencyDomainStatus::validation_error;
+        }
+
+        FloquetBlochScalarAssemblyRequest scalar_request{};
+        scalar_request.scalar_space = request.scalar_space;
+        scalar_request.k_rad_per_m = request.k_rad_per_m;
+        scalar_request.robin_beta = request.robin_beta;
+        scalar_request.robin_boundary_marker = request.robin_boundary_marker;
+        scalar_request.representation =
+            FloquetBlochScalarRepresentation::full_field_phase_constrained;
+        FloquetBlochScalarAssemblyResult scalar_result{};
+        FrequencyDomainStatus status = assemble_floquet_bloch_scalar_operator(
+            scalar_request,
+            &scalar_result);
+        if (status != FrequencyDomainStatus::ok) {
+            copy_block_error(out_result, "Floquet scalar operator assembly failed");
+            return status;
+        }
+
+        FloquetBlochScalarConstraintRequest scalar_constraint_request{};
+        scalar_constraint_request.scalar_space = request.scalar_space;
+        scalar_constraint_request.entries = scalar_entries.data();
+        scalar_constraint_request.entry_count = scalar_entries.size();
+        scalar_constraint_request.reduced_dof_count = request.scalar_reduced_node_count;
+        scalar_constraint_request.k_rad_per_m = request.k_rad_per_m;
+        FloquetBlochScalarConstraintResult scalar_constraint_result{};
+        status = assemble_floquet_bloch_scalar_constraint(
+            scalar_constraint_request,
+            &scalar_constraint_result);
+        if (status != FrequencyDomainStatus::ok) {
+            copy_block_error(out_result, "Floquet scalar phase constraint assembly failed");
+            return status;
+        }
+
+        FloquetBlochScalarTangentSourceRequest source_request{};
+        source_request.scalar_space = request.scalar_space;
+        source_request.tangent_frames = request.tangent_frames;
+        source_request.tangent_frame_count = request.tangent_frame_count;
+        source_request.saturation_magnetization_a_per_m =
+            request.uniform_saturation_magnetization_a_per_m;
+        source_request.saturation_magnetization_field =
+            request.saturation_magnetization_a_per_m;
+        source_request.saturation_magnetization_field_count =
+            request.saturation_magnetization_count;
+        source_request.k_rad_per_m = request.k_rad_per_m;
+        source_request.representation =
+            FloquetBlochScalarRepresentation::full_field_phase_constrained;
+        source_request.magnetic_element_mask = request.magnetic_element_mask;
+        source_request.magnetic_element_mask_count = request.magnetic_element_count;
+        FloquetBlochScalarTangentSourceResult source_result{};
+        status = assemble_floquet_bloch_scalar_tangent_source(source_request, &source_result);
+        if (status != FrequencyDomainStatus::ok) {
+            copy_block_error(out_result, "Floquet magnetic-potential source assembly failed");
+            return status;
+        }
+
+        out_result->scalar_operator = std::move(scalar_result.operator_matrix);
+        out_result->scalar_constraint = std::move(scalar_constraint_result.constraint_matrix);
+        out_result->tangent_source = std::move(source_result.source_matrix);
+        out_result->tangent_constraint = build_tangent_constraint_matrix(
+            magnetic_entries,
+            request.magnetic_reduced_node_count,
+            request.k_rad_per_m);
+        if (out_result->scalar_operator == nullptr || out_result->scalar_constraint == nullptr ||
+            out_result->tangent_source == nullptr || out_result->tangent_constraint == nullptr) {
+            copy_block_error(out_result, "Floquet shared-domain block assembly returned an empty block");
+            return FrequencyDomainStatus::operator_error;
+        }
+        return FrequencyDomainStatus::ok;
+    } catch (const std::exception &exception) {
+        copy_block_error(out_result, exception.what());
+        return FrequencyDomainStatus::operator_error;
+    } catch (...) {
+        copy_block_error(out_result, "Floquet shared-domain block assembly failed");
+        return FrequencyDomainStatus::operator_error;
+    }
+}
 
 FrequencyDomainStatus assemble_floquet_airbox_dynamic_demag_k(
     const FloquetAirboxDynamicDemagKProblem &problem,

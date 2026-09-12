@@ -17,12 +17,16 @@ public:
         mfem::FiniteElementSpace &space,
         const TangentFrameNode *frames,
         double saturation_magnetization,
+        const double *saturation_magnetization_field,
+        std::uint64_t saturation_magnetization_field_count,
         const std::uint8_t *magnetic_element_mask,
         std::uint64_t magnetic_element_mask_count)
         : mfem::VectorCoefficient(3)
         , space_(space)
         , frames_(frames)
         , saturation_magnetization_(saturation_magnetization)
+        , saturation_magnetization_field_(saturation_magnetization_field)
+        , saturation_magnetization_field_count_(saturation_magnetization_field_count)
         , magnetic_element_mask_(magnetic_element_mask)
         , magnetic_element_mask_count_(magnetic_element_mask_count)
     {
@@ -50,10 +54,19 @@ public:
         for (int local = 0; local < dofs.Size(); ++local) {
             const int dof = dofs[local] >= 0 ? dofs[local] : -1 - dofs[local];
             const double sign = dofs[local] >= 0 ? 1.0 : -1.0;
+            if (saturation_magnetization_field_ != nullptr &&
+                (dof < 0 || static_cast<std::uint64_t>(dof) >=
+                    saturation_magnetization_field_count_)) {
+                value = 0.0;
+                return;
+            }
             const double q1 = (*tangent_)[2 * dof];
             const double q2 = (*tangent_)[2 * dof + 1];
+            const double saturation_magnetization = saturation_magnetization_field_ != nullptr
+                ? saturation_magnetization_field_[static_cast<std::size_t>(dof)]
+                : saturation_magnetization_;
             for (int axis = 0; axis < 3; ++axis) {
-                value[axis] += sign * shape[local] * saturation_magnetization_ *
+                value[axis] += sign * shape[local] * saturation_magnetization *
                     (q1 * frames_[dof].e1[axis] + q2 * frames_[dof].e2[axis]);
             }
         }
@@ -63,6 +76,8 @@ private:
     mfem::FiniteElementSpace &space_;
     const TangentFrameNode *frames_;
     double saturation_magnetization_;
+    const double *saturation_magnetization_field_;
+    std::uint64_t saturation_magnetization_field_count_;
     const std::uint8_t *magnetic_element_mask_;
     std::uint64_t magnetic_element_mask_count_;
     const mfem::Vector *tangent_ = nullptr;
@@ -316,10 +331,31 @@ FrequencyDomainStatus assemble_floquet_bloch_scalar_tangent_source(
     const int dof_count = request.scalar_space->GetVSize();
     if (request.scalar_space->GetMesh()->Dimension() != 3 || dof_count <= 0 ||
         request.tangent_frames == nullptr ||
-        request.tangent_frame_count != static_cast<std::uint64_t>(dof_count) ||
-        !std::isfinite(request.saturation_magnetization_a_per_m) ||
-        request.saturation_magnetization_a_per_m <= 0.0) {
+        request.tangent_frame_count != static_cast<std::uint64_t>(dof_count)) {
         return FrequencyDomainStatus::validation_error;
+    }
+    const bool has_saturation_field = request.saturation_magnetization_field != nullptr;
+    if ((has_saturation_field != (request.saturation_magnetization_field_count != 0u)) ||
+        (has_saturation_field &&
+         request.saturation_magnetization_field_count != static_cast<std::uint64_t>(dof_count))) {
+        return FrequencyDomainStatus::validation_error;
+    }
+    if (!has_saturation_field &&
+        (!std::isfinite(request.saturation_magnetization_a_per_m) ||
+         request.saturation_magnetization_a_per_m <= 0.0)) {
+        return FrequencyDomainStatus::validation_error;
+    }
+    if (has_saturation_field) {
+        for (int dof = 0; dof < dof_count; ++dof) {
+            const double value = request.saturation_magnetization_field[
+                static_cast<std::size_t>(dof)];
+            // Nodal Ms fields may carry zero on air nodes.  Magnetic-element
+            // masking removes those nodes from the source; negative and
+            // non-finite material values remain invalid.
+            if (!std::isfinite(value) || value < 0.0) {
+                return FrequencyDomainStatus::validation_error;
+            }
+        }
     }
     if (request.representation !=
             FloquetBlochScalarRepresentation::shifted_envelope &&
@@ -387,6 +423,8 @@ FrequencyDomainStatus assemble_floquet_bloch_scalar_tangent_source(
         mfem::Vector tangent(2 * dof_count);
         TangentSourceCoefficient source(*request.scalar_space, request.tangent_frames,
                                         request.saturation_magnetization_a_per_m,
+                                        request.saturation_magnetization_field,
+                                        request.saturation_magnetization_field_count,
                                         request.magnetic_element_mask,
                                         request.magnetic_element_mask_count);
         TangentSourceWavevectorCoefficient k_source(source, k);
