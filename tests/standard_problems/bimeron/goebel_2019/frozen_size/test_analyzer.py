@@ -67,6 +67,7 @@ def test_analyzer_reads_managed_stage_layout_and_resolved_grid(tmp_path: Path) -
                     "step": 4,
                     "time": 2.5e-12,
                     "e_total": -1.25,
+                    "max_torque_Apm": 2.0,
                     "frozen_dof_count": 3,
                     "free_dof_count": 5,
                     "frozen_reference_max_drift": 0.0,
@@ -84,7 +85,10 @@ def test_analyzer_reads_managed_stage_layout_and_resolved_grid(tmp_path: Path) -
     assert result["profile_energy"]["stage_id"] == "stage_01_flat_relax"
     assert result["runtime_provenance"]["requested_execution"]["device"] == "gpu"
     assert result["frozen_runtime"]["frozen_dof_count"] == 3
-    assert result["frozen_runtime"]["free_torque_metric_status"] == "not_emitted"
+    assert result["frozen_runtime"]["free_torque_metric_status"] == "emitted"
+    assert result["frozen_runtime"]["free_torque_metric"] == 2.0
+    assert result["frozen_runtime"]["free_torque_metric_units"] == "Apm"
+    assert result["frozen_runtime"]["free_torque_metric_source"] == "max_torque_Apm"
     assert result["states"]["final"]["measurement"]["measurement_grid"]["nx"] == 4
 
 

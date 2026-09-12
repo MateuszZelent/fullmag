@@ -8,6 +8,8 @@ import math
 from pathlib import Path
 from typing import Any
 
+MU0_T_M_PER_A = 4.0 * math.pi * 1.0e-7
+
 
 def _load(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
@@ -75,8 +77,21 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
     elif drift is None and name != "p0":
         warnings.append("frozen_reference_drift_not_emitted")
     free_status = frozen.get("free_torque_metric_status")
+    free_torque_value = frozen.get("free_torque_metric")
+    free_torque_units = frozen.get("free_torque_metric_units")
+    free_torque_t = None
     if free_status != "emitted":
         warnings.append("free_torque_metric_not_emitted: full/all torque must not be interpreted as free-only")
+    elif _finite(free_torque_value):
+        free_torque_t = float(free_torque_value)
+        if free_torque_units != "T":
+            free_torque_t *= MU0_T_M_PER_A
+        maximum_free_torque_t = float(thresholds.get("maximum_free_torque_T", 1.0e-6))
+        if free_torque_t > maximum_free_torque_t:
+            if completion.get("converged") is True:
+                failures.append("free_torque_exceeds_threshold")
+            else:
+                warnings.append("free_torque_exceeds_threshold_before_convergence")
 
     for label, payload in states.items():
         measurement = payload.get("measurement") if isinstance(payload, dict) else None
@@ -105,6 +120,9 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
         "failures": failures,
         "warnings": warnings,
         "free_torque_metric_status": free_status or "not_emitted",
+        "free_torque_metric": free_torque_value,
+        "free_torque_metric_units": free_torque_units,
+        "free_torque_T": free_torque_t,
     }
     return result
 

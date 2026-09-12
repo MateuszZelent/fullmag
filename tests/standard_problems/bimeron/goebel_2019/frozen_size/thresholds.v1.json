@@ -9,5 +9,6 @@
   "require_completion": true,
   "require_gpu_residency": true,
   "require_positive_frozen_dof_for_constrained_protocols": true,
-  "require_frozen_hashes": true
+  "require_frozen_hashes": true,
+  "maximum_free_torque_T": 1e-6
 }

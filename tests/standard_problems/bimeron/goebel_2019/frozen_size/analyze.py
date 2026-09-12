@@ -497,9 +497,27 @@ def _frozen_metrics(row: dict[str, Any]) -> dict[str, Any]:
     for key, candidates in names.items():
         value = _row_value(row, *candidates)
         result[key] = int(value) if key.endswith("count") and value is not None else value
-    free_torque = _row_value(row, "max_torque_free_Apm", "max_torque_free", "max_torque_free_T")
-    result["free_torque_metric"] = free_torque
-    result["free_torque_metric_status"] = "emitted" if free_torque is not None else "not_emitted"
+    # frozen-spins.v1 defines the runtime's max_torque_Apm reduction over
+    # free DOFs. Keep older aliases and preserve the source/units explicitly.
+    torque_candidates = (
+        ("max_torque_free_Apm", "Apm"),
+        ("max_torque_free", "Apm"),
+        ("max_torque_free_T", "T"),
+        ("max_torque_Apm", "Apm"),
+    )
+    result["free_torque_metric"] = None
+    result["free_torque_metric_units"] = None
+    result["free_torque_metric_source"] = None
+    for name, units in torque_candidates:
+        value = _row_value(row, name)
+        if value is not None:
+            result["free_torque_metric"] = value
+            result["free_torque_metric_units"] = units
+            result["free_torque_metric_source"] = name
+            break
+    result["free_torque_metric_status"] = (
+        "emitted" if result["free_torque_metric"] is not None else "not_emitted"
+    )
     return result
 
 
