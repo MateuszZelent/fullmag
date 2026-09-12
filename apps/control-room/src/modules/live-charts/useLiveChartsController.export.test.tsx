@@ -164,4 +164,26 @@ describe("useLiveChartsController export ownership", () => {
       dom.restore();
     }
   });
+
+  it("ignores a stale failure callback after a newer export request", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as HTMLElement);
+    try {
+      await act(async () => root.render(<ControllerHarness />));
+      await act(async () => latestController?.onExport("csv"));
+      const staleFailed = latestController?.onRequestedExportFailed;
+      await act(async () => latestController?.onExport("tsv"));
+      const currentRequestId = latestController?.requestedExportRequest?.requestId;
+      await act(async () => staleFailed?.());
+      expect(latestController?.requestedExportRequest?.requestId).toBe(currentRequestId);
+      expect(latestController?.exportErrorFormat).toBeNull();
+
+      await act(async () => latestController?.onRequestedExportFailed?.());
+      expect(latestController?.requestedExportRequest).toBeNull();
+      expect(latestController?.exportErrorFormat).toBe("tsv");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
 });

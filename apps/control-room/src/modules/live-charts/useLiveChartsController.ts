@@ -32,6 +32,10 @@ type LiveChartPreferencesActions = Pick<
   ReturnType<typeof useLiveChartPreferencesHydration>,
   "setDescriptorLiveMode" | "setDescriptorRange" | "setDescriptorSelectedSeriesIds"
 >;
+interface LiveChartsLocalExportState {
+  errorFormat: LiveChartsExportRequest["format"] | null;
+  request: LiveChartsExportRequest | null;
+}
 type LiveChartsStateSetter<T> = (value: T | ((current: T) => T)) => void;
 let liveChartsLocalExportSequence = 0;
 
@@ -117,13 +121,16 @@ export function useLiveChartsController(selection: SelectionController) {
   const tableData = useLiveTableData({ active: descriptorId !== "energy", paused, range: descriptor.range, targetPoints: descriptor.targetPoints, xAxisId: descriptor.xAxisId });
   const energyData = useLiveEnergyData({ active: true, descriptorId, paused });
   const [localFitRequest, setLocalFitRequest] = useState(0);
-  const [localExportRequest, setLocalExportRequest] = useState<LiveChartsExportRequest | null>(null);
-  const [exportErrorFormat, setExportErrorFormat] = useState<LiveChartsExportRequest["format"] | null>(null);
+  const [localExportState, setLocalExportState] = useState<LiveChartsLocalExportState>({ errorFormat: null, request: null });
+  const localExportRequest = localExportState.request;
+  const exportErrorFormat = localExportState.errorFormat;
   const onExport = (format: LiveChartsExportRequest["format"]) => {
-    setExportErrorFormat(null);
-    setLocalExportRequest({
-      format,
-      requestId: `live-charts-local-export-${++liveChartsLocalExportSequence}`,
+    setLocalExportState({
+      errorFormat: null,
+      request: {
+        format,
+        requestId: `live-charts-local-export-${++liveChartsLocalExportSequence}`,
+      },
     });
   };
   const fitRequest = commandFitRequest + localFitRequest;
@@ -196,8 +203,7 @@ export function useLiveChartsController(selection: SelectionController) {
     preferences,
     requestedExportRequest,
     requestedExportRequestId,
-    setExportErrorFormat,
-    setLocalExportRequest,
+    setLocalExportState,
     setLocalFitRequest,
   });
   return {
@@ -232,8 +238,7 @@ function createLiveChartsViewActions({
   preferences,
   requestedExportRequest,
   requestedExportRequestId,
-  setExportErrorFormat,
-  setLocalExportRequest,
+  setLocalExportState,
   setLocalFitRequest,
 }: {
   commandExportRequest: LiveChartsExportRequest | null;
@@ -244,8 +249,7 @@ function createLiveChartsViewActions({
   preferences: LiveChartPreferencesActions;
   requestedExportRequest: LiveChartsExportRequest | null;
   requestedExportRequestId: string | null;
-  setExportErrorFormat: LiveChartsStateSetter<LiveChartsExportRequest["format"] | null>;
-  setLocalExportRequest: LiveChartsStateSetter<LiveChartsExportRequest | null>;
+  setLocalExportState: LiveChartsStateSetter<LiveChartsLocalExportState>;
   setLocalFitRequest: LiveChartsStateSetter<number>;
 }) {
   return {
@@ -259,19 +263,21 @@ function createLiveChartsViewActions({
     },
     onSeriesChange: (ids: string[]) => preferences.setDescriptorSelectedSeriesIds(descriptorId, ids),
     onRequestedExportHandled: () => {
-      setExportErrorFormat(null);
       if (commandExportRequest && isCurrentExportCommand(commandExportRequest.requestId)) {
         liveChartsCommandRequests.complete();
       } else if (!commandExportRequest && requestedExportRequestId) {
-        setLocalExportRequest((current) => current?.requestId === requestedExportRequestId ? null : current);
+        setLocalExportState((current) => current.request?.requestId === requestedExportRequestId
+          ? { errorFormat: null, request: null }
+          : current);
       }
     },
     onRequestedExportFailed: () => {
-      if (requestedExportRequest) setExportErrorFormat(requestedExportRequest.format);
       if (commandExportRequest && isCurrentExportCommand(commandExportRequest.requestId)) {
         liveChartsCommandRequests.fail();
-      } else if (!commandExportRequest && requestedExportRequestId) {
-        setLocalExportRequest((current) => current?.requestId === requestedExportRequestId ? null : current);
+      } else if (!commandExportRequest && requestedExportRequest && requestedExportRequestId) {
+        setLocalExportState((current) => current.request?.requestId === requestedExportRequestId
+          ? { errorFormat: requestedExportRequest.format, request: null }
+          : current);
       }
     },
     onToggleFollow: () => preferences.setDescriptorLiveMode(descriptorId, paused ? "following" : "paused"),
