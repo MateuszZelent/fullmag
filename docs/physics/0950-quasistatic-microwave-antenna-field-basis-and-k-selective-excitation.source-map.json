@@ -88,7 +88,7 @@
       "id": "antenna-spectrum-sampling",
       "path": "crates/fullmag-runner/src/antenna_spectrum.rs",
       "symbol": "sample_antenna_field_on_plane",
-      "responsibility": "Construct the declared centred plane lattice and perform only bounded identity-coordinate sampling from the immutable field carrier; reject unsupported interpolation."
+      "responsibility": "Construct the declared centred plane lattice; perform tet4 BVH/P1 interpolation with lowest-topology-ordinal shared-face ownership or bounded legacy identity-coordinate sampling; reject unsupported interpolation."
     },
     {
       "id": "antenna-spectrum-artifact",
@@ -101,6 +101,12 @@
       "path": "crates/fullmag-runner/src/antenna_spectrum.rs",
       "symbol": "identity_plane_sampling_is_coordinate_stable_and_reorders_sources",
       "responsibility": "Regression evidence for coordinate-stable sampling, outside-policy accounting, fail-closed interpolation, and content-addressed spectrum serialization."
+    },
+    {
+      "id": "antenna-spectrum-shared-face-test",
+      "path": "crates/fullmag-runner/src/antenna_spectrum.rs",
+      "symbol": "shared_face_ownership_uses_lowest_topology_ordinal",
+      "responsibility": "Regression evidence that a point admitted by multiple tetrahedra is owned by the lowest stored topology ordinal, independently of BVH traversal order."
     },
     {
       "id": "antenna-spectrum-cli-consumer",
@@ -156,9 +162,9 @@
         "type": "AntennaSpectrumSamplingPlane",
         "default": "required",
         "si_unit": "m for origin/extents; 1 for counts and frame",
-        "validation": "orthonormal in-plane axes, positive extents, at least two samples per axis; current executable lane requires identity-coordinate carrier matches and fails closed for unsupported interpolation",
+        "validation": "orthonormal in-plane axes, positive extents, at least two samples per axis; current executable lane requires valid tet4 P1 topology or unique identity-coordinate carrier matches and fails closed for unsupported interpolation",
         "meaning": "centred physical lattice on which the per-ampere source field is sampled before the spatial Fourier transform",
-        "backend_support": "immutable FEM antenna asset; FDM trilinear and arbitrary FEM element interpolation remain explicitly unsupported",
+        "backend_support": "immutable FEM antenna asset with tet4 P1 or legacy identity sampling; FDM trilinear, direct RT0 evaluation, mixed topology, and native MFEM transfer remain explicitly unsupported",
         "problem_ir": "antenna_spectrum_requests[].sampling_plane"
       },
       {

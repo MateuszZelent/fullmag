@@ -456,6 +456,9 @@ publicznego samplera potwierdza to samo obrócone pole afiniczne dla skali
 nanometrowy. Zamknięta jest część T09 dotycząca skali P1; nadal otwarte są
 `direct_rt0_evaluation_v1`, transfer do native MFEM, mixed topology oraz
 kwalifikacja dużych siatek.
+Punkt na współdzielonej ścianie ma teraz jawnego właściciela: najniższy ordinal
+elementu w zapisanym `tet4_connectivity`, a test wymusza niezależność tej
+decyzji od kolejności przejścia BVH.
 Opcja `mode_basis_ref` jest teraz fail-closed w obu walidatorach IR; nie można
 jej podać do ścieżki source-spectrum, która nie wykonuje analizy modalnej.
 Analogicznie `component="transverse"` z dowolnym `equilibrium_ref` jest

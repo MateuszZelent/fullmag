@@ -504,7 +504,10 @@ finite nodal coordinates/field values and a hashed `tet4_connectivity` payload.
 When that topology is present, the sampler performs deterministic BVH point
 location followed by P1 barycentric interpolation in the containing tetrahedron.
 The executed realization is recorded as `fem_p1_interpolation_v1`; shared-face
-ownership is deterministic and no nearest-node substitution is allowed.
+ownership is deterministic: if the boundary tolerance admits more than one
+tetrahedron, the cell with the lowest ordinal in the stored
+`tet4_connectivity` payload owns the point. No nearest-node substitution is
+allowed.
 
 Older point-only carriers remain readable through the explicit compatibility
 realization `identity_coordinates_v1`: every requested lattice point must
@@ -924,6 +927,8 @@ The exhaustive public parameter mapping for the new thin contracts is:
 | `AntennaPortMode.current_transport` | `str` | required | `1` | names one complete static one-way CurrentTransport bound to the source object | owner of solved electric potential and conventional current | FEM CPU/double initial reference lane | `antenna_port_modes[].current_transport_id` |
 | `AntennaPortBranch.weight` | `float` | required | `1` | finite; all branch weights in one mode sum to zero and include signal plus return | signed current share relative to the common positive orientation | backend-neutral contract | `antenna_port_modes[].branches[].weight` |
 | `SolvedAntennaDrive.peak_current` | `float` | required | `A` | finite; zero disables the drive without invalidating the spatial basis | signed peak multiplying the immutable per-ampere field basis | lane-specific artifact consumer | `solved_antenna_drives[].peak_current_a` |
+| `AntennaSpectrumRequest.sampling_plane` | `AntennaSpectrumSamplingPlane` | required | m for origin/extents; 1 for counts and frame | orthonormal in-plane axes, positive extents, at least two samples per axis; current executable lane requires valid tet4 P1 topology or unique identity-coordinate carrier matches and fails closed for unsupported interpolation | centred physical lattice on which the per-ampere source field is sampled before the spatial Fourier transform | immutable FEM antenna asset with tet4 P1 or legacy identity sampling; FDM trilinear, direct RT0 evaluation, mixed topology, and native MFEM transfer remain explicitly unsupported | `antenna_spectrum_requests[].sampling_plane` |
+| `AntennaSpectrumRequest.port_mode_id` | `str | None` | None only for legacy single-port assets | `1` | when present, non-empty and bound to the solve stage; omitted requests are valid only when that stage has exactly one port | selects the immutable per-ampere field basis used by source-spectrum analysis | immutable FEM antenna asset; multi-port assets require explicit selection | `antenna_spectrum_requests[].port_mode_id` |
 
 (The optional `AntennaSpectrumRequest.port_mode_id` selects the immutable
 per-ampere basis used by the source-spectrum transform. It may be omitted only

@@ -415,8 +415,13 @@ impl FieldTetraBvh {
                 if !bounds.contains(position) {
                     return None;
                 }
-                Self::locate_recursive(left, position, sample_positions, cells)
-                    .or_else(|| Self::locate_recursive(right, position, sample_positions, cells))
+                let left_match = Self::locate_recursive(left, position, sample_positions, cells);
+                let right_match = Self::locate_recursive(right, position, sample_positions, cells);
+                match (left_match, right_match) {
+                    (Some(left), Some(right)) => Some(if left.0 <= right.0 { left } else { right }),
+                    (Some(found), None) | (None, Some(found)) => Some(found),
+                    (None, None) => None,
+                }
             }
         }
     }
@@ -566,11 +571,10 @@ fn sample_antenna_field_with_tetrahedra(
 
 /// Sample the immutable source-field carrier on the declared centred plane.
 ///
-/// The current asset revision stores nodal coordinates but no element/grid
-/// topology.  Consequently this function performs only a bounded
-/// identity-coordinate lookup (with a relative floating-point tolerance).  It
-/// never substitutes a nearest node for a missing point and never broadcasts a
-/// single field value over a target lattice.
+/// A carrier with tet4 topology uses deterministic barycentric P1
+/// interpolation. A legacy point-only carrier uses bounded identity-coordinate
+/// lookup. Neither realization substitutes a nearest node or broadcasts one
+/// field value over a target lattice.
 pub fn sample_antenna_field_on_plane(
     request: &AntennaSpectrumRequestIR,
     samples: &AntennaFieldSolutionSamples,
@@ -1635,6 +1639,25 @@ mod tests {
             [scale_m, scale_m, 0.0],
         ];
         assert!(barycentric_tet([0.25 * scale_m, 0.25 * scale_m, 0.0], vertices).is_none());
+    }
+
+    #[test]
+    fn shared_face_ownership_uses_lowest_topology_ordinal() {
+        let positions = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ];
+        let cells = vec![[0, 1, 2, 3], [0, 1, 2, 4]];
+        let bvh = FieldTetraBvh::build(&positions, &cells, 1.0e-12).unwrap();
+
+        let (cell_index, _) = bvh
+            .locate([0.2, 0.2, 0.0], &positions, &cells)
+            .expect("shared-face point must belong to one deterministic cell");
+
+        assert_eq!(cell_index, 0);
     }
 
     #[test]
