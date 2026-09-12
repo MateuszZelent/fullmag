@@ -4523,6 +4523,12 @@ fullmag_fem_backend *fullmag_fem_backend_create_v3(
             "fullmag_fem_backend_create_v3 rotated-interfacial DMI cannot be combined with interfacial or bulk DMI");
         return nullptr;
     }
+    if (plan->has_rotated_interfacial_dmi != 0 &&
+        plan->base.mesh.periodic_node_pairs_len != 0u) {
+        fullmag_fem_set_global_error(
+            "FEM RotatedInterfacialDmi with periodic node pairs is unsupported until the weak residual and mass projection are reduced over periodic node classes");
+        return nullptr;
+    }
     // Rotated interfacial DMI contributes a natural surface term.  The
     // public ABI must enforce the same fail-closed boundary contract as the
     // planner before importing the term or starting any runtime resources:

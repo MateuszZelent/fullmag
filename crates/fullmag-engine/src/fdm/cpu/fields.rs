@@ -750,12 +750,14 @@ impl ExchangeLlgProblem {
     }
 
     pub fn rotated_interfacial_dmi_energy_from_vectors(&self, magnetization: &[Vector3]) -> f64 {
-        self.dmi_energy_with_coefficients(
-            |flat| magnetization[flat],
-            0.0,
-            self.terms.rotated_interfacial_dmi.unwrap_or(0.0),
-            0.0,
-        )
+        let Some(rotated) = self
+            .terms
+            .rotated_interfacial_dmi
+            .filter(|coefficient| coefficient.abs() > 0.0)
+        else {
+            return 0.0;
+        };
+        self.dmi_energy_with_coefficients(|flat| magnetization[flat], 0.0, rotated, 0.0)
     }
 
     pub fn dmi_energy_density_from_vectors(&self, magnetization: &[Vector3]) -> Vec<f64> {
@@ -771,12 +773,14 @@ impl ExchangeLlgProblem {
         &self,
         magnetization: &[Vector3],
     ) -> Vec<f64> {
-        self.dmi_energy_density_with_coefficients(
-            magnetization,
-            0.0,
-            self.terms.rotated_interfacial_dmi.unwrap_or(0.0),
-            0.0,
-        )
+        let Some(rotated) = self
+            .terms
+            .rotated_interfacial_dmi
+            .filter(|coefficient| coefficient.abs() > 0.0)
+        else {
+            return vec![0.0; self.grid.cell_count()];
+        };
+        self.dmi_energy_density_with_coefficients(magnetization, 0.0, rotated, 0.0)
     }
 
     fn dmi_energy_density_with_coefficients(
@@ -4661,6 +4665,35 @@ mod stt_tests {
             MaterialParameters::new(800.0e3, 13.0e-12, damping).unwrap(),
             LlgConfig::default(),
         )
+    }
+
+    #[test]
+    fn rotated_dmi_energy_helpers_short_circuit_when_term_is_absent_or_zero() {
+        // Deliberately supply no field data: an absent/zero term must return
+        // before visiting even a periodic self-neighbor in the face loop.
+        let magnetization: [Vector3; 0] = [];
+        let mut without_term = one_cell_problem(0.2);
+        without_term.boundary_policy.x = AxisBoundary::Periodic;
+        assert_eq!(
+            without_term.rotated_interfacial_dmi_energy_from_vectors(&magnetization),
+            0.0
+        );
+        assert_eq!(
+            without_term.rotated_interfacial_dmi_energy_density_from_vectors(&magnetization),
+            vec![0.0]
+        );
+
+        let mut zero_term = one_cell_problem(0.2);
+        zero_term.boundary_policy.x = AxisBoundary::Periodic;
+        zero_term.terms.rotated_interfacial_dmi = Some(0.0);
+        assert_eq!(
+            zero_term.rotated_interfacial_dmi_energy_from_vectors(&magnetization),
+            0.0
+        );
+        assert_eq!(
+            zero_term.rotated_interfacial_dmi_energy_density_from_vectors(&magnetization),
+            vec![0.0]
+        );
     }
 
     fn canonical_slonczewski_oracle(

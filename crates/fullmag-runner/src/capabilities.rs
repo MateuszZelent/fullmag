@@ -1009,7 +1009,7 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
 }
 
 pub(crate) fn capabilities_for_fem_eigen_engine(engine: FemEngine) -> BackendCapabilities {
-    let mut capabilities = capabilities_for_fem_engine(engine);
+    let mut capabilities = without_rotated_dmi_for_modal_fem(capabilities_for_fem_engine(engine));
     capabilities.engine_id = match engine {
         FemEngine::CpuNative => RuntimeEngineId::FemEigenCpuBaseline,
         FemEngine::NativeGpu => RuntimeEngineId::FemEigenNativeGpu,
@@ -1020,7 +1020,7 @@ pub(crate) fn capabilities_for_fem_eigen_engine(engine: FemEngine) -> BackendCap
 pub(crate) fn capabilities_for_fem_frequency_response_validation_engine(
     engine: FemEngine,
 ) -> BackendCapabilities {
-    let mut capabilities = capabilities_for_fem_engine(engine);
+    let mut capabilities = without_rotated_dmi_for_modal_fem(capabilities_for_fem_engine(engine));
     #[cfg(feature = "fem-gpu")]
     {
         capabilities.engine_id = RuntimeEngineId::FemFrequencyResponseProductionCpu;
@@ -1030,6 +1030,33 @@ pub(crate) fn capabilities_for_fem_frequency_response_validation_engine(
         capabilities.engine_id = RuntimeEngineId::FemFrequencyResponseDenseValidation;
     }
     align_compatibility_registry_to_final_engine(capabilities)
+}
+
+/// Rotated-interfacial DMI is a time-domain interaction only.  Eigen and
+/// frequency-response capability profiles must not inherit it from the
+/// time-domain compatibility profile until those operators are implemented.
+fn without_rotated_dmi_for_modal_fem(mut capabilities: BackendCapabilities) -> BackendCapabilities {
+    capabilities
+        .supported_terms
+        .retain(|term| term != "rotated_interfacial_dmi");
+    for quantities in [
+        &mut capabilities.preview_quantities,
+        &mut capabilities.snapshot_quantities,
+    ] {
+        quantities.retain(|quantity| quantity != "H_rotated_dmi" && quantity != "eden_rotated_dmi");
+    }
+    capabilities
+        .scalar_outputs
+        .retain(|quantity| quantity != "E_rotated_dmi");
+    if let Some(registry) = capabilities.resolved_quantity_registry.as_mut() {
+        registry
+            .field_quantities
+            .retain(|quantity| quantity != "H_rotated_dmi" && quantity != "eden_rotated_dmi");
+        registry
+            .scalar_quantities
+            .retain(|quantity| quantity != "E_rotated_dmi");
+    }
+    capabilities
 }
 
 fn align_compatibility_registry_to_final_engine(
@@ -1333,6 +1360,8 @@ mod tests {
             capabilities_for_fem_frequency_response_validation_engine(FemEngine::CpuNative);
         let fem_gpu = capabilities_for_fem_engine(FemEngine::NativeGpu);
         let fem_eigen_gpu = capabilities_for_fem_eigen_engine(FemEngine::NativeGpu);
+        let fem_response_gpu =
+            capabilities_for_fem_frequency_response_validation_engine(FemEngine::NativeGpu);
 
         assert_eq!(fem_cpu.engine_id.as_str(), "fem_cpu_native");
         assert_eq!(fem_eigen_cpu.engine_id.as_str(), "fem_eigen_cpu_baseline");
@@ -1349,8 +1378,39 @@ mod tests {
         assert_eq!(fem_gpu.engine_id.as_str(), "fem_native_gpu");
         assert_eq!(fem_eigen_gpu.engine_id.as_str(), "fem_eigen_native_gpu");
 
-        assert_eq!(fem_cpu.supported_terms, fem_eigen_cpu.supported_terms);
-        assert_eq!(fem_cpu.supported_terms, fem_response_cpu.supported_terms);
+        assert!(fem_cpu
+            .supported_terms
+            .iter()
+            .any(|term| term == "rotated_interfacial_dmi"));
+        for modal in [
+            &fem_eigen_cpu,
+            &fem_response_cpu,
+            &fem_eigen_gpu,
+            &fem_response_gpu,
+        ] {
+            assert!(!modal
+                .supported_terms
+                .iter()
+                .any(|term| term == "rotated_interfacial_dmi"));
+            assert!(!modal
+                .scalar_outputs
+                .iter()
+                .any(|quantity| quantity == "E_rotated_dmi"));
+            assert!(!modal
+                .preview_quantities
+                .iter()
+                .chain(&modal.snapshot_quantities)
+                .any(|quantity| quantity == "H_rotated_dmi" || quantity == "eden_rotated_dmi"));
+            if let Some(registry) = &modal.resolved_quantity_registry {
+                assert!(!registry.field_quantities.iter().any(|quantity| {
+                    quantity == "H_rotated_dmi" || quantity == "eden_rotated_dmi"
+                }));
+                assert!(!registry
+                    .scalar_quantities
+                    .iter()
+                    .any(|quantity| quantity == "E_rotated_dmi"));
+            }
+        }
         assert_eq!(
             fem_gpu.supported_demag_realizations,
             fem_eigen_gpu.supported_demag_realizations

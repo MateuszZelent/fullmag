@@ -169,7 +169,8 @@ int main() {
     rotated_abi.struct_size = sizeof(rotated_abi);
     // Keep this fixture away from the independent open-boundary gate so each
     // case below exercises the rDMI ABI/composition validation itself.
-    rotated_abi.base.mesh.periodic_node_pairs_len = 1;
+    rotated_abi.base.enable_exchange = 1;
+    rotated_abi.base.mesh.periodic_node_pairs_len = 0;
 
     rotated_abi.has_rotated_interfacial_dmi = 2;
     rotated_abi.rotated_interfacial_dmi_constant = 3.0e-3;
@@ -209,6 +210,12 @@ int main() {
     expect_create_v3_error(
         rotated_abi,
         "fullmag_fem_backend_create_v3 rotated-interfacial DMI cannot be combined with interfacial or bulk DMI");
+
+    rotated_abi.base.has_bulk_dmi = 0;
+    rotated_abi.base.mesh.periodic_node_pairs_len = 1;
+    expect_create_v3_error(
+        rotated_abi,
+        "FEM RotatedInterfacialDmi with periodic node pairs is unsupported until the weak residual and mass projection are reduced over periodic node classes");
 
     return 0;
 }

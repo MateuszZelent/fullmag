@@ -3009,11 +3009,7 @@ impl NativeFemBackend {
     }
 
     fn split_dmi_energy(&self, aggregate: f64) -> (f64, f64) {
-        if self.rotated_dmi_only {
-            (0.0, aggregate)
-        } else {
-            (aggregate, 0.0)
-        }
+        crate::types::split_rotated_only_dmi_energy(self.rotated_dmi_only, aggregate)
     }
 
     fn apply_demag_solver_policy_to_step_stats(&self, stats: &mut StepStats) {

@@ -180,7 +180,12 @@ bool context_preflight_single_grid_workspace(
     default:
         break;
     }
-    if (ctx.has_oersted_field) ++vector_field_count;
+    // h_oe_static is shared by descriptor-provided Oersted data and the
+    // late static external-field profile setter.  The latter is intentionally
+    // outside the legacy plan descriptor, so reserve its three components in
+    // the setup preflight even when no Oersted source was requested yet.
+    constexpr uint64_t h_oe_static_vector_fields = 1;
+    vector_field_count += h_oe_static_vector_fields;
 
     // Base solver fields, scalar energy density, and both four-slot snapshot
     // pools are mandatory setup-owned device storage.

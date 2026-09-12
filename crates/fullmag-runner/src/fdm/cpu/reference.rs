@@ -3529,14 +3529,7 @@ impl<'a> DirectFieldSnapshotCache<'a> {
                 .rotated_interfacial_dmi_energy_density_from_vectors(self.state.magnetization())),
             "eden_total" => {
                 let mut total = vec![0.0; self.state.magnetization().len()];
-                for quantity in [
-                    "eden_ex",
-                    "eden_demag",
-                    "eden_ext",
-                    "eden_ani",
-                    "eden_dmi",
-                    "eden_rotated_dmi",
-                ] {
+                for quantity in ["eden_ex", "eden_demag", "eden_ext", "eden_ani", "eden_dmi"] {
                     let values = self.select_scalar(quantity)?;
                     for (accum, value) in total.iter_mut().zip(values) {
                         *accum += value;
@@ -3928,6 +3921,13 @@ mod tests {
             .expect("direct rotated DMI energy density");
         let integrated = density.iter().sum::<f64>() * problem.cell_size.volume();
         assert!((integrated - observables.rotated_dmi_energy).abs() <= 1.0e-24);
+        let integrated_total = direct
+            .select_scalar("eden_total")
+            .expect("total energy density")
+            .iter()
+            .sum::<f64>()
+            * problem.cell_size.volume();
+        assert!((integrated_total - observables.total_energy).abs() <= 1.0e-24);
 
         let stats = make_step_stats(0, 0.0, 1.0e-14, 0, &observables, &problem);
         assert_eq!(stats.e_rotated_dmi, observables.rotated_dmi_energy);

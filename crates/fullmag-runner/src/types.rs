@@ -1625,6 +1625,13 @@ mod all_in_gpu_fem_transfer_audit_tests {
     }
 }
 
+/// Native reducers expose aggregate DMI energy. In a rotated-only plan the
+/// aggregate is also the exact rotated component; it must not be zeroed.
+#[cfg(any(test, feature = "cuda", feature = "fem-gpu"))]
+pub(crate) fn split_rotated_only_dmi_energy(rotated_dmi_only: bool, aggregate: f64) -> (f64, f64) {
+    (aggregate, if rotated_dmi_only { aggregate } else { 0.0 })
+}
+
 impl StepStats {
     pub(crate) fn set_dmi_energy_components(
         &mut self,
@@ -1720,7 +1727,32 @@ impl StepStats {
 
 #[cfg(test)]
 mod rotated_dmi_energy_tests {
-    use super::StepStats;
+    use super::{split_rotated_only_dmi_energy, StepStats};
+
+    #[test]
+    fn native_rotated_only_dmi_split_preserves_aggregate_and_component_in_both_lanes() {
+        for aggregate in [-2.5, 0.0, 1.25] {
+            assert_eq!(
+                split_rotated_only_dmi_energy(true, aggregate),
+                (aggregate, aggregate)
+            );
+            assert_eq!(
+                split_rotated_only_dmi_energy(false, aggregate),
+                (aggregate, 0.0)
+            );
+        }
+        for source in [
+            include_str!("native_fem.rs"),
+            include_str!("fdm/gpu/cuda/native.rs"),
+        ] {
+            let splitter = source
+                .split("    fn split_dmi_energy(")
+                .nth(1)
+                .and_then(|body| body.split("\n    }").next())
+                .expect("native energy splitter");
+            assert!(splitter.contains("crate::types::split_rotated_only_dmi_energy("));
+        }
+    }
 
     #[test]
     fn rotated_dmi_energy_is_reported_separately_and_in_total_dmi() {

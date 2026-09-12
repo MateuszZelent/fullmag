@@ -2827,6 +2827,56 @@ void cuda_rotated_interfacial_dmi_energy_difference_matches_tetra_oracle()
         scale >= std::abs(actual) && std::abs(actual - expected) <= tolerance,
         "CUDA rotated interfacial DMI energy difference must match the canonical tetrahedron oracle");
 
+    const std::vector<double> cancelling_component = {
+        1.0, -1.0, -1.0, 1.0};
+    const std::vector<double> cancelling_out_of_plane = {
+        1.0, -1.0, 1.0, -1.0};
+    check_cuda(
+        cudaMemcpy(
+            d_mx, cancelling_component.data(),
+            cancelling_component.size() * sizeof(double),
+            cudaMemcpyHostToDevice),
+        "copy rotated DMI cancellation x operand");
+    check_cuda(
+        cudaMemcpy(
+            d_my, cancelling_component.data(),
+            cancelling_component.size() * sizeof(double),
+            cudaMemcpyHostToDevice),
+        "copy rotated DMI cancellation y operand");
+    check_cuda(
+        cudaMemcpy(
+            d_mz, cancelling_out_of_plane.data(),
+            cancelling_out_of_plane.size() * sizeof(double),
+            cudaMemcpyHostToDevice),
+        "copy rotated DMI cancellation z operand");
+    check_cuda(cudaMemset(d_delta, 0, sizeof(double)),
+               "clear rotated DMI cancellation delta");
+    check_cuda(cudaMemset(d_scale, 0, sizeof(double)),
+               "clear rotated DMI cancellation scale");
+    fullmag::fem::fullmag_cuda_dmi_energy_difference(
+        d_nodes, d_elements, d_mask,
+        d_zero, d_zero, d_zero,
+        d_mx, d_my, d_mz,
+        d_zero, d_delta, d_scale,
+        0.0, kD, 0.0, 0.0, 1.0,
+        false, true, false, 1, nullptr);
+    check_cuda(
+        cudaGetLastError(),
+        "CUDA rotated interfacial DMI cancellation launch");
+    check_cuda(
+        cudaDeviceSynchronize(),
+        "CUDA rotated interfacial DMI cancellation synchronize");
+    const double cancelling_delta = copy_scalar_from_device(d_delta);
+    const double cancelling_scale = copy_scalar_from_device(d_scale);
+    const double cancellation_bound =
+        64.0 * std::numeric_limits<double>::epsilon() *
+        std::max(1.0, cancelling_scale);
+    check(
+        std::isfinite(cancelling_delta) && std::isfinite(cancelling_scale) &&
+            cancelling_scale > 1.0 &&
+            std::abs(cancelling_delta) <= cancellation_bound,
+        "CUDA rotated interfacial DMI cancellation must retain an operand-level absolute bound when aggregate s/q products vanish");
+
     for (void *pointer : {
              static_cast<void *>(d_nodes), static_cast<void *>(d_elements),
              static_cast<void *>(d_mask), static_cast<void *>(d_zero),

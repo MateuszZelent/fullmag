@@ -2041,11 +2041,7 @@ impl NativeFdmBackend {
     }
 
     fn split_dmi_energy(&self, aggregate_dmi_energy: f64) -> (f64, f64) {
-        if self.rotated_dmi_only {
-            (0.0, aggregate_dmi_energy)
-        } else {
-            (aggregate_dmi_energy, 0.0)
-        }
+        crate::types::split_rotated_only_dmi_energy(self.rotated_dmi_only, aggregate_dmi_energy)
     }
 
     pub(crate) fn stats_policy(&self) -> NativeStatsPolicy {

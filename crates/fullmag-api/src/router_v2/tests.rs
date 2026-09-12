@@ -8357,6 +8357,68 @@ async fn table_rows_resource_returns_cursor_window_and_column_metadata() {
 }
 
 #[tokio::test]
+async fn completed_rotated_dmi_scalar_preview_uses_plan_gated_manifest_fallback() {
+    use fullmag_ir::{
+        BackendPlanIR, BackendTarget, CommonPlanMeta, ExecutionMode, ExecutionPlanIR, FdmPlanIR,
+        OutputPlanIR, ProvenancePlanIR,
+    };
+
+    let state = test_app_state_with_live_session().await;
+    let mut guard = state.current_live_state.write().await;
+    let snapshot = guard.as_mut().expect("test live session");
+    snapshot.scalar_rows.clear();
+    snapshot.live_state = None;
+    snapshot.run = Some(
+        serde_json::from_value(serde_json::json!({
+            "run_id": "completed-rdmi", "session_id": "test", "status": "completed",
+            "total_steps": 10, "final_e_dmi": -2.5e-18, "artifact_dir": "."
+        }))
+        .unwrap(),
+    );
+    let plan = ExecutionPlanIR {
+        common: CommonPlanMeta {
+            ir_version: "test".to_string(),
+            requested_backend: BackendTarget::Fdm,
+            resolved_backend: BackendTarget::Fdm,
+            execution_mode: ExecutionMode::Strict,
+            material_field_plans: Vec::new(),
+        },
+        backend_plan: BackendPlanIR::Fdm(FdmPlanIR {
+            rotated_interfacial_dmi: Some(3.0e-3),
+            ..FdmPlanIR::default()
+        }),
+        output_plan: OutputPlanIR {
+            outputs: Vec::new(),
+        },
+        provenance: ProvenancePlanIR {
+            notes: Vec::new(),
+            integrator_resolution: None,
+            fem_eigen_execution_resolution: None,
+            physics_graph: None,
+        },
+    };
+    snapshot.metadata = Some(serde_json::json!({ "execution_plan": plan }));
+    assert_eq!(
+        crate::current_global_scalar_value(snapshot, "E_rotated_dmi"),
+        Some(-2.5e-18)
+    );
+
+    // Missing or corrupt legacy provenance cannot relabel an aggregate as a
+    // rotated component; the aggregate remains readable in both cases.
+    for metadata in [None, Some(serde_json::json!({ "execution_plan": {} }))] {
+        snapshot.metadata = metadata;
+        assert_eq!(
+            crate::current_global_scalar_value(snapshot, "E_rotated_dmi"),
+            None
+        );
+        assert_eq!(
+            crate::current_global_scalar_value(snapshot, "E_dmi"),
+            Some(-2.5e-18)
+        );
+    }
+}
+
+#[tokio::test]
 async fn table_rows_expose_rotated_dmi_energy_as_an_independent_global_scalar() {
     let state = test_app_state_with_live_session().await;
     {

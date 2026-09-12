@@ -392,9 +392,19 @@ __global__ void dmi_energy_difference_kernel(
                 rotated_sum += term;
                 rotated_absolute += fabs(term);
             }
+            const double rotated_arithmetic_scale =
+                abs_s[2] * abs_gq[0][0] +
+                abs_q[2] * abs_gs[0][0] +
+                abs_s[0] * abs_gq[2][0] +
+                abs_q[0] * abs_gs[2][0] +
+                abs_s[0] * abs_gq[1][1] +
+                abs_q[0] * abs_gs[1][1] +
+                abs_s[1] * abs_gq[0][1] +
+                abs_q[1] * abs_gs[0][1];
             delta += rotated_prefactor * rotated_sum;
             absolute_delta += 0.5 * fabs(uniform_rotated_d) * fabs(volume) *
-                geometry_condition_scale * rotated_absolute;
+                geometry_condition_scale *
+                (rotated_arithmetic_scale + rotated_absolute);
         }
     }
     dmi_atomic_add_double(delta_out, delta);

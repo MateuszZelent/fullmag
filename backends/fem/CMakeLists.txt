@@ -1137,6 +1137,21 @@ target_include_directories(fem_dmi_contract PRIVATE
 )
 add_test(NAME fem_dmi_contract COMMAND fem_dmi_contract)
 
+add_executable(
+    fem_rotated_dmi_absolute_scale_contract
+    tests/rotated_dmi_absolute_scale_contract.cpp
+)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(
+        fem_rotated_dmi_absolute_scale_contract PRIVATE
+        -Wall -Wextra -Wpedantic -Werror
+    )
+endif()
+add_test(
+    NAME fem_rotated_dmi_absolute_scale_contract
+    COMMAND fem_rotated_dmi_absolute_scale_contract
+)
+
 add_executable(fem_llg_rhs_contract tests/llg_rhs_contract.cpp)
 target_link_libraries(fem_llg_rhs_contract PRIVATE fullmag_fem)
 target_include_directories(fem_llg_rhs_contract PRIVATE
