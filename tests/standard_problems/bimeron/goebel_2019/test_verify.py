@@ -7,12 +7,28 @@ from pathlib import Path
 from tests.standard_problems.bimeron.goebel_2019.verify import (
     MIN_RELAX_TIME_S,
     _receipt_contains_dmi_operator,
+    _goebel_plan_has_only_expected_physics,
     _initial_energy_from_log,
     _stage_duration_s,
     _stage_meets_minimum_duration,
     analyze_fdm_state,
     verify_bundle,
 )
+
+
+def test_goebel_source_physics_rejects_extra_drives_and_torques() -> None:
+    assert _goebel_plan_has_only_expected_physics({})
+    for key, value in (
+        ("external_field", [1.0, 0.0, 0.0]),
+        ("field_drives", [{"id": "drive"}]),
+        ("spin_transport_plans", [{"id": "transport"}]),
+        ("sot_current_density", 1.0),
+        ("has_oersted_cylinder", True),
+        ("mel_b1", 1.0),
+        ("temperature", 300.0),
+    ):
+        plan = {key: value}
+        assert not _goebel_plan_has_only_expected_physics(plan), key
 
 
 def _analytic_bimeron(nx: int, ny: int) -> list[list[float]]:

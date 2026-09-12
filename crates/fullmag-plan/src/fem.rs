@@ -802,6 +802,96 @@ fn exclusive_coefficient_realization_error(
     None
 }
 
+fn rotated_dmi_exchange_stiffness_error(
+    rotated_interfacial_dmi: Option<f64>,
+    has_open_magnetic_boundary: bool,
+    enable_exchange: bool,
+    mesh: &fullmag_ir::MeshIR,
+    material: &fullmag_ir::MaterialIR,
+    a_element_field: Option<&[f64]>,
+) -> Option<String> {
+    if !rotated_interfacial_dmi.is_some_and(|d| d != 0.0) || !has_open_magnetic_boundary {
+        return None;
+    }
+    if !enable_exchange {
+        return Some(
+            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition"
+                .to_string(),
+        );
+    }
+    if !(material.exchange_stiffness.is_finite() && material.exchange_stiffness > 0.0) {
+        return Some(
+            "RotatedInterfacialDmi with open magnetic boundaries requires a strictly positive finite resolved FEM exchange stiffness A"
+                .to_string(),
+        );
+    }
+
+    let classified = match mesh.cells.mesh_parts.len() {
+        0 => false,
+        count if count == mesh.cells.len() => true,
+        _ => {
+            return Some(
+                "RotatedInterfacialDmi with open magnetic boundaries requires complete FEM cell material-part classification to resolve exchange stiffness A"
+                    .to_string(),
+            )
+        }
+    };
+    let mut magnetic_nodes = BTreeSet::new();
+    let mut magnetic_cells = 0usize;
+    for cell in mesh.cells.iter() {
+        let magnetic = !classified
+            || matches!(
+                mesh.cells.mesh_parts.get(cell.ordinal),
+                Some(fullmag_ir::FemCellMeshPartIR::Magnetic)
+            );
+        if !magnetic {
+            continue;
+        }
+        magnetic_cells += 1;
+        for node in cell.nodes.iter().copied() {
+            magnetic_nodes.insert(node as usize);
+        }
+        if let Some(values) = a_element_field {
+            let Some(value) = values.get(cell.ordinal) else {
+                return Some(
+                    "RotatedInterfacialDmi with open magnetic boundaries requires an A_element_field value for every magnetic FEM cell"
+                        .to_string(),
+                );
+            };
+            if !(value.is_finite() && *value > 0.0) {
+                return Some(
+                    "RotatedInterfacialDmi with open magnetic boundaries requires strictly positive finite A_element_field values on every magnetic FEM cell"
+                        .to_string(),
+                );
+            }
+        }
+    }
+    if magnetic_cells == 0 {
+        return Some(
+            "RotatedInterfacialDmi with open magnetic boundaries requires at least one magnetic FEM cell with resolved exchange stiffness A"
+                .to_string(),
+        );
+    }
+    if let Some(values) = material.a_field.as_deref() {
+        if values.len() != mesh.nodes.len() {
+            return Some(
+                "RotatedInterfacialDmi with open magnetic boundaries requires a nodal material.a_field covering every FEM node"
+                    .to_string(),
+            );
+        }
+        if magnetic_nodes
+            .iter()
+            .any(|node| !(values[*node].is_finite() && values[*node] > 0.0))
+        {
+            return Some(
+                "RotatedInterfacialDmi with open magnetic boundaries requires strictly positive finite material.a_field values on every magnetic boundary support"
+                    .to_string(),
+            );
+        }
+    }
+    None
+}
+
 /// Conservative explicit-exchange stiffness estimate for the resolved FEM mesh.
 ///
 /// The native FEM plan stores the reduced gyromagnetic factor `gamma_mu0` in
@@ -1022,6 +1112,31 @@ mod fem_exchange_stiffness_tests {
         assert!((estimate.h_min_m - 1.0).abs() < 1.0e-12);
         assert!((estimate.max_exchange_stiffness_j_per_m - 20.0e-12).abs() < 1.0e-24);
         assert!((estimate.min_saturation_magnetisation_a_per_m - 700.0e3).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn rotated_dmi_open_boundary_requires_positive_resolved_exchange() {
+        let mesh = tet_mesh(1.0);
+        let material = ProblemIR::bootstrap_example().materials[0].clone();
+        assert!(rotated_dmi_exchange_stiffness_error(
+            Some(3e-3),
+            true,
+            true,
+            &mesh,
+            &material,
+            Some(&[material.exchange_stiffness]),
+        )
+        .is_none());
+        let error = rotated_dmi_exchange_stiffness_error(
+            Some(3e-3),
+            true,
+            true,
+            &mesh,
+            &material,
+            Some(&[0.0]),
+        )
+        .expect("zero A must be rejected for open-boundary rotated DMI");
+        assert!(error.contains("strictly positive"));
     }
 }
 
@@ -3652,6 +3767,18 @@ pub(crate) fn plan_fem(
     if let Some(reason) =
         exclusive_coefficient_realization_error(&material, &ms_element_field, &a_element_field)
     {
+        return Err(PlanError {
+            reasons: vec![reason],
+        });
+    }
+    if let Some(reason) = rotated_dmi_exchange_stiffness_error(
+        rotated_interfacial_dmi,
+        has_open_magnetic_boundary,
+        enable_exchange,
+        &mesh,
+        &material,
+        a_element_field.as_deref(),
+    ) {
         return Err(PlanError {
             reasons: vec![reason],
         });

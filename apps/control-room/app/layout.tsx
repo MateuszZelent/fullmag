@@ -8,8 +8,8 @@ export const metadata: Metadata = {
   title: "Fullmag Control Room",
   description: "Modular Fullmag frontend v2 control room for web and desktop.",
   icons: {
-    icon: "/favicon.ico",
-    shortcut: "/favicon.ico",
+    icon: "/brand/fullmag-logo-vector.svg",
+    shortcut: "/brand/fullmag-logo-vector.svg",
   },
 };
 

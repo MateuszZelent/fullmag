@@ -189,6 +189,80 @@ def _stage_meets_minimum_duration(
     )
 
 
+def _goebel_plan_has_only_expected_physics(plan: dict[str, object]) -> bool:
+    """Reject receipts that silently add a second physical drive/module."""
+
+    def is_empty(value: object) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, bool):
+            return not value
+        if isinstance(value, (int, float)):
+            return value == 0.0
+        if isinstance(value, (list, tuple, dict, str)):
+            return len(value) == 0
+        return False
+
+    # The Göbel reproduction is a zero-current, zero-temperature thin film.
+    # Keep this list explicit so a future plan cannot pass source_physics while
+    # adding a field drive, torque, Oersted profile, thermal term, or strain.
+    disallowed = (
+        "external_field",
+        "antenna_zeeman_masks",
+        "field_drives",
+        "regional_field_drive_bases",
+        "inter_region_exchange",
+        "spin_transport_plans",
+        "fdm_gpu_charge_transports",
+        "current_density",
+        "stt_degree",
+        "stt_beta",
+        "zhang_li_formula_version",
+        "zhang_li_operator_version",
+        "zhang_li_target",
+        "zhang_li_lande_g",
+        "stt_spin_polarization",
+        "stt_lambda",
+        "stt_epsilon_prime",
+        "stt_thickness",
+        "stt_fixed_layer_position",
+        "slonczewski_formula_version",
+        "slonczewski_stack_normal",
+        "slonczewski_target",
+        "slonczewski_active_mask",
+        "sot_current_density",
+        "sot_xi_dl",
+        "sot_xi_fl",
+        "sot_sigma",
+        "sot_thickness",
+        "sot_formula_version",
+        "sot_target",
+        "sot_active_mask",
+        "sot_envelope",
+        "sot_drive",
+        "has_oersted_cylinder",
+        "oersted_current",
+        "oersted_radius",
+        "oersted_center",
+        "oersted_axis",
+        "oersted_field_xyz",
+        "static_external_field_xyz",
+        "oersted_time_dep_kind",
+        "oersted_time_dep_freq",
+        "oersted_time_dep_phase",
+        "oersted_time_dep_offset",
+        "oersted_time_dep_t_on",
+        "oersted_time_dep_t_off",
+        "oersted_realization",
+        "thermal_seed_config",
+        "temperature",
+        "mel_b1",
+        "mel_b2",
+        "mel_uniform_strain",
+    )
+    return all(is_empty(plan.get(key)) for key in disallowed)
+
+
 def _initial_energy_from_log(path: Path) -> float:
     pattern = re.compile(r"stage 1/4 .*?step\s+0 .*?E_total=([-+0-9.eE]+)")
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -319,6 +393,7 @@ def verify_bundle(
             and plan.get("enable_exchange") is True
             and plan.get("enable_demag") is True
             and plan.get("temperature", 0.0) == 0.0
+            and _goebel_plan_has_only_expected_physics(plan)
             and material["saturation_magnetisation"] == 0.58e6
             and material["exchange_stiffness"] == 15e-12
             and material["damping"] == 0.3

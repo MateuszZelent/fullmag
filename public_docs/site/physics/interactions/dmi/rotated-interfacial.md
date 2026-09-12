@@ -155,6 +155,7 @@ study.stages.add_relax(
     algorithm="llg_overdamped",
     solver="rk45",
     dt=2.5e-15,
+    relax_alpha=0.3,
     max_steps=8_000,
     max_physical_time_s=20e-12,
     tolT=1e-6,

@@ -2680,6 +2680,10 @@ def _normalize_geometry_interaction_entry(
     kind = str(raw.get("kind") or "").strip()
     if kind not in _GEOMETRY_INTERACTION_ORDER:
         return None
+    if kind == "rotated_interfacial_dmi":
+        raise ValueError(
+            "rotated_interfacial_dmi is study-scoped and cannot appear in object physics_stack"
+        )
     if kind in {"exchange", "demag"}:
         return {"kind": kind, "enabled": bool(raw.get("enabled", True)), "params": None}
     params = raw.get("params") if isinstance(raw.get("params"), dict) else {}  # type: ignore[assignment]
@@ -2693,9 +2697,6 @@ def _normalize_geometry_interaction_entry(
         if dbulk is None:
             dbulk = _number_or_none(material_dbulk)
         params["dbulk"] = dbulk if dbulk is not None else 1e-3
-    elif kind == "rotated_interfacial_dmi":
-        d = _number_or_none(params.get("d"))
-        params["d"] = d if d is not None else 3e-3
     elif kind == "uniaxial_anisotropy":
         ku1 = _number_or_none(params.get("ku1"))
         params["ku1"] = ku1 if ku1 is not None else 0.0
