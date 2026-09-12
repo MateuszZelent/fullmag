@@ -73,6 +73,31 @@ bool valid_modal_request_enums(const ModalEigenRequest &request) noexcept
     return valid_execution_target && valid_scalar_representation && valid_result_representation;
 }
 
+// The legacy Poisson-airbox modal path is assembled with real, k=0 blocks.
+// Keep the routing predicate local to this boundary so a nonzero-k Floquet
+// request cannot accidentally enter that path before the production
+// nonzero-k capability gate runs.
+bool modal_request_is_nonzero_k_floquet(const ModalEigenRequest &request) noexcept
+{
+    const double *k_vector = request.operator_request.k_vector_rad_m;
+    int k_vector_len = request.operator_request.k_vector_len;
+    if ((k_vector == nullptr || k_vector_len <= 0) && request.has_floquet_k_vector) {
+        k_vector = request.floquet_k_vector_rad_per_m;
+        k_vector_len = 3;
+    }
+    if (request.operator_request.spin_wave_bc_kind == nullptr ||
+        std::strcmp(request.operator_request.spin_wave_bc_kind, "floquet") != 0 ||
+        k_vector == nullptr || k_vector_len <= 0) {
+        return false;
+    }
+    for (int index = 0; index < k_vector_len; ++index) {
+        if (std::abs(k_vector[index]) > 0.0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::string escape_json_string(const char *value)
 {
     if (value == nullptr) {
@@ -287,6 +312,44 @@ void set_modal_execution(
     result.modal_execution.fallback_state = ModalResolvedFallbackState::none;
     result.modal_execution.engine_id = engine_id != nullptr ? engine_id : "unavailable";
     result.modal_execution.fallback_reason = "none";
+}
+
+FrequencyDomainContractResult nonzero_k_floquet_k0_poisson_path_unavailable(
+    const ModalEigenRequest &request) noexcept
+{
+    FrequencyDomainContractResult result{};
+    result.status = FrequencyDomainStatus::unavailable;
+    result.error_message =
+        "native FEM modal_eigen nonzero-k Floquet requests cannot use the real k=0 Poisson-airbox path";
+    result.diagnostics_json =
+        "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
+        "\"study_product\":\"modal_eigen\","
+        "\"status\":\"unavailable\","
+        "\"complete\":false,"
+        "\"solver_adapter_status\":\"unsupported\","
+        "\"unsupported_reason\":\"nonzero_k_floquet_k0_poisson_path\","
+        "\"production_cpu_rejection_reason\":\"nonzero_k_floquet_k0_poisson_path\","
+        "\"production_cpu_rejection_scope\":\"selected_spectrum_nonzero_k_floquet_modal\","
+        "\"required_operator_contract\":\"bloch_floquet_airbox_shared_domain_operator\","
+        "\"required_operator_payload_kind\":\"floquet_airbox_shared_domain_operator\","
+        "\"requested_poisson_path\":\"k0_real_shared_domain\","
+        "\"spectral_transform\":\"shift_invert\","
+        "\"phasor_convention\":\"exp_i_omega_t\"}";
+    result.diagnostics_json = with_operator_diagnostics(
+        std::move(result.diagnostics_json),
+        request.operator_request.operator_diagnostics_json);
+    result.result_json =
+        "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+        "\"study_product\":\"modal_eigen\","
+        "\"status\":\"unavailable\","
+        "\"accepted_mode_count\":0,"
+        "\"unsupported_reason\":\"nonzero_k_floquet_k0_poisson_path\","
+        "\"required_operator_contract\":\"bloch_floquet_airbox_shared_domain_operator\"}";
+    result.result_json = with_operator_diagnostics(
+        std::move(result.result_json),
+        request.operator_request.operator_diagnostics_json);
+    result.artifact_manifest_path.clear();
+    return result;
 }
 
 bool output_directory_required(int write_partial_artifacts, const char *output_directory) noexcept
@@ -1691,6 +1754,26 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
         return result;
     }
     ModalEigenRequest effective_request = request;
+    if (modal_request_is_nonzero_k_floquet(request) &&
+        (request.poisson_airbox_shared_domain_enabled != 0 ||
+         request.poisson_airbox_block_enabled != 0)) {
+        FrequencyDomainContractResult result =
+            nonzero_k_floquet_k0_poisson_path_unavailable(request);
+        const ModalExecutionTarget unavailable_target =
+            request.execution_target == ModalExecutionTarget::production_gpu
+                ? ModalExecutionTarget::production_gpu
+                : request.execution_target == ModalExecutionTarget::production_cpu
+                    ? ModalExecutionTarget::production_cpu
+                    : ModalExecutionTarget::auto_select;
+        set_modal_execution(
+            result,
+            unavailable_target,
+            request.spectral_transform_kind,
+            unavailable_target == ModalExecutionTarget::production_gpu
+                ? "production_gpu_nonzero_k_floquet_k0_poisson_path_unavailable"
+                : "production_cpu_nonzero_k_floquet_k0_poisson_path_unavailable");
+        return result;
+    }
     PoissonAirboxSharedDomainAssemblyResult shared_domain_assembly{};
     if (request.poisson_airbox_shared_domain_enabled != 0) {
         if (request.poisson_airbox_shared_domain_payload == nullptr) {

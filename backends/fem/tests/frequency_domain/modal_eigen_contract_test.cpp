@@ -2,6 +2,7 @@
 #include "frequency_domain/linearized_dynamic_pencil.hpp"
 #include "frequency_domain/linearization_state.hpp"
 #include "frequency_domain/mesh_symmetry_certificate.hpp"
+#include "frequency_domain/modal_eigen_solver.hpp"
 #include "fullmag_fem.h"
 
 #include <array>
@@ -2500,6 +2501,60 @@ void modal_nonzero_k_floquet_payload_rejects_until_production_operator_exists()
     fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
+void modal_nonzero_k_floquet_never_enters_k0_poisson_path()
+{
+    constexpr double k_vector_rad_m[] = {1.0e6, 0.0, 0.0};
+
+    fd::ModalEigenRequest request{};
+    request.abi_version = fd::kFrequencyDomainAbiVersion;
+    request.operator_request.abi_version = fd::kFrequencyDomainAbiVersion;
+    request.operator_request.gamma_rad_s_T = 1.760859e11;
+    request.operator_request.mu0_T_m_A = 1.25663706212e-6;
+    request.operator_request.spin_wave_bc_kind = "floquet";
+    request.operator_request.k_vector_rad_m = k_vector_rad_m;
+    request.operator_request.k_vector_len = 3;
+    request.poisson_airbox_shared_domain_enabled = 1;
+
+    const fd::FrequencyDomainContractResult result =
+        fd::solve_modal_eigen_contract(request);
+    check(result.status == fd::FrequencyDomainStatus::unavailable,
+          "nonzero-k Floquet shared-domain request must remain unavailable");
+    check(result.error_message.find("real k=0 Poisson-airbox path") != std::string::npos,
+          "nonzero-k Floquet shared-domain request must explain the k=0 routing guard");
+    check(result.diagnostics_json.find(
+              "\"unsupported_reason\":\"nonzero_k_floquet_k0_poisson_path\"") !=
+              std::string::npos,
+          "nonzero-k Floquet shared-domain diagnostics must expose the k=0 routing guard");
+    check(result.result_json.find(
+              "\"required_operator_contract\":\"bloch_floquet_airbox_shared_domain_operator\"") !=
+              std::string::npos,
+          "nonzero-k Floquet shared-domain result must name the required operator");
+}
+
+void modal_nonzero_k_floquet_legacy_poisson_block_never_enters_k0_solver()
+{
+    constexpr double k_vector_rad_m[] = {1.0e6, 0.0, 0.0};
+
+    fd::ModalEigenRequest request{};
+    request.abi_version = fd::kFrequencyDomainAbiVersion;
+    request.operator_request.abi_version = fd::kFrequencyDomainAbiVersion;
+    request.operator_request.gamma_rad_s_T = 1.760859e11;
+    request.operator_request.mu0_T_m_A = 1.25663706212e-6;
+    request.operator_request.spin_wave_bc_kind = "floquet";
+    request.operator_request.k_vector_rad_m = k_vector_rad_m;
+    request.operator_request.k_vector_len = 3;
+    request.poisson_airbox_block_enabled = 1;
+
+    const fd::FrequencyDomainContractResult result =
+        fd::solve_modal_eigen_contract(request);
+    check(result.status == fd::FrequencyDomainStatus::unavailable,
+          "nonzero-k Floquet legacy Poisson block must remain unavailable");
+    check(result.diagnostics_json.find(
+              "\"unsupported_reason\":\"nonzero_k_floquet_k0_poisson_path\"") !=
+              std::string::npos,
+          "nonzero-k Floquet legacy Poisson diagnostics must expose the k=0 routing guard");
+}
+
 void modal_nonzero_k_floquet_tail_payload_preserves_periodic_pair_contract()
 {
     constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
@@ -3149,6 +3204,8 @@ int main()
     modal_sparse_validation_error_preserves_explicit_k_vector();
     modal_diagnostics_preserve_explicit_k_vector();
     modal_nonzero_k_floquet_payload_rejects_until_production_operator_exists();
+    modal_nonzero_k_floquet_never_enters_k0_poisson_path();
+    modal_nonzero_k_floquet_legacy_poisson_block_never_enters_k0_solver();
     modal_nonzero_k_floquet_tail_payload_preserves_periodic_pair_contract();
     modal_nonzero_k_floquet_bloch_payload_reaches_production_solver();
     modal_nonzero_k_floquet_bloch_payload_rejects_gated_operator_terms();

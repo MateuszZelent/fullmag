@@ -9,7 +9,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 - Baza `master`: `5084a94ed14b151fc865e8def5a5c28401e98b44`.
 - Branch: `codex/eigensolve-dispersion-plan-20260912`.
 - Worktree: `C:/git/fullmag/worktrees/eigensolve-dispersion-plan-20260912`.
-- Ostatni kodowy przyrost: `41e80e534` (`feat(fem): bridge Floquet airbox blocks into demag Schur`); bieżący dokumentacyjny checkpoint jest zapisany po tym commicie, a worktree pozostaje czysty.
+- Ostatni kodowy przyrost: `41e80e534` (`feat(fem): bridge Floquet airbox blocks into demag Schur`); bieżący checkpoint ma jeszcze niezatwierdzoną regresję routingu K0 dla non-k0, a worktree jest w trakcie weryfikacji.
 - Właściciel: `codex:01a0941c-eb15-7261-a7ee-7cf099385525`.
 - Rejestr: `eigensolve-dispersion-plan-20260-c5dfad6d7f548079`; reaktywowany do implementacji.
 - Fizyczne źródła COMSOL: oba lokalne podręczniki modułu mikromagnetycznego wymienione w planie; szczególnie s. PDF 21–28 i 40–43. Przykład RF jest wzorem sprzężenia pól, a nie gotowym dowodem modalnym.
@@ -143,6 +143,15 @@ realifikację wyniku. To nadal bounded oracle: nie jest assemblerem siatkowym,
 nie zmienia capability planera i nie otwiera runnerowej ścieżki dynamicznego
 demag-k.
 
+Dodano również fail-closed guard na granicy `solve_modal_eigen_contract`: żądanie
+Floquet z niezerowym `k` nie może wejść ani przez shared-domain importer, ani
+przez starszy syntetyczny blok Poisson-airbox do rzeczywistej ścieżki K0. Guard
+zwraca jawny status `unavailable`, wymagany przyszły operator
+`bloch_floquet_airbox_shared_domain_operator` i stabilny powód
+`nonzero_k_floquet_k0_poisson_path`. Dwie regresje C++ wywołują bezpośredni
+native contract, aby sprawdzić oba wejścia. Nie otwiera to jeszcze produkcyjnej
+assemblacji non-k0; usuwa tylko możliwość cichego policzenia non-k0 jako K0.
+
 W S09 dodano analogiczny, jawnie oddzielony provider 2.5D
 `floquet_waveguide_demag_k`. Buduje on `P(k)=K⊥+k²M`, przyjmuje osobne
 poprzeczne i osiowe sprzężenia `A_qphi`/`A_phiq`, zachowuje znak źródła `−ik
@@ -180,6 +189,7 @@ bramki pozostają **NOT VERIFIED**.
 - Python: pełny `test_problem_ir.py` 26 passed; fokus API/IR dla eigensolve 35 passed; pełny `test_api.py` wykonał 277 passed i 19 failures środowiskowych (brak `h5py`/`zarr`, odmowa zapisu w lokalnym cache/worktree oraz `run_output`), bez błędu w fokusie eigensolve.
 - Test kontraktu dokumentacji matematycznej: 9 passed. Walidatory source-map i `git diff --check`: exit 0.
 - Próba nowego managed snapshotu nie utworzyła dodatkowego joba: runner zgłosił aktywny lock/storage dla rejestru `eigensolve-dispersion-plan-20260-c5dfad6d7f548079` i nakazał użyć istniejącego joba lub zaczekać. Najnowszy własny snapshot to job `b5200ded44964953a03491183dffaae1`, sequence 19, source digest `b59eadab5a1dd98e7b394403bd722bce864c81ea4d7659e24acd790f70853757`; ostatni odczyt pozostaje `queued` bez exit code. Nie uzyskano kompilacji C++ ani runtime dla bieżącego snapshotu.
+- Bezpośrednia kompilacja MSVC testu kontraktu po dodaniu regresji routingu zakończyła się exit 0 z `FULLMAG_HAS_MFEM_STACK=0` i `/D_USE_MATH_DEFINES`. Kompilacja całego `modal_eigen_solver.cpp` w tym trybie nadal zatrzymuje się na istniejących typach shared-domain dostępnych wyłącznie z MFEM (`PoissonAirboxSharedDomainAssemblyResult`); nie jest to ścieżka kwalifikacyjna FEM. Pełny test z MFEM pozostaje **NOT VERIFIED**.
 
 Próba `just worktree-finish ... state=review` z aktualnym HEAD została
 zatrzymana przez ten sam preflight (`Container runner owns heavy builds on this
