@@ -9,7 +9,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 - Baza `master`: `5084a94ed14b151fc865e8def5a5c28401e98b44`.
 - Branch: `codex/eigensolve-dispersion-plan-20260912`.
 - Worktree: `C:/git/fullmag/worktrees/eigensolve-dispersion-plan-20260912`.
-- Ostatni zapisany kodowy przyrost: `f2acf7b9b425733899bdfde63cb0566d16d74a59` (`feat(fem): wire nonzero-k airbox Schur provider`).
+- Ostatni zapisany kodowy przyrost: `8d266d778` (`feat(eigensolve): gate nonzero-k Floquet demag provider path`), nad wcześniejszym podłączeniem providera `f2acf7b9b425733899bdfde63cb0566d16d74a59`.
 - Właściciel: `codex:01a0941c-eb15-7261-a7ee-7cf099385525`.
 - Rejestr: `eigensolve-dispersion-plan-20260-c5dfad6d7f548079`; reaktywowany do implementacji.
 - Fizyczne źródła COMSOL: oba lokalne podręczniki modułu mikromagnetycznego wymienione w planie; szczególnie s. PDF 21–28 i 40–43. Przykład RF jest wzorem sprzężenia pól, a nie gotowym dowodem modalnym.
@@ -22,12 +22,12 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 | S01 — nauka, ADR, kontrakty | W TRAKCIE | Noty, mapy źródeł, walidatory i review |
 | S02 — Python/IR | W TRAKCIE | Walidacja k i selektorów, round-trip, testy konsumentów |
 | S03 — natywny operator magnetyczny Blocha | W TRAKCIE | Prolongacja fazowa, MFEM sparse/matrix-free, testy i połączenie produkcyjne |
-| S04 — dynamiczny demag-k CPU | W TRAKCIE | Bounded dense Schur provider i producent czterech bloków MFEM są zapisane; natywny importer może z zaakceptowanego shared-domain payloadu zbudować operator dla niezerowego k, lecz pozostają matrix-free/sparse owner, gauge i zbieżność brzegu |
-| S05 — natywny solver spektralny | W TRAKCIE | Runner przekazuje accepted shared-domain handoff razem z fazowym pencilem do produkcyjnego CPU; C++ wybiera k-aware Schur provider i dodaje jego realifikację do Hessianu. Pozostają SLEPc/managed runtime, reszty, kompletność i resume |
+| S04 — dynamiczny demag-k CPU | W TRAKCIE | Bounded dense Schur provider i producent czterech bloków MFEM są zapisane; planner otwiera wyłącznie strict/double/CPU/Full2x2/FloquetAirbox/nonzero-k z Poisson airbox. Pozostają matrix-free/sparse owner, gauge, zbieżność brzegu i managed runtime |
+| S05 — natywny solver spektralny | W TRAKCIE | Runner przekazuje accepted shared-domain handoff razem z fazowym pencilem do produkcyjnego CPU; C++ wybiera k-aware Schur provider i dodaje jego realifikację do Hessianu, a auto-routing przypina tę kombinację do CPU. Pozostają SLEPc/managed runtime, reszty, kompletność i resume |
 | S06 — śledzenie gałęzi | W TRAKCIE | Hungarian/gaps i metryka masy FE są gotowe; pozostają fizyczne podprzestrzenie zdegenerowane |
 | S07 — artefakty i API | W TRAKCIE | Stabilne ID, faza/obwiednia, selektory, binarne pola |
 | S08 — Control Room | DO WYKONANIA | Authoring, dyspersja, wybór modu i przestrzenna faza; browser/WebGL |
-| S09 — falowód 2.5D | W TRAKCIE | Bounded provider i deterministyczny P1 assembler przekroju są zapisane; pozostają managed/MFEM owner, open-boundary convergence i porównania TetraX/3D |
+| S09 — falowód 2.5D | W TRAKCIE | Bounded provider i deterministyczny P1 assembler przekroju są zapisane; pozostają typed realization/routing, managed/MFEM owner, open-boundary convergence i porównania TetraX/3D |
 | S10 — interakcje | DO WYKONANIA | Anizotropia, DMI seams, Gilbert i legalność |
 | S11 — GPU | DO WYKONANIA | Jawna trasa double bez fallbacku, residency i parytet |
 | S12 — kwalifikacja i integracja | W TRAKCIE | Managed benchmarki, review, commity, PR, merge, weryfikacja mastera |
@@ -278,3 +278,28 @@ sprzężenie hermitowskie, odrzucenie wadliwej mapy oraz przejście przez
 real-split Schur. Pełny target `fullmag_fem` nadal zatrzymuje się na
 wcześniejszych błędach bez MFEM; nowy plik został w tym przebiegu
 przetworzony przez MSBuild bez własnych błędów.
+
+### Przyrost routingu planera dla non-k0
+
+Commit `8d266d778` otwiera w plannerze wąską, jawnie opisaną kombinację
+`Full2x2 + Floquet + include_demag + nonzero-k + FloquetAirbox + Poisson`.
+Warunki wykonania są strict, double precision i CPU; ścieżki z GPU, innym
+warunkiem magnetostatycznym, inną reprezentacją operatora albo punktem Γ
+pozostają fail-closed. Dla `auto` dispatch przypina tę kombinację do CPU,
+aby dostępność GPU w rejestrze nie wybrała nieobsługiwanej realizacji. Planner
+publikuje notę provenance o bounded CPU Poisson-airbox Schur providerze.
+
+Weryfikacja tego przyrostu:
+
+- test planera `fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path` — `1 passed`, exit 0;
+- testy runnera ścieżki non-k0 — `4 passed`, exit 0;
+- `runner_rejects_floquet_dynamic_demag_gate` — `1 passed`, exit 0;
+- `fem_eigen_path_rejects_floquet_dynamic_demag_before_sample_solves` — `1 passed`, exit 0;
+- `git diff --check` i ukierunkowany `rustfmt --check` — exit 0.
+
+To jest bramka planowania i routingu, a nie kwalifikacja fizyczna. Nadal brak
+managed MFEM/SLEPc receipt, wykonania operatora na siatce, residuali
+oryginalnego układu, zbieżności paddingu oraz porównania COMSOL/TetraX. Nodalny
+`M_s`, damping i GPU pozostają poza otwartym wariantem. Worktree pozostaje
+niezintegrowany z `master`; push/PR/merge są zablokowane przez brak poprawnego
+uwierzytelnienia GitHub i wcześniejszą odmowę automatycznego review.
