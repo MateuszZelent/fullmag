@@ -2820,6 +2820,8 @@ void modal_nonzero_k_floquet_bloch_payload_with_dynamic_demag_k_is_admitted()
           "a complete nonzero-k dynamic demag matrix must reach the production SLEPc path");
     check(contains(result.result_json, "\"accepted_mode_count\":1"),
           "a complete nonzero-k dynamic demag matrix must produce one accepted mode");
+    check(contains(result.resolved_engine_id, "floquet_airbox_cpu_schur_slepc"),
+          "a complete nonzero-k dynamic demag matrix must attest the distinct Floquet CPU engine");
 #else
     check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
           "a complete nonzero-k dynamic demag matrix still requires SLEPc");

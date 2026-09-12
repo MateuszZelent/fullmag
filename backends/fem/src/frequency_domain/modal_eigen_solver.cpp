@@ -2476,26 +2476,39 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
         }
         return result;
     }
-    FrequencyDomainContractResult result = production_cpu_modal_eigen_unavailable(request);
+    // The nonzero-k Floquet provider materializes a dense real-split
+    // demag-k matrix into effective_request.  Pass that effective envelope
+    // into the production CPU modal adapter; using the original request here
+    // would silently discard the assembled k-dependent operator and fall back
+    // to the pending/missing-payload contract.
+    FrequencyDomainContractResult result =
+        production_cpu_modal_eigen_unavailable(effective_request);
     // Magnetic MFEM payloads consume and publish this pencil identity.  The
     // descriptor-Poisson branch above returns before this point deliberately.
     result.diagnostics_json = with_magnetic_pencil_digest(
-        std::move(result.diagnostics_json), request, "linearized_dynamic_pencil_digest");
+        std::move(result.diagnostics_json), effective_request, "linearized_dynamic_pencil_digest");
     result.result_json = with_magnetic_pencil_digest(
-        std::move(result.result_json), request, "linearized_dynamic_pencil_digest");
+        std::move(result.result_json), effective_request, "linearized_dynamic_pencil_digest");
     const ModalExecutionTarget unavailable_target =
         request.execution_target == ModalExecutionTarget::production_gpu
             ? ModalExecutionTarget::production_gpu
             : request.execution_target == ModalExecutionTarget::production_cpu
                 ? ModalExecutionTarget::production_cpu
                 : ModalExecutionTarget::auto_select;
+    const bool supplied_nonzero_k_dynamic_demag =
+        modal_request_is_nonzero_k_floquet(effective_request) &&
+        effective_request.operator_request.include_demag != 0 &&
+        (effective_request.dynamic_demag_k_tangent_matrix_row_major != nullptr ||
+         effective_request.dynamic_demag_k_tangent_matrix_value_count != 0u);
     set_modal_execution(
         result,
         unavailable_target,
-        request.spectral_transform_kind,
+        effective_request.spectral_transform_kind,
         unavailable_target == ModalExecutionTarget::production_gpu
             ? "production_gpu_modal_eigen_unavailable"
-            : "production_cpu_modal_eigen_unavailable");
+            : (native_nonzero_k_shared_domain_provider || supplied_nonzero_k_dynamic_demag
+                   ? "floquet_airbox_cpu_schur_slepc"
+                   : "production_cpu_modal_eigen_unavailable"));
     return result;
     }
 }

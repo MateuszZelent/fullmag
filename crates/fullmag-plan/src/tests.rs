@@ -12204,6 +12204,17 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
     }
     let planned = plan(&ir)
         .expect("explicit nonzero-k CPU Floquet airbox demag should pass the planner gate");
+    let resolution = planned
+        .provenance
+        .fem_eigen_execution_resolution
+        .as_ref()
+        .expect("nonzero-k Floquet airbox plans must publish an exact CPU execution resolution");
+    assert_eq!(
+        resolution.resolved_engine,
+        fullmag_ir::FemEigenEngineIR::FloquetAirboxCpuSchurSlepc
+    );
+    assert_eq!(resolution.resolved_device, fullmag_ir::ExecutionDevice::Cpu);
+    assert!(!resolution.fallback_used);
     match planned.backend_plan {
         BackendPlanIR::FemEigen(fem) => {
             assert_eq!(fem.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2);

@@ -1380,6 +1380,8 @@ fn allows_k0_kittel_synthetic_demag_factor(
 fn floquet_airbox_dynamic_demag_cpu_plan_supported(
     problem: &ProblemIR,
     operator: &fullmag_ir::EigenOperatorConfigIR,
+    target: &fullmag_ir::EigenTargetIR,
+    damping_policy: fullmag_ir::EigenDampingPolicyIR,
     spin_wave_bc: &fullmag_ir::SpinWaveBoundaryConditionIR,
     magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR,
     k_sampling: &Option<fullmag_ir::KSamplingIR>,
@@ -1411,6 +1413,8 @@ fn floquet_airbox_dynamic_demag_cpu_plan_supported(
     operator.include_demag
         && enable_demag
         && matches!(operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
+        && matches!(target, fullmag_ir::EigenTargetIR::FrequencyWindow { .. })
+        && matches!(damping_policy, fullmag_ir::EigenDampingPolicyIR::Ignore)
         && spin_wave_bc.kind() == fullmag_ir::SpinWaveBoundaryKindIR::Floquet
         && magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox
         && nonzero_k
@@ -4358,6 +4362,127 @@ fn resolve_k0_periodic_airbox_execution(
     })
 }
 
+fn resolve_floquet_airbox_dynamic_demag_execution(
+    problem: &ProblemIR,
+) -> Result<FemEigenExecutionResolutionIR, PlanError> {
+    const GPU_UNAVAILABLE_FALLBACK_REASON: &str = "gpu_modal_device_krylov_unavailable";
+    if problem.validation_profile.execution_mode != fullmag_ir::ExecutionMode::Strict {
+        return Err(PlanError {
+            reasons: vec![
+                "fem_eigen.floquet_airbox_dynamic_demag_requires_strict_execution_mode; fallback=none"
+                    .to_string(),
+            ],
+        });
+    }
+    if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
+        return Err(PlanError {
+            reasons: vec![
+                "fem_eigen.floquet_airbox_dynamic_demag_requires_double_precision; fallback=none"
+                    .to_string(),
+            ],
+        });
+    }
+
+    let requested_device = parse_fem_eigen_runtime_device(
+        problem
+            .problem_meta
+            .runtime_metadata
+            .get("runtime_selection")
+            .and_then(|value| value.get("device"))
+            .and_then(serde_json::Value::as_str),
+        "runtime_selection",
+    )?;
+    let runtime_device = parse_fem_eigen_runtime_device(
+        problem
+            .problem_meta
+            .runtime_metadata
+            .get("runtime_device_override")
+            .and_then(|value| value.get("device"))
+            .and_then(serde_json::Value::as_str),
+        "runtime_device_override",
+    )?;
+    let runtime_fallback_reason = problem
+        .problem_meta
+        .runtime_metadata
+        .get("runtime_device_override")
+        .and_then(|value| value.get("fallback_reason"))
+        .and_then(serde_json::Value::as_str);
+
+    let fallback_reason = match (requested_device, runtime_device, runtime_fallback_reason) {
+        (fullmag_ir::ExecutionDevice::Cpu, fullmag_ir::ExecutionDevice::Gpu, _) => {
+            return Err(PlanError {
+                reasons: vec![
+                    "fem_eigen.floquet_airbox_dynamic_demag_explicit_cpu_conflicts_with_gpu_override; fallback=none"
+                        .to_string(),
+                ],
+            });
+        }
+        (fullmag_ir::ExecutionDevice::Gpu, _, _) => {
+            return Err(PlanError {
+                reasons: vec![
+                    "fem_eigen.floquet_airbox_dynamic_demag_cpu_only_rejects_explicit_gpu; fallback=none"
+                        .to_string(),
+                ],
+            });
+        }
+        (fullmag_ir::ExecutionDevice::Auto, fullmag_ir::ExecutionDevice::Gpu, _) => {
+            return Err(PlanError {
+                reasons: vec![
+                    "fem_eigen.floquet_airbox_dynamic_demag_cpu_only_rejects_gpu_runtime; fallback=none"
+                        .to_string(),
+                ],
+            });
+        }
+        (fullmag_ir::ExecutionDevice::Cpu, _, Some(reason)) => {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "fem_eigen.floquet_airbox_dynamic_demag_explicit_cpu_rejects_fallback_reason: '{reason}'; fallback=none"
+                )],
+            });
+        }
+        (fullmag_ir::ExecutionDevice::Cpu, _, None) => None,
+        (fullmag_ir::ExecutionDevice::Auto, fullmag_ir::ExecutionDevice::Cpu, None) => None,
+        (fullmag_ir::ExecutionDevice::Auto, fullmag_ir::ExecutionDevice::Cpu, Some(reason))
+            if reason == GPU_UNAVAILABLE_FALLBACK_REASON =>
+        {
+            Some(GPU_UNAVAILABLE_FALLBACK_REASON.to_string())
+        }
+        (fullmag_ir::ExecutionDevice::Auto, _, Some(reason)) => {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "fem_eigen.floquet_airbox_dynamic_demag_unsupported_fallback_reason: '{reason}'; fallback=none"
+                )],
+            });
+        }
+        (fullmag_ir::ExecutionDevice::Auto, _, None) => None,
+    };
+
+    let selection_reason = match (requested_device, runtime_device, fallback_reason.is_some()) {
+        (fullmag_ir::ExecutionDevice::Cpu, _, _) => {
+            "fem_eigen.floquet_airbox_dynamic_demag.explicit_cpu"
+        }
+        (fullmag_ir::ExecutionDevice::Auto, fullmag_ir::ExecutionDevice::Cpu, true) => {
+            "fem_eigen.floquet_airbox_dynamic_demag.auto_gpu_unavailable_cpu_fallback"
+        }
+        (fullmag_ir::ExecutionDevice::Auto, fullmag_ir::ExecutionDevice::Cpu, false) => {
+            "fem_eigen.floquet_airbox_dynamic_demag.auto_runtime_cpu"
+        }
+        _ => "fem_eigen.floquet_airbox_dynamic_demag.auto_default_cpu",
+    };
+
+    Ok(FemEigenExecutionResolutionIR {
+        requested_device,
+        resolved_device: fullmag_ir::ExecutionDevice::Cpu,
+        requested_precision: problem.backend_policy.execution_precision,
+        resolved_precision: ExecutionPrecision::Double,
+        requested_engine: FemEigenEngineIR::Auto,
+        resolved_engine: FemEigenEngineIR::FloquetAirboxCpuSchurSlepc,
+        fallback_used: fallback_reason.is_some(),
+        fallback_reason,
+        selection_reason: selection_reason.to_string(),
+    })
+}
+
 /// Return whether a FEM eigen plan needs the bounded periodic-airbox K0
 /// execution contract even when the study-level magnetostatic boundary token
 /// remains `open`.
@@ -4755,6 +4880,8 @@ pub(crate) fn plan_fem_eigen(
     let floquet_airbox_dynamic_demag_cpu_path = floquet_airbox_dynamic_demag_cpu_plan_supported(
         problem,
         operator,
+        target,
+        *damping_policy,
         spin_wave_bc,
         *magnetostatic_bc,
         k_sampling,
@@ -5091,6 +5218,8 @@ pub(crate) fn plan_fem_eigen(
         k0_kittel_validation.as_ref(),
     ) {
         Some(resolve_k0_periodic_airbox_execution(problem)?)
+    } else if floquet_airbox_dynamic_demag_cpu_path {
+        Some(resolve_floquet_airbox_dynamic_demag_execution(problem)?)
     } else {
         None
     };
@@ -5183,7 +5312,7 @@ pub(crate) fn plan_fem_eigen(
         execution_resolution.as_ref().map_or_else(
             || "FEM eigen execution currently targets the transitional CPU FEM baseline; native MFEM/SLEPc integration remains future work".to_string(),
             |resolution| format!(
-                "FEM K0 periodic-airbox execution resolved: requested_device={:?}, resolved_device={:?}, requested_engine={:?}, resolved_engine={:?}, fallback_used={}, selection_reason={}",
+                "FEM eigen execution resolved: requested_device={:?}, resolved_device={:?}, requested_engine={:?}, resolved_engine={:?}, fallback_used={}, selection_reason={}",
                 resolution.requested_device,
                 resolution.resolved_device,
                 resolution.requested_engine,

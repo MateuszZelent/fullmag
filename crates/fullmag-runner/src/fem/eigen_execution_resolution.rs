@@ -1,3 +1,4 @@
+use super::eigen_capability::native_cpu_modal_window_has_floquet_dynamic_demag_path;
 use crate::native_fem::NativeModalExecutionTarget;
 use crate::types::{
     ExecutionProvenance, FemEigenNativeExecutionAttestation, ResolvedFallback, RunError,
@@ -38,6 +39,7 @@ impl PlannedFemEigenExecution<'_> {
             Some(FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc) => {
                 "k0_poisson_airbox_cpu_schur_slepc"
             }
+            Some(FemEigenEngineIR::FloquetAirboxCpuSchurSlepc) => "floquet_airbox_cpu_schur_slepc",
             Some(FemEigenEngineIR::GpuModalDeviceKrylov) => "gpu_modal_device_krylov",
             Some(FemEigenEngineIR::Auto) => "auto",
             None => match self.lane {
@@ -114,6 +116,7 @@ fn fem_eigen_engine_id(engine: FemEigenEngineIR) -> &'static str {
     match engine {
         FemEigenEngineIR::Auto => "auto",
         FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc => "k0_poisson_airbox_cpu_schur_slepc",
+        FemEigenEngineIR::FloquetAirboxCpuSchurSlepc => "floquet_airbox_cpu_schur_slepc",
         FemEigenEngineIR::GpuModalDeviceKrylov => "gpu_modal_device_krylov",
     }
 }
@@ -140,11 +143,12 @@ pub(crate) fn resolve_fem_eigen_execution_resolution<'a>(
     resolution: Option<&'a FemEigenExecutionResolutionIR>,
 ) -> Result<Option<PlannedFemEigenExecution<'a>>, RunError> {
     let bounded_k0 = super::eigen_policy::shared_domain_k0_modal_requested(plan);
+    let bounded_floquet = native_cpu_modal_window_has_floquet_dynamic_demag_path(plan);
     let reference_oracle = fem_eigen_reference_oracle_requested(plan);
     let Some(resolution) = resolution else {
-        if bounded_k0 {
+        if bounded_k0 || bounded_floquet {
             return Err(RunError {
-                message: "planned_fem_eigen_resolution_missing: bounded periodic_airbox_k0 plans must be replanned with FemEigenExecutionResolutionIR"
+                message: "planned_fem_eigen_resolution_missing: bounded modal plans must be replanned with FemEigenExecutionResolutionIR"
                     .to_string(),
             });
         }
@@ -157,9 +161,35 @@ pub(crate) fn resolve_fem_eigen_execution_resolution<'a>(
                 .to_string(),
         });
     }
-    if !bounded_k0 {
+    if !bounded_k0 && !bounded_floquet {
         return Err(RunError {
-            message: "planned_fem_eigen_resolution_scope_mismatch: exact K0 execution resolution is valid only for bounded periodic_airbox_k0"
+            message: "planned_fem_eigen_resolution_scope_mismatch: exact execution resolution is valid only for bounded periodic-airbox K0 or Floquet dynamic-demag plans"
+                .to_string(),
+        });
+    }
+    if matches!(resolution.resolved_engine, FemEigenEngineIR::Auto) {
+        return Err(RunError {
+            message: "planned_fem_eigen_resolved_engine_auto: materialized execution must name one exact CPU or GPU engine"
+            .to_string(),
+        });
+    }
+    let dynamic_resolution_scope = resolution
+        .selection_reason
+        .starts_with("fem_eigen.floquet_airbox_dynamic_demag.");
+    let resolution_scope_valid = match resolution.resolved_engine {
+        FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc => bounded_k0,
+        // A path's Gamma sample is normalized to the K0 physical lane while
+        // retaining the top-level Floquet resolution.  Allow that point-level
+        // view; the top-level nonzero-k plan still requires bounded_floquet.
+        FemEigenEngineIR::FloquetAirboxCpuSchurSlepc => {
+            bounded_floquet || (bounded_k0 && dynamic_resolution_scope)
+        }
+        FemEigenEngineIR::GpuModalDeviceKrylov => bounded_k0,
+        FemEigenEngineIR::Auto => unreachable!("auto engine was rejected above"),
+    };
+    if !resolution_scope_valid {
+        return Err(RunError {
+            message: "planned_fem_eigen_resolution_scope_mismatch: resolved engine does not match the bounded modal plan scope"
                 .to_string(),
         });
     }
@@ -184,7 +214,11 @@ pub(crate) fn resolve_fem_eigen_execution_resolution<'a>(
         && !(resolution.requested_device == ExecutionDevice::Auto
             && resolution.requested_engine == FemEigenEngineIR::Auto
             && resolution.resolved_device == ExecutionDevice::Cpu
-            && resolution.resolved_engine == FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc
+            && matches!(
+                resolution.resolved_engine,
+                FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc
+                    | FemEigenEngineIR::FloquetAirboxCpuSchurSlepc
+            )
             && resolution.fallback_reason.as_deref() == Some("gpu_modal_device_krylov_unavailable"))
     {
         return Err(RunError {
@@ -197,19 +231,22 @@ pub(crate) fn resolve_fem_eigen_execution_resolution<'a>(
         || plan.precision != resolution.resolved_precision
     {
         return Err(RunError {
-            message: "planned_fem_eigen_resolution_mismatch: bounded K0 requires matching double precision in plan and execution resolution"
+            message: "planned_fem_eigen_resolution_mismatch: bounded modal execution requires matching double precision in plan and execution resolution"
                 .to_string(),
         });
     }
 
     let (lane, native_target) = match resolution.resolved_engine {
-        FemEigenEngineIR::Auto => {
-            return Err(RunError {
-                message: "planned_fem_eigen_resolved_engine_auto: materialized execution must name one exact CPU or GPU engine"
-                    .to_string(),
-            });
-        }
+        FemEigenEngineIR::Auto => unreachable!("auto engine was rejected above"),
         FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc
+            if resolution.resolved_device == ExecutionDevice::Cpu =>
+        {
+            (
+                FemEigenExecutionLane::Cpu,
+                NativeModalExecutionTarget::ProductionCpu,
+            )
+        }
+        FemEigenEngineIR::FloquetAirboxCpuSchurSlepc
             if resolution.resolved_device == ExecutionDevice::Cpu =>
         {
             (

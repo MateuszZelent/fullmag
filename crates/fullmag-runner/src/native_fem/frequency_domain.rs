@@ -1095,6 +1095,15 @@ pub(crate) fn validate_planned_modal_execution_attestation(
         fullmag_ir::FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc => {
             (1, &["k0_poisson_airbox_cpu_schur_slepc"])
         }
+        fullmag_ir::FemEigenEngineIR::FloquetAirboxCpuSchurSlepc => (
+            1,
+            &[
+                "floquet_airbox_cpu_schur_slepc",
+                // Gamma samples in a Floquet path are normalized to the
+                // already-qualified periodic K0 solver.
+                "k0_poisson_airbox_cpu_schur_slepc",
+            ],
+        ),
         fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov => (
             2,
             &[
@@ -4613,6 +4622,33 @@ mod tests {
             "fem_eigen_native_gpu",
         )
         .expect_err("broad legacy engine id must not attest the exact GPU lane");
+        assert!(error.contains("native_modal_engine_mismatch"));
+    }
+
+    #[test]
+    fn planned_floquet_dynamic_demag_attestation_accepts_cpu_engine_and_gamma_alias() {
+        for engine_id in [
+            "floquet_airbox_cpu_schur_slepc",
+            "k0_poisson_airbox_cpu_schur_slepc",
+        ] {
+            validate_planned_modal_execution_attestation(
+                fullmag_ir::FemEigenEngineIR::FloquetAirboxCpuSchurSlepc,
+                NativeModalExecutionTarget::ProductionCpu,
+                Some(1),
+                0,
+                engine_id,
+            )
+            .expect("Floquet dynamic-demag CPU engine and its Gamma K0 alias are accepted");
+        }
+
+        let error = validate_planned_modal_execution_attestation(
+            fullmag_ir::FemEigenEngineIR::FloquetAirboxCpuSchurSlepc,
+            NativeModalExecutionTarget::ProductionCpu,
+            Some(1),
+            0,
+            "fem_eigen_cpu_baseline",
+        )
+        .expect_err("broad CPU baseline engine must not attest the exact Floquet lane");
         assert!(error.contains("native_modal_engine_mismatch"));
     }
 

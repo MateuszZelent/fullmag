@@ -1,6 +1,6 @@
 use super::eigen_capability::{
-    native_cpu_modal_window_enabled, native_gpu_k0_kittel_modal_supported,
-    native_gpu_shared_domain_modal_supported,
+    native_cpu_modal_window_enabled, native_cpu_modal_window_has_floquet_dynamic_demag_path,
+    native_gpu_k0_kittel_modal_supported, native_gpu_shared_domain_modal_supported,
 };
 use super::eigen_certificate::{modal_participation_for_mode, modal_participation_mesh_context};
 use super::eigen_constants::{FLOQUET_DYNAMIC_DEMAG_UNSUPPORTED, NATIVE_GPU_K0_KITTEL_SOLVER_KIND};
@@ -378,10 +378,28 @@ fn validate_planned_execution(
             message: "planned_fem_eigen_resolution_missing_at_execution".to_string(),
         });
     }
-    if !shared_domain_k0_modal_requested(plan) {
+    let bounded_k0 = shared_domain_k0_modal_requested(plan);
+    let bounded_floquet = native_cpu_modal_window_has_floquet_dynamic_demag_path(plan);
+    let dynamic_resolution_scope = execution.resolution().is_some_and(|resolution| {
+        resolution
+            .selection_reason
+            .starts_with("fem_eigen.floquet_airbox_dynamic_demag.")
+    });
+    let resolution_engine = execution
+        .resolution()
+        .map(|resolution| resolution.resolved_engine);
+    let scope_matches = match resolution_engine {
+        Some(fullmag_ir::FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc) => bounded_k0,
+        Some(fullmag_ir::FemEigenEngineIR::FloquetAirboxCpuSchurSlepc) => {
+            bounded_floquet || (bounded_k0 && dynamic_resolution_scope)
+        }
+        Some(fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov) => bounded_k0,
+        Some(fullmag_ir::FemEigenEngineIR::Auto) | None => false,
+    };
+    if !scope_matches {
         return Err(RunError {
             message: format!(
-                "planned_fem_eigen_engine_scope_mismatch: engine={} requires bounded periodic_airbox_k0",
+                "planned_fem_eigen_engine_scope_mismatch: engine={} does not match the bounded modal plan scope",
                 execution.engine_id()
             ),
         });

@@ -3387,6 +3387,18 @@ fn bounded_k0_execution_plan() -> FemEigenPlanIR {
     plan
 }
 
+fn bounded_floquet_dynamic_demag_execution_plan() -> FemEigenPlanIR {
+    let mut plan = bounded_k0_execution_plan();
+    plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+    plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+    plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+        frequency_min_hz: 1.0e8,
+        frequency_max_hz: 5.0e9,
+    };
+    add_x_floquet_pair_to_plan(&mut plan);
+    plan
+}
+
 fn exact_k0_resolution(
     device: fullmag_ir::ExecutionDevice,
 ) -> fullmag_ir::FemEigenExecutionResolutionIR {
@@ -3407,6 +3419,22 @@ fn exact_k0_resolution(
         fallback_used: false,
         fallback_reason: None,
         selection_reason: "test.exact_k0_resolution".to_string(),
+    }
+}
+
+fn exact_floquet_dynamic_demag_resolution(
+    requested_device: fullmag_ir::ExecutionDevice,
+) -> fullmag_ir::FemEigenExecutionResolutionIR {
+    fullmag_ir::FemEigenExecutionResolutionIR {
+        requested_device,
+        resolved_device: fullmag_ir::ExecutionDevice::Cpu,
+        requested_precision: fullmag_ir::ExecutionPrecision::Double,
+        resolved_precision: fullmag_ir::ExecutionPrecision::Double,
+        requested_engine: fullmag_ir::FemEigenEngineIR::Auto,
+        resolved_engine: fullmag_ir::FemEigenEngineIR::FloquetAirboxCpuSchurSlepc,
+        fallback_used: false,
+        fallback_reason: None,
+        selection_reason: "fem_eigen.floquet_airbox_dynamic_demag.explicit_cpu".to_string(),
     }
 }
 
@@ -3672,6 +3700,47 @@ fn planned_k0_gpu_resolution_resists_cpu_environment_and_dispatches_device_krylo
         Some(native_fem::NativeModalExecutionTarget::ProductionGpu)
     );
     assert_eq!(execution.engine_id(), "gpu_modal_device_krylov");
+}
+
+#[test]
+fn planned_floquet_dynamic_demag_cpu_resolution_dispatches_distinct_engine() {
+    let plan = bounded_floquet_dynamic_demag_execution_plan();
+    let resolution = exact_floquet_dynamic_demag_resolution(fullmag_ir::ExecutionDevice::Cpu);
+    let execution = resolve_fem_eigen_execution_resolution(&plan, Some(&resolution))
+        .expect("the materialized Floquet dynamic-demag resolution must validate")
+        .expect("bounded Floquet dynamic-demag plans must have an exact execution");
+
+    assert_eq!(execution.lane(), FemEigenExecutionLane::Cpu);
+    assert_eq!(
+        execution.native_target(),
+        Some(native_fem::NativeModalExecutionTarget::ProductionCpu)
+    );
+    assert_eq!(execution.engine_id(), "floquet_airbox_cpu_schur_slepc");
+}
+
+#[test]
+fn planned_floquet_dynamic_demag_rejects_gpu_resolution_without_fallback() {
+    let plan = bounded_floquet_dynamic_demag_execution_plan();
+    let mut resolution = exact_floquet_dynamic_demag_resolution(fullmag_ir::ExecutionDevice::Gpu);
+    resolution.resolved_device = fullmag_ir::ExecutionDevice::Gpu;
+    resolution.resolved_engine = fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov;
+    let error = resolve_fem_eigen_execution_resolution(&plan, Some(&resolution))
+        .expect_err("dynamic Floquet demag is CPU-only and must reject GPU resolution");
+    assert!(error
+        .message
+        .contains("resolved engine does not match the bounded modal plan scope"));
+}
+
+#[test]
+fn planned_k0_rejects_floquet_dynamic_demag_resolution_scope() {
+    let plan = bounded_k0_execution_plan();
+    let mut resolution = exact_floquet_dynamic_demag_resolution(fullmag_ir::ExecutionDevice::Cpu);
+    resolution.selection_reason = "test.floquet_dynamic_demag_resolution".to_string();
+    let error = resolve_fem_eigen_execution_resolution(&plan, Some(&resolution))
+        .expect_err("a plain K0 plan must not accept the Floquet dynamic-demag engine");
+    assert!(error
+        .message
+        .contains("resolved engine does not match the bounded modal plan scope"));
 }
 
 #[test]
