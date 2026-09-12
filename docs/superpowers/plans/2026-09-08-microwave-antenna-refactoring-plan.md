@@ -559,8 +559,13 @@ FEM. Kontenerowa recepta Windows nie wystartowała, ponieważ ogólny
 linuksowego targetu bind mountu i Docker Desktop odrzuca go jako ścieżkę z
 nadmiarowymi dwukropkami. Próba ponowiona 2026-09-12 po starcie Dockera i
 udostępnieniu zatwierdzonego rootu storage zakończyła się tym samym błędem
-`mount denied ... too many colons`; nie jest to jeszcze pełna bramka
-T11: brakuje agregacji między osobnymi blokami/retries i callbackami etapów,
+`mount denied ... too many colons`; poprawka rozdzielająca windowsowe źródło
+bindu od linuksowego celu kontenera oraz shell-local wrapper z
+`MSYS_NO_PATHCONV=1` usunęły tę blokadę. Ponowiony 2026-09-12 test przez
+`just verify-fem-solved-antenna-drive-contract` zbudował kontenerowy stos
+MFEM/CUDA i przeszedł kontrakt `fem_zeeman_contract`, test layoutu FFI oraz
+`native_pack_materializes_solved_antenna_as_preprojected_per_ampere_basis`.
+Nie zamyka to pełnej bramki T11: brakuje agregacji między osobnymi blokami/retries i callbackami etapów,
 budżetu pamięci i anulowania, diagnostyki pasma `eta_wave`/`eta_skin`, pomiaru
 wall-time/peak-memory oraz kontenerowego benchmarku direct RT0.
 
@@ -643,12 +648,15 @@ pełne spięcie z resolverem stage/output.
 
 **Bramka:** `fem-llg` przez container, plus istniejące `verify-fem-solved-antenna-drive-contract` i odpowiednie RK gates. Raport musi nazwać każdy integrator, device i precision. Pierwszy publiczny wykonywalny przykład powstaje po tej bramce, nie wcześniej.
 
-**Stan kwalifikacji 2026-09-12:** hostowy `cargo test --features fem-gpu` dochodzi
-do kompilacji Rust, ale natywny `fullmag-fem-sys` nie ma kompilatora C/C++ na
-hoście. Recepta kontenerowa została uruchomiona z aktywnym Docker Desktop,
-Pythonem 3.14 i zatwierdzonym `D:\git\fullmag\storage`; zatrzymała się przed
-`cmake` przez błąd mapowania `FULLMAG_FRONTEND_ROOT` opisany w T11. Wynik lane
-pozostaje `not_qualified`, a nie PASS.
+**Stan kwalifikacji 2026-09-12:** hostowy `cargo test --features fem-gpu` nadal
+nie jest dowodem, bo `fullmag-fem-sys` nie ma kompilatora C/C++ na hoście.
+Zarządzana recepta kontenerowa, uruchomiona z aktywnym Docker Desktop,
+Pythonem 3.14 i zatwierdzonym `D:\git\fullmag\storage`, przeszła po naprawie
+windowsowego bindu: CMake zbudował `fullmag_fem` i `fem_zeeman_contract`, a
+kontrakt FFI oraz test materializacji preprojekcji zakończyły się `1 passed`.
+To kwalifikuje natywny kontrakt solved-antenna→regional-Zeeman dla tej ścieżki;
+pełny `fem-llg` pozostaje otwarty do czasu testów wszystkich integratorów,
+waveformów, relaksacji i snapshotów wymienionych wyżej.
 
 ## T14. Domknąć OpenAPI, zasoby i realtime
 

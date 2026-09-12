@@ -111,5 +111,12 @@ esac
 # boundary: the runner resolves the same environment and holds the per-
 # worktree OS lock until every nested bash/docker/cargo command has finished.
 # Its owner token is inherited by nested `just` calls, which are reentrant.
+# Git Bash otherwise rewrites POSIX-looking bind targets before Docker Desktop
+# sees them.  Install a shell-local wrapper so only Docker invocations disable
+# that conversion; resolver/Python commands still receive normal Windows paths.
+run_recipe="${recipe}"
+if is_windows_shell && [[ "${recipe}" == *"docker compose"* ]]; then
+  run_recipe='docker() { MSYS_NO_PATHCONV=1 command docker "$@"; }; '"${recipe}"
+fi
 exec "${python_cmd}" "${resolver}" run --repo-root "${repo_root}" -- \
-  "${bash_executable}" -euo pipefail -c "${recipe}"
+  "${bash_executable}" -euo pipefail -c "${run_recipe}"

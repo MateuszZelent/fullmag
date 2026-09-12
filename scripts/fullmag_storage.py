@@ -52,6 +52,7 @@ MANAGED_VARIABLES = set(PATH_OVERRIDES) | {
     "FULLMAG_BUILD_STORAGE_ROOT", "FULLMAG_STORAGE_USE_MANAGED_EXT4",
     "FULLMAG_NATIVE_STORAGE_PROFILE", "FULLMAG_NATIVE_BUILD_IMAGE",
     "FULLMAG_NATIVE_MOUNT_VIEW", "FULLMAG_MANAGED_NATIVE_ROOT",
+    "FULLMAG_FRONTEND_CONTAINER_ROOT",
 }
 
 
@@ -235,6 +236,12 @@ def resolve_layout(repo_root, profile=None, environ=None):
         "FULLMAG_TEMP_ROOT": str(temp), "FULLMAG_RUNTIME_ROOT": layout["runtime_root"],
         "FULLMAG_RUNS_ROOT": layout["runs_root"],
         "FULLMAG_FRONTEND_ROOT": layout["frontend_root"],
+        # Bind sources are host paths, while Docker Desktop needs a Linux
+        # target for a Windows checkout. Linux retains the absolute target
+        # used by compatibility links.
+        "FULLMAG_FRONTEND_CONTAINER_ROOT": (
+            "/fullmag-frontend" if os.name == "nt" else layout["frontend_root"]
+        ),
         "FULLMAG_CARGO_TARGET_DIR": target,
         "FULLMAG_CARGO_TARGET_ROOT": str(build / "cargo-targets"),
         "FULLMAG_FDM_NATIVE_BUILD_ROOT": env.get("FULLMAG_FDM_NATIVE_BUILD_ROOT", str(build / "native-fdm")),

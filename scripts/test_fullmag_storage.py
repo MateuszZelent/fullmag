@@ -38,6 +38,11 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(layout, self.resolve())
         self.assertFalse(expected_root.exists())
 
+    def test_frontend_container_target_is_linux_safe_on_windows(self):
+        layout = self.resolve()
+        expected_target = "/fullmag-frontend" if os.name == "nt" else layout["frontend_root"]
+        self.assertEqual(layout["env"]["FULLMAG_FRONTEND_CONTAINER_ROOT"], expected_target)
+
     def test_windows_canonical_storage_override_is_allowed(self):
         if os.name != "nt":
             self.skipTest("Windows canonical checkout storage contract")
