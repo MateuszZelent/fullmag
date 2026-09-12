@@ -9,7 +9,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 - Baza `master`: `5084a94ed14b151fc865e8def5a5c28401e98b44`.
 - Branch: `codex/eigensolve-dispersion-plan-20260912`.
 - Worktree: `C:/git/fullmag/worktrees/eigensolve-dispersion-plan-20260912`.
-- Ostatni kodowy przyrost: `4336d8166` (`fix(fem): guard nonzero-k requests from k0 Poisson routing`); bieżący checkpoint dokumentuje ten commit i ograniczenia weryfikacji, a worktree pozostaje czysty.
+- Ostatni kodowy przyrost: `d1f2ac9b3` (`feat(fem): separate Floquet scalar representations`); bieżący checkpoint dokumentuje ten commit i ograniczenia weryfikacji, a worktree pozostaje czysty.
 - Właściciel: `codex:01a0941c-eb15-7261-a7ee-7cf099385525`.
 - Rejestr: `eigensolve-dispersion-plan-20260-c5dfad6d7f548079`; reaktywowany do implementacji.
 - Fizyczne źródła COMSOL: oba lokalne podręczniki modułu mikromagnetycznego wymienione w planie; szczególnie s. PDF 21–28 i 40–43. Przykład RF jest wzorem sprzężenia pól, a nie gotowym dowodem modalnym.
@@ -119,6 +119,7 @@ hostowych nie kwalifikuje relacji dyspersji ani dynamicznego demag-k.
 - `43fbba45d` — dokumentacja fizyki i spec artefaktów zawierają indeksy obu bounded providerów demag-k oraz kontrakt nieprzezroczystych `sample_id`; walidator map źródeł został uruchomiony na bazie mastera.
 - `41e80e534` — bounded MFEM bridge `floquet_airbox_operator`, test redukcji `CᴴP_fullC`/`CᴴAφq`, osobna recepta managed oraz regresja pinowania pojedynczego DOF w providerze Schura; źródła są zapisane, lecz kompilacja z MFEM pozostaje niezweryfikowana.
 - `4336d8166` — fail-closed guard w `solve_modal_eigen_contract` blokuje wejście non-k0 Floquet do shared-domain i starszego Poisson-airbox K0; dwie regresje native sprawdzają oba wejścia.
+- `d1f2ac9b3` — rozdzielenie reprezentacji `shifted_envelope`/`full_field_phase_constrained` w skalarnej assemblacji Floqueta oraz maskowanie powietrza i redukcja magnetycznych DOF w źródle; testy MFEM zapisane, wykonanie managed nadal oczekuje na poprawny runtime.
 
 Adapter dynamicznego demag-k przyjmuje wyłącznie kompletną macierz dostarczoną
 przez przyszłego właściciela `A_{q\phi}(k)`/`P(k)`/`A_{\phi q}(k)`; nie jest
@@ -152,6 +153,18 @@ zwraca jawny status `unavailable`, wymagany przyszły operator
 `nonzero_k_floquet_k0_poisson_path`. Dwie regresje C++ wywołują bezpośredni
 native contract, aby sprawdzić oba wejścia. Nie otwiera to jeszcze produkcyjnej
 assemblacji non-k0; usuwa tylko możliwość cichego policzenia non-k0 jako K0.
+
+W commicie `d1f2ac9b3` rozdzielono dwie reprezentacje skalarnego problemu Blocha
+we właścicielu MFEM. `shifted_envelope` zachowuje człony `k²` i sprzężone
+konwekcje w operatorze obwiedni, natomiast
+`full_field_phase_constrained` składa wyłącznie zwykłe pochodne; zależność od
+`k` w tej drugiej reprezentacji może pochodzić tylko z osobnej macierzy fazowej
+`C(k)`. Źródło `M_s δm → φ` przyjmuje teraz maskę elementów magnetycznych i
+kompletną mapę klas magnetycznych DOF, redukując kolumny przed późniejszym
+sprzężeniem fazowym. Dodano regresje dla braku przesuniętego bloku urojonego,
+maskowania powietrza i redukcji klas. To usuwa mieszanie reprezentacji w
+przyszłym assemblerze, ale nie podłącza jeszcze producenta `P(k)`,
+`A_{qφ}(k)`, `A_{φq}(k)` do shared-domain ani nie otwiera ścieżki runnera.
 
 W S09 dodano analogiczny, jawnie oddzielony provider 2.5D
 `floquet_waveguide_demag_k`. Buduje on `P(k)=K⊥+k²M`, przyjmuje osobne
@@ -191,6 +204,7 @@ bramki pozostają **NOT VERIFIED**.
 - Test kontraktu dokumentacji matematycznej: 9 passed. Walidatory source-map i `git diff --check`: exit 0.
 - Próba nowego managed snapshotu nie utworzyła dodatkowego joba: runner zgłosił aktywny lock/storage dla rejestru `eigensolve-dispersion-plan-20260-c5dfad6d7f548079` i nakazał użyć istniejącego joba lub zaczekać. Najnowszy własny snapshot to job `b5200ded44964953a03491183dffaae1`, sequence 19, source digest `b59eadab5a1dd98e7b394403bd722bce864c81ea4d7659e24acd790f70853757`; ostatni odczyt pozostaje `queued` bez exit code. Nie uzyskano kompilacji C++ ani runtime dla bieżącego snapshotu.
 - Bezpośrednia kompilacja MSVC testu kontraktu po dodaniu regresji routingu zakończyła się exit 0 z `FULLMAG_HAS_MFEM_STACK=0` i `/D_USE_MATH_DEFINES`. Kompilacja całego `modal_eigen_solver.cpp` w tym trybie nadal zatrzymuje się na istniejących typach shared-domain dostępnych wyłącznie z MFEM (`PoissonAirboxSharedDomainAssemblyResult`); nie jest to ścieżka kwalifikacyjna FEM. Pełny test z MFEM pozostaje **NOT VERIFIED**.
+- Dla `d1f2ac9b3` bezpośrednia kompilacja MSVC z `FULLMAG_HAS_MFEM_STACK=0` zakończyła się exit 0 osobno dla `floquet_bloch_scalar.cpp` i `floquet_bloch_scalar_test.cpp`; zlinkowany test no-MFEM zakończył się exit 0. CMake skonfigurował target, lecz pełna biblioteka zatrzymała się na wcześniejszych błędach bazowych MSVC (`std::snprintf`, `__atomic_*`, brak pól Poisson w trybie bez MFEM), więc nie jest to dowód wykonania ciała MFEM. Managed test `verify-fem-frequency-domain-floquet-bloch-scalar` pozostaje **NOT VERIFIED**.
 
 Próba `just worktree-finish ... state=review` z aktualnym HEAD została
 zatrzymana przez ten sam preflight (`Container runner owns heavy builds on this
