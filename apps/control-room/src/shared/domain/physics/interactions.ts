@@ -861,15 +861,22 @@ function activeObjectScopedDmi(
 }
 
 function activeStudyRotatedDmi(scene: SceneResource | null | undefined): boolean {
+  const value = studyRotatedDmiValue(scene);
+  return value !== null && value !== 0;
+}
+
+function studyRotatedDmiValue(
+  scene: SceneResource | null | undefined,
+): number | null {
   const study = scene?.study;
-  if (!study || typeof study !== "object" || Array.isArray(study)) return false;
+  if (!study || typeof study !== "object" || Array.isArray(study)) return null;
   const value = (study as Record<string, unknown>).rotated_interfacial_dmi;
-  if (typeof value === "number") return Number.isFinite(value) && value !== 0;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value === "string" && value.trim() !== "") {
     const parsed = Number(value);
-    return Number.isFinite(parsed) && parsed !== 0;
+    return Number.isFinite(parsed) ? parsed : null;
   }
-  return false;
+  return null;
 }
 
 function studyExchangeExplicitlyDisabled(

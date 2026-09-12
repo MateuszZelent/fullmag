@@ -2268,9 +2268,25 @@ def _validate_authored_mixed_p1_scope(
         if hasattr(term, "to_ir")
     ]
     device = runtime_selection.get("device")
-    dmi_kinds = {"interfacial_dmi", "bulk_dmi"}
-    has_dmi = any(payload.get("kind") in dmi_kinds for payload in energy_payloads) or any(
-        payload.get(key) is not None
+    dmi_kinds = {"interfacial_dmi", "bulk_dmi", "rotated_interfacial_dmi"}
+
+    def has_nonzero_value(value: object) -> bool:
+        if value is None or isinstance(value, bool):
+            return False
+        if isinstance(value, (int, float)):
+            # NaN is non-zero here so malformed authored input remains visible
+            # to the normal finite-value validators instead of being silently
+            # treated as an inactive interaction.
+            return value != 0.0
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            return any(has_nonzero_value(item) for item in value)
+        return False
+
+    has_dmi = any(
+        payload.get("kind") in dmi_kinds and has_nonzero_value(payload.get("D"))
+        for payload in energy_payloads
+    ) or any(
+        has_nonzero_value(payload.get(key))
         for payload in material_payloads
         for key in ("interfacial_dmi", "bulk_dmi", "dind_field", "dbulk_field")
     )
@@ -2296,7 +2312,14 @@ def _validate_authored_mixed_p1_scope(
         failed.append("demag_term_count_not_one")
     if any(
         payload.get("kind")
-        not in {"exchange", "demag", "zeeman", "interfacial_dmi", "bulk_dmi"}
+        not in {
+            "exchange",
+            "demag",
+            "zeeman",
+            "interfacial_dmi",
+            "bulk_dmi",
+            "rotated_interfacial_dmi",
+        }
         for payload in energy_payloads
     ):
         failed.append("unsupported_energy_term")

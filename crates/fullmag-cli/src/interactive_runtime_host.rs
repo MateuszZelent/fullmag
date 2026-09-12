@@ -1144,6 +1144,7 @@ fn apply_step_stats_to_idle_live_state(
     state.live_state.latest_step.e_ext = step_stats.e_ext;
     state.live_state.latest_step.e_ani = step_stats.e_ani;
     state.live_state.latest_step.e_dmi = step_stats.e_dmi;
+    state.live_state.latest_step.e_rotated_dmi = step_stats.e_rotated_dmi;
     state.live_state.latest_step.e_total = step_stats.e_total;
     state.live_state.latest_step.max_dm_dt = step_stats.max_dm_dt;
     state.live_state.latest_step.max_h_eff = step_stats.max_h_eff;
@@ -1223,6 +1224,7 @@ mod tests {
                 final_e_ext: None,
                 final_e_ani: None,
                 final_e_dmi: None,
+                final_e_rotated_dmi: None,
                 final_e_total: None,
                 artifact_dir: "/tmp/artifacts".to_string(),
             },

@@ -932,9 +932,9 @@ fn active_lane_operations(
         ),
         (
             "interaction.rotated_interfacial_dmi".into(),
-            supported(
-                "Study-scoped rotated interfacial DMI authoring is available; execution qualification remains lane-specific.",
-                &["authoring:study.rotated_interfacial_dmi"],
+            term_operation(
+                has_term(&["rotated_interfacial_dmi"]),
+                "interaction:rotated_interfacial_dmi",
             ),
         ),
         (

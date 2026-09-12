@@ -330,6 +330,35 @@ describe("physics interaction catalog", () => {
     });
   });
 
+  it("treats a string or zero rotated-DMI value as present but not active", () => {
+    const zeroScene = {
+      objects: [],
+      study: { exchange_enabled: false, rotated_interfacial_dmi: "0" },
+    } as unknown as SceneResource;
+    expect(
+      buildObjectInteractionPatchFromDraft(
+        {
+          enabled: true,
+          id: "interfacial_dmi",
+          present: true,
+          values: { dind: "0.003" },
+        },
+        zeroScene,
+      ),
+    ).not.toHaveProperty("error");
+    expect(
+      buildStudyInteractionPatchFromDraft(
+        {
+          enabled: true,
+          id: "rotated_interfacial_dmi",
+          present: true,
+          values: { d: "0" },
+        },
+        zeroScene,
+      ),
+    ).toEqual({ patch: { study: { rotated_interfacial_dmi: 0 } } });
+  });
+
   it("ignores active DMI entries on auxiliary scene objects", () => {
     for (const kind of ["interfacial_dmi", "bulk_dmi"] as const) {
       const scene = {

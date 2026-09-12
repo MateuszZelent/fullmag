@@ -2711,7 +2711,9 @@ inline bool abort_step_from_tmp(Context &ctx, bool invalidate_fsal = true) {
 /// Allocate all device buffers.
 bool context_alloc_device(Context &ctx);
 bool context_preflight_single_grid_workspace(
-    Context &ctx, const fullmag_fdm_plan_desc &plan);
+    Context &ctx,
+    const fullmag_fdm_plan_desc &plan,
+    bool reserve_rotated_dmi);
 
 /// Materialize the optional rotated-DMI observable storage after a v2 plan has
 /// been imported.  When setup accounting is already sealed this may extend the

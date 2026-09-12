@@ -1264,7 +1264,7 @@ mod realtime_change_tests {
                 e_ext: 0.0,
                 e_ani: 0.0,
                 e_dmi: 0.0,
-                e_rotated_dmi: 0.0,
+                e_rotated_dmi: Some(0.0),
                 e_total: 0.0,
                 max_dm_dt: 0.0,
                 max_h_eff: 0.0,
@@ -5387,7 +5387,7 @@ fn scalar_row_metric_value(row: &ScalarRow, metric_key: &str) -> Option<f64> {
         "e_ext" => Some(row.e_ext),
         "e_ani" => Some(row.e_ani),
         "e_dmi" => Some(row.e_dmi),
-        "e_rotated_dmi" => Some(row.e_rotated_dmi),
+        "e_rotated_dmi" => row.e_rotated_dmi,
         "e_total" => Some(row.e_total),
         _ => None,
     }

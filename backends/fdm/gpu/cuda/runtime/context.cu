@@ -133,7 +133,9 @@ cudaError_t context_gpu_workspace_cuda_malloc_raw(
 }
 
 bool context_preflight_single_grid_workspace(
-    Context &ctx, const fullmag_fdm_plan_desc &plan)
+    Context &ctx,
+    const fullmag_fdm_plan_desc &plan,
+    bool reserve_rotated_dmi)
 {
     constexpr uint64_t maximum = std::numeric_limits<uint64_t>::max();
     uint64_t required_aggregate_workspace_bytes = 0;
@@ -162,11 +164,8 @@ bool context_preflight_single_grid_workspace(
     if (ctx.cell_count > maximum / scalar_bytes) return overflow();
     const uint64_t component_bytes = ctx.cell_count * scalar_bytes;
 
-    // Rotated-DMI output is an optional observable buffer.  It is allocated
-    // only after the v2 descriptor explicitly enables the interaction, so a
-    // no-DMI context does not reserve or commit three dormant components.
     uint64_t vector_field_count = 10;
-    if (ctx.has_rotated_interfacial_dmi) ++vector_field_count;
+    if (reserve_rotated_dmi) ++vector_field_count;
     if (ctx.has_frozen_mask) ++vector_field_count;
     switch (ctx.integrator) {
     case FULLMAG_FDM_INTEGRATOR_DP45:
@@ -526,10 +525,22 @@ static bool alloc_vector_field(Context &ctx, DeviceVectorField &field) {
     if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(x)", err); return false; }
 
     err = cudaMalloc(&field.y, bytes);
-    if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(y)", err); return false; }
+    if (err != cudaSuccess) {
+        context_gpu_workspace_cuda_free(ctx, field.x);
+        field.x = nullptr;
+        set_cuda_error(ctx, "cudaMalloc(y)", err);
+        return false;
+    }
 
     err = cudaMalloc(&field.z, bytes);
-    if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(z)", err); return false; }
+    if (err != cudaSuccess) {
+        context_gpu_workspace_cuda_free(ctx, field.x);
+        context_gpu_workspace_cuda_free(ctx, field.y);
+        field.x = nullptr;
+        field.y = nullptr;
+        set_cuda_error(ctx, "cudaMalloc(z)", err);
+        return false;
+    }
 
     return true;
 }
@@ -953,9 +964,20 @@ static bool alloc_vector_field_cells(
         }
         return true;
     };
-    return alloc_component(&field.x, "x") &&
-        alloc_component(&field.y, "y") &&
-        alloc_component(&field.z, "z");
+    if (!alloc_component(&field.x, "x")) return false;
+    if (!alloc_component(&field.y, "y")) {
+        context_gpu_workspace_cuda_free(ctx, field.x);
+        field.x = nullptr;
+        return false;
+    }
+    if (!alloc_component(&field.z, "z")) {
+        context_gpu_workspace_cuda_free(ctx, field.x);
+        context_gpu_workspace_cuda_free(ctx, field.y);
+        field.x = nullptr;
+        field.y = nullptr;
+        return false;
+    }
+    return true;
 }
 
 static bool upload_vector_field_aos_f64(
@@ -1677,10 +1699,10 @@ bool context_preflight_multilayer_workspace_v2(
 
     const uint64_t scalar_bytes = scalar_size(ctx.precision);
     const uint64_t complex_bytes = complex_size(ctx.precision);
-    // h_rotated_dmi is a late-enabled observable for multilayer v2 handles;
-    // the setter accounts for its exact extension before the first step.
+    // The optional rotated-DMI field is allocated only for plans that enable
+    // the interaction; keep the preflight estimate aligned with that path.
     const uint64_t layer_vector_component_count =
-        (11 + (ctx.has_rotated_interfacial_dmi ? 1 : 0)) * 3;
+        (11 + (plan.has_rotated_interfacial_dmi != 0 ? 1 : 0)) * 3;
     for (uint32_t layer_index = 0;
          layer_index < plan.layer_count;
          ++layer_index)

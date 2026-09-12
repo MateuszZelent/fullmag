@@ -4980,6 +4980,8 @@ export interface components {
             /** Format: double */
             final_exchange_energy?: number | null;
             /** Format: double */
+            final_rotated_dmi_energy?: number | null;
+            /** Format: double */
             final_total_energy?: number | null;
             /** Format: double */
             final_zeeman_energy?: number | null;
