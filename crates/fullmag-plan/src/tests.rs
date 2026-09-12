@@ -12242,6 +12242,18 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
         other => panic!("expected FEM eigen path plan, got {other:?}"),
     }
 
+    let mut forced_gpu = ir.clone();
+    forced_gpu.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "gpu", "precision": "double"}),
+    );
+    let gpu_error = plan(&forced_gpu)
+        .expect_err("forced GPU must not silently select the CPU-only Floquet provider");
+    assert!(gpu_error
+        .reasons
+        .iter()
+        .any(|reason| { reason.contains("strict double-precision CPU FEM plan") }));
+
     ir.problem_meta.runtime_metadata.insert(
         "dispersion_validation".to_string(),
         serde_json::json!({
