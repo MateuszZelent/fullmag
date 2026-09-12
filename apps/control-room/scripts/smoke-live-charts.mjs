@@ -1014,14 +1014,16 @@ async function verifyVisibilityMatrix(page, evidence) {
 }
 
 async function verifyCanonicalCsvExport(page) {
+  const before = await page.evaluate(() => window.__FULLMAG_LIVE_CHARTS_SMOKE__.downloads.length);
   await keyboardExport(page);
-  await page.waitForFunction(() =>
-    window.__FULLMAG_LIVE_CHARTS_SMOKE__?.downloads?.some((entry) => entry.filename.endsWith(".csv") && typeof entry.content === "string"),
-    undefined,
+  await page.waitForFunction((before) =>
+    window.__FULLMAG_LIVE_CHARTS_SMOKE__?.downloads?.slice(before).some((entry) => entry.filename.endsWith(".csv") && typeof entry.content === "string"),
+    before,
     { timeout: timeoutMs },
   );
-  const csv = await page.evaluate(() =>
-    window.__FULLMAG_LIVE_CHARTS_SMOKE__.downloads.find((entry) => entry.filename.endsWith(".csv") && typeof entry.content === "string")?.content ?? "",
+  const csv = await page.evaluate((before) =>
+    window.__FULLMAG_LIVE_CHARTS_SMOKE__.downloads.slice(before).find((entry) => entry.filename.endsWith(".csv") && typeof entry.content === "string")?.content ?? "",
+    before,
   );
   const rows = csv.split(/\r?\n/).filter(Boolean).map((row) => row.split(","));
   const header = rows[0] ?? [];
