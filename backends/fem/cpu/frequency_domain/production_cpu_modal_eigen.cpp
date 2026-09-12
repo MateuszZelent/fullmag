@@ -25,6 +25,13 @@ constexpr double kWindowDedupFrequencyRelativeTolerance = 1.0e-8;
 constexpr double kWindowDedupFrequencyAbsoluteToleranceHz = 1.0e-12;
 constexpr double kWindowDedupOverlapThreshold = 0.90;
 
+bool dynamic_demag_k_payload_is_declared(const ModalEigenRequest &) noexcept;
+bool dynamic_demag_k_payload_is_consistent(const ModalEigenRequest &) noexcept;
+bool effective_dense_stiffness_for_request(
+    const ModalEigenRequest &,
+    std::vector<double> &,
+    const double **) noexcept;
+
 std::string escape_json_string(const char *value)
 {
     if (value == nullptr) {
@@ -142,6 +149,17 @@ std::string modal_floquet_periodic_pair_diagnostics_json(
            std::to_string(request.floquet_periodic_pair_count);
 }
 
+std::string dynamic_demag_k_diagnostics_json(
+    const ModalEigenRequest &request)
+{
+    if (!dynamic_demag_k_payload_is_declared(request)) {
+        return "";
+    }
+    return ",\"dynamic_demag_k_operator\":{\"payload_kind\":\"dense_real_split_tangent_matrix\",\"value_count\":" +
+        std::to_string(request.dynamic_demag_k_tangent_matrix_value_count) +
+        ",\"assembly_owner\":\"caller_supplied_preassembled\"}";
+}
+
 std::string with_modal_request_diagnostics(
     std::string diagnostics_json,
     const ModalEigenRequest &request)
@@ -150,6 +168,7 @@ std::string with_modal_request_diagnostics(
         diagnostics_json.pop_back();
         diagnostics_json += operator_k_vector_diagnostics_json(request);
         diagnostics_json += modal_floquet_periodic_pair_diagnostics_json(request);
+        diagnostics_json += dynamic_demag_k_diagnostics_json(request);
         diagnostics_json += "}";
     }
     return with_operator_diagnostics(
@@ -200,7 +219,12 @@ const char *modal_request_gated_operator_term(
         return nullptr;
     }
     if (std::strstr(diagnostics, "\"dynamic_demag\"") != nullptr) {
-        return "dynamic_demag";
+        // A complete, finite k-dependent payload is the native provider's
+        // proof that this term is materialized.  Keep the historical gate for
+        // labelled-but-missing Rust/full2x2 terms.
+        if (!dynamic_demag_k_payload_is_consistent(request)) {
+            return "dynamic_demag";
+        }
     }
     if (std::strstr(diagnostics, "\"floquet_airbox\"") != nullptr) {
         return "floquet_airbox";
@@ -403,6 +427,83 @@ bool has_dense_modal_payload(const ModalEigenRequest &request) noexcept
         request.mfem_tangent_dof_count > 0 &&
         request.mfem_stiffness_matrix_row_major != nullptr &&
         request.mfem_gyrotropic_matrix_row_major != nullptr;
+}
+
+bool dynamic_demag_k_payload_is_declared(const ModalEigenRequest &request) noexcept
+{
+    return request.dynamic_demag_k_tangent_matrix_row_major != nullptr ||
+        request.dynamic_demag_k_tangent_matrix_value_count != 0;
+}
+
+bool dynamic_demag_k_payload_is_consistent(
+    const ModalEigenRequest &request) noexcept
+{
+    const bool declared = dynamic_demag_k_payload_is_declared(request);
+    if (!declared) {
+        return true;
+    }
+    if (!modal_request_is_nonzero_k_floquet(request) ||
+        request.operator_request.include_demag == 0 ||
+        request.mfem_sparse_operator_enabled != 0 ||
+        !has_dense_modal_payload(request) ||
+        request.dynamic_demag_k_tangent_matrix_row_major == nullptr) {
+        return false;
+    }
+    const std::uint64_t n = request.mfem_tangent_dof_count;
+    if (n > std::numeric_limits<std::uint64_t>::max() / n) {
+        return false;
+    }
+    const std::uint64_t expected = n * n;
+    if (expected > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+        return false;
+    }
+    if (request.dynamic_demag_k_tangent_matrix_value_count != expected) {
+        return false;
+    }
+    for (std::uint64_t index = 0; index < expected; ++index) {
+        if (!std::isfinite(request.dynamic_demag_k_tangent_matrix_row_major[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Build the tangent stiffness consumed by the SLEPc adapter.  The caller
+// supplies the already assembled, topology-bound k-dependent demagnetisation
+// contribution; this adapter only adds it to the static restoring Hessian.
+// A missing or malformed payload is never replaced by the k=0/static field
+// term.
+bool effective_dense_stiffness_for_request(
+    const ModalEigenRequest &request,
+    std::vector<double> &storage,
+    const double **out_stiffness) noexcept
+{
+    if (out_stiffness == nullptr || !has_dense_modal_payload(request)) {
+        return false;
+    }
+    *out_stiffness = request.mfem_stiffness_matrix_row_major;
+    if (!dynamic_demag_k_payload_is_declared(request)) {
+        return true;
+    }
+    if (!dynamic_demag_k_payload_is_consistent(request)) {
+        return false;
+    }
+    const std::uint64_t n = request.mfem_tangent_dof_count;
+    const std::uint64_t value_count = n * n;
+    try {
+        storage.assign(
+            request.mfem_stiffness_matrix_row_major,
+            request.mfem_stiffness_matrix_row_major + value_count);
+        for (std::uint64_t index = 0; index < value_count; ++index) {
+            storage[static_cast<std::size_t>(index)] +=
+                request.dynamic_demag_k_tangent_matrix_row_major[index];
+        }
+    } catch (...) {
+        storage.clear();
+        return false;
+    }
+    *out_stiffness = storage.data();
+    return true;
 }
 
 bool has_sparse_modal_payload(const ModalEigenRequest &request) noexcept
@@ -1036,6 +1137,18 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
             "contour_interval_dense_payload_requires_even_tangent_dofs");
     }
 
+    std::vector<double> effective_stiffness;
+    const double *stiffness = nullptr;
+    if (!effective_dense_stiffness_for_request(
+            request,
+            effective_stiffness,
+            &stiffness)) {
+        return dense_payload_validation_error(
+            request,
+            "native FEM modal_eigen dynamic demag-k payload is malformed",
+            "invalid_dynamic_demag_k_tangent_matrix");
+    }
+
     ContourIntervalSolverRequest contour_request{};
     contour_request.frequency_min_hz = request.frequency_min_hz;
     contour_request.frequency_max_hz = request.frequency_max_hz;
@@ -1048,7 +1161,7 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
     contour_request.contour_point_count = 16;
     contour_request.tangent_dof_count = request.mfem_tangent_dof_count;
     contour_request.stiffness_matrix_row_major =
-        request.mfem_stiffness_matrix_row_major;
+        stiffness;
     contour_request.gyrotropic_mass_matrix_row_major =
         request.mfem_gyrotropic_matrix_row_major;
 
@@ -1510,15 +1623,29 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
             "mfem_modal_operator_payload_too_large_for_dense_adapter");
     }
 
+    std::vector<double> effective_stiffness;
+    const double *stiffness = nullptr;
+    if (!effective_dense_stiffness_for_request(
+            request,
+            effective_stiffness,
+            &stiffness)) {
+        return dense_payload_validation_error(
+            request,
+            "native FEM modal_eigen dynamic demag-k payload is malformed",
+            "invalid_dynamic_demag_k_tangent_matrix");
+    }
+    ModalEigenRequest effective_request = request;
+    effective_request.mfem_stiffness_matrix_row_major = stiffness;
+
     if (is_frequency_window(request)) {
-        return solve_dense_production_modal_window_payload(request, selection);
+        return solve_dense_production_modal_window_payload(effective_request, selection);
     }
 
     SLEPcTinyGyrotropicModalEigenRequest slepc_request{};
     slepc_request.tangent_dof_count =
         static_cast<int>(request.mfem_tangent_dof_count);
     slepc_request.stiffness_matrix_row_major =
-        request.mfem_stiffness_matrix_row_major;
+        stiffness;
     slepc_request.gyrotropic_matrix_row_major =
         request.mfem_gyrotropic_matrix_row_major;
     slepc_request.requested_mode_count = request.requested_mode_count;
@@ -2151,12 +2278,21 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
 {
     FrequencyDomainContractResult result{};
     result.status = FrequencyDomainStatus::unavailable;
+    if (dynamic_demag_k_payload_is_declared(request) &&
+        !dynamic_demag_k_payload_is_consistent(request)) {
+        return dense_payload_validation_error(
+            request,
+            "native FEM modal_eigen dynamic demag-k payload is malformed",
+            "invalid_dynamic_demag_k_tangent_matrix");
+    }
     if (modal_request_is_nonzero_k_floquet(request)) {
         if (!modal_request_has_bloch_floquet_tangent_operator_payload(request)) {
             return nonzero_k_floquet_modal_operator_missing(request);
         }
         if (request.operator_request.include_demag != 0) {
-            return nonzero_k_floquet_modal_dynamic_demag_k_missing(request);
+            if (!dynamic_demag_k_payload_is_declared(request)) {
+                return nonzero_k_floquet_modal_dynamic_demag_k_missing(request);
+            }
         }
         if (const char *gated_operator_term =
                 modal_request_gated_operator_term(request)) {

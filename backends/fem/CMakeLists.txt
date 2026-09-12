@@ -170,6 +170,7 @@ set(FEM_SOURCES
     cpu/mfem/runtime/step_metrics.cpp
     cpu/frequency_domain/dense_poisson_airbox_eigen_oracle.cpp
     cpu/frequency_domain/floquet_bloch_scalar.cpp
+    cpu/frequency_domain/operators/floquet_magnetic_operator.cpp
     cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp
     cpu/frequency_domain/poisson_airbox_modal_eigen.cpp
     cpu/frequency_domain/poisson_airbox_schur_matshell.cpp
@@ -990,6 +991,10 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_FEM_WITH_SLEPC)
     )
 endif()
 add_fem_source_facade_contract(
+    fem_floquet_magnetic_operator_contract
+    tests/frequency_domain/floquet_magnetic_operator_test.cpp
+)
+add_fem_source_facade_contract(
     fem_floquet_bloch_scalar_contract
     tests/frequency_domain/floquet_bloch_scalar_test.cpp
 )
@@ -1011,12 +1016,15 @@ endif()
 if(FULLMAG_USE_MFEM_STACK)
     if(TARGET MFEM::mfem)
         target_link_libraries(fem_floquet_bloch_scalar_contract PRIVATE MFEM::mfem)
+        target_link_libraries(fem_floquet_magnetic_operator_contract PRIVATE MFEM::mfem)
     else()
         target_link_libraries(fem_floquet_bloch_scalar_contract PRIVATE mfem)
+        target_link_libraries(fem_floquet_magnetic_operator_contract PRIVATE mfem)
     endif()
 endif()
 if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA)
     target_link_libraries(fem_floquet_bloch_scalar_contract PRIVATE CUDA::cudart)
+    target_link_libraries(fem_floquet_magnetic_operator_contract PRIVATE CUDA::cudart)
 endif()
 add_fem_source_facade_contract(
     fem_driven_response_contract

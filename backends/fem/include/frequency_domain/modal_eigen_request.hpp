@@ -158,6 +158,12 @@ struct ModalEigenRequest {
     const char *poisson_airbox_gauge_policy = nullptr;
     const char *poisson_airbox_gauge_reason = nullptr;
     const char *poisson_airbox_assembly_kind = nullptr;
+    // Optional native airbox contribution for a nonzero-k Floquet modal
+    // request.  Values are a dense real-split tangent matrix in exactly the
+    // same reduced coordinates and units as mfem_stiffness_matrix_row_major;
+    // the provider must include the complex Bloch phase and scalar-potential
+    // elimination before handing it across this ABI.  A null pointer and zero
+    // count mean that dynamic demagnetization is unavailable, never k=0.
     const double *dynamic_demag_k_tangent_matrix_row_major = nullptr;
     std::uint64_t dynamic_demag_k_tangent_matrix_value_count = 0;
     ModalExecutionTarget execution_target = ModalExecutionTarget::auto_select;

@@ -2719,6 +2719,107 @@ void modal_nonzero_k_floquet_bloch_payload_with_demag_is_unavailable()
     fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
+void modal_nonzero_k_floquet_bloch_payload_with_dynamic_demag_k_is_admitted()
+{
+    constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
+    constexpr double gyrotropic_mass_row_major[] = {0.0, -1.0, 1.0, 0.0};
+    constexpr double dynamic_demag_k_row_major[] = {0.25, 0.0, 0.0, 0.25};
+
+    fullmag_fem_frequency_domain_floquet_periodic_pair pair{};
+    pair.pair_id = "x_periodic_pair_0";
+    pair.node_a = 10;
+    pair.node_b = 20;
+    pair.has_translation = 1;
+    pair.translation_m[0] = 1.0e-6;
+    pair.has_phase = 1;
+    pair.phase_rad = -1.0;
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.target_kind = "frequency_window";
+    request.frequency_min_hz = 0.1;
+    request.frequency_max_hz = 0.3;
+    request.eigensolver_family = 1;
+    request.mfem_operator_enabled = 1;
+    request.mfem_tangent_dof_count = 2;
+    request.mfem_stiffness_matrix_row_major = stiffness_matrix_row_major;
+    request.mfem_gyrotropic_matrix_row_major = gyrotropic_mass_row_major;
+    request.operator_request.include_demag = 1;
+    request.operator_request.demag_realization = "floquet_airbox";
+    request.operator_request.operator_diagnostics_json =
+        "{\"operator_family\":\"mfem_linearized_llg\","
+        "\"payload_kind\":\"bloch_floquet_tangent_operator\","
+        "\"operator_terms_included\":[\"exchange\",\"dynamic_demag\"]}";
+    request.operator_request.spin_wave_bc_kind = "floquet";
+    request.has_floquet_k_vector = 1;
+    request.floquet_k_vector_rad_per_m[0] = 1.0e6;
+    request.phase_convention =
+        FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T;
+    request.mfem_floquet_periodic_pairs = &pair;
+    request.mfem_floquet_periodic_pair_count = 1;
+    request.dynamic_demag_k_tangent_matrix_row_major = dynamic_demag_k_row_major;
+    request.dynamic_demag_k_tangent_matrix_value_count = 4;
+
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+#if FULLMAG_FEM_WITH_SLEPC
+    check(result.status == FULLMAG_FEM_FD_OK,
+          "a complete nonzero-k dynamic demag matrix must reach the production SLEPc path");
+    check(contains(result.result_json, "\"accepted_mode_count\":1"),
+          "a complete nonzero-k dynamic demag matrix must produce one accepted mode");
+#else
+    check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
+          "a complete nonzero-k dynamic demag matrix still requires SLEPc");
+#endif
+    check(!contains(result.diagnostics_json,
+                    "\"production_cpu_rejection_reason\":\"production_cpu_modal_dynamic_demag_k_operator_missing\""),
+          "a supplied dynamic demag matrix must not be reported as missing");
+    check(contains(result.diagnostics_json,
+                   "\"dynamic_demag_k_operator\":{\"payload_kind\":\"dense_real_split_tangent_matrix\""),
+          "dynamic demag diagnostics must identify the real-split payload");
+    check(contains(result.diagnostics_json, "\"value_count\":4"),
+          "dynamic demag diagnostics must preserve the payload extent");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
+void modal_nonzero_k_floquet_dynamic_demag_k_rejects_malformed_payload()
+{
+    constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
+    constexpr double gyrotropic_mass_row_major[] = {0.0, -1.0, 1.0, 0.0};
+    constexpr double dynamic_demag_k_row_major[] = {0.25, 0.0, 0.0, 0.25};
+
+    fullmag_fem_frequency_domain_floquet_periodic_pair pair{};
+    pair.pair_id = "x_periodic_pair_0";
+    pair.node_a = 10;
+    pair.node_b = 20;
+    pair.has_translation = 1;
+    pair.translation_m[0] = 1.0e-6;
+    pair.has_phase = 1;
+    pair.phase_rad = -1.0;
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.mfem_operator_enabled = 1;
+    request.mfem_tangent_dof_count = 2;
+    request.mfem_stiffness_matrix_row_major = stiffness_matrix_row_major;
+    request.mfem_gyrotropic_matrix_row_major = gyrotropic_mass_row_major;
+    request.operator_request.include_demag = 1;
+    request.operator_request.demag_realization = "floquet_airbox";
+    request.operator_request.operator_diagnostics_json =
+        "{\"payload_kind\":\"bloch_floquet_tangent_operator\"}";
+    request.operator_request.spin_wave_bc_kind = "floquet";
+    request.has_floquet_k_vector = 1;
+    request.floquet_k_vector_rad_per_m[0] = 1.0e6;
+    request.mfem_floquet_periodic_pairs = &pair;
+    request.mfem_floquet_periodic_pair_count = 1;
+    request.dynamic_demag_k_tangent_matrix_row_major = dynamic_demag_k_row_major;
+    request.dynamic_demag_k_tangent_matrix_value_count = 3;
+
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "a dynamic demag matrix with a wrong extent must fail before solving");
+    check(contains(result.diagnostics_json, "invalid_dynamic_demag_k_tangent_matrix"),
+          "a malformed dynamic demag matrix must expose a stable validation reason");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
 void modal_poisson_airbox_tail_payload_resolves_augmented_gauge_schur_solver()
 {
     constexpr double omega0 = 6.283185307179586476925286766559 * 2.0e9;
@@ -3052,6 +3153,8 @@ int main()
     modal_nonzero_k_floquet_bloch_payload_reaches_production_solver();
     modal_nonzero_k_floquet_bloch_payload_rejects_gated_operator_terms();
     modal_nonzero_k_floquet_bloch_payload_with_demag_is_unavailable();
+    modal_nonzero_k_floquet_bloch_payload_with_dynamic_demag_k_is_admitted();
+    modal_nonzero_k_floquet_dynamic_demag_k_rejects_malformed_payload();
     modal_poisson_airbox_tail_payload_resolves_augmented_gauge_schur_solver();
     modal_poisson_airbox_tail_shift_invert_action_writes_artifact();
     modal_poisson_airbox_tail_gpu_shift_invert_action_writes_artifact();

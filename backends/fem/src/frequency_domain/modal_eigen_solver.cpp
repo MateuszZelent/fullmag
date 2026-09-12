@@ -180,11 +180,33 @@ std::string with_magnetic_pencil_digest(
         json.empty() || json.back() != '}') {
         return json;
     }
-    const std::uint64_t entry_count =
-        request.mfem_tangent_dof_count * request.mfem_tangent_dof_count;
+    const std::uint64_t tangent_dof_count = request.mfem_tangent_dof_count;
+    if (tangent_dof_count >
+        std::numeric_limits<std::uint64_t>::max() / tangent_dof_count) {
+        return json;
+    }
+    const std::uint64_t entry_count = tangent_dof_count * tangent_dof_count;
+    const bool dynamic_demag_k_declared =
+        request.dynamic_demag_k_tangent_matrix_row_major != nullptr ||
+        request.dynamic_demag_k_tangent_matrix_value_count != 0u;
+    if (dynamic_demag_k_declared &&
+        (request.dynamic_demag_k_tangent_matrix_row_major == nullptr ||
+         request.dynamic_demag_k_tangent_matrix_value_count != entry_count ||
+         entry_count > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))) {
+        return json;
+    }
     std::vector<std::complex<double>> l(entry_count), b_alpha(entry_count);
     for (std::uint64_t i = 0; i < entry_count; ++i) {
-        l[i] = {-request.mfem_stiffness_matrix_row_major[i], 0.0};
+        double stiffness = request.mfem_stiffness_matrix_row_major[i];
+        if (dynamic_demag_k_declared) {
+            const double dynamic_demag_k =
+                request.dynamic_demag_k_tangent_matrix_row_major[i];
+            if (!std::isfinite(dynamic_demag_k)) {
+                return json;
+            }
+            stiffness += dynamic_demag_k;
+        }
+        l[i] = {-stiffness, 0.0};
         b_alpha[i] = {-request.mfem_gyrotropic_matrix_row_major[i], 0.0};
     }
     DynamicPencilMetadata canonical_metadata{};
