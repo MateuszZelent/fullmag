@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashSet};
 
 use crate::dispatch::FemEngine;
+use crate::eigen::output_selection::{select_eigen_outputs, SampleModeId};
 use crate::fem::eigen_execution_resolution::{FemEigenExecutionLane, PlannedFemEigenExecution};
 use crate::fem_eigen;
 use crate::types::{AuxiliaryArtifact, ExecutedRun, RunError};
@@ -94,7 +95,21 @@ pub(crate) mod test_support {
         result: &crate::eigen::PathSolveResult,
         published_mode_indices: &BTreeSet<u32>,
     ) -> serde_json::Value {
-        super::eigen_path_solver_diagnostics(engine, plan, result, published_mode_indices)
+        let selected = result
+            .samples
+            .iter()
+            .flat_map(|sample| {
+                sample
+                    .modes
+                    .iter()
+                    .filter(|mode| {
+                        published_mode_indices
+                            .contains(&u32::try_from(mode.raw_mode_index).unwrap_or(u32::MAX))
+                    })
+                    .map(|mode| SampleModeId::new(sample.sample.sample_index, mode.raw_mode_index))
+            })
+            .collect();
+        super::eigen_path_solver_diagnostics(engine, plan, result, &selected)
     }
 
     pub(crate) fn eigen_path_mode_json(
@@ -142,7 +157,22 @@ pub(crate) mod test_support {
         mode_artifacts: &[crate::types::AuxiliaryArtifact],
         plan: &FemEigenPlanIR,
     ) -> serde_json::Value {
-        super::build_eigen_path_frequency_domain_manifest(engine, result, mode_artifacts, plan)
+        let outputs = vec![
+            OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".into(),
+            },
+            OutputIR::DispersionCurve {
+                name: "dispersion".into(),
+                include_branch_table: true,
+            },
+        ];
+        super::build_eigen_path_frequency_domain_manifest(
+            engine,
+            result,
+            mode_artifacts,
+            plan,
+            &outputs,
+        )
     }
 
     pub(crate) fn append_eigen_path_k0_kittel_validation_artifacts(
@@ -443,9 +473,16 @@ pub(crate) fn execute_fem_eigen_path(
     }
 
     let tracking_outputs = eigen_path_tracking_outputs(outputs, plan.count);
-    let published_mode_indices = eigen_path_public_mode_indices(outputs, plan.count);
-    let mode_artifact_indices = eigen_path_mode_artifact_indices(outputs);
-    let mode_fields_requested = !mode_artifact_indices.is_empty();
+    let mode_fields_requested = outputs
+        .iter()
+        .any(|output| matches!(output, OutputIR::EigenMode { .. }));
+    // Branch IDs are assigned after every sample is solved. Keep candidate fields
+    // until tracking resolves the public selection; raw IDs must not be renumbered.
+    let mode_artifact_indices = if mode_fields_requested {
+        (0..plan.count).collect()
+    } else {
+        BTreeSet::new()
+    };
     let wants_dispersion = eigen_path_wants_dispersion(outputs);
     let adapter = KSolverAdapter {
         execution,
@@ -469,6 +506,15 @@ pub(crate) fn execute_fem_eigen_path(
     if periodic_airbox_k0_runtime_supported(plan) && engine == FemEngine::NativeGpu {
         path_result.solver_model = crate::eigen::EigenSolverModel::ProductionGpuModalDeviceKrylov;
     }
+    let selection = select_eigen_outputs(&path_result, outputs).map_err(|error| RunError {
+        message: format!("invalid eigen output selection: {error}"),
+    })?;
+    let published_mode_ids: BTreeSet<SampleModeId> = selection
+        .spectrum_mode_ids()
+        .union(selection.field_mode_ids())
+        .copied()
+        .collect();
+    let branch_table_requested = selection.branch_table_requested();
     let mut mode_artifacts = adapter.mode_artifacts.into_inner();
     deduplicate_auxiliary_artifacts_by_path(&mut mode_artifacts);
     // Analytic reference solvers do not synthesize topology-bound mode fields
@@ -483,6 +529,10 @@ pub(crate) fn execute_fem_eigen_path(
     {
         mode_artifacts = eigen_path_mode_artifacts_from_result(&path_result)?;
     }
+
+    retain_selected_eigen_path_mode_artifacts(&mut mode_artifacts, selection.field_mode_ids());
+    validate_eigen_path_selected_mode_artifacts(&mode_artifacts, selection.field_mode_ids())?;
+    bind_eigen_path_tracked_mode_metadata(&mut mode_artifacts, &path_result)?;
 
     // Build the ExecutedRun with both V2 and legacy-compatible artifacts
     let mut auxiliary_artifacts = Vec::new();
@@ -502,15 +552,15 @@ pub(crate) fn execute_fem_eigen_path(
                 "modes": s
                     .modes
                     .iter()
-                    .filter(|m| published_mode_indices.contains(&(m.raw_mode_index as u32)))
+                    .filter(|m| published_mode_ids.contains(&SampleModeId::new(s.sample.sample_index, m.raw_mode_index)))
                     .map(|m| {
-                        eigen_path_mode_json(
+                        eigen_path_mode_publication_json(eigen_path_mode_json(
                             plan,
                             &s.sample,
                             m,
                             path_result.solver_model,
                             s.solver_diagnostics.as_ref(),
-                        )
+                        ), s.sample.sample_index, m.raw_mode_index, selection.field_mode_ids())
                     })
                     .collect::<Vec<_>>(),
             })
@@ -538,7 +588,10 @@ pub(crate) fn execute_fem_eigen_path(
             branch
                 .points
                 .iter()
-                .filter(|point| published_mode_indices.contains(&(point.raw_mode_index as u32)))
+                .filter(|point| {
+                    published_mode_ids
+                        .contains(&SampleModeId::new(point.sample_index, point.raw_mode_index))
+                })
                 .filter_map(|point| point.overlap_prev)
         })
         .collect::<Vec<_>>();
@@ -559,7 +612,7 @@ pub(crate) fn execute_fem_eigen_path(
         .iter()
         .map(|branch| v2_samples.len().saturating_sub(branch.points.len()))
         .sum::<usize>();
-    let public_mode_count = eigen_path_public_mode_count(&path_result, &published_mode_indices);
+    let public_mode_count = eigen_path_public_mode_count(&path_result, &published_mode_ids);
     let diagnostics_v2 = serde_json::json!({
         "schema_version": "eigen_diagnostics.v2",
         "dispersion": {
@@ -599,15 +652,15 @@ pub(crate) fn execute_fem_eigen_path(
                 "modes": sample
                     .modes
                     .iter()
-                    .filter(|mode| published_mode_indices.contains(&(mode.raw_mode_index as u32)))
+                    .filter(|mode| published_mode_ids.contains(&SampleModeId::new(sample.sample.sample_index, mode.raw_mode_index)))
                     .map(|mode| {
-                        eigen_path_mode_v3_json(
+                        eigen_path_mode_publication_json(eigen_path_mode_v3_json(
                             plan,
                             &sample.sample,
                             mode,
                             path_result.solver_model,
                             sample.solver_diagnostics.as_ref(),
-                        )
+                        ), sample.sample.sample_index, mode.raw_mode_index, selection.field_mode_ids())
                     })
                     .collect::<Vec<_>>(),
             })
@@ -644,7 +697,7 @@ pub(crate) fn execute_fem_eigen_path(
                 .points
                 .iter()
                 .enumerate()
-                .filter(|(_, p)| published_mode_indices.contains(&(p.raw_mode_index as u32)))
+                .filter(|(_, p)| published_mode_ids.contains(&SampleModeId::new(p.sample_index, p.raw_mode_index)))
                 .map(|(point_index, p)| {
                     let mode = eigen_path_mode_for_branch_point(&path_result, p);
                     let point_modal_overlap_available =
@@ -675,10 +728,9 @@ pub(crate) fn execute_fem_eigen_path(
                             p.sample_index,
                             p.raw_mode_index,
                         ),
-                        "mode_field_resource_key": eigen_path_mode_field_resource_key(
-                            p.sample_index,
-                            p.raw_mode_index,
-                        ),
+                        "mode_field_available": selection.contains_field_mode(p.sample_index, p.raw_mode_index),
+                        "mode_field_resource_key": selection.contains_field_mode(p.sample_index, p.raw_mode_index).then(||
+                            eigen_path_mode_field_resource_key(p.sample_index, p.raw_mode_index)),
                     })
                 })
                 .collect::<Vec<_>>();
@@ -710,42 +762,56 @@ pub(crate) fn execute_fem_eigen_path(
             "ambiguous_assignment_count": 0,
         },
     });
-    auxiliary_artifacts.push(AuxiliaryArtifact {
-        relative_path: "eigen/branches.v2.json".to_string(),
-        bytes: serde_json::to_vec_pretty(&branches_v2).unwrap_or_default(),
-    });
+    if branch_table_requested {
+        auxiliary_artifacts.push(AuxiliaryArtifact {
+            relative_path: "eigen/branches.v2.json".to_string(),
+            bytes: serde_json::to_vec_pretty(&branches_v2).unwrap_or_default(),
+        });
+    }
     auxiliary_artifacts.push(AuxiliaryArtifact {
         relative_path: "eigen/diagnostics.v2.json".to_string(),
         bytes: serde_json::to_vec_pretty(&diagnostics_v2).unwrap_or_default(),
     });
-    auxiliary_artifacts.push(AuxiliaryArtifact {
-        relative_path: "eigen/branches.json".to_string(),
-        bytes: serde_json::to_vec_pretty(&serde_json::json!({
-            "schema_version": "2",
-            "solver_model": path_result.solver_model.as_str(),
-            "branches": v2_branches,
-        }))
-        .unwrap_or_default(),
-    });
+    if branch_table_requested {
+        auxiliary_artifacts.push(AuxiliaryArtifact {
+            relative_path: "eigen/branches.json".to_string(),
+            bytes: serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": "2",
+                "solver_model": path_result.solver_model.as_str(),
+                "branches": v2_branches,
+            }))
+            .unwrap_or_default(),
+        });
+    }
 
     // Legacy-compatible spectrum.json from the first sample
     if let Some(first_sample) = path_result.samples.first() {
         let modes_summary: Vec<serde_json::Value> = first_sample
             .modes
             .iter()
-            .filter(|m| published_mode_indices.contains(&(m.raw_mode_index as u32)))
+            .filter(|m| {
+                published_mode_ids.contains(&SampleModeId::new(
+                    first_sample.sample.sample_index,
+                    m.raw_mode_index,
+                ))
+            })
             .map(|m| {
-                eigen_path_mode_v3_json(
-                    plan,
-                    &first_sample.sample,
-                    m,
-                    path_result.solver_model,
-                    first_sample.solver_diagnostics.as_ref(),
+                eigen_path_mode_publication_json(
+                    eigen_path_mode_v3_json(
+                        plan,
+                        &first_sample.sample,
+                        m,
+                        path_result.solver_model,
+                        first_sample.solver_diagnostics.as_ref(),
+                    ),
+                    first_sample.sample.sample_index,
+                    m.raw_mode_index,
+                    selection.field_mode_ids(),
                 )
             })
             .collect();
         let solver_diagnostics =
-            eigen_path_solver_diagnostics(engine, plan, &path_result, &published_mode_indices);
+            eigen_path_solver_diagnostics(engine, plan, &path_result, &published_mode_ids);
         let production_path = matches!(
             path_result.solver_model,
             crate::eigen::EigenSolverModel::ProductionCpuShiftInvert
@@ -800,7 +866,10 @@ pub(crate) fn execute_fem_eigen_path(
             for sample_result in &path_result.samples {
                 let k = sample_result.sample.k_vector;
                 for mode in &sample_result.modes {
-                    if !published_mode_indices.contains(&(mode.raw_mode_index as u32)) {
+                    if !published_mode_ids.contains(&SampleModeId::new(
+                        sample_result.sample.sample_index,
+                        mode.raw_mode_index,
+                    )) {
                         continue;
                     }
                     csv_lines.push(format!(
@@ -814,10 +883,12 @@ pub(crate) fn execute_fem_eigen_path(
                     ));
                 }
             }
-            auxiliary_artifacts.push(AuxiliaryArtifact {
-                relative_path: "eigen/dispersion/branch_table.csv".to_string(),
-                bytes: csv_lines.join("\n").into_bytes(),
-            });
+            if branch_table_requested {
+                auxiliary_artifacts.push(AuxiliaryArtifact {
+                    relative_path: "eigen/dispersion/branch_table.csv".to_string(),
+                    bytes: csv_lines.join("\n").into_bytes(),
+                });
+            }
 
             let mut dispersion_v2_lines = vec![
             "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id,mode_field_resource_key"
@@ -827,7 +898,10 @@ pub(crate) fn execute_fem_eigen_path(
                 let k = sample_result.sample.k_vector;
                 let label = sample_result.sample.label.clone().unwrap_or_default();
                 for mode in &sample_result.modes {
-                    if !published_mode_indices.contains(&(mode.raw_mode_index as u32)) {
+                    if !published_mode_ids.contains(&SampleModeId::new(
+                        sample_result.sample.sample_index,
+                        mode.raw_mode_index,
+                    )) {
                         continue;
                     }
                     let branch_point = eigen_path_branch_point_for_mode(
@@ -881,10 +955,17 @@ pub(crate) fn execute_fem_eigen_path(
                             sample_result.sample.sample_index,
                             mode.raw_mode_index,
                         ),
-                        eigen_path_mode_field_resource_key(
+                        if selection.contains_field_mode(
                             sample_result.sample.sample_index,
-                            mode.raw_mode_index,
-                        ),
+                            mode.raw_mode_index
+                        ) {
+                            eigen_path_mode_field_resource_key(
+                                sample_result.sample.sample_index,
+                                mode.raw_mode_index,
+                            )
+                        } else {
+                            String::new()
+                        },
                     ));
                 }
             }
@@ -911,6 +992,7 @@ pub(crate) fn execute_fem_eigen_path(
             &path_result,
             &mode_artifacts,
             plan,
+            outputs,
         ))
         .map_err(|error| RunError {
             message: format!("failed to serialize k-path frequency-domain manifest: {error}"),

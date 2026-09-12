@@ -6237,6 +6237,7 @@ mod tests {
             &plan,
             &[OutputIR::DispersionCurve {
                 name: "dispersion".to_string(),
+                include_branch_table: true,
             }],
         );
 
@@ -6261,6 +6262,7 @@ mod tests {
 
         let dispersion_only = vec![OutputIR::DispersionCurve {
             name: "dispersion".to_string(),
+            include_branch_table: true,
         }];
         assert_eq!(
             eigen_path_public_mode_indices(&dispersion_only, 2),
@@ -6270,10 +6272,13 @@ mod tests {
         let explicit_mode_subset = vec![
             OutputIR::DispersionCurve {
                 name: "dispersion".to_string(),
+                include_branch_table: true,
             },
             OutputIR::EigenMode {
                 field: "mode".to_string(),
                 indices: vec![1],
+                branches: vec![],
+                sample_selector: None,
             },
         ];
         assert_eq!(
@@ -8495,6 +8500,7 @@ mod tests {
                 },
                 OutputIR::DispersionCurve {
                     name: "dispersion".to_string(),
+                    include_branch_table: true,
                 },
             ],
         )
@@ -8547,10 +8553,13 @@ mod tests {
                 },
                 OutputIR::DispersionCurve {
                     name: "dispersion".to_string(),
+                    include_branch_table: true,
                 },
                 OutputIR::EigenMode {
                     field: "mode".to_string(),
                     indices: vec![0],
+                    branches: vec![],
+                    sample_selector: None,
                 },
             ],
         )

@@ -2,6 +2,292 @@
 
 use super::*;
 
+pub(super) fn eigen_path_mode_publication_json(
+    mut value: Value,
+    sample_index: usize,
+    raw_mode_index: usize,
+    selected_fields: &BTreeSet<SampleModeId>,
+) -> Value {
+    let available = selected_fields.contains(&SampleModeId::new(sample_index, raw_mode_index));
+    value["mode_field_available"] = serde_json::json!(available);
+    if !available {
+        value["mode_field_resource_key"] = Value::Null;
+    }
+    value
+}
+
+fn eigen_path_artifact_sample_index(path: &str) -> Option<usize> {
+    let component = path.split('/').find(|part| part.starts_with("sample_"))?;
+    let suffix = component.strip_prefix("sample_")?;
+    let end = suffix
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(suffix.len());
+    if end == 0
+        || !matches!(&suffix[end..], "" | ".json" | ".zattrs" | ".zgroup")
+            && !suffix[end..].starts_with("_mode_")
+    {
+        return None;
+    }
+    suffix[..end].parse().ok()
+}
+
+fn eigen_path_artifact_mode_id(path: &str) -> Option<SampleModeId> {
+    let sample_index = eigen_path_artifact_sample_index(path)?;
+    let raw_mode_index = single_k_mode_artifact_raw_mode_index(path).or_else(|| {
+        let (_, suffix) = path.rsplit_once("_mode_")?;
+        suffix.strip_suffix(".json")?.parse().ok()
+    })?;
+    Some(SampleModeId::new(sample_index, raw_mode_index))
+}
+
+pub(super) fn retain_selected_eigen_path_mode_artifacts(
+    artifacts: &mut Vec<AuxiliaryArtifact>,
+    selected: &BTreeSet<SampleModeId>,
+) {
+    let samples = selected
+        .iter()
+        .map(|id| id.sample_index)
+        .collect::<BTreeSet<_>>();
+    artifacts.retain(|artifact| {
+        if let Some(id) = eigen_path_artifact_mode_id(&artifact.relative_path) {
+            return selected.contains(&id);
+        }
+        if let Some(sample_index) = eigen_path_artifact_sample_index(&artifact.relative_path) {
+            return samples.contains(&sample_index);
+        }
+        !selected.is_empty()
+            && matches!(
+                artifact.relative_path.as_str(),
+                "eigen/mode_fields.zarr/.zgroup" | "eigen/mode_fields.zarr/.zattrs"
+            )
+    });
+}
+
+pub(super) fn bind_eigen_path_tracked_mode_metadata(
+    artifacts: &mut [AuxiliaryArtifact],
+    result: &crate::eigen::PathSolveResult,
+) -> Result<(), RunError> {
+    let branches = result
+        .samples
+        .iter()
+        .flat_map(|sample| {
+            sample.modes.iter().map(|mode| {
+                (
+                    SampleModeId::new(sample.sample.sample_index, mode.raw_mode_index),
+                    mode.branch_id,
+                )
+            })
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for artifact in artifacts {
+        let Some(id) = eigen_path_artifact_mode_id(&artifact.relative_path) else {
+            continue;
+        };
+        if !artifact.relative_path.ends_with(".json")
+            && !artifact.relative_path.ends_with(".zattrs")
+        {
+            continue;
+        }
+        let mut value: Value =
+            serde_json::from_slice(&artifact.bytes).map_err(|error| RunError {
+                message: format!(
+                    "invalid selected eigen metadata {}: {error}",
+                    artifact.relative_path
+                ),
+            })?;
+        if let Some(object) = value.as_object_mut() {
+            if object.contains_key("raw_mode_index")
+                || object.contains_key("mode_field_id")
+                || object.contains_key("branch_id")
+            {
+                object.insert(
+                    "branch_id".into(),
+                    serde_json::json!(branches.get(&id).copied().flatten()),
+                );
+                object.insert("sample_index".into(), serde_json::json!(id.sample_index));
+                object.insert(
+                    "raw_mode_index".into(),
+                    serde_json::json!(id.raw_mode_index),
+                );
+                artifact.bytes = serde_json::to_vec_pretty(&value).map_err(|error| RunError {
+                    message: format!("failed to serialize tracked mode metadata: {error}"),
+                })?;
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn validate_eigen_path_selected_mode_artifacts(
+    artifacts: &[AuxiliaryArtifact],
+    selected: &BTreeSet<SampleModeId>,
+) -> Result<(), RunError> {
+    let indexed = artifacts
+        .iter()
+        .map(|artifact| (artifact.relative_path.as_str(), artifact))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for id in selected {
+        let metadata = format!(
+            "eigen/modes/sample_{:04}/mode_{:04}.json",
+            id.sample_index, id.raw_mode_index
+        );
+        let payload = format!(
+            "eigen/mode_fields/sample_{:04}/mode_{:04}/vector.bin",
+            id.sample_index, id.raw_mode_index
+        );
+        let metadata_exists = indexed
+            .get(metadata.as_str())
+            .is_some_and(|artifact| !artifact.bytes.is_empty());
+        let payload_exists = indexed.get(payload.as_str()).is_some_and(|artifact| {
+            !artifact.bytes.is_empty()
+                && artifact.bytes.len() % (3 * 2 * std::mem::size_of::<f64>()) == 0
+        });
+        if !metadata_exists || !payload_exists {
+            return Err(RunError { message: format!(
+                "selected eigen mode sample={} raw_mode={} has no complete metadata/complex field payload",
+                id.sample_index, id.raw_mode_index,
+            ) });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod output_publication_tests {
+    use super::*;
+
+    #[test]
+    fn requested_field_requires_real_metadata_and_complex_payload() {
+        let selected = BTreeSet::from([SampleModeId::new(2, 7)]);
+        let mut artifacts = vec![AuxiliaryArtifact {
+            relative_path: "eigen/modes/sample_0002/mode_0007.json".into(),
+            bytes: b"{}".to_vec(),
+        }];
+        assert!(validate_eigen_path_selected_mode_artifacts(&artifacts, &selected).is_err());
+        artifacts.push(AuxiliaryArtifact {
+            relative_path: "eigen/mode_fields/sample_0002/mode_0007/vector.bin".into(),
+            bytes: vec![0; 48],
+        });
+        assert!(validate_eigen_path_selected_mode_artifacts(&artifacts, &selected).is_ok());
+        artifacts[1].bytes.pop();
+        assert!(validate_eigen_path_selected_mode_artifacts(&artifacts, &selected).is_err());
+    }
+
+    #[test]
+    fn omitted_mode_field_keeps_its_identity_without_a_resource_link() {
+        let metadata = serde_json::json!({"mode_field_id": "stable-id", "mode_field_resource_key": "field-resource"});
+        let value = eigen_path_mode_publication_json(metadata.clone(), 2, 7, &BTreeSet::new());
+        assert_eq!(value["mode_field_id"], "stable-id");
+        assert_eq!(value["mode_field_available"], false);
+        assert!(value["mode_field_resource_key"].is_null());
+        let value = eigen_path_mode_publication_json(
+            metadata,
+            2,
+            7,
+            &BTreeSet::from([SampleModeId::new(2, 7)]),
+        );
+        assert_eq!(value["mode_field_available"], true);
+        assert_eq!(value["mode_field_resource_key"], "field-resource");
+    }
+
+    #[test]
+    fn remapping_keeps_the_selected_zarr_sample_group() {
+        assert_eq!(
+            remap_single_k_mode_artifact_path(
+                "eigen/mode_fields.zarr/sample_0000/.zgroup",
+                3,
+                &BTreeSet::from([7])
+            ),
+            Some("eigen/mode_fields.zarr/sample_0003/.zgroup".into())
+        );
+        assert!(remap_single_k_mode_artifact_path(
+            "eigen/mode_fields.zarr/sample_0000/.zgroup",
+            3,
+            &BTreeSet::new()
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn selection_preserves_original_sample_ids_and_removes_unrequested_payloads() {
+        let paths = [
+            "eigen/mode_fields.zarr/.zgroup",
+            "eigen/mode_fields.zarr/.zattrs",
+            "eigen/mode_fields.zarr/sample_0002/.zgroup",
+            "eigen/mode_fields.zarr/sample_0002/mode_0007/real/0.0",
+            "eigen/mode_fields.zarr/sample_0003/mode_0007/real/0.0",
+            "eigen/mode_fields/sample_0002/mode_0007/vector.bin",
+            "eigen/mode_fields/sample_0002/mode_0008/vector.bin",
+            "eigen/modes/sample_0002/mode_0007.json",
+            "eigen/metadata/sample_0002_mode_0007.json",
+            "eigen/metadata/sample_0002/equilibrium_artifact.v7.json",
+            "eigen/metadata/sample_0003/equilibrium_artifact.v7.json",
+        ];
+        let mut artifacts = paths
+            .iter()
+            .map(|path| AuxiliaryArtifact {
+                relative_path: (*path).into(),
+                bytes: vec![17],
+            })
+            .collect();
+        let selected = BTreeSet::from([SampleModeId::new(2, 7)]);
+        retain_selected_eigen_path_mode_artifacts(&mut artifacts, &selected);
+        let kept = artifacts
+            .iter()
+            .map(|artifact| artifact.relative_path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kept,
+            vec![paths[0], paths[1], paths[2], paths[3], paths[5], paths[7], paths[8], paths[9]]
+        );
+        assert!(artifacts.iter().all(|artifact| artifact.bytes == [17]));
+        retain_selected_eigen_path_mode_artifacts(&mut artifacts, &BTreeSet::new());
+        assert!(artifacts.is_empty());
+    }
+
+    #[test]
+    fn internal_tracking_requests_all_modes_without_public_path_selectors() {
+        let outputs = vec![
+            OutputIR::EigenMode {
+                field: "selected".into(),
+                indices: vec![1],
+                branches: vec![4],
+                sample_selector: Some(fullmag_ir::SampleSelectorIR {
+                    sample_indices: vec![2],
+                    sample_labels: vec![],
+                }),
+            },
+            OutputIR::DispersionCurve {
+                name: "bands".into(),
+                include_branch_table: false,
+            },
+        ];
+        let internal = eigen_path_tracking_outputs(&outputs, 3);
+        assert!(internal
+            .iter()
+            .any(|output| matches!(output, OutputIR::EigenSpectrum { .. })));
+        let modes = internal
+            .iter()
+            .filter_map(|output| match output {
+                OutputIR::EigenMode {
+                    indices,
+                    branches,
+                    sample_selector,
+                    ..
+                } => Some((indices, branches, sample_selector)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(modes.len(), 1);
+        assert_eq!(modes[0].0, &[0, 1, 2]);
+        assert!(modes[0].1.is_empty());
+        assert!(modes[0].2.is_none());
+        assert!(!internal
+            .iter()
+            .any(|output| matches!(output, OutputIR::DispersionCurve { .. })));
+    }
+}
+
 pub(super) fn eigen_path_mode_artifacts_from_result(
     path_result: &crate::eigen::PathSolveResult,
 ) -> Result<Vec<AuxiliaryArtifact>, RunError> {
@@ -285,7 +571,18 @@ pub(super) fn eigen_path_operator_diagnostics_has_gated_terms(
 }
 
 pub(super) fn eigen_path_tracking_outputs(outputs: &[OutputIR], mode_count: u32) -> Vec<OutputIR> {
-    let mut tracking_outputs = outputs.to_vec();
+    // A single-k solver must not see path-level branch/sample selectors. Its
+    // candidate vectors are needed at every sample to track before exporting.
+    let mut tracking_outputs = outputs
+        .iter()
+        .filter(|output| {
+            !matches!(
+                output,
+                OutputIR::EigenMode { .. } | OutputIR::DispersionCurve { .. }
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
     if !tracking_outputs
         .iter()
         .any(|output| matches!(output, OutputIR::EigenSpectrum { .. }))
@@ -295,14 +592,13 @@ pub(super) fn eigen_path_tracking_outputs(outputs: &[OutputIR], mode_count: u32)
         });
     }
 
-    let requested_modes = eigen_path_requested_mode_indices(outputs);
-    let missing_tracking_modes = (0..mode_count)
-        .filter(|index| !requested_modes.contains(index))
-        .collect::<Vec<_>>();
-    if !missing_tracking_modes.is_empty() {
+    let tracking_modes = (0..mode_count).collect::<Vec<_>>();
+    if !tracking_modes.is_empty() {
         tracking_outputs.push(OutputIR::EigenMode {
             field: "mode".to_string(),
-            indices: missing_tracking_modes,
+            indices: tracking_modes,
+            branches: vec![],
+            sample_selector: None,
         });
     }
     tracking_outputs
@@ -423,7 +719,7 @@ pub(super) fn eigen_path_branch_point_tracking_score_source(
     let Some(point) = branch.points.get(point_index) else {
         return "unknown";
     };
-    if point.overlap_prev.is_none() {
+    if point_index == 0 {
         return "seed";
     }
     if eigen_path_branch_point_modal_overlap_available(path_result, branch, point_index) {
@@ -724,7 +1020,7 @@ pub(super) fn eigen_path_component_participation_from_json(
 
 pub(super) fn eigen_path_public_mode_count(
     result: &crate::eigen::PathSolveResult,
-    published_mode_indices: &BTreeSet<u32>,
+    published_mode_ids: &BTreeSet<SampleModeId>,
 ) -> usize {
     result
         .samples
@@ -733,7 +1029,12 @@ pub(super) fn eigen_path_public_mode_count(
             sample
                 .modes
                 .iter()
-                .filter(|mode| published_mode_indices.contains(&(mode.raw_mode_index as u32)))
+                .filter(|mode| {
+                    published_mode_ids.contains(&SampleModeId::new(
+                        sample.sample.sample_index,
+                        mode.raw_mode_index,
+                    ))
+                })
                 .count()
         })
         .max()
@@ -826,10 +1127,10 @@ pub(super) fn eigen_path_solver_diagnostics(
     engine: FemEngine,
     plan: &FemEigenPlanIR,
     result: &crate::eigen::PathSolveResult,
-    published_mode_indices: &BTreeSet<u32>,
+    published_mode_ids: &BTreeSet<SampleModeId>,
 ) -> serde_json::Value {
     let gamma0_rad_s_per_a_m = plan.gyromagnetic_ratio;
-    let public_mode_count = eigen_path_public_mode_count(result, published_mode_indices);
+    let public_mode_count = eigen_path_public_mode_count(result, published_mode_ids);
     let requested_production_shift_invert =
         result.solver_model == crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;
     let native_cpu_modal_window_rejection_reason =
@@ -1172,6 +1473,12 @@ pub(super) fn remap_single_k_mode_artifact_path(
         if relative_path == format!("eigen/metadata/{state_name}") {
             return Some(format!("eigen/metadata/{sample_path}/{state_name}"));
         }
+    }
+    if matches!(
+        relative_path,
+        "eigen/mode_fields.zarr/sample_0000/.zgroup" | "eigen/mode_fields.zarr/sample_0000/.zattrs"
+    ) {
+        return Some(relative_path.replace("sample_0000", &sample_path));
     }
     if relative_path.starts_with("eigen/modes/sample_0000/")
         || relative_path.starts_with("eigen/mode_fields/sample_0000/")

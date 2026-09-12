@@ -845,6 +845,11 @@ pub(crate) struct NativeModalEigenMfemOperatorProblem<'a> {
     pub stiffness_matrix_row_major: Option<&'a [f64]>,
     pub gyrotropic_matrix_row_major: Option<&'a [f64]>,
     pub mass_matrix_row_major: Option<&'a [f64]>,
+    /// Optional k-dependent dynamic-demagnetization contribution in the same
+    /// real-split tangent layout and units as `stiffness_matrix_row_major`.
+    /// The native boundary validates its shape and finite values; absence is
+    /// preserved so callers cannot silently fall back to a k=0 demag term.
+    pub dynamic_demag_k_tangent_matrix_row_major: Option<&'a [f64]>,
     pub linearized_pencil_dependency_digest: Option<&'a str>,
     pub linearized_pencil_gamma0_m_per_a_s: f64,
     pub phase_convention: FrequencyDomainPhaseConvention,
@@ -2416,8 +2421,12 @@ fn solve_native_modal_eigen_impl(
             .as_ref()
             .map(|value| value.as_ptr())
             .unwrap_or(std::ptr::null()),
-        dynamic_demag_k_tangent_matrix_row_major: std::ptr::null(),
-        dynamic_demag_k_tangent_matrix_value_count: 0,
+        dynamic_demag_k_tangent_matrix_row_major: mfem_operator
+            .and_then(|problem| problem.dynamic_demag_k_tangent_matrix_row_major)
+            .map_or(std::ptr::null(), slice_ptr_or_null),
+        dynamic_demag_k_tangent_matrix_value_count: mfem_operator
+            .and_then(|problem| problem.dynamic_demag_k_tangent_matrix_row_major)
+            .map_or(0, |values| values.len() as u64),
         struct_size: std::mem::size_of::<ffi::FullmagFemModalEigenRequest>() as u64,
         execution_target: match request.execution_target {
             NativeModalExecutionTarget::Auto => {
@@ -5361,6 +5370,7 @@ mod tests {
                 stiffness_matrix_row_major: Some(&stiffness_matrix_row_major),
                 gyrotropic_matrix_row_major: Some(&gyrotropic_mass_row_major),
                 mass_matrix_row_major: Some(&mass_matrix_row_major),
+                dynamic_demag_k_tangent_matrix_row_major: None,
                 linearized_pencil_dependency_digest: Some("modal-payload-dependency-v1"),
                 linearized_pencil_gamma0_m_per_a_s: 1.0,
                 phase_convention: FrequencyDomainPhaseConvention::ExpIOmegaT,
@@ -5496,6 +5506,7 @@ mod tests {
                 stiffness_matrix_row_major: Some(&stiffness_matrix_row_major),
                 gyrotropic_matrix_row_major: Some(&gyrotropic_mass_row_major),
                 mass_matrix_row_major: Some(&mass_matrix_row_major),
+                dynamic_demag_k_tangent_matrix_row_major: None,
                 linearized_pencil_dependency_digest: None,
                 linearized_pencil_gamma0_m_per_a_s: 0.0,
                 phase_convention: FrequencyDomainPhaseConvention::ExpIOmegaT,
@@ -5578,6 +5589,7 @@ mod tests {
                 stiffness_matrix_row_major: Some(&stiffness_matrix_row_major),
                 gyrotropic_matrix_row_major: Some(&gyrotropic_mass_row_major),
                 mass_matrix_row_major: None,
+                dynamic_demag_k_tangent_matrix_row_major: None,
                 linearized_pencil_dependency_digest: None,
                 linearized_pencil_gamma0_m_per_a_s: 0.0,
                 phase_convention: FrequencyDomainPhaseConvention::ExpIOmegaT,

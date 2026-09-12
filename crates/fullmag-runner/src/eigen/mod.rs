@@ -2,6 +2,7 @@ pub mod artifacts;
 pub mod assembly_scalar;
 pub mod diagnostics;
 pub mod orchestrator;
+pub(crate) mod output_selection;
 pub mod path;
 pub mod response_block_real;
 pub mod tracking;

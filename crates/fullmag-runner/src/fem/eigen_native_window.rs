@@ -366,6 +366,7 @@ pub(super) fn execute_native_modal_window(
                 &runner_stiffness_row_major,
                 &runner_gyrotropic_row_major,
                 &runner_tangent_mass_row_major,
+                None,
                 magnetic_pencil,
                 &runner_floquet_periodic_pairs,
             )
@@ -917,6 +918,7 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
             &stiffness_row_major,
             &payload.gyrotropic_row_major,
             &tangent_mass_row_major,
+            None,
             &magnetic_pencil,
             &native_floquet_periodic_pairs,
         )),
@@ -1176,6 +1178,7 @@ pub(super) fn native_modal_mfem_operator_problem<'a>(
     stiffness_matrix_row_major: &'a [f64],
     gyrotropic_matrix_row_major: &'a [f64],
     mass_matrix_row_major: &'a [f64],
+    dynamic_demag_k_tangent_matrix_row_major: Option<&'a [f64]>,
     pencil: &'a NativeModalMagneticPencilPayload,
     floquet_periodic_pairs: &'a [native_fem::NativeModalEigenFloquetPeriodicPair<'a>],
 ) -> native_fem::NativeModalEigenMfemOperatorProblem<'a> {
@@ -1184,6 +1187,7 @@ pub(super) fn native_modal_mfem_operator_problem<'a>(
         stiffness_matrix_row_major: Some(stiffness_matrix_row_major),
         gyrotropic_matrix_row_major: Some(gyrotropic_matrix_row_major),
         mass_matrix_row_major: Some(mass_matrix_row_major),
+        dynamic_demag_k_tangent_matrix_row_major,
         linearized_pencil_dependency_digest: Some(pencil.dependency_digest.as_str()),
         linearized_pencil_gamma0_m_per_a_s: pencil.gamma0_m_per_a_s,
         phase_convention: native_fem::FrequencyDomainPhaseConvention::ExpIOmegaT,

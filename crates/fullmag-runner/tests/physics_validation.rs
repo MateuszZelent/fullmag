@@ -959,6 +959,8 @@ fn fem_eigen_smoke_completes_without_errors() {
         OutputIR::EigenMode {
             field: "mode".to_string(),
             indices: vec![0u32],
+            branches: vec![],
+            sample_selector: None,
         },
     ];
 
@@ -1225,6 +1227,8 @@ fn fem_eigen_modes_are_non_trivial() {
         OutputIR::EigenMode {
             field: "mode".to_string(),
             indices: vec![0u32, 1u32],
+            branches: vec![],
+            sample_selector: None,
         },
     ];
 
@@ -1334,6 +1338,8 @@ fn dense_eigen_exports_relative_residuals() {
             OutputIR::EigenMode {
                 field: "mode".to_string(),
                 indices: vec![0u32, 1u32],
+                branches: vec![],
+                sample_selector: None,
             },
         ],
     )
@@ -1438,6 +1444,8 @@ fn dense_eigen_exports_tangent_leakage() {
             OutputIR::EigenMode {
                 field: "mode".to_string(),
                 indices: vec![0u32],
+                branches: vec![],
+                sample_selector: None,
             },
         ],
     )
@@ -1515,6 +1523,8 @@ fn dense_eigen_frequency_units_are_hz_and_rad_s() {
             OutputIR::EigenMode {
                 field: "mode".to_string(),
                 indices: vec![0u32],
+                branches: vec![],
+                sample_selector: None,
             },
         ],
     )
@@ -1871,9 +1881,12 @@ fn fem_eigen_full_2x2_floquet_executes_nonidentity_tangent_frame_transport() {
             OutputIR::EigenMode {
                 field: "mode".to_string(),
                 indices: vec![0],
+                branches: vec![],
+                sample_selector: None,
             },
             OutputIR::DispersionCurve {
                 name: "dispersion".to_string(),
+                include_branch_table: true,
             },
         ],
     )
@@ -3202,9 +3215,12 @@ fn fem_eigen_path_writes_v2_dispersion_artifacts() {
             OutputIR::EigenMode {
                 field: "mode".to_string(),
                 indices: vec![0],
+                branches: vec![],
+                sample_selector: None,
             },
             OutputIR::DispersionCurve {
                 name: "dispersion".to_string(),
+                include_branch_table: true,
             },
         ],
     )
@@ -3684,6 +3700,8 @@ fn fem_eigen_path_executes_full_2x2_nonzero_k_floquet_phase_reduction() {
             OutputIR::EigenMode {
                 field: "mode".to_string(),
                 indices: vec![0],
+                branches: vec![],
+                sample_selector: None,
             },
         ],
     )
@@ -4019,6 +4037,7 @@ fn fem_eigen_single_k_dispersion_request_writes_v2_dispersion_artifact() {
             },
             OutputIR::DispersionCurve {
                 name: "dispersion".to_string(),
+                include_branch_table: true,
             },
         ],
     )

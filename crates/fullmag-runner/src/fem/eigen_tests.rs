@@ -523,7 +523,11 @@ fn accepted_relax_stage_handoff_accepts_prism_source_and_checks_m0() {
     plan.equilibrium_magnetization[5] = [0.5, 0.0, 0.0];
     let error = relax_handoff_from_completion(&plan, &accepted_relax_completion())
         .expect_err("prism magnetic nodes must retain unit-norm validation");
-    assert!(error.message.contains("m0_norm_mismatch"), "{}", error.message);
+    assert!(
+        error.message.contains("m0_norm_mismatch"),
+        "{}",
+        error.message
+    );
 }
 
 #[test]
@@ -4692,7 +4696,7 @@ fn native_modal_magnetic_pencil_request_carries_payload_digest_and_canonical_gam
 
     let pencil = native_modal_magnetic_pencil_payload(&plan, &stiffness, &gyrotropic, &mass, &[]);
     let request =
-        native_modal_mfem_operator_problem(2, &stiffness, &gyrotropic, &mass, &pencil, &[]);
+        native_modal_mfem_operator_problem(2, &stiffness, &gyrotropic, &mass, None, &pencil, &[]);
 
     assert!(!pencil.dependency_digest.is_empty());
     assert_eq!(
@@ -7191,6 +7195,8 @@ fn cpu_full_2x2_frequency_window_uses_native_modal_artifact_path() {
             OutputIR::EigenMode {
                 field: "mode".to_string(),
                 indices: vec![0],
+                branches: vec![],
+                sample_selector: None,
             },
         ],
     )
@@ -7272,6 +7278,8 @@ fn cpu_full_2x2_nonzero_floquet_window_uses_native_bloch_payload_artifact_path()
             OutputIR::EigenMode {
                 field: "mode".to_string(),
                 indices: vec![0],
+                branches: vec![],
+                sample_selector: None,
             },
         ],
     )
