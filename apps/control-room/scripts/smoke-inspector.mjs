@@ -1615,6 +1615,17 @@ async function installInspectorFixtureApi(page, fixture) {
       );
     }
     if (request.method() === "OPTIONS") return fulfillEmpty(route, 204);
+    if (path === "/v2/sessions" && request.method() === "GET") {
+      return fulfillJson(route, {
+        schema_version: "2.0.0",
+        sessions: [{
+          current: true,
+          name: "Inspector routing smoke",
+          session_id: "inspector-routing-smoke",
+          status: "active",
+        }],
+      });
+    }
     if (path === "/v2/sessions/current/visualization/state" && request.method() === "PATCH") {
       const patch = request.postDataJSON() ?? {};
       fixture.visualizationMutationBodies.push(patch);
