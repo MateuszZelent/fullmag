@@ -3902,6 +3902,12 @@
       },
       "CommandStatusResource": {
         "properties": {
+          "client_intent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "command_id": {
             "type": "string"
           },
@@ -31882,14 +31888,19 @@
                 "$ref": "#/components/schemas/RuntimeCommandIntent"
               },
               {
-                "description": "Replan the FDM grid and membership masks from the committed scene.",
                 "properties": {
                   "mesh_options": {
                     "type": [
                       "object",
                       "null"
                     ]
-                  },
+                  }
+                },
+                "type": "object"
+              },
+              {
+                "description": "Replan the FDM grid and membership masks from the committed scene.",
+                "properties": {
                   "kind": {
                     "enum": [
                       "fdm_grid_refresh"
