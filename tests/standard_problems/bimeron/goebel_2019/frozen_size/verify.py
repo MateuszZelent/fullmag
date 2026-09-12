@@ -41,9 +41,12 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
     runtime = analysis.get("runtime_provenance") if isinstance(analysis.get("runtime_provenance"), dict) else {}
     requested = runtime.get("requested_execution") if isinstance(runtime.get("requested_execution"), dict) else {}
     provenance = runtime.get("execution_provenance") if isinstance(runtime.get("execution_provenance"), dict) else {}
+    completion = runtime.get("completion") if isinstance(runtime.get("completion"), dict) else {}
     if thresholds.get("require_runtime_provenance", True):
         if not requested or not provenance:
             failures.append("runtime_provenance_missing")
+    if thresholds.get("require_completion", True) and not completion:
+        failures.append("completion_provenance_missing")
     if str(requested.get("device", "")).lower() == "gpu" and thresholds.get("require_gpu_residency", True):
         receipt = provenance.get("fdm_gpu_execution_receipt") if isinstance(provenance.get("fdm_gpu_execution_receipt"), dict) else {}
         if receipt.get("resolved") != "device_resident" or receipt.get("executed") != "cuda_fdm":
@@ -62,6 +65,10 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
     if name != "p0" and thresholds.get("require_positive_frozen_dof_for_constrained_protocols", True):
         if not isinstance(frozen_count, int) or frozen_count <= 0:
             failures.append("constrained_protocol_has_no_frozen_dof")
+    if name != "p0" and thresholds.get("require_frozen_hashes", True):
+        for key in ("frozen_mask_sha256", "frozen_reference_sha256", "frozen_selector_sha256"):
+            if not isinstance(frozen.get(key), str) or not frozen[key]:
+                failures.append(f"{key}_missing")
     drift = frozen.get("frozen_reference_max_drift")
     if drift is not None and _finite(drift) and float(drift) > float(thresholds.get("frozen_reference_max_drift", 1e-15)):
         failures.append("frozen_reference_drift_exceeds_threshold")
@@ -84,11 +91,17 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
         if _finite(area) and _finite(core) and abs(float(area) - float(core)) > float(thresholds.get("maximum_area_core_radius_difference_nm", 3.0)):
             warnings.append(f"{label}_area_core_radius_disagreement")
 
+    not_converged = completion.get("converged") is False
+    if not_converged:
+        warnings.append(
+            "solver_not_converged: max_steps/max_physical_time is diagnostic and is excluded from an accepted minimum curve"
+        )
+    status = "failed" if failures else ("not_converged" if not_converged else "passed")
     result = {
         "schema_version": "bimeron_frozen_size.verification.v1",
         "artifact_root": analysis.get("artifact_root"),
         "case_id": protocol.get("case_id"),
-        "status": "passed" if not failures else "failed",
+        "status": status,
         "failures": failures,
         "warnings": warnings,
         "free_torque_metric_status": free_status or "not_emitted",

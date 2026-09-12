@@ -6,6 +6,8 @@
   "require_finite_energy": true,
   "require_finite_profile_energy": true,
   "require_runtime_provenance": true,
+  "require_completion": true,
   "require_gpu_residency": true,
-  "require_positive_frozen_dof_for_constrained_protocols": true
+  "require_positive_frozen_dof_for_constrained_protocols": true,
+  "require_frozen_hashes": true
 }

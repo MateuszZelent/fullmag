@@ -342,7 +342,10 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
 
     background_path: Path | None = None
     background_workspace: Path | None = None
-    built = False
+    # Reuse the compatible managed binary when the profile has already been
+    # prepared.  This keeps a resumed sweep from rebuilding or allocating a
+    # second target tree solely because a new case was added.
+    built = _binary_path(repo, layout).is_file()
     if args.with_background:
         background_path = output_root / f"background-h{args.cell_nm:g}nm".replace(".", "p")
         background_path = _assert_within(background_path, runs_root)

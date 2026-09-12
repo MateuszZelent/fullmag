@@ -273,6 +273,108 @@ def _solid_angle(a: Sequence[float], b: Sequence[float], c: Sequence[float]) -> 
     return 2.0 * math.atan2(triple, denominator)
 
 
+def _polygon_area(points: Sequence[tuple[float, float]]) -> float:
+    if len(points) < 3:
+        return 0.0
+    return 0.5 * abs(
+        sum(
+            points[index][0] * points[(index + 1) % len(points)][1]
+            - points[(index + 1) % len(points)][0] * points[index][1]
+            for index in range(len(points))
+        )
+    )
+
+
+def _clip_triangle_to_negative(
+    vertices: Sequence[tuple[float, float, float]]
+) -> list[tuple[float, float]]:
+    """Clip one linear triangle to ``m_x <= 0`` for contour area."""
+
+    clipped: list[tuple[float, float]] = []
+    previous = vertices[-1]
+    previous_inside = previous[2] <= 0.0
+    for current in vertices:
+        current_inside = current[2] <= 0.0
+        if current_inside != previous_inside:
+            denominator = previous[2] - current[2]
+            fraction = previous[2] / denominator if denominator else 0.5
+            clipped.append(
+                (
+                    previous[0] + fraction * (current[0] - previous[0]),
+                    previous[1] + fraction * (current[1] - previous[1]),
+                )
+            )
+        if current_inside:
+            clipped.append((current[0], current[1]))
+        previous = current
+        previous_inside = current_inside
+    return clipped
+
+
+def _interpolated_negative_area(
+    plane: Sequence[Sequence[float]], nx: int, ny: int, hx: float, hy: float
+) -> float:
+    """Estimate the closed ``m_x=0`` area with piecewise-linear triangles.
+
+    Magnetization samples live at cell centres.  Each adjacent centre quad is
+    split into two triangles and clipped at the zero contour.  The periodic x
+    seam is unwrapped while measuring so a contour crossing that seam does not
+    acquire a spurious long edge.
+    """
+
+    area = 0.0
+    for iy in range(ny - 1):
+        for ix in range(nx):
+            jx = (ix + 1) % nx
+            x0 = ix * hx
+            x1 = (ix + 1) * hx
+            y0 = iy * hy
+            y1 = (iy + 1) * hy
+            p00 = (x0, y0, float(plane[iy * nx + ix][0]))
+            p10 = (x1, y0, float(plane[iy * nx + jx][0]))
+            p01 = (x0, y1, float(plane[(iy + 1) * nx + ix][0]))
+            p11 = (x1, y1, float(plane[(iy + 1) * nx + jx][0]))
+            area += _polygon_area(_clip_triangle_to_negative((p00, p10, p11)))
+            area += _polygon_area(_clip_triangle_to_negative((p00, p11, p01)))
+    return area
+
+
+def _component_shape(
+    component: set[tuple[int, int]], nx: int, ny: int, hx: float, hy: float
+) -> dict[str, Any]:
+    if not component:
+        return {
+            "component_centroid_nm": None,
+            "component_bbox_nm": None,
+            "component_semi_axes_nm": None,
+            "component_aspect_ratio": None,
+        }
+    points = [
+        ((ix + 0.5) * hx - 0.5 * nx * hx, (iy + 0.5) * hy - 0.5 * ny * hy)
+        for ix, iy in component
+    ]
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    span_x = max(xs) - min(xs) + hx
+    span_y = max(ys) - min(ys) + hy
+    semi_x = 0.5 * span_x
+    semi_y = 0.5 * span_y
+    return {
+        "component_centroid_nm": [
+            sum(xs) / len(xs) * 1e9,
+            sum(ys) / len(ys) * 1e9,
+        ],
+        "component_bbox_nm": [
+            [min(xs) * 1e9 - 0.5 * hx * 1e9, min(ys) * 1e9 - 0.5 * hy * 1e9],
+            [max(xs) * 1e9 + 0.5 * hx * 1e9, max(ys) * 1e9 + 0.5 * hy * 1e9],
+        ],
+        "component_semi_axes_nm": [semi_x * 1e9, semi_y * 1e9],
+        "component_aspect_ratio": max(semi_x, semi_y) / min(semi_x, semi_y)
+        if min(semi_x, semi_y) > 0.0
+        else None,
+    }
+
+
 def _measure(values: Sequence[Sequence[float]], *, nx: int, ny: int, nz: int, cell: tuple[float, float, float]) -> dict[str, Any]:
     plane = _plane(values, nx, ny, nz)
     hx, hy, _ = cell
@@ -314,12 +416,14 @@ def _measure(values: Sequence[Sequence[float]], *, nx: int, ny: int, nz: int, ce
             )
             pending[:] = [(x, y) for x, y in pending if 0 <= y < ny]
 
-    area = len(component) * hx * hy
+    area_cell_count = len(component) * hx * hy
+    area_interpolated = _interpolated_negative_area(plane, nx, ny, hx, hy)
+    area = area_interpolated if area_interpolated > 0.0 else area_cell_count
     mz_values = [(at(ix, iy)[2], ix, iy) for iy in range(ny) for ix in range(nx)]
     min_mz, min_ix, min_iy = min(mz_values, key=lambda value: value[0]) if mz_values else (float("nan"), 0, 0)
     max_mz, max_ix, max_iy = max(mz_values, key=lambda value: value[0]) if mz_values else (float("nan"), 0, 0)
-    min_xy = ((min_ix + 0.5) * hx - 250e-9, (min_iy + 0.5) * hy - 20e-9)
-    max_xy = ((max_ix + 0.5) * hx - 250e-9, (max_iy + 0.5) * hy - 20e-9)
+    min_xy = ((min_ix + 0.5) * hx - 0.5 * nx * hx, (min_iy + 0.5) * hy - 0.5 * ny * hy)
+    max_xy = ((max_ix + 0.5) * hx - 0.5 * nx * hx, (max_iy + 0.5) * hy - 0.5 * ny * hy)
     core_distance = math.hypot(max_xy[0] - min_xy[0], max_xy[1] - min_xy[1])
 
     charge = 0.0
@@ -329,10 +433,15 @@ def _measure(values: Sequence[Sequence[float]], *, nx: int, ny: int, nz: int, ce
             p00, p10, p01, p11 = at(ix, iy), at(jx, iy), at(ix, iy + 1), at(jx, iy + 1)
             charge += _solid_angle(p00, p10, p11) + _solid_angle(p00, p11, p01)
     charge /= 4.0 * math.pi
+    shape = _component_shape(component, nx, ny, hx, hy)
     return {
         "R_area_m": math.sqrt(area / math.pi) if area > 0.0 else None,
         "R_area_nm": math.sqrt(area / math.pi) * 1e9 if area > 0.0 else None,
         "area_m2": area,
+        "area_interpolated_m2": area_interpolated,
+        "R_area_interpolated_nm": math.sqrt(area_interpolated / math.pi) * 1e9 if area_interpolated > 0.0 else None,
+        "area_method": "piecewise_linear_mx_zero_contour" if area_interpolated > 0.0 else "negative_cell_count",
+        "area_cell_count_m2": area_cell_count,
         "area_cell_count": len(component),
         "R_core_m": core_distance / 2.0 if core_distance > 0.0 else None,
         "R_core_nm": core_distance * 0.5e9 if core_distance > 0.0 else None,
@@ -342,6 +451,7 @@ def _measure(values: Sequence[Sequence[float]], *, nx: int, ny: int, nz: int, ce
         "mz_max_position_nm": [max_xy[0] * 1e9, max_xy[1] * 1e9],
         "topological_charge": charge,
         "measurement_grid": {"nx": nx, "ny": ny, "nz": nz, "cell_nm": [hx * 1e9, hy * 1e9, cell[2] * 1e9]},
+        **shape,
     }
 
 
@@ -405,8 +515,10 @@ def _resolved_frozen_metrics(
     ``not_emitted`` when the solver did not publish them.
     """
 
-    if all(current.get(key) is not None for key in ("active_dof_count", "frozen_dof_count", "free_dof_count")):
-        return current
+    counts_complete = all(
+        current.get(key) is not None
+        for key in ("active_dof_count", "frozen_dof_count", "free_dof_count")
+    )
     metadata_paths: list[Path] = []
     direct = root / "metadata.json"
     if direct.is_file():
@@ -423,10 +535,36 @@ def _resolved_frozen_metrics(
         resolved = _find_nested(metadata, "frozen_spins")
         if not isinstance(resolved, dict):
             continue
-        for key in ("active_dof_count", "frozen_dof_count", "free_dof_count"):
-            value = _number(resolved.get(key))
-            if value is not None and current.get(key) is None:
-                current[key] = int(value)
+        if not counts_complete:
+            for key in ("active_dof_count", "frozen_dof_count", "free_dof_count"):
+                value = _number(resolved.get(key))
+                if value is not None and current.get(key) is None:
+                    current[key] = int(value)
+        certificate = resolved.get("certificate")
+        if isinstance(certificate, dict):
+            for source_key, output_key in (
+                ("mask_sha256", "frozen_mask_sha256"),
+                ("resolved_reference_sha256", "frozen_reference_sha256"),
+                ("grid_or_mesh_fingerprint", "grid_or_mesh_fingerprint"),
+                ("evaluator_id", "frozen_mask_evaluator"),
+            ):
+                value = certificate.get(source_key)
+                if value is not None:
+                    current[output_key] = value
+            fingerprints = certificate.get("authored_fingerprints")
+            if isinstance(fingerprints, list) and fingerprints:
+                first = fingerprints[0]
+                if isinstance(first, dict) and first.get("selector_sha256"):
+                    current["frozen_selector_sha256"] = first["selector_sha256"]
+            bounds = certificate.get("bounds_m")
+            if isinstance(bounds, list):
+                current["frozen_bounds_m"] = bounds
+        mask = resolved.get("frozen_mask")
+        if isinstance(mask, list):
+            current["frozen_cell_indices"] = [
+                index for index, is_frozen in enumerate(mask) if bool(is_frozen)
+            ]
+            current["frozen_mask_cell_count"] = len(mask)
         current["frozen_runtime_source"] = "resolved_frozen_spins_plan"
         return current
     return current

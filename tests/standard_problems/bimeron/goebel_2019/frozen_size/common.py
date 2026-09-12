@@ -14,26 +14,36 @@ import math
 import os
 from typing import Any
 
+from tests.standard_problems.bimeron.goebel_2019.common import (
+    AEX,
+    ALPHA,
+    BIMERON_WALL_WIDTH,
+    CELL,
+    D_ROTATED,
+    HOLD_SAMPLE_PERIOD,
+    HOLD_TIME,
+    KU_X,
+    LLG_DT,
+    MS,
+    RELAX_FIELD_EVERY_STEPS,
+    RELAX_MAX_STEPS,
+    RELAX_TIME,
+    TRACK_SIZE,
+)
 
-TRACK_SIZE = (500e-9, 40e-9, 0.5e-9)
-MS = 0.58e6
-AEX = 15e-12
-D_ROTATED = 3e-3
-KU_X = 0.8e6
-ALPHA = 0.3
 TEMPERATURE = 0.0
-DEFAULT_CELL_NM = 0.5
-DEFAULT_WALL_WIDTH_NM = 3.0
+DEFAULT_CELL_NM = CELL[0] * 1e9
+DEFAULT_WALL_WIDTH_NM = BIMERON_WALL_WIDTH * 1e9
 DEFAULT_PIN_RADIUS_NM = 0.5
 DEFAULT_RING_WIDTH_NM = 0.5
-DEFAULT_RELAX_TIME_S = 2e-11
-DEFAULT_HOLD_TIME_S = 1e-10
+DEFAULT_RELAX_TIME_S = RELAX_TIME
+DEFAULT_HOLD_TIME_S = HOLD_TIME
 DEFAULT_RELEASE_TIME_S = 2e-11
-DEFAULT_DT_S = 2.5e-15
-DEFAULT_RELAX_MAX_STEPS = 8000
+DEFAULT_DT_S = LLG_DT
+DEFAULT_RELAX_MAX_STEPS = RELAX_MAX_STEPS
 DEFAULT_RELEASE_MAX_STEPS = 8000
-DEFAULT_FIELD_EVERY_STEPS = 1000
-DEFAULT_HOLD_SAMPLE_PERIOD_S = 1e-11
+DEFAULT_FIELD_EVERY_STEPS = RELAX_FIELD_EVERY_STEPS
+DEFAULT_HOLD_SAMPLE_PERIOD_S = HOLD_SAMPLE_PERIOD
 
 
 def _env_float(name: str, default: float) -> float:
@@ -222,38 +232,55 @@ def case_from_environment() -> FrozenCase:
         raise ValueError("FULLMAG_BIMERON_VORTICITY must be -1 or 1")
     if background_sign not in {-1, 1}:
         raise ValueError("FULLMAG_BIMERON_BACKGROUND_SIGN must be -1 or 1")
+    ring_width_nm = _env_float(
+        "FULLMAG_BIMERON_RING_WIDTH_NM", DEFAULT_RING_WIDTH_NM
+    )
+    helicity_rad = _env_float("FULLMAG_BIMERON_HELICITY_RAD", 0.0)
+    include_release = _env_bool("FULLMAG_BIMERON_RELEASE", False)
+    relax_time_s = _env_float("FULLMAG_BIMERON_RELAX_TIME_S", DEFAULT_RELAX_TIME_S)
+    hold_time_s = _env_float("FULLMAG_BIMERON_HOLD_TIME_S", DEFAULT_HOLD_TIME_S)
+    release_time_s = _env_float(
+        "FULLMAG_BIMERON_RELEASE_TIME_S", DEFAULT_RELEASE_TIME_S
+    )
+    dt_s = _env_float("FULLMAG_BIMERON_DT_S", DEFAULT_DT_S)
+    relax_max_steps = _env_int(
+        "FULLMAG_BIMERON_RELAX_MAX_STEPS", DEFAULT_RELAX_MAX_STEPS
+    )
+    release_max_steps = _env_int(
+        "FULLMAG_BIMERON_RELEASE_MAX_STEPS", DEFAULT_RELEASE_MAX_STEPS
+    )
+    field_every_steps = _env_int(
+        "FULLMAG_BIMERON_FIELD_EVERY_STEPS", DEFAULT_FIELD_EVERY_STEPS
+    )
+    hold_sample_period_s = _env_float(
+        "FULLMAG_BIMERON_HOLD_SAMPLE_PERIOD_S", DEFAULT_HOLD_SAMPLE_PERIOD_S
+    )
+    if ring_width_nm <= 0.0:
+        raise ValueError("FULLMAG_BIMERON_RING_WIDTH_NM must be positive")
+    if protocol == "ring" and ring_width_nm >= 2.0 * target_radius_nm:
+        raise ValueError("ring width must be smaller than twice target radius")
+    if any(value <= 0.0 for value in (relax_time_s, hold_time_s, release_time_s, dt_s, hold_sample_period_s)):
+        raise ValueError("relax, hold, release, dt, and sample periods must be positive")
+    if any(value <= 0 for value in (relax_max_steps, release_max_steps, field_every_steps)):
+        raise ValueError("step and field intervals must be positive")
     return FrozenCase(
         target_radius_nm=target_radius_nm,
         preset_radius_nm=preset_radius_nm,
         wall_width_nm=wall_width_nm,
         cell_nm=cell_nm,
         pin_radius_nm=pin_radius_nm,
-        ring_width_nm=_env_float(
-            "FULLMAG_BIMERON_RING_WIDTH_NM", DEFAULT_RING_WIDTH_NM
-        ),
+        ring_width_nm=ring_width_nm,
         protocol=protocol,
-        helicity_rad=_env_float("FULLMAG_BIMERON_HELICITY_RAD", 0.0),
+        helicity_rad=helicity_rad,
         vorticity=vorticity,
         background_sign=background_sign,
-        include_release=_env_bool("FULLMAG_BIMERON_RELEASE", False),
-        relax_time_s=_env_float(
-            "FULLMAG_BIMERON_RELAX_TIME_S", DEFAULT_RELAX_TIME_S
-        ),
-        hold_time_s=_env_float("FULLMAG_BIMERON_HOLD_TIME_S", DEFAULT_HOLD_TIME_S),
-        release_time_s=_env_float(
-            "FULLMAG_BIMERON_RELEASE_TIME_S", DEFAULT_RELEASE_TIME_S
-        ),
-        dt_s=_env_float("FULLMAG_BIMERON_DT_S", DEFAULT_DT_S),
-        relax_max_steps=_env_int(
-            "FULLMAG_BIMERON_RELAX_MAX_STEPS", DEFAULT_RELAX_MAX_STEPS
-        ),
-        release_max_steps=_env_int(
-            "FULLMAG_BIMERON_RELEASE_MAX_STEPS", DEFAULT_RELEASE_MAX_STEPS
-        ),
-        field_every_steps=_env_int(
-            "FULLMAG_BIMERON_FIELD_EVERY_STEPS", DEFAULT_FIELD_EVERY_STEPS
-        ),
-        hold_sample_period_s=_env_float(
-            "FULLMAG_BIMERON_HOLD_SAMPLE_PERIOD_S", DEFAULT_HOLD_SAMPLE_PERIOD_S
-        ),
+        include_release=include_release,
+        relax_time_s=relax_time_s,
+        hold_time_s=hold_time_s,
+        release_time_s=release_time_s,
+        dt_s=dt_s,
+        relax_max_steps=relax_max_steps,
+        release_max_steps=release_max_steps,
+        field_every_steps=field_every_steps,
+        hold_sample_period_s=hold_sample_period_s,
     )
