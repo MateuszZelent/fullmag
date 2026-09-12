@@ -12,6 +12,9 @@ use crate::antenna_field_solution::AntennaFieldSolutionSamples;
 use crate::types::AuxiliaryArtifact;
 use crate::types::RunError;
 
+const MAX_ANTENNA_SPECTRUM_SAMPLE_COUNT: usize = 10_000_000;
+const MAX_ANTENNA_NONUNIFORM_OPERATION_COUNT: usize = 100_000_000;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AntennaSourceSpectrum2D {
     pub schema_version: String,
@@ -603,7 +606,7 @@ pub fn sample_antenna_field_on_plane(
     let sample_count = count_u
         .checked_mul(count_v)
         .ok_or_else(|| error("antenna source-spectrum sample count overflows"))?;
-    if count_u < 2 || count_v < 2 || sample_count > 10_000_000 {
+    if count_u < 2 || count_v < 2 || sample_count > MAX_ANTENNA_SPECTRUM_SAMPLE_COUNT {
         return Err(error(
             "antenna source-spectrum lattice must have at least two samples per axis and at most 10000000 samples",
         ));
@@ -1113,6 +1116,117 @@ fn centered_origin_phase(k_u: f64, k_v: f64, extent_u_m: f64, extent_v_m: f64) -
     Complex64::from_polar(1.0, 0.5 * (k_u * extent_u_m + k_v * extent_v_m))
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ValidatedAntennaSpectrumLattice {
+    count_u: usize,
+    count_v: usize,
+    sample_count: usize,
+    spacing_u: f64,
+    spacing_v: f64,
+}
+
+fn validated_uniform_plane_lattice(
+    request: &AntennaSpectrumRequestIR,
+    field_sample_count: usize,
+) -> Result<ValidatedAntennaSpectrumLattice, RunError> {
+    let plane = &request.sampling_plane;
+    let count_u = usize::try_from(plane.sample_count_u)
+        .map_err(|_| error("antenna spectrum sample_count_u is not representable"))?;
+    let count_v = usize::try_from(plane.sample_count_v)
+        .map_err(|_| error("antenna spectrum sample_count_v is not representable"))?;
+    if count_u < 2 || count_v < 2 {
+        return Err(error(
+            "antenna spectrum lattice must have at least two samples per axis",
+        ));
+    }
+    let sample_count = count_u
+        .checked_mul(count_v)
+        .ok_or_else(|| error("antenna spectrum sample count overflows"))?;
+    if sample_count > MAX_ANTENNA_SPECTRUM_SAMPLE_COUNT {
+        return Err(error(format!(
+            "antenna spectrum lattice has {sample_count} samples; limit is {MAX_ANTENNA_SPECTRUM_SAMPLE_COUNT}"
+        )));
+    }
+    if field_sample_count != sample_count {
+        return Err(error(format!(
+            "antenna spectrum field samples have count {field_sample_count}, expected {sample_count}"
+        )));
+    }
+    let finite_frame = plane
+        .origin_m
+        .iter()
+        .chain(&plane.axis_u)
+        .chain(&plane.axis_v)
+        .chain([&plane.extent_u_m, &plane.extent_v_m])
+        .all(|value| value.is_finite());
+    let dot_uv = plane
+        .axis_u
+        .iter()
+        .zip(plane.axis_v)
+        .map(|(u, v)| u * v)
+        .sum::<f64>();
+    let norm_u = plane.axis_u.iter().map(|value| value * value).sum::<f64>();
+    let norm_v = plane.axis_v.iter().map(|value| value * value).sum::<f64>();
+    if !finite_frame
+        || !dot_uv.is_finite()
+        || !norm_u.is_finite()
+        || !norm_v.is_finite()
+        || (norm_u - 1.0).abs() > 1.0e-12
+        || (norm_v - 1.0).abs() > 1.0e-12
+        || dot_uv.abs() > 1.0e-12
+        || plane.extent_u_m <= 0.0
+        || plane.extent_v_m <= 0.0
+    {
+        return Err(error(
+            "antenna spectrum sampling plane must have finite origin, orthonormal axes, and positive finite extents",
+        ));
+    }
+    let spacing_u = plane.extent_u_m / (count_u - 1) as f64;
+    let spacing_v = plane.extent_v_m / (count_v - 1) as f64;
+    if !spacing_u.is_finite() || !spacing_v.is_finite() || spacing_u <= 0.0 || spacing_v <= 0.0 {
+        return Err(error(
+            "antenna spectrum plane spacing must be finite and positive",
+        ));
+    }
+    Ok(ValidatedAntennaSpectrumLattice {
+        count_u,
+        count_v,
+        sample_count,
+        spacing_u,
+        spacing_v,
+    })
+}
+
+fn validated_nonuniform_k_grid(
+    request: &AntennaSpectrumRequestIR,
+) -> Result<(&fullmag_ir::AntennaSpectrumKGridIR, usize), RunError> {
+    let grid = request
+        .nonuniform_k_grid
+        .as_ref()
+        .ok_or_else(|| error("nonuniform antenna spectrum requires an explicit k grid"))?;
+    if grid.k_u_rad_per_m.is_empty() || grid.k_v_rad_per_m.is_empty() {
+        return Err(error(
+            "nonuniform antenna spectrum k grid must contain at least one value on each axis",
+        ));
+    }
+    if grid
+        .k_u_rad_per_m
+        .iter()
+        .chain(&grid.k_v_rad_per_m)
+        .any(|value| !value.is_finite())
+    {
+        return Err(error(
+            "nonuniform antenna spectrum k grid must contain only finite values",
+        ));
+    }
+    let output_count = grid
+        .k_u_rad_per_m
+        .len()
+        .checked_mul(grid.k_v_rad_per_m.len())
+        .ok_or_else(|| error("antenna nonuniform k-grid size overflows"))?;
+    Ok((grid, output_count))
+}
+
 /// Compute the source-field spectrum after a separate carrier interpolation
 /// step has produced the exact authored uniform plane lattice.
 pub fn compute_structured_antenna_source_spectrum(
@@ -1125,28 +1239,21 @@ pub fn compute_structured_antenna_source_spectrum(
             "structured antenna FFT kernel requires transform='spatial_fft'",
         ));
     }
-    let count_u = request.sampling_plane.sample_count_u as usize;
-    let count_v = request.sampling_plane.sample_count_v as usize;
-    let sample_count = count_u
-        .checked_mul(count_v)
-        .ok_or_else(|| error("antenna spectrum sample count overflows"))?;
-    if field_samples_apm_per_a.len() != sample_count
-        || field_samples_apm_per_a
-            .iter()
-            .flatten()
-            .any(|value| !value.is_finite())
+    let lattice = validated_uniform_plane_lattice(request, field_samples_apm_per_a.len())?;
+    if field_samples_apm_per_a
+        .iter()
+        .flatten()
+        .any(|value| !value.is_finite())
     {
-        return Err(error(
-            "antenna spectrum field samples are non-finite or have the wrong count",
-        ));
+        return Err(error("antenna spectrum field samples are non-finite"));
     }
-    let spacing_u = request.sampling_plane.extent_u_m / (count_u - 1) as f64;
-    let spacing_v = request.sampling_plane.extent_v_m / (count_v - 1) as f64;
-    if !spacing_u.is_finite() || !spacing_v.is_finite() || spacing_u <= 0.0 || spacing_v <= 0.0 {
-        return Err(error(
-            "antenna spectrum plane spacing must be finite and positive",
-        ));
-    }
+    let ValidatedAntennaSpectrumLattice {
+        count_u,
+        count_v,
+        sample_count,
+        spacing_u,
+        spacing_v,
+    } = lattice;
     let window_u = window_values(&request.window, count_u);
     let window_v = window_values(&request.window, count_v);
     let window_sum = window_u.iter().sum::<f64>() * window_v.iter().sum::<f64>();
@@ -1232,40 +1339,30 @@ pub fn compute_nonuniform_k_antenna_source_spectrum(
             "nonuniform-k antenna spectrum kernel requires transform='nonuniform_spatial_fft'",
         ));
     }
-    let grid = request
-        .nonuniform_k_grid
-        .as_ref()
-        .ok_or_else(|| error("nonuniform antenna spectrum requires an explicit k grid"))?;
-    let count_u = request.sampling_plane.sample_count_u as usize;
-    let count_v = request.sampling_plane.sample_count_v as usize;
-    let sample_count = count_u
-        .checked_mul(count_v)
-        .ok_or_else(|| error("antenna spectrum sample count overflows"))?;
-    if field_samples_apm_per_a.len() != sample_count
-        || field_samples_apm_per_a
-            .iter()
-            .flatten()
-            .any(|value| !value.is_finite())
+    let lattice = validated_uniform_plane_lattice(request, field_samples_apm_per_a.len())?;
+    let (grid, output_count) = validated_nonuniform_k_grid(request)?;
+    if field_samples_apm_per_a
+        .iter()
+        .flatten()
+        .any(|value| !value.is_finite())
     {
-        return Err(error(
-            "antenna spectrum field samples are non-finite or have the wrong count",
-        ));
+        return Err(error("antenna spectrum field samples are non-finite"));
     }
-    let output_count = grid
-        .k_u_rad_per_m
-        .len()
-        .checked_mul(grid.k_v_rad_per_m.len())
-        .ok_or_else(|| error("antenna nonuniform k-grid size overflows"))?;
+    let ValidatedAntennaSpectrumLattice {
+        count_u,
+        count_v,
+        sample_count,
+        spacing_u,
+        spacing_v,
+    } = lattice;
     let operation_count = sample_count
         .checked_mul(output_count)
         .ok_or_else(|| error("antenna nonuniform transform operation count overflows"))?;
-    if operation_count > 100_000_000 {
+    if operation_count > MAX_ANTENNA_NONUNIFORM_OPERATION_COUNT {
         return Err(error(format!(
-            "antenna direct nonuniform transform requires {operation_count} sample-k pairs; limit is 100000000"
+            "antenna direct nonuniform transform requires {operation_count} sample-k pairs; limit is {MAX_ANTENNA_NONUNIFORM_OPERATION_COUNT}"
         )));
     }
-    let spacing_u = request.sampling_plane.extent_u_m / (count_u - 1) as f64;
-    let spacing_v = request.sampling_plane.extent_v_m / (count_v - 1) as f64;
     let window_u = window_values(&request.window, count_u);
     let window_v = window_values(&request.window, count_v);
     let window_sum = window_u.iter().sum::<f64>() * window_v.iter().sum::<f64>();
@@ -1440,6 +1537,35 @@ mod tests {
             assert!((fft[0] - direct[0]).abs() < 1.0e-12);
             assert!((fft[1] - direct[1]).abs() < 1.0e-12);
         }
+    }
+
+    #[test]
+    fn structured_spectrum_rejects_invalid_lattice_before_subtracting_counts() {
+        let mut invalid = request("x");
+        invalid.sampling_plane.sample_count_u = 0;
+        let error = compute_structured_antenna_source_spectrum(&invalid, &[], None)
+            .expect_err("zero lattice axis must fail closed");
+        assert!(error.message.contains("at least two samples per axis"));
+    }
+
+    #[test]
+    fn direct_spectrum_rejects_nonfinite_k_grid_and_wrong_sample_count() {
+        let mut invalid_grid = request("x");
+        invalid_grid.transform = AntennaSpectrumTransformIR::NonuniformSpatialFft;
+        invalid_grid.nonuniform_k_grid = Some(fullmag_ir::AntennaSpectrumKGridIR {
+            k_u_rad_per_m: vec![f64::NAN],
+            k_v_rad_per_m: vec![0.0],
+        });
+        let field = vec![[0.0, 0.0, 0.0]; 16];
+        let error = compute_nonuniform_k_antenna_source_spectrum(&invalid_grid, &field[..15], None)
+            .expect_err("wrong lattice sample count must fail closed");
+        assert!(error.message.contains("field samples have count 15"));
+
+        let error = compute_nonuniform_k_antenna_source_spectrum(&invalid_grid, &field, None)
+            .expect_err("non-finite k grid must fail closed");
+        assert!(error
+            .message
+            .contains("k grid must contain only finite values"));
     }
 
     fn solution_samples_for(request: &AntennaSpectrumRequestIR) -> AntennaFieldSolutionSamples {

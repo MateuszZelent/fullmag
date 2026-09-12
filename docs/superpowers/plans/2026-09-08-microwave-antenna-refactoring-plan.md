@@ -454,11 +454,19 @@ jest bezwymiarowa i nie zawiera już bezwzględnej podłogi `1 m`. Test
 publicznego samplera potwierdza to samo obrócone pole afiniczne dla skali
 `1 m`, `1 µm` i `1 nm`, a osobny test odrzuca zdegenerowany element
 nanometrowy. Zamknięta jest część T09 dotycząca skali P1; nadal otwarte są
-`direct_rt0_evaluation_v1`, transfer do native MFEM, mixed topology oraz
-kwalifikacja dużych siatek.
+`direct_rt0_evaluation_v1`, transfer do native MFEM, kwalifikacja mixed
+topology oraz kwalifikacja dużych siatek.
 Punkt na współdzielonej ścianie ma teraz jawnego właściciela: najniższy ordinal
 elementu w zapisanym `tet4_connectivity`, a test wymusza niezależność tej
 decyzji od kolejności przejścia BVH.
+Nowy plan anteny wymaga niepustej, wyłącznie tet4 topologii nośnika pola, a
+runtime powtarza tę kontrolę przed pierwszym wywołaniem native solvera. Mieszana
+lub nieobsługiwana topologia nie może już zostać zredukowana do
+`identity_coordinates_v1`; stary asset bez topologii zachowuje wyłącznie
+jawną ścieżkę kompatybilności point-only. Testy planera i runtime obejmują oba
+przypadki. Nadal otwarte pozostają bezpośrednia ewaluacja RT0, transfer MFEM,
+pełne rozróżnienie stanów HTTP w generated OpenAPI i kwalifikacja topologii
+mieszanej jako osobnej capability.
 Opcja `mode_basis_ref` jest teraz fail-closed w obu walidatorach IR; nie można
 jej podać do ścieżki source-spectrum, która nie wykonuje analizy modalnej.
 Analogicznie `component="transverse"` z dowolnym `equilibrium_ref` jest
@@ -474,7 +482,18 @@ jak i dokładną postać jednostki `(A/m/A)^2`.
 Pozostają: bezpośrednia ewaluacja `direct_rt0_evaluation_v1`, natywny transfer
 MFEM, rzeczywiste wczytanie `equilibrium_ref` dla `component=transverse`,
 odświeżenie śledzonych plików generated OpenAPI po zmianie odpowiedzi oraz
-kwalifikacja mieszanych topologii i dużych siatek.
+kwalifikacja mieszanych topologii i dużych siatek. Sam fail-closed dla
+nieobsługiwanej topologii jest zamknięty; nie oznacza to jeszcze implementacji
+interpolacji mixed/native MFEM.
+
+**Uzupełnienie 2026-09-12 (preflight T10):** oba publiczne transformatory
+`compute_structured_antenna_source_spectrum` i
+`compute_nonuniform_k_antenna_source_spectrum` korzystają ze wspólnej walidacji
+siatki. Sprawdzane są liczności osi przed odejmowaniem `N-1`, checked product,
+zgodność długości próbek, skończony i ortonormalny frame, dodatnie extenty oraz
+finite dodatnie spacing. Ścieżka direct dodatkowo odrzuca pusty/niefinite
+`k`-grid i checked output/operation count. Invalid request nie może wejść do
+FFT/DFT ani wywołać panic przez underflow `usize`.
 
 Niezależny test analityczny konwencji fazy, wykonywalny już teraz:
 

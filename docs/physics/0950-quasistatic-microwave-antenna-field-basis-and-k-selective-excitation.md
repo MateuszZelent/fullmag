@@ -531,6 +531,15 @@ outside count, coordinate mapping digest, window, normalization, and complex
 amplitudes. It is a source-field spectrum only; it is not a magnetization
 response or an eigenmode overlap.
 
+Both executable Fourier realizations apply the same fail-closed lattice
+preflight before allocating transform work: axis counts are checked before the
+`N-1` spacing calculation, their checked product must match the sampled field,
+the plane frame and positive finite spacing must be valid, and every field
+sample must be finite. The direct nonuniform realization additionally requires
+non-empty finite `k` axes and checked output/operation counts. These checks are
+runtime guards for callers that construct an IR request programmatically; they
+do not replace the canonical IR validators.
+
 ### 5.2 Local spectrum for a constricted antenna
 
 For a layout whose profile changes along local $u$, a global FFT hides where a

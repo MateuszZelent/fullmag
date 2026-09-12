@@ -91,6 +91,12 @@
       "responsibility": "Construct the declared centred plane lattice; perform tet4 BVH/P1 interpolation with lowest-topology-ordinal shared-face ownership or bounded legacy identity-coordinate sampling; reject unsupported interpolation."
     },
     {
+      "id": "antenna-spectrum-preflight",
+      "path": "crates/fullmag-runner/src/antenna_spectrum.rs",
+      "symbol": "validated_uniform_plane_lattice",
+      "responsibility": "Apply the shared fail-closed lattice/frame/spacing/sample-count preflight used by structured and direct Fourier realizations before transform work."
+    },
+    {
       "id": "antenna-spectrum-artifact",
       "path": "crates/fullmag-runner/src/antenna_spectrum.rs",
       "symbol": "compute_antenna_source_spectrum_artifact",
