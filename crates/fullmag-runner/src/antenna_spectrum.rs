@@ -58,6 +58,15 @@ pub struct AntennaSpectrumSamplingMetadata {
     pub sample_count_u: u32,
     pub sample_count_v: u32,
     pub interpolation: String,
+    /// Authored transform realization, retained in the thin manifest so a
+    /// consumer cannot infer it from array shape alone.
+    #[serde(default)]
+    pub transform: String,
+    #[serde(default)]
+    pub window: String,
+    /// Versioned executable Fourier implementation identity.
+    #[serde(default)]
+    pub fourier_realization: String,
     /// Executed carrier realization, kept distinct from the authored request
     /// label for backwards-compatible identity assets.
     pub realization: String,
@@ -173,6 +182,29 @@ fn sha256_u64(values: &[u64]) -> String {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
     sha256_bytes(&bytes)
+}
+
+fn spectrum_window_name(window: &AntennaSpectrumWindowIR) -> &'static str {
+    match window {
+        AntennaSpectrumWindowIR::Rectangular => "rectangular",
+        AntennaSpectrumWindowIR::Hann => "hann",
+        AntennaSpectrumWindowIR::Hamming => "hamming",
+        AntennaSpectrumWindowIR::Blackman => "blackman",
+    }
+}
+
+fn spectrum_transform_metadata(
+    transform: &AntennaSpectrumTransformIR,
+) -> (&'static str, &'static str) {
+    match transform {
+        AntennaSpectrumTransformIR::SpatialFft => {
+            ("spatial_fft", "structured_fft_rustfft_centered_v1")
+        }
+        AntennaSpectrumTransformIR::NonuniformSpatialFft => (
+            "nonuniform_spatial_fft",
+            "direct_nonuniform_dft_centered_v1",
+        ),
+    }
 }
 
 fn coordinate_key(position: [f64; 3], tolerance_m: f64) -> Option<[i64; 3]> {
@@ -766,6 +798,7 @@ pub fn compute_antenna_source_spectrum_artifact(
             )?
         }
     };
+    let (transform, fourier_realization) = spectrum_transform_metadata(&request.transform);
     let sampling = AntennaSpectrumSamplingMetadata {
         schema_version: "antenna_spectrum_sampling.v1".into(),
         solution_id: samples.solution_id.clone(),
@@ -780,6 +813,9 @@ pub fn compute_antenna_source_spectrum_artifact(
         sample_count_u: request.sampling_plane.sample_count_u,
         sample_count_v: request.sampling_plane.sample_count_v,
         interpolation: request.sampling_plane.interpolation.clone(),
+        transform: transform.into(),
+        window: spectrum_window_name(&request.window).into(),
+        fourier_realization: fourier_realization.into(),
         realization: if samples.sample_tet4_cells.is_some() {
             "fem_p1_interpolation_v1"
         } else {
@@ -1857,6 +1893,12 @@ mod tests {
         );
         assert_eq!(json["sampling"]["outside_count"], 0);
         assert_eq!(json["sampling"]["realization"], "identity_coordinates_v1");
+        assert_eq!(json["sampling"]["transform"], "spatial_fft");
+        assert_eq!(json["sampling"]["window"], "rectangular");
+        assert_eq!(
+            json["sampling"]["fourier_realization"],
+            "structured_fft_rustfft_centered_v1"
+        );
         assert!(json["spectrum"].get("amplitudes_re_im").is_none());
         assert!(json["payloads"]["amplitudes_re_im"]["sha256"]
             .as_str()

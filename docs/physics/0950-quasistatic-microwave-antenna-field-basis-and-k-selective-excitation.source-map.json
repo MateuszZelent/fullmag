@@ -100,7 +100,7 @@
       "id": "antenna-spectrum-artifact",
       "path": "crates/fullmag-runner/src/antenna_spectrum.rs",
       "symbol": "compute_antenna_source_spectrum_artifact",
-      "responsibility": "Apply the declared component projection, window, normalization, and spatial transform and return the source-field spectrum artifact with provenance."
+      "responsibility": "Apply the declared component projection, window, normalization, and spatial transform; return the source-field spectrum artifact with provenance including authored transform/window and executable Fourier identity."
     },
     {
       "id": "antenna-spectrum-tests",

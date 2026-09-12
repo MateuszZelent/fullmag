@@ -526,6 +526,12 @@ The artifact records the executed realization separately from the authored
 interpolation label so it cannot silently claim a spatial interpolation that
 was not executed.
 
+The thin manifest also records the authored transform (`spatial_fft` or
+`nonuniform_spatial_fft`), window, and a versioned executable Fourier identity
+(`structured_fft_rustfft_centered_v1` or
+`direct_nonuniform_dft_centered_v1`). Array shape alone is not a sufficient
+description of the numerical realization.
+
 The published artifact records the solution digest, source port, lattice frame,
 outside count, coordinate mapping digest, window, normalization, and complex
 amplitudes. It is a source-field spectrum only; it is not a magnetization

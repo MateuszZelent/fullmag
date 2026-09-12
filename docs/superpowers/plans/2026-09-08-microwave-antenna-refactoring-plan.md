@@ -494,6 +494,10 @@ zgodność długości próbek, skończony i ortonormalny frame, dodatnie extenty
 finite dodatnie spacing. Ścieżka direct dodatkowo odrzuca pusty/niefinite
 `k`-grid i checked output/operation count. Invalid request nie może wejść do
 FFT/DFT ani wywołać panic przez underflow `usize`.
+Manifest widma zapisuje teraz również authored `transform`, `window` i
+wersjonowaną `fourier_realization`; dwa wyniki o tym samym kształcie tablic nie
+mogą już wyglądać jak ten sam operator tylko dlatego, że mają identyczny
+digest danych liczbowych.
 
 Niezależny test analityczny konwencji fazy, wykonywalny już teraz:
 
