@@ -396,9 +396,6 @@ pub(crate) fn build_problem_and_state(
         if plan.dbulk_field.is_some() {
             unsupported_terms.push("dbulk_field");
         }
-        if plan.rotated_interfacial_dmi.is_some() {
-            unsupported_terms.push("rotated_interfacial_dmi");
-        }
         if plan.current_density.is_some() || plan.stt_degree.is_some() || plan.stt_beta.is_some() {
             unsupported_terms.push("zhang_li_stt");
         }
@@ -415,7 +412,8 @@ pub(crate) fn build_problem_and_state(
             return Err(RunError {
                 message: format!(
                     "Internal FEM baseline engine does not support the following interaction terms: {}; \
-                     supported: exchange, demag (poisson), zeeman, interfacial_dmi, bulk_dmi. \
+                     supported: exchange, demag (poisson), zeeman, interfacial_dmi, \
+                     rotated_interfacial_dmi, bulk_dmi. \
                      Use the native FEM GPU backend for these interactions.",
                     unsupported_terms.join(", ")
                 ),
@@ -438,7 +436,7 @@ pub(crate) fn build_problem_and_state(
         uniaxial_anisotropy: None,
         cubic_anisotropy: None,
         interfacial_dmi: plan.interfacial_dmi,
-        rotated_interfacial_dmi: None,
+        rotated_interfacial_dmi: plan.rotated_interfacial_dmi,
         bulk_dmi: plan.bulk_dmi,
         zhang_li_stt: None,
         slonczewski_stt: None,
@@ -2544,6 +2542,37 @@ mod tests {
             last.max_h_eff > 1e-6,
             "DMI terms should contribute to H_eff, got {}",
             last.max_h_eff
+        );
+    }
+
+    #[test]
+    fn rotated_dmi_is_forwarded_to_fem_observable_adapter() {
+        let mut plan = make_test_plan(false);
+        plan.enable_exchange = false;
+        plan.rotated_interfacial_dmi = Some(3e-3);
+        plan.initial_magnetization = vec![
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ];
+
+        let magnetization = plan.initial_magnetization.clone();
+        let observables = fem_observables_for_magnetization(&plan, &magnetization)
+            .expect("rotated DMI should be supported by the FEM reference observable adapter");
+
+        assert_eq!(observables.dmi_field.len(), plan.mesh.nodes.len());
+        assert!(
+            observables
+                .dmi_field
+                .iter()
+                .flatten()
+                .any(|component| component.abs() > 0.0),
+            "rotated DMI must contribute to the aggregate FEM DMI field"
+        );
+        assert!(
+            observables.max_effective_field_amplitude > 0.0,
+            "rotated DMI must contribute to FEM H_eff"
         );
     }
 
