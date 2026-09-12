@@ -9,7 +9,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 - Baza `master`: `5084a94ed14b151fc865e8def5a5c28401e98b44`.
 - Branch: `codex/eigensolve-dispersion-plan-20260912`.
 - Worktree: `C:/git/fullmag/worktrees/eigensolve-dispersion-plan-20260912`.
-- Ostatni kodowy przyrost: `d1f2ac9b3` (`feat(fem): separate Floquet scalar representations`); bieżący checkpoint dokumentuje ten commit i ograniczenia weryfikacji, a worktree pozostaje czysty.
+- Ostatni kodowy przyrost: `e2a7890c7` (`feat(fem): assemble phase-aware shared-domain Floquet blocks`); bieżący checkpoint dokumentuje ten commit i ograniczenia weryfikacji.
 - Właściciel: `codex:01a0941c-eb15-7261-a7ee-7cf099385525`.
 - Rejestr: `eigensolve-dispersion-plan-20260-c5dfad6d7f548079`; reaktywowany do implementacji.
 - Fizyczne źródła COMSOL: oba lokalne podręczniki modułu mikromagnetycznego wymienione w planie; szczególnie s. PDF 21–28 i 40–43. Przykład RF jest wzorem sprzężenia pól, a nie gotowym dowodem modalnym.
@@ -22,7 +22,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 | S01 — nauka, ADR, kontrakty | W TRAKCIE | Noty, mapy źródeł, walidatory i review |
 | S02 — Python/IR | W TRAKCIE | Walidacja k i selektorów, round-trip, testy konsumentów |
 | S03 — natywny operator magnetyczny Blocha | W TRAKCIE | Prolongacja fazowa, MFEM sparse/matrix-free, testy i połączenie produkcyjne |
-| S04 — dynamiczny demag-k CPU | W TRAKCIE | Bounded dense Schur provider jest gotowy dla złożonych bloków; pozostaje właściciel assemblacji siatkowej airbox, gauge i zbieżność brzegu |
+| S04 — dynamiczny demag-k CPU | W TRAKCIE | Bounded dense Schur provider oraz producent czterech bloków MFEM są zapisane; pozostaje właściciel assemblacji siatkowej w runnerze, gauge i zbieżność brzegu |
 | S05 — natywny solver spektralny | W TRAKCIE | Ścieżka Floquet propaguje postęp/anulowanie do native modal ABI i zapisuje partial artifact; pozostają SLEPc/realifikacja produkcyjna, reszty, kompletność i resume |
 | S06 — śledzenie gałęzi | W TRAKCIE | Hungarian/gaps i metryka masy FE są gotowe; pozostają fizyczne podprzestrzenie zdegenerowane |
 | S07 — artefakty i API | W TRAKCIE | Stabilne ID, faza/obwiednia, selektory, binarne pola |
@@ -120,6 +120,8 @@ hostowych nie kwalifikuje relacji dyspersji ani dynamicznego demag-k.
 - `41e80e534` — bounded MFEM bridge `floquet_airbox_operator`, test redukcji `CᴴP_fullC`/`CᴴAφq`, osobna recepta managed oraz regresja pinowania pojedynczego DOF w providerze Schura; źródła są zapisane, lecz kompilacja z MFEM pozostaje niezweryfikowana.
 - `4336d8166` — fail-closed guard w `solve_modal_eigen_contract` blokuje wejście non-k0 Floquet do shared-domain i starszego Poisson-airbox K0; dwie regresje native sprawdzają oba wejścia.
 - `d1f2ac9b3` — rozdzielenie reprezentacji `shifted_envelope`/`full_field_phase_constrained` w skalarnej assemblacji Floqueta oraz maskowanie powietrza i redukcja magnetycznych DOF w źródle; testy MFEM zapisane, wykonanie managed nadal oczekuje na poprawny runtime.
+- `1894f09a8` — phase-aware Schur bridge redukuje także magnetyczne DOF przez `C_\phi^H A_{\phi q,full} C_q`, zachowując zgodność ze starszym wejściem już zredukowanym.
+- `e2a7890c7` — producent shared-domain buduje na jednej siatce MFEM pełnopolowy operator skalarny, `C_\phi(k)`, źródło `A_{\phi q,full}` z maską magnetyczną i nodalnym `M_s` oraz `C_q(k)`; waliduje graf translacji, fazę `-k\cdot R`, kompletność klas i odrzuca niezerowe `k` bez par. To jest seam właściciela natywnego, bez podłączenia do runnera.
 
 Adapter dynamicznego demag-k przyjmuje wyłącznie kompletną macierz dostarczoną
 przez przyszłego właściciela `A_{q\phi}(k)`/`P(k)`/`A_{\phi q}(k)`; nie jest
@@ -205,6 +207,7 @@ bramki pozostają **NOT VERIFIED**.
 - Próba nowego managed snapshotu nie utworzyła dodatkowego joba: runner zgłosił aktywny lock/storage dla rejestru `eigensolve-dispersion-plan-20260-c5dfad6d7f548079` i nakazał użyć istniejącego joba lub zaczekać. Najnowszy własny snapshot to job `b5200ded44964953a03491183dffaae1`, sequence 19, source digest `b59eadab5a1dd98e7b394403bd722bce864c81ea4d7659e24acd790f70853757`; ostatni odczyt pozostaje `queued` bez exit code. Nie uzyskano kompilacji C++ ani runtime dla bieżącego snapshotu.
 - Bezpośrednia kompilacja MSVC testu kontraktu po dodaniu regresji routingu zakończyła się exit 0 z `FULLMAG_HAS_MFEM_STACK=0` i `/D_USE_MATH_DEFINES`. Kompilacja całego `modal_eigen_solver.cpp` w tym trybie nadal zatrzymuje się na istniejących typach shared-domain dostępnych wyłącznie z MFEM (`PoissonAirboxSharedDomainAssemblyResult`); nie jest to ścieżka kwalifikacyjna FEM. Pełny test z MFEM pozostaje **NOT VERIFIED**.
 - Dla `d1f2ac9b3` bezpośrednia kompilacja MSVC z `FULLMAG_HAS_MFEM_STACK=0` zakończyła się exit 0 osobno dla `floquet_bloch_scalar.cpp` i `floquet_bloch_scalar_test.cpp`; zlinkowany test no-MFEM zakończył się exit 0. CMake skonfigurował target, lecz pełna biblioteka zatrzymała się na wcześniejszych błędach bazowych MSVC (`std::snprintf`, `__atomic_*`, brak pól Poisson w trybie bez MFEM), więc nie jest to dowód wykonania ciała MFEM. Managed test `verify-fem-frequency-domain-floquet-bloch-scalar` pozostaje **NOT VERIFIED**.
+- Dla `e2a7890c7` bezpośrednia kompilacja MSVC z `FULLMAG_HAS_MFEM_STACK=0` zakończyła się exit 0 osobno dla `floquet_bloch_scalar.cpp`, `floquet_airbox_operator.cpp` i `floquet_airbox_operator_test.cpp`. Test MFEM zawiera ścieżkę sukcesu producenta, niespójnej fazy i braku par, ale na tym hoście ciało MFEM nie zostało wykonane. Pełny target CMake nadal zatrzymuje się na wcześniejszych błędach bazowych bez MFEM; managed test `fem_floquet_airbox_operator_contract` pozostaje **NOT VERIFIED**.
 
 Próba `just worktree-finish ... state=review` z aktualnym HEAD została
 zatrzymana przez ten sam preflight (`Container runner owns heavy builds on this
