@@ -29,7 +29,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 | S09 — falowód 2.5D | W TRAKCIE | Bounded algebraic provider `K⊥ + k²M` i axial transverse Schur oracle są zapisane; pozostają assembler przekroju MFEM, open boundary, normalizacja na długość i porównania TetraX/3D |
 | S10 — interakcje | DO WYKONANIA | Anizotropia, DMI seams, Gilbert i legalność |
 | S11 — GPU | DO WYKONANIA | Jawna trasa double bez fallbacku, residency i parytet |
-| S12 — kwalifikacja i integracja | DO WYKONANIA | Managed benchmarki, review, commity, PR, merge, weryfikacja mastera |
+| S12 — kwalifikacja i integracja | W TRAKCIE | Managed benchmarki, review, commity, PR, merge, weryfikacja mastera |
 
 ## Zweryfikowane warunki wykonania
 
@@ -132,6 +132,14 @@ poprzeczne i osiowe sprzężenia `A_qphi`/`A_phiq`, zachowuje znak źródła `�
 gauge oraz błędne kształty/budżet. Jest to bounded oracle dla algebry
 falowodu, nie assembler siatki przekroju ani dowód otwartej granicy; kompilacja
 i wykonanie testu pozostają **NOT VERIFIED** przez managed runner.
+
+Dodano recepty managed dla tych kontraktów źródłowych:
+`verify-fem-modal-floquet-magnetic-contract` uruchamia test operatora Blocha,
+a `verify-fem-modal-floquet-airbox-cpu` uruchamia oba ograniczone providery
+demag-k. Recepty korzystają z `ensure-managed-fem-runtime` i nie zmieniają
+statusu fizycznej assemblacji ani kwalifikacji runtime. Na bieżącym hoście
+runner nadal zwraca 503/profile mismatch przed utworzeniem joba, więc te
+bramki pozostają **NOT VERIFIED**.
 
 ### Walidacja po domknięciu przyrostu
 
