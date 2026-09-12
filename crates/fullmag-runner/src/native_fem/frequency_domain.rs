@@ -986,6 +986,16 @@ pub(crate) fn solve_native_driven_frequency_response(
 pub(crate) fn solve_native_modal_eigen(
     request: NativeModalEigenRequest<'_>,
 ) -> Result<NativeFrequencyDomainContractResult, String> {
+    let nonzero_k_floquet_shared_domain_provider = matches!(
+        request.execution_target,
+        NativeModalExecutionTarget::ProductionCpu
+    ) && request.include_demag
+        && request.spin_wave_bc_kind == "floquet"
+        && request
+            .k_vector_rad_m
+            .is_some_and(|values| values.iter().any(|value| value.abs() > f64::EPSILON))
+        && request.shared_domain_problem.is_some()
+        && request.mfem_operator_problem.is_some();
     let production_shared_domain_required = matches!(
         request.execution_target,
         NativeModalExecutionTarget::ProductionCpu | NativeModalExecutionTarget::ProductionGpu
@@ -994,7 +1004,7 @@ pub(crate) fn solve_native_modal_eigen(
         && request
             .k_vector_rad_m
             .is_none_or(|values| values.iter().all(|value| value.abs() <= f64::EPSILON));
-    validate_native_modal_request_payload_ownership(
+    validate_native_modal_request_payload_ownership_with_provider(
         request.execution_target,
         production_shared_domain_required,
         request.shared_domain_problem.is_some(),
@@ -1002,6 +1012,7 @@ pub(crate) fn solve_native_modal_eigen(
         request.mfem_sparse_operator_problem.is_some(),
         request.poisson_airbox_block_problem.is_some(),
         request.tiny_validation_problem.is_some(),
+        nonzero_k_floquet_shared_domain_provider,
     )?;
     #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
     super::configure_managed_openmpi_environment();
@@ -1023,6 +1034,28 @@ fn validate_native_modal_request_payload_ownership(
     has_poisson_airbox_block_problem: bool,
     has_tiny_validation_problem: bool,
 ) -> Result<(), String> {
+    validate_native_modal_request_payload_ownership_with_provider(
+        execution_target,
+        production_shared_domain_required,
+        has_shared_domain_problem,
+        has_mfem_operator_problem,
+        has_mfem_sparse_operator_problem,
+        has_poisson_airbox_block_problem,
+        has_tiny_validation_problem,
+        false,
+    )
+}
+
+fn validate_native_modal_request_payload_ownership_with_provider(
+    execution_target: NativeModalExecutionTarget,
+    production_shared_domain_required: bool,
+    has_shared_domain_problem: bool,
+    has_mfem_operator_problem: bool,
+    has_mfem_sparse_operator_problem: bool,
+    has_poisson_airbox_block_problem: bool,
+    has_tiny_validation_problem: bool,
+    allow_shared_domain_with_mfem_operator: bool,
+) -> Result<(), String> {
     let production = matches!(
         execution_target,
         NativeModalExecutionTarget::ProductionCpu | NativeModalExecutionTarget::ProductionGpu
@@ -1034,6 +1067,7 @@ fn validate_native_modal_request_payload_ownership(
     }
     if production
         && has_shared_domain_problem
+        && !allow_shared_domain_with_mfem_operator
         && (has_mfem_operator_problem
             || has_mfem_sparse_operator_problem
             || has_poisson_airbox_block_problem
@@ -4478,6 +4512,20 @@ mod tests {
         )
         .expect_err("shared-domain production must reject the runner MFEM pencil");
         assert!(error.contains("must not transport a runner-assembled operator"));
+
+        validate_native_modal_request_payload_ownership_with_provider(
+            NativeModalExecutionTarget::ProductionCpu,
+            false,
+            true,
+            true,
+            false,
+            false,
+            false,
+            true,
+        )
+        .expect(
+            "the explicit nonzero-k shared-domain provider may combine an accepted payload with the phase-aware runner pencil",
+        );
     }
 
     #[test]

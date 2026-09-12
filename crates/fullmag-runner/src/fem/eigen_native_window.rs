@@ -835,6 +835,7 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
     effective_dof: usize,
     artifact_sample_index: usize,
     planned_execution: Option<PlannedFemEigenExecution<'_>>,
+    shared_domain_problem: Option<native_fem::NativeModalEigenSharedDomainProblem<'_>>,
 ) -> Result<ExecutedRun, RunError> {
     emit_fem_eigen_progress(
         &mut progress,
@@ -955,7 +956,7 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
         )),
         mfem_sparse_operator_problem: None,
         poisson_airbox_block_problem: None,
-        shared_domain_problem: None,
+        shared_domain_problem,
     })
     .map_err(|message| RunError { message })?;
     progress = live_progress_sink.into_inner();

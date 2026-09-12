@@ -5,6 +5,7 @@
 #include "frequency_domain/tangent_frame.hpp"
 
 #include <cstdint>
+#include <array>
 #include <string>
 #include <vector>
 
@@ -21,6 +22,8 @@ struct FemMeshRuntimeState;
 }
 
 namespace fullmag::fem::frequency_domain {
+
+struct FloquetAirboxDynamicDemagKResult;
 
 #if FULLMAG_HAS_MFEM_STACK
 
@@ -198,10 +201,18 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
 
 /* Import and assemble the versioned public shared-domain modal payload.  The
  * returned CSR buffers own their storage and remain valid until the result is
- * destroyed by the caller. */
+ * destroyed by the caller.  When a k-vector and Floquet pair graph are
+ * supplied, the same accepted payload is also used to build the bounded
+ * phase-aware dynamic-demagnetization Schur matrix.  The optional result is
+ * deliberately separate from the legacy real k=0 CSR blocks so callers
+ * cannot confuse the two representations. */
 FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
     const FullmagFemModalSharedDomainPayload &payload,
-    PoissonAirboxSharedDomainAssemblyResult *out_result) noexcept;
+    PoissonAirboxSharedDomainAssemblyResult *out_result,
+    const FrequencyDomainFloquetPeriodicPair *floquet_periodic_pairs = nullptr,
+    std::uint64_t floquet_periodic_pair_count = 0,
+    const std::array<double, 3> *floquet_k_rad_per_m = nullptr,
+    FloquetAirboxDynamicDemagKResult *out_floquet_dynamic_demag_k = nullptr) noexcept;
 
 FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
     const PoissonAirboxSharedDomainAssemblyRequest &request,

@@ -48,7 +48,9 @@ use super::eigen_projection::{
     project_complex_mode_to_tangent_basis, project_real_mode_to_tangent_basis, tangent_bases,
 };
 use super::eigen_reduction::build_reduction_map;
+use super::eigen_reduction::k_sampling_contains_nonzero;
 use super::eigen_shared_domain::{
+    build_native_shared_domain_modal_problem, build_shared_domain_linearization_state,
     native_shared_domain_magnetic_assembly_available, native_shared_domain_magnetic_assembly_error,
     shared_domain_k0_runtime_unavailable_error, validate_eigen_equilibrium_certificate,
 };
@@ -981,7 +983,16 @@ pub(super) fn execute_fem_eigen_inner(
         }
         return Err(error);
     }
-    reject_unsupported_floquet_dynamic_demag(&plan.spin_wave_bc, plan.operator.include_demag)?;
+    let native_nonzero_k_shared_domain_provider_requested = use_native_modal_production
+        && !try_gpu
+        && plan.enable_demag
+        && plan.operator.include_demag
+        && matches!(plan.spin_wave_bc.kind(), SpinWaveBoundaryKindIR::Floquet)
+        && k_sampling_contains_nonzero(plan.k_sampling.as_ref())
+        && matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2);
+    if !native_nonzero_k_shared_domain_provider_requested {
+        reject_unsupported_floquet_dynamic_demag(&plan.spin_wave_bc, plan.operator.include_demag)?;
+    }
     let num_modes = plan.count as usize;
 
     emit_fem_eigen_progress(
@@ -1326,6 +1337,35 @@ pub(super) fn execute_fem_eigen_inner(
                 &equilibrium,
             )
         };
+        let native_floquet_shared_domain_problem =
+            if native_nonzero_k_shared_domain_provider_requested {
+                let linearization_state = build_shared_domain_linearization_state(
+                    plan,
+                    topology,
+                    &problem,
+                    source_artifact.as_ref(),
+                    source_relax_handoff,
+                    &equilibrium,
+                    &observables,
+                )?;
+                if let Some(handoff) = expected_handoff {
+                    handoff.validate_consumed_linearization(
+                        plan,
+                        &equilibrium,
+                        &linearization_state,
+                    )?;
+                }
+                Some(build_native_shared_domain_modal_problem(
+                    plan,
+                    topology,
+                    &equilibrium,
+                    &observables,
+                    Some(&linearization_state),
+                    artifact_sample_index,
+                )?)
+            } else {
+                None
+            };
         if is_full_2x2 && use_native_modal_production {
             return execute_native_cpu_modal_window_from_bloch_floquet_complex(
                 plan,
@@ -1343,6 +1383,7 @@ pub(super) fn execute_fem_eigen_inner(
                 effective_dof,
                 artifact_sample_index,
                 planned_execution,
+                native_floquet_shared_domain_problem,
             );
         }
         solve_complex_hermitian_eigenpairs(plan, stiffness, mass)?

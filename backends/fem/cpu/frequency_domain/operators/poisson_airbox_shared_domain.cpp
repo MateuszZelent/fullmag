@@ -1,4 +1,5 @@
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
+#include "cpu/frequency_domain/floquet_airbox_operator.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 
@@ -2308,7 +2309,11 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
 
 FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
     const FullmagFemModalSharedDomainPayload &payload,
-    PoissonAirboxSharedDomainAssemblyResult *out_result) noexcept
+    PoissonAirboxSharedDomainAssemblyResult *out_result,
+    const FrequencyDomainFloquetPeriodicPair *floquet_periodic_pairs,
+    std::uint64_t floquet_periodic_pair_count,
+    const std::array<double, 3> *floquet_k_rad_per_m,
+    FloquetAirboxDynamicDemagKResult *out_floquet_dynamic_demag_k) noexcept
 {
     if (out_result == nullptr) {
         return FrequencyDomainStatus::validation_error;
@@ -2723,7 +2728,77 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         request.boundary_kind = boundary_kind;
         request.robin_beta = payload.robin_beta;
         request.robin_boundary_marker = boundary_marker.Size() > 0 ? &boundary_marker : nullptr;
-        return assemble_poisson_airbox_shared_domain(request, out_result);
+        const auto assemble_k0 = [&]() noexcept {
+            return assemble_poisson_airbox_shared_domain(request, out_result);
+        };
+        const FrequencyDomainStatus assembly_status = assemble_k0();
+        if (assembly_status != FrequencyDomainStatus::ok ||
+            out_floquet_dynamic_demag_k == nullptr) {
+            return assembly_status;
+        }
+
+        if (floquet_k_rad_per_m == nullptr) {
+            copy_error(
+                out_result->error_message,
+                "Floquet dynamic demag-k request is missing its wavevector");
+            out_result->status = FrequencyDomainStatus::validation_error;
+            return out_result->status;
+        }
+
+        FloquetAirboxSharedDomainBlockRequest floquet_blocks_request{};
+        floquet_blocks_request.scalar_space = &scalar_space;
+        floquet_blocks_request.tangent_frames = tangent_frames.data();
+        floquet_blocks_request.tangent_frame_count = tangent_frames.size();
+        floquet_blocks_request.magnetic_element_mask = magnetic_element_mask.data();
+        floquet_blocks_request.magnetic_element_count = magnetic_element_mask.size();
+        floquet_blocks_request.saturation_magnetization_a_per_m =
+            saturation_magnetization.empty() ? nullptr : saturation_magnetization.data();
+        floquet_blocks_request.saturation_magnetization_count =
+            saturation_magnetization.size();
+        floquet_blocks_request.uniform_saturation_magnetization_a_per_m =
+            payload.uniform_saturation_magnetisation_a_per_m;
+        floquet_blocks_request.scalar_reduced_node = payload.scalar_reduced_node;
+        floquet_blocks_request.scalar_reduced_node_count = payload.scalar_reduced_node_count;
+        floquet_blocks_request.magnetic_reduced_node = payload.magnetic_reduced_node;
+        floquet_blocks_request.magnetic_reduced_node_count = payload.magnetic_reduced_node_count;
+        floquet_blocks_request.periodic_pairs = floquet_periodic_pairs;
+        floquet_blocks_request.periodic_pair_count = floquet_periodic_pair_count;
+        floquet_blocks_request.k_rad_per_m = *floquet_k_rad_per_m;
+        floquet_blocks_request.robin_beta = payload.robin_beta;
+        floquet_blocks_request.robin_boundary_marker =
+            boundary_marker.Size() > 0 ? &boundary_marker : nullptr;
+
+        FloquetAirboxSharedDomainBlockResult floquet_blocks{};
+        const FrequencyDomainStatus block_status =
+            assemble_floquet_airbox_shared_domain_blocks(
+                floquet_blocks_request,
+                &floquet_blocks);
+        if (block_status != FrequencyDomainStatus::ok) {
+            copy_error(out_result->error_message, floquet_blocks.error_message);
+            out_result->status = block_status;
+            return block_status;
+        }
+
+        FloquetAirboxDynamicDemagKProblem floquet_problem{};
+        floquet_problem.scalar_operator = floquet_blocks.scalar_operator.get();
+        floquet_problem.scalar_constraint = floquet_blocks.scalar_constraint.get();
+        floquet_problem.tangent_source = floquet_blocks.tangent_source.get();
+        floquet_problem.tangent_constraint = floquet_blocks.tangent_constraint.get();
+        floquet_problem.k_rad_per_m = *floquet_k_rad_per_m;
+        floquet_problem.gauge_policy = FloquetDynamicDemagKGaugePolicy::require_invertible;
+        floquet_problem.workspace_budget_bytes = 256ull * 1024ull * 1024ull;
+        const FrequencyDomainStatus dynamic_status =
+            assemble_floquet_airbox_dynamic_demag_k(
+                floquet_problem,
+                out_floquet_dynamic_demag_k);
+        if (dynamic_status != FrequencyDomainStatus::ok) {
+            copy_error(
+                out_result->error_message,
+                out_floquet_dynamic_demag_k->diagnostics.error_message);
+            out_result->status = dynamic_status;
+            return dynamic_status;
+        }
+        return assembly_status;
     } catch (const std::exception &exception) {
         copy_error(out_result->error_message, exception.what());
     } catch (...) {

@@ -4,6 +4,7 @@
 #include "cpu/frequency_domain/mode_deduplication.hpp"
 #include "cpu/frequency_domain/mode_filter.hpp"
 #include "cpu/frequency_domain/poisson_airbox_modal_eigen.hpp"
+#include "cpu/frequency_domain/floquet_airbox_operator.hpp"
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
 #include "cpu/frequency_domain/slepc_modal_eigen.hpp"
 #include "frequency_domain/modal_gpu_krylov.hpp"
@@ -12,6 +13,7 @@
 #include "frequency_domain/linearized_dynamic_pencil.hpp"
 
 #include <cmath>
+#include <array>
 #include <complex>
 #include <cstddef>
 #include <cstdio>
@@ -96,6 +98,28 @@ bool modal_request_is_nonzero_k_floquet(const ModalEigenRequest &request) noexce
         }
     }
     return false;
+}
+
+bool modal_request_floquet_k_vector(
+    const ModalEigenRequest &request,
+    std::array<double, 3> &out_k) noexcept
+{
+    const double *k_vector = request.operator_request.k_vector_rad_m;
+    int k_vector_len = request.operator_request.k_vector_len;
+    if ((k_vector == nullptr || k_vector_len <= 0) && request.has_floquet_k_vector) {
+        k_vector = request.floquet_k_vector_rad_per_m;
+        k_vector_len = 3;
+    }
+    if (k_vector == nullptr || k_vector_len != 3) {
+        return false;
+    }
+    for (int index = 0; index < 3; ++index) {
+        if (!std::isfinite(k_vector[index])) {
+            return false;
+        }
+        out_k[static_cast<std::size_t>(index)] = k_vector[index];
+    }
+    return true;
 }
 
 std::string escape_json_string(const char *value)
@@ -1754,9 +1778,77 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
         return result;
     }
     ModalEigenRequest effective_request = request;
+    std::vector<double> floquet_dynamic_demag_k_storage;
+    bool native_nonzero_k_shared_domain_provider = false;
+#if FULLMAG_HAS_MFEM_STACK
+    if (modal_request_is_nonzero_k_floquet(request) &&
+        request.execution_target == ModalExecutionTarget::production_cpu &&
+        request.operator_request.include_demag != 0 &&
+        request.poisson_airbox_shared_domain_enabled != 0 &&
+        request.poisson_airbox_shared_domain_payload != nullptr &&
+        request.mfem_operator_enabled != 0 &&
+        request.mfem_tangent_dof_count > 0 &&
+        request.mfem_stiffness_matrix_row_major != nullptr &&
+        request.mfem_gyrotropic_matrix_row_major != nullptr) {
+        std::array<double, 3> floquet_k{};
+        if (!modal_request_floquet_k_vector(request, floquet_k)) {
+            FrequencyDomainContractResult result = validation_error_result(
+                "modal_eigen",
+                "native FEM nonzero-k Floquet shared-domain provider requires a finite 3D wavevector",
+                "invalid_floquet_wavevector",
+                request.operator_request.operator_diagnostics_json);
+            set_modal_execution(
+                result,
+                request.execution_target,
+                request.spectral_transform_kind,
+                "production_cpu_floquet_airbox_dynamic_demag_k_validation");
+            return result;
+        }
+        PoissonAirboxSharedDomainAssemblyResult provider_assembly{};
+        FloquetAirboxDynamicDemagKResult provider_result{};
+        const FrequencyDomainStatus provider_status =
+            assemble_poisson_airbox_shared_domain_payload(
+                *request.poisson_airbox_shared_domain_payload,
+                &provider_assembly,
+                request.floquet_periodic_pairs,
+                request.floquet_periodic_pair_count,
+                &floquet_k,
+                &provider_result);
+        if (provider_status != FrequencyDomainStatus::ok ||
+            provider_result.real_split_row_major.empty()) {
+            FrequencyDomainContractResult result = validation_error_result(
+                "modal_eigen",
+                provider_assembly.error_message[0] != '\0'
+                    ? provider_assembly.error_message
+                    : "native FEM nonzero-k Floquet shared-domain provider failed to assemble a dynamic demagnetization operator",
+                "floquet_airbox_dynamic_demag_k_assembly_failed",
+                request.operator_request.operator_diagnostics_json);
+            result.status = provider_status;
+            set_modal_execution(
+                result,
+                request.execution_target,
+                request.spectral_transform_kind,
+                "production_cpu_floquet_airbox_dynamic_demag_k_provider");
+            return result;
+        }
+        floquet_dynamic_demag_k_storage = std::move(provider_result.real_split_row_major);
+        effective_request.dynamic_demag_k_tangent_matrix_row_major =
+            floquet_dynamic_demag_k_storage.data();
+        effective_request.dynamic_demag_k_tangent_matrix_value_count =
+            floquet_dynamic_demag_k_storage.size();
+        // The shared-domain payload has now been consumed by the k-aware
+        // provider.  Route the resulting real-split tangent operator through
+        // the ordinary native modal adapter instead of the legacy real k=0
+        // Poisson descriptor branch below.
+        effective_request.poisson_airbox_shared_domain_enabled = 0;
+        effective_request.poisson_airbox_shared_domain_payload = nullptr;
+        native_nonzero_k_shared_domain_provider = true;
+    }
+#endif
     if (modal_request_is_nonzero_k_floquet(request) &&
         (request.poisson_airbox_shared_domain_enabled != 0 ||
-         request.poisson_airbox_block_enabled != 0)) {
+         request.poisson_airbox_block_enabled != 0) &&
+        !native_nonzero_k_shared_domain_provider) {
         FrequencyDomainContractResult result =
             nonzero_k_floquet_k0_poisson_path_unavailable(request);
         const ModalExecutionTarget unavailable_target =
@@ -1775,7 +1867,8 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
         return result;
     }
     PoissonAirboxSharedDomainAssemblyResult shared_domain_assembly{};
-    if (request.poisson_airbox_shared_domain_enabled != 0) {
+    if (request.poisson_airbox_shared_domain_enabled != 0 &&
+        !native_nonzero_k_shared_domain_provider) {
         if (request.poisson_airbox_shared_domain_payload == nullptr) {
             return validation_error_result(
                 "modal_eigen",
