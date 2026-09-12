@@ -20,6 +20,29 @@ import {
 
 export type { ObjectInteractionKind, PhysicsInteractionDraft, PhysicsInteractionId };
 
+export function interactionIdFromSelection(
+  nodeId: string | null,
+): PhysicsInteractionId | null {
+  const raw = nodeId?.split(":").at(-1);
+  if (
+    raw === "exchange" ||
+    raw === "demag" ||
+    raw === "zeeman" ||
+    raw === "current_transport" ||
+    raw === "spin_torque" ||
+    raw === "interfacial_dmi" ||
+    raw === "rotated_interfacial_dmi" ||
+    raw === "bulk_dmi" ||
+    raw === "uniaxial_anisotropy" ||
+    raw === "cubic_anisotropy" ||
+    raw === "oersted_field" ||
+    raw === "magnetoelastic"
+  ) {
+    return raw;
+  }
+  return null;
+}
+
 export type InteractionApplyPatchResult =
   | { error: string }
   | { patch: JsonObject; storage: "study" }
@@ -216,19 +239,20 @@ function interactionDraftValueDirty(
 
 export function buildInteractionApplyPatch(
   draft: PhysicsInteractionDraft,
+  scene?: SceneResource | null,
 ): InteractionApplyPatchResult {
   const spec = findInteractionSpec(draft.id);
   if (!spec) return { error: `Unknown physics interaction: ${draft.id}` };
 
   if (spec.storage === "object_interaction") {
-    const result = buildObjectInteractionPatchFromDraft(draft);
+    const result = buildObjectInteractionPatchFromDraft(draft, scene);
     return "error" in result
       ? result
       : { patch: result.patch, storage: "object_interaction" };
   }
 
   if (spec.storage === "study") {
-    const result = buildStudyInteractionPatchFromDraft(draft);
+    const result = buildStudyInteractionPatchFromDraft(draft, scene);
     return "error" in result ? result : { patch: result.patch, storage: "study" };
   }
 

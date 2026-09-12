@@ -2616,12 +2616,26 @@ mod tests {
     #[test]
     fn scene_document_round_trips_signed_rotated_interfacial_dmi() {
         let mut builder = sample_builder();
+        builder.geometries[0].physics_stack.retain(|interaction| {
+            !matches!(
+                interaction.kind,
+                ScriptBuilderMagneticInteractionKind::InterfacialDmi
+                    | ScriptBuilderMagneticInteractionKind::BulkDmi
+            )
+        });
         builder.rotated_interfacial_dmi = Some(-3.0e-3);
 
         let scene = scene_document_from_script_builder(&builder);
         let round_trip = scene_document_to_script_builder(&scene).expect("scene should validate");
 
         assert_eq!(scene.study.rotated_interfacial_dmi, Some(-3.0e-3));
+        assert!(scene.objects[0].physics_stack.iter().all(|interaction| {
+            !matches!(
+                interaction.kind,
+                ScriptBuilderMagneticInteractionKind::InterfacialDmi
+                    | ScriptBuilderMagneticInteractionKind::BulkDmi
+            )
+        }));
         assert_eq!(round_trip.rotated_interfacial_dmi, Some(-3.0e-3));
         let overrides = scene_document_to_script_builder_overrides(&scene).expect("overrides");
         assert_eq!(overrides["rotated_interfacial_dmi"], -3.0e-3);

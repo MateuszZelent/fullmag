@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import type { SceneResource } from "@/kernel/api/apiTypes";
+
 import {
   BACKEND_INTERACTION_IDS,
   buildObjectInteractionPatchFromDraft,
@@ -255,6 +257,92 @@ describe("physics interaction catalog", () => {
     ).toEqual({
       error: "Bulk DMI is backend-supported but not yet writable from the control room.",
     });
+  });
+
+  it("rejects study-level rotated DMI when an object-scoped DMI is active", () => {
+    for (const kind of ["interfacial_dmi", "bulk_dmi"] as const) {
+      const scene = {
+        objects: [
+          {
+            id: "free-layer",
+            physics_stack: [{ kind, enabled: true }],
+          },
+        ],
+      } as unknown as SceneResource;
+
+      const result = buildStudyInteractionPatchFromDraft(
+        {
+          enabled: true,
+          id: "rotated_interfacial_dmi",
+          present: true,
+          values: { d: "0.003" },
+        },
+        scene,
+      );
+
+      expect(result).toEqual({
+        error:
+          `Rotated interfacial DMI conflicts with active object-scoped ${kind}. ` +
+          "Disable or remove the object-scoped DMI before applying the study-level term.",
+      });
+      expect("patch" in result).toBe(false);
+    }
+  });
+
+  it("ignores active DMI entries on auxiliary scene objects", () => {
+    for (const kind of ["interfacial_dmi", "bulk_dmi"] as const) {
+      const scene = {
+        objects: [
+          {
+            id: "antenna",
+            physics_stack: [{ kind, enabled: true }],
+            role: "antenna",
+          },
+        ],
+        revision: 7,
+        study: {},
+      } as unknown as SceneResource;
+
+      expect(
+        buildStudyInteractionPatchFromDraft(
+          {
+            enabled: true,
+            id: "rotated_interfacial_dmi",
+            present: true,
+            values: { d: "0.003" },
+          },
+          scene,
+        ),
+      ).toEqual({
+        patch: { study: { rotated_interfacial_dmi: 0.003 } },
+      });
+    }
+  });
+
+  it("rejects object-scoped DMI when study-level rotated DMI is active", () => {
+    const scene = {
+      objects: [],
+      study: { rotated_interfacial_dmi: -0.003 },
+    } as unknown as SceneResource;
+
+    for (const id of ["interfacial_dmi", "bulk_dmi"] as const) {
+      const result = buildObjectInteractionPatchFromDraft(
+        {
+          enabled: true,
+          id,
+          present: true,
+          values: id === "interfacial_dmi" ? { dind: "0.003" } : { d_bulk: "0.003" },
+        },
+        scene,
+      );
+
+      expect(result).toEqual({
+        error:
+          `Object-scoped ${id} conflicts with active study-level rotated interfacial DMI. ` +
+          "Disable or remove the study-level term before applying the object-scoped DMI.",
+      });
+      expect("patch" in result).toBe(false);
+    }
   });
 
   it("creates default drafts with documented units", () => {

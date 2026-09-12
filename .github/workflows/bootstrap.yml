@@ -164,6 +164,38 @@ jobs:
             exit 1
           fi
 
+      - name: Run Inspector mutation and DMI authoring browser regressions
+        env:
+          NEXT_PUBLIC_AUDIT_BUILD: "1"
+          CONTROL_ROOM_URL: http://127.0.0.1:3100/workspace
+          CONTROL_ROOM_AUDIT_ARTIFACTS_DIR: ${{ runner.temp }}/viewport-3d-browser-audit
+          CONTROL_ROOM_INSPECTOR_REPORT_DIR: ${{ runner.temp }}/viewport-3d-browser-audit/inspector
+        run: |
+          mkdir -p "$CONTROL_ROOM_INSPECTOR_REPORT_DIR"
+          # Reuse the audit build from this exact CI source snapshot. Start
+          # Node directly so the cleanup trap owns the actual server process.
+          (
+            cd apps/control-room
+            exec node node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3100
+          ) > "$CONTROL_ROOM_INSPECTOR_REPORT_DIR/server.log" 2>&1 &
+          inspector_server_pid=$!
+          trap 'kill "$inspector_server_pid" 2>/dev/null || true; wait "$inspector_server_pid" 2>/dev/null || true' EXIT
+          inspector_ready=0
+          for attempt in $(seq 1 60); do
+            if ! kill -0 "$inspector_server_pid" 2>/dev/null; then
+              cat "$CONTROL_ROOM_INSPECTOR_REPORT_DIR/server.log"
+              exit 1
+            fi
+            if curl --fail --silent --max-time 3 --output /dev/null "$CONTROL_ROOM_URL"; then
+              inspector_ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$inspector_ready" = 1
+          pnpm --dir apps/control-room run smoke:inspector
+          ./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-source-verify-post-write
+
       - name: Upload browser fixture smoke artifacts
         if: always()
         uses: actions/upload-artifact@v7
@@ -238,3 +270,9 @@ jobs:
 
       - name: Repository consistency checks
         run: python scripts/check_repo_consistency.py
+
+      - name: Run rotated DMI scene authoring regressions
+        run: >-
+          python -m pytest -q
+          packages/fullmag-py/tests/test_scratch_authoring_ui_roundtrip.py
+          -k dmi

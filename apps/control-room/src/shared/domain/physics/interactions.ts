@@ -2,6 +2,7 @@ import type {
   JsonObject,
   ObjectInteractionKind,
   ObjectInteractionPatchRequest,
+  SceneResource,
 } from "@/kernel/api/apiTypes";
 
 export const BACKEND_INTERACTION_IDS = [
@@ -717,8 +718,21 @@ export function draftFromObjectInteractionResource(
 
 export function buildObjectInteractionPatchFromDraft(
   draft: PhysicsInteractionDraft,
+  scene?: SceneResource | null,
 ): ObjectInteractionPatchResult {
   const spec = requireInteractionSpec(draft.id);
+  if (
+    (draft.id === "interfacial_dmi" || draft.id === "bulk_dmi") &&
+    draft.enabled &&
+    draft.present &&
+    activeStudyRotatedDmi(scene)
+  ) {
+    return {
+      error:
+        `Object-scoped ${draft.id} conflicts with active study-level rotated interfacial DMI. ` +
+        "Disable or remove the study-level term before applying the object-scoped DMI.",
+    };
+  }
   if (spec.storage !== "object_interaction" || !isObjectInteractionKind(draft.id)) {
     return { error: deferredMessage(spec) };
   }
@@ -740,6 +754,7 @@ export function buildObjectInteractionPatchFromDraft(
 
 export function buildStudyInteractionPatchFromDraft(
   draft: PhysicsInteractionDraft,
+  scene?: SceneResource | null,
 ): StudyInteractionPatchResult {
   const spec = requireInteractionSpec(draft.id);
   if (spec.storage !== "study") {
@@ -786,6 +801,14 @@ export function buildStudyInteractionPatchFromDraft(
         },
       };
     }
+    const conflictingInteraction = activeObjectScopedDmi(scene);
+    if (conflictingInteraction) {
+      return {
+        error:
+          `Rotated interfacial DMI conflicts with active object-scoped ${conflictingInteraction}. ` +
+          "Disable or remove the object-scoped DMI before applying the study-level term.",
+      };
+    }
     const d = parseNumber(draft.values.d, "D");
     if ("error" in d) return d;
     return {
@@ -798,6 +821,42 @@ export function buildStudyInteractionPatchFromDraft(
     };
   }
   return { error: deferredMessage(spec) };
+}
+
+function activeObjectScopedDmi(
+  scene: SceneResource | null | undefined,
+): "interfacial_dmi" | "bulk_dmi" | null {
+  if (!Array.isArray(scene?.objects)) return null;
+
+  for (const object of scene.objects) {
+    const role = (object as Record<string, unknown>).role;
+    if (typeof role === "string" && role !== "magnet") continue;
+    if (!Array.isArray(object.physics_stack)) continue;
+    for (const entry of object.physics_stack) {
+      if (!entry || typeof entry !== "object") continue;
+      const record = entry as Record<string, unknown>;
+      const kind = record.kind;
+      if (
+        (kind === "interfacial_dmi" || kind === "bulk_dmi") &&
+        record.enabled !== false
+      ) {
+        return kind;
+      }
+    }
+  }
+
+  return null;
+}
+
+function activeStudyRotatedDmi(scene: SceneResource | null | undefined): boolean {
+  const study = scene?.study;
+  if (!study || typeof study !== "object" || Array.isArray(study)) return false;
+  const value = (study as Record<string, unknown>).rotated_interfacial_dmi;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "string" && value.trim() !== "") {
+    return Number.isFinite(Number(value));
+  }
+  return false;
 }
 
 function valuesFromParams(

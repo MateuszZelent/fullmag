@@ -5,8 +5,9 @@ use crate::{
     SceneOerstedTimeDependence, ScenePrescribedSotDrive, SceneReactionLength, SceneRegionRef,
     SceneSpinBoundary, SceneSpinInterface, SceneSpinTorque, SceneSpinTransport,
     SceneSpinTransportMode, SceneStructuredCurrentClosure, SceneStructuredCurrentDrive,
-    SceneSurfaceRef, SceneTimeEnvelope, SceneTransportCoupling, SlonczewskiFormulaVersion,
-    StudyPipelineDocument, StudyPipelineNode,
+    SceneSurfaceRef, SceneTimeEnvelope, SceneTransportCoupling,
+    ScriptBuilderMagneticInteractionKind, SlonczewskiFormulaVersion, StudyPipelineDocument,
+    StudyPipelineNode,
 };
 use fullmag_ir::{
     CouplingEndpointIR, CouplingIR, CouplingKindIR, CouplingParametersIR, DriveActivationIR,
@@ -67,6 +68,7 @@ fn validate_scene_document_with_mode(
     if scene.version == "scene.v1" {
         validate_scene_v1_has_no_region_owned_payloads(scene)?;
     }
+    validate_dmi_scope_exclusivity(scene)?;
     if !matches!(
         scene.study.requested_mode.as_str(),
         "" | "strict" | "extended" | "hybrid"
@@ -200,6 +202,44 @@ fn validate_scene_document_with_mode(
     validate_scene_magnetization_constraints(scene, &object_ids)?;
 
     Ok(())
+}
+
+fn validate_dmi_scope_exclusivity(
+    scene: &SceneDocument,
+) -> Result<(), SceneDocumentValidationError> {
+    if scene.study.rotated_interfacial_dmi.is_none() {
+        return Ok(());
+    }
+
+    let mut conflicts = BTreeSet::new();
+    for object in &scene.objects {
+        if object.role != "magnet" {
+            continue;
+        }
+        for interaction in &object.physics_stack {
+            if !interaction.enabled {
+                continue;
+            }
+            match interaction.kind {
+                ScriptBuilderMagneticInteractionKind::InterfacialDmi => {
+                    conflicts.insert("interfacial_dmi");
+                }
+                ScriptBuilderMagneticInteractionKind::BulkDmi => {
+                    conflicts.insert("bulk_dmi");
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if conflicts.is_empty() {
+        return Ok(());
+    }
+
+    Err(SceneDocumentValidationError::new(format!(
+        "rotated_interfacial_dmi is study-scoped and cannot coexist with active object-scoped {}",
+        conflicts.into_iter().collect::<Vec<_>>().join(", ")
+    )))
 }
 
 fn validate_scene_magnetization_constraints(
@@ -3381,6 +3421,58 @@ mod tests {
             }]
         }))
         .expect("test scene should deserialize")
+    }
+
+    #[test]
+    fn rotated_interfacial_dmi_rejects_active_object_scoped_dmi() {
+        for kind in [
+            crate::ScriptBuilderMagneticInteractionKind::InterfacialDmi,
+            crate::ScriptBuilderMagneticInteractionKind::BulkDmi,
+        ] {
+            let mut scene = region_owned_scene();
+            scene.study.rotated_interfacial_dmi = Some(-3.0e-3);
+            scene.objects[0]
+                .physics_stack
+                .push(crate::ScriptBuilderMagneticInteractionEntry {
+                    kind,
+                    enabled: true,
+                    params: None,
+                });
+
+            let error = validate_scene_document(&scene)
+                .expect_err("active object-scoped DMI must conflict with study rDMI");
+            assert!(
+                error.message.contains("study-scoped") && error.message.contains("cannot coexist"),
+                "{}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn rotated_interfacial_dmi_conflict_can_be_recovered_by_disabling_or_removing_object_dmi() {
+        for kind in [
+            crate::ScriptBuilderMagneticInteractionKind::InterfacialDmi,
+            crate::ScriptBuilderMagneticInteractionKind::BulkDmi,
+        ] {
+            let mut scene = region_owned_scene();
+            scene.study.rotated_interfacial_dmi = Some(-3.0e-3);
+            scene.objects[0]
+                .physics_stack
+                .push(crate::ScriptBuilderMagneticInteractionEntry {
+                    kind,
+                    enabled: true,
+                    params: None,
+                });
+
+            scene.objects[0].physics_stack[0].enabled = false;
+            validate_scene_document(&scene)
+                .expect("disabling object-scoped DMI must allow study rDMI");
+
+            scene.objects[0].physics_stack.clear();
+            validate_scene_document(&scene)
+                .expect("removing object-scoped DMI must allow study rDMI");
+        }
     }
 
     fn valid_closed_current_view_value() -> Value {

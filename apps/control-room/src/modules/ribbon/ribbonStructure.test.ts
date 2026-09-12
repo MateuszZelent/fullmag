@@ -1934,6 +1934,48 @@ describe("ribbon structure", () => {
     expect(items.some((node) => node.id.includes("current_transport"))).toBe(false);
   });
 
+  it("opens global rotated interfacial DMI at the canonical ribbon node", async () => {
+    const selections: unknown[] = [];
+    const result = await createRibbonCommandRegistry().execute(
+      RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+      {
+        resourceData: {
+          [SESSION_STATUS_RESOURCE_KEY]: {
+            capabilities: {
+              active_lane: {
+                ...activeLaneCapabilityFixture(),
+                operations: {
+                  "interaction.rotated_interfacial_dmi": {
+                    state: "supported",
+                    reason: "Rotated interfacial DMI is supported.",
+                    requires: [],
+                  },
+                },
+              },
+            },
+            domain: { discretization: "fem" },
+          },
+        },
+        selection: {
+          get: () => ({ objectId: "film" }),
+          set: (selection: unknown) => selections.push(selection),
+        } as never,
+        source: "test",
+      },
+      { interactionId: "rotated_interfacial_dmi" },
+    );
+
+    expect(result).toEqual({ status: "completed" });
+    expect(selections).toEqual([
+      expect.objectContaining({
+        kind: "object.physics",
+        label: "Rotated interfacial DMI",
+        nodeId: "model:physics:rotated_interfacial_dmi",
+        objectId: null,
+      }),
+    ]);
+  });
+
   it("opens a canonical global field-drive draft from the Ribbon", async () => {
     const selections: unknown[] = [];
     const result = await createRibbonCommandRegistry().execute(

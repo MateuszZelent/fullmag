@@ -1070,6 +1070,37 @@ def _ensure_physics_stack(
     return ordered
 
 
+def _validate_dmi_scope_exclusivity(
+    objects: object,
+    rotated_interfacial_dmi: object,
+) -> None:
+    if _number_or_none(rotated_interfacial_dmi) is None:
+        return
+    conflicts: set[str] = set()
+    if isinstance(objects, list):
+        for obj in objects:
+            if not isinstance(obj, Mapping):
+                continue
+            if str(obj.get("role") or "magnet") != "magnet":
+                continue
+            stack = obj.get("physics_stack")
+            if not isinstance(stack, list):
+                continue
+            for entry in stack:
+                if not isinstance(entry, Mapping):
+                    continue
+                kind = str(entry.get("kind") or "").strip()
+                if kind in {"interfacial_dmi", "bulk_dmi"} and entry.get(
+                    "enabled", True
+                ) is not False:
+                    conflicts.add(kind)
+    if conflicts:
+        raise ValueError(
+            "rotated_interfacial_dmi is study-scoped and cannot coexist with active "
+            f"object-scoped {', '.join(sorted(conflicts))}"
+        )
+
+
 def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]:
     geometries = builder.get("geometries") or []
     objects: list[dict[str, Any]] = []
@@ -1166,6 +1197,11 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
                 "ui_label": magnetization.get("ui_label"),
             }
         )
+
+    _validate_dmi_scope_exclusivity(
+        objects,
+        builder.get("rotated_interfacial_dmi"),
+    )
 
     raw_current_modules = builder.get("current_modules") or []
     if not isinstance(raw_current_modules, list):
@@ -1266,6 +1302,13 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
 
 
 def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
+    raw_study = scene.get("study")
+    _validate_dmi_scope_exclusivity(
+        scene.get("objects"),
+        raw_study.get("rotated_interfacial_dmi")
+        if isinstance(raw_study, Mapping)
+        else None,
+    )
     materials = {
         str(material.get("id", "")): dict(material.get("properties") or {})
         for material in (scene.get("materials") or [])

@@ -9,8 +9,16 @@ import {
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 
 import { commitObjectInteractionMutation } from "./PhysicsInteractionPanel";
+import { interactionIdFromSelection } from "./PhysicsInteractionPanelModel";
 
 describe("PhysicsInteractionPanel lane contract", () => {
+  it("recognizes the canonical ribbon node for global rotated interfacial DMI", () => {
+    // ribbonCommands.ts emits global selections as model:physics:${interactionId}.
+    expect(
+      interactionIdFromSelection("model:physics:rotated_interfacial_dmi"),
+    ).toBe("rotated_interfacial_dmi");
+  });
+
   it("uses the resolved interaction catalog and blocks unresolved writes", () => {
     const source = readFileSync(
       new URL("./PhysicsInteractionPanel.tsx", import.meta.url),

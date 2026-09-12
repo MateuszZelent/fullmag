@@ -303,6 +303,28 @@ def test_rotated_dmi_object_stack_is_rejected_fail_closed() -> None:
         build_builder_from_scene_document(scene)
 
 
+@pytest.mark.parametrize("dmi_kind", ["interfacial_dmi", "bulk_dmi"])
+def test_scene_document_rejects_conflicting_study_and_object_dmi(
+    dmi_kind: str,
+) -> None:
+    builder = _builder(backend="fdm")
+    builder["rotated_interfacial_dmi"] = -0.003
+    builder["geometries"][0]["physics_stack"].append(
+        {"kind": dmi_kind, "enabled": True, "params": {}}
+    )
+
+    with pytest.raises(ValueError, match="study-scoped.*cannot coexist"):
+        build_scene_document_from_builder(builder)
+
+    scene = build_scene_document_from_builder(_builder(backend="fdm"))
+    scene["study"]["rotated_interfacial_dmi"] = -0.003
+    scene["objects"][0]["physics_stack"].append(
+        {"kind": dmi_kind, "enabled": True, "params": {}}
+    )
+    with pytest.raises(ValueError, match="study-scoped.*cannot coexist"):
+        build_builder_from_scene_document(scene)
+
+
 def test_scene_document_export_rejects_an_incomplete_scene() -> None:
     from fullmag.runtime.script_builder import render_scene_document_as_script
 
