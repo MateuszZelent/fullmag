@@ -16,6 +16,7 @@ use fullmag_ir::*;
 mod antenna_composition;
 mod antenna_field_solve;
 mod antenna_projection;
+mod antenna_validity;
 mod antenna_zeeman;
 mod current_transport;
 mod error;
@@ -45,6 +46,7 @@ pub mod boundary_geometry;
 
 pub use antenna_composition::{bind_antenna_field_solve, bind_antenna_field_solve_v03};
 pub use antenna_projection::resolve_fem_antenna_projection_mask;
+pub use antenna_validity::{antenna_waveform_bandwidth_notes, classify_antenna_waveform_bandwidth};
 pub use error::PlanError;
 pub use fdm::{
     checked_multilayer_aggregate_memory_bytes, checked_multilayer_pair_kernel_footprint,
@@ -210,6 +212,11 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
         }),
         BackendTarget::Auto => unreachable!("auto backend should resolve before dispatch"),
     }?;
+
+    execution_plan
+        .provenance
+        .notes
+        .extend(antenna_waveform_bandwidth_notes(problem));
 
     if problem.physics_graph.is_some() {
         let notes = physics_graph_provenance_notes(problem, resolved_backend)

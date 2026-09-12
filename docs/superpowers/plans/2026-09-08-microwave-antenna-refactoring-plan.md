@@ -580,6 +580,16 @@ wall-time/peak-memory oraz kontenerowego benchmarku direct RT0.
 - [ ] Ostrzeżenia przeliczać przy zmianie waveform, ale nie stawiać przez to bazy jako stale. Dla wielu aktywnych portów oceniać ich pasma i wspólne źródło.
 - [ ] Zapisać measured wall time, peak memory, pairs, refined pairs, error i cancellation latency. Dopiero jeśli direct solver nie spełnia potrzeb, zaprojektować oddzielnie kwalifikowany fast operator; samo zwiększenie limitu nie jest optymalizacją.
 
+Uzupełnienie implementacyjne 2026-09-12: `fullmag-ir` publikuje wersjonowany
+`antenna_waveform_bandwidth.v1`. Klasyfikator zwraca `f_max_hz=0` dla stałego
+napędu, częstotliwość autorską dla sinusoidy i `cutoff_hz` dla sinc; pulse oraz
+piecewise-linear pozostają `validity_bandwidth_unknown`, bez heurystyki
+`1/duration`. Planer dopisuje tę klasyfikację do provenance dla każdego
+`SolvedAntennaDriveIR`, więc zmiana waveformu odświeża diagnostykę bez
+unieważniania statycznej bazy pola. Obliczanie `eta_wave`/`eta_skin` z geometrii
+i materiału, agregacja budżetów między blokami oraz pomiar wall-time/peak-memory
+pozostają otwarte.
+
 Kontrakt arytmetyczny testu:
 
 ```rust
