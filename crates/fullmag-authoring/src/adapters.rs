@@ -1182,7 +1182,7 @@ fn ensure_object_physics_stack(
             },
         );
     }
-    if material_dind.is_some()
+    if material_dind.is_some_and(|value| value != 0.0)
         && !normalized
             .iter()
             .any(|entry| entry.kind == ScriptBuilderMagneticInteractionKind::InterfacialDmi)
@@ -1200,7 +1200,7 @@ fn ensure_object_physics_stack(
             ),
         );
     }
-    if material_dbulk.is_some()
+    if material_dbulk.is_some_and(|value| value != 0.0)
         && !normalized
             .iter()
             .any(|entry| entry.kind == ScriptBuilderMagneticInteractionKind::BulkDmi)
@@ -2639,6 +2639,104 @@ mod tests {
         assert_eq!(round_trip.rotated_interfacial_dmi, Some(-3.0e-3));
         let overrides = scene_document_to_script_builder_overrides(&scene).expect("overrides");
         assert_eq!(overrides["rotated_interfacial_dmi"], -3.0e-3);
+    }
+
+    #[test]
+    fn scene_document_to_script_builder_rejects_material_derived_dmi_conflicts() {
+        for (kind, dind, dbulk) in [
+            (
+                ScriptBuilderMagneticInteractionKind::InterfacialDmi,
+                Some(2.5e-3),
+                None,
+            ),
+            (
+                ScriptBuilderMagneticInteractionKind::BulkDmi,
+                None,
+                Some(2.5e-3),
+            ),
+        ] {
+            let mut scene = scene_document_from_script_builder(&sample_builder());
+            scene.study.rotated_interfacial_dmi = Some(-3.0e-3);
+            scene.objects[0].physics_stack.retain(|interaction| {
+                !matches!(
+                    interaction.kind,
+                    ScriptBuilderMagneticInteractionKind::InterfacialDmi
+                        | ScriptBuilderMagneticInteractionKind::BulkDmi
+                )
+            });
+            scene.materials[0].properties.dind = dind;
+            scene.materials[0].properties.dbulk = dbulk;
+
+            let error = scene_document_to_script_builder(&scene)
+                .expect_err("material-derived object DMI must conflict with study rDMI");
+            assert!(
+                error.message.contains("study-scoped") && error.message.contains("cannot coexist"),
+                "{}",
+                error.message
+            );
+
+            scene.objects[0]
+                .physics_stack
+                .push(ScriptBuilderMagneticInteractionEntry {
+                    kind,
+                    enabled: false,
+                    params: None,
+                });
+            let recovered = scene_document_to_script_builder(&scene)
+                .expect("explicitly disabled object DMI must suppress material injection");
+            assert!(recovered.geometries[0]
+                .physics_stack
+                .iter()
+                .any(|interaction| interaction.kind == kind && !interaction.enabled));
+        }
+    }
+
+    #[test]
+    fn scene_document_to_script_builder_zero_material_dmi_defaults_do_not_conflict_or_inject() {
+        for (dind, dbulk) in [(Some(0.0), None), (None, Some(0.0)), (Some(0.0), Some(0.0))] {
+            let mut scene = scene_document_from_script_builder(&sample_builder());
+            scene.study.rotated_interfacial_dmi = Some(-3.0e-3);
+            scene.objects[0].physics_stack.retain(|interaction| {
+                !matches!(
+                    interaction.kind,
+                    ScriptBuilderMagneticInteractionKind::InterfacialDmi
+                        | ScriptBuilderMagneticInteractionKind::BulkDmi
+                )
+            });
+            scene.materials[0].properties.dind = dind;
+            scene.materials[0].properties.dbulk = dbulk;
+
+            let round_trip = scene_document_to_script_builder(&scene)
+                .expect("zero material DMI defaults must allow study rDMI");
+            assert!(round_trip.geometries[0]
+                .physics_stack
+                .iter()
+                .all(|interaction| {
+                    !matches!(
+                        interaction.kind,
+                        ScriptBuilderMagneticInteractionKind::InterfacialDmi
+                            | ScriptBuilderMagneticInteractionKind::BulkDmi
+                    )
+                }));
+        }
+    }
+
+    #[test]
+    fn scene_document_to_script_builder_rejects_object_scoped_rotated_dmi_without_study() {
+        let mut scene = scene_document_from_script_builder(&sample_builder());
+        scene.objects[0]
+            .physics_stack
+            .push(ScriptBuilderMagneticInteractionEntry {
+                kind: ScriptBuilderMagneticInteractionKind::RotatedInterfacialDmi,
+                enabled: false,
+                params: None,
+            });
+
+        let error = scene_document_to_script_builder(&scene)
+            .expect_err("object-scoped rotated DMI must be rejected unconditionally");
+        assert!(error
+            .message
+            .contains("cannot appear in object physics_stack"));
     }
 
     #[test]

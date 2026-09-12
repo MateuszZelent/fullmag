@@ -1073,6 +1073,8 @@ def _ensure_physics_stack(
 def _validate_dmi_scope_exclusivity(
     objects: object,
     rotated_interfacial_dmi: object,
+    *,
+    materials: Mapping[str, Mapping[str, object]] | None = None,
 ) -> None:
     if _number_or_none(rotated_interfacial_dmi) is None:
         return
@@ -1084,7 +1086,15 @@ def _validate_dmi_scope_exclusivity(
             if str(obj.get("role") or "magnet") != "magnet":
                 continue
             stack = obj.get("physics_stack")
-            if not isinstance(stack, list):
+            if materials is not None:
+                material_ref = str(obj.get("material_ref") or "")
+                material = materials.get(material_ref, {})
+                stack = _ensure_physics_stack(
+                    stack,
+                    material_dind=material.get("Dind"),
+                    material_dbulk=material.get("Dbulk"),
+                )
+            elif not isinstance(stack, list):
                 continue
             for entry in stack:
                 if not isinstance(entry, Mapping):
@@ -1303,16 +1313,17 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
 
 def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
     raw_study = scene.get("study")
+    materials = {
+        str(material.get("id", "")): dict(material.get("properties") or {})
+        for material in (scene.get("materials") or [])
+    }
     _validate_dmi_scope_exclusivity(
         scene.get("objects"),
         raw_study.get("rotated_interfacial_dmi")
         if isinstance(raw_study, Mapping)
         else None,
+        materials=materials,
     )
-    materials = {
-        str(material.get("id", "")): dict(material.get("properties") or {})
-        for material in (scene.get("materials") or [])
-    }
     magnetization_assets = {
         str(asset.get("id", "")): dict(asset)
         for asset in (scene.get("magnetization_assets") or [])

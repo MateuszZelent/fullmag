@@ -325,6 +325,46 @@ def test_scene_document_rejects_conflicting_study_and_object_dmi(
         build_builder_from_scene_document(scene)
 
 
+@pytest.mark.parametrize(
+    ("material_key", "dmi_kind"),
+    [("Dind", "interfacial_dmi"), ("Dbulk", "bulk_dmi")],
+)
+@pytest.mark.parametrize("stack_state", ["empty", "missing"])
+def test_scene_document_rejects_material_derived_dmi_conflict_in_both_directions(
+    material_key: str,
+    dmi_kind: str,
+    stack_state: str,
+) -> None:
+    builder = _builder(backend="fdm")
+    builder["rotated_interfacial_dmi"] = -0.003
+    builder["geometries"][0]["material"][material_key] = 0.003
+
+    with pytest.raises(ValueError, match="study-scoped.*cannot coexist"):
+        build_scene_document_from_builder(builder)
+
+    scene_builder = _builder(backend="fdm")
+    scene_builder["geometries"][0]["material"][material_key] = 0.003
+    scene = build_scene_document_from_builder(scene_builder)
+    if stack_state == "empty":
+        scene["objects"][0]["physics_stack"] = []
+    else:
+        scene["objects"][0].pop("physics_stack")
+    scene["study"]["rotated_interfacial_dmi"] = -0.003
+
+    with pytest.raises(ValueError, match="study-scoped.*cannot coexist"):
+        build_builder_from_scene_document(scene)
+
+    scene["objects"][0]["physics_stack"] = [
+        {"kind": dmi_kind, "enabled": False, "params": {}}
+    ]
+    recovered = build_builder_from_scene_document(scene)
+    recovered_stack = recovered["geometries"][0]["physics_stack"]
+    assert any(
+        entry["kind"] == dmi_kind and entry["enabled"] is False
+        for entry in recovered_stack
+    )
+
+
 def test_scene_document_export_rejects_an_incomplete_scene() -> None:
     from fullmag.runtime.script_builder import render_scene_document_as_script
 
