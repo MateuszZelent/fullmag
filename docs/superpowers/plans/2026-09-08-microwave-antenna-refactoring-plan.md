@@ -591,14 +591,17 @@ restart:    reload ready manifest -> verify bytes and dependencies -> resolve co
 
 **Stan implementacji 2026-09-12:** ścieżka `execute_antenna_spectrum_requests`
 publikuje każdy wynik source-spectrum w prywatnym katalogu stagingowym i
-promuje kompletny katalog jednym rename. Manifest `spectrum.v2.json` jest
+promuje kompletny katalog jednym rename. `output_id` jest ograniczony do
+jednego bezpiecznego komponentu ścieżki, a manifest `spectrum.v2.json` jest
 zapisywany jako ostatni plik w stagingu; niekompletny lub uszkodzony zapis nie
 może pojawić się jako gotowy output. Ponowne żądanie tego samego `output_id`
-porównuje wszystkie oczekiwane payloady bajt-po-bajcie i reużywa identyczny
-wynik, natomiast konflikt treści albo brak pliku kończy się błędem bez
+porównuje dokładny zbiór plików oraz wszystkie oczekiwane payloady
+bajt-po-bajcie i reużywa identyczny wynik, natomiast dodatkowy/brakujący plik,
+konflikt treści albo niebezpieczny identyfikator kończy się błędem bez
 nadpisania poprzedniego assetu. Dodany test CLI obejmuje pierwszą publikację,
-reuse i konflikt. Nadal pozostaje test fault-injection dla anulowania/przerwania
-całego batcha wielu requestów oraz pełne spięcie z resolverem stage/output.
+reuse, konflikt, obcy plik i próbę wyjścia poza katalog. Nadal pozostaje test
+fault-injection dla anulowania/przerwania całego batcha wielu requestów oraz
+pełne spięcie z resolverem stage/output.
 
 **Bramka:** `lifecycle` i `artifact`; testy fault injection obejmują przerwanie przed/po zapisie payloadu i przed publikacją manifestu. Commit: `fix: bind antenna stage lifecycle to actual execution`.
 

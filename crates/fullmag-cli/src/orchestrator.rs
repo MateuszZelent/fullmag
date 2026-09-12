@@ -3265,11 +3265,50 @@ fn attach_solved_antenna_drive_bases(
 /// Execute authored source-spectrum requests only from a published immutable
 /// antenna field asset.  This is an analysis product, not a hidden field solve
 /// and not a magnetization-response FFT.
+fn collect_published_spectrum_files(root: &Path) -> Result<std::collections::BTreeSet<PathBuf>> {
+    let mut pending = vec![PathBuf::new()];
+    let mut files = std::collections::BTreeSet::new();
+    while let Some(relative_dir) = pending.pop() {
+        let directory = root.join(&relative_dir);
+        for entry in fs::read_dir(&directory).with_context(|| {
+            format!(
+                "scan antenna source-spectrum directory {}",
+                directory.display()
+            )
+        })? {
+            let entry = entry?;
+            let relative = relative_dir.join(entry.file_name());
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                pending.push(relative);
+            } else if file_type.is_file() {
+                files.insert(relative);
+            } else {
+                bail!(
+                    "antenna source-spectrum output contains unsupported filesystem entry '{}'",
+                    entry.path().display()
+                );
+            }
+        }
+    }
+    Ok(files)
+}
+
 fn publish_antenna_spectrum_artifacts_atomically(
     current_stage_artifact_dir: &Path,
     output_id: &str,
     artifacts: &[fullmag_runner::AuxiliaryArtifact],
 ) -> Result<()> {
+    let output_id_path = Path::new(output_id);
+    if output_id.trim().is_empty()
+        || output_id_path.components().count() != 1
+        || !matches!(
+            output_id_path.components().next(),
+            Some(Component::Normal(_))
+        )
+    {
+        bail!("antenna source-spectrum output_id '{output_id}' must be one safe path component");
+    }
     if artifacts.is_empty() {
         bail!("antenna source-spectrum output '{output_id}' produced no artifacts");
     }
@@ -3327,6 +3366,19 @@ fn publish_antenna_spectrum_artifacts_atomically(
             bail!(
                 "antenna source-spectrum output '{}' already exists as a non-directory",
                 output_id
+            );
+        }
+        let expected_files = normalized
+            .iter()
+            .map(|(relative, _)| relative.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let actual_files = collect_published_spectrum_files(&final_dir)?;
+        if actual_files != expected_files {
+            bail!(
+                "antenna source-spectrum output '{}' has a different published file set (expected {}, found {})",
+                output_id,
+                expected_files.len(),
+                actual_files.len()
             );
         }
         for (relative, artifact) in &normalized {
@@ -16328,6 +16380,11 @@ mod tests {
                 bytes: br#"{"content_digest":"sha256:test"}"#.to_vec(),
             },
         ];
+        let error =
+            super::publish_antenna_spectrum_artifacts_atomically(&root, "../outside", &artifacts)
+                .expect_err("output ids must not escape the artifact directory");
+        assert!(error.to_string().contains("one safe path component"));
+
         super::publish_antenna_spectrum_artifacts_atomically(&root, "field", &artifacts)
             .expect("first spectrum publication should succeed");
         let output_dir = root.join("antenna/source_spectra/field");
@@ -16357,6 +16414,14 @@ mod tests {
             fs::read(output_dir.join("k_u_rad_per_m.f64le")).unwrap(),
             vec![1, 2, 3]
         );
+
+        fs::write(output_dir.join("unexpected.tmp"), b"stray")
+            .expect("test should create an unexpected file");
+        let error =
+            super::publish_antenna_spectrum_artifacts_atomically(&root, "field", &artifacts)
+                .expect_err("unexpected files must invalidate an existing publication");
+        assert!(error.to_string().contains("different published file set"));
+        fs::remove_file(output_dir.join("unexpected.tmp")).unwrap();
 
         let _ = fs::remove_dir_all(root);
     }
