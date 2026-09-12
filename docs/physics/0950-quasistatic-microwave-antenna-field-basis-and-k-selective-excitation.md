@@ -347,6 +347,12 @@ rejection above it. A sinc pulse uses its declared cutoff as $f_{\max}$; a
 piecewise-linear drive must provide `declared_bandwidth_hz` for this diagnostic
 or report `validity_bandwidth_unknown`.
 
+The executable classifier is versioned as `antenna_waveform_bandwidth.v1`.
+It records the source of a known $f_{\max}$ (`constant`, `sinusoidal`, or
+`sinc_cutoff`) in plan provenance. Rectangular and piecewise-linear drives
+remain explicitly unknown until a finite bandwidth or rise-time contract is
+authored; the implementation never substitutes the inverse pulse duration.
+
 ## 4. Geometry contract
 
 ### 4.1 Local frame and transform

@@ -125,6 +125,12 @@
       "path": "crates/fullmag-cli/src/orchestrator.rs",
       "symbol": "execute_antenna_spectrum_requests",
       "responsibility": "Consume only published immutable field assets and publish each source-spectrum output through a task-private staging directory with manifest-last atomic promotion and bytewise reuse/conflict protection before the normal solver stage."
+    },
+    {
+      "id": "antenna-waveform-bandwidth",
+      "path": "crates/fullmag-ir/src/field_drive_validation.rs",
+      "symbol": "classify_antenna_waveform_bandwidth",
+      "responsibility": "Classify the finite authored f_max source for constant, sinusoidal, and sinc drives, and fail closed for pulse or piecewise-linear waveforms without a declared bandwidth."
     }
   ],
   "public_api": {
