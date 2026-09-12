@@ -51,8 +51,8 @@ interface EChartsSurfaceProps {
 }
 
 export function EChartsSurface(props: EChartsSurfaceProps) {
-  const acceptedChartId = props.chartId ?? props.series[0]?.source.tableId ?? "default";
-  return <EChartsSurfaceImpl key={acceptedChartId} {...props} />;
+  const stableChartKey = props.chartId ?? "default";
+  return <EChartsSurfaceImpl key={stableChartKey} {...props} />;
 }
 
 function EChartsSurfaceImpl({
