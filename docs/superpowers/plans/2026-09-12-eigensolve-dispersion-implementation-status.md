@@ -99,16 +99,34 @@ Poprzedni obrót celu klasyfikuję jako **postęp**: zapisano commit planu, kod 
 
 Odczyt runnera 07:23 UTC: własny job `1d31af520bb547848e23be8888fde8d8` pozostaje `running`, żywy worker i aktywny job są potwierdzone API. Log `native-build` zawiera kompilację Cargo. Wolne miejsce wynosiło 68 298 076 160 bajtów; historyczny błąd braku miejsca nie jest aktualną blokadą. Nadal brak terminalnego receipt. Profil nie wykonuje ukierunkowanych testów Rust/native i ma SLEPc OFF; istniejące osobne przepisy managed runtime wymagają dalszego ustalenia prawidłowej trasy w tym hoście.
 
-Kod C++/Rust i nowe testy są **NOT VERIFIED przez kompilację lub runtime** i pozostają unstaged WIP. Żaden powyższy wynik nie kwalifikuje relacji dyspersji ani dynamicznego demag-k.
+Kod C++/Rust i nowe testy są zapisane w osobnych, spójnych commitach, lecz nadal są
+**NOT VERIFIED przez managed kompilację lub runtime**. Żaden z poniższych wyników
+hostowych nie kwalifikuje relacji dyspersji ani dynamicznego demag-k.
+
+### Zapisane przyrosty implementacji
+
+- `964e9f87f` — kontrakt Python → IR → planner, walidacja żądań dyspersji oraz selektory `branches`/`sample_selector`/`include_branch_table`; testy pozwalają również na samodzielne `dispersion_curve` i `eigen_diagnostics`.
+- `509db79c2` — śledzenie gałęzi z Hungarian/gaps i fallbackiem częstotliwościowym oraz publikacja selekcjonowanych artefaktów dyspersji z trwałą tożsamością próbki i surowego modu.
+- `4c83ea4b2` — fundament redukcji Floqueta i fail-closed adapter dense real-split dla dostarczonego dynamicznego demag-k w natywnym solverze CPU; digest pencila obejmuje efektywną macierz.
+- `1300b8035` — dokumentacja dwóch reprezentacji non-k0, źródeł COMSOL/TetraX oraz granicy między adapterem a przyszłym providerem assemblacji.
+
+Adapter dynamicznego demag-k przyjmuje wyłącznie kompletną macierz dostarczoną
+przez przyszłego właściciela `A_{q\phi}(k)`/`P(k)`/`A_{\phi q}(k)`; nie jest
+jeszcze takim providerem i nie usuwa runnerowego odrzucenia planu Floquet z
+`include_demag`. S04/S05/S08–S12 pozostają otwarte.
 
 ### Walidacja po domknięciu przyrostu
 
-- `cargo +nightly check --locked -p fullmag-ir -p fullmag-plan -p fullmag-runner --lib`: exit 0; ostrzeżenia są istniejące lub dotyczą nieużytych elementów oczekujących na integrację.
+- `cargo +nightly check --locked -p fullmag-ir -p fullmag-plan -p fullmag-runner --lib --target-dir C:/Users/Mateusz/AppData/Local/Temp/fullmag-eigensolve-cargo-target`: exit 0; ostrzeżenia są istniejące lub dotyczą nieużytych elementów oczekujących na integrację.
+- `cargo +nightly check --locked -p fullmag-cli --target-dir C:/Users/Mateusz/AppData/Local/Temp/fullmag-eigensolve-cargo-target` oraz `cargo +nightly check --locked -p fullmag-runner --tests --target-dir C:/Users/Mateusz/AppData/Local/Temp/fullmag-eigensolve-cargo-target`: exit 0.
 - `cargo +nightly test --locked -p fullmag-ir --lib`: 101 passed, exit 0.
-- `cargo +nightly test --locked -p fullmag-plan --lib`: 461 passed, exit 0.
+- `cargo +nightly test --locked -p fullmag-ir --tests`: 101 unit + 229 integration tests passed, exit 0; `cargo +nightly test --locked -p fullmag-plan --lib`: 461 passed, exit 0.
+- `cargo +nightly test --locked -p fullmag-runner --lib output_publication_tests`: 5 passed; `--lib tracking`: 13 passed, exit 0.
 - `cargo +nightly test --locked -p fullmag-runner --lib eigen`: 226 passed, 1 failed. Jedyna porażka to istniejące `eigen::response_block_real::tests::field_driven_sweep_builds_artifact_ready_response_payload`, równość `1.0000000000000002` vs `1.0`; plik testu nie należy do tego przyrostu.
 - Python: pełny `test_problem_ir.py` 26 passed; fokus API/IR dla eigensolve 35 passed; pełny `test_api.py` wykonał 277 passed i 19 failures środowiskowych (brak `h5py`/`zarr`, odmowa zapisu w lokalnym cache/worktree oraz `run_output`), bez błędu w fokusie eigensolve.
 - Test kontraktu dokumentacji matematycznej: 9 passed. Walidatory source-map i `git diff --check`: exit 0.
-- Próba nowego managed snapshotu nie utworzyła joba: runner zgłosił aktywny lock/storage dla rejestru `eigensolve-dispersion-plan-20260-c5dfad6d7f548079` i nakazał użyć istniejącego joba lub zaczekać. Job `7ff3218f29e94ecea1b5bdf22d2a394e` pozostaje `queued`; nie uzyskano kompilacji C++ ani runtime dla bieżącego snapshotu.
+- Próba nowego managed snapshotu nie utworzyła dodatkowego joba: runner zgłosił aktywny lock/storage dla rejestru `eigensolve-dispersion-plan-20260-c5dfad6d7f548079` i nakazał użyć istniejącego joba lub zaczekać. Najnowszy własny snapshot to job `b5200ded44964953a03491183dffaae1`, sequence 19, source digest `b59eadab5a1dd98e7b394403bd722bce864c81ea4d7659e24acd790f70853757`; ostatni odczyt pozostaje `queued` bez exit code. Nie uzyskano kompilacji C++ ani runtime dla bieżącego snapshotu.
 
-Stan integracji pozostaje **W TRAKCIE**. Commit kodu wymaga jeszcze przeglądu staged diff; PR, managed C++/SLEPc, provider `A_{q\phi}(k)`/`P(k)`/`A_{\phi q}(k)`, walidacja fizyczna oraz ścieżki Control Room/GPU są otwarte.
+Stan integracji pozostaje **W TRAKCIE**. Commity mają przejrzany staged diff;
+otwarte pozostają PR, managed C++/SLEPc, provider `A_{q\phi}(k)`/`P(k)`/
+`A_{\phi q}(k)`, walidacja fizyczna oraz ścieżki Control Room/GPU.
