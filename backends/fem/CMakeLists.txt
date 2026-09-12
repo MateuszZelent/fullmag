@@ -170,6 +170,7 @@ set(FEM_SOURCES
     cpu/mfem/runtime/step_metrics.cpp
     cpu/frequency_domain/dense_poisson_airbox_eigen_oracle.cpp
     cpu/frequency_domain/floquet_bloch_scalar.cpp
+    cpu/frequency_domain/floquet_dynamic_demag_k.cpp
     cpu/frequency_domain/operators/floquet_magnetic_operator.cpp
     cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp
     cpu/frequency_domain/poisson_airbox_modal_eigen.cpp
@@ -997,6 +998,10 @@ add_fem_source_facade_contract(
 add_fem_source_facade_contract(
     fem_floquet_bloch_scalar_contract
     tests/frequency_domain/floquet_bloch_scalar_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_floquet_dynamic_demag_k_contract
+    tests/frequency_domain/floquet_dynamic_demag_k_test.cpp
 )
 add_fem_source_facade_contract(
     fem_poisson_airbox_shared_domain_contract
