@@ -9,7 +9,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 - Baza `master`: `5084a94ed14b151fc865e8def5a5c28401e98b44`.
 - Branch: `codex/eigensolve-dispersion-plan-20260912`.
 - Worktree: `C:/git/fullmag/worktrees/eigensolve-dispersion-plan-20260912`.
-- Ostatni kodowy przyrost: `e2a7890c7` (`feat(fem): assemble phase-aware shared-domain Floquet blocks`); bieżący checkpoint dokumentuje ten commit i ograniczenia weryfikacji.
+- Ostatni zapisany kodowy przyrost: `f2acf7b9b425733899bdfde63cb0566d16d74a59` (`feat(fem): wire nonzero-k airbox Schur provider`).
 - Właściciel: `codex:01a0941c-eb15-7261-a7ee-7cf099385525`.
 - Rejestr: `eigensolve-dispersion-plan-20260-c5dfad6d7f548079`; reaktywowany do implementacji.
 - Fizyczne źródła COMSOL: oba lokalne podręczniki modułu mikromagnetycznego wymienione w planie; szczególnie s. PDF 21–28 i 40–43. Przykład RF jest wzorem sprzężenia pól, a nie gotowym dowodem modalnym.
@@ -22,8 +22,8 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 | S01 — nauka, ADR, kontrakty | W TRAKCIE | Noty, mapy źródeł, walidatory i review |
 | S02 — Python/IR | W TRAKCIE | Walidacja k i selektorów, round-trip, testy konsumentów |
 | S03 — natywny operator magnetyczny Blocha | W TRAKCIE | Prolongacja fazowa, MFEM sparse/matrix-free, testy i połączenie produkcyjne |
-| S04 — dynamiczny demag-k CPU | W TRAKCIE | Bounded dense Schur provider oraz producent czterech bloków MFEM są zapisane; pozostaje właściciel assemblacji siatkowej w runnerze, gauge i zbieżność brzegu |
-| S05 — natywny solver spektralny | W TRAKCIE | Ścieżka Floquet propaguje postęp/anulowanie do native modal ABI i zapisuje partial artifact; pozostają SLEPc/realifikacja produkcyjna, reszty, kompletność i resume |
+| S04 — dynamiczny demag-k CPU | W TRAKCIE | Bounded dense Schur provider i producent czterech bloków MFEM są zapisane; natywny importer może z zaakceptowanego shared-domain payloadu zbudować operator dla niezerowego k, lecz pozostają matrix-free/sparse owner, gauge i zbieżność brzegu |
+| S05 — natywny solver spektralny | W TRAKCIE | Runner przekazuje accepted shared-domain handoff razem z fazowym pencilem do produkcyjnego CPU; C++ wybiera k-aware Schur provider i dodaje jego realifikację do Hessianu. Pozostają SLEPc/managed runtime, reszty, kompletność i resume |
 | S06 — śledzenie gałęzi | W TRAKCIE | Hungarian/gaps i metryka masy FE są gotowe; pozostają fizyczne podprzestrzenie zdegenerowane |
 | S07 — artefakty i API | W TRAKCIE | Stabilne ID, faza/obwiednia, selektory, binarne pola |
 | S08 — Control Room | DO WYKONANIA | Authoring, dyspersja, wybór modu i przestrzenna faza; browser/WebGL |
@@ -58,7 +58,7 @@ Ten build dotyczy bazy, a nie bieżących niezacommitowanych zmian. Wynik i rece
 
 ## Zasady zaliczania przyrostów
 
-Każdy przyrost otrzymuje pełny hash commita, zakres, wykonane polecenie i exit code po weryfikacji. Źródła, build, managed runtime, nauka, browser/WebGL i kwalifikacja wydania są odrębnymi dowodami. Przyrost dokumentacyjny zapisano w commicie `9c5be5d2212995f1437823178e7f7af83ee883e0`: plan i checkpoint (dwa pliki). Kontrole UTF-8, bloków Markdown, etapów S00–S12, linków, whitespace oraz zgodności staged bytes ze sprawdzonymi plikami przeszły (exit 0); plan miał też niezależne review z domkniętymi uwagami. Nie ma jeszcze zweryfikowanego commita kodu ani nowego wyniku runtime. Odrzucenia nieobsługiwanych kombinacji non-k0/demag/GPU pozostają aktywne do dostarczenia właściwej realizacji i dowodów.
+Każdy przyrost otrzymuje pełny hash commita, zakres, wykonane polecenie i exit code po weryfikacji. Źródła, build, managed runtime, nauka, browser/WebGL i kwalifikacja wydania są odrębnymi dowodami. Przyrost dokumentacyjny zapisano w commicie `9c5be5d2212995f1437823178e7f7af83ee883e0`: plan i checkpoint (dwa pliki). Kontrole UTF-8, bloków Markdown, etapów S00–S12, linków, whitespace oraz zgodności staged bytes ze sprawdzonymi plikami przeszły (exit 0); plan miał też niezależne review z domkniętymi uwagami. Commit kodu `f2acf7b9b425733899bdfde63cb0566d16d74a59` istnieje i przechodzi kontrolę Rust; nie ma jeszcze managed receipt ani wyniku runtime. Odrzucenia nieobsługiwanych kombinacji non-k0/demag/GPU pozostają aktywne poza dostarczonym wariantem CPU.
 
 
 ### S03 — fundament redukcji Blocha
@@ -79,12 +79,12 @@ konfliktu ze ścieżką CSR, a następnie dodaje macierz do efektywnego Hessianu
 przed solverem okna, shift-invert i contour. Digest liniowego pencil obejmuje
 ten sam przyrost, a diagnostyka zachowuje jego rodzaj i liczbę wartości.
 
-Jest to kontrakt i fail-closed bridge dla już złożonego operatora. Nie jest to
-jeszcze właściciel assemblacji `A_{q\phi}(k)`, `P(k)`, `A_{\phi q}(k)` ani ich
-Schur complementu; runner nadal odrzuca plan Floquet z demag-k, dopóki taki
-provider nie zostanie podłączony do shared-domain mesh. Kompilacja managed,
-wykonanie testów C++ oraz walidacja fizyczna tego adaptera pozostają **NOT
-VERIFIED**.
+Był to początkowo kontrakt i fail-closed bridge dla już złożonego operatora.
+Commit `f2acf7b9b425733899bdfde63cb0566d16d74a59` podłącza bounded właściciela
+assemblacji do shared-domain dla jednego wariantu CPU; skalowalny owner
+`A_{q\phi}(k)`, `P(k)`, `A_{\phi q}(k)` nadal pozostaje do wykonania. Kompilacja
+managed, wykonanie testów C++ oraz walidacja fizyczna tego operatora pozostają
+**NOT VERIFIED**.
 
 
 ### Przyrost po kolejnym review (12 września)
@@ -123,17 +123,26 @@ hostowych nie kwalifikuje relacji dyspersji ani dynamicznego demag-k.
 - `1894f09a8` — phase-aware Schur bridge redukuje także magnetyczne DOF przez `C_\phi^H A_{\phi q,full} C_q`, zachowując zgodność ze starszym wejściem już zredukowanym.
 - `e2a7890c7` — producent shared-domain buduje na jednej siatce MFEM pełnopolowy operator skalarny, `C_\phi(k)`, źródło `A_{\phi q,full}` z maską magnetyczną i nodalnym `M_s` oraz `C_q(k)`; waliduje graf translacji, fazę `-k\cdot R`, kompletność klas i odrzuca niezerowe `k` bez par. To jest seam właściciela natywnego, bez podłączenia do runnera.
 
+- `f2acf7b9b425733899bdfde63cb0566d16d74a59` — runner przekazuje accepted
+  shared-domain handoff wraz z fazowym pencilem do produkcyjnego CPU, a
+  `modal_eigen_solver` konsumuje go przez k-aware importer i dodaje bounded
+  Schur `D(k)` w real-split do magnetycznego Hessianu. Integracja pozostaje
+  ograniczona do `Full2x2 + Floquet + include_demag + nonzero-k + native CPU`;
+  GPU, SLEPc/managed runtime i większy matrix-free owner są nadal zamknięte.
+
 Adapter dynamicznego demag-k przyjmuje wyłącznie kompletną macierz dostarczoną
-przez przyszłego właściciela `A_{q\phi}(k)`/`P(k)`/`A_{\phi q}(k)`; nie jest
-jeszcze takim providerem i nie usuwa runnerowego odrzucenia planu Floquet z
-`include_demag`. S04/S05/S08–S12 pozostają otwarte.
+przez właściciela `A_{q\phi}(k)`/`P(k)`/`A_{\phi q}(k)`; aktualny bounded
+provider buduje tę macierz z zaakceptowanego shared-domain payloadu tylko na
+trasie native CPU. S04/S05 pozostają otwarte w zakresie skalowania i
+kwalifikacji, a S08–S12 nadal wymagają realizacji.
 
 Provider `floquet_dynamic_demag_k` domyka algebraiczny etap Schura dla małych
 problemów walidacyjnych i zwraca `[[Re D,-Im D],[Im D,Re D]]`, gdzie
 `D(k)=-A_{qφ}(k)P(k)^{-1}A_{φq}(k)`. Przyjmuje wyłącznie niezerowe,
 finite `k`, nie maskuje osobliwości `P(k)`, a `pin_first_dof` jest jawny. Nie
-ma jeszcze assemblera bloków na siatce MFEM ani podłączenia tego provider'a do
-shared-domain modal path; runner nadal odrzuca non-k0 z demag-k.
+ma jeszcze skalowalnego assemblera bloków na siatce MFEM ani dowodu pełnego
+shared-domain modal runtime; poza podłączonym wariantem native CPU runner
+pozostaje fail-closed dla non-k0 z demag-k.
 
 W commicie `41e80e534` dodano bounded MFEM bridge
 `assemble_floquet_airbox_dynamic_demag_k`. Bridge odczytuje zespolone bloki
@@ -189,7 +198,7 @@ bramki pozostają **NOT VERIFIED**.
 
 - `cmake -S native -B C:/Users/Mateusz/AppData/Local/Temp/fullmag-eigensolve-airbox -DFULLMAG_ENABLE_CUDA=OFF -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF`: konfiguracja CMake zakończyła się exit 0 i wygenerowała nowy target bridge.
 - Bezpośrednia kompilacja MSVC (`FULLMAG_HAS_MFEM_STACK=0`) dla `floquet_airbox_operator.cpp`, jego testu oraz providera `floquet_dynamic_demag_k` zakończyła się exit 0. Zlinkowany test `floquet_dynamic_demag_k_contract` zakończył się exit 0.
-- `cargo +nightly test --locked -p fullmag-runner --lib fem::eigen_tests::runner_rejects_floquet_dynamic_demag_gate --target-dir C:/Users/Mateusz/AppData/Local/Temp/fullmag-eigensolve-airbox-cargo-target -- --nocapture`: 1 passed, exit 0; runner nadal odrzuca niepodłączony dynamiczny demag-k.
+- `cargo +nightly test --locked -p fullmag-runner --lib fem::eigen_tests::runner_rejects_floquet_dynamic_demag_gate --target-dir C:/Users/Mateusz/AppData/Local/Temp/fullmag-eigensolve-airbox-cargo-target -- --nocapture`: 1 passed, exit 0; runner nadal odrzuca warianty bez podłączonego, certyfikowanego providera.
 - Próba kompilacji bridge z `FULLMAG_HAS_MFEM_STACK=1` zatrzymała się na braku `mfem.hpp`; managed test `fem_floquet_airbox_operator_contract` nie został wykonany, więc implementacja MFEM pozostaje **NOT VERIFIED**.
 - `cargo +nightly check --locked -p fullmag-ir -p fullmag-plan -p fullmag-runner --lib --target-dir C:/Users/Mateusz/AppData/Local/Temp/fullmag-eigensolve-cargo-target`: exit 0; ostrzeżenia są istniejące lub dotyczą nieużytych elementów oczekujących na integrację.
 - `cargo +nightly check --locked -p fullmag-cli --target-dir C:/Users/Mateusz/AppData/Local/Temp/fullmag-eigensolve-cargo-target` oraz `cargo +nightly check --locked -p fullmag-runner --tests --target-dir C:/Users/Mateusz/AppData/Local/Temp/fullmag-eigensolve-cargo-target`: exit 0.
@@ -208,6 +217,9 @@ bramki pozostają **NOT VERIFIED**.
 - Bezpośrednia kompilacja MSVC testu kontraktu po dodaniu regresji routingu zakończyła się exit 0 z `FULLMAG_HAS_MFEM_STACK=0` i `/D_USE_MATH_DEFINES`. Kompilacja całego `modal_eigen_solver.cpp` w tym trybie nadal zatrzymuje się na istniejących typach shared-domain dostępnych wyłącznie z MFEM (`PoissonAirboxSharedDomainAssemblyResult`); nie jest to ścieżka kwalifikacyjna FEM. Pełny test z MFEM pozostaje **NOT VERIFIED**.
 - Dla `d1f2ac9b3` bezpośrednia kompilacja MSVC z `FULLMAG_HAS_MFEM_STACK=0` zakończyła się exit 0 osobno dla `floquet_bloch_scalar.cpp` i `floquet_bloch_scalar_test.cpp`; zlinkowany test no-MFEM zakończył się exit 0. CMake skonfigurował target, lecz pełna biblioteka zatrzymała się na wcześniejszych błędach bazowych MSVC (`std::snprintf`, `__atomic_*`, brak pól Poisson w trybie bez MFEM), więc nie jest to dowód wykonania ciała MFEM. Managed test `verify-fem-frequency-domain-floquet-bloch-scalar` pozostaje **NOT VERIFIED**.
 - Dla `e2a7890c7` bezpośrednia kompilacja MSVC z `FULLMAG_HAS_MFEM_STACK=0` zakończyła się exit 0 osobno dla `floquet_bloch_scalar.cpp`, `floquet_airbox_operator.cpp` i `floquet_airbox_operator_test.cpp`. Test MFEM zawiera ścieżkę sukcesu producenta, niespójnej fazy i braku par, ale na tym hoście ciało MFEM nie zostało wykonane. Pełny target CMake nadal zatrzymuje się na wcześniejszych błędach bazowych bez MFEM; managed test `fem_floquet_airbox_operator_contract` pozostaje **NOT VERIFIED**.
+- Dla `f2acf7b9b425733899bdfde63cb0566d16d74a59` `rustfmt +nightly --edition 2021 --check` dla trzech zmienionych plików Rust zakończył się exit 0, `cargo +nightly check --locked -p fullmag-runner --lib --target-dir D:/git/fullmag-eigensolve-cargo-target` zakończył się exit 0, a test `native_fem::frequency_domain::tests::production_shared_domain_request_accepts_only_the_certified_payload` zakończył się `1 passed`, exit 0.
+- Próba `cargo +nightly check --locked -p fullmag-runner --lib --features fem-native --target-dir D:/git/fullmag-eigensolve-fem-native-target` zakończyła się exit 101 podczas budowania zależności native C++. Konfiguracja wygenerowała `FULLMAG_USE_MFEM_STACK=OFF`; log zatrzymuje się na istniejących błędach MSVC (`std::snprintf`, `__atomic_*`, `M_PI`, pola `Context::poisson_demag`) oraz na znanym ukryciu typów shared-domain bez MFEM. Źródła nowych `floquet_bloch_scalar.cpp` i `floquet_airbox_operator.cpp` zostały wykryte w przebiegu, lecz nie uzyskano managed receipt.
+- Ponowiony target CMake `fem_floquet_airbox_operator_contract` w konfiguracji bez MFEM zakończył się exit 1 na tej samej bazowej serii błędów; dodatkowe błędy `modal_eigen_solver.cpp` wynikają z wyłączenia `FULLMAG_HAS_MFEM_STACK`, nie z kompilacji nowej gałęzi provider'a. Nie wykonano testu z MFEM.
 
 Próba `just worktree-finish ... state=review` z aktualnym HEAD została
 zatrzymana przez ten sam preflight (`Container runner owns heavy builds on this
@@ -222,6 +234,27 @@ exit 1 z komunikatem `Container profile allow-list mismatch`; nie utworzono
 nowego joba i nie uzyskano dodatkowego receipt. Managed kompilacja C++/runtime
 bieżącego worktree pozostaje zatem **NOT VERIFIED**.
 
-Stan integracji pozostaje **W TRAKCIE**. Commity mają przejrzany staged diff;
-otwarte pozostają PR, managed C++/SLEPc, provider `A_{q\phi}(k)`/`P(k)`/
-`A_{\phi q}(k)`, walidacja fizyczna oraz ścieżki Control Room/GPU.
+Stan integracji pozostaje **W TRAKCIE**. Bounded provider `A_{q\phi}(k)`/
+`P(k)`/`A_{\phi q}(k)` jest podłączony do natywnego właściciela CPU; otwarte
+pozostają managed C++/SLEPc, skalowalny matrix-free owner, walidacja fizyczna,
+PR oraz ścieżki Control Room/GPU.
+
+### Aktualny przyrost integracyjny non-k0
+
+W worktree domknięto granicę właścicieli dla pierwszego wariantu CPU. Runner
+rozpoznaje plan `Full2x2 + Floquet + include_demag + nonzero-k` tylko przy
+produkcyjnym native CPU, buduje zaakceptowany
+`NativeModalEigenSharedDomainProblem` z handoffu równowagi i przekazuje go
+razem z fazowymi macierzami magnetycznymi. Natywny solver C++ używa wtedy
+rozszerzonego importera shared-domain: z tej samej siatki i markerów domeny
+składa pełnopolowy `P(k)`, `C_\phi(k)`, `A_{\phi q,full}(k)` oraz `C_q(k)`,
+wylicza przez Schura `D(k)=-A_{q\phi}(k)P(k)^{-1}A_{\phi q}(k)` i dodaje
+realifikację do magnetycznego Hessianu. Flaga `k=0` nie może wejść do tej
+gałęzi, a GPU i inne kombinacje pozostają fail-closed.
+
+Ten przyrost ma test kontraktu Rust i kompilację źródeł/targetów bez MFEM.
+Pełny build `fem-native` został uruchomiony, ale zakończył się na znanych
+problemach konfiguracji hosta (`FULLMAG_USE_MFEM_STACK=OFF`, brak działającego
+managed MFEM/SLEPc oraz wcześniejsze błędy MSVC w CUDA/Context); nie jest to
+receipt wykonania operatora. Managed runtime, wynik fizyczny `f(k)`, artefakty,
+API/UI i GPU nadal mają status **NOT VERIFIED**.
