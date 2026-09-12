@@ -8,6 +8,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <fstream>
 #include <iomanip>
 #include <string>
@@ -41,7 +42,11 @@ std::string timestamp_utc() {
     const auto now = std::chrono::system_clock::now();
     const std::time_t value = std::chrono::system_clock::to_time_t(now);
     std::tm utc{};
+#if defined(_WIN32)
+    if (gmtime_s(&utc, &value) != 0) return {};
+#else
     gmtime_r(&value, &utc);
+#endif
     char buffer[32]{};
     std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &utc);
     return buffer;
@@ -406,6 +411,18 @@ void verify_workspace_dependency_identity_matrix() {
                   material_variant.material_layout_sha256,
                   sizeof(baseline.material_layout_sha256)) != 0,
           "material layout is absent from the dependency key");
+
+    variant = plan;
+    variant.has_interfacial_dmi = 1;
+    variant.dmi_D_interfacial = 2.0e-3;
+    check(differs(identity_for(variant)),
+          "interfacial DMI is absent from the dependency key");
+
+    variant = plan;
+    variant.has_bulk_dmi = 1;
+    variant.dmi_D_bulk = 2.0e-3;
+    check(differs(identity_for(variant)),
+          "bulk DMI is absent from the dependency key");
 
     variant = plan;
     variant.integrator = FULLMAG_FDM_INTEGRATOR_DP45;

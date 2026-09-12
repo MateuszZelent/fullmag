@@ -478,6 +478,26 @@ void verify_multilayer(
     const char *create_status = fullmag_fdm_backend_last_error(backend);
     check(create_status != nullptr && std::string(create_status).find("uploaded 2 layers") != std::string::npos,
           "multilayer DMI backend create failed");
+    if (rotated && mixed) {
+        const fullmag_fdm_rotated_interfacial_dmi_desc_v1 descriptor = {
+            FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1,
+            sizeof(fullmag_fdm_rotated_interfacial_dmi_desc_v1),
+            1,
+            0,
+            0.0,
+        };
+        check(fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
+                  backend, &descriptor) == FULLMAG_FDM_ERR_INVALID,
+              "multilayer setter must reject mixed conventional and rotated DMI");
+        const char *mixed_error = fullmag_fdm_backend_last_error(backend);
+        check(mixed_error != nullptr &&
+                  std::string(mixed_error).find(
+                      "rotated_interfacial_dmi_v1_conflicts_with_conventional_dmi") !=
+                      std::string::npos,
+              "mixed DMI setter rejection must publish a precise diagnostic");
+        fullmag_fdm_backend_destroy(backend);
+        return;
+    }
     if (rotated) {
         const fullmag_fdm_rotated_interfacial_dmi_desc_v1 descriptor = {
             FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1,
@@ -755,7 +775,7 @@ int main() {
         FULLMAG_FDM_PRECISION_DOUBLE,
         FULLMAG_FDM_INTEGRATOR_HEUN,
         true,
-        "multilayer mixed iDMI H_DMI/H_EFF separation oracle",
+        "multilayer mixed iDMI setter rejection",
         true);
     std::printf("FDM CUDA DMI boundary runtime qualification: PASS\n");
     return 0;

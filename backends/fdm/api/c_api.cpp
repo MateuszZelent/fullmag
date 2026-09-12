@@ -1730,6 +1730,12 @@ int fullmag_fdm_backend_create_time_policy_v2_checked(
         }
         fullmag_fdm_commit_operator_residency(*ctx);
     }
+    // The legacy constructor cannot see the v2 rotated-DMI extension.  Rebuild
+    // the dependency identity after importing it so checkpoint/workspace
+    // compatibility is keyed by the complete material interaction state.
+    if (!context_build_workspace_dependency_identity_v1(*ctx, plan->base)) {
+        return FULLMAG_FDM_OK;
+    }
 
     const auto &policy = plan->time_policy;
     ctx->adaptive_enabled = policy.adaptive_enabled != 0;
@@ -1920,6 +1926,13 @@ int fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
         ctx->current_time != 0.0) {
         ctx->last_error =
             "rotated_interfacial_dmi_v1_must_be_set_before_first_step";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (descriptor->has_rotated_interfacial_dmi != 0 &&
+        (ctx->has_interfacial_dmi || ctx->has_bulk_dmi))
+    {
+        ctx->last_error =
+            "rotated_interfacial_dmi_v1_conflicts_with_conventional_dmi";
         return FULLMAG_FDM_ERR_INVALID;
     }
     if (descriptor->has_rotated_interfacial_dmi != 0 &&

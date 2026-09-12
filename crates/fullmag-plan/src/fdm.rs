@@ -510,7 +510,11 @@ fn validate_rotated_dmi_boundary_exchange_stiffness(
                 }
 
                 let mut touches_boundary = false;
-                for axis in 0..3 {
+                // The rotated-interfacial-DMI natural boundary term is defined
+                // on the film-plane (x/y) faces.  An open z face is the film
+                // surface, not an in-plane exchange stencil boundary, so it
+                // must not force a positive Aex value for this check.
+                for axis in 0..2 {
                     let coordinate = coordinates[axis];
                     let dimension = dimensions[axis];
                     let stride = strides[axis];
