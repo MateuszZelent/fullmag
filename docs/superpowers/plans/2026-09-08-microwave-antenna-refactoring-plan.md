@@ -678,6 +678,12 @@ To kwalifikuje natywny kontrakt solved-antenna→regional-Zeeman dla tej ścież
 pełny `fem-llg` pozostaje otwarty do czasu testów wszystkich integratorów,
 waveformów, relaksacji i snapshotów wymienionych wyżej.
 
+Uzupełnienie runtime 2026-09-12: testy `fullmag-runner` potwierdzają także
+że rozwiązaną bazę można skalować `peak_current_a` i oceniać sinusoidę z
+rzeczywistego czasu etapu integratora (`solved_antenna_basis_uses_peak_current_stage_clock_and_exact_term_time`),
+oraz że `AllTimeEvolution` nie jest aktywne podczas relaksacji. Są to dowody
+ścieżki FDM CPU/reference; nie zastępują pełnej bramki FEM LLG z tabeli powyżej.
+
 ## T14. Domknąć OpenAPI, zasoby i realtime
 
 **Stan 2026-09-11:** dodano typowane endpointy metadanych opublikowanego rozwiązania pola i widma źródłowego anteny (`data/antenna/...`) z tożsamością sesji, podpisami, linkami do artefaktów oraz ETag/304. Facade `ControlRoomApi` i hooki zasobów są podłączone; wcześniej wygenerowane pliki OpenAPI/TypeScript obejmują podstawowy endpoint, ale nie odzwierciedlają jeszcze dodanej odpowiedzi `unsupported_topology` HTTP 422, ponieważ generator został zablokowany limitem użycia. Zmiana katalogu artefaktów unieważnia teraz tylko prefiksy zasobów wyników anteny; test bridge obejmuje tę izolację. Router ma fixture test gotowego pola/widma, 304, 404 i uszkodzonego manifestu (`db52f48cd0e0449784f1dde51e017c8755ccc4b0`). W `973ac36da63e2e3c45c33d979c24f24ce15c5c1a` dodano manifest `antenna_source_spectrum_artifact.v2`, cztery adresowane hashem payloady `float64_le` oraz endpoint zakresowy `.../payloads/{payload_kind}` z walidacją rozmiaru/hash, ETag/304 i HTTP Range 206; facade/hook oraz testy Rust/UI obejmują ten transport. UI rozróżnia teraz brak opublikowanego payloadu (`missing_payload`) od nieobsługiwanej topologii. Pozostają pełna walidacja świeżości, odświeżenie generated OpenAPI po odzyskaniu generatora i testy przeglądarkowe end-to-end.
@@ -748,6 +754,11 @@ new conductor antenna -> port/solution Inspector; never missing regional source 
 - [ ] Dla FEM GPU wykonać osobny test tego samego artefaktu i RK. Wspólne pakowanie CPU/GPU nie zastępuje dowodu GPU device identity.
 
 **Bramki w kolejności:** `fdm-cpu`, `fdm-gpu`, `fem-gpu`. Każda zapisuje source/target hashes, device ordinal/name, precision, integrator, statyczne pole i trajektorię. Publikować support tylko dla kombinacji faktycznie zaliczonych; reszta ma jednoznaczny komunikat w UI i Python.
+
+Uzupełnienie runtime 2026-09-12: istniejący FDM CPU/reference ma zielone testy
+skalowania rozwiązanej bazy przez prąd i oceny waveformu w czasie oraz test
+braku RF w relaksacji. Publiczny skrypt pipeline, projekcja na rzeczywiste
+komórki FDM, upload CUDA i osobne dowody GPU nadal nie są zamknięte.
 
 ## T17. Domknąć frequency response bez pozornego wsparcia eigenmodes
 
