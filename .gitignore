@@ -112,6 +112,7 @@ apps/control-room/target-host/*
 target_agent/*
 target_tmp/debug/*
 target_host/*
+targets/
 apps/control-room/.next-audit/*
 
 # === Agent worktrees ===
@@ -144,3 +145,6 @@ pnpm-store/
 playwright-browsers/
 *.diff
 /patch.tmp
+antenna-implementation-target/
+storage/
+task-storage/
