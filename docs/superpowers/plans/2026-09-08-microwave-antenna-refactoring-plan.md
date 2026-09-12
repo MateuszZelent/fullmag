@@ -542,8 +542,11 @@ ewaluacji i identyfikatorem polityki. Testy planera przechodzą w `fullmag-plan`
 (3/3), zestaw referencyjny anteny w `fullmag-runner` (33/33), a kod feature
 `fem-gpu` przechodzi hostowy `cargo check`; nie jest to kwalifikacja natywnego
 FEM. Kontenerowa recepta Windows nie wystartowała, ponieważ ogólny
-`compose.yaml` interpretuje kompatybilnościowy `FULLMAG_FRONTEND_ROOT` jako
-nieprawidłowy mount z dwoma ścieżkami Windows. Nie jest to jeszcze pełna bramka
+`compose.yaml` używa hostowego `FULLMAG_FRONTEND_ROOT` równocześnie jako
+linuksowego targetu bind mountu i Docker Desktop odrzuca go jako ścieżkę z
+nadmiarowymi dwukropkami. Próba ponowiona 2026-09-12 po starcie Dockera i
+udostępnieniu zatwierdzonego rootu storage zakończyła się tym samym błędem
+`mount denied ... too many colons`; nie jest to jeszcze pełna bramka
 T11: brakuje agregacji między osobnymi blokami/retries i callbackami etapów,
 budżetu pamięci i anulowania, diagnostyki pasma `eta_wave`/`eta_skin`, pomiaru
 wall-time/peak-memory oraz kontenerowego benchmarku direct RT0.
@@ -626,6 +629,13 @@ pełne spięcie z resolverem stage/output.
 - [ ] Zapis `H_ant`, energy, torque i magnetization ma pochodzić z faktycznie wykonanej chwili, a nie pola przy `t=0` użytego w preview.
 
 **Bramka:** `fem-llg` przez container, plus istniejące `verify-fem-solved-antenna-drive-contract` i odpowiednie RK gates. Raport musi nazwać każdy integrator, device i precision. Pierwszy publiczny wykonywalny przykład powstaje po tej bramce, nie wcześniej.
+
+**Stan kwalifikacji 2026-09-12:** hostowy `cargo test --features fem-gpu` dochodzi
+do kompilacji Rust, ale natywny `fullmag-fem-sys` nie ma kompilatora C/C++ na
+hoście. Recepta kontenerowa została uruchomiona z aktywnym Docker Desktop,
+Pythonem 3.14 i zatwierdzonym `D:\git\fullmag\storage`; zatrzymała się przed
+`cmake` przez błąd mapowania `FULLMAG_FRONTEND_ROOT` opisany w T11. Wynik lane
+pozostaje `not_qualified`, a nie PASS.
 
 ## T14. Domknąć OpenAPI, zasoby i realtime
 
