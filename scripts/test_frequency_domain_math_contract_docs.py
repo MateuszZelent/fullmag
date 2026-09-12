@@ -79,9 +79,12 @@ def test_dynamic_demag_and_response_observables_use_si_contract() -> None:
     floquet = read(REPO_ROOT / "docs/physics/0828-fem-frequency-domain-floquet-demag.md")
     poisson = read(REPO_ROOT / "docs/physics/0830-fem-poisson-airbox-modal-eigen.md")
 
-    assert "delta_H_demag = -grad(delta_phi)" in floquet
+    compact_floquet = "".join(floquet.split())
+    assert r"\widetilde{\mathbf h}_{d,n\mathbf k}=-\nabla\widetilde\phi_{n\mathbf k}".replace(" ", "") in compact_floquet
     assert "delta_H_demag = -grad(delta_phi)." in poisson
-    assert "div(-grad(delta_phi)) = -div(delta_M)" in floquet
+    assert r"\nabla^2\widetilde\phi_{n\mathbf k}=\nabla\cdot\widetilde{\mathbf M}_{n\mathbf k}".replace(" ", "") in compact_floquet
+    assert r"\int_{\Omega}\nabla v^\ast\cdot\nabla\widetilde\phi_{n\mathbf k}\,\mathrm dV".replace(" ", "") in compact_floquet
+    assert r"=\int_{\Omega_m}\nabla v^\ast\cdot\widetilde{\mathbf M}_{n\mathbf k}\,\mathrm dV".replace(" ", "") in compact_floquet
     assert "delta_M = Ms * delta_m" in physics
     assert "chi = delta_M / h_drive" in physics
     assert "p_abs = - 0.5 * mu0 * Ms * omega * Im(conj(h_drive) dot delta_m)" in physics
@@ -93,16 +96,20 @@ def test_floquet_tangent_frame_transport_and_identity_rejection_are_documented()
     pbc_plan = read(PLAN_ROOT / "04_mesh_periodic_floquet_airbox.md")
     floquet = read(REPO_ROOT / "docs/physics/0828-fem-frequency-domain-floquet-demag.md")
 
-    assert "exp(+i omega t)" in floquet
+    assert "exp(+i omega t - i k dot r)" in floquet
     assert "q_dst = exp(-i kF · delta_r) T_dst^T R T_src q_src" in pbc_plan
     assert "q_dst = phase * G_pair q_src" in pbc_plan
     assert "duplicate periodic node pairs are rejected" in pbc_plan
-    assert "phase = exp(-i k dot Delta r)" in floquet
-    assert "T_dst q_dst = phase Q T_src q_src" in floquet
-    assert "q_dst = phase (T_dst^T Q T_src) q_src" in floquet
-    assert "Q = I for a pure translation" in floquet
-    assert "The scalar-potential constraint is phase-only" in floquet
-    assert "must reject these requests with explicit capability diagnostics" in floquet
+    compact_floquet = "".join(floquet.split())
+    assert r"p=\exp(-\mathrm{i}\mathbf k\cdot\Delta\mathbf r)".replace(" ", "") in compact_floquet
+    assert r"T_{\mathrm{dst}}q_{\mathrm{dst}}=pQ T_{\mathrm{src}}q_{\mathrm{src}}".replace(" ", "") in compact_floquet
+    assert r"q_{\mathrm{dst}}=p(T_{\mathrm{dst}}^\mathsf{T}Q T_{\mathrm{src}})q_{\mathrm{src}}".replace(" ", "") in compact_floquet
+    assert "identity for a pure translation" in " ".join(floquet.split())
+    assert r"\widetilde\phi_{\mathrm{dst}}=p\widetilde\phi_{\mathrm{src}}" in compact_floquet
+    normalized_floquet = " ".join(floquet.split())
+    assert "Unsupported combinations include dynamic floquet_airbox without a complete complex operator" in normalized_floquet
+    assert "reason and latest residual" in normalized_floquet
+    assert "No fallback may erase the physical k or report a K0 calculation as nonzero-k" in normalized_floquet
 
 
 def test_modal_dispersion_artifact_contract_names_tracking_and_mode_handoff() -> None:
@@ -298,8 +305,14 @@ def test_t1_k0_production_scope_is_scalable_future_only_and_source_mapped() -> N
             "backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp",
             "split_schur_matmult",
         ),
-        ("crates/fullmag-runner/src/fem_eigen.rs", "native_solver_diagnostics_json"),
-        ("crates/fullmag-runner/src/fem_eigen.rs", "write_eigen_v2_bundle"),
+        (
+            "crates/fullmag-runner/src/fem/eigen_native_window.rs",
+            "native_solver_diagnostics_json",
+        ),
+        (
+            "crates/fullmag-runner/src/fem/eigen_output.rs",
+            "write_eigen_v2_bundle",
+        ),
         (
             "crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs",
             "frequency_domain_artifact_content_digest",
@@ -410,7 +423,7 @@ def test_component_participation_publication_contract_is_mass_consistent_and_map
         if isinstance(source, dict)
     }
     assert (
-        "crates/fullmag-runner/src/fem_eigen.rs",
+        "crates/fullmag-runner/src/fem/eigen_output.rs",
         "write_eigen_v2_bundle",
     ) in source_identities
     assert (

@@ -24,7 +24,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 | S04 — dynamiczny demag-k CPU | DO WYKONANIA | Nowy właściciel airbox, sprzężenie, gauge, zbieżność brzegu |
 | S05 — natywny solver spektralny | DO WYKONANIA | SLEPc, realifikacja, reszty, kompletność, cancellation/resume |
 | S06 — śledzenie gałęzi | W TRAKCIE | Hungarian/gaps, następnie fizyczna metryka i podprzestrzenie |
-| S07 — artefakty i API | DO WYKONANIA | Stabilne ID, faza/obwiednia, selektory, binarne pola |
+| S07 — artefakty i API | W TRAKCIE | Stabilne ID, faza/obwiednia, selektory, binarne pola |
 | S08 — Control Room | DO WYKONANIA | Authoring, dyspersja, wybór modu i przestrzenna faza; browser/WebGL |
 | S09 — falowód 2.5D | DO WYKONANIA | Modified Helmholtz i normalizacja na długość |
 | S10 — interakcje | DO WYKONANIA | Anizotropia, DMI seams, Gilbert i legalność |
@@ -57,4 +57,58 @@ Ten build dotyczy bazy, a nie bieżących niezacommitowanych zmian. Wynik i rece
 
 ## Zasady zaliczania przyrostów
 
-Każdy przyrost otrzymuje pełny hash commita, zakres, wykonane polecenie i exit code po weryfikacji. Źródła, build, managed runtime, nauka, browser/WebGL i kwalifikacja wydania są odrębnymi dowodami. Aktualnie nie ma jeszcze commita implementacyjnego ani nowego wyniku runtime. Odrzucenia nieobsługiwanych kombinacji non-k0/demag/GPU pozostają aktywne do dostarczenia właściwej realizacji i dowodów.
+Każdy przyrost otrzymuje pełny hash commita, zakres, wykonane polecenie i exit code po weryfikacji. Źródła, build, managed runtime, nauka, browser/WebGL i kwalifikacja wydania są odrębnymi dowodami. Przyrost dokumentacyjny zapisano w commicie `9c5be5d2212995f1437823178e7f7af83ee883e0`: plan i checkpoint (dwa pliki). Kontrole UTF-8, bloków Markdown, etapów S00–S12, linków, whitespace oraz zgodności staged bytes ze sprawdzonymi plikami przeszły (exit 0); plan miał też niezależne review z domkniętymi uwagami. Nie ma jeszcze zweryfikowanego commita kodu ani nowego wyniku runtime. Odrzucenia nieobsługiwanych kombinacji non-k0/demag/GPU pozostają aktywne do dostarczenia właściwej realizacji i dowodów.
+
+
+### S03 — fundament redukcji Blocha
+
+W źródłach dodano `FloquetTangentProlongation`, wewnętrzny opis klas i `FloquetReducedMagneticOperator` oraz target `fem_floquet_magnetic_operator_contract`. To prolongacja fazy i bazy oraz działanie `C†AC` nad zwykłym operatorem MFEM; nie ma jeszcze połączenia z ABI solvera, pełnego magnetycznego assembly ani dynamicznego demag-k.
+
+Niezależne review potwierdziło algebrę `C` i operatora sprzężonego. Po uwagach dodano jawny wewnętrzny budżet pamięci (domyślnie 256 MiB, regulowany przez przyszłego właściciela solvera), kontrolę wymiarów/budżetu przed alokacją oraz testy ogromnego requestu, małego budżetu, niewłaściwego kształtu i rzeczywistej mapy dla obrotu spinowego. Zawężono komentarz dotyczący alokacji: własne bufory są przygotowane, lecz zachowanie dostarczonego operatora MFEM wymaga instrumentacji. Kompilacja i wykonanie nowego testu pozostają NOT VERIFIED.
+
+### Przyrost adaptera dynamicznego demag-k
+
+Do natywnego `ModalEigenRequest` dodano jawny, opcjonalny payload gęstej
+macierzy realifikowanej `C(k)` dla dynamicznego demag-k. Dostawca musi przekazać
+macierz w tych samych zredukowanych współrzędnych i jednostkach co magnetyczny
+Hessian; faza Blocha oraz eliminacja potencjału skalarnego muszą być wykonane
+przed granicą ABI. Natywny adapter sprawdza niezerowe `k`, tryb Floquet,
+`include_demag`, zgodność rozmiaru `n*n`, finite values, trasę gęstą i brak
+konfliktu ze ścieżką CSR, a następnie dodaje macierz do efektywnego Hessianu
+przed solverem okna, shift-invert i contour. Digest liniowego pencil obejmuje
+ten sam przyrost, a diagnostyka zachowuje jego rodzaj i liczbę wartości.
+
+Jest to kontrakt i fail-closed bridge dla już złożonego operatora. Nie jest to
+jeszcze właściciel assemblacji `A_{q\phi}(k)`, `P(k)`, `A_{\phi q}(k)` ani ich
+Schur complementu; runner nadal odrzuca plan Floquet z demag-k, dopóki taki
+provider nie zostanie podłączony do shared-domain mesh. Kompilacja managed,
+wykonanie testów C++ oraz walidacja fizyczna tego adaptera pozostają **NOT
+VERIFIED**.
+
+
+### Przyrost po kolejnym review (12 września)
+
+Poprzedni obrót celu klasyfikuję jako **postęp**: zapisano commit planu, kod i wyniki kontroli. Bieżąca kontynuacja również zmienia źródła; pełny cel S00–S12 pozostaje aktywny.
+
+- S02: Python odrzuca niecałkowite/ujemne/przepełnione ID, niepoprawne wektory i kontrolne punkty ścieżki. Fokus API/IR dla eigensolve: 35 passed; pełny `test_problem_ir.py`: 26 passed. Rust zachowuje `branches`, `sample_selector`, `include_branch_table`; planner pozwala na unię żądań dla różnych selektorów próbek, a testy IR/plannera/runnera zostały wykonane diagnostycznie.
+- S06: implementacja Hungarian i luk zachowuje surowe ID; `overlap_prev` jest rzeczywistym znormalizowanym overlapem, a `tracking_confidence` wynikiem 0.85 overlap + 0.15 frequency. Próg filtruje rzeczywisty overlap. Brak wektora ma jawny fallback częstotliwościowy i `overlap_prev=None`. Usunięto klonowanie bieżących dużych wektorów. Fizyczna metryka masowa i podprzestrzenie pozostają do wykonania.
+- S07: helper selekcji poprawiono po review. ID obecne jednocześnie w modzie i tabeli gałęzi są legalne; tabela waliduje swoje punkty. Etykieta Γ wybiera wszystkie pasujące próbki w ścieżce Γ–X–Γ. Diagnostyka może wymagać trackingu bez eksportu widma.
+- S07: writer FEM używa tożsamości `(sample_index, raw_mode_index)`, rozwiązuje wybór gałęzi po trackingu, zachowuje pełne widmo dla `SaveDispersion` i ogranicza osobno pola. Wyłączenie tabeli gałęzi wyłącza jej pliki i linki w manifeście, ale nie tracking. Niewybrane pola zachowują stabilne ID, dostają `mode_field_available=false` i nie mają aktywnego linku. Wybrane pola wymagają metadanych i binarnego payloadu. Dodano i wykonano regresje, poprawiono zachowanie grupy próbki Zarr; bezpośredni writer orchestratora, API i UI pozostają do integracji.
+- `rustfmt --check` dla trzech zmienionych writerów oraz selektora i trackingu: exit 0. Nie jest to dowód kompilacji. `git diff --check`: exit 0.
+- S01: oba walidatory source-map i końcowy test dokumentacji matematycznej przeszły. Usunięto pięć zdublowanych wierszy indeksu 0831 oraz poprawiono odwołania 0830 do aktualnych właścicieli symboli.
+
+Odczyt runnera 07:23 UTC: własny job `1d31af520bb547848e23be8888fde8d8` pozostaje `running`, żywy worker i aktywny job są potwierdzone API. Log `native-build` zawiera kompilację Cargo. Wolne miejsce wynosiło 68 298 076 160 bajtów; historyczny błąd braku miejsca nie jest aktualną blokadą. Nadal brak terminalnego receipt. Profil nie wykonuje ukierunkowanych testów Rust/native i ma SLEPc OFF; istniejące osobne przepisy managed runtime wymagają dalszego ustalenia prawidłowej trasy w tym hoście.
+
+Kod C++/Rust i nowe testy są **NOT VERIFIED przez kompilację lub runtime** i pozostają unstaged WIP. Żaden powyższy wynik nie kwalifikuje relacji dyspersji ani dynamicznego demag-k.
+
+### Walidacja po domknięciu przyrostu
+
+- `cargo +nightly check --locked -p fullmag-ir -p fullmag-plan -p fullmag-runner --lib`: exit 0; ostrzeżenia są istniejące lub dotyczą nieużytych elementów oczekujących na integrację.
+- `cargo +nightly test --locked -p fullmag-ir --lib`: 101 passed, exit 0.
+- `cargo +nightly test --locked -p fullmag-plan --lib`: 461 passed, exit 0.
+- `cargo +nightly test --locked -p fullmag-runner --lib eigen`: 226 passed, 1 failed. Jedyna porażka to istniejące `eigen::response_block_real::tests::field_driven_sweep_builds_artifact_ready_response_payload`, równość `1.0000000000000002` vs `1.0`; plik testu nie należy do tego przyrostu.
+- Python: pełny `test_problem_ir.py` 26 passed; fokus API/IR dla eigensolve 35 passed; pełny `test_api.py` wykonał 277 passed i 19 failures środowiskowych (brak `h5py`/`zarr`, odmowa zapisu w lokalnym cache/worktree oraz `run_output`), bez błędu w fokusie eigensolve.
+- Test kontraktu dokumentacji matematycznej: 9 passed. Walidatory source-map i `git diff --check`: exit 0.
+- Próba nowego managed snapshotu nie utworzyła joba: runner zgłosił aktywny lock/storage dla rejestru `eigensolve-dispersion-plan-20260-c5dfad6d7f548079` i nakazał użyć istniejącego joba lub zaczekać. Job `7ff3218f29e94ecea1b5bdf22d2a394e` pozostaje `queued`; nie uzyskano kompilacji C++ ani runtime dla bieżącego snapshotu.
+
+Stan integracji pozostaje **W TRAKCIE**. Commit kodu wymaga jeszcze przeglądu staged diff; PR, managed C++/SLEPc, provider `A_{q\phi}(k)`/`P(k)`/`A_{\phi q}(k)`, walidacja fizyczna oraz ścieżki Control Room/GPU są otwarte.

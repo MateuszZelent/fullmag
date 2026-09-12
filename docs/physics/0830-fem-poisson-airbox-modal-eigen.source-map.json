@@ -176,7 +176,7 @@
     },
     {
       "id": "source-relax-handoff",
-      "path": "crates/fullmag-runner/src/fem_eigen.rs",
+      "path": "crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs",
       "symbol": "from_completed_relax",
       "responsibility": "Validate a completed user-authored relaxation criterion; production requires migration of the expanded v2 source schema to v3 with source-equilibrium signatures."
     },
@@ -194,19 +194,19 @@
     },
     {
       "id": "source-equilibrium-materialization",
-      "path": "crates/fullmag-runner/src/fem_eigen.rs",
+      "path": "crates/fullmag-runner/src/fem/eigen_shared_domain.rs",
       "symbol": "build_shared_domain_linearization_state",
       "responsibility": "Materialize the accepted equilibrium and preserve relative torque as diagnostics rather than a second physical gate."
     },
     {
       "id": "source-runner-sweep",
-      "path": "crates/fullmag-runner/src/fem_eigen.rs",
+      "path": "crates/fullmag-runner/src/fem/eigen_execution.rs",
       "symbol": "execute_bias_field_sweep",
       "responsibility": "Retain typed sweep artifact aggregation and fail closed until every declared sample is expanded by the stage layer into an explicit user-controlled relaxation and certified eigensolve handoff."
     },
     {
       "id": "source-oracle-guard",
-      "path": "crates/fullmag-runner/src/fem_eigen.rs",
+      "path": "crates/fullmag-runner/src/fem/eigen_sweep.rs",
       "symbol": "validate_bias_field_sweep_oracle_contract",
       "responsibility": "Keep Kittel validation postsolve-only and fail closed on oracle influence."
     },
@@ -267,7 +267,7 @@
     },
     {
       "id": "source-runner-native-diagnostics",
-      "path": "crates/fullmag-runner/src/fem_eigen.rs",
+      "path": "crates/fullmag-runner/src/fem/eigen_native_window.rs",
       "symbol": "native_solver_diagnostics_json",
       "responsibility": "Project native convergence, solver-state and residency diagnostics into the eigen artifact contract."
     },
@@ -279,7 +279,7 @@
     },
     {
       "id": "source-runner-eigen-v2-writer",
-      "path": "crates/fullmag-runner/src/fem_eigen.rs",
+      "path": "crates/fullmag-runner/src/fem/eigen_output.rs",
       "symbol": "write_eigen_v2_bundle",
       "responsibility": "Write spectrum, diagnostics and mode-field resources with requested and resolved execution provenance; publish component participation append-only in eigen/spectrum.v3.json while preserving the v2 payload."
     },
@@ -318,7 +318,7 @@
     },
     {
       "id": "source-field-sweep-axis",
-      "path": "crates/fullmag-runner/src/eigen/artifacts.rs",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/field_sweep.rs",
       "symbol": "field_sweep_axis",
       "responsibility": "Emit the bias_field_a_per_m scan axis, A/m unit and mu0_H display conversion."
     }

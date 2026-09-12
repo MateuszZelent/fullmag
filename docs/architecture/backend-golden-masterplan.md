@@ -418,6 +418,25 @@ ADR 0023 zamraża `BiasFieldSweep` jako physical input, Kittel/FMR jako
 postsolve analysis oraz Results jako widok nad artefaktami `modal_eigen` i
 `driven_response`, nigdy jako trzeci solver.
 
+### Granica reprezentacji dyspersji nonzero-k (ADR-0031)
+
+Dyspersja FEM ma dwie odrębne reprezentacje opisane w
+`docs/adr/0031-fem-nonzero-k-dispersion-representations.md` oraz w notach
+`docs/physics/0828-fem-frequency-domain-floquet-demag.md` i
+`docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`:
+
+- pełna komórka Blocha 3D stosuje zwykłe gradienty do pełnych zespolonych pól,
+  a fazę przenosi przez zespolone ograniczenia `C(k)` na parach magnetycznych
+  i w airboxie; dynamiczny demag należy do tego samego operatora;
+- falowód 2.5D o przekroju niezmiennym wzdłuż osi stosuje operator obwiedni
+  `D(k)=grad_perp-i*k*z_hat`, bez podłużnych par fazowych `C(k)`.
+
+Nie wolno stosować jednocześnie ograniczeń fazowych i przesuniętego gradientu,
+ani kierować żądania nonzero-k do operatora K0. Obie reprezentacje współdzielą
+modalny pencil, proweniencję i artefakty, ale mają osobne warunki topologii,
+normalizacji, zbieżności i granicy `k -> 0`. Stan źródłowy obu ścieżek pozostaje
+`source_visible / unvalidated`; niniejsze odwołanie nie podnosi capability matrix.
+
 Runner przekazuje deskryptor okna i pojedynczy wybrany engine, odbiera wyniki,
 mapuje progress oraz publikuje artefakty i proweniencję. Nie może wybierać
 innego solvera, implementować assembly MFEM ani posiadać PETSc/SLEPc/hypre
