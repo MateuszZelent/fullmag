@@ -1758,6 +1758,18 @@ async function installInspectorFixtureApi(page, fixture) {
       });
     }
     if (path === "/v2/sessions/current/model/scene") return fulfillJson(route, fixture.scene);
+    if (path === "/v2/sessions/current/model/readiness") return fulfillJson(route, {
+      blockers: [],
+      capabilities: {
+        move: { available: true, reason: null },
+        rotate: { available: true, reason: null },
+        scale: { available: true, reason: null },
+      },
+      checks: [],
+      ready_to_export: true,
+      ready_to_run: false,
+      scene_revision: fixture.revision,
+    });
     if (path === "/v2/sessions/current/model/frozen-spins") return fulfillJson(route, {
       count: 0,
       definitions: [],
