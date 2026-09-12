@@ -122,6 +122,7 @@ def render_report(summary: dict[str, Any]) -> str:
         f"- Background: `{(summary.get('background') or {}).get('analysis', 'not recorded')}`",
         f"- Source: `{(summary.get('source') or {}).get('git_head', 'unknown')}`; branch `{(summary.get('source') or {}).get('branch_id', 'unknown')}`",
         "- Physical lane: FDM, requested GPU, FP64, strict mode; inspect each runtime receipt before interpreting a point.",
+        "- The reported free torque is sampled from the last constrained stage; release torque is retained separately in the case analysis.",
         "",
         "## Size-to-energy table",
         "",
@@ -172,15 +173,16 @@ def render_report(summary: dict[str, Any]) -> str:
             )
         )
 
-    lines.extend(["", "## Frozen-mask identity", "", "| R target (nm) | protocol | frozen DOF | free DOF | mask SHA-256 | reference SHA-256 | selector SHA-256 |", "|---:|---|---:|---:|---|---|---|"])
+    lines.extend(["", "## Frozen-mask identity", "", "| R target (nm) | protocol | frozen cells | active cells | free DOF | mask SHA-256 | reference SHA-256 | selector SHA-256 |", "|---:|---|---:|---:|---:|---|---|---|"])
     for result, _verification_value, _classification_value in rows:
         protocol = result.get("protocol") if isinstance(result.get("protocol"), dict) else {}
         frozen = result.get("frozen_runtime") if isinstance(result.get("frozen_runtime"), dict) else {}
         lines.append(
-            "| {target} | {protocol} | {frozen_count} | {free_count} | `{mask}` | `{reference}` | `{selector}` |".format(
+            "| {target} | {protocol} | {frozen_count} | {active_count} | {free_count} | `{mask}` | `{reference}` | `{selector}` |".format(
                 target=_fmt(protocol.get("target_radius_nm")),
                 protocol=protocol.get("protocol", "—"),
-                frozen_count=frozen.get("frozen_dof_count", "—"),
+                frozen_count=frozen.get("frozen_cell_count", frozen.get("frozen_dof_count", "—")),
+                active_count=frozen.get("frozen_mask_domain_cell_count", frozen.get("active_dof_count", "—")),
                 free_count=frozen.get("free_dof_count", "—"),
                 mask=frozen.get("frozen_mask_sha256", "not emitted"),
                 reference=frozen.get("frozen_reference_sha256", "not emitted"),

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -24,6 +25,7 @@ if str(_ROOT) not in sys.path:
 from tests.standard_problems.bimeron.goebel_2019.frozen_size.common import (
     DEFAULT_CELL_NM,
     DEFAULT_PIN_RADIUS_NM,
+    DEFAULT_RING_WIDTH_NM,
     DEFAULT_WALL_WIDTH_NM,
     preset_radius_for_contour,
 )
@@ -116,6 +118,10 @@ def _case_matrix(args: argparse.Namespace) -> list[dict[str, Any]]:
                     "protocol": protocol,
                     "cell_nm": args.cell_nm,
                     "pin_radius_nm": args.pin_radius_nm,
+                    "ring_width_nm": args.ring_width_nm,
+                    "helicity_rad": args.helicity_rad,
+                    "vorticity": args.vorticity,
+                    "background_sign": args.background_sign,
                     "release": bool(args.release),
                     "preset_radius_nm": preset_radius_for_contour(target_nm * 1e-9, wall_nm * 1e-9) * 1e9,
                 }
@@ -142,6 +148,10 @@ def _environment(case: dict[str, Any], args: argparse.Namespace) -> dict[str, st
         "FULLMAG_BIMERON_PROTOCOL": case["protocol"],
         "FULLMAG_BIMERON_CELL_NM": str(case["cell_nm"]),
         "FULLMAG_BIMERON_PIN_RADIUS_NM": str(case["pin_radius_nm"]),
+        "FULLMAG_BIMERON_RING_WIDTH_NM": str(case.get("ring_width_nm", args.ring_width_nm)),
+        "FULLMAG_BIMERON_HELICITY_RAD": str(case.get("helicity_rad", args.helicity_rad)),
+        "FULLMAG_BIMERON_VORTICITY": str(case.get("vorticity", args.vorticity)),
+        "FULLMAG_BIMERON_BACKGROUND_SIGN": str(case.get("background_sign", args.background_sign)),
         "FULLMAG_BIMERON_RELEASE": "1" if args.release else "0",
         "FULLMAG_BIMERON_RELAX_TIME_S": str(args.relax_time_s),
         "FULLMAG_BIMERON_HOLD_TIME_S": str(args.hold_time_s),
@@ -326,6 +336,14 @@ def _write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _write_profile_csv(path: Path, results: list[dict[str, Any]]) -> None:
     """Write the size-to-energy profile as a stable, analysis-friendly table."""
 
@@ -440,6 +458,25 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
         "worktree_status": subprocess.check_output(["git", "status", "--short"], cwd=repo, text=True),
         "profile": PROFILE,
         "device": args.device,
+        "source_identity": _source_identity(repo),
+        "scripts": {
+            "scenario_fdm": {
+                "path": str(repo / SCENARIO_REL),
+                "sha256": _sha256_file(repo / SCENARIO_REL),
+            },
+            "background_fdm": {
+                "path": str(repo / BACKGROUND_REL),
+                "sha256": _sha256_file(repo / BACKGROUND_REL),
+            },
+            "analyzer": {
+                "path": str(repo / ANALYZER_REL),
+                "sha256": _sha256_file(repo / ANALYZER_REL),
+            },
+            "thresholds": {
+                "path": str(repo / THRESHOLDS_REL),
+                "sha256": _sha256_file(repo / THRESHOLDS_REL),
+            },
+        },
     }
     manifest: dict[str, Any] = {
         "schema_version": "bimeron_frozen_size.sweep.v1",
@@ -465,6 +502,8 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
     # preflight prevents a stale binary from being selected for the first case
     # and turning an otherwise resumable sweep into a predictable failure.
     built = _managed_runtime_matches_source(repo, layout, device=args.device)
+    manifest["source"]["managed_runtime_matches_source_preflight"] = built
+    manifest["source"]["runtime_manifest"] = str(_runtime_manifest_path(layout))
     if args.with_background:
         background_path = output_root / f"background-h{args.cell_nm:g}nm".replace(".", "p")
         background_path = _assert_within(background_path, runs_root)
@@ -577,6 +616,21 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
             if args.fail_fast:
                 raise
     manifest["results"] = results
+    verification_statuses = [
+        result.get("verification_status")
+        for result in results
+        if isinstance(result, dict) and "verification_status" in result
+    ]
+    passed_count = sum(status == "passed" for status in verification_statuses)
+    manifest["qualification"] = {
+        "status": "passed" if results and passed_count == len(results) else "diagnostic",
+        "case_count": len(results),
+        "verification_status_counts": {
+            status: verification_statuses.count(status) for status in sorted(set(verification_statuses))
+        },
+        "accepted_case_count": passed_count,
+        "interpolation_allowed": passed_count == len(results) and bool(results),
+    }
     _write_json(output_root / "profile_summary.json", manifest)
     _write_profile_csv(output_root / "profile_energy.csv", results)
     (output_root / "profile_report.md").write_text(render_report(manifest), encoding="utf-8")
@@ -591,12 +645,17 @@ def main() -> int:
     parser.add_argument("--device", choices=("cpu", "gpu"), default=os.environ.get("FULLMAG_BIMERON_DEVICE", "gpu"))
     parser.add_argument("--cell-nm", type=float, default=DEFAULT_CELL_NM)
     parser.add_argument("--pin-radius-nm", type=float, default=DEFAULT_PIN_RADIUS_NM)
+    parser.add_argument("--ring-width-nm", type=float, default=DEFAULT_RING_WIDTH_NM)
+    parser.add_argument("--helicity-rad", type=float, default=float(os.environ.get("FULLMAG_BIMERON_HELICITY_RAD", "0")))
+    parser.add_argument("--vorticity", type=int, choices=(-1, 1), default=int(os.environ.get("FULLMAG_BIMERON_VORTICITY", "-1")))
+    parser.add_argument("--background-sign", type=int, choices=(-1, 1), default=int(os.environ.get("FULLMAG_BIMERON_BACKGROUND_SIGN", "1")))
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--release", action="store_true")
     parser.add_argument("--with-background", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--reuse", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")
+    parser.add_argument("--allow-diagnostic", action="store_true", help="return success while retaining a diagnostic (not accepted) profile")
     parser.add_argument("--relax-time-s", type=float, default=2e-11)
     parser.add_argument("--hold-time-s", type=float, default=1e-10)
     parser.add_argument("--release-time-s", type=float, default=2e-11)
@@ -614,7 +673,8 @@ def main() -> int:
     layout = _resolve_layout(repo)
     summary = _run_sweep(repo, layout, cases, args)
     print(json.dumps({"output_root": summary["layout"]["output_root"], "case_count": len(summary["results"])}, ensure_ascii=False))
-    return 0 if all(result.get("status") == "measured" for result in summary["results"]) else 2
+    qualification = summary.get("qualification") if isinstance(summary.get("qualification"), dict) else {}
+    return 0 if args.allow_diagnostic or qualification.get("status") == "passed" else 2
 
 
 if __name__ == "__main__":

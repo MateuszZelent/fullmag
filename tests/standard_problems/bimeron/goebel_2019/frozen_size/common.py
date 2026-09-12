@@ -123,6 +123,118 @@ def nominal_core_centres_m(preset_radius_m: float, wall_width_m: float) -> tuple
     return ((-rho, 0.0), (rho, 0.0))
 
 
+def _bimeron_mz(
+    x_m: float,
+    y_m: float,
+    preset_radius_m: float,
+    wall_width_m: float,
+    *,
+    helicity_rad: float,
+    vorticity: int,
+    background_sign: int,
+) -> float:
+    """Evaluate the public bimeron preset's out-of-plane component.
+
+    The selector is authored before the solver has a sampled field.  Reusing
+    the preset equation here makes the pin centres deterministic while still
+    selecting actual cell centres on the requested grid.
+    """
+
+    radius = math.hypot(x_m, y_m)
+    theta = math.asin(math.tanh((radius - preset_radius_m) / wall_width_m)) + math.asin(
+        math.tanh((radius + preset_radius_m) / wall_width_m)
+    )
+    phase = vorticity * math.atan2(y_m, x_m) + helicity_rad
+    return -background_sign * math.sin(theta) * math.cos(phase)
+
+
+def _discrete_core_extrema_m(
+    preset_radius_m: float,
+    wall_width_m: float,
+    cell_m: float,
+    *,
+    helicity_rad: float,
+    vorticity: int,
+    background_sign: int,
+) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    if preset_radius_m <= 0.0 or wall_width_m <= 0.0 or cell_m <= 0.0:
+        raise ValueError("preset_radius_m, wall_width_m, and cell_m must be positive")
+    if not math.isfinite(helicity_rad):
+        raise ValueError("helicity_rad must be finite")
+    if vorticity not in {-1, 1}:
+        raise ValueError("vorticity must be -1 or 1")
+    if background_sign not in {-1, 1}:
+        raise ValueError("background_sign must be -1 or 1")
+
+    length_x, length_y, _length_z = TRACK_SIZE
+    nx = round(length_x / cell_m)
+    ny = round(length_y / cell_m)
+    if nx <= 0 or ny <= 0:
+        raise ValueError("cell_m does not resolve the bimeron track")
+    target_radius_m = contour_radius_from_preset(preset_radius_m, wall_width_m)
+    search_radius_m = max(target_radius_m + 4.0 * wall_width_m, 4.0 * cell_m)
+    half_x = min(0.5 * length_x - 0.5 * cell_m, search_radius_m)
+    half_y = min(0.5 * length_y - 0.5 * cell_m, search_radius_m)
+    samples: list[tuple[float, float, float]] = []
+    for iy in range(ny):
+        y_m = (iy + 0.5) * cell_m - 0.5 * length_y
+        if abs(y_m) > half_y + 1e-15:
+            continue
+        for ix in range(nx):
+            x_m = (ix + 0.5) * cell_m - 0.5 * length_x
+            if abs(x_m) > half_x + 1e-15:
+                continue
+            samples.append(
+                (
+                    x_m,
+                    y_m,
+                    _bimeron_mz(
+                        x_m,
+                        y_m,
+                        preset_radius_m,
+                        wall_width_m,
+                        helicity_rad=helicity_rad,
+                        vorticity=vorticity,
+                        background_sign=background_sign,
+                    ),
+                )
+            )
+    if not samples:
+        raise ValueError("no cell centres available for discrete bimeron extrema")
+    minimum = min(samples, key=lambda item: (item[2], abs(item[0]) + abs(item[1]), item[0], item[1]))
+    maximum = max(samples, key=lambda item: (item[2], -(abs(item[0]) + abs(item[1])), -item[0], -item[1]))
+    if minimum[:2] == maximum[:2]:
+        raise ValueError("discrete bimeron extrema collapsed to one cell")
+    return tuple(sorted((minimum, maximum), key=lambda item: (item[0], item[1])))  # type: ignore[return-value]
+
+
+def discrete_core_centres_m(
+    preset_radius_m: float,
+    wall_width_m: float,
+    cell_m: float,
+    *,
+    helicity_rad: float = 0.0,
+    vorticity: int = 1,
+    background_sign: int = 1,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Return cell-centre pin locations at the sampled ``m_z`` extrema.
+
+    The extrema are evaluated on the same cell-centre lattice as the FDM
+    selector.  This removes a hidden sub-cell phase choice from P2/P3 while
+    retaining the physical pin radius.
+    """
+
+    extrema = _discrete_core_extrema_m(
+        preset_radius_m,
+        wall_width_m,
+        cell_m,
+        helicity_rad=helicity_rad,
+        vorticity=vorticity,
+        background_sign=background_sign,
+    )
+    return tuple((x_m, y_m) for x_m, y_m, _mz in extrema)  # type: ignore[return-value]
+
+
 @dataclass(frozen=True)
 class FrozenCase:
     target_radius_nm: float
@@ -197,6 +309,18 @@ class FrozenCase:
                         self.preset_radius_m, self.wall_width_m
                     )
                 ],
+                "discrete_core_centres_nm": [
+                    [x * 1e9, y * 1e9]
+                    for x, y in discrete_core_centres_m(
+                        self.preset_radius_m,
+                        self.wall_width_m,
+                        self.cell_m[0],
+                        helicity_rad=self.helicity_rad,
+                        vorticity=self.vorticity,
+                        background_sign=self.background_sign,
+                    )
+                ],
+                "core_centres_source": "discrete_initial_mz_extrema_on_cell_centres.v1",
             }
         )
         return value

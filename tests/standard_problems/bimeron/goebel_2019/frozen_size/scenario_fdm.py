@@ -26,7 +26,7 @@ from tests.standard_problems.bimeron.goebel_2019.frozen_size.common import (
     TRACK_SIZE,
     FrozenCase,
     case_from_environment,
-    nominal_core_centres_m,
+    discrete_core_centres_m,
 )
 
 
@@ -93,9 +93,17 @@ def _disk_selector(x_m: float, y_m: float, radius_m: float) -> fm.Selection:
 def _constraint_for_case() -> fm.FrozenSpins | None:
     if CASE.protocol == "p0":
         return None
+    core_centres = discrete_core_centres_m(
+        CASE.preset_radius_m,
+        CASE.wall_width_m,
+        CASE.cell_m[0],
+        helicity_rad=CASE.helicity_rad,
+        vorticity=CASE.vorticity,
+        background_sign=CASE.background_sign,
+    )
     left, right = (
         _disk_selector(x, y, CASE.pin_radius_m)
-        for x, y in nominal_core_centres_m(CASE.preset_radius_m, CASE.wall_width_m)
+        for x, y in core_centres
     )
     if CASE.protocol == "p2":
         selector = left | right

@@ -6,7 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from tests.standard_problems.bimeron.goebel_2019.frozen_size.analyze import analyze_case
+from tests.standard_problems.bimeron.goebel_2019.frozen_size.analyze import (
+    _constrained_metric_row,
+    analyze_case,
+)
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -141,6 +144,7 @@ def test_analyzer_uses_resolved_static_mask_when_trace_omits_counts(tmp_path: Pa
     result = analyze_case(root)
 
     assert result["frozen_runtime"]["frozen_dof_count"] == 4
+    assert result["frozen_runtime"]["frozen_cell_count"] == 4
     assert result["frozen_runtime"]["free_dof_count"] == 16
     assert result["frozen_runtime"]["frozen_runtime_source"] == "resolved_frozen_spins_plan"
 
@@ -186,3 +190,15 @@ def test_analyzer_derives_constrained_reference_drift_from_state_artifacts(tmp_p
 
     assert result["frozen_runtime"]["frozen_reference_max_drift"] == 0.0
     assert result["frozen_runtime"]["frozen_reference_drift_source"] == "state_artifact_comparison"
+
+
+def test_analyzer_uses_constrained_stage_torque_when_release_is_present() -> None:
+    rows = [
+        {"_stage_id": "constrained_hold", "max_torque_Apm": 8.0},
+        {"_stage_id": "released_relax", "max_torque_Apm": 1.0},
+    ]
+
+    selected = _constrained_metric_row(rows, rows[-1])
+
+    assert selected["_stage_id"] == "constrained_hold"
+    assert selected["max_torque_Apm"] == 8.0

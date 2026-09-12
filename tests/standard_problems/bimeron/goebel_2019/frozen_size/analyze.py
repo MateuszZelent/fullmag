@@ -201,6 +201,22 @@ def _last_row(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
     return dict(rows[-1]) if rows else {}
 
 
+def _constrained_metric_row(rows: Sequence[dict[str, Any]], fallback: dict[str, Any]) -> dict[str, Any]:
+    """Select torque/counter metrics from the constrained profile stage.
+
+    A release stage is intentionally free to move, so its terminal torque is
+    not the convergence metric for the frozen-spin profile.  Prefer the last
+    hold sample, then constrained-relax, and only use the terminal row for a
+    protocol without a constrained stage.
+    """
+
+    for stage_id in ("constrained_hold", "constrained_relax"):
+        candidates = [row for row in rows if row.get("_stage_id") == stage_id]
+        if candidates:
+            return dict(candidates[-1])
+    return dict(fallback)
+
+
 def _row_value(row: dict[str, Any], *names: str) -> float | None:
     for name in names:
         if name in row:
@@ -662,7 +678,11 @@ def _resolved_frozen_metrics(
             current["frozen_cell_indices"] = [
                 index for index, is_frozen in enumerate(mask) if bool(is_frozen)
             ]
+            current["frozen_cell_count"] = len(current["frozen_cell_indices"])
             current["frozen_mask_cell_count"] = len(mask)
+            current["frozen_mask_domain_cell_count"] = len(mask)
+        if current.get("frozen_cell_count") is None and current.get("frozen_dof_count") is not None:
+            current["frozen_cell_count"] = current.get("frozen_dof_count")
         current["frozen_runtime_source"] = "resolved_frozen_spins_plan"
         return current
     return current
@@ -838,9 +858,16 @@ def analyze_case(
         except Exception as error:
             states[label] = {"path": str(path), "measurement_error": str(error)}
 
+    constrained_row = _constrained_metric_row(rows, final_row)
     frozen_runtime = _resolved_frozen_metrics(
-        root, workspace_root, _frozen_metrics(final_row)
+        root, workspace_root, _frozen_metrics(constrained_row)
     )
+    frozen_runtime["metric_stage_id"] = constrained_row.get("_stage_id")
+    if constrained_row.get("_stage_id") != final_row.get("_stage_id"):
+        terminal_metrics = _frozen_metrics(final_row)
+        if terminal_metrics.get("free_torque_metric") is not None:
+            frozen_runtime["terminal_free_torque_metric"] = terminal_metrics.get("free_torque_metric")
+            frozen_runtime["terminal_free_torque_metric_units"] = terminal_metrics.get("free_torque_metric_units")
     if frozen_runtime.get("frozen_reference_max_drift") is None:
         derived_drift = _state_reference_drift(state_values, frozen_runtime)
         if derived_drift is not None:

@@ -72,6 +72,12 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
     if name != "p0" and thresholds.get("require_positive_frozen_dof_for_constrained_protocols", True):
         if not isinstance(frozen_count, int) or frozen_count <= 0:
             failures.append("constrained_protocol_has_no_frozen_dof")
+        frozen_cells = frozen.get("frozen_cell_count")
+        if frozen_cells is not None and _finite(frozen_cells) and int(float(frozen_cells)) != int(frozen_count):
+            failures.append("frozen_cell_count_mismatch")
+        active_cells = frozen.get("frozen_mask_domain_cell_count", frozen.get("active_dof_count"))
+        if active_cells is not None and _finite(active_cells) and int(float(active_cells)) < int(frozen_count):
+            failures.append("frozen_mask_domain_smaller_than_frozen_cells")
     if name != "p0" and thresholds.get("require_frozen_hashes", True):
         for key in ("frozen_mask_sha256", "frozen_reference_sha256", "frozen_selector_sha256"):
             if not isinstance(frozen.get(key), str) or not frozen[key]:
