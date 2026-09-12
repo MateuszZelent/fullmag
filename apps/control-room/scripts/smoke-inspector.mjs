@@ -11,6 +11,14 @@ const INSPECTOR_REQUEST_TIMEOUT_MS = 5_000;
 const INSPECTOR_MAX_REQUESTS_PER_PATH = 8;
 const INSPECTOR_REQUEST_LIMITS = new Map([
   [
+    "GET /v2/sessions/current/model/regions",
+    10,
+  ],
+  [
+    "GET /v2/sessions/current/analysis/frequency-domain/response/progress.v1",
+    10,
+  ],
+  [
     "POST /v2/sessions/current/model/transactions",
     1,
   ],
@@ -55,12 +63,18 @@ await mkdir(outputDir, { recursive: true });
 const browser = await playwright.chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
 const consoleErrors = [];
+const notFoundResponses = [];
 const previewRequests = [];
 
 page.on("console", (message) => {
   if (message.type() === "error") consoleErrors.push(message.text());
 });
 page.on("pageerror", (error) => consoleErrors.push(error.stack ?? error.message));
+page.on("response", (response) => {
+  if (response.status() === 404) {
+    notFoundResponses.push(`${response.request().method()} ${response.url()}`);
+  }
+});
 page.on("request", (request) => {
   const url = request.url();
   if (/inspector.*(?:thumbnail|screenshot|snapshot)|(?:thumbnail|screenshot).*inspector/i.test(url)) {
@@ -593,7 +607,7 @@ try {
   await waitForInspectorRequestQuiet(page, fixture);
   assert(
     fixture.requestBudgetViolation === null,
-    `Inspector request budget exceeded: ${JSON.stringify(fixture.requestBudgetViolation)}`,
+    `Inspector request budget exceeded: ${JSON.stringify(fixture.requestBudgetViolation)}; counts: ${JSON.stringify(Object.fromEntries(fixture.requestCounts))}`,
   );
   assert(
     fixture.unknownGetPaths.length === 0,
@@ -925,7 +939,7 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
   );
   assert(
     unexpectedResetErrors.length === 0,
-    `Unexpected browser errors before fixture reset: ${unexpectedResetErrors.join("\n")}`,
+    `Unexpected browser errors before fixture reset: ${unexpectedResetErrors.join("\n")}\n404 responses: ${notFoundResponses.join("\n")}`,
   );
   consoleErrors.length = 0;
 }
@@ -966,12 +980,11 @@ async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
     .locator(".fm-inspector__metadata-item")
     .filter({ hasText: "Node" });
   await globalNodeMetadata
-    .getByText(globalRotatedNodeId, { exact: true })
-    .waitFor({ state: "visible", timeout: 60_000 });
+    .locator(`dd[title="${globalRotatedNodeId}"]`)
+    .waitFor({ state: "attached", timeout: 60_000 });
 
   const rotatedToggle = inspector.getByRole("checkbox", {
-    name: "Rotated interfacial DMI",
-    exact: true,
+    name: /^Rotated interfacial DMI(?:\s|$)/,
   });
   await rotatedToggle.check();
   const apply = inspector.getByRole("button", {
@@ -1018,8 +1031,7 @@ async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
     label: "Object interfacial DMI recovery",
   });
   const interfacialToggle = inspector.getByRole("checkbox", {
-    name: "Interfacial DMI",
-    exact: true,
+    name: /^Interfacial DMI(?:\s|$)/,
   });
   await interfacialToggle.check();
   const inverseApply = inspector.getByRole("button", {
@@ -1589,6 +1601,25 @@ function inspectorVisualizationState() {
   };
 }
 
+function inspectorModeComposition(fixture) {
+  return {
+    artifact_revision: "",
+    composition_id: "active",
+    layers: [],
+    lifecycle: {
+      artifact_revision: 0,
+      mesh_revision: fixture.manifest.revision,
+      run_id: null,
+      session_id: "inspector-routing-smoke",
+    },
+    phase_clock: { master_rate_hz: 1, synchronized: true },
+    revision: fixture.revision,
+    run_id: "",
+    schema_version: "mode-composition.v1",
+    stage_id: "",
+  };
+}
+
 async function installInspectorFixtureApi(page, fixture) {
   await page.route("**/v2/**", async (route) => {
     const request = route.request();
@@ -1625,6 +1656,20 @@ async function installInspectorFixtureApi(page, fixture) {
           status: "active",
         }],
       });
+    }
+    if (path === "/v2/sessions/current/visualization/mode-compositions/active") {
+      if (request.method() === "GET") {
+        return fulfillJson(route, inspectorModeComposition(fixture));
+      }
+      if (request.method() === "PATCH") {
+        const patch = request.postDataJSON() ?? {};
+        const composition = inspectorModeComposition(fixture);
+        return fulfillJson(route, {
+          ...composition,
+          revision: composition.revision + 1,
+          ...(patch.phase_clock ? { phase_clock: patch.phase_clock } : {}),
+        });
+      }
     }
     if (path === "/v2/sessions/current/visualization/state" && request.method() === "PATCH") {
       const patch = request.postDataJSON() ?? {};
