@@ -422,6 +422,7 @@ static cudaError_t fullmag_fdm_untracked_cuda_free(void *pointer) {
 static void free_boundary_correction(Context &ctx);
 static void free_anisotropy_fields(Context &ctx);
 static void free_cubic_anisotropy_fields(Context &ctx);
+static bool free_tracked_vector_field(Context &ctx, DeviceVectorField &field);
 static bool launch_anisotropy_observable(Context &ctx);
 static bool upload_f64_array(Context &ctx, double *&dst, const double *src,
                               uint64_t len, const char *label);
@@ -526,18 +527,14 @@ static bool alloc_vector_field(Context &ctx, DeviceVectorField &field) {
 
     err = cudaMalloc(&field.y, bytes);
     if (err != cudaSuccess) {
-        context_gpu_workspace_cuda_free(ctx, field.x);
-        field.x = nullptr;
+        (void)free_tracked_vector_field(ctx, field);
         set_cuda_error(ctx, "cudaMalloc(y)", err);
         return false;
     }
 
     err = cudaMalloc(&field.z, bytes);
     if (err != cudaSuccess) {
-        context_gpu_workspace_cuda_free(ctx, field.x);
-        context_gpu_workspace_cuda_free(ctx, field.y);
-        field.x = nullptr;
-        field.y = nullptr;
+        (void)free_tracked_vector_field(ctx, field);
         set_cuda_error(ctx, "cudaMalloc(z)", err);
         return false;
     }
@@ -571,26 +568,25 @@ static void free_vector_field(DeviceVectorField &field) {
 // Rotated-DMI workspace extension allocations happen after the normal setup
 // baseline has been sealed.  A memset failure must release the tracked
 // allocations before returning so a retry cannot observe a stale complete
-// field (or leak the live-allocation accounting entry).
-static void free_tracked_vector_field(Context &ctx, DeviceVectorField &field) {
-    if (field.x) {
-        if (context_gpu_workspace_cuda_free(ctx, field.x) != cudaSuccess) {
-            ctx.gpu_workspace_accounting_valid = false;
+// field (or leak the live-allocation accounting entry).  A failed cudaFree is
+// deliberately retained in the field so teardown/retry can attempt it again.
+static bool free_tracked_vector_field(Context &ctx, DeviceVectorField &field) {
+    bool released = true;
+    const auto release = [&](void *&pointer) {
+        if (!pointer) {
+            return;
         }
-        field.x = nullptr;
-    }
-    if (field.y) {
-        if (context_gpu_workspace_cuda_free(ctx, field.y) != cudaSuccess) {
+        if (context_gpu_workspace_cuda_free(ctx, pointer) == cudaSuccess) {
+            pointer = nullptr;
+        } else {
             ctx.gpu_workspace_accounting_valid = false;
+            released = false;
         }
-        field.y = nullptr;
-    }
-    if (field.z) {
-        if (context_gpu_workspace_cuda_free(ctx, field.z) != cudaSuccess) {
-            ctx.gpu_workspace_accounting_valid = false;
-        }
-        field.z = nullptr;
-    }
+    };
+    release(field.x);
+    release(field.y);
+    release(field.z);
+    return released;
 }
 
 static void free_regional_field_drives(Context &ctx) {
@@ -991,15 +987,11 @@ static bool alloc_vector_field_cells(
     };
     if (!alloc_component(&field.x, "x")) return false;
     if (!alloc_component(&field.y, "y")) {
-        context_gpu_workspace_cuda_free(ctx, field.x);
-        field.x = nullptr;
+        (void)free_tracked_vector_field(ctx, field);
         return false;
     }
     if (!alloc_component(&field.z, "z")) {
-        context_gpu_workspace_cuda_free(ctx, field.x);
-        context_gpu_workspace_cuda_free(ctx, field.y);
-        field.x = nullptr;
-        field.y = nullptr;
+        (void)free_tracked_vector_field(ctx, field);
         return false;
     }
     return true;
@@ -2161,15 +2153,17 @@ static bool upload_tensor_kernel_component(
     return true;
 }
 
-static void free_multilayer_plan_v2(Context &ctx) {
+static bool free_multilayer_plan_v2(Context &ctx) {
     free_multilayer_fft_workspaces(ctx);
+    bool rotated_dmi_released = true;
     for (DeviceMultilayerLayer &layer : ctx.multilayer_layers) {
         free_vector_field(layer.m);
         free_vector_field(layer.pre_step_m);
         free_vector_field(layer.h_ex);
         free_vector_field(layer.h_demag);
         free_vector_field(layer.h_dmi);
-        free_vector_field(layer.h_rotated_dmi);
+        rotated_dmi_released =
+            free_tracked_vector_field(ctx, layer.h_rotated_dmi) && rotated_dmi_released;
         free_vector_field(layer.h_ani);
         free_vector_field(layer.tmp);
         free_vector_field(layer.k1);
@@ -2186,9 +2180,17 @@ static void free_multilayer_plan_v2(Context &ctx) {
         free_device_demag_kernel(ctx, kernel.tensor);
         free_device_pull_map(ctx, kernel.dst_pull_map);
     }
-    ctx.multilayer_layers.clear();
+    if (rotated_dmi_released) {
+        ctx.multilayer_layers.clear();
+        ctx.has_multilayer_plan_v2 = false;
+    } else {
+        // Keep the layer records containing failed tracked frees alive so a
+        // subsequent teardown or plan replacement can retry those pointers.
+        ctx.gpu_workspace_accounting_valid = false;
+        ctx.has_multilayer_plan_v2 = true;
+    }
     ctx.multilayer_kernels.clear();
-    ctx.has_multilayer_plan_v2 = false;
+    return rotated_dmi_released;
 }
 
 static bool alloc_active_mask(Context &ctx) {
@@ -3488,14 +3490,14 @@ void context_free_device(Context &ctx) {
     destroy_async_preview_snapshot_pool(ctx);
     destroy_async_field_snapshot_pool(ctx);
     context_destroy_compute_stream(ctx);
-    free_multilayer_plan_v2(ctx);
+    (void)free_multilayer_plan_v2(ctx);
     free_vector_field(ctx.m);
     free_vector_field(ctx.h_ex);
     free_vector_field(ctx.h_demag);
     free_vector_field(ctx.h_demag_visual);
     free_vector_field(ctx.h_eff_visual);
     free_vector_field(ctx.h_ani);
-    free_vector_field(ctx.h_rotated_dmi);
+    (void)free_tracked_vector_field(ctx, ctx.h_rotated_dmi);
     free_energy_density(ctx);
     free_vector_field(ctx.k1);
     free_vector_field(ctx.tmp);
@@ -3764,7 +3766,11 @@ bool context_upload_multilayer_plan_v2(
     Context &ctx,
     const fullmag_fdm_multilayer_plan_desc_v2 &plan)
 {
-    free_multilayer_plan_v2(ctx);
+    if (!free_multilayer_plan_v2(ctx)) {
+        ctx.last_error =
+            "cannot replace multilayer plan while tracked rotated DMI allocations remain";
+        return false;
+    }
     ctx.has_multilayer_plan_v2 = true;
     ctx.multilayer_layers.reserve(plan.layer_count);
     ctx.multilayer_kernels.reserve(plan.kernel_count);
@@ -4099,8 +4105,9 @@ bool context_ensure_rotated_dmi_workspace(Context &ctx) {
         if (!alloc_vector_field(ctx, ctx.h_rotated_dmi) ||
             !zero_vector_field(
                 ctx, ctx.h_rotated_dmi, ctx.cell_count, "rotated DMI observable")) {
-            free_tracked_vector_field(ctx, ctx.h_rotated_dmi);
-            reset_rotated_dmi_workspace_extension_baseline(ctx);
+            if (free_tracked_vector_field(ctx, ctx.h_rotated_dmi)) {
+                reset_rotated_dmi_workspace_extension_baseline(ctx);
+            }
             return false;
         }
         uint64_t expected_bytes = 0;
@@ -4113,8 +4120,9 @@ bool context_ensure_rotated_dmi_workspace(Context &ctx) {
                 allocation_bytes_before,
                 1,
                 expected_bytes)) {
-            free_tracked_vector_field(ctx, ctx.h_rotated_dmi);
-            reset_rotated_dmi_workspace_extension_baseline(ctx);
+            if (free_tracked_vector_field(ctx, ctx.h_rotated_dmi)) {
+                reset_rotated_dmi_workspace_extension_baseline(ctx);
+            }
             if (ctx.last_error.empty()) {
                 ctx.last_error = "rotated DMI workspace byte count overflow";
             }
@@ -4172,11 +4180,14 @@ bool context_ensure_rotated_dmi_workspace(Context &ctx) {
                 layer.h_rotated_dmi,
                 layer.cell_count,
                 "multilayer rotated DMI observable")) {
-            free_tracked_vector_field(ctx, layer.h_rotated_dmi);
+            bool cleanup_ok = free_tracked_vector_field(ctx, layer.h_rotated_dmi);
             for (DeviceMultilayerLayer *allocated : allocated_layers) {
-                free_tracked_vector_field(ctx, allocated->h_rotated_dmi);
+                cleanup_ok =
+                    free_tracked_vector_field(ctx, allocated->h_rotated_dmi) && cleanup_ok;
             }
-            reset_rotated_dmi_workspace_extension_baseline(ctx);
+            if (cleanup_ok) {
+                reset_rotated_dmi_workspace_extension_baseline(ctx);
+            }
             return false;
         }
         allocated_layers.push_back(&layer);
@@ -4188,10 +4199,14 @@ bool context_ensure_rotated_dmi_workspace(Context &ctx) {
         fields_to_allocate,
         expected_bytes);
     if (!valid) {
+        bool cleanup_ok = true;
         for (DeviceMultilayerLayer *allocated : allocated_layers) {
-            free_tracked_vector_field(ctx, allocated->h_rotated_dmi);
+            cleanup_ok =
+                free_tracked_vector_field(ctx, allocated->h_rotated_dmi) && cleanup_ok;
         }
-        reset_rotated_dmi_workspace_extension_baseline(ctx);
+        if (cleanup_ok) {
+            reset_rotated_dmi_workspace_extension_baseline(ctx);
+        }
     }
     return valid;
 }

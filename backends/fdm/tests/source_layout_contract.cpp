@@ -160,9 +160,13 @@ void rotated_dmi_workspace_failure_is_transactional() {
     const std::filesystem::path root = fdm_source_root();
     const std::string context = read_file(root / "gpu/cuda/runtime/context.cu");
     check(
-        context.find("static void free_tracked_vector_field(Context &ctx, DeviceVectorField &field)") !=
+        context.find("static bool free_tracked_vector_field(Context &ctx, DeviceVectorField &field)") !=
             std::string::npos,
         "rotated-DMI workspace failures must release tracked vector fields");
+    check(
+        context.find("if (context_gpu_workspace_cuda_free(ctx, pointer) == cudaSuccess)") !=
+            std::string::npos,
+        "tracked rotated-DMI frees must retain pointers when cudaFree fails");
     check(
         context.find("free_tracked_vector_field(ctx, ctx.h_rotated_dmi)") != std::string::npos,
         "single-grid rotated-DMI workspace failure must clean up every allocation");
@@ -172,6 +176,12 @@ void rotated_dmi_workspace_failure_is_transactional() {
     check(
         context.find("reset_rotated_dmi_workspace_extension_baseline(ctx)") != std::string::npos,
         "rotated-DMI workspace retry must reset the extension accounting baseline");
+    check(
+        context.find("free_vector_field(layer.h_rotated_dmi)") == std::string::npos,
+        "multilayer rotated-DMI teardown must use tracked frees");
+    check(
+        context.find("free_vector_field(ctx.h_rotated_dmi)") == std::string::npos,
+        "single-grid rotated-DMI teardown must use tracked frees");
 }
 
 void cmake_uses_gpu_runtime_owner_paths() {

@@ -54,8 +54,6 @@ use crate::types::{
 
 use std::time::Instant;
 
-const ZERO_THRESHOLD: f64 = 1.0e-30;
-
 pub(crate) fn execute_reference_fem(
     plan: &FemPlanIR,
     until_seconds: f64,
@@ -1509,11 +1507,11 @@ pub(crate) fn observe_state(
     let has_rotated_dmi = problem
         .terms
         .rotated_interfacial_dmi
-        .is_some_and(|d| d.abs() > ZERO_THRESHOLD);
+        .is_some_and(|d| d != 0.0);
     let has_bulk_dmi = problem
         .terms
         .bulk_dmi
-        .is_some_and(|d| d.abs() > ZERO_THRESHOLD);
+        .is_some_and(|d| d != 0.0);
     let rotated_dmi_field = if has_rotated_dmi {
         problem.rotated_interfacial_dmi_field_from_vectors(&observables.magnetization)
     } else {
@@ -1604,7 +1602,7 @@ fn rotated_dmi_energy_from_magnetization(
     if problem
         .terms
         .rotated_interfacial_dmi
-        .is_some_and(|d| d.abs() > ZERO_THRESHOLD)
+        .is_some_and(|d| d != 0.0)
     {
         problem.rotated_interfacial_dmi_energy_from_vectors(magnetization)
     } else {
@@ -2740,6 +2738,29 @@ mod tests {
         assert!(
             (step.e_dmi - step.e_rotated_dmi).abs() < 1e-30,
             "with only rotated DMI active, aggregate and rotated energies must agree"
+        );
+    }
+
+    #[test]
+    fn reference_rotated_dmi_energy_treats_any_exact_nonzero_coefficient_as_active() {
+        let mut plan = make_test_plan(false);
+        plan.enable_exchange = false;
+        plan.rotated_interfacial_dmi = Some(1.0e-31);
+        plan.initial_magnetization = vec![
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ];
+
+        let magnetization = plan.initial_magnetization.clone();
+        let (problem, _) = build_problem_and_state(&plan)
+            .expect("tiny nonzero rotated DMI should build in the FEM reference path");
+        let energy = rotated_dmi_energy_from_magnetization(&problem, &magnetization);
+
+        assert_ne!(
+            energy, 0.0,
+            "FEM telemetry must not silently drop a finite nonzero rotated-DMI coefficient"
         );
     }
 
