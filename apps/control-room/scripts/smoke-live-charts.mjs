@@ -76,7 +76,9 @@ async function main() {
     await keyboardPauseAndFollow(page, fixture, evidence);
     const lifecycleBaseline = await runLifecycleStress(page);
     await verifyLifecycleCounters(page, lifecycleBaseline);
+    await verifyOneVisibleCanvas(page);
     const axisRangeProof = await verifyAxisAndRangeRegression(browser);
+    await verifyOneVisibleCanvas(page);
     await verifyNoVisibleErrorNotifications(page);
     const idleProof = await verifyIdleStability(page, evidence);
     await captureVisualVariants(page);
@@ -1330,18 +1332,22 @@ async function verifyLifecycleCounters(page, baseline) {
 }
 
 async function captureVisualVariants(page) {
+  await verifyOneVisibleCanvas(page);
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "no-preference" });
   await setTheme(page, "dark");
+  await verifyOneVisibleCanvas(page);
   await verifyNoVisibleErrorNotifications(page);
   await page.screenshot({ fullPage: true, path: resolve(artifactRoot, "live-charts-mocha.png") });
 
   await page.emulateMedia({ colorScheme: "light", reducedMotion: "no-preference" });
   await setTheme(page, "light");
+  await verifyOneVisibleCanvas(page);
   await verifyNoVisibleErrorNotifications(page);
   await page.screenshot({ fullPage: true, path: resolve(artifactRoot, "live-charts-latte.png") });
 
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
   await setTheme(page, "dark");
+  await verifyOneVisibleCanvas(page);
   await verifyNoVisibleErrorNotifications(page);
   await page.screenshot({ fullPage: true, path: resolve(artifactRoot, "live-charts-reduced-motion.png") });
 
@@ -1522,6 +1528,7 @@ async function waitForQuietFrames(page) {
 }
 
 async function verifyIdleStability(page, evidence) {
+  await verifyOneVisibleCanvas(page);
   await waitForQuietFrames(page);
   const requestStart = evidence.requests.length;
   const before = await chartDiagnosticsSnapshot(page);

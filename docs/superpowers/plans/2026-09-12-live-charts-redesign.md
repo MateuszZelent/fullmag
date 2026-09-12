@@ -88,7 +88,7 @@ Zrzuty i logi zapisano w
 Pierwszy zweryfikowany etap zapisano jako
 `e489b572a91f095a612c0b7286df958adfdadadf`: stałe kolory serii oraz eksport
 czekający na gotowość renderera. Drugi etap zapisano jako
-`f092ee508`: pełny układ Live Charts, selekcja sygnałów, osie/okna, split-pane,
+`bc94729f058e73d9b33d6c0716383b6cd258c5b8`: pełny układ Live Charts, selekcja sygnałów, osie/okna, split-pane,
 smoke i dokumentacja. Dowody: focused Vitest, typecheck, lint i browser smoke.
 Hook commita zgłosił istniejący, niezmieniany łańcuch iteracji w
 `chartRenderer.ts:213`; nie jest to nowa regresja.
@@ -111,3 +111,52 @@ Stan: oba etapy zapisane (`e489b572a91f095a612c0b7286df958adfdadadf`,
 `active` w `storage/index/live-charts-redesign-20260912-f2e7bb663a3cfe15.json`.
 Następny krok: push/PR/merge, weryfikacja na
 `master` i usunięcie wyłącznie tego zweryfikowanego worktree.
+
+
+## Korekta po audycie — 2026-09-12
+
+Powyższy checkpoint jest historycznym zapisem przed PR #89, nie bieżącym
+potwierdzeniem ukończenia. PR #89 scalono jako
+`66d0a5de6024211addc221a935a37caa1a879036`. Review Copilota i Codexa
+pojawiły się przed merge i zawierały uwagi wymagające naprawy. Zgoda na
+administracyjny merge nie dowodzi ich rozwiązania. Deklaracja pełnego
+przywrócenia cudzych zmian była błędna: brakujący plan bimeronu odtworzono
+z zachowanego blobu `56b3b5b1146a5b9fcd8f73d649bb5e77b8f46353`, sprawdzając
+identyczność hasha. Nie usuwano stashów. Pusty stary katalog usunięto po
+zakończeniu własnego zawieszonego polecenia diagnostycznego.
+
+Poprawki: `codex/live-charts-review-fixes-20260912`, baza
+`207d37c522894930610fad204b0ece8cab8e0102`.
+
+- [x] Odzyskanie brakującego planu bimeronu i kontrola hasha.
+- [x] Zwolnienie własnego uchwytu i usunięcie pustego starego katalogu.
+- [x] Smoke CSV: sprawdzanie nowego pobrania zamiast wcześniejszego pliku.
+- [x] Eksport: stała tożsamość paneli, ID żądań, wyjątki i fallback ACK.
+- [x] Eksport wszystkich zaznaczonych sygnałów z każdej akcji CSV/TSV.
+- [x] Spójna semantyka osi i zakresów oraz uczciwa etykieta historii.
+- [x] Pełny suite: udokumentowane awarie i naprawa różnic platformowych.
+- [x] Focused testy, typecheck, lint, hygiene, React Doctor i browser smoke.
+- [ ] Review aktualnego HEAD, PR, CI, merge i cleanup nowego worktree.
+
+`managed-fem-qualification` pozostaje historycznie NOT VERIFIED dla PR #89.
+Workflow uruchamia się globalnie bez filtrów ścieżek; nie jest dowodem
+zmiany solvera w tym zadaniu. Kwalifikacja FEM i dowody frontendu są osobne.
+
+### Commity naprawcze i dowody
+
+- `aff2eda01adc5a3affc5a0ca3873d1113da4d8db`: smoke CSV sprawdza nowe pobranie; regression check 1 plik / 3 testy PASS, `node --check` PASS.
+- `4b44f0ee21e907b91bc816e29e161a551969d644`: normalizacja CRLF w 12 testach kontraktowych. Focused: 8 plikow / 169 testow oraz 5 plikow / 97 testow PASS (drugi zestaw obejmuje niezmieniany codec).
+
+Biezace artefakty: `storage/builds/live-charts-review-fixes-2026091-40e5382040d3c99b/frontend/artifacts`.
+Baseline przed normalizacja: 13 FAIL / 630 PASS / 1 SKIP i 12 bledow startu workerow. Kontrolowany przebieg `--pool=threads --maxWorkers=2`: 653 PASS / 3 FAIL / 1 SKIP; 6434 PASS / 4 FAIL / 1 SKIP. Dalsze naprawy i finalny wynik ponizej; ten przebieg nie jest zielona bramka.
+
+- `5f40572c82bb8bcd645752db1ce691353b9e560a`: przenosne odczyty zrodel audytu compute i testow geometry; focused 17 testow PASS.
+- `9ce84af50748ae4c8cd1e915530f8f4d9ed35b5c`: eksporty z request ID i ACK bledow, stale panele PNG, wszystkie zaznaczone serie CSV/TSV, poprawki osi i ograniczonego okna, wymiana zdecymowanych snapshotow zamiast blednego merge. Focused eksporty 30 testow; focused zakresy 38 testow PASS.
+- Pelny suite: 657 plikow PASS / 1 SKIP, 6446 testow PASS / 1 SKIP, exit 0 (208.86 s), log `vitest-review-fixes-complete.log`.
+- Typecheck i lint exit 0; hygiene API i architecture PASS. React Doctor 93/100: historyczny export funkcji z komponentu oraz false positive createObjectURL (revoke w microtask i sciezce catch, test cleanup PASS). Bez wylaczania regul.
+- Browser pozostaje w trakcie diagnozy: dwie kolejne komendy PNG i lifecycle przechodza, ale przed zrzutami widok wraca do 3D. Pierwsza asercja wykrywala to dopiero przy narrow; dodano asercje miedzy fazami. Nie uznajemy tych przebiegow za PASS.
+
+### Końcowa weryfikacja przed PR
+Browser smoke po restarcie serwera: PASS, exit 0. Artefakty w `review-fixes-smoke-diagnostic`, log `browser-review-fixes-diagnostic.log`. Dodatkowe asercje potwierdzają aktywny wykres przed i po kolejnych fazach; bez automatycznego ponownego otwierania modułu. Oba wcześniejsze nieudane przebiegi zachowano; nie odtworzono resetu na świeżym runtime, a resize nie był jego ustaloną przyczyną. Nie zmieniono kodu layoutu na podstawie domniemania.
+Dowód obejmuje 2 kolejne komendy PNG z tą samą instancją canvas, CSV bieżącego pobrania, 100 przełączeń cyklu życia, 8 kombinacji sygnałów, Step → Time → Step, jawny limit 5000 próbek, Mocha/Latte/reduced motion/narrow i zoom 200%. Canvas 570×342, jeden renderer i jeden ResizeObserver, brak żądań podczas 3 s idle. Fixture UI nie jest kwalifikacją naukową FEM.
+Po zatrzymaniu serwera przywrócono wyłącznie generowany plik `next-env.d.ts` worktree. Kontrole smoke i Next: 3 pliki / 24 testy PASS; `node --check` PASS. Pełny zielony suite pozostaje aktualnym dowodem dla niezmienionych źródeł produkcyjnych.
