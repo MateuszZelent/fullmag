@@ -105,6 +105,17 @@ fn execute_native_fem_charge_transport(
         }
         _ => NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature,
     };
+    if method == NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature {
+        let oersted_evaluation_count = prepared
+            .iter()
+            .filter(|prepared| prepared.descriptor.oersted_source_bound)
+            .count();
+        super::steady_transport::preflight_direct_oersted_pair_budget_for_evaluations(
+            mesh.cell_count(),
+            field_sample_positions_xyz_m.len(),
+            oersted_evaluation_count,
+        )?;
+    }
     let mut records = Vec::with_capacity(prepared.len());
     let mut snapshots = Vec::new();
     let mut provenance = Vec::with_capacity(prepared.len());
@@ -223,7 +234,10 @@ fn execute_native_fem_charge_transport(
                             conductor_positions_xyz_m: mesh.nodes.clone(),
                             sample_positions_xyz_m: field_sample_positions_xyz_m.to_vec(),
                             sample_tet4_cells: antenna_plan
-                                .and_then(|plan| plan.field_sampling.cells.require_tet4().ok())
+                                .field_sampling
+                                .cells
+                                .require_tet4()
+                                .ok()
                                 .filter(|cells| !cells.is_empty()),
                             bases: vec![AntennaFieldBasisInput {
                                 port_mode_id: request.port_mode_id.clone(),

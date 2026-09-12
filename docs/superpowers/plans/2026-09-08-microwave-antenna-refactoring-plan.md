@@ -484,17 +484,24 @@ Test jednostkowy produkcyjnego Rust ma korzystać z tych samych wartości i okna
 
 ## T11. Wprowadzić preflight ważności modelu i kosztu
 
-**Stan 2026-09-11:** współdzielona polityka `antenna_direct_oersted_budget.v1`
+**Stan 2026-09-12:** współdzielona polityka `antenna_direct_oersted_budget.v1`
 (`1_000_000` par źródło–target) jest zapisana w kanonicznym IR. Preflight
 planera odrzuca przekroczenie po zbudowaniu rzeczywistego meshu przewodnika i
 nośnika próbkowania, przed wywołaniem native solvera; wrapper RT0 powtarza tę
-kontrolę jako zabezpieczenie runtime. Sprawdzone są konwersje `usize → u64`,
-checked multiplication, granica dokładna, overflow oraz diagnostyka z liczbą
-elementów, targetów i identyfikatorem polityki. Testy planera przechodzą w
-`fullmag-plan` (3/3). Nie jest to jeszcze pełna bramka T11: brakuje agregacji
-kosztu przez wiele portów/bloków/retries, budżetu pamięci i anulowania,
-diagnostyki pasma `eta_wave`/`eta_skin`, pomiaru wall-time/peak-memory oraz
-kontenerowego benchmarku direct RT0.
+kontrolę jako zabezpieczenie runtime. Obie pętle wykonawcze charge/steady
+transport sumują koszt wszystkich jednocześnie przygotowanych źródeł Oersteda
+przed pierwszą ewaluacją, a kontrola pojedynczego wywołania pozostaje drugą
+granicą obrony. Sprawdzone są konwersje `usize → u64`, checked multiplication,
+granica dokładna, overflow oraz diagnostyka z liczbą elementów, targetów,
+ewaluacji i identyfikatorem polityki. Testy planera przechodzą w `fullmag-plan`
+(3/3), zestaw referencyjny anteny w `fullmag-runner` (33/33), a kod feature
+`fem-gpu` przechodzi hostowy `cargo check`; nie jest to kwalifikacja natywnego
+FEM. Kontenerowa recepta Windows nie wystartowała, ponieważ ogólny
+`compose.yaml` interpretuje kompatybilnościowy `FULLMAG_FRONTEND_ROOT` jako
+nieprawidłowy mount z dwoma ścieżkami Windows. Nie jest to jeszcze pełna bramka
+T11: brakuje agregacji między osobnymi blokami/retries i callbackami etapów,
+budżetu pamięci i anulowania, diagnostyki pasma `eta_wave`/`eta_skin`, pomiaru
+wall-time/peak-memory oraz kontenerowego benchmarku direct RT0.
 
 **Pliki:** nowe planner `antenna_preflight.rs` i runner `antenna_validity.rs`, istniejący IR/plan, `native_fem/steady_transport.rs`, direct tetra options, manifest/DTO; nowy `tests/antenna/verify_budget.py`.
 

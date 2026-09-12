@@ -44,6 +44,37 @@ fn preflight_direct_oersted_pair_budget(
     Ok(pairs)
 }
 
+pub(crate) fn preflight_direct_oersted_pair_budget_for_evaluations(
+    source_cell_count: usize,
+    target_count: usize,
+    evaluation_count: usize,
+) -> Result<u64, RunError> {
+    if evaluation_count == 0 {
+        return Ok(0);
+    }
+    let pairs_per_evaluation =
+        preflight_direct_oersted_pair_budget(source_cell_count, target_count)?;
+    let evaluation_count = u64::try_from(evaluation_count).map_err(|_| RunError {
+        message: "antenna Oersted preflight evaluation count is not representable".into(),
+    })?;
+    let total_pairs = pairs_per_evaluation
+        .checked_mul(evaluation_count)
+        .ok_or_else(|| RunError {
+            message: format!(
+                "antenna Oersted preflight global pair count overflows: {pairs_per_evaluation} pairs per evaluation x {evaluation_count} evaluations"
+            ),
+        })?;
+    if total_pairs > DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS {
+        return Err(RunError {
+            message: format!(
+                "antenna Oersted preflight policy='{}' global budget requires {total_pairs} source-target pairs ({pairs_per_evaluation} per evaluation x {evaluation_count} evaluations), exceeding the limit {DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS}; reduce the authored target resolution, reduce the number of simultaneous sources, or select the qualified vector-potential realization",
+                fullmag_ir::ANTENNA_DIRECT_OERSTED_BUDGET_POLICY_V1,
+            ),
+        });
+    }
+    Ok(total_pairs)
+}
+
 mod descriptor;
 mod provenance;
 mod publication;
@@ -214,6 +245,23 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
         }
         _ => NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature,
     };
+    if oersted_method == NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature {
+        let oersted_evaluation_count = prepared
+            .iter()
+            .filter(|prepared| {
+                prepared
+                    .resolved
+                    .fem_cpu_double
+                    .as_ref()
+                    .is_some_and(|descriptor| descriptor.oersted_source_bound)
+            })
+            .count();
+        preflight_direct_oersted_pair_budget_for_evaluations(
+            plan.mesh.cell_count(),
+            plan.mesh.nodes.len(),
+            oersted_evaluation_count,
+        )?;
+    }
     for prepared in prepared {
         let resolved = prepared.resolved;
         let stage_cache_key = validate_stage_cache_plan(resolved)?;
@@ -3758,6 +3806,26 @@ mod tests {
         assert!(error
             .message
             .contains("reduce the authored target resolution"));
+    }
+
+    #[test]
+    fn direct_oersted_pair_budget_is_global_across_evaluations() {
+        let allowed = preflight_direct_oersted_pair_budget_for_evaluations(500, 1_000, 2)
+            .expect("two evaluations should fit the global boundary");
+        assert_eq!(allowed, DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS);
+
+        let error =
+            preflight_direct_oersted_pair_budget_for_evaluations(500, 1_000, 3).unwrap_err();
+        assert!(error.message.contains("global budget"));
+        assert!(error.message.contains("1500000 source-target pairs"));
+        assert!(error.message.contains("3 evaluations"));
+    }
+
+    #[test]
+    fn direct_oersted_global_pair_budget_rejects_total_overflow() {
+        let error =
+            preflight_direct_oersted_pair_budget_for_evaluations(2, 2, usize::MAX).unwrap_err();
+        assert!(error.message.contains("global pair count overflows"));
     }
 }
 
