@@ -11,7 +11,7 @@ use crate::error::ApiError;
 use crate::router_v2::handlers::sessions::status::domain_generation_id;
 use crate::schemas::commands::{
     CommandResponse, RuntimeCommandIntent, RuntimeCommandPrecondition, RuntimeCommandTarget,
-    SolverPolicyRequest, StructuredCommandRequest, FDM_GRID_REFRESH_DEFERRED_REASON,
+    SolverPolicyRequest, StructuredCommandRequest,
 };
 use crate::schemas::runtime::FieldMaterializationRequirement;
 use crate::session::effective_runtime_status_code;
@@ -27,6 +27,10 @@ use fullmag_ir::{
 };
 use fullmag_quantities::quantity_spec;
 
+use super::remesh_admission::{
+    has_active_mesh_command, is_active_mesh_or_compute_command, is_compute_command,
+    remesh_disabled_reason,
+};
 use crate::schemas::relaxation::MU0_T_PER_APM;
 
 #[utoipa::path(
@@ -56,6 +60,21 @@ pub(crate) async fn submit_structured_command_impl(
     enforce_session_command_admission(&state).await?;
     validate_relax_command_controls(&req)?;
     validate_solver_policy_controls(&req)?;
+    match &mut req {
+        StructuredCommandRequest::MeshBuild {
+            mesh_options: Some(options),
+            ..
+        }
+        | StructuredCommandRequest::FdmGridRefresh {
+            mesh_options: Some(options),
+            ..
+        } => {
+            if let Some(options) = options.as_object_mut() {
+                options.remove("canonical_policy_snapshot");
+            }
+        }
+        _ => {}
+    }
     if request_has_adaptive_solver_policy(&req) {
         if let Some(scene) = current_authoring_gate_scene(&state).await? {
             validate_solver_policy_lane(
@@ -77,10 +96,24 @@ pub(crate) async fn submit_structured_command_impl(
     let mut command = command_from_structured(req, command_id, now);
     attach_frozen_spins_runtime_plan_binding(&state, &mut command).await?;
     if command.kind == "fdm_grid_refresh" {
-        let reason = fdm_grid_refresh_rejection_reason(&state).await?;
-        return reject_session_command_impl(state, headers, command, reason).await;
+        if let Some(reason) = fdm_grid_refresh_rejection_reason(&state).await? {
+            return reject_session_command_impl(state, headers, command, reason).await;
+        }
+        let has_scene_problem_patch = command
+            .mesh_options
+            .as_ref()
+            .and_then(|options| options.get("scene_problem_patch"))
+            .is_some();
+        if !has_scene_problem_patch {
+            return reject_session_command_impl(
+                state,
+                headers,
+                command,
+                "FDM grid refresh requires a materialized authoring scene.".into(),
+            )
+            .await;
+        }
     }
-    validate_runtime_command_contract(&state, &command).await?;
     enqueue_session_command_impl(state, headers, command).await
 }
 
@@ -119,15 +152,19 @@ async fn enforce_session_command_admission(state: &Arc<AppState>) -> Result<(), 
     Ok(())
 }
 
-async fn fdm_grid_refresh_rejection_reason(state: &Arc<AppState>) -> Result<String, ApiError> {
+async fn fdm_grid_refresh_rejection_reason(
+    state: &Arc<AppState>,
+) -> Result<Option<String>, ApiError> {
     let current = state.current_live_state.read().await;
     let snapshot = current
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
     if !crate::router_v2::handlers::data::field_resolution::is_fdm_snapshot(snapshot) {
-        return Ok("FDM grid refresh is only applicable to an FDM structured-grid session.".into());
+        return Ok(Some(
+            "FDM grid refresh is only applicable to an FDM structured-grid session.".into(),
+        ));
     }
-    Ok(FDM_GRID_REFRESH_DEFERRED_REASON.into())
+    Ok(None)
 }
 
 fn request_has_adaptive_solver_policy(req: &StructuredCommandRequest) -> bool {
@@ -409,18 +446,11 @@ fn physically_equal(left: f64, right: f64) -> bool {
     (left - right).abs() <= 16.0 * f64::EPSILON * scale
 }
 
-async fn validate_runtime_command_contract(
-    state: &Arc<AppState>,
+fn validate_runtime_command_contract(
+    snapshot: &SessionStateResponse,
+    ledger: &std::collections::VecDeque<TrackedCommandRecord>,
     command: &SessionCommand,
 ) -> Result<(), ApiError> {
-    let snapshot = {
-        let guard = state.current_live_state.read().await;
-        guard
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?
-    };
-
     if let Some(precondition) = command.precondition.as_ref() {
         let runtime_state = runtime_state_for_command_validation(&snapshot);
         if precondition
@@ -504,7 +534,7 @@ async fn validate_runtime_command_contract(
         }
 
         if let Some(expected) = precondition.command_revision {
-            let actual = state.current_command_ledger.lock().await.len() as u64;
+            let actual = ledger.len() as u64;
             if actual != expected {
                 return Err(ApiError::conflict(format!(
                     "command_revision precondition failed: expected {}, got {}",
@@ -517,6 +547,14 @@ async fn validate_runtime_command_contract(
     if is_stage_control_command(command.kind.as_str()) {
         validate_stage_control_state(&snapshot, command)?;
         validate_stage_control_target(&snapshot, command)?;
+    }
+
+    if matches!(command.kind.as_str(), "remesh" | "fdm_grid_refresh") {
+        if let Some(reason) = remesh_disabled_reason(Some(snapshot), ledger) {
+            return Err(ApiError::conflict(reason));
+        }
+    } else if is_compute_command(&command.kind) && has_active_mesh_command(ledger) {
+        return Err(ApiError::conflict("A mesh command is already active."));
     }
 
     Ok(())
@@ -602,14 +640,6 @@ pub(crate) async fn enqueue_frozen_spins_runtime_replan_if_running(
         );
         return None;
     }
-    if let Err(error) = validate_runtime_command_contract(state, &command).await {
-        eprintln!(
-            "[fullmag-api] frozen spins runtime replan validation failed: {}",
-            error.message
-        );
-        return None;
-    }
-
     let headers = HeaderMap::new();
     match enqueue_session_command_impl(Arc::clone(state), &headers, command).await {
         Ok(response) => Some(response.command_id),
@@ -747,7 +777,11 @@ async fn validate_authoring_gate_for_command(
     state: &Arc<AppState>,
     req: &StructuredCommandRequest,
 ) -> Result<Option<(SceneDocument, GeometryRealizationSnapshot)>, ApiError> {
-    let should_check_mesh = matches!(req, StructuredCommandRequest::MeshBuild { .. });
+    let should_check_mesh = matches!(
+        req,
+        StructuredCommandRequest::MeshBuild { .. }
+            | StructuredCommandRequest::FdmGridRefresh { .. }
+    );
     let should_check_run = matches!(
         req,
         StructuredCommandRequest::Run { .. }
@@ -816,9 +850,23 @@ fn attach_geometry_realization_to_mesh_request(
     scene: &SceneDocument,
     realization: &GeometryRealizationSnapshot,
 ) -> Result<(), ApiError> {
-    let StructuredCommandRequest::MeshBuild { mesh_options, .. } = req else {
-        return Ok(());
+    let (intent, mesh_options) = match req {
+        StructuredCommandRequest::MeshBuild {
+            intent,
+            mesh_options,
+            ..
+        }
+        | StructuredCommandRequest::FdmGridRefresh {
+            intent,
+            mesh_options,
+        } => (intent, mesh_options),
+        _ => return Ok(()),
     };
+    intent
+        .precondition
+        .get_or_insert_with(Default::default)
+        .scene_revision
+        .get_or_insert(scene.revision);
     let mut options = mesh_options.take().unwrap_or_else(|| serde_json::json!({}));
     if !options.is_object() {
         options = serde_json::json!({ "user_options": options });
@@ -848,8 +896,39 @@ fn attach_geometry_realization_to_mesh_request(
         "scene_problem_patch".to_string(),
         scene_problem_patch_for_mesh(scene)?,
     );
+    options_object.insert(
+        "canonical_policy_snapshot".to_string(),
+        canonical_mesh_policy_snapshot(scene),
+    );
     *mesh_options = Some(options);
     Ok(())
+}
+
+fn canonical_mesh_policy_snapshot(scene: &SceneDocument) -> serde_json::Value {
+    let objects = scene
+        .objects
+        .iter()
+        .map(|object| {
+            (
+                object.id.as_str(),
+                object
+                    .object_mesh
+                    .as_ref()
+                    .or(object.mesh_override.as_ref()),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let regions = scene
+        .objects
+        .iter()
+        .flat_map(|object| object.regions.iter())
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "objects": objects,
+        "universe": scene.study.universe_mesh.as_ref().or(scene.universe.as_ref()),
+        "shared_domain": scene.study.shared_domain_mesh,
+        "regions": regions,
+    })
 }
 
 fn scene_per_geometry_mesh_options(
@@ -968,6 +1047,19 @@ fn scene_problem_patch_for_mesh(scene: &SceneDocument) -> Result<serde_json::Val
         "object_regions": object_regions,
         "source_scene_revision": scene.revision,
         "universe": study_universe_for_problem_patch(scene)?,
+        "fdm": scene.study.fdm,
+        "runtime_selection": {
+            "backend": scene.study.requested_backend,
+            "device": scene.study.requested_device,
+            "precision": scene.study.requested_precision,
+            "mode": scene.study.requested_mode,
+            "cpu_threads": scene.study.requested_cpu_threads,
+            "explicit_selection": scene.study.requested_backend != "auto"
+                || scene.study.requested_device != "auto"
+                || scene.study.requested_precision != "double"
+                || scene.study.requested_mode != "strict"
+                || scene.study.requested_cpu_threads.is_some(),
+        },
     }))
 }
 
@@ -1293,26 +1385,22 @@ pub(crate) async fn enqueue_session_command_impl(
     headers: &HeaderMap,
     command: SessionCommand,
 ) -> Result<CommandResponse, ApiError> {
-    let snapshot = state
-        .current_live_state
-        .read()
-        .await
+    // Keep admission and queue/ledger insertion atomic. Snapshot -> ledger is
+    // also the publication lock order; no snapshot may change under this check.
+    let current = state.current_live_state.read().await;
+    let snapshot = current
         .as_ref()
-        .cloned()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-
-    if let Some(idempotency_key) = command_request_key(&headers) {
-        let cached = {
-            let responses = state.current_command_responses.lock().await;
-            responses
-                .iter()
-                .find(|(key, _)| key == &idempotency_key)
-                .map(|(_, response)| response.clone())
-        };
-        if let Some(response) = cached {
-            return Ok(response);
+    let mut responses = state.current_command_responses.lock().await;
+    let idempotency_key = command_request_key(headers);
+    if let Some(key) = idempotency_key.as_ref() {
+        if let Some((_, response)) = responses.iter().find(|(cached, _)| cached == key) {
+            return Ok(response.clone());
         }
     }
+    let mut ledger = state.current_command_ledger.lock().await;
+    validate_runtime_command_contract(snapshot, &ledger, &command)?;
+    reserve_command_ledger_entry(&mut ledger)?;
     let command_id = command.command_id.clone();
     let request_id = command_request_id(headers);
 
@@ -1333,22 +1421,15 @@ pub(crate) async fn enqueue_session_command_impl(
         .lock()
         .await
         .push_back(enqueued.clone());
-    {
-        let mut ledger = state.current_command_ledger.lock().await;
-        ledger.push_back(TrackedCommandRecord {
-            command: enqueued,
-            request_id: request_id.clone(),
-            status: CommandLifecycleState::Queued,
-            dispatched_at_unix_ms: None,
-            completed_at_unix_ms: None,
-            completion_status: None,
-            error: None,
-        });
-        while ledger.len() > 256 {
-            ledger.pop_front();
-        }
-    }
-    let _ = state.current_control_events.send(seq);
+    ledger.push_back(TrackedCommandRecord {
+        command: enqueued,
+        request_id: request_id.clone(),
+        status: CommandLifecycleState::Queued,
+        dispatched_at_unix_ms: None,
+        completed_at_unix_ms: None,
+        completion_status: None,
+        error: None,
+    });
 
     let response = CommandResponse {
         accepted: true,
@@ -1357,13 +1438,16 @@ pub(crate) async fn enqueue_session_command_impl(
         error: None,
     };
 
-    if let Some(idempotency_key) = command_request_key(&headers) {
-        let mut responses = state.current_command_responses.lock().await;
+    if let Some(idempotency_key) = idempotency_key {
         responses.push_back((idempotency_key, response.clone()));
         while responses.len() > 128 {
             responses.pop_front();
         }
     }
+    drop(ledger);
+    drop(responses);
+    drop(current);
+    let _ = state.current_control_events.send(seq);
 
     if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
         let display_revision = state.current_display_selection.read().await.revision;
@@ -1375,6 +1459,21 @@ pub(crate) async fn enqueue_session_command_impl(
     }
 
     Ok(response)
+}
+
+fn reserve_command_ledger_entry(
+    ledger: &mut std::collections::VecDeque<TrackedCommandRecord>,
+) -> Result<(), ApiError> {
+    while ledger.len() >= 256 {
+        let index = ledger
+            .iter()
+            .position(|record| !is_active_mesh_or_compute_command(record))
+            .ok_or_else(|| {
+                ApiError::conflict("The command ledger is full of active mesh or compute commands.")
+            })?;
+        ledger.remove(index);
+    }
+    Ok(())
 }
 
 async fn reject_session_command_impl(
@@ -1409,6 +1508,7 @@ async fn reject_session_command_impl(
     let completed_at_unix_ms = command.created_at_unix_ms;
     {
         let mut ledger = state.current_command_ledger.lock().await;
+        reserve_command_ledger_entry(&mut ledger)?;
         ledger.push_back(TrackedCommandRecord {
             command,
             request_id: request_id.clone(),
@@ -1418,9 +1518,6 @@ async fn reject_session_command_impl(
             completion_status: Some(crate::types::CommandCompletionState::Rejected),
             error: Some(error.clone()),
         });
-        while ledger.len() > 256 {
-            ledger.pop_front();
-        }
     }
 
     let response = CommandResponse {
@@ -1774,10 +1871,14 @@ fn command_from_structured(
             command.mesh_reason = mesh_reason;
             command
         }
-        StructuredCommandRequest::FdmGridRefresh { intent } => {
+        StructuredCommandRequest::FdmGridRefresh {
+            intent,
+            mesh_options,
+        } => {
             let mut command =
                 new_session_command(command_id, "fdm_grid_refresh", created_at_unix_ms);
             apply_command_intent(&mut command, intent, RuntimeCommandTarget::Study);
+            command.mesh_options = mesh_options;
             command
         }
         StructuredCommandRequest::SetSolverProfile { intent, profile } => {

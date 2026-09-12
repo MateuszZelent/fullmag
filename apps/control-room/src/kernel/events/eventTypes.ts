@@ -1,3 +1,6 @@
+import type { RuntimeCommandPrecondition } from "../api/apiTypes";
+import type { CommandContext } from "../commands/commandTypes";
+import type { MeshBuildConfirmCommandId } from "../authoring/meshBuildConfirmation";
 import type { ModuleId, SlotId } from "../types";
 import type { LayoutState } from "../layout/layoutTypes";
 
@@ -78,12 +81,40 @@ export interface KernelEventMap {
     source: string;
   };
   "mesh:build-confirm-requested": {
-    commandId: "mesh.build-selected" | "mesh.build-shared-domain";
+    commandId: MeshBuildConfirmCommandId;
+    requestId?: string;
     input?: unknown;
-    source: "inspector" | "palette" | "ribbon" | "test";
+    source: CommandContext["source"];
     sourceDetail?: string;
   };
+  "mesh:build-confirm-resolved": {
+    requestId: string;
+    confirmed: boolean;
+    precondition?: RuntimeCommandPrecondition;
+  };
+  "mesh:build-observation-requested": {
+    commandId: string;
+    requestId: string;
+    objectId?: string;
+    targetKind: "object_mesh" | "study_domain";
+  };
+  "mesh:build-observed": {
+    commandId?: string;
+    requestId?: string;
+    status: "completed" | "failed" | "cancelled" | "pending";
+    observation?: "waiting" | "disconnected" | "publication-unconfirmed";
+    message?: string;
+    meshRevision?: number;
+  };
+  "mesh:build-history-restore-requested": {
+    buildId?: string;
+    commandId?: string;
+    entryId: string;
+    meshTarget: string | null;
+    snapshot: Record<string, unknown>;
+  };
   "mesh:build-submitted": {
+    requestId?: string;
     commandId: string;
     objectId?: string;
     reason: string;
@@ -98,7 +129,7 @@ export interface KernelEventMap {
   };
   "command:completed": {
     commandId: string;
-    status: "completed" | "failed" | "cancelled";
+    status: "completed" | "failed" | "cancelled" | "pending";
   };
   "resource:invalidated": {
     resourceKey: string;

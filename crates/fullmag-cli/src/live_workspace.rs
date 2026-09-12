@@ -6438,6 +6438,7 @@ pub(crate) fn merge_detailed_mesh_workspace(
         .expect("planned mesh workspace should be an object");
     for key in [
         "active_build",
+        "command_outcomes",
         "effective_airbox_target",
         "effective_per_object_targets",
         "last_build_summary",

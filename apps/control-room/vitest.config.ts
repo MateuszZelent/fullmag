@@ -1,9 +1,10 @@
+import { fileURLToPath } from "node:url";
 import { configDefaults } from "vitest/config";
 
 const vitestConfig = {
   resolve: {
     alias: {
-      "@": new URL("./src", import.meta.url).pathname,
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
   test: {

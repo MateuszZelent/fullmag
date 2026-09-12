@@ -227,7 +227,10 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
         <MixedTopologyProvenanceSection model={model.mixedTopology} />
       ) : null}
       {showSection("build-history") ? (
-        <MeshBuildHistorySection entries={model.buildHistoryEntries} />
+        <MeshBuildHistorySection
+          entries={model.buildHistoryEntries}
+          onRestore={model.onRestoreBuildToDraft}
+        />
       ) : null}
       {showSection("policy-comparison") ? (
         <MeshPolicyComparisonSection rows={model.policyDiffRows} />

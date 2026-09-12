@@ -111,20 +111,10 @@ fn apply_regional_drive_energy(
             fullmag_ir::FieldTimeOriginIR::StageLocal => plan.time_stage.start_time_s,
             fullmag_ir::FieldTimeOriginIR::Absolute => 0.0,
         };
-        let multiplier = evaluate_time_dependence(
-            &resolved.drive.waveform,
-            stats.time - time_offset_s,
-        );
-        for (index, (m, field)) in magnetization
-            .iter()
-            .zip(&resolved.field_xyz)
-            .enumerate()
-        {
-            if plan
-                .active_mask
-                .as_ref()
-                .is_some_and(|mask| !mask[index])
-            {
+        let multiplier =
+            evaluate_time_dependence(&resolved.drive.waveform, stats.time - time_offset_s);
+        for (index, (m, field)) in magnetization.iter().zip(&resolved.field_xyz).enumerate() {
+            if plan.active_mask.as_ref().is_some_and(|mask| !mask[index]) {
                 continue;
             }
             magnetization_dot_field += multiplier

@@ -1926,8 +1926,7 @@ fn require_supported_fem_topology(
     if !matches!(requested_device.as_str(), "cpu" | "gpu") {
         failed_predicates.push("explicit_device_cpu_or_gpu_required");
     }
-    let supports_time_evolution =
-        mixed_p1_runtime_supports_time_evolution(problem, fem_plan);
+    let supports_time_evolution = mixed_p1_runtime_supports_time_evolution(problem, fem_plan);
     if let Some(fem) = fem_plan {
         if fem.fe_order != 1 {
             failed_predicates.push("fem_fe_order_not_p1");
@@ -6195,8 +6194,9 @@ mod tests {
         fem.fixed_timestep = None;
         fem.field_drives = vec![drive];
 
-        require_supported_fem_topology(&problem, &plan)
-            .expect("bound mixed P1 time evolution with a regional drive must cross the startup guard");
+        require_supported_fem_topology(&problem, &plan).expect(
+            "bound mixed P1 time evolution with a regional drive must cross the startup guard",
+        );
     }
 
     #[test]

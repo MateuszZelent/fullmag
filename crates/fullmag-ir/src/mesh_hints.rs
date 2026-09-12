@@ -3844,10 +3844,7 @@ fn mapped_jacobian(coordinates: &[[f64; 3]], derivatives: &[[f64; 3]]) -> [[f64;
     jacobian
 }
 
-fn mapped_jacobian_scaled_jacobian(
-    coordinates: &[[f64; 3]],
-    derivatives: &[[f64; 3]],
-) -> f64 {
+fn mapped_jacobian_scaled_jacobian(coordinates: &[[f64; 3]], derivatives: &[[f64; 3]]) -> f64 {
     let jacobian = mapped_jacobian(coordinates, derivatives);
     let denominator = (0..3)
         .map(|reference_axis| {

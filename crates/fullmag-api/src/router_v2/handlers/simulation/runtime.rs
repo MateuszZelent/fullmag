@@ -1877,6 +1877,7 @@ pub async fn get_command_status(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<CommandQueueStatusResource>, ApiError> {
     ensure_workspace(&state).await?;
+    let current = state.current_live_state.read().await;
     let ledger = state.current_command_ledger.lock().await;
     let pending_count = ledger
         .iter()
@@ -1908,8 +1909,7 @@ pub async fn get_command_status(
         .count() as u64;
     let revision = command_ledger_revisions(&ledger).command_queue_revision;
     let (can_accept_commands, runtime_controls) = {
-        let guard = state.current_live_state.read().await;
-        let snapshot = guard.as_ref();
+        let snapshot = current.as_ref();
         (
             snapshot
                 .map(|value| value.runtime_status.can_accept_commands)
@@ -1941,6 +1941,8 @@ fn runtime_command_readiness_resources(
         "solve",
         "compute_fields",
         "compute_energies",
+        "mesh_build",
+        "fdm_grid_refresh",
         "pause",
         "resume",
         "stop",
@@ -1963,6 +1965,9 @@ fn runtime_command_disabled_reason(
     ledger: &std::collections::VecDeque<TrackedCommandRecord>,
     kind: &str,
 ) -> Option<String> {
+    if matches!(kind, "mesh_build" | "fdm_grid_refresh") {
+        return super::remesh_admission::remesh_disabled_reason(snapshot, ledger);
+    }
     let Some(snapshot) = snapshot else {
         return Some("Runtime state is unavailable.".into());
     };
@@ -1984,6 +1989,9 @@ fn runtime_compute_disabled_reason(
     ledger: &std::collections::VecDeque<TrackedCommandRecord>,
     state: RuntimeStatus,
 ) -> Option<String> {
+    if super::remesh_admission::has_active_mesh_command(ledger) {
+        return Some("A mesh command is already active.".into());
+    }
     if has_active_compute_command(ledger) {
         return Some("A runtime command is already active.".into());
     }
@@ -2181,7 +2189,7 @@ pub async fn get_command_detail(
         command_id: record.command.command_id.clone(),
         request_id: record.request_id.clone(),
         seq: record.command.seq,
-        kind: record.command.kind.clone(),
+        kind: public_command_kind(&record.command.kind).to_string(),
         target: record.command.target.clone(),
         reason: record.command.reason.clone(),
         precondition: record.command.precondition.clone(),
@@ -2547,8 +2555,9 @@ fn command_status_resource(record: &TrackedCommandRecord) -> CommandStatusResour
     CommandStatusResource {
         command_id: record.command.command_id.clone(),
         request_id: record.request_id.clone(),
+        client_intent_id: record.command.client_intent_id.clone(),
         seq: record.command.seq,
-        kind: record.command.kind.clone(),
+        kind: public_command_kind(&record.command.kind).to_string(),
         target: record.command.target.clone(),
         reason: record.command.reason.clone(),
         status: record.status.as_str().to_string(),
@@ -2559,6 +2568,13 @@ fn command_status_resource(record: &TrackedCommandRecord) -> CommandStatusResour
             .completion_status
             .map(command_completion_state_string),
         error: record.error.clone(),
+    }
+}
+
+fn public_command_kind(kind: &str) -> &str {
+    match kind {
+        "remesh" => "mesh_build",
+        _ => kind,
     }
 }
 
@@ -3724,7 +3740,7 @@ fn command_resource_invalidations(
                 state,
             );
         }
-        "remesh" => {
+        "remesh" | "fdm_grid_refresh" => {
             push_command_invalidation(
                 &mut resources,
                 "meshing/builds/current",

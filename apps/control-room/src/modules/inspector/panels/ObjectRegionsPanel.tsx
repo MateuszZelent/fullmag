@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import { createCommandContext } from "@/kernel/commands/commandContext";
@@ -16,6 +16,7 @@ import {
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 
+import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FormField } from "../primitives/FormField";
 import {
@@ -59,7 +60,7 @@ import { resolveMeshInspectorLane } from "./fdmMeshInspectorModel";
 
 type Feedback =
   | {
-      kind: "error" | "success";
+      kind: "error" | "success" | "warning";
       message: string;
     }
   | null;
@@ -175,6 +176,8 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
   );
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [pending, setPending] = useState(false);
+  const [buildPending, setBuildPending] = useState(false);
+  const buildInFlight = useRef(false);
   const { draft } = resolveInspectorDraftState({
     baseDraft,
     baseKey: draftKey,
@@ -364,6 +367,7 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
   }
 
   async function buildRegion(): Promise<void> {
+    if (pending || buildInFlight.current) return;
     if (meshLane !== "fem") {
       setFeedback({
         kind: "error",
@@ -389,21 +393,28 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
       setFeedback({ kind: "error", message: regionMeshLifecycle.reason });
       return;
     }
-    if (objectRegionDraftDirty(draft, baseDraft)) {
-      const applied = await applyRegion();
-      if (!applied) return;
-    }
+    buildInFlight.current = true;
+    setBuildPending(true);
     try {
+      if (objectRegionDraftDirty(draft, baseDraft) && !(await applyRegion())) return;
       const commandContext = createCommandContext("inspector", kernel, {
         sourceDetail: "object-region-mesh",
+        input: { object_id: model.objectId, region_id: model.regionId },
       });
-      await kernel.commands.execute("mesh.build-shared-domain", commandContext);
+      const result = await kernel.commands.execute("mesh.build-shared-domain", commandContext);
       setFeedback({
-        kind: "success",
-        message: "Region policy applied. Shared-domain mesh build submitted.",
+        kind: result.status === "completed" ? "success" : result.status === "failed" ? "error" : "warning",
+        message: result.message ?? (result.status === "completed"
+          ? "Shared-domain mesh build completed."
+          : result.status === "failed" ? "Shared-domain mesh build failed."
+          : result.status === "pending" ? "Build remains active; see Mesh Jobs."
+          : "Mesh build was not submitted."),
       });
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
+    } finally {
+      buildInFlight.current = false;
+      setBuildPending(false);
     }
   }
 
@@ -497,10 +508,27 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
     }
   }
 
+  const revert = () => {
+    setDraftState(initialInspectorDraftState({ baseDraft, baseKey: draftKey, identityKey: draftIdentityKey }));
+    setFeedback(null);
+  };
+  const validationErrors = validateObjectRegionDraft(draft, { meshPolicyLane: meshLane });
+  useRegisterInspectorEditSession(
+    canWriteRegion ? "staged" : null,
+    pending,
+    objectRegionDraftDirty(draft, baseDraft),
+    canWriteRegion && validationErrors.length === 0,
+    undefined,
+    applyRegion,
+    revert,
+  );
+
   const subProps: RegionSubPanelProps = {
     model,
     draft,
     pending,
+    buildPending,
+    membership: membership.data ?? null,
     draftDirty: objectRegionDraftDirty(draft, baseDraft),
     buildRegion,
     regionMeshLifecycle,
@@ -517,16 +545,7 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
     applyRegion,
     duplicateRegion,
     deleteRegion,
-    revert: () => {
-      setDraftState(
-        initialInspectorDraftState({
-          baseDraft,
-          baseKey: draftKey,
-          identityKey: draftIdentityKey,
-        }),
-      );
-      setFeedback(null);
-    },
+    revert,
     feedback,
     materialFields: materialFields.data ?? null,
     couplingDependencies,

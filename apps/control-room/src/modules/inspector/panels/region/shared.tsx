@@ -2,7 +2,7 @@ import { Button } from "@/shared/ui/Button";
 import { FieldRow } from "../../primitives/FieldRow";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
-import type { MaterialParameterFieldListResource } from "@/kernel/api/apiTypes";
+import type { MeshRegionMembershipResource, MaterialParameterFieldListResource } from "@/kernel/api/apiTypes";
 import type {
   ObjectRegionDraft,
   ObjectRegionPanelModel,
@@ -19,6 +19,8 @@ export interface RegionSubPanelProps {
   model: ObjectRegionPanelModel;
   draft: ObjectRegionDraft;
   pending: boolean;
+  buildPending?: boolean;
+  membership?: MeshRegionMembershipResource | null;
   draftDirty: boolean;
   buildRegion: () => Promise<void>;
   regionMeshLifecycle: RegionMeshLifecycle | null;
@@ -41,7 +43,7 @@ export interface RegionSubPanelProps {
   duplicateRegion: () => Promise<void>;
   deleteRegion: () => Promise<void>;
   revert: () => void;
-  feedback: { kind: "error" | "success"; message: string } | null;
+  feedback: { kind: "error" | "success" | "warning"; message: string } | null;
 }
 
 export function ObjectRegionInlineDiagnostics({
@@ -106,6 +108,7 @@ export function ObjectRegionMetadataSection({
 
 export function ObjectRegionActionsSection({
   pending,
+  buildPending = false,
   draftDirty,
   buildRegion,
   regionMeshLifecycle,
@@ -120,6 +123,7 @@ export function ObjectRegionActionsSection({
   couplingDependencies,
 }: {
   pending: boolean;
+  buildPending?: boolean;
   draftDirty: boolean;
   buildRegion: () => Promise<void>;
   regionMeshLifecycle: RegionMeshLifecycle | null;
@@ -130,7 +134,7 @@ export function ObjectRegionActionsSection({
   revert: () => void;
   duplicateRegion: () => Promise<void>;
   deleteRegion: () => Promise<void>;
-  feedback: { kind: "error" | "success"; message: string } | null;
+  feedback: { kind: "error" | "success" | "warning"; message: string } | null;
   couplingDependencies: RegionCouplingDependency[];
 }) {
   const femMeshLifecycle = meshLane === "fem" ? regionMeshLifecycle : null;
@@ -201,14 +205,14 @@ export function ObjectRegionActionsSection({
         </Button>
         {meshLane === "fem" ? (
           <Button
-            disabled={pending || !meshWritesAllowed || femMeshLifecycle?.status === "unsupported"}
+            disabled={pending || buildPending || !meshWritesAllowed || femMeshLifecycle?.status === "unsupported"}
             size="sm"
             type="button"
             variant="primary"
             title={meshWritesAllowed ? femMeshLifecycle?.reason : "FEM mesh realization is unavailable"}
             onClick={() => void buildRegion()}
           >
-            {draftDirty ? "Apply & Build Mesh" : "Build Mesh"}
+            {buildPending ? "Waiting for mesh build…" : draftDirty ? "Apply & Build Mesh" : "Build Mesh"}
           </Button>
         ) : null}
         <Button

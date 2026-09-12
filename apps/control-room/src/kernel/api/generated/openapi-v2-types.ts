@@ -10556,6 +10556,8 @@ export interface components {
             /** @enum {string} */
             kind: "mesh_build";
         }) | (components["schemas"]["RuntimeCommandIntent"] & {
+            mesh_options?: Record<string, never> | null;
+        } & {
             /** @enum {string} */
             kind: "fdm_grid_refresh";
         }) | (components["schemas"]["RuntimeCommandIntent"] & {

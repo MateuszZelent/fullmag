@@ -9,7 +9,6 @@ import {
   useFdmRegionMembershipBinaryResource,
   useFdmRegionMembershipResource,
   useMeshRegionQualityResource,
-  useMeshRegionMembershipResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { normalizeMeshQualityStatistics } from "@/shared/domain/mesh/qualityStatistics";
 import { FormField } from "../../primitives/FormField";
@@ -35,6 +34,8 @@ export function ObjectRegionMeshPanel({
   model,
   draft,
   pending,
+  buildPending,
+  membership,
   draftDirty,
   buildRegion,
   regionMeshLifecycle,
@@ -79,12 +80,6 @@ export function ObjectRegionMeshPanel({
       }),
     [fdmMeshResources, meshLane, model.objectId, model.regionId],
   );
-  const membership = useMeshRegionMembershipResource(model.objectId, model.regionId, {
-    enabled:
-      femLane &&
-      model.mode === "committed" &&
-      model.regionId !== "none",
-  });
   const quality = useMeshRegionQualityResource(model.regionId, {
     enabled:
       femLane &&
@@ -102,17 +97,17 @@ export function ObjectRegionMeshPanel({
         kernel,
         scope: {
           kind: "region",
-          meshPartIds: membership.data?.mesh_part_ids ?? [],
+          meshPartIds: membership?.mesh_part_ids ?? [],
           objectId: model.objectId,
           regionId: model.regionId,
         },
       });
     },
-    [kernel, membership.data?.mesh_part_ids, model.objectId, model.regionId],
+    [kernel, membership?.mesh_part_ids, model.objectId, model.regionId],
   );
   if (meshLane === "fdm") {
     return (
-      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" data-mesh-policy-draft="region">
         <ObjectRegionMetadataSection model={model} meshLane={meshLane} />
         <InspectorGroup title="Region Mesh" badge={fdmModel.status}>
           {fdmModel.notice ? (
@@ -156,7 +151,7 @@ export function ObjectRegionMeshPanel({
   }
   if (meshLane !== "fem") {
     return (
-      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" data-mesh-policy-draft="region">
         <ObjectRegionMetadataSection model={model} meshLane={meshLane} />
         <InspectorGroup title="Mesh Semantics" badge="unresolved">
           <FeedbackBanner
@@ -168,6 +163,7 @@ export function ObjectRegionMeshPanel({
         </InspectorGroup>
         <ObjectRegionActionsSection
           pending={pending}
+        buildPending={buildPending}
           draftDirty={draftDirty}
           buildRegion={buildRegion}
           regionMeshLifecycle={regionMeshLifecycle}
@@ -185,7 +181,7 @@ export function ObjectRegionMeshPanel({
     );
   }
   return (
-    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" data-mesh-policy-draft="region">
       <ObjectRegionMetadataSection model={model} meshLane={meshLane} />
 
       <InspectorGroup title="Mesh Policy">
@@ -230,6 +226,23 @@ export function ObjectRegionMeshPanel({
         />
       </InspectorGroup>
 
+      <ObjectRegionActionsSection
+        pending={pending}
+          buildPending={buildPending}
+        draftDirty={draftDirty}
+        buildRegion={buildRegion}
+        regionMeshLifecycle={regionMeshLifecycle}
+        canWriteRegion={canWriteRegion}
+        canWriteMeshRegion={canWriteMeshRegion}
+        meshLane={meshLane}
+        couplingDependencies={couplingDependencies}
+        applyRegion={applyRegion}
+        revert={revert}
+        duplicateRegion={duplicateRegion}
+        deleteRegion={deleteRegion}
+        feedback={feedback}
+      />
+
       <InspectorGroup
         title="Region Quality Distributions"
         badge={
@@ -247,21 +260,7 @@ export function ObjectRegionMeshPanel({
         />
       </InspectorGroup>
 
-      <ObjectRegionActionsSection
-        pending={pending}
-        draftDirty={draftDirty}
-        buildRegion={buildRegion}
-        regionMeshLifecycle={regionMeshLifecycle}
-        canWriteRegion={canWriteRegion}
-        canWriteMeshRegion={canWriteMeshRegion}
-        meshLane={meshLane}
-        couplingDependencies={couplingDependencies}
-        applyRegion={applyRegion}
-        revert={revert}
-        duplicateRegion={duplicateRegion}
-        deleteRegion={deleteRegion}
-        feedback={feedback}
-      />
+
     </div>
   );
 }
