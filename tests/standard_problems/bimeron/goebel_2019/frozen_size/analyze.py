@@ -527,10 +527,12 @@ def _resolved_frozen_metrics(
     """Fill missing counts from the runtime's resolved frozen-mask plan.
 
     Native solver traces currently publish the terminal energy but may omit
-    constraint counters.  The stage metadata is authoritative for a static
-    selector and contains the resolved mask counts, so use it only for those
-    missing counters; torque and reference-drift fields remain explicitly
-    ``not_emitted`` when the solver did not publish them.
+    constraint counters or reference drift.  The stage metadata is
+    authoritative for a static selector and contains the resolved mask
+    counts, so use it only for those missing counters.  The frozen-spins v1
+    ``max_torque_Apm`` reduction is accepted as the free-DOF torque metric;
+    torque or reference-drift fields remain explicitly ``not_emitted`` when
+    the solver did not publish a contract-compatible value.
     """
 
     counts_complete = all(

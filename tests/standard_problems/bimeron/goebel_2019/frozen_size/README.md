@@ -30,8 +30,11 @@ oddziela spełnienie kontraktu od ostrzeżeń i oznacza limit czasu/kroków jako
 `not_converged`. `profile_summary.json` zachowuje pełną strukturę wyników,
 `profile_energy.csv` udostępnia płaską tabelę `R -> E`, a `report.py` generuje
 `profile_report.md` bez łączenia niezaakceptowanych punktów gładką krzywą.
-Brak `max_torque_free` pozostaje jawnie oznaczony jako `not_emitted`; metryka
-`max_torque_T` nie jest za nią podstawiana. Do profilu energii należy używać
+Runtime frozen-spins v1 publikuje `max_torque_Apm` jako maksimum po wolnych
+stopniach swobody; analizator mapuje tę wartość do `free_torque_metric` i
+przelicza ją na tesle. Jeżeli nie ma kontraktowo zgodnej metryki, wynik
+pozostaje jawnie oznaczony jako `not_emitted`; ogólna metryka `max_torque_T`
+nie jest za nią podstawiana. Do profilu energii należy używać
 pola `profile_energy`, które wskazuje ostatni pomiar etapu `constrained_hold`;
 pole `energy` opisuje stan terminalny, a więc po release, gdy release został
 włączony.
