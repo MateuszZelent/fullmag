@@ -568,6 +568,31 @@ static void free_vector_field(DeviceVectorField &field) {
     if (field.z) { fullmag_fdm_untracked_cuda_free(field.z); field.z = nullptr; }
 }
 
+// Rotated-DMI workspace extension allocations happen after the normal setup
+// baseline has been sealed.  A memset failure must release the tracked
+// allocations before returning so a retry cannot observe a stale complete
+// field (or leak the live-allocation accounting entry).
+static void free_tracked_vector_field(Context &ctx, DeviceVectorField &field) {
+    if (field.x) {
+        if (context_gpu_workspace_cuda_free(ctx, field.x) != cudaSuccess) {
+            ctx.gpu_workspace_accounting_valid = false;
+        }
+        field.x = nullptr;
+    }
+    if (field.y) {
+        if (context_gpu_workspace_cuda_free(ctx, field.y) != cudaSuccess) {
+            ctx.gpu_workspace_accounting_valid = false;
+        }
+        field.y = nullptr;
+    }
+    if (field.z) {
+        if (context_gpu_workspace_cuda_free(ctx, field.z) != cudaSuccess) {
+            ctx.gpu_workspace_accounting_valid = false;
+        }
+        field.z = nullptr;
+    }
+}
+
 static void free_regional_field_drives(Context &ctx) {
     if (ctx.regional_field_drive_x) {
         fullmag_fdm_untracked_cuda_free(ctx.regional_field_drive_x);
@@ -4044,6 +4069,20 @@ static bool validate_rotated_dmi_workspace_extension(
     return true;
 }
 
+static void reset_rotated_dmi_workspace_extension_baseline(Context &ctx) {
+    if (!ctx.gpu_workspace_setup_complete) {
+        return;
+    }
+    // A failed extension is not a successful setup, but its tracked
+    // allocation attempts remain part of the monotonic total counters.  Move
+    // the extension baseline forward only after every failed field has been
+    // released; the next retry is then checked for its own exact delta.
+    ctx.gpu_workspace_setup_device_allocation_count =
+        ctx.gpu_workspace_total_device_allocation_count;
+    ctx.gpu_workspace_setup_device_allocation_bytes =
+        ctx.gpu_workspace_total_device_allocation_bytes;
+}
+
 bool context_ensure_rotated_dmi_workspace(Context &ctx) {
     if (!ctx.has_multilayer_plan_v2) {
         if (vector_field_is_complete(ctx.h_rotated_dmi)) {
@@ -4060,6 +4099,8 @@ bool context_ensure_rotated_dmi_workspace(Context &ctx) {
         if (!alloc_vector_field(ctx, ctx.h_rotated_dmi) ||
             !zero_vector_field(
                 ctx, ctx.h_rotated_dmi, ctx.cell_count, "rotated DMI observable")) {
+            free_tracked_vector_field(ctx, ctx.h_rotated_dmi);
+            reset_rotated_dmi_workspace_extension_baseline(ctx);
             return false;
         }
         uint64_t expected_bytes = 0;
@@ -4072,6 +4113,8 @@ bool context_ensure_rotated_dmi_workspace(Context &ctx) {
                 allocation_bytes_before,
                 1,
                 expected_bytes)) {
+            free_tracked_vector_field(ctx, ctx.h_rotated_dmi);
+            reset_rotated_dmi_workspace_extension_baseline(ctx);
             if (ctx.last_error.empty()) {
                 ctx.last_error = "rotated DMI workspace byte count overflow";
             }
@@ -4113,6 +4156,8 @@ bool context_ensure_rotated_dmi_workspace(Context &ctx) {
         ctx.gpu_workspace_total_device_allocation_count;
     const uint64_t allocation_bytes_before =
         ctx.gpu_workspace_total_device_allocation_bytes;
+    std::vector<DeviceMultilayerLayer *> allocated_layers;
+    allocated_layers.reserve(static_cast<size_t>(fields_to_allocate));
     for (DeviceMultilayerLayer &layer : ctx.multilayer_layers) {
         if (!vector_field_is_empty(layer.h_rotated_dmi)) {
             continue;
@@ -4127,15 +4172,28 @@ bool context_ensure_rotated_dmi_workspace(Context &ctx) {
                 layer.h_rotated_dmi,
                 layer.cell_count,
                 "multilayer rotated DMI observable")) {
+            free_tracked_vector_field(ctx, layer.h_rotated_dmi);
+            for (DeviceMultilayerLayer *allocated : allocated_layers) {
+                free_tracked_vector_field(ctx, allocated->h_rotated_dmi);
+            }
+            reset_rotated_dmi_workspace_extension_baseline(ctx);
             return false;
         }
+        allocated_layers.push_back(&layer);
     }
-    return validate_rotated_dmi_workspace_extension(
+    const bool valid = validate_rotated_dmi_workspace_extension(
         ctx,
         allocation_count_before,
         allocation_bytes_before,
         fields_to_allocate,
         expected_bytes);
+    if (!valid) {
+        for (DeviceMultilayerLayer *allocated : allocated_layers) {
+            free_tracked_vector_field(ctx, allocated->h_rotated_dmi);
+        }
+        reset_rotated_dmi_workspace_extension_baseline(ctx);
+    }
+    return valid;
 }
 
 bool context_prepare_multilayer_fft_workspace_v2(Context &ctx) {

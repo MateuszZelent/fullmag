@@ -3563,6 +3563,14 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
         "capability_supported"
     );
     assert_eq!(
+        active_lane["operations"]["interaction.rotated_interfacial_dmi"]["state"], "unsupported",
+        "active-lane status must derive rotated-DMI support from the resolved planner terms"
+    );
+    assert_eq!(
+        active_lane["operations"]["interaction.rotated_interfacial_dmi"]["reason_code"],
+        "capability_unsupported"
+    );
+    assert_eq!(
         active_lane["operations"]["constraint.frozen_spins"]["state"],
         "supported"
     );
