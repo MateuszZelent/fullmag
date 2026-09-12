@@ -22,6 +22,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <vector>
 
 using namespace fullmag::fdm;
 
@@ -682,9 +683,11 @@ bool validate_multilayer_plan_v2(
                 + ", got " + std::to_string(layer.initial_magnetization_len);
             return false;
         }
-        if (layer.active_mask != nullptr &&
-            layer.active_mask_len != native_cell_count)
-        {
+        if ((layer.active_mask == nullptr) != (layer.active_mask_len == 0)) {
+            error = "layer active_mask and active_mask_len must be provided together";
+            return false;
+        }
+        if (layer.active_mask != nullptr && layer.active_mask_len != native_cell_count) {
             error = "layer active_mask_len mismatch: expected "
                 + std::to_string(native_cell_count)
                 + ", got " + std::to_string(layer.active_mask_len);
@@ -741,6 +744,122 @@ bool validate_multilayer_plan_v2(
 
     return true;
 }
+
+#if FULLMAG_HAS_CUDA
+bool validate_rotated_dmi_multilayer_boundary_exchange_stiffness(
+    const Context &ctx,
+    std::string &error)
+{
+    if (ctx.multilayer_layers.empty()) {
+        error =
+            "RotatedInterfacialDmi boundary Aex validation requires at least one uploaded layer";
+        return false;
+    }
+
+    for (const auto &layer : ctx.multilayer_layers) {
+        const auto &grid = layer.native_grid;
+        uint64_t checked_cell_count = 0;
+        if (grid.nx == 0 || grid.ny == 0 || grid.nz == 0 ||
+            !checked_grid_cell_count(grid, checked_cell_count)) {
+            error =
+                "RotatedInterfacialDmi boundary Aex validation found an invalid layer grid";
+            return false;
+        }
+        const uint64_t plane = static_cast<uint64_t>(grid.nx) * grid.ny;
+        const uint64_t cell_count = plane * grid.nz;
+        if (checked_cell_count != cell_count || layer.cell_count != cell_count ||
+            cell_count > std::numeric_limits<std::size_t>::max()) {
+            error =
+                "RotatedInterfacialDmi boundary Aex validation found an unaddressable layer grid";
+            return false;
+        }
+
+        // A finite positive layer coefficient is valid for every possible
+        // boundary topology.  Avoid a device-to-host mask read in the common
+        // valid case; only a non-positive/non-finite value needs topology.
+        if (std::isfinite(layer.material.exchange_stiffness) &&
+            layer.material.exchange_stiffness > 0.0) {
+            continue;
+        }
+        if (!layer.has_active_mask) {
+            error =
+                "RotatedInterfacialDmi with open boundaries requires strictly positive finite Aex on every active boundary cell (layer "
+                + std::to_string(layer.layer_index) + ")";
+            return false;
+        }
+        if (layer.has_active_mask) {
+            if (layer.active_mask == nullptr) {
+                error =
+                    "RotatedInterfacialDmi boundary Aex validation found a missing layer active mask";
+                return false;
+            }
+        }
+        std::vector<uint8_t> active_mask;
+        try {
+            active_mask.assign(static_cast<std::size_t>(cell_count), 1);
+            const cudaError_t mask_status = cudaMemcpy(
+                active_mask.data(),
+                layer.active_mask,
+                static_cast<std::size_t>(cell_count) * sizeof(uint8_t),
+                cudaMemcpyDeviceToHost);
+            if (mask_status != cudaSuccess) {
+                error =
+                    "RotatedInterfacialDmi boundary Aex validation could not read a layer active mask: "
+                    + std::string(cudaGetErrorString(mask_status));
+                return false;
+            }
+        } catch (const std::exception &exception) {
+            error =
+                "RotatedInterfacialDmi boundary Aex validation could not stage a layer active mask: "
+                + std::string(exception.what());
+            return false;
+        } catch (...) {
+            error =
+                "RotatedInterfacialDmi boundary Aex validation could not stage a layer active mask";
+            return false;
+        }
+
+        const uint64_t dimensions[3] = {grid.nx, grid.ny, grid.nz};
+        const uint64_t strides[3] = {1, grid.nx, plane};
+        for (uint64_t z = 0; z < grid.nz; ++z) {
+            for (uint64_t y = 0; y < grid.ny; ++y) {
+                for (uint64_t x = 0; x < grid.nx; ++x) {
+                    const uint64_t coordinates[3] = {x, y, z};
+                    const uint64_t index = z * plane + y * grid.nx + x;
+                    if (active_mask[index] == 0) continue;
+
+                    bool touches_boundary = false;
+                    for (int axis = 0; axis < 3; ++axis) {
+                        const uint64_t coordinate = coordinates[axis];
+                        const uint64_t dimension = dimensions[axis];
+                        const uint64_t stride = strides[axis];
+                        if (coordinate == 0 || coordinate + 1 == dimension) {
+                            touches_boundary = true;
+                        }
+                        if (coordinate > 0 && active_mask[index - stride] == 0) {
+                            touches_boundary = true;
+                        }
+                        if (coordinate + 1 < dimension &&
+                            active_mask[index + stride] == 0) {
+                            touches_boundary = true;
+                        }
+                    }
+
+                    if (touches_boundary &&
+                        !(std::isfinite(layer.material.exchange_stiffness) &&
+                          layer.material.exchange_stiffness > 0.0)) {
+                        error =
+                            "RotatedInterfacialDmi with open or active-mask boundaries requires strictly positive finite Aex on every active boundary cell (layer "
+                            + std::to_string(layer.layer_index) + ")";
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+#endif
 
 } // namespace
 
@@ -1716,11 +1835,21 @@ int fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
         return FULLMAG_FDM_ERR_INVALID;
     }
     if (descriptor->has_rotated_interfacial_dmi != 0 &&
+        descriptor->dmi_D_rotated_interfacial != 0.0 &&
         !ctx->enable_exchange)
     {
         ctx->last_error =
             "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition";
         return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (descriptor->has_rotated_interfacial_dmi != 0 &&
+        descriptor->dmi_D_rotated_interfacial != 0.0) {
+        std::string boundary_error;
+        if (!validate_rotated_dmi_multilayer_boundary_exchange_stiffness(
+                *ctx, boundary_error)) {
+            ctx->last_error = boundary_error;
+            return FULLMAG_FDM_ERR_INVALID;
+        }
     }
 
     ctx->has_rotated_interfacial_dmi =

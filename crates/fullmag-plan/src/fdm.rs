@@ -431,6 +431,132 @@ fn grid_sample_points(
     points
 }
 
+/// Validate the exchange stiffness used by the rotated-interfacial-DMI
+/// natural boundary condition.  A zero Aex is legal in the bulk, but the
+/// boundary stencil is only well-defined when every active cell touching an
+/// open or active-mask boundary has a strictly positive resolved Aex.
+fn validate_rotated_dmi_boundary_exchange_stiffness(
+    problem: &ProblemIR,
+    grid_cells: [u32; 3],
+    active_mask: Option<&[bool]>,
+    aex_field: Option<&[f64]>,
+    uniform_aex: f64,
+) -> Result<(), String> {
+    let dimensions = [
+        usize::try_from(grid_cells[0]).map_err(|_| {
+            format!(
+                "RotatedInterfacialDmi cannot validate boundary Aex for grid {:?}: cell count is not addressable",
+                grid_cells
+            )
+        })?,
+        usize::try_from(grid_cells[1]).map_err(|_| {
+            format!(
+                "RotatedInterfacialDmi cannot validate boundary Aex for grid {:?}: cell count is not addressable",
+                grid_cells
+            )
+        })?,
+        usize::try_from(grid_cells[2]).map_err(|_| {
+            format!(
+                "RotatedInterfacialDmi cannot validate boundary Aex for grid {:?}: cell count is not addressable",
+                grid_cells
+            )
+        })?,
+    ];
+    let [nx, ny, nz] = dimensions;
+    let Some(cell_count) = nx.checked_mul(ny).and_then(|count| count.checked_mul(nz)) else {
+        return Err(format!(
+            "RotatedInterfacialDmi cannot validate boundary Aex for grid {:?}: cell count overflows the host index type",
+            grid_cells
+        ));
+    };
+    if cell_count == 0 {
+        return Err(format!(
+            "RotatedInterfacialDmi cannot validate boundary Aex for empty grid {:?}",
+            grid_cells
+        ));
+    }
+    if let Some(mask) = active_mask {
+        if mask.len() != cell_count {
+            return Err(format!(
+                "RotatedInterfacialDmi boundary Aex validation received active mask length {}, expected {}",
+                mask.len(), cell_count
+            ));
+        }
+    }
+    if let Some(field) = aex_field {
+        if field.len() != cell_count {
+            return Err(format!(
+                "RotatedInterfacialDmi boundary Aex validation received resolved Aex field length {}, expected {}",
+                field.len(), cell_count
+            ));
+        }
+    }
+
+    let periodic_axes = problem
+        .pbc
+        .as_ref()
+        .map(|pbc| std::array::from_fn(|axis| matches!(pbc.axes[axis], AxisBoundary::Periodic)))
+        .unwrap_or([false; 3]);
+    let strides = [1, nx, nx * ny];
+    let dimensions = [nx, ny, nz];
+
+    for z in 0..nz {
+        for y in 0..ny {
+            for x in 0..nx {
+                let coordinates = [x, y, z];
+                let index = x + nx * (y + ny * z);
+                if active_mask.is_some_and(|mask| !mask[index]) {
+                    continue;
+                }
+
+                let mut touches_boundary = false;
+                for axis in 0..3 {
+                    let coordinate = coordinates[axis];
+                    let dimension = dimensions[axis];
+                    let stride = strides[axis];
+
+                    if coordinate == 0 {
+                        if periodic_axes[axis] {
+                            let neighbor = index + (dimension - 1) * stride;
+                            if active_mask.is_some_and(|mask| !mask[neighbor]) {
+                                touches_boundary = true;
+                            }
+                        } else {
+                            touches_boundary = true;
+                        }
+                    } else if active_mask.is_some_and(|mask| !mask[index - stride]) {
+                        touches_boundary = true;
+                    }
+
+                    if coordinate + 1 == dimension {
+                        if periodic_axes[axis] {
+                            let neighbor = index - (dimension - 1) * stride;
+                            if active_mask.is_some_and(|mask| !mask[neighbor]) {
+                                touches_boundary = true;
+                            }
+                        } else {
+                            touches_boundary = true;
+                        }
+                    } else if active_mask.is_some_and(|mask| !mask[index + stride]) {
+                        touches_boundary = true;
+                    }
+                }
+
+                if touches_boundary {
+                    let aex = aex_field.map(|field| field[index]).unwrap_or(uniform_aex);
+                    if !(aex.is_finite() && aex > 0.0) {
+                        return Err(format!(
+                            "RotatedInterfacialDmi with open or active-mask boundaries requires strictly positive resolved Aex on every active boundary cell; found resolved Aex={aex:.6e} at cell [{x}, {y}, {z}]"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) fn resolved_fdm_cell_centers(
     grid_cells: [u32; 3],
     cell_size: [f64; 3],
@@ -2211,6 +2337,7 @@ pub(crate) fn plan_fdm(
     let mut enable_demag = false;
     let mut has_bulk_dmi = false;
     let mut has_rotated_interfacial_dmi = false;
+    let mut has_nonzero_rotated_interfacial_dmi = false;
     let mut external_field = None;
     let mut has_thermal_noise = false;
     let mut thermal_temperature = problem.temperature;
@@ -2269,8 +2396,9 @@ pub(crate) fn plan_fdm(
             EnergyTermIR::BulkDmi { .. } => {
                 has_bulk_dmi = true;
             }
-            EnergyTermIR::RotatedInterfacialDmi { .. } => {
+            EnergyTermIR::RotatedInterfacialDmi { d } => {
                 has_rotated_interfacial_dmi = true;
+                has_nonzero_rotated_interfacial_dmi |= *d != 0.0;
             }
             EnergyTermIR::ThermalNoise { temperature, seed } => {
                 if has_thermal_noise {
@@ -2365,7 +2493,7 @@ pub(crate) fn plan_fdm(
             .iter()
             .any(|axis| matches!(axis, AxisBoundary::Open))
     });
-    if has_rotated_interfacial_dmi && has_open_magnetic_boundary && !enable_exchange {
+    if has_nonzero_rotated_interfacial_dmi && has_open_magnetic_boundary && !enable_exchange {
         errors.push(
             "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition"
                 .to_string(),
@@ -2591,7 +2719,7 @@ pub(crate) fn plan_fdm(
             voxelize_shape(&shape, cell_size, &mut errors);
         (bounding_size, active_mask, grid_cells, origin, false)
     };
-    if has_rotated_interfacial_dmi
+    if has_nonzero_rotated_interfacial_dmi
         && !enable_exchange
         && active_mask
             .as_deref()
@@ -2958,6 +3086,17 @@ pub(crate) fn plan_fdm(
     );
     let aex_field_opt = match aex_field_resolved {
         Ok(v) => {
+            if has_nonzero_rotated_interfacial_dmi {
+                if let Err(reason) = validate_rotated_dmi_boundary_exchange_stiffness(
+                    problem,
+                    grid_cells,
+                    active_mask.as_deref(),
+                    Some(v.as_slice()),
+                    material.exchange_stiffness,
+                ) {
+                    errors.push(reason);
+                }
+            }
             let is_uniform = v
                 .iter()
                 .all(|&val| (val - material.exchange_stiffness).abs() <= 1e-12);
@@ -2972,6 +3111,9 @@ pub(crate) fn plan_fdm(
             return Err(PlanError { reasons: errors });
         }
     };
+    if !errors.is_empty() {
+        return Err(PlanError { reasons: errors });
+    }
 
     // Resolve alpha field
     let alpha_field_resolved = crate::material::resolve_spatial_parameter(
@@ -4105,7 +4247,7 @@ pub(crate) fn plan_fdm_multilayer(
                 .to_string(),
         );
     }
-    if rotated_interfacial_dmi.is_some() && !enable_exchange {
+    if rotated_interfacial_dmi.is_some_and(|d| d != 0.0) && !enable_exchange {
         errors.push(
             "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition"
                 .to_string(),
@@ -4370,7 +4512,20 @@ pub(crate) fn plan_fdm_multilayer(
             material.exchange_stiffness,
             "Aex",
         ) {
-            Ok(values) => values,
+            Ok(values) => {
+                if rotated_interfacial_dmi.is_some_and(|d| d != 0.0) {
+                    if let Err(reason) = validate_rotated_dmi_boundary_exchange_stiffness(
+                        problem,
+                        grid_cells,
+                        active_mask.as_deref(),
+                        values.as_deref(),
+                        material.exchange_stiffness,
+                    ) {
+                        errors.push(format!("multilayer FDM layer '{}': {reason}", magnet.name));
+                    }
+                }
+                values
+            }
             Err(reason) => {
                 errors.push(reason);
                 None

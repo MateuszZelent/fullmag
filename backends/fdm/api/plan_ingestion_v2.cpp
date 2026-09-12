@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <limits>
 #include <new>
 
 namespace {
@@ -86,8 +87,115 @@ bool has_open_magnetic_boundary(const fullmag_fdm_plan_desc_v2 &plan)
 bool rotated_dmi_has_valid_open_boundary_exchange(
     const fullmag_fdm_plan_desc_v2 &plan)
 {
-    return plan.has_rotated_interfacial_dmi == 0 || plan.base.enable_exchange != 0 ||
+    return plan.has_rotated_interfacial_dmi == 0 ||
+        plan.dmi_D_rotated_interfacial == 0.0 ||
+        plan.base.enable_exchange != 0 ||
         !has_open_magnetic_boundary(plan);
+}
+
+bool rotated_dmi_has_valid_boundary_exchange_stiffness(
+    const fullmag_fdm_plan_desc_v2 &plan)
+{
+    if (plan.has_rotated_interfacial_dmi == 0 ||
+        plan.dmi_D_rotated_interfacial == 0.0) {
+        return true;
+    }
+
+    const auto &grid = plan.base.grid;
+    const bool has_active_mask = plan.base.active_mask != nullptr ||
+        plan.base.active_mask_len != 0;
+    if ((plan.base.active_mask == nullptr) !=
+        (plan.base.active_mask_len == 0)) {
+        return false;
+    }
+    const bool has_a_field = plan.base.a_field != nullptr ||
+        plan.base.a_field_len != 0;
+    if ((plan.base.a_field == nullptr) != (plan.base.a_field_len == 0)) {
+        return false;
+    }
+
+    // A fully periodic, unmasked grid has no natural or active-mask boundary
+    // cells.  Keep the boundary contract a no-op even for descriptors whose
+    // later backend validation will reject an incomplete grid payload.
+    if (grid.nx == 0 || grid.ny == 0 || grid.nz == 0) {
+        return !has_active_mask && !has_a_field &&
+            plan.base.periodic_x != 0 && plan.base.periodic_y != 0 &&
+            plan.base.periodic_z != 0;
+    }
+    if (static_cast<uint64_t>(grid.nx) >
+            std::numeric_limits<uint64_t>::max() /
+                static_cast<uint64_t>(grid.ny)) {
+        return false;
+    }
+    const uint64_t plane = static_cast<uint64_t>(grid.nx) * grid.ny;
+    if (static_cast<uint64_t>(grid.nz) >
+            std::numeric_limits<uint64_t>::max() / plane) {
+        return false;
+    }
+    const uint64_t cell_count = plane * grid.nz;
+    if ((has_active_mask && plan.base.active_mask_len != cell_count) ||
+        (has_a_field && plan.base.a_field_len != cell_count)) {
+        return false;
+    }
+    if (!has_active_mask && !has_a_field &&
+        plan.base.periodic_x != 0 && plan.base.periodic_y != 0 &&
+        plan.base.periodic_z != 0) {
+        return true;
+    }
+
+    const bool periodic[3] = {
+        plan.base.periodic_x != 0,
+        plan.base.periodic_y != 0,
+        plan.base.periodic_z != 0,
+    };
+    const uint64_t dimensions[3] = {grid.nx, grid.ny, grid.nz};
+    const uint64_t strides[3] = {1, grid.nx, plane};
+    const auto is_active = [&](uint64_t index) {
+        return !has_active_mask || plan.base.active_mask[index] != 0;
+    };
+    const auto resolved_aex = [&](uint64_t index) {
+        return has_a_field ? plan.base.a_field[index] :
+            plan.base.material.exchange_stiffness;
+    };
+
+    for (uint64_t z = 0; z < grid.nz; ++z) {
+        for (uint64_t y = 0; y < grid.ny; ++y) {
+            for (uint64_t x = 0; x < grid.nx; ++x) {
+                const uint64_t coordinates[3] = {x, y, z};
+                const uint64_t index = z * plane + y * grid.nx + x;
+                if (!is_active(index)) continue;
+
+                bool touches_boundary = false;
+                for (int axis = 0; axis < 3; ++axis) {
+                    const uint64_t coordinate = coordinates[axis];
+                    const uint64_t dimension = dimensions[axis];
+                    const uint64_t stride = strides[axis];
+                    if (coordinate == 0) {
+                        if (!periodic[axis] ||
+                            !is_active(index + (dimension - 1) * stride)) {
+                            touches_boundary = true;
+                        }
+                    } else if (!is_active(index - stride)) {
+                        touches_boundary = true;
+                    }
+                    if (coordinate + 1 == dimension) {
+                        if (!periodic[axis] ||
+                            !is_active(index - (dimension - 1) * stride)) {
+                            touches_boundary = true;
+                        }
+                    } else if (!is_active(index + stride)) {
+                        touches_boundary = true;
+                    }
+                }
+
+                if (touches_boundary) {
+                    const double aex = resolved_aex(index);
+                    if (!(std::isfinite(aex) && aex > 0.0)) return false;
+                }
+            }
+        }
+    }
+    return true;
 }
 
 bool rotated_dmi_has_valid_abi_and_composition(
@@ -138,6 +246,9 @@ int fullmag_fdm_plan_ingestion_v2_create_checked(
     copy_plan_desc_v2_fields(
         normalized, *plan, header.struct_size, complete_plan_desc_v2_size);
     if (!rotated_dmi_has_valid_abi_and_composition(normalized)) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (!rotated_dmi_has_valid_boundary_exchange_stiffness(normalized)) {
         return FULLMAG_FDM_ERR_INVALID;
     }
     if (!rotated_dmi_has_valid_open_boundary_exchange(normalized)) {

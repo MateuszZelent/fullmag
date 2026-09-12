@@ -121,6 +121,50 @@ void invalid_transfer_kind_reports_validation_error() {
     fullmag_fdm_backend_destroy(handle);
 }
 
+void rotated_dmi_setter_requires_positive_boundary_aex() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("rotated-DMI boundary Aex setter check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    const double magnetization[3] = {1.0, 0.0, 0.0};
+    const uint8_t active_mask[1] = {1};
+    fullmag_fdm_layer_desc_v2 layer = make_layer(0, magnetization);
+    layer.material.exchange_stiffness = 0.0;
+    layer.active_mask = active_mask;
+    layer.active_mask_len = 1;
+    fullmag_fdm_multilayer_plan_desc_v2 plan = make_plan(&layer, 1);
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create_v2(&plan);
+    check(handle != nullptr,
+          "zero boundary Aex setter check should return an error-capable handle");
+    check_error_contains(handle, "uploaded 1 layers");
+
+    const fullmag_fdm_rotated_interfacial_dmi_desc_v1 nonzero = {
+        FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1,
+        sizeof(fullmag_fdm_rotated_interfacial_dmi_desc_v1),
+        1,
+        0,
+        2.0e-3,
+    };
+    check(fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
+              handle, &nonzero) == FULLMAG_FDM_ERR_INVALID,
+          "rotated-DMI setter must reject zero Aex on an active open boundary");
+    check_error_contains(handle, "strictly positive finite Aex");
+
+    const fullmag_fdm_rotated_interfacial_dmi_desc_v1 zero = {
+        FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1,
+        sizeof(fullmag_fdm_rotated_interfacial_dmi_desc_v1),
+        1,
+        0,
+        0.0,
+    };
+    check(fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
+              handle, &zero) == FULLMAG_FDM_OK,
+          "D=0 rotated-DMI setter must remain a no-op for zero boundary Aex");
+    fullmag_fdm_backend_destroy(handle);
+}
+
 void check_failed_before_workspace_setup(fullmag_fdm_backend *handle) {
     fullmag_fdm_gpu_workspace_telemetry_v1 telemetry{};
     telemetry.abi_version = FULLMAG_FDM_GPU_WORKSPACE_TELEMETRY_ABI_V1;
@@ -1185,6 +1229,7 @@ void repeated_create_destroy_reclaims_cuda_workspace() {
 int main() {
     invalid_plan_reports_validation_error();
     invalid_transfer_kind_reports_validation_error();
+    rotated_dmi_setter_requires_positive_boundary_aex();
     overflowed_single_grid_is_rejected_before_workspace_setup();
     overflowed_fft_spectrum_is_rejected_before_workspace_setup();
     overflowed_grid_is_rejected_before_workspace_setup();

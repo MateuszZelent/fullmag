@@ -7096,6 +7096,207 @@ fn rotated_interfacial_dmi_rejects_active_mask_boundary_without_exchange() {
 }
 
 #[test]
+fn rotated_interfacial_dmi_rejects_zero_resolved_aex_on_open_boundary() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fdm;
+    ir.energy_terms = vec![
+        EnergyTermIR::Exchange,
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+    ir.materials[0].exchange_stiffness = 0.0;
+
+    let error = plan(&ir).expect_err("zero boundary Aex must fail closed for rotated DMI");
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("RotatedInterfacialDmi")
+                && reason.contains("resolved Aex")
+                && reason.contains("active boundary")
+        }),
+        "unexpected planner reasons: {:?}",
+        error.reasons
+    );
+}
+
+#[test]
+fn rotated_interfacial_dmi_zero_is_noop_for_open_boundary_validation() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fdm;
+    ir.energy_terms = vec![EnergyTermIR::RotatedInterfacialDmi { d: 0.0 }];
+    ir.materials[0].exchange_stiffness = 0.0;
+    if let fullmag_ir::StudyIR::TimeEvolution { sampling, .. } = &mut ir.study {
+        sampling.outputs.clear();
+    }
+
+    let planned = plan(&ir).expect("zero rotated DMI must not require an open-boundary stencil");
+    let BackendPlanIR::Fdm(fdm) = planned.backend_plan else {
+        panic!("expected a single-grid FDM plan");
+    };
+    assert_eq!(fdm.rotated_interfacial_dmi, Some(0.0));
+}
+
+#[test]
+fn rotated_interfacial_dmi_allows_zero_resolved_aex_away_from_open_boundary() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fdm;
+    ir.energy_terms = vec![
+        EnergyTermIR::Exchange,
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+    ir.material_parameter_fields
+        .push(fullmag_ir::MaterialParameterAssignmentIR {
+            assignment_id: "central_zero_aex".to_string(),
+            owner_object: "strip".to_string(),
+            region_id: None,
+            parameter: fullmag_ir::MaterialParameterNameIR::Aex,
+            value: fullmag_ir::MaterialParameterFieldIR::Radial {
+                center: [0.0, 0.0, 0.0],
+                radius: 1.9e-9,
+                inside: 0.0,
+                outside: 13.0e-12,
+                frame: fullmag_ir::RegionFrameIR::Object,
+                unit: Some("J/m".to_string()),
+            },
+            priority: 10,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        });
+
+    let planned = plan(&ir).expect("zero Aex away from an open boundary must be legal");
+    let BackendPlanIR::Fdm(fdm) = planned.backend_plan else {
+        panic!("expected a single-grid FDM plan");
+    };
+    let aex = fdm
+        .material
+        .a_field
+        .as_ref()
+        .expect("non-uniform Aex field must be retained in the plan");
+    assert!(
+        aex.iter().any(|value| *value == 0.0),
+        "fixture must contain a zero-Aex interior cell"
+    );
+    assert!(
+        aex.iter().any(|value| *value > 0.0),
+        "fixture must contain positive boundary Aex cells"
+    );
+}
+
+#[test]
+fn rotated_interfacial_dmi_rejects_zero_resolved_aex_on_active_mask_boundary() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fdm;
+    ir.geometry.entries = vec![GeometryEntryIR::ImportedGeometry {
+        name: "strip".to_string(),
+        source: "strip.stl".to_string(),
+        format: "stl".to_string(),
+        scale: fullmag_ir::ImportedGeometryScaleIR::Uniform(1.0),
+    }];
+    ir.regions[0].geometry = "strip".to_string();
+    ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: vec![fullmag_ir::FdmGridAssetIR {
+            geometry_name: "strip".to_string(),
+            cells: [3, 1, 1],
+            cell_size: [2e-9, 2e-9, 2e-9],
+            origin: [0.0, 0.0, 0.0],
+            active_mask: vec![true, false, true],
+        }],
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: None,
+    });
+    ir.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+        axes: [
+            fullmag_ir::AxisBoundary::Periodic,
+            fullmag_ir::AxisBoundary::Periodic,
+            fullmag_ir::AxisBoundary::Periodic,
+        ],
+        demag: fullmag_ir::FdmDemagPeriodicityIR::Open,
+        image_counts: None,
+    });
+    ir.energy_terms = vec![
+        EnergyTermIR::Exchange,
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+    ir.materials[0].exchange_stiffness = 0.0;
+
+    let error = plan(&ir).expect_err("zero Aex at an active-mask boundary must fail closed");
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("RotatedInterfacialDmi")
+                && reason.contains("active-mask boundaries")
+                && reason.contains("resolved Aex")
+        }),
+        "unexpected planner reasons: {:?}",
+        error.reasons
+    );
+}
+
+#[test]
+fn rotated_interfacial_dmi_allows_zero_resolved_aex_on_fully_periodic_grid() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fdm;
+    ir.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+        axes: [
+            fullmag_ir::AxisBoundary::Periodic,
+            fullmag_ir::AxisBoundary::Periodic,
+            fullmag_ir::AxisBoundary::Periodic,
+        ],
+        demag: fullmag_ir::FdmDemagPeriodicityIR::Open,
+        image_counts: None,
+    });
+    ir.energy_terms = vec![
+        EnergyTermIR::Exchange,
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+    ir.materials[0].exchange_stiffness = 0.0;
+
+    let planned = plan(&ir).expect("a fully periodic grid has no natural open boundary");
+    let BackendPlanIR::Fdm(fdm) = planned.backend_plan else {
+        panic!("expected a single-grid FDM plan");
+    };
+    assert!(
+        fdm.material
+            .a_field
+            .as_ref()
+            .is_none_or(|field| field.iter().all(|value| *value == 0.0)),
+        "uniform zero Aex should remain represented as the material constant"
+    );
+}
+
+#[test]
+fn multilayer_rotated_interfacial_dmi_rejects_zero_resolved_aex_on_open_boundary() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+    ir.materials[0].exchange_stiffness = 0.0;
+
+    let error = plan(&ir).expect_err("zero multilayer boundary Aex must fail closed");
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("RotatedInterfacialDmi")
+                && reason.contains("resolved Aex")
+                && reason.contains("active boundary")
+        }),
+        "unexpected multilayer planner reasons: {:?}",
+        error.reasons
+    );
+}
+
+#[test]
+fn multilayer_rotated_interfacial_dmi_accepts_positive_open_boundary_aex() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+
+    let planned = plan(&ir).expect("positive multilayer boundary Aex must remain legal");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("expected a multilayer FDM plan");
+    };
+    assert_eq!(multilayer.rotated_interfacial_dmi, Some(3.0e-3));
+}
+
+#[test]
 fn fem_rotated_interfacial_dmi_rejects_periodic_node_pairs() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;

@@ -284,6 +284,8 @@ void owner_ingestion_receipt_preserves_every_semantic_field() {
     // The sentinel storage is not a real active mask.  Keep this fixture's
     // boundary open/closed semantics explicit so it exercises receipt copying
     // rather than the rDMI boundary-law validator.
+    plan.base.a_field = nullptr;
+    plan.base.a_field_len = 0;
     plan.base.active_mask = nullptr;
     plan.base.active_mask_len = 0;
     plan.base.has_interfacial_dmi = 0;
@@ -306,6 +308,13 @@ void owner_ingestion_receipt_preserves_every_semantic_field() {
 void receipt_respects_legacy_output_capacity() {
     fullmag_fdm_plan_desc_v2 plan{};
     populate_distinct_semantic_sentinels(plan);
+    // This receipt fixture uses semantic sentinels, not a resolved per-cell
+    // Aex field or active mask.  Keep those optional arrays absent so the
+    // rDMI boundary-law validator sees the intended scalar material path.
+    plan.base.a_field = nullptr;
+    plan.base.a_field_len = 0;
+    plan.base.active_mask = nullptr;
+    plan.base.active_mask_len = 0;
     plan.base.has_interfacial_dmi = 0;
     plan.base.has_bulk_dmi = 0;
     plan.has_rotated_interfacial_dmi = 1;
@@ -346,6 +355,7 @@ void rotated_dmi_open_boundary_requires_exchange_at_public_ingestion_boundary() 
     plan.struct_size = sizeof(plan);
     plan.base.grid = {2, 1, 1, 1.0e-9, 1.0e-9, 1.0e-9};
     plan.base.material.saturation_magnetisation = 8.0e5;
+    plan.base.material.exchange_stiffness = 1.3e-11;
     plan.base.material.gyromagnetic_ratio = 2.211e5;
     plan.base.initial_magnetization_xyz = nullptr;
     plan.base.initial_magnetization_len = 0;
@@ -358,6 +368,86 @@ void rotated_dmi_open_boundary_requires_exchange_at_public_ingestion_boundary() 
           "open-boundary rotated DMI without Exchange must fail at public ingestion");
     check(ingestion == nullptr,
           "rejected open-boundary rotated DMI must not allocate an ingestion owner");
+}
+
+void rotated_dmi_open_boundary_requires_positive_exchange_stiffness_at_public_ingestion_boundary() {
+    fullmag_fdm_plan_desc_v2 plan{};
+    plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
+    plan.struct_size = sizeof(plan);
+    plan.base.grid = {2, 1, 1, 1.0e-9, 1.0e-9, 1.0e-9};
+    plan.base.material.saturation_magnetisation = 8.0e5;
+    plan.base.material.exchange_stiffness = 0.0;
+    plan.base.material.gyromagnetic_ratio = 2.211e5;
+    plan.base.enable_exchange = 1;
+    plan.has_rotated_interfacial_dmi = 1;
+    plan.dmi_D_rotated_interfacial = 3.0e-3;
+
+    fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
+    int status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
+    check(status == FULLMAG_FDM_ERR_INVALID,
+          "open-boundary rotated DMI must reject zero resolved Aex even with Exchange");
+    check(ingestion == nullptr,
+          "zero boundary Aex rejection must not allocate an ingestion owner");
+
+    plan.base.material.exchange_stiffness = 1.3e-11;
+    status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
+    check(status == FULLMAG_FDM_OK,
+          "open-boundary rotated DMI must accept positive resolved Aex");
+    check(ingestion != nullptr,
+          "positive boundary Aex must allocate an ingestion owner");
+    fullmag_fdm_plan_ingestion_v2_destroy(ingestion);
+}
+
+void rotated_dmi_active_mask_boundary_requires_positive_exchange_stiffness_at_public_ingestion_boundary() {
+    const std::array<unsigned char, 3> active = {1, 0, 1};
+    fullmag_fdm_plan_desc_v2 plan{};
+    plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
+    plan.struct_size = sizeof(plan);
+    plan.base.grid = {3, 1, 1, 1.0e-9, 1.0e-9, 1.0e-9};
+    plan.base.material.saturation_magnetisation = 8.0e5;
+    plan.base.material.exchange_stiffness = 0.0;
+    plan.base.material.gyromagnetic_ratio = 2.211e5;
+    plan.base.enable_exchange = 1;
+    plan.base.periodic_x = 1;
+    plan.base.periodic_y = 1;
+    plan.base.periodic_z = 1;
+    plan.base.active_mask = active.data();
+    plan.base.active_mask_len = active.size();
+    plan.has_rotated_interfacial_dmi = 1;
+    plan.dmi_D_rotated_interfacial = 3.0e-3;
+
+    fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
+    int status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
+    check(status == FULLMAG_FDM_ERR_INVALID,
+          "active-mask rotated DMI must reject zero resolved Aex at the mask boundary");
+    check(ingestion == nullptr,
+          "zero active-mask boundary Aex rejection must not allocate an owner");
+
+    plan.base.material.exchange_stiffness = 1.3e-11;
+    status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
+    check(status == FULLMAG_FDM_OK,
+          "active-mask rotated DMI must accept positive resolved Aex at the mask boundary");
+    check(ingestion != nullptr,
+          "positive active-mask boundary Aex must allocate an owner");
+    fullmag_fdm_plan_ingestion_v2_destroy(ingestion);
+}
+
+void rotated_dmi_zero_is_noop_for_public_open_boundary_exchange_stiffness() {
+    fullmag_fdm_plan_desc_v2 plan{};
+    plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
+    plan.struct_size = sizeof(plan);
+    plan.base.grid = {2, 1, 1, 1.0e-9, 1.0e-9, 1.0e-9};
+    plan.base.material.exchange_stiffness = 0.0;
+    plan.has_rotated_interfacial_dmi = 1;
+    plan.dmi_D_rotated_interfacial = 0.0;
+
+    fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
+    const int status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
+    check(status == FULLMAG_FDM_OK,
+          "D=0 rotated DMI must not require Exchange or positive boundary Aex");
+    check(ingestion != nullptr,
+          "D=0 rotated DMI must still allocate an ingestion owner");
+    fullmag_fdm_plan_ingestion_v2_destroy(ingestion);
 }
 
 void rotated_dmi_fully_periodic_boundary_may_omit_exchange() {
@@ -558,6 +648,9 @@ int main() {
     receipt_respects_legacy_output_capacity();
     legacy_v2_size_preserves_layout_and_defaults_the_extension();
     rotated_dmi_open_boundary_requires_exchange_at_public_ingestion_boundary();
+    rotated_dmi_open_boundary_requires_positive_exchange_stiffness_at_public_ingestion_boundary();
+    rotated_dmi_active_mask_boundary_requires_positive_exchange_stiffness_at_public_ingestion_boundary();
+    rotated_dmi_zero_is_noop_for_public_open_boundary_exchange_stiffness();
     rotated_dmi_fully_periodic_boundary_may_omit_exchange();
     rotated_dmi_flag_constant_and_composition_are_validated();
     incompatible_version_and_size_fail_before_backend_allocation();

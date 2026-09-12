@@ -305,7 +305,9 @@ void verify_single_grid(
 
     fullmag_fdm_plan_desc plan{};
     plan.grid = {nx, ny, nz, spacing, spacing, spacing};
-    plan.material = {ms, rotated ? 0.0 : 1.3e-11, 0.05, 2.211e5};
+    // Keep exchange numerically negligible so this runtime fixture remains a
+    // DMI oracle while satisfying the public rDMI boundary law.
+    plan.material = {ms, rotated ? 1.0e-30 : 1.3e-11, 0.05, 2.211e5};
     plan.precision = precision;
     plan.integrator = FULLMAG_FDM_INTEGRATOR_HEUN;
     plan.enable_exchange = rotated ? 1 : 0;
@@ -449,7 +451,9 @@ void verify_multilayer(
     layer.transfer_kind = FULLMAG_FDM_TRANSFER_IDENTITY;
     // Keep the DMI oracle isolated from the exchange contribution; the ABI
     // contract still exercises the required enabled Exchange flag for rDMI.
-    layer.material = {ms, rotated ? 0.0 : 1.3e-11, 0.05, 2.211e5};
+    // A positive local Aex is required on every active open/mask boundary for
+    // the rotated-DMI natural stencil; keep it tiny to isolate the oracle.
+    layer.material = {ms, rotated ? 1.0e-30 : 1.3e-11, 0.05, 2.211e5};
     layer.initial_magnetization_xyz = m_flat.data();
     layer.initial_magnetization_len = m_flat.size();
     layer.active_mask = active.data();
@@ -637,10 +641,80 @@ void verify_multilayer(
     }
 }
 
+void verify_multilayer_rotated_dmi_boundary_aex_contract() {
+    constexpr double spacing = 2.0e-9;
+    constexpr double ms = 8.0e5;
+    constexpr uint32_t cell_count = 3;
+    const std::array<uint8_t, cell_count> active = {1, 0, 1};
+    const std::array<double, cell_count * 3> magnetization = {
+        1.0, 0.0, 0.0,
+        0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+    };
+
+    fullmag_fdm_layer_desc_v2 layer{};
+    layer.native_grid = {cell_count, 1, 1, spacing, spacing, spacing};
+    layer.convolution_grid = layer.native_grid;
+    layer.transfer_kind = FULLMAG_FDM_TRANSFER_IDENTITY;
+    layer.layer_index = 0;
+    layer.material = {ms, 0.0, 0.05, 2.211e5};
+    layer.initial_magnetization_xyz = magnetization.data();
+    layer.initial_magnetization_len = magnetization.size();
+    layer.active_mask = active.data();
+    layer.active_mask_len = active.size();
+
+    fullmag_fdm_multilayer_plan_desc_v2 plan{};
+    plan.kind = FULLMAG_FDM_PLAN_MULTILAYER_CONV;
+    plan.precision = FULLMAG_FDM_PRECISION_DOUBLE;
+    plan.integrator = FULLMAG_FDM_INTEGRATOR_HEUN;
+    plan.enable_exchange = 1;
+    plan.layers = &layer;
+    plan.layer_count = 1;
+    plan.stats_mode = FULLMAG_FDM_STATS_NONE;
+    plan.stats_stride = 1;
+
+    fullmag_fdm_backend *backend = fullmag_fdm_backend_create_v2(&plan);
+    check(backend != nullptr,
+          "multilayer zero-boundary-Aex contract create returned null");
+    const char *create_status = fullmag_fdm_backend_last_error(backend);
+    check(create_status != nullptr &&
+              std::string(create_status).find("uploaded 1 layers") != std::string::npos,
+          "multilayer zero-boundary-Aex contract create failed");
+
+    const fullmag_fdm_rotated_interfacial_dmi_desc_v1 nonzero = {
+        FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1,
+        sizeof(fullmag_fdm_rotated_interfacial_dmi_desc_v1),
+        1,
+        0,
+        2.0e-3,
+    };
+    check(fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
+              backend, &nonzero) == FULLMAG_FDM_ERR_INVALID,
+          "multilayer rDMI setter must reject zero Aex at an active-mask boundary");
+    const char *boundary_error = fullmag_fdm_backend_last_error(backend);
+    check(boundary_error != nullptr &&
+              std::string(boundary_error).find("strictly positive finite Aex") !=
+                  std::string::npos,
+          "multilayer rDMI setter must explain the boundary Aex rejection");
+
+    const fullmag_fdm_rotated_interfacial_dmi_desc_v1 zero = {
+        FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1,
+        sizeof(fullmag_fdm_rotated_interfacial_dmi_desc_v1),
+        1,
+        0,
+        0.0,
+    };
+    check(fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
+              backend, &zero) == FULLMAG_FDM_OK,
+          "D=0 rDMI setter must remain a no-op for zero boundary Aex");
+    fullmag_fdm_backend_destroy(backend);
+}
+
 } // namespace
 
 int main() {
     check(fullmag_fdm_is_available() != 0, "CUDA FDM backend is unavailable");
+    verify_multilayer_rotated_dmi_boundary_aex_contract();
     verify_single_grid(FULLMAG_FDM_PRECISION_DOUBLE, false, false, false,
                        "single-grid iDMI fp64 open/mask boundary oracle");
     verify_single_grid(FULLMAG_FDM_PRECISION_SINGLE, false, false, false,
