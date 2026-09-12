@@ -7045,15 +7045,6 @@ fn execute_synthetic_stage(
                 diagnostic: None,
             };
             lifecycle.transition(fullmag_runner::AntennaFieldStageStatus::Queued, None)?;
-            lifecycle.transition(fullmag_runner::AntennaFieldStageStatus::Meshing, None)?;
-            lifecycle.transition(
-                fullmag_runner::AntennaFieldStageStatus::SolvingCurrent,
-                None,
-            )?;
-            lifecycle.transition(
-                fullmag_runner::AntennaFieldStageStatus::EvaluatingField,
-                None,
-            )?;
 
             if let Some(cached) =
                 fullmag_runner::load_cached_antenna_field_solution(artifact_dir, plan)?
@@ -7089,6 +7080,16 @@ fn execute_synthetic_stage(
                     ),
                 });
             }
+
+            lifecycle.transition(fullmag_runner::AntennaFieldStageStatus::Meshing, None)?;
+            lifecycle.transition(
+                fullmag_runner::AntennaFieldStageStatus::SolvingCurrent,
+                None,
+            )?;
+            lifecycle.transition(
+                fullmag_runner::AntennaFieldStageStatus::EvaluatingField,
+                None,
+            )?;
 
             let result = match fullmag_runner::execute_antenna_field_solve_plan(plan) {
                 Ok(result) => result,

@@ -610,7 +610,7 @@ Sekwencje testowe:
 
 ```text
 cache miss: queued -> meshing/reused_mesh -> solving_current -> evaluating_field -> projecting_targets -> ready
-cache hit:  queued -> ready(reused_existing=true)
+cache hit:  queued -> projecting_targets(reused_existing=true) -> ready
 cancel:     evaluating_field -> cancelled; no ready manifest
 failure:    solving_current -> failed(reason); no downstream drive
 stale:      ready -> stale(reason); old immutable artifact remains readable by its old run
@@ -630,6 +630,16 @@ nadpisania poprzedniego assetu. Dodany test CLI obejmuje pierwszą publikację,
 reuse, konflikt, obcy plik i próbę wyjścia poza katalog. Nadal pozostaje test
 fault-injection dla anulowania/przerwania całego batcha wielu requestów oraz
 pełne spięcie z resolverem stage/output.
+
+Uzupełnienie implementacyjne 2026-09-12: `execute_synthetic_stage` sprawdza
+zweryfikowaną, niezmienną bazę przed emisją stanów `Meshing`, `SolvingCurrent`
+i `EvaluatingField`. Przy trafieniu zapisuje przejścia
+`Queued → ProjectingTargets` z diagnostyką `reused verified immutable field
+solution` oraz `→ Ready`, a rekord etapu zawiera `reused_existing=true` i
+referencję opublikowanego assetu. Przy braku trafienia zachowana jest pełna
+sekwencja rzeczywistego solve'u. Regresja lifecycle wymusza oba warianty;
+anulowanie między blokami, deduplikacja równoległych solve'ów i pełny resolver
+stage/output pozostają otwarte.
 
 **Bramka:** `lifecycle` i `artifact`; testy fault injection obejmują przerwanie przed/po zapisie payloadu i przed publikacją manifestu. Commit: `fix: bind antenna stage lifecycle to actual execution`.
 

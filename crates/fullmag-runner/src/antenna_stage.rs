@@ -38,6 +38,10 @@ impl AntennaFieldStageStatus {
             (self, next),
             (Missing, Queued)
                 | (Queued, Meshing)
+                // A verified immutable asset can skip the solve stages and
+                // enter the projection boundary directly.  The diagnostic
+                // on the transition carries the explicit reuse reason.
+                | (Queued, ProjectingTargets)
                 | (Meshing, SolvingCurrent)
                 | (SolvingCurrent, EvaluatingField)
                 | (EvaluatingField, ProjectingTargets)
@@ -818,9 +822,53 @@ mod tests {
         assert!(AntennaFieldStageStatus::Missing.can_transition_to(AntennaFieldStageStatus::Queued));
         assert!(!AntennaFieldStageStatus::Queued
             .can_transition_to(AntennaFieldStageStatus::EvaluatingField));
+        assert!(AntennaFieldStageStatus::Queued
+            .can_transition_to(AntennaFieldStageStatus::ProjectingTargets));
         assert!(AntennaFieldStageStatus::SolvingCurrent
             .can_transition_to(AntennaFieldStageStatus::Failed));
         assert!(AntennaFieldStageStatus::Ready.can_transition_to(AntennaFieldStageStatus::Stale));
+    }
+
+    #[test]
+    fn lifecycle_records_cache_reuse_without_fake_solve_stages() {
+        let mut state = AntennaFieldStageState {
+            stage_id: "solve".into(),
+            solution_id: "solution".into(),
+            status: AntennaFieldStageStatus::Missing,
+            transitions: Vec::new(),
+            signatures: None,
+            diagnostic: None,
+        };
+        state
+            .transition(AntennaFieldStageStatus::Queued, None)
+            .unwrap();
+        state
+            .transition(
+                AntennaFieldStageStatus::ProjectingTargets,
+                Some("reused verified immutable field solution".into()),
+            )
+            .unwrap();
+        state
+            .transition(AntennaFieldStageStatus::Ready, None)
+            .unwrap();
+
+        let statuses: Vec<_> = state
+            .transitions
+            .iter()
+            .map(|transition| transition.to)
+            .collect();
+        assert_eq!(
+            statuses,
+            vec![
+                AntennaFieldStageStatus::Queued,
+                AntennaFieldStageStatus::ProjectingTargets,
+                AntennaFieldStageStatus::Ready,
+            ]
+        );
+        assert_eq!(
+            state.transitions[1].diagnostic.as_deref(),
+            Some("reused verified immutable field solution")
+        );
     }
 
     #[test]
