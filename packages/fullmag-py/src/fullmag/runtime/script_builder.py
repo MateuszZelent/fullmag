@@ -8918,10 +8918,15 @@ def _validate_energy_terms(problem: Problem) -> None:
             zeeman_count += 1
             continue
         if isinstance(term, InterfacialDMI):
-            conventional_dmi_count += 1
+            # Zero-valued DMI terms are retained for authoring round-trips,
+            # but they do not activate the executable Hamiltonian or its
+            # conventional-vs-rotated exclusivity rule.
+            if term.D != 0.0:
+                conventional_dmi_count += 1
             continue
         if isinstance(term, RotatedInterfacialDMI):
-            rotated_dmi_count += 1
+            if term.D != 0.0:
+                rotated_dmi_count += 1
             continue
         if isinstance(term, Demag):
             demag_count += 1
@@ -8940,7 +8945,8 @@ def _validate_energy_terms(problem: Problem) -> None:
                 )
             continue
         if isinstance(term, BulkDMI):
-            conventional_dmi_count += 1
+            if term.D != 0.0:
+                conventional_dmi_count += 1
             continue
         if isinstance(term, (OerstedCylinder, OerstedField, Magnetoelastic, UniaxialAnisotropy, CubicAnisotropy, ThermalNoise)):
             continue
