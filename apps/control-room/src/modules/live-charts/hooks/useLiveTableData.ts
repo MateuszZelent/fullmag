@@ -10,6 +10,7 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import type { ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
 import { analysisColumnDescriptorsForQuery, chartTableWindowFromBinary, chartTableWindowValue, mergeChartTableWindows } from "@/shared/domain/analysis/chartDataPlan";
+import { resolveScalarTableXAxisId } from "@/shared/domain/analysis/scalarTableChart";
 
 import { buildLiveChartsTableQuery } from "../liveChartsModel";
 import type { ChartRangePreference } from "@/kernel/workspace/liveChartPreferences";
@@ -53,11 +54,15 @@ export function useLiveTableData({
   const columns = useTableColumnsResource("default", { enabled: resourceEnabled });
   const [state, append] = useReducer(liveTableReducer, { cursor: undefined, queryKey: null, table: null });
   const queryColumns = useMemo(() => columns.data?.map((column) => column.column_id) ?? [], [columns.data]);
+  const effectiveXAxisId = useMemo(
+    () => queryColumns.length > 0 ? resolveScalarTableXAxisId(queryColumns, xAxisId) : xAxisId,
+    [queryColumns, xAxisId],
+  );
   const latestX = state.table && state.table.rowCount > 0
-    ? chartTableWindowValue(state.table, state.table.rowCount - 1, state.table.columns.findIndex((column) => column.column_id === xAxisId)) ?? null
+    ? chartTableWindowValue(state.table, state.table.rowCount - 1, state.table.columns.findIndex((column) => column.column_id === effectiveXAxisId)) ?? null
     : null;
-  const queryKey = useMemo(() => JSON.stringify({ queryColumns, range, targetPoints, xAxisId }), [queryColumns, range, targetPoints, xAxisId]);
-  const query = useMemo(() => buildLiveChartsTableQuery({ columns: queryColumns, cursor: state.queryKey === queryKey ? state.cursor : undefined, latestX: state.queryKey === queryKey ? latestX : null, range, targetPoints, xAxisId }), [latestX, queryColumns, queryKey, range, state.cursor, state.queryKey, targetPoints, xAxisId]);
+  const queryKey = useMemo(() => JSON.stringify({ queryColumns, range, targetPoints, xAxisId: effectiveXAxisId }), [effectiveXAxisId, queryColumns, range, targetPoints]);
+  const query = useMemo(() => buildLiveChartsTableQuery({ columns: queryColumns, cursor: state.queryKey === queryKey ? state.cursor : undefined, latestX: state.queryKey === queryKey ? latestX : null, range, targetPoints, xAxisId: effectiveXAxisId }), [effectiveXAxisId, latestX, queryColumns, queryKey, range, state.cursor, state.queryKey, targetPoints]);
   const hasSchema = queryColumns.length > 0;
   const rows = useTableRowsBinaryResource("default", {
     ...query,
@@ -78,5 +83,5 @@ export function useLiveTableData({
     if (selected.length !== decoded.data.columnCount) return;
     append({ queryKey, table: chartTableWindowFromBinary({ columns: selected, decoded: decoded.data, tableId: "default" }) });
   }, [columns.data, queryColumns, queryKey, rows.data]);
-  return { columns, rows, table: state.table, tableList, tableResource: table, unsupportedReason: liveTableUnsupportedReason(columns.data, columns.status) };
+  return { columns, rows, table: state.table, tableList, tableResource: table, unsupportedReason: liveTableUnsupportedReason(columns.data, columns.status), xAxisId: effectiveXAxisId };
 }

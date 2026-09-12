@@ -25,6 +25,8 @@ export interface ChartLegendItem {
 
 interface ChartLegendProps {
   items: readonly ChartLegendItem[];
+  /** IDs in the owning catalog. Filtered views use this for Shift+solo restore. */
+  availableSeriesIds?: readonly string[];
   selectedSeriesIds: readonly string[];
   onSelectedSeriesIdsChange?: (selectedSeriesIds: string[]) => void;
   /** Accessible label for the legend region */
@@ -66,6 +68,7 @@ export function chartColorNameForIndex(index: number): string {
  * No fetches are triggered by any of these actions.
  */
 export function ChartLegend({
+  availableSeriesIds,
   items,
   onSelectedSeriesIdsChange,
   selectedSeriesIds,
@@ -74,7 +77,7 @@ export function ChartLegend({
   if (items.length === 0) return null;
 
   const selected = new Set(selectedSeriesIds);
-  const availableIds = items.map((item) => item.id);
+  const availableIds = availableSeriesIds ?? items.map((item) => item.id);
 
   function handleClick(
     event: React.MouseEvent<HTMLButtonElement>,

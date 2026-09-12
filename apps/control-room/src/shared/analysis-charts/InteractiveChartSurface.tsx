@@ -17,6 +17,7 @@ export interface ChartInteractionCallbacks {
   onExportRequested?: (format: "csv" | "tsv" | "png") => void;
   onPointSelected?: (seriesId: string, pointIndex: number) => void;
   onRangeSelected?: (fromSI: number, toSI: number) => void;
+  onRequestedExportFailed?: () => void;
 }
 
 export interface InteractiveChartSurfaceIdentity {
@@ -62,6 +63,7 @@ export function InteractiveChartSurface({
   onPointSelected,
   onRangeSelected,
   onRequestedExportHandled,
+  onRequestedExportFailed,
   presentation,
   requestedExportFormat = null,
   series,
@@ -70,7 +72,9 @@ export function InteractiveChartSurface({
   xAxisLabel,
 }: InteractiveChartSurfaceProps) {
   const [isTableOpen, setIsTableOpen] = useState(false);
+  const [rendererReady, setRendererReady] = useState(false);
   const exportRef = useRef<ChartRendererOwner | null>(null);
+  const handledExportFormatRef = useRef<InteractiveChartSurfaceProps["requestedExportFormat"]>(null);
   const model = useMemo(
     () => chartSeriesRenderModel(series, allSeries ?? series, surface, xAxisLabel, dataStatus, presentation),
     [allSeries, dataStatus, presentation, series, surface, xAxisLabel],
@@ -78,17 +82,29 @@ export function InteractiveChartSurface({
 
   useEffect(() => {
     if (fitRequest > 0) exportRef.current?.fitView();
-  }, [fitRequest]);
+  }, [fitRequest, rendererReady]);
   useEffect(() => {
-    if (!requestedExportFormat) return;
+    if (!requestedExportFormat) {
+      handledExportFormatRef.current = null;
+      return;
+    }
+    if (handledExportFormatRef.current === requestedExportFormat) return;
+    if (requestedExportFormat === "png" && !rendererReady) return;
     onExportRequested?.(requestedExportFormat);
+    let exported = true;
     if (requestedExportFormat === "png") {
-      exportChartPng(model, exportRef);
+      exported = exportChartPng(model, exportRef);
     } else {
       exportChartData(model, requestedExportFormat);
     }
+    if (!exported) {
+      handledExportFormatRef.current = requestedExportFormat;
+      onRequestedExportFailed?.();
+      return;
+    }
+    handledExportFormatRef.current = requestedExportFormat;
     onRequestedExportHandled?.();
-  }, [model, onExportRequested, onRequestedExportHandled, requestedExportFormat]);
+  }, [model, onExportRequested, onRequestedExportFailed, onRequestedExportHandled, rendererReady, requestedExportFormat]);
 
   return (
     <div className="fm-analysis-plots__chart-frame">
@@ -97,6 +113,12 @@ export function InteractiveChartSurface({
         exportRef={exportRef}
         initialRange={initialRange}
         model={model}
+        onRendererReady={() => setRendererReady(true)}
+        onRendererError={() => {
+          if (requestedExportFormat === "png") {
+            onRequestedExportFailed?.();
+          }
+        }}
         presentation={presentation}
         ownerStatus={ownerStatus}
         onClick={(event) => {
@@ -110,6 +132,7 @@ export function InteractiveChartSurface({
       />
       <ChartExportControls
         model={model}
+        pngReady={rendererReady}
         rendererRef={exportRef}
         onExportRequested={onExportRequested}
         onOpenPointsTable={() => setIsTableOpen(true)}
@@ -135,6 +158,10 @@ export function chartSeriesRenderModel(
   const units = [...new Set(allSeries.map((item) => item.unit))].slice(0, 2);
   const allSeriesHaveSamples = allSeries.some((item) => item.points.length > 0);
   const xUnit = series.find((item) => item.xUnit)?.xUnit ?? allSeries.find((item) => item.xUnit)?.xUnit ?? "";
+  const colorIndexBySeriesId = new Map<string, number>();
+  allSeries.forEach((item, index) => {
+    if (!colorIndexBySeriesId.has(item.id)) colorIndexBySeriesId.set(item.id, index);
+  });
   const status = renderStatusForPresentation(
     presentation,
     dataStatus,
@@ -144,14 +171,17 @@ export function chartSeriesRenderModel(
     ariaLabel: surface.ariaLabel,
     key: surface.chartId,
     provenance: surface.provenance,
-    series: series.map((item) => ({
-      id: item.id,
-      kind: "line" as const,
-      label: item.label || item.quantity,
-      points: item.points,
-      unit: item.unit,
-      yAxis: Math.max(0, units.indexOf(item.unit)),
-    })),
+    series: series.map((item, visibleIndex) => {
+      return {
+        colorIndex: colorIndexBySeriesId.get(item.id) ?? visibleIndex,
+        id: item.id,
+        kind: "line" as const,
+        label: item.label || item.quantity,
+        points: item.points,
+        unit: item.unit,
+        yAxis: Math.max(0, units.indexOf(item.unit)),
+      };
+    }),
     status,
     statusMessage: presentationMessage(
       presentation,

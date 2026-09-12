@@ -1,6 +1,7 @@
 import type { ChartSeries } from "@/shared/domain/analysis/chartSeries";
 import type { ChartDataPresentationState } from "@/shared/analysis-charts/chartPresentationState";
 import type { LiveChartPresetId } from "./liveChartsModel";
+import type { ChartRangePreference } from "@/kernel/workspace/liveChartPreferences";
 
 export interface LiveChartsViewProps {
   descriptorId: LiveChartPresetId;
@@ -13,6 +14,7 @@ export interface LiveChartsViewProps {
   onPointSelected: (seriesId: string, pointIndex: number, revision: string | number) => void;
   onRangeSelected: (fromSI: number, toSI: number) => void;
   onRequestedExportHandled: () => void;
+  onRequestedExportFailed?: () => void;
   onSeriesChange: (ids: string[]) => void;
   onToggleFollow: () => void;
   presentation: ChartDataPresentationState;
@@ -21,4 +23,9 @@ export interface LiveChartsViewProps {
   selectedSeriesIds: readonly string[];
   title: string;
   xAxisLabel: string;
+  xAxisId?: string;
+  xAxisOptions?: readonly { id: string; label: string }[];
+  onXAxisChange?: (id: string) => void;
+  range?: ChartRangePreference;
+  onRangeChange?: (range: ChartRangePreference) => void;
 }

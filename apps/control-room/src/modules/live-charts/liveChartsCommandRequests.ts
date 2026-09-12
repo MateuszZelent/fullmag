@@ -50,6 +50,14 @@ class LiveChartsCommandRequests {
     this.listeners.forEach((listener) => listener());
   }
 
+  fail(): void {
+    const pending = this.pending;
+    if (!pending) return;
+    this.pending = null;
+    pending.resolve("failed");
+    this.listeners.forEach((listener) => listener());
+  }
+
   private failPending(): void {
     const pending = this.pending;
     if (!pending) return;
