@@ -104,7 +104,7 @@ describe("geometry lifecycle resources", () => {
     const source = readFileSync(
       new URL("./geometryLifecycleResources.ts", import.meta.url),
       "utf8",
-    );
+    ).replace(/\r\n/g, "\n");
     for (const hookName of [
       "useObjectTopologyResource",
       "useObjectMeshReportResource",
@@ -221,7 +221,7 @@ describe("geometry lifecycle resources", () => {
     const source = readFileSync(
       new URL("./geometryLifecycleResources.ts", import.meta.url),
       "utf8",
-    );
+    ).replace(/\r\n/g, "\n");
     const hookStart = source.indexOf("export function useGeometryValidationResource");
     const hookSource = source.slice(hookStart, source.indexOf("\n}\n", hookStart) + 3);
 

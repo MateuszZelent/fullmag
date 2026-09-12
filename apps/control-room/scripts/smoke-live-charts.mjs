@@ -69,13 +69,17 @@ async function main() {
     await verifyVisibilityMatrix(page, evidence);
     await verifySignalSearchAndBulkSelection(page, evidence);
     await verifyCanonicalCsvExport(page);
+    await verifyDirectExportFailureRecovery(page);
     await verifyKeyboardInteractions(page, evidence);
+    await verifyRepeatedPngCommands(page);
     await runRevisionStress(page, fixture, evidence);
     await verifyIrrelevantRevisionBudget(page, fixture, evidence);
     await keyboardPauseAndFollow(page, fixture, evidence);
     const lifecycleBaseline = await runLifecycleStress(page);
     await verifyLifecycleCounters(page, lifecycleBaseline);
+    await verifyOneVisibleCanvas(page);
     const axisRangeProof = await verifyAxisAndRangeRegression(browser);
+    await verifyOneVisibleCanvas(page);
     await verifyNoVisibleErrorNotifications(page);
     const idleProof = await verifyIdleStability(page, evidence);
     await captureVisualVariants(page);
@@ -866,8 +870,8 @@ async function verifyAxisAndRangeRegression(browser) {
 
     await waitForLiveChartSelectValue(page, "Sample window", "Latest samples");
     const rangeTransitions = ["Latest samples"];
-    await selectLiveChartOption(page, "Sample window", "Full history");
-    rangeTransitions.push("Full history");
+    await selectLiveChartOption(page, "Sample window", "Last 5,000 samples (decimated)");
+    rangeTransitions.push("Last 5,000 samples (decimated)");
     await verifyOneVisibleCanvas(page);
     await selectLiveChartOption(page, "Sample window", "Latest samples");
     rangeTransitions.push("Latest samples");
@@ -1014,14 +1018,16 @@ async function verifyVisibilityMatrix(page, evidence) {
 }
 
 async function verifyCanonicalCsvExport(page) {
+  const before = await page.evaluate(() => window.__FULLMAG_LIVE_CHARTS_SMOKE__.downloads.length);
   await keyboardExport(page);
-  await page.waitForFunction(() =>
-    window.__FULLMAG_LIVE_CHARTS_SMOKE__?.downloads?.some((entry) => entry.filename.endsWith(".csv") && typeof entry.content === "string"),
-    undefined,
+  await page.waitForFunction((before) =>
+    window.__FULLMAG_LIVE_CHARTS_SMOKE__?.downloads?.slice(before).some((entry) => entry.filename.endsWith(".csv") && typeof entry.content === "string"),
+    before,
     { timeout: timeoutMs },
   );
-  const csv = await page.evaluate(() =>
-    window.__FULLMAG_LIVE_CHARTS_SMOKE__.downloads.find((entry) => entry.filename.endsWith(".csv") && typeof entry.content === "string")?.content ?? "",
+  const csv = await page.evaluate((before) =>
+    window.__FULLMAG_LIVE_CHARTS_SMOKE__.downloads.slice(before).find((entry) => entry.filename.endsWith(".csv") && typeof entry.content === "string")?.content ?? "",
+    before,
   );
   const rows = csv.split(/\r?\n/).filter(Boolean).map((row) => row.split(","));
   const header = rows[0] ?? [];
@@ -1035,6 +1041,51 @@ async function verifyCanonicalCsvExport(page) {
       throw new Error(`Canonical CSV ${quantity} differs: ${JSON.stringify(final)}`);
     }
   }
+}
+
+async function verifyDirectExportFailureRecovery(page) {
+  const controls = page.locator(".fm-live-charts .fm-analysis-chart-export").first();
+  const before = await page.evaluate(() => window.__FULLMAG_LIVE_CHARTS_SMOKE__.downloads.length);
+  await page.evaluate(() => {
+    const smoke = window.__FULLMAG_LIVE_CHARTS_SMOKE__;
+    smoke.createObjectURLBeforeFailure = URL.createObjectURL;
+    URL.createObjectURL = () => { throw new Error("Controlled download failure"); };
+  });
+  try {
+    await controls.getByRole("button", { name: "CSV", exact: true }).click();
+    await controls.getByRole("alert").filter({ hasText: "CSV export failed" }).waitFor();
+  } finally {
+    await page.evaluate(() => {
+      const smoke = window.__FULLMAG_LIVE_CHARTS_SMOKE__;
+      URL.createObjectURL = smoke.createObjectURLBeforeFailure;
+      delete smoke.createObjectURLBeforeFailure;
+    });
+  }
+  await controls.getByRole("button", { name: "CSV", exact: true }).click();
+  await controls.getByRole("alert").waitFor({ state: "hidden" });
+  await page.waitForFunction((count) => window.__FULLMAG_LIVE_CHARTS_SMOKE__.downloads.length > count, before);
+}
+
+async function verifyRepeatedPngCommands(page) {
+  const canvas = await page.locator(".fm-live-charts canvas").first().elementHandle();
+  if (!canvas) throw new Error("PNG command verification requires a mounted canvas.");
+  for (let index = 0; index < 2; index += 1) {
+    await page.keyboard.press("Control+Shift+P");
+    const palette = page.getByRole("dialog", { name: "Command palette", exact: true });
+    await palette.getByPlaceholder("Search commands").fill("Export Live Chart PNG");
+    const downloaded = page.waitForEvent("download", { timeout: timeoutMs });
+    await palette.getByRole("option").filter({ hasText: "Export Live Chart PNG" }).click();
+    const download = await downloaded;
+    if (!download.suggestedFilename().endsWith(".png")) {
+      throw new Error("Live Chart PNG command produced an unexpected file.");
+    }
+    await palette.waitFor({ state: "hidden" });
+    await waitForQuietFrames(page);
+    if (!(await canvas.evaluate((node) => node.isConnected && node.width > 0 && node.height > 0))) {
+      throw new Error("PNG export replaced the chart canvas or lost its drawing buffer.");
+    }
+  }
+  await canvas.dispose();
 }
 
 async function verifySignalSearchAndBulkSelection(page, evidence) {
@@ -1305,18 +1356,22 @@ async function verifyLifecycleCounters(page, baseline) {
 }
 
 async function captureVisualVariants(page) {
+  await verifyOneVisibleCanvas(page);
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "no-preference" });
   await setTheme(page, "dark");
+  await verifyOneVisibleCanvas(page);
   await verifyNoVisibleErrorNotifications(page);
   await page.screenshot({ fullPage: true, path: resolve(artifactRoot, "live-charts-mocha.png") });
 
   await page.emulateMedia({ colorScheme: "light", reducedMotion: "no-preference" });
   await setTheme(page, "light");
+  await verifyOneVisibleCanvas(page);
   await verifyNoVisibleErrorNotifications(page);
   await page.screenshot({ fullPage: true, path: resolve(artifactRoot, "live-charts-latte.png") });
 
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
   await setTheme(page, "dark");
+  await verifyOneVisibleCanvas(page);
   await verifyNoVisibleErrorNotifications(page);
   await page.screenshot({ fullPage: true, path: resolve(artifactRoot, "live-charts-reduced-motion.png") });
 
@@ -1442,8 +1497,8 @@ function validateProof(proof, evidence) {
   if (evidence.consoleErrors.length > 0) failures.push(`Browser errors: ${evidence.consoleErrors.join(" | ")}`);
   if (proof.counters.chartInstances !== 1) failures.push(`final ECharts owners=${proof.counters.chartInstances}`);
   if (proof.visibilityCombinations !== 8) failures.push("Visibility matrix did not cover all eight combinations.");
-  if (!proof.axisRange || proof.axisRange.axes?.join("->") !== "Step->Time (s)->Step" || proof.axisRange.range?.join("->") !== "Latest samples->Full history->Latest samples") {
-    failures.push("Axis/range browser regression did not cover Step->Time->Step and Full history->Latest samples.");
+  if (!proof.axisRange || proof.axisRange.axes?.join("->") !== "Step->Time (s)->Step" || proof.axisRange.range?.join("->") !== "Latest samples->Last 5,000 samples (decimated)->Latest samples") {
+    failures.push("Axis/range browser regression did not cover Step->Time->Step and Last 5,000 samples (decimated)->Latest samples.");
   }
   const idleDelta = proof.idle?.chartDiagnostics?.delta;
   if (!idleDelta || Object.values(idleDelta).some((delta) => delta !== 0)) failures.push(`idle chart diagnostics changed: ${JSON.stringify(idleDelta)}`);
@@ -1497,6 +1552,7 @@ async function waitForQuietFrames(page) {
 }
 
 async function verifyIdleStability(page, evidence) {
+  await verifyOneVisibleCanvas(page);
   await waitForQuietFrames(page);
   const requestStart = evidence.requests.length;
   const before = await chartDiagnosticsSnapshot(page);

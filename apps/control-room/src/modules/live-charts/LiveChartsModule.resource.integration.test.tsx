@@ -282,7 +282,6 @@ describe("LiveChartsModule resource flow", () => {
         onRequestedExportHandled={() => undefined}
         onSeriesChange={() => undefined}
         presentation={{ kind: "ready", revision: 1 }}
-        requestedExportFormat={null}
         selectedSeriesIds={[]}
         series={series}
         title="Magnetization"

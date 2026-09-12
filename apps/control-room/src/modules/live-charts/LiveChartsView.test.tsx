@@ -8,7 +8,7 @@ const props: LiveChartsViewProps = {
   descriptorId: "magnetization", fitRequest: 0, isFollowing: true,
   onDescriptorChange: noop, onExport: noop, onFit: noop, onChartSelected: noop,
   onPointSelected: noop, onRangeSelected: noop, onRequestedExportHandled: noop,
-  onSeriesChange: noop, onToggleFollow: noop, requestedExportFormat: null,
+  onSeriesChange: noop, onToggleFollow: noop,
   presentation: { kind: "ready", revision: 7 }, selectedSeriesIds: ["mx"],
   series: [
     { id: "mx", label: "mx", quantity: "mx", unit: "1", xUnit: "s", points: [{ rowIndex: 0, x: 1e-9, y: 0.98 }], source: { kind: "data.table.rows", resourceKey: "table", tableId: "default" }, status: "ready" },

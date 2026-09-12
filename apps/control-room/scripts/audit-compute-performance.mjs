@@ -1,6 +1,13 @@
-import { readFileSync } from "node:fs";
+import { readFileSync as readFileSyncRaw } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+function readFileSync(filePath, encoding) {
+  const contents = readFileSyncRaw(filePath, encoding);
+  return typeof contents === "string"
+    ? contents.replace(/\r\n/g, "\n")
+    : contents;
+}
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const runtimeCommandsPath = path.join(

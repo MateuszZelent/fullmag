@@ -8,6 +8,7 @@ import {
   exportChartData,
   exportChartPng,
 } from "./ChartExportControls";
+import type { ChartExportRequest } from "./chartExport";
 import { EChartsCanvasSurface } from "./EChartsCanvasSurface";
 import { PointsTableDialog } from "./PointsTableDialog";
 import type { ChartRendererInstance, ChartRendererOwner, ChartRenderModel } from "./chartRenderer";
@@ -34,6 +35,8 @@ export interface InteractiveChartSurfaceIdentity {
 
 export interface InteractiveChartSurfaceProps extends ChartInteractionCallbacks {
   allSeries?: readonly ChartSeries[];
+  /** Optional model used by CSV/TSV controls when the visible pane is only a view. */
+  dataExportModel?: ChartRenderModel;
   dataStatus?: string;
   diagnostics?: {
     instanceCreated?: (instance: ChartRendererInstance) => void;
@@ -45,7 +48,7 @@ export interface InteractiveChartSurfaceProps extends ChartInteractionCallbacks 
   fitRequest?: number;
   initialRange?: { fromValue: number; toValue: number } | null;
   presentation?: ChartDataPresentationState;
-  requestedExportFormat?: "csv" | "tsv" | "png" | null;
+  requestedExportRequest?: ChartExportRequest | null;
   series: readonly ChartSeries[];
   surface: InteractiveChartSurfaceIdentity;
   ownerStatus?: string;
@@ -56,6 +59,7 @@ export interface InteractiveChartSurfaceProps extends ChartInteractionCallbacks 
 export function InteractiveChartSurface({
   allSeries,
   dataStatus,
+  dataExportModel,
   diagnostics,
   fitRequest = 0,
   initialRange = null,
@@ -65,7 +69,7 @@ export function InteractiveChartSurface({
   onRequestedExportHandled,
   onRequestedExportFailed,
   presentation,
-  requestedExportFormat = null,
+  requestedExportRequest,
   series,
   surface,
   ownerStatus,
@@ -74,7 +78,9 @@ export function InteractiveChartSurface({
   const [isTableOpen, setIsTableOpen] = useState(false);
   const [rendererReady, setRendererReady] = useState(false);
   const exportRef = useRef<ChartRendererOwner | null>(null);
-  const handledExportFormatRef = useRef<InteractiveChartSurfaceProps["requestedExportFormat"]>(null);
+  const rendererErrorRef = useRef(false);
+  const handledExportRequestRef = useRef<string | null>(null);
+  const exportRequest = requestedExportRequest ?? null;
   const model = useMemo(
     () => chartSeriesRenderModel(series, allSeries ?? series, surface, xAxisLabel, dataStatus, presentation),
     [allSeries, dataStatus, presentation, series, surface, xAxisLabel],
@@ -84,27 +90,35 @@ export function InteractiveChartSurface({
     if (fitRequest > 0) exportRef.current?.fitView();
   }, [fitRequest, rendererReady]);
   useEffect(() => {
-    if (!requestedExportFormat) {
-      handledExportFormatRef.current = null;
+    if (!exportRequest) {
+      handledExportRequestRef.current = null;
       return;
     }
-    if (handledExportFormatRef.current === requestedExportFormat) return;
-    if (requestedExportFormat === "png" && !rendererReady) return;
-    onExportRequested?.(requestedExportFormat);
-    let exported = true;
-    if (requestedExportFormat === "png") {
-      exported = exportChartPng(model, exportRef);
-    } else {
-      exportChartData(model, requestedExportFormat);
+    if (handledExportRequestRef.current === exportRequest.requestId) return;
+    if (exportRequest.format === "png" && rendererErrorRef.current) {
+      handledExportRequestRef.current = exportRequest.requestId;
+      acknowledgeExportFailure(onRequestedExportFailed, onRequestedExportHandled);
+      return;
     }
+    if (exportRequest.format === "png" && !rendererReady) return;
+    let exported = false;
+    try {
+      onExportRequested?.(exportRequest.format);
+      if (exportRequest.format === "png") {
+        exported = exportChartPng(model, exportRef);
+      } else {
+        exported = exportChartData(dataExportModel ?? model, exportRequest.format);
+      }
+    } catch {
+      exported = false;
+    }
+    handledExportRequestRef.current = exportRequest.requestId;
     if (!exported) {
-      handledExportFormatRef.current = requestedExportFormat;
-      onRequestedExportFailed?.();
+      acknowledgeExportFailure(onRequestedExportFailed, onRequestedExportHandled);
       return;
     }
-    handledExportFormatRef.current = requestedExportFormat;
     onRequestedExportHandled?.();
-  }, [model, onExportRequested, onRequestedExportFailed, onRequestedExportHandled, rendererReady, requestedExportFormat]);
+  }, [dataExportModel, exportRequest, model, onExportRequested, onRequestedExportFailed, onRequestedExportHandled, rendererReady]);
 
   return (
     <div className="fm-analysis-plots__chart-frame">
@@ -113,10 +127,15 @@ export function InteractiveChartSurface({
         exportRef={exportRef}
         initialRange={initialRange}
         model={model}
-        onRendererReady={() => setRendererReady(true)}
+        onRendererReady={() => {
+          rendererErrorRef.current = false;
+          setRendererReady(true);
+        }}
         onRendererError={() => {
-          if (requestedExportFormat === "png") {
-            onRequestedExportFailed?.();
+          rendererErrorRef.current = true;
+          if (exportRequest?.format === "png" && handledExportRequestRef.current !== exportRequest.requestId) {
+            handledExportRequestRef.current = exportRequest.requestId;
+            acknowledgeExportFailure(onRequestedExportFailed, onRequestedExportHandled);
           }
         }}
         presentation={presentation}
@@ -132,6 +151,7 @@ export function InteractiveChartSurface({
       />
       <ChartExportControls
         model={model}
+        dataModel={dataExportModel}
         pngReady={rendererReady}
         rendererRef={exportRef}
         onExportRequested={onExportRequested}
@@ -145,6 +165,19 @@ export function InteractiveChartSurface({
       />
     </div>
   );
+}
+
+function acknowledgeExportFailure(
+  onRequestedExportFailed: (() => void) | undefined,
+  onRequestedExportHandled: (() => void) | undefined,
+): void {
+  if (onRequestedExportFailed) {
+    onRequestedExportFailed();
+  } else {
+    // A request must always reach a terminal acknowledgement. Callers that do
+    // not expose a failure channel still need to release their command queue.
+    onRequestedExportHandled?.();
+  }
 }
 
 export function chartSeriesRenderModel(

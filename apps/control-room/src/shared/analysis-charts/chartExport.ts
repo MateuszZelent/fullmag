@@ -11,6 +11,13 @@ import {
 } from "./chartScalePolicy";
 
 export type ChartExportFormat = "csv" | "tsv";
+export type ChartExportRequestFormat = ChartExportFormat | "png";
+
+/** A command identity that remains unique when two consecutive commands share a format. */
+export interface ChartExportRequest {
+  format: ChartExportRequestFormat;
+  requestId: string;
+}
 
 export interface ChartExportProvenance {
   artifactPath: string | null;
@@ -229,14 +236,23 @@ export function downloadChartBlob({
   content: BlobPart;
   filename: string;
   mimeType: string;
-}): void {
-  const url = URL.createObjectURL(new Blob([content], { type: mimeType }));
-  const anchor = document.createElement("a");
-  anchor.download = filename;
-  anchor.href = url;
-  anchor.click();
-  // Revoke after current event loop to ensure download started
-  queueMicrotask(() => URL.revokeObjectURL(url));
+}): boolean {
+  let url: string | null = null;
+  try {
+    url = URL.createObjectURL(new Blob([content], { type: mimeType }));
+    const anchor = document.createElement("a");
+    anchor.download = filename;
+    anchor.href = url;
+    anchor.click();
+    // Revoke after current event loop to ensure download started.
+    queueMicrotask(() => {
+      if (url) URL.revokeObjectURL(url);
+    });
+    return true;
+  } catch {
+    if (url) URL.revokeObjectURL(url);
+    return false;
+  }
 }
 
 function roundTripNumber(value: number): string {

@@ -20,6 +20,89 @@ export interface LiveTableRowsQuery {
   toT?: number;
 }
 
+/** The table API can select ranges by row cursor or simulation time only. */
+export const LIVE_CHART_TABLE_ROW_LIMIT = 5_000;
+const LIVE_CHART_SERVER_X_AXIS_IDS = ["step", "t", "time"] as const;
+
+export function isLiveChartTimeXAxisId(xAxisId: string): boolean {
+  return xAxisId === "t" || xAxisId === "time";
+}
+
+export function isLiveChartServerXAxisId(xAxisId: string): boolean {
+  return (LIVE_CHART_SERVER_X_AXIS_IDS as readonly string[]).includes(xAxisId);
+}
+
+/**
+ * Resolve a persisted axis against the columns published by the table.
+ * Observable columns such as `mx` are valid Y series, but are not valid
+ * server range coordinates because the rows API has no value-range filter.
+ */
+export function resolveLiveChartXAxisId(
+  columnIds: readonly string[],
+  requestedXAxisId: string,
+): string {
+  if (isLiveChartServerXAxisId(requestedXAxisId) && columnIds.includes(requestedXAxisId)) {
+    return requestedXAxisId;
+  }
+  for (const axisId of LIVE_CHART_SERVER_X_AXIS_IDS) {
+    if (columnIds.includes(axisId)) return axisId;
+  }
+  return columnIds[0] ?? "step";
+}
+
+/**
+ * A fixed range is meaningful only when it can be represented by the rows API.
+ * `step` is an accepted-step label and may be sparse, so it must not be
+ * mistaken for the one-based row cursor used by `from_row`/`to_row`.
+ */
+export function normalizeLiveChartRangeForXAxis(
+  range: ChartRangePreference,
+  xAxisId: string,
+): ChartRangePreference {
+  if (
+    (range.mode === "tailTime" || range.mode === "fixed") &&
+    !isLiveChartTimeXAxisId(xAxisId)
+  ) {
+    return { mode: "follow" };
+  }
+  return range;
+}
+
+export function liveChartRangesEqual(
+  left: ChartRangePreference,
+  right: ChartRangePreference,
+): boolean {
+  if (left.mode !== right.mode) return false;
+  switch (left.mode) {
+    case "follow":
+    case "fullDecimated":
+      return true;
+    case "tailRows":
+      return right.mode === "tailRows" && left.rows === right.rows;
+    case "tailTime":
+      return right.mode === "tailTime" && left.durationS === right.durationS;
+    case "fixed":
+      return right.mode === "fixed" && left.fromSI === right.fromSI && left.toSI === right.toSI;
+  }
+}
+
+export function resolveLiveChartAxisAndRange(
+  columnIds: readonly string[],
+  requestedXAxisId: string,
+  range: ChartRangePreference,
+): { axisChanged: boolean; range: ChartRangePreference; xAxisId: string } {
+  const xAxisId = columnIds.length > 0
+    ? resolveLiveChartXAxisId(columnIds, requestedXAxisId)
+    : requestedXAxisId;
+  return {
+    axisChanged: xAxisId !== requestedXAxisId,
+    range: xAxisId !== requestedXAxisId
+      ? { mode: "follow" }
+      : normalizeLiveChartRangeForXAxis(range, xAxisId),
+    xAxisId,
+  };
+}
+
 export function liveChartDescriptorDefaults(id: LiveChartPresetId): LiveChartDescriptorPreferences {
   const preset = liveChartPreset(id);
   return {
@@ -47,19 +130,27 @@ export function buildLiveChartsTableQuery({
   targetPoints: number;
   xAxisId: string;
 }): LiveTableRowsQuery {
-  const query = (patch: Partial<LiveTableRowsQuery> = {}): LiveTableRowsQuery => ({ columns, cursor, decimation: "minmax_lttb", includeTail: true, limit: 5_000, targetPoints, ...patch });
-  if (range.mode === "tailRows") return query({ includeTail: true, limit: range.rows, targetPoints: range.rows });
-  if (range.mode === "tailTime" && (xAxisId === "t" || xAxisId === "time") && latestX !== null) {
-    return query({ cursor: undefined, fromT: latestX - range.durationS, includeTail: false, toT: latestX });
+  const normalizedRange = normalizeLiveChartRangeForXAxis(range, xAxisId);
+  const query = (patch: Partial<LiveTableRowsQuery> = {}): LiveTableRowsQuery => ({ columns, cursor, decimation: "minmax_lttb", includeTail: true, limit: LIVE_CHART_TABLE_ROW_LIMIT, targetPoints, ...patch });
+  if (normalizedRange.mode === "tailRows") {
+    // Tail rows is a bounded snapshot. A cursor would turn the requested
+    // window into an append-only stream and let it grow past the user's N.
+    return query({ cursor: undefined, includeTail: true, limit: normalizedRange.rows, targetPoints: normalizedRange.rows });
   }
-  if (range.mode === "fixed") {
-    const from = Math.min(range.fromSI, range.toSI);
-    const to = Math.max(range.fromSI, range.toSI);
-    return xAxisId === "t" || xAxisId === "time"
+  if (normalizedRange.mode === "tailTime" && isLiveChartTimeXAxisId(xAxisId) && latestX !== null) {
+    // Keep the lower bound stable while new samples arrive. The previous
+    // latestX is stale by the time an invalidation refetch runs, so carrying
+    // it as toT would exclude the appended rows.
+    return query({ cursor: undefined, fromT: latestX - normalizedRange.durationS, includeTail: false, limit: LIVE_CHART_TABLE_ROW_LIMIT });
+  }
+  if (normalizedRange.mode === "fixed") {
+    const from = Math.min(normalizedRange.fromSI, normalizedRange.toSI);
+    const to = Math.max(normalizedRange.fromSI, normalizedRange.toSI);
+    return isLiveChartTimeXAxisId(xAxisId)
       ? query({ cursor: undefined, fromT: from, includeTail: false, toT: to })
-      : query({ cursor: undefined, fromRow: Math.max(0, Math.floor(from)), includeTail: false, toRow: Math.max(0, Math.ceil(to)) });
+      : query();
   }
-  if (range.mode === "fullDecimated") return query({ cursor: undefined, includeTail: false, limit: targetPoints });
+  if (normalizedRange.mode === "fullDecimated") return query({ cursor: undefined, includeTail: false, limit: LIVE_CHART_TABLE_ROW_LIMIT });
   return query();
 }
 
