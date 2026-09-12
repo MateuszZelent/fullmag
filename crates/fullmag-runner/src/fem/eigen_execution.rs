@@ -1341,6 +1341,8 @@ pub(super) fn execute_fem_eigen_inner(
                 progress,
                 active_n,
                 effective_dof,
+                artifact_sample_index,
+                planned_execution,
             );
         }
         solve_complex_hermitian_eigenpairs(plan, stiffness, mass)?

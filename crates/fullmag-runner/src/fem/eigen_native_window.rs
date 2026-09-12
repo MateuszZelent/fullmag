@@ -833,6 +833,8 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
     mut progress: Option<&mut FemEigenProgressCallback<'_>>,
     active_nodes: usize,
     effective_dof: usize,
+    artifact_sample_index: usize,
+    planned_execution: Option<PlannedFemEigenExecution<'_>>,
 ) -> Result<ExecutedRun, RunError> {
     emit_fem_eigen_progress(
         &mut progress,
@@ -877,6 +879,35 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
         &tangent_mass_row_major,
         &native_floquet_periodic_pairs,
     );
+    let stop_requested = AtomicBool::new(false);
+    // Keep the phase-reduced Floquet path interruptible for the same two
+    // control sources as the shared-domain native path: runtime callbacks and
+    // the opt-in managed cancellation deadline used by qualification tests.
+    let cancellation_deadline = std::env::var("FULLMAG_FEM_EIGEN_CANCEL_AFTER_MS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .map(|milliseconds| Instant::now() + Duration::from_millis(milliseconds));
+    let live_progress_sink = RefCell::new(progress.take());
+    let cancel_callback = || {
+        stop_requested.load(Ordering::Relaxed)
+            || cancellation_deadline.is_some_and(|deadline| Instant::now() >= deadline)
+    };
+    let progress_callback = |progress_json: &str| {
+        let Some(event) = native_modal_progress_event(
+            progress_json,
+            NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND,
+            active_nodes,
+            effective_dof,
+            plan.count as usize,
+        ) else {
+            return;
+        };
+        if let Some(callback) = live_progress_sink.borrow_mut().as_deref_mut() {
+            if callback(event) != StepAction::Continue {
+                stop_requested.store(true, Ordering::Relaxed);
+            }
+        }
+    };
     let native_result = native_fem::solve_native_modal_eigen(native_fem::NativeModalEigenRequest {
         mesh_asset_id: &plan.mesh_name,
         equilibrium_source_kind: native_modal_equilibrium_source_kind(&plan.equilibrium),
@@ -910,8 +941,8 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
         eigensolver_family: 1,
         spectral_transform_kind: 1,
         execution_target: native_fem::NativeModalExecutionTarget::ProductionCpu,
-        cancel_requested: None,
-        progress_callback: None,
+        cancel_requested: Some(&cancel_callback),
+        progress_callback: Some(&progress_callback),
         tiny_validation_problem: None,
         mfem_operator_problem: Some(native_modal_mfem_operator_problem(
             payload.stiffness.nrows() as u64,
@@ -927,8 +958,10 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
         shared_domain_problem: None,
     })
     .map_err(|message| RunError { message })?;
+    progress = live_progress_sink.into_inner();
 
-    if native_result.status != native_fem::NativeFrequencyDomainStatus::Ok {
+    let interrupted = native_result.status == native_fem::NativeFrequencyDomainStatus::Interrupted;
+    if native_result.status != native_fem::NativeFrequencyDomainStatus::Ok && !interrupted {
         return Err(RunError {
             message: format!(
                 "native FEM modal_eigen Bloch/Floquet production CPU solve failed: {} (diagnostics_json={})",
@@ -936,46 +969,112 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
             ),
         });
     }
-    let solver_diagnostics = native_solver_diagnostics_json(
+    let native_execution_attestation = if let Some(execution) = planned_execution {
+        let resolution = execution.resolution().ok_or_else(|| RunError {
+            message: "planned_fem_eigen_resolution_missing_at_native_boundary".to_string(),
+        })?;
+        native_fem::validate_planned_modal_execution_attestation(
+            resolution.resolved_engine,
+            native_fem::NativeModalExecutionTarget::ProductionCpu,
+            native_result
+                .modal_eigen
+                .as_ref()
+                .map(|result| result.resolved_execution_target),
+            native_result.resolved_fallback_state,
+            &native_result.resolved_engine_id,
+        )
+        .map_err(|message| RunError { message })?;
+        Some(
+            execution.native_attestation(
+                native_result
+                    .modal_eigen
+                    .as_ref()
+                    .map(|result| result.resolved_execution_target),
+                &native_result.resolved_engine_id,
+                native_result.resolved_fallback_state,
+                &native_result.resolved_fallback_reason,
+            ),
+        )
+    } else {
+        None
+    };
+    let mut solver_diagnostics = native_solver_diagnostics_json(
         plan,
         &native_result.diagnostics_json,
         Some(&native_result.result_json),
         None,
     )?;
-    let modes =
-        native_bloch_floquet_modes_from_result_json(plan, &native_result.result_json, &payload)?;
-    if modes.is_empty() {
+    if let (Some(execution), Some(attestation)) =
+        (planned_execution, native_execution_attestation.as_ref())
+    {
+        bind_planned_execution_diagnostics(&mut solver_diagnostics, plan, execution, attestation)?;
+    }
+    if interrupted {
+        if let Some(object) = solver_diagnostics.as_object_mut() {
+            object.insert("status".to_string(), serde_json::json!("interrupted"));
+            object.insert("complete".to_string(), serde_json::json!(false));
+            object.insert(
+                "stop_reason".to_string(),
+                serde_json::json!("cancel_requested"),
+            );
+            object.insert(
+                "partial_artifacts_available".to_string(),
+                serde_json::json!(true),
+            );
+        }
+    }
+    let result_value = serde_json::from_str::<serde_json::Value>(&native_result.result_json)
+        .map_err(|error| RunError {
+            message: format!("failed to parse native modal result JSON: {error}"),
+        })?;
+    let has_modes_payload = result_value
+        .get("modes")
+        .and_then(serde_json::Value::as_array)
+        .is_some();
+    let modes = if has_modes_payload {
+        native_bloch_floquet_modes_from_result_json(plan, &native_result.result_json, &payload)?
+    } else if interrupted {
+        Vec::new()
+    } else {
+        return Err(RunError {
+            message: "native Bloch/Floquet modal result JSON is missing complete modes[] payload"
+                .to_string(),
+        });
+    };
+    if modes.is_empty() && !interrupted {
         return Err(RunError {
             message: "native FEM modal_eigen Bloch/Floquet production CPU solve returned no modes"
                 .to_string(),
         });
     }
 
-    emit_fem_eigen_progress(
-        &mut progress,
-        FemEigenProgress {
-            phase: "writing_artifacts",
-            phase_index: 4,
-            phase_count: 5,
-            percent: 85.0,
-            solver_kind: NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND,
-            active_nodes,
-            effective_dof,
-            requested_modes: plan.count as usize,
-            candidate_modes: modes.len(),
-            computed_modes: modes.len(),
-            iteration: None,
-            max_iterations: None,
-            residual: modes
-                .iter()
-                .map(|mode| mode.residual_relative_l2)
-                .reduce(f64::max),
-            warning: None,
-            ..Default::default()
-        },
-    )?;
+    if !interrupted {
+        emit_fem_eigen_progress(
+            &mut progress,
+            FemEigenProgress {
+                phase: "writing_artifacts",
+                phase_index: 4,
+                phase_count: 5,
+                percent: 85.0,
+                solver_kind: NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND,
+                active_nodes,
+                effective_dof,
+                requested_modes: plan.count as usize,
+                candidate_modes: modes.len(),
+                computed_modes: modes.len(),
+                iteration: None,
+                max_iterations: None,
+                residual: modes
+                    .iter()
+                    .map(|mode| mode.residual_relative_l2)
+                    .reduce(f64::max),
+                warning: None,
+                ..Default::default()
+            },
+        )?;
+    }
 
-    let auxiliary_artifacts = native_modal_artifacts(
+    let mut auxiliary_artifacts = native_modal_artifacts(
         plan,
         outputs,
         &equilibrium,
@@ -987,8 +1086,20 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
         relaxation_steps,
         None,
         None,
-        0,
+        artifact_sample_index,
     )?;
+    if interrupted {
+        auxiliary_artifacts.push(json_artifact(
+            "eigen/partial.v1.json",
+            &serde_json::json!({
+                "schema_version": "fem_floquet_modal_partial.v1",
+                "complete": false,
+                "stop_reason": "cancelled",
+                "sample_index": artifact_sample_index,
+                "preserved_mode_count": modes.len(),
+            }),
+        )?);
+    }
 
     let stats = StepStats {
         step: relaxation_steps,
@@ -1004,30 +1115,38 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
         ..StepStats::default()
     };
 
-    emit_fem_eigen_progress(
-        &mut progress,
-        FemEigenProgress {
-            phase: "completed",
-            phase_index: 5,
-            phase_count: 5,
-            percent: 100.0,
-            solver_kind: NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND,
-            active_nodes,
-            effective_dof,
-            requested_modes: plan.count as usize,
-            candidate_modes: modes.len(),
-            computed_modes: modes.len(),
-            iteration: None,
-            max_iterations: None,
-            residual: None,
-            warning: None,
-            ..Default::default()
-        },
-    )?;
+    if !interrupted {
+        emit_fem_eigen_progress(
+            &mut progress,
+            FemEigenProgress {
+                phase: "completed",
+                phase_index: 5,
+                phase_count: 5,
+                percent: 100.0,
+                solver_kind: NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND,
+                active_nodes,
+                effective_dof,
+                requested_modes: plan.count as usize,
+                candidate_modes: modes.len(),
+                computed_modes: modes.len(),
+                iteration: None,
+                max_iterations: None,
+                residual: None,
+                warning: None,
+                ..Default::default()
+            },
+        )?;
+    }
+
+    let status = if interrupted {
+        RunStatus::Cancelled
+    } else {
+        RunStatus::Completed
+    };
 
     Ok(ExecutedRun {
         result: RunResult {
-            status: RunStatus::Completed,
+            status,
             steps: vec![stats],
             final_magnetization: equilibrium,
             completion: Some(crate::relaxation::resolve_stage_completion(
@@ -1040,7 +1159,14 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
         field_snapshots: Vec::new(),
         field_snapshot_count: 0,
         auxiliary_artifacts,
-        provenance: native_modal_execution_provenance(plan),
+        provenance: {
+            let mut provenance = native_modal_execution_provenance(plan);
+            if let Some(execution) = planned_execution {
+                execution.bind_execution_provenance(&mut provenance);
+                provenance.fem_eigen_native_execution_attestation = native_execution_attestation;
+            }
+            provenance
+        },
     })
 }
 

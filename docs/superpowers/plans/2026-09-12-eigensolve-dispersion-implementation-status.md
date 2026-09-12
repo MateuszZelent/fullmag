@@ -22,7 +22,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 | S02 — Python/IR | W TRAKCIE | Walidacja k i selektorów, round-trip, testy konsumentów |
 | S03 — natywny operator magnetyczny Blocha | W TRAKCIE | Prolongacja fazowa, MFEM sparse/matrix-free, testy i połączenie produkcyjne |
 | S04 — dynamiczny demag-k CPU | W TRAKCIE | Bounded dense Schur provider jest gotowy dla złożonych bloków; pozostaje właściciel assemblacji siatkowej airbox, gauge i zbieżność brzegu |
-| S05 — natywny solver spektralny | DO WYKONANIA | SLEPc, realifikacja, reszty, kompletność, cancellation/resume |
+| S05 — natywny solver spektralny | W TRAKCIE | Ścieżka Floquet propaguje postęp/anulowanie do native modal ABI i zapisuje partial artifact; pozostają SLEPc/realifikacja produkcyjna, reszty, kompletność i resume |
 | S06 — śledzenie gałęzi | W TRAKCIE | Hungarian/gaps i metryka masy FE są gotowe; pozostają fizyczne podprzestrzenie zdegenerowane |
 | S07 — artefakty i API | W TRAKCIE | Stabilne ID, faza/obwiednia, selektory, binarne pola |
 | S08 — Control Room | DO WYKONANIA | Authoring, dyspersja, wybór modu i przestrzenna faza; browser/WebGL |
@@ -111,6 +111,7 @@ hostowych nie kwalifikuje relacji dyspersji ani dynamicznego demag-k.
 - `1300b8035` — dokumentacja dwóch reprezentacji non-k0, źródeł COMSOL/TetraX oraz granicy między adapterem a przyszłym providerem assemblacji.
 - `b360f7490` — overlap śledzenia gałęzi z dodatnią metryką masy FE na aktywny węzeł, z fallbackiem dla niezgodnych starszych artefaktów i regresjami.
 - `11183f7e8` — bounded dense provider Schura dynamicznego demag-k: zespolone `A_{qφ}(k)`, `P(k)`, `A_{φq}(k)`, kontrola niezerowego `k`, pivotu, gauge, budżetu i realifikacji ABI; test kontraktu CMake.
+- bieżący przyrost S05 — ścieżka `execute_native_cpu_modal_window_from_bloch_floquet_complex` przekazuje callbacki anulowania/postępu, zachowuje `artifact_sample_index` i attestation planera oraz publikuje `eigen/partial.v1.json` po przerwaniu; ukierunkowana kompilacja Rust i test parsera postępu przechodzą.
 
 Adapter dynamicznego demag-k przyjmuje wyłącznie kompletną macierz dostarczoną
 przez przyszłego właściciela `A_{q\phi}(k)`/`P(k)`/`A_{\phi q}(k)`; nie jest
@@ -149,6 +150,7 @@ bramki pozostają **NOT VERIFIED**.
 - `cargo +nightly test --locked -p fullmag-ir --tests`: 101 unit + 229 integration tests passed, exit 0; `cargo +nightly test --locked -p fullmag-plan --lib`: 461 passed, exit 0.
 - `cargo +nightly test --locked -p fullmag-runner --lib output_publication_tests`: 5 passed; `--lib tracking`: 13 passed, exit 0.
 - Po dodaniu metryki masy FE `cargo +nightly test --locked -p fullmag-runner --lib tracking --target-dir C:/Users/Mateusz/AppData/Local/Temp/fullmag-eigensolve-cargo-target`: 15 passed, exit 0.
+- Po zmianie S05 `rustfmt +nightly --check crates/fullmag-runner/src/fem/eigen_native_window.rs crates/fullmag-runner/src/fem/eigen_execution.rs`: exit 0; `cargo +nightly check --locked -p fullmag-runner --lib --target-dir D:/fullmag-eigensolve-cargo-target`: exit 0; `cargo +nightly test --locked -p fullmag-runner --lib fem::eigen_progress --target-dir D:/fullmag-eigensolve-cargo-target -- --nocapture`: 1 passed, exit 0. Jest to dowód kompilacji i kontraktu callbacku, nie managed C++ ani physics qualification.
 - `cargo +nightly test --locked -p fullmag-runner --lib eigen`: 226 passed, 1 failed. Jedyna porażka to istniejące `eigen::response_block_real::tests::field_driven_sweep_builds_artifact_ready_response_payload`, równość `1.0000000000000002` vs `1.0`; plik testu nie należy do tego przyrostu.
 - Python: pełny `test_problem_ir.py` 26 passed; fokus API/IR dla eigensolve 35 passed; pełny `test_api.py` wykonał 277 passed i 19 failures środowiskowych (brak `h5py`/`zarr`, odmowa zapisu w lokalnym cache/worktree oraz `run_output`), bez błędu w fokusie eigensolve.
 - Test kontraktu dokumentacji matematycznej: 9 passed. Walidatory source-map i `git diff --check`: exit 0.
