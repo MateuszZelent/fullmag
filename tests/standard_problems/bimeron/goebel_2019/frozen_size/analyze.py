@@ -210,6 +210,31 @@ def _row_value(row: dict[str, Any], *names: str) -> float | None:
     return None
 
 
+def _state_quality(values: Sequence[Sequence[float]]) -> dict[str, Any]:
+    """Return norm and finiteness diagnostics before any measurement normalizes m."""
+
+    maximum_defect = 0.0
+    nonfinite = 0
+    for vector in values:
+        if len(vector) != 3:
+            nonfinite += 1
+            continue
+        try:
+            norm = math.sqrt(sum(float(component) ** 2 for component in vector))
+        except (TypeError, ValueError, OverflowError):
+            nonfinite += 1
+            continue
+        if not math.isfinite(norm):
+            nonfinite += 1
+            continue
+        maximum_defect = max(maximum_defect, abs(norm - 1.0))
+    return {
+        "vector_count": len(values),
+        "nonfinite_vector_count": nonfinite,
+        "max_unit_norm_defect": maximum_defect,
+    }
+
+
 def _grid_from_metadata(root: Path, fallback_cell_nm: float = 0.5) -> tuple[int, int, int, float, float, float]:
     metadata_path = root / "metadata.json"
     metadata: Any = {}
@@ -419,6 +444,18 @@ def _measure(values: Sequence[Sequence[float]], *, nx: int, ny: int, nz: int, ce
     area_cell_count = len(component) * hx * hy
     area_interpolated = _interpolated_negative_area(plane, nx, ny, hx, hy)
     area = area_interpolated if area_interpolated > 0.0 else area_cell_count
+    cell_radius_nm = math.sqrt(area_cell_count / math.pi) * 1e9 if area_cell_count > 0.0 else None
+    interpolated_radius_nm = (
+        math.sqrt(area_interpolated / math.pi) * 1e9
+        if area_interpolated > 0.0
+        else None
+    )
+    contour_raster_delta_nm = (
+        abs(interpolated_radius_nm - cell_radius_nm)
+        if interpolated_radius_nm is not None and cell_radius_nm is not None
+        else None
+    )
+    radius_grid_uncertainty_nm = 0.5 * max(hx, hy) * 1e9
     mz_values = [(at(ix, iy)[2], ix, iy) for iy in range(ny) for ix in range(nx)]
     min_mz, min_ix, min_iy = min(mz_values, key=lambda value: value[0]) if mz_values else (float("nan"), 0, 0)
     max_mz, max_ix, max_iy = max(mz_values, key=lambda value: value[0]) if mz_values else (float("nan"), 0, 0)
@@ -443,6 +480,13 @@ def _measure(values: Sequence[Sequence[float]], *, nx: int, ny: int, nz: int, ce
         "area_method": "piecewise_linear_mx_zero_contour" if area_interpolated > 0.0 else "negative_cell_count",
         "area_cell_count_m2": area_cell_count,
         "area_cell_count": len(component),
+        "R_area_cell_count_nm": cell_radius_nm,
+        "contour_raster_delta_nm": contour_raster_delta_nm,
+        "R_area_uncertainty_nm": max(
+            radius_grid_uncertainty_nm,
+            contour_raster_delta_nm or 0.0,
+        ),
+        "R_core_uncertainty_nm": radius_grid_uncertainty_nm,
         "R_core_m": core_distance / 2.0 if core_distance > 0.0 else None,
         "R_core_nm": core_distance * 0.5e9 if core_distance > 0.0 else None,
         "mz_min": min_mz,
@@ -467,6 +511,39 @@ def _energy_from_row(row: dict[str, Any]) -> dict[str, float | None]:
     }
 
 
+def _energy_diagnostics(energy: dict[str, Any]) -> dict[str, Any]:
+    """Add a non-duplicating component sum and its residual to one energy row."""
+
+    component_keys = (
+        "E_ex_J",
+        "E_demag_J",
+        "E_ext_J",
+        "E_ani_J",
+        "E_rotated_dmi_J",
+    )
+    components = [energy.get(key) for key in component_keys]
+    total = energy.get("E_total_J")
+    if not all(_number(value) is not None for value in components) or _number(total) is None:
+        energy.update(
+            {
+                "E_component_sum_J": None,
+                "E_balance_residual_J": None,
+                "E_balance_relative": None,
+            }
+        )
+        return energy
+    component_sum = sum(float(value) for value in components)
+    residual = component_sum - float(total)
+    energy.update(
+        {
+            "E_component_sum_J": component_sum,
+            "E_balance_residual_J": residual,
+            "E_balance_relative": abs(residual) / max(abs(float(total)), 1e-30),
+        }
+    )
+    return energy
+
+
 def _stage_energy(
     rows: Sequence[dict[str, Any]], background_energy_j: float | None
 ) -> dict[str, dict[str, float | None]]:
@@ -476,6 +553,7 @@ def _stage_energy(
         if not isinstance(stage_id, str) or not stage_id:
             continue
         energy = _energy_from_row(row)
+        _energy_diagnostics(energy)
         terminal = energy.get("E_total_J")
         energy["delta_E_to_background_J"] = (
             terminal - background_energy_j
@@ -632,6 +710,55 @@ def _state_reference_drift(
     return maximum
 
 
+def _torque_t(metrics: dict[str, Any]) -> float | None:
+    value = _number(metrics.get("free_torque_metric"))
+    if value is None:
+        return None
+    if metrics.get("free_torque_metric_units") != "T":
+        value *= MU0
+    return value
+
+
+def _convergence_diagnostics(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize the final constrained window without claiming convergence."""
+
+    stage_rows = [row for row in rows if row.get("_stage_id") == "constrained_hold"]
+    if not stage_rows:
+        stage_rows = [row for row in rows if row.get("_stage_id") == "constrained_relax"]
+    if not stage_rows:
+        stage_rows = list(rows)
+    if not stage_rows:
+        return {
+            "stage_id": None,
+            "sample_count": 0,
+            "window_sample_count": 0,
+            "energy_window_span_J": None,
+            "energy_window_relative_span": None,
+            "free_torque_last_T": None,
+            "free_torque_window_max_T": None,
+        }
+    window_count = max(3, min(32, max(1, len(stage_rows) // 5)))
+    window = stage_rows[-window_count:]
+    energies = [
+        value
+        for value in (_energy_from_row(row).get("E_total_J") for row in window)
+        if value is not None
+    ]
+    span = max(energies) - min(energies) if energies else None
+    mean_abs = sum(abs(value) for value in energies) / len(energies) if energies else None
+    torques = [_torque_t(_frozen_metrics(row)) for row in window]
+    torques = [value for value in torques if value is not None]
+    return {
+        "stage_id": stage_rows[-1].get("_stage_id"),
+        "sample_count": len(stage_rows),
+        "window_sample_count": len(window),
+        "energy_window_span_J": span,
+        "energy_window_relative_span": span / max(mean_abs or 0.0, 1e-30) if span is not None else None,
+        "free_torque_last_T": torques[-1] if torques else None,
+        "free_torque_window_max_T": max(torques) if torques else None,
+    }
+
+
 def _runtime_provenance(metadata: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key in (
@@ -670,6 +797,7 @@ def analyze_case(
     rows = _trace_rows(root, workspace_root)
     final_row = _last_row(rows)
     energy = _energy_from_row(final_row)
+    _energy_diagnostics(energy)
     terminal_energy = energy.get("E_total_J")
     if background_energy_j is not None and terminal_energy is not None:
         energy["delta_E_to_background_J"] = terminal_energy - background_energy_j
@@ -704,7 +832,9 @@ def analyze_case(
             values = _state_values(path)
             if label in {"initial", "constrained_relaxed", "constrained_held"}:
                 state_values[label] = values
-            states[label] = {"path": str(path), "measurement": _measure(values, nx=nx, ny=ny, nz=nz, cell=(hx, hy, hz))}
+            measurement = _measure(values, nx=nx, ny=ny, nz=nz, cell=(hx, hy, hz))
+            measurement.update(_state_quality(values))
+            states[label] = {"path": str(path), "measurement": measurement}
         except Exception as error:
             states[label] = {"path": str(path), "measurement_error": str(error)}
 
@@ -726,6 +856,7 @@ def analyze_case(
         "energy": energy,
         "stage_energy": stage_energy,
         "profile_energy": {**profile_energy, "stage_id": profile_stage_id},
+        "convergence_diagnostics": _convergence_diagnostics(rows),
         "runtime_provenance": _runtime_provenance(metadata),
         "frozen_runtime": frozen_runtime,
         "states": states,

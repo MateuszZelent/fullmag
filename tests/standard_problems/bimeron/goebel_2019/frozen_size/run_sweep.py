@@ -27,12 +27,15 @@ from tests.standard_problems.bimeron.goebel_2019.frozen_size.common import (
     DEFAULT_WALL_WIDTH_NM,
     preset_radius_for_contour,
 )
+from tests.standard_problems.bimeron.goebel_2019.frozen_size.report import render_report
+from tests.standard_problems.bimeron.goebel_2019.frozen_size.verify import verify_analysis
 
 
 PROFILE = "bimeron-rdmi-frozen-spins"
 SCENARIO_REL = Path("tests/standard_problems/bimeron/goebel_2019/frozen_size/scenario_fdm.py")
 BACKGROUND_REL = Path("tests/standard_problems/bimeron/goebel_2019/frozen_size/background_fdm.py")
 ANALYZER_REL = Path("tests/standard_problems/bimeron/goebel_2019/frozen_size/analyze.py")
+THRESHOLDS_REL = Path("tests/standard_problems/bimeron/goebel_2019/frozen_size/thresholds.v1.json")
 
 
 def _repo_root() -> Path:
@@ -212,7 +215,8 @@ def _managed_runtime_matches_source(
     if not binary.is_file() or not manifest_path.is_file():
         return False
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        # Windows PowerShell 7 may emit an UTF-8 BOM for the managed receipt.
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
         return False
     if not isinstance(manifest, dict):
@@ -337,8 +341,13 @@ def _write_profile_csv(path: Path, results: list[dict[str, Any]]) -> None:
         "terminal_E_total_J",
         "terminal_delta_E_to_background_J",
         "R_area_hold_nm",
+        "R_area_uncertainty_nm",
         "R_core_release_nm",
         "Q_hold",
+        "radius_error_nm",
+        "radius_tolerance_nm",
+        "energy_window_relative_span",
+        "energy_balance_relative",
         "frozen_dof_count",
         "free_dof_count",
         "verification_status",
@@ -356,6 +365,7 @@ def _write_profile_csv(path: Path, results: list[dict[str, Any]]) -> None:
         released_measurement = released.get("measurement") if isinstance(released, dict) and isinstance(released.get("measurement"), dict) else {}
         frozen = result.get("frozen_runtime") if isinstance(result.get("frozen_runtime"), dict) else {}
         verification_status = result.get("verification_status")
+        verification_path: Path | None = None
         if verification_status is None:
             artifact_root = result.get("artifact_root")
             verification_path = Path(artifact_root) / "verification.json" if artifact_root else None
@@ -364,6 +374,14 @@ def _write_profile_csv(path: Path, results: list[dict[str, Any]]) -> None:
                     verification_status = json.loads(verification_path.read_text(encoding="utf-8")).get("status")
                 except (OSError, json.JSONDecodeError):
                     verification_status = None
+        verification_payload: dict[str, Any] = {}
+        if verification_path is not None and verification_path.is_file():
+            try:
+                loaded_verification = json.loads(verification_path.read_text(encoding="utf-8"))
+                if isinstance(loaded_verification, dict):
+                    verification_payload = loaded_verification
+            except (OSError, json.JSONDecodeError):
+                verification_payload = {}
         rows.append(
             {
                 "case_id": protocol.get("case_id"),
@@ -377,8 +395,13 @@ def _write_profile_csv(path: Path, results: list[dict[str, Any]]) -> None:
                 "terminal_E_total_J": terminal.get("E_total_J"),
                 "terminal_delta_E_to_background_J": terminal.get("delta_E_to_background_J"),
                 "R_area_hold_nm": held_measurement.get("R_area_nm"),
+                "R_area_uncertainty_nm": held_measurement.get("R_area_uncertainty_nm"),
                 "R_core_release_nm": released_measurement.get("R_core_nm"),
                 "Q_hold": held_measurement.get("topological_charge"),
+                "radius_error_nm": verification_payload.get("radius_error_nm"),
+                "radius_tolerance_nm": verification_payload.get("radius_tolerance_nm"),
+                "energy_window_relative_span": verification_payload.get("energy_window_relative_span"),
+                "energy_balance_relative": verification_payload.get("energy_balance_relative"),
                 "frozen_dof_count": frozen.get("frozen_dof_count"),
                 "free_dof_count": frozen.get("free_dof_count"),
                 "verification_status": verification_status or "not_run",
@@ -389,6 +412,21 @@ def _write_profile_csv(path: Path, results: list[dict[str, Any]]) -> None:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _verify_case(repo: Path, analysis: dict[str, Any], artifact_root: Path) -> dict[str, Any]:
+    """Persist the verification receipt for every measured case.
+
+    ``verify_analysis`` intentionally returns ``not_converged`` as a normal
+    diagnostic status.  Running it in-process lets the sweep keep that
+    receipt without treating the expected exit code of the standalone CLI as
+    a failed case.
+    """
+
+    thresholds = json.loads((repo / THRESHOLDS_REL).read_text(encoding="utf-8"))
+    verification = verify_analysis(analysis, thresholds)
+    _write_json(artifact_root / "verification.json", verification)
+    return verification
 
 
 def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], args: argparse.Namespace) -> dict[str, Any]:
@@ -491,7 +529,17 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
         case["artifact_root"] = str(case_root)
         analysis_path = case_root / "analysis.json"
         if analysis_path.is_file() and args.reuse:
-            results.append(json.loads(analysis_path.read_text(encoding="utf-8")))
+            reused = json.loads(analysis_path.read_text(encoding="utf-8"))
+            if isinstance(reused, dict):
+                verification_path = case_root / "verification.json"
+                if verification_path.is_file():
+                    try:
+                        verification = json.loads(verification_path.read_text(encoding="utf-8"))
+                        if isinstance(verification, dict):
+                            reused["verification_status"] = verification.get("status")
+                    except (OSError, json.JSONDecodeError):
+                        pass
+                results.append(reused)
             continue
         if case_root.exists() and any(case_root.iterdir()):
             raise RuntimeError(f"case output already exists; use --reuse or choose another output root: {case_root}")
@@ -522,7 +570,11 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
                 if background_workspace:
                     analyze_command.extend(["--background-workspace", str(background_workspace)])
             _run_process(analyze_command, cwd=repo, env={**os.environ, **_environment(case, args)}, log=case_root / "analysis.log")
-            results.append(json.loads(analysis_path.read_text(encoding="utf-8")))
+            analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+            verification = _verify_case(repo, analysis, case_root)
+            if isinstance(analysis, dict):
+                analysis["verification_status"] = verification.get("status")
+            results.append(analysis)
         except Exception as error:
             failure = {"schema_version": "bimeron_frozen_size.case_failure.v1", "case": case, "error": str(error)}
             _write_json(case_root / "failure.json", failure)
@@ -532,6 +584,7 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
     manifest["results"] = results
     _write_json(output_root / "profile_summary.json", manifest)
     _write_profile_csv(output_root / "profile_energy.csv", results)
+    (output_root / "profile_report.md").write_text(render_report(manifest), encoding="utf-8")
     return manifest
 
 

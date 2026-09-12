@@ -40,6 +40,11 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
         failures.append("profile_energy_not_finite")
     if profile_energy.get("stage_id") not in {"constrained_hold", "constrained_relax", "terminal"}:
         failures.append("profile_energy_stage_missing")
+    for label, payload in (("terminal", energy), ("profile", profile_energy)):
+        balance = payload.get("E_balance_relative")
+        if balance is not None and _finite(balance):
+            if float(balance) > float(thresholds.get("maximum_energy_balance_relative", 1e-9)):
+                failures.append(f"{label}_energy_balance_mismatch")
     runtime = analysis.get("runtime_provenance") if isinstance(analysis.get("runtime_provenance"), dict) else {}
     requested = runtime.get("requested_execution") if isinstance(runtime.get("requested_execution"), dict) else {}
     provenance = runtime.get("execution_provenance") if isinstance(runtime.get("execution_provenance"), dict) else {}
@@ -97,6 +102,12 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
         measurement = payload.get("measurement") if isinstance(payload, dict) else None
         if not isinstance(measurement, dict):
             continue
+        norm_defect = measurement.get("max_unit_norm_defect")
+        if _finite(norm_defect) and float(norm_defect) > float(thresholds.get("maximum_state_norm_defect", 1e-12)):
+            failures.append(f"{label}_unit_norm_defect_exceeds_threshold")
+        nonfinite_vectors = measurement.get("nonfinite_vector_count")
+        if _finite(nonfinite_vectors) and int(float(nonfinite_vectors)) > 0:
+            failures.append(f"{label}_contains_nonfinite_vectors")
         charge = measurement.get("topological_charge")
         if label in {"initial", "constrained_held"} and _finite(charge):
             if abs(float(charge)) < float(thresholds.get("minimum_nontrivial_abs_topological_charge", 0.8)):
@@ -105,6 +116,29 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
         core = measurement.get("R_core_nm")
         if _finite(area) and _finite(core) and abs(float(area) - float(core)) > float(thresholds.get("maximum_area_core_radius_difference_nm", 3.0)):
             warnings.append(f"{label}_area_core_radius_disagreement")
+
+    held_measurement = states.get("constrained_held", {}).get("measurement") if isinstance(states.get("constrained_held"), dict) else None
+    target_radius = protocol.get("target_radius_nm")
+    measured_radius = held_measurement.get("R_area_nm") if isinstance(held_measurement, dict) else None
+    cell_nm = protocol.get("cell_nm", 0.5)
+    radius_error = None
+    radius_tolerance = None
+    if _finite(target_radius) and _finite(measured_radius):
+        radius_error = abs(float(measured_radius) - float(target_radius))
+        radius_tolerance = max(0.5 * float(cell_nm), 0.02 * float(target_radius))
+        if radius_error > radius_tolerance:
+            if completion.get("converged") is True:
+                failures.append("radius_mismatch")
+            else:
+                warnings.append("radius_mismatch_before_convergence")
+
+    convergence = analysis.get("convergence_diagnostics") if isinstance(analysis.get("convergence_diagnostics"), dict) else {}
+    energy_window_relative = convergence.get("energy_window_relative_span")
+    if _finite(energy_window_relative) and float(energy_window_relative) > float(thresholds.get("maximum_energy_window_relative_span", 1e-3)):
+        if completion.get("converged") is True:
+            failures.append("energy_window_not_stable")
+        else:
+            warnings.append("energy_window_not_stable_before_convergence")
 
     not_converged = completion.get("converged") is False
     if not_converged:
@@ -123,6 +157,10 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
         "free_torque_metric": free_torque_value,
         "free_torque_metric_units": free_torque_units,
         "free_torque_T": free_torque_t,
+        "radius_error_nm": radius_error,
+        "radius_tolerance_nm": radius_tolerance,
+        "energy_balance_relative": profile_energy.get("E_balance_relative"),
+        "energy_window_relative_span": energy_window_relative,
     }
     return result
 

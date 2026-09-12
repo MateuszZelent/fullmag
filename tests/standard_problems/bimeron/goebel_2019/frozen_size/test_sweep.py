@@ -38,7 +38,7 @@ def test_runtime_manifest_matches_source_and_cuda_policy(tmp_path: Path, monkeyp
                 "local_changes_check": "passed",
             }
         ),
-        encoding="utf-8",
+        encoding="utf-8-sig",
     )
     monkeypatch.setattr(run_sweep, "_source_identity", lambda _repo: identity)
 
@@ -47,7 +47,7 @@ def test_runtime_manifest_matches_source_and_cuda_policy(tmp_path: Path, monkeyp
     )
 
     manifest = json.loads(
-        (tmp_path / "windows-runtime" / "build-manifest.json").read_text(encoding="utf-8")
+        (tmp_path / "windows-runtime" / "build-manifest.json").read_text(encoding="utf-8-sig")
     )
     manifest["git_commit"] = "c" * 40
     (tmp_path / "windows-runtime" / "build-manifest.json").write_text(

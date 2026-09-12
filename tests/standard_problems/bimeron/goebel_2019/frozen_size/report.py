@@ -120,6 +120,7 @@ def render_report(summary: dict[str, Any]) -> str:
         f"- Sweep schema: `{summary.get('schema_version', 'unknown')}`",
         f"- Cases: {len(rows)}",
         f"- Background: `{(summary.get('background') or {}).get('analysis', 'not recorded')}`",
+        f"- Source: `{(summary.get('source') or {}).get('git_head', 'unknown')}`; branch `{(summary.get('source') or {}).get('branch_id', 'unknown')}`",
         "- Physical lane: FDM, requested GPU, FP64, strict mode; inspect each runtime receipt before interpreting a point.",
         "",
         "## Size-to-energy table",
@@ -184,6 +185,30 @@ def render_report(summary: dict[str, Any]) -> str:
                 mask=frozen.get("frozen_mask_sha256", "not emitted"),
                 reference=frozen.get("frozen_reference_sha256", "not emitted"),
                 selector=frozen.get("frozen_selector_sha256", "not emitted"),
+            )
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Measurement uncertainty and final-window diagnostics",
+            "",
+            "| R target (nm) | R area uncertainty (nm) | R core uncertainty (nm) | energy-window relative span | energy-balance relative residual | radius error (nm) | radius tolerance (nm) |",
+            "|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for result, verification, _classification_value in rows:
+        protocol = result.get("protocol") if isinstance(result.get("protocol"), dict) else {}
+        held = _measurement(result, "constrained_held")
+        lines.append(
+            "| {target} | {area_uncertainty} | {core_uncertainty} | {window} | {balance} | {radius_error} | {radius_tolerance} |".format(
+                target=_fmt(protocol.get("target_radius_nm")),
+                area_uncertainty=_fmt(held.get("R_area_uncertainty_nm")),
+                core_uncertainty=_fmt(held.get("R_core_uncertainty_nm")),
+                window=_fmt(verification.get("energy_window_relative_span")),
+                balance=_fmt(verification.get("energy_balance_relative")),
+                radius_error=_fmt(verification.get("radius_error_nm")),
+                radius_tolerance=_fmt(verification.get("radius_tolerance_nm")),
             )
         )
 

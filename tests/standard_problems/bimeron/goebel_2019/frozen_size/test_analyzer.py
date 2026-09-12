@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
+
+import pytest
 
 from tests.standard_problems.bimeron.goebel_2019.frozen_size.analyze import analyze_case
 
@@ -90,6 +93,9 @@ def test_analyzer_reads_managed_stage_layout_and_resolved_grid(tmp_path: Path) -
     assert result["frozen_runtime"]["free_torque_metric_units"] == "Apm"
     assert result["frozen_runtime"]["free_torque_metric_source"] == "max_torque_Apm"
     assert result["states"]["final"]["measurement"]["measurement_grid"]["nx"] == 4
+    assert result["states"]["final"]["measurement"]["max_unit_norm_defect"] == pytest.approx(math.sqrt(2.0) - 1.0)
+    assert result["states"]["final"]["measurement"]["R_area_uncertainty_nm"] == 0.25
+    assert result["convergence_diagnostics"]["sample_count"] == 1
 
 
 def test_analyzer_uses_resolved_static_mask_when_trace_omits_counts(tmp_path: Path) -> None:
