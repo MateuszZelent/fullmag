@@ -1773,6 +1773,63 @@ class ProblemApiTests(unittest.TestCase):
             },
         )
 
+    def test_eigen_output_selectors_round_trip_through_script_builder(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("eigen_output_selectors")
+        study.engine("fem")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="film")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.01
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.save("spectrum", spectrum_scope="global")
+        study.save(
+            "mode",
+            field="mode_complex",
+            indices=[0, 2],
+            branches=[4],
+            sample_indices=[0, 2],
+            sample_labels=["Gamma", "X"],
+        )
+        study.save("dispersion", name="bands", include_branch_table=False)
+        study.save(
+            "diagnostics",
+            include_tracking=False,
+            include_overlaps=False,
+        )
+        study.stages.add_eigenmodes(count=5, include_demag=False)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            source = root / "eigen_output_selectors.py"
+            source.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(source, lightweight_assets=True)
+            original_ir = loaded.stages[0].problem.study.to_ir()
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = root / "eigen_output_selectors_rewritten.py"
+            rewritten.write_text(rendered, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(
+                rewritten,
+                lightweight_assets=True,
+            )
+
+        self.assertIn('study.save("mode", field="mode_complex"', rendered)
+        self.assertIn("branches=[4]", rendered)
+        self.assertIn("sample_indices=[0, 2]", rendered)
+        self.assertIn('sample_labels=["Gamma", "X"]', rendered)
+        self.assertIn(
+            'study.save("dispersion", name="bands", include_branch_table=False)',
+            rendered,
+        )
+        self.assertIn(
+            'study.save("diagnostics", include_tracking=False, include_overlaps=False)',
+            rendered,
+        )
+        self.assertEqual(reloaded.stages[0].problem.study.to_ir(), original_ir)
+
     def test_eigenmodes_rejects_frequency_response_outputs(self) -> None:
         with self.assertRaisesRegex(ValueError, "Eigenmodes outputs"):
             fm.Eigenmodes(outputs=[fm.SaveResponse("susceptibility_tensor")])

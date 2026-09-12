@@ -10475,6 +10475,8 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
                 fullmag_ir::OutputIR::EigenMode {
                     field: "mode".to_string(),
                     indices: vec![0, 1],
+                    branches: vec![],
+                    sample_selector: None,
                 },
             ],
         },
@@ -18066,4 +18068,84 @@ fn fdm_difference_preserves_translated_operand_and_finite_height() {
         box_removed, removed,
         "translated box and cylinder fixtures must share the canonical active-cell fingerprint"
     );
+}
+
+mod eigen_output_validation_tests {
+    use crate::validate::validate_eigen_outputs;
+    use fullmag_ir::{OutputIR, SampleSelectorIR};
+
+    fn mode_output_with_selector(index: u32, sample_selector: SampleSelectorIR) -> OutputIR {
+        OutputIR::EigenMode {
+            field: "mode".to_string(),
+            indices: vec![index],
+            branches: Vec::new(),
+            sample_selector: Some(sample_selector),
+        }
+    }
+
+    fn mode_output(index: u32, sample_indices: &[u32]) -> OutputIR {
+        mode_output_with_selector(
+            index,
+            SampleSelectorIR {
+                sample_indices: sample_indices.to_vec(),
+                sample_labels: Vec::new(),
+            },
+        )
+    }
+
+    #[test]
+    fn repeated_mode_requests_for_disjoint_samples_compose_as_a_union() {
+        let outputs = [mode_output(2, &[0]), mode_output(2, &[1])];
+        let mut errors = Vec::new();
+
+        validate_eigen_outputs(&outputs, &mut errors);
+
+        assert!(
+            errors.is_empty(),
+            "unexpected validation errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn repeated_mode_requests_with_overlapping_samples_compose_idempotently() {
+        let outputs = [mode_output(2, &[0, 1]), mode_output(2, &[1, 2])];
+        let mut errors = Vec::new();
+
+        validate_eigen_outputs(&outputs, &mut errors);
+
+        assert!(
+            errors.is_empty(),
+            "unexpected validation errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn semantically_duplicate_mode_requests_remain_invalid() {
+        let outputs = [
+            mode_output_with_selector(
+                2,
+                SampleSelectorIR {
+                    sample_indices: vec![1, 0],
+                    sample_labels: vec![" X ".to_string()],
+                },
+            ),
+            mode_output_with_selector(
+                2,
+                SampleSelectorIR {
+                    sample_indices: vec![0, 1],
+                    sample_labels: vec!["X".to_string()],
+                },
+            ),
+        ];
+        let mut errors = Vec::new();
+
+        validate_eigen_outputs(&outputs, &mut errors);
+
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("requests mode 2 more than once")),
+            "expected duplicate mode error, got {errors:?}"
+        );
+    }
 }

@@ -58,6 +58,7 @@ from fullmag.model.mechanics import (
 from fullmag.model.physics_scope import build_physics_graph
 from fullmag.model.outputs import (
     SaveDispersion,
+    SaveEigenDiagnostics,
     SaveField,
     SaveMode,
     SaveScalar,
@@ -1758,7 +1759,7 @@ backend = RuntimeSelection()
 EnergyTerm = Exchange | Demag | InterfacialDMI | BulkDMI | Zeeman | StaticFieldMap | Magnetoelastic | UniaxialAnisotropy | OerstedCylinder | OerstedField | CubicAnisotropy | ThermalNoise
 CurrentModule = AntennaFieldSource | CurrentTransport
 LegacyOutputSpec = SaveField | SaveScalar | Snapshot
-OutputSpec = LegacyOutputSpec | SaveSpectrum | SaveMode | SaveDispersion
+OutputSpec = LegacyOutputSpec | SaveSpectrum | SaveMode | SaveDispersion | SaveEigenDiagnostics
 
 
 def _material_has_anisotropy(material: Material) -> bool:

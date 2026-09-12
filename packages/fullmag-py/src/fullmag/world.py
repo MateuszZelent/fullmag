@@ -102,7 +102,7 @@ from fullmag.model.dynamics import (
     FieldRefreshPolicy,
     LLG,
 )
-from fullmag.model.outputs import SaveField, SaveScalar, SaveSpectrum, SaveMode, SaveDispersion, SaveResponse, Snapshot, parse_snapshot_quantity
+from fullmag.model.outputs import SaveEigenDiagnostics, SaveField, SaveScalar, SaveSpectrum, SaveMode, SaveDispersion, SaveResponse, Snapshot, parse_snapshot_quantity
 from fullmag.model.planar_monitor import (
     PlanarMonitor,
     StudyMonitorRegistry,
@@ -5665,8 +5665,38 @@ class StudyBuilder:
         *,
         every: SamplingPeriod | None = None,
         indices: Sequence[int] | None = None,
+        branches: Sequence[int] | None = None,
+        sample_indices: Sequence[int] | None = None,
+        sample_labels: Sequence[str] | None = None,
+        field: str = "mode",
+        name: str = "dispersion",
+        include_branch_table: bool = True,
+        spectrum_quantity: str = "eigenfrequency",
+        spectrum_scope: str = "per_sample",
+        include_tracking: bool = True,
+        include_residuals: bool = True,
+        include_overlaps: bool = True,
+        include_tangent_leakage: bool = True,
+        include_orthogonality: bool = True,
     ) -> "StudyBuilder":
-        save(quantity, every=every, indices=indices)
+        save(
+            quantity,
+            every=every,
+            indices=indices,
+            branches=branches,
+            sample_indices=sample_indices,
+            sample_labels=sample_labels,
+            field=field,
+            name=name,
+            include_branch_table=include_branch_table,
+            spectrum_quantity=spectrum_quantity,
+            spectrum_scope=spectrum_scope,
+            include_tracking=include_tracking,
+            include_residuals=include_residuals,
+            include_overlaps=include_overlaps,
+            include_tangent_leakage=include_tangent_leakage,
+            include_orthogonality=include_orthogonality,
+        )
         return self
 
     def save_response(self, observable: str = "susceptibility_tensor") -> "StudyBuilder":
@@ -8138,7 +8168,7 @@ _SCALAR_QUANTITIES = {
     "max_dm_dt",
     "max_h_demag",
 }
-_EIGEN_QUANTITIES = {"spectrum", "mode", "dispersion"}
+_EIGEN_QUANTITIES = {"spectrum", "mode", "dispersion", "diagnostics"}
 
 
 def save(
@@ -8146,6 +8176,19 @@ def save(
     *,
     every: SamplingPeriod | None = None,
     indices: Sequence[int] | None = None,
+    branches: Sequence[int] | None = None,
+    sample_indices: Sequence[int] | None = None,
+    sample_labels: Sequence[str] | None = None,
+    field: str = "mode",
+    name: str = "dispersion",
+    include_branch_table: bool = True,
+    spectrum_quantity: str = "eigenfrequency",
+    spectrum_scope: str = "per_sample",
+    include_tracking: bool = True,
+    include_residuals: bool = True,
+    include_overlaps: bool = True,
+    include_tangent_leakage: bool = True,
+    include_orthogonality: bool = True,
 ) -> None:
     """Register an output quantity to save periodically.
 
@@ -8154,23 +8197,49 @@ def save(
     quantity : str
         Field name (``"m"``, ``"H_demag"``, ``"H_eff"``),
         scalar name (``"E_ex"``, ``"E_total"``, ``"max_h_eff"``),
-        or eigen quantity (``"spectrum"``, ``"mode"``, ``"dispersion"``).
+        or eigen quantity (``"spectrum"``, ``"mode"``, ``"dispersion"``,
+        ``"diagnostics"``).
     every : float or "auto", optional
         Save interval in seconds, or automatic sampling derived from an active
         sinc drive. Required for field/scalar outputs, ignored for eigen outputs.
-    indices : sequence of int, optional
-        Mode indices for ``"mode"`` output.
+    indices, branches : sequence of int, optional
+        Raw mode indices or tracked branch indices for ``"mode"`` output.
+    sample_indices, sample_labels : sequence, optional
+        Optional sample selectors for ``"mode"`` output.
     """
     _state._outputs_explicit = True
     if quantity in _EIGEN_QUANTITIES:
         if quantity == "spectrum":
-            _state._outputs.append(SaveSpectrum())
+            _state._outputs.append(
+                SaveSpectrum(quantity=spectrum_quantity, scope=spectrum_scope)
+            )
         elif quantity == "mode":
-            if indices is None:
-                raise ValueError("save('mode', indices=[...]) requires mode indices")
-            _state._outputs.append(SaveMode(indices=tuple(indices)))
+            _state._outputs.append(
+                SaveMode(
+                    field=field,
+                    indices=tuple(indices or ()),
+                    branches=tuple(branches or ()),
+                    sample_indices=tuple(sample_indices or ()),
+                    sample_labels=tuple(sample_labels or ()),
+                )
+            )
         elif quantity == "dispersion":
-            _state._outputs.append(SaveDispersion())
+            _state._outputs.append(
+                SaveDispersion(
+                    name=name,
+                    include_branch_table=include_branch_table,
+                )
+            )
+        elif quantity == "diagnostics":
+            _state._outputs.append(
+                SaveEigenDiagnostics(
+                    include_tracking=include_tracking,
+                    include_residuals=include_residuals,
+                    include_overlaps=include_overlaps,
+                    include_tangent_leakage=include_tangent_leakage,
+                    include_orthogonality=include_orthogonality,
+                )
+            )
         return
     if every is None:
         raise ValueError("save() requires every= for field/scalar outputs")
@@ -8653,7 +8722,7 @@ def _build_problem(
     runtime_metadata.update(copy.deepcopy(s._extra_runtime_metadata))
 
     # Partition outputs by study family.
-    _EIGEN_OUTPUT_TYPES = (SaveSpectrum, SaveMode, SaveDispersion)
+    _EIGEN_OUTPUT_TYPES = (SaveSpectrum, SaveMode, SaveDispersion, SaveEigenDiagnostics)
     _RESPONSE_OUTPUT_TYPES = (SaveResponse,)
     eigen_outputs = [o for o in outputs if isinstance(o, _EIGEN_OUTPUT_TYPES)]
     response_outputs = [o for o in outputs if isinstance(o, _RESPONSE_OUTPUT_TYPES)]

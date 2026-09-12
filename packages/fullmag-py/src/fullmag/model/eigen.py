@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+from numbers import Integral
 from typing import Mapping, Sequence
 
 from fullmag._validation import require_non_empty, require_positive
@@ -39,11 +40,25 @@ SUPPORTED_K0_KITTEL_DEMAG_KINDS = {
     "synthetic_demag_factor",
 }
 
+_U32_MAX = 0xFFFF_FFFF
+
 
 def _normalize_vec3(value: Sequence[float], name: str) -> KVector:
-    if len(value) != 3:
+    if isinstance(value, (str, bytes, bytearray)):
+        raise ValueError(f"{name} must have exactly three numeric components")
+    try:
+        value_length = len(value)
+    except TypeError as exc:
+        raise ValueError(f"{name} must have exactly three components") from exc
+    if value_length != 3:
         raise ValueError(f"{name} must have exactly three components")
-    return (float(value[0]), float(value[1]), float(value[2]))
+    try:
+        normalized = (float(value[0]), float(value[1]), float(value[2]))
+    except (TypeError, ValueError, OverflowError, IndexError, KeyError) as exc:
+        raise ValueError(f"{name} must contain numeric values") from exc
+    if not all(math.isfinite(component) for component in normalized):
+        raise ValueError(f"{name} must contain finite values")
+    return normalized
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,20 +96,40 @@ class BiasFieldSweep:
 
 
 def _tuple_of_positive_ints(values: Sequence[int], name: str) -> tuple[int, ...]:
-    normalized = tuple(int(v) for v in values)
+    if isinstance(values, (str, bytes, bytearray)):
+        raise ValueError(f"{name} must contain positive integers only")
+    try:
+        raw_values = tuple(values)
+    except TypeError as exc:
+        raise ValueError(f"{name} must contain positive integers only") from exc
+    if any(isinstance(value, bool) or not isinstance(value, Integral) for value in raw_values):
+        raise ValueError(f"{name} must contain positive integers only")
+    normalized = tuple(int(v) for v in raw_values)
     if not normalized:
         raise ValueError(f"{name} must not be empty")
     if any(v <= 0 for v in normalized):
         raise ValueError(f"{name} must contain positive integers only")
+    if any(v > _U32_MAX for v in normalized):
+        raise ValueError(f"{name} must contain positive integers in the u32 range")
     return normalized
 
 
 def _tuple_of_sample_indices(values: Sequence[int], name: str) -> tuple[int, ...]:
-    normalized = tuple(int(v) for v in values)
+    if isinstance(values, (str, bytes, bytearray)):
+        raise ValueError(f"{name} must contain non-negative integers only")
+    try:
+        raw_values = tuple(values)
+    except TypeError as exc:
+        raise ValueError(f"{name} must contain non-negative integers only") from exc
+    if any(isinstance(value, bool) or not isinstance(value, Integral) for value in raw_values):
+        raise ValueError(f"{name} must contain non-negative integers only")
+    normalized = tuple(int(v) for v in raw_values)
     if not normalized:
         raise ValueError(f"{name} must not be empty")
     if any(v < 0 for v in normalized):
         raise ValueError(f"{name} must contain non-negative integers only")
+    if any(v > _U32_MAX for v in normalized):
+        raise ValueError(f"{name} must contain non-negative integers in the u32 range")
     return normalized
 
 
@@ -150,9 +185,16 @@ class KPath:
     closed: bool = False
 
     def __post_init__(self) -> None:
-        normalized_points = tuple(self.points)
+        if isinstance(self.points, (str, bytes, bytearray)):
+            raise ValueError("KPath points must be a sequence of KPoint instances")
+        try:
+            normalized_points = tuple(self.points)
+        except TypeError as exc:
+            raise ValueError("KPath points must be a sequence of KPoint instances") from exc
         if len(normalized_points) < 2:
             raise ValueError("KPath requires at least two points")
+        if any(not isinstance(point, KPoint) for point in normalized_points):
+            raise ValueError("KPath points must be KPoint instances")
         object.__setattr__(self, "points", normalized_points)
 
         normalized_samples = _tuple_of_positive_ints(
@@ -402,6 +444,8 @@ def serialize_k_sampling(value: object | None) -> dict[str, object] | None:
             "kind": "single",
             "k_vector": list(value.k),
         }
+    if isinstance(value, (str, bytes, bytearray)):
+        raise ValueError("k_sampling must have exactly three numeric components")
     if isinstance(value, (tuple, list)):
         k = _normalize_vec3(value, "k_sampling")
         return {
@@ -423,7 +467,13 @@ def coerce_k_sampling(
     if k_sampling is not None:
         return serialize_k_sampling(k_sampling)
     if legacy_k_vector is not None:
-        return serialize_k_sampling(tuple(float(v) for v in legacy_k_vector))
+        if isinstance(legacy_k_vector, (str, bytes, bytearray)):
+            raise ValueError("k_vector must have exactly three numeric components")
+        try:
+            normalized_legacy_k_vector = tuple(legacy_k_vector)
+        except TypeError as exc:
+            raise ValueError("k_vector must have exactly three numeric components") from exc
+        return serialize_k_sampling(normalized_legacy_k_vector)
     return None
 
 
