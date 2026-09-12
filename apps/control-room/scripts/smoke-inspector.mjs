@@ -11,11 +11,7 @@ const INSPECTOR_REQUEST_TIMEOUT_MS = 5_000;
 const INSPECTOR_MAX_REQUESTS_PER_PATH = 8;
 const INSPECTOR_REQUEST_LIMITS = new Map([
   [
-    "PATCH /v2/sessions/current/model/magnetization-assets/mag%3Afilm%3Avortex_wall",
-    1,
-  ],
-  [
-    "PATCH /v2/sessions/current/model/objects/film",
+    "POST /v2/sessions/current/model/transactions",
     1,
   ],
   [
@@ -907,11 +903,15 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
   const mutationRequests = fixture.requests.slice(requestStart);
   assert(mutationRequests.length <= 12,
     `Magnetic texture request budget exceeded: ${JSON.stringify(mutationRequests)}.`);
+  const transactionMutationCount = mutationRequests.filter(
+    (entry) => entry === "POST /v2/sessions/current/model/transactions",
+  ).length;
+  const syncMutationCount = mutationRequests.filter(
+    (entry) => entry === "POST /v2/sessions/current/model/syncs",
+  ).length;
   assert(
-    mutationRequests.filter((entry) => entry === "PATCH /v2/sessions/current/model/magnetization-assets/mag%3Afilm%3Avortex_wall").length === 1 &&
-      mutationRequests.filter((entry) => entry === "PATCH /v2/sessions/current/model/objects/film").length === 1 &&
-      mutationRequests.filter((entry) => entry === "POST /v2/sessions/current/model/syncs").length === 1,
-    `Magnetic texture request budget did not contain exactly one mutation transaction: ${JSON.stringify(mutationRequests)}.`,
+    transactionMutationCount === 1 && syncMutationCount === 1,
+    `Magnetic texture request budget did not contain exactly one model transaction and sync: ${JSON.stringify(mutationRequests)}.`,
   );
   fixture.texturePatchDelayMs = 0;
   fixture.manifest = fixtureSnapshot.manifest;
@@ -1651,36 +1651,35 @@ async function installInspectorFixtureApi(page, fixture) {
         status: body.status ?? "ready",
       });
     }
-    if (
-      path === "/v2/sessions/current/model/magnetization-assets/mag%3Afilm%3Avortex_wall" &&
-      request.method() === "PATCH"
-    ) {
+    if (path === "/v2/sessions/current/model/transactions" && request.method() === "POST") {
       const body = request.postDataJSON() ?? {};
+      if (body.kind !== "patch_magnetization" || body.object_id !== "film") {
+        fixture.unknownMutationPaths.push(`${request.method()} ${path}${url.search}`);
+        return fulfillJson(
+          route,
+          { error: { code: "inspector_fixture_unknown_transaction", kind: body.kind ?? null } },
+          422,
+        );
+      }
       fixture.textureMutationBodies.push(body);
       if (fixture.texturePatchDelayMs > 0) {
         await new Promise((resolveDelay) => setTimeout(resolveDelay, fixture.texturePatchDelayMs));
       }
-      const asset = body.asset ?? fixture.scene.magnetization_assets[0];
+      const asset = body.asset ?? null;
       fixture.revision += 1;
       fixture.scene.revision = fixture.revision;
       fixture.manifest.source_scene_revision = fixture.revision;
       fixture.visualization.revision = fixture.revision;
-      fixture.scene.magnetization_assets = [asset];
-      return fulfillJson(route, { asset, scene_revision: fixture.revision });
-    }
-    if (path === "/v2/sessions/current/model/objects/film" && request.method() === "PATCH") {
-      const body = request.postDataJSON() ?? {};
-      fixture.textureMutationBodies.push(body);
-      fixture.revision += 1;
-      fixture.scene.revision = fixture.revision;
-      fixture.manifest.source_scene_revision = fixture.revision;
-      fixture.visualization.revision = fixture.revision;
+      fixture.scene.magnetization_assets = asset ? [asset] : [];
       fixture.scene.objects[0] = {
         ...fixture.scene.objects[0],
-        magnetization_ref:
-          body.magnetization_ref ?? fixture.scene.objects[0].magnetization_ref,
+        magnetization_ref: body.magnetization_ref ?? null,
       };
-      return fulfillJson(route, fixture.scene);
+      return fulfillJson(route, {
+        committed_scene: fixture.scene,
+        scene_revision: fixture.revision,
+        transaction_kind: body.kind,
+      });
     }
     if (path === "/v2/sessions/current/model/syncs" && request.method() === "POST") {
       return fulfillJson(route, {
