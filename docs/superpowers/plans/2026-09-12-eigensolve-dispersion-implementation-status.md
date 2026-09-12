@@ -284,9 +284,11 @@ przetworzony przez MSBuild bez własnych błędów.
 Commit `8d266d778` otwiera w plannerze wąską, jawnie opisaną kombinację
 `Full2x2 + Floquet + include_demag + nonzero-k + FloquetAirbox + Poisson`.
 Warunki wykonania są strict, double precision i CPU; ścieżki z GPU, innym
-warunkiem magnetostatycznym, inną reprezentacją operatora albo punktem Γ
-pozostają fail-closed. Dla `auto` dispatch przypina tę kombinację do CPU,
-aby dostępność GPU w rejestrze nie wybrała nieobsługiwanej realizacji. Planner
+warunkiem magnetostatycznym albo inną reprezentacją operatora pozostają
+fail-closed. Ścieżka może zawierać Γ: orchestrator materializuje próbkę Γ jako
+`Periodic` z istniejącym K0 shared-domain, a punkty niezerowe pozostają w
+Floquet Schur. Dla `auto` dispatch przypina tę kombinację do CPU, aby
+dostępność GPU w rejestrze nie wybrała nieobsługiwanej realizacji. Planner
 publikuje notę provenance o bounded CPU Poisson-airbox Schur providerze.
 
 Weryfikacja tego przyrostu:
