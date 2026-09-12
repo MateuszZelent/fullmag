@@ -1904,4 +1904,56 @@ mod tests {
             .as_str()
             .is_some_and(|digest| digest.starts_with("sha256:")));
     }
+
+    #[test]
+    fn hann_window_reports_two_dimensional_coherent_gain_and_enbw() {
+        let mut request = request("x");
+        request.window = AntennaSpectrumWindowIR::Hann;
+        let field = vec![[1.0, 0.0, 0.0]; 16];
+        let result = compute_structured_antenna_source_spectrum(&request, &field, None).unwrap();
+
+        assert!((result.coherent_gain - 9.0 / 64.0).abs() < 1.0e-14);
+        assert!((result.equivalent_noise_bandwidth_bins - 4.0).abs() < 1.0e-14);
+    }
+
+    #[test]
+    fn unitary_discrete_spectrum_obeys_parseval() {
+        let request = request("x");
+        let field = (0..16)
+            .map(|index| [index as f64 - 7.5, 0.0, 0.0])
+            .collect::<Vec<_>>();
+        let result = compute_structured_antenna_source_spectrum(&request, &field, None).unwrap();
+        let input_power = field.iter().map(|value| value[0] * value[0]).sum::<f64>();
+        let output_power = result.power.iter().sum::<f64>();
+
+        assert!((output_power - input_power).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn integral_si_scaling_matches_unitary_discrete_scaling() {
+        let mut unitary_request = request("x");
+        let field = (0..16)
+            .map(|index| [index as f64 - 7.5, 0.0, 0.0])
+            .collect::<Vec<_>>();
+        let unitary =
+            compute_structured_antenna_source_spectrum(&unitary_request, &field, None).unwrap();
+
+        unitary_request.normalization = AntennaSpectrumNormalizationIR::IntegralSi;
+        let integral =
+            compute_structured_antenna_source_spectrum(&unitary_request, &field, None).unwrap();
+        let ratio = request("x").sampling_plane.extent_u_m
+            / (request("x").sampling_plane.sample_count_u as f64 - 1.0)
+            * request("x").sampling_plane.extent_v_m
+            / (request("x").sampling_plane.sample_count_v as f64 - 1.0)
+            * (16.0_f64).sqrt();
+
+        for (unitary, integral) in unitary
+            .amplitudes_re_im
+            .iter()
+            .zip(&integral.amplitudes_re_im)
+        {
+            assert!((integral[0] - ratio * unitary[0]).abs() < 1.0e-12);
+            assert!((integral[1] - ratio * unitary[1]).abs() < 1.0e-12);
+        }
+    }
 }

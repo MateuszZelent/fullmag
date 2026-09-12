@@ -499,6 +499,13 @@ wersjonowaną `fourier_realization`; dwa wyniki o tym samym kształcie tablic ni
 mogą już wyglądać jak ten sam operator tylko dlatego, że mają identyczny
 digest danych liczbowych.
 
+**Bramka numeryczna 2026-09-12:** zestaw testów source-spectrum ma teraz 18/18
+przypadków. Oprócz zgodności zespolonej structured FFT/direct DFT obejmuje
+dwuwymiarowy Hann (`coherent_gain=9/64`, `ENBW=4`), Parsevala dla
+`unitary_discrete` oraz relację skali `integral_si` do transformacji unitarnej
+przy tym samym polu i siatce. To jest dowód konwencji i normalizacji, nie
+kwalifikacja natywnego FEM ani cache analizy.
+
 Niezależny test analityczny konwencji fazy, wykonywalny już teraz:
 
 ```python

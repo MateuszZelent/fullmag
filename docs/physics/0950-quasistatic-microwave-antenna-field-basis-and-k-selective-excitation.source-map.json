@@ -106,7 +106,7 @@
       "id": "antenna-spectrum-tests",
       "path": "crates/fullmag-runner/src/antenna_spectrum.rs",
       "symbol": "identity_plane_sampling_is_coordinate_stable_and_reorders_sources",
-      "responsibility": "Regression evidence for coordinate-stable sampling, outside-policy accounting, fail-closed interpolation, and content-addressed spectrum serialization."
+      "responsibility": "Regression evidence for coordinate-stable sampling, outside-policy accounting, fail-closed interpolation, complex phase convention, window coherent gain/ENBW, Parseval/unitary normalization, integral-SI scaling, and content-addressed spectrum serialization."
     },
     {
       "id": "antenna-spectrum-shared-face-test",
