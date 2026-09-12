@@ -21,9 +21,9 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 | S01 — nauka, ADR, kontrakty | W TRAKCIE | Noty, mapy źródeł, walidatory i review |
 | S02 — Python/IR | W TRAKCIE | Walidacja k i selektorów, round-trip, testy konsumentów |
 | S03 — natywny operator magnetyczny Blocha | W TRAKCIE | Prolongacja fazowa, MFEM sparse/matrix-free, testy i połączenie produkcyjne |
-| S04 — dynamiczny demag-k CPU | DO WYKONANIA | Nowy właściciel airbox, sprzężenie, gauge, zbieżność brzegu |
+| S04 — dynamiczny demag-k CPU | W TRAKCIE | Bounded dense Schur provider jest gotowy dla złożonych bloków; pozostaje właściciel assemblacji siatkowej airbox, gauge i zbieżność brzegu |
 | S05 — natywny solver spektralny | DO WYKONANIA | SLEPc, realifikacja, reszty, kompletność, cancellation/resume |
-| S06 — śledzenie gałęzi | W TRAKCIE | Hungarian/gaps, następnie fizyczna metryka i podprzestrzenie |
+| S06 — śledzenie gałęzi | W TRAKCIE | Hungarian/gaps i metryka masy FE są gotowe; pozostają fizyczne podprzestrzenie zdegenerowane |
 | S07 — artefakty i API | W TRAKCIE | Stabilne ID, faza/obwiednia, selektory, binarne pola |
 | S08 — Control Room | DO WYKONANIA | Authoring, dyspersja, wybór modu i przestrzenna faza; browser/WebGL |
 | S09 — falowód 2.5D | DO WYKONANIA | Modified Helmholtz i normalizacja na długość |
@@ -91,7 +91,7 @@ VERIFIED**.
 Poprzedni obrót celu klasyfikuję jako **postęp**: zapisano commit planu, kod i wyniki kontroli. Bieżąca kontynuacja również zmienia źródła; pełny cel S00–S12 pozostaje aktywny.
 
 - S02: Python odrzuca niecałkowite/ujemne/przepełnione ID, niepoprawne wektory i kontrolne punkty ścieżki. Fokus API/IR dla eigensolve: 35 passed; pełny `test_problem_ir.py`: 26 passed. Rust zachowuje `branches`, `sample_selector`, `include_branch_table`; planner pozwala na unię żądań dla różnych selektorów próbek, a testy IR/plannera/runnera zostały wykonane diagnostycznie.
-- S06: implementacja Hungarian i luk zachowuje surowe ID; `overlap_prev` jest rzeczywistym znormalizowanym overlapem, a `tracking_confidence` wynikiem 0.85 overlap + 0.15 frequency. Próg filtruje rzeczywisty overlap. Brak wektora ma jawny fallback częstotliwościowy i `overlap_prev=None`. Usunięto klonowanie bieżących dużych wektorów. Fizyczna metryka masowa i podprzestrzenie pozostają do wykonania.
+- S06: implementacja Hungarian i luk zachowuje surowe ID; `overlap_prev` jest rzeczywistym znormalizowanym overlapem, a `tracking_confidence` wynikiem 0.85 overlap + 0.15 frequency. Próg filtruje rzeczywisty overlap. Brak wektora ma jawny fallback częstotliwościowy i `overlap_prev=None`. Usunięto klonowanie bieżących dużych wektorów. Gdy oba artefakty mają zgodne dodatnie wagi FE, overlap używa metryki masy na aktywny węzeł; starsze lub niezgodne wektory zachowują fallback euklidesowy. Fizyczne podprzestrzenie pozostają do wykonania.
 - S07: helper selekcji poprawiono po review. ID obecne jednocześnie w modzie i tabeli gałęzi są legalne; tabela waliduje swoje punkty. Etykieta Γ wybiera wszystkie pasujące próbki w ścieżce Γ–X–Γ. Diagnostyka może wymagać trackingu bez eksportu widma.
 - S07: writer FEM używa tożsamości `(sample_index, raw_mode_index)`, rozwiązuje wybór gałęzi po trackingu, zachowuje pełne widmo dla `SaveDispersion` i ogranicza osobno pola. Wyłączenie tabeli gałęzi wyłącza jej pliki i linki w manifeście, ale nie tracking. Niewybrane pola zachowują stabilne ID, dostają `mode_field_available=false` i nie mają aktywnego linku. Wybrane pola wymagają metadanych i binarnego payloadu. Dodano i wykonano regresje, poprawiono zachowanie grupy próbki Zarr; bezpośredni writer orchestratora, API i UI pozostają do integracji.
 - `rustfmt --check` dla trzech zmienionych writerów oraz selektora i trackingu: exit 0. Nie jest to dowód kompilacji. `git diff --check`: exit 0.
@@ -109,11 +109,20 @@ hostowych nie kwalifikuje relacji dyspersji ani dynamicznego demag-k.
 - `509db79c2` — śledzenie gałęzi z Hungarian/gaps i fallbackiem częstotliwościowym oraz publikacja selekcjonowanych artefaktów dyspersji z trwałą tożsamością próbki i surowego modu.
 - `4c83ea4b2` — fundament redukcji Floqueta i fail-closed adapter dense real-split dla dostarczonego dynamicznego demag-k w natywnym solverze CPU; digest pencila obejmuje efektywną macierz.
 - `1300b8035` — dokumentacja dwóch reprezentacji non-k0, źródeł COMSOL/TetraX oraz granicy między adapterem a przyszłym providerem assemblacji.
+- `b360f7490` — overlap śledzenia gałęzi z dodatnią metryką masy FE na aktywny węzeł, z fallbackiem dla niezgodnych starszych artefaktów i regresjami.
+- `11183f7e8` — bounded dense provider Schura dynamicznego demag-k: zespolone `A_{qφ}(k)`, `P(k)`, `A_{φq}(k)`, kontrola niezerowego `k`, pivotu, gauge, budżetu i realifikacji ABI; test kontraktu CMake.
 
 Adapter dynamicznego demag-k przyjmuje wyłącznie kompletną macierz dostarczoną
 przez przyszłego właściciela `A_{q\phi}(k)`/`P(k)`/`A_{\phi q}(k)`; nie jest
 jeszcze takim providerem i nie usuwa runnerowego odrzucenia planu Floquet z
 `include_demag`. S04/S05/S08–S12 pozostają otwarte.
+
+Provider `floquet_dynamic_demag_k` domyka algebraiczny etap Schura dla małych
+problemów walidacyjnych i zwraca `[[Re D,-Im D],[Im D,Re D]]`, gdzie
+`D(k)=-A_{qφ}(k)P(k)^{-1}A_{φq}(k)`. Przyjmuje wyłącznie niezerowe,
+finite `k`, nie maskuje osobliwości `P(k)`, a `pin_first_dof` jest jawny. Nie
+ma jeszcze assemblera bloków na siatce MFEM ani podłączenia tego provider'a do
+shared-domain modal path; runner nadal odrzuca non-k0 z demag-k.
 
 ### Walidacja po domknięciu przyrostu
 
@@ -122,6 +131,7 @@ jeszcze takim providerem i nie usuwa runnerowego odrzucenia planu Floquet z
 - `cargo +nightly test --locked -p fullmag-ir --lib`: 101 passed, exit 0.
 - `cargo +nightly test --locked -p fullmag-ir --tests`: 101 unit + 229 integration tests passed, exit 0; `cargo +nightly test --locked -p fullmag-plan --lib`: 461 passed, exit 0.
 - `cargo +nightly test --locked -p fullmag-runner --lib output_publication_tests`: 5 passed; `--lib tracking`: 13 passed, exit 0.
+- Po dodaniu metryki masy FE `cargo +nightly test --locked -p fullmag-runner --lib tracking --target-dir C:/Users/Mateusz/AppData/Local/Temp/fullmag-eigensolve-cargo-target`: 15 passed, exit 0.
 - `cargo +nightly test --locked -p fullmag-runner --lib eigen`: 226 passed, 1 failed. Jedyna porażka to istniejące `eigen::response_block_real::tests::field_driven_sweep_builds_artifact_ready_response_payload`, równość `1.0000000000000002` vs `1.0`; plik testu nie należy do tego przyrostu.
 - Python: pełny `test_problem_ir.py` 26 passed; fokus API/IR dla eigensolve 35 passed; pełny `test_api.py` wykonał 277 passed i 19 failures środowiskowych (brak `h5py`/`zarr`, odmowa zapisu w lokalnym cache/worktree oraz `run_output`), bez błędu w fokusie eigensolve.
 - Test kontraktu dokumentacji matematycznej: 9 passed. Walidatory source-map i `git diff --check`: exit 0.
