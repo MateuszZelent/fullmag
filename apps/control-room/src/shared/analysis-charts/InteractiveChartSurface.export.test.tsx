@@ -238,4 +238,37 @@ describe("InteractiveChartSurface export lifecycle", () => {
       dom.restore();
     }
   });
+
+  it("fails a later PNG request after an import error occurred before the request", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as HTMLElement);
+    const handled = vi.fn();
+    const failed = vi.fn();
+    try {
+      await act(async () => root.render(
+        <InteractiveChartSurface
+          onRequestedExportFailed={failed}
+          onRequestedExportHandled={handled}
+          series={series}
+          surface={surface}
+        />,
+      ));
+      await act(async () => harness.onRendererError?.());
+      await act(async () => root.render(
+        <InteractiveChartSurface
+          onRequestedExportFailed={failed}
+          onRequestedExportHandled={handled}
+          requestedExportRequest={{ format: "png", requestId: "png-after-import-error-1" }}
+          series={series}
+          surface={surface}
+        />,
+      ));
+      expect(failed).toHaveBeenCalledOnce();
+      expect(handled).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
 });

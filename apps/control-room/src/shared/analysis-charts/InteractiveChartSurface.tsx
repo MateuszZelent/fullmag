@@ -78,6 +78,7 @@ export function InteractiveChartSurface({
   const [isTableOpen, setIsTableOpen] = useState(false);
   const [rendererReady, setRendererReady] = useState(false);
   const exportRef = useRef<ChartRendererOwner | null>(null);
+  const rendererErrorRef = useRef(false);
   const handledExportRequestRef = useRef<string | null>(null);
   const exportRequest = requestedExportRequest ?? null;
   const model = useMemo(
@@ -94,6 +95,11 @@ export function InteractiveChartSurface({
       return;
     }
     if (handledExportRequestRef.current === exportRequest.requestId) return;
+    if (exportRequest.format === "png" && rendererErrorRef.current) {
+      handledExportRequestRef.current = exportRequest.requestId;
+      acknowledgeExportFailure(onRequestedExportFailed, onRequestedExportHandled);
+      return;
+    }
     if (exportRequest.format === "png" && !rendererReady) return;
     let exported = false;
     try {
@@ -121,8 +127,12 @@ export function InteractiveChartSurface({
         exportRef={exportRef}
         initialRange={initialRange}
         model={model}
-        onRendererReady={() => setRendererReady(true)}
+        onRendererReady={() => {
+          rendererErrorRef.current = false;
+          setRendererReady(true);
+        }}
         onRendererError={() => {
+          rendererErrorRef.current = true;
           if (exportRequest?.format === "png" && handledExportRequestRef.current !== exportRequest.requestId) {
             handledExportRequestRef.current = exportRequest.requestId;
             acknowledgeExportFailure(onRequestedExportFailed, onRequestedExportHandled);

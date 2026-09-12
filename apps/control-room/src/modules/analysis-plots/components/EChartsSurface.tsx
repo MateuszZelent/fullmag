@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
@@ -68,7 +68,27 @@ export function EChartsSurface({
 }: EChartsSurfaceProps) {
   const [requestedExportRequest, setRequestedExportRequest] = useState<ChartExportRequest | null>(null);
   const exportRequestSequenceRef = useRef(0);
+  const queuedExportRequestsRef = useRef<ChartExportRequest[]>([]);
+  const activeExportRequestRef = useRef<ChartExportRequest | null>(null);
   const rangeCommitTimerRef = useRef<number | null>(null);
+  const enqueueExportRequest = useCallback((request: ChartExportRequest) => {
+    if (
+      activeExportRequestRef.current?.requestId === request.requestId ||
+      queuedExportRequestsRef.current.some((queued) => queued.requestId === request.requestId)
+    ) return;
+    if (activeExportRequestRef.current) {
+      queuedExportRequestsRef.current.push(request);
+      return;
+    }
+    activeExportRequestRef.current = request;
+    setRequestedExportRequest(request);
+  }, []);
+  const acknowledgeExportRequest = useCallback((requestId: string | null) => {
+    if (!requestId || activeExportRequestRef.current?.requestId !== requestId) return;
+    const next = queuedExportRequestsRef.current.shift() ?? null;
+    activeExportRequestRef.current = next;
+    setRequestedExportRequest(next);
+  }, []);
   const surfaceStatus = presentation?.kind === "refreshing" && series.some((entry) => entry.points.length > 0)
     ? "refreshing"
     : undefined;
@@ -83,13 +103,13 @@ export function EChartsSurface({
     const acceptedChartId = chartId ?? series[0]?.source.tableId ?? "default";
     return bus.subscribe("analysis-plots:export-requested", (request) => {
       if (request.chartId === acceptedChartId) {
-        setRequestedExportRequest({
+        enqueueExportRequest({
           format: request.format,
           requestId: request.requestId ?? `analysis-chart-export-${acceptedChartId}-${++exportRequestSequenceRef.current}`,
         });
       }
     });
-  }, [bus, chartId, series, exportRequestSequenceRef]);
+  }, [bus, chartId, enqueueExportRequest, series]);
 
   return (
     <InteractiveChartSurface
@@ -130,8 +150,8 @@ export function EChartsSurface({
         const range = chartRangeFromDataZoomEvent({ endValue: toValue, startValue: fromValue });
         if (range) scheduleRangeCommit(rangeCommitTimerRef, () => onRangeChange?.(range));
       }}
-       onRequestedExportHandled={() => setRequestedExportRequest(null)}
-       onRequestedExportFailed={() => setRequestedExportRequest(null)}
+       onRequestedExportHandled={() => acknowledgeExportRequest(requestedExportRequest?.requestId ?? null)}
+       onRequestedExportFailed={() => acknowledgeExportRequest(requestedExportRequest?.requestId ?? null)}
     />
   );
 }

@@ -9,15 +9,19 @@ import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationP
 const renderedFormats: Array<string | null> = [];
 const renderedRequests: Array<{ chartId: string; format: string | null }> = [];
 const renderedRequestIds: Array<string | null> = [];
+const renderedHandledCallbacks = new Map<string, () => void>();
 const renderedRanges: Array<{ fromValue: number; toValue: number } | null> = [];
 const renderedProvenance: Array<Record<string, unknown> | undefined> = [];
 
 vi.mock("@/shared/analysis-charts/InteractiveChartSurface", () => ({
-  InteractiveChartSurface: ({ initialRange, requestedExportRequest, surface }: { initialRange: { fromValue: number; toValue: number } | null; requestedExportRequest?: { format: string; requestId: string } | null; surface: { chartId: string; provenance?: Record<string, unknown> } }) => {
+  InteractiveChartSurface: ({ initialRange, onRequestedExportHandled, requestedExportRequest, surface }: { initialRange: { fromValue: number; toValue: number } | null; onRequestedExportHandled?: () => void; requestedExportRequest?: { format: string; requestId: string } | null; surface: { chartId: string; provenance?: Record<string, unknown> } }) => {
     const format = requestedExportRequest?.format ?? null;
     renderedFormats.push(format);
     renderedRequests.push({ chartId: surface.chartId, format });
     renderedRequestIds.push(requestedExportRequest?.requestId ?? null);
+    if (requestedExportRequest?.requestId && onRequestedExportHandled) {
+      renderedHandledCallbacks.set(requestedExportRequest.requestId, onRequestedExportHandled);
+    }
     renderedRanges.push(initialRange);
     renderedProvenance.push(surface.provenance);
     return <div />;
@@ -61,17 +65,44 @@ describe("Analysis chart export routing", () => {
     renderedFormats.length = 0;
     renderedRequests.length = 0;
     renderedRequestIds.length = 0;
+    renderedHandledCallbacks.clear();
     const dom = installSimulationPreparationTestDom();
     const root = createRoot(dom.document.createElement("div") as unknown as Element);
     const bus = new EventBus<KernelEventMap>();
     try {
       await act(async () => root.render(<EChartsSurface bus={bus} chartId="dynamics:table-a" series={series} xAxisLabel="step" />));
       await act(async () => bus.emit("analysis-plots:export-requested", { chartId: "dynamics:table-a", format: "csv", source: "analysis-plots" }));
+      const firstRequestId = renderedRequestIds.find((requestId): requestId is string => requestId !== null);
+      await act(async () => firstRequestId && renderedHandledCallbacks.get(firstRequestId)?.());
       await act(async () => bus.emit("analysis-plots:export-requested", { chartId: "dynamics:table-a", format: "csv", source: "analysis-plots" }));
       expect(renderedFormats.filter((format) => format === "csv")).toHaveLength(2);
       const csvRequestIds = renderedRequestIds.filter((requestId): requestId is string => requestId !== null);
       expect(csvRequestIds).toHaveLength(2);
       expect(csvRequestIds[0]).not.toBe(csvRequestIds[1]);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("queues batched bus requests and drains the next request after acknowledgement", async () => {
+    renderedFormats.length = 0;
+    renderedRequests.length = 0;
+    renderedRequestIds.length = 0;
+    renderedHandledCallbacks.clear();
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    const bus = new EventBus<KernelEventMap>();
+    try {
+      await act(async () => root.render(<EChartsSurface bus={bus} chartId="dynamics:table-a" series={series} xAxisLabel="step" />));
+      await act(async () => {
+        bus.emit("analysis-plots:export-requested", { chartId: "dynamics:table-a", format: "csv", requestId: "batched-1", source: "analysis-plots" });
+        bus.emit("analysis-plots:export-requested", { chartId: "dynamics:table-a", format: "csv", requestId: "batched-2", source: "analysis-plots" });
+      });
+      expect(renderedRequestIds).toContain("batched-1");
+      expect(renderedRequestIds).not.toContain("batched-2");
+      await act(async () => renderedHandledCallbacks.get("batched-1")?.());
+      expect(renderedRequestIds).toContain("batched-2");
     } finally {
       await act(async () => root.unmount());
       dom.restore();

@@ -113,12 +113,14 @@ export function useLiveChartsController(selection: SelectionController) {
   const [localExportRequest, setLocalExportRequest] = useState<LiveChartsExportRequest | null>(null);
   const localExportSequenceRef = useRef(0);
   const fitRequest = commandFitRequest + localFitRequest;
-  const requestedExportRequest: LiveChartsExportRequest | null = commandAction?.kind === "export"
+  const commandExportRequest: LiveChartsExportRequest | null = commandAction?.kind === "export"
     ? {
         format: commandAction.format,
         requestId: commandAction.requestId ?? `live-charts-command-export-${commandAction.format}`,
       }
-    : localExportRequest;
+    : null;
+  const requestedExportRequest = commandExportRequest ?? localExportRequest;
+  const requestedExportRequestId = requestedExportRequest?.requestId ?? null;
   useEffect(() => {
     if (!preferences.isHydrated || preferences.descriptor) return;
     liveChartPreferencesStore.updateDescriptor(descriptorId, () => defaults);
@@ -225,12 +227,18 @@ export function useLiveChartsController(selection: SelectionController) {
     },
     onSeriesChange: (ids: string[]) => preferences.setDescriptorSelectedSeriesIds(descriptorId, ids),
     onRequestedExportHandled: () => {
-      setLocalExportRequest(null);
-      liveChartsCommandRequests.complete();
+      if (commandExportRequest && isCurrentExportCommand(commandExportRequest.requestId)) {
+        liveChartsCommandRequests.complete();
+      } else if (!commandExportRequest && requestedExportRequestId) {
+        setLocalExportRequest((current) => current?.requestId === requestedExportRequestId ? null : current);
+      }
     },
     onRequestedExportFailed: () => {
-      setLocalExportRequest(null);
-      liveChartsCommandRequests.fail();
+      if (commandExportRequest && isCurrentExportCommand(commandExportRequest.requestId)) {
+        liveChartsCommandRequests.fail();
+      } else if (!commandExportRequest && requestedExportRequestId) {
+        setLocalExportRequest((current) => current?.requestId === requestedExportRequestId ? null : current);
+      }
     },
     onToggleFollow: () => preferences.setDescriptorLiveMode(descriptorId, paused ? "following" : "paused"),
     onXAxisChange: (id: string) => {
@@ -242,7 +250,7 @@ export function useLiveChartsController(selection: SelectionController) {
       }));
       setLocalFitRequest((value) => value + 1);
     },
-    onRangeChange: descriptorId === "energy" || !isLiveChartServerXAxisId(effectiveXAxisId) ? undefined : (range: ChartRangePreference) => {
+    onRangeChange: descriptorId === "energy" ? undefined : (range: ChartRangePreference) => {
       liveChartsWorkspaceStore.clearRange();
       preferences.setDescriptorRange(descriptorId, normalizeLiveChartRangeForXAxis(range, effectiveXAxisId));
       setLocalFitRequest((value) => value + 1);
@@ -261,4 +269,9 @@ export function useLiveChartsController(selection: SelectionController) {
         ? "Step"
         : effectiveXAxisId,
   };
+}
+
+function isCurrentExportCommand(requestId: string): boolean {
+  const action = liveChartsCommandRequests.getSnapshot();
+  return action?.kind === "export" && action.requestId === requestId;
 }
