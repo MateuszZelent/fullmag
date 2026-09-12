@@ -258,7 +258,7 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
     assert_eq!(spectrum["sample_count"], 1);
     assert_eq!(
         spectrum["samples"][0]["sample_id"],
-        "bias-field-sample-0000"
+        "k-path-sample-0000"
     );
     assert_eq!(
         spectrum["samples"][0]["modes"][0]["mode_id"],
@@ -504,6 +504,35 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
     assert_eq!(
         family_manifest["capabilities"]["modal_artifact_available"],
         true
+    );
+}
+
+#[test]
+fn path_writer_keeps_bias_namespace_explicit_for_physical_field_sweeps() {
+    let temp = TempDirGuard::new("eigen-artifacts-bias-namespace");
+    let result = sample_result();
+
+    write_path_bundle_with_sample_namespace(&temp.path, &result, true)
+        .expect("field-sweep path bundle should write");
+
+    let spectrum: Value = serde_json::from_slice(
+        &std::fs::read(temp.path.join("eigen/spectrum.v2.json"))
+            .expect("spectrum.v2.json should be written"),
+    )
+    .expect("spectrum.v2.json should be valid JSON");
+    assert_eq!(
+        spectrum["samples"][0]["sample_id"],
+        "bias-field-sample-0000"
+    );
+
+    let spectrum_v3: Value = serde_json::from_slice(
+        &std::fs::read(temp.path.join("eigen/spectrum.v3.json"))
+            .expect("spectrum.v3.json should be written"),
+    )
+    .expect("spectrum.v3.json should be valid JSON");
+    assert_eq!(
+        spectrum_v3["samples"][0]["sample_id"],
+        "bias-field-sample-0000"
     );
 }
 

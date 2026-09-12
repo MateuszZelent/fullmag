@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashSet};
 
 use crate::dispatch::FemEngine;
+use crate::eigen::KSampleDescriptor;
 use crate::eigen::output_selection::{select_eigen_outputs, SampleModeId};
 use crate::fem::eigen_execution_resolution::{FemEigenExecutionLane, PlannedFemEigenExecution};
 use crate::fem_eigen;
@@ -20,6 +21,20 @@ mod eigen_path_manifest;
 use eigen_path_artifacts::*;
 use eigen_path_guards::*;
 use eigen_path_manifest::*;
+
+fn eigen_path_sample_id(plan: &FemEigenPlanIR, sample: &KSampleDescriptor) -> String {
+    let prefix = if bias_field_sweep_requested(plan) {
+        "bias-field-sample"
+    } else if matches!(
+        plan.k_sampling,
+        Some(fullmag_ir::KSamplingIR::Path { .. })
+    ) {
+        "k-path-sample"
+    } else {
+        "k-sample"
+    };
+    format!("{prefix}-{:04}", sample.sample_index)
+}
 
 #[cfg(test)]
 pub(crate) mod test_support {
@@ -642,7 +657,7 @@ pub(crate) fn execute_fem_eigen_path(
         .iter()
         .map(|sample| {
             serde_json::json!({
-                "sample_id": format!("bias-field-sample-{:04}", sample.sample.sample_index),
+                "sample_id": eigen_path_sample_id(plan, &sample.sample),
                 "sample_index": sample.sample.sample_index,
                 "label": sample.sample.label,
                 "k_vector": sample.sample.k_vector,

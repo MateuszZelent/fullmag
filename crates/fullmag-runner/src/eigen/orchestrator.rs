@@ -12,7 +12,7 @@
 
 use crate::eigen::artifacts::{
     write_branch_bundle, write_frequency_domain_eigen_manifest, write_mode_bundle,
-    write_path_bundle,
+    write_path_bundle_with_sample_namespace,
 };
 use crate::eigen::path::expand_k_sampling;
 use crate::eigen::tracking::track_branches;
@@ -106,7 +106,12 @@ pub fn run_path_or_single<S: SingleKSolver>(
     track_branches(&mut result, mode_tracking);
 
     if let Some(output_dir) = output_dir {
-        write_path_bundle(output_dir, &result).map_err(|error| RunError {
+        write_path_bundle_with_sample_namespace(
+            output_dir,
+            &result,
+            !plan.bias_field_samples.is_empty(),
+        )
+        .map_err(|error| RunError {
             message: format!("failed to write path bundle: {error}"),
         })?;
         write_branch_bundle(output_dir, &result).map_err(|error| RunError {

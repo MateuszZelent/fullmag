@@ -677,13 +677,28 @@ fn eigen_mode_field_resources(result: &PathSolveResult) -> Vec<String> {
 }
 
 pub fn write_path_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::Result<()> {
+    write_path_bundle_with_sample_namespace(base_dir, result, false)
+}
+
+/// Write the path bundle while preserving the identity of the solved sample
+/// axis.  Bias-field samples use the legacy field-sweep namespace because the
+/// field-sweep readers already key on it; k-path samples use an explicit
+/// k-path namespace so a zero-k Gamma point cannot be mistaken for a field
+/// sample.  The explicit flag comes from the plan, where the runner can still
+/// distinguish a physical bias sweep from a k-path whose vectors happen to be
+/// zero.
+pub fn write_path_bundle_with_sample_namespace(
+    base_dir: &Path,
+    result: &PathSolveResult,
+    bias_field_sweep: bool,
+) -> std::io::Result<()> {
     let eigen_dir = base_dir.join("eigen");
     fs::create_dir_all(&eigen_dir)?;
     let samples: Vec<SampleArtifact> = result
         .samples
         .iter()
         .map(|sample| SampleArtifact {
-            sample_id: format!("bias-field-sample-{:04}", sample.sample.sample_index),
+            sample_id: path_sample_id(sample, bias_field_sweep),
             sample_index: sample.sample.sample_index,
             label: sample.sample.label.clone(),
             k_vector: sample.sample.k_vector,
@@ -725,10 +740,7 @@ pub fn write_path_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 })
                 .collect::<Vec<_>>();
             serde_json::json!({
-                "sample_id": format!(
-                    "bias-field-sample-{:04}",
-                    sample.sample.sample_index
-                ),
+                "sample_id": path_sample_id(sample, bias_field_sweep),
                 "sample_index": sample.sample.sample_index,
                 "label": sample.sample.label,
                 "k_vector": sample.sample.k_vector,
@@ -764,6 +776,17 @@ pub fn write_path_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
         serde_json::to_vec_pretty(&samples).unwrap(),
     )?;
     Ok(())
+}
+
+fn path_sample_id(sample: &SingleKSolveResult, bias_field_sweep: bool) -> String {
+    let prefix = if bias_field_sweep {
+        "bias-field-sample"
+    } else if sample.sample.segment_index.is_some() {
+        "k-path-sample"
+    } else {
+        "k-sample"
+    };
+    format!("{prefix}-{:04}", sample.sample.sample_index)
 }
 
 pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::Result<()> {
