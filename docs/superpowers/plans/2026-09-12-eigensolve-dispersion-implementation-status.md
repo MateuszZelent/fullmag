@@ -2,6 +2,21 @@
 
 Data: 2026-09-13. Status zadania: **W TRAKCIE**. Kwalifikacja solvera non-k0: **NOT VERIFIED**.
 
+## Aktualny audyt — 2026-09-13
+
+Nadrzędne bieżące zestawienie: [audyt postępu S00–S12 i R01–R05](2026-09-13-eigensolve-dispersion-progress-audit.md).
+HEAD kodu: `3dda82b4e7310f16bb816b6dcc69f59502bc10de`.
+Ostatni przyrost dodaje względny residual bloku potencjału; izolowany MSVC
+zakończył się exit 0. Nowy audyt ujawnił niespójność pivotów (R01), brak
+certyfikacji/propagacji residualu (R02) i niepełne recepty (R03).
+Żaden etap S00–S12 nie jest w pełni zamknięty; wcześniejsze procenty bez
+mianownika wycofano. Aktualna blokada runnera: allow-list mismatch, exit 1.
+GitHub: nieważny token, exit 1. Starsze joby nie zostały ponownie odczytane.
+
+Dalsze sekcje są chronologiczną historią. Opisy „jeszcze nie podłączono”,
+„queued/running”, brak miejsca i dawne HEAD-y opisują moment wpisu,
+nie aktualny stan. Bieżący rejestr ma niezgodny SHA; otwarte S12.R05b.
+
 ## Cel i źródła
 
 Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md), po osobnym zleceniu implementacji. Zakres obejmuje CPU z pełnym dynamicznym demag-k, falowód 2.5D, interakcje, GPU, artefakty, API i Control Room. Etap źródłowy lub pojedynczy test nie zamyka tego celu.

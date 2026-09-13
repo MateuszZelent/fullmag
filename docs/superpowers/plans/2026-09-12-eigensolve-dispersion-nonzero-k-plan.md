@@ -10,7 +10,7 @@ Plan powstał jako osobne zadanie w nowym worktree. Po jego przygotowaniu użytk
 
 | Tożsamość | Wartość |
 |---|---|
-| Zweryfikowany lokalny `master`, baza i HEAD worktree | `5084a94ed14b151fc865e8def5a5c28401e98b44` |
+| Zweryfikowany lokalny `master` — baza utworzenia worktree | `5084a94ed14b151fc865e8def5a5c28401e98b44` |
 | Branch | `codex/eigensolve-dispersion-plan-20260912` |
 | Worktree | `C:/git/fullmag/worktrees/eigensolve-dispersion-plan-20260912` |
 | Główny checkout według Git | `C:/git/fullmag/fullmag` |
@@ -253,11 +253,11 @@ Wykorzystać rodzinę `analysis/frequency-domain`, istniejący facade/resource h
 
 ## 6. Etapy wykonawcze i zależności
 
-Wszystkie etapy poniżej mają status **DO WYKONANIA**. Każdy kończy się spójnym, zweryfikowanym przyrostem na branchu implementacyjnym. To lista prac do przyszłej implementacji, nie zapis wykonanych commitów.
+Aktualizacja 2026-09-13: S00–S07, S09 i S12 są częściowe; rozszerzenia S08, S10 i S11 pozostają do wykonania. Żaden etap nie jest zamknięty według pełnych kryteriów. Poniższa tabela zachowuje wymagany zakres końcowy; aktualny stan wykonania i podzadania naprawcze R01–R05 opisuje [audyt postępu](2026-09-13-eigensolve-dispersion-progress-audit.md).
 
 ### Konkretni nowi właściciele S03–S05 (kontrakty źródłowe; runtime pozostaje do kwalifikacji)
 
-Pod `backends/fem/` przewidziano:
+Docelowy zakres właścicieli pod `backends/fem/` (obecność pliku nie oznacza realizacji całego opisu; luka pełnego requestu i skalowania: R04):
 
 - `include/frequency_domain/floquet_modal_problem.hpp` — opis geometrii, materiałów, równowagi, k, obu zbiorów par, reprezentacji pola i BC/gauge; przekazany native problem, nie gotowa macierz numeryczna z Rust.
 - `cpu/frequency_domain/operators/floquet_magnetic_operator.hpp` oraz `.cpp` — pełny styczny operator magnetyczny na polach Blocha i fazowa redukcja w natywnym MFEM.
@@ -266,7 +266,7 @@ Pod `backends/fem/` przewidziano:
 
 Rozszerzyć istniejący `modal_eigen_request.hpp` oraz wrapper `crates/fullmag-runner/src/native_fem/frequency_domain.rs` wersjonowanym requestem/native handle. Zachować aktualny dense caller-supplied payload wyłącznie jako oracle. Zmiana capability od reject do supported następuje dopiero dla dokładnie zweryfikowanej kombinacji i nie usuwa zbiorczo strażników K0/GPU.
 
-Nowe, planowane wejścia managed: `just verify-fem-modal-floquet-magnetic-contract` dla S03 i `just verify-fem-modal-floquet-airbox-cpu` dla S04–S05. Każde ma wywołać natywny target i weryfikator artefaktów, odnotować source identity, requested/resolved oraz końcowy stan w storage. **Nie są obecnymi poleceniami repo.**
+Istniejące wejścia kontraktowe managed: `just verify-fem-modal-floquet-magnetic-contract` dla S03 i `just verify-fem-modal-floquet-airbox-cpu` dla S04–S05. Każde ma wywołać natywny target i weryfikator artefaktów, odnotować source identity, requested/resolved oraz końcowy stan w storage. **Obie recepty istnieją w bieżącym branchu, lecz nie mają kompletnego dowodu wykonania.** R03 audytu wymaga uzupełnienia targetów modal/cross-section, jawnego potwierdzenia CPU oraz scenariusza i weryfikatora artefaktów.
 
 W S03 test krzywizny exchange k² sprawdza uzyskane widmo. Nie upoważnia do ręcznego dodania członu k² do wybranej realizacji pełnych pól 3D, gdzie zależność od k wynika już z C(k). Jawny człon k² należy do oddzielnej reprezentacji obwiedni/przekroju.
 
@@ -287,6 +287,36 @@ W S03 test krzywizny exchange k² sprawdza uzyskane widmo. Nie upoważnia do rę
 | S12 — walidacja, dokumentacja i integracja | nowe scenariusze/verify scripts, `justfile`, source-map, public docs | Macierz benchmarków z §7, manifesty, ograniczenia i przykłady do uruchomienia. Dopiero po autoryzacji implementacji: wymagane tests/review → scoped commits/push → PR/merge → FF master → kontrola integracji i exact-worktree cleanup według governance. |
 
 Pierwszy pełny kamień milowy: **S00–S08 + dipolowo-wymienna dyspersja CPU 3D i jej naukowe porównania**. Następne: S09 (falowód), S10 (interakcje/tłumienie), S11 (GPU), S12 (kwalifikacja całego zadeklarowanego zakresu). Nie uznawać ukończenia S03 ani samego wykresu za ukończenie rozszerzenia.
+
+
+### Aktualny backlog naprawczy i warunki wznowienia
+
+Audyt bazuje na kodzie `3dda82b4e7310f16bb816b6dcc69f59502bc10de`.
+Szczegóły źródeł, kontrprzykładu i akceptacji: [R01–R05](2026-09-13-eigensolve-dispersion-progress-audit.md#ustalenia-i-zadania-naprawcze).
+
+- [x] S02.a: walidacja k/ID i przeniesienie selektorów Python→IR.
+- [x] S06.a: Hungarian, luki i metryka FE z testami kontraktów.
+- [x] S07.a: sample/raw-mode ID, selekcja pól i rozdział osi k/bias-field.
+- [x] S04.a: bounded provider oraz osobna trasa K0/non-k0 — kod zapisany, błąd R01 otwarty.
+- [x] S05.a: właściciel Floquet, walidacja payloadu/k/okna i handoff fazy.
+- [x] S09.a: bounded provider i elementowy assembler przekroju — prototyp.
+- [ ] S04.R01 (P1): regresja wielokrotnego pivotowania, naprawa LU solve, Schur oracle.
+- [ ] S04.R02 (P1): próg residualu, test stale-zero, propagacja diagnostyki i gauge.
+- [ ] S05.R02 (P1): rekonstrukcja potencjału i pełny residual V9.
+- [ ] S12.R03 (P1): naprawa trasy runnera; targety modal/cross-section i dokładny receipt MFEM/SLEPc.
+- [ ] S03.R04/S04.R04 (P1): pełny native problem i skalowalny operator demag-k.
+- [x] S12.R05a: aktualizacja audytu/statusów bez awansu kwalifikacji.
+- [ ] S12.R05b: uzgodnienie rejestru storage z rzeczywistym pełnym SHA.
+- [ ] S06.b: podprzestrzenie zdegenerowane, faza obwiedni, crossing/restart.
+- [ ] S07.b/S08: API/OpenAPI, realne artefakty i przepływ browser/FMS.
+- [ ] S09.b: typed realization/routing i porównanie TetraX/3D.
+- [ ] S10/S11: interakcje, damping i rzeczywista trasa GPU.
+- [ ] S12.b: wszystkie V0–V10, review, autoryzacja GitHub, PR/merge/FF i cleanup.
+
+Najpierw zamknąć błąd algebraiczny R01, następnie certyfikację R02 oraz
+trasę wykonania R03. Dopiero wtedy wyniki non-k0 mogą służyć do oceny
+zbieżności lub porównania solverów. Nie uznawać pojedynczych zielonych
+kontraktów za zamknięcie etapu.
 
 ## 7. Walidacja i warunki promocji
 
