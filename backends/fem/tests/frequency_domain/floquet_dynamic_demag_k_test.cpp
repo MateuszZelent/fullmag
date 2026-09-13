@@ -65,6 +65,9 @@ void nonzero_k_dense_schur_is_realified_for_modal_abi()
     check_close(output[3], expected.real(), "realified Schur imag-imag entry matches");
     check_close(diagnostics.k_norm_rad_per_m, 2.0, "diagnostics preserve Floquet wavevector norm");
     check(diagnostics.max_abs_schur_entry > 0.0, "diagnostics record Schur magnitude");
+    check(
+        diagnostics.max_relative_potential_solve_residual < 1.0e-12,
+        "diagnostics record a small scalar-potential solve residual");
 }
 
 void hermitian_blocks_produce_hermitian_dynamic_demag()

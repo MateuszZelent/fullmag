@@ -42,6 +42,10 @@ struct FloquetDynamicDemagKDiagnostics {
     std::uint64_t phi_dof_count = 0;
     double k_norm_rad_per_m = 0.0;
     double max_abs_pivot = 0.0;
+    // Maximum infinity-norm relative residual of P(k) x = b over all
+    // magnetic right-hand sides.  This is the reduced scalar-potential block
+    // residual; it is not the residual of the full modal pencil.
+    double max_relative_potential_solve_residual = 0.0;
     double max_abs_schur_entry = 0.0;
     double max_abs_hermitian_residual = 0.0;
     char error_message[192] = "";
