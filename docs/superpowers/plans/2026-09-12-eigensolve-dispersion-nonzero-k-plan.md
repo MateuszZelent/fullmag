@@ -393,3 +393,20 @@ Etap planowania zakończył się zachowaniem worktree i rejestrem `review`, bez 
 - Kontrola dokumentu: UTF-8, zamknięte bloki Markdown, zgodna liczba kolumn tabel, unikalne etykiety równań, obecność S00–S12 oraz 33 wskazane istniejące ścieżki źródeł — PASS. Pliki proponowanych nowych właścicieli oznaczono oddzielnie jako nieistniejące.
 - Niezależny przegląd planu zgłosił trzy uwagi dotyczące jednoznacznej reprezentacji Blocha, zakresu reuse K0 i konkretnych właścicieli natywnych. Wszystkie poprawiono i ich zamknięcie potwierdzono w ponownym przeglądzie; brak pozostawionych blokujących uwag w tym zakresie.
 - Nie uruchamiano solverów, buildów ani testów runtime/physics/GPU/browser. Ich status pozostaje **NOT VERIFIED** i jest przedmiotem przyszłych etapów, nie dowodem wynikającym z poprawności Markdown.
+
+
+### Referencja COMSOL — przepis dla operatora, 2026-09-13
+
+Użytkownik nie ma dotychczas wyników COMSOL/TetraX i zadeklarował wykonanie
+nowej symulacji. Zapisano kompletny przepis
+[comsol-nonzero-k-dispersion-benchmark](../../guides/comsol-nonzero-k-dispersion-benchmark.md),
+parametry SI oraz 61 punktów Γ–X–M–Γ. Model A1: film Permalloy
+200×200×10 nm, otwór kołowy r=50 nm, μ0H=0.1 T w +x,
+alpha eigen=0, skończony airbox z Dirichlet w z i periodycznością x/y.
+Dynamiczny demag opisano przez periodyczną obwiednię potencjału; fazor
+magnetyzacji zachowuje Floquet exp(-ik·r). Dwa testy kontrolne filmu
+i eksport zespolonych pól poprzedzają pełny benchmark.
+Sprawdzono stałe, jednostki, 61 punktów i znaki transformacji;
+wykonanie COMSOL i wyniki porównania pozostają NOT VERIFIED.
+Brak danych jest teraz zadaniem oczekującym na pomiar operatora,
+a nie podstawą do deklarowania ukończonej walidacji naukowej.

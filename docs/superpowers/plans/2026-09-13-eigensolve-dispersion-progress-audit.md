@@ -244,3 +244,20 @@ k/residualu/linewidth od liczby zero i odrzuca wiersze z brakującymi lub
 niepoprawnymi indeksami/częstotliwością/ścieżką. RED: cztery wiersze zamiast
 jednego; GREEN: 116 testów w trzech plikach Vitest. Nie zmieniono
 fizycznych tolerancji ani nie uzupełniano danych arbitralnymi wartościami.
+
+
+### Referencja COMSOL — przepis dla operatora, 2026-09-13
+
+Użytkownik nie ma dotychczas wyników COMSOL/TetraX i zadeklarował wykonanie
+nowej symulacji. Zapisano kompletny przepis
+[comsol-nonzero-k-dispersion-benchmark](../../guides/comsol-nonzero-k-dispersion-benchmark.md),
+parametry SI oraz 61 punktów Γ–X–M–Γ. Model A1: film Permalloy
+200×200×10 nm, otwór kołowy r=50 nm, μ0H=0.1 T w +x,
+alpha eigen=0, skończony airbox z Dirichlet w z i periodycznością x/y.
+Dynamiczny demag opisano przez periodyczną obwiednię potencjału; fazor
+magnetyzacji zachowuje Floquet exp(-ik·r). Dwa testy kontrolne filmu
+i eksport zespolonych pól poprzedzają pełny benchmark.
+Sprawdzono stałe, jednostki, 61 punktów i znaki transformacji;
+wykonanie COMSOL i wyniki porównania pozostają NOT VERIFIED.
+Brak danych jest teraz zadaniem oczekującym na pomiar operatora,
+a nie podstawą do deklarowania ukończonej walidacji naukowej.
