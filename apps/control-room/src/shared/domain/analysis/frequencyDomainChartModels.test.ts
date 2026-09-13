@@ -554,6 +554,7 @@ describe("frequencyDomainChartModels", () => {
       branchId: "acoustic",
       calculationMode: "dispersion_modal",
       kind: "results.eigen.dispersion",
+      kPathCoordinateRadPerM: 2.5e7,
       modeIndex: 5,
       nodeId: "results:eigen:dispersion:sample:4:mode:5",
       resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
@@ -585,11 +586,41 @@ describe("frequencyDomainChartModels", () => {
       calculationMode: "dispersion_modal",
       fieldId: "analysis:eigen:sample-0002:mode-0000",
       kind: "results.eigen.mode",
+      kPathCoordinateRadPerM: 5.0e7,
       modeIndex: 0,
       nodeId: "results:eigen:dispersion:sample:2:mode:0",
       resourceRef: fieldVectorResourceKey("analysis:eigen:sample-0002:mode-0000"),
       sampleIndex: 2,
       type: "frequency-domain",
+    });
+  });
+
+  it.each([false, true])("preserves dispersion identity, revision and clicked k (field=%s)", (withField) => {
+    const model = buildEigenDispersionChartModel(textResource([
+      "sample_index,raw_mode_index,sample_id,mode_id,path_s_rad_per_m,frequency_hz,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,mode_field_id",
+      `4,7,k-path-sample-0004,sample-0004-mode-0007,2.5e7,1.2e9,-2e7,1e7,0,${withField ? "field-7" : ""}`,
+    ].join("\n")));
+    const selection = buildEigenDispersionPointSelectionRef(model.points[0]!, {
+      analysisRunId: "run-current",
+      artifactRevision: 0,
+      equilibriumId: "equilibrium-current",
+      representation: "complex-vector-xyz",
+      kContextKind: "k_path",
+      // A previous selection's vector must not replace the clicked sample.
+      wavevectorKf: [9, 9, 9],
+    });
+    expect(selection).toMatchObject({
+      kind: withField ? "results.eigen.mode" : "results.eigen.dispersion",
+      sampleId: "k-path-sample-0004",
+      modeId: "sample-0004-mode-0007",
+      sampleIndex: 4,
+      modeIndex: 7,
+      analysisRunId: "run-current",
+      artifactRevision: "0",
+      equilibriumId: "equilibrium-current",
+      representation: "complex-vector-xyz",
+      kContextKind: "k_path",
+      wavevectorKf: [-2e7, 1e7, 0],
     });
   });
 

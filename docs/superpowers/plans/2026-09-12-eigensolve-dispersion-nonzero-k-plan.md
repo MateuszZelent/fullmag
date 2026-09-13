@@ -315,7 +315,8 @@ Szczegóły źródeł, kontrprzykładu i akceptacji: [R01–R05](2026-09-13-eige
 - [x] S12.R05b1: rejestr naprawiony oficjalnym resolverem dla 71a98514c410ebac82a610ccc2a17ff172533a23.
 - [ ] S12.R05b2: końcowa aktualizacja rejestru po ostatnim commicie i integracji.
 - [ ] S06.b: podprzestrzenie zdegenerowane, faza obwiedni, crossing/restart.
-- [ ] S07.b/S08: API/OpenAPI, realne artefakty i przepływ browser/FMS.
+- [x] S08.R06a: zachowanie k/ścieżki/ID i dostarczonego kontekstu rewizji przy wyborze dyspersji; 115 testów Vitest passed.
+- [ ] S07.b/S08: API/OpenAPI, realne artefakty i przepływ browser/FMS; źródłowa poprawka selekcji nie zamyka całego etapu.
 - [ ] S09.b: typed realization/routing i porównanie TetraX/3D.
 - [ ] S10/S11: interakcje, damping i rzeczywista trasa GPU.
 - [ ] S12.b: wszystkie V0–V10, review, autoryzacja GitHub, PR/merge/FF i cleanup.

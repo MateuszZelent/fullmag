@@ -518,3 +518,18 @@ build directory, poprawiono czas życia LD_LIBRARY_PATH dla wszystkich testów.
 `just --show`, Bash syntax i porównanie targetów z CMake: PASS (7/7).
 Nie uruchomiono jeszcze kompilacji w kolejce; receipt i fizyka pozostają otwarte.
 Oficjalny resolver register: exit 0, poprawny pełny SHA i aktywny właściciel.
+
+### R03 — commit oraz S08.R06 — wybór punktu dyspersji
+
+Naprawę recepty i stan rejestru zapisano w
+`92f272681ece6479d2e3ea51e531c533c086e2d7` (just/Bash/target coverage PASS).
+Następnie naprawiono utratę k/ID/rewizji w parserze i dwóch ścieżkach
+selekcji UI. Regresje RED→GREEN; trzy pliki Vitest: 115 passed.
+Instalację 771 zależności wykonano offline w resolverowym frontend storage
+z dokładnych manifestów i lockfile; instalator przez junction worktree
+wcześniej kończył się ENOTDIR. Nie kopiowano zależności innego worktree.
+Runtime, browser/FMS i pełne zamknięcie S08 nadal otwarte.
+
+Dodatkowe kontrole R06: typecheck, API hygiene i architecture hygiene exit 0.
+Lokalny react-doctor 0.9.12: cztery zmienione pliki, brak ustaleń, exit 0.
+Logi i manifest kontroli są w resolverowym frontend storage zadania.

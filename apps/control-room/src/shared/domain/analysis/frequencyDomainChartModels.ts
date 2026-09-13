@@ -405,6 +405,9 @@ export interface EigenDispersionPoint {
   sampleLabel?: string | null;
   sampleIndex: number;
   validationGeometry: string | null;
+  sampleId?: string | null;
+  modeId?: string | null;
+  wavevectorKf?: readonly [number, number, number] | null;
 }
 
 export interface EigenBranchPoint {
@@ -1016,8 +1019,24 @@ export function buildEigenDispersionPointSelectionRef(
   point: EigenDispersionPoint,
   context: FrequencyDomainSelectionContext = {},
 ): SelectionRef {
+  const identity = {
+    artifactRevision: context.artifactRevision == null
+      ? undefined
+      : String(context.artifactRevision),
+    equilibriumId: context.equilibriumId ?? undefined,
+    kContextKind: context.kContextKind ?? undefined,
+    kPathCoordinateRadPerM: point.pathS,
+    modeId: point.modeId ?? undefined,
+    representation: context.representation ?? undefined,
+    sampleId: point.sampleId ?? undefined,
+    source: context.source ?? undefined,
+    studyProduct: context.studyProduct ?? undefined,
+    // The clicked row wins over a previous selection's wavevector.
+    wavevectorKf: point.wavevectorKf ?? context.wavevectorKf ?? undefined,
+  };
   if (point.modeFieldId) {
     return cleanFrequencyDomainSelectionRef({
+      ...identity,
       analysisRunId: context.analysisRunId ?? undefined,
       analysisStageId: context.analysisStageId ?? undefined,
       artifactPath: context.artifactPath ?? undefined,
@@ -1035,6 +1054,7 @@ export function buildEigenDispersionPointSelectionRef(
     });
   }
   return cleanFrequencyDomainSelectionRef({
+    ...identity,
     analysisRunId: context.analysisRunId ?? undefined,
     analysisStageId: context.analysisStageId ?? undefined,
     artifactPath: context.artifactPath ?? undefined,
@@ -1805,7 +1825,17 @@ function parseDispersionCsv(csv: string): {
       droppedPointCount += 1;
       continue;
     }
+    const sampleId = stringValue(row.sample_id ?? row.sampleId);
+    const modeId = stringValue(row.mode_id ?? row.modeId);
+    const kx = finiteNumber(row.kx_rad_per_m);
+    const ky = finiteNumber(row.ky_rad_per_m);
+    const kz = finiteNumber(row.kz_rad_per_m);
     points.push({
+      ...(sampleId ? { sampleId } : {}),
+      ...(modeId ? { modeId } : {}),
+      ...(kx != null && ky != null && kz != null
+        ? { wavevectorKf: [kx, ky, kz] as const }
+        : {}),
       analyticFrequencyHz: finiteNumber(
         row.analytic_frequency_hz ?? row.analyticFrequencyHz,
       ),

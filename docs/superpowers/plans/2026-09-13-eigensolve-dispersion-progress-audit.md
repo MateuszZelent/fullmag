@@ -213,3 +213,14 @@ HEAD `71a98514c410ebac82a610ccc2a17ff172533a23`, branch, właściciela oraz stan
 active istniejącego worktree. Wrapper just błędnie kierował operację metadanych
 przez blokadę heavy build; bezpośredni resolver zachował własny build_lock.
 Rejestr należy ponownie zamknąć tym samym API po ostatnim commicie zadania.
+
+### R06 — utrata kontekstu punktu dyspersji w UI
+
+Parser CSV pomijał kx/ky/kz, a selekcja dyspersji pomijała dostarczone
+identyfikatory i część provenance. Osobna ścieżka kliknięcia Analysis Plots
+korzystała z identyfikatorów wyłącznie widma, nie dyspersji. Naprawiono obie
+ścieżki: zachowują k klikniętego wiersza, współrzędną ścieżki, opcjonalne ID
+i kontekst rewizji. Nie wymyślają brakującego k ani identyfikatorów.
+Dwa testy transformacji oraz test kliknięcia były RED przed naprawą.
+Po naprawie trzy pliki Vitest: 115 passed. To testy źródeł, bez live WebGL.
+S08 pozostaje otwarte do authoring/runtime/FMS i weryfikacji w przeglądarce.

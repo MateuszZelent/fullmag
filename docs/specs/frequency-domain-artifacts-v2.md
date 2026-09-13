@@ -2313,6 +2313,13 @@ Analyze UI must:
   in dispersion inspectors when present, including the analytic model, maximum
   accepted `k`, frequency window, and DE/BV scenario-to-branch mapping,
 - propagate click selection as `{ branchId, sampleIndex, rawModeIndex }`,
+- zachować kompletny skończony wektor z kolumn `kx_rad_per_m`,
+  `ky_rad_per_m`, `kz_rad_per_m` i współrzędną `path_s_rad_per_m` w wyborze
+  punktu dyspersji; wektor klikniętego wiersza ma pierwszeństwo przed
+  kontekstem poprzedniego wyboru,
+- zachować opcjonalne `sample_id` i `mode_id` jako nieprzezroczyste
+  identyfikatory oraz dostarczoną rewizję artefaktu, równowagę i reprezentację;
+  brak tych kolumn w starszym CSV nie upoważnia do wymyślania identyfikatorów,
 - load mode artifacts by `sample_index` and `raw_mode_index`.
 
 ## API contract

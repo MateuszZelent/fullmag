@@ -337,13 +337,38 @@ export function frequencyDomainSelectionFromPoint(input: {
     );
     return { kind: "results.frequency_response.frequency_point", label: `${point.label} ${point.point.y} ${point.unit}`, nodeId, objectId: null, ref: compactSelectionRef({ ...identity, calculationMode: input.routeMode, chartId: input.chartId, fieldId: match?.fieldId ?? undefined, frequencyHz: match?.frequencyHz, frequencyIndex: match?.frequencyIndex ?? undefined, kind: "results.frequency_response.frequency_point", nodeId, observableId: match?.observableId, resourceRef: point.source.resourceKey, source: "frequency-response" as const, type: "frequency-domain" as const }) };
   }
-  const spectrumMode = input.routeMode === "dispersion_modal"
-    ? null
-    : input.spectrumModel.points[point.point.rowIndex];
-  const mode = input.routeMode === "dispersion_modal"
+  const dispersionMode = input.routeMode === "dispersion_modal"
     ? input.dispersionModel.points[point.point.rowIndex]
-    : spectrumMode;
-  return { kind: "results.eigen.mode", label: `${point.label} ${point.point.y} ${point.unit}`, nodeId, objectId: null, ref: compactSelectionRef({ ...identity, artifactPath: point.source.resourceKey, branchId: mode?.branchId ?? undefined, calculationMode: input.routeMode, chartId: input.chartId, fieldId: mode?.modeFieldId ?? undefined, frequencyHz: mode?.frequencyHz, kind: "results.eigen.mode", modeId: spectrumMode?.modeId ?? undefined, modeIndex: mode?.rawModeIndex, nodeId, resourceRef: mode?.modeFieldResourceKey ?? point.source.resourceKey, sampleId: spectrumMode?.sampleId ?? undefined, sampleIndex: mode?.sampleIndex, source: "eigen-mode" as const, type: "frequency-domain" as const }) };
+    : null;
+  const mode = input.routeMode === "dispersion_modal"
+    ? dispersionMode
+    : input.spectrumModel.points[point.point.rowIndex];
+  return {
+    kind: "results.eigen.mode",
+    label: `${point.label} ${point.point.y} ${point.unit}`,
+    nodeId,
+    objectId: null,
+    ref: compactSelectionRef({
+      ...identity,
+      artifactPath: point.source.resourceKey,
+      branchId: mode?.branchId ?? undefined,
+      calculationMode: input.routeMode,
+      chartId: input.chartId,
+      fieldId: mode?.modeFieldId ?? undefined,
+      frequencyHz: mode?.frequencyHz,
+      kPathCoordinateRadPerM: dispersionMode?.pathS,
+      kind: "results.eigen.mode",
+      modeId: mode?.modeId ?? undefined,
+      modeIndex: mode?.rawModeIndex,
+      nodeId,
+      resourceRef: mode?.modeFieldResourceKey ?? point.source.resourceKey,
+      sampleId: mode?.sampleId ?? undefined,
+      sampleIndex: mode?.sampleIndex,
+      source: "eigen-mode" as const,
+      type: "frequency-domain" as const,
+      wavevectorKf: dispersionMode?.wavevectorKf ?? wavevectorKf,
+    }),
+  };
 }
 
 function compactSelectionRef<T extends Record<string, unknown>>(ref: T): T {
