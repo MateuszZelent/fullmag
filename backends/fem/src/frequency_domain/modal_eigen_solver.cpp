@@ -1,3 +1,4 @@
+#include "frequency_domain/floquet_dynamic_demag_k.hpp"
 #include "frequency_domain/modal_eigen_solver.hpp"
 
 #include "cpu/frequency_domain/contour_interval_solver.hpp"
@@ -1781,6 +1782,7 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
     std::vector<double> floquet_dynamic_demag_k_storage;
     bool native_nonzero_k_shared_domain_provider = false;
     std::string floquet_potential_certificate;
+    FloquetPotentialReconstruction floquet_reconstruction;
 #if FULLMAG_HAS_MFEM_STACK
     if (modal_request_is_nonzero_k_floquet(request) &&
         request.execution_target == ModalExecutionTarget::production_cpu &&
@@ -1850,6 +1852,8 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             ",\"relative_residual_tolerance\":1e-8,"
             "\"norm\":\"original_potential_rhs_relative_linf\","
             "\"includes_pinned_equation\":true}";
+        floquet_reconstruction=std::move(provider_result.reconstruction);
+        floquet_reconstruction.magnetic_stiffness_real_split=request.mfem_stiffness_matrix_row_major;
         floquet_dynamic_demag_k_storage = std::move(provider_result.real_split_row_major);
         effective_request.dynamic_demag_k_tangent_matrix_row_major =
             floquet_dynamic_demag_k_storage.data();
@@ -2501,7 +2505,8 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
     // would silently discard the assembled k-dependent operator and fall back
     // to the pending/missing-payload contract.
     FrequencyDomainContractResult result =
-        production_cpu_modal_eigen_unavailable(effective_request);
+        production_cpu_modal_eigen_unavailable(effective_request,
+            native_nonzero_k_shared_domain_provider ? &floquet_reconstruction : nullptr);
     if (!floquet_potential_certificate.empty()) {
         for (std::string *json : {&result.diagnostics_json, &result.result_json}) {
             if (json->empty()) *json = "{}";

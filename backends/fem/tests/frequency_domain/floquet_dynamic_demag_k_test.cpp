@@ -323,10 +323,30 @@ void reconstructs_complex_potential_with_original_residual()
     check(!result.certified && result.phi.empty(),"no stale potential on failure");
 }
 
+
+void original_descriptor_rejects_wrong_magnetic_equation()
+{
+    fd::FloquetPotentialReconstruction b;
+    b.q_count=1; b.phi_count=1; b.p={2.}; b.a_phiq={1.}; b.a_qphi={1.};
+    double k[4]={2.5,0.,0.,2.5}, g[4]={1.,0.,0.,1.};
+    fd::FloquetModalResidual r;
+    const std::vector<Complex> z={Complex(1,2),Complex(3,-1)};
+    check(fd::certify_floquet_realified_mode(b,k,g,z,Complex(2,0),&r)==
+          fd::FrequencyDomainStatus::ok,"original descriptor accepts exact doubled mode");
+    check(r.certified && r.potential_real_split.size()==2,"descriptor preserves potential");
+    for(int i=0;i<2;++i)
+        check(std::abs(r.potential_real_split[i]+0.5*z[i])<1e-12,"both realification sectors reconstructed");
+    k[0]+=1.;
+    check(fd::certify_floquet_realified_mode(b,k,g,z,Complex(2,0),&r)==
+          fd::FrequencyDomainStatus::operator_error,"wrong magnetic equation rejects");
+    check(!r.certified && r.potential_real_split.empty(),"failed descriptor does not publish potential");
+}
+
 } // namespace
 
 int main()
 {
+    original_descriptor_rejects_wrong_magnetic_equation();
     reconstructs_complex_potential_with_original_residual();
     multiple_pivots_preserve_complex_multiple_rhs();
     nonzero_k_dense_schur_is_realified_for_modal_abi();

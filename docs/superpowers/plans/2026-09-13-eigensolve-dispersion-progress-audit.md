@@ -183,3 +183,16 @@ jest odniesieniem metodycznym, nie wynikiem numerycznym referencyjnego solvera.
 Kolejność realizacji: R01 → R02 i R03 → S03/S04 skalowanie → S05/S06 →
 S07/S08 i CPU science → S09 → S10 → S11 → pełne S12.
 Naprawa autoryzacji GitHub jest warunkiem integracji, lecz nie blokuje lokalnych prac.
+
+
+### Aktualizacja S05.R02 — integracja dense SLEPc
+
+Podłączono rekonstrukcję do nearest/window i każdego zwróconego modu.
+Kontrola używa oryginalnego stiffness, sprzężeń i masy, a nie wyłącznie
+macierzy Schura. Natywny JSON przenosi podwojony zespolony potencjał oraz
+osobne residuale magnetyczny/potencjału. Błędny descriptor odrzuca solve.
+Contour z kontekstem rekonstrukcji jest fail-closed. Izolowane testy providera
+przechodzą (exit 0), adapter production_cpu_modal_eigen.cpp kompiluje się
+MSVC bez MFEM (exit 0). To nie jest wykonanie SLEPc ani końcowa kwalifikacja.
+Nadal do wykonania: geometryczne BC/pełna siatka, binary publikacja potencjału
+przez runner, contour i managed/physics V9. R02 pozostaje częściowe.

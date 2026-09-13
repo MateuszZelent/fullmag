@@ -496,3 +496,16 @@ Cały izolowany test MSVC exit 0: manufactured complex q, dwa pivoty,
 zgodny gauge, odrzucenie niezgodnego źródła i brak starego pola po błędzie.
 Nie podłączono jeszcze do wektorów SLEPc ani publikacji pól; magnetyczny
 residual oraz Bloch BC nie są certyfikowane. S05.R02/V9 nadal OTWARTE.
+
+
+### Aktualizacja S05.R02 — integracja dense SLEPc
+
+Podłączono rekonstrukcję do nearest/window i każdego zwróconego modu.
+Kontrola używa oryginalnego stiffness, sprzężeń i masy, a nie wyłącznie
+macierzy Schura. Natywny JSON przenosi podwojony zespolony potencjał oraz
+osobne residuale magnetyczny/potencjału. Błędny descriptor odrzuca solve.
+Contour z kontekstem rekonstrukcji jest fail-closed. Izolowane testy providera
+przechodzą (exit 0), adapter production_cpu_modal_eigen.cpp kompiluje się
+MSVC bez MFEM (exit 0). To nie jest wykonanie SLEPc ani końcowa kwalifikacja.
+Nadal do wykonania: geometryczne BC/pełna siatka, binary publikacja potencjału
+przez runner, contour i managed/physics V9. R02 pozostaje częściowe.

@@ -1,3 +1,4 @@
+#include "frequency_domain/floquet_dynamic_demag_k.hpp"
 #include "frequency_domain/modal_eigen_solver.hpp"
 
 #include "cpu/frequency_domain/contour_interval_solver.hpp"
@@ -416,7 +417,24 @@ std::string format_slepc_modes_json(
             }
             modes += format_double(std::imag(mode.mode_vector[component]));
         }
-        modes += "]}";
+        modes += "]";
+        if (mode.floquet_descriptor_certified) {
+            modes += ",\"floquet_descriptor_certified\":true,"
+                "\"floquet_geometric_bc_certified\":false,"
+                "\"potential_representation\":\"doubled_real_split_complex_coefficients\","
+                "\"magnetic_relative_residual\":" + format_double(mode.floquet_magnetic_residual) +
+                ",\"potential_relative_residual\":" + format_double(mode.floquet_potential_residual);
+            for (int part=0; part<2; ++part) {
+                modes += part==0 ? ",\"potential_vector_real\":[" : ",\"potential_vector_imag\":[";
+                for (std::size_t i=0;i<mode.floquet_potential_real_split.size();++i) {
+                    if(i) modes += ",";
+                    modes += format_double(part==0 ? mode.floquet_potential_real_split[i].real()
+                                                  : mode.floquet_potential_real_split[i].imag());
+                }
+                modes += "]";
+            }
+        }
+        modes += "}";
     }
     modes += "]";
     return modes;
@@ -438,10 +456,33 @@ bool has_dense_modal_payload(const ModalEigenRequest &request) noexcept
 
 SLEPcTinyGyrotropicModalEigenResult solve_modal_spectrum_for_request(
     const ModalEigenRequest &request,
-    const SLEPcTinyGyrotropicModalEigenRequest &spectral_request) noexcept
+    const SLEPcTinyGyrotropicModalEigenRequest &spectral_request,
+    const FloquetPotentialReconstruction *reconstruction) noexcept
 {
     if (modal_request_is_nonzero_k_floquet(request)) {
-        return solve_floquet_modal_spectrum(request, spectral_request);
+        auto solved = solve_floquet_modal_spectrum(request, spectral_request);
+        if (reconstruction && solved.ok) {
+            for (auto &mode : solved.accepted_modes) {
+                FloquetModalResidual residual;
+                if (certify_floquet_realified_mode(
+                        *reconstruction, reconstruction->magnetic_stiffness_real_split,
+                        spectral_request.gyrotropic_matrix_row_major,
+                        mode.mode_vector, {mode.lambda_real,mode.lambda_imag}, &residual)
+                    != FrequencyDomainStatus::ok) {
+                    solved.ok=false;
+                    solved.status="solve_error";
+                    solved.unsupported_reason="floquet_original_descriptor_residual_failed";
+                    solved.accepted_modes.clear();
+                    solved.accepted_mode_count=0;
+                    return solved;
+                }
+                mode.floquet_descriptor_certified=true;
+                mode.floquet_magnetic_residual=residual.magnetic_relative_residual;
+                mode.floquet_potential_residual=residual.potential_relative_residual;
+                mode.floquet_potential_real_split=std::move(residual.potential_real_split);
+            }
+        }
+        return solved;
     }
     return solve_slepc_tiny_gyrotropic_modal_eigen(spectral_request);
 }
@@ -1393,7 +1434,8 @@ void emit_production_shift_invert_progress(
 
 FrequencyDomainContractResult solve_dense_production_modal_window_payload(
     const ModalEigenRequest &request,
-    const ModalSolverSelection &selection) noexcept
+    const ModalSolverSelection &selection,
+    const FloquetPotentialReconstruction *reconstruction) noexcept
 {
     FrequencyWindowPartition partition =
         partition_frequency_window(partition_request_from_modal_request(request));
@@ -1424,7 +1466,7 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
         slepc_request.max_linear_iterations = request.max_linear_iterations;
         slepc_request.phase_convention = request.phase_convention;
         SLEPcTinyGyrotropicModalEigenResult slepc_result =
-            solve_modal_spectrum_for_request(request, slepc_request);
+            solve_modal_spectrum_for_request(request, slepc_request, reconstruction);
         const char *stop_reason = subwindow_stop_reason(slepc_result);
         emit_production_shift_invert_progress(
             request,
@@ -1641,7 +1683,8 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
 FrequencyDomainContractResult solve_dense_production_modal_payload(
     const ModalEigenRequest &request,
     const ModalSolverSelection &selection,
-    const ModalShiftSelection &shift) noexcept
+    const ModalShiftSelection &shift,
+    const FloquetPotentialReconstruction *reconstruction) noexcept
 {
     if (request.mfem_tangent_dof_count >
         static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
@@ -1666,7 +1709,7 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
     effective_request.mfem_stiffness_matrix_row_major = stiffness;
 
     if (is_frequency_window(request)) {
-        return solve_dense_production_modal_window_payload(effective_request, selection);
+        return solve_dense_production_modal_window_payload(effective_request, selection, reconstruction);
     }
 
     SLEPcTinyGyrotropicModalEigenRequest slepc_request{};
@@ -1685,7 +1728,7 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
     slepc_request.max_linear_iterations = request.max_linear_iterations;
     slepc_request.phase_convention = request.phase_convention;
     const SLEPcTinyGyrotropicModalEigenResult slepc_result =
-        solve_modal_spectrum_for_request(request, slepc_request);
+        solve_modal_spectrum_for_request(request, slepc_request, reconstruction);
 
     FrequencyDomainContractResult result{};
     if (!slepc_result.ok) {
@@ -2307,7 +2350,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
 #endif
 
 FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
-    const ModalEigenRequest &request) noexcept
+    const ModalEigenRequest &request,
+    const FloquetPotentialReconstruction *reconstruction) noexcept
 {
     FrequencyDomainContractResult result{};
     result.status = FrequencyDomainStatus::unavailable;
@@ -2374,11 +2418,14 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
     if (!contour_interval &&
         adapter.slepc_available &&
         has_dense_modal_payload(request)) {
-        return solve_dense_production_modal_payload(request, selection, shift);
+        return solve_dense_production_modal_payload(request, selection, shift, reconstruction);
     }
     if (contour_interval &&
         adapter.slepc_available &&
         has_dense_modal_payload(request)) {
+        if (reconstruction) return dense_payload_validation_error(
+            request, "Floquet contour descriptor certification is not implemented",
+            "floquet_contour_descriptor_certification_unavailable");
         return solve_dense_production_modal_contour_payload(request, selection);
     }
     const char *solver_adapter_status = adapter.solver_adapter_status;

@@ -174,8 +174,20 @@ zredukowane po Schurze. `reconstruct_floquet_potential` odtwarza potencjał
 ze znakiem przeciwnym do rozwiązania P inverse A_phiq q, zgodnie z dolnym
 równaniem descriptora. Wynik zawiera kompleksowy potencjał, residual i status;
 niezgodny gauge nie publikuje pola. Właściciel ogranicza ten oracle do 512
-DOF na blok. Integracja wektorów real-split SLEPc oraz residual magnetyczny
-i BC pozostają otwarte; helper nie certyfikuje pełnego modu.
+DOF na blok. Adapter dense SLEPc (nearest/window) przekazuje teraz każdy zaakceptowany
+wektor do `certify_floquet_realified_mode`. Dwa sektory realifikacji są
+rekonstruowane oddzielnie; zapisany potencjał ma nadal podwojony układ
+współczynników zespolonych, nie jest bezpośrednio phasorem XYZ ani polem Zarr.
+Kontrola oryginalnego równania magnetycznego używa stiffness sprzed dodania
+Schura, odtworzonego sprzężenia z potencjałem i gyrotropic mass. Norma maksimum
+residualu jest dzielona przez maksimum sumy modułów tych trzech wkładów
+wiersza (floor 1e-300 w tych samych jednostkach). Względny próg wynosi 1e-8;
+zero eigenvector, niepoprawny wymiar i niefinite dane są odrzucane.
+Certyfikat dotyczy algebraicznego descriptora po ograniczeniach. Geometryczne
+BC, rozwinięcie potencjału na pełnej siatce i zbieżność V9 nadal są otwarte.
+Contour z kontekstem rekonstrukcji jest jawnie odrzucany do czasu integracji.
+Wynik natywny per-mode zawiera residuale oraz potential_vector_real/imag;
+`floquet_geometric_bc_certified=false` zapobiega awansowi do pełnego V9.
 
 ### 2.3 Modal pencil and original residual
 
@@ -587,3 +599,5 @@ visibility into runtime or physical qualification.
 | Shared harmonic pencil | common native | backends/fem/include/frequency_domain/linearized_dynamic_pencil.hpp + apply_Aomega | Preserve the shared i omega B_alpha minus L convention. | existing dynamic-pencil contract tests | source visible; managed physics unvalidated |
 | CPU descriptor boundary | FEM CPU | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp + solve_poisson_airbox_modal_eigen_cpu_schur | Reconstruct the full descriptor and original residual. | focused CPU Schur tests | source visible; managed qualification absent |
 | Contract regression | documentation | scripts/test_frequency_domain_math_contract_docs.py + test_dynamic_demag_and_response_observables_use_si_contract | Protect SI and support wording. | focused documentation test | source visible; not numerical evidence |
+
+| Reduced Floquet descriptor certificate | FEM CPU | backends/fem/cpu/frequency_domain/floquet_dynamic_demag_k.cpp + certify_floquet_realified_mode | source-floquet-descriptor-certification: reconstruct potential and test original reduced equations | isolated contract test passed; managed and geometric BC unverified | source visible |

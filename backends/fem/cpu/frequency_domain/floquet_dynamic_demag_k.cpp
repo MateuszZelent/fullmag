@@ -489,4 +489,73 @@ FrequencyDomainStatus reconstruct_floquet_potential(
     }
 }
 
+
+FrequencyDomainStatus certify_floquet_realified_mode(
+    const FloquetPotentialReconstruction &blocks,
+    const double *magnetic_stiffness, const double *gyrotropic,
+    const std::vector<Complex> &z, Complex lambda,
+    FloquetModalResidual *result) noexcept
+{
+    if (!result) return FrequencyDomainStatus::validation_error;
+    *result = FloquetModalResidual{};
+    const auto q=blocks.q_count, p=blocks.phi_count, n=2*q;
+    if (!q || !p || q>512 || p>512 || z.size()!=n ||
+        !magnetic_stiffness || !gyrotropic || blocks.a_qphi.size()!=q*p ||
+        !finite_complex_values(blocks.a_qphi.data(),q*p) ||
+        !std::isfinite(std::abs(lambda)))
+        return FrequencyDomainStatus::validation_error;
+    if (!finite_complex_values(z.data(), n)) return FrequencyDomainStatus::validation_error;
+    bool nonzero=false;
+    for (const auto value : z) nonzero = nonzero || std::abs(value)>0.0;
+    if (!nonzero) return FrequencyDomainStatus::validation_error;
+    try {
+        std::vector<Complex> plus(q), minus(q);
+        const Complex imaginary(0,1);
+        for (std::uint64_t i=0;i<q;++i) {
+            plus[i]=z[i]+imaginary*z[q+i];
+            // Conjugate the minus sector to use the same P(k).
+            minus[i]=std::conj(z[i]-imaginary*z[q+i]);
+        }
+        FloquetReconstructedPotential a,b;
+        if (reconstruct_floquet_potential(blocks,plus,&a)!=FrequencyDomainStatus::ok ||
+            reconstruct_floquet_potential(blocks,minus,&b)!=FrequencyDomainStatus::ok)
+            return FrequencyDomainStatus::operator_error;
+        std::vector<Complex> phi(2*p);
+        for (std::uint64_t i=0;i<p;++i) {
+            phi[i]=(a.phi[i]+std::conj(b.phi[i]))/2.;
+            phi[p+i]=(a.phi[i]-std::conj(b.phi[i]))/(2.*imaginary);
+        }
+        double residual=0, scale=0;
+        for (std::uint64_t i=0;i<n;++i) {
+            Complex k{}, g{}, feedback{};
+            for (std::uint64_t j=0;j<n;++j) {
+                if (!std::isfinite(magnetic_stiffness[i*n+j]) ||
+                    !std::isfinite(gyrotropic[i*n+j]))
+                    return FrequencyDomainStatus::validation_error;
+                k+=magnetic_stiffness[i*n+j]*z[j];
+                g+=gyrotropic[i*n+j]*z[j];
+            }
+            for (std::uint64_t j=0;j<p;++j) {
+                const Complex value=blocks.a_qphi[(i%q)*p+j];
+                feedback += i<q ? value.real()*phi[j]-value.imag()*phi[p+j]
+                               : value.imag()*phi[j]+value.real()*phi[p+j];
+            }
+            const double error=std::abs(k+feedback-lambda*g);
+            const double row_scale=std::abs(k)+std::abs(feedback)+std::abs(lambda*g);
+            if (!std::isfinite(error) || !std::isfinite(row_scale))
+                return FrequencyDomainStatus::operator_error;
+            residual=std::max(residual,error);
+            scale=std::max(scale,row_scale);
+        }
+        result->magnetic_relative_residual=residual/std::max(scale,1e-300);
+        result->potential_relative_residual=std::max(a.relative_residual,b.relative_residual);
+        if (!std::isfinite(result->magnetic_relative_residual) ||
+            result->magnetic_relative_residual>1e-8)
+            return FrequencyDomainStatus::operator_error;
+        result->potential_real_split=std::move(phi);
+        result->certified=true;
+        return FrequencyDomainStatus::ok;
+    } catch (...) { return FrequencyDomainStatus::operator_error; }
+}
+
 } // namespace fullmag::fem::frequency_domain

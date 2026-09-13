@@ -306,7 +306,8 @@ Szczegóły źródeł, kontrprzykładu i akceptacji: [R01–R05](2026-09-13-eige
 - [ ] S04.R02b: kod propagacji certyfikatu zapisany; managed MFEM i artefakty wymagają wykonania.
 - [ ] S04.R02c: ogólna identyfikacja nullspace/gauge poza sprawdzeniem zgodności źródła.
 - [x] S05.R02a: owned bloki i helper rekonstrukcji kompleksowego potencjału; izolowany test passed.
-- [ ] S05.R02b (P1): integracja wektorów SLEPc real-split, publikacja potencjału, residual magnetyczny i BC oraz managed V9.
+- [x] S05.R02b1: podłączenie dense nearest/window do rekonstrukcji real-split i kontroli oryginalnego równania magnetycznego; natywny JSON per-mode. Test oracle i diagnostyczna kompilacja adaptera passed.
+- [ ] S05.R02b2: rozwinięcie na pełnej siatce, geometryczne BC, binary publikacja runnera, contour i managed/physics V9.
 - [ ] S12.R03 (P1): naprawa trasy runnera; targety modal/cross-section i dokładny receipt MFEM/SLEPc.
 - [ ] S03.R04/S04.R04 (P1): pełny native problem i skalowalny operator demag-k.
 - [x] S12.R05a: aktualizacja audytu/statusów bez awansu kwalifikacji.

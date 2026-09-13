@@ -45,6 +45,10 @@ struct SLEPcTinyGyrotropicModalEigenRequest {
 };
 
 struct SLEPcModalAcceptedMode {
+    bool floquet_descriptor_certified = false;
+    double floquet_magnetic_residual = 0.0;
+    double floquet_potential_residual = 0.0;
+    std::vector<std::complex<double>> floquet_potential_real_split;
     int eigenpair_index = -1;
     int positive_frequency_pair_index = -1;
     double lambda_real = 0.0;

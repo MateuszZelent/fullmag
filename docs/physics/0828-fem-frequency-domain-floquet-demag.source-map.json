@@ -158,7 +158,8 @@
       ],
       "sources": [
         "source-cpu-schur",
-        "source-dynamic-pencil"
+        "source-dynamic-pencil",
+        "source-floquet-descriptor-certification"
       ]
     }
   ],
@@ -499,6 +500,12 @@
       "path": "scripts/test_frequency_domain_math_contract_docs.py",
       "symbol": "test_dynamic_demag_and_response_observables_use_si_contract",
       "responsibility": "Freeze the text-level SI and dynamic-demagnetization contract; this is not numerical evidence."
+    },
+    {
+      "id": "source-floquet-descriptor-certification",
+      "path": "backends/fem/cpu/frequency_domain/floquet_dynamic_demag_k.cpp",
+      "symbol": "certify_floquet_realified_mode",
+      "responsibility": "Reconstruct both realification sectors and check original reduced magnetic/potential equations; geometric BC and full V9 remain unverified."
     }
   ],
   "public_api": {

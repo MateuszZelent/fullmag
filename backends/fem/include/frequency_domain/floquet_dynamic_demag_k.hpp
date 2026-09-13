@@ -64,6 +64,8 @@ struct FloquetPotentialReconstruction {
     FloquetDynamicDemagKGaugePolicy gauge_policy =
         FloquetDynamicDemagKGaugePolicy::require_invertible;
     std::vector<std::complex<double>> p, a_phiq, a_qphi;
+    // Borrowed original magnetic operator; caller owns it through the solve.
+    const double *magnetic_stiffness_real_split = nullptr;
 };
 
 struct FloquetReconstructedPotential {
@@ -78,6 +80,21 @@ FrequencyDomainStatus reconstruct_floquet_potential(
     const FloquetPotentialReconstruction &blocks,
     const std::vector<std::complex<double>> &q,
     FloquetReconstructedPotential *result) noexcept;
+
+
+struct FloquetModalResidual {
+    bool certified = false;
+    double magnetic_relative_residual = 0.0;
+    double potential_relative_residual = 0.0;
+    std::vector<std::complex<double>> potential_real_split;
+};
+// Checks the original constrained algebraic descriptor, not geometric BC
+// or continuum/mesh convergence. z and potential use the doubled real layout.
+FrequencyDomainStatus certify_floquet_realified_mode(
+    const FloquetPotentialReconstruction &blocks,
+    const double *magnetic_stiffness, const double *gyrotropic,
+    const std::vector<std::complex<double>> &z, std::complex<double> lambda,
+    FloquetModalResidual *result) noexcept;
 
 // `out_real_split_row_major` uses [Re(q), Im(q)] ordering and the standard
 // realification [[Re D, -Im D], [Im D, Re D]].  The output is the dynamic

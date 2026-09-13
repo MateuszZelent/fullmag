@@ -11,7 +11,10 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
 FrequencyDomainContractResult solve_driven_response_contract(
     const DrivenResponseContractRequest &request) noexcept;
 
+struct FloquetPotentialReconstruction;
+
 FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
-    const ModalEigenRequest &request) noexcept;
+    const ModalEigenRequest &request,
+    const FloquetPotentialReconstruction *reconstruction = nullptr) noexcept;
 
 } // namespace fullmag::fem::frequency_domain
