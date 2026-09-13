@@ -157,6 +157,46 @@ mod output_publication_tests {
     use super::*;
 
     #[test]
+    fn eigen_path_retains_only_sample_candidates_before_tracking() {
+        let mut sample = KSampleDescriptor {
+            sample_index: 10,
+            label: None,
+            segment_index: Some(0),
+            path_s: 1.0,
+            t_in_segment: 0.5,
+            k_vector: [1.0, 0.0, 0.0],
+        };
+        let output = OutputIR::EigenMode {
+            field: "mode".into(),
+            indices: vec![0, 1],
+            branches: vec![],
+            sample_selector: Some(fullmag_ir::SampleSelectorIR {
+                sample_indices: vec![10],
+                sample_labels: vec!["Gamma".into()],
+            }),
+        };
+        assert_eq!(
+            eigen_path_candidate_mode_indices(&[output.clone()], &sample, 24),
+            BTreeSet::from([0, 1])
+        );
+        sample.sample_index = 11;
+        assert!(eigen_path_candidate_mode_indices(&[output.clone()], &sample, 24).is_empty());
+        sample.label = Some("Gamma".into());
+        assert_eq!(
+            eigen_path_candidate_mode_indices(&[output.clone()], &sample, 24),
+            BTreeSet::from([0, 1])
+        );
+        let mut branch_output = output;
+        if let OutputIR::EigenMode { branches, .. } = &mut branch_output {
+            branches.push(3);
+        }
+        assert_eq!(
+            eigen_path_candidate_mode_indices(&[branch_output], &sample, 24).len(),
+            24
+        );
+    }
+
+    #[test]
     fn requested_field_requires_real_metadata_and_complex_payload() {
         let selected = BTreeSet::from([SampleModeId::new(2, 7)]);
         let mut artifacts = vec![AuxiliaryArtifact {
@@ -1423,6 +1463,51 @@ pub(super) fn eigen_path_equilibrium_source_json(
 
 fn finite_or_default(value: Option<f64>, default: f64) -> f64 {
     value.filter(|value| value.is_finite()).unwrap_or(default)
+}
+
+/// Retain only possible publication candidates while traversing k. Tracking
+/// still consumes every magnetic vector from the current single-k result.
+/// Branch selectors need all raw candidates until assignment; explicit raw
+/// selectors and sample selectors can bound retained heavy potential fields.
+pub(super) fn eigen_path_candidate_mode_indices(
+    outputs: &[OutputIR],
+    sample: &crate::eigen::KSampleDescriptor,
+    mode_count: u32,
+) -> BTreeSet<u32> {
+    let mut result = BTreeSet::new();
+    for output in outputs {
+        let OutputIR::EigenMode {
+            indices,
+            branches,
+            sample_selector,
+            ..
+        } = output
+        else {
+            continue;
+        };
+        let selected_sample = sample_selector.as_ref().map_or(true, |selector| {
+            (selector.sample_indices.is_empty() && selector.sample_labels.is_empty())
+                || selector
+                    .sample_indices
+                    .iter()
+                    .any(|index| *index as usize == sample.sample_index)
+                || sample.label.as_ref().is_some_and(|label| {
+                    selector
+                        .sample_labels
+                        .iter()
+                        .any(|selected| selected.trim() == label.trim())
+                })
+        });
+        if !selected_sample {
+            continue;
+        }
+        if !branches.is_empty() || indices.is_empty() {
+            result.extend(0..mode_count);
+        } else {
+            result.extend(indices.iter().copied().filter(|index| *index < mode_count));
+        }
+    }
+    result
 }
 
 pub(super) fn remap_single_k_mode_artifacts(

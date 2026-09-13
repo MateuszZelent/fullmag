@@ -305,7 +305,7 @@ pub(crate) fn execute_fem_eigen_path(
         execution: PlannedFemEigenExecution<'a>,
         engine: FemEngine,
         mode_artifacts: RefCell<Vec<AuxiliaryArtifact>>,
-        mode_artifact_indices: BTreeSet<u32>,
+        publication_outputs: Vec<OutputIR>,
         relax_handoff: RefCell<Option<fem_eigen::AcceptedFemEigenEquilibriumHandoff>>,
         periodic_airbox_k0_metrics:
             RefCell<Option<crate::eigen::K0KittelPeriodicAirboxDemagMetrics>>,
@@ -383,7 +383,11 @@ pub(crate) fn execute_fem_eigen_path(
                 .extend(remap_single_k_mode_artifacts(
                     &executed.auxiliary_artifacts,
                     sample.sample_index,
-                    &self.mode_artifact_indices,
+                    &eigen_path_candidate_mode_indices(
+                        &self.publication_outputs,
+                        sample,
+                        plan.count,
+                    ),
                 )?);
 
             // Parse the spectrum artifact to extract mode results
@@ -492,19 +496,12 @@ pub(crate) fn execute_fem_eigen_path(
     let mode_fields_requested = outputs
         .iter()
         .any(|output| matches!(output, OutputIR::EigenMode { .. }));
-    // Branch IDs are assigned after every sample is solved. Keep candidate fields
-    // until tracking resolves the public selection; raw IDs must not be renumbered.
-    let mode_artifact_indices = if mode_fields_requested {
-        (0..plan.count).collect()
-    } else {
-        BTreeSet::new()
-    };
     let wants_dispersion = eigen_path_wants_dispersion(outputs);
     let adapter = KSolverAdapter {
         execution,
         engine,
         mode_artifacts: RefCell::new(Vec::new()),
-        mode_artifact_indices,
+        publication_outputs: outputs.to_vec(),
         relax_handoff: RefCell::new(None),
         periodic_airbox_k0_metrics: RefCell::new(None),
     };
