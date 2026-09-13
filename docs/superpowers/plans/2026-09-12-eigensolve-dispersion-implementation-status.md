@@ -9,7 +9,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 - Baza `master`: `5084a94ed14b151fc865e8def5a5c28401e98b44`.
 - Branch: `codex/eigensolve-dispersion-plan-20260912`.
 - Worktree: `C:/git/fullmag/worktrees/eigensolve-dispersion-plan-20260912`.
-- Ostatni zapisany kodowy przyrost: `80736831e` (`feat(eigensolve): add Floquet modal solver owner`), nad routingiem dynamicznego demag-k `e3fa509db`, zmianą nodalnego `Ms` `c511cb413`, testem wymuszonego GPU `71ce348b0`, routingiem Γ `1114e1aa0` i podłączeniem providera `f2acf7b9b425733899bdfde63cb0566d16d74a59`.
+- Ostatni zapisany kodowy przyrost: `de72a5b1f` (`fix(eigensolve): validate Floquet modal payloads`), nad właścicielem solvera `80736831e`, routingiem dynamicznego demag-k `e3fa509db`, zmianą nodalnego `Ms` `c511cb413`, testem wymuszonego GPU `71ce348b0`, routingiem Γ `1114e1aa0` i podłączeniem providera `f2acf7b9b425733899bdfde63cb0566d16d74a59`.
 - Właściciel: `codex:01a0941c-eb15-7261-a7ee-7cf099385525`.
 - Rejestr: `eigensolve-dispersion-plan-20260-c5dfad6d7f548079`; reaktywowany do implementacji.
 - Fizyczne źródła COMSOL: oba lokalne podręczniki modułu mikromagnetycznego wymienione w planie; szczególnie s. PDF 21–28 i 40–43. Przykład RF jest wzorem sprzężenia pól, a nie gotowym dowodem modalnym.
@@ -387,3 +387,17 @@ przebiegu. Brama `just verify-fem-modal-floquet-airbox-cpu` nadal zatrzymuje
 się przed kompilacją przez `Container profile allow-list mismatch`. Managed
 receipt, residual po rekonstrukcji potencjału, zbieżność, porównania COMSOL/
 TetraX, UI, GPU oraz PR pozostają **NOT VERIFIED**.
+
+### Walidacja payloadu właściciela Floquet — `de72a5b1f`
+
+Właściciel dense sprawdza teraz rozmiar `n×n` i skończoność real-split
+dynamicznego demag-k względem wymiaru pencila; sparse CSR ma analogiczną
+walidację kształtu, offsetów, indeksów i wartości. Diagnostyka produkcyjna
+rozróżnia model Floquet sparse od ogólnego sparse SLEPc. Regresje obejmują
+niepełny i nie-skończony payload dense oraz przyjęcie poprawnego sparse bez
+demag-k.
+
+Ponowiona kompilacja MSVC i uruchomienie izolowanego testu kontraktu zakończyły
+się exit 0; zmodyfikowany adapter produkcyjny także skompilował się exit 0.
+Przyrost nie zmienia granicy kwalifikacji: managed MFEM/SLEPc, fizyczny
+residual, zbieżność, porównania COMSOL/TetraX, UI i GPU są nadal **NOT VERIFIED**.
