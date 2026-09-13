@@ -9,7 +9,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 - Baza `master`: `5084a94ed14b151fc865e8def5a5c28401e98b44`.
 - Branch: `codex/eigensolve-dispersion-plan-20260912`.
 - Worktree: `C:/git/fullmag/worktrees/eigensolve-dispersion-plan-20260912`.
-- Ostatni zapisany kodowy przyrost: `2e8362463` (`fix(fem): keep nonzero-k demag assembly separate from K0`), nad handoffem phase/window `bed355f41`, walidacją payloadu `de72a5b1f`, właścicielem solvera `80736831e`, routingiem dynamicznego demag-k `e3fa509db`, zmianą nodalnego `Ms` `c511cb413`, testem wymuszonego GPU `71ce348b0`, routingiem Γ `1114e1aa0` i podłączeniem providera `f2acf7b9b425733899bdfde63cb0566d16d74a59`.
+- Ostatni zapisany kodowy przyrost: `beca34bb0` (`fix(eigensolve): reject conflicting Floquet wavevectors`), nad rozdzieleniem assemblacji K0 `2e8362463`, handoffem phase/window `bed355f41`, walidacją payloadu `de72a5b1f`, właścicielem solvera `80736831e`, routingiem dynamicznego demag-k `e3fa509db`, zmianą nodalnego `Ms` `c511cb413`, testem wymuszonego GPU `71ce348b0`, routingiem Γ `1114e1aa0` i podłączeniem providera `f2acf7b9b425733899bdfde63cb0566d16d74a59`.
 - Właściciel: `codex:01a0941c-eb15-7261-a7ee-7cf099385525`.
 - Rejestr: `eigensolve-dispersion-plan-20260-c5dfad6d7f548079`; reaktywowany do implementacji.
 - Fizyczne źródła COMSOL: oba lokalne podręczniki modułu mikromagnetycznego wymienione w planie; szczególnie s. PDF 21–28 i 40–43. Przykład RF jest wzorem sprzężenia pól, a nie gotowym dowodem modalnym.
@@ -436,3 +436,18 @@ ciała MFEM nie został wykonany, ponieważ managed runner nadal odrzuca profil
 (`Container profile allow-list mismatch`), a host nie ma nagłówków MFEM. Wobec
 tego managed wykonanie, residual, zbieżność fizyczna, porównania COMSOL/TetraX,
 UI, GPU i kwalifikacja wydania pozostają **NOT VERIFIED**.
+
+### Spójność dwóch źródeł wektora Floqueta — `beca34bb0`
+
+Właściciel modalny odrzuca teraz request, w którym legacy
+`operator_request.k_vector_rad_m` i append-only `floquet_k_vector_rad_per_m`
+opisują różne wartości albo niepełny wymiar. Gdy obecne jest tylko jedno źródło,
+pozostaje ono legalnym nośnikiem trójwymiarowego `k`; oba źródła są wymagane do
+zgodności, gdy zostały dostarczone jednocześnie. Stabilny powód
+`floquet_modal_k_vector_payload_mismatch` chroni przed zmianą fazy bez zmiany
+identyfikatora próbki.
+
+Regresja konfliktu przechodzi w izolowanym `floquet_modal_solver_test.exe`
+(MSVC, `FULLMAG_HAS_MFEM_STACK=0`), a kompilacja właściciela, adapterów i testu
+kończy się exit 0. Managed MFEM/SLEPc, residual, fizyczne `f(k)` i pozostałe
+bramki S04–S12 są nadal **NOT VERIFIED**.
