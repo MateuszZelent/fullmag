@@ -7,7 +7,7 @@ branch `codex/eigensolve-dispersion-plan-20260912`, HEAD kodu
 `5084a94ed14b151fc865e8def5a5c28401e98b44`.
 Audyt obejmuje statusy S00–S12, diff od bazy, wybrane krytyczne implementacje,
 testy i trasy weryfikacji. Nie jest pełnym review każdej linii brancha.
-Zmiany tej aktualizacji dotyczą dokumentacji; znalezione błędy kodu pozostają otwarte.
+Pierwotna aktualizacja dotyczyła dokumentacji. Następnie wykonano naprawę kodu R01; patrz aktualizacja poniżej.
 
 [Plan wdrożenia](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md) ·
 [Historia implementacji i testów](2026-09-12-eigensolve-dispersion-implementation-status.md)
@@ -52,6 +52,16 @@ zamkniętej bramki naukowej.
 
 ### R01 — P1: błędna kolejność pivotów w bounded Schur
 
+Aktualizacja: **NAPRAWIONE ŹRÓDŁOWO, managed verification otwarte**.
+`solve_factored` stosuje teraz wszystkie permutacje RHS przed podstawianiem
+w przód. Regresja `multiple_pivots_preserve_complex_multiple_rhs` sprawdza
+realny i zespolony P, dwa zespolone RHS, cztery bloki realifikacji Schura
+i residual oryginalnego P. Oracle powstaje przez B=P X oraz D=-A X.
+Natywny test MSVC: przed poprawką exit 1 (`FAIL: pivoted Schur real-real`),
+po poprawce cały plik testowy exit 0. Managed recipe ponowiono: exit 1
+przed kompilacją, `Container runner owns heavy builds on this host`.
+Opis błędu poniżej dokumentuje stan sprzed naprawy.
+
 Źródło: `backends/fem/cpu/frequency_domain/floquet_dynamic_demag_k.cpp`,
 `factorize` i `solve_factored`. Faktoryzacja zamienia całe wiersze, także
 zapisane wcześniej mnożniki L. Solve przeplata kolejne permutacje RHS
@@ -65,9 +75,9 @@ To dowód błędu algorytmu; nie uruchomiono w audycie binarnego MFEM.
 Obecny test `floquet_dynamic_demag_k_test.cpp` nie obejmuje takiego
 wielokrotnego pivotowania.
 
-- [ ] S04.R01: dodać natywną regresję 3×3 z wymuszonym drugim pivotem,
+- [x] S04.R01: dodać natywną regresję 3×3 z wymuszonym drugim pivotem,
   zespolonymi/multiple RHS i porównaniem Schura do niezależnego oracle.
-- [ ] Poprawić stosowanie permutacji przed forward substitution lub użyć
+- [x] Poprawić stosowanie permutacji przed forward substitution lub użyć
   zgodnego rozwiązania bibliotecznego; zachować istniejące testy znaku/gauge.
 - [ ] Kryterium: regresja czerwona na HEAD audytu, zielona po naprawie;
   uruchomiony `fem_floquet_dynamic_demag_k_contract` w zarządzanej trasie.

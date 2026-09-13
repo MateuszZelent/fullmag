@@ -300,7 +300,8 @@ Szczegóły źródeł, kontrprzykładu i akceptacji: [R01–R05](2026-09-13-eige
 - [x] S04.a: bounded provider oraz osobna trasa K0/non-k0 — kod zapisany, błąd R01 otwarty.
 - [x] S05.a: właściciel Floquet, walidacja payloadu/k/okna i handoff fazy.
 - [x] S09.a: bounded provider i elementowy assembler przekroju — prototyp.
-- [ ] S04.R01 (P1): regresja wielokrotnego pivotowania, naprawa LU solve, Schur oracle.
+- [x] S04.R01a (P1): regresja wielokrotnego pivotowania, naprawa LU solve, Schur oracle; natywny MSVC RED→GREEN.
+- [ ] S04.R01b: managed wykonanie tej regresji; recipe nadal blokowane przed kompilacją.
 - [ ] S04.R02 (P1): próg residualu, test stale-zero, propagacja diagnostyki i gauge.
 - [ ] S05.R02 (P1): rekonstrukcja potencjału i pełny residual V9.
 - [ ] S12.R03 (P1): naprawa trasy runnera; targety modal/cross-section i dokładny receipt MFEM/SLEPc.

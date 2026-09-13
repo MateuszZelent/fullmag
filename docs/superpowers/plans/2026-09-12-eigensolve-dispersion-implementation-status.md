@@ -466,3 +466,13 @@ Regresja konfliktu przechodzi w izolowanym `floquet_modal_solver_test.exe`
 (MSVC, `FULLMAG_HAS_MFEM_STACK=0`), a kompilacja właściciela, adapterów i testu
 kończy się exit 0. Managed MFEM/SLEPc, residual, fizyczne `f(k)` i pozostałe
 bramki S04–S12 są nadal **NOT VERIFIED**.
+
+
+### R01 — naprawa LU po audycie
+
+Wykonano permutacje RHS przed podstawianiem z finalnym L. Nowa regresja
+3×3 wymusza dwa pivoty i testuje zespolone multiple RHS oraz niezależny
+Schur oracle. Natywny MSVC: RED exit 1 przed zmianą, GREEN exit 0 po zmianie
+wraz ze wszystkimi wcześniejszymi testami pliku. Managed bramka nadal
+kończy się przed kompilacją przez politykę kolejki runnera. R01 jest
+naprawione źródłowo; managed potwierdzenie oraz R02 pozostają otwarte.

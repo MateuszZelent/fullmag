@@ -235,6 +235,10 @@ bool solve_factored(
                 solution[static_cast<std::size_t>(pivot)],
                 solution[static_cast<std::size_t>(pivot_row)]);
         }
+    }
+    // Factorization swaps complete rows, including earlier L multipliers.
+    // Apply the complete permutation before solving with the final L factor.
+    for (std::uint64_t pivot = 0; pivot < dimension; ++pivot) {
         for (std::uint64_t row = pivot + 1; row < dimension; ++row) {
             solution[static_cast<std::size_t>(row)] -=
                 factor[static_cast<std::size_t>(row * dimension + pivot)] *

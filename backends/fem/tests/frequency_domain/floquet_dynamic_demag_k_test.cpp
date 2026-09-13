@@ -222,10 +222,66 @@ void pin_first_phi_gauge_rejects_a_single_potential_dof()
         "pin-first-dof gauge rejects a scalar space with no unpinned DOF");
 }
 
+
+void multiple_pivots_preserve_complex_multiple_rhs()
+{
+    // Manufacture B = P X, so the independent Schur oracle is -A X.
+    // P forces a row exchange at both the first and second pivots.
+    for (bool complex_case : {false, true}) {
+        const Complex scale = complex_case ? Complex(1.0, 0.5) : Complex(1.0, 0.0);
+        const double entries[9] = {1, 2, 3, 4, 5, 6, 7, 8, 10};
+        Complex p[9];
+        for (int i = 0; i < 9; ++i) p[i] = entries[i] * scale;
+        const Complex x[6] = {
+            Complex(1, 1), Complex(2, -1),
+            Complex(1, -2), Complex(-1, 3),
+            Complex(1, 0.5), Complex(4, 2)};
+        const Complex a[6] = {
+            Complex(1, 0), Complex(0, 1), Complex(2, -1),
+            Complex(-1, 2), Complex(3, 0), Complex(0, -2)};
+        Complex b[6]{};
+        Complex expected[4]{};
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 2; ++j)
+                for (int k = 0; k < 3; ++k)
+                    b[i * 2 + j] += p[i * 3 + k] * x[k * 2 + j];
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j)
+                for (int k = 0; k < 3; ++k)
+                    expected[i * 2 + j] -= a[i * 3 + k] * x[k * 2 + j];
+        fd::FloquetDynamicDemagKProblem problem{};
+        problem.q_dof_count = 2;
+        problem.phi_dof_count = 3;
+        problem.p_row_major = p;
+        problem.p_value_count = 9;
+        problem.a_qphi_row_major = a;
+        problem.a_qphi_value_count = 6;
+        problem.a_phiq_row_major = b;
+        problem.a_phiq_value_count = 6;
+        problem.k_rad_per_m[0] = 1;
+        double output[16]{};
+        fd::FloquetDynamicDemagKDiagnostics diagnostics{};
+        check(fd::build_floquet_dynamic_demag_k_real_split(
+                  problem, output, 16, &diagnostics) == fd::FrequencyDomainStatus::ok,
+              "multiple-pivot solve succeeds");
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j) {
+                const Complex value = expected[i * 2 + j];
+                check_close(output[i * 4 + j], value.real(), "pivoted Schur real-real");
+                check_close(output[i * 4 + j + 2], -value.imag(), "pivoted Schur real-imag");
+                check_close(output[(i + 2) * 4 + j], value.imag(), "pivoted Schur imag-real");
+                check_close(output[(i + 2) * 4 + j + 2], value.real(), "pivoted Schur imag-imag");
+            }
+        check(diagnostics.max_relative_potential_solve_residual < 1e-12,
+              "multiple-pivot original potential residual");
+    }
+}
+
 } // namespace
 
 int main()
 {
+    multiple_pivots_preserve_complex_multiple_rhs();
     nonzero_k_dense_schur_is_realified_for_modal_abi();
     hermitian_blocks_produce_hermitian_dynamic_demag();
     validation_rejects_zero_k_singular_p_and_budget_overflow();
