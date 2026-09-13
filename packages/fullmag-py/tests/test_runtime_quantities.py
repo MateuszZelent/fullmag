@@ -75,6 +75,10 @@ class RuntimeQuantityTests(unittest.TestCase):
             "E_rotated_dmi",
         )
         self.assertEqual(
+            fm.SaveScalar("e_rotated_dmi", every=1.0e-12).to_ir()["name"],
+            "E_rotated_dmi",
+        )
+        self.assertEqual(
             fm.SaveField("H_rotated_dmi", every=1.0e-12).to_ir()["name"],
             "H_rotated_dmi",
         )

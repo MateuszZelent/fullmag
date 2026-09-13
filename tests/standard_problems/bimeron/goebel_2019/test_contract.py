@@ -146,3 +146,22 @@ def test_thresholds_are_source_frozen() -> None:
         "fem_cpu_gpu_fp64_residual_rtol": 5e-11,
         "fp32_field_rtol": 3e-5,
     }
+
+
+def test_source_physics_rejects_extra_uniaxial_and_cubic_channels() -> None:
+    from tests.standard_problems.bimeron.goebel_2019.verify import (
+        _goebel_material_has_only_expected_physics,
+    )
+
+    material = {
+        "name": "Py",
+        "saturation_magnetisation": 0.58e6,
+        "exchange_stiffness": 15e-12,
+        "damping": 0.3,
+        "uniaxial_anisotropy_ku1": 0.8e6,
+        "anisotropy_axis": [1.0, 0.0, 0.0],
+    }
+    assert _goebel_material_has_only_expected_physics(material)
+    for extra_key in ("uniaxial_anisotropy_ku2", "cubic_anisotropy_kc1"):
+        with_extra = {**material, extra_key: 1.0}
+        assert not _goebel_material_has_only_expected_physics(with_extra)

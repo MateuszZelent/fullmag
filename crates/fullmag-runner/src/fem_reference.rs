@@ -54,8 +54,6 @@ use crate::types::{
 
 use std::time::Instant;
 
-const ZERO_THRESHOLD: f64 = 1.0e-30;
-
 pub(crate) fn execute_reference_fem(
     plan: &FemPlanIR,
     until_seconds: f64,
@@ -799,13 +797,16 @@ fn execute_reference_fem_impl(
         if let Some(next) = report.suggested_next_dt {
             dt = next;
         }
-        let latest_stats = StepStats {
+        let rotated_dmi_energy =
+            rotated_dmi_energy_from_magnetization(&problem, state.magnetization());
+        let mut latest_stats = StepStats {
             step: step_count,
             time: report.time_seconds,
             dt: report.dt_used,
             e_ex: report.exchange_energy_joules,
             e_demag: report.demag_energy_joules,
             e_ext: report.external_energy_joules,
+            e_dmi: report.dmi_energy_joules,
             e_total: report.total_energy_joules,
             max_dm_dt: report.max_rhs_amplitude,
             max_rhs_norm_per_s: report.max_rhs_amplitude,
@@ -818,6 +819,15 @@ fn execute_reference_fem_impl(
             wall_time_ns: wall_elapsed,
             ..StepStats::default()
         };
+        // `StepReport::dmi_energy_joules` is the aggregate conventional +
+        // rotated channel.  Keep the aggregate in `e_dmi` while exposing the
+        // rotated contribution separately so live/relaxation telemetry cannot
+        // silently report an rDMI run as zero-DMI.
+        latest_stats.set_dmi_energy_components(
+            report.dmi_energy_joules - rotated_dmi_energy,
+            0.0,
+            rotated_dmi_energy,
+        );
         current_stats = enrich_step_stats_from_magnetization(
             latest_stats.clone(),
             state.magnetization(),
@@ -1497,11 +1507,11 @@ pub(crate) fn observe_state(
     let has_rotated_dmi = problem
         .terms
         .rotated_interfacial_dmi
-        .is_some_and(|d| d.abs() > ZERO_THRESHOLD);
+        .is_some_and(|d| d != 0.0);
     let has_bulk_dmi = problem
         .terms
         .bulk_dmi
-        .is_some_and(|d| d.abs() > ZERO_THRESHOLD);
+        .is_some_and(|d| d != 0.0);
     let rotated_dmi_field = if has_rotated_dmi {
         problem.rotated_interfacial_dmi_field_from_vectors(&observables.magnetization)
     } else {
@@ -1512,11 +1522,8 @@ pub(crate) fn observe_state(
     } else {
         Vec::new()
     };
-    let rotated_dmi_energy = if has_rotated_dmi {
-        problem.rotated_interfacial_dmi_energy_from_vectors(&observables.magnetization)
-    } else {
-        0.0
-    };
+    let rotated_dmi_energy =
+        rotated_dmi_energy_from_magnetization(problem, &observables.magnetization);
     // `FemLlgProblem::observe` returns the aggregate interfacial + rotated +
     // bulk DMI field. Remove each independently materialized component so
     // `H_dmi`, `H_rotated_dmi`, and `H_dmi_bulk` remain disjoint observables.
@@ -1582,6 +1589,27 @@ pub(crate) fn observe_state(
     })
 }
 
+/// Return the independently materialized rotated-interfacial DMI energy.
+///
+/// `StepReport` and the engine's aggregate observables intentionally expose
+/// one DMI energy channel.  Consumers that publish component telemetry must
+/// derive the rotated part with the same active-term semantics used by
+/// `observe_state`; in particular, an authored zero coefficient is a no-op.
+fn rotated_dmi_energy_from_magnetization(
+    problem: &FemLlgProblem,
+    magnetization: &[[f64; 3]],
+) -> f64 {
+    if problem
+        .terms
+        .rotated_interfacial_dmi
+        .is_some_and(|d| d != 0.0)
+    {
+        problem.rotated_interfacial_dmi_energy_from_vectors(magnetization)
+    } else {
+        0.0
+    }
+}
+
 fn make_step_stats(
     step: u64,
     time: f64,
@@ -1618,11 +1646,7 @@ fn make_step_stats(
         &observables.magnetization,
         magnetic_node_volumes,
     );
-    stats.set_dmi_energy_components(
-        observables.dmi_energy,
-        0.0,
-        observables.rotated_dmi_energy,
-    );
+    stats.set_dmi_energy_components(observables.dmi_energy, 0.0, observables.rotated_dmi_energy);
     stats.per_object_scalars = fem_per_object_scalars(
         object_segments,
         mesh_parts,
@@ -2685,6 +2709,72 @@ mod tests {
             observables.max_effective_field_amplitude > 0.0,
             "rotated DMI must contribute to FEM H_eff"
         );
+    }
+
+    #[test]
+    fn reference_live_step_stats_preserve_rotated_dmi_energy_component() {
+        let mut plan = make_test_plan(false);
+        plan.enable_exchange = false;
+        plan.rotated_interfacial_dmi = Some(3e-3);
+        plan.initial_magnetization = vec![
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ];
+
+        let result = execute_reference_fem(&plan, 1e-13, &[], None, None)
+            .expect("reference FEM rotated-DMI run should succeed");
+        let step = result
+            .result
+            .steps
+            .last()
+            .expect("rotated-DMI run must publish a step");
+
+        assert!(
+            step.e_rotated_dmi.abs() > 0.0,
+            "live step telemetry must expose the rotated DMI energy"
+        );
+        assert!(
+            (step.e_dmi - step.e_rotated_dmi).abs() < 1e-30,
+            "with only rotated DMI active, aggregate and rotated energies must agree"
+        );
+    }
+
+    #[test]
+    fn reference_rotated_dmi_energy_treats_any_exact_nonzero_coefficient_as_active() {
+        let mut plan = make_test_plan(false);
+        plan.enable_exchange = false;
+        plan.rotated_interfacial_dmi = Some(1.0e-31);
+        plan.initial_magnetization = vec![
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ];
+
+        let magnetization = plan.initial_magnetization.clone();
+        let (problem, _) = build_problem_and_state(&plan)
+            .expect("tiny nonzero rotated DMI should build in the FEM reference path");
+        let energy = rotated_dmi_energy_from_magnetization(&problem, &magnetization);
+
+        assert_ne!(
+            energy, 0.0,
+            "FEM telemetry must not silently drop a finite nonzero rotated-DMI coefficient"
+        );
+    }
+
+    #[test]
+    fn equilibrium_identity_rejects_rotated_dmi_source_plans() {
+        let mut plan = make_test_plan(false);
+        plan.rotated_interfacial_dmi = Some(3e-3);
+
+        let error = crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1::from_relax_plan(
+            &plan,
+        )
+        .expect_err("an equilibrium identity must not omit rotated-DMI physics");
+        assert!(error.message.contains("equilibrium_identity_scope_unsupported"));
+        assert!(error.message.contains("DMI data"));
     }
 
     #[test]

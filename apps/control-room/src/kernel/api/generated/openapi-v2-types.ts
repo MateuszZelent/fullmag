@@ -4852,6 +4852,7 @@ export interface components {
             request_id?: string | null;
         };
         CommandStatusResource: {
+            client_intent_id?: string | null;
             command_id: string;
             completed_at_unix_ms?: number | null;
             completion_status?: string | null;

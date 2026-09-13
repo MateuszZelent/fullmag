@@ -728,7 +728,7 @@ export function buildObjectInteractionPatchFromDraft(
     (draft.id === "interfacial_dmi" || draft.id === "bulk_dmi") &&
     draft.enabled &&
     draft.present &&
-    activeStudyRotatedDmi(scene)
+    studyHasRotatedDmi(scene)
   ) {
     return {
       error:
@@ -863,6 +863,17 @@ function activeObjectScopedDmi(
 function activeStudyRotatedDmi(scene: SceneResource | null | undefined): boolean {
   const value = studyRotatedDmiValue(scene);
   return value !== null && value !== 0;
+}
+
+/**
+ * The IR treats a present rotated-DMI term as occupying the study-level DMI
+ * channel even when its coefficient is zero.  Keep that presence check
+ * separate from the nonzero check used for the coupled Exchange boundary
+ * requirement, so the UI cannot create a conventional/rotated term conflict
+ * that the server will reject later.
+ */
+function studyHasRotatedDmi(scene: SceneResource | null | undefined): boolean {
+  return studyRotatedDmiValue(scene) !== null;
 }
 
 function studyRotatedDmiValue(

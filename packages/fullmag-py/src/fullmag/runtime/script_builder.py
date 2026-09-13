@@ -726,10 +726,34 @@ def _render_scene_document_bootstrap(builder: Mapping[str, object]) -> str:
         )
         handles.append(handle)
         material = raw_object.get("material")
+        physics_stack = raw_object.get("physics_stack")
+        explicit_dmi_kinds = (
+            {
+                str(entry.get("kind"))
+                for entry in physics_stack
+                if isinstance(entry, Mapping)
+                and entry.get("enabled", True) is not False
+                and str(entry.get("kind")) in {"interfacial_dmi", "bulk_dmi"}
+            }
+            if isinstance(physics_stack, list)
+            else set()
+        )
         if isinstance(material, Mapping):
             for key in ("Ms", "Aex", "alpha", "Dind", "Dbulk", "Ku1", "Kc1"):
                 value = _finite_number(material.get(key))
                 if value is not None:
+                    if (
+                        key == "Dind"
+                        and value == 0.0
+                        and "interfacial_dmi" not in explicit_dmi_kinds
+                    ):
+                        continue
+                    if (
+                        key == "Dbulk"
+                        and value == 0.0
+                        and "bulk_dmi" not in explicit_dmi_kinds
+                    ):
+                        continue
                     lines.append(f"{handle}.{key} = {_python_literal(value)}")
             anis_u = material.get("anisU") or material.get("anis_u")
             if isinstance(anis_u, (list, tuple)) and len(anis_u) == 3:
@@ -7890,19 +7914,45 @@ def _export_table_autosave(problem: Problem) -> dict[str, object] | None:
 
 
 def _magnet_dmi(problem: Problem, magnet_name: str) -> float | None:
-    del magnet_name
     for term in problem.energy:
         if isinstance(term, InterfacialDMI):
             return term.D
+    for magnet in problem.magnets:
+        if magnet.name == magnet_name:
+            return magnet.material.Dind
     return None
 
 
 def _magnet_bulk_dmi(problem: Problem, magnet_name: str) -> float | None:
-    del magnet_name
     for term in problem.energy:
         if isinstance(term, BulkDMI):
             return term.D
+    for magnet in problem.magnets:
+        if magnet.name == magnet_name:
+            return magnet.material.Dbulk
     return None
+
+
+def _material_dmi_mirror_matches(
+    problem: Problem,
+    *,
+    parameter: str,
+    explicit_value: float,
+) -> bool:
+    """Return whether one explicit DMI term mirrors every material value.
+
+    The legacy flat API promotes a material ``Dind``/``Dbulk`` assignment to
+    one energy term while retaining the material coefficient.  Canonical
+    rendering can preserve that representation only when all referenced
+    magnets carry the same scalar value as the explicit term; otherwise the
+    explicit-first renderer would silently overwrite a per-magnet value.
+    """
+    values = [
+        getattr(magnet.material, parameter)
+        for magnet in problem.magnets
+        if getattr(magnet.material, parameter) is not None
+    ]
+    return bool(values) and all(value == explicit_value for value in values)
 
 
 def _snapshot_quantity_string(snapshot: Snapshot) -> str:
@@ -8915,6 +8965,21 @@ def _validate_energy_terms(
     conventional_dmi_count = 0
     rotated_dmi_count = 0
     rotated_override_present = overrides is not None and "rotated_interfacial_dmi" in overrides
+    material_dind_present = False
+    material_dbulk_present = False
+    material_dmi_field_present = False
+    for magnet in problem.magnets:
+        material = magnet.material
+        material_dind_present |= material.Dind is not None
+        material_dbulk_present |= material.Dbulk is not None
+        material_dmi_field_present |= (
+            (material.Dind_field is not None and len(material.Dind_field) > 0)
+            or (material.Dbulk_field is not None and len(material.Dbulk_field) > 0)
+        )
+    if material_dmi_field_present:
+        raise ValueError(
+            "canonical flat-script rewrite does not support spatial material DMI fields"
+        )
     for term in problem.energy:
         if isinstance(term, Exchange):
             exchange_count += 1
@@ -8923,11 +8988,10 @@ def _validate_energy_terms(
             zeeman_count += 1
             continue
         if isinstance(term, InterfacialDMI):
-            # Zero-valued DMI terms are retained for authoring round-trips,
-            # but they do not activate the executable Hamiltonian or its
-            # conventional-vs-rotated exclusivity rule.
-            if term.D != 0.0:
-                conventional_dmi_count += 1
+            # Presence is part of the IR contract even when D=0.  Keep the
+            # authored no-op, but reject a channel combination that the
+            # planner would reject after this script is serialized.
+            conventional_dmi_count += 1
             continue
         if isinstance(term, RotatedInterfacialDMI):
             # A rotated-DMI override replaces the authored term during
@@ -8935,8 +8999,7 @@ def _validate_energy_terms(
             # than counting the shadowed base value as well.
             if rotated_override_present:
                 continue
-            if term.D != 0.0:
-                rotated_dmi_count += 1
+            rotated_dmi_count += 1
             continue
         if isinstance(term, Demag):
             demag_count += 1
@@ -8955,8 +9018,7 @@ def _validate_energy_terms(
                 )
             continue
         if isinstance(term, BulkDMI):
-            if term.D != 0.0:
-                conventional_dmi_count += 1
+            conventional_dmi_count += 1
             continue
         if isinstance(term, (OerstedCylinder, OerstedField, Magnetoelastic, UniaxialAnisotropy, CubicAnisotropy, ThermalNoise)):
             continue
@@ -8965,8 +9027,43 @@ def _validate_energy_terms(
         )
     if rotated_override_present:
         override_d = _number_or_none(overrides.get("rotated_interfacial_dmi"))
-        if override_d is not None and override_d != 0.0:
+        if override_d is not None:
             rotated_dmi_count += 1
+        effective_rotated_dmi_present = override_d is not None
+    else:
+        effective_rotated_dmi_present = rotated_dmi_count > 0
+    if (material_dind_present or material_dbulk_present) and effective_rotated_dmi_present:
+        raise ValueError(
+            "canonical flat-script rewrite does not support mixed conventional and rotated DMI terms"
+        )
+    explicit_interfacial_terms = [
+        term for term in problem.energy if isinstance(term, InterfacialDMI)
+    ]
+    explicit_bulk_terms = [term for term in problem.energy if isinstance(term, BulkDMI)]
+    if (
+        material_dind_present
+        and explicit_interfacial_terms
+        and not _material_dmi_mirror_matches(
+            problem,
+            parameter="Dind",
+            explicit_value=explicit_interfacial_terms[0].D,
+        )
+    ):
+        raise ValueError(
+            "canonical flat-script rewrite does not support combining explicit and material interfacial DMI"
+        )
+    if (
+        material_dbulk_present
+        and explicit_bulk_terms
+        and not _material_dmi_mirror_matches(
+            problem,
+            parameter="Dbulk",
+            explicit_value=explicit_bulk_terms[0].D,
+        )
+    ):
+        raise ValueError(
+            "canonical flat-script rewrite does not support combining explicit and material bulk DMI"
+        )
     if exchange_count > 1 or demag_count > 1:
         raise ValueError(
             "canonical flat-script rewrite currently supports at most one exchange term and one demag term"

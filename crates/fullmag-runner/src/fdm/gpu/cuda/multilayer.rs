@@ -1781,11 +1781,8 @@ fn snapshot_native_multilayer_observables(
         // contains the rotated term.  Keep the receipt count exact for
         // conventional-DMI snapshots (six fields) while retaining the
         // seventh device-to-host vector for an active rDMI term.
-        let observed_vector_fields = if plan.rotated_interfacial_dmi.is_some() {
-            7
-        } else {
-            6
-        };
+        let observed_vector_fields =
+            observed_snapshot_vector_field_count(plan.rotated_interfacial_dmi.is_some());
         for _ in 0..observed_vector_fields {
             transfer_counters.record_observed_snapshot_d2h_vector(cell_count);
         }
@@ -3127,6 +3124,17 @@ fn observe_multilayer_cuda(
         max_torque_all_Apm: max_torque_apm,
         per_object_scalars,
     })
+}
+
+/// Count the native vector payloads copied back for one multilayer snapshot.
+///
+/// The six base payloads are M, H_demag, H_ex, H_ani, H_dmi and H_eff.  The
+/// rotated-DMI field is a seventh payload only when the planner materializes
+/// that term; keeping the count derived from the same plan presence check as
+/// the copy above prevents telemetry from claiming a transfer for a zero
+/// placeholder field.
+fn observed_snapshot_vector_field_count(has_rotated_dmi: bool) -> u64 {
+    6 + u64::from(has_rotated_dmi)
 }
 
 fn step_multilayer_cuda(
@@ -4968,6 +4976,12 @@ mod tests {
         assert_eq!(telemetry.h2d_bytes, telemetry.setup_h2d_bytes);
         assert_eq!(telemetry.d2h_transfer_count, plan.layers.len() as u64 * 6);
         assert_eq!(telemetry.d2h_bytes, telemetry.observed_snapshot_d2h_bytes);
+    }
+
+    #[test]
+    fn device_resident_snapshot_transfer_count_matches_rotated_dmi_presence() {
+        assert_eq!(observed_snapshot_vector_field_count(false), 6);
+        assert_eq!(observed_snapshot_vector_field_count(true), 7);
     }
 
     #[test]
