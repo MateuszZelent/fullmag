@@ -819,6 +819,49 @@ add_test(NAME fem_transfer_audit COMMAND fem_transfer_audit)
 function(add_fem_source_facade_contract target source)
     add_executable(${target} ${source})
     target_link_libraries(${target} PRIVATE fullmag_fem)
+    if(target STREQUAL fem_poisson_airbox_modal_eigen_slepc_contract AND FULLMAG_USE_MFEM_STACK AND FULLMAG_FEM_WITH_SLEPC)
+        # The modal contract performs a compile-time PetscReal precision
+        # assertion; expose both PETSc and MPI include contracts to that test
+        # target.  The PETSc imported target supplied by the managed stack
+        # does not always carry mpi.h's include directory transitively.
+        find_package(MPI REQUIRED COMPONENTS CXX)
+        target_link_libraries(${target} PRIVATE MPI::MPI_CXX)
+        # This target uses PETSc headers only for the compile-time PetscReal
+        # precision assertion.  Linking PETSC::petsc here would pull its
+        # optional libCEED/CUDA dependency into the CPU executable; the
+        # production fullmag_fem shared library already owns the PETSc/SLEPc
+        # runtime linkage.  Add the header contract explicitly instead.
+        if(PETSc_INCLUDE_DIRS)
+            target_include_directories(${target} PRIVATE ${PETSc_INCLUDE_DIRS})
+        elseif(PETSc_INCLUDE_DIR)
+            target_include_directories(${target} PRIVATE ${PETSc_INCLUDE_DIR})
+        endif()
+    endif()
+    if(FULLMAG_ENABLE_CUDA)
+        # The managed CPU image carries libCEED with CUDA-driver symbols.
+        # Every source-facade contract links fullmag_fem, whose CUDA-enabled
+        # shared library keeps those symbols in its dependency closure. Resolve
+        # them for every contract target, not only the modal target; otherwise
+        # the first target can link while the next contract fails with an
+        # unresolved cu* symbol. The contract launcher supplies the same
+        # compatibility directory at runtime. Linking the stub target would
+        # leave an unresolvable libcuda.so.1 SONAME in the CPU image, so prefer
+        # the compatibility driver path explicitly.
+        find_library(FULLMAG_CUDA_DRIVER_LIBRARY
+            NAMES cuda
+            HINTS
+                "${CMAKE_CUDA_COMPILER_TOOLKIT_ROOT}/compat"
+                "${CUDAToolkit_LIBRARY_ROOT}/../compat"
+                "${CMAKE_CUDA_COMPILER_TOOLKIT_ROOT}/targets/x86_64-linux/lib/stubs"
+        )
+        if(FULLMAG_CUDA_DRIVER_LIBRARY)
+            target_link_libraries(${target} PRIVATE ${FULLMAG_CUDA_DRIVER_LIBRARY})
+        else()
+            message(FATAL_ERROR
+                "CUDA-enabled FEM contract requires a CUDA driver/compatibility "
+                "library to resolve libCEED's driver symbols")
+        endif()
+    endif()
     target_include_directories(${target} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/include
