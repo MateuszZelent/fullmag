@@ -1,6 +1,6 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
-Data: 2026-09-12. Status zadania: **W TRAKCIE**. Kwalifikacja solvera non-k0: **NOT VERIFIED**.
+Data: 2026-09-13. Status zadania: **W TRAKCIE**. Kwalifikacja solvera non-k0: **NOT VERIFIED**.
 
 ## Cel i źródła
 
@@ -9,7 +9,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 - Baza `master`: `5084a94ed14b151fc865e8def5a5c28401e98b44`.
 - Branch: `codex/eigensolve-dispersion-plan-20260912`.
 - Worktree: `C:/git/fullmag/worktrees/eigensolve-dispersion-plan-20260912`.
-- Ostatni zapisany kodowy przyrost: `e3fa509db` (`feat(eigensolve): route Floquet dynamic demag through exact CPU engine`), nad zmianą nodalnego `Ms` `c511cb413`, testem wymuszonego GPU `71ce348b0`, routingiem Γ `1114e1aa0` i podłączeniem providera `f2acf7b9b425733899bdfde63cb0566d16d74a59`.
+- Ostatni zapisany kodowy przyrost: `80736831e` (`feat(eigensolve): add Floquet modal solver owner`), nad routingiem dynamicznego demag-k `e3fa509db`, zmianą nodalnego `Ms` `c511cb413`, testem wymuszonego GPU `71ce348b0`, routingiem Γ `1114e1aa0` i podłączeniem providera `f2acf7b9b425733899bdfde63cb0566d16d74a59`.
 - Właściciel: `codex:01a0941c-eb15-7261-a7ee-7cf099385525`.
 - Rejestr: `eigensolve-dispersion-plan-20260-c5dfad6d7f548079`; reaktywowany do implementacji.
 - Fizyczne źródła COMSOL: oba lokalne podręczniki modułu mikromagnetycznego wymienione w planie; szczególnie s. PDF 21–28 i 40–43. Przykład RF jest wzorem sprzężenia pól, a nie gotowym dowodem modalnym.
@@ -21,9 +21,9 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 | S00 — baza K0 i dowody | W TRAKCIE | Bieżący managed runtime, Kittel, pełny zaakceptowany handoff |
 | S01 — nauka, ADR, kontrakty | W TRAKCIE | Noty, mapy źródeł, walidatory i review |
 | S02 — Python/IR | W TRAKCIE | Walidacja k i selektorów, round-trip, testy konsumentów |
-| S03 — natywny operator magnetyczny Blocha | W TRAKCIE | Prolongacja fazowa, MFEM sparse/matrix-free, testy i połączenie produkcyjne |
+| S03 — natywny operator magnetyczny Blocha | W TRAKCIE | Prolongacja fazowa i właściciel sparse są zapisane; pozostają MFEM sparse/matrix-free, pełne assembly i managed runtime |
 | S04 — dynamiczny demag-k CPU | W TRAKCIE | Bounded dense Schur provider i producent czterech bloków MFEM są zapisane; planner otwiera wyłącznie strict/double/CPU/Full2x2/FloquetAirbox/nonzero-k z Poisson airbox. Pozostają matrix-free/sparse owner, gauge, zbieżność brzegu i managed runtime |
-| S05 — natywny solver spektralny | W TRAKCIE | Runner przekazuje accepted shared-domain handoff razem z fazowym pencilem do produkcyjnego CPU; C++ wybiera k-aware Schur provider i dodaje jego realifikację do Hessianu, a auto-routing przypina tę kombinację do CPU. Pozostają SLEPc/managed runtime, reszty, kompletność i resume |
+| S05 — natywny solver spektralny | W TRAKCIE | Dodano właściciela Floquet SLEPc dla dense i sparse oraz routing obu ścieżek; pozostają managed SLEPc, residuale oryginalnego układu, kompletność i resume |
 | S06 — śledzenie gałęzi | W TRAKCIE | Hungarian/gaps i metryka masy FE są gotowe; pozostają fizyczne podprzestrzenie zdegenerowane |
 | S07 — artefakty i API | W TRAKCIE | Stabilne ID, faza/obwiednia, selektory, binarne pola |
 | S08 — Control Room | DO WYKONANIA | Authoring, dyspersja, wybór modu i przestrzenna faza; browser/WebGL |
@@ -359,3 +359,31 @@ Brama `just verify-fem-modal-floquet-airbox-cpu` nie doszła do kompilacji C++:
 że managed MFEM/SLEPc, wykonanie na rzeczywistej siatce, residuale, zbieżność
 paddingu/warunku otwartego oraz porównanie liczbowe z COMSOL/TetraX nadal mają
 status **NOT VERIFIED**. Nie wykonano push/PR/merge ani usunięcia worktree.
+
+### Przyrost właściciela solvera Floquet dense/sparse — `80736831e`
+
+Dodano jawny moduł `cpu/frequency_domain/modal/floquet_modal_solver.*` jako
+granicę między fazowo zredukowanym operatorem Blocha a adapterem SLEPc. Moduł
+sprawdza finite, niezerowy trójwymiarowy wektor `k`, warunek Floquet, komplet
+par periodycznych, marker zaakceptowanego operatora oraz obecność
+realifikowanego pencila. Wymuszona ścieżka GPU jest odrzucana bez fallbacku.
+Dense CPU z dynamicznym demag-k wymaga payloadu real-split, a sparse CSR bez
+demag-k ma osobną funkcję admission i routing; sparse z demag-k jest odrzucany
+ze stabilnym powodem i kierowany do właściciela dense Schura. Obie ścieżki są
+wywoływane z produkcyjnego adaptera zamiast ogólnego wejścia K0.
+
+Dodano target `fem_floquet_modal_solver_contract` oraz regresje dla poprawnego
+non-k0 CPU, braku payloadu demag-k, wymuszonego GPU, zerowego `k`, braku seamów,
+poprawnego sparse CSR i odrzucenia sparse+demag. Bezpośrednia kompilacja MSVC
+z `FULLMAG_HAS_MFEM_STACK=0` dla nowego modułu, testu, adaptera produkcyjnego,
+adaptera SLEPc i kinematyki zakończyła się exit 0; zlinkowany i uruchomiony
+`floquet_modal_solver_test.exe` zakończył się exit 0. Jest to dowód źródłowy i
+izolowany test kontraktu, nie managed MFEM/SLEPc ani dowód fizycznego `f(k)`.
+
+Pełny `cargo +nightly check --features build-native` ponownie zatrzymał się na
+znanych błędach bazowych konfiguracji bez MFEM (`Context::poisson_demag`,
+`mkdir`, typy shared-domain); nowe pliki nie zgłosiły własnych błędów w tym
+przebiegu. Brama `just verify-fem-modal-floquet-airbox-cpu` nadal zatrzymuje
+się przed kompilacją przez `Container profile allow-list mismatch`. Managed
+receipt, residual po rekonstrukcji potencjału, zbieżność, porównania COMSOL/
+TetraX, UI, GPU oraz PR pozostają **NOT VERIFIED**.
