@@ -139,6 +139,32 @@ void rejects_zero_k_and_missing_pairs()
           "missing seam-pair rejection reason is stable");
 }
 
+void rejects_invalid_frequency_windows()
+{
+    fd::ModalEigenRequest request = valid_request();
+    auto spectral = spectral_request();
+    spectral.frequency_min_hz = 2.0;
+    spectral.frequency_max_hz = 1.0;
+    auto admission = fd::admit_floquet_modal_request(request, spectral);
+    check(!admission.accepted, "reversed Floquet frequency window is rejected");
+    check(std::strcmp(admission.reason,
+                      "floquet_modal_requires_valid_frequency_window") == 0,
+          "invalid frequency window reason is stable");
+
+    spectral = spectral_request();
+    spectral.frequency_min_hz = -1.0;
+    spectral.frequency_max_hz = 1.0;
+    admission = fd::admit_floquet_modal_request(request, spectral);
+    check(!admission.accepted, "negative Floquet frequency window is rejected");
+
+    spectral = spectral_request();
+    spectral.frequency_min_hz = 1.0;
+    spectral.frequency_max_hz = 2.0;
+    admission = fd::admit_floquet_modal_request(request, spectral);
+    check(admission.accepted, "finite positive Floquet frequency window is admitted");
+    check(admission.frequency_window, "admission records a selected frequency window");
+}
+
 void admits_sparse_bloch_operator_without_demag()
 {
     fd::ModalEigenRequest request = valid_request();
@@ -169,6 +195,7 @@ int main()
     accepts_finite_nonzero_k_cpu_contract();
     rejects_missing_dynamic_payload_and_gpu();
     rejects_zero_k_and_missing_pairs();
+    rejects_invalid_frequency_windows();
     admits_sparse_bloch_operator_without_demag();
     return 0;
 }

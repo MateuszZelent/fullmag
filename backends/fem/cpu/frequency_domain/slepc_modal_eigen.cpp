@@ -530,6 +530,7 @@ solve_slepc_sparse_gyrotropic_modal_eigen(
     solve_request.residual_tolerance = request.residual_tolerance;
     solve_request.max_outer_iterations = request.max_outer_iterations;
     solve_request.max_linear_iterations = request.max_linear_iterations;
+    solve_request.phase_convention = request.phase_convention;
     result = solve_slepc_gyrotropic_modal_eigen_with_matrices(
         solve_request,
         stiffness,

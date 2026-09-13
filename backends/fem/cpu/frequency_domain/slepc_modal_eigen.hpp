@@ -99,6 +99,8 @@ struct SLEPcSparseGyrotropicModalEigenRequest {
     double residual_tolerance = 1.0e-10;
     int max_outer_iterations = 64;
     int max_linear_iterations = 128;
+    FrequencyDomainPhaseConvention phase_convention =
+        FrequencyDomainPhaseConvention::exp_i_omega_t;
 };
 
 SLEPcTinyGyrotropicModalEigenResult

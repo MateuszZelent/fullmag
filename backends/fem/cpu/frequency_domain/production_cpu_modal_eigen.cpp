@@ -1422,6 +1422,7 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
         slepc_request.residual_tolerance = request.residual_tolerance;
         slepc_request.max_outer_iterations = request.max_outer_iterations;
         slepc_request.max_linear_iterations = request.max_linear_iterations;
+        slepc_request.phase_convention = request.phase_convention;
         SLEPcTinyGyrotropicModalEigenResult slepc_result =
             solve_modal_spectrum_for_request(request, slepc_request);
         const char *stop_reason = subwindow_stop_reason(slepc_result);
@@ -1682,6 +1683,7 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
     slepc_request.residual_tolerance = request.residual_tolerance;
     slepc_request.max_outer_iterations = request.max_outer_iterations;
     slepc_request.max_linear_iterations = request.max_linear_iterations;
+    slepc_request.phase_convention = request.phase_convention;
     const SLEPcTinyGyrotropicModalEigenResult slepc_result =
         solve_modal_spectrum_for_request(request, slepc_request);
 
@@ -1869,6 +1871,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
     slepc_request.residual_tolerance = request.residual_tolerance;
     slepc_request.max_outer_iterations = request.max_outer_iterations;
     slepc_request.max_linear_iterations = request.max_linear_iterations;
+    slepc_request.phase_convention = request.phase_convention;
     const SLEPcTinyGyrotropicModalEigenResult slepc_result =
         solve_sparse_modal_spectrum_for_request(request, slepc_request);
 
@@ -2066,6 +2069,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         slepc_request.residual_tolerance = request.residual_tolerance;
         slepc_request.max_outer_iterations = request.max_outer_iterations;
         slepc_request.max_linear_iterations = request.max_linear_iterations;
+        slepc_request.phase_convention = request.phase_convention;
         SLEPcTinyGyrotropicModalEigenResult slepc_result =
             solve_sparse_modal_spectrum_for_request(request, slepc_request);
         const char *stop_reason = subwindow_stop_reason(slepc_result);

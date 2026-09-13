@@ -95,6 +95,52 @@ bool dense_matrix_payload_is_valid(
     return true;
 }
 
+bool frequency_window_is_valid(
+    const SLEPcTinyGyrotropicModalEigenRequest &request,
+    bool *out_has_window) noexcept
+{
+    if (out_has_window == nullptr ||
+        !std::isfinite(request.frequency_min_hz) ||
+        !std::isfinite(request.frequency_max_hz) ||
+        !std::isfinite(request.target_frequency_hz) ||
+        request.frequency_min_hz < 0.0 ||
+        request.frequency_max_hz < 0.0 ||
+        request.target_frequency_hz < 0.0) {
+        return false;
+    }
+    const bool no_window = request.frequency_min_hz == 0.0 &&
+        request.frequency_max_hz == 0.0;
+    if (!no_window &&
+        !(request.frequency_max_hz > request.frequency_min_hz)) {
+        return false;
+    }
+    *out_has_window = !no_window;
+    return true;
+}
+
+bool frequency_window_is_valid(
+    const SLEPcSparseGyrotropicModalEigenRequest &request,
+    bool *out_has_window) noexcept
+{
+    if (out_has_window == nullptr ||
+        !std::isfinite(request.frequency_min_hz) ||
+        !std::isfinite(request.frequency_max_hz) ||
+        !std::isfinite(request.target_frequency_hz) ||
+        request.frequency_min_hz < 0.0 ||
+        request.frequency_max_hz < 0.0 ||
+        request.target_frequency_hz < 0.0) {
+        return false;
+    }
+    const bool no_window = request.frequency_min_hz == 0.0 &&
+        request.frequency_max_hz == 0.0;
+    if (!no_window &&
+        !(request.frequency_max_hz > request.frequency_min_hz)) {
+        return false;
+    }
+    *out_has_window = !no_window;
+    return true;
+}
+
 } // namespace
 
 FloquetModalSolverAdmission admit_floquet_modal_request(
@@ -102,8 +148,10 @@ FloquetModalSolverAdmission admit_floquet_modal_request(
     const SLEPcTinyGyrotropicModalEigenRequest &spectral_request) noexcept
 {
     FloquetModalSolverAdmission admission{};
-    admission.frequency_window = spectral_request.frequency_max_hz >
-        spectral_request.frequency_min_hz;
+    if (!frequency_window_is_valid(spectral_request, &admission.frequency_window)) {
+        admission.reason = "floquet_modal_requires_valid_frequency_window";
+        return admission;
+    }
     admission.dynamic_demag_k = request.operator_request.include_demag != 0;
     if (request.execution_target == ModalExecutionTarget::production_gpu) {
         admission.reason = "floquet_modal_gpu_lane_not_owned_by_cpu_solver";
@@ -159,8 +207,10 @@ FloquetModalSolverAdmission admit_floquet_modal_sparse_request(
     const SLEPcSparseGyrotropicModalEigenRequest &spectral_request) noexcept
 {
     FloquetModalSolverAdmission admission{};
-    admission.frequency_window = spectral_request.frequency_max_hz >
-        spectral_request.frequency_min_hz;
+    if (!frequency_window_is_valid(spectral_request, &admission.frequency_window)) {
+        admission.reason = "floquet_modal_requires_valid_frequency_window";
+        return admission;
+    }
     if (request.execution_target == ModalExecutionTarget::production_gpu) {
         admission.reason = "floquet_modal_gpu_lane_not_owned_by_cpu_solver";
         return admission;
