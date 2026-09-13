@@ -9,7 +9,7 @@ Realizacja [planu S00–S12](2026-09-12-eigensolve-dispersion-nonzero-k-plan.md)
 - Baza `master`: `5084a94ed14b151fc865e8def5a5c28401e98b44`.
 - Branch: `codex/eigensolve-dispersion-plan-20260912`.
 - Worktree: `C:/git/fullmag/worktrees/eigensolve-dispersion-plan-20260912`.
-- Ostatni zapisany kodowy przyrost: `de72a5b1f` (`fix(eigensolve): validate Floquet modal payloads`), nad właścicielem solvera `80736831e`, routingiem dynamicznego demag-k `e3fa509db`, zmianą nodalnego `Ms` `c511cb413`, testem wymuszonego GPU `71ce348b0`, routingiem Γ `1114e1aa0` i podłączeniem providera `f2acf7b9b425733899bdfde63cb0566d16d74a59`.
+- Ostatni zapisany kodowy przyrost: `bed355f41` (`fix(eigensolve): preserve phase convention in Floquet modal handoff`), nad walidacją payloadu `de72a5b1f`, właścicielem solvera `80736831e`, routingiem dynamicznego demag-k `e3fa509db`, zmianą nodalnego `Ms` `c511cb413`, testem wymuszonego GPU `71ce348b0`, routingiem Γ `1114e1aa0` i podłączeniem providera `f2acf7b9b425733899bdfde63cb0566d16d74a59`.
 - Właściciel: `codex:01a0941c-eb15-7261-a7ee-7cf099385525`.
 - Rejestr: `eigensolve-dispersion-plan-20260-c5dfad6d7f548079`; reaktywowany do implementacji.
 - Fizyczne źródła COMSOL: oba lokalne podręczniki modułu mikromagnetycznego wymienione w planie; szczególnie s. PDF 21–28 i 40–43. Przykład RF jest wzorem sprzężenia pól, a nie gotowym dowodem modalnym.
@@ -401,3 +401,20 @@ Ponowiona kompilacja MSVC i uruchomienie izolowanego testu kontraktu zakończył
 się exit 0; zmodyfikowany adapter produkcyjny także skompilował się exit 0.
 Przyrost nie zmienia granicy kwalifikacji: managed MFEM/SLEPc, fizyczny
 residual, zbieżność, porównania COMSOL/TetraX, UI i GPU są nadal **NOT VERIFIED**.
+
+### Konwencja fazy i okno częstotliwości w handoffie SLEPc — `bed355f41`
+
+Produkcja przekazuje teraz `ModalEigenRequest.phase_convention` do wszystkich
+czterech konstrukcji żądania SLEPc: dense nearest, dense window, sparse nearest
+i sparse window. Wewnętrzny request CSR ma ten sam jawny token i propaguje go do
+wspólnego adaptera, więc `exp(+iωt)` oraz `exp(-iωt)` nie są przypadkiem
+zamieniane przez wartość domyślną. Właściciel Floqueta odrzuca także ujemne,
+nieskończone i odwrócone okna; `(0,0)` pozostaje jawnie rozpoznanym trybem bez
+okna, a dodatnie `max > min` jest oznaczane jako wybrane okno.
+
+Regresje obejmują odwrócone i ujemne okno oraz poprawne okno finite; bezpośrednia
+kompilacja MSVC z `FULLMAG_HAS_MFEM_STACK=0` dla właściciela, testu, adaptera
+SLEPc i adaptera produkcyjnego zakończyła się exit 0, a zlinkowany
+`floquet_modal_solver_test.exe` zakończył się exit 0. Jest to dowód kontraktu
+źródłowego; managed SLEPc, residual, fizyczne `f(k)`, porównania COMSOL/TetraX,
+UI, GPU i integracja PR pozostają **NOT VERIFIED**.
