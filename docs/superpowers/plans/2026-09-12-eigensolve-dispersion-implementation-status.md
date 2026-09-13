@@ -509,3 +509,12 @@ przechodzą (exit 0), adapter production_cpu_modal_eigen.cpp kompiluje się
 MSVC bez MFEM (exit 0). To nie jest wykonanie SLEPc ani końcowa kwalifikacja.
 Nadal do wykonania: geometryczne BC/pełna siatka, binary publikacja potencjału
 przez runner, contour i managed/physics V9. R02 pozostaje częściowe.
+
+### R03/R05 — naprawa pokrycia recepty i wznowienie rejestru
+
+Na bazie 71a98514c410ebac82a610ccc2a17ff172533a23 rozszerzono managed recipe
+do siedmiu kontraktów Floquet, ustawiono CPU realization i oddzielny CMake
+build directory, poprawiono czas życia LD_LIBRARY_PATH dla wszystkich testów.
+`just --show`, Bash syntax i porównanie targetów z CMake: PASS (7/7).
+Nie uruchomiono jeszcze kompilacji w kolejce; receipt i fizyka pozostają otwarte.
+Oficjalny resolver register: exit 0, poprawny pełny SHA i aktywny właściciel.

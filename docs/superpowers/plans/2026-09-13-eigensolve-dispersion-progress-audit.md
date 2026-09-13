@@ -27,7 +27,7 @@ zamkniętej bramki naukowej.
 | S01 | ADR 0031, rozdział 3D/2.5D, faza, mapowanie lokalnego manuala COMSOL, noty i source-map | Review całej semantyki, spójność capability, zamrożone kryteria naukowe | Częściowy |
 | S02 | Walidacja k/ID, zachowanie branches/sample_selector/include_branch_table w Python→IR, wąski routing CPU, Γ, forced-GPU reject | Kompletny round-trip publicznego scenariusza, realizacja 2.5D, testy wszystkich konsumentów | Częściowy |
 | S03 | FloquetTangentProlongation, operator C†AC, walidacja payloadów | Pełny natywny opis problemu i skalowalne assembly magnetyczne; MFEM V0/V1 | Częściowy |
-| S04 | Bounded Schur, bloki MFEM, nodalne Ms, osobna trasa K0/non-k0, diagnostyka residualu | R01/R02, skalowalny owner, gauge, rekonstrukcja pełnego układu, V2/V3/V9 | Częściowy, błąd algebraiczny |
+| S04 | Bounded Schur, bloki MFEM, nodalne Ms, osobna trasa K0/non-k0, diagnostyka residualu | R01/R02, skalowalny owner, gauge, rekonstrukcja pełnego układu, V2/V3/V9 | Częściowy; R01 naprawione źródłowo |
 | S05 | Właściciel dense/sparse Floquet, handoff fazy/okna, progress/cancel i partial | Managed SLEPc, kompletność okna, cache/resume, pełny residual | Częściowy |
 | S06 | Hungarian, luki, overlap ważony masą FE; zapisane regresje | Obwiednie w wspólnej bazie, degeneracje/SVD, restart i crossing na fizycznych modach | Częściowy |
 | S07 | Selekcja pól/gałęzi, sample/raw-mode ID, rozdział osi k i pola, manifesty | API/OpenAPI i binary consumers, partial/resume end-to-end, wyniki realnego solve | Częściowy |
@@ -196,3 +196,20 @@ przechodzą (exit 0), adapter production_cpu_modal_eigen.cpp kompiluje się
 MSVC bez MFEM (exit 0). To nie jest wykonanie SLEPc ani końcowa kwalifikacja.
 Nadal do wykonania: geometryczne BC/pełna siatka, binary publikacja potencjału
 przez runner, contour i managed/physics V9. R02 pozostaje częściowe.
+
+### Aktualizacja R03/R05 — komplet recepty i rejestr
+
+Recepta `verify-fem-modal-floquet-airbox-cpu` obejmuje teraz wszystkie siedem
+zarejestrowanych kontraktów Floquet, w tym modal solver, scalar Bloch i przekrój.
+CTest odrzuca brak testów; biblioteki współdzielone są dostępne dla całej serii.
+Konfiguracja ma MFEM/SLEPc ON, Fullmag FEM GPU OFF i oddzielny katalog CMake
+w resolverowym build root. Obraz fem-gpu służy jako kompletny toolchain
+(z CUDA-linked MFEM), a nie jako dowód urządzenia solve.
+Sprawdzenie parsera just, składni Bash i kompletności siedmiu targetów: PASS.
+To naprawa źródeł recepty, nie receipt wykonania ani scenariusz f(k).
+
+R05b: oficjalny `fullmag_storage.py register` zakończył się exit 0 i odtworzył
+HEAD `71a98514c410ebac82a610ccc2a17ff172533a23`, branch, właściciela oraz stan
+active istniejącego worktree. Wrapper just błędnie kierował operację metadanych
+przez blokadę heavy build; bezpośredni resolver zachował własny build_lock.
+Rejestr należy ponownie zamknąć tym samym API po ostatnim commicie zadania.

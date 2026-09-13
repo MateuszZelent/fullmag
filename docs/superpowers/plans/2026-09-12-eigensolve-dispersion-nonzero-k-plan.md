@@ -297,7 +297,7 @@ Szczegóły źródeł, kontrprzykładu i akceptacji: [R01–R05](2026-09-13-eige
 - [x] S02.a: walidacja k/ID i przeniesienie selektorów Python→IR.
 - [x] S06.a: Hungarian, luki i metryka FE z testami kontraktów.
 - [x] S07.a: sample/raw-mode ID, selekcja pól i rozdział osi k/bias-field.
-- [x] S04.a: bounded provider oraz osobna trasa K0/non-k0 — kod zapisany, błąd R01 otwarty.
+- [x] S04.a: bounded provider oraz osobna trasa K0/non-k0 — kod zapisany; R01 naprawione źródłowo, managed dowód otwarty.
 - [x] S05.a: właściciel Floquet, walidacja payloadu/k/okna i handoff fazy.
 - [x] S09.a: bounded provider i elementowy assembler przekroju — prototyp.
 - [x] S04.R01a (P1): regresja wielokrotnego pivotowania, naprawa LU solve, Schur oracle; natywny MSVC RED→GREEN.
@@ -308,10 +308,12 @@ Szczegóły źródeł, kontrprzykładu i akceptacji: [R01–R05](2026-09-13-eige
 - [x] S05.R02a: owned bloki i helper rekonstrukcji kompleksowego potencjału; izolowany test passed.
 - [x] S05.R02b1: podłączenie dense nearest/window do rekonstrukcji real-split i kontroli oryginalnego równania magnetycznego; natywny JSON per-mode. Test oracle i diagnostyczna kompilacja adaptera passed.
 - [ ] S05.R02b2: rozwinięcie na pełnej siatce, geometryczne BC, binary publikacja runnera, contour i managed/physics V9.
-- [ ] S12.R03 (P1): naprawa trasy runnera; targety modal/cross-section i dokładny receipt MFEM/SLEPc.
+- [x] S12.R03a: recepta obejmuje siedem kontraktów Floquet, w tym modal/cross-section; składnia i zgodność targetów sprawdzone.
+- [ ] S12.R03b (P1): zgodny klient/profil kolejki, dokładny receipt MFEM/SLEPc i scenariusz f(k).
 - [ ] S03.R04/S04.R04 (P1): pełny native problem i skalowalny operator demag-k.
 - [x] S12.R05a: aktualizacja audytu/statusów bez awansu kwalifikacji.
-- [ ] S12.R05b: uzgodnienie rejestru storage z rzeczywistym pełnym SHA.
+- [x] S12.R05b1: rejestr naprawiony oficjalnym resolverem dla 71a98514c410ebac82a610ccc2a17ff172533a23.
+- [ ] S12.R05b2: końcowa aktualizacja rejestru po ostatnim commicie i integracji.
 - [ ] S06.b: podprzestrzenie zdegenerowane, faza obwiedni, crossing/restart.
 - [ ] S07.b/S08: API/OpenAPI, realne artefakty i przepływ browser/FMS.
 - [ ] S09.b: typed realization/routing i porównanie TetraX/3D.
