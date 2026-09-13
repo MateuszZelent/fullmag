@@ -45,6 +45,7 @@ CONFIG_SCHEMA = "fullmag.local-runner.container.v1"
 SECRET_SCHEMA = "fullmag.local-runner.container-secret.v1"
 CONTAINER_NAME = "Fullmag_build_runner"
 CONTAINER_PORT = _resolve_env_port(48765)
+LEGACY_CONTAINER_PORT = 8765
 CONTAINER_STORAGE_ROOT = "/storage"
 CONTAINER_CONFIG_PATH = "/control/config.json"
 DOCKER_SOCKET_PATH = "/var/run/docker.sock"
@@ -552,7 +553,13 @@ def _attest(
 
     expected_port = str(public["port"])
     bindings = host.get("PortBindings")
-    expected_container_ports = {f"{public['port']}/tcp", f"{CONTAINER_PORT}/tcp"}
+    expected_container_ports = {
+        f"{public['port']}/tcp",
+        f"{CONTAINER_PORT}/tcp",
+        f"{LEGACY_CONTAINER_PORT}/tcp",
+        "48765/tcp",
+        "8765/tcp",
+    }
     if not isinstance(bindings, Mapping) or not set(bindings).issubset(expected_container_ports) or len(bindings) != 1:
         raise ContainerClientError("Coordinator port binding set mismatch")
     binding_key = next(iter(bindings))

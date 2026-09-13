@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
+import sys
 import threading
 import time
 import uuid
@@ -26,6 +28,9 @@ from local_runner.retention import plan as retention_plan
 _DEFAULT_POLICY = {
     "version": "1.0",
     "mode": "preview",
+    "mode_supported": ["preview"],
+    "automatic_mode_available": False,
+    "notice": "Wszystkie operacje retencji działają w bezpiecznym trybie podglądu (preview); wykonawca automatycznego usuwania nie jest włączony.",
     "ttl_success_hours": 24,
     "ttl_failure_hours": 168,
     "ttl_orphan_hours": 24,
@@ -40,10 +45,24 @@ _DEFAULT_POLICY = {
 
 _MAX_EVENTS = 500
 _MAX_METRIC_SAMPLES = 120
+_REDACT_PATTERN = re.compile(r"(?i)(token|bearer|secret|password|lease_token)[:=\s]+([^\s,]+)")
 
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+_REPARSE_POINT = 0x400
+
+
+def _is_reparse_or_symlink(path: Path | str) -> bool:
+    try:
+        info = os.lstat(path)
+    except (FileNotFoundError, OSError):
+        return True
+    if stat.S_ISLNK(info.st_mode):
+        return True
+    return bool(getattr(info, "st_file_attributes", 0) & _REPARSE_POINT)
 
 
 def get_process_rss_bytes(pid: int | None = None) -> int | None:
@@ -246,6 +265,8 @@ class ObservabilityHub:
         self._events: deque[dict[str, Any]] = deque(maxlen=_MAX_EVENTS)
         self._metric_samples: deque[dict[str, Any]] = deque(maxlen=_MAX_METRIC_SAMPLES)
         self._plans: dict[str, dict[str, Any]] = {}
+        self._resources_cache: dict[str, Any] | None = None
+        self._resources_cache_time: float = 0.0
         self._init_default_events()
         self._init_metrics_history()
 
@@ -293,8 +314,10 @@ class ObservabilityHub:
             except Exception:
                 pass
 
-        if not self._metric_samples:
+        try:
             self.sample_metrics()
+        except Exception:
+            pass
 
     def record_event(
         self,
@@ -309,18 +332,32 @@ class ObservabilityHub:
         now: str | None = None,
     ) -> dict[str, Any]:
         with self._lock:
+            redacted_message = _REDACT_PATTERN.sub(r"\1=***", message)
             record = {
                 "id": uuid.uuid4().hex[:12],
                 "timestamp": now or _utc_now_iso(),
                 "level": level.upper(),
                 "event": event,
-                "message": message,
+                "message": redacted_message,
                 "job_id": job_id,
                 "profile": profile,
                 "stage": stage,
                 "duration_seconds": duration,
             }
             self._events.append(record)
+
+            # Log structured redacted event to stdout for Docker / container logs
+            log_line = f"[{record['timestamp']}] [{record['level']}] {record['event']}: {record['message']}"
+            if job_id:
+                log_line += f" (job={job_id})"
+            if stage:
+                log_line += f" (stage={stage})"
+            try:
+                sys.stdout.write(log_line + "\n")
+                sys.stdout.flush()
+            except Exception:
+                pass
+
             return record
 
     def sample_metrics(self) -> dict[str, Any]:
@@ -329,6 +366,7 @@ class ObservabilityHub:
             measurement = self._take_real_measurement()
             sample = {
                 "timestamp": now_iso,
+                "scope": "coordinator",
                 "disk_free_gb": measurement["disk_free_gb"],
                 "storage_growth_mb": measurement["storage_growth_mb"],
                 "ram_mb": measurement["ram_mb"],
@@ -355,6 +393,26 @@ class ObservabilityHub:
 
     def get_metrics_trends(self) -> list[dict[str, Any]]:
         with self._lock:
+            policy = self.get_retention_policy()
+            interval = float(policy.get("disk_sample_interval_seconds", 5))
+            need_sample = False
+            if not self._metric_samples:
+                need_sample = True
+            else:
+                last_ts = self._metric_samples[-1].get("timestamp")
+                if last_ts:
+                    try:
+                        last_dt = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+                        now_dt = datetime.now(timezone.utc)
+                        if (now_dt - last_dt).total_seconds() >= interval:
+                            need_sample = True
+                    except Exception:
+                        need_sample = True
+            if need_sample:
+                try:
+                    self.sample_metrics()
+                except Exception:
+                    pass
             return list(self._metric_samples)
 
     # -------------------------------------------------------------------------
@@ -373,14 +431,56 @@ class ObservabilityHub:
 
     def set_retention_policy(self, updates: Mapping[str, Any]) -> dict[str, Any]:
         current = self.get_retention_policy()
-        allowed_keys = set(_DEFAULT_POLICY) - {"version"}
-        for k, v in updates.items():
-            if k in allowed_keys:
-                current[k] = v
+
+        # Validate numeric ranges
+        for num_key in (
+            "ttl_success_hours",
+            "ttl_failure_hours",
+            "ttl_orphan_hours",
+            "ttl_sources_hours",
+            "ttl_logs_days",
+            "min_artifacts_to_keep",
+            "min_free_space_gib",
+            "disk_sample_interval_seconds",
+        ):
+            if num_key in updates:
+                try:
+                    val = float(updates[num_key])
+                    if val < 0 or not math.isfinite(val):
+                        raise ValueError(f"{num_key} must be non-negative")
+                    current[num_key] = int(val) if num_key in ("min_artifacts_to_keep", "ttl_logs_days", "disk_sample_interval_seconds") else val
+                except (ValueError, TypeError):
+                    pass
+
+        for thresh_key in ("disk_warning_threshold_gib", "disk_critical_threshold_gib"):
+            if thresh_key in updates:
+                try:
+                    val = float(updates[thresh_key])
+                    if val <= 0 or not math.isfinite(val):
+                        raise ValueError(f"{thresh_key} must be positive")
+                    current[thresh_key] = val
+                except (ValueError, TypeError):
+                    pass
+
+        if "mode" in updates:
+            requested_mode = str(updates["mode"]).strip().lower()
+            if requested_mode == "automatic":
+                # Honest notification: automatic cleanup scheduler is not attached
+                current["mode"] = "preview"
+                current["requested_mode"] = "automatic"
+                current["mode_status"] = "not_implemented"
+                current["mode_notice"] = "Tryb automatyczny jest niedostępny (brak aktywnego wykonawcy w tle). Pozostawiono tryb preview."
+                self.record_event("WARN", "policy_mode_rejected", "Automatic retention mode requested but rejected: scheduler not enabled, remaining in preview mode")
+            elif requested_mode in ("preview", "dry-run"):
+                current["mode"] = "preview"
+                current["mode_status"] = "implemented"
+                current.pop("mode_notice", None)
+
         current["updated_at"] = _utc_now_iso()
         policy_path = self.storage / "index" / "retention-policy.json"
         policy_path.parent.mkdir(parents=True, exist_ok=True)
         atomic_json(policy_path, current)
+        self._resources_cache = None
         self.record_event("INFO", "policy_updated", "Retention and storage policy updated by operator")
         return current
 
@@ -418,6 +518,7 @@ class ObservabilityHub:
             path = self._pinned_path()
             path.parent.mkdir(parents=True, exist_ok=True)
             atomic_json(path, pinned)
+            self._resources_cache = None
             return {"resource_id": resource_id, "pinned": pin, "reason": reason}
 
     # -------------------------------------------------------------------------
@@ -425,9 +526,9 @@ class ObservabilityHub:
     # -------------------------------------------------------------------------
     def get_storage_volumes(self) -> list[dict[str, Any]]:
         policy = self.get_retention_policy()
-        warn_gib = int(policy.get("disk_warning_threshold_gib", 30))
-        crit_gib = int(policy.get("disk_critical_threshold_gib", 10))
-        min_free_gib = int(policy.get("min_free_space_gib", 8))
+        warn_gib = float(policy.get("disk_warning_threshold_gib", 30))
+        crit_gib = float(policy.get("disk_critical_threshold_gib", 10))
+        min_free_gib = float(policy.get("min_free_space_gib", 8))
 
         volumes = []
         try:
@@ -435,9 +536,9 @@ class ObservabilityHub:
             total = usage.total
             used = usage.used
             free = usage.free
-            warning_threshold = max(int(0.15 * total), warn_gib * 1024 * 1024 * 1024)
-            critical_threshold = max(int(0.05 * total), crit_gib * 1024 * 1024 * 1024)
-            reserved_bytes = min_free_gib * 1024 * 1024 * 1024  # Policy-configured build reserve
+            warning_threshold = max(int(0.15 * total), int(warn_gib * 1024 * 1024 * 1024))
+            critical_threshold = max(int(0.05 * total), int(crit_gib * 1024 * 1024 * 1024))
+            reserved_bytes = int(min_free_gib * 1024 * 1024 * 1024)
             status = "healthy"
             if free <= critical_threshold:
                 status = "critical"
@@ -450,7 +551,7 @@ class ObservabilityHub:
             warning_threshold = None
             critical_threshold = None
             reserved_bytes = None
-            status = "niedostępne"
+            status = "unavailable"
 
         volumes.append({
             "id": "storage-root",
@@ -467,77 +568,120 @@ class ObservabilityHub:
             "measured_at": _utc_now_iso(),
         })
 
-        # Add Docker VM / host backing volume representation with real measurements
+        # Probe Docker VM / host backing volume ONLY if a distinct path actually exists
         docker_path, docker_name, docker_fs = _probe_docker_root(self.storage)
+        is_distinct = False
         try:
-            d_usage = shutil.disk_usage(docker_path)
-            d_total = d_usage.total
-            d_used = d_usage.used
-            d_free = d_usage.free
-            d_warn = max(int(0.15 * d_total), warn_gib * 1024 * 1024 * 1024)
-            d_crit = max(int(0.05 * d_total), crit_gib * 1024 * 1024 * 1024)
-            d_status = "healthy"
-            if d_free <= d_crit:
-                d_status = "critical"
-            elif d_free <= d_warn:
-                d_status = "warning"
+            if os.path.exists(docker_path):
+                try:
+                    is_distinct = not os.path.samefile(docker_path, str(self.storage))
+                except (OSError, ValueError):
+                    is_distinct = Path(docker_path).resolve() != self.storage.resolve()
         except Exception:
-            d_total = None
-            d_used = None
-            d_free = None
-            d_warn = None
-            d_crit = None
-            d_status = "niedostępne"
+            is_distinct = False
 
-        volumes.append({
-            "id": "docker-backing-vhdx",
-            "name": docker_name,
-            "mount_point": docker_path,
-            "filesystem": docker_fs or "ext4",
-            "total_bytes": d_total,
-            "used_bytes": d_used,
-            "free_bytes": d_free,
-            "reserved_bytes": 0 if d_total else None,
-            "warning_threshold_bytes": d_warn,
-            "critical_threshold_bytes": d_crit,
-            "status": d_status,
-            "measured_at": _utc_now_iso(),
-        })
+        if is_distinct:
+            try:
+                d_usage = shutil.disk_usage(docker_path)
+                d_total = d_usage.total
+                d_used = d_usage.used
+                d_free = d_usage.free
+                d_warn = max(int(0.15 * d_total), int(warn_gib * 1024 * 1024 * 1024))
+                d_crit = max(int(0.05 * d_total), int(crit_gib * 1024 * 1024 * 1024))
+                d_status = "healthy"
+                if d_free <= d_crit:
+                    d_status = "critical"
+                elif d_free <= d_warn:
+                    d_status = "warning"
+            except Exception:
+                d_total = None
+                d_used = None
+                d_free = None
+                d_warn = None
+                d_crit = None
+                d_status = "unavailable"
+
+            volumes.append({
+                "id": "docker-backing-vhdx",
+                "name": docker_name,
+                "mount_point": docker_path,
+                "filesystem": docker_fs or "ext4",
+                "total_bytes": d_total,
+                "used_bytes": d_used,
+                "free_bytes": d_free,
+                "reserved_bytes": 0 if d_total else None,
+                "warning_threshold_bytes": d_warn,
+                "critical_threshold_bytes": d_crit,
+                "status": d_status,
+                "measured_at": _utc_now_iso(),
+            })
 
         return volumes
 
     def get_storage_resources(self, queue=None) -> dict[str, Any]:
         """Aggregate categorized storage inventory with protection rationales."""
+        now = time.time()
+        if self._resources_cache and (now - self._resources_cache_time < 10.0) and queue is None:
+            return self._resources_cache
+
         pinned = self.get_pinned()
         policy = self.get_retention_policy()
         ttl_success_h = float(policy.get("ttl_success_hours", 24))
         ttl_failure_h = float(policy.get("ttl_failure_hours", 168))
 
+        raw_engine_plan = {}
+        engine_candidates: dict[tuple[str, str], Mapping[str, Any]] = {}
+        engine_retained: dict[tuple[str, str], Mapping[str, Any]] = {}
+        if queue is not None:
+            jobs = []
+            try:
+                if hasattr(queue, 'connection') and getattr(queue, 'path', None) and Path(queue.path).is_file():
+                    with queue.connection() as db:
+                        rows = db.execute("SELECT * FROM jobs ORDER BY sequence DESC").fetchall()
+                        jobs = [queue.record(row) for row in rows]
+                else:
+                    jobs = queue.list(owner=self.owner, limit=1000)
+            except Exception:
+                jobs = []
+            if jobs:
+                try:
+                    raw_engine_plan = retention_plan(
+                        str(self.storage), jobs, now, success_hours=ttl_success_h, failed_hours=ttl_failure_h
+                    )
+                    for c in raw_engine_plan.get("candidates", []):
+                        if c.get("worktree_id") and c.get("job_id"):
+                            engine_candidates[(c["worktree_id"], c["job_id"])] = c
+                    for r in raw_engine_plan.get("retained", []):
+                        if r.get("worktree_id") and r.get("job_id"):
+                            engine_retained[(r["worktree_id"], r["job_id"])] = r
+                except Exception:
+                    pass
+
         categories: dict[str, dict[str, Any]] = {
-            "source_capsules": {"name": "Source Capsules", "logical_bytes": 0, "file_count": 0, "items": []},
-            "execution": {"name": "Execution Trees", "logical_bytes": 0, "file_count": 0, "items": []},
-            "build_targets": {"name": "Build Targets", "logical_bytes": 0, "file_count": 0, "items": []},
-            "dependency_cache": {"name": "Dependency Cache", "logical_bytes": 0, "file_count": 0, "items": []},
-            "artifacts": {"name": "Artifacts & Receipts", "logical_bytes": 0, "file_count": 0, "items": []},
-            "logs": {"name": "Build Logs", "logical_bytes": 0, "file_count": 0, "items": []},
-            "coordinator_data": {"name": "Coordinator Index & DB", "logical_bytes": 0, "file_count": 0, "items": []},
-            "docker_resources": {"name": "Docker Layers", "logical_bytes": 0, "file_count": 0, "items": []},
-            "unassigned": {"name": "Unassigned", "logical_bytes": 0, "file_count": 0, "items": []},
+            "source_capsules": {"name": "Source Capsules", "logical_bytes": 0, "file_count": 0, "had_errors": False, "items": []},
+            "execution": {"name": "Execution Trees", "logical_bytes": 0, "file_count": 0, "had_errors": False, "items": []},
+            "build_targets": {"name": "Build Targets", "logical_bytes": 0, "file_count": 0, "had_errors": False, "items": []},
+            "dependency_cache": {"name": "Dependency Cache", "logical_bytes": 0, "file_count": 0, "had_errors": False, "items": []},
+            "artifacts": {"name": "Artifacts & Receipts", "logical_bytes": 0, "file_count": 0, "had_errors": False, "items": []},
+            "logs": {"name": "Build Logs", "logical_bytes": 0, "file_count": 0, "had_errors": False, "items": []},
+            "coordinator_data": {"name": "Coordinator Index & DB", "logical_bytes": 0, "file_count": 0, "had_errors": False, "items": []},
+            "docker_resources": {"name": "Docker Layers", "logical_bytes": 0, "file_count": 0, "had_errors": False, "items": []},
+            "unassigned": {"name": "Unassigned", "logical_bytes": 0, "file_count": 0, "had_errors": False, "items": []},
         }
 
         # Inspect runs directory
         runs_dir = self.storage / "runs"
         if runs_dir.is_dir():
             for wt_dir in runs_dir.iterdir():
-                if not wt_dir.is_dir():
+                if not wt_dir.is_dir() or _is_reparse_or_symlink(wt_dir):
                     continue
                 for run_item in wt_dir.iterdir():
-                    if not run_item.is_dir():
+                    if not run_item.is_dir() or _is_reparse_or_symlink(run_item):
                         continue
                     item_name = run_item.name
                     # Check subtrees: source, execution, artifacts
                     src_tree = run_item / "source"
-                    if src_tree.is_dir():
+                    if src_tree.is_dir() and not _is_reparse_or_symlink(src_tree):
                         size = _fast_dir_size(src_tree)
                         res_id = f"src-{wt_dir.name}-{item_name}"
                         is_pin = (res_id in pinned) or (item_name in pinned)
@@ -545,6 +689,8 @@ class ObservabilityHub:
                         pin_reason = pin_info.get("reason", "Przypięte przez operatora")
                         categories["source_capsules"]["logical_bytes"] += size[0]
                         categories["source_capsules"]["file_count"] += size[1]
+                        if size[2]:
+                            categories["source_capsules"]["had_errors"] = True
                         categories["source_capsules"]["items"].append({
                             "resource_id": res_id,
                             "name": f"{wt_dir.name}/{item_name}/source",
@@ -556,10 +702,11 @@ class ObservabilityHub:
                             "why_retained": pin_reason if is_pin else "Aktywny capture lub referencja zadania",
                             "eligible_for_retention": False,
                             "reclaimable_bytes": 0,
+                            "had_errors": size[2],
                         })
 
                     exec_tree = run_item / "execution"
-                    if exec_tree.is_dir():
+                    if exec_tree.is_dir() and not _is_reparse_or_symlink(exec_tree):
                         size = _fast_dir_size(exec_tree)
                         res_id = f"exec-{wt_dir.name}-{item_name}"
                         is_pin = (res_id in pinned) or (item_name in pinned)
@@ -567,39 +714,24 @@ class ObservabilityHub:
                         pin_reason = pin_info.get("reason", "Przypięte przez operatora")
                         categories["execution"]["logical_bytes"] += size[0]
                         categories["execution"]["file_count"] += size[1]
+                        if size[2]:
+                            categories["execution"]["had_errors"] = True
 
-                        job_rec = None
-                        if queue is not None:
-                            try:
-                                job_rec = queue.get(item_name)
-                            except Exception:
-                                job_rec = None
+                        cand = engine_candidates.get((wt_dir.name, item_name))
+                        ret = engine_retained.get((wt_dir.name, item_name))
 
                         if is_pin:
                             why = pin_reason
                             eligible = False
-                        elif job_rec is not None:
-                            state = job_rec.get("state")
-                            if state in ("running", "cancel_requested"):
-                                why = "Aktywny build (slot zajęty)"
-                                eligible = False
-                            elif state in ("succeeded", "failed", "cancelled"):
-                                term_time = job_rec.get("updated_at") or job_rec.get("created_at") or time.time()
-                                ttl_h = ttl_success_h if state == "succeeded" else ttl_failure_h
-                                expiry = term_time + ttl_h * 3600
-                                if time.time() < expiry:
-                                    rem_h = max(0, int((expiry - time.time()) / 3600))
-                                    why = f"W oknie retencji ({rem_h}h do wygaśnięcia)"
-                                    eligible = False
-                                else:
-                                    why = "Upłynął okres retencji po zakończeniu zadania"
-                                    eligible = True
-                            else:
-                                why = f"Stan zadania: {state}"
-                                eligible = False
-                        else:
-                            why = "Osierocony katalog roboczy / upłynął okres retencji"
+                        elif cand is not None:
+                            why = f"Kwalifikuje się do retencji ({cand.get('reason', 'wygasła')})"
                             eligible = True
+                        elif ret is not None:
+                            why = f"Zachowane przez silnik ({ret.get('reason', 'chronione')})"
+                            eligible = False
+                        else:
+                            why = "Niezweryfikowany lub osierocony katalog - ochrona przed usunięciem"
+                            eligible = False
 
                         categories["execution"]["items"].append({
                             "resource_id": res_id,
@@ -612,6 +744,7 @@ class ObservabilityHub:
                             "why_retained": why,
                             "eligible_for_retention": eligible,
                             "reclaimable_bytes": size[0] if eligible else 0,
+                            "had_errors": size[2],
                         })
 
                     art_tree = run_item / "artifacts"
@@ -622,10 +755,13 @@ class ObservabilityHub:
                     log_bytes = 0
                     log_files = 0
                     log_paths = []
-                    if logs_dir and logs_dir.is_dir():
+                    log_had_errors = False
+                    if logs_dir and logs_dir.is_dir() and not _is_reparse_or_symlink(logs_dir):
                         ld_size = _fast_dir_size(logs_dir)
                         log_bytes += ld_size[0]
                         log_files += ld_size[1]
+                        if ld_size[2]:
+                            log_had_errors = True
                         log_paths.append(str(logs_dir))
                     if worker_log.is_file():
                         try:
@@ -634,7 +770,7 @@ class ObservabilityHub:
                             log_files += 1
                             log_paths.append(str(worker_log))
                         except Exception:
-                            pass
+                            log_had_errors = True
 
                     if log_bytes > 0 or log_files > 0:
                         res_id = f"log-{wt_dir.name}-{item_name}"
@@ -643,6 +779,8 @@ class ObservabilityHub:
                         pin_reason = pin_info.get("reason", "Przypięte przez operatora")
                         categories["logs"]["logical_bytes"] += log_bytes
                         categories["logs"]["file_count"] += log_files
+                        if log_had_errors:
+                            categories["logs"]["had_errors"] = True
                         categories["logs"]["items"].append({
                             "resource_id": res_id,
                             "name": f"{wt_dir.name}/{item_name}/logs",
@@ -654,11 +792,11 @@ class ObservabilityHub:
                             "why_retained": pin_reason if is_pin else "Dzienniki i logi etapów kompilacji",
                             "eligible_for_retention": False,
                             "reclaimable_bytes": 0,
+                            "had_errors": log_had_errors,
                         })
 
-                    if art_tree.is_dir():
+                    if art_tree.is_dir() and not _is_reparse_or_symlink(art_tree):
                         total_art = _fast_dir_size(art_tree)
-                        # Exclude logs_dir bytes from artifacts to prevent double counting
                         logs_in_art_bytes = _fast_dir_size(logs_dir)[0] if (logs_dir and logs_dir.is_dir()) else 0
                         logs_in_art_files = _fast_dir_size(logs_dir)[1] if (logs_dir and logs_dir.is_dir()) else 0
                         art_bytes = max(0, total_art[0] - logs_in_art_bytes)
@@ -670,6 +808,8 @@ class ObservabilityHub:
                         pin_reason = pin_info.get("reason", "Przypięte przez operatora")
                         categories["artifacts"]["logical_bytes"] += art_bytes
                         categories["artifacts"]["file_count"] += art_files
+                        if total_art[2]:
+                            categories["artifacts"]["had_errors"] = True
                         categories["artifacts"]["items"].append({
                             "resource_id": res_id,
                             "name": f"{wt_dir.name}/{item_name}/artifacts",
@@ -681,15 +821,16 @@ class ObservabilityHub:
                             "why_retained": pin_reason if is_pin else "Trwałe dowody builda i receipt",
                             "eligible_for_retention": False,
                             "reclaimable_bytes": 0,
+                            "had_errors": total_art[2],
                         })
 
         # Inspect builds directory
         builds_dir = self.storage / "builds"
         if builds_dir.is_dir():
             for b_item in builds_dir.iterdir():
-                if not b_item.is_dir():
+                if not b_item.is_dir() or _is_reparse_or_symlink(b_item):
                     continue
-                subdirs = [p for p in b_item.iterdir() if p.is_dir()]
+                subdirs = [p for p in b_item.iterdir() if p.is_dir() and not _is_reparse_or_symlink(p)]
                 if subdirs:
                     for s_item in subdirs:
                         size = _fast_dir_size(s_item)
@@ -699,6 +840,8 @@ class ObservabilityHub:
                         pin_reason = pin_info.get("reason", "Przypięte przez operatora")
                         categories["build_targets"]["logical_bytes"] += size[0]
                         categories["build_targets"]["file_count"] += size[1]
+                        if size[2]:
+                            categories["build_targets"]["had_errors"] = True
                         categories["build_targets"]["items"].append({
                             "resource_id": res_id,
                             "name": f"{b_item.name}/{s_item.name}",
@@ -710,6 +853,7 @@ class ObservabilityHub:
                             "why_retained": pin_reason if is_pin else "Trwały build target worktree/profilu",
                             "eligible_for_retention": False,
                             "reclaimable_bytes": 0,
+                            "had_errors": size[2],
                         })
                 else:
                     size = _fast_dir_size(b_item)
@@ -719,6 +863,8 @@ class ObservabilityHub:
                     pin_reason = pin_info.get("reason", "Przypięte przez operatora")
                     categories["build_targets"]["logical_bytes"] += size[0]
                     categories["build_targets"]["file_count"] += size[1]
+                    if size[2]:
+                        categories["build_targets"]["had_errors"] = True
                     categories["build_targets"]["items"].append({
                         "resource_id": res_id,
                         "name": b_item.name,
@@ -730,13 +876,14 @@ class ObservabilityHub:
                         "why_retained": pin_reason if is_pin else "Trwały build target worktree/profilu",
                         "eligible_for_retention": False,
                         "reclaimable_bytes": 0,
+                        "had_errors": size[2],
                     })
 
         # Inspect cache directory
         cache_dir = self.storage / "cache"
         if cache_dir.is_dir():
             for c_item in cache_dir.iterdir():
-                if c_item.is_dir():
+                if c_item.is_dir() and not _is_reparse_or_symlink(c_item):
                     size = _fast_dir_size(c_item)
                     res_id = f"cache-{c_item.name}"
                     is_pin = (res_id in pinned) or (c_item.name in pinned)
@@ -744,6 +891,8 @@ class ObservabilityHub:
                     pin_reason = pin_info.get("reason", "Przypięte przez operatora")
                     categories["dependency_cache"]["logical_bytes"] += size[0]
                     categories["dependency_cache"]["file_count"] += size[1]
+                    if size[2]:
+                        categories["dependency_cache"]["had_errors"] = True
                     categories["dependency_cache"]["items"].append({
                         "resource_id": res_id,
                         "name": c_item.name,
@@ -755,6 +904,7 @@ class ObservabilityHub:
                         "why_retained": pin_reason if is_pin else "Współdzielony cache zależności (Cargo/pnpm)",
                         "eligible_for_retention": False,
                         "reclaimable_bytes": 0,
+                        "had_errors": size[2],
                     })
 
         # Inspect index and locks directories (coordinator SQLite, configs, locks)
@@ -763,10 +913,12 @@ class ObservabilityHub:
             ("locks", "locks / coordinator", "Blokady współbieżności i wykonawcy"),
         ):
             d_path = self.storage / dir_name
-            if d_path.is_dir():
+            if d_path.is_dir() and not _is_reparse_or_symlink(d_path):
                 size = _fast_dir_size(d_path)
                 categories["coordinator_data"]["logical_bytes"] += size[0]
                 categories["coordinator_data"]["file_count"] += size[1]
+                if size[2]:
+                    categories["coordinator_data"]["had_errors"] = True
                 categories["coordinator_data"]["items"].append({
                     "resource_id": f"coordinator-{dir_name}",
                     "name": label,
@@ -778,19 +930,54 @@ class ObservabilityHub:
                     "why_retained": desc,
                     "eligible_for_retention": False,
                     "reclaimable_bytes": 0,
+                    "had_errors": size[2],
                 })
+
+        # Scan unassigned root items
+        known_roots = {"runs", "builds", "cache", "index", "locks"}
+        if self.storage.is_dir():
+            for root_child in self.storage.iterdir():
+                if root_child.name not in known_roots and not _is_reparse_or_symlink(root_child):
+                    if root_child.is_dir():
+                        size = _fast_dir_size(root_child)
+                        res_bytes, res_count, res_err = size[0], size[1], size[2]
+                    else:
+                        try:
+                            res_bytes = root_child.stat().st_size
+                            res_count = 1
+                            res_err = False
+                        except Exception:
+                            res_bytes, res_count, res_err = 0, 0, True
+                    categories["unassigned"]["logical_bytes"] += res_bytes
+                    categories["unassigned"]["file_count"] += res_count
+                    if res_err:
+                        categories["unassigned"]["had_errors"] = True
+                    categories["unassigned"]["items"].append({
+                        "resource_id": f"unassigned-{root_child.name}",
+                        "name": root_child.name,
+                        "category": "unassigned",
+                        "path": str(root_child),
+                        "size_bytes": res_bytes,
+                        "file_count": res_count,
+                        "pinned": False,
+                        "why_retained": "Nieskategoryzowany element katalogu głównego storage",
+                        "eligible_for_retention": False,
+                        "reclaimable_bytes": 0,
+                        "had_errors": res_err,
+                    })
 
         # Format breakdown summary
         summary = []
         all_items = []
         for cat_id, cat_data in categories.items():
             eligible_bytes = sum(i["reclaimable_bytes"] for i in cat_data["items"])
+            comp = "partial" if cat_data["had_errors"] else "complete"
             summary.append({
                 "category_id": cat_id,
                 "name": cat_data["name"],
                 "logical_bytes": cat_data["logical_bytes"],
                 "file_count": cat_data["file_count"],
-                "completeness": "complete",
+                "completeness": comp,
                 "eligible_cleanup_bytes": eligible_bytes,
                 "reclaimable_bytes": eligible_bytes,
                 "items_count": len(cat_data["items"]),
@@ -800,13 +987,21 @@ class ObservabilityHub:
         # Sort items descending by size
         all_items.sort(key=lambda x: x["size_bytes"], reverse=True)
 
-        return {
+        had_errors = any(s["completeness"] == "partial" for s in summary)
+        completeness = "partial" if had_errors else "complete"
+
+        result = {
             "categories": summary,
             "resources": all_items,
             "total_measured_bytes": sum(s["logical_bytes"] for s in summary),
             "total_reclaimable_bytes": sum(s["reclaimable_bytes"] for s in summary),
+            "completeness": completeness,
+            "had_errors": had_errors,
             "measured_at": _utc_now_iso(),
         }
+        self._resources_cache = result
+        self._resources_cache_time = now
+        return result
 
     # -------------------------------------------------------------------------
     # Retention Planning
@@ -816,42 +1011,106 @@ class ObservabilityHub:
             jobs = []
             if queue is not None:
                 try:
-                    jobs = queue.list(owner=self.owner, limit=1000)
+                    if hasattr(queue, 'connection') and getattr(queue, 'path', None) and Path(queue.path).is_file():
+                        with queue.connection() as db:
+                            rows = db.execute("SELECT * FROM jobs ORDER BY sequence DESC").fetchall()
+                            jobs = [queue.record(row) for row in rows]
+                    else:
+                        jobs = queue.list(owner=self.owner, limit=1000)
                 except Exception:
                     jobs = []
+
+            policy = self.get_retention_policy()
+            ttl_success_h = float(policy.get("ttl_success_hours", 24))
+            ttl_failure_h = float(policy.get("ttl_failure_hours", 168))
+            now = time.time()
 
             raw_plan = {}
             if jobs:
                 try:
-                    raw_plan = retention_plan(str(self.storage), jobs, time.time())
+                    raw_plan = retention_plan(str(self.storage), jobs, now, success_hours=ttl_success_h, failed_hours=ttl_failure_h)
                 except Exception as err:
-                    raw_plan = {"error": str(err)}
+                    raw_plan = {"error": str(err), "candidates": [], "retained": []}
 
-            inv = self.get_storage_resources(queue=queue)
+            pinned = self.get_pinned()
             plan_id = f"plan-{uuid.uuid4().hex[:8]}"
 
             candidates = []
-            retained = []
-            for item in inv["resources"]:
-                if item["eligible_for_retention"]:
-                    candidates.append({
-                        "resource_id": item["resource_id"],
-                        "name": item["name"],
-                        "path": item["path"],
-                        "size_bytes": item["size_bytes"],
-                        "reason": "Upłynął okres retencji po zakończeniu zadania",
+            pinned_retained = []
+            for c in raw_plan.get("candidates", []):
+                wt = c.get("worktree_id")
+                jid = c.get("job_id")
+                res_id = f"exec-{wt}-{jid}"
+                if res_id in pinned or jid in pinned:
+                    pin_info = pinned.get(res_id) or pinned.get(jid) or {}
+                    pin_reason = pin_info.get("reason", "Przypięte przez operatora")
+                    pinned_retained.append({
+                        "resource_id": res_id,
+                        "name": f"{wt}/{jid}/execution",
+                        "worktree_id": wt,
+                        "job_id": jid,
+                        "path": c.get("execution"),
+                        "size_bytes": c.get("bytes", 0),
+                        "why_retained": f"{pin_reason} (ochrona przed retencją)",
                     })
-                else:
-                    retained.append({
-                        "resource_id": item["resource_id"],
-                        "name": item["name"],
-                        "path": item["path"],
-                        "size_bytes": item["size_bytes"],
-                        "why_retained": item["why_retained"],
-                    })
+                    continue
+                candidates.append({
+                    "resource_id": res_id,
+                    "name": f"{wt}/{jid}/execution",
+                    "worktree_id": wt,
+                    "job_id": jid,
+                    "path": c.get("execution"),
+                    "size_bytes": c.get("bytes", 0),
+                    "reason": c.get("reason", "Upłynął okres retencji po zakończeniu zadania"),
+                })
+
+            retained = list(pinned_retained)
+            for r in raw_plan.get("retained", []):
+                wt = r.get("worktree_id")
+                jid = r.get("job_id")
+                res_id = f"exec-{wt}-{jid}"
+                retained.append({
+                    "resource_id": res_id,
+                    "name": f"{wt}/{jid}/execution" if wt and jid else "unknown",
+                    "worktree_id": wt,
+                    "job_id": jid,
+                    "path": r.get("execution"),
+                    "size_bytes": r.get("bytes", 0) or 0,
+                    "why_retained": r.get("reason", "Chronione przez silnik retencji"),
+                })
+
+            # Ensure all on-disk execution trees missing identity/journal or absent from raw_plan are protected
+            accounted_identities = {
+                (item.get("worktree_id"), item.get("job_id"))
+                for item in candidates + retained
+                if item.get("worktree_id") and item.get("job_id")
+            }
+            runs_dir = self.storage / "runs"
+            if runs_dir.is_dir() and not _is_reparse_or_symlink(runs_dir):
+                for wt_dir in sorted(runs_dir.iterdir()):
+                    if not wt_dir.is_dir() or _is_reparse_or_symlink(wt_dir):
+                        continue
+                    for job_dir in sorted(wt_dir.iterdir()):
+                        if not job_dir.is_dir() or _is_reparse_or_symlink(job_dir):
+                            continue
+                        ident = (wt_dir.name, job_dir.name)
+                        if ident not in accounted_identities:
+                            exec_dir = job_dir / "execution"
+                            if exec_dir.is_dir() and not _is_reparse_or_symlink(exec_dir):
+                                sz = _fast_dir_size(exec_dir)
+                                retained.append({
+                                    "resource_id": f"exec-{wt_dir.name}-{job_dir.name}",
+                                    "name": f"{wt_dir.name}/{job_dir.name}/execution",
+                                    "worktree_id": wt_dir.name,
+                                    "job_id": job_dir.name,
+                                    "path": str(exec_dir),
+                                    "size_bytes": sz[0],
+                                    "why_retained": "Niezweryfikowany lub osierocony katalog - ochrona przed usunięciem",
+                                })
+                                accounted_identities.add(ident)
 
             volumes = self.get_storage_volumes()
-            free_before = volumes[0]["free_bytes"] if volumes else 0
+            free_before = volumes[0]["free_bytes"] if volumes and volumes[0]["free_bytes"] is not None else 0
             estimated_reclaim = sum(c["size_bytes"] for c in candidates)
 
             plan_record = {
@@ -877,45 +1136,73 @@ class ObservabilityHub:
         with self._lock:
             plan = self._plans.get(plan_id)
             if not plan:
-                return {"applied": False, "error": "Plan not found or expired"}
+                return {
+                    "applied": False,
+                    "plan_id": plan_id,
+                    "status": "preview_only",
+                    "error": "Plan not found or expired",
+                    "reclaimed_bytes": 0,
+                }
 
-            # Retention apply is intentionally cautious: it confirms all identity
             self.record_event(
-                "INFO",
-                "retention_plan_applied",
-                f"Executed retention plan {plan_id} (simulated/applied in safe preview mode)",
+                "WARN",
+                "retention_plan_preview_only",
+                f"Retention plan {plan_id} requested for apply, but cleanup executor is not enabled. Kept in preview_only status.",
             )
-            plan["status"] = "applied"
-            plan["applied_at"] = _utc_now_iso()
+            plan["status"] = "preview_only"
+            plan["applied"] = False
+            plan["actual_reclaimed_bytes"] = 0
             return {
-                "applied": True,
+                "applied": False,
                 "plan_id": plan_id,
-                "reclaimed_bytes": plan["estimated_reclaimed_bytes"],
-                "message": f"Idempotent retention executed successfully for plan {plan_id}",
+                "status": "preview_only",
+                "error": "cleanup_executor_not_enabled",
+                "reclaimed_bytes": 0,
+                "message": "Operacja w trybie podglądu (preview_only): wykonawca automatycznego usuwania nie jest włączony (cleanup_executor_not_enabled).",
             }
 
 
-def _fast_dir_size(path: Path) -> tuple[int, int]:
+def _fast_dir_size(path: Path) -> tuple[int, int, bool]:
     """Calculate directory size in bytes and file count with safe traversal."""
     total_bytes = 0
     count = 0
+    had_errors = False
+
+    def on_walk_error(err: OSError) -> None:
+        nonlocal had_errors
+        had_errors = True
+
     try:
-        for root, _, files in os.walk(path):
+        if _is_reparse_or_symlink(path):
+            return 0, 0, True
+        for root, dirs, files in os.walk(path, onerror=on_walk_error):
+            pruned_dirs = []
+            for d in dirs:
+                full_d = Path(root) / d
+                if _is_reparse_or_symlink(full_d):
+                    had_errors = True
+                else:
+                    pruned_dirs.append(d)
+            dirs[:] = pruned_dirs
+
             for file_name in files:
                 try:
-                    p = os.path.join(root, file_name)
-                    stat = os.lstat(p)
-                    total_bytes += stat.st_size
+                    p = Path(root) / file_name
+                    if _is_reparse_or_symlink(p):
+                        had_errors = True
+                        continue
+                    stat_info = os.lstat(p)
+                    total_bytes += stat_info.st_size
                     count += 1
-                except (OSError, FileNotFoundError):
-                    pass
-    except (OSError, FileNotFoundError):
-        pass
-    return total_bytes, count
+                except (OSError, FileNotFoundError, PermissionError):
+                    had_errors = True
+    except (OSError, FileNotFoundError, PermissionError):
+        had_errors = True
+    return total_bytes, count, had_errors
 
 
 def build_job_timeline(job: Mapping[str, Any], storage_root: Path | str) -> list[dict[str, Any]]:
-    """Construct multi-stage timeline representation of a build job."""
+    """Construct multi-stage timeline representation of a build job with honest status."""
     created_at = job.get("created_at")
     started_at = job.get("started_at")
     updated_at = job.get("updated_at")
@@ -937,47 +1224,166 @@ def build_job_timeline(job: Mapping[str, Any], storage_root: Path | str) -> list
         return stages
 
     stages[0]["status"] = "succeeded"
-    stages[1]["status"] = "succeeded"
-    stages[1]["started_at"] = started_at or created_at
 
-    # Check for actual log artifacts on disk
     storage = Path(storage_root)
     worktree_id = job.get("worktree_id", "")
     job_id = job.get("job_id", "")
     job_dir = storage / "runs" / worktree_id / job_id if worktree_id and job_id else None
 
-    if job_dir and job_dir.exists():
-        logs_dir = job_dir / "artifacts" / "logs"
-        if logs_dir.exists():
-            if (logs_dir / "native-build.stdout.log").exists() or (logs_dir / "native-build.stderr.log").exists():
-                stages[2]["status"] = "succeeded"
-            if (logs_dir / "frontend-dependencies.stdout.log").exists() or (logs_dir / "frontend-dependencies.stderr.log").exists():
-                stages[3]["status"] = "succeeded"
-            if (logs_dir / "frontend-build.stdout.log").exists() or (logs_dir / "frontend-build.stderr.log").exists():
-                stages[4]["status"] = "succeeded"
+    journal = {}
+    receipt_data = None
+    worker_log_text = ""
 
-        receipt_file = job_dir / "artifacts" / "receipt.json"
-        if receipt_file.exists():
+    if job_dir and job_dir.exists():
+        coord_file = job_dir / "coordinator.json"
+        if coord_file.is_file():
+            try:
+                journal = json.loads(coord_file.read_text(encoding="utf-8"))
+            except Exception:
+                journal = {}
+
+        for r_path in (
+            job_dir / "artifacts" / "build-receipt.json",
+            job_dir / "artifacts" / "receipt.json",
+            job_dir / "receipt.json",
+        ):
+            if r_path.is_file():
+                try:
+                    loaded = json.loads(r_path.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        receipt_data = loaded
+                        break
+                except Exception:
+                    pass
+
+        worker_log_file = job_dir / "worker.log"
+        if worker_log_file.is_file():
+            try:
+                worker_log_text = worker_log_file.read_text(encoding="utf-8")
+            except Exception:
+                worker_log_text = ""
+
+    if not started_at and journal.get("started_at"):
+        started_at = journal["started_at"]
+
+    # Stage 1: prepare
+    stages[1]["status"] = "succeeded"
+    stages[1]["started_at"] = started_at or created_at
+    if started_at and created_at and isinstance(started_at, (int, float)) and isinstance(created_at, (int, float)):
+        stages[0]["duration_seconds"] = max(0.0, round(started_at - created_at, 2))
+
+    # Case A: We have a valid build receipt with recorded stages
+    if receipt_data and isinstance(receipt_data.get("stages"), list) and receipt_data["stages"]:
+        stage_map = {
+            "native-build": 2,
+            "frontend-dependencies": 3,
+            "frontend-build": 4,
+        }
+        for st_info in receipt_data["stages"]:
+            s_name = st_info.get("name")
+            if s_name in stage_map:
+                idx = stage_map[s_name]
+                s_code = st_info.get("exit_code")
+                stages[idx]["status"] = "succeeded" if s_code == 0 else "failed"
+                stages[idx]["started_at"] = st_info.get("started_at")
+                stages[idx]["exit_code"] = s_code
+                dur_ms = st_info.get("duration_ms")
+                if dur_ms is not None:
+                    stages[idx]["duration_seconds"] = round(dur_ms / 1000.0, 2)
+
+        # Stage 5: receipt-verification
+        if receipt_data.get("state") == "succeeded" and all(s.get("exit_code") == 0 for s in receipt_data["stages"]):
             stages[5]["status"] = "succeeded"
+            stages[5]["started_at"] = receipt_data.get("finished_at")
+        else:
+            stages[5]["status"] = "failed" if state == "failed" else "cancelled"
+
+        # Stage 6: result
+        stages[6]["status"] = state if state in ("succeeded", "failed", "cancelled") else "succeeded"
+        stages[6]["exit_code"] = exit_code if exit_code is not None else (0 if stages[6]["status"] == "succeeded" else 1)
+        return stages
+
+    # Case B: No complete build receipt yet (job is running or ended abnormally)
+    logs_dir = job_dir / "artifacts" / "logs" if job_dir else None
+
+    stage_prefixes = [
+        (2, "native-build"),
+        (3, "frontend-dependencies"),
+        (4, "frontend-build"),
+    ]
+
+    has_stage_log = {}
+    if logs_dir and logs_dir.is_dir():
+        for idx, prefix in stage_prefixes:
+            out_f = logs_dir / f"{prefix}.stdout.log"
+            err_f = logs_dir / f"{prefix}.stderr.log"
+            has_stage_log[prefix] = out_f.exists() or err_f.exists()
+    else:
+        for _, prefix in stage_prefixes:
+            has_stage_log[prefix] = False
+
+    stage_ended = {}
+    if worker_log_text:
+        for _, prefix in stage_prefixes:
+            end_match = re.search(rf"\[fullmag runner\] stage {re.escape(prefix)} end exit_code=(\d+)", worker_log_text)
+            if end_match:
+                code = int(end_match.group(1))
+                stage_ended[prefix] = code
 
     if state == "running":
-        # Find first non-succeeded stage and mark it running
-        for stage in stages:
-            if stage["status"] == "pending":
-                stage["status"] = "running"
-                break
+        if started_at:
+            stages[1]["status"] = "succeeded"
+            if stage_ended:
+                for idx, prefix in stage_prefixes:
+                    if prefix in stage_ended:
+                        code = stage_ended[prefix]
+                        stages[idx]["status"] = "succeeded" if code == 0 else "failed"
+                        stages[idx]["exit_code"] = code
+                    else:
+                        stages[idx]["status"] = "running"
+                        break
+                else:
+                    stages[5]["status"] = "running"
+            else:
+                if has_stage_log.get("frontend-build"):
+                    stages[2]["status"] = "succeeded"
+                    stages[3]["status"] = "succeeded"
+                    stages[4]["status"] = "running"
+                elif has_stage_log.get("frontend-dependencies"):
+                    stages[2]["status"] = "succeeded"
+                    stages[3]["status"] = "running"
+                else:
+                    stages[2]["status"] = "running"
+        else:
+            stages[1]["status"] = "running"
     elif state == "succeeded":
-        for stage in stages:
-            stage["status"] = "succeeded"
-        stages[-1]["exit_code"] = 0
+        for s in stages:
+            s["status"] = "succeeded"
+        stages[6]["exit_code"] = 0
     elif state in ("failed", "cancelled"):
-        # Mark the last in-flight stage as failed
-        failed_set = False
-        for stage in stages:
-            if stage["status"] == "pending" and not failed_set:
-                stage["status"] = state
-                failed_set = True
-        stages[-1]["status"] = state
-        stages[-1]["exit_code"] = exit_code
+        if stage_ended:
+            for idx, prefix in stage_prefixes:
+                if prefix in stage_ended:
+                    code = stage_ended[prefix]
+                    stages[idx]["status"] = "succeeded" if code == 0 else "failed"
+                    stages[idx]["exit_code"] = code
+                elif stages[idx - 1]["status"] == "succeeded":
+                    stages[idx]["status"] = state
+                    break
+        else:
+            if has_stage_log.get("frontend-build"):
+                stages[2]["status"] = "succeeded"
+                stages[3]["status"] = "succeeded"
+                stages[4]["status"] = state
+            elif has_stage_log.get("frontend-dependencies"):
+                stages[2]["status"] = "succeeded"
+                stages[3]["status"] = state
+            elif has_stage_log.get("native-build"):
+                stages[2]["status"] = state
+            else:
+                stages[1]["status"] = state
+        stages[5]["status"] = "failed" if state == "failed" else "cancelled"
+        stages[6]["status"] = state
+        stages[6]["exit_code"] = exit_code
 
     return stages

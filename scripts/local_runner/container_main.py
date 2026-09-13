@@ -80,6 +80,7 @@ class Application:
         self._worker_result = None
         self._worker_started_at = None
         self._worker_finished_at = None
+        self._worker_samples_by_job = {}
 
     def _service_record(self):
         if not self.paths.state_path.exists():
@@ -386,9 +387,16 @@ class Application:
         volumes = self.hub.get_storage_volumes()
         trends = self.hub.get_metrics_trends()
         active = self.queue.active()
-        all_queue_jobs = self.queue.list(owner=self.owner, limit=1000)
-        queued_jobs = [j for j in all_queue_jobs if j.get('state') == 'queued']
-        queued_jobs.sort(key=lambda j: j.get('created_at', 0))
+
+        if hasattr(self.queue, 'connection') and getattr(self.queue, 'path', None) and Path(self.queue.path).is_file():
+            with self.queue.connection() as db:
+                rows = db.execute("SELECT * FROM jobs WHERE (? IS NULL OR owner=?) AND state='queued' ORDER BY sequence ASC", (self.owner, self.owner)).fetchall()
+                queued_jobs = [self.queue.record(r) for r in rows]
+        else:
+            all_queue_jobs = self.queue.list(owner=self.owner, limit=1000)
+            queued_jobs = [j for j in all_queue_jobs if j.get('state') == 'queued']
+            queued_jobs.sort(key=lambda j: j.get('created_at', 0))
+
         active_build = None
         if active:
             job = active[0]
@@ -423,7 +431,8 @@ class Application:
             'storage': volumes[0] if volumes else {},
             'last_cleanup': {
                 'candidates_count': last_plan['candidates_count'] if last_plan else None,
-                'reclaimed_bytes': last_plan['estimated_reclaimed_bytes'] if last_plan else None,
+                'estimated_reclaimed_bytes': last_plan['estimated_reclaimed_bytes'] if last_plan else None,
+                'reclaimed_bytes': last_plan.get('actual_reclaimed_bytes', 0) if last_plan and last_plan.get('applied') else 0,
                 'status': last_plan['status'] if last_plan else 'brak',
             },
             'trends': trends,
@@ -446,64 +455,158 @@ class Application:
         except (ValueError, TypeError):
             page = 1
 
-        all_jobs = self.queue.list(owner=self.owner, limit=1000)
-        unique_worktrees = sorted(list({j.get('worktree_id') for j in all_jobs if j.get('worktree_id')}))
-        filtered = []
-        for j in all_jobs:
+        has_sqlite = (
+            hasattr(self.queue, 'connection')
+            and getattr(self.queue, 'path', None)
+            and Path(self.queue.path).is_file()
+        )
+
+        if has_sqlite:
+            where_clauses = ["(? IS NULL OR owner=?)"]
+            params = [self.owner, self.owner]
+
             if status and status != 'all':
                 if status in ('history', 'terminal'):
-                    if j.get('state') not in ('succeeded', 'failed', 'cancelled'):
-                        continue
-                elif j.get('state') != status:
-                    continue
-            if profile and profile != 'all' and j.get('profile') != profile:
-                continue
-            if worktree and worktree != 'all' and j.get('worktree_id') != worktree:
-                continue
+                    where_clauses.append("state IN ('succeeded', 'failed', 'cancelled')")
+                else:
+                    where_clauses.append("state = ?")
+                    params.append(status)
+
+            if profile and profile != 'all':
+                where_clauses.append("profile = ?")
+                params.append(profile)
+
+            if worktree and worktree != 'all':
+                where_clauses.append("worktree_id = ?")
+                params.append(worktree)
+
             if search:
-                j_id = j.get('job_id', '').lower()
-                wt = j.get('worktree_id', '').lower()
-                sd = j.get('source_digest', '').lower()
-                if search not in j_id and search not in wt and search not in sd:
-                    continue
-            filtered.append(j)
+                where_clauses.append("(LOWER(job_id) LIKE ? OR LOWER(worktree_id) LIKE ? OR LOWER(source_digest) LIKE ?)")
+                search_pat = f"%{search}%"
+                params.extend([search_pat, search_pat, search_pat])
 
-        if sort == 'oldest':
-            filtered.sort(key=lambda j: j.get('created_at', 0))
-        elif sort == 'duration':
-            filtered.sort(key=lambda j: (j.get('updated_at', 0) or 0) - (j.get('started_at', 0) or j.get('created_at', 0) or 0), reverse=True)
+            where_sql = " WHERE " + " AND ".join(where_clauses)
+
+            order_sql = "ORDER BY sequence DESC"
+            if sort == 'oldest':
+                order_sql = "ORDER BY sequence ASC"
+            elif sort == 'duration':
+                order_sql = "ORDER BY (COALESCE(updated_at, 0) - COALESCE(created_at, 0)) DESC"
+
+            with self.queue.connection() as db:
+                count_row = db.execute(f"SELECT COUNT(*) AS total FROM jobs{where_sql}", params).fetchone()
+                total = count_row['total'] if count_row else 0
+
+                wt_rows = db.execute("SELECT DISTINCT worktree_id FROM jobs WHERE (? IS NULL OR owner=?) AND worktree_id IS NOT NULL", (self.owner, self.owner)).fetchall()
+                unique_worktrees = sorted([r['worktree_id'] for r in wt_rows if r['worktree_id']])
+
+                offset = (page - 1) * limit
+                query_params = list(params) + [limit, offset]
+                rows = db.execute(f"SELECT * FROM jobs{where_sql} {order_sql} LIMIT ? OFFSET ?", query_params).fetchall()
+                items = [self.queue.record(r) for r in rows]
+
+            return {
+                'items': items,
+                'total': total,
+                'total_count': total,
+                'is_truncated': False,
+                'page': page,
+                'limit': limit,
+                'pages': (total + limit - 1) // limit if limit > 0 else 1,
+                'worktrees': unique_worktrees,
+            }
         else:
-            filtered.sort(key=lambda j: j.get('created_at', 0), reverse=True)
+            if hasattr(self.queue, '_jobs'):
+                all_jobs = list(self.queue._jobs.values())
+            else:
+                all_jobs = self.queue.list(owner=self.owner, limit=1000)
 
-        total = len(filtered)
-        start = (page - 1) * limit
-        items = filtered[start : start + limit]
-        return {
-            'items': items,
-            'total': total,
-            'page': page,
-            'limit': limit,
-            'pages': (total + limit - 1) // limit if limit > 0 else 1,
-            'worktrees': unique_worktrees,
-        }
+            unique_worktrees = sorted(list({j.get('worktree_id') for j in all_jobs if j.get('worktree_id')}))
+            filtered = []
+            for j in all_jobs:
+                if status and status != 'all':
+                    if status in ('history', 'terminal'):
+                        if j.get('state') not in ('succeeded', 'failed', 'cancelled'):
+                            continue
+                    elif j.get('state') != status:
+                        continue
+                if profile and profile != 'all' and j.get('profile') != profile:
+                    continue
+                if worktree and worktree != 'all' and j.get('worktree_id') != worktree:
+                    continue
+                if search:
+                    j_id = j.get('job_id', '').lower()
+                    wt = j.get('worktree_id', '').lower()
+                    sd = j.get('source_digest', '').lower()
+                    if search not in j_id and search not in wt and search not in sd:
+                        continue
+                filtered.append(j)
+
+            if sort == 'oldest':
+                filtered.sort(key=lambda j: j.get('created_at', 0))
+            elif sort == 'duration':
+                filtered.sort(key=lambda j: (j.get('updated_at', 0) or 0) - (j.get('started_at', 0) or j.get('created_at', 0) or 0), reverse=True)
+            else:
+                filtered.sort(key=lambda j: j.get('created_at', 0), reverse=True)
+
+            total = len(filtered)
+            start = (page - 1) * limit
+            items = filtered[start : start + limit]
+            return {
+                'items': items,
+                'total': total,
+                'total_count': total,
+                'is_truncated': len(all_jobs) >= 1000,
+                'page': page,
+                'limit': limit,
+                'pages': (total + limit - 1) // limit if limit > 0 else 1,
+                'worktrees': unique_worktrees,
+            }
 
     def job_detail(self, job_id):
         job = self.get(job_id)
         stages = build_job_timeline(job, self.storage)
         wt = job.get('worktree_id', '')
         receipt = None
-        receipt_path = self.storage / 'runs' / wt / job_id / 'artifacts' / 'receipt.json'
-        if receipt_path.is_file():
-            try:
-                receipt = json.loads(receipt_path.read_text(encoding='utf-8'))
-            except Exception:
-                pass
+        started_at = job.get('started_at')
+        finished_at = job.get('finished_at')
+
+        for r_path in (
+            self.storage / 'runs' / wt / job_id / 'artifacts' / 'build-receipt.json',
+            self.storage / 'runs' / wt / job_id / 'receipt.json',
+            self.storage / 'runs' / wt / job_id / 'artifacts' / 'receipt.json',
+        ):
+            if r_path.is_file():
+                try:
+                    receipt = json.loads(r_path.read_text(encoding='utf-8'))
+                    if not started_at and receipt.get('started_at'):
+                        started_at = receipt.get('started_at')
+                    if not finished_at and receipt.get('finished_at'):
+                        finished_at = receipt.get('finished_at')
+                    break
+                except Exception:
+                    pass
+
+        if not started_at or not finished_at:
+            coord_path = self.storage / 'runs' / wt / job_id / 'coordinator.json'
+            if coord_path.is_file():
+                try:
+                    journal = json.loads(coord_path.read_text(encoding='utf-8'))
+                    if not started_at and journal.get('started_at'):
+                        started_at = journal.get('started_at')
+                    if not finished_at and journal.get('finished_at'):
+                        finished_at = journal.get('finished_at')
+                except Exception:
+                    pass
+
         pinned_map = self.hub.get_pinned()
         exec_res_id = f"exec-{wt}-{job_id}"
         is_pinned = (exec_res_id in pinned_map) or (job_id in pinned_map)
         pin_info = pinned_map.get(exec_res_id) or pinned_map.get(job_id) or {}
         return {
             **job,
+            'started_at': started_at,
+            'finished_at': finished_at,
             'stages': stages,
             'receipt': receipt,
             'is_pinned': is_pinned,
@@ -526,6 +629,18 @@ class Application:
                 journal = json.loads(journal_path.read_text(encoding='utf-8'))
             except Exception:
                 pass
+
+        receipt = None
+        for r_path in (
+            self.storage / 'runs' / wt / job_id / 'artifacts' / 'build-receipt.json',
+            self.storage / 'runs' / wt / job_id / 'receipt.json',
+        ):
+            if r_path.is_file():
+                try:
+                    receipt = json.loads(r_path.read_text(encoding='utf-8'))
+                    break
+                except Exception:
+                    pass
 
         has_queued = any(e.get('event') == 'job_queued' for e in events)
         created_at = job.get('created_at')
@@ -557,6 +672,26 @@ class Application:
                 'duration_seconds': None,
             })
 
+        # Enrich with stage terminal events from build-receipt if present
+        if receipt and isinstance(receipt.get('stages'), list):
+            has_stage_events = {e.get('stage') for e in events if e.get('stage')}
+            for st in receipt['stages']:
+                st_name = st.get('name')
+                if st_name and st_name not in has_stage_events:
+                    st_code = st.get('exit_code')
+                    st_time = st.get('finished_at') or st.get('started_at') or _utc_now_iso()
+                    events.append({
+                        'id': f"ev-st-{job_id[:8]}-{st_name}",
+                        'timestamp': st_time,
+                        'level': 'INFO' if st_code == 0 else 'ERROR',
+                        'event': 'stage_terminal',
+                        'message': f"Etap {st_name} zakończony (exit={st_code})",
+                        'job_id': job_id,
+                        'profile': job.get('profile'),
+                        'stage': st_name,
+                        'duration_seconds': round(st.get('duration_ms', 0) / 1000.0, 2) if st.get('duration_ms') is not None else None,
+                    })
+
         finished_at = journal.get('finished_at') or job.get('finished_at')
         has_terminal = any(e.get('event') in ('job_terminal', 'job_finished', 'job_failed', 'job_cancelled') for e in events)
         if not has_terminal and finished_at:
@@ -581,7 +716,28 @@ class Application:
         return events
 
     def job_metrics(self, job_id):
-        return self.hub.get_metrics_trends()
+        if not hasattr(self, '_worker_samples_by_job'):
+            self._worker_samples_by_job = {}
+        active = self.queue.active()
+        current_job = active[0] if active else None
+        if current_job and current_job.get('job_id') == job_id:
+            wm = self._inspect_worker_metrics(current_job)
+            if wm.get('memory_mb') is not None or wm.get('cpu_percent') is not None:
+                samples = self._worker_samples_by_job.setdefault(job_id, [])
+                now_iso = datetime.now(timezone.utc).isoformat()
+                if not samples or samples[-1].get('ram_mb') != wm.get('memory_mb') or samples[-1].get('cpu_percent') != wm.get('cpu_percent'):
+                    samples.append({
+                        'timestamp': now_iso,
+                        'scope': 'worker',
+                        'job_id': job_id,
+                        'ram_mb': wm.get('memory_mb'),
+                        'ram_limit_mb': wm.get('limit_mb'),
+                        'cpu_percent': wm.get('cpu_percent'),
+                        'storage_growth_mb': None,
+                    })
+                    if len(samples) > 120:
+                        self._worker_samples_by_job[job_id] = samples[-120:]
+        return list(self._worker_samples_by_job.get(job_id, []))
 
     def job_resources(self, job_id):
         job = self.get(job_id)
@@ -643,7 +799,7 @@ class Application:
             cid = wm.get('container_id')
             worker_id = f"worker-{cid[:12]}" if cid else f"worker-{current_job['job_id'][:8]}"
             w_ram = f"{wm['memory_mb']:.1f} MiB" if wm.get('memory_mb') is not None else "niedostępne"
-            w_limit = f"{wm['limit_mb']} MiB" if wm.get('limit_mb') is not None else "Bez limitu"
+            w_limit = f"{wm['limit_mb']} MiB" if wm.get('limit_mb') is not None else "niedostępne"
             w_cpu = f"{wm['cpu_percent']:.1f}%" if wm.get('cpu_percent') is not None else "niedostępne"
             w_io = f"{wm['io_mb_s']:.2f} MB/s" if wm.get('io_mb_s') is not None else "niedostępne"
             rows.append({
@@ -783,6 +939,35 @@ class Application:
         return result
 
     def _reconcile(self, jobs):
+        try:
+            self.hub.sample_metrics()
+        except Exception:
+            pass
+        if jobs:
+            if not hasattr(self, '_worker_samples_by_job'):
+                self._worker_samples_by_job = {}
+            current_job = jobs[0]
+            jid = current_job.get('job_id')
+            if jid and current_job.get('operation') == 'build':
+                try:
+                    wm = self._inspect_worker_metrics(current_job)
+                    if wm.get('memory_mb') is not None or wm.get('cpu_percent') is not None:
+                        samples = self._worker_samples_by_job.setdefault(jid, [])
+                        now_iso = datetime.now(timezone.utc).isoformat()
+                        if not samples or samples[-1].get('ram_mb') != wm.get('memory_mb') or samples[-1].get('cpu_percent') != wm.get('cpu_percent'):
+                            samples.append({
+                                'timestamp': now_iso,
+                                'scope': 'worker',
+                                'job_id': jid,
+                                'ram_mb': wm.get('memory_mb'),
+                                'ram_limit_mb': wm.get('limit_mb'),
+                                'cpu_percent': wm.get('cpu_percent'),
+                                'storage_growth_mb': None,
+                            })
+                            if len(samples) > 120:
+                                self._worker_samples_by_job[jid] = samples[-120:]
+                except Exception:
+                    pass
         legacy = [job for job in jobs if job.get('operation') != 'build']
         if legacy:
             raise APIUnavailable('Legacy active job requires manual recovery')

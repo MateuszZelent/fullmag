@@ -696,7 +696,14 @@ class _RunnerAPIHandler(BaseHTTPRequestHandler):
             if self.server.callbacks.retention_plan_apply is not None:
                 self._invoke(self.server.callbacks.retention_plan_apply, plan_id)
             else:
-                self._send(200, {"applied": True, "plan_id": plan_id, "simulated": True})
+                self._send(200, {
+                    "applied": False,
+                    "plan_id": plan_id,
+                    "status": "preview_only",
+                    "error": "cleanup_executor_not_enabled",
+                    "reclaimed_bytes": 0,
+                    "message": "Operacja w trybie podglądu (preview_only): wykonawca automatycznego usuwania nie jest włączony (cleanup_executor_not_enabled).",
+                })
         elif len(parts) == 5 and parts[:3] == ["api", "v1", "resources"] and parts[4] == "pin":
             body = self._read_body(required=False)
             if body is _BODY_ERROR:

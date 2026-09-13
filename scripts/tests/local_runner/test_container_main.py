@@ -78,6 +78,7 @@ class ContainerMainTests(unittest.TestCase):
         app._worker_result = None
         app._worker_started_at = None
         app._worker_finished_at = None
+        app._worker_samples_by_job = {}
         return app
 
     def test_live_worker_accepts_a_build_submission_while_callback_blocks(self):
@@ -465,6 +466,127 @@ class ContainerMainTests(unittest.TestCase):
         app.hub.get_storage_volumes = lambda: [{"free_bytes": None, "critical_threshold_bytes": None}]
         alerts = app.alerts()
         self.assertEqual([], alerts)
+
+    def test_job_metrics_honest_scoping(self):
+        job = {
+            "job_id": "job-inactive-999",
+            "owner": "alice",
+            "profile": "fem-cpu-release",
+            "worktree_id": "wt-test",
+            "state": "succeeded",
+        }
+        app = self.app(FakeQueue(jobs=[job]))
+        # Inactive/completed job MUST return empty list, never coordinator process trends!
+        metrics = app.job_metrics("job-inactive-999")
+        self.assertEqual([], metrics)
+
+        # Active job with worker metrics
+        active_job = {
+            "job_id": "job-active-123",
+            "owner": "alice",
+            "profile": "fem-cpu-release",
+            "worktree_id": "wt-test",
+            "state": "running",
+        }
+        app_active = self.app(FakeQueue(active=[active_job]))
+        app_active._inspect_worker_metrics = lambda current_job: {
+            "container_id": "cid-123",
+            "memory_mb": 512.0,
+            "limit_mb": 8192,
+            "cpu_percent": 45.0,
+            "io_mb_s": None,
+        }
+        active_metrics = app_active.job_metrics("job-active-123")
+        self.assertEqual(1, len(active_metrics))
+        self.assertEqual("worker", active_metrics[0]["scope"])
+        self.assertEqual("job-active-123", active_metrics[0]["job_id"])
+        self.assertEqual(512.0, active_metrics[0]["ram_mb"])
+        self.assertEqual(45.0, active_metrics[0]["cpu_percent"])
+
+        # Second sample with changing values accumulates
+        app_active._inspect_worker_metrics = lambda current_job: {
+            "container_id": "cid-123",
+            "memory_mb": 600.0,
+            "limit_mb": 8192,
+            "cpu_percent": 55.0,
+            "io_mb_s": None,
+        }
+        active_metrics2 = app_active.job_metrics("job-active-123")
+        self.assertEqual(2, len(active_metrics2))
+        self.assertEqual(600.0, active_metrics2[1]["ram_mb"])
+        self.assertEqual(55.0, active_metrics2[1]["cpu_percent"])
+
+    def test_job_detail_enriches_timestamps_from_journal_and_receipt(self):
+        job = {
+            "job_id": "job-time-test",
+            "owner": "alice",
+            "profile": "fem-cpu-release",
+            "worktree_id": "wt-time",
+            "state": "succeeded",
+            "created_at": 1773000000.0,
+            # Note: started_at and finished_at are missing from queue record
+        }
+        app = self.app(FakeQueue(jobs=[job]))
+        run_dir = self.root / "runs" / "wt-time" / "job-time-test"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        journal = {
+            "job_id": "job-time-test",
+            "started_at": 1773000010.0,
+            "finished_at": 1773000050.0,
+            "state": "succeeded",
+        }
+        (run_dir / "coordinator.json").write_text(json.dumps(journal), encoding="utf-8")
+
+        detail = app.job_detail("job-time-test")
+        self.assertEqual(1773000010.0, detail["started_at"])
+        self.assertEqual(1773000050.0, detail["finished_at"])
+
+    def test_overview_last_cleanup_honest_zero_reclaimed_when_not_applied(self):
+        app = self.app(FakeQueue(jobs=[]))
+        app.health = lambda: {
+            "ok": True,
+            "worker_alive": False,
+            "worker_state": "idle",
+            "worker_error": None,
+            "accepting_jobs": True,
+            "service_status": {"started_at": "2026-09-13T12:00:00Z"},
+            "storage_free_bytes": 100 * 1024**3,
+        }
+        app.hub._plans["plan-test"] = {
+            "plan_id": "plan-test",
+            "created_at": "2026-09-13T12:00:00Z",
+            "status": "preview",
+            "candidates_count": 1,
+            "estimated_reclaimed_bytes": 4096,
+            "applied": False,
+        }
+        ov = app.overview()
+        self.assertEqual(4096, ov["last_cleanup"]["estimated_reclaimed_bytes"])
+        self.assertEqual(0, ov["last_cleanup"]["reclaimed_bytes"])
+
+    def test_paginated_jobs_sqlite_full_pagination_over_1000_items(self):
+        db_path = self.root / "index" / "queue.db"
+        jq = JobQueue(db_path)
+        with jq.connection() as db:
+            records = [
+                (f"job-{i:04d}", "alice", f"req-{i}", "h" * 64, f"wt-{i % 5}", "a" * 64, "fem-cpu-release", "build", "{}", "succeeded", 1000.0 + i, 1005.0 + i)
+                for i in range(1050)
+            ]
+            db.executemany(
+                "INSERT INTO jobs (job_id, owner, request_key, request_hash, worktree_id, source_digest, profile, operation, payload, state, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                records,
+            )
+
+        app = self.app(jq)
+        res_page1 = app.paginated_jobs({"page": 1, "limit": 50})
+        self.assertEqual(1050, res_page1["total"])
+        self.assertEqual(50, len(res_page1["items"]))
+        self.assertFalse(res_page1["is_truncated"])
+        self.assertEqual(21, res_page1["pages"])
+
+        res_page21 = app.paginated_jobs({"page": 21, "limit": 50})
+        self.assertEqual(50, len(res_page21["items"]))
 
 
 if __name__ == "__main__":

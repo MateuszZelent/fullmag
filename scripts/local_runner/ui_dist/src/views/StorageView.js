@@ -30,7 +30,7 @@ export function renderStorageView(container) {
             <span class="section-subtitle" id="plan-metadata"></span>
           </div>
           <div>
-            <button class="btn btn-danger btn-sm" id="btn-apply-plan">⚡ Wykonaj bezpieczną retencję</button>
+            <button class="btn btn-secondary btn-sm" id="btn-apply-plan">⚡ Wykonaj plan (Tryb podglądu / Preview)</button>
           </div>
         </div>
         <div id="plan-content-container"></div>
@@ -84,6 +84,12 @@ export function renderStorageView(container) {
     if (confirm(`Czy na pewno wykonać plan retencji ${activePlan.plan_id}? Operacja jest restartowalna i bezpieczna.`)) {
       try {
         const res = await api.applyRetentionPlan(activePlan.plan_id);
+        if (res && res.status === 'preview_only') {
+          alert(`Tryb podglądu (Preview): ${res.message || 'Wykonawca automatycznego usuwania nie jest włączony.'}`);
+          activePlan.status = 'preview_only';
+          renderPlan();
+          return;
+        }
         if (!res || res.applied !== true) {
           const errMsg = res?.error || res?.message || 'Plan nie został wykonany (applied != true).';
           alert('Błąd wykonania retencji: ' + errMsg);
@@ -183,7 +189,7 @@ export function renderStorageView(container) {
                   <td class="font-mono font-bold">${formatBytes(v.free_bytes)}</td>
                   <td class="font-mono">${formatBytes(v.reserved_bytes)}</td>
                   <td class="font-mono">${formatBytes(v.warning_threshold_bytes)}</td>
-                  <td>${renderStatusBadge(v.status || 'healthy')}</td>
+                  <td>${renderStatusBadge(v.status || 'unavailable')}</td>
                 </tr>
               `;
             }).join('')}

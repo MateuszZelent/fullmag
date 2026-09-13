@@ -28,6 +28,54 @@ class UnixDockerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             desktop_daemon_root('C:\\project,readonly\\storage')
 
+    def test_stats_operation(self):
+        import json
+        from unittest.mock import patch
+        from local_runner.unix_docker import docker
+
+        fake_stats = {
+            "memory_stats": {"usage": 52428800, "limit": 1073741824},
+            "cpu_stats": {
+                "cpu_usage": {"total_usage": 200000000, "percpu_usage": [100000000, 100000000]},
+                "system_cpu_usage": 1000000000,
+                "online_cpus": 2,
+            },
+            "precpu_stats": {
+                "cpu_usage": {"total_usage": 100000000},
+                "system_cpu_usage": 500000000,
+            },
+            "blkio_stats": {
+                "io_service_bytes_recursive": [
+                    {"op": "Read", "value": 1048576},
+                    {"op": "Write", "value": 2097152},
+                ]
+            },
+        }
+
+        with patch("local_runner.unix_docker.engine", return_value=json.dumps(fake_stats).encode()):
+            result = docker(["stats", "--no-stream", "container-123"])
+            self.assertIn("52428800B / 1073741824B", result)
+            self.assertIn("40.0%", result)
+            self.assertIn("1048576B / 2097152B", result)
+
+            # Test argument position variation
+            result_rev = docker(["stats", "container-123", "--no-stream"])
+            self.assertEqual(result, result_rev)
+
+    def test_stats_operation_with_null_and_empty_metrics(self):
+        import json
+        from unittest.mock import patch
+        from local_runner.unix_docker import docker
+
+        empty_stats = {
+            "memory_stats": None,
+            "cpu_stats": None,
+            "precpu_stats": None,
+        }
+        with patch("local_runner.unix_docker.engine", return_value=json.dumps(empty_stats).encode()):
+            result = docker(["stats", "--no-stream", "container-empty"])
+            self.assertEqual("0B / 0B|0.0%|0B / 0B", result)
+
 
 if __name__ == '__main__':
     unittest.main()

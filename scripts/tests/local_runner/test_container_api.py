@@ -307,11 +307,15 @@ class ContainerAPITests(unittest.TestCase):
         status, _, payload = self.request("POST", "/api/v1/retention/plans")
         self.assertEqual(200, status)
 
-        # 11. POST /api/v1/retention/plans/{id}/apply (idempotent apply route)
+        # 11. POST /api/v1/retention/plans/{id}/apply (honest preview_only when no executor)
         status, _, payload = self.request("POST", "/api/v1/retention/plans/plan-abc123/apply")
         self.assertEqual(200, status)
-        self.assertEqual("plan-abc123", self.json_body(payload)["plan_id"])
-        self.assertTrue(self.json_body(payload)["applied"])
+        body = self.json_body(payload)
+        self.assertEqual("plan-abc123", body["plan_id"])
+        self.assertFalse(body["applied"])
+        self.assertEqual("preview_only", body["status"])
+        self.assertEqual(0, body["reclaimed_bytes"])
+        self.assertEqual("cleanup_executor_not_enabled", body["error"])
 
         # 12. POST /api/v1/resources/test-res/pin
         status, _, payload = self.request("POST", "/api/v1/resources/test-res/pin", body={"pinned": True})

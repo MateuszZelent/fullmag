@@ -45,15 +45,18 @@ export function renderPoliciesView(container) {
 
       card.innerHTML = `
         <form id="policy-form" class="policy-form">
+          <div class="alert-box alert-warning" style="margin-bottom: 1.5rem; padding: 0.75rem 1rem; border-left: 4px solid var(--warning); background: rgba(245, 158, 11, 0.1);">
+            <strong>Tryb działania:</strong> Automatyczny harmonogram usuwania danych (Automatic Mode) jest obecnie wyłączony. Wszystkie operacje retencji działają w bezpiecznym trybie podglądu (Preview).
+          </div>
           <div class="form-row">
             <div class="form-group">
               <label class="form-label">Tryb działania retencji (Execution Mode):</label>
               <select id="pol-mode" class="form-select">
-                <option value="preview" ${currentPolicy.mode === 'preview' ? 'selected' : ''}>
+                <option value="preview" selected>
                   Preview (Tylko audytowalny podgląd, bez usuwania plików)
                 </option>
-                <option value="automatic" ${currentPolicy.mode === 'automatic' ? 'selected' : ''}>
-                  Automatic (Cykliczne automatyczne czyszczenie wygasłych katalogów)
+                <option value="automatic" disabled>
+                  Tryb automatyczny niedostępny (wyłącznie podgląd)
                 </option>
               </select>
               <span class="form-hint">Domyślnie włączony jest bezpieczny tryb podglądu (preview).</span>
@@ -140,8 +143,14 @@ export function renderPoliciesView(container) {
     const card = container.querySelector('#policy-card');
     if (!card) return;
 
+    const chosenMode = card.querySelector('#pol-mode')?.value;
+    if (chosenMode === 'automatic') {
+      alert('Tryb automatyczny niedostępny (wyłącznie podgląd). Harmonogram usuwania w tle nie jest włączony.');
+      return;
+    }
+
     const payload = {
-      mode: card.querySelector('#pol-mode')?.value || 'preview',
+      mode: 'preview',
       ttl_success_hours: parseInt(card.querySelector('#pol-ttl-success')?.value, 10) || 24,
       ttl_failure_hours: parseInt(card.querySelector('#pol-ttl-failure')?.value, 10) || 168,
       ttl_orphan_hours: parseInt(card.querySelector('#pol-ttl-orphan')?.value, 10) || 24,
