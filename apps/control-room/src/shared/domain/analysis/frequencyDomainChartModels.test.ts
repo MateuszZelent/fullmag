@@ -595,6 +595,20 @@ describe("frequencyDomainChartModels", () => {
     });
   });
 
+  it("does not turn empty dispersion values into zero-valued physics or mode identities", () => {
+    const model = buildEigenDispersionChartModel(textResource([
+      "sample_index,raw_mode_index,path_s_rad_per_m,frequency_hz,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,residual_norm,line_width_hz",
+      "0,1,0,1e9,,,,,",
+      "1,,1,1e9,0,0,0,0,0",
+      "2,1.5,2,1e9,0,0,0,0,0",
+      "3,1,3,,0,0,0,0,0",
+    ].join("\n")));
+    expect(model.points).toHaveLength(1);
+    expect(model.droppedPointCount).toBe(3);
+    expect(model.points[0]).toMatchObject({ residualNorm: null, linewidthHz: null });
+    expect(model.points[0]?.wavevectorKf).toBeUndefined();
+  });
+
   it.each([false, true])("preserves dispersion identity, revision and clicked k (field=%s)", (withField) => {
     const model = buildEigenDispersionChartModel(textResource([
       "sample_index,raw_mode_index,sample_id,mode_id,path_s_rad_per_m,frequency_hz,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,mode_field_id",

@@ -235,3 +235,12 @@ z bridge. Natywna regresja małej skali: RED exit 1, GREEN exit 0; sprawdza
 też odrzucenie przy ostrzejszym progu i wyzerowanie poprzedniego wyniku.
 Dodano test przekazania progu przez MFEM bridge, jeszcze niewykonany managed.
 Validator source-map 0828: exit 0. Nie zmieniono residual tolerance 1e-8.
+
+### R06b — brak danych CSV nie oznacza zera
+
+Dodatkowa regresja wykryła konwersję pustych komórek CSV do zera oraz
+obcinanie niecałkowitego indeksu modu. Parser dyspersji odróżnia teraz brak
+k/residualu/linewidth od liczby zero i odrzuca wiersze z brakującymi lub
+niepoprawnymi indeksami/częstotliwością/ścieżką. RED: cztery wiersze zamiast
+jednego; GREEN: 116 testów w trzech plikach Vitest. Nie zmieniono
+fizycznych tolerancji ani nie uzupełniano danych arbitralnymi wartościami.

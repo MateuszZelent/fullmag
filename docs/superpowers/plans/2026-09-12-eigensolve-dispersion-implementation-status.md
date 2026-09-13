@@ -543,3 +543,12 @@ exit 0. Dodatkowy bridge test wymaga MFEM i pozostaje niewykonany.
 Source-map validator 0828 exit 0; pierwsze wywołanie omyłkowej ścieżki
 scripts/validate_scientific_docs.py nie uruchomiło walidatora.
 Diagnostyka C++ zapisana w resolverowym windows-native/floquet-potential-contract.
+
+### R06b — brak danych CSV nie oznacza zera
+
+Dodatkowa regresja wykryła konwersję pustych komórek CSV do zera oraz
+obcinanie niecałkowitego indeksu modu. Parser dyspersji odróżnia teraz brak
+k/residualu/linewidth od liczby zero i odrzuca wiersze z brakującymi lub
+niepoprawnymi indeksami/częstotliwością/ścieżką. RED: cztery wiersze zamiast
+jednego; GREEN: 116 testów w trzech plikach Vitest. Nie zmieniono
+fizycznych tolerancji ani nie uzupełniano danych arbitralnymi wartościami.

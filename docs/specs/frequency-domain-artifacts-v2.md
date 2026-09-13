@@ -2320,6 +2320,9 @@ Analyze UI must:
 - zachować opcjonalne `sample_id` i `mode_id` jako nieprzezroczyste
   identyfikatory oraz dostarczoną rewizję artefaktu, równowagę i reprezentację;
   brak tych kolumn w starszym CSV nie upoważnia do wymyślania identyfikatorów,
+- puste opcjonalne komórki liczbowe CSV oznaczają brak danych, nie zero;
+  wiersze bez skończonej częstotliwości/współrzędnej ścieżki lub bez
+  nieujemnych bezpiecznych całkowitych indeksów sample/mode są odrzucane,
 - load mode artifacts by `sample_index` and `raw_mode_index`.
 
 ## API contract
