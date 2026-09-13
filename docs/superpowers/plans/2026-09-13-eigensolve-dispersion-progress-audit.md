@@ -224,3 +224,14 @@ i kontekst rewizji. Nie wymyślają brakującego k ani identyfikatorów.
 Dwa testy transformacji oraz test kliknięcia były RED przed naprawą.
 Po naprawie trzy pliki Vitest: 115 passed. To testy źródeł, bez live WebGL.
 S08 pozostaje otwarte do authoring/runtime/FMS i weryfikacji w przeglądarce.
+
+### R07 — niespójna tolerancja pivotowania rekonstrukcji
+
+Schur przyjmował `problem.pivot_tolerance`, natomiast rekonstrukcja ponownie
+faktoryzowała P ze stałym 1e-14. Poprawna mała macierz P=1e-15 z progiem
+1e-16 była zatem odrzucana dopiero podczas odtwarzania potencjału.
+Rekonstrukcja zachowuje teraz oryginalny próg, waliduje go i otrzymuje go
+z bridge. Natywna regresja małej skali: RED exit 1, GREEN exit 0; sprawdza
+też odrzucenie przy ostrzejszym progu i wyzerowanie poprzedniego wyniku.
+Dodano test przekazania progu przez MFEM bridge, jeszcze niewykonany managed.
+Validator source-map 0828: exit 0. Nie zmieniono residual tolerance 1e-8.

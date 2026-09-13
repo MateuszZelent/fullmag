@@ -304,6 +304,8 @@ Szczegóły źródeł, kontrprzykładu i akceptacji: [R01–R05](2026-09-13-eige
 - [ ] S04.R01b: managed wykonanie tej regresji; recipe nadal blokowane przed kompilacją.
 - [x] S04.R02a: próg 1e-8, kontrola pominiętego równania i test niezerowego residualu — izolowany native test passed.
 - [ ] S04.R02b: kod propagacji certyfikatu zapisany; managed MFEM i artefakty wymagają wykonania.
+- [x] S04.R07a: wspólna tolerancja pivotowania Schura i rekonstrukcji, małoskalowy native RED→GREEN.
+- [ ] S04.R07b: managed MFEM bridge regression.
 - [ ] S04.R02c: ogólna identyfikacja nullspace/gauge poza sprawdzeniem zgodności źródła.
 - [x] S05.R02a: owned bloki i helper rekonstrukcji kompleksowego potencjału; izolowany test passed.
 - [x] S05.R02b1: podłączenie dense nearest/window do rekonstrukcji real-split i kontroli oryginalnego równania magnetycznego; natywny JSON per-mode. Test oracle i diagnostyczna kompilacja adaptera passed.

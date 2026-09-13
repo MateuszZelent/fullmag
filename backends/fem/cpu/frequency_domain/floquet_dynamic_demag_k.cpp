@@ -443,6 +443,7 @@ FrequencyDomainStatus reconstruct_floquet_potential(
     if (n == 0 || m == 0 || n > 512 || m > 512 || q.size() != m ||
         blocks.p.size() != n*n || blocks.a_phiq.size() != n*m ||
         !valid_gauge_policy(blocks.gauge_policy) ||
+        !std::isfinite(blocks.pivot_tolerance) || blocks.pivot_tolerance <= 0.0 ||
         !finite_complex_values(q.data(), m) ||
         !finite_complex_values(blocks.p.data(), n*n) ||
         !finite_complex_values(blocks.a_phiq.data(), n*m))
@@ -463,7 +464,7 @@ FrequencyDomainStatus reconstruct_floquet_potential(
                 factor[i*size+j]=blocks.p[(i+offset)*n+j+offset];
         }
         std::vector<std::uint64_t> pivots;
-        if (!factorize(factor,size,1e-14,pivots,nullptr) ||
+        if (!factorize(factor,size,blocks.pivot_tolerance,pivots,nullptr) ||
             !solve_factored(factor,pivots,size,reduced_rhs,solution))
             return FrequencyDomainStatus::operator_error;
         std::vector<Complex> phi(n, Complex{});

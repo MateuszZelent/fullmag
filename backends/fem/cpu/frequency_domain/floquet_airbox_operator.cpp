@@ -677,6 +677,7 @@ FrequencyDomainStatus assemble_floquet_airbox_dynamic_demag_k(
             out_result->reconstruction.q_count = q;
             out_result->reconstruction.phi_count = reduced_phi;
             out_result->reconstruction.gauge_policy = problem.gauge_policy;
+            out_result->reconstruction.pivot_tolerance = problem.pivot_tolerance;
             out_result->reconstruction.p = std::move(p_reduced);
             out_result->reconstruction.a_phiq = std::move(a_phiq);
             out_result->reconstruction.a_qphi = std::move(a_qphi);

@@ -256,11 +256,14 @@ void assembles_shared_domain_floquet_blocks_with_one_phase_graph()
     schur_request.tangent_source = blocks.tangent_source.get();
     schur_request.tangent_constraint = blocks.tangent_constraint.get();
     schur_request.k_rad_per_m[0] = 0.5;
+    schur_request.pivot_tolerance = 1e-17;
     fd::FloquetAirboxDynamicDemagKResult schur_result{};
     check(
         fd::assemble_floquet_airbox_dynamic_demag_k(schur_request, &schur_result) ==
             fd::FrequencyDomainStatus::ok,
         "shared-domain Floquet blocks feed the phase-aware Schur bridge");
+    check(schur_result.reconstruction.pivot_tolerance == schur_request.pivot_tolerance,
+          "Schur bridge retains the scalar pivot policy for modal reconstruction");
     const std::size_t q_real_split = static_cast<std::size_t>(4u * reduced_node_count);
     check(schur_result.real_split_row_major.size() == q_real_split * q_real_split,
           "shared-domain Floquet Schur result has the reduced real-split q shape");

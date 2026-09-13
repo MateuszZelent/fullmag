@@ -344,8 +344,33 @@ void original_descriptor_rejects_wrong_magnetic_equation()
 
 } // namespace
 
+void reconstruction_preserves_scalar_pivot_policy()
+{
+    fd::FloquetPotentialReconstruction blocks;
+    blocks.q_count = blocks.phi_count = 1;
+    blocks.p = {Complex(1e-15, 0.)};
+    blocks.a_phiq = blocks.p;
+    blocks.pivot_tolerance = 1e-16;
+    fd::FloquetReconstructedPotential result;
+    check(fd::reconstruct_floquet_potential(blocks, {Complex(2., -3.)}, &result) ==
+              fd::FrequencyDomainStatus::ok,
+          "reconstruction uses the admitted scalar pivot tolerance");
+    check(result.certified && std::abs(result.phi[0] - Complex(-2., 3.)) < 1e-12,
+          "small-scale potential matches manufactured solution");
+    blocks.pivot_tolerance = 1e-14;
+    check(fd::reconstruct_floquet_potential(blocks, {Complex(2., -3.)}, &result) ==
+              fd::FrequencyDomainStatus::operator_error,
+          "stricter pivot tolerance rejects the same scalar block");
+    check(!result.certified && result.phi.empty(), "failed factorization clears prior result");
+    blocks.pivot_tolerance = 0.;
+    check(fd::reconstruct_floquet_potential(blocks, {Complex(2., -3.)}, &result) ==
+              fd::FrequencyDomainStatus::validation_error,
+          "invalid pivot tolerance is rejected before solve");
+}
+
 int main()
 {
+    reconstruction_preserves_scalar_pivot_policy();
     original_descriptor_rejects_wrong_magnetic_equation();
     reconstructs_complex_potential_with_original_residual();
     multiple_pivots_preserve_complex_multiple_rhs();

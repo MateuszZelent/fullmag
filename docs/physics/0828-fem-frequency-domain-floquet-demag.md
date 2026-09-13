@@ -175,7 +175,11 @@ ze znakiem przeciwnym do rozwiązania P inverse A_phiq q, zgodnie z dolnym
 równaniem descriptora. Wynik zawiera kompleksowy potencjał, residual i status;
 niezgodny gauge nie publikuje pola. Właściciel ogranicza ten oracle do 512
 DOF na blok. Adapter dense SLEPc (nearest/window) przekazuje teraz każdy zaakceptowany
-wektor do `certify_floquet_realified_mode`. Dwa sektory realifikacji są
+wektor do `certify_floquet_realified_mode`. Rekonstrukcja zachowuje tę samą
+bezwzględną tolerancję pivotowania co oryginalna faktoryzacja P; nie zastępuje
+jej stałym progiem podczas odtwarzania modu. Tolerancja musi być dodatnia
+i skończona; nie zmienia to progu residualu 1e-8.
+Dwa sektory realifikacji są
 rekonstruowane oddzielnie; zapisany potencjał ma nadal podwojony układ
 współczynników zespolonych, nie jest bezpośrednio phasorem XYZ ani polem Zarr.
 Kontrola oryginalnego równania magnetycznego używa stiffness sprzed dodania

@@ -533,3 +533,13 @@ Runtime, browser/FMS i pełne zamknięcie S08 nadal otwarte.
 Dodatkowe kontrole R06: typecheck, API hygiene i architecture hygiene exit 0.
 Lokalny react-doctor 0.9.12: cztery zmienione pliki, brak ustaleń, exit 0.
 Logi i manifest kontroli są w resolverowym frontend storage zadania.
+
+### S04.R07 — zachowanie tolerancji faktoryzacji
+
+R06 UI zapisano jako `5331dc5c866266b8c67c96097d0b6afb4d9d3d43`.
+Następnie poprawiono niespójny pivot tolerance Schur→rekonstrukcja.
+Małoskalowy oracle P=1e-15: MSVC RED→GREEN, wszystkie testy pliku providera
+exit 0. Dodatkowy bridge test wymaga MFEM i pozostaje niewykonany.
+Source-map validator 0828 exit 0; pierwsze wywołanie omyłkowej ścieżki
+scripts/validate_scientific_docs.py nie uruchomiło walidatora.
+Diagnostyka C++ zapisana w resolverowym windows-native/floquet-potential-contract.

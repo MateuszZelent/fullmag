@@ -63,6 +63,8 @@ struct FloquetPotentialReconstruction {
     std::uint64_t phi_count = 0;
     FloquetDynamicDemagKGaugePolicy gauge_policy =
         FloquetDynamicDemagKGaugePolicy::require_invertible;
+    // Preserve the scalar factorization policy used to construct the Schur block.
+    double pivot_tolerance = 1.0e-14;
     std::vector<std::complex<double>> p, a_phiq, a_qphi;
     // Borrowed original magnetic operator; caller owns it through the solve.
     const double *magnetic_stiffness_real_split = nullptr;
