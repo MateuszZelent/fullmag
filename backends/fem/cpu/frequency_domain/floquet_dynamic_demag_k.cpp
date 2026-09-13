@@ -501,7 +501,9 @@ FrequencyDomainStatus certify_floquet_realified_mode(
     *result = FloquetModalResidual{};
     const auto q=blocks.q_count, p=blocks.phi_count, n=2*q;
     if (!q || !p || q>512 || p>512 || z.size()!=n ||
-        !magnetic_stiffness || !gyrotropic || blocks.a_qphi.size()!=q*p ||
+        !magnetic_stiffness ||
+        blocks.magnetic_stiffness_real_split_value_count != n*n ||
+        !gyrotropic || blocks.a_qphi.size()!=q*p ||
         !finite_complex_values(blocks.a_qphi.data(),q*p) ||
         !std::isfinite(std::abs(lambda)))
         return FrequencyDomainStatus::validation_error;

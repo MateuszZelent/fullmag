@@ -1,3 +1,4 @@
+use super::eigen_mass_metric::ModalMassMetric;
 use super::eigen_solve::{
     complex_mass_norm, deembed_native_bloch_floquet_mode_vector, normalize_complex_mode,
 };
@@ -43,6 +44,26 @@ pub(super) struct NativeModalEigenpair {
     /// other modal lanes leave both fields empty.
     pub(super) q_vector: Vec<Complex64>,
     pub(super) phi_vector: Vec<Complex64>,
+    /// Native descriptor certificate for a nonzero-k Floquet mode.  The
+    /// potential is kept in the doubled real-split complex coefficient
+    /// layout emitted by the native formatter; it is not a Cartesian mesh
+    /// field and must not be promoted to a geometric-BC certificate.
+    pub(super) floquet_descriptor_certified: bool,
+    pub(super) floquet_geometric_bc_certified: bool,
+    pub(super) floquet_potential_representation: Option<String>,
+    pub(super) floquet_magnetic_relative_residual: Option<f64>,
+    pub(super) floquet_potential_relative_residual: Option<f64>,
+    pub(super) floquet_potential_real_split: Vec<Complex64>,
+}
+
+#[derive(Debug, Default)]
+struct NativeFloquetModeCertificate {
+    descriptor_certified: bool,
+    geometric_bc_certified: bool,
+    potential_representation: Option<String>,
+    magnetic_relative_residual: Option<f64>,
+    potential_relative_residual: Option<f64>,
+    potential_real_split: Vec<Complex64>,
 }
 
 pub(super) fn diagnostics_number(
@@ -119,7 +140,9 @@ pub(super) fn merge_poisson_airbox_modal_result_diagnostics(
         Some("k0_poisson_airbox_gpu_petsc_slepc")
             | Some("k0_poisson_airbox_gpu_modal_device_krylov")
     );
-    let cpu_schur = solver_adapter == Some("k0_poisson_airbox_cpu_schur_slepc");
+    let floquet_cpu_schur = solver_adapter == Some("floquet_airbox_cpu_schur_slepc");
+    let cpu_schur =
+        floquet_cpu_schur || solver_adapter == Some("k0_poisson_airbox_cpu_schur_slepc");
     let gpu_scalable_selected_spectrum = result
         .get("scalable_selected_spectrum")
         .and_then(|value| value.as_bool())
@@ -141,6 +164,8 @@ pub(super) fn merge_poisson_airbox_modal_result_diagnostics(
             } else {
                 "device_dense_validation_shift_invert"
             }
+        } else if floquet_cpu_schur {
+            "floquet_poisson_airbox_schur"
         } else if cpu_schur {
             "k0_poisson_airbox_schur"
         } else {
@@ -255,7 +280,8 @@ pub(super) fn merge_poisson_airbox_modal_result_diagnostics(
 pub(super) fn is_native_poisson_airbox_modal_adapter(adapter: Option<&str>) -> bool {
     matches!(
         adapter,
-        Some("k0_poisson_airbox_cpu_full_coupled_slepc")
+        Some("floquet_airbox_cpu_schur_slepc")
+            | Some("k0_poisson_airbox_cpu_full_coupled_slepc")
             | Some("k0_poisson_airbox_cpu_schur_slepc")
             | Some("k0_poisson_airbox_gpu_petsc_slepc")
             | Some("k0_poisson_airbox_gpu_modal_device_krylov")
@@ -413,7 +439,7 @@ pub(super) fn native_modal_modes_from_result_json(
             if poisson_airbox {
                 let tangent_mass = shared_domain_context
                     .map(|context| context.reduced_tangent_mass)
-                    .or_else(|| runner_operator.map(|(_, _, tangent_mass)| tangent_mass))
+                    .or_else(|| runner_operator.map(|(_, _, tangent_mass)| tangent_mass as &dyn ModalMassMetric))
                     .ok_or_else(|| RunError {
                         message: "native Poisson-airbox modal result is missing its native shared-domain mass context"
                             .to_string(),
@@ -479,7 +505,7 @@ fn assign_modal_frequency_clusters(modes: &mut [NativeModalEigenpair]) {
 pub(super) fn native_poisson_airbox_mode_from_json(
     plan: &FemEigenPlanIR,
     mode: &serde_json::Value,
-    tangent_mass: &DMatrix<f64>,
+    tangent_mass: &dyn ModalMassMetric,
     shared_domain_context: Option<&SharedDomainModeContext<'_>>,
 ) -> Result<NativeModalEigenpair, RunError> {
     let real = mode
@@ -536,6 +562,23 @@ pub(super) fn native_poisson_airbox_mode_from_json(
     let normalization_scale =
         complex_block_mode_normalization_scale(&vector, tangent_mass, plan.normalization);
     normalize_complex_block_mode(&mut vector, tangent_mass, plan.normalization);
+    let floquet_certificate = if mode
+        .get("potential_representation")
+        .and_then(|v| v.as_str())
+        == Some("complex_coefficients")
+    {
+        if shared_domain_context.is_none() {
+            return Err(RunError {
+                message: "physical complex potential requires shared-domain mesh context".into(),
+            });
+        }
+        validate_native_physical_potential_layout(mode)?;
+        // Physical phi is normalized and exported below. It must never enter
+        // the legacy doubled-real coefficient artifact writer.
+        NativeFloquetModeCertificate::default()
+    } else {
+        native_floquet_mode_certificate_from_json(mode, normalization_scale)?
+    };
     let phi_real = mode
         .get("mode_phi_real")
         .map(|_| required_f64_array(mode, "mode_phi_real"))
@@ -633,9 +676,16 @@ pub(super) fn native_poisson_airbox_mode_from_json(
                         .to_string(),
                 });
             }
-            expanded[active_position] = vector[class as usize];
+            let phase = match context.node_phases {
+                Some(phases) => *phases.get(node).ok_or_else(|| RunError {
+                    message: "native shared-domain Bloch phase map is shorter than the mesh"
+                        .to_string(),
+                })?,
+                None => Complex64::new(1.0, 0.0),
+            };
+            expanded[active_position] = phase * vector[class as usize];
             expanded[active_count + active_position] =
-                vector[context.magnetic_class_count + class as usize];
+                phase * vector[context.magnetic_class_count + class as usize];
         }
         expanded
     } else {
@@ -657,6 +707,12 @@ pub(super) fn native_poisson_airbox_mode_from_json(
         backend_reported_residual,
         q_vector: vector.clone(),
         phi_vector,
+        floquet_descriptor_certified: floquet_certificate.descriptor_certified,
+        floquet_geometric_bc_certified: floquet_certificate.geometric_bc_certified,
+        floquet_potential_representation: floquet_certificate.potential_representation,
+        floquet_magnetic_relative_residual: floquet_certificate.magnetic_relative_residual,
+        floquet_potential_relative_residual: floquet_certificate.potential_relative_residual,
+        floquet_potential_real_split: floquet_certificate.potential_real_split,
         vector: vector_for_projection,
     })
 }
@@ -705,7 +761,18 @@ fn native_bloch_floquet_mode_from_json(
         .collect::<Vec<_>>();
     let mut vector =
         deembed_native_bloch_floquet_mode_vector(&embedded, payload.physical_complex_dof)?;
+    let normalization_scale = match plan.normalization {
+        EigenNormalizationIR::UnitL2 => complex_mass_norm(&payload.physical_mass, &vector)
+            .re
+            .max(0.0)
+            .sqrt(),
+        EigenNormalizationIR::UnitMaxAmplitude => vector
+            .iter()
+            .fold(0.0_f64, |acc, value| acc.max(value.norm())),
+    }
+    .max(1.0e-30);
     vector = normalize_complex_mode(&vector, &payload.physical_mass, &plan.normalization);
+    let floquet_certificate = native_floquet_mode_certificate_from_json(mode, normalization_scale)?;
     let eigenvalue_real = required_f64(mode, "eigenvalue_real")?;
     let eigenvalue_imag = required_f64(mode, "eigenvalue_imag")?;
     let frequency_hz = required_f64(mode, "frequency_hz")?;
@@ -737,6 +804,12 @@ fn native_bloch_floquet_mode_from_json(
         vector,
         q_vector: Vec::new(),
         phi_vector: Vec::new(),
+        floquet_descriptor_certified: floquet_certificate.descriptor_certified,
+        floquet_geometric_bc_certified: floquet_certificate.geometric_bc_certified,
+        floquet_potential_representation: floquet_certificate.potential_representation,
+        floquet_magnetic_relative_residual: floquet_certificate.magnetic_relative_residual,
+        floquet_potential_relative_residual: floquet_certificate.potential_relative_residual,
+        floquet_potential_real_split: floquet_certificate.potential_real_split,
     })
 }
 
@@ -764,7 +837,10 @@ fn native_modal_mode_from_json(
         .zip(imag.iter())
         .map(|(re, im)| Complex64::new(*re, *im))
         .collect::<Vec<_>>();
+    let normalization_scale =
+        complex_block_mode_normalization_scale(&vector, tangent_mass, plan.normalization);
     normalize_complex_block_mode(&mut vector, tangent_mass, plan.normalization);
+    let floquet_certificate = native_floquet_mode_certificate_from_json(mode, normalization_scale)?;
     let eigenvalue_real = required_f64(mode, "eigenvalue_real")?;
     let eigenvalue_imag = required_f64(mode, "eigenvalue_imag")?;
     let frequency_hz = required_f64(mode, "frequency_hz")?;
@@ -791,6 +867,12 @@ fn native_modal_mode_from_json(
         vector,
         q_vector: Vec::new(),
         phi_vector: Vec::new(),
+        floquet_descriptor_certified: floquet_certificate.descriptor_certified,
+        floquet_geometric_bc_certified: floquet_certificate.geometric_bc_certified,
+        floquet_potential_representation: floquet_certificate.potential_representation,
+        floquet_magnetic_relative_residual: floquet_certificate.magnetic_relative_residual,
+        floquet_potential_relative_residual: floquet_certificate.potential_relative_residual,
+        floquet_potential_real_split: floquet_certificate.potential_real_split,
     })
 }
 
@@ -869,9 +951,156 @@ fn required_f64_array(value: &serde_json::Value, key: &str) -> Result<Vec<f64>, 
         .collect()
 }
 
+fn validate_native_physical_potential_layout(mode: &serde_json::Value) -> Result<(), RunError> {
+    if mode.get("potential_vector_real").is_some() || mode.get("potential_vector_imag").is_some() {
+        return Err(RunError {
+            message: "physical potential must not contain doubled-real coefficient vectors".into(),
+        });
+    }
+    let real = required_f64_array(mode, "mode_phi_real")?;
+    let imag = required_f64_array(mode, "mode_phi_imag")?;
+    let count = mode
+        .get("potential_dof_count")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| RunError {
+            message: "physical potential requires potential_dof_count".into(),
+        })?;
+    if count == 0 || count != real.len() as u64 || real.len() != imag.len() {
+        return Err(RunError {
+            message: "physical potential coefficient count does not match real/imag vectors".into(),
+        });
+    }
+    Ok(())
+}
+
+/// Parse the optional certificate emitted by the native nonzero-k Floquet
+/// modal formatter. The payload stays in the doubled real-split complex
+/// coefficient layout; it is not a Cartesian mesh field.
+fn native_floquet_mode_certificate_from_json(
+    mode: &serde_json::Value,
+    normalization_scale: f64,
+) -> Result<NativeFloquetModeCertificate, RunError> {
+    const CERTIFICATE_KEYS: [&str; 7] = [
+        "floquet_descriptor_certified",
+        "floquet_geometric_bc_certified",
+        "potential_representation",
+        "magnetic_relative_residual",
+        "potential_relative_residual",
+        "potential_vector_real",
+        "potential_vector_imag",
+    ];
+    let has_any = CERTIFICATE_KEYS.iter().any(|key| mode.get(*key).is_some());
+    if !has_any {
+        return Ok(NativeFloquetModeCertificate::default());
+    }
+
+    let descriptor_certified = mode
+        .get("floquet_descriptor_certified")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| RunError {
+            message:
+                "native Floquet mode certificate requires boolean floquet_descriptor_certified"
+                    .to_string(),
+        })?;
+    if !descriptor_certified {
+        if CERTIFICATE_KEYS[1..]
+            .iter()
+            .any(|key| mode.get(*key).is_some())
+        {
+            return Err(RunError {
+                message: "native Floquet mode has certificate payload while floquet_descriptor_certified is false".to_string(),
+            });
+        }
+        return Ok(NativeFloquetModeCertificate::default());
+    }
+
+    let geometric_bc_certified = mode
+        .get("floquet_geometric_bc_certified")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| RunError {
+            message:
+                "native Floquet descriptor certificate is missing boolean floquet_geometric_bc_certified"
+                    .to_string(),
+        })?;
+    if geometric_bc_certified {
+        return Err(RunError {
+            message:
+                "native Floquet descriptor certificate cannot claim geometric BC certification"
+                    .to_string(),
+        });
+    }
+    let potential_representation = mode
+        .get("potential_representation")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| *value == "doubled_real_split_complex_coefficients")
+        .map(str::to_owned)
+        .ok_or_else(|| RunError {
+            message:
+                "native Floquet descriptor certificate has unsupported potential_representation"
+                    .to_string(),
+        })?;
+    let magnetic_relative_residual = required_f64(mode, "magnetic_relative_residual")?;
+    let potential_relative_residual = required_f64(mode, "potential_relative_residual")?;
+    for (name, value) in [
+        ("magnetic_relative_residual", magnetic_relative_residual),
+        ("potential_relative_residual", potential_relative_residual),
+    ] {
+        if !(0.0..=1.0e-8).contains(&value) {
+            return Err(RunError {
+                message: format!(
+                    "native Floquet descriptor certificate field '{name}' must be in [0, 1e-8]"
+                ),
+            });
+        }
+    }
+    if !(normalization_scale.is_finite() && normalization_scale > 0.0) {
+        return Err(RunError {
+            message: "native Floquet descriptor certificate requires a positive finite normalization scale"
+                .to_string(),
+        });
+    }
+    let potential_real = required_f64_array(mode, "potential_vector_real")?;
+    let potential_imag = required_f64_array(mode, "potential_vector_imag")?;
+    if potential_real.is_empty()
+        || potential_real.len() != potential_imag.len()
+        || potential_real.len() % 2 != 0
+    {
+        return Err(RunError {
+            message: format!(
+                "native Floquet potential real-split vector requires equal non-empty even lengths: real={}, imag={}",
+                potential_real.len(),
+                potential_imag.len()
+            ),
+        });
+    }
+    let potential_real_split = potential_real
+        .into_iter()
+        .zip(potential_imag)
+        .map(|(real, imag)| Complex64::new(real, imag) / normalization_scale)
+        .collect::<Vec<_>>();
+    if potential_real_split
+        .iter()
+        .any(|value| !value.re.is_finite() || !value.im.is_finite())
+    {
+        return Err(RunError {
+            message:
+                "native Floquet descriptor certificate potential payload overflows after normalization"
+                    .to_string(),
+        });
+    }
+    Ok(NativeFloquetModeCertificate {
+        descriptor_certified: true,
+        geometric_bc_certified: false,
+        potential_representation: Some(potential_representation),
+        magnetic_relative_residual: Some(magnetic_relative_residual),
+        potential_relative_residual: Some(potential_relative_residual),
+        potential_real_split,
+    })
+}
+
 pub(super) fn normalize_complex_block_mode(
     vector: &mut [Complex64],
-    mass: &DMatrix<f64>,
+    mass: &dyn ModalMassMetric,
     normalization: EigenNormalizationIR,
 ) {
     let scale = complex_block_mode_normalization_scale(vector, mass, normalization);
@@ -879,31 +1108,24 @@ pub(super) fn normalize_complex_block_mode(
         *value /= scale;
     }
 }
-
 fn complex_block_mode_normalization_scale(
     vector: &[Complex64],
-    mass: &DMatrix<f64>,
+    mass: &dyn ModalMassMetric,
     normalization: EigenNormalizationIR,
 ) -> f64 {
     match normalization {
-        EigenNormalizationIR::UnitL2 => complex_block_mass_norm(mass, vector).re.max(0.0).sqrt(),
+        EigenNormalizationIR::UnitL2 => mass.quadratic_form(vector).re.max(0.0).sqrt(),
         EigenNormalizationIR::UnitMaxAmplitude => vector
             .iter()
             .fold(0.0_f64, |acc, value| acc.max(value.norm())),
     }
     .max(1.0e-30)
 }
-
-pub(super) fn complex_block_mass_norm(mass: &DMatrix<f64>, vector: &[Complex64]) -> Complex64 {
-    let mut norm = Complex64::new(0.0, 0.0);
-    for row in 0..mass.nrows() {
-        let mut projected = Complex64::new(0.0, 0.0);
-        for col in 0..mass.ncols() {
-            projected += vector[col] * mass[(row, col)];
-        }
-        norm += vector[row].conj() * projected;
-    }
-    norm
+pub(super) fn complex_block_mass_norm(
+    mass: &dyn ModalMassMetric,
+    vector: &[Complex64],
+) -> Complex64 {
+    mass.quadratic_form(vector)
 }
 
 pub(super) fn gyrotropic_pencil_residual_norms(
@@ -939,4 +1161,103 @@ pub(super) fn gyrotropic_pencil_residual_norms(
         residual_absolute_l2
     };
     (residual_absolute_l2, residual_relative_l2, residual_linf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn physical_potential_accepts_odd_dof_count_without_doubled_real_layout() {
+        let mut mode = serde_json::json!({
+            "potential_dof_count": 3,
+            "mode_phi_real": [1.0, 2.0, 3.0],
+            "mode_phi_imag": [0.5, 0.0, -0.5]
+        });
+        validate_native_physical_potential_layout(&mode).unwrap();
+        mode["potential_vector_real"] = serde_json::json!([1.0, 2.0, 3.0]);
+        assert!(validate_native_physical_potential_layout(&mode)
+            .unwrap_err()
+            .message
+            .contains("doubled-real"));
+        mode.as_object_mut()
+            .unwrap()
+            .remove("potential_vector_real");
+        mode["potential_dof_count"] = serde_json::json!(6);
+        assert!(validate_native_physical_potential_layout(&mode).is_err());
+    }
+
+    #[test]
+    fn native_floquet_certificate_payload_roundtrips_to_interleaved_binary() {
+        let mode = serde_json::json!({
+            "floquet_descriptor_certified": true,
+            "floquet_geometric_bc_certified": false,
+            "potential_representation": "doubled_real_split_complex_coefficients",
+            "magnetic_relative_residual": 2.0e-10,
+            "potential_relative_residual": 3.0e-10,
+            "potential_vector_real": [2.0, -4.0, 6.0, -8.0],
+            "potential_vector_imag": [1.0, -3.0, 5.0, -7.0],
+        });
+
+        let certificate = native_floquet_mode_certificate_from_json(&mode, 2.0)
+            .expect("valid native Floquet certificate should parse");
+        assert!(certificate.descriptor_certified);
+        assert!(!certificate.geometric_bc_certified);
+        assert_eq!(
+            certificate.potential_real_split,
+            vec![
+                Complex64::new(1.0, 0.5),
+                Complex64::new(-2.0, -1.5),
+                Complex64::new(3.0, 2.5),
+                Complex64::new(-4.0, -3.5),
+            ]
+        );
+
+        let bytes = super::super::eigen_output::floquet_potential_payload_bytes(
+            &certificate.potential_real_split,
+        )
+        .expect("parsed potential should serialize");
+        assert_eq!(bytes.len(), certificate.potential_real_split.len() * 16);
+        for (index, value) in certificate.potential_real_split.iter().enumerate() {
+            let offset = index * 16;
+            assert_eq!(
+                f64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()),
+                value.re
+            );
+            assert_eq!(
+                f64::from_le_bytes(bytes[offset + 8..offset + 16].try_into().unwrap()),
+                value.im
+            );
+        }
+    }
+
+    #[test]
+    fn native_floquet_certificate_rejects_payload_when_descriptor_is_false() {
+        let mode = serde_json::json!({
+            "floquet_descriptor_certified": false,
+            "potential_vector_real": [1.0, 2.0],
+            "potential_vector_imag": [0.0, 0.0],
+        });
+
+        let error = native_floquet_mode_certificate_from_json(&mode, 1.0)
+            .expect_err("non-certified Floquet payload must be rejected");
+        assert!(error.message.contains("certificate payload"));
+    }
+
+    #[test]
+    fn native_floquet_certificate_rejects_geometric_bc_claim() {
+        let mode = serde_json::json!({
+            "floquet_descriptor_certified": true,
+            "floquet_geometric_bc_certified": true,
+            "potential_representation": "doubled_real_split_complex_coefficients",
+            "magnetic_relative_residual": 1.0e-10,
+            "potential_relative_residual": 1.0e-10,
+            "potential_vector_real": [1.0, 2.0],
+            "potential_vector_imag": [0.0, 0.0],
+        });
+
+        let error = native_floquet_mode_certificate_from_json(&mode, 1.0)
+            .expect_err("geometric BC claim must be rejected");
+        assert!(error.message.contains("geometric BC"));
+    }
 }

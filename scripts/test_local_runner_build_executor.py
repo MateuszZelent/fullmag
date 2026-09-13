@@ -85,6 +85,20 @@ class BuildExecutorTests(unittest.TestCase):
             self.assertNotIn('docker.sock', ' '.join(command))
             self.assertIn('type=bind,source=' + str(paths['source']) + ',target=/source,readonly', command)
             self.assertEqual(8, command.count('--mount'))
+            modal_command = executor.build_command(
+                'a' * 32,
+                'b' * 64,
+                'fem-cpu-slepc-modal-v1',
+                {
+                    'image_digest': 'sha256:' + 'c' * 64,
+                    'cpus': 2,
+                    'memory_bytes': 8 * 1024**3,
+                },
+                paths,
+                root,
+            )
+            self.assertNotIn('--gpus', modal_command)
+            self.assertIn('fem-cpu-slepc-modal-v1', modal_command)
 
     def test_reject_mount_escape(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -112,6 +126,214 @@ class BuildExecutorTests(unittest.TestCase):
             (root / 'build-receipt.json').write_text(json.dumps({**job, 'state': 'succeeded', 'qualification': 'NOT VERIFIED', 'artifacts': []}))
             with self.assertRaises(ValueError):
                 executor.validate_build_receipt(root, job, {})
+
+    def test_slepc_modal_receipt_accepts_contract_artifacts_and_cpu_provenance(self):
+        import hashlib
+        import json
+        from local_runner.worker_entrypoint import canonical
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            image = "sha256:" + "c" * 64
+            native = {"head_commit_full": "a" * 40, "source_snapshot_sha256": "3" * 64}
+            job = {
+                "job_id": "a" * 32,
+                "source_digest": "b" * 64,
+                "profile": "fem-cpu-slepc-modal-v1",
+                "payload": {"native_source_identity": native},
+            }
+            result = {
+                "schema": "fullmag.fem.cpu.slepc_modal_contract_result.v1",
+                "scenario": "slepc-modal",
+                "status": "pass",
+                "source": {
+                    "commit": native["head_commit_full"],
+                    "snapshot_sha256": native["source_snapshot_sha256"],
+                },
+                "requested": {
+                    "backend": "fem",
+                    "device": "cpu",
+                    "precision": "double",
+                    "slepc": True,
+                },
+                "resolved": {
+                    "backend": "fem",
+                    "device": "cpu",
+                    "precision": "double",
+                    "slepc": True,
+                    "fallback_used": False,
+                },
+                "build": {
+                    "options": [
+                        "-DFULLMAG_ENABLE_CUDA=ON",
+                        "-DFULLMAG_ENABLE_FEM_GPU=OFF",
+                        "-DFULLMAG_USE_MFEM_STACK=ON",
+                        "-DFULLMAG_FEM_WITH_SLEPC=ON",
+                    ],
+                    "modal_target": "fem_poisson_airbox_modal_eigen_slepc_contract",
+                    "floquet_targets": list(
+                        executor.PROFILE_CONTRACTS["fem-cpu-slepc-modal-v1"][
+                            "floquet_targets"
+                        ]
+                    ),
+                    "ctest_completed": True,
+                    "executed_targets": [
+                        "fem_poisson_airbox_modal_eigen_slepc_contract",
+                        *executor.PROFILE_CONTRACTS["fem-cpu-slepc-modal-v1"]["floquet_targets"],
+                    ],
+                },
+                "runtime_library": "/workspace/.fullmag/local/lib/libfullmag_fem.so.0",
+                "attestation": {
+                    "ctest_junit": {
+                        "status": "pass",
+                        "testcase_count": 8,
+                        "skipped_count": 0,
+                        "failure_count": 0,
+                        "testcases": [
+                            "fem_poisson_airbox_modal_eigen_slepc_contract",
+                            *executor.PROFILE_CONTRACTS["fem-cpu-slepc-modal-v1"]["floquet_targets"],
+                        ],
+                    },
+                    "cmake": {
+                        "status": "pass",
+                        "options": {
+                            "FULLMAG_ENABLE_CUDA": {"value": "ON"},
+                            "FULLMAG_ENABLE_FEM_GPU": {"value": "OFF"},
+                            "FULLMAG_USE_MFEM_STACK": {"value": "ON"},
+                            "FULLMAG_FEM_WITH_SLEPC": {"value": "ON"},
+                        },
+                    },
+                    "runtime": {
+                        "status": "pass",
+                        "availability": {"native_fem_cpu_available": True},
+                        "startup_stamp": "[fullmag] build: test | source snapshot: test",
+                    },
+                    "dependency": {
+                        "status": "pass",
+                        "dependency": {
+                            "petsc_available": True,
+                            "slepc_available": True,
+                            "modal_eigen_native_cpu_slepc_available": True,
+                            "petsc_version": "3.24.6",
+                            "slepc_version": "3.24.3",
+                        },
+                    },
+                    "resolution": {
+                        "status": "pass",
+                            "resolved": {
+                            "backend": "fem",
+                            "device": "cpu",
+                            "precision": "double",
+                            "slepc": True,
+                                "fallback_used": False,
+                            },
+                            "precision": {
+                                "value": "double",
+                                "basis": "modal CTest compiled with PETSC_USE_REAL_DOUBLE and static_assert(sizeof(PetscReal) == sizeof(double))",
+                            },
+                        },
+                },
+            }
+            result_path = root / "contracts" / "slepc-modal" / "result.json"
+            result_path.parent.mkdir(parents=True)
+            result_path.write_text(json.dumps(result), encoding="utf-8")
+            result_bytes = result_path.read_bytes()
+            native_library = root / "outputs" / ".fullmag" / "local" / "lib" / "libfullmag_fem.so.0"
+            native_library.parent.mkdir(parents=True)
+            native_library.write_bytes(b"native fem library")
+            identity_path = root / "source-identity.json"
+            identity_path.write_text(json.dumps(native), encoding="utf-8")
+            native_library_bytes = native_library.read_bytes()
+            identity_bytes = identity_path.read_bytes()
+            receipt = {
+                **job,
+                "image_digest": image,
+                "native_source_identity": native,
+                "native_source_identity_sha256": hashlib.sha256(
+                    canonical(native)
+                ).hexdigest(),
+                "qualification": "NOT VERIFIED",
+                "state": "succeeded",
+                "contract_scenarios": ["slepc-modal"],
+                "contract_schema": "fullmag.fem.cpu.slepc_modal_contract_result.v1",
+                "stages": [
+                    {
+                        "name": "contract-slepc-modal",
+                        "exit_code": 0,
+                    }
+                ],
+                "artifacts": [
+                    {
+                        "path": "contracts/slepc-modal/result.json",
+                        "size": len(result_bytes),
+                        "sha256": hashlib.sha256(result_bytes).hexdigest(),
+                    },
+                    {
+                        "path": "outputs/.fullmag/local/lib/libfullmag_fem.so.0",
+                        "size": len(native_library_bytes),
+                        "sha256": hashlib.sha256(native_library_bytes).hexdigest(),
+                    },
+                    {
+                        "path": "source-identity.json",
+                        "size": len(identity_bytes),
+                        "sha256": hashlib.sha256(identity_bytes).hexdigest(),
+                    },
+                ],
+            }
+            (root / "build-receipt.json").write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+            validated = executor.validate_build_receipt(
+                root,
+                job,
+                {"image_digest": image},
+            )
+            self.assertEqual(validated["state"], "succeeded")
+
+            result["source"]["snapshot_sha256"] = "4" * 64
+            result_path.write_text(json.dumps(result), encoding="utf-8")
+            result_bytes = result_path.read_bytes()
+            receipt["artifacts"][0].update(
+                size=len(result_bytes),
+                sha256=hashlib.sha256(result_bytes).hexdigest(),
+            )
+            (root / "build-receipt.json").write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "source identity mismatch"):
+                executor.validate_build_receipt(
+                    root,
+                    job,
+                    {"image_digest": image},
+                )
+
+            result["source"]["snapshot_sha256"] = native["source_snapshot_sha256"]
+            result_path.write_text(json.dumps(result), encoding="utf-8")
+            result_bytes = result_path.read_bytes()
+            receipt["artifacts"][0].update(
+                size=len(result_bytes),
+                sha256=hashlib.sha256(result_bytes).hexdigest(),
+            )
+            (root / "build-receipt.json").write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+
+            result["resolved"]["fallback_used"] = True
+            result_path.write_text(json.dumps(result), encoding="utf-8")
+            result_bytes = result_path.read_bytes()
+            receipt["artifacts"][0].update(
+                size=len(result_bytes),
+                sha256=hashlib.sha256(result_bytes).hexdigest(),
+            )
+            (root / "build-receipt.json").write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "implicit fallback"):
+                executor.validate_build_receipt(
+                    root,
+                    job,
+                    {"image_digest": image},
+                )
 
     def test_worker_isolation_is_attested(self):
         inspected = {'Image': 'image', 'Mounts': [], 'Config': {'User': '65532:65532'},

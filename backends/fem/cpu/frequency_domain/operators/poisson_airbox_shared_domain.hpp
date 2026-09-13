@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <array>
+#include <complex>
 #include <string>
 #include <vector>
 
@@ -24,6 +25,22 @@ struct FemMeshRuntimeState;
 namespace fullmag::fem::frequency_domain {
 
 struct FloquetAirboxDynamicDemagKResult;
+
+/*
+ * Backend-owned complex CSR storage for the phase-reduced Floquet pencil.
+ * The arrays are intentionally independent from CsrMatrixView: the latter
+ * is a real ABI carrier, while a nonzero-k operator has genuine complex
+ * entries before its real-split SLEPc view is formed.  Keeping ownership here
+ * makes it possible to assemble and solve a large shared-domain problem
+ * without materialising a dense dynamic-demagnetisation block.
+ */
+struct PoissonAirboxSharedDomainComplexCsrMatrix {
+    std::uint64_t row_count = 0;
+    std::uint64_t column_count = 0;
+    std::vector<std::uint32_t> row_offsets{};
+    std::vector<std::uint32_t> column_indices{};
+    std::vector<std::complex<double>> values{};
+};
 
 #if FULLMAG_HAS_MFEM_STACK
 
@@ -80,6 +97,10 @@ struct PoissonAirboxSharedDomainAssemblyRequest {
     double mu0_T_m_A = 0.0;
 
     const CsrMatrixView *magnetic_a_qq_csr = nullptr;
+    /* Optional full-q -> phase-reduced-q constraint.  When supplied, the
+       magnetic A_qq and B_qq blocks are projected as C^H A C and C^H B C;
+       the real k=0 reduction remains the default when it is null. */
+    const mfem::ComplexSparseMatrix *magnetic_phase_constraint = nullptr;
 
     const std::uint32_t *scalar_reduced_node = nullptr;
     std::uint64_t scalar_reduced_node_count = 0;
@@ -106,6 +127,12 @@ struct PoissonAirboxSharedDomainAssemblyResult {
     PoissonAirboxSharedDomainCsrMatrix a_phiq{};
     PoissonAirboxSharedDomainCsrMatrix p{};
     PoissonAirboxSharedDomainCsrMatrix b_qq{};
+    PoissonAirboxSharedDomainComplexCsrMatrix floquet_a_qq{};
+    PoissonAirboxSharedDomainComplexCsrMatrix floquet_b_qq{};
+    PoissonAirboxSharedDomainComplexCsrMatrix floquet_p{};
+    PoissonAirboxSharedDomainComplexCsrMatrix floquet_a_qphi{};
+    PoissonAirboxSharedDomainComplexCsrMatrix floquet_a_phiq{};
+    bool floquet_sparse_operator_ready = false;
     std::vector<double> phi_mean_weights{};
     std::vector<std::uint32_t> dirichlet_dofs{};
     char boundary_kind[32]{};
@@ -202,18 +229,20 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
 /* Import and assemble the versioned public shared-domain modal payload.  The
  * returned CSR buffers own their storage and remain valid until the result is
  * destroyed by the caller.  When a k-vector and Floquet pair graph are
- * supplied, the same accepted payload is also used to build the bounded
- * phase-aware dynamic-demagnetization Schur matrix.  The nonzero-k route
- * deliberately skips legacy real k=0 CSR assembly; the optional result is
- * separate from those blocks so callers cannot confuse the two
- * representations. */
+ * supplied, the same accepted payload is also used to build the phase-aware
+ * shared-domain blocks.  `materialize_dense_floquet` keeps the old bounded
+ * dynamic-demagnetization oracle available for diagnostics, while `false`
+ * returns only owned sparse complex blocks for the production MatShell path.
+ * The nonzero-k route deliberately keeps its phase-reduced blocks separate
+ * from the legacy real k=0 CSR representation. */
 FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
     const FullmagFemModalSharedDomainPayload &payload,
     PoissonAirboxSharedDomainAssemblyResult *out_result,
     const FrequencyDomainFloquetPeriodicPair *floquet_periodic_pairs = nullptr,
     std::uint64_t floquet_periodic_pair_count = 0,
     const std::array<double, 3> *floquet_k_rad_per_m = nullptr,
-    FloquetAirboxDynamicDemagKResult *out_floquet_dynamic_demag_k = nullptr) noexcept;
+    FloquetAirboxDynamicDemagKResult *out_floquet_dynamic_demag_k = nullptr,
+    bool materialize_dense_floquet = true) noexcept;
 
 FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
     const PoissonAirboxSharedDomainAssemblyRequest &request,

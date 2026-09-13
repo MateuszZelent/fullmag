@@ -41,6 +41,7 @@ from .gmsh_bridge import (
     generate_mesh_from_file,
     generate_shared_domain_mesh_from_components,
 )
+from ._gmsh_swept import _is_box_cylinder_ring
 from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS
 from .surface_assets import _geometry_to_trimesh, _import_trimesh, build_surface_preview_payload
 from .voxelization import VoxelMaskData, voxelize_geometry
@@ -2625,7 +2626,16 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         and airbox is not None
         and surface_mesh_options.mesh_strategy == "swept_prism"
     )
-    single_geometry_occ_direct = mixed_shared_geo_direct
+    ring_shared_geo_direct = (
+        len(geometries) == 1
+        and _is_box_cylinder_ring(geometries[0])
+        and airbox is not None
+        and surface_mesh_options.mesh_strategy
+        in {"thin_film_tetrahedral", "swept_prism"}
+        and not per_object_recipes
+        and not object_regions
+    )
+    single_geometry_occ_direct = mixed_shared_geo_direct or ring_shared_geo_direct
     if (
         isinstance(mesh_workflow, Mapping)
         and bool(mesh_workflow.get("single_geometry_occ_direct")) is True
@@ -2763,6 +2773,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         used_size_field_kinds = _unique_size_field_kinds(list(mesh_options.size_fields))
         if mixed_shared_geo_direct:
             planned_build_mode = "single_geometry_geo_mixed"
+        elif ring_shared_geo_direct:
+            planned_build_mode = "single_geometry_geo_ring"
         elif single_geometry_occ_direct:
             planned_build_mode = "single_geometry_occ"
         elif conformal_occ_direct:
@@ -2823,7 +2835,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 "error": str(exc),
                 "message": "Shared-domain mesh build failed",
             }
-            if mixed_shared_geo_direct:
+            if mixed_shared_geo_direct or ring_shared_geo_direct:
                 payload["mixed_layer_topology_rejection"] = {
                     "schema_version": "mixed_layer_topology_rejection.v1",
                     "certificate_status": "rejected",
@@ -2854,13 +2866,13 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 else float(hints.hmax)
             )
             if (
-                not mixed_shared_geo_direct
+                not (mixed_shared_geo_direct or ring_shared_geo_direct)
                 and airbox is not None
                 and airbox.maximum_element_size is not None
                 and float(airbox.maximum_element_size) > effective_hmax
             ):
                 effective_hmax = float(airbox.maximum_element_size)
-            if not mixed_shared_geo_direct:
+            if not (mixed_shared_geo_direct or ring_shared_geo_direct):
                 for field in mesh_options.size_fields:
                     vin = field.get("params", {}).get("VIn") if isinstance(field.get("params"), dict) else None
                     if isinstance(vin, (int, float)) and float(vin) > effective_hmax:
@@ -2871,7 +2883,11 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 build_mode = (
                     "single_geometry_geo_mixed"
                     if mixed_shared_geo_direct
-                    else "single_geometry_occ"
+                    else (
+                        "single_geometry_geo_ring"
+                        if ring_shared_geo_direct
+                        else "single_geometry_occ"
+                    )
                 )
                 emit_progress_event(
                     {
@@ -2880,14 +2896,22 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                         "message": (
                             "Generating shared-GEO prism/pyramid/tetrahedron mesh"
                             if mixed_shared_geo_direct
-                            else "Generating direct OCC 3D tetrahedral mesh"
+                            else (
+                                "Generating shared-GEO ring tetrahedral mesh"
+                                if ring_shared_geo_direct
+                                else "Generating direct OCC 3D tetrahedral mesh"
+                            )
                         ),
                     }
                 )
                 emit_progress(
                     "Single-geometry shared-GEO mixed mesh path selected"
                     if mixed_shared_geo_direct
-                    else "Single-geometry OCC mesh path selected (skipping STL component import)"
+                    else (
+                        "Single-geometry shared-GEO ring mesh path selected"
+                        if ring_shared_geo_direct
+                        else "Single-geometry OCC mesh path selected (skipping STL component import)"
+                    )
                 )
                 mesh = generate_mesh(
                     geometries[0],
@@ -3177,7 +3201,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             }
         )
         if (
-            build_mode != "conformal_occ"
+            build_mode not in {"conformal_occ", "single_geometry_geo_ring"}
             and getattr(mesh, "mixed_layer_topology_certificate", None) is None
         ):
             mesh = _drop_degenerate_tetrahedra(

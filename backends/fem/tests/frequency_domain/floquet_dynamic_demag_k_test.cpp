@@ -328,6 +328,7 @@ void original_descriptor_rejects_wrong_magnetic_equation()
 {
     fd::FloquetPotentialReconstruction b;
     b.q_count=1; b.phi_count=1; b.p={2.}; b.a_phiq={1.}; b.a_qphi={1.};
+    b.magnetic_stiffness_real_split_value_count = 4u;
     double k[4]={2.5,0.,0.,2.5}, g[4]={1.,0.,0.,1.};
     fd::FloquetModalResidual r;
     const std::vector<Complex> z={Complex(1,2),Complex(3,-1)};
@@ -340,6 +341,12 @@ void original_descriptor_rejects_wrong_magnetic_equation()
     check(fd::certify_floquet_realified_mode(b,k,g,z,Complex(2,0),&r)==
           fd::FrequencyDomainStatus::operator_error,"wrong magnetic equation rejects");
     check(!r.certified && r.potential_real_split.empty(),"failed descriptor does not publish potential");
+    b.magnetic_stiffness_real_split_value_count = 3u;
+    check(fd::certify_floquet_realified_mode(b,k,g,z,Complex(2,0),&r)==
+          fd::FrequencyDomainStatus::validation_error,
+          "mismatched magnetic operator bound rejects before descriptor evaluation");
+    check(!r.certified && r.potential_real_split.empty(),
+          "mismatched magnetic operator bound does not publish potential");
 }
 
 } // namespace

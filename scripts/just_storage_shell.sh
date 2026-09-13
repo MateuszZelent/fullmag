@@ -73,6 +73,16 @@ case "${recipe}" in
   *"scripts/local_runner_cli.py"*)
     FULLMAG_STORAGE_PYTHON="${python_cmd}" exec bash -euo pipefail -c "${recipe}"
     ;;
+  *"scripts/run_comsol_dispersion_benchmark.py"*)
+    # The benchmark consumes an already completed runner build.  Its Python
+    # entry point acquires the per-worktree build lock around the immutable
+    # receipt check and Compose run, so it must not enter the generic heavy
+    # lock that rejects all commands while the container coordinator is
+    # enrolled on Windows.
+    "${python_cmd}" "${resolver}" resolve --repo-root "${repo_root}" >/dev/null
+    export PYTHONDONTWRITEBYTECODE=1
+    exec bash -euo pipefail -c "${recipe}"
+    ;;
 esac
 
 # The Windows PowerShell launchers select their own storage profile and hold

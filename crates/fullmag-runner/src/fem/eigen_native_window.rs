@@ -1,3 +1,4 @@
+use super::eigen_capability::native_cpu_modal_window_has_floquet_dynamic_demag_path;
 use super::eigen_constants::{
     NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND, NATIVE_GPU_MODAL_SHARED_DOMAIN_SOLVER_KIND,
 };
@@ -7,6 +8,9 @@ use super::eigen_equilibrium_contract::{
     AcceptedFemEigenEquilibriumHandoff, AcceptedFemRelaxStageHandoff, LoadedEquilibriumArtifactV7,
 };
 use super::eigen_execution_resolution::PlannedFemEigenExecution;
+use super::eigen_mass_metric::{
+    canonical_shared_domain_phases, validate_shared_domain_phase_anchors, SharedDomainSparseMass,
+};
 use super::eigen_native_artifacts::{
     native_gpu_modal_shared_domain_execution_provenance, native_modal_artifacts,
     native_modal_execution_provenance,
@@ -16,8 +20,10 @@ use super::eigen_native_result::{
     merge_poisson_airbox_modal_result_diagnostics, native_bloch_floquet_modes_from_result_json,
     native_modal_modes_from_result_json, normalize_native_window_subwindows,
 };
-use super::eigen_operator::assemble_tangent_mass_matrix;
-use super::eigen_output::{json_artifact, k_vector_json};
+use super::eigen_output::{json_artifact, k_vector_json, requested_mode_indices};
+use super::eigen_physical_potential::{
+    doubled_real_split_to_complex, physical_potential_artifacts,
+};
 use super::eigen_policy::{
     native_cpu_modal_window_has_bloch_floquet_payload_path, native_modal_damping_policy,
     native_modal_equilibrium_source_kind, native_modal_floquet_periodic_pairs,
@@ -32,8 +38,9 @@ use super::eigen_progress::{
 use super::eigen_reduction::ReductionMap;
 use super::eigen_shared_domain::{
     build_native_shared_domain_modal_problem, build_shared_domain_linearization_state,
-    full_physical_magnetic_reduction_map, reduced_shared_domain_tangent_mass,
+    full_physical_magnetic_reduction_map,
 };
+use super::eigen_shared_domain_geometry::modal_shared_domain_equivalence_classes;
 use super::eigen_solve::{
     native_bloch_floquet_dense_payload_from_complex_pair, regularize_periodic_mass_if_needed,
 };
@@ -117,7 +124,9 @@ pub(super) fn execute_native_modal_window(
         },
     )?;
 
-    let shared_domain_linearization_state = if shared_domain_k0_modal_requested(plan) {
+    let shared_domain_requested = shared_domain_k0_modal_requested(plan)
+        || native_cpu_modal_window_has_floquet_dynamic_demag_path(plan);
+    let shared_domain_linearization_state = if shared_domain_requested {
         Some(build_shared_domain_linearization_state(
             plan,
             topology,
@@ -158,7 +167,7 @@ pub(super) fn execute_native_modal_window(
             }
             (None, _) => None,
         };
-    let shared_domain_problem = if shared_domain_k0_modal_requested(plan) {
+    let shared_domain_problem = if shared_domain_requested {
         Some(build_native_shared_domain_modal_problem(
             plan,
             topology,
@@ -227,7 +236,7 @@ pub(super) fn execute_native_modal_window(
             let operator_input_signature = serde_json::json!({
                 "schema_version": "frequency_domain_operator_input_signature.v1",
                 "assembly_kind": "mfem_weak_form_shared_domain",
-                "demag_kind": "periodic_airbox_k0",
+                "demag_kind": if reduction.complex_reduction { "floquet_airbox" } else { "periodic_airbox_k0" },
                 "matrix_equation": "L_eff q = lambda B_qq q; phi(q) = -P^-1 A_phiq q",
                 "physics_contract_version": "micromagnetics_frequency_domain_v5",
                 "operator_dictionary_version": "FrequencyOperatorDictionary.v1",
@@ -372,6 +381,11 @@ pub(super) fn execute_native_modal_window(
             )
         });
     let shared_domain_mode = shared_domain_problem.is_some();
+    let shared_domain_pairs = if shared_domain_mode {
+        native_modal_floquet_periodic_pairs(plan, topology)?
+    } else {
+        Vec::new()
+    };
     let native_result = native_fem::solve_native_modal_eigen(native_fem::NativeModalEigenRequest {
         mesh_asset_id: &plan.mesh_name,
         equilibrium_source_kind: native_modal_equilibrium_source_kind(&plan.equilibrium),
@@ -409,6 +423,7 @@ pub(super) fn execute_native_modal_window(
         mfem_sparse_operator_problem: None,
         poisson_airbox_block_problem: None,
         shared_domain_problem,
+        shared_domain_floquet_periodic_pairs: &shared_domain_pairs,
     })
     .map_err(|message| RunError { message })?;
     progress = live_progress_sink.into_inner();
@@ -497,22 +512,47 @@ pub(super) fn execute_native_modal_window(
     }
     let shared_domain_full_reduction =
         shared_domain_mode.then(|| full_physical_magnetic_reduction_map(topology));
-    let shared_domain_full_mass = shared_domain_full_reduction
-        .as_ref()
-        .map(|full_reduction| assemble_tangent_mass_matrix(topology, full_reduction));
-    let shared_mode_context_data = if let Some(full_mass) = shared_domain_full_mass.as_ref() {
-        Some(reduced_shared_domain_tangent_mass(topology, full_mass)?)
+    let shared_domain_phases = if shared_domain_mode {
+        Some(canonical_shared_domain_phases(topology, plan)?)
+    } else {
+        None
+    };
+    let shared_mode_context_data = if shared_domain_mode {
+        let (scalar_classes, scalar_count, magnetic_classes, magnetic_count) =
+            modal_shared_domain_equivalence_classes(topology)?;
+        let scalar_count = usize::try_from(scalar_count).map_err(|_| RunError {
+            message: "shared-domain scalar class count exceeds host dimensions".to_string(),
+        })?;
+        let magnetic_count = usize::try_from(magnetic_count).map_err(|_| RunError {
+            message: "shared-domain magnetic class count exceeds host dimensions".to_string(),
+        })?;
+        let phases = shared_domain_phases.as_deref().ok_or_else(|| RunError {
+            message: "shared-domain phase map was not constructed".to_string(),
+        })?;
+        validate_shared_domain_phase_anchors(&scalar_classes, scalar_count, phases)?;
+        let metric = SharedDomainSparseMass::from_topology(
+            topology,
+            &magnetic_classes,
+            magnetic_count,
+            phases,
+        )?;
+        Some((
+            metric,
+            magnetic_classes,
+            magnetic_count,
+            scalar_classes,
+            scalar_count,
+        ))
     } else {
         None
     };
     let shared_mode_context = shared_mode_context_data.as_ref().map(
-        |(reduced_tangent_mass, active_nodes, magnetic_classes, magnetic_class_count)| {
-            SharedDomainModeContext {
-                reduced_tangent_mass,
-                active_nodes,
-                magnetic_classes,
-                magnetic_class_count: *magnetic_class_count,
-            }
+        |(metric, magnetic_classes, magnetic_class_count, _, _)| SharedDomainModeContext {
+            reduced_tangent_mass: metric,
+            active_nodes: &metric.active_nodes,
+            magnetic_classes,
+            magnetic_class_count: *magnetic_class_count,
+            node_phases: shared_domain_phases.as_deref(),
         },
     );
     let result_value = serde_json::from_str::<serde_json::Value>(&native_result.result_json)
@@ -580,18 +620,9 @@ pub(super) fn execute_native_modal_window(
     }
 
     let artifact_reduction = shared_domain_full_reduction.as_ref().unwrap_or(reduction);
-    let artifact_node_mass_weights = shared_domain_full_mass
+    let artifact_node_mass_weights = shared_mode_context_data
         .as_ref()
-        .and_then(|full_mass| {
-            shared_domain_full_reduction
-                .as_ref()
-                .and_then(|full_reduction| {
-                    node_mass_weights_from_tangent_mass(
-                        full_mass,
-                        full_reduction.active_nodes.len(),
-                    )
-                })
-        })
+        .map(|(metric, _, _, _, _)| metric.node_diagonal_weights.clone())
         .or_else(|| {
             runner_operator
                 .and_then(|(_, mass)| node_mass_weights_from_tangent_mass(mass, active_nodes))
@@ -610,6 +641,63 @@ pub(super) fn execute_native_modal_window(
         relax_to_eigen_handoff.as_ref(),
         artifact_sample_index,
     )?;
+    if shared_domain_mode && !interrupted {
+        let (_, _, _, scalar_classes, scalar_class_count) =
+            shared_mode_context_data.as_ref().ok_or_else(|| RunError {
+                message: "shared-domain scalar class map was not constructed".to_string(),
+            })?;
+        let phases = shared_domain_phases.as_deref().ok_or_else(|| RunError {
+            message: "shared-domain phase map was not constructed".to_string(),
+        })?;
+        let mut potential_provenance = shared_domain_identity.clone().ok_or_else(|| RunError {
+            message: "shared-domain physical potential export is missing solver identity"
+                .to_string(),
+        })?;
+        if let Some(object) = potential_provenance.as_object_mut() {
+            object.insert(
+                "source_mesh_topology_sha256".to_string(),
+                serde_json::json!(plan.mesh.topology_fingerprint_v6()),
+            );
+        }
+        for raw_mode_index in requested_mode_indices(outputs) {
+            let mode_index = raw_mode_index as usize;
+            let Some(mode) = modes.get(mode_index) else {
+                continue;
+            };
+            let reduced = if !mode.phi_vector.is_empty() {
+                if mode.phi_vector.len() != *scalar_class_count {
+                    return Err(RunError {
+                        message: format!(
+                            "native shared-domain phi payload has {} coefficients; expected {} scalar classes",
+                            mode.phi_vector.len(), scalar_class_count
+                        ),
+                    });
+                }
+                mode.phi_vector.clone()
+            } else if !mode.floquet_potential_real_split.is_empty() {
+                doubled_real_split_to_complex(
+                    &mode.floquet_potential_real_split,
+                    *scalar_class_count,
+                )?
+            } else {
+                return Err(RunError {
+                    message: format!(
+                        "requested shared-domain mode {mode_index} has no scalar potential payload"
+                    ),
+                });
+            };
+            auxiliary_artifacts.extend(physical_potential_artifacts(
+                topology,
+                &reduced,
+                *scalar_class_count,
+                scalar_classes,
+                phases,
+                artifact_sample_index,
+                mode_index,
+                &potential_provenance,
+            )?);
+        }
+    }
     if interrupted {
         auxiliary_artifacts.push(json_artifact(
             "eigen/partial.v1.json",
@@ -957,6 +1045,7 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
         mfem_sparse_operator_problem: None,
         poisson_airbox_block_problem: None,
         shared_domain_problem,
+        shared_domain_floquet_periodic_pairs: &[],
     })
     .map_err(|message| RunError { message })?;
     progress = live_progress_sink.into_inner();
@@ -1653,7 +1742,15 @@ fn insert_native_poisson_airbox_execution_provenance(
             .or_insert_with(|| serde_json::json!("modal_eigen"));
         requested_object
             .entry("magnetostatic_bc".to_string())
-            .or_insert_with(|| serde_json::json!("periodic_airbox_k0"));
+            .or_insert_with(|| {
+                serde_json::json!(
+                    if native_cpu_modal_window_has_floquet_dynamic_demag_path(plan) {
+                        "floquet_airbox"
+                    } else {
+                        "periodic_airbox_k0"
+                    }
+                )
+            });
     }
     diagnostics.insert("requested_execution".to_string(), requested);
 

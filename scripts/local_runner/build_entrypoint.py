@@ -71,6 +71,10 @@ class Profile:
     lane: str
     environment: Mapping[str, str]
     needs_cuda_toolchain: bool = False
+    contract_scenarios: tuple[str, ...] = ()
+    contract_script: str = "scripts/run_fem_cpu_only_contract.sh"
+    contract_schema: str = "fullmag.fem.cpu_only_contract_result.v1"
+    build_runtime: bool = False
 
 
 PROFILES: dict[str, Profile] = {
@@ -116,6 +120,44 @@ PROFILES: dict[str, Profile] = {
     ),
 }
 
+# Contract profiles execute a trusted, fixed script and publish one result per
+# scenario.  They intentionally keep the release profiles above unchanged.
+PROFILES["fem-cpu-current-contracts-v1"] = Profile(
+    name="fem-cpu-current-contracts-v1",
+    lane="fem-cpu",
+    environment=PROFILES["fem-cpu-release"].environment,
+    contract_scenarios=("steady-transport", "steady-transport-rt0", "oersted-oet0"),
+)
+PROFILES["fem-gpu-current-contracts-v1"] = Profile(
+    name="fem-gpu-current-contracts-v1",
+    lane="fem-gpu",
+    environment=PROFILES["fem-gpu-release"].environment,
+    needs_cuda_toolchain=True,
+    contract_scenarios=("gpu-current",),
+    contract_script="scripts/run_current_gpu_contracts.sh",
+    contract_schema="fullmag.current.gpu_contract_result.v1",
+)
+PROFILES["fem-cpu-slepc-modal-v1"] = Profile(
+    name="fem-cpu-slepc-modal-v1",
+    lane="fem-cpu",
+    environment={
+        "FULLMAG_BUILD_CPU_ONLY": "0",
+        "FULLMAG_FORCE_LOCAL_FEM_CPU": "1",
+        "FULLMAG_FORCE_LOCAL_FEM_GPU": "0",
+        "FULLMAG_FEM_REQUIRE_GPU": "0",
+        "FULLMAG_FEM_REQUIRE_CEED": "0",
+        "FULLMAG_FEM_WITH_SLEPC": "ON",
+        "FULLMAG_USE_MFEM_STACK": "ON",
+        "FULLMAG_MANAGED_FEM_DEVICE": "cpu",
+        "FULLMAG_FEM_MFEM_DEVICE": "cpu",
+        "FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT": "1",
+    },
+    contract_scenarios=("slepc-modal",),
+    contract_script="scripts/run_fem_cpu_slepc_modal_contract.sh",
+    contract_schema="fullmag.fem.cpu.slepc_modal_contract_result.v1",
+    build_runtime=True,
+)
+
 REQUIRED_OUTPUTS = (
     "bin/fullmag-bin",
     "bin/fullmag-api",
@@ -123,10 +165,17 @@ REQUIRED_OUTPUTS = (
     "launcher-build-mode",
     "web/index.html",
 )
+HEADLESS_REQUIRED_OUTPUTS = (
+    "bin/fullmag-bin",
+    "bin/fullmag-api",
+    "_fullmag_core.so",
+    "launcher-build-mode",
+)
 EXPECTED_BUILD_MARKER = {
     "fem-cpu-release": "fem-cpu",
     "fem-gpu-release": "cuda-fem-gpu",
     "fdm-cpu-release": "cpu",
+    "fem-cpu-slepc-modal-v1": "fem-cpu",
 }
 
 
@@ -479,6 +528,10 @@ def preflight(profile: Profile, *, release: bool = True) -> dict[str, str]:
             tools["corepack"] = str(shutil.which("corepack"))
         else:
             raise BuildEntryPointError("release build requires pnpm or corepack")
+    if profile.contract_scenarios:
+        tools["bash"] = _require_tool("bash")
+        tools["cmake"] = _require_tool("cmake")
+        tools["ctest"] = _require_tool("ctest")
     if profile.needs_cuda_toolchain:
         tools["cmake"] = _require_tool("cmake")
         tools["nvcc"] = _require_tool("nvcc")
@@ -523,6 +576,10 @@ def toolchain_versions(tools: Mapping[str, str]) -> dict[str, Any]:
         versions["cmake"] = _command_version([tools["cmake"], "--version"])
     if "nvcc" in tools:
         versions["nvcc"] = _command_version([tools["nvcc"], "--version"])
+    if "bash" in tools:
+        versions["bash"] = _command_version([tools["bash"], "--version"])
+    if "ctest" in tools:
+        versions["ctest"] = _command_version([tools["ctest"], "--version"])
     return versions
 
 
@@ -625,16 +682,28 @@ def run_stage(
     }
 
 
-def _required_output_paths(output: Path) -> tuple[Path, ...]:
-    return tuple(output.joinpath(*relative.split("/")) for relative in REQUIRED_OUTPUTS)
+def _required_output_paths(
+    output: Path,
+    required_outputs: tuple[str, ...] = REQUIRED_OUTPUTS,
+) -> tuple[Path, ...]:
+    return tuple(output.joinpath(*relative.split("/")) for relative in required_outputs)
 
 
-def _validate_required_outputs(output: Path, profile: Profile) -> None:
+def _validate_required_outputs(
+    output: Path,
+    profile: Profile,
+    *,
+    required_outputs: tuple[str, ...] = REQUIRED_OUTPUTS,
+) -> None:
     if not output.exists():
-        raise BuildEntryPointError(f"required Fullmag output is missing: {REQUIRED_OUTPUTS[0]}")
+        missing = required_outputs[0] if required_outputs else "runtime output"
+        raise BuildEntryPointError(f"required Fullmag output is missing: {missing}")
     if output.is_symlink() or not output.is_dir():
         raise BuildEntryPointError("Fullmag output directory is not a regular directory")
-    for relative, path in zip(REQUIRED_OUTPUTS, _required_output_paths(output)):
+    for relative, path in zip(
+        required_outputs,
+        _required_output_paths(output, required_outputs),
+    ):
         if path.is_symlink() or not path.is_file():
             raise BuildEntryPointError(f"required Fullmag output is missing: {relative}")
     marker = output / "launcher-build-mode"
@@ -648,6 +717,27 @@ def _validate_required_outputs(output: Path, profile: Profile) -> None:
             f"unexpected Fullmag launcher build mode: expected {expected}, got {observed}"
         )
 
+
+def _validate_slepc_modal_outputs(output: Path, profile: Profile) -> None:
+    """Require the headless native FEM runtime used by the modal contract."""
+
+    _validate_required_outputs(
+        output,
+        profile,
+        required_outputs=HEADLESS_REQUIRED_OUTPUTS,
+    )
+    library_directory = output / "lib"
+    if library_directory.is_symlink() or not library_directory.is_dir():
+        raise BuildEntryPointError("SLEPc modal runtime library directory is missing")
+    libraries = tuple(
+        path
+        for path in library_directory.iterdir()
+        if path.name.startswith("libfullmag_fem.so") and path.is_file()
+    )
+    if not libraries:
+        raise BuildEntryPointError(
+            "SLEPc modal runtime is missing a regular libfullmag_fem.so library"
+        )
 
 def _within(path: Path, roots: tuple[Path, ...]) -> bool:
     return any(path == root or root in path.parents for root in roots)
@@ -743,6 +833,22 @@ def _copy_outputs(workspace: Path, artifacts: Path) -> None:
         raise BuildEntryPointError("cannot copy Fullmag runtime outputs to artifacts") from error
 
 
+def _write_source_identity_artifact(artifacts: Path, identity: Mapping[str, Any]) -> None:
+    """Publish the exact source identity alongside the modal runtime bundle."""
+
+    target = artifacts / "source-identity.json"
+    try:
+        with target.open("x", encoding="utf-8", newline="\n") as stream:
+            json.dump(identity, stream, ensure_ascii=False, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+    except FileExistsError as error:
+        raise BuildEntryPointError("refusing to replace source identity artifact") from error
+    except OSError as error:
+        raise BuildEntryPointError("cannot publish source identity artifact") from error
+
+
 def artifact_records(artifacts: Path) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for path in sorted(artifacts.rglob("*")):
@@ -796,6 +902,8 @@ def _base_receipt(
         "state": "failed",
         "stages": [],
         "toolchain": {},
+        "contract_scenarios": list(profile.contract_scenarios),
+        "contract_schema": profile.contract_schema if profile.contract_scenarios else None,
         "artifacts": [],
         "created_at": _utc_now(),
     }
@@ -857,7 +965,7 @@ def main(argv: list[str] | None = None) -> int:
         _workspace_is_empty(workspace)
         materialize_capsule(manifest, source, workspace)
         _regular_directory(build / "cargo-targets", "cargo target root", create=True)
-        tools = preflight(profile, release=True)
+        tools = preflight(profile, release=not bool(profile.contract_scenarios))
         environment = build_environment(
             profile,
             workspace=workspace,
@@ -871,7 +979,7 @@ def main(argv: list[str] | None = None) -> int:
             "resolved_commit": manifest["resolved_commit"],
             "file_count": len(manifest["files"]),
         }
-        # The first stage is the only native build entrypoint admitted here.
+        # All commands are selected by the trusted profile, never by job data.
         make = tools["make"]
         stages = [
             (
@@ -879,19 +987,35 @@ def main(argv: list[str] | None = None) -> int:
                 [make, "install-cli-dev"],
             ),
         ]
-        pnpm = _pnpm_command(tools)
-        stages.extend(
-            [
+        if profile.contract_scenarios:
+            environment["FULLMAG_FEM_CPU_BUILD_ROOT"] = str(build / "current-contracts")
+            environment["FULLMAG_FEM_CPU_REPORT_ROOT"] = str(artifacts / "contracts")
+            environment["FULLMAG_CURRENT_GPU_BUILD_ROOT"] = str(build / "current-gpu-contracts")
+            environment["FULLMAG_CURRENT_GPU_REPORT_ROOT"] = str(artifacts / "contracts")
+            environment["FULLMAG_FEM_SLEPC_MODAL_BUILD_ROOT"] = str(build / "fem-slepc-modal")
+            environment["FULLMAG_FEM_SLEPC_MODAL_REPORT_ROOT"] = str(artifacts / "contracts")
+            contract_stages = [
                 (
-                    "frontend-dependencies",
-                    [*pnpm, "install", "--dir", "apps/control-room", "--frozen-lockfile"],
-                ),
-                (
-                    "frontend-build",
-                    [make, "web-build-static"],
-                ),
+                    f"contract-{scenario}",
+                    [tools["bash"], profile.contract_script, scenario],
+                )
+                for scenario in profile.contract_scenarios
             ]
-        )
+            stages = ([*stages, *contract_stages] if profile.build_runtime else contract_stages)
+        else:
+            pnpm = _pnpm_command(tools)
+            stages.extend(
+                [
+                    (
+                        "frontend-dependencies",
+                        [*pnpm, "install", "--dir", "apps/control-room", "--frozen-lockfile"],
+                    ),
+                    (
+                        "frontend-build",
+                        [make, "web-build-static"],
+                    ),
+                ]
+            )
         for name, command in stages:
             stage = run_stage(
                 name,
@@ -905,9 +1029,37 @@ def main(argv: list[str] | None = None) -> int:
                 raise BuildEntryPointError(
                     f"managed stage failed: {name} (exit={stage['exit_code']})"
                 )
-        output = workspace / ".fullmag" / "local"
-        _validate_required_outputs(output, profile)
-        _copy_outputs(workspace, artifacts)
+        if profile.contract_scenarios:
+            for scenario in profile.contract_scenarios:
+                result_path = artifacts / "contracts" / scenario / "result.json"
+                if result_path.is_symlink() or not result_path.is_file():
+                    raise BuildEntryPointError(f"missing contract receipt: {scenario}")
+                try:
+                    result = json.loads(result_path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, json.JSONDecodeError) as error:
+                    raise BuildEntryPointError(
+                        f"invalid contract receipt JSON: {scenario}"
+                    ) from error
+                if not isinstance(result, Mapping) or (
+                    result.get("schema") != profile.contract_schema
+                    or result.get("scenario") != scenario
+                    or result.get("status") != "pass"
+                ):
+                    raise BuildEntryPointError(
+                        f"invalid or failing contract receipt: {scenario}"
+                    )
+            if profile.build_runtime:
+                output = workspace / ".fullmag" / "local"
+                _validate_slepc_modal_outputs(output, profile)
+                _copy_outputs(workspace, artifacts)
+                _write_source_identity_artifact(
+                    artifacts,
+                    context["native_source_identity"],
+                )
+        else:
+            output = workspace / ".fullmag" / "local"
+            _validate_required_outputs(output, profile)
+            _copy_outputs(workspace, artifacts)
         receipt["artifacts"] = artifact_records(artifacts)
         receipt["state"] = "succeeded"
         receipt["finished_at"] = _utc_now()

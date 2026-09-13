@@ -4478,6 +4478,102 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
 }
 
 #[test]
+fn native_eigen_v2_persists_certified_floquet_potential_binary_reference() {
+    let plan = minimal_native_modal_plan();
+    let values = [
+        Complex64::new(1.0, -2.0),
+        Complex64::new(3.0, -4.0),
+        Complex64::new(5.0, -6.0),
+        Complex64::new(7.0, -8.0),
+    ];
+    let potential_bytes = floquet_potential_payload_bytes(&values)
+        .expect("finite even Floquet coefficients should serialize");
+    let mode = serde_json::json!({
+        "index": 0,
+        "frequency_hz": 1.0e9,
+        "frequency_real_hz": 1.0e9,
+        "frequency_imag_hz": 0.0,
+        "angular_frequency_rad_per_s": std::f64::consts::TAU * 1.0e9,
+        "omega_rad_s": std::f64::consts::TAU * 1.0e9,
+        "eigenvalue_real": 0.0,
+        "eigenvalue_imag": std::f64::consts::TAU * 1.0e9,
+        "normalization": "unit_l2",
+        "damping_policy": "ignore",
+        "residual_norm": 1.0e-10,
+        "residual_absolute_l2": 1.0e-10,
+        "residual_relative_l2": 1.0e-10,
+        "residual_linf": 1.0e-10,
+        "mass_norm": 1.0,
+        "tangent_leakage_mean_abs": 0.0,
+        "tangent_leakage_max_abs": 0.0,
+        "tangent_leakage_weighted_relative_l2": 0.0,
+        "phasor_convention": "exp_plus_i_omega_t",
+        "eigenvalue_mapping": "lambda_imag_positive_frequency",
+        "gamma_rad_s_T": 1.0,
+        "gamma0_rad_s_per_A_m": 2.211e5,
+        "mu0_T_m_per_A": MU0,
+        "dominant_polarization": "uniform",
+        "k_vector": [0.0, 0.0, 0.0],
+        "real": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 0.0]],
+        "imag": [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 1.0]],
+        "amplitude": [1.0, 1.0, 1.0, 1.0],
+        "floquet_descriptor_certified": true,
+        "floquet_geometric_bc_certified": false,
+        "potential_representation": "doubled_real_split_complex_coefficients",
+        "magnetic_relative_residual": 1.0e-10,
+        "potential_relative_residual": 2.0e-10,
+        "potential_dof_count": values.len(),
+    });
+    let summary = serde_json::json!({
+        "solver_kind": "reference_modal_fixture",
+        "modes": [mode.clone()],
+    });
+    let potential_path = floquet_potential_payload_path(0, 0);
+    let mut artifacts = vec![
+        json_artifact("eigen/modes/mode_0000.json", &mode)
+            .expect("legacy mode artifact should serialize"),
+        AuxiliaryArtifact {
+            relative_path: potential_path.clone(),
+            bytes: potential_bytes.clone(),
+        },
+    ];
+
+    write_eigen_v2_bundle(&plan, &summary, &BTreeSet::from([0_u32]), &mut artifacts, 0)
+        .expect("certified Floquet potential should be published");
+
+    let spectrum = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "eigen/spectrum.v2.json")
+        .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+        .expect("spectrum.v2 should be emitted");
+    let spectrum_mode = &spectrum["samples"][0]["modes"][0];
+    assert_eq!(spectrum_mode["floquet_descriptor_certified"], true);
+    assert_eq!(spectrum_mode["potential_dof_count"], values.len());
+    assert_eq!(spectrum_mode["potential_payload_path"], potential_path);
+    assert_eq!(
+        spectrum_mode["potential_payload_sha256"],
+        format!("sha256:{:x}", Sha256::digest(&potential_bytes))
+    );
+    let nested = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "eigen/modes/sample_0000/mode_0000.json")
+        .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+        .expect("nested mode metadata should be emitted");
+    assert_eq!(nested["potential_payload_path"], potential_path);
+    assert_eq!(nested["potential_value_count"], values.len() * 2);
+    assert!(nested.get("potential_vector_real").is_none());
+    assert!(nested.get("potential_vector_imag").is_none());
+    assert_eq!(
+        artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == potential_path)
+            .expect("potential binary artifact should remain persisted")
+            .bytes,
+        potential_bytes
+    );
+}
+
+#[test]
 fn native_eigen_v2_rejects_requested_mode_without_cartesian_complex_payload() {
     let plan = minimal_native_modal_plan();
     let summary = serde_json::json!({
@@ -5393,6 +5489,22 @@ fn native_poisson_airbox_top_level_accepted_mode_count_is_preserved() {
 }
 
 #[test]
+fn native_floquet_sparse_diagnostics_keep_schur_and_nonzero_k_identity() {
+    let mut diagnostics = serde_json::Map::new();
+    let result = serde_json::json!({
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "demag_kind": "floquet_airbox", "accepted_mode_count": 8,
+    });
+    super::eigen_native_result::merge_poisson_airbox_modal_result_diagnostics(
+        &mut diagnostics, &result.to_string(),
+    ).unwrap();
+    assert_eq!(diagnostics["resolved_solver_family"], "floquet_poisson_airbox_schur");
+    assert_eq!(diagnostics["algebraic_form"], "schur_reduced_descriptor");
+    assert_eq!(diagnostics["demag_kind"], "floquet_airbox");
+    assert_eq!(diagnostics["accepted_mode_count"], 8);
+}
+
+#[test]
 fn native_poisson_airbox_result_maps_to_k0_kittel_metrics() {
     let raw = serde_json::json!({
         "schema_version": "frequency_domain_modal_result.v1",
@@ -5565,6 +5677,7 @@ fn native_shared_domain_modes_require_phi_and_block_residuals() {
         active_nodes: &active_nodes,
         magnetic_classes: &magnetic_classes,
         magnetic_class_count: 2,
+        node_phases: None,
     };
     let error = native_poisson_airbox_mode_from_json(&plan, &mode, &mass, Some(&context))
         .expect_err("shared-domain mode must include certified block residuals");
@@ -5578,6 +5691,38 @@ fn native_shared_domain_modes_require_phi_and_block_residuals() {
     assert_eq!(accepted.block_residual_q, 3.0e-12);
     assert_eq!(accepted.block_residual_phi, 4.0e-12);
     assert_eq!(accepted.block_residual_gauge, 0.0);
+    let phases = [Complex64::new(1.0, 0.0), Complex64::new(0.0, -1.0)];
+    let phase_context = SharedDomainModeContext {
+        node_phases: Some(&phases),
+        ..context
+    };
+    let phased =
+        native_poisson_airbox_mode_from_json(&plan, &mode, &mass, Some(&phase_context)).unwrap();
+    assert_eq!(phased.q_vector, accepted.q_vector);
+    assert_eq!(phased.vector[0], accepted.vector[0]);
+    assert_eq!(phased.vector[1], phases[1] * accepted.vector[1]);
+    assert_eq!(phased.phi_vector, accepted.phi_vector);
+    mode["potential_representation"] = serde_json::json!("complex_coefficients");
+    mode["potential_dof_count"] = serde_json::json!(2);
+    mode["floquet_descriptor_certified"] = serde_json::json!(false);
+    mode["floquet_geometric_bc_certified"] = serde_json::json!(false);
+    let full_result = serde_json::json!({
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc", "modes": [mode],
+    });
+    let modes = native_modal_modes_from_result_json(
+        &plan, &full_result.to_string(), None, Some(&phase_context),
+    ).expect("native sparse Floquet adapter must parse the physical shared-domain q/phi payload");
+    assert_eq!(modes[0].vector, phased.vector);
+    assert_eq!(modes[0].phi_vector, phased.phi_vector);
+    let residuals = super::eigen_native_artifacts::native_modal_block_residuals(
+        &modes[0], Some("floquet_airbox_cpu_schur_slepc"));
+    assert_eq!(residuals["scope"], "reduced_original_blocks_only");
+    assert!(residuals["eps_full"].is_null());
+    assert_eq!(residuals["certified"], false);
+    assert_eq!(residuals["full_descriptor_certified"], false);
+    assert_eq!(residuals["reduced_pencil_certified"], true);
+
+
 }
 
 #[test]
@@ -7725,4 +7870,31 @@ fn equilibrium_artifact_v7_loader_rejects_arbitrary_declared_hash_and_id() {
         .expect_err("a self-consistent but arbitrary declared hash/id must fail closed");
     assert!(error.message.contains("content_sha256"));
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn sparse_shared_domain_mass_preserves_dense_reference_and_full_node_weights() {
+    use super::eigen_mass_metric::{ModalMassMetric, SharedDomainSparseMass};
+    let mut plan = minimal_native_modal_plan();
+    add_minimal_shared_domain_periodic_airbox(&mut plan);
+    let topology = MeshTopology::from_ir(&plan.mesh).unwrap();
+    let full_reduction = full_physical_magnetic_reduction_map(&topology);
+    let full = assemble_tangent_mass_matrix(&topology, &full_reduction);
+    let (dense, active, classes, count) =
+        reduced_shared_domain_tangent_mass(&topology, &full).unwrap();
+    let phases = vec![Complex64::new(1.0, 0.0); topology.n_nodes];
+    let sparse =
+        SharedDomainSparseMass::from_topology(&topology, &classes, count, &phases).unwrap();
+    let q: Vec<_> = (0..dense.nrows())
+        .map(|i| Complex64::new((i + 1) as f64, (i % 3) as f64))
+        .collect();
+    let expected = complex_block_mass_norm(&dense, &q);
+    let actual = sparse.quadratic_form(&q);
+    assert!((actual - expected).norm() <= expected.norm() * 1e-13);
+    assert_eq!(active, sparse.active_nodes);
+    let weights =
+        node_mass_weights_from_tangent_mass(&full, full_reduction.active_nodes.len()).unwrap();
+    for (a, b) in weights.iter().zip(&sparse.node_diagonal_weights) {
+        assert!((a - b).abs() <= a.abs() * 1e-13);
+    }
 }

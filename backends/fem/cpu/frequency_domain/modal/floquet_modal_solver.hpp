@@ -3,7 +3,30 @@
 #include "cpu/frequency_domain/slepc_modal_eigen.hpp"
 #include "frequency_domain/modal_eigen_request.hpp"
 
+#include <cstdint>
+
 namespace fullmag::fem::frequency_domain {
+
+struct PoissonAirboxSharedDomainComplexCsrMatrix;
+
+/*
+ * Native shared-domain Floquet owner.  All five blocks are phase-reduced
+ * complex CSR matrices assembled from one MFEM mesh/material/equilibrium
+ * payload.  The modal solver realifies only the sparse PETSc views and keeps
+ * A_qphi P^{-1} A_phiq as a MatShell action, so the dense512 diagnostic bound
+ * is not part of this production contract.
+ */
+struct FloquetSharedDomainSparseModalOperator {
+    const PoissonAirboxSharedDomainComplexCsrMatrix *a_qq = nullptr;
+    const PoissonAirboxSharedDomainComplexCsrMatrix *b_qq = nullptr;
+    const PoissonAirboxSharedDomainComplexCsrMatrix *p = nullptr;
+    const PoissonAirboxSharedDomainComplexCsrMatrix *a_qphi = nullptr;
+    const PoissonAirboxSharedDomainComplexCsrMatrix *a_phiq = nullptr;
+    std::uint64_t q_complex_dof_count = 0;
+    std::uint64_t phi_dof_count = 0;
+    const char *boundary_kind = nullptr;
+    const char *gauge_policy = nullptr;
+};
 
 // The Floquet modal owner is the boundary between the phase-reduced Bloch
 // operator and the ordinary SLEPc spectral adapter.  The spectral request is
@@ -36,6 +59,15 @@ SLEPcTinyGyrotropicModalEigenResult solve_floquet_modal_spectrum(
 
 SLEPcTinyGyrotropicModalEigenResult solve_floquet_modal_sparse_spectrum(
     const ModalEigenRequest &request,
+    const SLEPcSparseGyrotropicModalEigenRequest &spectral_request) noexcept;
+
+/* Execute the native shared-domain phase-reduced operator.  This entry point
+ * is kept separate from the legacy real CSR adapter so callers cannot
+ * accidentally erase the complex phase or reintroduce a dense dynamic block.
+ */
+SLEPcTinyGyrotropicModalEigenResult
+solve_floquet_shared_domain_sparse_modal_spectrum(
+    const FloquetSharedDomainSparseModalOperator &operator_view,
     const SLEPcSparseGyrotropicModalEigenRequest &spectral_request) noexcept;
 
 const char *floquet_modal_solver_model() noexcept;

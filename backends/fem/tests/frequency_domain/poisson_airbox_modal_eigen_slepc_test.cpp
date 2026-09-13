@@ -20,6 +20,16 @@
 #include <string>
 #include <vector>
 
+#if defined(FULLMAG_FEM_WITH_SLEPC) && FULLMAG_FEM_WITH_SLEPC
+#include <petscsys.h>
+#ifndef PETSC_USE_REAL_DOUBLE
+#error "SLEPc modal contract requires PETSC_USE_REAL_DOUBLE"
+#endif
+static_assert(
+    sizeof(PetscReal) == sizeof(double),
+    "SLEPc modal contract requires an eight-byte PetscReal");
+#endif
+
 namespace fd = fullmag::fem::frequency_domain;
 
 extern "C" int fullmag_fem_frequency_domain_apply_modal_shift_invert_gpu_action(

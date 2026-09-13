@@ -68,6 +68,9 @@ struct FloquetPotentialReconstruction {
     std::vector<std::complex<double>> p, a_phiq, a_qphi;
     // Borrowed original magnetic operator; caller owns it through the solve.
     const double *magnetic_stiffness_real_split = nullptr;
+    // Explicit bound for the borrowed real-split magnetic operator.  The
+    // certifier requires this to equal (2*q_count)^2 before dereferencing it.
+    std::uint64_t magnetic_stiffness_real_split_value_count = 0;
 };
 
 struct FloquetReconstructedPotential {

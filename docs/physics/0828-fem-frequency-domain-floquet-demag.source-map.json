@@ -506,6 +506,18 @@
       "path": "backends/fem/cpu/frequency_domain/floquet_dynamic_demag_k.cpp",
       "symbol": "certify_floquet_realified_mode",
       "responsibility": "Reconstruct both realification sectors and check original reduced magnetic/potential equations; geometric BC and full V9 remain unverified."
+    },
+    {
+      "id": "source-sparse-modal-mass",
+      "path": "crates/fullmag-runner/src/fem/eigen_mass_metric.rs",
+      "symbol": "SharedDomainSparseMass",
+      "responsibility": "Consistent phase-reduced P1 modal normalization without dense storage; not solver assembly."
+    },
+    {
+      "id": "source-physical-modal-potential",
+      "path": "crates/fullmag-runner/src/fem/eigen_physical_potential.rs",
+      "symbol": "physical_potential_artifacts",
+      "responsibility": "Full physical potential and element-wise negative P1 gradient with the magnetic mode normalization."
     }
   ],
   "public_api": {

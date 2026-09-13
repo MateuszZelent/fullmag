@@ -249,6 +249,60 @@ mod output_publication_tests {
     }
 
     #[test]
+    fn remaps_full_potential_sidecars_to_sample_seven_and_filters_modes() {
+        let manifest = serde_json::json!({
+            "schema_version": "fem_modal_physical_potential.v1",
+            "sample_index": 0,
+            "mode_index": 3,
+            "potential": {
+                "path": "eigen/mode_fields/sample_0000/mode_0003/potential_full.bin"
+            },
+            "demag_field": {
+                "path": "eigen/mode_fields/sample_0000/mode_0003/demag_element_full.bin"
+            }
+        });
+        let artifacts = vec![
+            AuxiliaryArtifact {
+                relative_path: "eigen/mode_fields/sample_0000/mode_0003/potential_full.bin".into(),
+                bytes: vec![1, 2, 3, 4],
+            },
+            AuxiliaryArtifact {
+                relative_path: "eigen/mode_fields/sample_0000/mode_0003/demag_element_full.bin"
+                    .into(),
+                bytes: vec![5, 6, 7, 8],
+            },
+            AuxiliaryArtifact {
+                relative_path: "eigen/mode_fields/sample_0000/mode_0003/physical_potential.v1.json"
+                    .into(),
+                bytes: serde_json::to_vec(&manifest).unwrap(),
+            },
+            AuxiliaryArtifact {
+                relative_path: "eigen/mode_fields/sample_0000/mode_0004/potential_full.bin".into(),
+                bytes: vec![9],
+            },
+        ];
+        let selected = BTreeSet::from([3_u32]);
+        let remapped = remap_single_k_mode_artifacts(&artifacts, 7, &selected).unwrap();
+        assert_eq!(remapped.len(), 3);
+        assert!(remapped
+            .iter()
+            .all(|artifact| { artifact.relative_path.contains("sample_0007/mode_0003") }));
+        assert_eq!(remapped[0].bytes, vec![1, 2, 3, 4]);
+        assert_eq!(remapped[1].bytes, vec![5, 6, 7, 8]);
+        let remapped_manifest: serde_json::Value =
+            serde_json::from_slice(&remapped[2].bytes).unwrap();
+        assert_eq!(remapped_manifest["sample_index"], 7);
+        assert_eq!(
+            remapped_manifest["potential"]["path"],
+            "eigen/mode_fields/sample_0007/mode_0003/potential_full.bin"
+        );
+        assert_eq!(
+            remapped_manifest["demag_field"]["path"],
+            "eigen/mode_fields/sample_0007/mode_0003/demag_element_full.bin"
+        );
+    }
+
+    #[test]
     fn selection_preserves_original_sample_ids_and_removes_unrequested_payloads() {
         let paths = [
             "eigen/mode_fields.zarr/.zgroup",

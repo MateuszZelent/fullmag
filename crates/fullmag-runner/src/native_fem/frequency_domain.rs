@@ -272,6 +272,7 @@ pub(crate) struct NativeModalEigenRequest<'a> {
     pub mfem_sparse_operator_problem: Option<NativeModalEigenSparseOperatorProblem<'a>>,
     pub poisson_airbox_block_problem: Option<NativeModalEigenPoissonAirboxBlockProblem<'a>>,
     pub shared_domain_problem: Option<NativeModalEigenSharedDomainProblem<'a>>,
+    pub shared_domain_floquet_periodic_pairs: &'a [NativeModalEigenFloquetPeriodicPair<'a>],
 }
 
 #[derive(Debug, Clone)]
@@ -2226,52 +2227,41 @@ fn solve_native_modal_eigen_impl(
     });
     let has_floquet_k_vector =
         request.spin_wave_bc_kind == "floquet" && floquet_k_vector_rad_per_m.is_some();
-    let floquet_pair_ids = mfem_operator
-        .map(|problem| {
-            problem
-                .floquet_periodic_pairs
-                .iter()
-                .map(|pair| {
-                    pair.pair_id
-                        .map(|pair_id| {
-                            CString::new(pair_id.as_bytes()).map_err(|_| {
-                                "native FEM modal_eigen Floquet pair id contains NUL".to_string()
-                            })
-                        })
-                        .transpose()
-                })
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .transpose()?
-        .unwrap_or_default();
-    let floquet_periodic_pairs = mfem_operator
-        .map(|problem| {
-            problem
-                .floquet_periodic_pairs
-                .iter()
-                .zip(floquet_pair_ids.iter())
-                .map(
-                    |(pair, pair_id)| ffi::fullmag_fem_frequency_domain_floquet_periodic_pair {
-                        pair_id: pair_id
-                            .as_ref()
-                            .map_or(std::ptr::null(), |value| value.as_ptr()),
-                        node_a: pair.node_a,
-                        node_b: pair.node_b,
-                        has_translation: pair.translation_m.is_some() as i32,
-                        translation_m: pair.translation_m.unwrap_or([0.0; 3]),
-                        has_phase: pair.phase_rad.is_some() as i32,
-                        phase_rad: pair.phase_rad.unwrap_or(0.0),
-                    },
-                )
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    if let Some(problem) = mfem_operator {
-        validate_floquet_pair_phase_metadata(
-            floquet_k_vector_rad_per_m,
-            problem.floquet_periodic_pairs,
-        )?;
+    let pairs = mfem_operator
+        .map(|problem| problem.floquet_periodic_pairs)
+        .unwrap_or(request.shared_domain_floquet_periodic_pairs);
+    if mfem_operator.is_some() && !request.shared_domain_floquet_periodic_pairs.is_empty() {
+        return Err(
+            "native modal Floquet pairs have competing matrix and shared-domain owners".to_string(),
+        );
     }
+    validate_floquet_pair_phase_metadata(floquet_k_vector_rad_per_m, pairs)?;
+    let floquet_pair_ids = pairs
+        .iter()
+        .map(|pair| {
+            pair.pair_id
+                .map(|id| {
+                    CString::new(id.as_bytes())
+                        .map_err(|_| "native modal Floquet pair id contains NUL".to_string())
+                })
+                .transpose()
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let floquet_periodic_pairs = pairs
+        .iter()
+        .zip(&floquet_pair_ids)
+        .map(
+            |(pair, id)| ffi::fullmag_fem_frequency_domain_floquet_periodic_pair {
+                pair_id: id.as_ref().map_or(std::ptr::null(), |v| v.as_ptr()),
+                node_a: pair.node_a,
+                node_b: pair.node_b,
+                has_translation: pair.translation_m.is_some() as i32,
+                translation_m: pair.translation_m.unwrap_or([0.0; 3]),
+                has_phase: pair.phase_rad.is_some() as i32,
+                phase_rad: pair.phase_rad.unwrap_or(0.0),
+            },
+        )
+        .collect::<Vec<_>>();
 
     let ffi_request = ffi::FullmagFemModalEigenRequest {
         abi_version: ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION,
@@ -5035,6 +5025,7 @@ mod tests {
                 mfem_sparse_operator_problem: None,
                 poisson_airbox_block_problem: None,
                 shared_domain_problem: None,
+                shared_domain_floquet_periodic_pairs: &[],
             })
             .expect_err("native modal contract should require fem-native feature");
             assert!(err.contains("fem-native"));
@@ -5076,6 +5067,7 @@ mod tests {
                 mfem_sparse_operator_problem: None,
                 poisson_airbox_block_problem: None,
                 shared_domain_problem: None,
+                shared_domain_floquet_periodic_pairs: &[],
             })
             .expect("native modal contract should return a structured unavailable result");
             assert_eq!(result.status, NativeFrequencyDomainStatus::Unavailable);
@@ -5147,6 +5139,7 @@ mod tests {
             mfem_sparse_operator_problem: None,
         poisson_airbox_block_problem: None,
         shared_domain_problem: None,
+                shared_domain_floquet_periodic_pairs: &[],
         })
         .expect("native modal contract should return a structured unavailable result");
 
@@ -5218,6 +5211,7 @@ mod tests {
             mfem_sparse_operator_problem: None,
             poisson_airbox_block_problem: None,
             shared_domain_problem: None,
+            shared_domain_floquet_periodic_pairs: &[],
         })
         .expect("native modal validation solve should return a structured result");
 
@@ -5281,6 +5275,7 @@ mod tests {
             mfem_sparse_operator_problem: None,
             poisson_airbox_block_problem: None,
             shared_domain_problem: None,
+            shared_domain_floquet_periodic_pairs: &[],
         })
         .expect("native modal validation cancel should return a structured result");
 
@@ -5340,6 +5335,7 @@ mod tests {
             mfem_sparse_operator_problem: None,
             poisson_airbox_block_problem: None,
             shared_domain_problem: None,
+            shared_domain_floquet_periodic_pairs: &[],
         })
         .expect("native modal frequency-window validation solve should return a result");
 
@@ -5463,6 +5459,7 @@ mod tests {
             mfem_sparse_operator_problem: None,
         poisson_airbox_block_problem: None,
         shared_domain_problem: None,
+                shared_domain_floquet_periodic_pairs: &[],
         })
         .expect("native modal production payload should return a structured result");
 
@@ -5599,6 +5596,7 @@ mod tests {
             mfem_sparse_operator_problem: None,
         poisson_airbox_block_problem: None,
         shared_domain_problem: None,
+                shared_domain_floquet_periodic_pairs: &[],
         })
         .expect("native modal shift-invert payload should return a structured result");
 
@@ -5682,6 +5680,7 @@ mod tests {
             mfem_sparse_operator_problem: None,
             poisson_airbox_block_problem: None,
             shared_domain_problem: None,
+            shared_domain_floquet_periodic_pairs: &[],
         })
         .expect("native modal Floquet payload should return a structured result");
 

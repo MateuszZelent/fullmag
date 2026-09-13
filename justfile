@@ -94,6 +94,11 @@ runner-once:
 runner-build mode profile="fem-cpu-release" ref="":
     {{storage_python}} scripts/local_runner_cli.py submit --operation build --profile {{quote(profile)}} --source {{quote(mode)}} {{if ref == "" { "" } else { "--ref " + quote(ref) }}}
 
+# Consume one completed managed CPU/SLEPc build; this recipe never builds an
+# image or native target and writes only a new run below canonical storage.
+run-comsol-dispersion-benchmark job_id cases="c0,c1,a1" timeout_seconds="21600":
+    {{storage_python}} "{{repo_root}}/scripts/run_comsol_dispersion_benchmark.py" --repo-root "{{repo_root}}" --job-id {{quote(job_id)}} --cases {{quote(cases)}} --timeout-seconds {{quote(timeout_seconds)}}
+
 runner-configure-build profile image_id:
     {{storage_python}} scripts/local_runner_cli.py configure-build --profile {{quote(profile)}} --image-id {{quote(image_id)}}
 

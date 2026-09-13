@@ -50,7 +50,6 @@ use super::eigen_projection::{
 use super::eigen_reduction::build_reduction_map;
 use super::eigen_reduction::k_sampling_contains_nonzero;
 use super::eigen_shared_domain::{
-    build_native_shared_domain_modal_problem, build_shared_domain_linearization_state,
     native_shared_domain_magnetic_assembly_available, native_shared_domain_magnetic_assembly_error,
     shared_domain_k0_runtime_unavailable_error, validate_eigen_equilibrium_certificate,
 };
@@ -706,6 +705,7 @@ pub(crate) fn execute_gpu_fem_eigen_with_handoff(
         mfem_sparse_operator_problem: None,
         poisson_airbox_block_problem: None,
         shared_domain_problem: None,
+        shared_domain_floquet_periodic_pairs: &[],
     })
     .map_err(|message| RunError { message })?;
 
@@ -829,6 +829,12 @@ fn execute_native_gpu_k0_kittel_modal(
         vector: mode_vector,
         q_vector: Vec::new(),
         phi_vector: Vec::new(),
+        floquet_descriptor_certified: false,
+        floquet_geometric_bc_certified: false,
+        floquet_potential_representation: None,
+        floquet_magnetic_relative_residual: None,
+        floquet_potential_relative_residual: None,
+        floquet_potential_real_split: Vec::new(),
     }];
     let solver_diagnostics = native_gpu_k0_kittel_solver_diagnostics(
         plan,
@@ -1053,8 +1059,11 @@ pub(super) fn execute_fem_eigen_inner(
     let active_n = reduction.active_nodes.len();
     let is_full_2x2 = matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2);
     let effective_dof = if is_full_2x2 { 2 * active_n } else { active_n };
-    let use_sparse = effective_dof > SPARSE_EIGEN_THRESHOLD && !try_gpu && !complex_reduction;
-    if effective_dof > 3000 && !use_sparse {
+    let use_sparse = effective_dof > SPARSE_EIGEN_THRESHOLD
+        && !try_gpu
+        && !complex_reduction
+        && !use_native_modal_production;
+    if effective_dof > 3000 && !use_sparse && !use_native_modal_production {
         eprintln!(
             "warning: FEM eigen dense solver has {} effective DOF ({} active nodes, {}) — O(n³) scaling; \
              consider reducing mesh size or awaiting future sparse/Krylov eigensolver",
@@ -1077,7 +1086,7 @@ pub(super) fn execute_fem_eigen_inner(
     } else {
         solver_kind_label(plan)
     };
-    let dense_warning = (effective_dof > 3000 && !use_sparse)
+    let dense_warning = (effective_dof > 3000 && !use_sparse && !use_native_modal_production)
         .then_some("dense_o_n3_eigensolve_without_iteration_progress");
     emit_fem_eigen_progress(
         &mut progress,
@@ -1102,6 +1111,33 @@ pub(super) fn execute_fem_eigen_inner(
 
     let bases = tangent_bases(&equilibrium);
     let mut dense_orthogonality = None;
+
+    if native_nonzero_k_shared_domain_provider_requested {
+        // Native MFEM owns both the magnetic and magnetostatic sparse blocks.
+        // Do not materialize a dense runner K/M pair before crossing this boundary.
+        return execute_native_modal_window(
+            plan,
+            outputs,
+            initial_magnetization,
+            equilibrium,
+            observables,
+            relaxation_steps,
+            &problem,
+            source_artifact.as_ref(),
+            source_relax_handoff,
+            topology,
+            &reduction,
+            &bases,
+            None,
+            progress,
+            active_n,
+            effective_dof,
+            artifact_sample_index,
+            native_fem::NativeModalExecutionTarget::ProductionCpu,
+            planned_execution,
+            expected_handoff,
+        );
+    }
 
     let real_eigenpairs = if complex_reduction {
         Vec::new()
@@ -1355,35 +1391,6 @@ pub(super) fn execute_fem_eigen_inner(
                 &equilibrium,
             )
         };
-        let native_floquet_shared_domain_problem =
-            if native_nonzero_k_shared_domain_provider_requested {
-                let linearization_state = build_shared_domain_linearization_state(
-                    plan,
-                    topology,
-                    &problem,
-                    source_artifact.as_ref(),
-                    source_relax_handoff,
-                    &equilibrium,
-                    &observables,
-                )?;
-                if let Some(handoff) = expected_handoff {
-                    handoff.validate_consumed_linearization(
-                        plan,
-                        &equilibrium,
-                        &linearization_state,
-                    )?;
-                }
-                Some(build_native_shared_domain_modal_problem(
-                    plan,
-                    topology,
-                    &equilibrium,
-                    &observables,
-                    Some(&linearization_state),
-                    artifact_sample_index,
-                )?)
-            } else {
-                None
-            };
         if is_full_2x2 && use_native_modal_production {
             return execute_native_cpu_modal_window_from_bloch_floquet_complex(
                 plan,
@@ -1401,7 +1408,7 @@ pub(super) fn execute_fem_eigen_inner(
                 effective_dof,
                 artifact_sample_index,
                 planned_execution,
-                native_floquet_shared_domain_problem,
+                None,
             );
         }
         solve_complex_hermitian_eigenpairs(plan, stiffness, mass)?

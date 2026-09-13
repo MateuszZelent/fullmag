@@ -25,6 +25,25 @@ class ClientTests(unittest.TestCase):
             code = local_runner_cli.main(list(args))
         return code, output.getvalue(), errors.getvalue()
 
+    def test_container_configure_exposes_explicit_slepc_activation(self):
+        image = "sha256:" + "a" * 64
+        with patch("local_runner.container_client.configure", return_value={"ok": True}) as configure:
+            code, output, errors = self.run_client(
+                "container-configure",
+                "--image-id",
+                image,
+                "--enable-slepc-modal",
+            )
+        self.assertEqual(0, code, errors)
+        self.assertEqual({"ok": True}, json.loads(output))
+        configure.assert_called_once_with(
+            self.layout,
+            image,
+            owner="alice",
+            enable_current_contracts=False,
+            enable_slepc_modal=True,
+        )
+
     def test_list_does_not_create_empty_queue(self):
         code, output, _ = self.run_client('list')
         self.assertEqual(0, code)

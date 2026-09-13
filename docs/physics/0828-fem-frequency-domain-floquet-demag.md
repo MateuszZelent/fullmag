@@ -297,14 +297,32 @@ continuity, gauge policy and normalization.
 
 (full-bloch-contract)=
 
-Assemble the ordinary-gradient shared-domain Poisson operator on magnetic and
-air elements. Build complete seam equivalence classes and apply the complex
-constraint map to the interleaved local tangent layout and scalar potential.
-The matrix-free magnetic action is the planned C^H A C boundary. The new
-foundational FloquetTangentProlongation and FloquetReducedMagneticOperator
-source is visible, but it is currently uncompiled, unvalidated and disconnected
-from the solver ABI. The scalar potential, dynamic demagnetization coupling,
-and selected-spectrum solve remain future steps.
+Operator Poissona jest składany na wspólnej siatce magnetyka i powietrza,
+zwykłymi gradientami pełnego pola. Warunki fazowe działają na obu polach.
+Dla benchmarku COMSOL potencjał ma jawny jednorodny Dirichlet na górze i dole
+pudełka: zbiór węzłów istotnych musi zostać domknięty przez klasy periodyczne.
+Eliminacja obejmuje również wiersze źródła magnetycznego. Nie wolno zastępować
+tego brzegu warunkiem Neumanna lub Robina; przy tym Dirichlecie nie narzucamy
+dodatkowej średniej zerowej potencjału.
+
+Natywna ścieżka sparse jest wdrażana we wspólnym właścicielu MFEM/SLEPc.
+Rust przekazuje geometrię, zaakceptowaną równowagę i fazy, bez materializacji
+gęstych macierzy K/M. Bounded dense pozostaje odrębną ścieżką referencyjną;
+limit takiej ścieżki nie wyznacza dopuszczalnego rozmiaru modelu produkcyjnego.
+Nie ma jeszcze potwierdzonego wykonania pełnego benchmarku nonzero-k.
+
+Normalizacja wyników używa spójnej masy P1 na elementach magnetycznych.
+Wkłady tetraedru to V/10 na przekątnej i V/20 poza nią, z czynnikami
+sprzężonej fazy wiersza i fazy kolumny. Przechowywanie wkładów elementowych
+usuwa kwadratowy koszt pamięci tego postprocessingu i zachowuje normę starego
+operatora referencyjnego. Nie jest to drugi właściciel assembly solvera.
+
+Pełny potencjał jest rekonstruowany fazową prolongacją z tych samych
+reprezentantów klas co operator. Pole demagnetyzujące jest eksportowane jako
+ujemny gradient P1 w każdym tetraedrze, bez uśredniania na interfejsach.
+Potencjał i magnetyzacja zachowują wspólną normalizację i fazę. Weryfikacja
+wymaga porównania masy z referencją, testu faz na szwach, gradientu pola
+liniowego oraz residuali oryginalnego układu po natywnym solve.
 
 ### 4.2 FEM 2.5D waveguide
 
@@ -482,11 +500,13 @@ fallback may erase the physical k or report a K0 calculation as nonzero-k.
 (implementation-mapping)=
 ## 8. Implementation mapping
 
-The existing Floquet validator checks phase cycles and tangent-frame transport.
-The shared-domain Poisson owner remains the K0/provider boundary. The new
-native prolongation and reduced operator are foundational source only. The
-complete dynamic demagnetization coupling, potential reconstruction, selected
-spectrum and artifact publication remain planned steps.
+Walidator Floqueta kontroluje cykle fazowe i transport bazy stycznej.
+W źródłach istnieją bounded providery, rekonstrukcja potencjału, certyfikacja
+algebraiczna oraz publikacja wyników. Skalowalne połączenie wspólnego operatora
+MFEM z modalnym SLEPc jest w trakcie wdrożenia. Wiersze oznaczone jako planned
+opisują wcześniejsze granice dowodów; żaden z nich nie stanowi kwalifikacji
+pełnego benchmarku COMSOL. Bieżące kryteria wykonania B0–B6 zapisano w
+`docs/superpowers/plans/2026-09-12-eigensolve-dispersion-implementation-status.md`.
 
 | Claim | Lane | Repository path + stable symbol | Responsibility | Evidence status |
 |---|---|---|---|---|
@@ -605,3 +625,6 @@ visibility into runtime or physical qualification.
 | Contract regression | documentation | scripts/test_frequency_domain_math_contract_docs.py + test_dynamic_demag_and_response_observables_use_si_contract | Protect SI and support wording. | focused documentation test | source visible; not numerical evidence |
 
 | Reduced Floquet descriptor certificate | FEM CPU | backends/fem/cpu/frequency_domain/floquet_dynamic_demag_k.cpp + certify_floquet_realified_mode | source-floquet-descriptor-certification: reconstruct potential and test original reduced equations | isolated contract test passed; managed and geometric BC unverified | source visible |
+
+| Spójna masa P1 wyników | FEM CPU postprocessing | crates/fullmag-runner/src/fem/eigen_mass_metric.rs + SharedDomainSparseMass | Norma z fazowymi wkładami elementowymi, bez gęstej macierzy | Test parytetu z referencją | source visible; runtime unvalidated |
+| Pełny potencjał i gradient | FEM CPU postprocessing | crates/fullmag-runner/src/fem/eigen_physical_potential.rs + physical_potential_artifacts | Rekonstrukcja fazowa oraz gradient elementowy z tą samą skalą co dm | Test rekonstrukcji; pełny benchmark pozostaje wymagany | source visible; runtime unvalidated |

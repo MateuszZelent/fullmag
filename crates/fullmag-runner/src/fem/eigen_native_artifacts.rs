@@ -7,7 +7,8 @@ use super::eigen_equilibrium_contract::AcceptedFemEigenEquilibriumHandoff;
 use super::eigen_native_result::NativeModalEigenpair;
 use super::eigen_output::{
     classify_polarization, damping_policy_label, demag_realization_label, dispersion_csv,
-    dispersion_v2_csv, equilibrium_source_json, json_artifact, k_vector_json, normalization_label,
+    dispersion_v2_csv, equilibrium_source_json, floquet_potential_payload_bytes,
+    floquet_potential_payload_path, json_artifact, k_vector_json, normalization_label,
     requested_mode_indices, solver_kind_label, spin_wave_bc_json, spin_wave_bc_label,
     write_eigen_v2_bundle,
 };
@@ -26,6 +27,115 @@ use fullmag_ir::FemEigenPlanIR;
 use fullmag_ir::OutputIR;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+
+pub(super) fn native_modal_block_residuals(
+    mode: &NativeModalEigenpair,
+    solver_adapter: Option<&str>,
+) -> serde_json::Value {
+    let reduced_only = solver_adapter == Some("floquet_airbox_cpu_schur_slepc");
+    let reduced_ok = [
+        mode.block_residual_q,
+        mode.block_residual_phi,
+        mode.block_residual_gauge,
+        mode.residual_relative_l2,
+    ]
+    .iter()
+    .all(|value| value.is_finite() && (0.0..=1.0e-8).contains(value));
+    serde_json::json!({
+        "eps_q": mode.block_residual_q,
+        "eps_phi": mode.block_residual_phi,
+        "eps_gauge": mode.block_residual_gauge,
+        "eps_full": (!reduced_only).then_some(mode.residual_relative_l2),
+        "eps_reduced": reduced_only.then_some(mode.residual_relative_l2),
+        "scope": if reduced_only { "reduced_original_blocks_only" } else { "native_descriptor" },
+        "backend_reported_residual": mode.backend_reported_residual,
+        "certification_tolerance": 1.0e-8,
+        "certified": !reduced_only && reduced_ok,
+        "reduced_pencil_certified": reduced_only && reduced_ok,
+        "full_descriptor_certified": !reduced_only && reduced_ok,
+    })
+}
+
+fn floquet_certificate_summary(
+    mode: &NativeModalEigenpair,
+) -> Result<Option<serde_json::Value>, RunError> {
+    if !mode.floquet_descriptor_certified {
+        if mode.floquet_geometric_bc_certified
+            || mode.floquet_potential_representation.is_some()
+            || mode.floquet_magnetic_relative_residual.is_some()
+            || mode.floquet_potential_relative_residual.is_some()
+            || !mode.floquet_potential_real_split.is_empty()
+        {
+            return Err(RunError {
+                message:
+                    "non-certified native Floquet mode carries certificate metadata or potential payload"
+                        .to_string(),
+            });
+        }
+        return Ok(None);
+    }
+    if mode.floquet_geometric_bc_certified {
+        return Err(RunError {
+            message:
+                "native Floquet descriptor certificate cannot claim geometric BC certification"
+                    .to_string(),
+        });
+    }
+    if mode.floquet_potential_representation.as_deref()
+        != Some("doubled_real_split_complex_coefficients")
+    {
+        return Err(RunError {
+            message:
+                "native Floquet descriptor certificate has unsupported potential representation"
+                    .to_string(),
+        });
+    }
+    let magnetic_relative_residual = mode
+        .floquet_magnetic_relative_residual
+        .filter(|value| value.is_finite() && (0.0..=1.0e-8).contains(value))
+        .ok_or_else(|| RunError {
+            message: "native Floquet descriptor certificate has invalid magnetic relative residual"
+                .to_string(),
+        })?;
+    let potential_relative_residual = mode
+        .floquet_potential_relative_residual
+        .filter(|value| value.is_finite() && (0.0..=1.0e-8).contains(value))
+        .ok_or_else(|| RunError {
+            message:
+                "native Floquet descriptor certificate has invalid potential relative residual"
+                    .to_string(),
+        })?;
+    if mode.floquet_potential_real_split.is_empty()
+        || mode.floquet_potential_real_split.len() % 2 != 0
+        || mode
+            .floquet_potential_real_split
+            .iter()
+            .any(|value| !value.re.is_finite() || !value.im.is_finite())
+    {
+        return Err(RunError {
+            message:
+                "native Floquet descriptor certificate has an invalid doubled real-split potential payload"
+                    .to_string(),
+        });
+    }
+    Ok(Some(serde_json::json!({
+        "floquet_descriptor_certified": true,
+        "floquet_geometric_bc_certified": false,
+        "potential_representation": "doubled_real_split_complex_coefficients",
+        "magnetic_relative_residual": magnetic_relative_residual,
+        "potential_relative_residual": potential_relative_residual,
+        "potential_dof_count": mode.floquet_potential_real_split.len(),
+    })))
+}
+
+fn merge_object_fields(target: &mut serde_json::Value, fields: &serde_json::Value) {
+    let (Some(target), Some(fields)) = (target.as_object_mut(), fields.as_object()) else {
+        return;
+    };
+    for (key, value) in fields {
+        target.insert(key.clone(), value.clone());
+    }
+}
 
 pub(super) fn native_modal_artifacts(
     plan: &FemEigenPlanIR,
@@ -451,7 +561,8 @@ pub(super) fn native_modal_artifacts(
             .map(|value| value.im)
             .collect::<Vec<_>>();
         let has_native_q_phi_payload = !mode.q_vector.is_empty() || !mode.phi_vector.is_empty();
-        let mode_summary = serde_json::json!({
+        let floquet_certificate = floquet_certificate_summary(mode)?;
+        let mut mode_summary = serde_json::json!({
             "index": mode_index,
             "sample_index": sample_index,
             "cluster_id": mode.cluster_id,
@@ -474,15 +585,7 @@ pub(super) fn native_modal_artifacts(
             "residual_absolute_l2": mode.residual_absolute_l2,
             "residual_relative_l2": mode.residual_relative_l2,
             "residual_linf": mode.residual_linf,
-            "block_residuals": {
-                "eps_q": mode.block_residual_q,
-                "eps_phi": mode.block_residual_phi,
-                "eps_gauge": mode.block_residual_gauge,
-                "eps_full": mode.residual_relative_l2,
-                "backend_reported_residual": mode.backend_reported_residual,
-                "certification_tolerance": 1.0e-8,
-                "certified": mode.residual_relative_l2 <= 1.0e-8,
-            },
+            "block_residuals": native_modal_block_residuals(mode, solver_adapter_name),
             "mass_norm": mode.mass_norm,
             "q_dof_count": mode.q_vector.len(),
             "phi_dof_count": mode.phi_vector.len(),
@@ -506,10 +609,13 @@ pub(super) fn native_modal_artifacts(
             "source_mesh_topology_sha256": mode_source_mesh_topology.clone(),
             "component_participation": component_participation.clone(),
         });
+        if let Some(certificate) = floquet_certificate.as_ref() {
+            merge_object_fields(&mut mode_summary, certificate);
+        }
         modes_summary.push(mode_summary.clone());
 
         if requested_modes.contains(&(mode_index as u32)) {
-            let payload = serde_json::json!({
+            let mut payload = serde_json::json!({
                 "index": mode_index,
                 "sample_index": sample_index,
                 "frequency_hz": mode.frequency_hz,
@@ -530,15 +636,7 @@ pub(super) fn native_modal_artifacts(
                 "cluster_id": mode.cluster_id,
                 "cluster_size": cluster_sizes.get(&mode.cluster_id).copied().unwrap_or(1),
                 "multiplicity": cluster_sizes.get(&mode.cluster_id).copied().unwrap_or(1),
-                "block_residuals": {
-                    "eps_q": mode.block_residual_q,
-                    "eps_phi": mode.block_residual_phi,
-                    "eps_gauge": mode.block_residual_gauge,
-                    "eps_full": mode.residual_relative_l2,
-                    "backend_reported_residual": mode.backend_reported_residual,
-                    "certification_tolerance": 1.0e-8,
-                    "certified": mode.residual_relative_l2 <= 1.0e-8,
-                },
+                "block_residuals": native_modal_block_residuals(mode, solver_adapter_name),
                 "mass_norm": mode.mass_norm,
                 "q_dof_count": mode.q_vector.len(),
                 "phi_dof_count": mode.phi_vector.len(),
@@ -578,6 +676,15 @@ pub(super) fn native_modal_artifacts(
                 "phase": phase,
                 "component_participation": component_participation,
             });
+            if let Some(certificate) = floquet_certificate.as_ref() {
+                merge_object_fields(&mut payload, certificate);
+                let potential_bytes =
+                    floquet_potential_payload_bytes(&mode.floquet_potential_real_split)?;
+                auxiliary_artifacts.push(AuxiliaryArtifact {
+                    relative_path: floquet_potential_payload_path(sample_index, mode_index as u64),
+                    bytes: potential_bytes,
+                });
+            }
             auxiliary_artifacts.push(json_artifact(
                 format!("eigen/modes/mode_{mode_index:04}.json"),
                 &payload,

@@ -1,11 +1,19 @@
 #include "cpu/frequency_domain/modal/floquet_modal_solver.hpp"
+#include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
+#include <vector>
+
+#ifndef FULLMAG_FEM_WITH_SLEPC
+#define FULLMAG_FEM_WITH_SLEPC 0
+#endif
 
 namespace fd = fullmag::fem::frequency_domain;
 
@@ -204,6 +212,192 @@ void admits_sparse_bloch_operator_without_demag()
           "sparse dynamic demag rejection reason is stable");
 }
 
+fd::PoissonAirboxSharedDomainComplexCsrMatrix diagonal_complex_csr(
+    std::size_t dimension,
+    const std::vector<std::complex<double>> &diagonal)
+{
+    check(dimension == diagonal.size(), "diagonal fixture has matching dimensions");
+    fd::PoissonAirboxSharedDomainComplexCsrMatrix matrix{};
+    matrix.row_count = dimension;
+    matrix.column_count = dimension;
+    matrix.row_offsets.reserve(dimension + 1u);
+    matrix.column_indices.reserve(dimension);
+    matrix.values.reserve(dimension);
+    matrix.row_offsets.push_back(0u);
+    for (std::size_t row = 0u; row < dimension; ++row) {
+        matrix.column_indices.push_back(static_cast<std::uint32_t>(row));
+        matrix.values.push_back(diagonal[row]);
+        matrix.row_offsets.push_back(static_cast<std::uint32_t>(matrix.values.size()));
+    }
+    return matrix;
+}
+
+fd::PoissonAirboxSharedDomainComplexCsrMatrix q_to_phi_complex_csr(
+    std::size_t q_dimension,
+    std::complex<double> coupling)
+{
+    fd::PoissonAirboxSharedDomainComplexCsrMatrix matrix{};
+    matrix.row_count = q_dimension;
+    matrix.column_count = 1u;
+    matrix.row_offsets.reserve(q_dimension + 1u);
+    matrix.row_offsets.push_back(0u);
+    for (std::size_t row = 0u; row < q_dimension; ++row) {
+        if (row == 0u) {
+            matrix.column_indices.push_back(0u);
+            matrix.values.push_back(coupling);
+        }
+        matrix.row_offsets.push_back(static_cast<std::uint32_t>(matrix.values.size()));
+    }
+    return matrix;
+}
+
+fd::PoissonAirboxSharedDomainComplexCsrMatrix phi_to_q_complex_csr(
+    std::size_t q_dimension,
+    std::complex<double> coupling)
+{
+    fd::PoissonAirboxSharedDomainComplexCsrMatrix matrix{};
+    matrix.row_count = 1u;
+    matrix.column_count = q_dimension;
+    matrix.row_offsets = {0u, 1u};
+    matrix.column_indices = {0u};
+    matrix.values = {coupling};
+    return matrix;
+}
+
+std::vector<std::complex<double>> complex_csr_matvec_for_test(
+    const fd::PoissonAirboxSharedDomainComplexCsrMatrix &matrix,
+    const std::vector<std::complex<double>> &vector)
+{
+    check(matrix.column_count == vector.size(), "fixture CSR matvec dimensions match");
+    std::vector<std::complex<double>> result(
+        static_cast<std::size_t>(matrix.row_count), std::complex<double>{});
+    for (std::uint64_t row = 0u; row < matrix.row_count; ++row) {
+        for (std::uint32_t entry = matrix.row_offsets[static_cast<std::size_t>(row)];
+             entry < matrix.row_offsets[static_cast<std::size_t>(row + 1u)];
+             ++entry) {
+            result[static_cast<std::size_t>(row)] +=
+                matrix.values[entry] *
+                vector[static_cast<std::size_t>(matrix.column_indices[entry])];
+        }
+    }
+    return result;
+}
+
+double complex_norm_for_test(const std::vector<std::complex<double>> &vector)
+{
+    long double sum = 0.0L;
+    for (const auto value : vector) {
+        sum += static_cast<long double>(std::norm(value));
+    }
+    return std::sqrt(static_cast<double>(sum));
+}
+
+void executes_native_sparse_matshell_above_dense_bound()
+{
+    constexpr std::size_t q_dimension = 514u;
+    constexpr double expected_frequency_hz = 1000.0;
+    constexpr double target_frequency_hz = 1100.0;
+    const double expected_omega = fd::omega_rad_s_from_frequency_hz(expected_frequency_hz);
+    const std::complex<double> q_phi_coupling(0.25, 0.0);
+    const std::complex<double> phi_q_coupling(0.25, 0.0);
+
+    std::vector<std::complex<double>> a_diagonal(q_dimension);
+    std::vector<std::complex<double>> b_diagonal(
+        q_dimension, std::complex<double>(1.0, 0.0));
+    a_diagonal[0u] = q_phi_coupling * phi_q_coupling +
+        std::complex<double>(0.0, expected_omega);
+    for (std::size_t row = 1u; row < q_dimension; ++row) {
+        a_diagonal[row] = std::complex<double>(
+            0.0,
+            fd::omega_rad_s_from_frequency_hz(
+                expected_frequency_hz + 400.0 * static_cast<double>(row)));
+    }
+
+    const auto a_qq = diagonal_complex_csr(q_dimension, a_diagonal);
+    const auto b_qq = diagonal_complex_csr(q_dimension, b_diagonal);
+    const auto p = diagonal_complex_csr(1u, {std::complex<double>(1.0, 0.0)});
+    const auto a_qphi = q_to_phi_complex_csr(q_dimension, q_phi_coupling);
+    const auto a_phiq = phi_to_q_complex_csr(q_dimension, phi_q_coupling);
+
+    fd::FloquetSharedDomainSparseModalOperator operator_view{};
+    operator_view.a_qq = &a_qq;
+    operator_view.b_qq = &b_qq;
+    operator_view.p = &p;
+    operator_view.a_qphi = &a_qphi;
+    operator_view.a_phiq = &a_phiq;
+    operator_view.q_complex_dof_count = q_dimension;
+    operator_view.phi_dof_count = 1u;
+    operator_view.boundary_kind = "robin";
+    operator_view.gauge_policy = "nonzero_k_invertible_poisson";
+
+    fd::SLEPcSparseGyrotropicModalEigenRequest spectral{};
+    spectral.tangent_dof_count = static_cast<int>(q_dimension);
+    spectral.requested_mode_count = 1;
+    spectral.target_frequency_hz = target_frequency_hz;
+    spectral.residual_tolerance = 1.0e-8;
+    spectral.max_outer_iterations = 160;
+    spectral.max_linear_iterations = 96;
+
+    const auto result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+        operator_view, spectral);
+#if FULLMAG_FEM_WITH_SLEPC
+    check(result.ok, "native Floquet MatShell regression solves with SLEPc");
+    check(result.accepted_mode_count == 1,
+          "native Floquet MatShell regression accepts one requested mode");
+    check(result.solver_adapter != nullptr &&
+              std::strcmp(result.solver_adapter, "floquet_airbox_cpu_schur_slepc") == 0,
+          "native Floquet MatShell regression reports its native adapter");
+    const fd::SLEPcModalAcceptedMode &mode = result.accepted_modes.front();
+    check(mode.floquet_mode_vector_physical_complex,
+          "native Floquet mode exposes a physical complex q vector");
+    check(mode.mode_vector.size() == q_dimension,
+          "native Floquet physical q vector has the original complex dimension");
+    check(mode.floquet_potential_real_split.size() == 1u,
+          "native Floquet mode exposes the physical scalar potential");
+    check(std::abs(mode.frequency_hz - expected_frequency_hz) < 1.0e-4,
+          "native Floquet mode uses the analytical frequency after rotation");
+    check(std::abs(mode.lambda_real) < 1.0e-6 &&
+              std::abs(mode.lambda_imag - expected_omega) < 1.0e-3,
+          "native Floquet mode restores the canonical lambda=i*omega convention");
+    check(!mode.floquet_descriptor_certified,
+          "native reduced blocks do not claim full descriptor certification");
+    check(std::abs(mode.floquet_potential_real_split[0]) > 1.0e-6,
+          "native Floquet scalar potential remains nonzero under coupling");
+
+    const auto a_q_q = complex_csr_matvec_for_test(a_qq, mode.mode_vector);
+    const auto a_q_phi = complex_csr_matvec_for_test(
+        a_qphi, mode.floquet_potential_real_split);
+    const auto b_q = complex_csr_matvec_for_test(b_qq, mode.mode_vector);
+    const auto p_phi = complex_csr_matvec_for_test(
+        p, mode.floquet_potential_real_split);
+    const auto a_phi_q = complex_csr_matvec_for_test(a_phiq, mode.mode_vector);
+    std::vector<std::complex<double>> magnetic_residual(q_dimension);
+    for (std::size_t index = 0u; index < q_dimension; ++index) {
+        magnetic_residual[index] = a_q_q[index] + a_q_phi[index] -
+            std::complex<double>(0.0, mode.lambda_imag) * b_q[index];
+    }
+    const double magnetic_denominator = complex_norm_for_test(a_q_q) +
+        complex_norm_for_test(a_q_phi) +
+        std::abs(mode.lambda_imag) * complex_norm_for_test(b_q);
+    const double magnetic_relative_residual =
+        complex_norm_for_test(magnetic_residual) /
+        (magnetic_denominator + std::numeric_limits<double>::min());
+    check(magnetic_relative_residual < 1.0e-7,
+          "native Floquet physical q/phi satisfies the original magnetic block");
+    std::vector<std::complex<double>> potential_residual(1u);
+    potential_residual[0u] = p_phi[0u] + a_phi_q[0u];
+    check(complex_norm_for_test(potential_residual) < 1.0e-7,
+          "native Floquet physical q/phi satisfies the original Poisson block");
+#else
+    check(!result.ok, "native Floquet endpoint stays unavailable without SLEPc");
+    check(result.status != nullptr && std::strcmp(result.status, "unavailable") == 0,
+          "native Floquet endpoint reports unavailable without SLEPc");
+    check(result.unsupported_reason != nullptr &&
+              std::strcmp(result.unsupported_reason, "slepc_not_available") == 0,
+          "native Floquet endpoint reports the SLEPc capability failure");
+#endif
+}
+
 } // namespace
 
 int main()
@@ -214,5 +408,6 @@ int main()
     rejects_conflicting_k_payloads();
     rejects_invalid_frequency_windows();
     admits_sparse_bloch_operator_without_demag();
+    executes_native_sparse_matshell_above_dense_bound();
     return 0;
 }

@@ -9,6 +9,7 @@
 #include <complex>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <initializer_list>
 #include <memory>
 #include <tuple>
@@ -222,6 +223,7 @@ void assembles_shared_domain_floquet_blocks_with_one_phase_graph()
     request.periodic_pairs = &pair;
     request.periodic_pair_count = 1u;
     request.k_rad_per_m[0] = 0.5;
+    request.boundary_kind = fd::FloquetAirboxBoundaryKind::robin;
     request.robin_beta = 1.0;
     request.robin_boundary_marker = &robin_marker;
 
@@ -243,9 +245,10 @@ void assembles_shared_domain_floquet_blocks_with_one_phase_graph()
           "shared-domain tangent constraint has component-wise q dimensions");
     check(std::abs(blocks.scalar_constraint->imag()(1, 0)) > 0.0,
           "shared-domain scalar constraint carries the requested nonzero phase");
-    for (int row = 0; row < blocks.scalar_operator->imag().Height(); ++row) {
-        for (int column = 0; column < blocks.scalar_operator->imag().Width(); ++column) {
-            check(std::abs(blocks.scalar_operator->imag()(row, column)) < 1.0e-12,
+    const mfem::ComplexSparseMatrix &scalar_operator = *blocks.scalar_operator;
+    for (int row = 0; row < scalar_operator.imag().Height(); ++row) {
+        for (int column = 0; column < scalar_operator.imag().Width(); ++column) {
+            check(std::abs(scalar_operator.imag()(row, column)) < 1.0e-12,
                   "shared-domain full-field scalar operator has no shifted k block");
         }
     }
@@ -268,6 +271,19 @@ void assembles_shared_domain_floquet_blocks_with_one_phase_graph()
     check(schur_result.real_split_row_major.size() == q_real_split * q_real_split,
           "shared-domain Floquet Schur result has the reduced real-split q shape");
 
+    request.boundary_kind = fd::FloquetAirboxBoundaryKind::unknown;
+    fd::FloquetAirboxSharedDomainBlockResult missing_boundary_kind{};
+    check(
+        fd::assemble_floquet_airbox_shared_domain_blocks(request, &missing_boundary_kind) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "shared-domain Floquet blocks reject a missing boundary descriptor");
+    check(
+        std::strstr(
+            missing_boundary_kind.error_message,
+            "boundary kind must be explicit") != nullptr,
+        "missing boundary descriptor fails closed before scalar assembly");
+    request.boundary_kind = fd::FloquetAirboxBoundaryKind::robin;
+
     pair.phase_rad = 0.0;
     fd::FloquetAirboxSharedDomainBlockResult invalid_blocks{};
     check(
@@ -285,6 +301,135 @@ void assembles_shared_domain_floquet_blocks_with_one_phase_graph()
         "shared-domain Floquet block producer rejects nonzero k without translation pairs");
 }
 
+void assembles_dirichlet_floquet_blocks_with_periodic_class_elimination()
+{
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
+        1,
+        1,
+        1,
+        mfem::Element::TETRAHEDRON,
+        1.0,
+        1.0,
+        1.0);
+    mfem::H1_FECollection collection(1, mesh.Dimension());
+    mfem::FiniteElementSpace scalar_space(&mesh, &collection);
+    const std::uint64_t node_count = static_cast<std::uint64_t>(scalar_space.GetVSize());
+    check(node_count >= 3u, "Dirichlet Floquet fixture has a free node for the class test");
+
+    mfem::Array<int> dirichlet_marker(mesh.bdr_attributes.Max());
+    dirichlet_marker = 0;
+    check(dirichlet_marker.Size() > 0, "Dirichlet Floquet fixture has a boundary attribute");
+    dirichlet_marker[0] = 1;
+    mfem::Array<int> marked_true_dofs;
+    scalar_space.GetEssentialTrueDofs(dirichlet_marker, marked_true_dofs);
+    check(marked_true_dofs.Size() > 0, "Dirichlet fixture marker selects scalar true dofs");
+
+    std::vector<std::uint8_t> is_marked(static_cast<std::size_t>(node_count), 0u);
+    for (int index = 0; index < marked_true_dofs.Size(); ++index) {
+        const int dof = marked_true_dofs[index];
+        check(dof >= 0 && static_cast<std::uint64_t>(dof) < node_count,
+              "Dirichlet fixture true dof is in the scalar space");
+        is_marked[static_cast<std::size_t>(dof)] = 1u;
+    }
+    const std::uint64_t marked_node = static_cast<std::uint64_t>(marked_true_dofs[0]);
+    std::uint64_t unmarked_node = node_count;
+    for (std::uint64_t node = 0u; node < node_count; ++node) {
+        if (is_marked[static_cast<std::size_t>(node)] == 0u) {
+            unmarked_node = node;
+            break;
+        }
+    }
+    check(unmarked_node < node_count,
+          "Dirichlet fixture has an unmarked node for periodic class expansion");
+
+    std::vector<fd::TangentFrameNode> frames(static_cast<std::size_t>(node_count));
+    std::vector<std::uint8_t> magnetic_mask(static_cast<std::size_t>(mesh.GetNE()), 1u);
+    std::vector<double> saturation_magnetization(static_cast<std::size_t>(node_count), 1.0);
+    std::vector<std::uint32_t> scalar_classes(static_cast<std::size_t>(node_count));
+    std::vector<std::uint32_t> magnetic_classes(static_cast<std::size_t>(node_count));
+    scalar_classes[static_cast<std::size_t>(marked_node)] = 0u;
+    scalar_classes[static_cast<std::size_t>(unmarked_node)] = 0u;
+    std::uint32_t next_class = 1u;
+    for (std::uint64_t node = 0u; node < node_count; ++node) {
+        if (node == marked_node || node == unmarked_node) {
+            continue;
+        }
+        scalar_classes[static_cast<std::size_t>(node)] = next_class++;
+    }
+    magnetic_classes = scalar_classes;
+    const std::uint64_t reduced_node_count = static_cast<std::uint64_t>(next_class);
+    check(reduced_node_count == node_count - 1u,
+          "Dirichlet fixture has one reduced class for the periodic pair");
+
+    fd::FrequencyDomainFloquetPeriodicPair pair{};
+    pair.node_a = marked_node;
+    pair.node_b = unmarked_node;
+    pair.has_translation = true;
+    pair.translation_m[0] = 1.0;
+    pair.has_phase = true;
+    pair.phase_rad = -0.5;
+
+    fd::FloquetAirboxSharedDomainBlockRequest request{};
+    request.scalar_space = &scalar_space;
+    request.tangent_frames = frames.data();
+    request.tangent_frame_count = node_count;
+    request.magnetic_element_mask = magnetic_mask.data();
+    request.magnetic_element_count = magnetic_mask.size();
+    request.saturation_magnetization_a_per_m = saturation_magnetization.data();
+    request.saturation_magnetization_count = saturation_magnetization.size();
+    request.scalar_reduced_node = scalar_classes.data();
+    request.scalar_reduced_node_count = reduced_node_count;
+    request.magnetic_reduced_node = magnetic_classes.data();
+    request.magnetic_reduced_node_count = reduced_node_count;
+    request.periodic_pairs = &pair;
+    request.periodic_pair_count = 1u;
+    request.k_rad_per_m[0] = 0.5;
+    request.boundary_kind = fd::FloquetAirboxBoundaryKind::dirichlet;
+    request.robin_boundary_marker = &dirichlet_marker;
+
+    fd::FloquetAirboxSharedDomainBlockResult blocks{};
+    check(
+        fd::assemble_floquet_airbox_shared_domain_blocks(request, &blocks) ==
+            fd::FrequencyDomainStatus::ok,
+        "shared-domain Floquet blocks assemble with Dirichlet elimination");
+    check(blocks.scalar_operator != nullptr && blocks.tangent_source != nullptr,
+          "Dirichlet Floquet assembly returns scalar and source blocks");
+
+    const mfem::ComplexSparseMatrix &scalar_operator = *blocks.scalar_operator;
+    const mfem::ComplexSparseMatrix &tangent_source = *blocks.tangent_source;
+    const auto check_eliminated = [&](std::uint64_t node, const char *message) {
+        const int row = static_cast<int>(node);
+        check(std::abs(scalar_operator.real()(row, row) - 1.0) < 1.0e-12,
+              message);
+        check(std::abs(scalar_operator.imag()(row, row)) < 1.0e-12,
+              "Dirichlet scalar identity has no imaginary diagonal");
+        for (int column = 0; column < static_cast<int>(node_count); ++column) {
+            if (column == row) {
+                continue;
+            }
+            check(std::abs(scalar_operator.real()(row, column)) < 1.0e-12,
+                  "Dirichlet scalar row is eliminated");
+            check(std::abs(scalar_operator.real()(column, row)) < 1.0e-12,
+                  "Dirichlet scalar column is eliminated");
+            check(std::abs(scalar_operator.imag()(row, column)) < 1.0e-12,
+                  "Dirichlet scalar imaginary row is eliminated");
+            check(std::abs(scalar_operator.imag()(column, row)) < 1.0e-12,
+                  "Dirichlet scalar imaginary column is eliminated");
+        }
+        for (int column = 0; column < tangent_source.real().Width(); ++column) {
+            check(std::abs(tangent_source.real()(row, column)) < 1.0e-12,
+                  "Dirichlet tangent source row is eliminated");
+            check(std::abs(tangent_source.imag()(row, column)) < 1.0e-12,
+                  "Dirichlet tangent source imaginary row is eliminated");
+        }
+    };
+
+    check_eliminated(marked_node, "marked Dirichlet scalar dof is eliminated");
+    check_eliminated(
+        unmarked_node,
+        "periodic partner in a Dirichlet class is eliminated as well");
+}
+
 #endif
 
 } // namespace
@@ -295,6 +440,7 @@ int main()
     reduces_phase_constrained_airbox_blocks_before_schur_elimination();
     applies_the_magnetic_floquet_constraint_before_schur_elimination();
     assembles_shared_domain_floquet_blocks_with_one_phase_graph();
+    assembles_dirichlet_floquet_blocks_with_periodic_class_elimination();
     rejects_missing_floquet_airbox_blocks_without_fallback();
 #endif
     return 0;

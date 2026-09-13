@@ -242,6 +242,99 @@ Mode artifacts export:
 
 The current circular polarization export is a tangent-basis reconstruction convenience for visualization. It should be treated as a reference visualization product contract, not yet as a full non-Hermitian modal analysis package.
 
+## Branch identity at crossings and degeneracies
+
+`KSamplingIR::Path` solves each sample independently, so the order and phase
+of eigenvectors returned by a solver are not branch identity.  The tracker
+compares only modes represented in the same active magnetic FEM basis.  The
+mass weights are the positive per-node FE weights supplied with the reduced
+vectors; they are applied to every Cartesian component at that node.  Airbox
+degrees of freedom and vectors on a different mesh are not part of this
+metric.
+
+For a reduced vector $v$, the internal mass-normalized representation is
+
+```{math}
+:label: eq-eigenmode-branch-mass-normalization
+\widetilde v = \frac{M^{1/2}v}{\lVert M^{1/2}v\rVert_2},
+\qquad
+M=\operatorname{diag}(w_1,w_1,w_1,\ldots,w_n,w_n,w_n),
+\qquad w_i>0.
+```
+
+The implementation orthonormalizes each previous and current candidate group
+in this metric.  If $U$ and $V$ are the resulting bases of the same rank
+$r$, it computes
+
+```{math}
+:label: eq-eigenmode-branch-principal-angles
+C=U^\ast V=P\,\Sigma\,Q^\ast,
+\qquad
+\cos\theta_j=\sigma_j(C),
+\qquad
+s_{\mathrm{sub}}=\min_{1\leq j\leq r}\cos\theta_j .
+```
+
+The minimum principal-angle cosine is the geometric continuity criterion; a
+single raw-vector overlap is not used to certify a degenerate group.  The
+Procrustes transport
+
+```{math}
+:label: eq-eigenmode-branch-procrustes-transport
+R=Q P^\ast,
+\qquad
+V R\ \text{is the current basis transported closest to }U,
+```
+
+provides a private frame for the next path sample.  A Hungarian assignment on
+$|R_{ij}|$ gives stable raw-mode slots for the next step.  Individual labels
+inside a degenerate subspace remain gauge-dependent; the published branch
+point therefore leaves `overlap_prev` empty for a subspace edge and keeps the
+subspace decision in the internal confidence/diagnostic path until the V2
+artifact extension defines explicit principal-angle fields.
+
+The tracker groups complex frequencies only for numerical degeneracy
+detection.  With real and imaginary frequencies in Hz, the current private
+policy is
+
+```{math}
+:label: eq-eigenmode-branch-degeneracy-policy
+\delta_f=
+\sqrt{(f_r-f'_r)^2+(f_i-f'_i)^2}
+\leq
+10^{-6}\,\mathrm{Hz}
+ +10^{-9}\max\!\left(
+ \sqrt{f_r^2+f_i^2},
+ \sqrt{(f'_r)^2+(f'_i)^2},
+ 1\,\mathrm{Hz}\right).
+```
+
+This is a conservative numerical grouping rule for solver round-off around an
+exact crossing, not a claim that bands separated by this value are physically
+identical.  It is intentionally private while the versioned IR/artifact
+contract has no authored degeneracy tolerance.  A degenerate sample adjacent
+to split singleton modes forms a candidate group from the nearest complex
+frequency center and still requires the mass-weighted principal-angle test;
+an ambiguous boundary, unequal rank, invalid vector, mismatched positive mass
+diagonal, or different last sample causes the candidate to be rejected and
+leaves ordinary overlap matching or branch restart in control.
+
+The present implementation is scoped to right eigenvectors in a common FEM
+coordinate basis.  It is phase-invariant and can transport a rotated basis,
+but it does not yet remove a known Bloch envelope phase before comparison and
+does not claim a left/right biorthogonal metric for strongly non-Hermitian
+damped pencils.  Those cases require explicit phase-frame and left/right
+fields in a later versioned contract.
+
+The numerical owner is
+`crates/fullmag-runner/src/eigen/tracking_subspace.rs::mass_weighted_subspace_transport`;
+assignment and restart policy remain in
+`crates/fullmag-runner/src/eigen/tracking.rs::track_branches`.  Regression
+coverage includes rotated mass-weighted degenerate bases,
+split–degenerate–split crossings, unequal-rank rejection, and rejection of
+frames retained from different last samples in
+`crates/fullmag-runner/src/eigen/tracking.rs::tests`.
+
 ## Artifact contract
 
 The runner writes:

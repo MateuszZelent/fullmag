@@ -76,6 +76,303 @@ struct SparseAccumulator {
     }
 };
 
+using Complex = std::complex<double>;
+
+struct ComplexSparseAccumulator {
+    std::uint64_t row_count = 0;
+    std::uint64_t column_count = 0;
+    std::vector<std::map<std::uint32_t, Complex>> rows{};
+
+    ComplexSparseAccumulator(std::uint64_t rows_in, std::uint64_t columns_in)
+        : row_count(rows_in)
+        , column_count(columns_in)
+        , rows(static_cast<std::size_t>(rows_in))
+    {
+    }
+
+    void add(std::uint64_t row, std::uint64_t column, Complex value)
+    {
+        if (row >= row_count || column >= column_count ||
+            column > std::numeric_limits<std::uint32_t>::max()) {
+            throw std::out_of_range("shared-domain complex CSR entry is out of range");
+        }
+        if (value == Complex{}) {
+            return;
+        }
+        rows[static_cast<std::size_t>(row)][static_cast<std::uint32_t>(column)] += value;
+    }
+
+    void finish(PoissonAirboxSharedDomainComplexCsrMatrix &out) const
+    {
+        out = PoissonAirboxSharedDomainComplexCsrMatrix{};
+        out.row_count = row_count;
+        out.column_count = column_count;
+        out.row_offsets.reserve(rows.size() + 1u);
+        out.row_offsets.push_back(0u);
+        for (const auto &row : rows) {
+            for (const auto &[column, value] : row) {
+                if (value == Complex{}) {
+                    continue;
+                }
+                if (!std::isfinite(value.real()) || !std::isfinite(value.imag())) {
+                    throw std::invalid_argument(
+                        "shared-domain complex CSR assembly produced a non-finite value");
+                }
+                out.column_indices.push_back(column);
+                out.values.push_back(value);
+            }
+            if (out.values.size() > std::numeric_limits<std::uint32_t>::max()) {
+                throw std::overflow_error(
+                    "shared-domain complex CSR nnz exceeds uint32 range");
+            }
+            out.row_offsets.push_back(static_cast<std::uint32_t>(out.values.size()));
+        }
+    }
+};
+
+bool complex_csr_is_valid(
+    const PoissonAirboxSharedDomainComplexCsrMatrix &matrix) noexcept
+{
+    if (matrix.row_count == 0u || matrix.column_count == 0u ||
+        matrix.row_count == std::numeric_limits<std::uint64_t>::max() ||
+        matrix.row_count > std::numeric_limits<std::size_t>::max() ||
+        matrix.row_offsets.size() !=
+            static_cast<std::size_t>(matrix.row_count + 1u) ||
+        matrix.column_indices.size() != matrix.values.size() ||
+        matrix.row_offsets.empty() || matrix.row_offsets.front() != 0u ||
+        matrix.row_offsets.back() != matrix.values.size()) {
+        return false;
+    }
+    for (std::uint64_t row = 0u; row < matrix.row_count; ++row) {
+        if (matrix.row_offsets[static_cast<std::size_t>(row)] >
+            matrix.row_offsets[static_cast<std::size_t>(row + 1u)]) {
+            return false;
+        }
+    }
+    for (std::size_t index = 0u; index < matrix.values.size(); ++index) {
+        if (matrix.column_indices[index] >= matrix.column_count ||
+            !std::isfinite(matrix.values[index].real()) ||
+            !std::isfinite(matrix.values[index].imag())) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool copy_mfem_complex_matrix(
+    const mfem::ComplexSparseMatrix &source,
+    PoissonAirboxSharedDomainComplexCsrMatrix &out,
+    std::string &error)
+{
+    const mfem::SparseMatrix &real = source.real();
+    const mfem::SparseMatrix &imaginary = source.imag();
+    if (real.Height() <= 0 || real.Width() <= 0 ||
+        real.Height() != imaginary.Height() || real.Width() != imaginary.Width() ||
+        static_cast<std::uint64_t>(real.Height()) >
+            std::numeric_limits<std::uint32_t>::max() ||
+        static_cast<std::uint64_t>(real.Width()) >
+            std::numeric_limits<std::uint32_t>::max()) {
+        error = "Floquet MFEM complex block has invalid dimensions";
+        return false;
+    }
+    try {
+        ComplexSparseAccumulator accumulator(
+            static_cast<std::uint64_t>(real.Height()),
+            static_cast<std::uint64_t>(real.Width()));
+        mfem::Array<int> real_columns;
+        mfem::Array<int> imaginary_columns;
+        mfem::Vector real_values;
+        mfem::Vector imaginary_values;
+        for (int row = 0; row < real.Height(); ++row) {
+            real.GetRow(row, real_columns, real_values);
+            imaginary.GetRow(row, imaginary_columns, imaginary_values);
+            if (real_columns.Size() != real_values.Size() ||
+                imaginary_columns.Size() != imaginary_values.Size()) {
+                error = "Floquet MFEM complex block row storage is inconsistent";
+                return false;
+            }
+            for (int index = 0; index < real_columns.Size(); ++index) {
+                if (real_columns[index] < 0) {
+                    error = "Floquet MFEM complex block has a negative column index";
+                    return false;
+                }
+                accumulator.add(
+                    static_cast<std::uint64_t>(row),
+                    static_cast<std::uint64_t>(real_columns[index]),
+                    Complex(real_values[index], 0.0));
+            }
+            for (int index = 0; index < imaginary_columns.Size(); ++index) {
+                if (imaginary_columns[index] < 0) {
+                    error = "Floquet MFEM complex block has a negative column index";
+                    return false;
+                }
+                accumulator.add(
+                    static_cast<std::uint64_t>(row),
+                    static_cast<std::uint64_t>(imaginary_columns[index]),
+                    Complex(0.0, imaginary_values[index]));
+            }
+        }
+        accumulator.finish(out);
+        return true;
+    } catch (const std::exception &exception) {
+        error = exception.what();
+        return false;
+    }
+}
+
+bool copy_real_csr_as_complex(
+    const CsrMatrixView &source,
+    PoissonAirboxSharedDomainComplexCsrMatrix &out,
+    std::string &error)
+{
+    if (source.row_count == 0u || source.column_count == 0u ||
+        source.row_offsets == nullptr ||
+        source.row_offsets_len != source.row_count + 1u ||
+        source.column_indices_len != source.values_len ||
+        (source.values_len > 0u &&
+         (source.column_indices == nullptr || source.values == nullptr)) ||
+        source.row_offsets[0] != 0u ||
+        source.row_offsets[source.row_count] != source.values_len) {
+        error = "shared-domain real CSR block is invalid";
+        return false;
+    }
+    for (std::uint64_t row = 0u; row < source.row_count; ++row) {
+        if (source.row_offsets[row] > source.row_offsets[row + 1u]) {
+            error = "shared-domain real CSR row offsets are not monotone";
+            return false;
+        }
+    }
+    for (std::uint64_t entry = 0u; entry < source.values_len; ++entry) {
+        if (source.column_indices[entry] >= source.column_count ||
+            !std::isfinite(source.values[entry])) {
+            error = "shared-domain real CSR block contains an invalid entry";
+            return false;
+        }
+    }
+    try {
+        ComplexSparseAccumulator accumulator(source.row_count, source.column_count);
+        for (std::uint64_t row = 0u; row < source.row_count; ++row) {
+            for (std::uint32_t entry = source.row_offsets[row];
+                 entry < source.row_offsets[row + 1u];
+                 ++entry) {
+                accumulator.add(
+                    row,
+                    source.column_indices[entry],
+                    Complex(source.values[entry], 0.0));
+            }
+        }
+        accumulator.finish(out);
+        return true;
+    } catch (const std::exception &exception) {
+        error = exception.what();
+        return false;
+    }
+}
+
+bool complex_csr_multiply(
+    const PoissonAirboxSharedDomainComplexCsrMatrix &left,
+    const PoissonAirboxSharedDomainComplexCsrMatrix &right,
+    PoissonAirboxSharedDomainComplexCsrMatrix &out,
+    std::string &error)
+{
+    if (!complex_csr_is_valid(left) || !complex_csr_is_valid(right) ||
+        left.column_count != right.row_count) {
+        error = "Floquet complex CSR multiplication shape mismatch";
+        return false;
+    }
+    try {
+        ComplexSparseAccumulator accumulator(left.row_count, right.column_count);
+        for (std::uint64_t row = 0u; row < left.row_count; ++row) {
+            const std::uint32_t begin = left.row_offsets[static_cast<std::size_t>(row)];
+            const std::uint32_t end = left.row_offsets[static_cast<std::size_t>(row + 1u)];
+            for (std::uint32_t left_entry = begin; left_entry < end; ++left_entry) {
+                const std::uint32_t middle = left.column_indices[left_entry];
+                const Complex left_value = left.values[left_entry];
+                const std::uint32_t right_begin =
+                    right.row_offsets[static_cast<std::size_t>(middle)];
+                const std::uint32_t right_end =
+                    right.row_offsets[static_cast<std::size_t>(middle + 1u)];
+                for (std::uint32_t right_entry = right_begin;
+                     right_entry < right_end;
+                     ++right_entry) {
+                    accumulator.add(
+                        row,
+                        right.column_indices[right_entry],
+                        left_value * right.values[right_entry]);
+                }
+            }
+        }
+        accumulator.finish(out);
+        return true;
+    } catch (const std::exception &exception) {
+        error = exception.what();
+        return false;
+    }
+}
+
+bool complex_csr_conjugate_transpose(
+    const PoissonAirboxSharedDomainComplexCsrMatrix &source,
+    PoissonAirboxSharedDomainComplexCsrMatrix &out,
+    std::string &error)
+{
+    if (!complex_csr_is_valid(source)) {
+        error = "Floquet complex CSR conjugate-transpose input is invalid";
+        return false;
+    }
+    try {
+        ComplexSparseAccumulator accumulator(source.column_count, source.row_count);
+        for (std::uint64_t row = 0u; row < source.row_count; ++row) {
+            for (std::uint32_t entry = source.row_offsets[static_cast<std::size_t>(row)];
+                 entry < source.row_offsets[static_cast<std::size_t>(row + 1u)];
+                 ++entry) {
+                accumulator.add(
+                    source.column_indices[entry],
+                    row,
+                    std::conj(source.values[entry]));
+            }
+        }
+        accumulator.finish(out);
+        return true;
+    } catch (const std::exception &exception) {
+        error = exception.what();
+        return false;
+    }
+}
+
+bool project_real_csr_with_complex_constraint(
+    const CsrMatrixView &full_matrix,
+    const PoissonAirboxSharedDomainComplexCsrMatrix &constraint,
+    PoissonAirboxSharedDomainComplexCsrMatrix &out,
+    std::string &error)
+{
+    PoissonAirboxSharedDomainComplexCsrMatrix full_complex{};
+    PoissonAirboxSharedDomainComplexCsrMatrix constrained{};
+    PoissonAirboxSharedDomainComplexCsrMatrix adjoint{};
+    if (!copy_real_csr_as_complex(full_matrix, full_complex, error) ||
+        full_complex.row_count != constraint.row_count ||
+        !complex_csr_multiply(full_complex, constraint, constrained, error) ||
+        !complex_csr_conjugate_transpose(constraint, adjoint, error) ||
+        !complex_csr_multiply(adjoint, constrained, out, error)) {
+        if (error.empty()) {
+            error = "Floquet phase projection shape mismatch";
+        }
+        return false;
+    }
+    return true;
+}
+
+bool project_accumulator_with_complex_constraint(
+    const SparseAccumulator &full_matrix,
+    const PoissonAirboxSharedDomainComplexCsrMatrix &constraint,
+    PoissonAirboxSharedDomainComplexCsrMatrix &out,
+    std::string &error)
+{
+    PoissonAirboxSharedDomainCsrMatrix full_real{};
+    full_matrix.finish(full_real);
+    return project_real_csr_with_complex_constraint(
+        full_real.view(), constraint, out, error);
+}
+
 void copy_error(char out[256], const char *message) noexcept
 {
     if (out == nullptr) {
@@ -1957,6 +2254,31 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
                        "shared-domain assembly requires a finite full magnetic A_qq CSR block");
             return out_result->status;
         }
+        PoissonAirboxSharedDomainComplexCsrMatrix phase_constraint{};
+        if (request.magnetic_phase_constraint != nullptr) {
+            const mfem::SparseMatrix &phase_real =
+                request.magnetic_phase_constraint->real();
+            const mfem::SparseMatrix &phase_imag =
+                request.magnetic_phase_constraint->imag();
+            const std::uint64_t expected_phase_columns =
+                2u * request.magnetic_reduced_node_count;
+            if (phase_real.Height() != phase_imag.Height() ||
+                phase_real.Width() != phase_imag.Width() ||
+                phase_real.Height() != static_cast<int>(full_q_count) ||
+                phase_real.Width() != static_cast<int>(expected_phase_columns)) {
+                copy_error(
+                    out_result->error_message,
+                    "shared-domain Floquet phase constraint dimensions do not match full A_qq");
+                return out_result->status;
+            }
+            if (!copy_mfem_complex_matrix(
+                    *request.magnetic_phase_constraint,
+                    phase_constraint,
+                    error)) {
+                copy_error(out_result->error_message, error.c_str());
+                return out_result->status;
+            }
+        }
 
         switch (request.boundary_kind) {
         case PoissonAirboxBoundaryKind::robin:
@@ -2200,6 +2522,21 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
             2u,
             2u,
             b_qq_reduced);
+        if (request.magnetic_phase_constraint != nullptr) {
+            if (!project_real_csr_with_complex_constraint(
+                    *request.magnetic_a_qq_csr,
+                    phase_constraint,
+                    out_result->floquet_a_qq,
+                    error) ||
+                !project_accumulator_with_complex_constraint(
+                    b_qq_full,
+                    phase_constraint,
+                    out_result->floquet_b_qq,
+                    error)) {
+                copy_error(out_result->error_message, error.c_str());
+                return out_result->status;
+            }
+        }
         a_phiq_reduced.finish(out_result->a_phiq);
         a_qphi_reduced.finish(out_result->a_qphi);
         b_qq_reduced.finish(out_result->b_qq);
@@ -2313,7 +2650,8 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
     const FrequencyDomainFloquetPeriodicPair *floquet_periodic_pairs,
     std::uint64_t floquet_periodic_pair_count,
     const std::array<double, 3> *floquet_k_rad_per_m,
-    FloquetAirboxDynamicDemagKResult *out_floquet_dynamic_demag_k) noexcept
+    FloquetAirboxDynamicDemagKResult *out_floquet_dynamic_demag_k,
+    bool materialize_dense_floquet) noexcept
 {
     if (out_result == nullptr) {
         return FrequencyDomainStatus::validation_error;
@@ -2695,14 +3033,17 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         request.mu0_T_m_A = 1.25663706212e-6;
         const bool has_floquet_wavevector = floquet_k_rad_per_m != nullptr;
         const bool has_floquet_result = out_floquet_dynamic_demag_k != nullptr;
-        if (has_floquet_wavevector != has_floquet_result) {
+        if ((!has_floquet_wavevector && has_floquet_result) ||
+            (has_floquet_wavevector && materialize_dense_floquet && !has_floquet_result) ||
+            (has_floquet_wavevector && !materialize_dense_floquet && has_floquet_result) ||
+            (!has_floquet_wavevector && !materialize_dense_floquet)) {
             copy_error(
                 out_result->error_message,
-                "Floquet dynamic demag-k request must provide both wavevector and result");
+                "Floquet shared-domain request has inconsistent wavevector/dense-output policy");
             out_result->status = FrequencyDomainStatus::validation_error;
             return out_result->status;
         }
-        if (has_floquet_result) {
+        if (has_floquet_wavevector) {
             long double floquet_k_squared = 0.0L;
             for (double component : *floquet_k_rad_per_m) {
                 if (!std::isfinite(component)) {
@@ -2732,7 +3073,7 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         }
         PoissonAirboxSharedDomainCsrMatrix native_magnetic_a_qq{};
         CsrMatrixView magnetic_a_qq{};
-        if (!has_floquet_result) {
+        {
             char native_error[256]{};
             const double accepted_max_transverse_field_a_per_m =
                 std::strcmp(payload.acceptance_criterion, "torque") == 0 &&
@@ -2771,7 +3112,7 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         const auto assemble_k0 = [&]() noexcept {
             return assemble_poisson_airbox_shared_domain(request, out_result);
         };
-        if (!has_floquet_result) {
+        if (!has_floquet_wavevector) {
             return assemble_k0();
         }
 
@@ -2794,6 +3135,21 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         floquet_blocks_request.periodic_pairs = floquet_periodic_pairs;
         floquet_blocks_request.periodic_pair_count = floquet_periodic_pair_count;
         floquet_blocks_request.k_rad_per_m = *floquet_k_rad_per_m;
+        switch (boundary_kind) {
+        case PoissonAirboxBoundaryKind::robin:
+            floquet_blocks_request.boundary_kind = FloquetAirboxBoundaryKind::robin;
+            break;
+        case PoissonAirboxBoundaryKind::dirichlet:
+            floquet_blocks_request.boundary_kind = FloquetAirboxBoundaryKind::dirichlet;
+            break;
+        case PoissonAirboxBoundaryKind::pure_neumann:
+            floquet_blocks_request.boundary_kind = FloquetAirboxBoundaryKind::pure_neumann;
+            break;
+        default:
+            // Keep the request's zero value so the Floquet operator rejects
+            // an impossible or future boundary kind before assembly.
+            break;
+        }
         floquet_blocks_request.robin_beta = payload.robin_beta;
         floquet_blocks_request.robin_boundary_marker =
             boundary_marker.Size() > 0 ? &boundary_marker : nullptr;
@@ -2809,6 +3165,95 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
             return block_status;
         }
 
+        /*
+         * Assemble the static magnetic blocks through the same shared-domain
+         * importer and phase constraint as the scalar blocks.  This is the
+         * ownership boundary for the scalable path: no Rust-side dense K/G
+         * descriptor is accepted, and no dense dynamic demagnetisation block
+         * is needed to produce the sparse operator below.
+         */
+        request.magnetic_phase_constraint = floquet_blocks.tangent_constraint.get();
+        const FrequencyDomainStatus static_status =
+            assemble_poisson_airbox_shared_domain(request, out_result);
+        if (static_status != FrequencyDomainStatus::ok) {
+            return static_status;
+        }
+
+        PoissonAirboxSharedDomainComplexCsrMatrix scalar_operator{};
+        PoissonAirboxSharedDomainComplexCsrMatrix scalar_constraint{};
+        PoissonAirboxSharedDomainComplexCsrMatrix tangent_source{};
+        PoissonAirboxSharedDomainComplexCsrMatrix tangent_constraint{};
+        PoissonAirboxSharedDomainComplexCsrMatrix scalar_constraint_adjoint{};
+        PoissonAirboxSharedDomainComplexCsrMatrix scalar_operator_times_constraint{};
+        PoissonAirboxSharedDomainComplexCsrMatrix source_times_constraint{};
+        PoissonAirboxSharedDomainComplexCsrMatrix a_qphi{};
+        if (!copy_mfem_complex_matrix(
+                *floquet_blocks.scalar_operator,
+                scalar_operator,
+                error) ||
+            !copy_mfem_complex_matrix(
+                *floquet_blocks.scalar_constraint,
+                scalar_constraint,
+                error) ||
+            !copy_mfem_complex_matrix(
+                *floquet_blocks.tangent_source,
+                tangent_source,
+                error) ||
+            !copy_mfem_complex_matrix(
+                *floquet_blocks.tangent_constraint,
+                tangent_constraint,
+                error) ||
+            !complex_csr_conjugate_transpose(
+                scalar_constraint,
+                scalar_constraint_adjoint,
+                error) ||
+            !complex_csr_multiply(
+                scalar_operator,
+                scalar_constraint,
+                scalar_operator_times_constraint,
+                error) ||
+            !complex_csr_multiply(
+                scalar_constraint_adjoint,
+                scalar_operator_times_constraint,
+                out_result->floquet_p,
+                error) ||
+            !complex_csr_multiply(
+                tangent_source,
+                tangent_constraint,
+                source_times_constraint,
+                error) ||
+            !complex_csr_multiply(
+                scalar_constraint_adjoint,
+                source_times_constraint,
+                out_result->floquet_a_phiq,
+                error) ||
+            !complex_csr_conjugate_transpose(
+                out_result->floquet_a_phiq,
+                a_qphi,
+                error)) {
+            copy_error(out_result->error_message, error.c_str());
+            out_result->status = FrequencyDomainStatus::operator_error;
+            return out_result->status;
+        }
+        out_result->floquet_a_qphi = std::move(a_qphi);
+        if (out_result->floquet_a_qq.row_count == 0u ||
+            out_result->floquet_b_qq.row_count == 0u ||
+            out_result->floquet_p.row_count == 0u ||
+            out_result->floquet_a_phiq.row_count == 0u ||
+            out_result->floquet_a_qphi.row_count == 0u ||
+            !complex_csr_is_valid(out_result->floquet_a_qq) ||
+            !complex_csr_is_valid(out_result->floquet_b_qq) ||
+            !complex_csr_is_valid(out_result->floquet_p) ||
+            !complex_csr_is_valid(out_result->floquet_a_phiq) ||
+            !complex_csr_is_valid(out_result->floquet_a_qphi)) {
+            copy_error(
+                out_result->error_message,
+                "Floquet shared-domain sparse block assembly returned an invalid block");
+            out_result->status = FrequencyDomainStatus::operator_error;
+            return out_result->status;
+        }
+        out_result->floquet_sparse_operator_ready = true;
+
         FloquetAirboxDynamicDemagKProblem floquet_problem{};
         floquet_problem.scalar_operator = floquet_blocks.scalar_operator.get();
         floquet_problem.scalar_constraint = floquet_blocks.scalar_constraint.get();
@@ -2817,16 +3262,18 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         floquet_problem.k_rad_per_m = *floquet_k_rad_per_m;
         floquet_problem.gauge_policy = FloquetDynamicDemagKGaugePolicy::require_invertible;
         floquet_problem.workspace_budget_bytes = 256ull * 1024ull * 1024ull;
-        const FrequencyDomainStatus dynamic_status =
-            assemble_floquet_airbox_dynamic_demag_k(
-                floquet_problem,
-                out_floquet_dynamic_demag_k);
-        if (dynamic_status != FrequencyDomainStatus::ok) {
-            copy_error(
-                out_result->error_message,
-                out_floquet_dynamic_demag_k->diagnostics.error_message);
-            out_result->status = dynamic_status;
-            return dynamic_status;
+        if (materialize_dense_floquet) {
+            const FrequencyDomainStatus dynamic_status =
+                assemble_floquet_airbox_dynamic_demag_k(
+                    floquet_problem,
+                    out_floquet_dynamic_demag_k);
+            if (dynamic_status != FrequencyDomainStatus::ok) {
+                copy_error(
+                    out_result->error_message,
+                    out_floquet_dynamic_demag_k->diagnostics.error_message);
+                out_result->status = dynamic_status;
+                return dynamic_status;
+            }
         }
         // The nonzero-k route deliberately does not populate the legacy K0
         // CSR blocks above.  Mark the result explicitly so a future caller
@@ -2834,7 +3281,9 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         // assembly with empty matrices.
         std::strncpy(
             out_result->assembly_kind,
-            "floquet_dynamic_demag_k",
+            materialize_dense_floquet
+                ? "floquet_dynamic_demag_k"
+                : "floquet_shared_domain_sparse_matshell",
             sizeof(out_result->assembly_kind) - 1u);
         out_result->assembly_kind[sizeof(out_result->assembly_kind) - 1u] = '\0';
         out_result->status = FrequencyDomainStatus::ok;

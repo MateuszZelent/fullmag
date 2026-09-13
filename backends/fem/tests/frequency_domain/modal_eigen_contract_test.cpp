@@ -1,6 +1,10 @@
 #include "cpu/frequency_domain/mfem_modal_operator_payload.hpp"
+#include "cpu/frequency_domain/contour_interval_solver.hpp"
+#include "cpu/frequency_domain/floquet_airbox_operator.hpp"
+#include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
 #include "frequency_domain/linearized_dynamic_pencil.hpp"
 #include "frequency_domain/linearization_state.hpp"
+#include "frequency_domain/floquet_dynamic_demag_k.hpp"
 #include "frequency_domain/mesh_symmetry_certificate.hpp"
 #include "frequency_domain/modal_eigen_solver.hpp"
 #include "fullmag_fem.h"
@@ -13,9 +17,12 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
+
 
 namespace {
 
@@ -955,6 +962,651 @@ struct ModalCertificateV6CAbiGoldenFixture {
         c_binding.payload_scalar = c_views[3];
     }
 };
+
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
+
+/*
+ * The contour adapter must be exercised with the same bounded shared-domain
+ * provider that production_cpu uses.  Keep this fixture deliberately small:
+ * two tetrahedra provide four magnetic nodes and one airbox node, while the
+ * v6 views bind the exact seam/corner topology used by the importer.
+ */
+struct FloquetContourSharedDomainFixture {
+    std::vector<double> nodes = {
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, -1.0};
+    std::vector<std::uint32_t> cell_types = {
+        FULLMAG_FEM_CELL_TET4, FULLMAG_FEM_CELL_TET4};
+    std::vector<std::uint32_t> cell_offsets = {0u, 4u, 8u};
+    std::vector<std::uint32_t> cell_nodes = {
+        0u, 1u, 2u, 3u,
+        0u, 2u, 1u, 4u};
+    std::vector<std::uint64_t> cell_ordinals = {0u, 1u};
+    std::vector<std::uint32_t> cell_markers = {1u, 0u};
+    std::vector<std::uint32_t> facet_types =
+        std::vector<std::uint32_t>(6u, FULLMAG_FEM_FACET_TRI3);
+    std::vector<std::uint32_t> facet_roles = {
+        FULLMAG_FEM_FACET_ROLE_PERIODIC_SEAM,
+        FULLMAG_FEM_FACET_ROLE_PERIODIC_SEAM,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR};
+    std::vector<std::uint32_t> facet_offsets = {0u, 3u, 6u, 9u, 12u, 15u, 18u};
+    std::vector<std::uint32_t> facet_nodes = {
+        1u, 2u, 3u,
+        0u, 3u, 2u,
+        0u, 1u, 3u,
+        1u, 4u, 2u,
+        0u, 2u, 4u,
+        0u, 1u, 4u};
+    std::vector<std::uint64_t> facet_ordinals = {0u, 1u, 2u, 3u, 4u, 5u};
+    std::vector<std::uint32_t> facet_markers = {7u, 8u, 1u, 1u, 1u, 1u};
+    std::vector<std::uint32_t> mesh_periodic_node_pairs = {
+        0u, 1u, 0u, 2u, 0u, 3u, 1u, 2u, 1u, 3u, 2u, 3u};
+    std::vector<std::uint32_t> periodic_boundary_markers = {7u, 8u, 9u, 10u};
+    fullmag_fem_mesh_desc mesh{};
+
+    std::vector<double> equilibrium = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0};
+    std::vector<double> h_eff = equilibrium;
+    std::vector<double> h_demag = std::vector<double>(15u, 0.0);
+    std::vector<double> phi0 = std::vector<double>(5u, 0.0);
+    std::vector<std::uint32_t> scalar_classes = {0u, 0u, 0u, 0u, 1u};
+    std::vector<std::uint32_t> magnetic_classes = {
+        0u, 0u, 0u, 0u, std::numeric_limits<std::uint32_t>::max()};
+    std::vector<std::uint32_t> a_qq_offsets =
+        std::vector<std::uint32_t>(11u, 0u);
+    std::vector<double> descriptor_frames = std::vector<double>(30u, 0.0);
+    std::vector<double> descriptor_external = std::vector<double>(15u, 0.0);
+    std::vector<double> descriptor_alpha = std::vector<double>(5u, 0.01);
+    FullmagFemModalLinearizationDescriptor descriptor{};
+
+    std::array<std::uint32_t, 4> magnetic_certificate_regions{{1u, 1u, 1u, 1u}};
+    std::array<std::uint32_t, 5> scalar_certificate_regions{{2u, 2u, 2u, 2u, 2u}};
+    std::array<std::uint32_t, 4> magnetic_boundary_axes{{0u, 1u, 2u, 7u}};
+    std::array<std::uint32_t, 5> scalar_boundary_axes{{0u, 1u, 2u, 7u, 4u}};
+    FullmagFemModalCertificateV6RegionRole magnetic_roles[1]{{1u, 1u}};
+    FullmagFemModalCertificateV6RegionRole scalar_roles[1]{{2u, 2u}};
+    FullmagFemModalCertificateV6Relation magnetic_generators[3]{
+        {0u, 1u, 1u, 1u}, {0u, 2u, 2u, 1u}, {0u, 3u, 7u, 3u}};
+    FullmagFemModalCertificateV6Relation magnetic_closure[6]{
+        {0u, 1u, 1u, 1u}, {0u, 2u, 2u, 1u}, {0u, 3u, 7u, 3u},
+        {1u, 2u, 3u, 2u}, {1u, 3u, 6u, 2u}, {2u, 3u, 5u, 2u}};
+    FullmagFemModalCertificateV6Relation scalar_generators[3]{
+        {0u, 1u, 1u, 1u}, {0u, 2u, 2u, 1u}, {0u, 3u, 7u, 3u}};
+    FullmagFemModalCertificateV6Relation scalar_closure[6]{
+        {0u, 1u, 1u, 1u}, {0u, 2u, 2u, 1u}, {0u, 3u, 7u, 3u},
+        {1u, 2u, 3u, 2u}, {1u, 3u, 6u, 2u}, {2u, 3u, 5u, 2u}};
+    FullmagFemModalCertificateV6View c_views[4]{};
+    FullmagFemModalCertificateV6BindingRequest c_certificate{};
+    fd::MeshSymmetryCertificateV6Binding accepted_certificate{};
+    std::vector<std::uint64_t> magnetic_expected_class_ids{};
+    std::vector<std::uint64_t> scalar_expected_class_ids{};
+    std::vector<std::string> magnetic_expected_class_digest_strings{};
+    std::vector<std::string> scalar_expected_class_digest_strings{};
+    std::vector<FullmagFemModalCertificateV6ClassDigest> magnetic_expected_class_digests{};
+    std::vector<FullmagFemModalCertificateV6ClassDigest> scalar_expected_class_digests{};
+    std::string canonical_preimage{};
+    std::string canonical_preimage_digest{};
+    std::string magnetic_class_digest{};
+    std::string scalar_class_digest{};
+    std::string map_binding_digest{};
+    std::array<fullmag_fem_frequency_domain_floquet_periodic_pair, 3> c_pairs{};
+    std::array<fd::FrequencyDomainFloquetPeriodicPair, 3> native_pairs{};
+    std::array<double, 3> k_vector{{1.0, 0.0, 0.0}};
+    FullmagFemModalSharedDomainPayload payload{};
+
+    FullmagFemModalCertificateV6View make_c_view(
+        std::uint32_t view_kind,
+        std::uint32_t part_role,
+        const char *part_identity,
+        const char *topology_fingerprint,
+        std::uint64_t node_count,
+        const std::uint32_t *regions,
+        const std::uint32_t *boundary_axes,
+        const FullmagFemModalCertificateV6RegionRole *roles,
+        std::uint64_t role_count,
+        const FullmagFemModalCertificateV6Relation *generators,
+        std::uint64_t generator_count,
+        const FullmagFemModalCertificateV6Relation *closure,
+        std::uint64_t closure_count)
+    {
+        FullmagFemModalCertificateV6View view{};
+        view.view_kind = view_kind;
+        view.part_role = part_role;
+        view.part_identity = part_identity;
+        view.topology_fingerprint = topology_fingerprint;
+        view.node_count = node_count;
+        view.region_ids = regions;
+        view.boundary_axis_masks = boundary_axes;
+        view.region_roles = roles;
+        view.region_role_count = role_count;
+        view.generator_relations = generators;
+        view.generator_relation_count = generator_count;
+        view.closure_relations = closure;
+        view.closure_relation_count = closure_count;
+        view.require_complete_closure = 1u;
+        return view;
+    }
+
+    fd::MeshSymmetryCertificateV6View typed_view(
+        const FullmagFemModalCertificateV6View &source) const
+    {
+        fd::MeshSymmetryCertificateV6View view{};
+        view.schema_version = c_certificate.schema_version;
+        view.view_kind = static_cast<fd::MeshSymmetryCertificateV6ViewKind>(source.view_kind);
+        view.part_role = static_cast<fd::MeshSymmetryCertificatePartRole>(source.part_role);
+        view.part_identity = source.part_identity;
+        view.topology_fingerprint = source.topology_fingerprint;
+        view.node_count = source.node_count;
+        view.region_ids = source.region_ids;
+        view.boundary_axis_masks = source.boundary_axis_masks;
+        view.region_roles = reinterpret_cast<const fd::MeshSymmetryCertificateRegionRole *>(
+            source.region_roles);
+        view.region_role_count = source.region_role_count;
+        view.generator_relations = reinterpret_cast<const fd::MeshSymmetryCertificateV6Relation *>(
+            source.generator_relations);
+        view.generator_relation_count = source.generator_relation_count;
+        view.closure_relations = reinterpret_cast<const fd::MeshSymmetryCertificateV6Relation *>(
+            source.closure_relations);
+        view.closure_relation_count = source.closure_relation_count;
+        view.require_complete_closure = source.require_complete_closure != 0u;
+        view.expected_class_ids = source.expected_class_ids;
+        view.expected_class_id_count = source.expected_class_id_count;
+        view.expected_class_digests = reinterpret_cast<
+            const fd::MeshSymmetryCertificateV6ClassDigest *>(source.expected_class_digests);
+        view.expected_class_digest_count = source.expected_class_digest_count;
+        return view;
+    }
+
+    void initialize()
+    {
+        mesh = fullmag_fem_mesh_desc{
+            FULLMAG_FEM_MESH_DESC_ABI_VERSION,
+            sizeof(fullmag_fem_mesh_desc),
+            nodes.data(), nodes.size(),
+            cell_types.data(), cell_types.size(),
+            cell_offsets.data(), cell_offsets.size(),
+            cell_nodes.data(), cell_nodes.size(),
+            cell_ordinals.data(), cell_ordinals.size(),
+            cell_markers.data(), cell_markers.size(),
+            facet_types.data(), facet_types.size(),
+            facet_roles.data(), facet_roles.size(),
+            facet_offsets.data(), facet_offsets.size(),
+            facet_nodes.data(), facet_nodes.size(),
+            facet_ordinals.data(), facet_ordinals.size(),
+            facet_markers.data(), facet_markers.size(),
+            mesh_periodic_node_pairs.data(), mesh_periodic_node_pairs.size(),
+            periodic_boundary_markers.data(), periodic_boundary_markers.size()};
+        for (std::uint64_t node = 0u; node < 5u; ++node) {
+            descriptor_frames[6u * node] = 1.0;
+            descriptor_frames[6u * node + 4u] = 1.0;
+        }
+        descriptor.abi_version = FULLMAG_FEM_MODAL_LINEARIZATION_DESCRIPTOR_V1_ABI_VERSION;
+        descriptor.struct_size = sizeof(descriptor);
+        descriptor.schema_version = FULLMAG_FEM_MODAL_LINEARIZATION_DESCRIPTOR_SCHEMA;
+        descriptor.node_count = 5u;
+        descriptor.tangent_dof_count = 10u;
+        descriptor.coordinate_unit = "m";
+        descriptor.magnetisation_unit = "A/m";
+        descriptor.time_unit = "s";
+        descriptor.frequency_unit = "Hz";
+        descriptor.angular_frequency_unit = "rad/s";
+        descriptor.linearization_state_digest =
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+        descriptor.equilibrium_digest = descriptor.linearization_state_digest;
+        descriptor.operator_input_digest = descriptor.linearization_state_digest;
+        descriptor.term_presence_mask = 0u;
+        descriptor.tangent_frame_xyz = descriptor_frames.data();
+        descriptor.tangent_frame_xyz_count = descriptor_frames.size();
+        descriptor.equilibrium_m0_xyz = equilibrium.data();
+        descriptor.equilibrium_m0_xyz_count = equilibrium.size();
+        descriptor.effective_field_h_eff0_xyz = h_eff.data();
+        descriptor.effective_field_h_eff0_xyz_count = h_eff.size();
+        descriptor.external_field_h_ext0_xyz = descriptor_external.data();
+        descriptor.external_field_h_ext0_xyz_count = descriptor_external.size();
+        descriptor.alpha_per_node = descriptor_alpha.data();
+        descriptor.alpha_per_node_count = descriptor_alpha.size();
+        descriptor.uniform_saturation_magnetisation_a_per_m = 2.0;
+
+        c_certificate.schema_version = "periodic_mesh_certificate.v6";
+        c_certificate.mesh_magnetic = make_c_view(
+            1u, 1u, "magnetic:film",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            4u, magnetic_certificate_regions.data(), magnetic_boundary_axes.data(),
+            magnetic_roles, 1u, magnetic_generators, 3u, magnetic_closure, 6u);
+        c_certificate.payload_magnetic = make_c_view(
+            2u, 1u, "magnetic:film",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            4u, magnetic_certificate_regions.data(), magnetic_boundary_axes.data(),
+            magnetic_roles, 1u, magnetic_generators, 3u, magnetic_closure, 6u);
+        c_certificate.mesh_scalar = make_c_view(
+            1u, 2u, "airbox:shared",
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            5u, scalar_certificate_regions.data(), scalar_boundary_axes.data(),
+            scalar_roles, 1u, scalar_generators, 3u, scalar_closure, 6u);
+        c_certificate.payload_scalar = make_c_view(
+            2u, 2u, "airbox:shared",
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            5u, scalar_certificate_regions.data(), scalar_boundary_axes.data(),
+            scalar_roles, 1u, scalar_generators, 3u, scalar_closure, 6u);
+        c_views[0] = c_certificate.mesh_magnetic;
+        c_views[1] = c_certificate.payload_magnetic;
+        c_views[2] = c_certificate.mesh_scalar;
+        c_views[3] = c_certificate.payload_scalar;
+
+        fd::MeshSymmetryCertificateV6BindingRequest binding_request{};
+        binding_request.schema_version = c_certificate.schema_version;
+        binding_request.mesh_generation_identity = "mesh-generation:fixture";
+        binding_request.mesh_magnetic = typed_view(c_views[0]);
+        binding_request.payload_magnetic = typed_view(c_views[1]);
+        binding_request.mesh_scalar = typed_view(c_views[2]);
+        binding_request.payload_scalar = typed_view(c_views[3]);
+        binding_request.payload_binding_digest =
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+        fd::MeshSymmetryCertificateV6Binding bootstrap{};
+        check(fd::verify_mesh_symmetry_certificate_v6(binding_request, bootstrap) !=
+                  fd::FrequencyDomainStatus::ok,
+              "contour fixture bootstrap must reject missing payload class metadata");
+        check(bootstrap.magnetic_canonical_class_ids.size() == 4u &&
+                  bootstrap.scalar_canonical_class_ids.size() == 5u,
+              "contour fixture bootstrap must derive both canonical class maps");
+        magnetic_expected_class_ids = bootstrap.magnetic_canonical_class_ids;
+        scalar_expected_class_ids = bootstrap.scalar_canonical_class_ids;
+        magnetic_expected_class_digest_strings = bootstrap.magnetic_class_digests;
+        scalar_expected_class_digest_strings = bootstrap.scalar_class_digests;
+        /* Canonical IDs are dense and ordered by their first node. */
+        magnetic_expected_class_digests.clear();
+        magnetic_expected_class_digests.push_back({
+            0u, 4u, magnetic_expected_class_digest_strings.front().c_str()});
+        scalar_expected_class_digests.clear();
+        scalar_expected_class_digests.push_back({
+            0u, 4u, scalar_expected_class_digest_strings.front().c_str()});
+        scalar_expected_class_digests.push_back({
+            4u, 1u, scalar_expected_class_digest_strings.back().c_str()});
+        c_certificate.payload_magnetic.expected_class_ids = magnetic_expected_class_ids.data();
+        c_certificate.payload_magnetic.expected_class_id_count = magnetic_expected_class_ids.size();
+        c_certificate.payload_magnetic.expected_class_digests =
+            magnetic_expected_class_digests.data();
+        c_certificate.payload_magnetic.expected_class_digest_count =
+            magnetic_expected_class_digests.size();
+        c_certificate.payload_scalar.expected_class_ids = scalar_expected_class_ids.data();
+        c_certificate.payload_scalar.expected_class_id_count = scalar_expected_class_ids.size();
+        c_certificate.payload_scalar.expected_class_digests = scalar_expected_class_digests.data();
+        c_certificate.payload_scalar.expected_class_digest_count = scalar_expected_class_digests.size();
+        c_views[1] = c_certificate.payload_magnetic;
+        c_views[3] = c_certificate.payload_scalar;
+        binding_request.payload_magnetic = typed_view(c_views[1]);
+        binding_request.payload_scalar = typed_view(c_views[3]);
+        fd::MeshSymmetryCertificateV6Binding final_binding{};
+        check(fd::verify_mesh_symmetry_certificate_v6(binding_request, final_binding) !=
+                  fd::FrequencyDomainStatus::ok &&
+                  !final_binding.canonical_preimage.empty(),
+              "contour fixture must expose the canonical preimage before digest binding");
+        canonical_preimage = final_binding.canonical_preimage;
+        canonical_preimage_digest = final_binding.canonical_preimage_sha256;
+        magnetic_class_digest = final_binding.magnetic_class_digest_sha256;
+        scalar_class_digest = final_binding.scalar_class_digest_sha256;
+        binding_request.payload_binding_digest = canonical_preimage_digest.c_str();
+        check(fd::verify_mesh_symmetry_certificate_v6(
+                  binding_request, accepted_certificate) == fd::FrequencyDomainStatus::ok &&
+                  accepted_certificate.accepted,
+              "contour fixture must produce an accepted v6 binding");
+
+        payload.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
+        payload.struct_size = sizeof(payload);
+        payload.mesh = &mesh;
+        payload.equilibrium_m0_xyz = equilibrium.data();
+        payload.equilibrium_m0_xyz_count = equilibrium.size();
+        payload.linearization_m0_xyz = equilibrium.data();
+        payload.linearization_m0_xyz_count = equilibrium.size();
+        payload.linearization_h_eff0_xyz = h_eff.data();
+        payload.linearization_h_eff0_xyz_count = h_eff.size();
+        payload.linearization_h_demag0_xyz = h_demag.data();
+        payload.linearization_h_demag0_xyz_count = h_demag.size();
+        payload.linearization_phi0 = phi0.data();
+        payload.linearization_phi0_count = phi0.size();
+        payload.uniform_saturation_magnetisation_a_per_m = 2.0;
+        payload.gamma0_m_per_a_s = 3.0;
+        payload.magnetic_a_qq_csr = FullmagFemCsrMatrixView{
+            10u, 10u, a_qq_offsets.data(), a_qq_offsets.size(),
+            nullptr, 0u, nullptr, 0u};
+        payload.scalar_reduced_node = scalar_classes.data();
+        payload.scalar_reduced_node_count = 2u;
+        payload.magnetic_reduced_node = magnetic_classes.data();
+        payload.magnetic_reduced_node_count = 1u;
+        payload.magnetic_pair_count = 6u;
+        payload.airbox_pair_count = 6u;
+        payload.boundary_kind = "robin";
+        payload.robin_beta = 1.0;
+        payload.boundary_marker = 1u;
+        payload.mesh_certificate_schema = c_certificate.schema_version;
+        payload.equilibrium_digest =
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+        payload.mesh_certificate_digest = payload.equilibrium_digest;
+        payload.linearization_state_digest = payload.equilibrium_digest;
+        payload.equilibrium_id = "equilibrium_artifact.v7:contour-fixture";
+        payload.mesh_snapshot_id = "mesh-snapshot:contour-fixture";
+        payload.material_snapshot_id = "material-snapshot:contour-fixture";
+        payload.physics_snapshot_id = "physics-snapshot:contour-fixture";
+        payload.boundary_snapshot_id = "boundary-snapshot:contour-fixture";
+        payload.producer_run_id = "producer-run:contour-fixture";
+        payload.equilibrium_content_sha256 = payload.equilibrium_digest;
+        payload.demag_model = "floquet_airbox";
+        payload.m0_norm_tolerance = 1.0e-8;
+        payload.equilibrium_torque_relative_tolerance = 0.0;
+        payload.boundary_gauge_digest = payload.equilibrium_digest;
+        payload.bias_field_sample_id = "bias-field-sample:contour-fixture";
+        payload.bias_field_sample_signature = payload.equilibrium_digest;
+        payload.magnetic_part_identity = "magnetic:film";
+        payload.airbox_part_identity = "airbox:shared";
+        payload.mesh_generation_identity = "mesh-generation:fixture";
+        payload.canonical_preimage = canonical_preimage.c_str();
+        payload.canonical_preimage_len = canonical_preimage.size();
+        payload.canonical_preimage_sha256 = canonical_preimage_digest.c_str();
+        payload.magnetic_class_digest_sha256 = magnetic_class_digest.c_str();
+        payload.scalar_class_digest_sha256 = scalar_class_digest.c_str();
+        payload.certificate_binding_status = FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_ACCEPTED;
+        payload.certificate_binding_reason = "none";
+        payload.certificate_binding_v6 = &c_certificate;
+        payload.linearization_descriptor = &descriptor;
+        payload.acceptance_criterion = "energy";
+        payload.acceptance_metric_kind = "total_energy_plateau_range_j";
+        payload.acceptance_unit = "J";
+        payload.acceptance_metric_value = 2.5e-19;
+        payload.acceptance_threshold = 1.0e-18;
+        payload.acceptance_certificate_sha256 =
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+        char map_error[256]{};
+        check(fd::compute_modal_shared_domain_map_binding_digest(
+                  payload, accepted_certificate, 4u, map_binding_digest, map_error) ==
+                  fd::FrequencyDomainStatus::ok,
+              map_error);
+        payload.mesh_certificate_map_binding_digest = map_binding_digest.c_str();
+
+        const std::array<std::array<double, 3>, 3> translations{{
+            {{1.0, 0.0, 0.0}}, {{0.0, 1.0, 0.0}}, {{0.0, 0.0, 1.0}}}};
+        const std::array<std::pair<std::uint64_t, std::uint64_t>, 3> endpoints{{
+            {0u, 1u}, {0u, 2u}, {0u, 3u}}};
+        const char *pair_ids[3] = {
+            "x_periodic_pair_0", "y_periodic_pair_0", "z_periodic_pair_0"};
+        for (std::size_t index = 0u; index < 3u; ++index) {
+            c_pairs[index].pair_id = pair_ids[index];
+            c_pairs[index].node_a = endpoints[index].first;
+            c_pairs[index].node_b = endpoints[index].second;
+            c_pairs[index].has_translation = 1;
+            for (std::size_t axis = 0u; axis < 3u; ++axis) {
+                c_pairs[index].translation_m[axis] = translations[index][axis];
+            }
+            native_pairs[index].pair_id = pair_ids[index];
+            native_pairs[index].node_a = endpoints[index].first;
+            native_pairs[index].node_b = endpoints[index].second;
+            native_pairs[index].has_translation = true;
+            for (std::size_t axis = 0u; axis < 3u; ++axis) {
+                native_pairs[index].translation_m[axis] = translations[index][axis];
+            }
+        }
+    }
+};
+
+FullmagFemModalEigenRequest make_floquet_contour_request(
+    const FloquetContourSharedDomainFixture &fixture,
+    const double *stiffness,
+    const double *gyrotropic)
+{
+    FullmagFemModalEigenRequest request = base_request();
+    request.target_kind = "frequency_window";
+    request.frequency_min_hz = 0.01;
+    request.frequency_max_hz = 1.0;
+    request.requested_mode_count = 1;
+    request.residual_tolerance = 1.0e-10;
+    request.eigensolver_family = 2;
+    request.completeness_policy = 1;
+    request.execution_target = FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_CPU;
+    request.mfem_operator_enabled = 1;
+    request.mfem_tangent_dof_count = 2u;
+    request.mfem_stiffness_matrix_row_major = stiffness;
+    request.mfem_gyrotropic_matrix_row_major = gyrotropic;
+    request.operator_request.include_demag = 1;
+    request.operator_request.demag_realization = "floquet_airbox";
+    request.operator_request.spin_wave_bc_kind = "floquet";
+    request.operator_request.operator_diagnostics_json =
+        "{\"operator_family\":\"mfem_linearized_llg\","
+        "\"payload_kind\":\"bloch_floquet_tangent_operator\"}";
+    request.has_floquet_k_vector = 1;
+    request.floquet_k_vector_rad_per_m[0] = fixture.k_vector[0];
+    request.floquet_k_vector_rad_per_m[1] = fixture.k_vector[1];
+    request.floquet_k_vector_rad_per_m[2] = fixture.k_vector[2];
+    request.phase_convention = FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T;
+    request.mfem_floquet_periodic_pairs = fixture.c_pairs.data();
+    request.mfem_floquet_periodic_pair_count = fixture.c_pairs.size();
+    request.poisson_airbox_periodic_mesh_certificate_schema =
+        fixture.payload.mesh_certificate_schema;
+    request.poisson_airbox_magnetic_pair_count = fixture.payload.magnetic_pair_count;
+    request.poisson_airbox_airbox_pair_count = fixture.payload.airbox_pair_count;
+    request.shared_domain_payload = &fixture.payload;
+    request.mesh_generation_identity = fixture.payload.mesh_generation_identity;
+    request.canonical_preimage_sha256 = fixture.payload.canonical_preimage_sha256;
+    return request;
+}
+
+#endif
+
+void modal_floquet_contour_original_descriptor_certification_is_fail_closed()
+{
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
+    FloquetContourSharedDomainFixture fixture{};
+    fixture.initialize();
+
+    constexpr double stiffness[] = {1.0, 0.0, 0.0, 1.0};
+    constexpr double gyrotropic[] = {0.0, -1.0, 1.0, 0.0};
+
+    reset_progress_capture();
+    FullmagFemModalEigenRequest request =
+        make_floquet_contour_request(fixture, stiffness, gyrotropic);
+    request.progress_callback = capture_progress;
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_OK,
+          "Floquet contour production adapter must certify the original descriptor");
+    check(contains(result.result_json, "\"accepted_mode_count\":1"),
+          "Floquet contour result must publish one accepted mode");
+    check(contains(result.result_json, "\"floquet_descriptor_certified\":true"),
+          "Floquet contour result must publish the descriptor certificate");
+    check(contains(result.result_json, "\"floquet_geometric_bc_certified\":false"),
+          "Floquet contour result must preserve the geometric-BC certificate distinction");
+    check(contains(result.result_json,
+                   "\"potential_representation\":\"doubled_real_split_complex_coefficients\""),
+          "Floquet contour result must publish the reconstructed potential representation");
+    check(contains(result.result_json, "\"magnetic_relative_residual\":"),
+          "Floquet contour result must publish the original magnetic residual");
+    check(contains(result.result_json, "\"potential_relative_residual\":"),
+          "Floquet contour result must publish the original potential residual");
+    check(contains(result.result_json, "\"potential_vector_real\":[") &&
+              contains(result.result_json, "\"potential_vector_imag\":["),
+          "Floquet contour result must publish both potential components");
+    check(contains(result.diagnostics_json, "\"floquet_potential_certificate\":"),
+          "Floquet contour diagnostics must retain the provider potential certificate");
+    check(g_progress_event_count == 16,
+          "Floquet contour progress must be emitted only after descriptor certification");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    request.phase_convention =
+        FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_MINUS_I_OMEGA_T;
+    reset_progress_capture();
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "Floquet contour must reject the unsupported negative-i omega phase convention");
+    check(contains(result.diagnostics_json,
+                   "contour_interval_phase_convention_unsupported"),
+          "Floquet contour phase rejection must expose a stable reason");
+    check(contains(result.result_json, "\"accepted_mode_count\":0"),
+          "Floquet contour phase rejection must publish no accepted modes");
+    check(g_progress_event_count == 0,
+          "Floquet contour phase rejection must publish no progress events");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    fd::PoissonAirboxSharedDomainAssemblyResult provider_assembly{};
+    fd::FloquetAirboxDynamicDemagKResult provider_result{};
+    check(fd::assemble_poisson_airbox_shared_domain_payload(
+              fixture.payload,
+              &provider_assembly,
+              fixture.native_pairs.data(),
+              fixture.native_pairs.size(),
+              &fixture.k_vector,
+              &provider_result) == fd::FrequencyDomainStatus::ok,
+          "Floquet contour regression provider assembly must succeed");
+    check(provider_result.reconstruction.q_count == 2u &&
+              provider_result.reconstruction.phi_count > 0u &&
+              provider_result.reconstruction.magnetic_stiffness_real_split_value_count == 16u,
+          "Floquet contour provider must bind the bounded original K dimension");
+
+    std::vector<double> effective_stiffness(16u, 0.0);
+    for (std::size_t index = 0u; index < effective_stiffness.size(); ++index) {
+        effective_stiffness[index] = provider_result.real_split_row_major[index];
+    }
+    effective_stiffness[0] += stiffness[0];
+    effective_stiffness[5] += stiffness[1];
+    effective_stiffness[10] += stiffness[2];
+    effective_stiffness[15] += stiffness[3];
+    fd::ContourIntervalSolverRequest contour_request{};
+    contour_request.frequency_min_hz = 0.01;
+    contour_request.frequency_max_hz = 1.0;
+    contour_request.requested_mode_count = 1;
+    contour_request.residual_tolerance = 1.0e-10;
+    contour_request.max_outer_iterations = 32;
+    contour_request.max_linear_iterations = 128;
+    contour_request.eigensolver_family = fd::kModalEigensolverFamilyContourInterval;
+    contour_request.completeness_policy = 1;
+    contour_request.contour_point_count = 16;
+    contour_request.tangent_dof_count = 4u;
+    contour_request.stiffness_matrix_row_major = effective_stiffness.data();
+    contour_request.gyrotropic_mass_matrix_row_major = gyrotropic;
+    const fd::ContourIntervalSolveResult contour_result =
+        fd::solve_tiny_contour_interval(contour_request);
+    check(contour_result.ok && !contour_result.modes.empty(),
+          "Floquet contour regression must obtain a mode from the provider Schur pencil");
+
+    fd::FloquetPotentialReconstruction reconstruction = provider_result.reconstruction;
+    reconstruction.magnetic_stiffness_real_split = stiffness;
+    fd::FloquetModalResidual accepted{};
+    check(fd::certify_floquet_realified_mode(
+              reconstruction,
+              stiffness,
+              gyrotropic,
+              contour_result.modes.front().mode_vector,
+              contour_result.modes.front().eigenvalue,
+              &accepted) == fd::FrequencyDomainStatus::ok &&
+              accepted.certified && !accepted.potential_real_split.empty(),
+          "the contour mode must pass against the original magnetic descriptor");
+
+    std::vector<double> perturbed_stiffness(stiffness, stiffness + 4u);
+    perturbed_stiffness[0] += 1.0;
+    fd::FloquetModalResidual rejected{};
+    const fd::FrequencyDomainStatus perturbed_status =
+        fd::certify_floquet_realified_mode(
+            reconstruction,
+            perturbed_stiffness.data(),
+            gyrotropic,
+            contour_result.modes.front().mode_vector,
+            contour_result.modes.front().eigenvalue,
+            &rejected);
+    check(perturbed_status != fd::FrequencyDomainStatus::ok || !rejected.certified,
+          "perturbing original K must reject the Floquet descriptor certificate");
+    check(rejected.potential_real_split.empty(),
+          "a rejected original-K certificate must publish no potential payload");
+
+    fd::ModalEigenRequest mismatched_request{};
+    mismatched_request.target_kind = "frequency_window";
+    mismatched_request.frequency_min_hz = 0.01;
+    mismatched_request.frequency_max_hz = 1.0;
+    mismatched_request.requested_mode_count = 1;
+    mismatched_request.residual_tolerance = 1.0e-10;
+    mismatched_request.max_outer_iterations = 32;
+    mismatched_request.max_linear_iterations = 128;
+    mismatched_request.eigensolver_family = fd::kModalEigensolverFamilyContourInterval;
+    mismatched_request.completeness_policy = 1;
+    mismatched_request.execution_target = fd::ModalExecutionTarget::production_cpu;
+    mismatched_request.mfem_operator_enabled = 1;
+    mismatched_request.mfem_tangent_dof_count = 2u;
+    mismatched_request.mfem_stiffness_matrix_row_major = stiffness;
+    mismatched_request.mfem_gyrotropic_matrix_row_major = gyrotropic;
+    mismatched_request.dynamic_demag_k_tangent_matrix_row_major =
+        provider_result.real_split_row_major.data();
+    mismatched_request.dynamic_demag_k_tangent_matrix_value_count =
+        provider_result.real_split_row_major.size();
+    mismatched_request.operator_request.include_demag = 1;
+    mismatched_request.operator_request.demag_realization = "floquet_airbox";
+    mismatched_request.operator_request.spin_wave_bc_kind = "floquet";
+    mismatched_request.operator_request.k_vector_rad_m = fixture.k_vector.data();
+    mismatched_request.operator_request.k_vector_len = 3;
+    mismatched_request.floquet_periodic_pairs = fixture.native_pairs.data();
+    mismatched_request.floquet_periodic_pair_count = fixture.native_pairs.size();
+    mismatched_request.phase_convention =
+        fd::FrequencyDomainPhaseConvention::exp_i_omega_t;
+    fd::FloquetPotentialReconstruction mismatched_reconstruction = reconstruction;
+    mismatched_reconstruction.magnetic_stiffness_real_split =
+        perturbed_stiffness.data();
+    reset_progress_capture();
+    mismatched_request.progress_callback = capture_progress;
+    const fd::FrequencyDomainContractResult mismatched_result =
+        fd::production_cpu_modal_eigen_unavailable(
+            mismatched_request,
+            &mismatched_reconstruction);
+    check(mismatched_result.status == fd::FrequencyDomainStatus::solve_error,
+          "the contour adapter must fail when its original K certificate is perturbed");
+    check(contains(mismatched_result.result_json.c_str(), "\"accepted_mode_count\":0"),
+          "a failed original-K contour certificate must publish no accepted modes");
+    check(contains(mismatched_result.result_json.c_str(),
+                   "\"floquet_descriptor_certified\":false"),
+          "a failed original-K contour certificate must publish an explicit false marker");
+    check(!contains(mismatched_result.result_json.c_str(), "\"potential_vector_real\":"),
+          "a failed original-K contour certificate must publish no potential payload");
+    check(g_progress_event_count == 0,
+          "a failed original-K contour certificate must publish no progress events");
+
+    fd::FloquetPotentialReconstruction malformed = reconstruction;
+    malformed.magnetic_stiffness_real_split_value_count -= 1u;
+    fd::FloquetModalResidual malformed_result{};
+    check(fd::certify_floquet_realified_mode(
+              malformed,
+              stiffness,
+              gyrotropic,
+              contour_result.modes.front().mode_vector,
+              contour_result.modes.front().eigenvalue,
+              &malformed_result) == fd::FrequencyDomainStatus::validation_error &&
+              !malformed_result.certified && malformed_result.potential_real_split.empty(),
+          "a mismatched original-K bound must fail before publishing a potential");
+
+    fd::FloquetPotentialReconstruction malformed_adapter = reconstruction;
+    malformed_adapter.magnetic_stiffness_real_split_value_count -= 1u;
+    reset_progress_capture();
+    mismatched_request.progress_callback = capture_progress;
+    const fd::FrequencyDomainContractResult malformed_adapter_result =
+        fd::production_cpu_modal_eigen_unavailable(
+            mismatched_request,
+            &malformed_adapter);
+    check(malformed_adapter_result.status == fd::FrequencyDomainStatus::solve_error,
+          "the contour adapter must reject a mismatched original-K bound");
+    check(contains(malformed_adapter_result.result_json.c_str(),
+                   "\"accepted_mode_count\":0") &&
+              contains(malformed_adapter_result.result_json.c_str(),
+                       "\"floquet_descriptor_certified\":false"),
+          "a mismatched original-K bound must publish no accepted modes and an explicit false marker");
+    check(!contains(malformed_adapter_result.result_json.c_str(),
+                    "\"potential_vector_real\":"),
+          "a mismatched original-K bound must publish no potential payload");
+    check(g_progress_event_count == 0,
+          "a mismatched original-K bound must publish no progress events");
+#endif
+}
 
 void modal_v6_c_abi_relation_views_accept_golden_and_reject_digest_tamper()
 {
@@ -3198,6 +3850,7 @@ int main()
     frequency_window_reports_unresolved_subwindow();
     frequency_window_wide_auto_selects_contour_interval_solver();
     modal_frequency_window_production_payload_contour_accepts_multiple_modes();
+    modal_floquet_contour_original_descriptor_certification_is_fail_closed();
     modal_shift_invert_payload_can_be_assembled_from_mfem_operator();
     modal_dynamic_demag_materialization_preserves_legacy_s_sign();
     modal_shift_invert_dense_full_2x2_payload_accepts_k0_kittel_macrospin();

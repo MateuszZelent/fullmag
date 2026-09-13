@@ -129,6 +129,102 @@ void copy_block_error(FloquetAirboxSharedDomainBlockResult *result, const char *
     result->error_message[255] = '\0';
 }
 
+bool collect_dirichlet_dofs(
+    const FloquetAirboxSharedDomainBlockRequest &request,
+    std::vector<int> &out_dofs,
+    std::string &error)
+{
+    out_dofs.clear();
+    if (request.boundary_kind != FloquetAirboxBoundaryKind::dirichlet) {
+        return true;
+    }
+    if (request.scalar_space == nullptr || request.scalar_space->GetMesh() == nullptr ||
+        request.robin_boundary_marker == nullptr) {
+        error = "Floquet Dirichlet elimination requires a scalar space and boundary marker";
+        return false;
+    }
+    const int maximum_boundary_attribute =
+        request.scalar_space->GetMesh()->bdr_attributes.Max();
+    if (maximum_boundary_attribute <= 0 ||
+        request.robin_boundary_marker->Size() < maximum_boundary_attribute) {
+        error = "Floquet Dirichlet elimination boundary marker has invalid size";
+        return false;
+    }
+
+    mfem::Array<int> essential_true_dofs;
+    request.scalar_space->GetEssentialTrueDofs(
+        *request.robin_boundary_marker,
+        essential_true_dofs);
+    const std::uint64_t node_count =
+        static_cast<std::uint64_t>(request.scalar_space->GetVSize());
+    if (essential_true_dofs.Size() == 0) {
+        error = "Floquet Dirichlet boundary marker selects no scalar true dofs";
+        return false;
+    }
+
+    std::vector<std::uint8_t> essential_classes(
+        static_cast<std::size_t>(request.scalar_reduced_node_count), 0u);
+    for (int index = 0; index < essential_true_dofs.Size(); ++index) {
+        const int dof = essential_true_dofs[index];
+        if (dof < 0 || static_cast<std::uint64_t>(dof) >= node_count) {
+            error = "Floquet Dirichlet elimination returned an out-of-range true dof";
+            return false;
+        }
+        const std::uint32_t reduced =
+            request.scalar_reduced_node[static_cast<std::size_t>(dof)];
+        if (reduced >= request.scalar_reduced_node_count) {
+            error = "Floquet Dirichlet elimination found an invalid scalar class";
+            return false;
+        }
+        essential_classes[static_cast<std::size_t>(reduced)] = 1u;
+    }
+
+    for (std::uint64_t node = 0u; node < node_count; ++node) {
+        const std::uint32_t reduced =
+            request.scalar_reduced_node[static_cast<std::size_t>(node)];
+        if (reduced >= request.scalar_reduced_node_count) {
+            error = "Floquet Dirichlet elimination found an invalid scalar class";
+            return false;
+        }
+        if (essential_classes[static_cast<std::size_t>(reduced)] != 0u) {
+            out_dofs.push_back(static_cast<int>(node));
+        }
+    }
+    if (out_dofs.empty()) {
+        error = "Floquet Dirichlet boundary has no scalar classes to eliminate";
+        return false;
+    }
+    return true;
+}
+
+bool eliminate_dirichlet_dofs(
+    const FloquetAirboxSharedDomainBlockRequest &request,
+    mfem::ComplexSparseMatrix &scalar_operator,
+    mfem::ComplexSparseMatrix &tangent_source,
+    std::string &error)
+{
+    std::vector<int> essential_dofs;
+    if (!collect_dirichlet_dofs(request, essential_dofs, error)) {
+        return false;
+    }
+    if (request.boundary_kind != FloquetAirboxBoundaryKind::dirichlet) {
+        return true;
+    }
+
+    for (const int dof : essential_dofs) {
+        // P is complex-valued even in the full-field representation. Keep
+        // the real identity row used for an essential unknown and keep the
+        // imaginary identity contribution zero.
+        scalar_operator.real().EliminateRowCol(dof, mfem::Operator::DIAG_ONE);
+        scalar_operator.imag().EliminateRowCol(dof, mfem::Operator::DIAG_ZERO);
+        // The source is rectangular; its essential rows must be removed as
+        // well, otherwise C^H P^-1 A would reintroduce a boundary potential.
+        tangent_source.real().EliminateRow(dof, mfem::Operator::DIAG_ZERO);
+        tangent_source.imag().EliminateRow(dof, mfem::Operator::DIAG_ZERO);
+    }
+    return true;
+}
+
 struct PhaseEdge {
     std::uint64_t target = 0;
     std::array<double, 3> translation{};
@@ -363,7 +459,11 @@ FrequencyDomainStatus assemble_floquet_airbox_shared_domain_blocks(
     if (node_count == 0u || node_count != request.tangent_frame_count ||
         node_count > static_cast<std::uint64_t>(std::numeric_limits<int>::max() / 2) ||
         request.scalar_reduced_node == nullptr || request.scalar_reduced_node_count == 0u ||
+        request.scalar_reduced_node_count >
+            static_cast<std::uint64_t>(std::numeric_limits<int>::max() / 2) ||
         request.magnetic_reduced_node == nullptr || request.magnetic_reduced_node_count == 0u ||
+        request.magnetic_reduced_node_count >
+            static_cast<std::uint64_t>(std::numeric_limits<int>::max() / 2) ||
         request.magnetic_element_mask == nullptr ||
         request.magnetic_element_count !=
             static_cast<std::uint64_t>(request.scalar_space->GetMesh()->GetNE())) {
@@ -384,6 +484,41 @@ FrequencyDomainStatus assemble_floquet_airbox_shared_domain_blocks(
         copy_block_error(
             out_result,
             "nonzero-k Floquet shared-domain blocks require periodic translation pairs");
+        return FrequencyDomainStatus::validation_error;
+    }
+    switch (request.boundary_kind) {
+    case FloquetAirboxBoundaryKind::robin:
+        if (!std::isfinite(request.robin_beta) || request.robin_beta <= 0.0 ||
+            request.robin_boundary_marker == nullptr) {
+            copy_block_error(
+                out_result,
+                "Floquet shared-domain Robin boundary requires beta>0 and a boundary marker");
+            return FrequencyDomainStatus::validation_error;
+        }
+        break;
+    case FloquetAirboxBoundaryKind::dirichlet:
+        if (!std::isfinite(request.robin_beta) || request.robin_beta != 0.0 ||
+            request.robin_boundary_marker == nullptr) {
+            copy_block_error(
+                out_result,
+                "Floquet shared-domain Dirichlet boundary requires beta=0 and a boundary marker");
+            return FrequencyDomainStatus::validation_error;
+        }
+        break;
+    case FloquetAirboxBoundaryKind::pure_neumann:
+        if (!std::isfinite(request.robin_beta) || request.robin_beta != 0.0 ||
+            request.robin_boundary_marker != nullptr) {
+            copy_block_error(
+                out_result,
+                "Floquet shared-domain pure-Neumann boundary forbids Robin data");
+            return FrequencyDomainStatus::validation_error;
+        }
+        break;
+    case FloquetAirboxBoundaryKind::unknown:
+    default:
+        copy_block_error(
+            out_result,
+            "Floquet shared-domain boundary kind must be explicit");
         return FrequencyDomainStatus::validation_error;
     }
 
@@ -466,6 +601,15 @@ FrequencyDomainStatus assemble_floquet_airbox_shared_domain_blocks(
         if (status != FrequencyDomainStatus::ok) {
             copy_block_error(out_result, "Floquet magnetic-potential source assembly failed");
             return status;
+        }
+
+        if (!eliminate_dirichlet_dofs(
+                request,
+                *scalar_result.operator_matrix,
+                *source_result.source_matrix,
+                error)) {
+            copy_block_error(out_result, error.c_str());
+            return FrequencyDomainStatus::validation_error;
         }
 
         out_result->scalar_operator = std::move(scalar_result.operator_matrix);
@@ -678,6 +822,8 @@ FrequencyDomainStatus assemble_floquet_airbox_dynamic_demag_k(
             out_result->reconstruction.phi_count = reduced_phi;
             out_result->reconstruction.gauge_policy = problem.gauge_policy;
             out_result->reconstruction.pivot_tolerance = problem.pivot_tolerance;
+            out_result->reconstruction.magnetic_stiffness_real_split_value_count =
+                output_values;
             out_result->reconstruction.p = std::move(p_reduced);
             out_result->reconstruction.a_phiq = std::move(a_phiq);
             out_result->reconstruction.a_qphi = std::move(a_qphi);

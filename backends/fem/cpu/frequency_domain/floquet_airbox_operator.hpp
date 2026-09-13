@@ -36,6 +36,17 @@ struct FloquetAirboxDynamicDemagKResult {
     FloquetPotentialReconstruction reconstruction{};
 };
 
+// The shared-domain Floquet bridge must receive the physical airbox boundary
+// contract explicitly. `unknown` is intentionally the zero value so a caller
+// that forgets to propagate the descriptor fails closed instead of silently
+// assembling a natural (Neumann) boundary.
+enum class FloquetAirboxBoundaryKind : std::uint32_t {
+    unknown = 0,
+    robin = 1,
+    dirichlet = 2,
+    pure_neumann = 3,
+};
+
 /*
  * Mesh-level block producer for the full-field Floquet representation.  The
  * producer owns only the small MFEM block objects; the Schur bridge below
@@ -59,6 +70,7 @@ struct FloquetAirboxSharedDomainBlockRequest {
     const FrequencyDomainFloquetPeriodicPair *periodic_pairs = nullptr;
     std::uint64_t periodic_pair_count = 0;
     std::array<double, 3> k_rad_per_m{};
+    FloquetAirboxBoundaryKind boundary_kind = FloquetAirboxBoundaryKind::unknown;
     double robin_beta = 0.0;
     mfem::Array<int> *robin_boundary_marker = nullptr;
 };

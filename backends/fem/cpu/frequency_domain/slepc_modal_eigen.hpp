@@ -7,6 +7,8 @@
 
 namespace fullmag::fem::frequency_domain {
 
+struct FloquetSharedDomainSparseModalOperator;
+
 struct SLEPcModalEigenAdapterStatus {
     const char *solver_adapter = "slepc_modal_eigen";
     const char *solver_adapter_status = "pending";
@@ -46,6 +48,7 @@ struct SLEPcTinyGyrotropicModalEigenRequest {
 
 struct SLEPcModalAcceptedMode {
     bool floquet_descriptor_certified = false;
+    bool floquet_mode_vector_physical_complex = false;
     double floquet_magnetic_residual = 0.0;
     double floquet_potential_residual = 0.0;
     std::vector<std::complex<double>> floquet_potential_real_split;
@@ -105,6 +108,11 @@ struct SLEPcSparseGyrotropicModalEigenRequest {
     int max_linear_iterations = 128;
     FrequencyDomainPhaseConvention phase_convention =
         FrequencyDomainPhaseConvention::exp_i_omega_t;
+    /* Optional native shared-domain Floquet owner.  When present, the
+       stiffness/gyrotropic CSR views above are not materialised by the
+       caller; the owner builds the phase-reduced static blocks and applies
+       the scalar-potential Schur complement through a PETSc MatShell. */
+    const FloquetSharedDomainSparseModalOperator *floquet_shared_domain_operator = nullptr;
 };
 
 SLEPcTinyGyrotropicModalEigenResult

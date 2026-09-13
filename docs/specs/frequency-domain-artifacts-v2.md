@@ -1035,6 +1035,93 @@ qualified single-precision execution. The array must be compressed by the Zarr
 codec configured for the runtime. If a compatibility `vector.bin` file exists,
 it is a derived/export payload, not the authoritative production store.
 
+### Pełny potencjał modalny na wspólnej siatce
+
+Natywna ścieżka shared-domain publikuje dla wybranych modów plik
+`eigen/mode_fields/sample_XXXX/mode_YYYY/physical_potential.v1.json` oraz
+`potential_full.bin` i `demag_element_full.bin`. Jest to eksport po rekonstrukcji
+`phi_full = C_phi phi_reduced`, z fazami tych samych reprezentantów klas co w
+operatorze natywnym. Potencjał zachowuje wspólną normalizację i fazę modu
+magnetyzacji oraz konwencję czasową `exp(+i omega t)`.
+
+Potencjał ma układ `[source_mesh_node, real|imag]`, jednostkę A i dokładnie
+16 bajtów na węzeł. Pole `h = -grad(phi_full)` ma układ
+`[source_mesh_tet4_element, x|y|z, real|imag]`, jednostkę A/m i 48 bajtów na
+element. Oba pliki używają little-endian float64. Gradient P1 jest stały w
+elemencie; eksport nie uśrednia go pomiędzy elementami ani przez interfejs
+materiałowy. Manifest określa powiązanie z siatką źródłową, operatorem,
+warunkami fazowymi oraz SHA-256 dokładnych bajtów każdego pliku.
+
+Eksport pełnego pola umożliwia porównanie rozwiązań po interpolacji na wspólne
+punkty i uzgodnieniu fazy. Sam zapis plików nie jest dowodem poprawności
+warunków brzegowych, zbieżności siatki ani zgodności z COMSOL.
+
+### Certified Floquet modal potential sidecar
+
+A native nonzero-k Floquet mode may publish an algebraic descriptor
+certificate together with a selected-mode potential sidecar. The certificate
+is valid only when all of the following scalar fields are present:
+
+```json
+{
+  "floquet_descriptor_certified": true,
+  "floquet_geometric_bc_certified": false,
+  "potential_representation": "doubled_real_split_complex_coefficients",
+  "magnetic_relative_residual": 1.0e-10,
+  "potential_relative_residual": 2.0e-10,
+  "potential_dof_count": 2
+}
+```
+
+`potential_dof_count` is the number of complex coefficients in the native
+doubled real-split vector. It is therefore positive and even (`2*p` for a
+`p`-DOF scalar block); it is not a mesh-node count and does not describe a
+Cartesian field. The two residuals are finite, nonnegative algebraic
+descriptor residuals and must not exceed the native certification tolerance
+of `1e-8`.
+
+For a selected mode, the coefficient vector is persisted at
+`eigen/mode_fields/sample_XXXX/mode_YYYY/potential_real_split.bin`. The binary
+layout is little-endian `f64` pairs in coefficient order:
+
+```text
+[(real_0, imag_0), ..., (real_(N-1), imag_(N-1))]
+```
+
+where `N = potential_dof_count`. Its logical shape is `[N, 2]`, its byte
+length is `N * 16`, `potential_value_count = N * 2`, and metadata must publish
+`potential_payload_encoding = "f64_interleaved_real_imag"` together with
+`potential_binary_layout = "complex_f64_pairs_little_endian"`. The sidecar
+uses exactly the mode normalization and common phase applied to the magnetic
+(`q`) and Cartesian mode payloads; it must not be independently rescaled or
+phase-rotated. Its digest is
+`potential_payload_sha256 = "sha256:<64 lowercase hex>"` over the exact
+sidecar bytes.
+
+The sidecar is a descriptor coefficient payload only. It has no Cartesian
+mesh indexing, node map, geometric boundary certificate, or `mode_field_id`,
+and it must not be placed in `vector_xyz_complex` or used as a rendered mode
+field. `floquet_geometric_bc_certified` remains false even when both residuals
+pass; the certificate does not prove geometric Floquet seams, a full-mesh
+potential reconstruction, or V9 convergence.
+
+Certificate scalar fields may be retained for every certified mode, but the
+binary sidecar and its reference fields are emitted only for modes selected
+for payload export. A selected certified mode requires exactly one sidecar;
+an unselected certified mode has no sidecar reference. The reference path
+must match the `(sample_index, raw_mode_index)` identity, and the digest,
+encoding, layout and value count must match the validated bytes. A mode with
+`floquet_descriptor_certified = false` must not carry any certificate field or
+potential sidecar. Inline `potential_vector_real`/`potential_vector_imag`
+arrays are native input only and must never appear in canonical mode metadata.
+
+Writers and readers fail closed on a missing, duplicate, malformed, nonfinite,
+wrong-length or digest-mismatched sidecar; an unsupported representation,
+geometric-BC claim, inconsistent reference or non-certified payload is also a
+publication error. These checks preserve the distinction between an
+algebraically certified descriptor and an unqualified geometric/full-mesh
+result.
+
 `residual_norm` is the legacy alias for `residual_absolute_l2`. The dense
 oracle path must also emit:
 
@@ -2336,3 +2423,15 @@ The v2 API must expose:
 
 Missing optional artifacts should produce explicit `404` responses with
 diagnostic messages, not silent empty plots.
+
+
+### Zakres residualu natywnego sparse Floquet
+
+Adapter `floquet_airbox_cpu_schur_slepc` publikuje blokowe residuale oryginalnego
+zredukowanego pencil przed eliminacją Schura. Pole `block_residuals.scope`
+wynosi `reduced_original_blocks_only`, `eps_reduced` zawiera residual,
+a `eps_full` pozostaje null. `reduced_pencil_certified` wymaga skończonych,
+nieujemnych residuali q, phi, gauge i eigenpaira nie większych niż 1e-8.
+`certified` oraz `full_descriptor_certified` pozostają false, dopóki nie ma
+oddzielnego dowodu więzów i pełnej rekonstrukcji. Sam fizyczny eksport phi
+nie podnosi tej kwalifikacji.
