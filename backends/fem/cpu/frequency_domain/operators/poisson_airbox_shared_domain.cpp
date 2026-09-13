@@ -2693,33 +2693,73 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
             payload.uniform_saturation_magnetisation_a_per_m;
         request.gamma0_m_per_a_s = payload.gamma0_m_per_a_s;
         request.mu0_T_m_A = 1.25663706212e-6;
-        PoissonAirboxSharedDomainCsrMatrix native_magnetic_a_qq{};
-        char native_error[256]{};
-        const double accepted_max_transverse_field_a_per_m =
-            std::strcmp(payload.acceptance_criterion, "torque") == 0 &&
-                std::strcmp(payload.acceptance_metric_kind, "max_torque_apm") == 0 &&
-                std::strcmp(payload.acceptance_unit, "A/m") == 0
-            ? payload.acceptance_threshold
-            : -1.0;
-        const FrequencyDomainStatus native_status =
-            assemble_native_magnetic_a_qq(
-                *payload.linearization_descriptor,
-                &scalar_space,
-                magnetic_element_mask.data(),
-                magnetic_element_mask.size(),
-                &native_magnetic_a_qq,
-                native_error,
-                payload.exchange_material_view,
-                tangent_frames.data(),
-                tangent_frames.size(),
-                accepted_max_transverse_field_a_per_m);
-        if (native_status != FrequencyDomainStatus::ok) {
-            copy_error(out_result->error_message, native_error);
-            out_result->status = native_status;
-            return native_status;
+        const bool has_floquet_wavevector = floquet_k_rad_per_m != nullptr;
+        const bool has_floquet_result = out_floquet_dynamic_demag_k != nullptr;
+        if (has_floquet_wavevector != has_floquet_result) {
+            copy_error(
+                out_result->error_message,
+                "Floquet dynamic demag-k request must provide both wavevector and result");
+            out_result->status = FrequencyDomainStatus::validation_error;
+            return out_result->status;
         }
-        CsrMatrixView magnetic_a_qq = native_magnetic_a_qq.view();
-        request.magnetic_a_qq_csr = &magnetic_a_qq;
+        if (has_floquet_result) {
+            long double floquet_k_squared = 0.0L;
+            for (double component : *floquet_k_rad_per_m) {
+                if (!std::isfinite(component)) {
+                    copy_error(
+                        out_result->error_message,
+                        "Floquet dynamic demag-k wavevector must contain finite values");
+                    out_result->status = FrequencyDomainStatus::validation_error;
+                    return out_result->status;
+                }
+                floquet_k_squared += static_cast<long double>(component) * component;
+            }
+            if (!(floquet_k_squared > 0.0L) ||
+                !std::isfinite(static_cast<double>(floquet_k_squared))) {
+                copy_error(
+                    out_result->error_message,
+                    "Floquet dynamic demag-k request requires a nonzero wavevector");
+                out_result->status = FrequencyDomainStatus::validation_error;
+                return out_result->status;
+            }
+            if (floquet_periodic_pairs == nullptr || floquet_periodic_pair_count == 0u) {
+                copy_error(
+                    out_result->error_message,
+                    "Floquet dynamic demag-k request requires periodic pair payload");
+                out_result->status = FrequencyDomainStatus::validation_error;
+                return out_result->status;
+            }
+        }
+        PoissonAirboxSharedDomainCsrMatrix native_magnetic_a_qq{};
+        CsrMatrixView magnetic_a_qq{};
+        if (!has_floquet_result) {
+            char native_error[256]{};
+            const double accepted_max_transverse_field_a_per_m =
+                std::strcmp(payload.acceptance_criterion, "torque") == 0 &&
+                    std::strcmp(payload.acceptance_metric_kind, "max_torque_apm") == 0 &&
+                    std::strcmp(payload.acceptance_unit, "A/m") == 0
+                ? payload.acceptance_threshold
+                : -1.0;
+            const FrequencyDomainStatus native_status =
+                assemble_native_magnetic_a_qq(
+                    *payload.linearization_descriptor,
+                    &scalar_space,
+                    magnetic_element_mask.data(),
+                    magnetic_element_mask.size(),
+                    &native_magnetic_a_qq,
+                    native_error,
+                    payload.exchange_material_view,
+                    tangent_frames.data(),
+                    tangent_frames.size(),
+                    accepted_max_transverse_field_a_per_m);
+            if (native_status != FrequencyDomainStatus::ok) {
+                copy_error(out_result->error_message, native_error);
+                out_result->status = native_status;
+                return native_status;
+            }
+            magnetic_a_qq = native_magnetic_a_qq.view();
+            request.magnetic_a_qq_csr = &magnetic_a_qq;
+        }
         request.scalar_reduced_node = payload.scalar_reduced_node;
         request.scalar_reduced_node_count = payload.scalar_reduced_node_count;
         request.magnetic_reduced_node = payload.magnetic_reduced_node;
@@ -2731,18 +2771,8 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         const auto assemble_k0 = [&]() noexcept {
             return assemble_poisson_airbox_shared_domain(request, out_result);
         };
-        const FrequencyDomainStatus assembly_status = assemble_k0();
-        if (assembly_status != FrequencyDomainStatus::ok ||
-            out_floquet_dynamic_demag_k == nullptr) {
-            return assembly_status;
-        }
-
-        if (floquet_k_rad_per_m == nullptr) {
-            copy_error(
-                out_result->error_message,
-                "Floquet dynamic demag-k request is missing its wavevector");
-            out_result->status = FrequencyDomainStatus::validation_error;
-            return out_result->status;
+        if (!has_floquet_result) {
+            return assemble_k0();
         }
 
         FloquetAirboxSharedDomainBlockRequest floquet_blocks_request{};
@@ -2798,7 +2828,17 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
             out_result->status = dynamic_status;
             return dynamic_status;
         }
-        return assembly_status;
+        // The nonzero-k route deliberately does not populate the legacy K0
+        // CSR blocks above.  Mark the result explicitly so a future caller
+        // cannot mistake an otherwise successful dynamic provider for a K0
+        // assembly with empty matrices.
+        std::strncpy(
+            out_result->assembly_kind,
+            "floquet_dynamic_demag_k",
+            sizeof(out_result->assembly_kind) - 1u);
+        out_result->assembly_kind[sizeof(out_result->assembly_kind) - 1u] = '\0';
+        out_result->status = FrequencyDomainStatus::ok;
+        return out_result->status;
     } catch (const std::exception &exception) {
         copy_error(out_result->error_message, exception.what());
     } catch (...) {

@@ -203,9 +203,10 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
  * returned CSR buffers own their storage and remain valid until the result is
  * destroyed by the caller.  When a k-vector and Floquet pair graph are
  * supplied, the same accepted payload is also used to build the bounded
- * phase-aware dynamic-demagnetization Schur matrix.  The optional result is
- * deliberately separate from the legacy real k=0 CSR blocks so callers
- * cannot confuse the two representations. */
+ * phase-aware dynamic-demagnetization Schur matrix.  The nonzero-k route
+ * deliberately skips legacy real k=0 CSR assembly; the optional result is
+ * separate from those blocks so callers cannot confuse the two
+ * representations. */
 FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
     const FullmagFemModalSharedDomainPayload &payload,
     PoissonAirboxSharedDomainAssemblyResult *out_result,
