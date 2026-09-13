@@ -4926,4 +4926,14 @@ describe("useViewport3DSceneModel", () => {
       "fullFieldBufferIdentity: fdmAirboxFieldBuffer",
     );
   });
+
+  it("exposes revision quad and threads tracker to field collections in scene model (LR-14)", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain("requestedRevision: fieldVectorRevisionString");
+    expect(source).toContain("receivedRevision: fieldVectorPayloadRevisionString");
+    expect(source).toContain("preparedRevision: fieldVectorPreparedRevision");
+    expect(source).toContain("displayedRevision: fieldVectorDisplayedRevision");
+    expect(source).toContain("selectedTargetId: selectedVisualizationTargetId, tracker");
+  });
 });

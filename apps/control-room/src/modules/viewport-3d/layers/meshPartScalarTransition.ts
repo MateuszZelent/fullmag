@@ -1,4 +1,27 @@
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
+import type { Viewport3DScalarColorUploadResult } from "../hooks/useViewport3DScalarColorUpload";
+
+export interface MeshPartCommittedScalarColorState {
+  readonly buffer: ScalarColorBuffer | null;
+  readonly fresh: boolean;
+  readonly pipeline: "shader" | "vertex" | null;
+}
+
+function normalizeScalarUploadInput(
+  input:
+    | Viewport3DScalarColorUploadResult
+    | ScalarColorBuffer
+    | null
+    | undefined,
+): Viewport3DScalarColorUploadResult {
+  if (!input) {
+    return { buffer: null, fresh: false };
+  }
+  if ("buffer" in input && typeof input.fresh === "boolean") {
+    return input;
+  }
+  return { buffer: input as ScalarColorBuffer, fresh: true };
+}
 
 export function buildMeshPartScalarColorRetentionKey(input: {
   mode: string;
@@ -36,26 +59,34 @@ export function resolveMeshPartCommittedScalarColorState({
   visibleVertexColors,
 }: {
   requestedPipeline: "shader" | "vertex";
-  visibleShaderColors: ScalarColorBuffer | null;
-  visibleVertexColors: ScalarColorBuffer | null;
-}): {
-  buffer: ScalarColorBuffer | null;
-  pipeline: "shader" | "vertex" | null;
-} {
+  visibleShaderColors:
+    | Viewport3DScalarColorUploadResult
+    | ScalarColorBuffer
+    | null
+    | undefined;
+  visibleVertexColors:
+    | Viewport3DScalarColorUploadResult
+    | ScalarColorBuffer
+    | null
+    | undefined;
+}): MeshPartCommittedScalarColorState {
+  const shader = normalizeScalarUploadInput(visibleShaderColors);
+  const vertex = normalizeScalarUploadInput(visibleVertexColors);
+
   if (requestedPipeline === "shader") {
-    if (visibleShaderColors) {
-      return { buffer: visibleShaderColors, pipeline: "shader" };
+    if (shader.buffer) {
+      return { buffer: shader.buffer, fresh: shader.fresh, pipeline: "shader" };
     }
-    if (visibleVertexColors) {
-      return { buffer: visibleVertexColors, pipeline: "vertex" };
+    if (vertex.buffer) {
+      return { buffer: vertex.buffer, fresh: vertex.fresh, pipeline: "vertex" };
     }
   } else {
-    if (visibleVertexColors) {
-      return { buffer: visibleVertexColors, pipeline: "vertex" };
+    if (vertex.buffer) {
+      return { buffer: vertex.buffer, fresh: vertex.fresh, pipeline: "vertex" };
     }
-    if (visibleShaderColors) {
-      return { buffer: visibleShaderColors, pipeline: "shader" };
+    if (shader.buffer) {
+      return { buffer: shader.buffer, fresh: shader.fresh, pipeline: "shader" };
     }
   }
-  return { buffer: null, pipeline: null };
+  return { buffer: null, fresh: false, pipeline: null };
 }

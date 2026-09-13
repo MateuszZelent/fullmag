@@ -36,10 +36,12 @@ import {
   resolveViewport3DQuantityFieldVectorResourceRequests,
   resolveViewport3DQuantityFieldVectorResourceKeys,
   synchronizeViewport3DSessionIdentity,
+  resolveViewport3DFieldVectorIdentityMatch,
   viewport3DFieldVectorMatchesRequestIdentity,
   viewport3DFieldMetaResourceMatchesQuantity,
   type Viewport3DFieldVectorEnvelope,
 } from "./viewport3dResources";
+import { Viewport3DResourceTracker } from "./viewport3dDiagnostics";
 
 const viewport3dResourcesSourceUrl = new URL(
   "./viewport3dResources.ts",
@@ -585,6 +587,246 @@ describe("viewport3dResources", () => {
     );
   });
 
+  it("discriminates identity mismatch reason for snapshot_id, stage_id, phase_rad, and view (LR-04)", () => {
+    const baseEnvelope: Viewport3DFieldVectorEnvelope = {
+      data: {
+        dtype: "float64",
+        formatVersion: 3,
+        domainGenerationId: "gen-1",
+        grid: [1, 1, 1],
+        indexing: "full_domain",
+        meshTopologyHash: "top-1",
+        nComp: 3,
+        pointCount: 1,
+        quantityId: "m",
+        scopeId: "part-1",
+        scopeKind: "part",
+        valueCount: 3,
+        values: new Float64Array([1, 0, 0]),
+      },
+      etag: '"m-1"',
+      resourceKey:
+        "/v2/sessions/current/data/fields/m?scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-1&stage_id=stage-1&phase_rad=0&view=slice-x",
+      responseMetadata: fieldResponseMetadata({
+        component: "full",
+        domainGenerationId: "gen-1",
+        meshTopologyHash: "top-1",
+        phaseRad: 0,
+        quantityId: "m",
+        snapshotId: "snap-1",
+        stageId: "stage-1",
+        view: "slice-x",
+      }),
+    };
+
+    const baseRequest = {
+      quantityId: "m",
+      query: {
+        component: "full",
+        expected_carrier_revision: "top-1",
+        expected_generation_id: "gen-1",
+        phase_rad: 0,
+        scope_id: "part-1",
+        scope_kind: "part",
+        snapshot_id: "snap-1",
+        stage_id: "stage-1",
+        view: "slice-x",
+      },
+    };
+
+    expect(
+      resolveViewport3DFieldVectorIdentityMatch(baseEnvelope, baseRequest),
+    ).toEqual({
+      matches: true,
+    });
+
+    expect(
+      resolveViewport3DFieldVectorIdentityMatch(baseEnvelope, {
+        ...baseRequest,
+        query: { ...baseRequest.query, snapshot_id: "snap-2" },
+      }),
+    ).toEqual({ matches: false, reason: "snapshot" });
+
+    expect(
+      resolveViewport3DFieldVectorIdentityMatch(baseEnvelope, {
+        ...baseRequest,
+        query: { ...baseRequest.query, stage_id: "stage-2" },
+      }),
+    ).toEqual({ matches: false, reason: "stage" });
+
+    expect(
+      resolveViewport3DFieldVectorIdentityMatch(baseEnvelope, {
+        ...baseRequest,
+        query: { ...baseRequest.query, phase_rad: Math.PI / 2 },
+      }),
+    ).toEqual({ matches: false, reason: "phase" });
+
+    expect(
+      resolveViewport3DFieldVectorIdentityMatch(baseEnvelope, {
+        ...baseRequest,
+        query: { ...baseRequest.query, view: "slice-z" },
+      }),
+    ).toEqual({ matches: false, reason: "view" });
+
+    expect(
+      resolveViewport3DFieldVectorIdentityMatch(baseEnvelope, {
+        ...baseRequest,
+        query: { ...baseRequest.query, max_samples: 128 },
+      }),
+    ).toEqual({ matches: true });
+
+    expect(
+      resolveViewport3DFieldVectorIdentityMatch(baseEnvelope, {
+        ...baseRequest,
+        query: {
+          ...baseRequest.query,
+          snapshot_id: 1 as unknown as string,
+          stage_id: 1 as unknown as string,
+          view: "slice-x",
+        },
+      }),
+    ).toEqual({ matches: false, reason: "snapshot" });
+
+    const numericEnvelope: Viewport3DFieldVectorEnvelope = {
+      ...baseEnvelope,
+      resourceKey:
+        "/v2/sessions/current/data/fields/m?scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=1&stage_id=2&phase_rad=0&view=1",
+      responseMetadata: fieldResponseMetadata({
+        ...baseEnvelope.responseMetadata,
+        snapshotId: "1",
+        stageId: "2",
+        view: "1",
+      }),
+    };
+    expect(
+      resolveViewport3DFieldVectorIdentityMatch(numericEnvelope, {
+        ...baseRequest,
+        query: {
+          ...baseRequest.query,
+          phase_rad: "0" as unknown as number,
+          snapshot_id: 1 as unknown as string,
+          stage_id: 2 as unknown as string,
+          view: 1 as unknown as string,
+        },
+      }),
+    ).toEqual({ matches: true });
+
+    expect(
+      resolveViewport3DFieldVectorIdentityMatch(baseEnvelope, {
+        ...baseRequest,
+        query: {
+          ...baseRequest.query,
+          snapshot_id: "   ",
+        },
+      }),
+    ).toEqual({ matches: false, reason: "snapshot" });
+  });
+
+  it("retains last good frame with retained: true across mismatched ready response (LR-03)", () => {
+    const tracker = new Viewport3DResourceTracker();
+    const frameA: Viewport3DFieldVectorEnvelope = {
+      data: {
+        dtype: "float64",
+        formatVersion: 3,
+        domainGenerationId: "gen-1",
+        grid: [1, 1, 1],
+        indexing: "full_domain",
+        meshTopologyHash: "top-1",
+        nComp: 3,
+        pointCount: 1,
+        quantityId: "m",
+        scopeId: "part-1",
+        scopeKind: "part",
+        valueCount: 3,
+        values: new Float64Array([1, 0, 0]),
+      },
+      etag: '"m-frame-a"',
+      resourceKey:
+        "/v2/sessions/current/data/fields/m?scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1",
+      responseMetadata: fieldResponseMetadata({
+        component: "full",
+        domainGenerationId: "gen-1",
+        meshTopologyHash: "top-1",
+        quantityId: "m",
+      }),
+    };
+
+    const frameB_MismatchedQuantity: Viewport3DFieldVectorEnvelope = {
+      ...frameA,
+      data: {
+        ...frameA.data,
+        quantityId: "H_demag",
+      },
+      etag: '"m-frame-b"',
+      responseMetadata: fieldResponseMetadata({
+        component: "full",
+        domainGenerationId: "gen-1",
+        meshTopologyHash: "top-1",
+        quantityId: "H_demag",
+      }),
+    };
+
+    const frameC: Viewport3DFieldVectorEnvelope = {
+      ...frameA,
+      etag: '"m-frame-c"',
+    };
+
+    const request = {
+      quantityId: "m",
+      query: {
+        component: "full",
+        expected_carrier_revision: "top-1",
+        expected_generation_id: "gen-1",
+        scope_id: "part-1",
+        scope_kind: "part",
+      },
+    };
+    const requests = new Map([["target-1", request]]);
+
+    const stepA = resolveViewport3DFieldVectorCollectionLastGood({
+      current: new Map([["target-1", frameA]]),
+      previous: new Map(),
+      requests,
+      status: "ready",
+      tracker,
+    });
+    expect(stepA.get("target-1")).toEqual({ ...frameA, retained: false });
+
+    const stepB = resolveViewport3DFieldVectorCollectionLastGood({
+      current: new Map([["target-1", frameB_MismatchedQuantity]]),
+      previous: stepA,
+      requests,
+      status: "ready",
+      tracker,
+    });
+    expect(stepB.get("target-1")).toEqual({ ...frameA, retained: true });
+
+    const stepC = resolveViewport3DFieldVectorCollectionLastGood({
+      current: new Map([["target-1", frameC]]),
+      previous: stepB,
+      requests,
+      status: "ready",
+      tracker,
+    });
+    expect(stepC.get("target-1")).toEqual({ ...frameC, retained: false });
+
+    const requestNewGeneration = {
+      ...request,
+      query: { ...request.query, expected_generation_id: "gen-2" },
+    };
+    const stepB_GenMismatch = resolveViewport3DFieldVectorCollectionLastGood({
+      current: new Map([["target-1", frameB_MismatchedQuantity]]),
+      previous: stepA,
+      requests: new Map([["target-1", requestNewGeneration]]),
+      status: "ready",
+      tracker,
+    });
+    expect(stepB_GenMismatch.size).toBe(0);
+    expect(tracker.getRetentionRejectionCounts()).toEqual({
+      generation: 1,
+    });
+  });
+
   it("loads collection members independently instead of atomically awaiting Promise.all", () => {
     const source = readFileSync(viewport3dResourcesSourceUrl, "utf8");
     const quantityCollectionSource = source.slice(
@@ -606,6 +848,26 @@ describe("viewport3dResources", () => {
     expect(quantityCollectionSource).toContain("loadViewport3DFieldRequestsBounded(");
     expect(partCollectionSource).toContain("loadViewport3DFieldRequestsBounded(");
     expect(airboxCollectionSource).toContain("loadViewport3DFieldRequestsBounded(");
+  });
+
+  it("threads options.tracker to resolveViewport3DFieldVectorCollectionLastGood in collection hooks (LR-14)", () => {
+    const source = readFileSync(viewport3dResourcesSourceUrl, "utf8");
+    const quantityCollectionSource = source.slice(
+      source.indexOf("export function useViewport3DQuantityFieldVectors"),
+      source.indexOf("export function useViewport3DPartFieldVectors"),
+    );
+    const partCollectionSource = source.slice(
+      source.indexOf("export function useViewport3DPartFieldVectors"),
+      source.indexOf("export function useViewport3DMeshQualityData"),
+    );
+    const airboxCollectionSource = source.slice(
+      source.indexOf("export function useViewport3DAirboxFieldVectors"),
+      source.indexOf("function isViewport3DAirboxFieldVectorRequestMap"),
+    );
+
+    expect(quantityCollectionSource).toContain("tracker: options.tracker");
+    expect(partCollectionSource).toContain("tracker: options.tracker");
+    expect(airboxCollectionSource).toContain("tracker: options.tracker");
   });
 
   it("changes a collection resource identity when a stable target changes quantity or query", () => {

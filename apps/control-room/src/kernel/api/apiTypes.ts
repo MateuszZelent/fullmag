@@ -904,6 +904,9 @@ export interface FieldVectorResponseMetadata {
   scopeId: string | null;
   scopeKind: string | null;
   snapshotId: string | null;
+  stageId?: string | null;
+  phaseRad?: number | null;
+  view?: string | null;
   valueCount: number | null;
 }
 

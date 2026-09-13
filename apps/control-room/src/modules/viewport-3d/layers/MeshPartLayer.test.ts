@@ -248,7 +248,7 @@ describe("MeshPartLayer", () => {
         visibleShaderColors: committedShader,
         visibleVertexColors: null,
       }),
-    ).toEqual({ buffer: committedShader, pipeline: "shader" });
+    ).toEqual({ buffer: committedShader, fresh: true, pipeline: "shader" });
   });
 
   it("keeps committed vertex colors visible while a requested shader is pending", () => {
@@ -264,7 +264,59 @@ describe("MeshPartLayer", () => {
         visibleShaderColors: null,
         visibleVertexColors: committedVertex,
       }),
-    ).toEqual({ buffer: committedVertex, pipeline: "vertex" });
+    ).toEqual({ buffer: committedVertex, fresh: true, pipeline: "vertex" });
+  });
+
+  it("preserves retained scalar colors marked fresh: false without blanking the surface (LR-02)", () => {
+    const retainedColors = {
+      colors: new Float32Array(9),
+      colorMode: "orientation",
+      range: { max: 1, min: 0 },
+    };
+
+    const committedState = resolveMeshPartCommittedScalarColorState({
+      requestedPipeline: "vertex",
+      visibleShaderColors: null,
+      visibleVertexColors: {
+        buffer: retainedColors,
+        fresh: false,
+      },
+    });
+
+    expect(committedState).toEqual({
+      buffer: retainedColors,
+      fresh: false,
+      pipeline: "vertex",
+    });
+
+    const visibleState = resolveMeshPartVisibleScalarColorState({
+      effectiveScalarColors: null,
+      meshQualityColors: null,
+      surfaceVertexCount: 3,
+      vertexColorsEnabled: true,
+      visibleScalarColors: committedState.buffer,
+    });
+
+    expect(visibleState).toEqual({
+      canUseVertexScalarColors: true,
+      hasScalarColors: true,
+    });
+
+    const visibleStateFromUploadResult = resolveMeshPartVisibleScalarColorState({
+      effectiveScalarColors: null,
+      meshQualityColors: null,
+      surfaceVertexCount: 3,
+      vertexColorsEnabled: true,
+      visibleScalarColors: {
+        buffer: retainedColors,
+        fresh: false,
+      },
+    });
+
+    expect(visibleStateFromUploadResult).toEqual({
+      canUseVertexScalarColors: true,
+      hasScalarColors: true,
+    });
   });
 
   it("keeps geometry upload identity stable across quantity, component, and colormap changes", () => {

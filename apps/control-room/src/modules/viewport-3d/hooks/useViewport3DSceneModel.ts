@@ -253,6 +253,7 @@ import {
 import {
   buildViewport3DDiagnostics,
   type Viewport3DResourceCounts,
+  type Viewport3DResourceTracker,
 } from "../viewport3dDiagnostics";
 import {
   getViewport3DBuildDiagnosticsSnapshotVersion,
@@ -345,7 +346,7 @@ import {
   getViewport3DCacheStats as getCacheStats,
   resolveViewport3DFieldVectorResourceKey,
   resolveViewport3DFieldVectorRequestResourceKey,
-  viewport3DFieldVectorMatchesRequestIdentity,
+  resolveViewport3DFieldVectorIdentityMatch,
   useViewport3DAirboxFieldVectors,
   useViewport3DDomainMeta,
   useViewport3DDomainTopology,
@@ -2649,6 +2650,7 @@ export function useViewport3DSceneModel({
   meshSizeHighlightSelection,
   resourceCounts,
   selection,
+  tracker,
 }: {
   commandState: ReturnType<typeof useViewport3DCommandState>;
   colors: Viewport3DSceneProps["colors"] | null;
@@ -2656,6 +2658,7 @@ export function useViewport3DSceneModel({
   meshSizeHighlightSelection: MeshHistogramBinElementsResource | null;
   resourceCounts: Viewport3DResourceCounts;
   selection: Selection;
+  tracker?: Viewport3DResourceTracker;
 }) {
   const primitiveDraftOverlay = usePrimitiveDraftOverlay();
   const { analysisFieldOverlay } = useKernel();
@@ -3941,19 +3944,19 @@ export function useViewport3DSceneModel({
   const magneticPartFieldVectors = useViewport3DPartFieldVectors(
     magneticPartFieldQueries,
     magneticPartFieldQueries.size > 0,
-    { selectedTargetId: selectedVisualizationTargetId },
+    { selectedTargetId: selectedVisualizationTargetId, tracker },
   );
   const targetQuantityFieldVectors = useViewport3DQuantityFieldVectors(
     targetQuantityFieldRequests,
     targetQuantityFieldRequests.size > 0,
-    { selectedTargetId: selectedVisualizationTargetId },
+    { selectedTargetId: selectedVisualizationTargetId, tracker },
   );
   const airboxFieldVectors = useViewport3DAirboxFieldVectors(
     airboxSettings.activeQuantityId,
     airboxFieldVectorParts,
     airboxFieldVectorEnabled && airboxFieldVectorParts.length > 0,
     airboxFieldVectorRequests,
-    { selectedTargetId: selectedVisualizationTargetId },
+    { selectedTargetId: selectedVisualizationTargetId, tracker },
     fieldCatalog.data,
   );
   const rawFieldRenderOptions = useViewport3DFieldRenderOptions({
@@ -4457,18 +4460,18 @@ export function useViewport3DSceneModel({
   const incomingFieldVectorReady = Boolean(
     fieldVector.status === "ready" &&
       incomingFieldVectorEnvelope &&
-      viewport3DFieldVectorMatchesRequestIdentity(
+      resolveViewport3DFieldVectorIdentityMatch(
         incomingFieldVectorEnvelope,
         primaryFieldRequest,
-      ),
+      ).matches,
   );
   const previousFieldVectorCompatible = Boolean(
     fieldVector.status !== "ready" &&
       incomingFieldVectorEnvelope &&
-      viewport3DFieldVectorMatchesRequestIdentity(
+      resolveViewport3DFieldVectorIdentityMatch(
         incomingFieldVectorEnvelope,
         primaryFieldRequest,
-      ),
+      ).matches,
   );
   const displayedFieldVectorEnvelope = resolveViewport3DDisplayedLiveValue(
     incomingFieldVectorReady ? incomingFieldVectorEnvelope : null,
@@ -4476,6 +4479,18 @@ export function useViewport3DSceneModel({
     fieldVector.status !== "ready",
   );
   const displayedFieldVector = displayedFieldVectorEnvelope?.data ?? null;
+  const fieldVectorRevisionString =
+    fieldVector.revision == null ? null : String(fieldVector.revision);
+  const fieldVectorPayloadRevisionString =
+    fieldVector.payloadRevision == null
+      ? null
+      : String(fieldVector.payloadRevision);
+  const fieldVectorPreparedRevision =
+    fieldVectorPayloadRevisionString ?? fieldVectorRevisionString;
+  const fieldVectorDisplayedRevision =
+    incomingFieldVectorReady || previousFieldVectorCompatible
+      ? fieldVectorPreparedRevision
+      : null;
   const analysisComplexFieldQuery = useMemo(
     () =>
       analysisOverlay
@@ -6234,6 +6249,7 @@ export function useViewport3DSceneModel({
     buildFallbacks: buildFallbackDiagnostics,
     cache: getCacheStats(),
     dataPlaneIssues,
+    displayedRevision: fieldVectorDisplayedRevision,
     fieldDemandDiagnostics,
     fieldPayloadRevision: fieldVector.payloadRevision ?? null,
     fieldRevision: fieldVector.payloadRevision ?? fieldVector.revision,
@@ -6248,7 +6264,10 @@ export function useViewport3DSceneModel({
       ? fdmTargetViews.length
       : femDomain.objectPartIds.size,
     pipelineDiagnostics: buildPipelineDiagnostics,
+    preparedRevision: fieldVectorPreparedRevision,
     quantityId: primaryFieldQuantityId,
+    receivedRevision: fieldVectorPayloadRevisionString,
+    requestedRevision: fieldVectorRevisionString,
     surfaceColorStatus: chunkedScalarColors.status,
     targetDiagnostics: fieldRenderModel?.targetDiagnostics,
     topologyRevision: topology.revision,

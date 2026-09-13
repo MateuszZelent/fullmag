@@ -41,6 +41,7 @@ import {
 } from "../viewport3dGeometryColors";
 import { useViewport3DGeometryUpload } from "../hooks/useViewport3DGeometryUpload";
 import {
+  type Viewport3DScalarColorUploadResult,
   useViewport3DScalarColorUpload,
   useViewport3DScalarShaderColorUpload,
 } from "../hooks/useViewport3DScalarColorUpload";
@@ -380,12 +381,20 @@ export function resolveMeshPartVisibleScalarColorState({
   meshQualityColors: ScalarColorBuffer | null;
   surfaceVertexCount: number;
   vertexColorsEnabled: boolean;
-  visibleScalarColors: ScalarColorBuffer | null;
+  visibleScalarColors:
+    | Viewport3DScalarColorUploadResult
+    | ScalarColorBuffer
+    | null
+    | undefined;
 }): {
   canUseVertexScalarColors: boolean;
   hasScalarColors: boolean;
 } {
-  const visibleOrPendingColors = visibleScalarColors ?? effectiveScalarColors;
+  const actualBuffer =
+    visibleScalarColors && typeof visibleScalarColors === "object" && "buffer" in visibleScalarColors
+      ? visibleScalarColors.buffer
+      : (visibleScalarColors ?? null);
+  const visibleOrPendingColors = actualBuffer ?? effectiveScalarColors;
   const canUseVertexScalarColors =
     Boolean(meshQualityColors) ||
     (vertexColorsEnabled &&
@@ -395,7 +404,7 @@ export function resolveMeshPartVisibleScalarColorState({
       ));
   return {
     canUseVertexScalarColors,
-    hasScalarColors: Boolean(canUseVertexScalarColors && visibleScalarColors),
+    hasScalarColors: Boolean(canUseVertexScalarColors && actualBuffer),
   };
 }
 
