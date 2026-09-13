@@ -2,6 +2,7 @@
 
 #include "cpu/frequency_domain/contour_interval_solver.hpp"
 #include "cpu/frequency_domain/mode_deduplication.hpp"
+#include "cpu/frequency_domain/modal/floquet_modal_solver.hpp"
 #include "cpu/frequency_domain/slepc_modal_eigen.hpp"
 #include "cpu/frequency_domain/spectral_transform.hpp"
 #include "cpu/frequency_domain/window_partition.hpp"
@@ -27,6 +28,7 @@ constexpr double kWindowDedupOverlapThreshold = 0.90;
 
 bool dynamic_demag_k_payload_is_declared(const ModalEigenRequest &) noexcept;
 bool dynamic_demag_k_payload_is_consistent(const ModalEigenRequest &) noexcept;
+bool modal_request_is_nonzero_k_floquet(const ModalEigenRequest &) noexcept;
 bool effective_dense_stiffness_for_request(
     const ModalEigenRequest &,
     std::vector<double> &,
@@ -169,6 +171,11 @@ std::string with_modal_request_diagnostics(
         diagnostics_json += operator_k_vector_diagnostics_json(request);
         diagnostics_json += modal_floquet_periodic_pair_diagnostics_json(request);
         diagnostics_json += dynamic_demag_k_diagnostics_json(request);
+        if (modal_request_is_nonzero_k_floquet(request)) {
+            diagnostics_json += ",\"floquet_modal_solver_model\":\"";
+            diagnostics_json += floquet_modal_solver_model();
+            diagnostics_json += "\"";
+        }
         diagnostics_json += "}";
     }
     return with_operator_diagnostics(
@@ -427,6 +434,26 @@ bool has_dense_modal_payload(const ModalEigenRequest &request) noexcept
         request.mfem_tangent_dof_count > 0 &&
         request.mfem_stiffness_matrix_row_major != nullptr &&
         request.mfem_gyrotropic_matrix_row_major != nullptr;
+}
+
+SLEPcTinyGyrotropicModalEigenResult solve_modal_spectrum_for_request(
+    const ModalEigenRequest &request,
+    const SLEPcTinyGyrotropicModalEigenRequest &spectral_request) noexcept
+{
+    if (modal_request_is_nonzero_k_floquet(request)) {
+        return solve_floquet_modal_spectrum(request, spectral_request);
+    }
+    return solve_slepc_tiny_gyrotropic_modal_eigen(spectral_request);
+}
+
+SLEPcTinyGyrotropicModalEigenResult solve_sparse_modal_spectrum_for_request(
+    const ModalEigenRequest &request,
+    const SLEPcSparseGyrotropicModalEigenRequest &spectral_request) noexcept
+{
+    if (modal_request_is_nonzero_k_floquet(request)) {
+        return solve_floquet_modal_sparse_spectrum(request, spectral_request);
+    }
+    return solve_slepc_sparse_gyrotropic_modal_eigen(spectral_request);
 }
 
 bool dynamic_demag_k_payload_is_declared(const ModalEigenRequest &request) noexcept
@@ -1396,7 +1423,7 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
         slepc_request.max_outer_iterations = request.max_outer_iterations;
         slepc_request.max_linear_iterations = request.max_linear_iterations;
         SLEPcTinyGyrotropicModalEigenResult slepc_result =
-            solve_slepc_tiny_gyrotropic_modal_eigen(slepc_request);
+            solve_modal_spectrum_for_request(request, slepc_request);
         const char *stop_reason = subwindow_stop_reason(slepc_result);
         emit_production_shift_invert_progress(
             request,
@@ -1656,7 +1683,7 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
     slepc_request.max_outer_iterations = request.max_outer_iterations;
     slepc_request.max_linear_iterations = request.max_linear_iterations;
     const SLEPcTinyGyrotropicModalEigenResult slepc_result =
-        solve_slepc_tiny_gyrotropic_modal_eigen(slepc_request);
+        solve_modal_spectrum_for_request(request, slepc_request);
 
     FrequencyDomainContractResult result{};
     if (!slepc_result.ok) {
@@ -1843,7 +1870,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
     slepc_request.max_outer_iterations = request.max_outer_iterations;
     slepc_request.max_linear_iterations = request.max_linear_iterations;
     const SLEPcTinyGyrotropicModalEigenResult slepc_result =
-        solve_slepc_sparse_gyrotropic_modal_eigen(slepc_request);
+        solve_sparse_modal_spectrum_for_request(request, slepc_request);
 
     FrequencyDomainContractResult result{};
     constexpr const char *kSparseSolverModel =
@@ -2039,7 +2066,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         slepc_request.max_outer_iterations = request.max_outer_iterations;
         slepc_request.max_linear_iterations = request.max_linear_iterations;
         SLEPcTinyGyrotropicModalEigenResult slepc_result =
-            solve_slepc_sparse_gyrotropic_modal_eigen(slepc_request);
+            solve_sparse_modal_spectrum_for_request(request, slepc_request);
         const char *stop_reason = subwindow_stop_reason(slepc_result);
         emit_production_shift_invert_progress(
             request,
