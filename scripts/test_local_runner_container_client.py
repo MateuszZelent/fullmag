@@ -143,6 +143,49 @@ class ContainerClientTests(unittest.TestCase):
         self.assertEqual(container_client.SECRET_SCHEMA, secret["schema"])
         self.assertGreaterEqual(len(secret["token"]), 32)
 
+    def test_configure_can_explicitly_enable_current_and_slepc_profiles_without_docker(self):
+        initial = self.configure()
+        self.assertEqual(list(container_client.ALLOWED_PROFILES), initial["allowed_profiles"])
+
+        current = container_client.configure(
+            self.layout, image_id=IMAGE, owner="alice", enable_current_contracts=True
+        )
+        self.assertEqual(list(container_client.CURRENT_CONTRACT_PROFILES), current["allowed_profiles"])
+        secret_path = self.storage / "index" / "local-runner-container-secret.json"
+        secret = json.loads(secret_path.read_text(encoding="utf-8"))
+        self.assertEqual(current["allowed_profiles"], secret["allowed_profiles"])
+
+        slepc = container_client.configure(
+            self.layout, image_id=IMAGE, owner="alice", enable_slepc_modal=True
+        )
+        self.assertEqual(list(container_client.SLEPC_MODAL_PROFILES), slepc["allowed_profiles"])
+
+        # Enabling the older five-profile set must never silently downgrade an
+        # already activated six-profile coordinator.
+        preserved = container_client.configure(
+            self.layout, image_id=IMAGE, owner="alice", enable_current_contracts=True
+        )
+        self.assertEqual(list(container_client.SLEPC_MODAL_PROFILES), preserved["allowed_profiles"])
+
+    def test_configure_rejects_mismatched_public_and_secret_profile_lists(self):
+        self.configure()
+        secret_path = self.storage / "index" / "local-runner-container-secret.json"
+        secret = json.loads(secret_path.read_text(encoding="utf-8"))
+        secret["allowed_profiles"] = list(container_client.CURRENT_CONTRACT_PROFILES)
+        secret_path.write_text(json.dumps(secret), encoding="utf-8")
+        with self.assertRaisesRegex(container_client.ContainerClientError, "profile lists differ"):
+            container_client._load_config(self.layout, "alice")
+
+    def test_configure_rejects_conflicting_profile_activation_flags(self):
+        with self.assertRaisesRegex(container_client.ContainerClientError, "only one"):
+            container_client.configure(
+                self.layout,
+                image_id=IMAGE,
+                owner="alice",
+                enable_current_contracts=True,
+                enable_slepc_modal=True,
+            )
+
     def test_configure_refuses_a_foreign_operator_without_overwriting(self):
         original = self.configure()
         with self.assertRaises(container_client.ContainerClientError):
@@ -173,7 +216,7 @@ class ContainerClientTests(unittest.TestCase):
         self.assertEqual(CONTAINER_ID, result["container_id"])
         self.assertIn(["--name", container_client.CONTAINER_NAME], [create[index:index + 2] for index in range(len(create) - 1)])
         self.assertIn(["--restart", "unless-stopped"], [create[index:index + 2] for index in range(len(create) - 1)])
-        self.assertIn(["--publish", "127.0.0.1:8765:8765"], [create[index:index + 2] for index in range(len(create) - 1)])
+        self.assertIn(["--publish", f"127.0.0.1:{container_client.CONTAINER_PORT}:{container_client.CONTAINER_PORT}"], [create[index:index + 2] for index in range(len(create) - 1)])
         labels = [create[index + 1] for index, value in enumerate(create[:-1]) if value == "--label"]
         self.assertEqual(
             {f"{key}={value}" for key, value in container_client._container_labels("alice").items()},

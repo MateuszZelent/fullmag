@@ -19,10 +19,11 @@ from local_runner.service import ServicePaths, read_stop_request  # noqa: E402
 
 
 class FakeQueue:
-    def __init__(self, active=None, queued=None):
+    def __init__(self, active=None, queued=None, jobs=None):
         self.active_jobs = list(active or [])
         self.queued = queued
         self.submitted = []
+        self.jobs = list(jobs or [])
 
     def active(self):
         return list(self.active_jobs)
@@ -35,7 +36,13 @@ class FakeQueue:
         return {"job_id": "job-1", "state": "queued"}
 
     def list(self, owner=None, limit=100):
-        return []
+        return list(self.jobs)
+
+    def get(self, job_id):
+        for j in self.jobs + self.active_jobs:
+            if j.get("job_id") == job_id:
+                return j
+        return None
 
 
 class LiveThread:
@@ -60,8 +67,15 @@ class ContainerMainTests(unittest.TestCase):
         app = container_main.Application.__new__(container_main.Application)
         app.storage = self.root
         app.owner = "alice"
+        app.allowed_profiles = frozenset((
+            "fem-cpu-release",
+            "fem-gpu-release",
+            "fdm-cpu-release",
+        ))
         app.paths = ServicePaths.from_storage(self.root)
         app.queue = queue or FakeQueue()
+        from local_runner.observability import ObservabilityHub
+        app.hub = ObservabilityHub(self.root, owner=app.owner)
         app._lifecycle_lock = threading.RLock()
         app._worker_thread = None
         app._worker_state = "starting"
@@ -69,7 +83,25 @@ class ContainerMainTests(unittest.TestCase):
         app._worker_result = None
         app._worker_started_at = None
         app._worker_finished_at = None
+        app._worker_samples_by_job = {}
+        app._worker_io_baselines = {}
         return app
+
+    def test_unenabled_contract_profile_is_rejected_before_source_or_queue_access(self):
+        app = self.app()
+        app._worker_state = "running"
+        app._worker_thread = LiveThread()
+        payload = {
+            "worktree_id": "wt",
+            "source_digest": "a" * 64,
+            "profile": "fem-cpu-slepc-modal-v1",
+            "operation": "build",
+            "request_key": "request-unenabled",
+            "payload": {},
+        }
+        with patch.object(container_main, "capsule_path", side_effect=AssertionError("source must not be read")):
+            with self.assertRaisesRegex(ValueError, "not enabled by the operator configuration"):
+                app.submit(payload)
 
     def test_live_worker_accepts_a_build_submission_while_callback_blocks(self):
         queue = FakeQueue()
@@ -316,6 +348,329 @@ class ContainerMainTests(unittest.TestCase):
         self.assertFalse(health["accepting_jobs"])
         self.assertEqual(["old"], [job["job_id"] for job in health["legacy_jobs"]])
         self.assertIn("manual recovery", health["worker_error"])
+
+    def test_paginated_jobs_and_job_detail_with_pinned_state(self):
+        sample_jobs = [
+            {"job_id": "job-1", "worktree_id": "wt-alpha", "state": "succeeded", "profile": "fem-cpu-release", "created_at": 100, "started_at": 105, "updated_at": 130},
+            {"job_id": "job-2", "worktree_id": "wt-beta", "state": "failed", "profile": "fem-gpu-release", "created_at": 200, "started_at": 205, "updated_at": 210},
+            {"job_id": "job-3", "worktree_id": "wt-alpha", "state": "running", "profile": "fem-cpu-release", "created_at": 300, "started_at": 305, "updated_at": 310},
+        ]
+        app = self.app(FakeQueue(jobs=sample_jobs))
+        from local_runner.observability import ObservabilityHub
+        app.hub = ObservabilityHub(self.root)
+
+        # 1. Query with status='history' returns only terminal jobs (job-1, job-2)
+        res = app.paginated_jobs({"status": "history"})
+        self.assertEqual(2, res["total"])
+        self.assertEqual(["job-2", "job-1"], [j["job_id"] for j in res["items"]])
+        self.assertEqual(["wt-alpha", "wt-beta"], res["worktrees"])
+
+        # 2. Sort by oldest
+        res_oldest = app.paginated_jobs({"sort": "oldest"})
+        self.assertEqual("job-1", res_oldest["items"][0]["job_id"])
+
+        # 3. Sort by duration
+        res_dur = app.paginated_jobs({"sort": "duration"})
+        self.assertEqual("job-1", res_dur["items"][0]["job_id"])  # 25s vs 5s
+
+        # 4. Filter by worktree
+        res_wt = app.paginated_jobs({"worktree": "wt-beta"})
+        self.assertEqual(1, res_wt["total"])
+        self.assertEqual("job-2", res_wt["items"][0]["job_id"])
+
+        # 5. job_detail checks pinned status
+        app.get = lambda jid: dict(sample_jobs[0])
+        detail_unpinned = app.job_detail("job-1")
+        self.assertFalse(detail_unpinned["is_pinned"])
+
+        # Pin the resource
+        app.hub.set_pinned("exec-wt-alpha-job-1", True, "Test pin")
+        detail_pinned = app.job_detail("job-1")
+        self.assertTrue(detail_pinned["is_pinned"])
+        self.assertEqual("Test pin", detail_pinned["pin_reason"])
+
+    def test_main_port_resolution_default_and_env(self):
+        import os
+        from unittest.mock import patch
+
+        with patch("local_runner.container_main.Path") as mock_path, \
+             patch("local_runner.container_main.Application") as mock_app_cls, \
+             patch("local_runner.container_api.serve") as mock_serve:
+            mock_path.return_value.read_text.return_value = json.dumps({"storage_root": "/storage"})
+            mock_app = mock_app_cls.return_value
+            mock_app.start_worker.return_value = None
+
+            with patch.dict(os.environ, {}, clear=True):
+                container_main.main()
+                self.assertEqual(48765, mock_serve.call_args[1]["port"])
+
+            with patch.dict(os.environ, {"FULLMAG_RUNNER_PORT": "59999"}):
+                container_main.main()
+                self.assertEqual(59999, mock_serve.call_args[1]["port"])
+
+            with patch.dict(os.environ, {"FULLMAG_RUNNER_PORT": ""}):
+                container_main.main()
+                self.assertEqual(48765, mock_serve.call_args[1]["port"])
+
+            with patch.dict(os.environ, {"FULLMAG_RUNNER_PORT": "invalid"}):
+                container_main.main()
+                self.assertEqual(48765, mock_serve.call_args[1]["port"])
+
+    def test_overview_and_processes_real_metrics(self):
+        import os
+        app = self.app(FakeQueue(jobs=[]))
+        app.health = lambda: {
+            "ok": True,
+            "worker_alive": True,
+            "worker_state": "running",
+            "worker_error": None,
+            "accepting_jobs": True,
+            "service_status": {"started_at": "2026-09-13T12:00:00Z"},
+            "storage_free_bytes": 100 * 1024**3,
+        }
+
+        # 1. Idle worker overview: worker metrics are None, never mock 340.0 / 8192 / 2.5
+        ov = app.overview()
+        self.assertIsNone(ov["worker"]["memory_mb"])
+        self.assertIsNone(ov["worker"]["limit_mb"])
+        self.assertIsNone(ov["worker"]["cpu_percent"])
+
+        # 2. Idle worker processes: coordinator PID is real int, worker is idle with '—'
+        procs = app.processes()
+        self.assertEqual(2, len(procs))
+        coord_proc = procs[0]
+        worker_proc = procs[1]
+
+        self.assertEqual(f"coord-pid-{os.getpid()}", coord_proc["id"])
+        self.assertNotEqual("coord-pid-1", coord_proc["id"])
+        self.assertEqual("running", coord_proc["status"])
+        self.assertIn("MiB", coord_proc["ram"]) if "MiB" in coord_proc["ram"] else self.assertEqual("niedostępne", coord_proc["ram"])
+
+        self.assertEqual("worker-idle", worker_proc["id"])
+        self.assertEqual("idle", worker_proc["status"])
+        self.assertEqual("—", worker_proc["cpu"])
+        self.assertEqual("—", worker_proc["ram"])
+        self.assertEqual("—", worker_proc["io"])
+        self.assertEqual("brak aktywnego kontenera", worker_proc["cmd"])
+
+    def test_processes_does_not_claim_unverified_worker_is_running(self):
+        active_job = {
+            "job_id": "job-unverified-123",
+            "owner": "alice",
+            "profile": "fem-cpu-release",
+            "worktree_id": "wt-test",
+            "state": "running",
+        }
+        app = self.app(FakeQueue(active=[active_job]))
+        app.health = lambda: {
+            "ok": True,
+            "worker_alive": True,
+            "worker_state": "running",
+            "worker_error": None,
+            "accepting_jobs": True,
+            "service_status": {"started_at": "2026-09-13T12:00:00Z"},
+        }
+
+        worker_proc = app.processes()[1]
+        self.assertEqual("unverified", worker_proc["status"])
+
+        run_dir = self.root / "runs" / "wt-test" / active_job["job_id"]
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "coordinator.json").write_text(
+            json.dumps({"container_id": "c" * 64}), encoding="utf-8"
+        )
+        with patch.object(container_main, "inspect_owned", side_effect=RuntimeError("unavailable")):
+            worker_proc = app.processes()[1]
+        self.assertEqual("unverified", worker_proc["status"])
+
+    def test_worker_stats_report_io_rate_only_after_cumulative_delta(self):
+        job = {
+            "job_id": "job-io-123",
+            "owner": "alice",
+            "profile": "fem-cpu-release",
+            "worktree_id": "wt-test",
+            "state": "running",
+        }
+        app = self.app(FakeQueue(active=[job]))
+        run_dir = self.root / "runs" / "wt-test" / "job-io-123"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "coordinator.json").write_text(
+            json.dumps({"container_id": "c" * 64}), encoding="utf-8"
+        )
+        stats = [
+            "104857600B / 1073741824B|25.0%|1048576B / 2097152B",
+            "104857600B / 1073741824B|25.0%|3145728B / 6291456B",
+        ]
+        with patch.object(container_main, "inspect_owned"), \
+                patch.object(container_main, "docker", side_effect=stats), \
+                patch.object(container_main.time, "monotonic", side_effect=[100.0, 102.0]):
+            first = app._inspect_worker_metrics(job)
+            second = app._inspect_worker_metrics(job)
+
+        self.assertTrue(first["container_verified"])
+        self.assertIsNone(first["io_mb_s"])
+        self.assertEqual(3.0, second["io_mb_s"])
+
+    def test_job_events_historical_journal_and_memory_merging(self):
+        job = {
+            "job_id": "job-abc-123",
+            "owner": "alice",
+            "profile": "fem-cpu-release",
+            "worktree_id": "wt-test",
+            "created_at": 1773000000.0,
+            "started_at": 1773000010.0,
+            "finished_at": 1773000030.0,
+            "state": "succeeded",
+        }
+        app = self.app(FakeQueue(jobs=[job]))
+        run_dir = self.root / "runs" / "wt-test" / "job-abc-123"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        journal = {
+            "job_id": "job-abc-123",
+            "started_at": 1773000010.0,
+            "finished_at": 1773000030.0,
+            "state": "succeeded",
+        }
+        (run_dir / "coordinator.json").write_text(json.dumps(journal), encoding="utf-8")
+
+        events = app.job_events("job-abc-123")
+        self.assertEqual(3, len(events))
+        self.assertEqual("job_queued", events[0]["event"])
+        self.assertEqual("job_claimed", events[1]["event"])
+        self.assertEqual("job_terminal", events[2]["event"])
+        self.assertEqual(20.0, events[2]["duration_seconds"])
+
+    def test_alerts_none_tolerance(self):
+        app = self.app(FakeQueue(jobs=[]))
+        app.health = lambda: {"worker_error": None, "legacy_jobs": []}
+        app.hub.get_storage_volumes = lambda: [{"free_bytes": None, "critical_threshold_bytes": None}]
+        alerts = app.alerts()
+        self.assertEqual([], alerts)
+
+    def test_job_metrics_honest_scoping(self):
+        job = {
+            "job_id": "job-inactive-999",
+            "owner": "alice",
+            "profile": "fem-cpu-release",
+            "worktree_id": "wt-test",
+            "state": "succeeded",
+        }
+        app = self.app(FakeQueue(jobs=[job]))
+        with self.assertRaises(LookupError):
+            app.job_events("job-missing-404")
+        with self.assertRaises(LookupError):
+            app.job_metrics("job-missing-404")
+        # Inactive/completed job MUST return empty list, never coordinator process trends!
+        metrics = app.job_metrics("job-inactive-999")
+        self.assertEqual([], metrics)
+
+        # Active job with worker metrics
+        active_job = {
+            "job_id": "job-active-123",
+            "owner": "alice",
+            "profile": "fem-cpu-release",
+            "worktree_id": "wt-test",
+            "state": "running",
+        }
+        app_active = self.app(FakeQueue(active=[active_job]))
+        app_active._inspect_worker_metrics = lambda current_job: {
+            "container_id": "cid-123",
+            "memory_mb": 512.0,
+            "limit_mb": 8192,
+            "cpu_percent": 45.0,
+            "io_mb_s": None,
+        }
+        active_metrics = app_active.job_metrics("job-active-123")
+        self.assertEqual(1, len(active_metrics))
+        self.assertEqual("worker", active_metrics[0]["scope"])
+        self.assertEqual("job-active-123", active_metrics[0]["job_id"])
+        self.assertEqual(512.0, active_metrics[0]["ram_mb"])
+        self.assertEqual(45.0, active_metrics[0]["cpu_percent"])
+
+        # Second sample with changing values accumulates
+        app_active._inspect_worker_metrics = lambda current_job: {
+            "container_id": "cid-123",
+            "memory_mb": 600.0,
+            "limit_mb": 8192,
+            "cpu_percent": 55.0,
+            "io_mb_s": None,
+        }
+        active_metrics2 = app_active.job_metrics("job-active-123")
+        self.assertEqual(2, len(active_metrics2))
+        self.assertEqual(600.0, active_metrics2[1]["ram_mb"])
+        self.assertEqual(55.0, active_metrics2[1]["cpu_percent"])
+
+    def test_job_detail_enriches_timestamps_from_journal_and_receipt(self):
+        job = {
+            "job_id": "job-time-test",
+            "owner": "alice",
+            "profile": "fem-cpu-release",
+            "worktree_id": "wt-time",
+            "state": "succeeded",
+            "created_at": 1773000000.0,
+            # Note: started_at and finished_at are missing from queue record
+        }
+        app = self.app(FakeQueue(jobs=[job]))
+        run_dir = self.root / "runs" / "wt-time" / "job-time-test"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        journal = {
+            "job_id": "job-time-test",
+            "started_at": 1773000010.0,
+            "finished_at": 1773000050.0,
+            "state": "succeeded",
+        }
+        (run_dir / "coordinator.json").write_text(json.dumps(journal), encoding="utf-8")
+
+        detail = app.job_detail("job-time-test")
+        self.assertEqual(1773000010.0, detail["started_at"])
+        self.assertEqual(1773000050.0, detail["finished_at"])
+
+    def test_overview_last_cleanup_honest_zero_reclaimed_when_not_applied(self):
+        app = self.app(FakeQueue(jobs=[]))
+        app.health = lambda: {
+            "ok": True,
+            "worker_alive": False,
+            "worker_state": "idle",
+            "worker_error": None,
+            "accepting_jobs": True,
+            "service_status": {"started_at": "2026-09-13T12:00:00Z"},
+            "storage_free_bytes": 100 * 1024**3,
+        }
+        app.hub._plans["plan-test"] = {
+            "plan_id": "plan-test",
+            "created_at": "2026-09-13T12:00:00Z",
+            "status": "preview",
+            "candidates_count": 1,
+            "estimated_reclaimed_bytes": 4096,
+            "applied": False,
+        }
+        ov = app.overview()
+        self.assertEqual(4096, ov["last_cleanup"]["estimated_reclaimed_bytes"])
+        self.assertEqual(0, ov["last_cleanup"]["reclaimed_bytes"])
+
+    def test_paginated_jobs_sqlite_full_pagination_over_1000_items(self):
+        db_path = self.root / "index" / "queue.db"
+        jq = JobQueue(db_path)
+        with jq.connection() as db:
+            records = [
+                (f"job-{i:04d}", "alice", f"req-{i}", "h" * 64, f"wt-{i % 5}", "a" * 64, "fem-cpu-release", "build", "{}", "succeeded", 1000.0 + i, 1005.0 + i)
+                for i in range(1050)
+            ]
+            db.executemany(
+                "INSERT INTO jobs (job_id, owner, request_key, request_hash, worktree_id, source_digest, profile, operation, payload, state, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                records,
+            )
+
+        app = self.app(jq)
+        res_page1 = app.paginated_jobs({"page": 1, "limit": 50})
+        self.assertEqual(1050, res_page1["total"])
+        self.assertEqual(50, len(res_page1["items"]))
+        self.assertFalse(res_page1["is_truncated"])
+        self.assertEqual(21, res_page1["pages"])
+
+        res_page21 = app.paginated_jobs({"page": 21, "limit": 50})
+        self.assertEqual(50, len(res_page21["items"]))
 
 
 if __name__ == "__main__":
