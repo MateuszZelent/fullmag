@@ -116,6 +116,40 @@ for (const method of expectedApiMethods) {
 }
 console.log(`✓ All ${expectedApiMethods.length} API client methods verified`);
 
+// Verify that a stalled request is aborted and retried without leaking the
+// timeout/retry-only options into the FetchInit object.
+const originalFetch = globalThis.fetch;
+let timeoutFetchAttempts = 0;
+globalThis.fetch = (_url, options = {}) => {
+  timeoutFetchAttempts += 1;
+  assert(!Object.prototype.hasOwnProperty.call(options, 'timeoutMs'), 'timeoutMs must stay client-side');
+  assert(!Object.prototype.hasOwnProperty.call(options, 'retries'), 'retries must stay client-side');
+  if (timeoutFetchAttempts === 1) {
+    return new Promise((_, reject) => {
+      const rejectAborted = () => {
+        const err = new Error('request aborted by test');
+        err.name = 'AbortError';
+        reject(err);
+      };
+      options.signal?.addEventListener('abort', rejectAborted, { once: true });
+      setTimeout(rejectAborted, 50);
+    });
+  }
+  return Promise.resolve({
+    ok: true,
+    status: 200,
+    headers: { get: () => 'application/json' },
+    json: async () => ({ attempts: timeoutFetchAttempts }),
+  });
+};
+try {
+  const timeoutRetryResult = await api.request('/timeout-retry-test', { timeoutMs: 5, retries: 1 });
+  assert.strictEqual(timeoutRetryResult.attempts, 2, 'timed out requests must retry once');
+} finally {
+  globalThis.fetch = originalFetch;
+}
+console.log('✓ api.js timeout abort and retry verified');
+
 // 5. Setup synthetic DOM environment to test component and view renders
 class MockElement {
   constructor(tag = 'div', id = '') {
@@ -378,6 +412,32 @@ api.getStorageResources = async () => ({
 
 const storageContainer = new MockElement('div');
 const storageMod = await import('./src/views/StorageView.js');
+
+// A slow resources scan must not hold back the fast volumes response.
+let resolveStorageResources;
+api.getStorageResources = () => new Promise(resolve => {
+  resolveStorageResources = resolve;
+});
+const deferredStorageContainer = new MockElement('div');
+storageMod.renderStorageView(deferredStorageContainer);
+await new Promise(r => setTimeout(r, 20));
+const deferredVolumesEl = deferredStorageContainer.querySelector('#volumes-table-container');
+const deferredCategoriesEl = deferredStorageContainer.querySelector('#categories-breakdown-container');
+assert(deferredVolumesEl.innerHTML.includes('Root Volume'), 'StorageView must render volumes before resource scan completes');
+assert(deferredCategoriesEl.innerHTML.includes('Wczytywanie podziału klas storage'), 'StorageView must keep resource sections loading independently');
+resolveStorageResources({ total_measured_bytes: 1, categories: [], resources: [] });
+await new Promise(r => setTimeout(r, 20));
+assert(deferredCategoriesEl.innerHTML.includes('Brak danych inwentaryzacji klas storage'), 'StorageView must render resource response after deferred scan resolves');
+
+api.getStorageResources = async () => ({
+  total_measured_bytes: 20e9,
+  measured_at: new Date().toISOString(),
+  categories: [
+    { name: 'Execution', logical_bytes: 10e9, file_count: 150, completeness: 'partial', eligible_cleanup_bytes: 5e9, reclaimable_bytes: 5e9 },
+    { name: 'Artifacts', logical_bytes: 10e9, file_count: 50, completeness: 'complete', eligible_cleanup_bytes: 0, reclaimable_bytes: 0 },
+  ],
+  resources: [],
+});
 storageMod.renderStorageView(storageContainer);
 await new Promise(r => setTimeout(r, 20));
 
