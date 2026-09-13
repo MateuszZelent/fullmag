@@ -302,7 +302,9 @@ Szczegóły źródeł, kontrprzykładu i akceptacji: [R01–R05](2026-09-13-eige
 - [x] S09.a: bounded provider i elementowy assembler przekroju — prototyp.
 - [x] S04.R01a (P1): regresja wielokrotnego pivotowania, naprawa LU solve, Schur oracle; natywny MSVC RED→GREEN.
 - [ ] S04.R01b: managed wykonanie tej regresji; recipe nadal blokowane przed kompilacją.
-- [ ] S04.R02 (P1): próg residualu, test stale-zero, propagacja diagnostyki i gauge.
+- [x] S04.R02a: próg 1e-8, kontrola pominiętego równania i test niezerowego residualu — izolowany native test passed.
+- [ ] S04.R02b: kod propagacji certyfikatu zapisany; managed MFEM i artefakty wymagają wykonania.
+- [ ] S04.R02c: ogólna identyfikacja nullspace/gauge poza sprawdzeniem zgodności źródła.
 - [ ] S05.R02 (P1): rekonstrukcja potencjału i pełny residual V9.
 - [ ] S12.R03 (P1): naprawa trasy runnera; targety modal/cross-section i dokładny receipt MFEM/SLEPc.
 - [ ] S03.R04/S04.R04 (P1): pełny native problem i skalowalny operator demag-k.

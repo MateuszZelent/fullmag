@@ -1780,6 +1780,7 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
     ModalEigenRequest effective_request = request;
     std::vector<double> floquet_dynamic_demag_k_storage;
     bool native_nonzero_k_shared_domain_provider = false;
+    std::string floquet_potential_certificate;
 #if FULLMAG_HAS_MFEM_STACK
     if (modal_request_is_nonzero_k_floquet(request) &&
         request.execution_target == ModalExecutionTarget::production_cpu &&
@@ -1831,6 +1832,24 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                 "production_cpu_floquet_airbox_dynamic_demag_k_provider");
             return result;
         }
+
+        const auto &certificate = provider_result.diagnostics;
+        if (!certificate.potential_solve_certified ||
+            certificate.certified_rhs_count != certificate.q_dof_count) {
+            return validation_error_result(
+                "modal_eigen", "Floquet potential solve has no complete certificate",
+                "floquet_potential_certificate_missing",
+                request.operator_request.operator_diagnostics_json);
+        }
+        floquet_potential_certificate =
+            "{\"potential_solve_certified\":true,"
+            "\"full_modal_residual_certified\":false,"
+            "\"certified_rhs_count\":" + std::to_string(certificate.certified_rhs_count) +
+            ",\"relative_residual_max\":" +
+            format_double(certificate.max_relative_potential_solve_residual) +
+            ",\"relative_residual_tolerance\":1e-8,"
+            "\"norm\":\"original_potential_rhs_relative_linf\","
+            "\"includes_pinned_equation\":true}";
         floquet_dynamic_demag_k_storage = std::move(provider_result.real_split_row_major);
         effective_request.dynamic_demag_k_tangent_matrix_row_major =
             floquet_dynamic_demag_k_storage.data();
@@ -2483,6 +2502,16 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
     // to the pending/missing-payload contract.
     FrequencyDomainContractResult result =
         production_cpu_modal_eigen_unavailable(effective_request);
+    if (!floquet_potential_certificate.empty()) {
+        for (std::string *json : {&result.diagnostics_json, &result.result_json}) {
+            if (json->empty()) *json = "{}";
+            if (json->back() == '}') {
+                json->pop_back();
+                if (json->size() > 1) *json += ",";
+                *json += "\"floquet_potential_certificate\":" + floquet_potential_certificate + "}";
+            }
+        }
+    }
     // Magnetic MFEM payloads consume and publish this pencil identity.  The
     // descriptor-Poisson branch above returns before this point deliberately.
     result.diagnostics_json = with_magnetic_pencil_digest(

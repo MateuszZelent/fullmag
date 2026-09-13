@@ -476,3 +476,13 @@ Schur oracle. Natywny MSVC: RED exit 1 przed zmianą, GREEN exit 0 po zmianie
 wraz ze wszystkimi wcześniejszymi testami pliku. Managed bramka nadal
 kończy się przed kompilacją przez politykę kolejki runnera. R01 jest
 naprawione źródłowo; managed potwierdzenie oraz R02 pozostają otwarte.
+
+### R02 — certyfikacja bloku potencjału, częściowo
+
+Provider odrzuca residual powyżej 1e-8 i sprawdza oryginalny wiersz pinowania.
+Test obejmuje niezgodny RHS, niezerowy residual oraz brak publikacji outputu;
+cały izolowany test C++ providera zakończył się exit 0. Zmieniono importer,
+aby zachować certyfikat w diagnostics/result JSON, jawnie bez certyfikowania
+pełnego modu. Ta część MFEM pozostaje nieskompilowana przez zablokowaną
+managed trasę. Source-map validator noty 0828 i diff check: exit 0.
+R02 nie jest zamknięte: S05.R02/full descriptor V9 i managed evidence otwarte.

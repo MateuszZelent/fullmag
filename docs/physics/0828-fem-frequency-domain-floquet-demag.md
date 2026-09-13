@@ -153,6 +153,22 @@ operator check; it does not prove equivalence to removing seams from a 3D
 periodic cell. This is the planned S09 path inspired by TetraX arbitrary
 cross-section propagating modes.
 
+### Certyfikacja eliminacji potencjału w bounded FEM CPU
+
+W `build_floquet_dynamic_demag_k_real_split` każda kolumna rozwiązania
+potencjału jest podstawiana do oryginalnego bloku P, łącznie z wierszem
+pominiętym przy pinowaniu. Norma maksimum błędu jest dzielona przez normę
+maksimum oryginalnego RHS (dolne ograniczenie 1e-300 w tych samych jednostkach).
+Próg względny wynosi 1e-8, bez jednostki. Nieskończony lub większy residual
+powoduje operator_error przed publikacją macierzy Schura. Certyfikat
+`potential_solve_certified` jest prawdziwy dopiero po wszystkich RHS.
+Pinowanie nie naprawia niezgodnego źródła; zgodność pominiętego równania jest
+obowiązkowa. Nie dowodzi to identyfikacji nullspace ani pełnego residualu modu.
+Parametry publicznego Python/IR nie zmieniają się. Ta kontrola dotyczy bounded
+FEM CPU; nie kwalifikuje FEM GPU ani backendów FDM.
+Diagnostyka modalna zachowuje `floquet_potential_certificate`; pole
+`full_modal_residual_certified=false` oddziela tę kontrolę od V9.
+
 ### 2.3 Modal pencil and original residual
 
 The same tangent LLG pencil is used by both representations, but each sample

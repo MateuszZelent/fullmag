@@ -5,6 +5,7 @@
 
 #include "frequency_domain/floquet_dynamic_demag_k.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstdio>
@@ -165,12 +166,12 @@ void validation_rejects_zero_k_singular_p_and_budget_overflow()
 
 void pin_first_phi_gauge_excludes_the_pinned_dof()
 {
-    const Complex a_qphi[2] = {Complex(7.0, 0.0), Complex(2.0, 0.0)};
+    const Complex a_qphi[2] = {Complex(-2.0, 0.0), Complex(2.0, 0.0)};
     const Complex p[4] = {
-        Complex(0.0, 0.0), Complex(9.0, 0.0),
-        Complex(0.0, 0.0), Complex(4.0, 0.0),
+        Complex(4.0, 0.0), Complex(-4.0, 0.0),
+        Complex(-4.0, 0.0), Complex(4.0, 0.0),
     };
-    const Complex a_phiq[2] = {Complex(5.0, 0.0), Complex(3.0, 0.0)};
+    Complex a_phiq[2] = {Complex(-3.0, 0.0), Complex(3.0, 0.0)};
     fd::FloquetDynamicDemagKProblem problem{};
     problem.q_dof_count = 1;
     problem.phi_dof_count = 2;
@@ -193,6 +194,18 @@ void pin_first_phi_gauge_excludes_the_pinned_dof()
         "pin-first-dof Floquet Schur provider succeeds");
     // The pinned phi_0 row/column is excluded, so only 2 * 3 / 4 remains.
     check_close(output[0], -1.5, "pin-first-dof Schur uses the unpinned scalar potential");
+    a_phiq[0] = Complex(5.0, 0.0); // Incompatible omitted equation.
+    fd::FloquetDynamicDemagKDiagnostics diagnostics{};
+    std::fill(output.begin(), output.end(), 123.0);
+    check(fd::build_floquet_dynamic_demag_k_real_split(
+              problem, output.data(), output.size(), &diagnostics) ==
+              fd::FrequencyDomainStatus::operator_error,
+          "incompatible pinned equation rejects the Schur result");
+    check(diagnostics.max_relative_potential_solve_residual > 1.0,
+          "incompatible source produces a measured nonzero residual");
+    check(!diagnostics.potential_solve_certified, "failed solve is not certified");
+    for (double value : output) check(value == 123.0, "failed solve leaves output unpublished");
+
 }
 
 void pin_first_phi_gauge_rejects_a_single_potential_dof()
@@ -272,6 +285,8 @@ void multiple_pivots_preserve_complex_multiple_rhs()
                 check_close(output[(i + 2) * 4 + j], value.imag(), "pivoted Schur imag-real");
                 check_close(output[(i + 2) * 4 + j + 2], value.real(), "pivoted Schur imag-imag");
             }
+        check(diagnostics.potential_solve_certified && diagnostics.certified_rhs_count == 2,
+              "all multiple RHS are certified");
         check(diagnostics.max_relative_potential_solve_residual < 1e-12,
               "multiple-pivot original potential residual");
     }

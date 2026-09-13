@@ -342,43 +342,38 @@ FrequencyDomainStatus build_floquet_dynamic_demag_k_real_split(
                 return FrequencyDomainStatus::operator_error;
             }
             double rhs_inf_norm = 0.0;
-            for (const Complex value : rhs) {
-                rhs_inf_norm = std::max(rhs_inf_norm, std::abs(value));
-            }
-            const double residual_scale = std::max(rhs_inf_norm, 1.0e-300);
             double residual_inf_norm = 0.0;
-            for (std::uint64_t row = 0; row < factored_phi_dof_count; ++row) {
-                const std::uint64_t source_row =
-                    row + (problem.gauge_policy == FloquetDynamicDemagKGaugePolicy::pin_first_dof ? 1 : 0);
+            // Reconstruct all original equations, including the pinned row.
+            const std::uint64_t offset =
+                problem.gauge_policy == FloquetDynamicDemagKGaugePolicy::pin_first_dof ? 1 : 0;
+            for (std::uint64_t row = 0; row < problem.phi_dof_count; ++row) {
+                const Complex original_rhs =
+                    problem.a_phiq_row_major[row * problem.q_dof_count + column];
+                rhs_inf_norm = std::max(rhs_inf_norm, std::abs(original_rhs));
                 Complex reconstructed(0.0, 0.0);
-                for (std::uint64_t column = 0; column < factored_phi_dof_count; ++column) {
-                    const std::uint64_t source_column =
-                        column + (problem.gauge_policy == FloquetDynamicDemagKGaugePolicy::pin_first_dof ? 1 : 0);
-                    reconstructed += problem.p_row_major[
-                        static_cast<std::size_t>(source_row * problem.phi_dof_count + source_column)] *
-                        solution[static_cast<std::size_t>(column)];
+                for (std::uint64_t j = 0; j < factored_phi_dof_count; ++j) {
+                    reconstructed += problem.p_row_major[row * problem.phi_dof_count + j + offset] *
+                        solution[static_cast<std::size_t>(j)];
                 }
-                const double residual = std::abs(
-                    reconstructed - rhs[static_cast<std::size_t>(row)]);
+                const double residual = std::abs(reconstructed - original_rhs);
                 if (!std::isfinite(residual)) {
-                    copy_error(
-                        out_diagnostics,
-                        "Floquet dynamic demag-k scalar-potential residual is non-finite");
+                    copy_error(out_diagnostics, "Floquet scalar-potential residual is non-finite");
                     return FrequencyDomainStatus::operator_error;
                 }
                 residual_inf_norm = std::max(residual_inf_norm, residual);
             }
-            const double relative_residual = residual_inf_norm / residual_scale;
-            if (!std::isfinite(relative_residual)) {
-                copy_error(
-                    out_diagnostics,
-                    "Floquet dynamic demag-k scalar-potential relative residual is non-finite");
+            const double relative_residual = residual_inf_norm / std::max(rhs_inf_norm, 1.0e-300);
+            if (out_diagnostics != nullptr) {
+                out_diagnostics->max_relative_potential_solve_residual = std::max(
+                    out_diagnostics->max_relative_potential_solve_residual, relative_residual);
+            }
+            if (!std::isfinite(relative_residual) ||
+                relative_residual > kFloquetPotentialResidualTolerance) {
+                copy_error(out_diagnostics, "Floquet scalar-potential residual exceeds tolerance");
                 return FrequencyDomainStatus::operator_error;
             }
             if (out_diagnostics != nullptr) {
-                out_diagnostics->max_relative_potential_solve_residual = std::max(
-                    out_diagnostics->max_relative_potential_solve_residual,
-                    relative_residual);
+                ++out_diagnostics->certified_rhs_count;
             }
             for (std::uint64_t row = 0; row < problem.q_dof_count; ++row) {
                 Complex feedback(0.0, 0.0);
@@ -393,6 +388,12 @@ FrequencyDomainStatus build_floquet_dynamic_demag_k_real_split(
             }
         }
 
+        for (const Complex value : schur) {
+            if (!std::isfinite(value.real()) || !std::isfinite(value.imag())) {
+                copy_error(out_diagnostics, "Floquet Schur feedback is non-finite");
+                return FrequencyDomainStatus::operator_error;
+            }
+        }
         double max_abs_schur_entry = 0.0;
         double max_abs_hermitian_residual = 0.0;
         for (std::uint64_t row = 0; row < problem.q_dof_count; ++row) {
@@ -417,6 +418,7 @@ FrequencyDomainStatus build_floquet_dynamic_demag_k_real_split(
             }
         }
         if (out_diagnostics != nullptr) {
+            out_diagnostics->potential_solve_certified = true;
             out_diagnostics->max_abs_schur_entry = max_abs_schur_entry;
             out_diagnostics->max_abs_hermitian_residual = max_abs_hermitian_residual;
         }

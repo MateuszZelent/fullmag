@@ -84,6 +84,20 @@ wielokrotnego pivotowania.
 
 ### R02 — P1: residual nie certyfikuje i nie dociera do wyniku modalnego
 
+Aktualizacja: **częściowa naprawa**. Provider wymusza próg 1e-8 dla normy
+oryginalnego RHS, sprawdza również pominięte równanie przy pinowaniu,
+certyfikuje wszystkie RHS i nie publikuje macierzy po błędzie. Regresja
+niezgodnego źródła sprawdza duży niezerowy residual, odrzucenie i nienaruszony
+bufor; zgodny nullspace/gauge ma osobny przypadek sukcesu.
+Izolowany natywny MSVC test providera: exit 0. Źródła importera przekazują
+floquet_potential_certificate do JSON diagnostyki/wyniku i jawnie zachowują
+full_modal_residual_certified=false. Ta gałąź MFEM nie została skompilowana
+ani wykonana: managed recipe zatrzymuje się przed kompilacją na preflight
+kolejki. Source-map validator noty 0828: exit 0.
+S05.R02 — pełna rekonstrukcja modu i V9 — pozostaje do implementacji.
+Historyczna diagnoza poniżej opisuje stan sprzed tej częściowej poprawki.
+
+
 Źródła: `build_floquet_dynamic_demag_k_real_split` i
 `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` →
 `solve_modal_eigen_contract`. Provider odrzuca niefinite residual, ale

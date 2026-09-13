@@ -37,13 +37,18 @@ struct FloquetDynamicDemagKProblem {
     std::uint64_t workspace_budget_bytes = 256ull * 1024ull * 1024ull;
 };
 
+inline constexpr double kFloquetPotentialResidualTolerance = 1.0e-8;
+
 struct FloquetDynamicDemagKDiagnostics {
+    bool potential_solve_certified = false;
+    std::uint64_t certified_rhs_count = 0;
     std::uint64_t q_dof_count = 0;
     std::uint64_t phi_dof_count = 0;
     double k_norm_rad_per_m = 0.0;
     double max_abs_pivot = 0.0;
     // Maximum infinity-norm relative residual of P(k) x = b over all
-    // magnetic right-hand sides.  This is the reduced scalar-potential block
+    // magnetic right-hand sides, including the original pinned equation.
+    // This is the reduced scalar-potential block
     // residual; it is not the residual of the full modal pencil.
     double max_relative_potential_solve_residual = 0.0;
     double max_abs_schur_entry = 0.0;
