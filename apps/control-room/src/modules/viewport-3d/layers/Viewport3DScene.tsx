@@ -1417,22 +1417,23 @@ function Viewport3DModelLayerStack({
         </group>
       ) : null}
       {!fdmLaneActive &&
-      stageVisibility.baseGeometry &&
       viewport3DAirboxLayerEnabledFromBrowserConfig() ? (
-        <AirboxLayer
-          adoptionRegistry={adoptionRegistry}
-          colors={colors}
-          sessionIdentity={sessionIdentity}
-          fieldModel={fieldModel}
-          materialProfile={materialProfile}
-          onSelectPart={onSelectPart}
-          settings={airboxSettings}
-          topologyModel={topologyModel}
-          topologyFreshness={topologyFreshness}
-          tracker={tracker}
-          vectorColorMode={vectorColorMode}
-          vectorStyle={vectorStyle}
-        />
+        <group visible={stageVisibility.baseGeometry}>
+          <AirboxLayer
+            adoptionRegistry={adoptionRegistry}
+            colors={colors}
+            sessionIdentity={sessionIdentity}
+            fieldModel={fieldModel}
+            materialProfile={materialProfile}
+            onSelectPart={onSelectPart}
+            settings={airboxSettings}
+            topologyModel={topologyModel}
+            topologyFreshness={topologyFreshness}
+            tracker={tracker}
+            vectorColorMode={vectorColorMode}
+            vectorStyle={vectorStyle}
+          />
+        </group>
       ) : null}
       {stageVisibility.primitiveObjects &&
       viewport3DPrimitiveObjectLayerEnabledFromBrowserConfig() ? (
@@ -1455,29 +1456,30 @@ function Viewport3DModelLayerStack({
         selectedObjectId={selectedObjectId}
       />
       {!fdmLaneActive &&
-      stageVisibility.baseGeometry &&
       viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (
-        <TopologyMeshLayer
-          adoptionRegistry={adoptionRegistry}
-          colors={colors}
-          sessionIdentity={sessionIdentity}
-          fieldModel={fieldModel}
-          getPartSettings={getPartSettings}
-          materialProfile={materialProfile}
-          magnetizationTexturePreviews={magnetizationTexturePreviews}
-          meshQualityColors={meshQualityColors}
-          meshQualityOverlayVisible={stagedMeshQualityOverlayVisible}
-          modeCompositionFieldLayers={modeCompositionFieldLayers}
-          modeCompositionId={modeCompositionId}
-          modeCompositionPhaseByLayerId={modeCompositionPhaseByLayerId}
-          onSelectPart={onSelectPart}
-          tracker={tracker}
-          topologyFreshness={topologyFreshness}
-          topologyModel={topologyModel}
-          vectorColorMode={vectorColorMode}
-          vectorScale={vectorScale}
-          vectorStyle={vectorStyle}
-        />
+        <group visible={stageVisibility.baseGeometry}>
+          <TopologyMeshLayer
+            adoptionRegistry={adoptionRegistry}
+            colors={colors}
+            sessionIdentity={sessionIdentity}
+            fieldModel={fieldModel}
+            getPartSettings={getPartSettings}
+            materialProfile={materialProfile}
+            magnetizationTexturePreviews={magnetizationTexturePreviews}
+            meshQualityColors={meshQualityColors}
+            meshQualityOverlayVisible={stagedMeshQualityOverlayVisible}
+            modeCompositionFieldLayers={modeCompositionFieldLayers}
+            modeCompositionId={modeCompositionId}
+            modeCompositionPhaseByLayerId={modeCompositionPhaseByLayerId}
+            onSelectPart={onSelectPart}
+            tracker={tracker}
+            topologyFreshness={topologyFreshness}
+            topologyModel={topologyModel}
+            vectorColorMode={vectorColorMode}
+            vectorScale={vectorScale}
+            vectorStyle={vectorStyle}
+          />
+        </group>
       ) : null}
       {realizedRegionOverlaysVisible ? (
         <RegionMeshOverlayLayer

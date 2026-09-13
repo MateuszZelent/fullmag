@@ -676,10 +676,10 @@ describe("Viewport3DScene scale helpers", () => {
     );
 
     expect(modelStack).toContain(
-      "{!fdmLaneActive &&\n      stageVisibility.baseGeometry &&\n      viewport3DAirboxLayerEnabledFromBrowserConfig() ? (",
+      "{!fdmLaneActive &&\n      viewport3DAirboxLayerEnabledFromBrowserConfig() ? (",
     );
     expect(modelStack).toContain(
-      "{!fdmLaneActive &&\n      stageVisibility.baseGeometry &&\n      viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (",
+      "{!fdmLaneActive &&\n      viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (",
     );
   });
 
@@ -1010,6 +1010,34 @@ describe("Viewport3DScene scale helpers", () => {
 
     expect(modelStack).toContain("<group visible={stageVisibility.baseGeometry}>");
     expect(modelStack).not.toContain("{stageVisibility.baseGeometry &&\n      fdmCuboidLayerEnabled");
+  });
+
+  it("preserves AirboxLayer and TopologyMeshLayer mounts during staging via group visibility (B4 FEM)", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+    const modelStack = source.slice(
+      source.indexOf("function Viewport3DModelLayerStack"),
+      source.indexOf("function RegionOverlayNativePickingLayer"),
+    );
+
+    expect(modelStack).not.toContain("stageVisibility.baseGeometry &&\n      viewport3DAirboxLayerEnabledFromBrowserConfig()");
+    expect(modelStack).not.toContain("stageVisibility.baseGeometry &&\n      viewport3DTopologyMeshLayerEnabledFromBrowserConfig()");
+
+    const airboxStart = modelStack.indexOf("<AirboxLayer");
+    const airboxGroupStart = modelStack.lastIndexOf("<group", airboxStart);
+    const airboxGroupEnd = modelStack.indexOf("</group>", airboxStart) + 8;
+    const airboxBlock = modelStack.slice(airboxGroupStart, airboxGroupEnd);
+    expect(airboxBlock).toContain("visible={stageVisibility.baseGeometry}");
+    expect(airboxBlock).toContain("<AirboxLayer");
+
+    const topologyStart = modelStack.indexOf("<TopologyMeshLayer");
+    const topologyGroupStart = modelStack.lastIndexOf("<group", topologyStart);
+    const topologyGroupEnd = modelStack.indexOf("</group>", topologyStart) + 8;
+    const topologyBlock = modelStack.slice(topologyGroupStart, topologyGroupEnd);
+    expect(topologyBlock).toContain("visible={stageVisibility.baseGeometry}");
+    expect(topologyBlock).toContain("<TopologyMeshLayer");
   });
 });
 
