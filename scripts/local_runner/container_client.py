@@ -28,10 +28,23 @@ from fullmag_storage import StorageError, atomic_json, file_lock
 from local_runner import coordinator
 
 
+def _resolve_env_port(default: int = 48765) -> int:
+    val = os.environ.get("FULLMAG_RUNNER_PORT")
+    if not val or not str(val).strip():
+        return default
+    try:
+        parsed = int(str(val).strip())
+        if 1 <= parsed <= 65535:
+            return parsed
+    except (ValueError, TypeError):
+        pass
+    return default
+
+
 CONFIG_SCHEMA = "fullmag.local-runner.container.v1"
 SECRET_SCHEMA = "fullmag.local-runner.container-secret.v1"
 CONTAINER_NAME = "Fullmag_build_runner"
-CONTAINER_PORT = 8765
+CONTAINER_PORT = _resolve_env_port(48765)
 CONTAINER_STORAGE_ROOT = "/storage"
 CONTAINER_CONFIG_PATH = "/control/config.json"
 DOCKER_SOCKET_PATH = "/var/run/docker.sock"
@@ -45,6 +58,28 @@ ALLOWED_PROFILES = (
     "fem-gpu-release",
     "fdm-cpu-release",
 )
+CPU_CONTRACT_PROFILES = (*ALLOWED_PROFILES, "fem-cpu-current-contracts-v1")
+CURRENT_CONTRACT_PROFILES = (*CPU_CONTRACT_PROFILES, "fem-gpu-current-contracts-v1")
+SLEPC_MODAL_PROFILES = (*CURRENT_CONTRACT_PROFILES, "fem-cpu-slepc-modal-v1")
+_PROFILE_LISTS = (
+    ALLOWED_PROFILES,
+    CPU_CONTRACT_PROFILES,
+    CURRENT_CONTRACT_PROFILES,
+    SLEPC_MODAL_PROFILES,
+)
+
+
+def _known_profile_list(value: object) -> bool:
+    if not isinstance(value, (list, tuple)) or not value:
+        return False
+    val_list = list(value)
+    if any(val_list == list(profiles) for profiles in _PROFILE_LISTS):
+        return True
+    if len(set(val_list)) == len(val_list) and all(isinstance(p, str) and p in SLEPC_MODAL_PROFILES for p in val_list):
+        if val_list[:len(ALLOWED_PROFILES)] == list(ALLOWED_PROFILES):
+            return True
+    return False
+
 
 _IMAGE_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _CONTAINER_ID_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -183,7 +218,14 @@ def _same_host_path(left: object, right: Path | str) -> bool:
         return False
 
 
-def _public_record(storage: Path, operator: str, image: str, port: int) -> dict[str, Any]:
+def _public_record(
+    storage: Path,
+    operator: str,
+    image: str,
+    port: int,
+    *,
+    allowed_profiles: tuple[str, ...] | list[str] = ALLOWED_PROFILES,
+) -> dict[str, Any]:
     return {
         "schema": CONFIG_SCHEMA,
         "operator": operator,
@@ -195,11 +237,18 @@ def _public_record(storage: Path, operator: str, image: str, port: int) -> dict[
         "endpoint": f"http://127.0.0.1:{port}",
         "labels": _container_labels(operator),
         "build_config_path": BUILD_CONFIG_PATH,
-        "allowed_profiles": list(ALLOWED_PROFILES),
+        "allowed_profiles": list(allowed_profiles),
     }
 
 
-def _secret_record(storage: Path, operator: str, token: str, port: int) -> dict[str, Any]:
+def _secret_record(
+    storage: Path,
+    operator: str,
+    token: str,
+    port: int,
+    *,
+    allowed_profiles: tuple[str, ...] | list[str] = ALLOWED_PROFILES,
+) -> dict[str, Any]:
     return {
         "schema": SECRET_SCHEMA,
         "operator": operator,
@@ -208,7 +257,7 @@ def _secret_record(storage: Path, operator: str, token: str, port: int) -> dict[
         "storage_root": CONTAINER_STORAGE_ROOT,
         "port": port,
         "build_config_path": BUILD_CONFIG_PATH,
-        "allowed_profiles": list(ALLOWED_PROFILES),
+        "allowed_profiles": list(allowed_profiles),
     }
 
 
@@ -229,7 +278,7 @@ def _validate_public(config: Mapping[str, object], storage: Path, operator: str)
         raise ContainerClientError("Container labels do not match the operator configuration")
     if config.get("build_config_path") != BUILD_CONFIG_PATH:
         raise ContainerClientError("Container build configuration path mismatch")
-    if config.get("allowed_profiles") != list(ALLOWED_PROFILES):
+    if not _known_profile_list(config.get("allowed_profiles")):
         raise ContainerClientError("Container profile allow-list mismatch")
     _image_id(config.get("image_id"))
     _port(config.get("port"))
@@ -247,7 +296,7 @@ def _validate_secret(secret: Mapping[str, object], storage: Path, operator: str,
         raise ContainerClientError("Container secret storage identity mismatch")
     if secret.get("port") != port or secret.get("build_config_path") != BUILD_CONFIG_PATH:
         raise ContainerClientError("Container secret runtime configuration mismatch")
-    if secret.get("allowed_profiles") != list(ALLOWED_PROFILES):
+    if not _known_profile_list(secret.get("allowed_profiles")):
         raise ContainerClientError("Container secret profile allow-list mismatch")
     token = secret.get("token")
     if not isinstance(token, str) or len(token) < 32 or len(token) > 4096 or any(char.isspace() for char in token):
@@ -262,6 +311,8 @@ def _load_config(layout: Mapping[str, object], operator: str) -> tuple[Path, Pat
     public = _validate_public(_read_object(public_path, "Container configuration"), storage, operator)
     secret = _read_object(secret_path, "Container secret")
     token = _validate_secret(secret, storage, operator, public["port"])
+    if list(public.get("allowed_profiles") or []) != list(secret.get("allowed_profiles") or []):
+        raise ContainerClientError("Container public and secret profile lists differ")
     return storage, secret_path, public, token
 
 
@@ -269,9 +320,11 @@ def configure(
     layout: Mapping[str, object],
     image_id: str | None = None,
     owner: str | None = None,
-    port: int = CONTAINER_PORT,
+    port: int | None = None,
     *,
     image: str | None = None,
+    enable_current_contracts: bool = False,
+    enable_slepc_modal: bool = False,
 ) -> dict[str, Any]:
     """Install or update host configuration without contacting Docker.
 
@@ -284,9 +337,12 @@ def configure(
         image_id = image
     elif image is not None:
         raise ContainerClientError("Specify only one coordinator image ID")
+    if not isinstance(enable_current_contracts, bool) or not isinstance(enable_slepc_modal, bool):
+        raise ContainerClientError("Profile activation flags must be boolean")
+    if enable_current_contracts and enable_slepc_modal:
+        raise ContainerClientError("Choose only one profile activation set")
     operator = _owner(owner)
     image = _image_id(image_id)
-    port = _port(port)
     storage = _storage_root(layout)
     storage.mkdir(parents=True, exist_ok=True)
     public_path, secret_path, lock_path = _config_paths(layout, create=True)
@@ -296,19 +352,46 @@ def configure(
         if public_exists != secret_exists:
             raise ContainerClientError("Container public and secret configuration must be paired")
         token: str
+        selected_profiles = list(ALLOWED_PROFILES)
         if public_exists:
             existing = _validate_public(_read_object(public_path, "Container configuration"), storage, operator)
-            if existing["image_id"] != image or existing["port"] != port:
+            if port is None:
+                port = existing["port"]
+            else:
+                port = _port(port)
+                if existing["port"] != port:
+                    raise ContainerClientError(
+                        "Existing coordinator image/port cannot be changed implicitly; use an explicit replacement operation"
+                    )
+            if existing["image_id"] != image:
                 raise ContainerClientError(
                     "Existing coordinator image/port cannot be changed implicitly; use an explicit replacement operation"
                 )
+            existing_secret = _read_object(secret_path, "Container secret")
             token = _validate_secret(
-                _read_object(secret_path, "Container secret"), storage, operator, existing["port"]
+                existing_secret, storage, operator, existing["port"]
             )
+            if existing["allowed_profiles"] != existing_secret["allowed_profiles"]:
+                raise ContainerClientError("Container public and secret profile lists differ")
+            selected_profiles = list(existing["allowed_profiles"])
         else:
+            if port is None:
+                val = os.environ.get("FULLMAG_RUNNER_PORT")
+                if val is not None and str(val).strip():
+                    try:
+                        port = int(str(val).strip())
+                    except (ValueError, TypeError) as error:
+                        raise ContainerClientError("Coordinator port must be between 1 and 65535") from error
+                else:
+                    port = CONTAINER_PORT
+            port = _port(port)
             token = secrets.token_urlsafe(48)
-        public = _public_record(storage, operator, image, port)
-        secret = _secret_record(storage, operator, token, port)
+        if enable_slepc_modal:
+            selected_profiles = list(SLEPC_MODAL_PROFILES)
+        elif enable_current_contracts and "fem-cpu-slepc-modal-v1" not in selected_profiles:
+            selected_profiles = list(CURRENT_CONTRACT_PROFILES)
+        public = _public_record(storage, operator, image, port, allowed_profiles=selected_profiles)
+        secret = _secret_record(storage, operator, token, port, allowed_profiles=selected_profiles)
         atomic_json(secret_path, secret)
         try:
             os.chmod(secret_path, 0o600)
@@ -469,9 +552,11 @@ def _attest(
 
     expected_port = str(public["port"])
     bindings = host.get("PortBindings")
-    if not isinstance(bindings, Mapping) or set(bindings) != {f"{CONTAINER_PORT}/tcp"}:
+    expected_container_ports = {f"{public['port']}/tcp", f"{CONTAINER_PORT}/tcp"}
+    if not isinstance(bindings, Mapping) or not set(bindings).issubset(expected_container_ports) or len(bindings) != 1:
         raise ContainerClientError("Coordinator port binding set mismatch")
-    binding = bindings.get(f"{CONTAINER_PORT}/tcp")
+    binding_key = next(iter(bindings))
+    binding = bindings.get(binding_key)
     if not isinstance(binding, list) or len(binding) != 1 or not isinstance(binding[0], Mapping):
         raise ContainerClientError("Coordinator port binding metadata is invalid")
     if binding[0].get("HostIp") != "127.0.0.1" or str(binding[0].get("HostPort")) != expected_port:
@@ -596,7 +681,7 @@ def _start_unlocked(
     command.extend(
         (
             "--publish",
-            f"127.0.0.1:{public['port']}:{CONTAINER_PORT}",
+            f"127.0.0.1:{public['port']}:{public['port']}",
             "--mount",
             f"type=bind,source={storage},target={CONTAINER_STORAGE_ROOT}",
             "--mount",
@@ -855,6 +940,9 @@ install = configure
 
 __all__ = [
     "ALLOWED_PROFILES",
+    "CPU_CONTRACT_PROFILES",
+    "CURRENT_CONTRACT_PROFILES",
+    "SLEPC_MODAL_PROFILES",
     "BUILD_CONFIG_PATH",
     "CONFIG_SCHEMA",
     "CONTAINER_CONFIG_PATH",

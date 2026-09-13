@@ -1,5 +1,6 @@
 import io
 import json
+import os
 from contextlib import contextmanager
 from pathlib import Path
 import tempfile
@@ -28,6 +29,18 @@ class FakeDocker:
         self.fail_create = False
 
     def _inspection(self, *, running=False, labels=None):
+        port = container_client.CONTAINER_PORT
+        for call in self.calls:
+            if call and call[0] == "create":
+                for idx in range(len(call) - 1):
+                    if call[idx] == "--publish":
+                        parts = call[idx + 1].split(":")
+                        if len(parts) >= 2:
+                            try:
+                                port = int(parts[-1])
+                            except ValueError:
+                                pass
+                        break
         return {
             "Id": self.container_id or CONTAINER_ID,
             "Name": "/" + container_client.CONTAINER_NAME,
@@ -40,8 +53,8 @@ class FakeDocker:
             "HostConfig": {
                 "RestartPolicy": {"Name": "unless-stopped"},
                 "PortBindings": {
-                    f"{container_client.CONTAINER_PORT}/tcp": [
-                        {"HostIp": "127.0.0.1", "HostPort": str(container_client.CONTAINER_PORT)}
+                    f"{port}/tcp": [
+                        {"HostIp": "127.0.0.1", "HostPort": str(port)}
                     ]
                 },
             },
@@ -123,8 +136,8 @@ class ContainerClientTests(unittest.TestCase):
         self.storage = Path(temporary.name).resolve()
         self.layout = {"storage_root": str(self.storage)}
 
-    def configure(self):
-        return container_client.configure(self.layout, image_id=IMAGE, owner="alice")
+    def configure(self, port=None):
+        return container_client.configure(self.layout, image_id=IMAGE, owner="alice", port=port)
 
     def test_configure_is_docker_free_and_keeps_token_out_of_public_metadata(self):
         with patch.object(container_client.coordinator, "docker", side_effect=AssertionError("no Docker")):
@@ -173,7 +186,7 @@ class ContainerClientTests(unittest.TestCase):
         self.assertEqual(CONTAINER_ID, result["container_id"])
         self.assertIn(["--name", container_client.CONTAINER_NAME], [create[index:index + 2] for index in range(len(create) - 1)])
         self.assertIn(["--restart", "unless-stopped"], [create[index:index + 2] for index in range(len(create) - 1)])
-        self.assertIn(["--publish", "127.0.0.1:8765:8765"], [create[index:index + 2] for index in range(len(create) - 1)])
+        self.assertIn(["--publish", "127.0.0.1:48765:48765"], [create[index:index + 2] for index in range(len(create) - 1)])
         labels = [create[index + 1] for index, value in enumerate(create[:-1]) if value == "--label"]
         self.assertEqual(
             {f"{key}={value}" for key, value in container_client._container_labels("alice").items()},
@@ -374,7 +387,7 @@ class ContainerClientTests(unittest.TestCase):
         )
         self.configure()
         redirect = urllib.error.HTTPError(
-            "http://127.0.0.1:8765/health",
+            "http://127.0.0.1:48765/health",
             302,
             "redirect",
             {"Location": "http://outside.example.invalid/health"},
@@ -413,6 +426,157 @@ class ContainerClientTests(unittest.TestCase):
             container_client.request(self.layout, "alice", "PUT", "/health")
         with self.assertRaises(container_client.ContainerClientError):
             container_client.request(self.layout, "alice", "GET", "/jobs/../secret")
+
+    def test_default_port_is_48765_and_configurable_via_env(self):
+        self.assertEqual(48765, container_client.CONTAINER_PORT)
+        # Test that configure defaults to 48765 without FULLMAG_RUNNER_PORT
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual("http://127.0.0.1:48765", self.configure()["endpoint"])
+        # Test empty FULLMAG_RUNNER_PORT falls back to 48765
+        sub_layout_empty = {"storage_root": str(self.storage / "empty_env")}
+        with patch.dict(os.environ, {"FULLMAG_RUNNER_PORT": ""}):
+            self.assertEqual(
+                "http://127.0.0.1:48765",
+                container_client.configure(sub_layout_empty, image_id=IMAGE, owner="alice")["endpoint"],
+            )
+        # In a separate storage root, test that configure respects FULLMAG_RUNNER_PORT when set
+        other_layout = {"storage_root": str(self.storage / "sub")}
+        with patch.dict(os.environ, {"FULLMAG_RUNNER_PORT": "51234"}):
+            self.assertEqual(
+                "http://127.0.0.1:51234",
+                container_client.configure(other_layout, image_id=IMAGE, owner="alice")["endpoint"],
+            )
+        # Test invalid FULLMAG_RUNNER_PORT raises ContainerClientError
+        sub_layout_inv = {"storage_root": str(self.storage / "invalid_env")}
+        with patch.dict(os.environ, {"FULLMAG_RUNNER_PORT": "not_a_number"}):
+            with self.assertRaises(container_client.ContainerClientError):
+                container_client.configure(sub_layout_inv, image_id=IMAGE, owner="alice")
+        # Test out of range FULLMAG_RUNNER_PORT raises ContainerClientError
+        sub_layout_oor = {"storage_root": str(self.storage / "oor_env")}
+        with patch.dict(os.environ, {"FULLMAG_RUNNER_PORT": "99999"}):
+            with self.assertRaises(container_client.ContainerClientError):
+                container_client.configure(sub_layout_oor, image_id=IMAGE, owner="alice")
+
+    def test_configure_can_explicitly_enable_current_and_slepc_profiles_without_docker(self):
+        initial = self.configure()
+        self.assertEqual(list(container_client.ALLOWED_PROFILES), initial["allowed_profiles"])
+
+        current = container_client.configure(
+            self.layout, image_id=IMAGE, owner="alice", enable_current_contracts=True
+        )
+        self.assertEqual(list(container_client.CURRENT_CONTRACT_PROFILES), current["allowed_profiles"])
+        secret_path = self.storage / "index" / "local-runner-container-secret.json"
+        secret = json.loads(secret_path.read_text(encoding="utf-8"))
+        self.assertEqual(current["allowed_profiles"], secret["allowed_profiles"])
+
+        slepc = container_client.configure(
+            self.layout, image_id=IMAGE, owner="alice", enable_slepc_modal=True
+        )
+        self.assertEqual(list(container_client.SLEPC_MODAL_PROFILES), slepc["allowed_profiles"])
+
+        # Enabling the older five-profile set must never silently downgrade an
+        # already activated six-profile coordinator.
+        preserved = container_client.configure(
+            self.layout, image_id=IMAGE, owner="alice", enable_current_contracts=True
+        )
+        self.assertEqual(list(container_client.SLEPC_MODAL_PROFILES), preserved["allowed_profiles"])
+
+    def test_configure_rejects_conflicting_profile_activation_flags(self):
+        with self.assertRaisesRegex(container_client.ContainerClientError, "only one"):
+            container_client.configure(
+                self.layout,
+                image_id=IMAGE,
+                owner="alice",
+                enable_current_contracts=True,
+                enable_slepc_modal=True,
+            )
+
+    def test_configure_rejects_mismatched_public_and_secret_profile_lists(self):
+        self.configure()
+        secret_path = self.storage / "index" / "local-runner-container-secret.json"
+        secret = json.loads(secret_path.read_text(encoding="utf-8"))
+        secret["allowed_profiles"] = list(container_client.CURRENT_CONTRACT_PROFILES)
+        secret_path.write_text(json.dumps(secret), encoding="utf-8")
+        with self.assertRaisesRegex(container_client.ContainerClientError, "profile lists differ"):
+            container_client._load_config(self.layout, "alice")
+
+    def test_load_config_rejects_unknown_profile_list(self):
+        self.configure()
+        public_path = self.storage / "index" / "local-runner-container.json"
+        public = json.loads(public_path.read_text(encoding="utf-8"))
+        public["allowed_profiles"] = ["unknown-profile"]
+        public_path.write_text(json.dumps(public), encoding="utf-8")
+        with self.assertRaisesRegex(container_client.ContainerClientError, "allow-list mismatch"):
+            container_client._load_config(self.layout, "alice")
+
+    def test_attest_accepts_container_on_legacy_port(self):
+        # Configure with port 8765
+        container_client.configure(self.layout, image_id=IMAGE, owner="alice", port=8765)
+        docker = FakeDocker(self.storage)
+        docker.container_id = CONTAINER_ID
+        docker.inspection = {
+            "Id": CONTAINER_ID,
+            "Name": "/" + container_client.CONTAINER_NAME,
+            "Image": IMAGE,
+            "Config": {
+                "Hostname": container_client.CONTAINER_NAME,
+                "Labels": container_client._container_labels("alice"),
+            },
+            "State": {"Status": "running", "Running": True, "ExitCode": 0},
+            "HostConfig": {
+                "RestartPolicy": {"Name": "unless-stopped"},
+                "PortBindings": {
+                    "8765/tcp": [{"HostIp": "127.0.0.1", "HostPort": "8765"}]
+                },
+            },
+            "Mounts": [
+                {"Type": "bind", "Source": str(self.storage), "Destination": "/storage", "RW": True},
+                {
+                    "Type": "bind",
+                    "Source": str(self.storage / "index" / "local-runner-container-secret.json"),
+                    "Destination": "/control/config.json",
+                    "RW": False,
+                },
+                {
+                    "Type": "bind",
+                    "Source": "/var/run/docker.sock",
+                    "Destination": "/var/run/docker.sock",
+                    "RW": True,
+                },
+            ],
+        }
+        result = container_client.start(self.layout, "alice", docker_call=docker)
+        self.assertEqual("running", result["state"])
+        self.assertEqual(8765, result["port"])
+
+    def test_start_creates_container_with_custom_port_matching_container_port(self):
+        container_client.configure(self.layout, image_id=IMAGE, owner="alice", port=8765)
+        docker = FakeDocker(self.storage)
+        result = container_client.start(self.layout, "alice", docker_call=docker)
+        create = next(call for call in docker.calls if call[0] == "create")
+        self.assertEqual("running", result["state"])
+        self.assertEqual(8765, result["port"])
+        self.assertIn(["--publish", "127.0.0.1:8765:8765"], [create[index:index + 2] for index in range(len(create) - 1)])
+
+    def test_configure_existing_coordinator_without_explicit_port_preserves_port(self):
+        initial = container_client.configure(self.layout, image_id=IMAGE, owner="alice", port=8765)
+        self.assertEqual(8765, initial["port"])
+
+        # Reconfiguring without specifying port must preserve 8765 and NOT fail
+        reconfigured = container_client.configure(
+            self.layout, image_id=IMAGE, owner="alice", enable_slepc_modal=True
+        )
+        self.assertEqual(8765, reconfigured["port"])
+        self.assertEqual(list(container_client.SLEPC_MODAL_PROFILES), reconfigured["allowed_profiles"])
+
+    def test_known_profile_list_accepts_tuples_and_profile_lists(self):
+        self.assertTrue(container_client._known_profile_list(list(container_client.ALLOWED_PROFILES)))
+        self.assertTrue(container_client._known_profile_list(tuple(container_client.ALLOWED_PROFILES)))
+        self.assertTrue(container_client._known_profile_list(list(container_client.SLEPC_MODAL_PROFILES)))
+        self.assertTrue(container_client._known_profile_list(tuple(container_client.SLEPC_MODAL_PROFILES)))
+        self.assertFalse(container_client._known_profile_list([]))
+        self.assertFalse(container_client._known_profile_list(None))
+        self.assertFalse(container_client._known_profile_list(["unknown"]))
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 """Trusted Docker-resident queue owner. Workers never receive its socket/token."""
 import json
 import hashlib
+import os
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
 import re
@@ -9,7 +10,7 @@ import time
 
 from fullmag_storage import validate_path
 from local_runner.queue import JobQueue
-from local_runner.build_executor import execute_build, reconcile_build, capsule_path, profile_lane
+from local_runner.build_executor import execute_build, reconcile_build, capsule_path, profile_lane, PROFILES
 from local_runner.build_source import bind_identity
 from local_runner.worker_entrypoint import canonical, SCHEMA
 from local_runner.coordinator import inspect_owned
@@ -23,6 +24,13 @@ from local_runner.service import (
 )
 from local_runner.unix_docker import docker
 from local_runner.container_api import APIUnavailable
+from local_runner.observability import (
+    ObservabilityHub,
+    build_job_timeline,
+    _fast_dir_size,
+    get_process_rss_bytes,
+    get_process_memory_limit_bytes,
+)
 
 
 _RETENTION_QUEUE_LIMIT = 1000
@@ -64,6 +72,7 @@ class Application:
             validate_path(self.storage / name, self.storage).mkdir(exist_ok=True)
         self.queue = JobQueue(validate_path(self.storage / 'index' / 'runner-jobs.sqlite', self.storage))
         self.paths = ServicePaths.from_storage(self.storage)
+        self.hub = ObservabilityHub(self.storage, owner=self.owner)
         self._lifecycle_lock = threading.RLock()
         self._worker_thread = None
         self._worker_state = 'starting'
@@ -182,12 +191,20 @@ class Application:
             raise ValueError('Unregistered source worktree')
         with self._lifecycle_lock:
             self._assert_submission_ready()
-            return self.queue.submit(owner=self.owner, **payload,
+            job = self.queue.submit(owner=self.owner, **payload,
                 identity_payload={
                     'source_mode': detail['source_mode'],
                     'origin_repo': detail['origin_repo'],
                     'native_source_identity': detail['native_source_identity'],
                 })
+            self.hub.record_event(
+                "INFO",
+                "job_queued",
+                f"Zadanie {job['job_id']} dodane do kolejki (profil: {payload.get('profile')})",
+                job_id=job["job_id"],
+                profile=payload.get("profile"),
+            )
+            return job
 
     def list(self):
         return self.queue.list(owner=self.owner)
@@ -201,15 +218,22 @@ class Application:
         return job
 
     def cancel(self, job_id):
-        self.get(job_id)
+        job = self.get(job_id)
         self.queue.cancel(job_id, self.owner)
+        self.hub.record_event(
+            "WARN",
+            "job_cancelled",
+            f"Anulowano zadanie {job_id} przez operatora",
+            job_id=job_id,
+            profile=job.get("profile"),
+        )
         return self.get(job_id)
 
     def logs(self, job_id):
         job = self.get(job_id)
         root = validate_path(self.storage / 'runs' / job['worktree_id'] / job_id, self.storage)
         parts = []
-        for filename in ('native-build.stderr.log', 'native-build.stdout.log', 'frontend-dependencies.stderr.log', 'frontend-build.stderr.log', 'frontend-build.stdout.log'):
+        for filename in ('native-build.stderr.log', 'native-build.stdout.log', 'frontend-dependencies.stdout.log', 'frontend-dependencies.stderr.log', 'frontend-build.stderr.log', 'frontend-build.stdout.log'):
             path = validate_path(root / 'artifacts' / 'logs' / filename, self.storage)
             if path.exists():
                 with path.open('rb') as stream:
@@ -230,6 +254,7 @@ class Application:
                 existing = request_stop(self.paths, requested_by=self.owner)
             if self._worker_thread is not None and self._worker_thread.is_alive():
                 self._worker_state = 'stopping'
+            self.hub.record_event("WARN", "queue_paused", f"Kolejka wstrzymana przez {self.owner} (drain)")
             return existing
 
     def resume(self):
@@ -251,6 +276,8 @@ class Application:
             clear_stop_request(self.paths, reason='operator resumed the service')
             started = self._start_worker_locked()
             health = self._health_snapshot()
+            if started:
+                self.hub.record_event("INFO", "queue_resumed", "Kolejka wznowiona przez operatora")
             return {
                 'resumed': True,
                 'worker_started': started,
@@ -274,6 +301,10 @@ class Application:
     def health(self):
         import shutil
         snapshot = self._health_snapshot()
+        try:
+            free_bytes = shutil.disk_usage(self.storage).free
+        except Exception:
+            free_bytes = None
         return {
             'ok': snapshot['ok'],
             'service': 'fullmag-build-runner',
@@ -285,15 +316,471 @@ class Application:
             'active_jobs': snapshot['active_jobs'],
             'legacy_jobs': snapshot['legacy_jobs'],
             'stop_requested': snapshot['stop_requested'],
-            'storage_free_bytes': shutil.disk_usage(self.storage).free,
+            'storage_free_bytes': free_bytes,
+            'allowed_profiles': list(PROFILES.keys()),
             'qualification': 'NOT VERIFIED',
         }
+
+    def _inspect_worker_metrics(self, current_job=None):
+        if not current_job:
+            return {'container_id': None, 'memory_mb': None, 'limit_mb': None, 'cpu_percent': None, 'io_mb_s': None}
+        wt = current_job.get('worktree_id', '')
+        job_id = current_job.get('job_id', '')
+        journal_path = self.storage / 'runs' / wt / job_id / 'coordinator.json'
+        container_id = None
+        if journal_path.is_file():
+            try:
+                journal = json.loads(journal_path.read_text(encoding='utf-8'))
+                container_id = journal.get('container_id')
+            except Exception:
+                pass
+
+        if not container_id:
+            return {'container_id': None, 'memory_mb': None, 'limit_mb': None, 'cpu_percent': None, 'io_mb_s': None}
+
+        mem_mb = None
+        limit_mb = None
+        cpu_pct = None
+        io_rate = None
+        try:
+            inspect_owned(docker, container_id, job_id)
+            stats_raw = docker(['stats', '--no-stream', '--no-trunc', '--format', '{{.MemUsage}}|{{.CPUPerc}}|{{.BlockIO}}', container_id])
+            if stats_raw and '|' in stats_raw:
+                parts = stats_raw.strip().split('|')
+                if len(parts) >= 1 and '/' in parts[0]:
+                    usage_part, limit_part = parts[0].split('/', 1)
+                    def _parse_bytes(s):
+                        s = s.strip().upper()
+                        mult = 1
+                        if s.endswith('KIB') or s.endswith('KB'): mult = 1024
+                        elif s.endswith('MIB') or s.endswith('MB'): mult = 1024**2
+                        elif s.endswith('GIB') or s.endswith('GB'): mult = 1024**3
+                        elif s.endswith('B'): mult = 1
+                        num = re.findall(r'[\d\.]+', s)
+                        return float(num[0]) * mult if num else None
+                    u_b = _parse_bytes(usage_part)
+                    l_b = _parse_bytes(limit_part)
+                    if u_b is not None:
+                        mem_mb = round(u_b / (1024 * 1024), 1)
+                    if l_b is not None:
+                        limit_mb = int(l_b / (1024 * 1024))
+                if len(parts) >= 2:
+                    cpu_raw = parts[1].replace('%', '').strip()
+                    try:
+                        cpu_pct = round(float(cpu_raw), 1)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        return {
+            'container_id': container_id,
+            'memory_mb': mem_mb,
+            'limit_mb': limit_mb,
+            'cpu_percent': cpu_pct,
+            'io_mb_s': io_rate,
+        }
+
+    def overview(self):
+        health = self.health()
+        volumes = self.hub.get_storage_volumes()
+        trends = self.hub.get_metrics_trends()
+        active = self.queue.active()
+        all_queue_jobs = self.queue.list(owner=self.owner, limit=1000)
+        queued_jobs = [j for j in all_queue_jobs if j.get('state') == 'queued']
+        queued_jobs.sort(key=lambda j: j.get('created_at', 0))
+        active_build = None
+        if active:
+            job = active[0]
+            stages = build_job_timeline(job, self.storage)
+            current_stage = next((s['name'] for s in reversed(stages) if s['status'] in ('running', 'succeeded')), 'W toku')
+            active_build = {
+                'job_id': job['job_id'],
+                'profile': job['profile'],
+                'worktree_id': job['worktree_id'],
+                'source_digest': job['source_digest'],
+                'created_at': job['created_at'],
+                'started_at': job.get('started_at', job.get('created_at')),
+                'stage': current_stage,
+                'stages': stages,
+            }
+        recent_plans = list(self.hub._plans.values())
+        last_plan = recent_plans[-1] if recent_plans else None
+        worker_metrics = self._inspect_worker_metrics(active[0] if active else None)
+        return {
+            'active_build': active_build,
+            'queued_count': len(queued_jobs),
+            'next_jobs': queued_jobs[:5],
+            'next_job': queued_jobs[0] if queued_jobs else None,
+            'worker': {
+                'state': health['worker_state'],
+                'alive': health['worker_alive'],
+                'accepting_jobs': health['accepting_jobs'],
+                'memory_mb': worker_metrics['memory_mb'],
+                'limit_mb': worker_metrics['limit_mb'],
+                'cpu_percent': worker_metrics['cpu_percent'],
+            },
+            'storage': volumes[0] if volumes else {},
+            'last_cleanup': {
+                'candidates_count': last_plan['candidates_count'] if last_plan else None,
+                'reclaimed_bytes': last_plan['estimated_reclaimed_bytes'] if last_plan else None,
+                'status': last_plan['status'] if last_plan else 'brak',
+            },
+            'trends': trends,
+            'incidents': self.alerts(),
+        }
+
+    def paginated_jobs(self, query=None):
+        query = query or {}
+        status = query.get('status')
+        profile = query.get('profile')
+        worktree = query.get('worktree')
+        search = query.get('search', '').lower()
+        sort = query.get('sort', 'newest')
+        try:
+            limit = max(1, min(int(query.get('limit', 50)), 1000))
+        except (ValueError, TypeError):
+            limit = 50
+        try:
+            page = max(1, int(query.get('page', 1)))
+        except (ValueError, TypeError):
+            page = 1
+
+        all_jobs = self.queue.list(owner=self.owner, limit=1000)
+        unique_worktrees = sorted(list({j.get('worktree_id') for j in all_jobs if j.get('worktree_id')}))
+        filtered = []
+        for j in all_jobs:
+            if status and status != 'all':
+                if status in ('history', 'terminal'):
+                    if j.get('state') not in ('succeeded', 'failed', 'cancelled'):
+                        continue
+                elif j.get('state') != status:
+                    continue
+            if profile and profile != 'all' and j.get('profile') != profile:
+                continue
+            if worktree and worktree != 'all' and j.get('worktree_id') != worktree:
+                continue
+            if search:
+                j_id = j.get('job_id', '').lower()
+                wt = j.get('worktree_id', '').lower()
+                sd = j.get('source_digest', '').lower()
+                if search not in j_id and search not in wt and search not in sd:
+                    continue
+            filtered.append(j)
+
+        if sort == 'oldest':
+            filtered.sort(key=lambda j: j.get('created_at', 0))
+        elif sort == 'duration':
+            filtered.sort(key=lambda j: (j.get('updated_at', 0) or 0) - (j.get('started_at', 0) or j.get('created_at', 0) or 0), reverse=True)
+        else:
+            filtered.sort(key=lambda j: j.get('created_at', 0), reverse=True)
+
+        total = len(filtered)
+        start = (page - 1) * limit
+        items = filtered[start : start + limit]
+        return {
+            'items': items,
+            'total': total,
+            'page': page,
+            'limit': limit,
+            'pages': (total + limit - 1) // limit if limit > 0 else 1,
+            'worktrees': unique_worktrees,
+        }
+
+    def job_detail(self, job_id):
+        job = self.get(job_id)
+        stages = build_job_timeline(job, self.storage)
+        wt = job.get('worktree_id', '')
+        receipt = None
+        receipt_path = self.storage / 'runs' / wt / job_id / 'artifacts' / 'receipt.json'
+        if receipt_path.is_file():
+            try:
+                receipt = json.loads(receipt_path.read_text(encoding='utf-8'))
+            except Exception:
+                pass
+        pinned_map = self.hub.get_pinned()
+        exec_res_id = f"exec-{wt}-{job_id}"
+        is_pinned = (exec_res_id in pinned_map) or (job_id in pinned_map)
+        pin_info = pinned_map.get(exec_res_id) or pinned_map.get(job_id) or {}
+        return {
+            **job,
+            'stages': stages,
+            'receipt': receipt,
+            'is_pinned': is_pinned,
+            'pin_reason': pin_info.get('reason', ''),
+            'pinned_at': pin_info.get('pinned_at', ''),
+        }
+
+    def job_events(self, job_id):
+        events = self.hub.get_events(limit=100, job_id=job_id)
+        try:
+            job = self.get(job_id)
+        except Exception:
+            return events
+
+        wt = job.get('worktree_id', '')
+        journal = {}
+        journal_path = self.storage / 'runs' / wt / job_id / 'coordinator.json'
+        if journal_path.is_file():
+            try:
+                journal = json.loads(journal_path.read_text(encoding='utf-8'))
+            except Exception:
+                pass
+
+        has_queued = any(e.get('event') == 'job_queued' for e in events)
+        created_at = job.get('created_at')
+        if not has_queued and created_at:
+            events.append({
+                'id': f"ev-q-{job_id[:8]}",
+                'timestamp': datetime.fromtimestamp(created_at, tz=timezone.utc).isoformat() if isinstance(created_at, (int, float)) else str(created_at),
+                'level': 'INFO',
+                'event': 'job_queued',
+                'message': f"Zadanie {job_id} dodane do kolejki (profil: {job.get('profile')})",
+                'job_id': job_id,
+                'profile': job.get('profile'),
+                'stage': None,
+                'duration_seconds': None,
+            })
+
+        started_at = journal.get('started_at') or job.get('started_at')
+        has_claimed = any(e.get('event') in ('job_claimed', 'job_started') for e in events)
+        if not has_claimed and started_at:
+            events.append({
+                'id': f"ev-c-{job_id[:8]}",
+                'timestamp': datetime.fromtimestamp(started_at, tz=timezone.utc).isoformat() if isinstance(started_at, (int, float)) else str(started_at),
+                'level': 'INFO',
+                'event': 'job_claimed',
+                'message': f"Rozpoczęto kompilację zadania {job_id} (kontener worker)",
+                'job_id': job_id,
+                'profile': job.get('profile'),
+                'stage': None,
+                'duration_seconds': None,
+            })
+
+        finished_at = journal.get('finished_at') or job.get('finished_at')
+        has_terminal = any(e.get('event') in ('job_terminal', 'job_finished', 'job_failed', 'job_cancelled') for e in events)
+        if not has_terminal and finished_at:
+            st = journal.get('state') or job.get('state', 'unknown')
+            lvl = 'INFO' if st == 'succeeded' else ('WARN' if st == 'cancelled' else 'ERROR')
+            dur = None
+            if started_at and isinstance(started_at, (int, float)) and isinstance(finished_at, (int, float)):
+                dur = round(finished_at - started_at, 2)
+            events.append({
+                'id': f"ev-t-{job_id[:8]}",
+                'timestamp': datetime.fromtimestamp(finished_at, tz=timezone.utc).isoformat() if isinstance(finished_at, (int, float)) else str(finished_at),
+                'level': lvl,
+                'event': 'job_terminal',
+                'message': f"Zadanie {job_id} zakończone ze statusem: {st}",
+                'job_id': job_id,
+                'profile': job.get('profile'),
+                'stage': 'Zakończono',
+                'duration_seconds': dur,
+            })
+
+        events.sort(key=lambda e: str(e.get('timestamp') or ''))
+        return events
+
+    def job_metrics(self, job_id):
+        return self.hub.get_metrics_trends()
+
+    def job_resources(self, job_id):
+        job = self.get(job_id)
+        wt = job.get('worktree_id', '')
+        run_dir = self.storage / 'runs' / wt / job_id
+        items = []
+        if run_dir.exists():
+            for child in run_dir.iterdir():
+                if child.is_dir():
+                    size = _fast_dir_size(child)
+                    items.append({
+                        'name': child.name,
+                        'path': str(child),
+                        'size_bytes': size[0],
+                        'file_count': size[1],
+                    })
+        return items
+
+    def storage_volumes(self):
+        return self.hub.get_storage_volumes()
+
+    def storage_resources(self):
+        return self.hub.get_storage_resources(queue=self.queue)
+
+    def processes(self):
+        import sys
+        health = self.health()
+        active = self.queue.active()
+        current_job = active[0] if active else None
+
+        coord_rss = get_process_rss_bytes()
+        coord_ram_str = f"{coord_rss / (1024 * 1024):.1f} MiB" if coord_rss is not None else "niedostępne"
+        coord_limit = get_process_memory_limit_bytes()
+        coord_limit_str = f"{coord_limit / (1024 * 1024 * 1024):.1f} GiB" if coord_limit is not None else "Bez limitu"
+        coord_cpu, coord_io = self.hub._tracker.measure()
+        coord_cpu_str = f"{coord_cpu:.1f}%" if coord_cpu is not None else "niedostępne"
+        coord_io_str = f"{coord_io:.2f} MB/s" if coord_io is not None else "niedostępne"
+        coord_pid = os.getpid()
+
+        rows = [
+            {
+                'id': f'coord-pid-{coord_pid}',
+                'role': 'Koordynator (API & Queue)',
+                'type': 'host/container',
+                'job_id': '—',
+                'started_at': health.get('coordinator', {}).get('started_at'),
+                'cpu': coord_cpu_str,
+                'ram': coord_ram_str,
+                'limit': coord_limit_str,
+                'io': coord_io_str,
+                'paths': str(self.storage / 'index' / 'runner-jobs.sqlite'),
+                'cmd': ' '.join(sys.argv) if getattr(sys, 'argv', None) else 'python -m local_runner.container_main',
+                'status': 'running',
+            },
+        ]
+
+        if current_job:
+            wm = self._inspect_worker_metrics(current_job)
+            cid = wm.get('container_id')
+            worker_id = f"worker-{cid[:12]}" if cid else f"worker-{current_job['job_id'][:8]}"
+            w_ram = f"{wm['memory_mb']:.1f} MiB" if wm.get('memory_mb') is not None else "niedostępne"
+            w_limit = f"{wm['limit_mb']} MiB" if wm.get('limit_mb') is not None else "Bez limitu"
+            w_cpu = f"{wm['cpu_percent']:.1f}%" if wm.get('cpu_percent') is not None else "niedostępne"
+            w_io = f"{wm['io_mb_s']:.2f} MB/s" if wm.get('io_mb_s') is not None else "niedostępne"
+            rows.append({
+                'id': worker_id,
+                'role': 'Kompilator (Build Worker)',
+                'type': 'container (uid 65532)',
+                'job_id': current_job['job_id'],
+                'started_at': current_job.get('started_at', '—'),
+                'cpu': w_cpu,
+                'ram': w_ram,
+                'limit': w_limit,
+                'io': w_io,
+                'paths': f"{self.storage}/runs/{current_job['worktree_id']}/{current_job['job_id']}/execution",
+                'cmd': f"fullmag-build-worker --profile {current_job['profile']}",
+                'status': 'running',
+            })
+        else:
+            rows.append({
+                'id': 'worker-idle',
+                'role': 'Kompilator (Build Worker)',
+                'type': 'container (uid 65532)',
+                'job_id': '—',
+                'started_at': '—',
+                'cpu': '—',
+                'ram': '—',
+                'limit': '—',
+                'io': '—',
+                'paths': '—',
+                'cmd': 'brak aktywnego kontenera',
+                'status': 'idle',
+            })
+
+        return rows
+
+    def alerts(self):
+        alerts = []
+        health = self.health()
+        volumes = self.hub.get_storage_volumes()
+        vol = volumes[0] if volumes else {}
+        free = vol.get('free_bytes')
+        crit = vol.get('critical_threshold_bytes')
+        warn = vol.get('warning_threshold_bytes')
+
+        if free is not None and crit is not None and free <= crit:
+            alerts.append({
+                'key': 'storage_pressure_critical',
+                'level': 'CRITICAL',
+                'title': 'Krytyczny brak miejsca',
+                'message': f"Wolne miejsce w storage spadło do {free // (1024*1024*1024)} GiB",
+                'started_at': _timestamp(),
+                'timestamp': _timestamp(),
+                'resolution_criteria': 'Zwolnienie przestrzeni do poziomu powyżej progu krytycznego',
+            })
+        elif free is not None and warn is not None and free <= warn:
+            alerts.append({
+                'key': 'storage_pressure_warning',
+                'level': 'WARN',
+                'title': 'Ostrzeżenie o zapełnieniu dysku',
+                'message': f"Wolne miejsce w storage wynosi {free // (1024*1024*1024)} GiB",
+                'started_at': _timestamp(),
+                'timestamp': _timestamp(),
+                'resolution_criteria': 'Uruchomienie planu retencji i odzyskanie wolnego miejsca',
+            })
+
+        if health.get('worker_error'):
+            alerts.append({
+                'key': 'worker_error',
+                'level': 'ERROR',
+                'title': 'Błąd procesu wykonawczego',
+                'message': str(health['worker_error']),
+                'started_at': _timestamp(),
+                'timestamp': _timestamp(),
+                'resolution_criteria': 'Manualne wznowienie lub usunięcie przyczyny awarii',
+            })
+
+        if health.get('legacy_jobs'):
+            alerts.append({
+                'key': 'legacy_jobs_detected',
+                'level': 'ERROR',
+                'title': 'Wykryto zadania legacy',
+                'message': 'Nieobsługiwane zadania starszego typu w kolejce',
+                'started_at': _timestamp(),
+                'timestamp': _timestamp(),
+                'resolution_criteria': 'Ręczne usunięcie lub zatwierdzenie legacy rekordów',
+            })
+
+        return alerts
+
+    def events(self, query=None):
+        query = query or {}
+        limit = int(query.get('limit', 100))
+        level = query.get('level')
+        job_id = query.get('job_id')
+        return self.hub.get_events(limit=limit, level=level, job_id=job_id)
+
+    def retention_plan_preview(self):
+        return self.hub.generate_retention_plan(queue=self.queue)
+
+    def retention_plan_apply(self, plan_id):
+        return self.hub.apply_retention_plan(plan_id)
+
+    def get_retention_policy(self):
+        return self.hub.get_retention_policy()
+
+    def put_retention_policy(self, policy):
+        return self.hub.set_retention_policy(policy)
+
+    def pin_resource(self, resource_id, payload):
+        pinned = payload.get('pinned', True)
+        reason = payload.get('reason', '')
+        return self.hub.set_pinned(resource_id, pinned, reason)
 
     def _execute_next(self):
         queued = self.queue.next_queued(self.owner)
         if queued is not None and queued.get('operation') != 'build':
             raise APIUnavailable('Legacy queued job requires manual recovery')
-        return execute_build(self.layout, owner=self.owner, call=docker)
+        if queued is not None:
+            self.hub.record_event(
+                "INFO",
+                "job_claimed",
+                f"Rozpoczęto kompilację zadania {queued['job_id']} (profil: {queued.get('profile')})",
+                job_id=queued["job_id"],
+                profile=queued.get("profile"),
+            )
+        result = execute_build(self.layout, owner=self.owner, call=docker)
+        if queued is not None and isinstance(result, dict):
+            state = result.get('state')
+            if state in ('succeeded', 'failed', 'cancelled', 'blocked'):
+                level = "INFO" if state == 'succeeded' else ("WARN" if state == 'cancelled' else "ERROR")
+                self.hub.record_event(
+                    level,
+                    "job_terminal",
+                    f"Zadanie {queued['job_id']} zakończone ze statusem: {state}",
+                    job_id=queued["job_id"],
+                    profile=queued.get("profile"),
+                )
+        return result
 
     def _reconcile(self, jobs):
         legacy = [job for job in jobs if job.get('operation') != 'build']
@@ -309,12 +796,27 @@ class Application:
 
 
 def main():
-    from local_runner.container_api import serve
+    from local_runner.container_api import DEFAULT_PORT, serve
     config = json.loads(Path('/control/config.json').read_text())
     app = Application(config)
     app.start_worker()
-    callbacks = {name: getattr(app, name) for name in ('submit', 'list', 'get', 'logs', 'cancel', 'stop', 'health', 'resume', 'retention')}
-    serve(callbacks, config_path='/control/config.json', host='0.0.0.0', port=8765)
+    callback_names = (
+        'submit', 'list', 'get', 'logs', 'cancel', 'stop', 'health', 'resume', 'retention',
+        'overview', 'paginated_jobs', 'job_detail', 'job_events', 'job_metrics', 'job_resources',
+        'storage_volumes', 'storage_resources', 'processes', 'alerts', 'events',
+        'retention_plan_preview', 'retention_plan_apply', 'get_retention_policy',
+        'put_retention_policy', 'pin_resource',
+    )
+    callbacks = {name: getattr(app, name) for name in callback_names}
+    port_env = os.environ.get("FULLMAG_RUNNER_PORT")
+    if port_env is not None and str(port_env).strip():
+        try:
+            port = int(str(port_env).strip())
+        except (ValueError, TypeError):
+            port = int(config.get("port", DEFAULT_PORT))
+    else:
+        port = int(config.get("port", DEFAULT_PORT))
+    serve(callbacks, config_path='/control/config.json', host='0.0.0.0', port=port)
 
 
 if __name__ == '__main__':

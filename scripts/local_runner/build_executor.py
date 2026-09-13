@@ -18,8 +18,14 @@ from local_runner.worker import _resolve_storage_dir, _format_cpus, _format_memo
 from local_runner.worker_entrypoint import verify_source
 
 
-PROFILES = {'fem-cpu-release': ('fem', 'cpu'), 'fem-gpu-release': ('fem', 'gpu'),
-            'fdm-cpu-release': ('fdm', 'cpu')}
+PROFILES = {
+    'fem-cpu-release': ('fem', 'cpu'),
+    'fem-gpu-release': ('fem', 'gpu'),
+    'fdm-cpu-release': ('fdm', 'cpu'),
+    'fem-cpu-current-contracts-v1': ('fem', 'cpu'),
+    'fem-gpu-current-contracts-v1': ('fem', 'gpu'),
+    'fem-cpu-slepc-modal-v1': ('fem', 'cpu'),
+}
 TARGETS = {'source': '/source', 'workspace': '/workspace',
            'build': '/workspace/.fullmag-build', 'artifacts': '/artifacts',
            'trusted': '/runner', 'cargo': '/workspace/.fullmag-cargo',

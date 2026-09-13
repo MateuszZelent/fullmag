@@ -13,17 +13,33 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hmac
 import json
+import os
 from pathlib import Path
 import re
+import secrets
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import threading
 from typing import Callable, Mapping
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
+
+
+def _resolve_env_port(default: int = 48765) -> int:
+    val = os.environ.get("FULLMAG_RUNNER_PORT")
+    if not val or not str(val).strip():
+        return default
+    try:
+        parsed = int(str(val).strip())
+        if 0 <= parsed <= 65535:
+            return parsed
+    except (ValueError, TypeError):
+        pass
+    return default
 
 
 DEFAULT_CONFIG_PATH = Path("/control/config.json")
 DEFAULT_HOST = "0.0.0.0"
-DEFAULT_PORT = 8765
+DEFAULT_PORT = _resolve_env_port(48765)
 MAX_BODY_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 1024 * 1024
 _BODY_ERROR = object()
@@ -39,6 +55,40 @@ _SENSITIVE_KEYS = frozenset(
         "lease_token",
     }
 )
+
+_MIME_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".mjs": "application/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".ico": "image/x-icon",
+    ".woff2": "font/woff2",
+    ".woff": "font/woff",
+    ".ttf": "font/ttf",
+    ".txt": "text/plain; charset=utf-8",
+}
+
+
+def _ui_dir() -> Path | None:
+    """Find the pre-built or source UI directory."""
+    # 1. Inside container / packaged alongside local_runner
+    p1 = Path(__file__).resolve().parent / "ui_dist"
+    if p1.is_dir() and (p1 / "index.html").is_file():
+        return p1
+    # 2. Workspace build dist
+    p2 = Path(__file__).resolve().parents[2] / "apps" / "runner-console" / "dist"
+    if p2.is_dir() and (p2 / "index.html").is_file():
+        return p2
+    # 3. Workspace source directory
+    p3 = Path(__file__).resolve().parents[2] / "apps" / "runner-console"
+    if p3.is_dir() and (p3 / "index.html").is_file():
+        return p3
+    return None
 
 
 class APIError(RuntimeError):
@@ -66,6 +116,22 @@ class APICallbacks:
     health: Callable[[], object] | None = None
     resume: Callable[[], object] | None = None
     retention: Callable[[], object] | None = None
+    overview: Callable[[], object] | None = None
+    paginated_jobs: Callable[[dict], object] | None = None
+    job_detail: Callable[[str], object] | None = None
+    job_events: Callable[[str], object] | None = None
+    job_metrics: Callable[[str], object] | None = None
+    job_resources: Callable[[str], object] | None = None
+    storage_volumes: Callable[[], object] | None = None
+    storage_resources: Callable[[], object] | None = None
+    processes: Callable[[], object] | None = None
+    alerts: Callable[[], object] | None = None
+    events: Callable[[dict], object] | None = None
+    retention_plan_preview: Callable[[], object] | None = None
+    retention_plan_apply: Callable[[str], object] | None = None
+    get_retention_policy: Callable[[], object] | None = None
+    put_retention_policy: Callable[[dict], object] | None = None
+    pin_resource: Callable[[str, dict], object] | None = None
 
     def __post_init__(self) -> None:
         for name in ("submit", "list", "get", "logs", "cancel", "stop"):
@@ -77,6 +143,27 @@ class APICallbacks:
             raise TypeError("API callback resume must be callable")
         if self.retention is not None and not callable(self.retention):
             raise TypeError("API callback retention must be callable")
+        for optional_name in (
+            "overview",
+            "paginated_jobs",
+            "job_detail",
+            "job_events",
+            "job_metrics",
+            "job_resources",
+            "storage_volumes",
+            "storage_resources",
+            "processes",
+            "alerts",
+            "events",
+            "retention_plan_preview",
+            "retention_plan_apply",
+            "get_retention_policy",
+            "put_retention_policy",
+            "pin_resource",
+        ):
+            val = getattr(self, optional_name, None)
+            if val is not None and not callable(val):
+                raise TypeError(f"API callback {optional_name} must be callable")
 
 
 def _load_token(config_path: Path | str) -> str:
@@ -172,27 +259,101 @@ class _RunnerAPIHandler(BaseHTTPRequestHandler):
     def _error(self, status: int, code: str, *, headers: Mapping[str, str] | None = None) -> None:
         self._send(status, {"error": code}, headers=headers)
 
-    def _authenticate(self) -> bool:
-        # An Origin header is never accepted: this service is a host-local
-        # control plane, not a browser API, and it deliberately emits no CORS.
-        if self.headers.get("Origin") is not None:
-            self._error(403, "origin_not_allowed")
-            return False
+    def _serve_ui(self) -> None:
+        raw_path = unquote(urlsplit(self.path).path)
+        subpath = raw_path[len("/ui/") :].lstrip("/")
+        ui_dir = _ui_dir()
+        if ui_dir is None:
+            body = b"<!DOCTYPE html><html><body><h1>Fullmag Build Runner</h1><p>UI bundle is not deployed.</p></body></html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if not subpath or subpath == "/":
+            target_file = ui_dir / "index.html"
+        else:
+            target_file = (ui_dir / subpath).resolve()
+
+        try:
+            target_file.relative_to(ui_dir.resolve())
+        except (ValueError, RuntimeError):
+            self._error(404, "not_found")
+            return
+
+        if not target_file.exists() or target_file.is_dir():
+            # SPA fallback: subroutes without dot extension serve index.html
+            if not target_file.exists() and "." in Path(subpath).name:
+                self._error(404, "not_found")
+                return
+            target_file = ui_dir / "index.html"
+
+        if not target_file.is_file():
+            self._error(404, "not_found")
+            return
+
+        try:
+            content = target_file.read_bytes()
+        except OSError:
+            self._error(500, "file_read_error")
+            return
+
+        ext = target_file.suffix.lower()
+        mime = _MIME_TYPES.get(ext, "application/octet-stream")
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(content)))
+        self.send_header("Cache-Control", "no-cache" if ext == ".html" else "public, max-age=3600")
+        self.end_headers()
+        self.wfile.write(content)
+
+    def _check_is_authenticated(self) -> bool:
+        cookie_header = self.headers.get("Cookie", "")
+        if cookie_header:
+            for part in cookie_header.split(";"):
+                part = part.strip()
+                if part.startswith("runner_session="):
+                    session_id = part.split("=", 1)[1].strip()
+                    if self.server.is_valid_session(session_id):
+                        return True
         authorization = self.headers.get("Authorization")
-        prefix = "Bearer "
-        if not authorization or not authorization.startswith(prefix):
-            self._error(401, "unauthorized", headers={"WWW-Authenticate": "Bearer"})
-            return False
-        supplied = authorization[len(prefix) :]
-        if not supplied or not hmac.compare_digest(supplied, self.server.api_token):
-            self._error(401, "unauthorized", headers={"WWW-Authenticate": "Bearer"})
-            return False
-        return True
+        if authorization and authorization.startswith("Bearer "):
+            supplied = authorization[len("Bearer ") :]
+            if supplied and hmac.compare_digest(supplied, self.server.api_token):
+                return True
+        return False
+
+    def _authenticate(self) -> bool:
+        origin = self.headers.get("Origin")
+        if origin is not None:
+            host = self.headers.get("Host", "")
+            server_port = getattr(self.server, "server_port", DEFAULT_PORT)
+            allowed_origins = {
+                f"http://{host}",
+                f"https://{host}",
+                f"http://127.0.0.1:{server_port}",
+                f"http://localhost:{server_port}",
+            }
+            if origin not in allowed_origins:
+                self._error(403, "origin_not_allowed")
+                return False
+
+        if self._check_is_authenticated():
+            return True
+
+        self._error(401, "unauthorized", headers={"WWW-Authenticate": "Bearer"})
+        return False
+
+    def _query(self) -> dict[str, str]:
+        parsed = urlsplit(self.path)
+        raw_query = parse_qs(parsed.query)
+        return {k: v[0] if v else "" for k, v in raw_query.items()}
 
     def _path(self) -> list[str] | None:
         parsed = urlsplit(self.path)
-        if parsed.query or parsed.fragment:
-            return None
         raw = unquote(parsed.path)
         if not raw.startswith("/") or "\\" in raw:
             return None
@@ -200,6 +361,10 @@ class _RunnerAPIHandler(BaseHTTPRequestHandler):
         if parts and parts[0] == "":
             parts = parts[1:]
         if any(part in ("", ".", "..") for part in parts):
+            return None
+        if (parsed.query or parsed.fragment) and not (
+            parts and (parts[0] == "ui" or (len(parts) >= 2 and parts[0] == "api" and parts[1] == "v1"))
+        ):
             return None
         return parts
 
@@ -261,6 +426,31 @@ class _RunnerAPIHandler(BaseHTTPRequestHandler):
             return _BODY_ERROR
         return value
 
+    def _fallback_overview(self) -> dict[str, object]:
+        jobs = self.server.callbacks.list()
+        items = jobs if isinstance(jobs, list) else []
+        active = [j for j in items if isinstance(j, dict) and j.get("state") == "running"]
+        queued = [j for j in items if isinstance(j, dict) and j.get("state") == "queued"]
+        health = self.server.callbacks.health() if self.server.callbacks.health else {"ok": True}
+        health_dict = health if isinstance(health, Mapping) else {}
+        return {
+            "active_build": active[0] if active else None,
+            "queued_count": len(queued),
+            "worker": {
+                "state": health_dict.get("worker_state", "running"),
+                "alive": health_dict.get("worker_alive", True),
+                "accepting_jobs": health_dict.get("accepting_jobs", True),
+                "memory_mb": None,
+                "limit_mb": None,
+                "cpu_percent": None,
+            },
+            "storage": {
+                "free_bytes": health_dict.get("storage_free_bytes"),
+            },
+            "trends": [],
+            "incidents": [],
+        }
+
     def _invoke(
         self,
         callback: Callable[..., object],
@@ -297,12 +487,32 @@ class _RunnerAPIHandler(BaseHTTPRequestHandler):
         self._send(success, result)
 
     def do_GET(self) -> None:  # noqa: N802
-        if not self._authenticate():
+        raw_path = unquote(urlsplit(self.path).path)
+        if raw_path in ("/", "/ui"):
+            self.send_response(301)
+            self.send_header("Location", "/ui/")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
             return
+        if raw_path.startswith("/ui/"):
+            self._serve_ui()
+            return
+
         parts = self._path()
         if parts is None:
             self._error(404, "not_found")
-        elif parts == ["health"]:
+            return
+
+        # Session auth probe does not require pre-existing authentication
+        if parts == ["api", "v1", "auth", "session"]:
+            is_auth = self._check_is_authenticated()
+            self._send(200, {"authenticated": is_auth, "service": "fullmag-build-runner"})
+            return
+
+        if not self._authenticate():
+            return
+
+        if parts == ["health"]:
             if self.server.callbacks.health is None:
                 self._send(
                     200,
@@ -329,20 +539,124 @@ class _RunnerAPIHandler(BaseHTTPRequestHandler):
                 return {"job_id": job_id, "logs": result} if isinstance(result, str) else result
 
             self._invoke(logs_callback, parts[1], none_is_not_found=True)
+        # --- Versioned API v1 Endpoints ---
+        elif parts == ["api", "v1", "overview"]:
+            if self.server.callbacks.overview is not None:
+                self._invoke(self.server.callbacks.overview)
+            else:
+                self._invoke(self._fallback_overview)
+        elif parts == ["api", "v1", "jobs"]:
+            query = self._query()
+            if self.server.callbacks.paginated_jobs is not None:
+                self._invoke(self.server.callbacks.paginated_jobs, query)
+            else:
+                self._invoke(self.server.callbacks.list)
+        elif len(parts) == 4 and parts[:3] == ["api", "v1", "jobs"] and self._job_id(parts[3]):
+            if self.server.callbacks.job_detail is not None:
+                self._invoke(self.server.callbacks.job_detail, parts[3], none_is_not_found=True)
+            else:
+                self._invoke(self.server.callbacks.get, parts[3], none_is_not_found=True)
+        elif len(parts) == 5 and parts[:3] == ["api", "v1", "jobs"] and parts[4] == "events" and self._job_id(parts[3]):
+            if self.server.callbacks.job_events is not None:
+                self._invoke(self.server.callbacks.job_events, parts[3])
+            else:
+                self._send(200, [])
+        elif len(parts) == 5 and parts[:3] == ["api", "v1", "jobs"] and parts[4] == "logs" and self._job_id(parts[3]):
+            if self.server.callbacks.logs is not None:
+                self._invoke(self.server.callbacks.logs, parts[3], none_is_not_found=True)
+            else:
+                self._error(404, "job_not_found")
+        elif len(parts) == 5 and parts[:3] == ["api", "v1", "jobs"] and parts[4] == "metrics" and self._job_id(parts[3]):
+            if self.server.callbacks.job_metrics is not None:
+                self._invoke(self.server.callbacks.job_metrics, parts[3])
+            else:
+                self._send(200, [])
+        elif len(parts) == 5 and parts[:3] == ["api", "v1", "jobs"] and parts[4] == "resources" and self._job_id(parts[3]):
+            if self.server.callbacks.job_resources is not None:
+                self._invoke(self.server.callbacks.job_resources, parts[3])
+            else:
+                self._send(200, [])
+        elif parts == ["api", "v1", "storage", "volumes"]:
+            if self.server.callbacks.storage_volumes is not None:
+                self._invoke(self.server.callbacks.storage_volumes)
+            else:
+                self._send(200, [])
+        elif parts == ["api", "v1", "storage", "resources"]:
+            if self.server.callbacks.storage_resources is not None:
+                self._invoke(self.server.callbacks.storage_resources)
+            else:
+                self._send(200, {"categories": [], "resources": []})
+        elif parts == ["api", "v1", "processes"]:
+            if self.server.callbacks.processes is not None:
+                self._invoke(self.server.callbacks.processes)
+            else:
+                self._send(200, [])
+        elif parts == ["api", "v1", "alerts"]:
+            if self.server.callbacks.alerts is not None:
+                self._invoke(self.server.callbacks.alerts)
+            else:
+                self._send(200, [])
+        elif parts == ["api", "v1", "events"]:
+            query = self._query()
+            if self.server.callbacks.events is not None:
+                self._invoke(self.server.callbacks.events, query)
+            else:
+                self._send(200, [])
+        elif parts == ["api", "v1", "retention", "policy"]:
+            if self.server.callbacks.get_retention_policy is not None:
+                self._invoke(self.server.callbacks.get_retention_policy)
+            else:
+                self._send(200, {})
+        elif parts == ["api", "v1", "retention", "plans"]:
+            if self.server.callbacks.retention_plan_preview is not None:
+                self._invoke(self.server.callbacks.retention_plan_preview)
+            elif self.server.callbacks.retention is not None:
+                self._invoke(self.server.callbacks.retention)
+            else:
+                self._error(503, "retention_unavailable")
         else:
             self._error(404, "not_found")
 
     def do_POST(self) -> None:  # noqa: N802
+        parts = self._path()
+        if parts is None:
+            self._error(404, "not_found")
+            return
+
+        # POST /api/v1/auth/session
+        if parts == ["api", "v1", "auth", "session"]:
+            payload = self._read_body(required=True)
+            if payload is None or payload is _BODY_ERROR:
+                return
+            token = payload.get("token")
+            if not isinstance(token, str) or not hmac.compare_digest(token, self.server.api_token):
+                self._error(401, "invalid_token")
+                return
+            session_id = self.server.create_session(86400)
+            cookie_hdr = f"runner_session={session_id}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400"
+            self._send(200, {"ok": True, "authenticated": True, "expires_in": 86400}, headers={"Set-Cookie": cookie_hdr})
+            return
+
+        # POST /api/v1/auth/logout
+        if parts == ["api", "v1", "auth", "logout"]:
+            cookie_header = self.headers.get("Cookie", "")
+            for part in cookie_header.split(";"):
+                if part.strip().startswith("runner_session="):
+                    sid = part.strip().split("=", 1)[1].strip()
+                    self.server.revoke_session(sid)
+            clear_cookie = "runner_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
+            self._send(200, {"ok": True, "authenticated": False}, headers={"Set-Cookie": clear_cookie})
+            return
+
         if not self._authenticate():
             return
-        parts = self._path()
+
         if parts == ["jobs"]:
             payload = self._read_body(required=True)
             if payload is not None and payload is not _BODY_ERROR:
                 self._invoke(self.server.callbacks.submit, payload, success=201)
         elif (
-            parts is not None
-            and len(parts) == 3
+            len(parts) == 3
             and parts[0] == "jobs"
             and parts[2] == "cancel"
             and self._job_id(parts[1])
@@ -364,6 +678,35 @@ class _RunnerAPIHandler(BaseHTTPRequestHandler):
                 self._error(503, "resume_unavailable")
             else:
                 self._invoke(self.server.callbacks.resume)
+        elif parts == ["api", "v1", "retention", "plans"]:
+            body = self._read_body(required=False)
+            if body is _BODY_ERROR:
+                return
+            if self.server.callbacks.retention_plan_preview is not None:
+                self._invoke(self.server.callbacks.retention_plan_preview)
+            elif self.server.callbacks.retention is not None:
+                self._invoke(self.server.callbacks.retention)
+            else:
+                self._error(503, "retention_unavailable")
+        elif len(parts) == 6 and parts[:4] == ["api", "v1", "retention", "plans"] and parts[5] == "apply":
+            body = self._read_body(required=False)
+            if body is _BODY_ERROR:
+                return
+            plan_id = parts[4]
+            if self.server.callbacks.retention_plan_apply is not None:
+                self._invoke(self.server.callbacks.retention_plan_apply, plan_id)
+            else:
+                self._send(200, {"applied": True, "plan_id": plan_id, "simulated": True})
+        elif len(parts) == 5 and parts[:3] == ["api", "v1", "resources"] and parts[4] == "pin":
+            body = self._read_body(required=False)
+            if body is _BODY_ERROR:
+                return
+            resource_id = parts[3]
+            payload = body if isinstance(body, dict) else {}
+            if self.server.callbacks.pin_resource is not None:
+                self._invoke(self.server.callbacks.pin_resource, resource_id, payload)
+            else:
+                self._send(200, {"resource_id": resource_id, "pinned": payload.get("pinned", True)})
         else:
             self._error(404, "not_found")
 
@@ -374,6 +717,15 @@ class _RunnerAPIHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self) -> None:  # noqa: N802
         if not self._authenticate():
+            return
+        parts = self._path()
+        if parts == ["api", "v1", "retention", "policy"]:
+            payload = self._read_body(required=True)
+            if payload is not None and payload is not _BODY_ERROR:
+                if self.server.callbacks.put_retention_policy is not None:
+                    self._invoke(self.server.callbacks.put_retention_policy, payload)
+                else:
+                    self._send(200, payload)
             return
         self._error(405, "method_not_allowed", headers={"Allow": "GET, POST"})
 
@@ -396,6 +748,7 @@ class RunnerAPIServer(ThreadingHTTPServer):
         self._api_state_lock = threading.Lock()
         self.api_started_at = datetime.now(timezone.utc).isoformat()
         self.api_last_request_at: str | None = None
+        self._sessions: dict[str, float] = {}
         super().__init__(address, _RunnerAPIHandler)
 
     def touch_api(self) -> None:
@@ -408,6 +761,33 @@ class RunnerAPIServer(ThreadingHTTPServer):
                 "started_at": self.api_started_at,
                 "last_request_at": self.api_last_request_at,
             }
+
+    def create_session(self, duration_seconds: int = 86400) -> str:
+        with self._api_state_lock:
+            session_id = secrets.token_hex(32)
+            now = time.time()
+            self._sessions[session_id] = now + duration_seconds
+            # Purge expired
+            self._sessions = {k: exp for k, exp in self._sessions.items() if exp > now}
+            return session_id
+
+    def is_valid_session(self, session_id: str) -> bool:
+        if not isinstance(session_id, str) or len(session_id) != 64:
+            return False
+        with self._api_state_lock:
+            expiry = self._sessions.get(session_id)
+            if expiry is None:
+                return False
+            if expiry < time.time():
+                del self._sessions[session_id]
+                return False
+            return True
+
+    def revoke_session(self, session_id: str) -> None:
+        with self._api_state_lock:
+            self._sessions.pop(session_id, None)
+
+
 def _coerce_callbacks(callbacks: APICallbacks | Mapping[str, Callable[..., object]]) -> APICallbacks:
     if isinstance(callbacks, APICallbacks):
         return callbacks
@@ -423,6 +803,22 @@ def _coerce_callbacks(callbacks: APICallbacks | Mapping[str, Callable[..., objec
                 health=callbacks.get("health"),
                 resume=callbacks.get("resume"),
                 retention=callbacks.get("retention"),
+                overview=callbacks.get("overview"),
+                paginated_jobs=callbacks.get("paginated_jobs"),
+                job_detail=callbacks.get("job_detail"),
+                job_events=callbacks.get("job_events"),
+                job_metrics=callbacks.get("job_metrics"),
+                job_resources=callbacks.get("job_resources"),
+                storage_volumes=callbacks.get("storage_volumes"),
+                storage_resources=callbacks.get("storage_resources"),
+                processes=callbacks.get("processes"),
+                alerts=callbacks.get("alerts"),
+                events=callbacks.get("events"),
+                retention_plan_preview=callbacks.get("retention_plan_preview"),
+                retention_plan_apply=callbacks.get("retention_plan_apply"),
+                get_retention_policy=callbacks.get("get_retention_policy"),
+                put_retention_policy=callbacks.get("put_retention_policy"),
+                pin_resource=callbacks.get("pin_resource"),
             )
         except KeyError as error:
             raise APIError(f"Missing API callback: {error.args[0]}") from error
@@ -434,10 +830,19 @@ def create_server(
     *,
     config_path: Path | str = DEFAULT_CONFIG_PATH,
     host: str = DEFAULT_HOST,
-    port: int = DEFAULT_PORT,
+    port: int | None = None,
 ) -> RunnerAPIServer:
     """Create a configured server; the caller owns ``serve_forever``."""
 
+    if port is None:
+        val = os.environ.get("FULLMAG_RUNNER_PORT")
+        if val is not None and str(val).strip():
+            try:
+                port = int(str(val).strip())
+            except (ValueError, TypeError) as error:
+                raise APIError("API port must be 0..65535") from error
+        else:
+            port = DEFAULT_PORT
     if not isinstance(host, str) or not host:
         raise APIError("API host must be nonempty text")
     if not isinstance(port, int) or not 0 <= port <= 65535:
@@ -450,7 +855,7 @@ def serve(
     *,
     config_path: Path | str = DEFAULT_CONFIG_PATH,
     host: str = DEFAULT_HOST,
-    port: int = DEFAULT_PORT,
+    port: int | None = None,
 ) -> None:
     """Run the API loop until the container supervisor stops the process."""
 

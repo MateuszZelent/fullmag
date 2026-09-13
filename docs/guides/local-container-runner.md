@@ -9,7 +9,7 @@ profili. Tylko jeden ciężki job może zajmować slot; praca edytorów na innyc
 worktree nie wymaga zatrzymywania bieżącej kompilacji.
 
 Socket Docker jest szerokim uprawnieniem zaufanego operatora. API wymaga bearer
-tokena i jest publikowane tylko na `127.0.0.1:8765`; nie wystawiaj go do LAN.
+tokena i jest publikowane tylko na `127.0.0.1:48765` (domyślnie, konfigurowane przez `FULLMAG_RUNNER_PORT`); nie wystawiaj go do LAN.
 Token pozostaje w lokalnym storage, nigdy w repozytorium ani w payloadzie joba.
 Worker nie otrzymuje socketu/tokena, `.env` ani checkoutu hosta. Ma UID 65532,
 rootfs readonly, ograniczenia CPU/RAM/PID oraz prywatne katalogi wykonania.
