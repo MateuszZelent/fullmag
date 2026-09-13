@@ -430,4 +430,63 @@ FrequencyDomainStatus build_floquet_dynamic_demag_k_real_split(
     return FrequencyDomainStatus::ok;
 }
 
+
+FrequencyDomainStatus reconstruct_floquet_potential(
+    const FloquetPotentialReconstruction &blocks,
+    const std::vector<Complex> &q,
+    FloquetReconstructedPotential *result) noexcept
+{
+    if (result == nullptr) return FrequencyDomainStatus::validation_error;
+    *result = FloquetReconstructedPotential{};
+    const auto n = blocks.phi_count;
+    const auto m = blocks.q_count;
+    if (n == 0 || m == 0 || n > 512 || m > 512 || q.size() != m ||
+        blocks.p.size() != n*n || blocks.a_phiq.size() != n*m ||
+        !valid_gauge_policy(blocks.gauge_policy) ||
+        !finite_complex_values(q.data(), m) ||
+        !finite_complex_values(blocks.p.data(), n*n) ||
+        !finite_complex_values(blocks.a_phiq.data(), n*m))
+        return FrequencyDomainStatus::validation_error;
+    const std::uint64_t offset =
+        blocks.gauge_policy == FloquetDynamicDemagKGaugePolicy::pin_first_dof ? 1 : 0;
+    if (n <= offset) return FrequencyDomainStatus::validation_error;
+    try {
+        const auto size = n-offset;
+        std::vector<Complex> rhs(n, Complex{});
+        for (std::uint64_t i=0; i<n; ++i)
+            for (std::uint64_t j=0; j<m; ++j)
+                rhs[i] -= blocks.a_phiq[i*m+j]*q[j];
+        std::vector<Complex> factor(size*size), reduced_rhs(size), solution;
+        for (std::uint64_t i=0; i<size; ++i) {
+            reduced_rhs[i]=rhs[i+offset];
+            for (std::uint64_t j=0; j<size; ++j)
+                factor[i*size+j]=blocks.p[(i+offset)*n+j+offset];
+        }
+        std::vector<std::uint64_t> pivots;
+        if (!factorize(factor,size,1e-14,pivots,nullptr) ||
+            !solve_factored(factor,pivots,size,reduced_rhs,solution))
+            return FrequencyDomainStatus::operator_error;
+        std::vector<Complex> phi(n, Complex{});
+        for (std::uint64_t i=0; i<size; ++i) phi[i+offset]=solution[i];
+        double residual=0, scale=0;
+        for (std::uint64_t i=0; i<n; ++i) {
+            Complex value=-rhs[i];
+            for (std::uint64_t j=0; j<n; ++j) value+=blocks.p[i*n+j]*phi[j];
+            if (!std::isfinite(std::abs(value)) || !std::isfinite(std::abs(rhs[i])))
+                return FrequencyDomainStatus::operator_error;
+            residual=std::max(residual,std::abs(value));
+            scale=std::max(scale,std::abs(rhs[i]));
+        }
+        result->relative_residual=residual/std::max(scale,1e-300);
+        if (!std::isfinite(result->relative_residual) ||
+            result->relative_residual>kFloquetPotentialResidualTolerance)
+            return FrequencyDomainStatus::operator_error;
+        result->phi=std::move(phi);
+        result->certified=true;
+        return FrequencyDomainStatus::ok;
+    } catch (...) {
+        return FrequencyDomainStatus::operator_error;
+    }
+}
+
 } // namespace fullmag::fem::frequency_domain

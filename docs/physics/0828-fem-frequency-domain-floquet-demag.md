@@ -169,6 +169,14 @@ FEM CPU; nie kwalifikuje FEM GPU ani backendów FDM.
 Diagnostyka modalna zachowuje `floquet_potential_certificate`; pole
 `full_modal_residual_certified=false` oddziela tę kontrolę od V9.
 
+Wewnętrzny `FloquetPotentialReconstruction` zachowuje oryginalne bloki
+zredukowane po Schurze. `reconstruct_floquet_potential` odtwarza potencjał
+ze znakiem przeciwnym do rozwiązania P inverse A_phiq q, zgodnie z dolnym
+równaniem descriptora. Wynik zawiera kompleksowy potencjał, residual i status;
+niezgodny gauge nie publikuje pola. Właściciel ogranicza ten oracle do 512
+DOF na blok. Integracja wektorów real-split SLEPc oraz residual magnetyczny
+i BC pozostają otwarte; helper nie certyfikuje pełnego modu.
+
 ### 2.3 Modal pencil and original residual
 
 The same tangent LLG pencil is used by both representations, but each sample

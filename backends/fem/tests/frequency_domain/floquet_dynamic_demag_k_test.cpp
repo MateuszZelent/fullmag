@@ -292,10 +292,42 @@ void multiple_pivots_preserve_complex_multiple_rhs()
     }
 }
 
+
+void reconstructs_complex_potential_with_original_residual()
+{
+    fd::FloquetPotentialReconstruction blocks;
+    blocks.q_count=3;
+    blocks.phi_count=3;
+    blocks.p={1.,2.,3.,4.,5.,6.,7.,8.,10.};
+    blocks.a_phiq=blocks.p;
+    const std::vector<Complex> q={Complex(1,2),Complex(-2,1),Complex(3,-1)};
+    fd::FloquetReconstructedPotential result;
+    check(fd::reconstruct_floquet_potential(blocks,q,&result)==fd::FrequencyDomainStatus::ok,
+          "complex mode potential reconstruction succeeds");
+    check(result.certified && result.phi.size()==3, "reconstruction certificate");
+    for (int i=0;i<3;++i)
+        check(std::abs(result.phi[i]+q[i])<1e-12,"potential equals manufactured minus q");
+    check(result.relative_residual<1e-12,"original potential residual");
+    blocks.q_count=1;
+    blocks.phi_count=2;
+    blocks.p={4.,-4.,-4.,4.};
+    blocks.a_phiq={1.,-1.};
+    blocks.gauge_policy=fd::FloquetDynamicDemagKGaugePolicy::pin_first_dof;
+    check(fd::reconstruct_floquet_potential(blocks,{Complex(1,0)},&result)==
+          fd::FrequencyDomainStatus::ok,"compatible gauge reconstructs");
+    check_close(result.phi[0].real(),0.0,"pinned potential");
+    check_close(result.phi[1].real(),0.25,"unpinned potential");
+    blocks.a_phiq[0]=2.;
+    check(fd::reconstruct_floquet_potential(blocks,{Complex(1,0)},&result)==
+          fd::FrequencyDomainStatus::operator_error,"incompatible original equation rejects");
+    check(!result.certified && result.phi.empty(),"no stale potential on failure");
+}
+
 } // namespace
 
 int main()
 {
+    reconstructs_complex_potential_with_original_residual();
     multiple_pivots_preserve_complex_multiple_rhs();
     nonzero_k_dense_schur_is_realified_for_modal_abi();
     hermitian_blocks_produce_hermitian_dynamic_demag();

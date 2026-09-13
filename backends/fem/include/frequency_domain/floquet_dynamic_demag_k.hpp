@@ -4,6 +4,7 @@
 
 #include <complex>
 #include <cstdint>
+#include <vector>
 
 namespace fullmag::fem::frequency_domain {
 
@@ -55,6 +56,28 @@ struct FloquetDynamicDemagKDiagnostics {
     double max_abs_hermitian_residual = 0.0;
     char error_message[192] = "";
 };
+
+// Owned original reduced blocks retained beyond Schur assembly.
+struct FloquetPotentialReconstruction {
+    std::uint64_t q_count = 0;
+    std::uint64_t phi_count = 0;
+    FloquetDynamicDemagKGaugePolicy gauge_policy =
+        FloquetDynamicDemagKGaugePolicy::require_invertible;
+    std::vector<std::complex<double>> p, a_phiq, a_qphi;
+};
+
+struct FloquetReconstructedPotential {
+    bool certified = false;
+    double relative_residual = 0.0;
+    std::vector<std::complex<double>> phi;
+};
+
+// Reconstruct phi = -P^-1 A_phiq q in complex reduced coordinates.
+// Includes the original pinned equation in its residual, if any.
+FrequencyDomainStatus reconstruct_floquet_potential(
+    const FloquetPotentialReconstruction &blocks,
+    const std::vector<std::complex<double>> &q,
+    FloquetReconstructedPotential *result) noexcept;
 
 // `out_real_split_row_major` uses [Re(q), Im(q)] ordering and the standard
 // realification [[Re D, -Im D], [Im D, Re D]].  The output is the dynamic

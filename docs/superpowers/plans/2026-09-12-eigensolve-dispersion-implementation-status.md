@@ -486,3 +486,13 @@ aby zachować certyfikat w diagnostics/result JSON, jawnie bez certyfikowania
 pełnego modu. Ta część MFEM pozostaje nieskompilowana przez zablokowaną
 managed trasę. Source-map validator noty 0828 i diff check: exit 0.
 R02 nie jest zamknięte: S05.R02/full descriptor V9 i managed evidence otwarte.
+
+### S05.R02 — fundament rekonstrukcji potencjału
+
+Dodano owned FloquetPotentialReconstruction w wyniku bridge i natywny
+reconstruct_floquet_potential. Zachowuje P/A_phiq/A_qphi i odtwarza
+kompleksowy potencjał z oryginalnym residualem obejmującym pinned row.
+Cały izolowany test MSVC exit 0: manufactured complex q, dwa pivoty,
+zgodny gauge, odrzucenie niezgodnego źródła i brak starego pola po błędzie.
+Nie podłączono jeszcze do wektorów SLEPc ani publikacji pól; magnetyczny
+residual oraz Bloch BC nie są certyfikowane. S05.R02/V9 nadal OTWARTE.

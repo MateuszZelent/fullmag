@@ -33,6 +33,7 @@ struct FloquetAirboxDynamicDemagKProblem {
 struct FloquetAirboxDynamicDemagKResult {
     std::vector<double> real_split_row_major{};
     FloquetDynamicDemagKDiagnostics diagnostics{};
+    FloquetPotentialReconstruction reconstruction{};
 };
 
 /*
