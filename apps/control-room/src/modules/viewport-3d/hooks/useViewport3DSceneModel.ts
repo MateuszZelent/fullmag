@@ -7,6 +7,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
   type ComponentProps,
 } from "react";
@@ -1880,6 +1881,109 @@ export function resolveViewport3DDisplayedLiveValue<TValue>(
   holdActive: boolean,
 ): TValue | null {
   return holdActive ? previousDisplayed : incoming;
+}
+
+export interface Viewport3DPrimaryFieldRetainedState {
+  envelope: Viewport3DFieldVectorEnvelope;
+  revision: string | null;
+}
+
+export interface ResolvePrimaryFieldDisplayedEnvelopeResult {
+  displayedEnvelope: Viewport3DFieldVectorEnvelope | null;
+  displayedRevision: string | null;
+  nextRetained: Viewport3DPrimaryFieldRetainedState | null;
+}
+
+export function resolvePrimaryFieldDisplayedEnvelope({
+  incomingEnvelope,
+  status,
+  preparedRevision,
+  retained,
+  request,
+  tracker,
+}: {
+  incomingEnvelope: Viewport3DFieldVectorEnvelope | null;
+  status: string;
+  preparedRevision: string | null;
+  retained: Viewport3DPrimaryFieldRetainedState | null;
+  request: Pick<Viewport3DFieldResourceRequest, "quantityId" | "query">;
+  tracker?: Viewport3DResourceTracker;
+}): ResolvePrimaryFieldDisplayedEnvelopeResult {
+  if (status === "ready" && incomingEnvelope) {
+    const incomingMatch = resolveViewport3DFieldVectorIdentityMatch(
+      incomingEnvelope,
+      request,
+    );
+    if (incomingMatch.matches) {
+      const freshEnvelope: Viewport3DFieldVectorEnvelope = {
+        ...incomingEnvelope,
+        retained: false,
+      };
+      return {
+        displayedEnvelope: freshEnvelope,
+        displayedRevision: preparedRevision,
+        nextRetained: {
+          envelope: freshEnvelope,
+          revision: preparedRevision,
+        },
+      };
+    }
+  }
+
+  if (retained) {
+    const retainedMatch = resolveViewport3DFieldVectorIdentityMatch(
+      retained.envelope,
+      request,
+    );
+    if (retainedMatch.matches) {
+      const retainedEnvelope: Viewport3DFieldVectorEnvelope = {
+        ...retained.envelope,
+        retained: true,
+      };
+      return {
+        displayedEnvelope: retainedEnvelope,
+        displayedRevision: retained.revision,
+        nextRetained: {
+          envelope: retainedEnvelope,
+          revision: retained.revision,
+        },
+      };
+    }
+    tracker?.recordRetentionRejection(retainedMatch.reason);
+    return {
+      displayedEnvelope: null,
+      displayedRevision: null,
+      nextRetained: null,
+    };
+  }
+
+  if (incomingEnvelope) {
+    const incomingMatch = resolveViewport3DFieldVectorIdentityMatch(
+      incomingEnvelope,
+      request,
+    );
+    if (incomingMatch.matches) {
+      const retainedEnvelope: Viewport3DFieldVectorEnvelope = {
+        ...incomingEnvelope,
+        retained: true,
+      };
+      return {
+        displayedEnvelope: retainedEnvelope,
+        displayedRevision: preparedRevision,
+        nextRetained: {
+          envelope: retainedEnvelope,
+          revision: preparedRevision,
+        },
+      };
+    }
+    tracker?.recordRetentionRejection(incomingMatch.reason);
+  }
+
+  return {
+    displayedEnvelope: null,
+    displayedRevision: null,
+    nextRetained: null,
+  };
 }
 
 export function sameViewport3DQuantityId(left: string, right: string): boolean {
@@ -4457,28 +4561,8 @@ export function useViewport3DSceneModel({
       fieldVectorResourceKey,
     ],
   );
-  const incomingFieldVectorReady = Boolean(
-    fieldVector.status === "ready" &&
-      incomingFieldVectorEnvelope &&
-      resolveViewport3DFieldVectorIdentityMatch(
-        incomingFieldVectorEnvelope,
-        primaryFieldRequest,
-      ).matches,
-  );
-  const previousFieldVectorCompatible = Boolean(
-    fieldVector.status !== "ready" &&
-      incomingFieldVectorEnvelope &&
-      resolveViewport3DFieldVectorIdentityMatch(
-        incomingFieldVectorEnvelope,
-        primaryFieldRequest,
-      ).matches,
-  );
-  const displayedFieldVectorEnvelope = resolveViewport3DDisplayedLiveValue(
-    incomingFieldVectorReady ? incomingFieldVectorEnvelope : null,
-    previousFieldVectorCompatible ? incomingFieldVectorEnvelope : null,
-    fieldVector.status !== "ready",
-  );
-  const displayedFieldVector = displayedFieldVectorEnvelope?.data ?? null;
+  const [primaryFieldRetained, setPrimaryFieldRetained] =
+    useState<Viewport3DPrimaryFieldRetainedState | null>(null);
   const fieldVectorRevisionString =
     fieldVector.revision == null ? null : String(fieldVector.revision);
   const fieldVectorPayloadRevisionString =
@@ -4487,10 +4571,39 @@ export function useViewport3DSceneModel({
       : String(fieldVector.payloadRevision);
   const fieldVectorPreparedRevision =
     fieldVectorPayloadRevisionString ?? fieldVectorRevisionString;
-  const fieldVectorDisplayedRevision =
-    incomingFieldVectorReady || previousFieldVectorCompatible
-      ? fieldVectorPreparedRevision
-      : null;
+  const {
+    displayedEnvelope: displayedFieldVectorEnvelope,
+    displayedRevision: fieldVectorDisplayedRevision,
+    nextRetained: nextPrimaryFieldRetained,
+  } = useMemo(() => {
+    if (!fieldVectorEnabled) {
+      return {
+        displayedEnvelope: null,
+        displayedRevision: null,
+        nextRetained: null,
+      };
+    }
+    return resolvePrimaryFieldDisplayedEnvelope({
+      incomingEnvelope: incomingFieldVectorEnvelope,
+      status: fieldVector.status,
+      preparedRevision: fieldVectorPreparedRevision,
+      retained: primaryFieldRetained,
+      request: primaryFieldRequest,
+      tracker,
+    });
+  }, [
+    fieldVector.status,
+    fieldVectorEnabled,
+    fieldVectorPreparedRevision,
+    incomingFieldVectorEnvelope,
+    primaryFieldRequest,
+    primaryFieldRetained,
+    tracker,
+  ]);
+  if (nextPrimaryFieldRetained !== primaryFieldRetained) {
+    setPrimaryFieldRetained(nextPrimaryFieldRetained);
+  }
+  const displayedFieldVector = displayedFieldVectorEnvelope?.data ?? null;
   const analysisComplexFieldQuery = useMemo(
     () =>
       analysisOverlay

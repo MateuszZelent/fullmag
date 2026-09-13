@@ -21,6 +21,8 @@ import {
   buildHysteresisChartPointSelection,
 } from "@/shared/domain/study/HysteresisChart";
 
+import { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import type { Viewport3DFieldVectorEnvelope } from "../viewport3dResources";
 import {
   buildViewport3DAirboxSyntheticVectorField,
   applyViewport3DFieldLayerDiagnosticOverrides,
@@ -28,6 +30,7 @@ import {
   resolveViewport3DAnalysisComplexFieldQuery,
   resolveViewport3DAnalysisComplexProjectionEnabled,
   resolveViewport3DDisplayedLiveValue,
+  resolvePrimaryFieldDisplayedEnvelope,
   resolveViewport3DFieldMetaScalarComponent,
   resolveViewport3DPrimaryFieldDataOptions,
   resolveViewport3DPrimaryFieldDemandPlan,
@@ -1452,6 +1455,153 @@ describe("useViewport3DSceneModel", () => {
     expect(resolveViewport3DDisplayedLiveValue("next", "previous", false)).toBe(
       "next",
     );
+  });
+
+  it("retains the last compatible primary field frame across ready response with mismatched identity (LR-03)", () => {
+    const tracker = new Viewport3DResourceTracker();
+    const frameA: Viewport3DFieldVectorEnvelope = {
+      data: {
+        dtype: "float64",
+        formatVersion: 3,
+        domainGenerationId: "gen-1",
+        grid: [1, 1, 1],
+        indexing: "full_domain",
+        meshTopologyHash: "top-1",
+        nComp: 3,
+        pointCount: 1,
+        quantityId: "m",
+        scopeId: "part-1",
+        scopeKind: "part",
+        valueCount: 3,
+        values: new Float64Array([1, 0, 0]),
+      },
+      etag: '"m-frame-a"',
+      resourceKey:
+        "/v2/sessions/current/data/fields/m?scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-1",
+      responseMetadata: {
+        component: "full",
+        domainGenerationId: "gen-1",
+        encoding: "FMVP;version=2",
+        fieldIndexing: null,
+        fieldRevision: "rev-A",
+        identityIssues: [],
+        meshTopologyHash: "top-1",
+        nComp: 3,
+        nodeIndexCount: null,
+        pointCount: 1,
+        quantityId: "m",
+        scopeId: "part-1",
+        scopeKind: "part",
+        snapshotId: "snap-1",
+        stageId: null,
+        phaseRad: null,
+        view: null,
+        valueCount: 3,
+      },
+    };
+
+    const frameB_MismatchedSnapshot: Viewport3DFieldVectorEnvelope = {
+      ...frameA,
+      etag: '"m-frame-b"',
+      resourceKey:
+        "/v2/sessions/current/data/fields/m?scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-wrong",
+      responseMetadata: {
+        ...frameA.responseMetadata!,
+        fieldRevision: "rev-B",
+        snapshotId: "snap-wrong",
+      },
+    };
+
+    const frameC: Viewport3DFieldVectorEnvelope = {
+      ...frameA,
+      etag: '"m-frame-c"',
+      responseMetadata: {
+        ...frameA.responseMetadata!,
+        fieldRevision: "rev-C",
+      },
+    };
+
+    const request = {
+      quantityId: "m",
+      query: {
+        component: "full",
+        expected_carrier_revision: "top-1",
+        expected_generation_id: "gen-1",
+        scope_id: "part-1",
+        scope_kind: "part",
+        snapshot_id: "snap-1",
+      },
+    };
+
+    // Step A: incoming frame A matches and is ready
+    const stepA = resolvePrimaryFieldDisplayedEnvelope({
+      incomingEnvelope: frameA,
+      preparedRevision: "rev-A",
+      retained: null,
+      request,
+      status: "ready",
+      tracker,
+    });
+    expect(stepA.displayedEnvelope).toEqual({ ...frameA, retained: false });
+    expect(stepA.displayedRevision).toBe("rev-A");
+    expect(stepA.nextRetained).toEqual({
+      envelope: { ...frameA, retained: false },
+      revision: "rev-A",
+    });
+
+    // Step B: incoming frame B is ready but has mismatched snapshot_id
+    const stepB = resolvePrimaryFieldDisplayedEnvelope({
+      incomingEnvelope: frameB_MismatchedSnapshot,
+      preparedRevision: "rev-B",
+      retained: stepA.nextRetained,
+      request,
+      status: "ready",
+      tracker,
+    });
+    // In step B, frame A is displayed with retained: true, and revision is rev-A (not rev-B)
+    expect(stepB.displayedEnvelope).toEqual({ ...frameA, retained: true });
+    expect(stepB.displayedRevision).toBe("rev-A");
+    expect(stepB.nextRetained).toEqual({
+      envelope: { ...frameA, retained: true },
+      revision: "rev-A",
+    });
+    expect(tracker.getRetentionRejectionCounts()).toEqual({});
+
+    // Step C: incoming frame C matches and is ready
+    const stepC = resolvePrimaryFieldDisplayedEnvelope({
+      incomingEnvelope: frameC,
+      preparedRevision: "rev-C",
+      retained: stepB.nextRetained,
+      request,
+      status: "ready",
+      tracker,
+    });
+    expect(stepC.displayedEnvelope).toEqual({ ...frameC, retained: false });
+    expect(stepC.displayedRevision).toBe("rev-C");
+    expect(stepC.nextRetained).toEqual({
+      envelope: { ...frameC, retained: false },
+      revision: "rev-C",
+    });
+
+    // Scenario 2: request has new expected_generation_id -> retention is rejected, returns null, counter incremented
+    const requestNewGeneration = {
+      ...request,
+      query: { ...request.query, expected_generation_id: "gen-2" },
+    };
+    const stepB_GenMismatch = resolvePrimaryFieldDisplayedEnvelope({
+      incomingEnvelope: frameB_MismatchedSnapshot,
+      preparedRevision: "rev-B",
+      retained: stepA.nextRetained,
+      request: requestNewGeneration,
+      status: "ready",
+      tracker,
+    });
+    expect(stepB_GenMismatch.displayedEnvelope).toBeNull();
+    expect(stepB_GenMismatch.displayedRevision).toBeNull();
+    expect(stepB_GenMismatch.nextRetained).toBeNull();
+    expect(tracker.getRetentionRejectionCounts()).toEqual({
+      generation: 1,
+    });
   });
 
   it("keys the render model by the displayed payload revision", () => {
