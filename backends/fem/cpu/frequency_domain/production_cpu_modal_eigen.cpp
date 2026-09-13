@@ -1873,8 +1873,9 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         solve_sparse_modal_spectrum_for_request(request, slepc_request);
 
     FrequencyDomainContractResult result{};
-    constexpr const char *kSparseSolverModel =
-        "slepc_shift_invert_production_cpu_sparse_csr";
+    const char *kSparseSolverModel = modal_request_is_nonzero_k_floquet(request)
+        ? "floquet_real_frequency_slepc_sparse"
+        : "slepc_shift_invert_production_cpu_sparse_csr";
     if (!slepc_result.ok) {
         const char *stop_reason = stop_reason_or_default(slepc_result);
         result.status = FrequencyDomainStatus::solve_error;
@@ -2143,8 +2144,9 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
     }
 
     FrequencyDomainContractResult result{};
-    constexpr const char *kSparseWindowSolverModel =
-        "slepc_multi_shift_invert_production_cpu_sparse_csr";
+    const char *kSparseWindowSolverModel = modal_request_is_nonzero_k_floquet(request)
+        ? "floquet_multi_shift_invert_slepc_sparse"
+        : "slepc_multi_shift_invert_production_cpu_sparse_csr";
     const std::string window_diagnostics =
         production_window_diagnostics_json(
             request,

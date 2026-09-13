@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <complex>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -102,6 +103,21 @@ void rejects_missing_dynamic_payload_and_gpu()
     check(std::strcmp(result.unsupported_reason,
                       "floquet_modal_gpu_lane_not_owned_by_cpu_solver") == 0,
           "solver propagates the admission reason");
+
+    request = valid_request();
+    request.dynamic_demag_k_tangent_matrix_value_count = 3;
+    admission = fd::admit_floquet_modal_request(request, spectral_request());
+    check(!admission.accepted, "non-square dynamic demag payload is rejected");
+    check(std::strcmp(
+              admission.reason,
+              "floquet_modal_requires_finite_square_dynamic_demag_k_payload") == 0,
+          "dynamic demag shape rejection reason is stable");
+
+    static double nan_dynamic[4] = {0.25, 0.0, 0.0, NAN};
+    request = valid_request();
+    request.dynamic_demag_k_tangent_matrix_row_major = nan_dynamic;
+    admission = fd::admit_floquet_modal_request(request, spectral_request());
+    check(!admission.accepted, "non-finite dynamic demag payload is rejected");
 }
 
 void rejects_zero_k_and_missing_pairs()

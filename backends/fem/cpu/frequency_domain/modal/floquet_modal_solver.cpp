@@ -74,6 +74,27 @@ bool sparse_view_is_valid(const CsrMatrixView &view) noexcept
     return true;
 }
 
+bool dense_matrix_payload_is_valid(
+    const double *values,
+    std::uint64_t value_count,
+    int dimension) noexcept
+{
+    if (values == nullptr || dimension <= 0) {
+        return false;
+    }
+    const std::uint64_t n = static_cast<std::uint64_t>(dimension);
+    if (n > std::numeric_limits<std::uint64_t>::max() / n ||
+        value_count != n * n) {
+        return false;
+    }
+    for (std::uint64_t index = 0; index < value_count; ++index) {
+        if (!std::isfinite(values[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 FloquetModalSolverAdmission admit_floquet_modal_request(
@@ -107,11 +128,20 @@ FloquetModalSolverAdmission admit_floquet_modal_request(
         admission.reason = "floquet_modal_requires_bloch_floquet_operator_payload";
         return admission;
     }
-    if (request.operator_request.include_demag != 0 &&
-        (request.dynamic_demag_k_tangent_matrix_row_major == nullptr ||
-         request.dynamic_demag_k_tangent_matrix_value_count == 0u)) {
-        admission.reason = "floquet_modal_requires_dynamic_demag_k_payload";
-        return admission;
+    if (request.operator_request.include_demag != 0) {
+        if (request.dynamic_demag_k_tangent_matrix_row_major == nullptr ||
+            request.dynamic_demag_k_tangent_matrix_value_count == 0u) {
+            admission.reason = "floquet_modal_requires_dynamic_demag_k_payload";
+            return admission;
+        }
+        if (!dense_matrix_payload_is_valid(
+                request.dynamic_demag_k_tangent_matrix_row_major,
+                request.dynamic_demag_k_tangent_matrix_value_count,
+                spectral_request.tangent_dof_count)) {
+            admission.reason =
+                "floquet_modal_requires_finite_square_dynamic_demag_k_payload";
+            return admission;
+        }
     }
     if (spectral_request.tangent_dof_count <= 0 ||
         spectral_request.stiffness_matrix_row_major == nullptr ||
