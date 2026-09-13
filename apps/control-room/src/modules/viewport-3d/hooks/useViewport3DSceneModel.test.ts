@@ -1,6 +1,10 @@
 import { readFileSync as readFileSyncRaw } from "node:fs";
+import { act, createElement, useMemo, useState } from "react";
+import { createRoot } from "react-dom/client";
 
 import { describe, expect, it } from "vitest";
+
+import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
 import { DEFAULT_CAMERA_REGISTRY_STATE } from "@/kernel/visualization/CameraRegistryController";
 import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
@@ -31,6 +35,7 @@ import {
   resolveViewport3DAnalysisComplexProjectionEnabled,
   resolveViewport3DDisplayedLiveValue,
   resolvePrimaryFieldDisplayedEnvelope,
+  type Viewport3DPrimaryFieldRetainedState,
   resolveViewport3DFieldMetaScalarComponent,
   resolveViewport3DPrimaryFieldDataOptions,
   resolveViewport3DPrimaryFieldDemandPlan,
@@ -1602,6 +1607,481 @@ describe("useViewport3DSceneModel", () => {
     expect(tracker.getRetentionRejectionCounts()).toEqual({
       generation: 1,
     });
+  });
+
+  it("reaches a retention fixed point in one step (regression: render loop)", () => {
+    const tracker = new Viewport3DResourceTracker();
+    const frameA: Viewport3DFieldVectorEnvelope = {
+      data: {
+        dtype: "float64",
+        formatVersion: 3,
+        domainGenerationId: "gen-1",
+        grid: [1, 1, 1],
+        indexing: "full_domain",
+        meshTopologyHash: "top-1",
+        nComp: 3,
+        pointCount: 1,
+        quantityId: "m",
+        scopeId: "part-1",
+        scopeKind: "part",
+        valueCount: 3,
+        values: new Float64Array([1, 0, 0]),
+      },
+      etag: '"m-frame-a"',
+      resourceKey:
+        "/v2/sessions/current/data/fields/m?scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-1",
+      responseMetadata: {
+        component: "full",
+        domainGenerationId: "gen-1",
+        encoding: "FMVP;version=2",
+        fieldIndexing: null,
+        fieldRevision: "rev-A",
+        identityIssues: [],
+        meshTopologyHash: "top-1",
+        nComp: 3,
+        nodeIndexCount: null,
+        pointCount: 1,
+        quantityId: "m",
+        scopeId: "part-1",
+        scopeKind: "part",
+        snapshotId: "snap-1",
+        stageId: null,
+        phaseRad: null,
+        view: null,
+        valueCount: 3,
+      },
+    };
+
+    const frameB_MismatchedSnapshot: Viewport3DFieldVectorEnvelope = {
+      ...frameA,
+      etag: '"m-frame-b"',
+      resourceKey:
+        "/v2/sessions/current/data/fields/m?scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-wrong",
+      responseMetadata: {
+        ...frameA.responseMetadata!,
+        fieldRevision: "rev-B",
+        snapshotId: "snap-wrong",
+      },
+    };
+
+    const request = {
+      quantityId: "m",
+      query: {
+        component: "full",
+        expected_carrier_revision: "top-1",
+        expected_generation_id: "gen-1",
+        scope_id: "part-1",
+        scope_kind: "part",
+        snapshot_id: "snap-1",
+      },
+    };
+
+    // Path 1: Fresh read on ready + compatible incoming
+    const freshStep1 = resolvePrimaryFieldDisplayedEnvelope({
+      incomingEnvelope: frameA,
+      preparedRevision: "rev-A",
+      retained: null,
+      request,
+      status: "ready",
+      tracker,
+    });
+    expect(freshStep1.nextRetained).not.toBeNull();
+    const freshStep2 = resolvePrimaryFieldDisplayedEnvelope({
+      incomingEnvelope: frameA,
+      preparedRevision: "rev-A",
+      retained: freshStep1.nextRetained,
+      request,
+      status: "ready",
+      tracker,
+    });
+    expect(freshStep2.nextRetained).toBe(freshStep1.nextRetained);
+    expect(freshStep2.displayedEnvelope).toBe(freshStep1.displayedEnvelope);
+
+    // Path 2: Retention on ready + mismatched incoming identity
+    const mismatchStep1 = resolvePrimaryFieldDisplayedEnvelope({
+      incomingEnvelope: frameB_MismatchedSnapshot,
+      preparedRevision: "rev-B",
+      retained: freshStep1.nextRetained,
+      request,
+      status: "ready",
+      tracker,
+    });
+    expect(mismatchStep1.nextRetained).not.toBeNull();
+    const mismatchStep2 = resolvePrimaryFieldDisplayedEnvelope({
+      incomingEnvelope: frameB_MismatchedSnapshot,
+      preparedRevision: "rev-B",
+      retained: mismatchStep1.nextRetained,
+      request,
+      status: "ready",
+      tracker,
+    });
+    expect(mismatchStep2.nextRetained).toBe(mismatchStep1.nextRetained);
+    expect(mismatchStep2.displayedEnvelope).toBe(mismatchStep1.displayedEnvelope);
+
+    // Path 3: Retention on loading/stale with existing retained frame
+    const loadingStep1 = resolvePrimaryFieldDisplayedEnvelope({
+      incomingEnvelope: null,
+      preparedRevision: null,
+      retained: freshStep1.nextRetained,
+      request,
+      status: "loading",
+      tracker,
+    });
+    expect(loadingStep1.nextRetained).not.toBeNull();
+    const loadingStep2 = resolvePrimaryFieldDisplayedEnvelope({
+      incomingEnvelope: null,
+      preparedRevision: null,
+      retained: loadingStep1.nextRetained,
+      request,
+      status: "loading",
+      tracker,
+    });
+    expect(loadingStep2.nextRetained).toBe(loadingStep1.nextRetained);
+    expect(loadingStep2.displayedEnvelope).toBe(loadingStep1.displayedEnvelope);
+
+    // Path 4: Stale/loading with retained: null and matching incoming frame
+    const staleStep1 = resolvePrimaryFieldDisplayedEnvelope({
+      incomingEnvelope: frameA,
+      preparedRevision: "rev-A",
+      retained: null,
+      request,
+      status: "stale",
+      tracker,
+    });
+    expect(staleStep1.nextRetained).not.toBeNull();
+    const staleStep2 = resolvePrimaryFieldDisplayedEnvelope({
+      incomingEnvelope: frameA,
+      preparedRevision: "rev-A",
+      retained: staleStep1.nextRetained,
+      request,
+      status: "stale",
+      tracker,
+    });
+    expect(staleStep2.nextRetained).toBe(staleStep1.nextRetained);
+    expect(staleStep2.displayedEnvelope).toBe(staleStep1.displayedEnvelope);
+
+    // Iterative loop (up to 10 iterations) for fresh ready path
+    let currentRetainedFresh: Viewport3DPrimaryFieldRetainedState | null = null;
+    let freshIterations = 0;
+    for (let i = 0; i < 10; i++) {
+      freshIterations++;
+      const result = resolvePrimaryFieldDisplayedEnvelope({
+        incomingEnvelope: frameA,
+        preparedRevision: "rev-A",
+        retained: currentRetainedFresh,
+        request,
+        status: "ready",
+        tracker,
+      });
+      if (result.nextRetained === currentRetainedFresh) {
+        break;
+      }
+      currentRetainedFresh = result.nextRetained;
+    }
+    expect(freshIterations).toBe(2);
+
+    // Iterative loop (up to 10 iterations) for retention on mismatch path
+    let currentRetainedMismatch: Viewport3DPrimaryFieldRetainedState | null = freshStep1.nextRetained;
+    let mismatchIterations = 0;
+    for (let i = 0; i < 10; i++) {
+      mismatchIterations++;
+      const result = resolvePrimaryFieldDisplayedEnvelope({
+        incomingEnvelope: frameB_MismatchedSnapshot,
+        preparedRevision: "rev-B",
+        retained: currentRetainedMismatch,
+        request,
+        status: "ready",
+        tracker,
+      });
+      if (result.nextRetained === currentRetainedMismatch) {
+        break;
+      }
+      currentRetainedMismatch = result.nextRetained;
+    }
+    expect(mismatchIterations).toBe(2);
+
+    // Iterative loop (up to 10 iterations) for loading/stale with existing retained frame (Path 3)
+    let currentRetainedLoading: Viewport3DPrimaryFieldRetainedState | null = freshStep1.nextRetained;
+    let loadingIterations = 0;
+    for (let i = 0; i < 10; i++) {
+      loadingIterations++;
+      const result = resolvePrimaryFieldDisplayedEnvelope({
+        incomingEnvelope: null,
+        preparedRevision: null,
+        retained: currentRetainedLoading,
+        request,
+        status: "loading",
+        tracker,
+      });
+      if (result.nextRetained === currentRetainedLoading) {
+        break;
+      }
+      currentRetainedLoading = result.nextRetained;
+    }
+    expect(loadingIterations).toBe(2);
+
+    // Iterative loop (up to 10 iterations) for stale initial adoption (Path 4)
+    let currentRetainedStale: Viewport3DPrimaryFieldRetainedState | null = null;
+    let staleIterations = 0;
+    for (let i = 0; i < 10; i++) {
+      staleIterations++;
+      const result = resolvePrimaryFieldDisplayedEnvelope({
+        incomingEnvelope: frameA,
+        preparedRevision: "rev-A",
+        retained: currentRetainedStale,
+        request,
+        status: "stale",
+        tracker,
+      });
+      if (result.nextRetained === currentRetainedStale) {
+        break;
+      }
+      currentRetainedStale = result.nextRetained;
+    }
+    expect(staleIterations).toBe(2);
+
+    // Rejection path does not double-increment tracker counts when called with null retained
+    const rejectionTracker = new Viewport3DResourceTracker();
+    const reqGen2 = {
+      ...request,
+      query: { ...request.query, expected_generation_id: "gen-2" },
+    };
+    const rejStep1 = resolvePrimaryFieldDisplayedEnvelope({
+      incomingEnvelope: frameA,
+      preparedRevision: "rev-A",
+      retained: freshStep1.nextRetained,
+      request: reqGen2,
+      status: "ready",
+      tracker: rejectionTracker,
+    });
+    expect(rejStep1.nextRetained).toBeNull();
+    expect(rejectionTracker.getRetentionRejectionCounts()).toEqual({ generation: 1 });
+
+    const rejStep2 = resolvePrimaryFieldDisplayedEnvelope({
+      incomingEnvelope: frameA,
+      preparedRevision: "rev-A",
+      retained: rejStep1.nextRetained,
+      request: reqGen2,
+      status: "ready",
+      tracker: rejectionTracker,
+    });
+    expect(rejStep2.nextRetained).toBeNull();
+    expect(rejectionTracker.getRetentionRejectionCounts()).toEqual({ generation: 1 });
+  });
+
+  it("stabilizes the render synchronization loop in at most two renders (regression: render loop)", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const frameA: Viewport3DFieldVectorEnvelope = {
+      data: {
+        dtype: "float64",
+        formatVersion: 3,
+        domainGenerationId: "gen-1",
+        grid: [1, 1, 1],
+        indexing: "full_domain",
+        meshTopologyHash: "top-1",
+        nComp: 3,
+        pointCount: 1,
+        quantityId: "m",
+        scopeId: "part-1",
+        scopeKind: "part",
+        valueCount: 3,
+        values: new Float64Array([1, 0, 0]),
+      },
+      etag: '"m-frame-a"',
+      resourceKey:
+        "/v2/sessions/current/data/fields/m?scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-1",
+      responseMetadata: {
+        component: "full",
+        domainGenerationId: "gen-1",
+        encoding: "FMVP;version=2",
+        fieldIndexing: null,
+        fieldRevision: "rev-A",
+        identityIssues: [],
+        meshTopologyHash: "top-1",
+        nComp: 3,
+        nodeIndexCount: null,
+        pointCount: 1,
+        quantityId: "m",
+        scopeId: "part-1",
+        scopeKind: "part",
+        snapshotId: "snap-1",
+        stageId: null,
+        phaseRad: null,
+        view: null,
+        valueCount: 3,
+      },
+    };
+
+    const frameB_MismatchedSnapshot: Viewport3DFieldVectorEnvelope = {
+      ...frameA,
+      etag: '"m-frame-b"',
+      resourceKey:
+        "/v2/sessions/current/data/fields/m?scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-wrong",
+      responseMetadata: {
+        ...frameA.responseMetadata!,
+        fieldRevision: "rev-B",
+        snapshotId: "snap-wrong",
+      },
+    };
+
+    const frameC_Compatible: Viewport3DFieldVectorEnvelope = {
+      ...frameA,
+      etag: '"m-frame-c"',
+      responseMetadata: {
+        ...frameA.responseMetadata!,
+        fieldRevision: "rev-C",
+      },
+    };
+
+    const request = {
+      quantityId: "m",
+      query: {
+        component: "full",
+        expected_carrier_revision: "top-1",
+        expected_generation_id: "gen-1",
+        scope_id: "part-1",
+        scope_kind: "part",
+        snapshot_id: "snap-1",
+      },
+    };
+
+    const tracker = new Viewport3DResourceTracker();
+
+    let renderCount = 0;
+    function TestRetentionHarness(props: {
+      incomingEnvelope: Viewport3DFieldVectorEnvelope | null;
+      status: string;
+      preparedRevision: string | null;
+      requestOverride?: typeof request;
+    }) {
+      renderCount++;
+      const [primaryFieldRetained, setPrimaryFieldRetained] =
+        useState<Viewport3DPrimaryFieldRetainedState | null>(null);
+      const activeRequest = props.requestOverride ?? request;
+      const { nextRetained } = useMemo(() => {
+        return resolvePrimaryFieldDisplayedEnvelope({
+          incomingEnvelope: props.incomingEnvelope,
+          status: props.status,
+          preparedRevision: props.preparedRevision,
+          retained: primaryFieldRetained,
+          request: activeRequest,
+          tracker,
+        });
+      }, [props.incomingEnvelope, props.status, props.preparedRevision, primaryFieldRetained, activeRequest]);
+
+      if (nextRetained !== primaryFieldRetained) {
+        setPrimaryFieldRetained(nextRetained);
+      }
+
+      return null;
+    }
+
+    try {
+      renderCount = 0;
+      await act(async () => {
+        root.render(
+          createElement(TestRetentionHarness, {
+            incomingEnvelope: frameA,
+            status: "ready",
+            preparedRevision: "rev-A",
+          }),
+        );
+      });
+      // Initial mount: 1st render has primaryFieldRetained=null -> setState -> 2nd render stabilizes
+      expect(renderCount).toBeLessThanOrEqual(2);
+
+      // Re-render with same frame
+      const countBeforeRerender = renderCount;
+      await act(async () => {
+        root.render(
+          createElement(TestRetentionHarness, {
+            incomingEnvelope: frameA,
+            status: "ready",
+            preparedRevision: "rev-A",
+          }),
+        );
+      });
+      expect(renderCount - countBeforeRerender).toBe(1);
+
+      // Transition to retention (mismatched snapshot arrives)
+      const countBeforeMismatch = renderCount;
+      await act(async () => {
+        root.render(
+          createElement(TestRetentionHarness, {
+            incomingEnvelope: frameB_MismatchedSnapshot,
+            status: "ready",
+            preparedRevision: "rev-B",
+          }),
+        );
+      });
+      // Stabilizes in at most 2 renders
+      expect(renderCount - countBeforeMismatch).toBeLessThanOrEqual(2);
+
+      // Re-render during retention with another mismatched snapshot
+      const countBeforeMismatchRerender = renderCount;
+      await act(async () => {
+        root.render(
+          createElement(TestRetentionHarness, {
+            incomingEnvelope: frameB_MismatchedSnapshot,
+            status: "ready",
+            preparedRevision: "rev-B",
+          }),
+        );
+      });
+      expect(renderCount - countBeforeMismatchRerender).toBe(1);
+
+      // Transition back to ready (matching frame arrives)
+      const countBeforeReturnToReady = renderCount;
+      await act(async () => {
+        root.render(
+          createElement(TestRetentionHarness, {
+            incomingEnvelope: frameC_Compatible,
+            status: "ready",
+            preparedRevision: "rev-C",
+          }),
+        );
+      });
+      expect(renderCount - countBeforeReturnToReady).toBeLessThanOrEqual(2);
+
+      // Transition to stale
+      const countBeforeStale = renderCount;
+      await act(async () => {
+        root.render(
+          createElement(TestRetentionHarness, {
+            incomingEnvelope: frameC_Compatible,
+            status: "stale",
+            preparedRevision: "rev-C",
+          }),
+        );
+      });
+      expect(renderCount - countBeforeStale).toBeLessThanOrEqual(2);
+
+      // Transition to rejected retention (new generation request)
+      const reqGen2 = {
+        ...request,
+        query: { ...request.query, expected_generation_id: "gen-2" },
+      };
+      const countBeforeRejection = renderCount;
+      await act(async () => {
+        root.render(
+          createElement(TestRetentionHarness, {
+            incomingEnvelope: frameC_Compatible,
+            status: "ready",
+            preparedRevision: "rev-C",
+            requestOverride: reqGen2,
+          }),
+        );
+      });
+      expect(renderCount - countBeforeRejection).toBeLessThanOrEqual(2);
+      expect(tracker.getRetentionRejectionCounts()).toEqual({ generation: 1 });
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      dom.restore();
+    }
   });
 
   it("keys the render model by the displayed payload revision", () => {

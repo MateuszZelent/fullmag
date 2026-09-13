@@ -1915,10 +1915,25 @@ export function resolvePrimaryFieldDisplayedEnvelope({
       request,
     );
     if (incomingMatch.matches) {
-      const freshEnvelope: Viewport3DFieldVectorEnvelope = {
-        ...incomingEnvelope,
-        retained: false,
-      };
+      if (
+        retained &&
+        retained.envelope.data === incomingEnvelope.data &&
+        retained.envelope.retained === false &&
+        retained.revision === preparedRevision
+      ) {
+        return {
+          displayedEnvelope: retained.envelope,
+          displayedRevision: preparedRevision,
+          nextRetained: retained,
+        };
+      }
+      const freshEnvelope: Viewport3DFieldVectorEnvelope =
+        incomingEnvelope.retained === false
+          ? incomingEnvelope
+          : {
+              ...incomingEnvelope,
+              retained: false,
+            };
       return {
         displayedEnvelope: freshEnvelope,
         displayedRevision: preparedRevision,
@@ -1936,6 +1951,13 @@ export function resolvePrimaryFieldDisplayedEnvelope({
       request,
     );
     if (retainedMatch.matches) {
+      if (retained.envelope.retained === true) {
+        return {
+          displayedEnvelope: retained.envelope,
+          displayedRevision: retained.revision,
+          nextRetained: retained,
+        };
+      }
       const retainedEnvelope: Viewport3DFieldVectorEnvelope = {
         ...retained.envelope,
         retained: true,
@@ -1957,16 +1979,19 @@ export function resolvePrimaryFieldDisplayedEnvelope({
     };
   }
 
-  if (incomingEnvelope) {
+  if (status !== "ready" && incomingEnvelope) {
     const incomingMatch = resolveViewport3DFieldVectorIdentityMatch(
       incomingEnvelope,
       request,
     );
     if (incomingMatch.matches) {
-      const retainedEnvelope: Viewport3DFieldVectorEnvelope = {
-        ...incomingEnvelope,
-        retained: true,
-      };
+      const retainedEnvelope: Viewport3DFieldVectorEnvelope =
+        incomingEnvelope.retained === true
+          ? incomingEnvelope
+          : {
+              ...incomingEnvelope,
+              retained: true,
+            };
       return {
         displayedEnvelope: retainedEnvelope,
         displayedRevision: preparedRevision,
@@ -1976,7 +2001,6 @@ export function resolvePrimaryFieldDisplayedEnvelope({
         },
       };
     }
-    tracker?.recordRetentionRejection(incomingMatch.reason);
   }
 
   return {
