@@ -139,6 +139,22 @@ void rejects_zero_k_and_missing_pairs()
           "missing seam-pair rejection reason is stable");
 }
 
+void rejects_conflicting_k_payloads()
+{
+    fd::ModalEigenRequest request = valid_request();
+    static double operator_k[3] = {1.0, 0.0, 0.0};
+    request.has_floquet_k_vector = true;
+    request.floquet_k_vector_rad_per_m[0] = 2.0;
+    request.floquet_k_vector_rad_per_m[1] = 0.0;
+    request.floquet_k_vector_rad_per_m[2] = 0.0;
+    request.operator_request.k_vector_rad_m = operator_k;
+    request.operator_request.k_vector_len = 3;
+    const auto admission = fd::admit_floquet_modal_request(request, spectral_request());
+    check(!admission.accepted, "conflicting Floquet k payloads are rejected");
+    check(std::strcmp(admission.reason, "floquet_modal_k_vector_payload_mismatch") == 0,
+          "conflicting Floquet k reason is stable");
+}
+
 void rejects_invalid_frequency_windows()
 {
     fd::ModalEigenRequest request = valid_request();
@@ -195,6 +211,7 @@ int main()
     accepts_finite_nonzero_k_cpu_contract();
     rejects_missing_dynamic_payload_and_gpu();
     rejects_zero_k_and_missing_pairs();
+    rejects_conflicting_k_payloads();
     rejects_invalid_frequency_windows();
     admits_sparse_bloch_operator_without_demag();
     return 0;

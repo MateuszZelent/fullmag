@@ -30,6 +30,28 @@ bool finite_nonzero_k(const ModalEigenRequest &request) noexcept
     return nonzero;
 }
 
+bool floquet_k_payload_is_consistent(const ModalEigenRequest &request) noexcept
+{
+    if (!request.has_floquet_k_vector) {
+        return true;
+    }
+    const double *operator_values = request.operator_request.k_vector_rad_m;
+    const int operator_length = request.operator_request.k_vector_len;
+    if (operator_values == nullptr && operator_length <= 0) {
+        return true;
+    }
+    if (operator_values == nullptr || operator_length != 3) {
+        return false;
+    }
+    for (int index = 0; index < 3; ++index) {
+        if (!std::isfinite(operator_values[index]) ||
+            operator_values[index] != request.floquet_k_vector_rad_per_m[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool has_floquet_payload_marker(const ModalEigenRequest &request) noexcept
 {
     const char *diagnostics = request.operator_request.operator_diagnostics_json;
@@ -162,6 +184,10 @@ FloquetModalSolverAdmission admit_floquet_modal_request(
         admission.reason = "floquet_modal_requires_floquet_boundary";
         return admission;
     }
+    if (!floquet_k_payload_is_consistent(request)) {
+        admission.reason = "floquet_modal_k_vector_payload_mismatch";
+        return admission;
+    }
     if (!finite_nonzero_k(request)) {
         admission.reason = "floquet_modal_requires_finite_nonzero_three_vector";
         return admission;
@@ -218,6 +244,10 @@ FloquetModalSolverAdmission admit_floquet_modal_sparse_request(
     if (request.operator_request.spin_wave_bc_kind == nullptr ||
         std::strcmp(request.operator_request.spin_wave_bc_kind, "floquet") != 0) {
         admission.reason = "floquet_modal_requires_floquet_boundary";
+        return admission;
+    }
+    if (!floquet_k_payload_is_consistent(request)) {
+        admission.reason = "floquet_modal_k_vector_payload_mismatch";
         return admission;
     }
     if (!finite_nonzero_k(request)) {
