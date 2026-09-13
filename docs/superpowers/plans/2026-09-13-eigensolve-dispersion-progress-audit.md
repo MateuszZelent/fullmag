@@ -160,12 +160,13 @@ checkpointu pozostają jawnie historyczne.
 
 ## Dowody i ograniczenia
 
-Bieżące odczyty: Git status czysty przed aktualizacją; diff od bazy nie zawiera
-apps/control-room ani implementacji GPU zadania. Główny checkout ma cudze
-zmiany .gitignore i trzech submodułów. `python scripts/local_runner_cli.py
-container-status`: exit 1, „Container profile allow-list mismatch”.
-`gh auth status`: exit 1, nieważny token. Nie pobrano nowego wyniku joba,
-więc historyczne queued/running nie są aktualnym dowodem żywego procesu.
+Bieżące odczyty po podmianie obrazu: diff od bazy nie zawiera zmian
+`apps/control-room` ani implementacji GPU zadania. Główny checkout zachowuje
+cudze zmiany. `just runner-container-status` z obrazu
+`sha256:fe2931c6e4fe5e43eb4a4da1fc18a24696cb50c3e36df84fd1db21897ba69175`
+zwraca exit 0, `worker_alive=true`, `accepting_jobs=true`, pustą kolejkę i
+wolne około 50.9 GB. `gh auth status` nadal zwraca exit 1 z powodu nieważnego
+tokenu; nie blokuje to lokalnego obrazu ani endpointów UI.
 
 Historyczne wyniki w checkpointcie: planner 461 passed, IR 102 passed
 (najnowszy zapis), runner fem::eigen_tests 142 passed, tracking 15 passed,
@@ -261,3 +262,117 @@ Sprawdzono stałe, jednostki, 61 punktów i znaki transformacji;
 wykonanie COMSOL i wyniki porównania pozostają NOT VERIFIED.
 Brak danych jest teraz zadaniem oczekującym na pomiar operatora,
 a nie podstawą do deklarowania ukończonej walidacji naukowej.
+
+
+## Zlecenie wykonania dokładnego benchmarku COMSOL
+
+Kryteria B0–B6 są zapisane w aktualnym nagłówku implementation-status.
+Nie wystarczy sam wykres/import CSV, podniesienie limitu dense ani zmiana
+Dirichleta na Robin. Wymagany jest rzeczywisty model A1 z dynamicznym demagiem,
+zaakceptowaną równowagą, pełną ścieżką k i eksportem porównywalnych pól.
+
+
+### B0: rzeczywista materializacja A1 na hoście Windows — 2026-09-13
+
+Próba publicznego skryptu C0/C1/A1 dla A1 z
+`load_problem_from_script(lightweight_assets=False)` i
+`to_ir(include_geometry_assets=True)` doszła do ekstrakcji Gmsh, orientacji
+ścian periodycznych i `MeshData.validate_strict`. Nie powstał końcowy ProblemIR.
+Diagnostyka `faulthandler` ujawniła Windows access violation w
+`numpy.linalg.det`, wywołanym z `_gmsh_types.py::validate_strict`.
+Log: `comsol-a1-real-mesh-stack.log` w resolverowym build root `windows-native`.
+Pierwszą próbę bez diagnostyki przerwano; druga zakończyła się kodem 1.
+
+Wniosek: testy lekkiego authoringu nie dowodzą materializacji siatki.
+Należy zweryfikować rzeczywistą siatkę w kontrolowanej trasie Linux/CPU
+z tym samym skryptem, a błąd hostowego stosu NumPy zbadać osobno. Nie wolno
+wyłączać `validate_strict` ani uznać modelu za gotowy na podstawie mock assets.
+
+
+### B2/B5: review przed natywnym wykonaniem
+
+- **OTWARTE**: sparse Floquet musi targetować częstotliwość zgodnie z
+  lambda=i omega; rzeczywisty shift omega w nierotowanym pencil jest błędny.
+- **W TRAKCIE**: formatter i parser rozdzielają fizyczne zespolone phi od
+  doubled-real coefficients. Wariant fizyczny wymaga własnego wymiaru
+  `potential_dof_count` i nie może trafić do starego eksportera współczynników.
+- **OTWARTE**: residual zredukowanych bloków CSR jest poprawną kontrolą
+  problemu Galerkina, lecz nie dowodzi rekonstrukcji pełnego deskryptora ani
+  phase/frame seams i Dirichleta. Nazwy i certyfikacja muszą odpowiadać dowodowi.
+- **DO WERYFIKACJI TRASY**: ogólny sparse production window nadal posiada
+  konwersję mass CSR do dense; nowa ścieżka A1 nie może jej wywoływać.
+- **NAPRAWIONE źródłowo**: plotter łączy osobne `branch_id`, pozostawia przerwy
+  przy brakujących próbkach i nie łączy nieśledzonych modów. Commit
+  `8e460ea3dfd8a8714c01cc912bbb3939a1caa13a`, 7 testów passed i oględziny PNG
+  fixture. Nie jest to wykres policzonego A1.
+
+Po rozdzieleniu parsera fizycznego potencjału: **259 testów eigen passed**,
+log `physical-native-parser-tests.log` w resolverowym build root windows-native.
+Natywny MFEM/SLEPc nie jest objęty tym testem.
+
+
+### B0: Linux materializacja zakończona, L1 nadal niezaakceptowane
+
+Próba `a1-linux-real-mesh-20260913-144626` utworzyła rzeczywisty ProblemIR:
+108377 węzłów, 612437 tet4, w magnetyku 4327 węzłów i 14923 tetraedry.
+Objętość analityczna wynosi 3.214601836602551e-22 m³, a suma objętości
+magnetycznych tetraedrów 3.2155705887666717e-22 m³. Są to różne wielkości.
+Receipt `passed` dotyczy wyłącznie materializacji; `solver_executed=false`.
+
+Review raportu wykrył **otwartą niezgodność L1**: żądane `thin_film_tetrahedral`
+z trzema warstwami ma `status=skipped`, actual `free_tetrahedral`, ponieważ
+swept meshing nie obsługuje jeszcze `Difference`. Konieczna jest realizacja
+warstw dla tej geometrii oraz ponowna rzeczywista kontrola. Nie można uznać
+samego receipt materializacji za spełnienie wymagań siatki benchmarku.
+
+
+### Aktualizacja audytu — 2026-09-13, obraz UI i retry managed builda
+
+#### Wykonane od poprzedniego audytu
+
+- **Runner/UI — wykonane źródłowo i operacyjnie:** zintegrowano statyczny panel
+  runnera, endpointy UI/observability i allow-listę profili z profilem
+  `fem-cpu-slepc-modal-v1`. Obraz `sha256:fe2931c6e4fe5e43eb4a4da1fc18a24696cb50c3e36df84fd1db21897ba69175`
+  zastąpił stary obraz; kontener `20601ed2d46245996ba5768f5aa408af50e25266c6562fc447bebc311becf90b`
+  jest `running`.
+- **Auth/health — wykonane:** `/ui/` HTTP 200, publiczny probe
+  `/api/v1/auth/session` HTTP 200 z `authenticated=false`, chroniony
+  `/health` bez tokenu HTTP 401, z tokenem HTTP 200 oraz
+  `worker_alive=true`, `accepting_jobs=true`; autoryzowany overview HTTP 200.
+  Ochrona API pozostała włączona.
+- **Błąd linkowania — poprawiony źródłowo:** commit `377230523` rozszerza
+  dołączanie biblioteki CUDA compatibility na wszystkie targety
+  `add_fem_source_facade_contract`, aby `libceed.so` nie pozostawiał symboli
+  `cu*` nierozwiązanych po pierwszym targetzie.
+
+#### Wynik i korekta planu
+
+Job `cdc83e275b9948628fd968b8e9b783cf` z profilem
+`fem-cpu-slepc-modal-v1` zakończył się `exit_code=2`. CMake i pierwszy target
+modalny przeszły, lecz `fem_floquet_magnetic_operator_contract` zatrzymał się
+na linkowaniu `libceed.so`; `ctest_completed=false`, więc nie ma jeszcze
+managed dowodu wykonania kontraktów, solvera ani fizycznego `f(k)`. Następny
+krok to jeden retry z commitem `377230523`, po uzyskaniu wymaganej zgody na
+budowanie testów przez managed runner.
+
+#### Estymata postępu (stan implementacji, nie kwalifikacja)
+
+| Zakres | Wykonane | Pozostało | Postęp |
+|---|---|---|---:|
+| Model COMSOL C0/C1/A1 i kontrakty Python/IR | publiczny przepis, walidatory, materializacja Linux; L1 siatki nadal otwarte | trzy warstwy swept dla Difference i końcowy ProblemIR | 70% |
+| Natywny Floquet/demag-k/SLEPc CPU | sparse owner, rekonstrukcja phi, tracking i testy źródłowe | managed kompilacja, CTest, runtime residuale | 65% |
+| Runner i UI | najnowszy obraz, UI 200, auth/health/API, profil allow-list | browser smoke w żywym panelu i receipt kontraktu | 90% |
+| Rzeczywiste C0/C1/A1 oraz 61 punktów f(k) | brak zaakceptowanego solve | równowaga, pełne Γ–X–M–Γ, 8 gałęzi, eksport | 10% |
+| Porównanie COMSOL/TetraX i kwalifikacja wydania | przepis i format wyników | dane referencyjne, tolerancje, review/PR/merge | 0% |
+
+#### Otwarte podpunkty wymagające naprawy
+
+1. Uzyskać zgodę na retry managed builda i potwierdzić, że wszystkie osiem
+   targetów kontraktowych linkuje oraz wykonuje się w CPU/double/SLEPc.
+2. Jeśli retry przejdzie, uruchomić materializację L1 na tej samej trasie,
+   następnie C0/C1 i pierwszy mały nonzero-k przed pełnym A1.
+3. Nie oznaczać `qualification` jako `passed` na podstawie działającego UI,
+   obrazu ani samego CMake; potrzebne są receipt, residuale, artefakty pól i
+   zgodność 61 punktów.
+4. Po dowodach runtime wykonać browser/WebGL smoke, porównanie COMSOL/TetraX,
+   niezależny review i pełny cykl PR → merge → weryfikacja mastera → cleanup.

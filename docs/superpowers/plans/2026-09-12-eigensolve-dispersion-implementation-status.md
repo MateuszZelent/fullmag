@@ -2,20 +2,68 @@
 
 Data: 2026-09-13. Status zadania: **W TRAKCIE**. Kwalifikacja solvera non-k0: **NOT VERIFIED**.
 
-## Aktualny audyt — 2026-09-13
+## Aktualne kryterium ukończenia — 2026-09-13
 
-Nadrzędne bieżące zestawienie: [audyt postępu S00–S12 i R01–R05](2026-09-13-eigensolve-dispersion-progress-audit.md).
-HEAD kodu: `3dda82b4e7310f16bb816b6dcc69f59502bc10de`.
-Ostatni przyrost dodaje względny residual bloku potencjału; izolowany MSVC
-zakończył się exit 0. Nowy audyt ujawnił niespójność pivotów (R01), brak
-certyfikacji/propagacji residualu (R02) i niepełne recepty (R03).
-Żaden etap S00–S12 nie jest w pełni zamknięty; wcześniejsze procenty bez
-mianownika wycofano. Aktualna blokada runnera: allow-list mismatch, exit 1.
-GitHub: nieważny token, exit 1. Starsze joby nie zostały ponownie odczytane.
+Użytkownik zlecił dokończenie implementacji tak, aby Fullmag rzeczywiście
+policzył ten sam model co przepis COMSOL. Żaden skrót modelu nie zamyka zadania.
+Bazowy checkpoint HEAD: `15577c802c5065305f0522650e7956fc2d0e316a`;
+obecny worktree zawiera również sprawdzone, niezapisane jeszcze przyrosty.
 
-Dalsze sekcje są chronologiczną historią. Opisy „jeszcze nie podłączono”,
-„queued/running”, brak miejsca i dawne HEAD-y opisują moment wpisu,
-nie aktualny stan. Bieżący rejestr ma niezgodny SHA; otwarte S12.R05b.
+| Bramka | Wymagany wynik | Stan |
+|---|---|---|
+| B0 — model | C0/C1/A1, geometria i parametry z przepisu, skrypt publicznego DSL | W TRAKCIE |
+| B1 — brzegi | Fizyczny Dirichlet potencjału ztop/zbottom oraz Floquet x/y na magnetyku i powietrzu | W TRAKCIE; wcześniejsze odrzucenie chroniło przed błędnym Neumannem |
+| B2 — skalowanie | Native MFEM/SLEPc sparse lub matrix-free, bez dense512 i bez gęstego K/M w Rust | W TRAKCIE |
+| B3 — równowaga | Rzeczywista relaksacja i zaakceptowany, identyczny handoff dla wszystkich k | DO WYKONANIA runtime |
+| B4 — kontrola | C0 oraz C1 w Γ, zgodność jednostek/gamma/demag i mały nonzero-k | DO WYKONANIA runtime |
+| B5 — pełna dyspersja | A1 L1, 61 punktów Γ–X–M–Γ, 8 fizycznych gałęzi, zespolone mody/potencjały, wykres | DO WYKONANIA runtime |
+| B6 — weryfikacja i integracja | Kontrole siatki/airbox/liczby modów, residuale, review/build/PR/merge | DO WYKONANIA |
+
+Zapisany przyrost `19fac315c6e66f2ce5c7b8c96518c2c3e2e2a249`:
+wcześniejsza selekcja ciężkich artefaktów wzdłuż ścieżki k, bez usuwania
+wektorów potrzebnych do śledzenia gałęzi. Test `eigen_path`: **8 passed**,
+log `sparse-modal-path-selection-tests.log`; staged diff/check zweryfikowane.
+Ten commit nie zamyka natywnego solvera ani całego zadania.
+
+Przyrost wykresu `8e460ea3dfd8a8714c01cc912bbb3939a1caa13a`: oddzielne
+gałęzie według `branch_id`, przerwy przy brakujących próbkach, brak łączenia
+modów bez trackingu i usunięcie fałszywego podpisu „no demag”. **7 testów passed**,
+w tym render PNG; obejrzany obraz pochodzi z fixture, nie z benchmarku A1.
+
+Bieżący test diagnostyczny `cargo test -p fullmag-runner --lib eigen --offline`:
+**259 passed, 0 failed** (log `physical-native-residual-scope-tests.log` w build root
+profilu `windows-native`). Obejmuje usunięcie gęstej macierzy z normalizacji,
+przekazanie shared-domain Floquet bez gęstego K/M w Rust i test rekonstrukcji
+pełnego potencjału. Nie kompiluje natywnego MFEM/SLEPc ani nie dowodzi
+wykonania modelu. Pełny eksport potencjału i pola elementowego jest podłączony
+w kodzie; natywny operator nadal wymaga kompilacji i wykonania. Testy kontraktu
+publicznego benchmarku oraz dokumentacji: **18 passed**, z wyłączonym cache pytest.
+Rzeczywista materializacja A1 na Windows zakończyła się błędem access violation
+w NumPy podczas ścisłej walidacji siatki; nie powstał zaakceptowany ProblemIR.
+Trwa sprawdzenie identycznego modelu w kontrolowanym środowisku Linux.
+
+Profil `fem-cpu-slepc-modal-v1` jest aktywowany (8 CPU, 24 GiB, istniejący
+obraz PETSc/SLEPc `sha256:e5f70bd632011f9a0d8163430dab81bc6f248e07e4af086dfdf77bcd087471d7`).
+Zachowano sześć profili allow-list i istniejące konfiguracje workerów. Po
+zakończeniu joba 41 koordynator został zastąpiony obrazem
+`sha256:fe2931c6e4fe5e43eb4a4da1fc18a24696cb50c3e36df84fd1db21897ba69175`,
+kontener `20601ed2d46245996ba5768f5aa408af50e25266c6562fc447bebc311becf90b`.
+Graceful drain wykonano po świeżym dowodzie pustej kolejki; aktualny health
+potwierdza `worker_alive=true`, `accepting_jobs=true` i brak aktywnych jobów.
+
+Job 41 zbudował pierwszy target modalny, ale zakończył się `exit_code=2` na
+linkowaniu kolejnego kontraktu przez brak symboli CUDA w `libceed.so`. Źródło
+naprawy zapisano w `377230523`; retry wymaga osobnej zgody automatycznego
+przeglądu. Wolne miejsce wynosi około **50.9 GB**, nie usuwano danych.
+Ostatnia weryfikacja GitHub wykazała nieważny token; integracja pozostaje otwarta.
+
+Native sparse source jest zamrożony do pierwszego buildu, wraz z regresją
+q_complex_dof_count=514, niezerowym sprzężeniem potencjału i analityczną
+częstotliwością. Ten test nie został jeszcze wykonany w MFEM/SLEPc.
+
+Poniższe sekcje i dawna tabela S00–S12 są historią etapów. Ich datowane
+HEAD-y, liczby wolnego miejsca i opisy brakujących funkcji nie zastępują
+powyższego kryterium ani bieżącego kodu. Nie ma jeszcze kwalifikacji non-k0.
 
 ## Cel i źródła
 
@@ -569,3 +617,37 @@ Sprawdzono stałe, jednostki, 61 punktów i znaki transformacji;
 wykonanie COMSOL i wyniki porównania pozostają NOT VERIFIED.
 Brak danych jest teraz zadaniem oczekującym na pomiar operatora,
 a nie podstawą do deklarowania ukończonej walidacji naukowej.
+
+
+### Aktualizacja 2026-09-13 — najnowszy obraz UI i wynik joba 41
+
+Aktywny wcześniej job `cdc83e275b9948628fd968b8e9b783cf` zakończył się
+terminalnie z `exit_code=2`. CMake i target
+`fem_poisson_airbox_modal_eigen_slepc_contract` zbudowały się, lecz drugi
+target (`fem_floquet_magnetic_operator_contract`) nie zlinkował się, ponieważ
+`/opt/fullmag-deps/lib/libceed.so` wymagał symboli sterownika CUDA (`cu*`).
+Receipt `artifacts/contracts/slepc-modal/result.json` ma `status=fail`,
+`ctest_completed=false`, a więc nie jest dowodem wykonania żadnego kontraktu.
+
+Źródłową przyczynę poprawiono w commicie `377230523`:
+`add_fem_source_facade_contract` dołącza bibliotekę CUDA compatibility do
+każdego targetu korzystającego z `fullmag_fem`, a nie tylko do targetu modalnego.
+Poprawka nie ma jeszcze świeżego managed builda, więc pozostaje
+**NOT VERIFIED**.
+
+Koordynator został po zakończeniu joba kontrolowanie podmieniony na najnowszy
+obraz `sha256:fe2931c6e4fe5e43eb4a4da1fc18a24696cb50c3e36df84fd1db21897ba69175`;
+kontener `20601ed2d46245996ba5768f5aa408af50e25266c6562fc447bebc311becf90b`
+działa na porcie 8765. Health z autoryzowanym odczytem potwierdza
+`worker_alive=true`, `accepting_jobs=true`, pustą kolejkę i obecność profilu
+`fem-cpu-slepc-modal-v1`. Publiczny `/ui/` zwraca HTTP 200 z tytułem
+„Fullmag Build Runner — Panel Operacyjny”; publiczny
+`/api/v1/auth/session` zwraca `authenticated=false`; chronione `/health`,
+`/api/v1/auth/session` i `/api/v1/overview` działają z tokenem, a bez tokenu
+`/health` nadal prawidłowo odrzuca żądanie HTTP 401. Problem `unauthorized`
+był skutkiem starego obrazu bez UI i został usunięty bez wyłączenia ochrony API.
+
+Obecne granice dowodu są niezmienione: nie wykonano jeszcze C0/C1/A1,
+61 punktów Γ–X–M–Γ ani porównania z COMSOL/TetraX. Ponowne zgłoszenie
+managed joba z commitem `377230523` wymaga osobnej zgody z powodu aktywnej
+reguły automatycznego przeglądu dotyczącej budowania testów.
