@@ -728,7 +728,10 @@ if ($InitialMagnetizationState) {
     $cliArguments += @("--initial-magnetization-state-dataset", $InitialMagnetizationStateDataset)
   }
   if ($null -ne $InitialMagnetizationStateSampleIndex) {
-    $cliArguments += @("--initial-magnetization-state-sample-index", $InitialMagnetizationStateSampleIndex.ToString())
+    # Clap treats a negative value passed as a separate argv item as another
+    # option. Keep the option and value in one argv item so sample -1 reaches
+    # the state reader unchanged.
+    $cliArguments += "--initial-magnetization-state-sample-index=$($InitialMagnetizationStateSampleIndex.ToString())"
   }
 }
 if ($Backend -ne "auto") {
