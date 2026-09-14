@@ -5422,8 +5422,12 @@ fn owner_session_lost(session_id: &str, enabled: bool) -> bool {
     else {
         return false;
     };
+    // A publisher can legitimately reach the API before its first snapshot
+    // has been accepted.  Treat the empty current workspace as a bootstrap
+    // state so the worker can publish that snapshot; only an explicitly
+    // different session means that another owner replaced us.
     if response.status() == reqwest::StatusCode::NOT_FOUND {
-        return true;
+        return false;
     }
     let Some(current_session_id) = response
         .error_for_status()
