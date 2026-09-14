@@ -245,23 +245,21 @@ def equilibrium_artifact_v7_digest(artifact: dict) -> str:
     return "sha256:" + hashlib.sha256(canonical_bytes).hexdigest()
 
 
-def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
-    declared_path = manifest.get("artifacts", {}).get(
-        "equilibrium_artifact_v7_path"
-    )
-    if declared_path is None:
-        return
-    relative_path, artifact_path = require_bundle_path(
-        root,
-        declared_path,
-        "manifest.artifacts.equilibrium_artifact_v7_path",
-    )
-    require_equal(
-        relative_path,
-        "eigen/metadata/equilibrium_artifact.v7.json",
-        "manifest.artifacts.equilibrium_artifact_v7_path",
-    )
-    artifact = load_json(artifact_path)
+def _require_non_negative_finite_number(value: object, name: str) -> float:
+    if isinstance(value, bool):
+        fail(f"{name} must be a finite number")
+    number = require_finite_number(value, name)
+    if number < 0.0:
+        fail(f"{name} must be non-negative")
+    return number
+
+
+def validate_equilibrium_artifact_v7_payload(
+    artifact: dict, expected_content_sha256: object
+) -> None:
+    """Validate an equilibrium v7 payload independently of its bundle path."""
+    if not isinstance(artifact, dict):
+        fail("equilibrium_artifact must be an object")
     schema_version = artifact.get("schema_version")
     if schema_version == "equilibrium_artifact.v6":
         fail(
@@ -273,8 +271,12 @@ def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
         "equilibrium_artifact.v7",
         "equilibrium_artifact.schema_version",
     )
-    require_equal(
+    accepted_for_linearization = require_boolean(
         artifact.get("accepted_for_linearization"),
+        "equilibrium_artifact.accepted_for_linearization",
+    )
+    require_equal(
+        accepted_for_linearization,
         True,
         "equilibrium_artifact.accepted_for_linearization",
     )
@@ -309,20 +311,24 @@ def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
         "completed",
         "equilibrium_artifact.acceptance_certificate.status",
     )
-    require_equal(
+    converged = require_boolean(
         certificate.get("converged"),
+        "equilibrium_artifact.acceptance_certificate.converged",
+    )
+    require_equal(
+        converged,
         True,
         "equilibrium_artifact.acceptance_certificate.converged",
     )
-    metric_value = require_finite_number(
+    metric_value = _require_non_negative_finite_number(
         certificate.get("metric_value"),
         "equilibrium_artifact.acceptance_certificate.metric_value",
     )
-    threshold = require_finite_number(
+    threshold = _require_non_negative_finite_number(
         certificate.get("threshold"),
         "equilibrium_artifact.acceptance_certificate.threshold",
     )
-    if threshold < 0.0 or metric_value > threshold:
+    if metric_value > threshold:
         fail(
             "equilibrium_artifact.acceptance_certificate.metric_value must "
             "satisfy its non-negative threshold"
@@ -340,42 +346,63 @@ def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
         artifact.get("content_sha256"),
         "equilibrium_artifact.content_sha256",
     )
+    expected_content_sha256 = require_sha256_token(
+        expected_content_sha256,
+        "expected_content_sha256",
+    )
     require_equal(
         content_sha256,
         equilibrium_artifact_v7_digest(artifact),
         "equilibrium_artifact.content_sha256",
     )
     require_equal(
+        content_sha256,
+        expected_content_sha256,
+        "expected_content_sha256",
+    )
+    require_equal(
         artifact.get("equilibrium_id"),
         "equilibrium_artifact.v7:" + content_sha256.removeprefix("sha256:"),
         "equilibrium_artifact.equilibrium_id",
-    )
-    manifest_digest = manifest.get("equilibrium_artifact_sha256")
-    require_equal(
-        manifest_digest,
-        content_sha256,
-        "manifest.equilibrium_artifact_sha256",
     )
     observables = artifact.get("observables")
     if not isinstance(observables, dict):
         fail("equilibrium_artifact.observables must be an object")
     for field_name in ["max_torque_Apm", "max_torque_T", "max_torque_relative"]:
-        require_finite_number(
+        _require_non_negative_finite_number(
             observables.get(field_name),
             f"equilibrium_artifact.observables.{field_name}",
         )
     integrity = artifact.get("representation_integrity")
     if not isinstance(integrity, dict):
         fail("equilibrium_artifact.representation_integrity must be an object")
-    m0_norm_tolerance = require_finite_number(
+    _require_non_negative_finite_number(
         integrity.get("m0_norm_tolerance"),
         "equilibrium_artifact.representation_integrity.m0_norm_tolerance",
     )
-    if m0_norm_tolerance < 0.0:
-        fail(
-            "equilibrium_artifact.representation_integrity.m0_norm_tolerance "
-            "must be non-negative"
-        )
+
+
+def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
+    declared_path = manifest.get("artifacts", {}).get(
+        "equilibrium_artifact_v7_path"
+    )
+    if declared_path is None:
+        return
+    relative_path, artifact_path = require_bundle_path(
+        root,
+        declared_path,
+        "manifest.artifacts.equilibrium_artifact_v7_path",
+    )
+    require_equal(
+        relative_path,
+        "eigen/metadata/equilibrium_artifact.v7.json",
+        "manifest.artifacts.equilibrium_artifact_v7_path",
+    )
+    artifact = load_json(artifact_path)
+    validate_equilibrium_artifact_v7_payload(
+        artifact,
+        manifest.get("equilibrium_artifact_sha256"),
+    )
 
 
 def validate_periodic_mesh_certificate(

@@ -181,3 +181,36 @@ Helper uzupełnia walidację certyfikatu akceptacji równowagi, nie zastępuje j
 Wywołujący musi niezależnie ustalić sygnaturę siatki i wsparcie magnetyczne.
 Ładowanie i wiązanie plików próbek oraz integracja tej kontroli z bramką
 pozostają do wykonania; sam helper nie kwalifikuje kampanii.
+
+
+### Odczyt certyfikatu konkretnej próbki
+
+`scripts/comsol_equilibrium_artifacts.py` + `read_sample_equilibrium` odczytuje
+parę v7/v6 wskazaną przez manifest dla konkretnej próbki. Singularne ścieżki
+są dopuszczone tylko dla próbki 0; listy per-sample muszą jednoznacznie
+zawierać oba pliki. Brak artefaktu nie powoduje szukania zastępczej próbki.
+Wykorzystywany jest wydzielony `validate_equilibrium_artifact_v7_payload`
+z dotychczasowego walidatora: akceptacja relaksacji, zgodność digestu oraz
+nieujemne metryki pozostają wymagane. Stary wrapper pojedynczego pliku
+zachowuje zgodność ścieżek.
+
+Test całego odczytu obejmuje zapisane pliki próbki 7 i odmowę dla certyfikatu
+bez zbieżności, nawet po aktualizacji hashy. Nie zastępuje sprawdzenia
+natywnej sygnatury siatki. Wywołujący nadal musi niezależnie wyznaczyć tę
+sygnaturę i powiązać modalną próbkę; integracja z główną bramką oraz transfer
+siatkowy pozostają otwarte. Żaden z tych testów nie wykonuje FEM.
+
+
+Uściślenie przepływu Relax → Eigen: orchestrator kopiuje
+`stage_result.final_magnetization` do następnego ProblemIR i replanuje
+(`crates/fullmag-cli/src/orchestrator.rs`, `step_utils.rs`).
+`AcceptedFemRelaxStageHandoff::validate_target_plan` w
+`eigen_equilibrium_contract.rs` wymaga zgodności wektora i jego SHA256.
+Zatem przy poprawnym handoffie tablica planu jest zrelaksowanym m0.
+Poprzednie ustalenie dotyczy braku niezależnego dowodu w samej tablicy,
+a nie potwierdzonego używania niezrelaksowanego stanu w produkcji.
+Autorytatywne certyfikaty pozostają wymagane.
+
+Wyodrębniony walidator payloadu przeszedł 9 testów; istniejący pełny moduł
+walidatora przeszedł 203 testy. Odczyt próbki sprawdzono oddzielnie.
+Są to dowody interpretowanego kodu i kontraktów, nie wykonania FEM.
