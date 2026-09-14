@@ -18,16 +18,18 @@ import csv
 import hashlib
 import json
 import math
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
 from verify_fem_frequency_domain_eigen_artifacts import (
     kalinikos_slab_n0_frequency_hz,
+    require_kalinikos_slab_n0_material_and_bias,
+    validate_mode_diagnostics_fields,
 )
 
 
-GATE_SCHEMA = "fullmag.comsol-dispersion-scientific-gate.v1"
-EVIDENCE_SCHEMA = "fullmag.comsol-dispersion-scientific-evidence.v1"
+GATE_SCHEMA = "fullmag.comsol-dispersion-scientific-gate.v2"
+EVIDENCE_SCHEMA = "fullmag.comsol-dispersion-scientific-evidence.v2"
 EVIDENCE_RELATIVE_PATH = Path("validation/scientific_gate.v1.json")
 EXPECTED_CASES = ("c0", "c1", "a1")
 PATH_CASES = frozenset(("c1", "a1"))
@@ -37,11 +39,19 @@ EXPECTED_CONTROL_SAMPLES = (0, 10, 20, 30, 40, 50, 60)
 KITTEL_RELATIVE_TOLERANCE = 1.0e-3
 KS_RELATIVE_TOLERANCE = 2.0e-2
 CONVERGENCE_RELATIVE_TOLERANCE = 5.0e-3
+MAX_IMAGINARY_TO_REAL_RATIO = 1.0e-6
+MAX_TANGENT_LEAKAGE = 1.0e-6
+MAX_EIGEN_RESIDUAL = 1.0e-6
+MAX_PHASE_RESIDUAL = 1.0e-6
+NUMERIC_FREQUENCY_SOURCE = "numeric_modal_solver_with_analytic_comparison"
+PRODUCTION_SOLVER_MODEL = "slepc_multi_shift_invert_production_cpu_dense"
 _REQUIRED_ARTIFACTS = (
+    Path("metadata.json"),
     Path("eigen/spectrum.v2.json"),
     Path("eigen/branches.v2.json"),
     Path("eigen/dispersion.csv"),
     Path("frequency_domain/manifest.v1.json"),
+    Path("eigen/diagnostics/solver.v1.json"),
 )
 
 
@@ -139,6 +149,389 @@ def _load_parameters(parameters_path: Path) -> tuple[dict[str, Any] | None, list
     return value, reasons
 
 
+def _metadata_benchmark_block(metadata: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """Return the benchmark contract emitted by the native metadata writer.
+
+    ``metadata.json`` is produced by the runner from ``ProblemIR``.  The
+    benchmark authoring contract is therefore read from its real
+    ``problem_meta.runtime_metadata`` location; a validator-local copy of the
+    material or geometry is deliberately not accepted as provenance.
+    """
+
+    runtime = _nested(metadata, "problem_meta", "runtime_metadata")
+    if isinstance(runtime, Mapping):
+        value = runtime.get("comsol_nonzero_k_dispersion")
+        if isinstance(value, Mapping):
+            return value
+    return None
+
+
+def _metadata_backend_plan(metadata: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """Return the resolved FEM eigen plan emitted by the native runner."""
+
+    value = _nested(metadata, "execution_plan", "backend_plan")
+    return value if isinstance(value, Mapping) else None
+
+
+def _backend_airbox_value(plan: Mapping[str, Any]) -> float | None:
+    """Resolve symmetric z padding in metres from the actual domain bounds.
+
+    AirBoxConfig.factor is dimensionless authoring intent, not a measurement
+    of the generated domain. This benchmark requires equal padding both sides.
+    """
+    frame = plan.get("domain_frame")
+    if not isinstance(frame, Mapping):
+        return None
+    bounds = [frame.get(name) for name in (
+        "object_bounds_min", "object_bounds_max", "mesh_bounds_min", "mesh_bounds_max",
+    )]
+    if any(not isinstance(bound, list) or len(bound) != 3 or not all(_finite(value) for value in bound) for bound in bounds):
+        return None
+    object_min, object_max, mesh_min, mesh_max = bounds
+    if any(float(hi) <= float(lo) for lo, hi in zip(object_min, object_max)) or any(float(hi) <= float(lo) for lo, hi in zip(mesh_min, mesh_max)):
+        return None
+    below = float(object_min[2]) - float(mesh_min[2])
+    above = float(mesh_max[2]) - float(object_max[2])
+    if not _finite_positive(below) or not _finite_positive(above):
+        return None
+    if abs(below - above) > 1e-8 * max(below, above):
+        return None
+    return 0.5 * (below + above)
+
+
+def _backend_mesh_hmax(plan: Mapping[str, Any]) -> float | None:
+    for candidate in (
+        plan.get("hmax"),
+        _nested(plan, "mesh", "hmax"),
+        _nested(plan, "mesh", "maximum_element_size"),
+        _nested(plan, "mesh", "interface_hmax"),
+    ):
+        if _finite_positive(candidate):
+            return float(candidate)
+    return None
+
+
+def _validate_resolved_backend_plan(
+    metadata: Mapping[str, Any],
+    case: str,
+    parameters: Mapping[str, Any],
+    label: str,
+    reasons: list[str],
+    *,
+    require_uniform_slab: bool,
+    allow_airbox_change: bool,
+) -> bool:
+    """Bind the gate to resolved producer metadata rather than authoring flags."""
+
+    plan = _metadata_backend_plan(metadata)
+    if plan is None:
+        reasons.append(f"{label} lacks metadata.execution_plan.backend_plan from the native runner")
+        return False
+    valid = True
+    if plan.get("kind") != "fem_eigen":
+        reasons.append(f"{label} backend_plan.kind is not fem_eigen")
+        valid = False
+    canonical_material = parameters.get("material")
+    canonical_bias = parameters.get("bias_H_A_per_m")
+    if not isinstance(canonical_material, Mapping) or not isinstance(canonical_bias, list):
+        reasons.append("canonical parameters cannot provide the resolved backend signature")
+        return False
+    material = plan.get("material")
+    if not isinstance(material, Mapping):
+        reasons.append(f"{label} backend_plan.material is missing")
+        valid = False
+    else:
+        for actual_field, canonical_field in (
+            ("saturation_magnetisation", "Ms_A_per_m"),
+            ("exchange_stiffness", "Aex_J_per_m"),
+        ):
+            if not _require_metadata_number(
+                material.get(actual_field),
+                canonical_material.get(canonical_field),
+                f"{label}.backend_plan.material.{actual_field}",
+                reasons,
+            ):
+                valid = False
+        if material.get("interfacial_dmi") not in (None, 0, 0.0) or material.get("bulk_dmi") not in (None, 0, 0.0):
+            reasons.append(f"{label} resolved material enables DMI")
+            valid = False
+        if any(
+            material.get(field) not in (None, 0, 0.0)
+            for field in ("uniaxial_anisotropy", "uniaxial_anisotropy_k2", "cubic_anisotropy_kc1", "cubic_anisotropy_kc2", "cubic_anisotropy_kc3")
+        ):
+            reasons.append(f"{label} resolved material enables anisotropy")
+            valid = False
+    if not _require_metadata_number(
+        plan.get("gyromagnetic_ratio"),
+        canonical_material.get("gamma0_m_per_A_s"),
+        f"{label}.backend_plan.gyromagnetic_ratio",
+        reasons,
+    ):
+        valid = False
+    external_field = plan.get("external_field")
+    if not isinstance(external_field, list) or len(external_field) != 3 or len(canonical_bias) != 3:
+        reasons.append(f"{label} backend_plan.external_field must be a length-3 vector")
+        valid = False
+    else:
+        for index, (actual, expected) in enumerate(zip(external_field, canonical_bias)):
+            if not _require_metadata_number(actual, expected, f"{label}.backend_plan.external_field[{index}]", reasons):
+                valid = False
+    operator = plan.get("operator")
+    expected_demag = case in PATH_CASES
+    if not isinstance(operator, Mapping) or operator.get("kind") != "full_2x2" or operator.get("include_demag") is not expected_demag:
+        reasons.append(f"{label} backend_plan.operator does not match the {case} full_2x2 demag contract")
+        valid = False
+    if plan.get("enable_demag") is not expected_demag:
+        reasons.append(f"{label} backend_plan.enable_demag does not match case {case}")
+        valid = False
+    equilibrium = plan.get("equilibrium_magnetization")
+    if not isinstance(equilibrium, list) or not equilibrium:
+        reasons.append(f"{label} backend_plan.equilibrium_magnetization is missing resolved field samples")
+        valid = False
+    elif require_uniform_slab:
+        for index, vector in enumerate(equilibrium):
+            if not isinstance(vector, list) or len(vector) != 3 or not all(_finite(value) for value in vector):
+                reasons.append(f"{label} resolved equilibrium vector {index} is invalid")
+                valid = False
+                continue
+            if _relative_error(float(vector[0]), 1.0) > 1.0e-6 or abs(float(vector[1])) > 1.0e-6 or abs(float(vector[2])) > 1.0e-6:
+                reasons.append(f"{label} resolved equilibrium is not uniformly x-aligned")
+                valid = False
+                break
+        # Reuse the production oracle's material-field checks.  Scalar
+        # saturation/exchange values do not establish a homogeneous slab when
+        # the resolved plan also carries spatial overrides such as ms_field or
+        # a_field.  The helper deliberately fails closed via SystemExit.
+        if valid and isinstance(material, Mapping) and isinstance(equilibrium, list):
+            first = equilibrium[0]
+            if isinstance(first, list) and len(first) == 3 and all(_finite(value) for value in first):
+                norm = math.sqrt(sum(float(value) * float(value) for value in first))
+                if norm > 0.0:
+                    try:
+                        require_kalinikos_slab_n0_material_and_bias(
+                            dict(plan),
+                            dict(material),
+                            tuple(float(value) / norm for value in first),
+                        )
+                    except (SystemExit, ValueError, TypeError) as error:
+                        reasons.append(f"{label} resolved material is outside homogeneous-slab KS applicability: {error}")
+                        valid = False
+    if plan.get("damping_policy") not in (None, "ignore"):
+        reasons.append(f"{label} resolved eigen plan does not disable damping")
+        valid = False
+    spin_bc = plan.get("spin_wave_bc")
+    if expected_demag:
+        if not isinstance(spin_bc, Mapping) or spin_bc.get("kind") != "floquet":
+            reasons.append(f"{label} resolved spin-wave boundary is not Floquet")
+            valid = False
+        if plan.get("demag_realization") not in (None, "poisson_dirichlet"):
+            reasons.append(f"{label} resolved demag realization is not poisson_dirichlet")
+            valid = False
+        if _backend_airbox_value(plan) is None:
+            reasons.append(f"{label} resolved backend plan has no finite airbox identity")
+            valid = False
+        frame = plan.get("domain_frame")
+        if not isinstance(frame, Mapping):
+            reasons.append(f"{label} resolved backend plan has no DomainFrameIR airbox bounds")
+            valid = False
+        else:
+            object_min = frame.get("object_bounds_min")
+            object_max = frame.get("object_bounds_max")
+            mesh_min = frame.get("mesh_bounds_min")
+            mesh_max = frame.get("mesh_bounds_max")
+            if not all(
+                isinstance(vector, list) and len(vector) == 3 and all(_finite(value) for value in vector)
+                for vector in (object_min, object_max, mesh_min, mesh_max)
+            ):
+                reasons.append(f"{label} DomainFrameIR does not expose finite object and mesh bounds")
+                valid = False
+            else:
+                lower = float(object_min[2]) - float(mesh_min[2])
+                upper = float(mesh_max[2]) - float(object_max[2])
+                if lower <= 0.0 or upper <= 0.0 or _relative_error(lower, upper) > 1.0e-8:
+                    reasons.append(f"{label} DomainFrameIR does not prove symmetric positive z air padding")
+                    valid = False
+    elif not isinstance(spin_bc, Mapping) or spin_bc.get("kind") not in ("periodic", "periodic_bc"):
+        reasons.append(f"{label} resolved C0 spin-wave boundary is not periodic")
+        valid = False
+    if allow_airbox_change and _backend_airbox_value(plan) is None:
+        reasons.append(f"{label} varied airbox run has no resolved airbox value")
+        valid = False
+    if _backend_mesh_hmax(plan) is None:
+        reasons.append(f"{label} resolved backend plan has no finite mesh hmax")
+        valid = False
+    return valid
+
+
+def _require_metadata_number(
+    value: object,
+    expected: object,
+    label: str,
+    reasons: list[str],
+    *,
+    tolerance: float = 1.0e-12,
+) -> bool:
+    if not _finite(value) or not _finite(expected):
+        reasons.append(f"{label} is missing or non-finite in native benchmark metadata")
+        return False
+    if _relative_error(float(value), float(expected)) > tolerance:
+        reasons.append(
+            f"{label}={float(value)!r} does not match canonical value {float(expected)!r}"
+        )
+        return False
+    return True
+
+
+def _validate_benchmark_metadata(
+    metadata: Mapping[str, Any],
+    case: str,
+    parameters: Mapping[str, Any],
+    label: str,
+    reasons: list[str],
+    *,
+    require_uniform_slab: bool,
+    allow_airbox_change: bool = False,
+) -> bool:
+    """Validate material/geometry/equilibrium from the native metadata graph."""
+
+    benchmark = _metadata_benchmark_block(metadata)
+    if benchmark is None:
+        reasons.append(f"{label} lacks problem_meta.runtime_metadata.comsol_nonzero_k_dispersion")
+        return False
+    valid = True
+    if benchmark.get("schema_version") != "fullmag.comsol_nonzero_k_benchmark.v1":
+        reasons.append(f"{label} has an unsupported benchmark metadata schema")
+        valid = False
+    if benchmark.get("benchmark_id") != parameters.get("benchmark_id"):
+        reasons.append(f"{label} benchmark_id does not match canonical parameters")
+        valid = False
+    if benchmark.get("case_id") != case:
+        reasons.append(f"{label} case_id does not match {case}")
+        valid = False
+
+    geometry = benchmark.get("geometry")
+    material = benchmark.get("material")
+    equilibrium = benchmark.get("equilibrium")
+    eigensolve = benchmark.get("eigensolve")
+    if not all(isinstance(value, Mapping) for value in (geometry, material, equilibrium, eigensolve)):
+        reasons.append(f"{label} is missing native geometry/material/equilibrium/eigensolve metadata")
+        return False
+    canonical_geometry = parameters.get("geometry")
+    canonical_material = parameters.get("material")
+    canonical_bias = parameters.get("bias_H_A_per_m")
+    if not isinstance(canonical_geometry, Mapping) or not isinstance(canonical_material, Mapping):
+        reasons.append("canonical parameters cannot provide a material/geometry signature")
+        return False
+    if not _validate_resolved_backend_plan(
+        metadata,
+        case,
+        parameters,
+        label,
+        reasons,
+        require_uniform_slab=require_uniform_slab,
+        allow_airbox_change=allow_airbox_change,
+    ):
+        valid = False
+    canonical_thickness = canonical_geometry.get("film_thickness_m")
+    actual_thickness = geometry.get("film_thickness_m")
+    film_size_candidate = geometry.get("film_size_m")
+    if actual_thickness is None and isinstance(film_size_candidate, list) and len(film_size_candidate) == 3:
+        actual_thickness = film_size_candidate[-1]
+    if not _require_metadata_number(actual_thickness, canonical_thickness, f"{label}.geometry.film_thickness_m", reasons):
+        valid = False
+    airbox = geometry.get("air_padding_each_side_m")
+    if allow_airbox_change:
+        if not _finite(airbox) or float(airbox) <= 0.0:
+            reasons.append(f"{label}.geometry.air_padding_each_side_m must be finite and positive")
+            valid = False
+    elif not _require_metadata_number(
+        airbox,
+        canonical_geometry.get("air_padding_each_side_m"),
+        f"{label}.geometry.air_padding_each_side_m",
+        reasons,
+    ):
+        valid = False
+    if case in PATH_CASES and isinstance(_metadata_backend_plan(metadata), Mapping):
+        frame = _metadata_backend_plan(metadata).get("domain_frame")
+        if isinstance(frame, Mapping):
+            object_min = frame.get("object_bounds_min")
+            object_max = frame.get("object_bounds_max")
+            mesh_min = frame.get("mesh_bounds_min")
+            mesh_max = frame.get("mesh_bounds_max")
+            if all(
+                isinstance(vector, list) and len(vector) == 3 and all(_finite(value) for value in vector)
+                for vector in (object_min, object_max, mesh_min, mesh_max)
+            ):
+                lower = float(object_min[2]) - float(mesh_min[2])
+                upper = float(mesh_max[2]) - float(object_max[2])
+                if _finite(airbox) and (_relative_error(lower, float(airbox)) > 1.0e-8 or _relative_error(upper, float(airbox)) > 1.0e-8):
+                    reasons.append(f"{label} DomainFrameIR z padding does not match geometry.air_padding_each_side_m")
+    film_size = geometry.get("film_size_m")
+    thickness = canonical_geometry.get("film_thickness_m")
+    if not isinstance(film_size, list) or len(film_size) != 3 or not _finite(film_size[-1]) or not _finite(thickness):
+        reasons.append(f"{label}.geometry.film_size_m must expose a finite z thickness")
+        valid = False
+    elif _relative_error(float(film_size[-1]), float(thickness)) > 1.0e-12:
+        reasons.append(f"{label}.geometry.film_size_m[2] does not match canonical film thickness")
+        valid = False
+    for actual_field, canonical_field in (
+        ("Ms_A_per_m", "Ms_A_per_m"),
+        ("Aex_J_per_m", "Aex_J_per_m"),
+        ("mu0_H_per_m", "mu0_H_per_m"),
+        # The public guide calls this gamma_m_per_A_s while the canonical
+        # parameter sheet uses the explicit gamma0_m_per_A_s name.
+        ("gamma_m_per_A_s", "gamma0_m_per_A_s"),
+    ):
+        expected = canonical_material.get(canonical_field)
+        if not _require_metadata_number(material.get(actual_field), expected, f"{label}.material.{actual_field}", reasons):
+            valid = False
+    bias = material.get("bias_field_A_per_m")
+    if not isinstance(bias, list) or len(bias) != 3 or not isinstance(canonical_bias, list) or len(canonical_bias) != 3:
+        reasons.append(f"{label}.material.bias_field_A_per_m must be a canonical length-3 vector")
+        valid = False
+    else:
+        for index, (actual, expected) in enumerate(zip(bias, canonical_bias)):
+            if not _require_metadata_number(actual, expected, f"{label}.material.bias_field_A_per_m[{index}]", reasons):
+                valid = False
+    dmi_disabled = (
+        material.get("DMI") is False
+        or material.get("dmi") in {"disabled", "off", "none", 0, 0.0}
+    )
+    surface_anisotropy_disabled = (
+        material.get("surface_anisotropy") is False
+        or material.get("Ks_surface_A") in (0, 0.0)
+    )
+    volume_anisotropy_disabled = material.get("K_volume_A_per_m") in (0, 0.0)
+    if not dmi_disabled or not surface_anisotropy_disabled or not volume_anisotropy_disabled:
+        reasons.append(f"{label} must prove DMI and surface anisotropy are disabled")
+        valid = False
+    initial_magnetization = equilibrium.get("initial_magnetization")
+    if initial_magnetization != [1.0, 0.0, 0.0]:
+        reasons.append(f"{label}.equilibrium.initial_magnetization is not the canonical x-aligned state")
+        valid = False
+    if equilibrium.get("reuse_for_all_k") is not True:
+        reasons.append(f"{label}.equilibrium.reuse_for_all_k must be true")
+        valid = False
+    if eigensolve.get("operator") != "full_2x2" or eigensolve.get("complex_arithmetic") is not True:
+        reasons.append(f"{label} does not prove the complex full_2x2 modal operator")
+        valid = False
+    if eigensolve.get("alpha") != 0 or eigensolve.get("damping_policy") != "ignore":
+        reasons.append(f"{label} does not prove the zero-damping eigen solve")
+        valid = False
+    if require_uniform_slab:
+        hole_radius = geometry.get("hole_radius_m")
+        if hole_radius is not None:
+            reasons.append(f"{label} has a hole and is outside homogeneous-slab analytic applicability")
+            valid = False
+        if eigensolve.get("magnetostatic_bc") != "floquet_airbox":
+            reasons.append(f"{label} does not use the finite Floquet airbox required by C1 KS control")
+            valid = False
+    if case == "c0" and eigensolve.get("magnetostatic_bc") != "open":
+        reasons.append(f"{label} C0 magnetostatic_bc is not open")
+        valid = False
+    return valid
+
+
 def _kalinikos_frequency_hz(
     k: float,
     geometry: str,
@@ -149,7 +542,8 @@ def _kalinikos_frequency_hz(
     aex = _nested(parameters, "material", "Aex_J_per_m")
     mu0 = _nested(parameters, "material", "mu0_H_per_m")
     gamma0 = _nested(parameters, "material", "gamma0_m_per_A_s")
-    bias = _nested(parameters, "bias_H_A_per_m", 0)
+    bias_values = _nested(parameters, "bias_H_A_per_m")
+    bias = bias_values[0] if isinstance(bias_values, list) and bias_values else None
     if not all(_finite(value) for value in (k, thickness, ms, aex, mu0, gamma0, bias)):
         return None
     if geometry not in {"backward_volume", "damon_eshbach"} or k < 0.0:
@@ -206,6 +600,109 @@ def _sample_frequency(sample: Mapping[str, Any], raw_mode_index: int | None = No
     return min(values) if values else None
 
 
+def _phase_residual(mode: Mapping[str, Any]) -> object:
+    for key in (
+        "phase_constraint_residual",
+        "phase_boundary_residual",
+        "phase_residual",
+    ):
+        if key in mode:
+            return mode[key]
+    phase = mode.get("phase_constraint")
+    if isinstance(phase, Mapping):
+        for key in ("residual", "residual_abs", "max_residual"):
+            if key in phase:
+                return phase[key]
+    return None
+
+
+def _validate_modal_quality(mode: Mapping[str, Any], label: str, reasons: list[str]) -> bool:
+    """Validate native per-mode diagnostics without defaulting absent values."""
+
+    frequency = mode.get("frequency_real_hz", mode.get("frequency_hz"))
+    imaginary = mode.get("frequency_imag_hz")
+    valid = True
+    if not _finite_positive(frequency):
+        reasons.append(f"{label} has a missing or non-positive real frequency")
+        return False
+    if not _finite(imaginary):
+        reasons.append(f"{label} is missing native frequency_imag_hz")
+        valid = False
+    else:
+        ratio = abs(float(imaginary)) / max(abs(float(frequency)), 1.0)
+        if ratio >= MAX_IMAGINARY_TO_REAL_RATIO:
+            reasons.append(f"{label} has |Im(f)|/max(|Re(f)|,1Hz)={ratio:.6g} >= {MAX_IMAGINARY_TO_REAL_RATIO:.6g}")
+            valid = False
+    residual = mode.get("residual_relative_l2")
+    if not _finite(residual):
+        reasons.append(f"{label} is missing native residual_relative_l2")
+        valid = False
+    elif float(residual) < 0.0 or float(residual) >= MAX_EIGEN_RESIDUAL:
+        reasons.append(f"{label} residual_relative_l2={float(residual)!r} is outside the <{MAX_EIGEN_RESIDUAL:.6g} gate")
+        valid = False
+    tangent = mode.get("tangent_leakage_max_abs")
+    if not _finite(tangent):
+        reasons.append(f"{label} is missing native tangent_leakage_max_abs")
+        valid = False
+    elif float(tangent) < 0.0 or float(tangent) >= MAX_TANGENT_LEAKAGE:
+        reasons.append(f"{label} tangent_leakage_max_abs={float(tangent)!r} is outside the <{MAX_TANGENT_LEAKAGE:.6g} gate")
+        valid = False
+    phase = _phase_residual(mode)
+    if _finite(phase) and (float(phase) < 0.0 or float(phase) >= MAX_PHASE_RESIDUAL):
+        reasons.append(f"{label} phase constraint residual={float(phase)!r} is outside the <{MAX_PHASE_RESIDUAL:.6g} gate")
+        valid = False
+    try:
+        validate_mode_diagnostics_fields(dict(mode), label, float(frequency))
+    except (SystemExit, ValueError, TypeError) as error:
+        reasons.append(f"{label} fails native modal diagnostics validation: {error}")
+        valid = False
+    return valid
+
+
+def _validate_exported_mode_fields(
+    case_dir: Path,
+    case: str,
+    branches: Sequence[Mapping[str, Any]],
+    sample_map: Mapping[int, Mapping[str, Any]],
+    reasons: list[str],
+) -> dict[str, Any]:
+    """Inspect branch-selected binary fields, independently of solver claims."""
+    from comsol_modal_field_certificate import validate_modal_field_certificate
+
+    control_samples = {0} if case == "c0" else {0, 10, 20, 40, 50, 60}
+    selections = []
+    for branch in branches:
+        for point in branch.get("points", []):
+            if not isinstance(point, Mapping) or point.get("sample_index") not in control_samples:
+                continue
+            raw = point.get("raw_mode_index")
+            sample = point.get("sample_index")
+            if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
+                selections.append((sample, raw))
+    expected_count = len(control_samples) * (1 if case == "c0" else EXPECTED_TARGET_BANDS)
+    if len(set(selections)) != expected_count:
+        reasons.append(f"modal field phase requires {expected_count} distinct branch-selected fields")
+        return _new_check("fail", expected_mode_count=expected_count)
+    certificate = validate_modal_field_certificate(
+        case_dir, mode_selections=sorted(selections), phase_tolerance=MAX_PHASE_RESIDUAL,
+    )
+    if certificate.get("status") != "pass":
+        reasons.extend(f"modal field phase: {reason}" for reason in certificate.get("reasons", []))
+        reasons.append("modal field phase certificate did not pass")
+    for mode in certificate.get("modes", []):
+        index = mode.get("sample_index")
+        actual = mode.get("k_vector_rad_per_m")
+        expected = sample_map.get(index, {}).get("k_vector")
+        if not isinstance(actual, list) or not isinstance(expected, list) or len(actual) != 3 or len(expected) != 3 or any(
+            not _finite(a) or not _finite(b) or abs(float(a) - float(b)) > 1e-8 * max(1.0, abs(float(b)))
+            for a, b in zip(actual, expected)
+        ):
+            reasons.append(f"modal field sample {index} wavevector differs from the numeric spectrum")
+            certificate["status"] = "fail"
+            certificate["qualification"] = "NOT VERIFIED"
+    return certificate
+
+
 def _validate_spectrum(
     spectrum: Mapping[str, Any],
     case: str,
@@ -256,11 +753,16 @@ def _validate_spectrum(
                 reasons.append(f"spectrum sample {index} contains a mode without a valid raw_mode_index")
                 continue
             frequency = mode.get("frequency_real_hz", mode.get("frequency_hz"))
-            imag = mode.get("frequency_imag_hz", 0.0)
+            imag = mode.get("frequency_imag_hz")
             if not _finite(frequency) or not _finite(imag):
-                reasons.append(f"spectrum sample {index} mode {raw} has a non-finite frequency")
+                reasons.append(f"spectrum sample {index} mode {raw} has a missing or non-finite frequency")
                 continue
-            mode_map[(index, raw)] = float(frequency)
+            key = (index, raw)
+            if key in mode_map:
+                reasons.append(f"spectrum contains duplicate raw_mode_index {raw} at sample {index}")
+                continue
+            _validate_modal_quality(mode, f"spectrum sample {index} mode {raw}", reasons)
+            mode_map[key] = float(frequency)
     expected_indices = {0} if case == "c0" else set(range(EXPECTED_PATH_SAMPLE_COUNT))
     if set(sample_map) != expected_indices:
         reasons.append(f"spectrum sample indices are {sorted(sample_map)}, expected {sorted(expected_indices)}")
@@ -292,6 +794,7 @@ def _validate_branches(
     expected_indices = {0} if case == "c0" else set(range(EXPECTED_PATH_SAMPLE_COUNT))
     target = 1 if case == "c0" else EXPECTED_TARGET_BANDS
     complete: list[dict[str, Any]] = []
+    seen_mode_bindings: set[tuple[int, int]] = set()
     for branch in parsed:
         branch_id = int(branch["branch_id"])
         point_map: dict[int, Mapping[str, Any]] = {}
@@ -308,13 +811,21 @@ def _validate_branches(
                 continue
             point_map[index] = point
             frequency = point.get("frequency_real_hz", point.get("frequency_hz"))
-            imag = point.get("frequency_imag_hz", 0.0)
+            imag = point.get("frequency_imag_hz")
             if not _finite_positive(frequency) or not _finite(imag):
-                reasons.append(f"branch {branch_id} sample {index} has a non-finite or non-positive frequency")
+                reasons.append(f"branch {branch_id} sample {index} has a missing, non-finite, or non-positive frequency")
             raw = point.get("raw_mode_index")
-            if isinstance(raw, int) and (index, raw) in mode_map and _finite(frequency):
-                if _relative_error(float(frequency), mode_map[(index, raw)]) > 1.0e-9:
-                    reasons.append(f"branch {branch_id} sample {index} disagrees with spectrum for raw mode {raw}")
+            if not isinstance(raw, int) or isinstance(raw, bool) or raw < 0:
+                reasons.append(f"branch {branch_id} sample {index} has no valid raw_mode_index")
+                continue
+            binding = (index, raw)
+            if binding in seen_mode_bindings:
+                reasons.append(f"raw mode {raw} at sample {index} is assigned to multiple tracked branches")
+            seen_mode_bindings.add(binding)
+            if binding not in mode_map:
+                reasons.append(f"branch {branch_id} sample {index} references unknown spectrum raw mode {raw}")
+            elif _finite(frequency) and _relative_error(float(frequency), mode_map[binding]) > 1.0e-9:
+                reasons.append(f"branch {branch_id} sample {index} disagrees with spectrum for raw mode {raw}")
         if set(point_map) == expected_indices:
             complete.append(branch)
     if len(complete) < target:
@@ -330,74 +841,177 @@ def _validate_branches(
     )
 
 
-def _validate_dispersion_csv(path: Path, case: str, reasons: list[str]) -> dict[str, Any]:
+def _validate_dispersion_csv(
+    path: Path,
+    case: str,
+    expected_path: Mapping[int, tuple[float, float, float]],
+    sample_map: Mapping[int, Mapping[str, Any]],
+    mode_map: Mapping[tuple[int, int], float],
+    selected_branches: Sequence[Mapping[str, Any]],
+    reasons: list[str],
+) -> dict[str, Any]:
+    """Cross-check native dispersion rows against the modal spectrum."""
+
     expected_indices = {0} if case == "c0" else set(range(EXPECTED_PATH_SAMPLE_COUNT))
-    counts: dict[int, int] = {}
+    before = len(reasons)
     rows = 0
+    sample_indices: set[int] = set()
+    seen_modes: set[tuple[int, int]] = set()
+    branch_by_mode: dict[tuple[int, int], int] = {}
+    expected_pairs: set[tuple[int, int]] = set()
+    for branch in selected_branches:
+        branch_id = branch.get("branch_id")
+        points = branch.get("points")
+        if not isinstance(branch_id, int) or not isinstance(points, list):
+            continue
+        for point in points:
+            if isinstance(point, Mapping) and isinstance(point.get("sample_index"), int) and isinstance(point.get("raw_mode_index"), int):
+                key = (int(point["sample_index"]), int(point["raw_mode_index"]))
+                expected_pairs.add(key)
+                branch_by_mode[key] = int(branch_id)
+    observed_pairs: set[tuple[int, int]] = set()
     try:
         with path.open("r", encoding="utf-8-sig", newline="") as stream:
             reader = csv.DictReader(stream)
             fieldnames = set(reader.fieldnames or ())
-            required = {"sample_index", "kx_rad_per_m", "ky_rad_per_m", "kz_rad_per_m"}
-            frequency_key = "frequency_hz" if "frequency_hz" in fieldnames else "frequency_real_hz"
+            required = {
+                "sample_index",
+                "branch_id",
+                "raw_mode_index",
+                "kx_rad_per_m",
+                "ky_rad_per_m",
+                "kz_rad_per_m",
+            }
+            frequency_key = (
+                "frequency_real_hz"
+                if "frequency_real_hz" in fieldnames
+                else "frequency_hz"
+            )
             missing = sorted(required - fieldnames)
             if frequency_key not in fieldnames:
-                missing.append("frequency_hz or frequency_real_hz")
+                missing.append("frequency_real_hz or frequency_hz")
             if missing:
                 reasons.append(f"dispersion.csv is missing columns: {', '.join(missing)}")
-                return _new_check("fail", rows=0, sample_count=0, samples=[])
-            for row in reader:
+                return _new_check("fail", rows=0, sample_count=0, tracked_pairs=0)
+            for row_number, row in enumerate(reader, start=1):
                 rows += 1
                 try:
-                    index = int(row["sample_index"])
+                    sample_index = int(row["sample_index"])
+                    raw_mode_index = int(row["raw_mode_index"])
                 except (TypeError, ValueError):
-                    reasons.append(f"dispersion.csv row {rows} has an invalid sample_index")
+                    reasons.append(f"dispersion.csv row {row_number} has invalid sample_index/raw_mode_index")
                     continue
-                counts[index] = counts.get(index, 0) + 1
-                for key in ("kx_rad_per_m", "ky_rad_per_m", "kz_rad_per_m", frequency_key):
-                    try:
-                        value = float(row[key])
-                    except (TypeError, ValueError):
-                        value = math.nan
-                    if not math.isfinite(value):
-                        reasons.append(f"dispersion.csv row {rows} has a non-finite {key}")
+                sample_indices.add(sample_index)
+                key = (sample_index, raw_mode_index)
+                if key in seen_modes:
+                    reasons.append(f"dispersion.csv contains duplicate sample/raw mode {key}")
+                    continue
+                seen_modes.add(key)
                 try:
-                    if float(row[frequency_key]) <= 0.0:
-                        reasons.append(f"dispersion.csv row {rows} has a non-positive frequency")
+                    vector = tuple(float(row[name]) for name in ("kx_rad_per_m", "ky_rad_per_m", "kz_rad_per_m"))
+                    frequency = float(row[frequency_key])
                 except (TypeError, ValueError):
-                    pass
+                    reasons.append(f"dispersion.csv row {row_number} has non-numeric k or frequency")
+                    continue
+                if not all(math.isfinite(value) for value in (*vector, frequency)):
+                    reasons.append(f"dispersion.csv row {row_number} has a non-finite k or frequency")
+                    continue
+                if frequency <= 0.0:
+                    reasons.append(f"dispersion.csv row {row_number} has a non-positive frequency")
+                sample = sample_map.get(sample_index)
+                if sample is None:
+                    reasons.append(f"dispersion.csv row {row_number} references unknown sample {sample_index}")
+                    continue
+                sample_vector = sample.get("k_vector")
+                if not isinstance(sample_vector, list) or len(sample_vector) != 3:
+                    reasons.append(f"dispersion.csv row {row_number} cannot bind to sample {sample_index} k_vector")
+                elif any(abs(actual - float(wanted)) > 1.0e-8 * max(1.0, abs(float(wanted))) for actual, wanted in zip(vector, sample_vector)):
+                    reasons.append(f"dispersion.csv row {row_number} k_vector disagrees with spectrum sample {sample_index}")
+                if case in PATH_CASES and sample_index in expected_path:
+                    expected = expected_path[sample_index]
+                    if any(abs(actual - wanted) > 1.0e-8 * max(1.0, abs(wanted)) for actual, wanted in zip(vector, expected)):
+                        reasons.append(f"dispersion.csv row {row_number} k_vector disagrees with canonical k-path")
+                expected_frequency = mode_map.get(key)
+                if expected_frequency is None:
+                    reasons.append(f"dispersion.csv row {row_number} references unknown spectrum raw mode {raw_mode_index} at sample {sample_index}")
+                elif _relative_error(frequency, expected_frequency) > 1.0e-9:
+                    reasons.append(f"dispersion.csv row {row_number} frequency disagrees with spectrum raw mode {raw_mode_index}")
+                if "frequency_imag_hz" in fieldnames:
+                    try:
+                        frequency_imag = float(row["frequency_imag_hz"])
+                    except (TypeError, ValueError):
+                        frequency_imag = math.nan
+                    if not math.isfinite(frequency_imag):
+                        reasons.append(f"dispersion.csv row {row_number} has a non-finite frequency_imag_hz")
+                raw_branch = row.get("branch_id", "").strip()
+                branch_id = None
+                if raw_branch:
+                    try:
+                        branch_id = int(raw_branch)
+                    except ValueError:
+                        reasons.append(f"dispersion.csv row {row_number} has an invalid branch_id")
+                expected_branch = branch_by_mode.get(key)
+                if expected_branch is not None:
+                    if branch_id != expected_branch:
+                        reasons.append(f"dispersion.csv row {row_number} branch_id does not bind tracked raw mode {raw_mode_index} to branch {expected_branch}")
+                    else:
+                        observed_pairs.add(key)
     except (OSError, UnicodeError) as error:
         reasons.append(f"cannot read dispersion.csv: {error}")
+    if sample_indices != expected_indices:
+        reasons.append(f"dispersion.csv sample indices are {sorted(sample_indices)}, expected {sorted(expected_indices)}")
+    missing_pairs = sorted(expected_pairs - observed_pairs)
+    if missing_pairs:
+        reasons.append(f"dispersion.csv is missing {len(missing_pairs)} tracked sample/raw-mode rows")
     minimum_modes = 1 if case == "c0" else EXPECTED_TARGET_BANDS
     for index in sorted(expected_indices):
-        if counts.get(index, 0) < minimum_modes:
-            reasons.append(f"dispersion.csv sample {index} has {counts.get(index, 0)} rows; {minimum_modes} are required")
-    if set(counts) != expected_indices:
-        reasons.append(f"dispersion.csv sample indices are {sorted(counts)}, expected {sorted(expected_indices)}")
+        count = sum(1 for sample, _ in seen_modes if sample == index)
+        if count < minimum_modes:
+            reasons.append(f"dispersion.csv sample {index} has {count} unique modes; {minimum_modes} are required")
     return _new_check(
-        "pass" if not any("dispersion.csv" in reason for reason in reasons) else "fail",
+        "pass" if len(reasons) == before and bool(expected_pairs) else "fail",
         rows=rows,
-        sample_count=len(counts),
-        samples=sorted(counts),
-        minimum_modes_per_sample=minimum_modes,
+        sample_count=len(sample_indices),
+        unique_mode_count=len(seen_modes),
+        tracked_pairs=len(observed_pairs),
+        expected_tracked_pairs=len(expected_pairs),
     )
 
-
-def _validate_numeric_source(manifest: Mapping[str, Any], case: str, reasons: list[str]) -> dict[str, Any]:
+def _validate_numeric_source(
+    manifest: Mapping[str, Any],
+    diagnostics: Mapping[str, Any],
+    case: str,
+    reasons: list[str],
+) -> dict[str, Any]:
+    before = len(reasons)
     source = _nested(manifest, "validation", "dispersion_frequency_source")
     dynamic_source = _nested(manifest, "validation", "dynamic_demag_operator_source")
-    solver_model = manifest.get("solver_model")
-    if source == "analytic_reference_model" or (isinstance(solver_model, str) and "kalinikos" in solver_model.lower()):
-        reasons.append("analytic reference is declared as the frequency source; it cannot qualify a FEM run")
+    solver_model = diagnostics.get("solver_model")
+    native_execution = (
+        solver_model == PRODUCTION_SOLVER_MODEL
+        and diagnostics.get("production_native_solver_available") is True
+        and diagnostics.get("validation_only") is not True
+    )
+    native_attested = (
+        source is None and native_execution
+        and _nested(manifest, "resolved_execution", "reference_or_production") == "production"
+    )
+    if not native_execution:
+        reasons.append("native production solver execution is unavailable or validation-only")
+    if source == "analytic_reference_model":
+        reasons.append("analytic reference is declared as the frequency source; an analytic source cannot qualify a FEM run")
+    elif source != NUMERIC_FREQUENCY_SOURCE and not native_attested:
+        reasons.append(f"frequency source {source!r} is neither the numeric comparison source nor a native production attestation")
+    if solver_model != PRODUCTION_SOLVER_MODEL:
+        reasons.append(f"solver_model {solver_model!r} is not the managed production SLEPc modal solver")
     if case in {"c1", "a1"} and dynamic_source != "numeric_modal_solver":
         reasons.append("dynamic demagnetization source is not declared as numeric_modal_solver")
-    if case in {"c1", "a1"} and source == "analytic_reference_model":
-        reasons.append("numeric dynamic-demag evidence is replaced by the analytic reference")
     return _new_check(
-        "pass" if not any("analytic reference" in reason or "dynamic demagnetization" in reason for reason in reasons) else "fail",
+        "pass" if len(reasons) == before else "fail",
         frequency_source=source,
         dynamic_demag_operator_source=dynamic_source,
         solver_model=solver_model,
+        native_production_attestation=native_execution,
     )
 
 
@@ -431,7 +1045,299 @@ def _validate_kittel(
     )
 
 
+def _safe_relative_path(case_dir: Path, value: object, label: str, reasons: list[str]) -> Path | None:
+    if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
+        reasons.append(f"{label} is not a safe relative path")
+        return None
+    relative = PurePosixPath(value)
+    if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
+        reasons.append(f"{label} escapes the case output directory")
+        return None
+    candidate = case_dir.joinpath(*relative.parts)
+    try:
+        resolved_case = case_dir.resolve()
+        resolved_candidate = candidate.resolve()
+        resolved_candidate.relative_to(resolved_case)
+    except (OSError, ValueError):
+        reasons.append(f"{label} escapes the case output directory")
+        return None
+    if candidate.is_symlink() or not candidate.is_file():
+        reasons.append(f"{label} is not a regular file")
+        return None
+    return candidate
+
+
+def _validate_payload_schemas(bundle: Mapping[str, Any], label: str, reasons: list[str]) -> None:
+    for name, expected in (
+        ("spectrum", "eigen_spectrum.v2"),
+        ("branches", "eigen_branches.v2"),
+        ("manifest", "frequency_domain_manifest.v1"),
+    ):
+        payload = bundle.get(name)
+        if not isinstance(payload, Mapping) or payload.get("schema_version") != expected:
+            reasons.append(f"{label}.{name} requires schema_version={expected}")
+
+
+def _load_numeric_bundle(
+    case_dir: Path,
+    descriptor: object,
+    label: str,
+    reasons: list[str],
+    *,
+    require_demag: bool,
+) -> dict[str, Any] | None:
+    """Load and hash-bind a comparison run referenced by scientific evidence."""
+
+    if not isinstance(descriptor, Mapping):
+        reasons.append(f"{label} is missing a numeric run descriptor")
+        return None
+    root = descriptor.get("root")
+    artifacts = descriptor.get("artifacts")
+    if not isinstance(root, str) or not root or not isinstance(artifacts, Mapping):
+        reasons.append(f"{label} must contain root and artifacts")
+        return None
+    default_paths = {
+        "metadata": "metadata.json",
+        "spectrum": "eigen/spectrum.v2.json",
+        "branches": "eigen/branches.v2.json",
+        "manifest": "frequency_domain/manifest.v1.json",
+        "diagnostics": "eigen/diagnostics/solver.v1.json",
+    }
+    loaded: dict[str, Any] = {}
+    for logical, default_relative in default_paths.items():
+        spec = artifacts.get(logical)
+        if not isinstance(spec, Mapping):
+            reasons.append(f"{label} is missing artifact binding {logical}")
+            continue
+        relative = spec.get("path", f"{root.rstrip('/')}/{default_relative}")
+        path = _safe_relative_path(case_dir, relative, f"{label}.{logical}", reasons)
+        expected_hash = spec.get("sha256")
+        if path is None:
+            continue
+        if not isinstance(expected_hash, str) or expected_hash != _sha256(path):
+            reasons.append(f"{label}.{logical} SHA256 does not match the referenced artifact")
+            continue
+        value, error = _load_json(path)
+        if error:
+            reasons.append(f"{label}.{logical}: {error}")
+            continue
+        assert value is not None
+        loaded[logical] = value
+    if set(loaded) != set(default_paths):
+        return None
+    _validate_payload_schemas(loaded, label, reasons)
+    manifest = loaded["manifest"]
+    diagnostics = loaded["diagnostics"]
+    source = _nested(manifest, "validation", "dispersion_frequency_source")
+    dynamic_source = _nested(manifest, "validation", "dynamic_demag_operator_source")
+    if source != NUMERIC_FREQUENCY_SOURCE:
+        native_attested = (
+            source is None
+            and isinstance(diagnostics, Mapping)
+            and diagnostics.get("solver_model") == PRODUCTION_SOLVER_MODEL
+            and diagnostics.get("production_native_solver_available") is True
+            and _nested(manifest, "resolved_execution", "reference_or_production") == "production"
+        )
+        if not native_attested:
+            reasons.append(f"{label} frequency source {source!r} is not the numeric FEM source")
+    if not isinstance(diagnostics, Mapping) or diagnostics.get("solver_model") != PRODUCTION_SOLVER_MODEL:
+        reasons.append(f"{label} does not identify the managed production SLEPc modal solver")
+    if not isinstance(diagnostics, Mapping) or diagnostics.get("production_native_solver_available") is not True:
+        reasons.append(f"{label} lacks the native production solver attestation")
+    if isinstance(diagnostics, Mapping) and diagnostics.get("validation_only") is True:
+        reasons.append(f"{label} is marked validation_only and cannot supply numeric evidence")
+    if _nested(manifest, "resolved_execution", "reference_or_production") != "production":
+        reasons.append(f"{label} is not bound to a production numeric execution")
+    if not isinstance(diagnostics, Mapping) or diagnostics.get("schema_version") != "frequency_domain_modal_solver_diagnostics.v1":
+        reasons.append(f"{label} lacks the native modal solver diagnostics schema")
+    if not isinstance(diagnostics, Mapping) or diagnostics.get("complete") is not True or diagnostics.get("status") != "ready":
+        reasons.append(f"{label} native modal solver diagnostics are not complete and ready")
+    if require_demag and dynamic_source != "numeric_modal_solver":
+        reasons.append(f"{label} does not identify numeric_modal_solver as dynamic-demag source")
+    metadata = loaded.get("metadata")
+    if not isinstance(metadata, Mapping):
+        reasons.append(f"{label} has no native metadata.json object")
+    elif _metadata_backend_plan(metadata) is None:
+        reasons.append(f"{label} has no metadata.execution_plan.backend_plan")
+    _validate_bundle_modal_payload(loaded, label, reasons)
+    return loaded
+
+
+def _validate_bundle_modal_payload(
+    bundle: Mapping[str, Any],
+    label: str,
+    reasons: list[str],
+) -> None:
+    """Check every numeric comparison mode before it can feed an oracle."""
+
+    spectrum = bundle.get("spectrum")
+    diagnostics = bundle.get("diagnostics")
+    if not isinstance(spectrum, Mapping) or not isinstance(diagnostics, Mapping):
+        return
+    samples = spectrum.get("samples")
+    if not isinstance(samples, list):
+        reasons.append(f"{label} spectrum has no samples array")
+        return
+    mode_count = 0
+    seen: set[tuple[int, int]] = set()
+    for sample in samples:
+        if not isinstance(sample, Mapping) or not isinstance(sample.get("sample_index"), int):
+            reasons.append(f"{label} spectrum has an invalid sample")
+            continue
+        sample_index = int(sample["sample_index"])
+        modes = sample.get("modes")
+        if not isinstance(modes, list):
+            reasons.append(f"{label} spectrum sample {sample_index} has no modes array")
+            continue
+        for mode in modes:
+            if not isinstance(mode, Mapping) or not isinstance(mode.get("raw_mode_index"), int):
+                reasons.append(f"{label} spectrum sample {sample_index} has an invalid raw mode")
+                continue
+            raw_mode_index = int(mode["raw_mode_index"])
+            key = (sample_index, raw_mode_index)
+            if key in seen:
+                reasons.append(f"{label} spectrum contains duplicate raw mode {key}")
+            seen.add(key)
+            mode_count += 1
+            _validate_modal_quality(mode, f"{label} spectrum sample {sample_index} mode {raw_mode_index}", reasons)
+    if diagnostics.get("sample_count") != len(samples):
+        reasons.append(f"{label} solver diagnostics sample_count does not match spectrum")
+    if diagnostics.get("mode_count") != mode_count:
+        reasons.append(f"{label} solver diagnostics mode_count does not match spectrum")
+
+
+def _bundle_observation(
+    bundle: Mapping[str, Any],
+    sample_index: int,
+    branch_id: int,
+    label: str,
+    reasons: list[str],
+) -> tuple[float | None, tuple[float, float, float] | None]:
+    spectrum = bundle.get("spectrum")
+    branches = bundle.get("branches")
+    if not isinstance(spectrum, Mapping) or not isinstance(branches, Mapping):
+        reasons.append(f"{label} has no spectrum/branches objects")
+        return None, None
+    samples = spectrum.get("samples")
+    vector: tuple[float, float, float] | None = None
+    if isinstance(samples, list):
+        for sample in samples:
+            if isinstance(sample, Mapping) and sample.get("sample_index") == sample_index:
+                raw = sample.get("k_vector")
+                if isinstance(raw, list) and len(raw) == 3 and all(_finite(item) for item in raw):
+                    vector = tuple(float(item) for item in raw)  # type: ignore[assignment]
+                break
+    if vector is None:
+        reasons.append(f"{label} is missing finite k_vector for sample {sample_index}")
+    values = branches.get("branches")
+    observed: float | None = None
+    selected_point: Mapping[str, Any] | None = None
+    if isinstance(values, list):
+        for branch in values:
+            if not isinstance(branch, Mapping) or branch.get("branch_id") != branch_id:
+                continue
+            points = branch.get("points")
+            if isinstance(points, list):
+                for point in points:
+                    if isinstance(point, Mapping) and point.get("sample_index") == sample_index:
+                        value = point.get("frequency_real_hz", point.get("frequency_hz"))
+                        if _finite_positive(value):
+                            observed = float(value)
+                            selected_point = point
+                        else:
+                            reasons.append(f"{label} branch {branch_id} sample {sample_index} has a non-finite frequency")
+                        break
+            break
+    if observed is None:
+        reasons.append(f"{label} is missing branch {branch_id} sample {sample_index}")
+    if selected_point is not None:
+        raw_mode = selected_point.get("raw_mode_index")
+        if not isinstance(raw_mode, int):
+            reasons.append(f"{label} branch {branch_id} sample {sample_index} has no raw_mode_index")
+        else:
+            mode_match: Mapping[str, Any] | None = None
+            if isinstance(samples, list):
+                for sample in samples:
+                    if not isinstance(sample, Mapping) or sample.get("sample_index") != sample_index:
+                        continue
+                    modes = sample.get("modes")
+                    if isinstance(modes, list):
+                        mode_match = next(
+                            (
+                                mode
+                                for mode in modes
+                                if isinstance(mode, Mapping)
+                                and mode.get("raw_mode_index", mode.get("index")) == raw_mode
+                            ),
+                            None,
+                        )
+                    break
+            mode_frequency = mode_match.get("frequency_real_hz", mode_match.get("frequency_hz")) if mode_match else None
+            if not _finite_positive(mode_frequency) or observed is None or _relative_error(observed, float(mode_frequency)) > 1.0e-9:
+                reasons.append(f"{label} branch {branch_id} sample {sample_index} is not cross-checked against spectrum raw mode {raw_mode}")
+    return observed, vector
+
+
+def _bundle_branch_is_lowest_positive(
+    bundle: Mapping[str, Any],
+    sample_index: int,
+    branch_id: int,
+    label: str,
+    reasons: list[str],
+) -> bool:
+    branches = bundle.get("branches")
+    frequencies: list[float] = []
+    selected: float | None = None
+    if isinstance(branches, Mapping) and isinstance(branches.get("branches"), list):
+        for branch in branches["branches"]:
+            if not isinstance(branch, Mapping) or not isinstance(branch.get("points"), list):
+                continue
+            for point in branch["points"]:
+                if not isinstance(point, Mapping) or point.get("sample_index") != sample_index:
+                    continue
+                frequency = point.get("frequency_real_hz", point.get("frequency_hz"))
+                if _finite_positive(frequency):
+                    value = float(frequency)
+                    frequencies.append(value)
+                    if branch.get("branch_id") == branch_id:
+                        selected = value
+                break
+    if selected is None or not frequencies:
+        reasons.append(f"{label} cannot establish the positive fundamental branch at sample {sample_index}")
+        return False
+    fundamental = min(frequencies)
+    if _relative_error(selected, fundamental) > 1.0e-9:
+        reasons.append(f"{label} branch {branch_id} is not the lowest positive branch at sample {sample_index}")
+        return False
+    return True
+
+
+def _validate_homogeneous_slab_applicability(
+    bundle: Mapping[str, Any],
+    label: str,
+    parameters: Mapping[str, Any],
+    reasons: list[str],
+) -> bool:
+    metadata = bundle.get("metadata")
+    if not isinstance(metadata, Mapping):
+        reasons.append(f"{label} has no native metadata for analytic applicability")
+        return False
+    return _validate_benchmark_metadata(
+        metadata,
+        "c1",
+        parameters,
+        label,
+        reasons,
+        require_uniform_slab=True,
+    )
+
+
+def _vector_norm(vector: Sequence[float]) -> float:
+    return math.sqrt(sum(value * value for value in vector))
+
+
 def _validate_ks(
+    case_dir: Path,
     case: str,
     evidence: Mapping[str, Any] | None,
     parameters: Mapping[str, Any],
@@ -455,26 +1361,59 @@ def _validate_ks(
             reasons.append(f"Kalinikos–Slavin sample {index} is not an object")
             continue
         geometry = sample.get("geometry")
-        k = sample.get("k_rad_per_m")
-        observed = sample.get("observed_frequency_hz")
-        expected = _kalinikos_frequency_hz(float(k), geometry, parameters) if _finite(k) and isinstance(geometry, str) else None
         if geometry not in {"backward_volume", "damon_eshbach"}:
             reasons.append(f"Kalinikos–Slavin sample {index} has unsupported geometry {geometry!r}")
             continue
-        geometries.add(geometry)
-        if not _finite_positive(observed) or not _finite_positive(expected):
-            reasons.append(f"Kalinikos–Slavin sample {index} lacks finite positive observed/reference frequency")
+        run = _load_numeric_bundle(case_dir, sample.get("run"), f"Kalinikos–Slavin sample {index}", reasons, require_demag=True)
+        if run is None:
             continue
-        error = _relative_error(float(observed), float(expected))
+        _validate_homogeneous_slab_applicability(
+            run,
+            f"Kalinikos–Slavin sample {index}",
+            parameters,
+            reasons,
+        )
+        sample_index = sample.get("sample_index")
+        branch_id = sample.get("branch_id", 0)
+        if not isinstance(sample_index, int) or not isinstance(branch_id, int):
+            reasons.append(f"Kalinikos–Slavin sample {index} lacks integer sample_index/branch_id")
+            continue
+        observed, vector = _bundle_observation(run, sample_index, branch_id, f"Kalinikos–Slavin sample {index}", reasons)
+        if observed is None or vector is None:
+            continue
+        _bundle_branch_is_lowest_positive(
+            run,
+            sample_index,
+            branch_id,
+            f"Kalinikos–Slavin sample {index}",
+            reasons,
+        )
+        k_actual = _vector_norm(vector)
+        declared_k = sample.get("k_rad_per_m")
+        if _finite(declared_k) and _relative_error(k_actual, float(declared_k)) > 1.0e-8:
+            reasons.append(f"Kalinikos–Slavin sample {index} declares k inconsistent with the numeric spectrum")
+        scale = max(1.0, k_actual)
+        if abs(vector[2]) > 1.0e-8 * scale:
+            reasons.append(f"Kalinikos–Slavin sample {index} is not an in-plane wavevector")
+        if geometry == "backward_volume" and (abs(vector[1]) > 1.0e-8 * scale or abs(vector[0]) <= 1.0e-12 * scale):
+            reasons.append(f"Kalinikos–Slavin BV sample {index} is not parallel to the bias axis")
+        if geometry == "damon_eshbach" and (abs(vector[0]) > 1.0e-8 * scale or abs(vector[1]) <= 1.0e-12 * scale):
+            reasons.append(f"Kalinikos–Slavin DE sample {index} is not perpendicular to the bias axis")
+        expected = _kalinikos_frequency_hz(k_actual, geometry, parameters)
+        if not _finite_positive(expected):
+            reasons.append(f"Kalinikos–Slavin sample {index} has no finite analytic reference")
+            continue
+        error = _relative_error(observed, float(expected))
+        geometries.add(geometry)
         errors.append(error)
         if error > KS_RELATIVE_TOLERANCE:
             reasons.append(f"Kalinikos–Slavin {geometry} sample {index} error {error:.6g} exceeds {KS_RELATIVE_TOLERANCE:.6g}")
     for geometry in ("backward_volume", "damon_eshbach"):
         if geometry not in geometries:
             reasons.append(f"Kalinikos–Slavin evidence is missing a {geometry} applicability sample")
-    maximum = max(errors, default=math.inf)
-    if not isinstance(ks.get("status"), str) or ks.get("status") != "pass":
+    if ks.get("status") != "pass":
         reasons.append("Kalinikos–Slavin evidence is not explicitly marked pass")
+    maximum = max(errors, default=math.inf)
     return _new_check(
         "pass" if geometries == {"backward_volume", "damon_eshbach"} and errors and maximum <= KS_RELATIVE_TOLERANCE and ks.get("status") == "pass" else "fail",
         sample_count=len(samples),
@@ -484,12 +1423,132 @@ def _validate_ks(
     )
 
 
-def _validate_convergence(
+def _manifest_identity(bundle: Mapping[str, Any], key: str) -> object:
+    manifest = bundle.get("manifest")
+    if not isinstance(manifest, Mapping):
+        return None
+    if key == "mesh":
+        for candidate in (manifest.get("mesh_identity"), _nested(manifest, "geometry", "mesh_id"), _nested(manifest, "benchmark", "mesh_id")):
+            if candidate is not None:
+                return candidate
+    if key == "airbox":
+        for candidate in (
+            _nested(manifest, "geometry", "air_padding_each_side_m"),
+            manifest.get("airbox_size_m"),
+            _nested(manifest, "benchmark", "air_padding_each_side_m"),
+        ):
+            if candidate is not None:
+                return candidate
+    return None
+
+
+def _bundle_identity(bundle: Mapping[str, Any], key: str) -> object:
+    metadata = bundle.get("metadata")
+    plan = _metadata_backend_plan(metadata) if isinstance(metadata, Mapping) else None
+    diagnostics = bundle.get("diagnostics")
+    if not isinstance(plan, Mapping):
+        return _manifest_identity(bundle, key)
+    if key == "mesh":
+        return (
+            plan.get("mesh_name") or _nested(plan, "mesh", "mesh_name"),
+            _backend_mesh_hmax(plan),
+        )
+    if key == "airbox":
+        return _backend_airbox_value(plan)
+    if key == "mode_count":
+        return (
+            plan.get("count"),
+            diagnostics.get("requested_mode_count") if isinstance(diagnostics, Mapping) else None,
+        )
+    return None
+
+
+def _uniform_nodal_signature(samples: object) -> object:
+    """Represent a constant nodal field without its mesh-dependent repetition.
+
+    Nonuniform fields retain their complete values: they need an independent
+    spatial transfer check, not an average that could conceal a changed state.
+    """
+    if not isinstance(samples, list) or not samples:
+        return samples
+    first = samples[0]
+    finite_first = _finite(first) or (
+        isinstance(first, list) and len(first) == 3 and all(_finite(value) for value in first)
+    )
+    if finite_first and all(value == first for value in samples):
+        return {"uniform_value": first}
+    return samples
+
+
+def _backend_signature(metadata: Mapping[str, Any], *, vary: str | None = None) -> str | None:
+    """Remove only the inputs intentionally varied by this convergence test."""
+    plan = _metadata_backend_plan(metadata)
+    if not isinstance(plan, Mapping):
+        return None
+    value = dict(plan)
+    if vary in {"mesh", "airbox"}:
+        for key in ("mesh", "mesh_name", "mesh_source", "mesh_build_report"):
+            value.pop(key, None)
+        value["equilibrium_magnetization"] = _uniform_nodal_signature(value.get("equilibrium_magnetization"))
+        material = value.get("material")
+        if isinstance(material, Mapping):
+            value["material"] = {
+                key: _uniform_nodal_signature(field) if key.endswith("_field") else field
+                for key, field in material.items()
+            }
+        segments = value.get("object_segments")
+        if isinstance(segments, list):
+            value["object_segments"] = [
+                {key: field for key, field in segment.items() if key not in {
+                    "node_start", "node_count", "element_start", "element_count",
+                    "boundary_face_start", "boundary_face_count",
+                }} if isinstance(segment, Mapping) else segment
+                for segment in segments
+            ]
+        parts = value.get("mesh_parts")
+        if isinstance(parts, list):
+            value["mesh_parts"] = [
+                {key: field for key, field in part.items() if key not in {
+                    "element_selector", "boundary_face_selector", "node_selector",
+                    "boundary_face_indices", "node_indices", "facet_global_ordinals",
+                    "bounds_min", "bounds_max",
+                }} if isinstance(part, Mapping) else part
+                for part in parts
+            ]
+    if vary == "mesh":
+        value.pop("hmax", None)
+        # h-refinement does not authorize changing finite-element order.
+    if vary == "airbox":
+        air = value.get("air_box_config")
+        if isinstance(air, Mapping):
+            value["air_box_config"] = {key: field for key, field in air.items() if key in {
+                "bc_kind", "boundary_marker", "robin_beta", "grading", "shape",
+            }}
+        frame = value.get("domain_frame")
+        if isinstance(frame, Mapping):
+            value["domain_frame"] = {key: frame.get(key) for key in (
+                "object_bounds_min", "object_bounds_max",
+            )}
+    if vary == "mode_count":
+        value.pop("count", None)
+        # Same mesh, physical state, target and search window; only count varies.
+    try:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError):
+        return None
+
+
+def _validate_convergence_pair(
+    case_dir: Path,
     evidence: Mapping[str, Any] | None,
     key: str,
     case: str,
+    primary_metadata: Mapping[str, Any] | None,
     reasons: list[str],
+    *,
+    primary_bundle: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    reason_count = len(reasons)
     convergence = evidence.get("convergence") if isinstance(evidence, Mapping) else None
     section = convergence.get(key) if isinstance(convergence, Mapping) else None
     if key == "airbox" and case == "c0":
@@ -502,6 +1561,49 @@ def _validate_convergence(
         return _new_check("missing")
     if section.get("status") != "pass":
         reasons.append(f"convergence.{key} is not explicitly marked pass")
+    runs = section.get("runs")
+    if not isinstance(runs, Mapping):
+        reasons.append(f"convergence.{key} is missing numeric run bundles")
+        return _new_check("missing")
+    left_name, right_name = (("coarse", "fine") if key in {"mesh", "airbox"} else ("baseline", "check"))
+    left = _load_numeric_bundle(case_dir, runs.get(left_name), f"convergence.{key}.{left_name}", reasons, require_demag=case in PATH_CASES)
+    right = _load_numeric_bundle(case_dir, runs.get(right_name), f"convergence.{key}.{right_name}", reasons, require_demag=case in PATH_CASES)
+    if left is None or right is None:
+        return _new_check("fail")
+    if key in {"mesh", "airbox"}:
+        left_identity = _bundle_identity(left, key)
+        right_identity = _bundle_identity(right, key)
+        if left_identity is None or right_identity is None:
+            reasons.append(f"convergence.{key} native metadata does not expose the varied {key} identity")
+        elif left_identity == right_identity:
+            reasons.append(f"convergence.{key} runs have identical {key} identities")
+        elif key == "mesh":
+            left_hmax = left_identity[1] if isinstance(left_identity, tuple) else None
+            right_hmax = right_identity[1] if isinstance(right_identity, tuple) else None
+            if not _finite_positive(left_hmax) or not _finite_positive(right_hmax) or not float(right_hmax) < float(left_hmax):
+                reasons.append("convergence.mesh fine run does not prove a smaller resolved hmax")
+        elif key == "airbox":
+            if not _finite_positive(left_identity) or not _finite_positive(right_identity) or not float(right_identity) > float(left_identity):
+                reasons.append("convergence.airbox fine run does not prove a larger resolved airbox")
+    if primary_metadata is None:
+        reasons.append(f"convergence.{key} cannot bind comparison runs to the primary native metadata")
+    else:
+        primary_signature = _backend_signature(primary_metadata, vary=key)
+        left_metadata = left.get("metadata")
+        right_metadata = right.get("metadata")
+        left_signature = _backend_signature(left_metadata, vary=key) if isinstance(left_metadata, Mapping) else None
+        right_signature = _backend_signature(right_metadata, vary=key) if isinstance(right_metadata, Mapping) else None
+        if primary_signature is None or left_signature != primary_signature or right_signature != primary_signature:
+            reasons.append(f"convergence.{key} runs do not hold the resolved FEM physics inputs fixed")
+    if key == "mode_count":
+        if section.get("baseline_requested_modes") != 24 or section.get("check_requested_modes") != 48:
+            reasons.append("mode-count convergence must compare requested modes 24 against 48")
+        for name, bundle, expected in ((left_name, left, 24), (right_name, right, 48)):
+            actual = _bundle_identity(bundle, "mode_count")
+            actual_count = actual[0] if isinstance(actual, tuple) else None
+            diagnostics_count = actual[1] if isinstance(actual, tuple) else None
+            if actual_count != expected or diagnostics_count != expected:
+                reasons.append(f"convergence.mode_count.{name} resolved requested mode count is {(actual_count, diagnostics_count)!r}, expected {expected}")
     comparisons = section.get("comparisons")
     if not isinstance(comparisons, list):
         reasons.append(f"convergence.{key}.comparisons is missing")
@@ -509,41 +1611,120 @@ def _validate_convergence(
     expected_pairs = {(sample, band) for sample in (EXPECTED_CONTROL_SAMPLES if case in PATH_CASES else (0,)) for band in range(EXPECTED_TARGET_BANDS if case in PATH_CASES else 1)}
     observed_pairs: set[tuple[int, int]] = set()
     errors: list[float] = []
+    changes: dict[str, float] = {}
     for index, comparison in enumerate(comparisons):
         if not isinstance(comparison, Mapping):
             reasons.append(f"convergence.{key} comparison {index} is not an object")
             continue
         sample = comparison.get("sample_index")
-        band = comparison.get("band_index", comparison.get("branch_index"))
-        reference = comparison.get("reference_frequency_hz", comparison.get("coarse_frequency_hz"))
-        refined = comparison.get("refined_frequency_hz", comparison.get("fine_frequency_hz"))
-        if not isinstance(sample, int) or not isinstance(band, int):
-            reasons.append(f"convergence.{key} comparison {index} lacks integer sample/band indices")
+        band = comparison.get("branch_id")
+        if not isinstance(sample, int) or isinstance(sample, bool) or not isinstance(band, int) or isinstance(band, bool):
+            reasons.append(f"convergence.{key} comparison {index} lacks integer sample_index/branch_id")
             continue
-        observed_pairs.add((sample, band))
-        if not _finite_positive(reference) or not _finite_positive(refined):
-            reasons.append(f"convergence.{key} comparison {index} lacks finite positive frequencies")
+        pair = (sample, band)
+        if pair in observed_pairs:
+            reasons.append(f"convergence.{key} comparison {index} duplicates sample/band pair {pair}")
             continue
-        error = _relative_error(float(reference), float(refined))
+        observed_pairs.add(pair)
+        coarse, coarse_k = _bundle_observation(left, sample, band, f"convergence.{key}.coarse", reasons)
+        fine, fine_k = _bundle_observation(right, sample, band, f"convergence.{key}.fine", reasons)
+        if coarse is None or fine is None or coarse_k is None or fine_k is None:
+            continue
+        if primary_bundle is not None:
+            primary, primary_k = _bundle_observation(
+                primary_bundle,
+                sample,
+                band,
+                f"convergence.{key}.primary",
+                reasons,
+            )
+            if primary is not None and primary_k is not None:
+                if any(
+                    abs(a - b) > 1.0e-8 * max(1.0, abs(a), abs(b))
+                    for a, b in zip(primary_k, coarse_k)
+                ) or any(
+                    abs(a - b) > 1.0e-8 * max(1.0, abs(a), abs(b))
+                    for a, b in zip(primary_k, fine_k)
+                ):
+                    reasons.append(
+                        f"convergence.{key} comparison {index} does not use the primary k vector"
+                    )
+                for run_name, observed in (("coarse", coarse), ("fine", fine)):
+                    primary_error = _relative_error(observed, primary)
+                    if primary_error > CONVERGENCE_RELATIVE_TOLERANCE:
+                        reasons.append(
+                            f"convergence.{key}.{run_name} comparison {index} differs from the primary numeric spectrum by {primary_error:.6g}"
+                        )
+        if any(abs(a - b) > 1.0e-8 * max(1.0, abs(a), abs(b)) for a, b in zip(coarse_k, fine_k)):
+            reasons.append(f"convergence.{key} comparison {index} uses different k vectors")
+        error = _relative_error(coarse, fine)
         errors.append(error)
-        reported = comparison.get("relative_change")
-        if reported is not None and (not _finite(reported) or abs(float(reported) - error) > 1.0e-9):
-            reasons.append(f"convergence.{key} comparison {index} reports an inconsistent relative_change")
+        changes[f"{sample}:{band}"] = error
+        if error > CONVERGENCE_RELATIVE_TOLERANCE:
+            reasons.append(f"convergence.{key} comparison {index} change {error:.6g} exceeds {CONVERGENCE_RELATIVE_TOLERANCE:.6g}")
     missing = sorted(expected_pairs - observed_pairs)
     if missing:
         reasons.append(f"convergence.{key} is missing {len(missing)} required sample/band comparisons")
     maximum = max(errors, default=math.inf)
-    if maximum > CONVERGENCE_RELATIVE_TOLERANCE:
-        reasons.append(f"convergence.{key} maximum relative change {maximum:.6g} exceeds {CONVERGENCE_RELATIVE_TOLERANCE:.6g}")
-    if key == "mode_count":
-        if section.get("baseline_requested_modes") != 24 or section.get("check_requested_modes") != 48:
-            reasons.append("mode-count convergence must compare requested modes 24 against 48")
     return _new_check(
-        "pass" if section.get("status") == "pass" and not missing and errors and maximum <= CONVERGENCE_RELATIVE_TOLERANCE else "fail",
+        "pass" if len(reasons) == reason_count and section.get("status") == "pass" and not missing and errors and maximum <= CONVERGENCE_RELATIVE_TOLERANCE else "fail",
+        relative_changes=changes,
         comparison_count=len(comparisons),
         expected_comparison_count=len(expected_pairs),
         max_relative_change=maximum if math.isfinite(maximum) else None,
         tolerance=CONVERGENCE_RELATIVE_TOLERANCE,
+    )
+
+
+def _validate_convergence(
+    case_dir: Path,
+    evidence: Mapping[str, Any] | None,
+    key: str,
+    case: str,
+    primary_metadata: Mapping[str, Any] | None,
+    reasons: list[str],
+    *,
+    primary_bundle: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Require three resolved levels and measure both adjacent increments."""
+    if key == "mode_count" or (key == "airbox" and case == "c0"):
+        return _validate_convergence_pair(
+            case_dir, evidence, key, case, primary_metadata, reasons,
+            primary_bundle=primary_bundle,
+        )
+    convergence = evidence.get("convergence") if isinstance(evidence, Mapping) else None
+    section = convergence.get(key) if isinstance(convergence, Mapping) else None
+    runs = section.get("runs") if isinstance(section, Mapping) else None
+    if not isinstance(runs, Mapping) or any(not isinstance(runs.get(name), Mapping) for name in ("coarse", "medium", "fine")):
+        reasons.append(f"missing convergence.{key} three-level evidence: coarse, medium, fine numeric bundles are required")
+        return _new_check("fail", required_level_count=3)
+    initial_reason_count = len(reasons)
+    checks = []
+    for left_name, right_name in (("coarse", "medium"), ("medium", "fine")):
+        pair_section = dict(section)
+        pair_section["runs"] = {"coarse": runs[left_name], "fine": runs[right_name]}
+        pair_evidence = dict(evidence)
+        pair_evidence["convergence"] = {**convergence, key: pair_section}
+        check = _validate_convergence_pair(
+            case_dir, pair_evidence, key, case, primary_metadata, reasons,
+            primary_bundle=primary_bundle,
+        )
+        check["levels"] = [left_name, right_name]
+        checks.append(check)
+    first = checks[0].get("relative_changes", {})
+    second = checks[1].get("relative_changes", {})
+    # This small dimensionless margin avoids treating roundoff-sized variation
+    # as divergence. It is not an estimate of continuum or analytic-model error.
+    trend_margin = 1.0e-8
+    for pair in sorted(first.keys() & second.keys()):
+        if second[pair] > first[pair] + trend_margin:
+            reasons.append(f"convergence.{key} sample/band {pair} increments grow from {first[pair]:.6g} to {second[pair]:.6g}")
+    return _new_check(
+        "pass" if len(reasons) == initial_reason_count and all(check["status"] == "pass" for check in checks) else "fail",
+        required_level_count=3,
+        adjacent_comparisons=checks,
+        trend_margin=trend_margin,
+        continuum_error_estimate=None,
     )
 
 
@@ -565,8 +1746,8 @@ def _validate_evidence_binding(
     if not isinstance(numeric, Mapping):
         reasons.append("scientific evidence is missing numeric_run provenance")
     else:
-        if numeric.get("frequency_source") != "numeric_modal_solver":
-            reasons.append("scientific evidence does not identify numeric_modal_solver as frequency source")
+        if numeric.get("frequency_source") not in {NUMERIC_FREQUENCY_SOURCE, "native_solver_attested"}:
+            reasons.append("scientific evidence does not identify the native numeric FEM solver as frequency source")
         if numeric.get("analytic_solver_used_for_frequencies") is not False:
             reasons.append("scientific evidence does not prove that the analytic solver was excluded from FEM frequencies")
         if case in {"c1", "a1"} and numeric.get("dynamic_demag_operator_source") != "numeric_modal_solver":
@@ -576,10 +1757,12 @@ def _validate_evidence_binding(
         reasons.append("scientific evidence is missing artifact_bindings")
     else:
         expected_keys = {
+            "metadata.json": "metadata_sha256",
             "eigen/spectrum.v2.json": "spectrum_v2_sha256",
             "eigen/branches.v2.json": "branches_v2_sha256",
             "eigen/dispersion.csv": "dispersion_csv_sha256",
             "frequency_domain/manifest.v1.json": "manifest_sha256",
+            "eigen/diagnostics/solver.v1.json": "solver_diagnostics_sha256",
         }
         for relative, key in expected_keys.items():
             actual = artifacts.get(Path(relative), {}).get("sha256")
@@ -615,6 +1798,13 @@ def validate_case(
     spectrum: dict[str, Any] = {}
     branches: dict[str, Any] = {}
     manifest: dict[str, Any] = {}
+    metadata: dict[str, Any] = {}
+    diagnostics: dict[str, Any] = {}
+    if Path("metadata.json") in artifacts:
+        metadata, error = _load_json(case_dir / "metadata.json")
+        if error:
+            reasons.append(error)
+            metadata = {}
     if Path("eigen/spectrum.v2.json") in artifacts:
         spectrum, error = _load_json(case_dir / "eigen/spectrum.v2.json")
         if error:
@@ -630,6 +1820,14 @@ def validate_case(
         if error:
             reasons.append(error)
             manifest = {}
+    if Path("eigen/diagnostics/solver.v1.json") in artifacts:
+        diagnostics, error = _load_json(case_dir / "eigen/diagnostics/solver.v1.json")
+        if error:
+            reasons.append(error)
+            diagnostics = {}
+    _validate_payload_schemas(
+        {"spectrum": spectrum, "branches": branches, "manifest": manifest}, "primary", reasons,
+    )
     sample_map: dict[int, dict[str, Any]] = {}
     mode_map: dict[tuple[int, int], float] = {}
     if spectrum:
@@ -640,10 +1838,28 @@ def validate_case(
         selected_branches, branch_check = _validate_branches(branches, case, mode_map, reasons)
     csv_check = _new_check("missing")
     if Path("eigen/dispersion.csv") in artifacts:
-        csv_check = _validate_dispersion_csv(case_dir / "eigen/dispersion.csv", case, reasons)
+        csv_check = _validate_dispersion_csv(
+            case_dir / "eigen/dispersion.csv",
+            case,
+            expected_path,
+            sample_map,
+            mode_map,
+            selected_branches,
+            reasons,
+        )
     source_check = _new_check("missing")
-    if manifest:
-        source_check = _validate_numeric_source(manifest, case, reasons)
+    if manifest and diagnostics:
+        source_check = _validate_numeric_source(manifest, diagnostics, case, reasons)
+    if parameters and metadata:
+        _validate_benchmark_metadata(
+            metadata,
+            case,
+            parameters,
+            "primary case",
+            reasons,
+            require_uniform_slab=case == "c1",
+        )
+    field_check = _validate_exported_mode_fields(case_dir, case, selected_branches, sample_map, reasons)
     evidence: dict[str, Any] | None = None
     evidence_path = case_dir / EVIDENCE_RELATIVE_PATH
     if evidence_path.is_file():
@@ -653,9 +1869,23 @@ def validate_case(
             evidence = None
     evidence_check = _validate_evidence_binding(case_dir, evidence, artifacts, case, reasons)
     kittel_check = _validate_kittel(case, selected_branches, parameters or {}, reasons) if parameters else _new_check("missing")
-    ks_check = _validate_ks(case, evidence, parameters or {}, reasons) if parameters else _new_check("missing")
+    ks_check = _validate_ks(case_dir, case, evidence, parameters or {}, reasons) if parameters else _new_check("missing")
     convergence = {
-        key: _validate_convergence(evidence, key, case, reasons)
+        key: _validate_convergence(
+            case_dir,
+            evidence,
+            key,
+            case,
+            metadata if metadata else None,
+            reasons,
+            primary_bundle={
+                "metadata": metadata,
+                "spectrum": spectrum,
+                "branches": branches,
+                "manifest": manifest,
+                "diagnostics": diagnostics,
+            },
+        )
         for key in ("mesh", "airbox", "mode_count")
     }
     finite_check = _new_check(
@@ -673,6 +1903,7 @@ def validate_case(
         "checks": {
             "artifact_binding": evidence_check,
             "numeric_source": source_check,
+            "modal_field_phase": field_check,
             "finite_values": finite_check,
             "spectrum_samples": _new_check("pass" if len(sample_map) == (1 if case == "c0" else EXPECTED_PATH_SAMPLE_COUNT) else "fail", sample_count=len(sample_map)),
             "tracked_branches": branch_check,
@@ -700,8 +1931,15 @@ def validate_requested_cases(case_results: Mapping[str, Mapping[str, Any]], case
         result = case_results.get(case)
         if not isinstance(result, Mapping):
             reasons.append(f"scientific gate result is missing for case {case}")
-        elif result.get("status") != "qualified":
-            reasons.extend(f"{case}: {reason}" for reason in result.get("reasons", []) if isinstance(reason, str))
+        elif result.get("status") != "qualified" or result.get("reasons") != []:
+            # A failed/missing status fails independently of optional prose.
+            # Empty reasons must never promote an unsuccessful child to pass.
+            reasons.append(f"{case}: scientific gate status is {result.get('status')!r}, expected 'qualified' with an empty reason list")
+            child_reasons = result.get("reasons")
+            if isinstance(child_reasons, list):
+                reasons.extend(f"{case}: {reason}" for reason in child_reasons if isinstance(reason, str) and reason)
+            elif isinstance(child_reasons, str) and child_reasons:
+                reasons.append(f"{case}: {child_reasons}")
     status = "qualified" if not reasons else "not_qualified"
     return {
         "schema_version": GATE_SCHEMA,

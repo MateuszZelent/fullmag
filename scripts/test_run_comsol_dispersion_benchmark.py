@@ -153,6 +153,53 @@ class ComsolDispersionBenchmarkTests(unittest.TestCase):
                  patch.object(benchmark, "_inspect_image", side_effect=AssertionError("Docker must not be inspected")):
                 self.assertEqual(benchmark.main(["--job-id", context.job["job_id"], "--dry-run"]), 0)
 
+    def test_execute_attaches_scientific_gate_and_keeps_unqualified_result_when_gate_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            context = self.fake_context(root)
+            output_dir = root / "output"
+            failed_gate = {
+                "schema_version": benchmark.SCIENTIFIC_GATE_SCHEMA,
+                "status": "not_qualified",
+                "qualification": "NOT VERIFIED",
+                "reasons": ["missing scientific evidence bundle"],
+            }
+            with patch.object(
+                benchmark.subprocess,
+                "run",
+                return_value=SimpleNamespace(returncode=0),
+            ), patch.object(
+                benchmark,
+                "_validate_case_artifacts",
+                side_effect=lambda case_dir, case: {"case": case},
+            ), patch.object(
+                benchmark,
+                "validate_scientific_case",
+                return_value=failed_gate,
+            ), patch.object(
+                benchmark,
+                "validate_requested_cases",
+                return_value={
+                    "schema_version": benchmark.SCIENTIFIC_GATE_SCHEMA,
+                    "status": "not_qualified",
+                    "qualification": "NOT VERIFIED",
+                    "reasons": ["missing scientific evidence bundle"],
+                },
+            ):
+                result_code = benchmark._execute(
+                    context,
+                    output_dir,
+                    ("c0",),
+                    ["docker", "compose"],
+                    timeout_seconds=30.0,
+                )
+            self.assertEqual(result_code, 0)
+            result = json.loads((output_dir / "run-result.json").read_text(encoding="utf-8"))
+            self.assertEqual(result["status"], "completed_unqualified")
+            self.assertEqual(result["qualification"], "NOT VERIFIED")
+            self.assertEqual(result["cases"][0]["scientific_gate"], failed_gate)
+            self.assertEqual(result["scientific_gate"]["status"], "not_qualified")
+
     def test_job_reader_requires_succeeded_modal_build_and_canonical_origin(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -33,6 +33,30 @@ accepting_jobs=true, job 44 `635451d7648a446a83e8d88e21c0279b` nadal running,
 źródło `28f552b959455957bbf6dada8a522a241425552c`. Nie restartowano runnera;
 nowy obraz koordynatora pozostaje niewdrożony. Ten job nie kwalifikuje HEAD3833.
 
+### Certyfikat pól i korekty review bramki — 2026-09-14
+
+Bramka v2 jest połączona z niezależnym odczytem vector.bin dla gałęzi i punktów
+kontrolnych. Odrzuca brak pola, błędną fazę mimo nowego hasha i podmianę pola
+Gamma za próbkę nonzero-k. Sprawdza pełną kolejność węzłów, pary i translacje.
+Residuum Blocha normalizuje całym niezerowym polem; zerowy ślad na brzegu
+spełnia warunek i nie jest mylony z zerowym modem w całej domenie.
+
+Dalsze poprawki: target i siatka są stałe w mode-count comparison, fe_order
+jest stały przy h-refinement, a magnetyczne bounds i hmax przy zmianie airboxu.
+Stałe nodalne pola nie różnią się podpisem przez samą liczbę powtórzeń.
+Wersje spectrum/branches/manifest są kontrolowane w primary i comparison runs.
+Agregator odrzuca qualified z niepustymi lub nieprawidłowymi reasons.
+
+Weryfikacja: **68 passed, 25 subtests passed** — certyfikat, scientific gate,
+agregacja, benchmark runner i testy dokumentacji. Brak kompilacji native.
+Wcześniejszy błąd tuple/Path w trakcie integracji certyfikatu został usunięty;
+wynik powyżej pochodzi z ponownego wykonania całego wymienionego zestawu.
+
+**Nadal otwarte:** profil KS n=0 z pól kontrolnych, przestrzenna zgodność
+niejednorodnej równowagi między siatkami (surowe tablice nie są poprawnym
+transferem), rzeczywista kampania C0/C1/A1 oraz kwalifikacja operatora i widma.
+Syntetyczne fixtures nie dowodzą tych punktów. B4–B6 i cel pozostają W TRAKCIE.
+
 ## Aktualizacja po review — 2026-09-14
 
 Stan: **W TRAKCIE**, fizyka non-k0 **NOT VERIFIED**. Sprawdzony HEAD:

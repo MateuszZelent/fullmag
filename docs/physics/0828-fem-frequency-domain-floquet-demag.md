@@ -631,3 +631,62 @@ visibility into runtime or physical qualification.
 | Pełny potencjał i gradient | FEM CPU postprocessing | crates/fullmag-runner/src/fem/eigen_physical_potential.rs + physical_potential_artifacts | Rekonstrukcja fazowa oraz gradient elementowy z tą samą skalą co dm | Test rekonstrukcji; pełny benchmark pozostaje wymagany | source visible; runtime unvalidated |
 
 | Natywny modalny sparse Floquet | FEM CPU | backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp + solve_floquet_shared_domain_sparse_modal_spectrum | MatShell Schura, SLEPc i diagnostyka obu układów KSP | Test kontraktu źródłowego; kompilacja testów nieuruchomiona | implemented in source; managed execution and physics NOT VERIFIED |
+
+
+## Bramka zbieżności benchmarku — korekta audytu 2026-09-14
+
+Kwalifikacja C0/C1/A1 wymaga trzech uporządkowanych poziomów siatki
+(`coarse`, `medium`, `fine`) oraz, przy dynamicznym demag, trzech rosnących
+odległości zewnętrznej granicy airboxu. Każdy poziom jest osobnym zestawem
+natywnych artefaktów z tożsamością źródła i rozwiązanymi parametrami.
+Porównanie dwóch przebiegów jest wyłącznie wstępną kontrolą, nie pełną
+kwalifikacją zbieżności. C0 bez demag zachowuje jawne `not_applicable` dla airboxu.
+
+Walidator porównuje oba sąsiednie przyrosty częstotliwości tych samych modów
+w tych samych punktach k. Raportuje ich względne wartości i odrzuca wzrost
+przyrostu większy od marginesu 1e-8 (bezwymiarowego progu porównania trendu,
+nie estymaty błędu fizycznego). Nie wyznacza rzędu zbieżności ani granicy continuum
+z samych trzech wartości. Kontrakt tolerancji częstotliwości pozostaje oddzielny
+od residualu algebraicznego i od zakresu modelu KS n=0. Kontrola fazy i profilu
+modalnego pozostaje osobnym wymaganiem; sama zgodność częstotliwości nie wystarcza.
+Implementacja walidatora i jego syntetyczne testy nie są wykonaniem tej kampanii.
+
+Kontrakt raportu i wejściowych dowodów ma wersję `v2`
+(`fullmag.comsol-dispersion-scientific-gate.v2` oraz
+`fullmag.comsol-dispersion-scientific-evidence.v2`). Dowody v1 nie są automatycznie
+migrowane ani kwalifikowane: wymagają uzupełnienia rzeczywistych trzech przebiegów.
+
+
+Podpis wejść porównania zachowuje target i siatkę w teście liczby modów,
+rząd FE przy h-refinement oraz geometrię magnetyku i hmax przy zmianie airboxu.
+Stałe pola nodalne można zapisać bez powtórzeń zależnych od liczby węzłów;
+niejednorodnych pól nie wolno zastąpić średnią. Ich porównanie między siatkami
+wymaga osobnej kontroli transferu/przestrzennej zgodności; obecna ścisła kontrola
+może je odrzucić i nie stanowi jeszcze kwalifikacji A1. Wersje schematów
+spectrum/branches/manifest są weryfikowane zarówno w głównym wyniku, jak i
+we wszystkich dołączonych przebiegach porównawczych.
+
+
+### Niezależna kontrola eksportowanych pól modalnych
+
+Bramka wybiera pola przez `raw_mode_index` punktów śledzonych gałęzi, nie przez
+utożsamienie numeru gałęzi z indeksem modu. Dla C1/A1 obejmuje osiem gałęzi
+w eksportowanych punktach 0, 10, 20, 40, 50, 60; C0 obejmuje punkt Gamma.
+Odczytuje rzeczywiste `vector.bin` w układzie little-endian float64
+(real_x, imag_x, real_y, imag_y, real_z, imag_z) w pełnej kolejności węzłów.
+Wektor k metadanych pola musi być zgodny z odpowiednią próbką widma.
+
+Warunek kontrolowany na parach to dm_b = exp(-i k·R) dm_a. Wymagane są poprawne
+rozmiary, skończone niezerowe pole, zgodność map i aktualnego hasha payloadu.
+Hash mapy fazowej oraz residuum zadeklarowane przez solver nie zastępują tej
+kontroli. Certyfikat pola dotyczy warunku Blocha, nie dowodzi samodzielnie
+poprawności operatora LLG, równania Poissona, profilu n=0 ani zbieżności.
+Dodatkowe kontrole q/phi, profilu modalnego i transferu równowagi między
+siatkami pozostają odrębnymi bramkami kwalifikacji.
+
+Błąd warunku Blocha jest normalizowany maksimum modułu składowej całego
+niezerowego pola. Zerowy ślad na parze brzegów spełnia jednorodny warunek
+(0 = exp(-i k·R) 0) i nie może odrzucać poprawnego modu z węzłem na brzegu.
+Raport rozróżnia taki przypadek od informatywnego niezerowego śladu. Pole
+zerowe w całej domenie pozostaje odrzucane. Dzielenie przez lokalny ślad
+bliski zeru niesłusznie wzmacniałoby błędy zaokrągleń.
