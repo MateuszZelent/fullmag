@@ -89,3 +89,61 @@ pozostaje `completed_unqualified` do wykonania osobnej oceny naukowej.
 
 Próba dry-run z jobem 43 została odrzucona przez preflight: job jest running.
 Nie wykonano z tego powodu Docker Compose ani symulacji.
+
+## Aktualizacja kolejki — właściwa wersja DE
+
+Receptę i raport zapisano w commicie
+`28f552b959455957bbf6dada8a522a241425552c`.
+Weryfikacja fragmentu: 5 testów wrappera DE i 8 testów wrappera COMSOL
+zakończonych sukcesem; `just --show run-de-100nm-pilot` poprawnie parsuje receptę.
+Nie są to testy wykonania natywnego ani dowód zgodności fizycznej.
+
+Przyjęto build **44**, `635451d7648a446a83e8d88e21c0279b`, dla tego commita,
+profil `fem-cpu-slepc-modal-v1`, stan początkowy `queued`.
+Kapsuła: `2b0e4a386c984f81952c1f86e48df5af`.
+Source digest: `e525db73d0689d20f18ca97017ce9f3ecebc981d2bcd09b29a475f72d17b7c86`.
+Native snapshot: `c98c74f0d1a828561ae5cd8afcc1be5da1d6eda422427212b1b291722c384a53`.
+
+Starszy build 43 zastąpiono buildem właściwej wersji. Oficjalne API przyjęło
+anulowanie i zwróciło `cancel_requested`; nie potwierdzono jeszcze terminalnego
+`cancelled`. Przyczyną jest zastąpienie starego źródła nowym, a nie timeout
+obserwatora. Nie kasowano lease ani nie uruchamiano innego koordynatora.
+Po sukcesie buildu 44 polecenie wykonania: `just run-de-100nm-pilot 635451d7648a446a83e8d88e21c0279b`.
+
+## Doprecyzowanie diagnostyki I/O
+
+Liczniki procesu nie dowodzą postępu buildu: większość odczytów pochodziła
+z wątku 9. Obserwowany wątek 7118 miał `rchar=2872333`, `syscr=695`;
+po 45 sekundach oba liczniki były niezmienione, `wchan=p9_client_rpc`,
+a stan jądra wynosił `D`. Jest to dowód oczekiwania na I/O, nie dowód
+postępu kompilacji ani pełna identyfikacja przyczyny źródłowej.
+Odczyt stosu jądra `/proc/1/task/7118/stack` został odrzucony przez uprawnienia;
+nie zmieniano capabilities ani uprawnień kontenera.
+Nie należy na podstawie samego health.worker_alive uznawać builda za zdrowy.
+Build 43 nadal `cancel_requested`, a 44 pozostaje bez wyniku.
+
+## Przejście na build 44
+
+Koordynator potwierdził 2026-09-14 o 08:37:03 UTC stan terminalny buildu 43:
+`cancelled`, exit 143. O 08:37:09 UTC podjął build 44; API zwróciło `running`.
+W chwili kontroli nie było jeszcze kontenera workera 44. Przejście kolejki
+jest potwierdzone, ale rozpoczęcie kompilacji i sukces buildu pozostają
+niepotwierdzone. Nie przypisujemy skutku ograniczonej próbie diagnostycznej.
+Pojedyncze stat manifestu trwało około 0.005 s; osobna, ograniczona do 25 s
+kontrola kapsuły przechodziła przez kolejne pliki i została zakończona limitem.
+Nie uzyskano z niej pełnego wyniku weryfikacji kapsuły.
+
+## Przygotowane porównanie artefaktów
+
+`scripts/compare_de_100nm_pilot.py <katalog-runu>` czyta numeryczne
+`de100/eigen/dispersion.csv`, sprawdza dziewięć punktów DE i skończone
+częstotliwości/residuale. Nakłada wszystkie mody na analitykę n=0; opcjonalne
+`--branch-id N` tworzy tabelę różnic dla jawnie wskazanej pełnej gałęzi.
+Nie dobiera gałęzi do oczekiwanej częstotliwości. Zapisuje PNG/PDF oraz JSON
+z hashami i ograniczeniami; status pozostaje NOT VERIFIED.
+
+Weryfikacja źródeł: 4 testy odczytu CSV, niepełnej gałęzi, braku automatycznej
+podmiany gałęzi oraz granicy Gamma/reciprocity. To dane testowe, nie wyniki FEM.
+Narzędzie nie zostało jeszcze wykonane na rzeczywistym spektrum, ponieważ build
+44 nie dostarczył runtime. Żaden syntetyczny wykres nie jest przedstawiany jako
+wynik symulacji.
