@@ -39,6 +39,7 @@ EXPECTED_TARGET_BANDS = 8
 EXPECTED_CONTROL_SAMPLES = (0, 10, 20, 30, 40, 50, 60)
 KITTEL_RELATIVE_TOLERANCE = 1.0e-3
 KS_RELATIVE_TOLERANCE = 2.0e-2
+KS_FREQUENCY_CONTINUITY_TOLERANCE = 2.0 * KS_RELATIVE_TOLERANCE
 CONVERGENCE_RELATIVE_TOLERANCE = 5.0e-3
 MAX_IMAGINARY_TO_REAL_RATIO = 1.0e-6
 MAX_TANGENT_LEAKAGE = 1.0e-6
@@ -1510,6 +1511,7 @@ def _validate_ks(
     geometries: set[str] = set()
     errors: list[float] = []
     profiles: list[dict[str, Any]] = []
+    frequency_rows_by_geometry: dict[str, list[tuple[float, float, float, int]]] = {}
     for index, sample in enumerate(samples):
         if not isinstance(sample, Mapping):
             reasons.append(f"Kalinikos–Slavin sample {index} is not an object")
@@ -1563,21 +1565,55 @@ def _validate_ks(
         error = _relative_error(observed, float(expected))
         geometries.add(geometry)
         errors.append(error)
+        frequency_rows_by_geometry.setdefault(geometry, []).append(
+            (k_actual, float(observed), float(expected), index)
+        )
         if error > KS_RELATIVE_TOLERANCE:
             reasons.append(f"Kalinikos–Slavin {geometry} sample {index} error {error:.6g} exceeds {KS_RELATIVE_TOLERANCE:.6g}")
+    frequency_continuity_errors: list[float] = []
+    frequency_continuity_pairs: list[dict[str, Any]] = []
+    for geometry, rows in frequency_rows_by_geometry.items():
+        rows.sort(key=lambda row: (row[0], row[3]))
+        for left, right in zip(rows, rows[1:]):
+            expected_delta = right[2] - left[2]
+            observed_delta = right[1] - left[1]
+            continuity_error = abs(observed_delta - expected_delta) / max(
+                abs(left[2]), abs(right[2]), 1.0
+            )
+            frequency_continuity_errors.append(continuity_error)
+            frequency_continuity_pairs.append(
+                {
+                    "geometry": geometry,
+                    "left_sample_index": left[3],
+                    "right_sample_index": right[3],
+                    "left_k_rad_per_m": left[0],
+                    "right_k_rad_per_m": right[0],
+                    "relative_error": continuity_error,
+                }
+            )
+            if continuity_error > KS_FREQUENCY_CONTINUITY_TOLERANCE:
+                reasons.append(
+                    f"Kalinikos–Slavin {geometry} frequency continuity between samples "
+                    f"{left[3]} and {right[3]} error {continuity_error:.6g} exceeds "
+                    f"{KS_FREQUENCY_CONTINUITY_TOLERANCE:.6g}"
+                )
     for geometry in ("backward_volume", "damon_eshbach"):
         if geometry not in geometries:
             reasons.append(f"Kalinikos–Slavin evidence is missing a {geometry} applicability sample")
     if ks.get("status") != "pass":
         reasons.append("Kalinikos–Slavin evidence is not explicitly marked pass")
     maximum = max(errors, default=math.inf)
+    maximum_continuity = max(frequency_continuity_errors, default=None)
     return _new_check(
-        "pass" if len(reasons) == initial_reason_count and geometries == {"backward_volume", "damon_eshbach"} and errors and maximum <= KS_RELATIVE_TOLERANCE and ks.get("status") == "pass" else "fail",
+        "pass" if len(reasons) == initial_reason_count and geometries == {"backward_volume", "damon_eshbach"} and errors and maximum <= KS_RELATIVE_TOLERANCE and (maximum_continuity is None or maximum_continuity <= KS_FREQUENCY_CONTINUITY_TOLERANCE) and ks.get("status") == "pass" else "fail",
         sample_count=len(samples),
         n0_profiles=profiles,
         geometries=sorted(geometries),
         max_relative_error=maximum if math.isfinite(maximum) else None,
         tolerance=KS_RELATIVE_TOLERANCE,
+        frequency_continuity_pairs=frequency_continuity_pairs,
+        max_frequency_continuity_error=maximum_continuity,
+        frequency_continuity_tolerance=KS_FREQUENCY_CONTINUITY_TOLERANCE,
     )
 
 

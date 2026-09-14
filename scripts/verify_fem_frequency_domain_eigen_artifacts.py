@@ -4142,6 +4142,7 @@ def validate_low_k_de_bv_analytic_dispersion(
             fail(f"DE/BV scenario {geometry} requires at least three samples")
         branch_errors: list[float] = []
         nonzero_samples = 0
+        frequency_points: list[tuple[float, float, float, int]] = []
         for sample_index in sample_indices:
             if sample_index not in known_samples:
                 fail(f"DE/BV scenario {geometry} references unknown sample_index {sample_index}")
@@ -4195,6 +4196,7 @@ def validate_low_k_de_bv_analytic_dispersion(
             )
             relative_error = abs(frequency_hz - expected_hz) / max(abs(expected_hz), 1.0)
             branch_errors.append(relative_error)
+            frequency_points.append((k_norm, frequency_hz, expected_hz, sample_index))
             row = dispersion_rows_by_mode.get(mode_key)
             if row is None:
                 fail(
@@ -4239,6 +4241,19 @@ def validate_low_k_de_bv_analytic_dispersion(
             )
         if nonzero_samples < 2:
             fail(f"DE/BV scenario {geometry} requires at least two nonzero k samples")
+        frequency_points.sort(key=lambda point: (point[0], point[3]))
+        for left, right in zip(frequency_points, frequency_points[1:]):
+            expected_delta = right[2] - left[2]
+            observed_delta = right[1] - left[1]
+            continuity_error = abs(observed_delta - expected_delta) / max(
+                abs(left[2]), abs(right[2]), 1.0
+            )
+            if continuity_error > max_relative_error:
+                fail(
+                    f"DE/BV low-k frequency continuity error is too large for {geometry} "
+                    f"between sample_index {left[3]} and {right[3]}: "
+                    f"got {continuity_error:.6g}, expected <= {max_relative_error:.6g}"
+                )
         branch_error = max(branch_errors)
         if branch_error > max_relative_error:
             fail(
