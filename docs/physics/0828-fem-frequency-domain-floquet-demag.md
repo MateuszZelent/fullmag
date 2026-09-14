@@ -766,3 +766,20 @@ z minimalizacji kwadratowej normy masowej względem stałego współczynnika.
 | Kontrakt | Źródło | Symbol | Dowód |
 |---|---|---|---|
 | Projekcja n=0 | docs/physics/0828-fem-frequency-domain-floquet-demag.md | DOC-ANCHOR:n0-field-projection-contract | Definicja diagnostyki; kwalifikacja niewykonana |
+
+| Numeryczna projekcja n=0 | scripts/comsol_n0_projection.py | tet4_n0_projection | Testy syntetyczne; bez kwalifikacji FEM |
+
+Odczyt artefaktów wykonuje `scripts/comsol_n0_field_certificate.py` +
+`measure_n0_field`: najpierw niezależny certyfikat fazy, następnie zgodność k
+z próbką widma i ponowne sprawdzenie hashy odczytywanych bajtów. Zmiana pliku
+między certyfikacją a pomiarem unieważnia wynik. Dekoder
+`scripts/comsol_magnetic_support.py` + `tet4_cells` wymaga kanonicznej
+łączności `FemConnectivityIR` (`types`, `offsets`, `nodes`);
+`magnetic_element_indices` wymaga jawnego, pełnego i rozłącznego podziału
+objętości `mesh_parts` na magnetyk i powietrze.
+
+Status `measured` oznacza wyłącznie wykonany pomiar obwiedni. Nie oznacza
+kwalifikacji modelu KS ani całej kampanii. Integracja pomiaru z warunkiem
+akceptacji C1 pozostaje osobnym krokiem. Średnie pola w raporcie mają suffix
+`_scaled` i są podane po podzieleniu wejściowego pola przez `field_scale`;
+nie wolno interpretować ich jako nieprzeskalowanej amplitudy fizycznej.

@@ -176,7 +176,8 @@
         "wave_vector"
       ],
       "sources": [
-        "source-n0-projection-contract"
+        "source-n0-projection-contract",
+        "source-n0-projection"
       ]
     },
     {
@@ -193,7 +194,8 @@
         "wave_vector"
       ],
       "sources": [
-        "source-n0-projection-contract"
+        "source-n0-projection-contract",
+        "source-n0-projection"
       ]
     },
     {
@@ -210,7 +212,8 @@
         "wave_vector"
       ],
       "sources": [
-        "source-n0-projection-contract"
+        "source-n0-projection-contract",
+        "source-n0-projection"
       ]
     }
   ],
@@ -624,6 +627,13 @@
       "symbol": "DOC-ANCHOR:n0-field-projection-contract",
       "responsibility": "Define magnetic Tet4 nodal-envelope projection without an implicit qualification threshold.",
       "evidence_status": "planned_contract"
+    },
+    {
+      "id": "source-n0-projection",
+      "path": "scripts/comsol_n0_projection.py",
+      "symbol": "tet4_n0_projection",
+      "responsibility": "Compute the constant transverse nodal-envelope projection in the magnetic consistent Tet4 mass metric.",
+      "evidence_status": "source_visible"
     }
   ],
   "public_api": {
