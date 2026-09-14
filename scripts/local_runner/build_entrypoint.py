@@ -956,7 +956,7 @@ def _attest_slepc_runtime(
             (
                 path
                 for path in cargo_target.glob(
-                    "release/build/fullmag-fem-sys-*/out/native-build/CMakeCache.txt"
+                    "release/build/fullmag-fem-sys*/**/out/native-build/CMakeCache.txt"
                 )
                 if path.is_file() and not path.is_symlink()
             ),

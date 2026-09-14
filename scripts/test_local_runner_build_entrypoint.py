@@ -278,7 +278,8 @@ class BuildEntryPointTests(unittest.TestCase):
             cargo_target
             / "release"
             / "build"
-            / "fullmag-fem-sys-test"
+            / "fullmag-fem-sys"
+            / "abc123"
             / "out"
             / "native-build"
             / "CMakeCache.txt"
@@ -378,7 +379,8 @@ class BuildEntryPointTests(unittest.TestCase):
             cargo_target
             / "release"
             / "build"
-            / "fullmag-fem-sys-test"
+            / "fullmag-fem-sys"
+            / "abc123"
             / "out"
             / "native-build"
             / "CMakeCache.txt"
@@ -438,7 +440,8 @@ class BuildEntryPointTests(unittest.TestCase):
             cargo_target
             / "release"
             / "build"
-            / "fullmag-fem-sys-test"
+            / "fullmag-fem-sys"
+            / "abc123"
             / "out"
             / "native-build"
             / "CMakeCache.txt"
