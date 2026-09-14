@@ -317,3 +317,22 @@ Przejrzano obie gałęzie warunkowe i rzeczywisty include w pliku testu.
 Odtworzenie kompilacji i wykonanie ośmiu kontraktów w nowym managed buildzie
 pozostaje wymagane. Nie zmieniono kapsuły ani artefaktów buildu 44.
 Pilot FEM nadal nie został uruchomiony.
+
+
+### Ponowienie po poprawce zależności MFEM
+
+Commit poprawki: `75f0e4f30c81c04954997dc0d384108edc478819`.
+Build 45: `5f98c295fb5540e9a499b834e5bd981a`, profil
+`fem-cpu-slepc-modal-v1`, source digest
+`8940bec897aa49c029ea42cb4a72f4fe3486ca35fd5fa9adb2ca53fa0565cdfb`.
+Runner przyjął zadanie i przeszedł do `running`; brak jeszcze końcowego
+receipt. Poprzednia próba stanowiła postęp: wykryto terminalny błąd,
+naprawiono przyczynę i zgłoszono nowe niezmienne źródło.
+
+Niezależną referencję z pełnymi BC utrwalono w
+`scripts/de100_full_bc_collocation_diagnostic.py` i osobnej nocie
+`2026-09-14-de-full-bc-collocation-method.md`. Pięć lekkich testów
+przeszło poprawnie. Kolokacja różniczkowa stanowi niezależną metodę
+względem Galerkina z jądrem Greena; kontroluje również profile i BC.
+Nie jest wynikiem FEM ani zamkniętą formułą analityczną. Wymagana bramka
+pozostaje otwarta do wykonania i sprawdzenia właściwej symulacji.
