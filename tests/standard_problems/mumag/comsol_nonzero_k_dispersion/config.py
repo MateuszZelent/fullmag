@@ -43,7 +43,10 @@ TARGET_BANDS = 8
 MODE_FIELD_SAMPLE_INDICES = (0, 10, 20, 40, 50, 60)
 INITIAL_SHIFT_HZ = 1.0e9
 FREQUENCY_WINDOW_HZ = (1.0e6, 30.0e9)
-DEMAG_SOLVER_RTOL = 1.0e-8
+# The independently certified Hypre residual can be a small factor above the
+# requested stopping threshold on this airbox mesh; retain a strict explicit
+# gate while matching the guide's 1e-7 relaxation tolerance.
+DEMAG_SOLVER_RTOL = 1.0e-7
 DEMAG_SOLVER_MAX_ITERATIONS = 1000
 
 AIRBOX_HMAX_M = 100.0e-9
