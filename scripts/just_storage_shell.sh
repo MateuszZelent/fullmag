@@ -73,7 +73,7 @@ case "${recipe}" in
   *"scripts/local_runner_cli.py"*)
     FULLMAG_STORAGE_PYTHON="${python_cmd}" exec bash -euo pipefail -c "${recipe}"
     ;;
-  *"scripts/run_comsol_dispersion_benchmark.py"*)
+  *"scripts/run_comsol_dispersion_benchmark.py"*|*"scripts/run_de_100nm_pilot.py"*)
     # The benchmark consumes an already completed runner build.  Its Python
     # entry point acquires the per-worktree build lock around the immutable
     # receipt check and Compose run, so it must not enter the generic heavy
