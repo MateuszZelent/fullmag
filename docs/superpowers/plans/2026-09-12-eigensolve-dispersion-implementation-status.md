@@ -13,6 +13,25 @@ z kontrolą pola/fazy/n=0 i kampanią co najmniej 3 siatek oraz 3 airboxów.
 Poniższe checkpointy zachowują historię; starsze SHA, wyniki testów i statusy jobów
 nie opisują automatycznie stanu bieżącego. Aktualizacja planu nie stanowi naprawy NK-01–20.
 
+### Managed runtime — wynik joba 51 i korekta loadera CUDA — 2026-09-14
+
+Job `d6f1e5c18ab640c79761f8320feff2ba` zbudował natywny runtime dla commita
+`ffbbf8650c62b848d7c86b03f081a3b336cd9380` w obrazie FEM
+`sha256:e5f70bd632011f9a0d8163430dab81bc6f248e07e4af086dfdf77bcd087471d7`.
+Etap `make install-cli-dev` zakończył się kodem 0, a poprawiony trusted runner
+znalazł zagnieżdżony `release/build/fullmag-fem-sys/<hash>/out/native-build/CMakeCache.txt`;
+job zakończył się jednak `NOT VERIFIED` z powodu probe:
+`fullmag-bin` nie ładował `libcuda.so.1`, ponieważ worker nie dodawał obrazu
+`/usr/local/cuda/compat` do `LD_LIBRARY_PATH`. Nie jest to błąd solvera FEM ani
+dowód kwalifikacji fizycznej.
+
+W źródłach dodano fail-closed wykrywanie image-owned compatibility SONAME,
+wiązanie ścieżki w `runtime-attestation.json` oraz regresje entrypointu. Ostatnia
+weryfikacja lokalna: `test_local_runner_build_entrypoint.py` **26 OK** i
+`test_local_runner_build_executor.py` **14 OK**. Po commicie trzeba ponownie
+zbudować obraz koordynatora, uruchomić nowy managed runtime build, a dopiero po
+receipcie uruchomić benchmark C0/C1/A1; B4–B6 pozostają otwarte.
+
 ### Wdrożenie trzech poziomów zbieżności — 2026-09-14
 
 Robocza bramka v2 wymaga coarse/medium/fine dla mesh i airbox (C0 bez demag:
