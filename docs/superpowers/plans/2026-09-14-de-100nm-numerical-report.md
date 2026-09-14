@@ -257,3 +257,46 @@ Przy porownywaniu przyszlych zespolonych profili nalezy wykonac
 sprzezenie; sama zgodnosc widma i reciprocity nie wykrywa tej roznicy.
 Konwencje zapisano jawnie w docstringu. Nadal brakuje cross-checku
 shootingiem, residuali modow i identyfikacji fizycznych galezi.
+
+
+## Identyfikacja harmonicznej w komorce periodycznej
+
+Zakres abs(ky)<=40e6 rad/m lezy wewnatrz pierwszej strefy
+Brillouina komorki 50 nm: pi/a=62.831853e6 rad/m. Nie oznacza
+to usuniecia z widma wszystkich galezi z fizycznymi wektorami k+G.
+G=2*pi/a=125.663706e6 rad/m, wiec przy ky=40e6 harmoniczna
+ky-G ma modul 85.663706e6 rad/m. Nie ustalono jeszcze, ktore
+z takich galezi wejda do okna do 30 GHz w wyniku FEM.
+
+Wniosek dla porownania: referencja jednowymiarowa dla zadanego k
+opisuje sektor G=0. Trzeba rozpoznac ten sektor na podstawie
+profilu w plaszczyznie oraz okresowej czesci Blocha przed
+porownywaniem modow grubosci. Sam numer surowego modu ani
+najblizsza czestotliwosc nie wystarczaja. Nie zmieniamy parametrow
+aktywnego pilota ani jego kapsuly. Ogolny kontrakt Blocha i
+rozwijania w harmoniczne opisuje dokumentacja COMSOL:
+https://doc.comsol.com/6.3/doc/com.comsol.help.semicond/semicond_ug_semiconductor.6.48.html
+To zastosowanie ogolnej periodycznosci, nie mikromagnetyczny
+benchmark z tej strony.
+
+### Profile i niezależna kontrola referencji
+
+Rozszerzono diagnostykę Galerkina o zespolone profile modów, transformację
+powrotną do zmiennych magnetyzacji, kontrolę dodatniości oraz residual
+oryginalnego **dyskretnego** równania LL. Pięć lekkich testów interpretera
+zakończyło się powodzeniem; nie są to testy natywnego runtime FEM.
+Konwencja Fullmag jest sprawdzana przez sprzężenie profili i znaku bloku
+magnetostatycznego, ponieważ same częstotliwości nie wykrywają tej pomyłki.
+Metodę opisuje `2026-09-14-de-coupled-reference-method.md`.
+
+Wstępny niezależny eksperyment kolokacji Czebyszewa rozwiązał różniczkowe
+równania LL–Poissona z sześcioma jawnymi warunkami brzegowymi. Dla stopni
+32, 48 i 64 pierwsze trzy częstotliwości zgadzały się do ośmiu wyświetlonych
+miejsc po przecinku. Przy k=20 Mrad/m uzyskano 11.23215299, 15.20503202,
+17.43475997 GHz; przy k=40 Mrad/m 12.67480343, 16.14874894,
+19.08761353 GHz. To diagnostyka referencji, nie wynik Fullmag. Utrwalenie
+algorytmu, kontrola residuali i zbieżności są kolejnym krokiem, zanim
+posłuży on do ustalenia bramki porównania.
+
+Build 44 nadal wykonuje etap `contract-slepc-modal`; główna kompilacja
+runtime zakończyła się kodem 0. Pilot FEM pozostaje **NOT VERIFIED**.
