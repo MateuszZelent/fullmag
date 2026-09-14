@@ -690,3 +690,79 @@ niezerowego pola. Zerowy ślad na parze brzegów spełnia jednorodny warunek
 Raport rozróżnia taki przypadek od informatywnego niezerowego śladu. Pole
 zerowe w całej domenie pozostaje odrzucane. Dzielenie przez lokalny ślad
 bliski zeru niesłusznie wzmacniałoby błędy zaokrągleń.
+
+
+(n0-field-projection-contract)=
+## Projekcja pola C1 na jednorodny profil n=0
+
+<!-- DOC-ANCHOR:n0-field-projection-contract -->
+
+Kontrola dotyczy C1 z równowagą wzdłuż osi x. Nie jest nowym solverem ani
+rozszerzeniem publicznego Python/ProblemIR. Dane wejściowe to pełne węzły,
+łączność Tet4, jawnie ustalone elementy magnetyczne, fizyczne pole modalne
+i wektor k. Role domen muszą pochodzić z `FemMeshPartIR.element_selector`;
+nie wolno utożsamiać indeksów aktywnych węzłów z pełnym porządkiem payloadu.
+
+Dla objętości elementu $V_e$ i masy elementowej $M^e$ stosujemy masę zgodną
+P1. Węzłowe wartości obwiedni $u_{i\alpha}$ otrzymujemy przez usunięcie fazy
+fizycznego pola $d_{i\alpha}$; $\alpha$ oznacza składową kartezjańską.
+
+```{math}
+:label: eq-0828-n0-mass-envelope
+M^e_{ij}=\frac{V_e}{20}(1+\delta_{ij}),\qquad
+u_{i\alpha}=e^{+i\mathbf k\cdot\mathbf r_i}d_{i\alpha}.
+```
+
+Nie jest to dokładna transformacja funkcji P1 wewnątrz elementu: jest to
+interpolant P1 zdemodulowanych wartości węzłowych. Błąd tej diagnostyki musi
+być oceniany przy zagęszczaniu siatki. Zgodna masa $M$ powstaje wyłącznie
+z elementów magnetycznych, a wektor $\mathbf 1$ ma wartość jeden na ich
+wsparciu. Stała projekcja $c_\alpha$, reszta $r_\alpha$ i względny kwadrat
+błędu profilu $\eta_0$ są określone przez:
+
+```{math}
+:label: eq-0828-n0-projection
+c_\alpha=\frac{\mathbf 1^H M u_\alpha}{\mathbf 1^H M\mathbf 1},\qquad
+r_\alpha=u_\alpha-c_\alpha\mathbf 1,\qquad
+\eta_0=\frac{\sum_{\alpha=y,z}r_\alpha^H M r_\alpha}
+{\sum_{\alpha=y,z}u_\alpha^H M u_\alpha}.
+```
+
+Resztę liczymy bezpośrednio; odejmowanie norm niemal równych pól jest
+niestabilne dla profilu bliskiego stałemu. Wspólne skalowanie pola i masy
+nie zmienia ilorazu. Zerowa norma poprzeczna uniemożliwia ocenę. Udział
+podłużny $\eta_\parallel$ raportujemy oddzielnie:
+
+```{math}
+:label: eq-0828-n0-longitudinal
+\eta_\parallel=\frac{u_x^H M u_x}{\sum_{\alpha=x,y,z}u_\alpha^H M u_\alpha}.
+```
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $V_e$ | objętość magnetycznego tetraedru | $\mathrm{m^3}$ |
+| $M^e$, $M$ | elementowa i złożona masa zgodna | $\mathrm{m^3}$ |
+| $\delta_{ij}$ | delta Kroneckera | $1$ |
+| $d_{i\alpha}$, $u_{i\alpha}$ | pole modalne i jego obwiednia węzłowa dla znormalizowanej magnetyzacji | $1$ |
+| $c_\alpha$, $r_\alpha$ | stała projekcja i reszta obwiedni | $1$ |
+| $\mathbf 1$ | wektor stałych wartości węzłowych | $1$ |
+| $\eta_0$, $\eta_\parallel$ | względne kwadraty norm | $1$ |
+
+Projekcja globalna sprawdza także harmoniczną w płaszczyźnie. Nie stanowi
+uniwersalnej identyfikacji gałęzi DE przy lokalizacji powierzchniowej.
+Nie ma domyślnego progu kwalifikacji: zakres k i tolerancja profilu wymagają
+jawnego uzasadnienia benchmarku, niezależnego od tolerancji częstotliwości KS.
+
+Realizacja: diagnostyka offline FEM CPU dla artefaktów C1; implementacja
+helpera nie dowodzi wykonania FEM ani kwalifikacji fizycznej. FEM GPU nie
+zostaje przez nią zakwalifikowane. FDM CPU/GPU wymagają własnej metryki siatki
+regularnej i nie są objęte tym kontraktem Tet4.
+
+Indeks źródeł: `crates/fullmag-runner/src/fem/eigen_mass_metric.rs` +
+`SharedDomainSparseMass::from_topology` (masa); `crates/fullmag-ir/src/plan.rs`
++ `FemMeshPartSelector` (domeny). Równania projekcji wynikają bezpośrednio
+z minimalizacji kwadratowej normy masowej względem stałego współczynnika.
+
+| Kontrakt | Źródło | Symbol | Dowód |
+|---|---|---|---|
+| Projekcja n=0 | docs/physics/0828-fem-frequency-domain-floquet-demag.md | DOC-ANCHOR:n0-field-projection-contract | Definicja diagnostyki; kwalifikacja niewykonana |

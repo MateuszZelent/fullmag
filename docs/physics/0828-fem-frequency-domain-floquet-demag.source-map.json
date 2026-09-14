@@ -161,6 +161,57 @@
         "source-dynamic-pencil",
         "source-floquet-descriptor-certification"
       ]
+    },
+    {
+      "id": "eq-0828-n0-mass-envelope",
+      "symbols": [
+        "n0_volume",
+        "n0_mass",
+        "n0_delta",
+        "n0_envelope",
+        "n0_residual",
+        "n0_one",
+        "n0_ratios",
+        "position",
+        "wave_vector"
+      ],
+      "sources": [
+        "source-n0-projection-contract"
+      ]
+    },
+    {
+      "id": "eq-0828-n0-projection",
+      "symbols": [
+        "n0_volume",
+        "n0_mass",
+        "n0_delta",
+        "n0_envelope",
+        "n0_residual",
+        "n0_one",
+        "n0_ratios",
+        "position",
+        "wave_vector"
+      ],
+      "sources": [
+        "source-n0-projection-contract"
+      ]
+    },
+    {
+      "id": "eq-0828-n0-longitudinal",
+      "symbols": [
+        "n0_volume",
+        "n0_mass",
+        "n0_delta",
+        "n0_envelope",
+        "n0_residual",
+        "n0_one",
+        "n0_ratios",
+        "position",
+        "wave_vector"
+      ],
+      "sources": [
+        "source-n0-projection-contract"
+      ]
     }
   ],
   "symbols": [
@@ -391,6 +442,48 @@
       "latex": "$\\operatorname{Re}$, $\\exp$, $\\mathrm{i}$, $\\pi$, $(\\cdot)^\\mathsf{T}$, $(\\cdot)^\\mathsf{H}$, $(\\cdot)^\\ast$, $\\cdot$, $\\max$",
       "meaning": "real part, exponential, imaginary unit, circle constant, transpose, Hermitian transpose, conjugation, contraction and maximum",
       "si_unit": "$1$"
+    },
+    {
+      "id": "n0_volume",
+      "latex": "$V_e$",
+      "meaning": "objętość magnetycznego tetraedru",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "n0_mass",
+      "latex": "$M^e$, $M$",
+      "meaning": "elementowa i złożona masa zgodna",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "n0_delta",
+      "latex": "$\\delta_{ij}$",
+      "meaning": "delta Kroneckera",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "n0_envelope",
+      "latex": "$d_{i\\alpha}$, $u_{i\\alpha}$",
+      "meaning": "pole modalne i jego obwiednia węzłowa dla znormalizowanej magnetyzacji",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "n0_residual",
+      "latex": "$c_\\alpha$, $r_\\alpha$",
+      "meaning": "stała projekcja i reszta obwiedni",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "n0_one",
+      "latex": "$\\mathbf 1$",
+      "meaning": "wektor stałych wartości węzłowych",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "n0_ratios",
+      "latex": "$\\eta_0$, $\\eta_\\parallel$",
+      "meaning": "względne kwadraty norm",
+      "si_unit": "$1$"
     }
   ],
   "sources": [
@@ -524,6 +617,13 @@
       "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
       "symbol": "solve_floquet_shared_domain_sparse_modal_spectrum",
       "responsibility": "Own the native CPU Floquet sparse modal solve and resolved KSP diagnostics; runtime and physical qualification remain unverified."
+    },
+    {
+      "id": "source-n0-projection-contract",
+      "path": "docs/physics/0828-fem-frequency-domain-floquet-demag.md",
+      "symbol": "DOC-ANCHOR:n0-field-projection-contract",
+      "responsibility": "Define magnetic Tet4 nodal-envelope projection without an implicit qualification threshold.",
+      "evidence_status": "planned_contract"
     }
   ],
   "public_api": {
