@@ -61,7 +61,11 @@ ALLOWED_PROFILES = (
 )
 CPU_CONTRACT_PROFILES = (*ALLOWED_PROFILES, "fem-cpu-current-contracts-v1")
 CURRENT_CONTRACT_PROFILES = (*CPU_CONTRACT_PROFILES, "fem-gpu-current-contracts-v1")
-SLEPC_MODAL_PROFILES = (*CURRENT_CONTRACT_PROFILES, "fem-cpu-slepc-modal-v1")
+SLEPC_MODAL_PROFILES = (
+    *CURRENT_CONTRACT_PROFILES,
+    "fem-cpu-slepc-modal-v1",
+    "fem-cpu-slepc-runtime-v1",
+)
 _PROFILE_LISTS = (
     ALLOWED_PROFILES,
     CPU_CONTRACT_PROFILES,

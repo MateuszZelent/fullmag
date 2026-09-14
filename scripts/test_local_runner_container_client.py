@@ -159,6 +159,7 @@ class ContainerClientTests(unittest.TestCase):
             self.layout, image_id=IMAGE, owner="alice", enable_slepc_modal=True
         )
         self.assertEqual(list(container_client.SLEPC_MODAL_PROFILES), slepc["allowed_profiles"])
+        self.assertIn("fem-cpu-slepc-runtime-v1", slepc["allowed_profiles"])
 
         # Enabling the older five-profile set must never silently downgrade an
         # already activated six-profile coordinator.

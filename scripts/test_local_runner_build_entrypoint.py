@@ -185,6 +185,304 @@ class BuildEntryPointTests(unittest.TestCase):
         self.assertEqual(profile.environment["FULLMAG_FEM_MFEM_DEVICE"], "cpu")
         self.assertEqual(profile.environment["FULLMAG_FEM_REQUIRE_GPU"], "0")
         self.assertEqual(profile.environment["FULLMAG_FORCE_LOCAL_FEM_GPU"], "0")
+
+    def test_slepc_runtime_profile_is_native_only_and_slepc_enabled(self) -> None:
+        profile = entrypoint.profile_for("fem-cpu-slepc-runtime-v1")
+        self.assertEqual(profile.lane, "fem-cpu")
+        self.assertTrue(profile.runtime_only)
+        self.assertEqual(profile.contract_scenarios, ())
+        self.assertEqual(
+            profile.runtime_contract_schema,
+            "fullmag.fem.cpu.slepc_runtime_contract.v1",
+        )
+        self.assertEqual(profile.environment["FULLMAG_FEM_WITH_SLEPC"], "ON")
+        self.assertEqual(profile.environment["FULLMAG_USE_MFEM_STACK"], "ON")
+        self.assertEqual(profile.environment["FULLMAG_FEM_MFEM_DEVICE"], "cpu")
+        self.assertFalse(entrypoint._runtime_contract(profile)["unit_test_targets"])
+        self.assertFalse(entrypoint._runtime_contract(profile)["frontend_stages"])
+
+    def test_slepc_runtime_profile_runs_only_native_build_and_publishes_identity(self) -> None:
+        self.profile = "fem-cpu-slepc-runtime-v1"
+        context = self._write_context()
+        calls: list[tuple[str, list[str]]] = []
+
+        def runtime_preflight(profile, *, release=True):
+            self.assertEqual(profile.name, self.profile)
+            self.assertFalse(release)
+            return {"make": "/usr/bin/make"}
+
+        def runtime_stage(name, command, *, workspace, artifacts, environment):
+            calls.append((name, command))
+            self.assertEqual(environment["FULLMAG_FEM_WITH_SLEPC"], "ON")
+            self._write_outputs(include_fem_library=True, include_web=False)
+            return {
+                "name": name,
+                "command": command,
+                "started_at": "now",
+                "finished_at": "now",
+                "duration_ms": 1,
+                "exit_code": 0,
+            }
+
+        with patch.object(
+            entrypoint,
+            "preflight",
+            side_effect=runtime_preflight,
+        ), patch.object(
+            entrypoint,
+            "toolchain_versions",
+            return_value={},
+        ), patch.object(
+            entrypoint,
+            "_attest_slepc_runtime",
+            return_value=None,
+        ), patch.object(
+            entrypoint,
+            "run_stage",
+            side_effect=runtime_stage,
+        ):
+            code = entrypoint.main(self._argv(context))
+
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, [("native-build", ["/usr/bin/make", "install-cli-dev"])])
+        self.assertFalse((self.workspace / ".fullmag" / "local" / "web").exists())
+        receipt = json.loads(
+            (self.artifacts / "build-receipt.json").read_text(encoding="utf-8")
+        )
+        self.assertTrue(receipt["runtime_only"])
+        self.assertEqual(
+            receipt["runtime_contract"],
+            entrypoint._runtime_contract(entrypoint.profile_for(self.profile)),
+        )
+        self.assertEqual(receipt["contract_scenarios"], [])
+        self.assertIsNone(receipt["contract_schema"])
+        self.assertEqual(
+            json.loads((self.artifacts / "source-identity.json").read_text(encoding="utf-8")),
+            self._identity(),
+        )
+        self.assertIn(
+            "outputs/.fullmag/local/lib/libfullmag_fem.so.0",
+            {entry["path"] for entry in receipt["artifacts"]},
+        )
+
+    def test_slepc_runtime_probe_records_binary_and_dependency_attestations(self) -> None:
+        output = self.workspace / ".fullmag" / "local"
+        runtime_bin = output / "bin" / "fullmag-bin"
+        runtime_library = output / "lib" / "libfullmag_fem.so.0"
+        runtime_bin.parent.mkdir(parents=True)
+        runtime_library.parent.mkdir(parents=True)
+        runtime_bin.write_bytes(b"binary")
+        runtime_library.write_bytes(b"library")
+        cargo_target = self.build / "cargo-targets" / "fem-cpu"
+        cmake_cache = (
+            cargo_target
+            / "release"
+            / "build"
+            / "fullmag-fem-sys-test"
+            / "out"
+            / "native-build"
+            / "CMakeCache.txt"
+        )
+        cmake_cache.parent.mkdir(parents=True)
+        cmake_cache.write_text(
+            "\n".join(
+                [
+                    "FULLMAG_ENABLE_CUDA:BOOL=ON",
+                    "FULLMAG_ENABLE_FEM_GPU:BOOL=ON",
+                    "FULLMAG_USE_MFEM_STACK:BOOL=ON",
+                    "FULLMAG_FEM_WITH_SLEPC:BOOL=ON",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        native_library = cmake_cache.parent / "backends" / "fem" / "libfullmag_fem.so.0"
+        native_library.parent.mkdir(parents=True)
+        native_library.write_bytes(b"library")
+
+        class FakeQuery:
+            argtypes = None
+            restype = None
+
+            def __call__(self, pointer):
+                info = pointer._obj
+                info.petsc_available = 1
+                info.slepc_available = 1
+                info.modal_eigen_native_cpu_slepc_available = 1
+                info.petsc_version = b"3.24.6"
+                info.slepc_version = b"3.24.3"
+                info.reason = b"available"
+                return 0
+
+        class FakeLibrary:
+            fullmag_fem_get_frequency_domain_dependency_info = FakeQuery()
+
+        probe = entrypoint.subprocess.CompletedProcess(
+            [str(runtime_bin)],
+            0,
+            '{"native_fem_cpu_available": true}',
+            "[fullmag] build: test | source snapshot: "
+            + str(self._identity()["source_snapshot_sha256"])
+            + "\n",
+        )
+        identity = self._identity()
+        with patch.object(
+            entrypoint.subprocess,
+            "run",
+            return_value=probe,
+        ), patch.object(
+            entrypoint.os,
+            "access",
+            return_value=True,
+        ), patch.object(
+            entrypoint.ctypes,
+            "CDLL",
+            return_value=FakeLibrary(),
+        ):
+            entrypoint._attest_slepc_runtime(
+                self.workspace,
+                self.artifacts,
+                {
+                    "LD_LIBRARY_PATH": "/opt/petsc/lib",
+                    "FULLMAG_CARGO_TARGET_DIR": str(cargo_target),
+                },
+                identity,
+                entrypoint._runtime_contract(
+                    entrypoint.profile_for("fem-cpu-slepc-runtime-v1")
+                ),
+            )
+
+        runtime_attestation = json.loads(
+            (self.artifacts / "runtime-attestation.json").read_text(encoding="utf-8")
+        )
+        dependency_attestation = json.loads(
+            (self.artifacts / "dependency-attestation.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(runtime_attestation["status"], "pass")
+        self.assertTrue(runtime_attestation["availability"]["native_fem_cpu_available"])
+        self.assertEqual(dependency_attestation["status"], "pass")
+        self.assertTrue(
+            dependency_attestation["dependency"]["modal_eigen_native_cpu_slepc_available"]
+        )
+
+    def test_slepc_runtime_probe_rejects_unavailable_native_fem(self) -> None:
+        output = self.workspace / ".fullmag" / "local"
+        runtime_bin = output / "bin" / "fullmag-bin"
+        runtime_library = output / "lib" / "libfullmag_fem.so.0"
+        runtime_bin.parent.mkdir(parents=True)
+        runtime_library.parent.mkdir(parents=True)
+        runtime_bin.write_bytes(b"binary")
+        runtime_library.write_bytes(b"library")
+        cargo_target = self.build / "cargo-targets" / "fem-cpu"
+        cmake_cache = (
+            cargo_target
+            / "release"
+            / "build"
+            / "fullmag-fem-sys-test"
+            / "out"
+            / "native-build"
+            / "CMakeCache.txt"
+        )
+        cmake_cache.parent.mkdir(parents=True)
+        cmake_cache.write_text(
+            "FULLMAG_ENABLE_CUDA:BOOL=ON\n"
+            "FULLMAG_ENABLE_FEM_GPU:BOOL=ON\n"
+            "FULLMAG_USE_MFEM_STACK:BOOL=ON\n"
+            "FULLMAG_FEM_WITH_SLEPC:BOOL=ON\n",
+            encoding="utf-8",
+        )
+        native_library = cmake_cache.parent / "backends" / "fem" / "libfullmag_fem.so.0"
+        native_library.parent.mkdir(parents=True)
+        native_library.write_bytes(b"library")
+        probe = entrypoint.subprocess.CompletedProcess(
+            [str(runtime_bin)],
+            0,
+            '{"native_fem_cpu_available": false}',
+            "[fullmag] build: test | source snapshot: "
+            + str(self._identity()["source_snapshot_sha256"])
+            + "\n",
+        )
+        with patch.object(
+            entrypoint.subprocess,
+            "run",
+            return_value=probe,
+        ), patch.object(
+            entrypoint.os,
+            "access",
+            return_value=True,
+        ):
+            with self.assertRaisesRegex(
+                entrypoint.BuildEntryPointError,
+                "native FEM CPU availability",
+            ):
+                entrypoint._attest_slepc_runtime(
+                    self.workspace,
+                    self.artifacts,
+                    {"FULLMAG_CARGO_TARGET_DIR": str(cargo_target)},
+                    self._identity(),
+                    entrypoint._runtime_contract(
+                        entrypoint.profile_for("fem-cpu-slepc-runtime-v1")
+                    ),
+                )
+
+    def test_slepc_runtime_probe_rejects_stale_source_snapshot(self) -> None:
+        output = self.workspace / ".fullmag" / "local"
+        runtime_bin = output / "bin" / "fullmag-bin"
+        runtime_library = output / "lib" / "libfullmag_fem.so.0"
+        runtime_bin.parent.mkdir(parents=True)
+        runtime_library.parent.mkdir(parents=True)
+        runtime_bin.write_bytes(b"binary")
+        runtime_library.write_bytes(b"library")
+        cargo_target = self.build / "cargo-targets" / "fem-cpu"
+        cmake_cache = (
+            cargo_target
+            / "release"
+            / "build"
+            / "fullmag-fem-sys-test"
+            / "out"
+            / "native-build"
+            / "CMakeCache.txt"
+        )
+        cmake_cache.parent.mkdir(parents=True)
+        cmake_cache.write_text(
+            "FULLMAG_ENABLE_CUDA:BOOL=ON\n"
+            "FULLMAG_ENABLE_FEM_GPU:BOOL=ON\n"
+            "FULLMAG_USE_MFEM_STACK:BOOL=ON\n"
+            "FULLMAG_FEM_WITH_SLEPC:BOOL=ON\n",
+            encoding="utf-8",
+        )
+        native_library = cmake_cache.parent / "backends" / "fem" / "libfullmag_fem.so.0"
+        native_library.parent.mkdir(parents=True)
+        native_library.write_bytes(b"library")
+        stale_snapshot = "0" * 64
+        probe = entrypoint.subprocess.CompletedProcess(
+            [str(runtime_bin)],
+            0,
+            '{"native_fem_cpu_available": true}',
+            "[fullmag] build: test | source snapshot: " + stale_snapshot + "\n",
+        )
+        with patch.object(
+            entrypoint.subprocess,
+            "run",
+            return_value=probe,
+        ), patch.object(
+            entrypoint.os,
+            "access",
+            return_value=True,
+        ):
+            with self.assertRaisesRegex(
+                entrypoint.BuildEntryPointError,
+                "does not match the native source identity",
+            ):
+                entrypoint._attest_slepc_runtime(
+                    self.workspace,
+                    self.artifacts,
+                    {"FULLMAG_CARGO_TARGET_DIR": str(cargo_target)},
+                    self._identity(),
+                    entrypoint._runtime_contract(
+                        entrypoint.profile_for("fem-cpu-slepc-runtime-v1")
+                    ),
+                )
     def test_slepc_modal_contract_script_is_explicit_and_unescaped(self) -> None:
         script = Path(__file__).with_name("run_fem_cpu_slepc_modal_contract.sh").read_text(encoding="utf-8")
         self.assertNotIn(r"\${", script)

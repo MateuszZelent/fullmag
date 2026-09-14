@@ -51,6 +51,8 @@ from validate_comsol_dispersion_scientific_gate import (  # noqa: E402
 
 
 PROFILE = "fem-cpu-slepc-modal-v1"
+RUNTIME_PROFILE = "fem-cpu-slepc-runtime-v1"
+SUPPORTED_PROFILES = (PROFILE, RUNTIME_PROFILE)
 EXPECTED_IMAGE_DIGEST = "sha256:e5f70bd6320119f0d8163430dab81bc6f248e07e4af086dfdf77bcd087471d7"
 RECEIPT_SCHEMA = "fullmag.local-runner.build-receipt.v1"
 CONTRACT_SCHEMA = "fullmag.fem.cpu.slepc_modal_contract_result.v1"
@@ -227,9 +229,11 @@ def _read_job(layout: Mapping[str, Any], job_id: str) -> dict[str, Any]:
     if not isinstance(job["payload"], dict):
         raise BenchmarkError("runner job payload is not an object")
 
+    if job.get("profile") not in SUPPORTED_PROFILES:
+        raise BenchmarkError("runner job does not satisfy benchmark preflight: profile")
+
     expected = {
         "worktree_id": layout["worktree_id"],
-        "profile": PROFILE,
         "operation": "build",
         "state": "succeeded",
         "exit_code": 0,
@@ -266,6 +270,37 @@ def _read_job(layout: Mapping[str, Any], job_id: str) -> dict[str, Any]:
     ):
         raise BenchmarkError("runner job native snapshot identity is invalid")
     return job
+
+
+def _validated_build_evidence(
+    artifacts: Path,
+    profile: str,
+    native_identity: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Select evidence after canonical validate_build_receipt has verified hashes.
+
+    Runtime-only builds do not claim CTest execution. Their production probes
+    are checked by the canonical receipt validator before this helper runs.
+    """
+    if profile == PROFILE:
+        contract = _validate_contract(
+            artifacts / "contracts" / "slepc-modal" / "result.json", native_identity
+        )
+        return {"kind": "native_build_and_ctest", "source": contract["source"]}
+    if profile != RUNTIME_PROFILE:
+        raise BenchmarkError("unsupported benchmark build profile")
+    attestation = _json_file(artifacts / "runtime-attestation.json", "runtime attestation")
+    expected_source = {
+        "commit": native_identity["head_commit_full"],
+        "snapshot_sha256": native_identity["source_snapshot_sha256"],
+    }
+    if (
+        attestation.get("schema") != "fullmag.fem.slepc_runtime.attestation.v1"
+        or attestation.get("status") != "pass"
+        or attestation.get("source") != expected_source
+    ):
+        raise BenchmarkError("runtime build evidence source or status mismatch")
+    return {"kind": "native_build_and_runtime_probes", "source": expected_source}
 
 
 def _validate_contract(
@@ -479,7 +514,7 @@ def _validate_build_context(layout: Mapping[str, Any], job: Mapping[str, Any]) -
     )
     if not fem_libraries:
         raise BenchmarkError("modal runtime has no regular libfullmag_fem.so library")
-    contract = _validate_contract(artifacts / "contracts" / "slepc-modal" / "result.json", native_identity)
+    evidence = _validated_build_evidence(artifacts, job["profile"], native_identity)
     # Keep a compact immutable identity view for the run manifest.  The full
     # receipt remains in the build run and is never copied or rewritten.
     receipt_artifact_hashes = {
@@ -494,7 +529,8 @@ def _validate_build_context(layout: Mapping[str, Any], job: Mapping[str, Any]) -
         native_identity=native_identity,
         receipt={
             **receipt,
-            "contract_source": contract.get("source"),
+            "contract_source": evidence["source"],
+            "build_evidence_kind": evidence["kind"],
             "artifact_hashes": receipt_artifact_hashes,
         },
         run_root=run_root,

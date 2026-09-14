@@ -25,6 +25,7 @@ PROFILES = {
     'fem-cpu-current-contracts-v1': ('fem', 'cpu'),
     'fem-gpu-current-contracts-v1': ('fem', 'gpu'),
     'fem-cpu-slepc-modal-v1': ('fem', 'cpu'),
+    'fem-cpu-slepc-runtime-v1': ('fem', 'cpu'),
 }
 PROFILE_CONTRACTS = {
     'fem-cpu-current-contracts-v1': {
@@ -48,6 +49,24 @@ PROFILE_CONTRACTS = {
             'fem_floquet_waveguide_cross_section_contract',
             'fem_floquet_modal_solver_contract',
         ),
+    },
+}
+RUNTIME_PROFILE_CONTRACTS = {
+    'fem-cpu-slepc-runtime-v1': {
+        'schema': 'fullmag.fem.cpu.slepc_runtime_contract.v1',
+        'native_target': 'fullmag_fem',
+        'backend': 'fem',
+        'device': 'cpu',
+        'precision': 'double',
+        'slepc': True,
+        'cmake_options': {
+            'FULLMAG_ENABLE_CUDA': 'ON',
+            'FULLMAG_ENABLE_FEM_GPU': 'ON',
+            'FULLMAG_USE_MFEM_STACK': 'ON',
+            'FULLMAG_FEM_WITH_SLEPC': 'ON',
+        },
+        'unit_test_targets': [],
+        'frontend_stages': [],
     },
 }
 TARGETS = {'source': '/source', 'workspace': '/workspace',
@@ -215,8 +234,181 @@ def validate_build_receipt(artifacts, job, journal):
     if not isinstance(entries, list) or not entries:
         raise ValueError('Build receipt has no artifacts')
 
+    runtime = RUNTIME_PROFILE_CONTRACTS.get(job['profile'])
     contract = PROFILE_CONTRACTS.get(job['profile'])
-    if contract is None:
+    if runtime is not None:
+        if receipt.get('runtime_only') is not True:
+            raise ValueError('SLEPc runtime receipt is not marked runtime-only')
+        if receipt.get('runtime_contract') != runtime:
+            raise ValueError('SLEPc runtime contract mismatch')
+        if receipt.get('contract_scenarios') != [] or receipt.get('contract_schema') is not None:
+            raise ValueError('SLEPc runtime receipt contains contract stages')
+        entry_paths = {
+            entry.get('path') for entry in entries if isinstance(entry, dict)
+        }
+        required = {
+            'outputs/.fullmag/local/bin/fullmag-bin',
+            'outputs/.fullmag/local/bin/fullmag-api',
+            'outputs/.fullmag/local/_fullmag_core.so',
+            'outputs/.fullmag/local/launcher-build-mode',
+            'source-identity.json',
+            'cmake-attestation.json',
+            'runtime-attestation.json',
+            'dependency-attestation.json',
+        }
+        if not required.issubset(entry_paths):
+            raise ValueError('Required SLEPc runtime outputs missing')
+        if not any(
+            isinstance(path, str)
+            and path.startswith('outputs/.fullmag/local/lib/libfullmag_fem.so')
+            for path in entry_paths
+        ):
+            raise ValueError('SLEPc runtime receipt is missing the native FEM library artifact')
+        identity_path = validate_path(
+            artifacts / 'source-identity.json',
+            artifacts,
+            'source identity artifact',
+        )
+        try:
+            identity_artifact = json.loads(identity_path.read_text(encoding='utf-8'))
+        except (OSError, UnicodeError, ValueError) as error:
+            raise ValueError('Invalid source identity artifact') from error
+        if identity_artifact != native:
+            raise ValueError('SLEPc runtime source identity artifact mismatch')
+        expected_source = {
+            'commit': native.get('head_commit_full') if isinstance(native, dict) else None,
+            'snapshot_sha256': native.get('source_snapshot_sha256') if isinstance(native, dict) else None,
+        }
+        cmake_path = validate_path(
+            artifacts / 'cmake-attestation.json',
+            artifacts,
+            'CMake attestation',
+        )
+        runtime_path = validate_path(
+            artifacts / 'runtime-attestation.json',
+            artifacts,
+            'runtime attestation',
+        )
+        dependency_path = validate_path(
+            artifacts / 'dependency-attestation.json',
+            artifacts,
+            'dependency attestation',
+        )
+        try:
+            cmake_attestation = json.loads(cmake_path.read_text(encoding='utf-8'))
+            runtime_attestation = json.loads(runtime_path.read_text(encoding='utf-8'))
+            dependency_attestation = json.loads(dependency_path.read_text(encoding='utf-8'))
+        except (OSError, UnicodeError, ValueError) as error:
+            raise ValueError('Invalid SLEPc runtime attestation') from error
+        cmake_options = (
+            cmake_attestation.get('options')
+            if isinstance(cmake_attestation, dict)
+            else None
+        )
+        expected_cmake_options = runtime['cmake_options']
+        artifact_hashes = {
+            entry.get('path'): entry.get('sha256')
+            for entry in entries
+            if isinstance(entry, dict)
+        }
+        runtime_library_sha256 = (
+            cmake_attestation.get('runtime_library_sha256')
+            if isinstance(cmake_attestation, dict)
+            else None
+        )
+        native_library_sha256 = (
+            cmake_attestation.get('native_library_sha256')
+            if isinstance(cmake_attestation, dict)
+            else None
+        )
+        dependency_library_path = (
+            dependency_attestation.get('library')
+            if isinstance(dependency_attestation, dict)
+            else None
+        )
+        runtime_library_bound = (
+            isinstance(dependency_library_path, str)
+            and dependency_library_path in artifact_hashes
+            and artifact_hashes[dependency_library_path] == runtime_library_sha256
+        )
+        if (
+            not isinstance(cmake_attestation, dict)
+            or cmake_attestation.get('schema')
+            != 'fullmag.fem.slepc_runtime.cmake_attestation.v1'
+            or cmake_attestation.get('status') != 'pass'
+            or cmake_attestation.get('source') != expected_source
+            or not isinstance(cmake_options, dict)
+            or set(cmake_options) != set(expected_cmake_options)
+            or any(
+                not isinstance(cmake_options.get(name), dict)
+                or str(cmake_options[name].get('value', '')).upper() != str(value).upper()
+                for name, value in expected_cmake_options.items()
+            )
+            or not re.fullmatch(r'[a-f0-9]{64}', str(runtime_library_sha256 or ''))
+            or runtime_library_sha256 != native_library_sha256
+            or not runtime_library_bound
+        ):
+            raise ValueError('SLEPc runtime CMake attestation does not match the profile')
+        startup_stamp = (
+            runtime_attestation.get('startup_stamp')
+            if isinstance(runtime_attestation, dict)
+            else ''
+        )
+        stamped_snapshot = ''
+        if isinstance(startup_stamp, str) and 'source snapshot:' in startup_stamp:
+            snapshot_suffix = startup_stamp.split('source snapshot:', 1)[1].strip()
+            stamped_snapshot = snapshot_suffix.split(maxsplit=1)[0] if snapshot_suffix else ''
+        if (
+            not isinstance(runtime_attestation, dict)
+            or runtime_attestation.get('schema') != 'fullmag.fem.slepc_runtime.attestation.v1'
+            or runtime_attestation.get('status') != 'pass'
+            or runtime_attestation.get('source') != expected_source
+            or not isinstance(runtime_attestation.get('availability'), dict)
+            or runtime_attestation['availability'].get('native_fem_cpu_available') is not True
+            or stamped_snapshot != expected_source['snapshot_sha256']
+            or not re.fullmatch(r'[a-f0-9]{64}', stamped_snapshot)
+        ):
+            raise ValueError('SLEPc runtime attestation does not prove native CPU availability')
+        dependency = (
+            dependency_attestation.get('dependency')
+            if isinstance(dependency_attestation, dict)
+            else None
+        )
+        if (
+            not isinstance(dependency_attestation, dict)
+            or dependency_attestation.get('schema')
+            != 'fullmag.fem.slepc_runtime.dependency_attestation.v1'
+            or dependency_attestation.get('status') != 'pass'
+            or dependency_attestation.get('source') != expected_source
+            or not isinstance(dependency, dict)
+            or dependency.get('petsc_available') is not True
+            or dependency.get('slepc_available') is not True
+            or dependency.get('modal_eigen_native_cpu_slepc_available') is not True
+            or not dependency.get('petsc_version')
+            or not dependency.get('slepc_version')
+        ):
+            raise ValueError('SLEPc runtime dependency attestation is incomplete')
+        stages = receipt.get('stages')
+        if not isinstance(stages, list) or len(stages) != 1:
+            raise ValueError('SLEPc runtime receipt must contain only native-build')
+        stage = stages[0]
+        command = stage.get('command') if isinstance(stage, dict) else None
+        make_name = (
+            str(command[0]).replace('\\', '/').rsplit('/', 1)[-1]
+            if isinstance(command, list) and command
+            else ''
+        )
+        if (
+            not isinstance(stage, dict)
+            or stage.get('name') != 'native-build'
+            or stage.get('exit_code') != 0
+            or not isinstance(command, list)
+            or len(command) != 2
+            or make_name != 'make'
+            or command[1] != 'install-cli-dev'
+        ):
+            raise ValueError('SLEPc runtime receipt does not prove native-only build')
+    elif contract is None:
         required = {
             'outputs/.fullmag/local/' + name
             for name in (

@@ -11,6 +11,7 @@ does not accept a shell command from the job request.
 from __future__ import annotations
 
 import argparse
+import ctypes
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -75,6 +76,8 @@ class Profile:
     contract_script: str = "scripts/run_fem_cpu_only_contract.sh"
     contract_schema: str = "fullmag.fem.cpu_only_contract_result.v1"
     build_runtime: bool = False
+    runtime_only: bool = False
+    runtime_contract_schema: str | None = None
 
 
 PROFILES: dict[str, Profile] = {
@@ -157,6 +160,24 @@ PROFILES["fem-cpu-slepc-modal-v1"] = Profile(
     contract_schema="fullmag.fem.cpu.slepc_modal_contract_result.v1",
     build_runtime=True,
 )
+PROFILES["fem-cpu-slepc-runtime-v1"] = Profile(
+    name="fem-cpu-slepc-runtime-v1",
+    lane="fem-cpu",
+    environment={
+        "FULLMAG_BUILD_CPU_ONLY": "0",
+        "FULLMAG_FORCE_LOCAL_FEM_CPU": "1",
+        "FULLMAG_FORCE_LOCAL_FEM_GPU": "0",
+        "FULLMAG_FEM_REQUIRE_GPU": "0",
+        "FULLMAG_FEM_REQUIRE_CEED": "0",
+        "FULLMAG_FEM_WITH_SLEPC": "ON",
+        "FULLMAG_USE_MFEM_STACK": "ON",
+        "FULLMAG_MANAGED_FEM_DEVICE": "cpu",
+        "FULLMAG_FEM_MFEM_DEVICE": "cpu",
+        "FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT": "1",
+    },
+    runtime_only=True,
+    runtime_contract_schema="fullmag.fem.cpu.slepc_runtime_contract.v1",
+)
 
 REQUIRED_OUTPUTS = (
     "bin/fullmag-bin",
@@ -176,7 +197,33 @@ EXPECTED_BUILD_MARKER = {
     "fem-gpu-release": "cuda-fem-gpu",
     "fdm-cpu-release": "cpu",
     "fem-cpu-slepc-modal-v1": "fem-cpu",
+    "fem-cpu-slepc-runtime-v1": "fem-cpu",
 }
+
+
+def _runtime_contract(profile: Profile) -> dict[str, Any] | None:
+    if not profile.runtime_only:
+        return None
+    if not profile.runtime_contract_schema:
+        raise BuildEntryPointError(
+            f"runtime-only profile has no contract schema: {profile.name}"
+        )
+    return {
+        "schema": profile.runtime_contract_schema,
+        "native_target": "fullmag_fem",
+        "backend": "fem",
+        "device": "cpu",
+        "precision": "double",
+        "slepc": profile.environment.get("FULLMAG_FEM_WITH_SLEPC") == "ON",
+        "cmake_options": {
+            "FULLMAG_ENABLE_CUDA": "ON",
+            "FULLMAG_ENABLE_FEM_GPU": "ON",
+            "FULLMAG_USE_MFEM_STACK": "ON",
+            "FULLMAG_FEM_WITH_SLEPC": "ON",
+        },
+        "unit_test_targets": [],
+        "frontend_stages": [],
+    }
 
 
 def canonical(value: object) -> bytes:
@@ -849,6 +896,305 @@ def _write_source_identity_artifact(artifacts: Path, identity: Mapping[str, Any]
         raise BuildEntryPointError("cannot publish source identity artifact") from error
 
 
+def _write_json_artifact(artifacts: Path, name: str, payload: Mapping[str, Any]) -> None:
+    target = artifacts / name
+    try:
+        with target.open("x", encoding="utf-8", newline="\n") as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+    except FileExistsError as error:
+        raise BuildEntryPointError(f"refusing to replace runtime attestation: {name}") from error
+    except OSError as error:
+        raise BuildEntryPointError(f"cannot publish runtime attestation: {name}") from error
+
+
+def _attest_slepc_runtime(
+    workspace: Path,
+    artifacts: Path,
+    environment: Mapping[str, str],
+    native_identity: Mapping[str, Any],
+    runtime_contract: Mapping[str, Any],
+) -> None:
+    """Run production-only probes against the built CPU/SLEPc runtime.
+
+    This is deliberately a post-build probe, not a CTest or contract-target
+    stage.  It records the binary availability response and the dependency
+    query exported by ``libfullmag_fem`` so the receipt cannot infer SLEPc
+    support from the requested environment alone.
+    """
+
+    expected_cmake_options = runtime_contract.get("cmake_options")
+    if not isinstance(expected_cmake_options, Mapping):
+        raise BuildEntryPointError("SLEPc runtime contract lacks CMake options")
+    cargo_target_text = environment.get("FULLMAG_CARGO_TARGET_DIR")
+    if not cargo_target_text:
+        raise BuildEntryPointError("SLEPc runtime probe lacks the Cargo target root")
+    cargo_target = Path(cargo_target_text)
+    output = workspace / ".fullmag" / "local"
+    runtime_bin = output / "bin" / "fullmag-bin"
+    library_directory = output / "lib"
+    libraries = tuple(
+        sorted(
+            path
+            for path in library_directory.iterdir()
+            if path.name.startswith("libfullmag_fem.so")
+            and path.is_file()
+            and not path.is_symlink()
+        )
+    ) if library_directory.is_dir() else ()
+    if not runtime_bin.is_file() or not os.access(runtime_bin, os.X_OK):
+        raise BuildEntryPointError("SLEPc runtime probe requires an executable fullmag-bin")
+    if not libraries:
+        raise BuildEntryPointError("SLEPc runtime probe requires libfullmag_fem.so")
+    runtime_library = libraries[0]
+    _, runtime_library_sha256 = sha256_file(runtime_library)
+
+    cache_candidates = tuple(
+        sorted(
+            (
+                path
+                for path in cargo_target.glob(
+                    "release/build/fullmag-fem-sys-*/out/native-build/CMakeCache.txt"
+                )
+                if path.is_file() and not path.is_symlink()
+            ),
+            # mtime is only a deterministic tie-breaker. The cache is accepted
+            # below only when its corresponding native library has identical
+            # bytes to the runtime library copied to the output bundle.
+            key=lambda path: path.stat().st_mtime_ns,
+            reverse=True,
+        )
+    )
+    if not cache_candidates:
+        raise BuildEntryPointError("SLEPc runtime build did not retain a CMake cache")
+    bound_cache: tuple[Path, Path, str] | None = None
+    for candidate in cache_candidates:
+        native_library_directory = candidate.parent / "backends" / "fem"
+        native_libraries = tuple(
+            sorted(
+                path
+                for path in native_library_directory.glob("libfullmag_fem.so*")
+                if path.is_file() and not path.is_symlink()
+            )
+        )
+        for native_library in native_libraries:
+            _, native_library_sha256 = sha256_file(native_library)
+            if native_library_sha256 == runtime_library_sha256:
+                bound_cache = (candidate, native_library, native_library_sha256)
+                break
+        if bound_cache is not None:
+            break
+    if bound_cache is None:
+        raise BuildEntryPointError(
+            "SLEPc runtime CMake cache is not bound to the runtime FEM library"
+        )
+    cache_path, native_library, native_library_sha256 = bound_cache
+    observed_cmake_options: dict[str, dict[str, str]] = {}
+    try:
+        cache_lines = cache_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as error:
+        raise BuildEntryPointError("cannot read SLEPc runtime CMake cache") from error
+    for line in cache_lines:
+        if not line or line.startswith("//") or line.startswith("#") or ":" not in line or "=" not in line:
+            continue
+        name, remainder = line.split(":", 1)
+        value_type, value = remainder.split("=", 1)
+        if name in expected_cmake_options:
+            observed_cmake_options[name] = {
+                "type": value_type,
+                "value": value,
+            }
+    missing_options = sorted(set(expected_cmake_options) - set(observed_cmake_options))
+    if missing_options:
+        raise BuildEntryPointError(
+            "SLEPc runtime CMake cache is missing: " + ", ".join(missing_options)
+        )
+    wrong_options = [
+        name
+        for name, expected in expected_cmake_options.items()
+        if observed_cmake_options[name]["value"].upper() != str(expected).upper()
+    ]
+    if wrong_options:
+        details = ", ".join(
+            f"{name}={observed_cmake_options[name]['value']}"
+            for name in wrong_options
+        )
+        raise BuildEntryPointError(
+            "SLEPc runtime CMake options do not match the profile: " + details
+        )
+
+    probe_environment = dict(environment)
+    probe_environment["FULLMAG_REPO_ROOT"] = str(workspace)
+    library_paths = [str(library_directory)]
+    existing_library_path = probe_environment.get("LD_LIBRARY_PATH")
+    if existing_library_path:
+        library_paths.append(existing_library_path)
+    probe_environment["LD_LIBRARY_PATH"] = os.pathsep.join(library_paths)
+    try:
+        probe = subprocess.run(
+            [str(runtime_bin), "runtime", "fem-availability", "--json"],
+            cwd=str(workspace),
+            env=probe_environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise BuildEntryPointError(f"SLEPc runtime availability probe failed: {error}") from error
+    if probe.returncode != 0:
+        stderr = (probe.stderr or "").strip()[-1024:]
+        raise BuildEntryPointError(
+            f"SLEPc runtime availability probe exited {probe.returncode}: {stderr}"
+        )
+    try:
+        availability = json.loads(probe.stdout or "")
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise BuildEntryPointError("SLEPc runtime availability probe returned invalid JSON") from error
+    if not isinstance(availability, dict) or availability.get("native_fem_cpu_available") is not True:
+        raise BuildEntryPointError("runtime probe did not attest native FEM CPU availability")
+    startup_stamp = next(
+        (
+            line.strip()
+            for line in (probe.stderr or "").splitlines()
+            if line.startswith("[fullmag] build:")
+        ),
+        "",
+    )
+    source_snapshot_marker = "source snapshot:"
+    if not startup_stamp or source_snapshot_marker not in startup_stamp:
+        raise BuildEntryPointError("runtime probe startup stamp lacks source snapshot identity")
+    snapshot_suffix = startup_stamp.split(source_snapshot_marker, 1)[1].strip()
+    stamped_snapshot = snapshot_suffix.split(maxsplit=1)[0] if snapshot_suffix else ""
+    expected_snapshot = native_identity.get("source_snapshot_sha256")
+    if (
+        not isinstance(expected_snapshot, str)
+        or not SHA256_RE.fullmatch(stamped_snapshot)
+        or stamped_snapshot != expected_snapshot
+    ):
+        raise BuildEntryPointError(
+            "runtime probe startup stamp source snapshot does not match the native source identity"
+        )
+
+    class DependencyInfo(ctypes.Structure):
+        _fields_ = [
+            ("petsc_available", ctypes.c_int),
+            ("slepc_available", ctypes.c_int),
+            ("modal_eigen_native_cpu_slepc_available", ctypes.c_int),
+            ("petsc_version", ctypes.c_char * 64),
+            ("slepc_version", ctypes.c_char * 64),
+            ("petsc_pkgconfig_dir", ctypes.c_char * 256),
+            ("slepc_pkgconfig_dir", ctypes.c_char * 256),
+            ("petsc_find_module_file", ctypes.c_char * 256),
+            ("slepc_find_module_file", ctypes.c_char * 256),
+            ("petsc_library_path", ctypes.c_char * 256),
+            ("slepc_library_path", ctypes.c_char * 256),
+            ("reason", ctypes.c_char * 256),
+            ("diagnostics_json", ctypes.c_char * 1024),
+        ]
+
+    def c_text(value: object) -> str:
+        return bytes(value).split(b"\0", 1)[0].decode("utf-8", "replace")
+
+    previous_library_path = os.environ.get("LD_LIBRARY_PATH")
+    os.environ["LD_LIBRARY_PATH"] = probe_environment["LD_LIBRARY_PATH"]
+    try:
+        try:
+            library = ctypes.CDLL(str(runtime_library))
+            query = library.fullmag_fem_get_frequency_domain_dependency_info
+            query.argtypes = [ctypes.POINTER(DependencyInfo)]
+            query.restype = ctypes.c_int
+            info = DependencyInfo()
+            return_code = int(query(ctypes.byref(info)))
+        except (AttributeError, OSError) as error:
+            raise BuildEntryPointError(
+                f"SLEPc runtime dependency query is unavailable: {error}"
+            ) from error
+    finally:
+        if previous_library_path is None:
+            os.environ.pop("LD_LIBRARY_PATH", None)
+        else:
+            os.environ["LD_LIBRARY_PATH"] = previous_library_path
+    if return_code != 0:
+        raise BuildEntryPointError(
+            f"SLEPc runtime dependency query exited {return_code}"
+        )
+    dependency = {
+        "petsc_available": int(info.petsc_available) == 1,
+        "slepc_available": int(info.slepc_available) == 1,
+        "modal_eigen_native_cpu_slepc_available": (
+            int(info.modal_eigen_native_cpu_slepc_available) == 1
+        ),
+        "petsc_version": c_text(info.petsc_version),
+        "slepc_version": c_text(info.slepc_version),
+        "petsc_pkgconfig_dir": c_text(info.petsc_pkgconfig_dir),
+        "slepc_pkgconfig_dir": c_text(info.slepc_pkgconfig_dir),
+        "petsc_find_module_file": c_text(info.petsc_find_module_file),
+        "slepc_find_module_file": c_text(info.slepc_find_module_file),
+        "petsc_library_path": c_text(info.petsc_library_path),
+        "slepc_library_path": c_text(info.slepc_library_path),
+        "reason": c_text(info.reason),
+        "diagnostics_json": c_text(info.diagnostics_json),
+    }
+    if not all(
+        (
+            dependency["petsc_available"],
+            dependency["slepc_available"],
+            dependency["modal_eigen_native_cpu_slepc_available"],
+            dependency["petsc_version"],
+            dependency["slepc_version"],
+        )
+    ):
+        raise BuildEntryPointError(
+            "runtime FEM dependency query did not attest PETSc/SLEPc CPU modal support"
+        )
+    source = {
+        "commit": native_identity.get("head_commit_full"),
+        "snapshot_sha256": native_identity.get("source_snapshot_sha256"),
+    }
+    _write_json_artifact(
+        artifacts,
+        "cmake-attestation.json",
+        {
+            "schema": "fullmag.fem.slepc_runtime.cmake_attestation.v1",
+            "status": "pass",
+            "cache_path": str(cache_path),
+            "native_library_path": str(native_library),
+            "runtime_library_sha256": runtime_library_sha256,
+            "native_library_sha256": native_library_sha256,
+            "options": observed_cmake_options,
+            "source": source,
+        },
+    )
+    _write_json_artifact(
+        artifacts,
+        "runtime-attestation.json",
+        {
+            "schema": "fullmag.fem.slepc_runtime.attestation.v1",
+            "status": "pass",
+            "binary": "outputs/.fullmag/local/bin/fullmag-bin",
+            "availability": availability,
+            "startup_stamp": startup_stamp,
+            "source": source,
+        },
+    )
+    _write_json_artifact(
+        artifacts,
+        "dependency-attestation.json",
+        {
+            "schema": "fullmag.fem.slepc_runtime.dependency_attestation.v1",
+            "status": "pass",
+            "library": "outputs/.fullmag/local/lib/" + runtime_library.name,
+            "dependency": dependency,
+            "source": source,
+        },
+    )
+
+
 def artifact_records(artifacts: Path) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for path in sorted(artifacts.rglob("*")):
@@ -904,6 +1250,8 @@ def _base_receipt(
         "toolchain": {},
         "contract_scenarios": list(profile.contract_scenarios),
         "contract_schema": profile.contract_schema if profile.contract_scenarios else None,
+        "runtime_only": profile.runtime_only,
+        "runtime_contract": _runtime_contract(profile),
         "artifacts": [],
         "created_at": _utc_now(),
     }
@@ -965,7 +1313,10 @@ def main(argv: list[str] | None = None) -> int:
         _workspace_is_empty(workspace)
         materialize_capsule(manifest, source, workspace)
         _regular_directory(build / "cargo-targets", "cargo target root", create=True)
-        tools = preflight(profile, release=not bool(profile.contract_scenarios))
+        tools = preflight(
+            profile,
+            release=not bool(profile.contract_scenarios or profile.runtime_only),
+        )
         environment = build_environment(
             profile,
             workspace=workspace,
@@ -1002,7 +1353,7 @@ def main(argv: list[str] | None = None) -> int:
                 for scenario in profile.contract_scenarios
             ]
             stages = ([*stages, *contract_stages] if profile.build_runtime else contract_stages)
-        else:
+        elif not profile.runtime_only:
             pnpm = _pnpm_command(tools)
             stages.extend(
                 [
@@ -1056,6 +1407,21 @@ def main(argv: list[str] | None = None) -> int:
                     artifacts,
                     context["native_source_identity"],
                 )
+        elif profile.runtime_only:
+            output = workspace / ".fullmag" / "local"
+            _validate_slepc_modal_outputs(output, profile)
+            _attest_slepc_runtime(
+                workspace,
+                artifacts,
+                environment,
+                context["native_source_identity"],
+                _runtime_contract(profile) or {},
+            )
+            _copy_outputs(workspace, artifacts)
+            _write_source_identity_artifact(
+                artifacts,
+                context["native_source_identity"],
+            )
         else:
             output = workspace / ".fullmag" / "local"
             _validate_required_outputs(output, profile)
