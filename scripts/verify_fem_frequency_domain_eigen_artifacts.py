@@ -3852,7 +3852,7 @@ def require_kalinikos_slab_n0_material_and_bias(
             for value in values:
                 if not math.isclose(require_finite_number(value, field), expected, rel_tol=1e-12, abs_tol=0.0):
                     fail(f"Kalinikos n=0 requires uniform {field} matching {scalar}")
-    for field in ("ku_field", "ku2_field", "kc1_field", "kc2_field", "kc3_field"):
+    for field in ("ku_field", "ku2_field", "kc1_field", "kc2_field", "kc3_field", "dind_field", "dbulk_field"):
         values = material.get(field)
         if values is not None:
             if not isinstance(values, list) or any(require_finite_number(value, field) != 0.0 for value in values):

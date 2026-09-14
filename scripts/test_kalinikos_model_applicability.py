@@ -38,3 +38,14 @@ def test_rejects_omitted_dmi(field):
 def test_rejects_omitted_anisotropy_or_heterogeneity(material):
     with pytest.raises(SystemExit):
         check(material=material)
+
+
+@pytest.mark.parametrize("field", ["dind_field", "dbulk_field"])
+@pytest.mark.parametrize("values", [[0.0, 1e-3], [0.0, float("nan")]])
+def test_rejects_spatial_dmi_omitted_by_slab_oracle(field, values):
+    with pytest.raises(SystemExit, match=field):
+        check(material={field: values})
+
+
+def test_accepts_explicit_zero_spatial_dmi():
+    check(material={"dind_field": [0.0, 0.0], "dbulk_field": [0.0, 0.0]})
