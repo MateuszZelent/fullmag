@@ -1,6 +1,30 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
 
+## Bieżący checkpoint po poprawce ciągłości częstotliwości — 2026-09-14
+
+Aktualny worktree `eigensolve-dispersion-plan-20260912` na branchu
+`codex/eigensolve-dispersion-plan-20260912` ma HEAD
+`3b8065466` (`Add explicit dispersion frequency continuity checks`).
+Worktree jest czysty. Ten checkpoint rozdziela dowody źródłowe od wykonania
+managed runtime i od kwalifikacji fizycznej.
+
+| Zakres | Stan bieżący | Dowód lub następny krok |
+|---|---|---|
+| P1 — numeryczny solve i analityczne porównanie | Zaimplementowane w źródłach | `eigen_path.rs` wykonuje numeric single-k solve; analityka pozostaje referencją postsolve |
+| P00 przy `k→0` | Zaimplementowane w źródłach | Rust/Python używają Taylor + `expm1`; nowa kontrola sprawdza ciągłość częstotliwości |
+| Zakres C1 | Zaimplementowane w plannerze/walidatorze | Brak sztywnych limitów `3e6 rad/m` i `5 GHz`; pozostaje walidacja stosowalności modelu |
+| Bramka naukowa C0/C1/A1 | Kod bramki gotowy, wynik naukowy otwarty | Wymagane rzeczywiste 61 próbek, 8 gałęzi, Kittel/KS i zbieżność mesh/airbox/mode-count |
+| Polityka PETSc/telemetria | Zaimplementowane w źródłach | Sequential PETSc, LU dla Poissona, GMRES/Jacobi dla układu przesuniętego, odczyt rzeczywistych limitów |
+| Managed runtime | W TRAKCIE | Job `669d35c722c54745aed4965d6de191ed` (commit `fbbc87a4`) kompiluje się na obrazie koordynatora `sha256:42596c689843141ec68cf782d50ae9bcf90bc1d219c553b665186ecce3b1af36`; po zakończeniu potrzebny jest nowy job dla HEAD `3b8065466` |
+| Kwalifikacja fizyki i release | NOT VERIFIED | Nie ma jeszcze receiptu z poprawnym runtime ani wyników benchmarku C0/C1/A1; B4–B6 pozostają otwarte |
+
+Weryfikacja po zmianie: `test_validate_comsol_dispersion_scientific_gate.py`
+**43/43**, `test_verify_fem_frequency_domain_eigen_artifacts.py` **203 passed**.
+Te testy nie są wykonaniem natywnego operatora FEM. Kontrola ciągłości w bramce
+raportuje pary próbek KS, a walidator artefaktów odrzuca skok częstotliwości
+między sąsiednimi próbkami scenariuszy DE/BV.
+
 ## Audyt GPT PRO 6 — korekta priorytetów 2026-09-14
 
 Obowiązuje [integracja 20 ustaleń i zaktualizowana kolejność napraw](2026-09-14-non-k0-pro6-audit-integration.md).
