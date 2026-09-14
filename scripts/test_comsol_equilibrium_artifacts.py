@@ -32,19 +32,23 @@ def test_singular_native_artifact_is_only_valid_for_sample_zero():
     with pytest.raises(ValueError):sample_state_paths(value,1)
 
 
-@pytest.mark.parametrize("invalid_certificate", [False, True])
-def test_full_sample_loader_validates_acceptance_and_actual_state(tmp_path, invalid_certificate):
+@pytest.mark.parametrize("defect", [None, "certificate", "mesh"])
+def test_full_sample_loader_validates_acceptance_and_actual_state(tmp_path, defect):
     import json
     import hashlib
     from comsol_equilibrium_artifacts import read_sample_equilibrium
     from test_equilibrium_payload_validation import _fresh_artifact, _refresh_digest
     from verify_fem_frequency_domain_eigen_artifacts import serde_json_compact_bytes
+    from test_comsol_mesh_identity import fixture as mesh_fixture
+    from comsol_mesh_identity import mesh_topology_fingerprint_v2
+    mesh = mesh_fixture()
+    signature = mesh_topology_fingerprint_v2(mesh)
     eq = _fresh_artifact(tmp_path / "reference")
     eq["m0"] = [[1., 0., 0.]] * 4
-    eq["mesh_signature"] = "mesh"
+    eq["mesh_signature"] = signature
     for key in ("material_signature", "physics_signature", "boundary_signature", "static_demag_signature"):
         eq[key] = key
-    if invalid_certificate:
+    if defect == "certificate":
         eq["acceptance_certificate"]["converged"] = False
     digest = _refresh_digest(eq)
     state = {key:eq[key] for key in ("mesh_signature", "material_signature", "physics_signature", "boundary_signature", "static_demag_signature")}
@@ -52,19 +56,23 @@ def test_full_sample_loader_validates_acceptance_and_actual_state(tmp_path, inva
                  source_equilibrium_id=eq["equilibrium_id"],source_equilibrium_artifact=digest,m0=eq["m0"])
     state_digest="sha256:"+hashlib.sha256(serde_json_compact_bytes(state)).hexdigest()
     state.update(content_sha256=state_digest,linearization_state_id="LinearizationState.v6:"+state_digest.removeprefix("sha256:"))
-    mode={"equilibrium_artifact_sha256":digest,"linearization_state_sha256":state_digest,"source_mesh_topology_sha256":"mesh"}
+    mode={"equilibrium_artifact_sha256":digest,"linearization_state_sha256":state_digest,"source_mesh_topology_sha256":signature}
     declared=manifest(7)
     for relative, value in zip(sample_state_paths(declared,7), (eq,state)):
         path=tmp_path/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps(value))
     metadata={"execution_plan":{"backend_plan":{
-        "mesh":{"nodes":[[0.,0.,0.],[1.,0.,0.],[0.,1.,0.],[0.,0.,1.]],"cells":{"types":["tet4"],"offsets":[0,4],"nodes":[0,1,2,3]}},
+        "mesh":mesh,
         "mesh_parts":[{"id":"film","role":"magnetic_object","element_selector":{"kind":"element_range","start":0,"count":1}}]
     }}}
-    if invalid_certificate:
+    if defect == "certificate":
         with pytest.raises(SystemExit, match="converged"):
-            read_sample_equilibrium(tmp_path,declared,metadata,mode,7,mesh_signature="mesh")
+            read_sample_equilibrium(tmp_path,declared,metadata,mode,7)
+    elif defect == "mesh":
+        mesh["nodes"][1][0] += 0.25
+        with pytest.raises(ValueError, match="mesh signature mismatch"):
+            read_sample_equilibrium(tmp_path,declared,metadata,mode,7)
     else:
-        result=read_sample_equilibrium(tmp_path,declared,metadata,mode,7,mesh_signature="mesh")
+        result=read_sample_equilibrium(tmp_path,declared,metadata,mode,7)
         assert result["magnetic_m0"] == eq["m0"]
         assert result["sample_index"] == 7
         assert len(result["file_hashes"]) == 2

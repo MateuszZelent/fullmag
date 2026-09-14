@@ -8,13 +8,16 @@ import struct
 from comsol_modal_field_certificate import validate_modal_field_certificate, DEFAULT_PHASE_TOLERANCE
 from comsol_magnetic_support import magnetic_element_indices, tet4_cells
 from comsol_n0_projection import tet4_n0_projection
+from comsol_equilibrium_artifacts import read_sample_equilibrium
 
 
-def measure_n0_field(case_dir, sample_index, raw_mode_index, *, expected_k, phase_tolerance=DEFAULT_PHASE_TOLERANCE):
+def measure_n0_field(case_dir, sample_index, raw_mode_index, *, expected_k, phase_tolerance=DEFAULT_PHASE_TOLERANCE, equilibrium_manifest=None):
     """Return measured diagnostics, never a scientific qualification verdict.
 
     The caller must check C1 material/equilibrium applicability and its justified
     profile tolerance. Every input is rechecked against the phase certificate.
+    When equilibrium_manifest is supplied, the accepted per-sample state and
+    its C1 orientation are mandatory; absence retains diagnostics-only use.
     """
     root = Path(case_dir)
     phase = validate_modal_field_certificate(root, mode_selections=[(sample_index, raw_mode_index)], phase_tolerance=phase_tolerance)
@@ -47,6 +50,15 @@ def measure_n0_field(case_dir, sample_index, raw_mode_index, *, expected_k, phas
         if any(abs(a-b) > 1e-10 * max(1.0, abs(a), abs(b)) for a, b in zip(vector, expected_k)):
             raise ValueError("modal field k does not match the numeric spectrum")
         metadata = json.loads(bound_bytes("metadata.json"))
+        if equilibrium_manifest is not None:
+            mode_metadata = json.loads(bound_bytes(mode["metadata_path"]))
+            equilibrium = read_sample_equilibrium(root, equilibrium_manifest, metadata, mode_metadata, sample_index)
+            # The n0 projector below uses the fixed yz tangent plane of C1.
+            # Check the accepted magnetic state, never the air extension.
+            if any(abs(value - target) > 1e-8 for vector in equilibrium["magnetic_m0"]
+                   for value, target in zip(vector, (1.0, 0.0, 0.0))):
+                raise ValueError("accepted magnetic equilibrium is outside the C1 +x n0 model")
+            result["equilibrium_binding"] = equilibrium
         plan = metadata["execution_plan"]["backend_plan"]
         mesh = plan["mesh"]
         cells = tet4_cells(mesh)
@@ -56,6 +68,6 @@ def measure_n0_field(case_dir, sample_index, raw_mode_index, *, expected_k, phas
         field = [[complex(values[i+j], values[i+j+1]) for j in (0, 2, 4)] for i in range(0, len(values), 6)]
         metrics = tet4_n0_projection(mesh["nodes"], cells, selected, field, vector)
         result.update(status="measured", metrics=metrics, sample_index=sample_index, raw_mode_index=raw_mode_index, file_hashes=phase["file_hashes"])
-    except (OSError, ValueError, TypeError, KeyError, IndexError, struct.error) as error:
+    except (OSError, ValueError, TypeError, KeyError, IndexError, struct.error, SystemExit) as error:
         result["reasons"].append(str(error))
     return result

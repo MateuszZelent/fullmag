@@ -4,7 +4,7 @@ Data: 2026-09-14. Status: **plan zaktualizowany; implementacja i kwalifikacja na
 
 ## Baza i sposób interpretacji
 
-Audyt użytkownika dotyczy mastera `33aa26fe8b48b6df1bab77e96eb31afa6c6b90a8`. Przegląd aktualności wykonano względem worktree `eigensolve-dispersion-plan-20260912`, branch `codex/eigensolve-dispersion-plan-20260912`, HEAD `3833c93eb2d52f575e2b8c67d7723225bc3cd61c`; robocze zmiany bramki naukowej pozostają niezacommitowane. Te dwie wersje nie są równoważne.
+Audyt użytkownika dotyczy mastera `33aa26fe8b48b6df1bab77e96eb31afa6c6b90a8`. Pierwszy przegląd aktualności wykonano względem worktree `eigensolve-dispersion-plan-20260912`, branch `codex/eigensolve-dispersion-plan-20260912`, HEAD `3833c93eb2d52f575e2b8c67d7723225bc3cd61c`; w chwili tego przeglądu zmiany bramki naukowej były niezacommitowane. Jest to historyczna baza przeglądu; dalsze checkpointy poniżej opisują kolejne etapy. Te dwie wersje nie są równoważne.
 
 Źródła: [audyt NK-01–20](../../raports/fullmag_nonzero_k_audit_33aa26f/AUDYT_NONZERO_K_EIGENSOLVE.md), [szczegółowe karty napraw i testów](../../raports/fullmag_nonzero_k_audit_33aa26f/PLAN_NAPRAW_NONZERO_K_EIGENSOLVE.md), [rejestr kontroli autora](../../raports/fullmag_nonzero_k_audit_33aa26f/verification_log.json). Wszystkie sześć sum SHA256 z pakietu sprawdzono: zgodne. Oryginałów nie zmieniono.
 
@@ -214,3 +214,92 @@ Autorytatywne certyfikaty pozostają wymagane.
 Wyodrębniony walidator payloadu przeszedł 9 testów; istniejący pełny moduł
 walidatora przeszedł 203 testy. Odczyt próbki sprawdzono oddzielnie.
 Są to dowody interpretowanego kodu i kontraktów, nie wykonania FEM.
+
+
+### Niezależna tożsamość siatki i kontrola wcześniejszej obawy
+
+`read_sample_equilibrium` wyznacza teraz sygnaturę z canonical MeshIR przez
+`comsol_mesh_identity.mesh_topology_fingerprint_v2`. To odpowiada wywołaniu
+Rust `MeshIR::topology_fingerprint_v6`, które deleguje do topology-v2;
+wersje certyfikatu i formatu hashowania nie mają tej samej numeracji.
+Zachowana jest kolejność pól typowanych struktur Rust. Zamrożony wzorzec
+Rust/Python przechodzi, podobnie jak odmowa po zmianie geometrii. Szerszy
+przegląd serializacji pozostaje przed ostatecznym zatwierdzeniem helpera.
+
+Przegląd osiągalności pierwszej próbki k-path nie potwierdził obawy o
+pominięcie relaksacji w produkcji: `execute_fem_eigen_inner` najpierw wywołuje
+`validate_eigen_equilibrium_certificate`. W `eigen_shared_domain.rs` brak
+zaakceptowanego handoffu dla `RelaxedInitialState` kończy wykonanie komunikatem
+`accepted relaxation handoff is required before FEM eigensolve`; analogiczny
+guard odrzuca niecertyfikowane `Provided`. Jest to przed materializacją
+równowagi i wyborem solvera. Wyjątek syntetycznego K0-3 nie jest kwalifikacją
+produkcyjnego sparse CPU. Nie należy traktować tej wcześniejszej obawy jako
+potwierdzonego błędu fizyki.
+
+
+### Uzupełnienie przeglądu: parytet sygnatur siatki — OTWARTE
+
+Niezależny przegląd wskazuje dodatkowe zadanie w ramach R2 i certyfikacji
+pochodzenia wyników: topology-v2 używa w Rust typowanego serde_json, a
+publiczny Python MeshData używa json.dumps. Dla nanoskalowych współrzędnych
+zapis wykładnika (np. 1e-7 wobec 1e-07) oraz kolejność i pomijanie pól par
+okresowych mogą dawać różne hashe. Prosty zamrożony tetraedr nie dowodzi
+zgodności dla okresowej siatki benchmarku.
+
+Do wykonania:
+- Zamrozić międzyjęzykowe przypadki v2 dla współrzędnych nanoskalowych,
+  dodatnich wykładników, -0.0 i pełnych par okresowych.
+- Rozstrzygnąć alias tolerance_m, opcjonalne None oraz normalizację pustych
+  global_ordinals względem rzeczywistej deserializacji MeshIR; wejście
+  niekanoniczne odrzucać albo jawnie normalizować przed hashowaniem.
+- Sprawdzić zachowanie Rust dla NaN/Infinity i błędów serializacji.
+  Obecność unwrap_or_default jest ryzykiem maskowania błędu, lecz nie
+  dowodzi, że serde_json zgłasza błąd właśnie dla NaN/Infinity; wymaga to
+  osobnego potwierdzenia. Nie traktujemy tej hipotezy jako odtworzonej awarii.
+- Dopiero po zgodności wzorców podłączyć obliczaną tożsamość do głównej
+  bramki kampanii. Aktualny helper i 25 zielonych testów odczytu/wiązania
+  są etapem roboczym, nie dowodem pełnego parytetu ani kwalifikacji FEM.
+
+Wyniki tego przeglądu rozszerzają plan napraw, nie zastępują 20 kart NK
+ani czterech ryzyk R1–R4. B4–B6 pozostają otwarte.
+
+
+Checkpoint kontroli wejść sygnatury: helper odrzuca teraz tolerance_m
+zamiast po cichu pomijać ten alias, niepełne/nietypowane global_ordinals
+oraz niefinitywną tolerancję pary. Test kolejności pól i opcjonalnego None
+potwierdza deterministyczność typowanego payloadu. Zestaw
+scripts/test_comsol_mesh_identity.py + test_comsol_equilibrium_artifacts.py
++ test_comsol_linearization_binding.py: **35 passed** (exit 0).
+Nie jest to jeszcze pełny międzyjęzykowy dowód serializacji ani wykonanie
+FEM; helper pozostaje roboczy do rozstrzygnięcia tej otwartej kontroli.
+
+
+Sprostowanie po odczycie przypiętych zależności: Cargo.lock wskazuje
+serde_json 1.0.150 oraz zmij 1.0.21 (nie Ryu). Kod write_f64 deleguje do
+zmij; dla f64 zapis stałopozycyjny obejmuje wykładniki -5..=15, poza nimi
+używa wykładnika z jawnym znakiem dodatnim. Helper jest zgodny z tą polityką;
+dodano testy granic, 1e20 i -0.0. Jest to dowód analizy źródła biblioteki,
+nie nowy wykonany międzyjęzykowy fixture. Nadal trzeba potwierdzić pełny
+payload okresowej siatki.
+
+serialize_f64 tej wersji serde_json jawnie zapisuje NaN/Infinity jako null.
+Nie potwierdzono zatem zgłaszanego mechanizmu pustego payloadu dla takich
+liczb; tę konkretną hipotezę wycofujemy. Niefinitywna geometria nadal musi
+być odrzucona przed hashowaniem i Pythonowy helper ją odrzuca.
+
+
+### Obowiązkowa równowaga w głównej kontroli KS
+
+_measure_ks_profile przekazuje teraz manifest numerycznego runu do
+measure_n0_field. Pomiar wymaga pary zaakceptowanej równowagi v7 i stanu
+linearyzacji v6 konkretnej próbki, sprawdza ich digesty względem metadanych
+modu i tożsamość siatki. Sprawdza kierunek +x faktycznego magnetycznego m0
+przed użyciem projektora yz. Brak certyfikatu nie przechodzi w diagnostykę
+bez certyfikatu. Samodzielny helper bez manifestu nadal daje tylko pomiar,
+nie kwalifikację.
+
+Pełny moduł bramki: 28 testów + 28 subtestów passed. Po dodaniu osobnej
+regresji usunięcia certyfikatu KS: 1 passed (28 deselected). Fixture zawiera
+syntetyczne pola i certyfikaty; nie jest dowodem wykonania FEM. Kontrola
+równowagi wszystkich próbek głównej kampanii i przebiegów zbieżności,
+transfer A1 oraz pełny międzyjęzykowy fixture siatki pozostają otwarte.

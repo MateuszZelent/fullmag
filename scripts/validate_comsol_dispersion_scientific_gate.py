@@ -1355,7 +1355,7 @@ def _measure_ks_profile(run, sample_index, branch_id, vector, parameters, label,
         reasons.append(f"{label} has no unique raw mode for the profile")
         return {"status": "unverified"}
     metadata_file = Path(run["_metadata_file"])
-    result = measure_n0_field(metadata_file.parent, sample_index, points[0]["raw_mode_index"], expected_k=vector)
+    result = measure_n0_field(metadata_file.parent, sample_index, points[0]["raw_mode_index"], expected_k=vector, equilibrium_manifest=run["manifest"])
     hashes = {item["path"]: item["sha256"] for item in result.get("file_hashes", [])}
     if metadata_file.name != "metadata.json" or hashes.get("metadata.json") != "sha256:" + str(run["_metadata_hash"]):
         reasons.append(f"{label} profile metadata is not bound to the numeric run")

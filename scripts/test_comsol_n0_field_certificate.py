@@ -59,3 +59,39 @@ def test_changed_payload_between_phase_check_and_projection_is_rejected(tmp_path
     result = module.measure_n0_field(root, 0, 7, expected_k=[math.pi/2,0.,0.])
     assert result["status"] == "unverified"
     assert any("changed after phase certification" in reason for reason in result["reasons"])
+
+
+@pytest.mark.parametrize("manifest", [{}, {"artifacts": {}}])
+def test_requested_equilibrium_binding_cannot_fall_back_to_field_only(tmp_path, manifest):
+    root, _ = cube_case(tmp_path)
+    result = measure_n0_field(root, 0, 7, expected_k=[math.pi/2, 0., 0.], equilibrium_manifest=manifest)
+    assert result["status"] == "unverified"
+    assert result["reasons"]
+    assert "metrics" not in result
+
+
+def test_acceptance_validator_exit_is_a_failed_measurement(tmp_path, monkeypatch):
+    import comsol_n0_field_certificate as module
+    root, _ = cube_case(tmp_path)
+    def rejected(*args, **kwargs):
+        raise SystemExit("equilibrium certificate did not converge")
+    monkeypatch.setattr(module, "read_sample_equilibrium", rejected)
+    result = module.measure_n0_field(root, 0, 7, expected_k=[math.pi/2, 0., 0.], equilibrium_manifest={})
+    assert result["status"] == "unverified"
+    assert any("did not converge" in item for item in result["reasons"])
+
+
+@pytest.mark.parametrize("m0, expected", [([1., 0., 0.], "measured"), ([0., 1., 0.], "unverified")])
+def test_profile_uses_accepted_magnetic_orientation(tmp_path, monkeypatch, m0, expected):
+    import comsol_n0_field_certificate as module
+    root, _ = cube_case(tmp_path)
+    # The loader has separate on-disk certificate tests. This isolates the
+    # consumer's use of its accepted state instead of metadata plan m0.
+    binding = {"magnetic_m0": [m0], "sample_index": 0}
+    monkeypatch.setattr(module, "read_sample_equilibrium", lambda *a, **kw: binding)
+    result = module.measure_n0_field(root, 0, 7, expected_k=[math.pi/2, 0., 0.], equilibrium_manifest={})
+    assert result["status"] == expected, result["reasons"]
+    if expected == "measured":
+        assert result["equilibrium_binding"] == binding
+    else:
+        assert any("outside the C1" in item for item in result["reasons"])

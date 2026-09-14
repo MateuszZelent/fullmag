@@ -81,16 +81,18 @@ def _native_metadata(case, mesh_id, airbox_m, requested_modes):
         "types": ["tet4"] * len(tet4_connectivity),
         "offsets": list(range(0, 4 * len(tet4_connectivity) + 1, 4)),
         "nodes": [node for cell in tet4_connectivity for node in cell],
+        "global_ordinals": list(range(len(tet4_connectivity))), "mesh_parts": ["magnetic_object"] * len(tet4_connectivity),
     }
     demag = case != "c0"
     plan = {
         "kind": "fem_eigen", "mesh_name": mesh_id,
         "mesh": {"mesh_name": mesh_id, "nodes": nodes,
             "cells": canonical_cells, "element_markers": [1] * len(tet4_connectivity),
-            "periodic_node_pairs": node_pairs,
+            "facets": {"types": [], "roles": [], "offsets": [0], "nodes": [], "global_ordinals": []},
+            "boundary_markers": [], "periodic_node_pairs": node_pairs,
             "periodic_boundary_pairs": [
-                {"pair_id": "x_faces", "translation": [2e-7, 0.0, 0.0]},
-                {"pair_id": "y_faces", "translation": [0.0, 2e-7, 0.0]},
+                {"pair_id": "x_faces", "marker_a": 1, "marker_b": 2, "translation": [2e-7, 0.0, 0.0]},
+                {"pair_id": "y_faces", "marker_a": 3, "marker_b": 4, "translation": [0.0, 2e-7, 0.0]},
             ]},
         "mesh_parts": [
             {
@@ -155,6 +157,38 @@ def _write_mode_fields(root, samples):
                 "compatibility_binary_payload_path": relative,
                 "payload_sha256": "sha256:" + hashlib.sha256(data).hexdigest(),
             })
+
+
+def _attach_ks_equilibrium(root):
+    """Synthetic accepted state for gate contracts; no native solve claim."""
+    from test_equilibrium_payload_validation import _fresh_artifact, _refresh_digest
+    from verify_fem_frequency_domain_eigen_artifacts import serde_json_compact_bytes
+    from comsol_mesh_identity import mesh_topology_fingerprint_v2
+    metadata = json.loads((root / "metadata.json").read_text())
+    plan = metadata["execution_plan"]["backend_plan"]
+    signature = mesh_topology_fingerprint_v2(plan["mesh"])
+    eq = _fresh_artifact(root / "synthetic_reference")
+    eq["m0"] = plan["equilibrium_magnetization"]
+    eq["mesh_signature"] = signature
+    for key in ("material_signature", "physics_signature", "boundary_signature", "static_demag_signature"):
+        eq[key] = key
+    digest = _refresh_digest(eq)
+    state = {key: eq[key] for key in ("mesh_signature", "material_signature", "physics_signature", "boundary_signature", "static_demag_signature")}
+    state.update(schema_version="LinearizationState.v6", accepted_for_frequency_operator=True,
+                 source_equilibrium_id=eq["equilibrium_id"], source_equilibrium_artifact=digest, m0=eq["m0"])
+    state_digest = "sha256:" + hashlib.sha256(serde_json_compact_bytes(state)).hexdigest()
+    state.update(content_sha256=state_digest, linearization_state_id="LinearizationState.v6:" + state_digest.removeprefix("sha256:"))
+    paths = ("eigen/metadata/sample_0000/equilibrium_artifact.v7.json", "eigen/metadata/sample_0000/linearization_state.v6.json")
+    for path, payload in zip(paths, (eq, state)):
+        _write_json(root / path, payload)
+    manifest_path = root / "frequency_domain/manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest.setdefault("artifacts", {}).update(equilibrium_artifact_v7_paths=[paths[0]], linearization_state_v6_paths=[paths[1]])
+    _write_json(manifest_path, manifest)
+    mode_path = root / "eigen/modes/sample_0000/mode_0000.json"
+    mode = json.loads(mode_path.read_text())
+    mode.update(equilibrium_artifact_sha256=digest, linearization_state_sha256=state_digest, source_mesh_topology_sha256=signature)
+    _write_json(mode_path, mode)
 
 
 def _rewrite_mode_field_with_z_sign_profile(root: Path, *, sample_index: int = 0, raw_mode_index: int = 0) -> None:
@@ -403,6 +437,10 @@ def _make_case(root: Path, case: str = "c1") -> Path:
         ks_de = _write_bundle(case_dir, "validation/ks/de", ks_samples_de, ks_branches_de, mesh_id="ks-de", airbox_m=2.0e-6, requested_modes=1)
         _write_mode_fields(case_dir / "validation/ks/bv", ks_samples)
         _write_mode_fields(case_dir / "validation/ks/de", ks_samples_de)
+        for direction in ("bv", "de"):
+            _attach_ks_equilibrium(case_dir / f"validation/ks/{direction}")
+        ks_bv = _bundle_descriptor(case_dir, "validation/ks/bv")
+        ks_de = _bundle_descriptor(case_dir, "validation/ks/de")
     for name, mesh_id, airbox, scale, modes in (("mesh_coarse", "mesh-L1", 2.0e-6, 1.0, 24), ("mesh_medium", "mesh-L2", 2.0e-6, 1.001, 24), ("mesh_fine", "mesh-L3", 2.0e-6, 1.00125, 24), ("airbox_coarse", "mesh-L1", 2.0e-6, 1.0, 24), ("airbox_medium", "mesh-L1", 4.0e-6, 1.001, 24), ("airbox_fine", "mesh-L1", 8.0e-6, 1.00125, 24), ("modes_24", "mesh-L1", 2.0e-6, 1.0, 24), ("modes_48", "mesh-L1", 2.0e-6, 1.001, 48)):
         scaled_samples, scaled_branches = _scaled_payload(samples, branches, scale)
         convergence_runs[name] = _write_bundle(case_dir, f"validation/convergence/{name}", scaled_samples, scaled_branches, mesh_id=mesh_id, airbox_m=airbox, requested_modes=modes)
@@ -684,6 +722,27 @@ class ScientificGateTests(unittest.TestCase):
         self.assertEqual(report["checks"]["tracked_branches"]["target_band_count"], 8)
         self.assertEqual(report["checks"]["spectrum_samples"]["sample_count"], 61)
         self.assertEqual(report["checks"]["kalinikos_slab_n0"]["status"], "pass")
+
+    def test_ks_mode_cannot_use_equilibrium_from_another_mesh(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            mode_path = case_dir / "validation/ks/bv/eigen/modes/sample_0000/mode_0000.json"
+            mode = json.loads(mode_path.read_text())
+            mode["source_mesh_topology_sha256"] = "sha256:" + "0" * 64
+            _write_json(mode_path, mode)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+        self.assertEqual(report["status"], "not_qualified")
+        self.assertEqual(report["checks"]["kalinikos_slab_n0"]["status"], "fail")
+        self.assertTrue(any("mesh signature mismatch" in item for item in report["reasons"]), report["reasons"])
+
+    def test_missing_ks_equilibrium_is_not_qualified(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            (case_dir / "validation/ks/bv/eigen/metadata/sample_0000/equilibrium_artifact.v7.json").unlink()
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+        self.assertEqual(report["status"], "not_qualified")
+        self.assertEqual(report["checks"]["kalinikos_slab_n0"]["status"], "fail")
+        self.assertTrue(any("n0 profile measurement failed" in item for item in report["reasons"]), report["reasons"])
 
     def test_missing_ks_profile_vector_is_not_qualified(self):
         with tempfile.TemporaryDirectory() as directory:
