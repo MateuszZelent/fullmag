@@ -644,7 +644,7 @@ pub(super) fn execute_native_modal_window(
         relax_to_eigen_handoff.as_ref(),
         artifact_sample_index,
     )?;
-    if shared_domain_mode && !interrupted {
+    if shared_domain_mode && !interrupted && plan.operator.include_demag {
         let (_, _, _, scalar_classes, scalar_class_count) =
             shared_mode_context_data.as_ref().ok_or_else(|| RunError {
                 message: "shared-domain scalar class map was not constructed".to_string(),

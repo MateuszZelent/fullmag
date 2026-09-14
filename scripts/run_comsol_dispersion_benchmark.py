@@ -53,7 +53,7 @@ from validate_comsol_dispersion_scientific_gate import (  # noqa: E402
 PROFILE = "fem-cpu-slepc-modal-v1"
 RUNTIME_PROFILE = "fem-cpu-slepc-runtime-v1"
 SUPPORTED_PROFILES = (PROFILE, RUNTIME_PROFILE)
-EXPECTED_IMAGE_DIGEST = "sha256:e5f70bd6320119f0d8163430dab81bc6f248e07e4af086dfdf77bcd087471d7"
+EXPECTED_IMAGE_DIGEST = "sha256:e5f70bd632011f9a0d8163430dab81bc6f248e07e4af086dfdf77bcd087471d7"
 RECEIPT_SCHEMA = "fullmag.local-runner.build-receipt.v1"
 CONTRACT_SCHEMA = "fullmag.fem.cpu.slepc_modal_contract_result.v1"
 RUN_REQUEST_SCHEMA = "fullmag.comsol-dispersion-benchmark.request.v1"
@@ -606,7 +606,7 @@ def _shell_case_command(cases: Sequence[str]) -> str:
                 "FULLMAG_USE_MFEM_STACK=ON \\",
                 "FULLMAG_FEM_REQUIRE_CEED=1 \\",
                 "FULLMAG_FEM_REQUIRE_GPU=0 \\",
-                "FULLMAG_PYTHON=/usr/bin/python3 \\",
+                "FULLMAG_PYTHON=/usr/local/bin/python3 \\",
                 'PYTHONPATH="$pythonpath" \\',
                 'LD_LIBRARY_PATH=/workspace/.fullmag/local/lib:/usr/local/cuda/compat:/opt/fullmag-deps/lib \\',
                 '"$runtime_bin" "$source_script" --backend fem --mode strict --precision double --headless --json --output-dir "$case_dir" >"$case_dir/runtime.log" 2>&1',
@@ -620,9 +620,31 @@ def _compose_command(
     output_dir: Path,
     cases: Sequence[str],
 ) -> list[str]:
+    # The modal benchmark is a closed, file-backed computation.  It does not
+    # need service-to-service networking, and creating Compose's project
+    # bridge is fragile on long-lived Docker Desktop hosts whose address pool
+    # is exhausted.  Reset the service's inherited development mounts as well:
+    # on Windows the base target `${FULLMAG_FRONTEND_ROOT}` would otherwise be
+    # interpolated as a second drive-qualified host path.  The command below
+    # supplies the three exact benchmark mounts explicitly.
+    override_path = output_dir / "compose.benchmark.override.yaml"
+    if output_dir.is_dir():
+        override_path.write_text(
+            "services:\n"
+            "  fem-modal-cpu:\n"
+            "    network_mode: none\n"
+            "    volumes: !reset []\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+    compose_file = context.source_tree / "compose.yaml"
     command = [
         "docker",
         "compose",
+        "-f",
+        str(compose_file),
+        "-f",
+        str(override_path),
         "--profile",
         "fem-modal-cpu",
         "run",
@@ -651,7 +673,8 @@ def _compose_command(
         ("FULLMAG_API_PORT", "0"),
         ("FULLMAG_DISABLE_PREVIEW_3D", "1"),
         ("FULLMAG_DISABLE_CHARTS", "1"),
-        ("FULLMAG_PYTHON", "/usr/bin/python3"),
+        ("FULLMAG_STATE_ROOT", "/workspace/benchmark-output/state"),
+        ("FULLMAG_PYTHON", "/usr/local/bin/python3"),
         ("PYTHONPATH", "/workspace/capsule/packages/fullmag-py/src:/workspace/.fullmag/local"),
         ("LD_LIBRARY_PATH", "/workspace/.fullmag/local/lib:/usr/local/cuda/compat:/opt/fullmag-deps/lib"),
         ("FULLMAG_REPO_ROOT", "/workspace/capsule"),
@@ -667,6 +690,10 @@ def _compose_command(
 def _compose_environment(layout: Mapping[str, Any]) -> dict[str, str]:
     environment = dict(os.environ)
     environment.update({str(key): str(value) for key, value in layout["env"].items()})
+    if os.name == "nt":
+        # Keep explicit `C:\\...:/container/path` bind mounts unambiguous in
+        # Docker Compose's Windows path conversion layer.
+        environment["COMPOSE_CONVERT_WINDOWS_PATHS"] = "1"
     environment["FULLMAG_FEM_GPU_IMAGE"] = EXPECTED_IMAGE_DIGEST
     environment["FULLMAG_FEM_EXECUTION"] = "cpu"
     environment["FULLMAG_FEM_MFEM_DEVICE"] = "cpu"

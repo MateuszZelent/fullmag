@@ -24,6 +24,8 @@ from tests.standard_problems.mumag.comsol_nonzero_k_dispersion.config import (
     A_LAT_M,
     AEX_J_PER_M,
     BIAS_FIELD_T,
+    DEMAG_SOLVER_MAX_ITERATIONS,
+    DEMAG_SOLVER_RTOL,
     FREQUENCY_WINDOW_HZ,
     GAMMA_M_PER_A_S,
     INTERFACE_HMAX_M,
@@ -122,8 +124,8 @@ else:
 study.fem_demag_solver(
     solver="CG",
     preconditioner="AMG",
-    rtol=1.0e-10,
-    max_iterations=1000,
+    rtol=DEMAG_SOLVER_RTOL,
+    max_iterations=DEMAG_SOLVER_MAX_ITERATIONS,
 )
 study.solver(gamma=GAMMA_M_PER_A_S, fix_dt=RELAX_DT_S)
 study.build_domain_mesh()

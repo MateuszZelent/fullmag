@@ -43,6 +43,8 @@ TARGET_BANDS = 8
 MODE_FIELD_SAMPLE_INDICES = (0, 10, 20, 40, 50, 60)
 INITIAL_SHIFT_HZ = 1.0e9
 FREQUENCY_WINDOW_HZ = (1.0e6, 30.0e9)
+DEMAG_SOLVER_RTOL = 1.0e-8
+DEMAG_SOLVER_MAX_ITERATIONS = 1000
 
 AIRBOX_HMAX_M = 100.0e-9
 AIRBOX_GROWTH_RATE = 1.3
@@ -244,6 +246,10 @@ def guide_metadata(case: BenchmarkCase) -> dict[str, object]:
             "static_demag_realization": (
                 None if not case.include_demag else "poisson_dirichlet"
             ),
+            "demag_solver": {
+                "relative_tolerance": DEMAG_SOLVER_RTOL,
+                "max_iterations": DEMAG_SOLVER_MAX_ITERATIONS,
+            },
         },
         "outputs": {
             "spectrum": "eigen_spectrum",
