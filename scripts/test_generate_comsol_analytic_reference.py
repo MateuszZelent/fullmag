@@ -97,3 +97,34 @@ def test_frequency_is_continuous_at_gamma(geometry: str, k: float) -> None:
     assert module.frequency_hz(k, geometry) == pytest.approx(
         module.frequency_hz(0.0, geometry), rel=1e-12
     )
+
+
+@pytest.mark.parametrize("kd", [1e-18, 1e-10, 9.999e-5, 1e-4, 1.001e-4, 0.15707963267948966, 1.0])
+def test_p00_matches_high_precision_direct_formula(kd: float) -> None:
+    from decimal import Decimal, localcontext
+    module = load_generator_module()
+    with localcontext() as context:
+        context.prec = 80
+        x = Decimal(str(kd))
+        expected = float(1 - (1 - (-x).exp()) / x)
+    assert module.p00_demag_factor(kd / module.FILM_THICKNESS_M, module.FILM_THICKNESS_M) == pytest.approx(
+        expected, rel=4e-12, abs=0.0
+    )
+
+
+@pytest.mark.parametrize("geometry", ["backward_volume", "damon_eshbach"])
+@pytest.mark.parametrize("k", [1e-9, 1e-6, 9999., 10000., 1.5707963267948966e7])
+def test_frequency_matches_high_precision_slab_formula(k: float, geometry: str) -> None:
+    from decimal import Decimal, localcontext
+    module = load_generator_module()
+    with localcontext() as context:
+        context.prec = 80
+        wave = Decimal(str(k))
+        thickness = Decimal(str(module.FILM_THICKNESS_M))
+        ms = Decimal(str(module.MS_A_PER_M))
+        x = wave * thickness
+        p = 1 - (1 - (-x).exp()) / x
+        h = Decimal(str(module.BIAS_FIELD_A_PER_M)) + 2 * Decimal(str(module.AEX_J_PER_M)) * wave**2 / (Decimal(str(module.MU0_H_PER_M)) * ms)
+        product = (h + ms * (1 - p)) * (h + ms * p) if geometry == "damon_eshbach" else h * (h + ms * (1 - p))
+        expected = float(Decimal(str(module.GAMMA_M_PER_A_S)) * product.sqrt() / Decimal(str(2 * module.math.pi)))
+    assert module.frequency_hz(k, geometry) == pytest.approx(expected, rel=1e-12)

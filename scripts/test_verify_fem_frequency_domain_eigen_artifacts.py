@@ -3295,7 +3295,7 @@ def test_validator_rejects_reference_full_2x2_floquet_without_dispersion_path_me
     result = run_validator(tmp_path, "--require-reference-full-2x2-floquet")
 
     assert result.returncode != 0
-    assert "eigen/dispersion/path.json" in (result.stderr + result.stdout)
+    assert str(Path("eigen") / "dispersion" / "path.json") in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_reference_full_2x2_floquet_without_dispersion_capabilities(
@@ -4216,7 +4216,7 @@ def test_validator_rejects_production_modal_k_path_without_dispersion_path_metad
     result = run_validator(tmp_path, "--require-production-modal-k-path")
 
     assert result.returncode != 0
-    assert "eigen/dispersion/path.json" in (result.stderr + result.stdout)
+    assert str(Path("eigen") / "dispersion" / "path.json") in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_production_modal_k_path_with_non_eigen_stage_id(
@@ -5188,7 +5188,7 @@ def test_validator_rejects_reference_full_2x2_floquet_without_k_path(
     result = run_validator(tmp_path, "--require-reference-full-2x2-floquet")
 
     assert result.returncode != 0
-    assert "eigen/dispersion/path.json" in (result.stderr + result.stdout)
+    assert str(Path("eigen") / "dispersion" / "path.json") in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_flat_reference_full_2x2_floquet_dispersion(
