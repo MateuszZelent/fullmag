@@ -165,3 +165,19 @@ Wymagana kolejność dalszej pracy:
 
 To nowo zidentyfikowana luka dowodu w walidatorze. Eksport źródłowy nie jest
 jeszcze potwierdzeniem dostępności kompletnych artefaktów w kampanii runtime.
+
+
+### Implementacja kontroli powiązania stanu
+
+`scripts/comsol_linearization_binding.py` + `validate_linearization_binding`
+porównuje digesty równowagi i linearyzacji z modem, identyfikatory źródłowe,
+sygnatury domeny/fizyki oraz faktyczne m0 na jawnym wsparciu magnetycznym.
+Wymaga pełnego porządku węzłów i normalizacji magnetycznego m0 z tolerancją
+1e-8 zgodną z istniejącym kontraktem reprezentacji. Rozszerzenie airboxu nie
+wchodzi do porównania m0. Sześć testów syntetycznych przeszło, w tym ponowne
+hashowanie zmienionego stanu i niezgodna siatka.
+
+Helper uzupełnia walidację certyfikatu akceptacji równowagi, nie zastępuje jej.
+Wywołujący musi niezależnie ustalić sygnaturę siatki i wsparcie magnetyczne.
+Ładowanie i wiązanie plików próbek oraz integracja tej kontroli z bramką
+pozostają do wykonania; sam helper nie kwalifikuje kampanii.
