@@ -148,6 +148,49 @@ dh3 = -exp(-i*(kx_b*x+ky_b*y+kz_b*z))*(psiz-i*kz_b*psi)
 
 Są to indukowane pola w A/m. **Nie dodawaj niezależnego RF, np. +1[A/m], cosinusów ani źródła harmonicznego.** W C0 dh=(0,0,0) i psi nie jest rozwiązywane. W C1/A1 Study Eigenfrequency rozwiązuje mmf i psi jednocześnie; mm oraz phi0 pozostają zamrożone. Równania muszą być liniowe w niewiadomych własnych. Nie dodawaj przesuniętych gradientów do wymiany mmf: tam liczymy pełne pole z warunkiem Floquet.
 
+### 6.1. Analityczna kontrola demagnetyzacji dynamicznej
+
+Przed porównaniem z geometrią A1 należy wykonać kontrolę C1 dla jednorodnego
+filmu. Dla tej kontroli używamy zerowego rzędu modelu Kalinikosa–Slawina,
+czyli cienkiego filmu o tej samej grubości, `Ms`, `Aex`, `Hbias` i `gamma0`.
+Model zawiera zarówno wymianę, jak i dynamiczny demag przez
+
+```text
+P00(kt) = 1 - (1 - exp(-k*t))/(k*t),    P00(0) = 0
+H_ex(k) = 2*Aex*k^2/(mu0*Ms).
+```
+
+Przy konwencji Fullmag `gamma0` ma jednostkę
+`rad/(s*(A/m))`, a `Hbias` i `H_ex` są w A/m. Częstotliwości referencyjne są
+
+```text
+f_BV(k) = gamma0/(2*pi) * sqrt((H+H_ex) * (H+H_ex + Ms*(1-P00))),
+f_DE(k) = gamma0/(2*pi) * sqrt((H+H_ex + Ms*(1-P00)) * (H+H_ex + Ms*P00)).
+```
+
+BV oznacza `k` równoległe do równowagowego `m0`, a DE — `k` prostopadłe w
+płaszczyźnie filmu. Obie gałęzie w Γ przechodzą w tę samą formułę Kittela.
+Generator zapisuje tę referencję z pełną precyzją:
+
+```powershell
+python scripts/generate_comsol_analytic_reference.py
+```
+
+Wynikiem jest
+`comsol-dispersion-benchmark/kalinikos_slab_n0_reference.csv`, zawierający
+`k`, `P00`, pole wymiany, częstotliwość, geometrię BV/DE oraz jawne parametry
+SI. Domyślny zakres `0..pi/a_lat` kończy się w punkcie X. Dla parametrów C1
+częstotliwość w Γ wynosi około **9.309813711 GHz** (granica nieskończonego
+filmu), a skończony airbox z tego przepisu ma osobną kontrolę około
+**9.299249697 GHz**. Różnica jest oczekiwana i nie może być korygowana przez
+zmianę `gamma0`.
+
+CSV jest analityczną referencją do nakładki na `eigen/dispersion.csv`; nie jest
+wynikiem FEM ani dowodem wykonania dynamicznego operatora `demag-k`. Jednorodny
+C1 jest właściwą bramką analityczną. Otwór A1 nie ma dokładnej jednorodnej
+referencji slab i po przejściu C1 należy porównywać go bezpośrednio z COMSOL-em
+(oraz, pomocniczo, z TetraX) przy tych samych warunkach brzegowych.
+
 ## 7. Siatka i rozwiązanie własne
 
 Zbuduj trzy siatki; dla pierwszego uruchomienia wystarczy L1, przed całym sweepem wykonaj kontrole C0/C1.

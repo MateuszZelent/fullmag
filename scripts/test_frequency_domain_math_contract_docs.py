@@ -92,6 +92,24 @@ def test_dynamic_demag_and_response_observables_use_si_contract() -> None:
     assert "Gamma > 0" in physics
 
 
+def test_comsol_dispersion_guide_exposes_kalinikos_demag_reference_generator() -> None:
+    guide = read(
+        REPO_ROOT
+        / "docs/guides/comsol-nonzero-k-dispersion-benchmark.md"
+    )
+    normalized = " ".join(guide.split())
+    for required in (
+        "Analityczna kontrola demagnetyzacji dynamicznej",
+        "P00(kt) = 1 - (1 - exp(-k*t))/(k*t)",
+        "f_BV(k) = gamma0/(2*pi)",
+        "f_DE(k) = gamma0/(2*pi)",
+        "scripts/generate_comsol_analytic_reference.py",
+        "kalinikos_slab_n0_reference.csv",
+        "dynamicznego operatora `demag-k`",
+    ):
+        assert required in normalized
+
+
 def test_floquet_tangent_frame_transport_and_identity_rejection_are_documented() -> None:
     pbc_plan = read(PLAN_ROOT / "04_mesh_periodic_floquet_airbox.md")
     floquet = read(REPO_ROOT / "docs/physics/0828-fem-frequency-domain-floquet-demag.md")
