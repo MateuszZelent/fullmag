@@ -488,8 +488,11 @@ review z powodu obowiązującego ograniczenia użytkownika.
 
 ## Current limitations
 
-Stan źródeł sprawdzony 2026-09-14 na bazie commita
-`95763e6a7f3d6a7c19657bd214d5d805082b926b`, z poprawkami review w worktree:
+Stan źródeł dla tej noty należy identyfikować w checkoutcie przez
+`git rev-parse HEAD` oraz `git status --short`; historyczne SHA z wcześniejszych
+checkpointów nie są dowodem bieżącej implementacji. W tym worktree sprawdzono
+źródła 2026-09-14, a dowody managed runtime i kwalifikacji fizycznej są opisane
+oddzielnie w planie checkpointu.
 
 - FEM CPU ma zintegrowaną ścieżkę shared-domain MFEM/Floquet i sparse SLEPc;
   samo istnienie tej ścieżki nie dowodzi wykonania ani poprawności demag-k.
