@@ -79,7 +79,6 @@ REQUIRED_RUNTIME_ARTIFACTS = (
     "outputs/.fullmag/local/_fullmag_core.so",
     "outputs/.fullmag/local/launcher-build-mode",
     "source-identity.json",
-    "contracts/slepc-modal/result.json",
 )
 MODAL_TARGET = "fem_poisson_airbox_modal_eigen_slepc_contract"
 FLOQUET_TARGETS = (

@@ -19,6 +19,7 @@ def write_attestation(root, **changes):
 
 def test_runtime_profile_does_not_claim_or_require_ctest(tmp_path):
     write_attestation(tmp_path)
+    assert "contracts/slepc-modal/result.json" not in benchmark.REQUIRED_RUNTIME_ARTIFACTS
     with patch.object(benchmark, "_validate_contract", side_effect=AssertionError("CTest must not run")):
         result = benchmark._validated_build_evidence(tmp_path, benchmark.RUNTIME_PROFILE, NATIVE)
     assert result == {"kind": "native_build_and_runtime_probes", "source": SOURCE}
