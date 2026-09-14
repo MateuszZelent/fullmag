@@ -519,7 +519,7 @@ def _validate_mode(
     local: list[str] = []
     relative = path.relative_to(case_dir).as_posix()
     report: dict[str, Any] = {"metadata_path": relative, "status": "fail", "reasons": local, "phase_checks": []}
-    for key in ("frequency_real_hz", "frequency_imag_hz"):
+    for key in ("frequency_real_hz", "frequency_imag_hz", "source_mesh_topology_sha256"):
         report[key] = mode.get(key)
     sample = _nonnegative_int(mode, "sample_index", label, local)
     raw_mode = _nonnegative_int(mode, "raw_mode_index", label, local)

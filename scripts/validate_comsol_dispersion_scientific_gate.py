@@ -704,7 +704,27 @@ def _validate_exported_mode_fields(
     if certificate.get("status") != "pass":
         reasons.extend(f"modal field phase: {reason}" for reason in certificate.get("reasons", []))
         reasons.append("modal field phase certificate did not pass")
+    from comsol_mesh_identity import mesh_topology_fingerprint_v2
+    mesh_signature = None
+    try:
+        metadata_path = _safe_relative_path(case_dir, "metadata.json", "modal field mesh metadata", reasons)
+        if metadata_path is None:
+            raise ValueError("unsafe or missing mesh metadata")
+        metadata_bytes = metadata_path.read_bytes()
+        certified_hashes = {item["path"]: item["sha256"] for item in certificate.get("file_hashes", [])}
+        if "sha256:" + hashlib.sha256(metadata_bytes).hexdigest() != certified_hashes.get("metadata.json"):
+            raise ValueError("metadata changed after field certification")
+        field_metadata = json.loads(metadata_bytes)
+        mesh_signature = mesh_topology_fingerprint_v2(field_metadata["execution_plan"]["backend_plan"]["mesh"])
+    except (OSError, ValueError, TypeError, KeyError, SystemExit) as error:
+        reasons.append(f"modal field mesh identity could not be verified: {error}")
+        certificate["status"] = "fail"
+        certificate["qualification"] = "NOT VERIFIED"
     for mode in certificate.get("modes", []):
+        if mesh_signature is None or mode.get("source_mesh_topology_sha256") != mesh_signature:
+            reasons.append("modal field topology differs from the numeric mesh")
+            certificate["status"] = "fail"
+            certificate["qualification"] = "NOT VERIFIED"
         index = mode.get("sample_index")
         if not _modal_frequency_matches_spectrum(mode, sample_map.get(index, {}), f"modal field sample {index}", reasons):
             certificate["status"] = "fail"
@@ -1161,6 +1181,9 @@ def _load_numeric_bundle(
         return None
     _validate_payload_schemas(loaded, label, reasons)
     manifest = loaded["manifest"]
+    for key, expected in (("analysis_family", "magnetic_frequency_domain"), ("study_product", "modal_eigen")):
+        if manifest.get(key) != expected:
+            reasons.append(f"{label} manifest {key} must be {expected}")
     diagnostics = loaded["diagnostics"]
     source = _nested(manifest, "validation", "dispersion_frequency_source")
     dynamic_source = _nested(manifest, "validation", "dynamic_demag_operator_source")
@@ -1194,6 +1217,7 @@ def _load_numeric_bundle(
     elif _metadata_backend_plan(metadata) is None:
         reasons.append(f"{label} has no metadata.execution_plan.backend_plan")
     _validate_bundle_modal_payload(loaded, label, reasons)
+    _validate_bundle_branches(loaded, label, reasons)
     loaded["_metadata_file"] = str(metadata_file)
     loaded["_metadata_hash"] = metadata_hash
     return loaded
@@ -1211,22 +1235,29 @@ def _validate_bundle_modal_payload(
     if not isinstance(spectrum, Mapping) or not isinstance(diagnostics, Mapping):
         return
     samples = spectrum.get("samples")
-    if not isinstance(samples, list):
+    if not isinstance(samples, list) or not samples:
         reasons.append(f"{label} spectrum has no samples array")
         return
     mode_count = 0
     seen: set[tuple[int, int]] = set()
+    sample_ids: set[int] = set()
     for sample in samples:
-        if not isinstance(sample, Mapping) or not isinstance(sample.get("sample_index"), int):
+        if not isinstance(sample, Mapping) or type(sample.get("sample_index")) is not int or sample.get("sample_index", -1) < 0:
             reasons.append(f"{label} spectrum has an invalid sample")
             continue
         sample_index = int(sample["sample_index"])
+        if sample_index in sample_ids:
+            reasons.append(f"{label} spectrum contains duplicate sample_index {sample_index}")
+        sample_ids.add(sample_index)
+        vector = sample.get("k_vector")
+        if not isinstance(vector, list) or len(vector) != 3 or not all(_finite(value) for value in vector):
+            reasons.append(f"{label} spectrum sample {sample_index} has an invalid k_vector")
         modes = sample.get("modes")
-        if not isinstance(modes, list):
+        if not isinstance(modes, list) or not modes:
             reasons.append(f"{label} spectrum sample {sample_index} has no modes array")
             continue
         for mode in modes:
-            if not isinstance(mode, Mapping) or not isinstance(mode.get("raw_mode_index"), int):
+            if not isinstance(mode, Mapping) or type(mode.get("raw_mode_index")) is not int or mode.get("raw_mode_index", -1) < 0:
                 reasons.append(f"{label} spectrum sample {sample_index} has an invalid raw mode")
                 continue
             raw_mode_index = int(mode["raw_mode_index"])
@@ -1240,6 +1271,54 @@ def _validate_bundle_modal_payload(
         reasons.append(f"{label} solver diagnostics sample_count does not match spectrum")
     if diagnostics.get("mode_count") != mode_count:
         reasons.append(f"{label} solver diagnostics mode_count does not match spectrum")
+
+
+def _validate_bundle_branches(bundle, label, reasons):
+    """Cross-check every published branch point, not only oracle selections."""
+    branches = bundle.get("branches", {}).get("branches")
+    samples = bundle.get("spectrum", {}).get("samples")
+    if not isinstance(branches, list) or not branches or not isinstance(samples, list):
+        reasons.append(f"{label} requires nonempty branches and spectrum samples")
+        return
+    modes = {(sample.get("sample_index"), mode.get("raw_mode_index")): mode
+             for sample in samples if isinstance(sample, Mapping) and type(sample.get("sample_index")) is int
+             and isinstance(sample.get("modes"), list)
+             for mode in sample["modes"] if isinstance(mode, Mapping) and type(mode.get("raw_mode_index")) is int}
+    ids, bindings = set(), set()
+    for branch in branches:
+        if not isinstance(branch, Mapping):
+            reasons.append(f"{label} contains a malformed branch")
+            continue
+        branch_id = branch.get("branch_id")
+        if type(branch_id) is not int or branch_id < 0 or branch_id in ids:
+            reasons.append(f"{label} branch_id must be nonnegative and unique")
+            continue
+        ids.add(branch_id)
+        points = branch.get("points")
+        if not isinstance(points, list) or not points:
+            reasons.append(f"{label} branch {branch_id} has no points")
+            continue
+        seen_samples = set()
+        for point in points:
+            if not isinstance(point, Mapping):
+                reasons.append(f"{label} contains a malformed branch point")
+                continue
+            sample, raw = point.get("sample_index"), point.get("raw_mode_index")
+            if type(sample) is not int or sample < 0 or type(raw) is not int or raw < 0:
+                reasons.append(f"{label} branch point requires nonnegative integer identities")
+                continue
+            if sample in seen_samples or (sample, raw) in bindings:
+                reasons.append(f"{label} contains duplicate branch sample or modal binding")
+            seen_samples.add(sample)
+            bindings.add((sample, raw))
+            reference = modes.get((sample, raw))
+            if reference is None:
+                reasons.append(f"{label} branch point references an unknown spectrum mode")
+                continue
+            for key in ("frequency_real_hz", "frequency_imag_hz"):
+                a, b = point.get(key), reference.get(key)
+                if not _finite(a) or not _finite(b) or abs(a-b) > 1e-9 * max(1.0, abs(b)):
+                    reasons.append(f"{label} branch point {key} differs from spectrum")
 
 
 def _bundle_observation(

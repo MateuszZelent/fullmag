@@ -130,6 +130,8 @@ def _write_mode_fields(root, samples):
     """Synthetic native-layout Bloch fields, not a FEM eigenmode calculation."""
     metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
     nodes = metadata["execution_plan"]["backend_plan"]["mesh"]["nodes"]
+    from comsol_mesh_identity import mesh_topology_fingerprint_v2
+    mesh_signature = mesh_topology_fingerprint_v2(metadata["execution_plan"]["backend_plan"]["mesh"])
     for sample in samples:
         index = sample["sample_index"]
         if index not in (0, 10, 20, 40, 50, 60):
@@ -151,6 +153,7 @@ def _write_mode_fields(root, samples):
             _write_json(root / f"eigen/modes/sample_{index:04}/mode_{raw:04}.json", {
                 "sample_index": index, "raw_mode_index": raw, "k_vector": k,
                 "frequency_real_hz": mode["frequency_real_hz"], "frequency_imag_hz": mode["frequency_imag_hz"],
+                "source_mesh_topology_sha256": mesh_signature,
                 "payload_encoding": "f64_interleaved_real_imag_xyz",
                 "binary_layout": "complex_f64_pairs_little_endian",
                 "component_basis": "global_xyz", "mode_field_sample_count": len(nodes),
@@ -279,6 +282,7 @@ def _write_bundle(
     })
     _write_json(case_dir / root / "frequency_domain/manifest.v1.json", {
         "schema_version": "frequency_domain_manifest.v1",
+        "analysis_family": "magnetic_frequency_domain", "study_product": "modal_eigen",
         "resolved_execution": {"reference_or_production": "production"},
         "solver_model": "full_2x2_herring_kittel",
         "mesh_identity": mesh_id,
@@ -410,6 +414,7 @@ def _make_case(root: Path, case: str = "c1") -> Path:
                 })
     _write_json(case_dir / "frequency_domain/manifest.v1.json", {
         "schema_version": "frequency_domain_manifest.v1",
+        "analysis_family": "magnetic_frequency_domain", "study_product": "modal_eigen",
         "resolved_execution": {"reference_or_production": "production"},
         "solver_model": "full_2x2_herring_kittel",
         "mesh_identity": "base-mesh",
@@ -751,6 +756,18 @@ class ScientificGateTests(unittest.TestCase):
         self.assertEqual(report["checks"]["kalinikos_slab_n0"]["status"], "fail")
         self.assertTrue(any("frequency_imag_hz differs" in reason for reason in report["reasons"]), report["reasons"])
 
+    def test_primary_connectivity_change_invalidates_modal_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            path = case_dir / "metadata.json"
+            metadata = json.loads(path.read_text())
+            nodes = metadata["execution_plan"]["backend_plan"]["mesh"]["cells"]["nodes"]
+            nodes[0], nodes[1] = nodes[1], nodes[0]
+            _write_json(path, metadata)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+        self.assertEqual(report["status"], "not_qualified")
+        self.assertTrue(any("topology differs" in reason for reason in report["reasons"]), report["reasons"])
+
     def test_primary_field_frequency_must_match_spectrum(self):
         with tempfile.TemporaryDirectory() as directory:
             case_dir = _make_case(Path(directory), "c1")
@@ -890,6 +907,56 @@ class ScientificGateTests(unittest.TestCase):
                 result = gate._safe_relative_path(root, "eigen/spectrum.v2.json", "spectrum", reasons)
         self.assertIsNone(result)
         self.assertTrue(any("symlink or junction" in reason for reason in reasons))
+
+    def test_comparison_spectrum_rejects_duplicate_samples_and_bool_indices(self):
+        from unittest.mock import patch
+        baseline = {"spectrum": {"samples": [{"sample_index": 0, "k_vector": [0., 0., 0.],
+                    "modes": [{"raw_mode_index": 0}]}]},
+                    "diagnostics": {"sample_count": 1, "mode_count": 1}}
+        for defect in ("duplicate", "bool_sample", "bool_mode", "negative_mode", "bad_k"):
+            with self.subTest(defect=defect):
+                bundle = copy.deepcopy(baseline)
+                sample = bundle["spectrum"]["samples"][0]
+                if defect == "duplicate":
+                    second = copy.deepcopy(sample)
+                    second["modes"][0]["raw_mode_index"] = 1
+                    bundle["spectrum"]["samples"].append(second)
+                    bundle["diagnostics"].update(sample_count=2, mode_count=2)
+                elif defect == "bool_sample": sample["sample_index"] = False
+                elif defect == "bool_mode": sample["modes"][0]["raw_mode_index"] = False
+                elif defect == "negative_mode": sample["modes"][0]["raw_mode_index"] = -1
+                else: sample["k_vector"] = [float("nan"), 0., 0.]
+                reasons = []
+                with patch.object(gate, "_validate_modal_quality", return_value=True):
+                    gate._validate_bundle_modal_payload(bundle, "control", reasons)
+                self.assertTrue(reasons)
+
+    def test_bundle_checks_points_outside_selected_control(self):
+        modes = [{"raw_mode_index": raw, "frequency_real_hz": 1e9 + raw, "frequency_imag_hz": 0.0} for raw in (0, 1)]
+        bundle = {"spectrum": {"samples": [{"sample_index": 0, "modes": modes}]},
+                  "branches": {"branches": [{"branch_id": raw, "points": [{"sample_index": 0, **mode}]} for raw, mode in enumerate(modes)]}}
+        reasons = []
+        gate._validate_bundle_branches(bundle, "control", reasons)
+        self.assertFalse(reasons)
+        bundle["branches"]["branches"][1]["points"][0]["frequency_real_hz"] *= 2
+        gate._validate_bundle_branches(bundle, "control", reasons)
+        self.assertTrue(any("differs from spectrum" in reason for reason in reasons))
+
+    def test_rehashed_wrong_manifest_product_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            path = case_dir / "validation/ks/bv/frequency_domain/manifest.v1.json"
+            baseline = json.loads(path.read_text())
+            for field, value in (("study_product", "driven_response"), ("analysis_family", "other")):
+                with self.subTest(field=field):
+                    manifest = copy.deepcopy(baseline)
+                    manifest[field] = value
+                    _write_json(path, manifest)
+                    descriptor = _bundle_descriptor(case_dir, "validation/ks/bv")
+                    reasons = []
+                    gate._load_numeric_bundle(case_dir, descriptor, "KS", reasons, require_demag=True)
+                    self.assertTrue(any(f"manifest {field}" in reason for reason in reasons), reasons)
+                    self.assertFalse(any("SHA256 does not match" in reason for reason in reasons), reasons)
 
     def test_missing_evidence_is_unqualified_with_explicit_reasons(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -378,3 +378,41 @@ pełnym C1: 3 passed. To testy logiki, nie natywnego tworzenia junctionów.
 Nie stanowią gwarancji atomowego odczytu przy równoległej podmianie plików.
 
 Weryfikacja laczna ostatniego etapu: 99 passed, 32 subtests passed (exit 0), obejmujaca glowna bramke, certyfikat fazy, rownowage, n0, runner benchmarku i agregacje. Kontrola diff bez bledow. To dowod kontraktow Python; bez kompilacji i wykonania FEM.
+
+
+Review pozycja 2: primary kontrola pol modalnych wylicza teraz topology-v2
+z metadata.json i porownuje source_mesh_topology_sha256 kazdego wybranego
+modu. Ponowny odczyt metadanych jest sprawdzany wzgledem hasha certyfikatu
+fazy i bezpiecznej sciezki. Podmiana lacznosci przy niezmienionych pozycjach
+wezlow i polach jest odrzucana. Regresja oraz poprawny pelny C1: 2 passed.
+Zakres obejmuje probki kontrolne pol; nie zastępuje kontroli wszystkich
+probek kampanii ani pelnego miedzyjezykowego fixture serializacji.
+
+
+Review pozycja 3, etap branches: _load_numeric_bundle kontroluje teraz
+wszystkie opublikowane punkty gałęzi względem spectrum (real/imag),
+nieujemne unikalne branch IDs, powtórzone próbki i przypisania modów.
+Regresja uszkadza punkt poza wybranym odniesieniem; wraz z poprawnym C1
+2 passed. Nie zamyka pełnej pozycji 3: pozostają kontrakt manifestu,
+content digests i wymagana kompletność każdego przebiegu kampanii.
+
+
+Comparison spectrum: odrzucane są powtórzone sample_index nawet przy
+rozłącznych raw modes, bool/ujemne indeksy, puste samples/modes oraz
+niefinitywne lub niepełne k_vector. Regresja izoluje kontrolę identyfikacji
+od jakości eigensolve; poprawny pełny C1 nadal przechodzi. Wynik: 2 passed,
+5 subtests passed. Pełny kontrakt manifestu i wymagana kompletność kampanii
+nadal pozostają osobnymi otwartymi wymaganiami.
+
+
+Sprostowanie zakresu content digestów po odczycie writera eigen_path.rs:
+spectrum.v2 i branches.v2 nie mają własnej koperty revision/content_sha256.
+Sekcja A1S specyfikacji dotyczy pochodnych produktów analizy (np. field_sweep),
+które wskazują SHA256 rzeczywistych bajtów tych plików. Nie należy nakładać
+koperty A1S na natywne spectrum/branches bez jawnej migracji kontraktu.
+Istniejące hashe plików descriptorów benchmarku pozostają wymagane.
+Walidator dodatkowego przebiegu wymaga teraz także natywnych deklaracji
+manifest.analysis_family=magnetic_frequency_domain i study_product=modal_eigen.
+Pełne sprawdzenie pozostałej semantyki manifestu nadal otwarte.
+
+Regresja manifestu podmienia study_product/analysis_family i ponownie przelicza descriptor SHA256; odmowa wynika z semantyki, nie z nieaktualnego hasha. Laczny zestaw glownej bramki, certyfikatu pola i n0: 65 passed, 39 subtests passed (exit 0). Bez wykonania FEM.
