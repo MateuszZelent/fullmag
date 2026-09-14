@@ -32,7 +32,7 @@ def test_singular_native_artifact_is_only_valid_for_sample_zero():
     with pytest.raises(ValueError):sample_state_paths(value,1)
 
 
-@pytest.mark.parametrize("defect", [None, "certificate", "mesh"])
+@pytest.mark.parametrize("defect", [None, "certificate", "mesh", "field", "gamma"])
 def test_full_sample_loader_validates_acceptance_and_actual_state(tmp_path, defect):
     import json
     import hashlib
@@ -44,12 +44,22 @@ def test_full_sample_loader_validates_acceptance_and_actual_state(tmp_path, defe
     mesh = mesh_fixture()
     signature = mesh_topology_fingerprint_v2(mesh)
     eq = _fresh_artifact(tmp_path / "reference")
+    eq["external_field_a_per_m"] = [79577.47154594767, 0., 0.]
+    if defect == "field":
+        eq["external_field_a_per_m"][0] *= 2
     eq["m0"] = [[1., 0., 0.]] * 4
     eq["mesh_signature"] = signature
     for key in ("material_signature", "physics_signature", "boundary_signature", "static_demag_signature"):
         eq[key] = key
     if defect == "certificate":
         eq["acceptance_certificate"]["converged"] = False
+    from comsol_equilibrium_artifacts import physics_signature_from_plan
+    physics_plan = {"enable_exchange": True, "enable_demag": True,
+                    "external_field": [79577.47154594767, 0., 0.],
+                    "gyromagnetic_ratio": 221100., "material": {"damping": 0.5},
+                    "operator": {"kind": "full_2x2", "include_demag": True},
+                    "demag_realization": "poisson_dirichlet"}
+    eq["physics_signature"] = physics_signature_from_plan(physics_plan)
     digest = _refresh_digest(eq)
     state = {key:eq[key] for key in ("mesh_signature", "material_signature", "physics_signature", "boundary_signature", "static_demag_signature")}
     state.update(schema_version="LinearizationState.v6", accepted_for_frequency_operator=True,
@@ -61,11 +71,19 @@ def test_full_sample_loader_validates_acceptance_and_actual_state(tmp_path, defe
     for relative, value in zip(sample_state_paths(declared,7), (eq,state)):
         path=tmp_path/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps(value))
     metadata={"execution_plan":{"backend_plan":{
-        "mesh":mesh,
+        **physics_plan, "mesh":mesh,
         "mesh_parts":[{"id":"film","role":"magnetic_object","element_selector":{"kind":"element_range","start":0,"count":1}}]
     }}}
-    if defect == "certificate":
+    if defect == "gamma":
+        metadata["execution_plan"]["backend_plan"]["gyromagnetic_ratio"] *= 2
+    if defect == "gamma":
+        with pytest.raises(ValueError, match="physics signature differs"):
+            read_sample_equilibrium(tmp_path,declared,metadata,mode,7)
+    elif defect == "certificate":
         with pytest.raises(SystemExit, match="converged"):
+            read_sample_equilibrium(tmp_path,declared,metadata,mode,7)
+    elif defect == "field":
+        with pytest.raises(ValueError, match="external field differs"):
             read_sample_equilibrium(tmp_path,declared,metadata,mode,7)
     elif defect == "mesh":
         mesh["nodes"][1][0] += 0.25

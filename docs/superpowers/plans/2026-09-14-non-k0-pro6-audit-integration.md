@@ -303,3 +303,78 @@ regresji usunięcia certyfikatu KS: 1 passed (28 deselected). Fixture zawiera
 syntetyczne pola i certyfikaty; nie jest dowodem wykonania FEM. Kontrola
 równowagi wszystkich próbek głównej kampanii i przebiegów zbieżności,
 transfer A1 oraz pełny międzyjęzykowy fixture siatki pozostają otwarte.
+
+
+### Powiązanie pola zewnętrznego równowagi
+
+read_sample_equilibrium wymaga teraz skończonych trójwektorów
+plan.external_field oraz equilibrium.external_field_a_per_m i ich dokładnej
+zgodności, zgodnie z natywnym zapisem pola z planu. Regresja zmienia pole
+certyfikatu przed ponownym obliczeniem digestów: poprawne hashe nie maskują
+niezgodności warunków fizycznych. 22 testy loadera/pomiaru przeszły, podobnie
+jak pozytywny test pełnej bramki C1 (1 passed, 29 deselected). Pełne
+powiązanie sygnatur materiału i pozostałych warunków z planem nadal otwarte.
+
+
+Kontrola physics_signature jest teraz przeliczana z planu zgodnie z
+preimage w eigen_shared_domain.rs: enable_exchange, enable_demag, pole,
+gamma, damping, operator i nazwa resolved demag. Brak realization przy
+aktywnym demag odpowiada natywnemu PoissonRobin; nieznana wartość jest
+odrzucana. 13 testów loadera passed, w tym zmiana gamma, a pozytywna
+pełna bramka C1 przeszła. Sygnatura materiału i granic pozostaje otwarta.
+
+Niezależny review etapu wskazał dalsze pozycje do sprawdzenia/poprawy:
+1. Powiązanie ścieżki vector.bin i metadanych z sample/raw_mode oraz spectrum.
+2. Tożsamość siatki primary case, nie tylko sidecarów KS.
+3. Pełne kontrakty manifest/branches i kompletność comparison bundles.
+4. Odrzucanie brakującego/niefinitywnego k_rad_per_m kontroli KS.
+5. Unikalność branch_id przed liczeniem wymaganych gałęzi.
+6. Odrzucanie jawnego pair_ids=[] zamiast wyboru wszystkich par.
+7. Ochrona primary artefaktów przed linkami/reparse w _artifact_map.
+Pełny fixture międzyjęzykowy oraz uzasadnienie tolerancji fazy 1e-6 wobec
+1e-8 pozostają otwarte. Są to zadania bramki, nie nowe dowody wadliwego FEM.
+
+
+Review pozycje 4 i 5: kontrola KS wymaga teraz jawnego, skończonego,
+nieujemnego k_rad_per_m. Branch IDs muszą być nieujemne i unikalne;
+duplikaty nie liczą się do wymaganych ośmiu gałęzi. Status podkontroli
+branches jest fail również przy zgłoszonych błędach jej zawartości, nie
+tylko zbyt małej liczbie gałęzi. Regresje plus poprawny C1: 3 passed,
+7 subtests passed. Pełny zestaw bramki uruchomiony oddzielnie.
+
+
+Review pozycja 6: jawne pair_ids=[]/null/błędnego typu nie uruchamia już
+fallbacku do wszystkich par ani boundary_pair_id. Brak pola zachowuje
+dotychczasową obsługę starszego kontraktu. Regresje sprawdzają status fail
+i pusty requested_pair_ids nawet przy poprawnym boundary_pair_id.
+Zestaw certyfikatu fazy oraz n0: 24 passed. Poprzedni pełny zestaw głównej
+bramki po poprawkach pozycji 4–5: 31 passed, 32 subtests passed.
+
+
+Review pozycja 1, etap ścieżek: certyfikat wymaga zgodności kanonicznych
+ścieżek metadata oraz vector.bin z sample_index/raw_mode_index. Odrzuca
+wskazanie pliku innego modu lub próbki nawet przy identycznych bajtach,
+poprawnym hashu i fazie. 26 testów certyfikatu i n0 passed. Nie dowodzi to
+niezależności skopiowanych pól pod różnymi poprawnymi nazwami: powiązanie
+częstotliwości/metadanych ze spectrum oraz fizyczna niezależność modów
+pozostają otwarte. Numer pozycji 1 nie jest jeszcze zamknięty w całości.
+
+
+Review pozycja 1, etap częstotliwości: certyfikat pola przekazuje wartości
+frequency_real_hz i frequency_imag_hz z zahashowanych metadanych modu.
+Główna bramka i KS porównują je z jednoznacznym raw_mode_index w spectrum
+konkretnej próbki; brak/niefinitywność/rozbieżność odrzucane. Tolerancja
+porównania artefaktów to 1e-9 * max(1 Hz, abs(f)), nie tolerancja fizyczna
+modelu KS. Dwie regresje (primary real, KS imag) oraz pozytywny pełny C1:
+3 passed. Niezależność pól, pozostała tożsamość i pełna kampania otwarte.
+
+
+Review pozycja 7: _artifact_map używa teraz wspólnej _safe_relative_path;
+sprawdzany jest plik i każdy katalog do case_dir włącznie. Symlink/junction
+powoduje odmowę przed hashowaniem, również gdy docelowa ścieżka mieści się
+w case_dir. Dwa testy wstrzykują rozpoznanie linku na poziomie pliku oraz
+katalogu; pierwszy dodatkowo zabrania wywołania hashowania. Wraz z poprawnym
+pełnym C1: 3 passed. To testy logiki, nie natywnego tworzenia junctionów.
+Nie stanowią gwarancji atomowego odczytu przy równoległej podmianie plików.
+
+Weryfikacja laczna ostatniego etapu: 99 passed, 32 subtests passed (exit 0), obejmujaca glowna bramke, certyfikat fazy, rownowage, n0, runner benchmarku i agregacje. Kontrola diff bez bledow. To dowod kontraktow Python; bez kompilacji i wykonania FEM.

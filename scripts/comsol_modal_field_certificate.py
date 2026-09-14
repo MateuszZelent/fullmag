@@ -276,6 +276,7 @@ def _spin_wave_contract(
     kind: str | None = None
     phase_convention: str | None = None
     requested: list[str] = []
+    explicit_pairs = isinstance(raw, Mapping) and "pair_ids" in raw
     if isinstance(raw, str):
         kind = raw
     elif isinstance(raw, Mapping):
@@ -292,14 +293,14 @@ def _spin_wave_contract(
                 f"{CANONICAL_PHASE_CONVENTION!r} when present"
             )
         pair_ids = raw.get("pair_ids")
-        if pair_ids is not None:
-            if not isinstance(pair_ids, list) or not all(
+        if explicit_pairs:
+            if not isinstance(pair_ids, list) or not pair_ids or not all(
                 isinstance(item, str) and item for item in pair_ids
             ):
                 reasons.append("backend_plan.spin_wave_bc.pair_ids must be non-empty strings")
             else:
                 requested.extend(pair_ids)
-        if not requested and raw.get("boundary_pair_id") is not None:
+        if not explicit_pairs and not requested and raw.get("boundary_pair_id") is not None:
             boundary_id = raw["boundary_pair_id"]
             if not isinstance(boundary_id, str) or not boundary_id:
                 reasons.append("backend_plan.spin_wave_bc.boundary_pair_id is invalid")
@@ -314,7 +315,7 @@ def _spin_wave_contract(
         reasons.append("modal field certificate requires spin_wave_bc.kind periodic or floquet")
     if len(set(requested)) != len(requested):
         reasons.append("backend_plan.spin_wave_bc contains duplicate pair IDs")
-    if not requested:
+    if not explicit_pairs and not requested:
         requested = list(dict.fromkeys(node_pair_ids))
     return kind, requested, phase_convention
 
@@ -518,6 +519,8 @@ def _validate_mode(
     local: list[str] = []
     relative = path.relative_to(case_dir).as_posix()
     report: dict[str, Any] = {"metadata_path": relative, "status": "fail", "reasons": local, "phase_checks": []}
+    for key in ("frequency_real_hz", "frequency_imag_hz"):
+        report[key] = mode.get(key)
     sample = _nonnegative_int(mode, "sample_index", label, local)
     raw_mode = _nonnegative_int(mode, "raw_mode_index", label, local)
     if sample is not None:
@@ -531,6 +534,14 @@ def _validate_mode(
         report["k_vector_rad_per_m"] = list(k)
 
     relative_payload = _payload_path(mode, label, node_count, local)
+    if sample is not None and raw_mode is not None:
+        expected_metadata = f"eigen/modes/sample_{sample:04d}/mode_{raw_mode:04d}.json"
+        expected_payload = f"eigen/mode_fields/sample_{sample:04d}/mode_{raw_mode:04d}/vector.bin"
+        if relative != expected_metadata:
+            local.append(f"{label} metadata path does not match its sample/raw mode identity")
+        if relative_payload != expected_payload:
+            local.append(f"{label} payload path does not match its sample/raw mode identity")
+            relative_payload = None
     payload_path = (
         _safe_relative_path(case_dir, relative_payload, f"{label}.payload_path", local)
         if relative_payload is not None

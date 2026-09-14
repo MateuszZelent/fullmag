@@ -150,6 +150,7 @@ def _write_mode_fields(root, samples):
             path.write_bytes(data)
             _write_json(root / f"eigen/modes/sample_{index:04}/mode_{raw:04}.json", {
                 "sample_index": index, "raw_mode_index": raw, "k_vector": k,
+                "frequency_real_hz": mode["frequency_real_hz"], "frequency_imag_hz": mode["frequency_imag_hz"],
                 "payload_encoding": "f64_interleaved_real_imag_xyz",
                 "binary_layout": "complex_f64_pairs_little_endian",
                 "component_basis": "global_xyz", "mode_field_sample_count": len(nodes),
@@ -168,10 +169,13 @@ def _attach_ks_equilibrium(root):
     plan = metadata["execution_plan"]["backend_plan"]
     signature = mesh_topology_fingerprint_v2(plan["mesh"])
     eq = _fresh_artifact(root / "synthetic_reference")
+    eq["external_field_a_per_m"] = plan["external_field"]
     eq["m0"] = plan["equilibrium_magnetization"]
     eq["mesh_signature"] = signature
     for key in ("material_signature", "physics_signature", "boundary_signature", "static_demag_signature"):
         eq[key] = key
+    from comsol_equilibrium_artifacts import physics_signature_from_plan
+    eq["physics_signature"] = physics_signature_from_plan(plan)
     digest = _refresh_digest(eq)
     state = {key: eq[key] for key in ("mesh_signature", "material_signature", "physics_signature", "boundary_signature", "static_demag_signature")}
     state.update(schema_version="LinearizationState.v6", accepted_for_frequency_operator=True,
@@ -735,6 +739,29 @@ class ScientificGateTests(unittest.TestCase):
         self.assertEqual(report["checks"]["kalinikos_slab_n0"]["status"], "fail")
         self.assertTrue(any("mesh signature mismatch" in item for item in report["reasons"]), report["reasons"])
 
+    def test_ks_field_frequency_must_match_spectrum(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            path = case_dir / "validation/ks/bv/eigen/modes/sample_0000/mode_0000.json"
+            mode = json.loads(path.read_text())
+            mode["frequency_imag_hz"] = 1.0
+            _write_json(path, mode)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+        self.assertEqual(report["status"], "not_qualified")
+        self.assertEqual(report["checks"]["kalinikos_slab_n0"]["status"], "fail")
+        self.assertTrue(any("frequency_imag_hz differs" in reason for reason in report["reasons"]), report["reasons"])
+
+    def test_primary_field_frequency_must_match_spectrum(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            path = case_dir / "eigen/modes/sample_0000/mode_0000.json"
+            mode = json.loads(path.read_text())
+            mode["frequency_real_hz"] *= 2
+            _write_json(path, mode)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+        self.assertEqual(report["status"], "not_qualified")
+        self.assertTrue(any("frequency_real_hz differs" in reason for reason in report["reasons"]), report["reasons"])
+
     def test_missing_ks_equilibrium_is_not_qualified(self):
         with tempfile.TemporaryDirectory() as directory:
             case_dir = _make_case(Path(directory), "c1")
@@ -818,7 +845,7 @@ class ScientificGateTests(unittest.TestCase):
             case_dir = _make_case(Path(directory), "c1")
             baseline = json.loads((case_dir / gate.EVIDENCE_RELATIVE_PATH).read_text(encoding="utf-8"))
             parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
-            for field, value in (("sample_index", False), ("branch_id", False), ("k_rad_per_m", 2.0e7)):
+            for field, value in (("sample_index", False), ("branch_id", False), ("k_rad_per_m", 2.0e7), ("k_rad_per_m", None), ("k_rad_per_m", float("nan")), ("k_rad_per_m", "1e7"), ("k_rad_per_m", -1.0)):
                 with self.subTest(field=field):
                     evidence = copy.deepcopy(baseline)
                     evidence["analytic_controls"]["kalinikos_slab_n0"]["samples"][0][field] = value
@@ -826,6 +853,43 @@ class ScientificGateTests(unittest.TestCase):
                     check = gate._validate_ks(case_dir, "c1", evidence, parameters, reasons)
                     self.assertEqual(check["status"], "fail", reasons)
                     self.assertTrue(reasons)
+
+    def test_duplicate_branch_ids_do_not_count_as_independent_bands(self):
+        branches = [{"branch_id": 0, "points": [{"sample_index": sample, "raw_mode_index": raw,
+                     "frequency_real_hz": 1e9 + raw} for sample in range(61)]} for raw in range(8)]
+        modes = {(sample, raw): 1e9 + raw for sample in range(61) for raw in range(8)}
+        reasons = []
+        selected, check = gate._validate_branches({"branches": branches}, "c1", modes, reasons)
+        self.assertEqual(check["status"], "fail")
+        self.assertEqual(len(selected), 1)
+        self.assertTrue(any("unique" in reason for reason in reasons))
+
+    def test_primary_artifacts_reject_link_before_hashing(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "metadata.json"
+            path.write_text("{}")
+            original = Path.is_symlink
+            with patch.object(Path, "is_symlink", lambda value: value == path or original(value)):
+                with patch.object(gate, "_sha256", side_effect=AssertionError("linked artifact was read")):
+                    artifacts, reasons = gate._artifact_map(root)
+        self.assertNotIn(Path("metadata.json"), artifacts)
+        self.assertTrue(any("symlink or junction" in reason for reason in reasons))
+
+    def test_internal_linked_parent_is_rejected(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent = root / "eigen"
+            parent.mkdir()
+            (parent / "spectrum.v2.json").write_text("{}")
+            original = Path.is_symlink
+            reasons = []
+            with patch.object(Path, "is_symlink", lambda value: value == parent or original(value)):
+                result = gate._safe_relative_path(root, "eigen/spectrum.v2.json", "spectrum", reasons)
+        self.assertIsNone(result)
+        self.assertTrue(any("symlink or junction" in reason for reason in reasons))
 
     def test_missing_evidence_is_unqualified_with_explicit_reasons(self):
         with tempfile.TemporaryDirectory() as directory:

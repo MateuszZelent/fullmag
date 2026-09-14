@@ -1,6 +1,7 @@
 """Read native per-sample equilibrium/state pairs without filename guessing."""
 import hashlib
 import json
+import math
 from pathlib import Path
 from collections.abc import Mapping
 
@@ -8,6 +9,29 @@ import verify_fem_frequency_domain_eigen_artifacts as verifier
 from comsol_linearization_binding import validate_linearization_binding
 from comsol_mesh_identity import mesh_topology_fingerprint_v2
 from comsol_magnetic_support import magnetic_element_indices, tet4_cells
+
+
+def physics_signature_from_plan(plan):
+    """Match eigen_shared_domain.rs physics_signature JSON Value preimage."""
+    for key in ("enable_exchange", "enable_demag"):
+        if type(plan.get(key)) is not bool:
+            raise ValueError(f"resolved boolean {key} is required")
+    realization = None
+    if plan["enable_demag"]:
+        name = plan.get("demag_realization")
+        if name is None:
+            name = "poisson_robin"
+        if name not in ("poisson_dirichlet", "poisson_robin", "bem", "fredkin_koehler", "fmm"):
+            raise ValueError("canonical resolved demag realization is required")
+        realization = "fem_" + name
+    payload = {
+        "enable_exchange": plan["enable_exchange"], "enable_demag": plan["enable_demag"],
+        "external_field_a_per_m": plan["external_field"],
+        "gyromagnetic_ratio": plan["gyromagnetic_ratio"],
+        "damping": plan["material"]["damping"], "operator": plan["operator"],
+        "demag_realization": realization,
+    }
+    return "sha256:" + hashlib.sha256(verifier.serde_json_compact_bytes(payload)).hexdigest()
 
 
 def sample_state_paths(manifest, sample_index):
@@ -56,6 +80,14 @@ def read_sample_equilibrium(root, manifest, metadata, mode, sample_index, *, mes
     equilibrium, state = objects
     verifier.validate_equilibrium_artifact_v7_payload(equilibrium, mode.get("equilibrium_artifact_sha256"))
     plan = metadata["execution_plan"]["backend_plan"]
+    fields = (plan.get("external_field"), equilibrium.get("external_field_a_per_m"))
+    for field in fields:
+        if not isinstance(field, list) or len(field) != 3 or any(type(x) not in (int, float) or not math.isfinite(x) for x in field):
+            raise ValueError("finite external field is required in plan and equilibrium")
+    if fields[0] != fields[1]:
+        raise ValueError("equilibrium external field differs from the numeric plan")
+    if equilibrium.get("physics_signature") != physics_signature_from_plan(plan):
+        raise ValueError("equilibrium physics signature differs from the numeric plan")
     mesh = plan["mesh"]
     computed_signature = mesh_topology_fingerprint_v2(mesh)
     if mesh_signature is not None and mesh_signature != computed_signature:

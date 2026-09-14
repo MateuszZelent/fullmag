@@ -232,3 +232,36 @@ def test_nonzero_interior_mode_with_zero_or_roundoff_sized_trace_is_valid(tmp_pa
     report = module.validate_modal_field_certificate(case_dir, mode_selections=[(0, 7)])
     assert report["status"] == "pass", report["reasons"]
     assert report["modes"][0]["phase_checks"][0]["relative_residual"] < 1e-8
+
+
+@pytest.mark.parametrize("pair_ids", [[], None, "x_faces", [""]])
+def test_explicit_invalid_pair_ids_cannot_select_all_mesh_pairs(tmp_path, pair_ids):
+    root, _ = write_case(tmp_path, vectors=good_vectors(), raw_mode_index=7)
+    path = root / "metadata.json"
+    metadata = json.loads(path.read_text())
+    contract = metadata["execution_plan"]["backend_plan"]["spin_wave_bc"]
+    contract["pair_ids"] = pair_ids
+    contract["boundary_pair_id"] = "x_faces"
+    path.write_text(json.dumps(metadata))
+    report = load_module().validate_modal_field_certificate(root, mode_selections=[(0, 7)])
+    assert report["status"] == "fail"
+    assert report["pair_contract"]["requested_pair_ids"] == []
+    assert any("pair_ids" in reason for reason in report["reasons"])
+
+
+@pytest.mark.parametrize("other_path", [
+    "eigen/mode_fields/sample_0000/mode_0008/vector.bin",
+    "eigen/mode_fields/sample_0001/mode_0007/vector.bin",
+])
+def test_payload_cannot_be_borrowed_from_another_mode(tmp_path, other_path):
+    root, payload = write_case(tmp_path, vectors=good_vectors(), raw_mode_index=7)
+    borrowed = root / other_path
+    borrowed.parent.mkdir(parents=True, exist_ok=True)
+    borrowed.write_bytes(payload.read_bytes())
+    path = root / "eigen/modes/sample_0000/mode_0007.json"
+    metadata = json.loads(path.read_text())
+    metadata["compatibility_binary_payload_path"] = other_path
+    path.write_text(json.dumps(metadata))
+    report = load_module().validate_modal_field_certificate(root, mode_selections=[(0, 7)])
+    assert report["status"] == "fail"
+    assert any("payload path does not match" in reason for reason in report["reasons"])

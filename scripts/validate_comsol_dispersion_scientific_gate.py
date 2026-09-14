@@ -573,9 +573,8 @@ def _artifact_map(case_dir: Path) -> tuple[dict[Path, dict[str, Any]], list[str]
     artifacts: dict[Path, dict[str, Any]] = {}
     reasons: list[str] = []
     for relative in _REQUIRED_ARTIFACTS:
-        path = case_dir / relative
-        if not path.is_file():
-            reasons.append(f"missing required artifact: {relative.as_posix()}")
+        path = _safe_relative_path(case_dir, relative.as_posix(), f"required artifact {relative.as_posix()}", reasons)
+        if path is None:
             continue
         if path.stat().st_size <= 0:
             reasons.append(f"required artifact is empty: {relative.as_posix()}")
@@ -660,6 +659,21 @@ def _validate_modal_quality(mode: Mapping[str, Any], label: str, reasons: list[s
     return valid
 
 
+def _modal_frequency_matches_spectrum(mode, sample, label, reasons):
+    matches = [item for item in sample.get("modes", []) if isinstance(item, Mapping)
+               and item.get("raw_mode_index") == mode.get("raw_mode_index")]
+    if len(matches) != 1:
+        reasons.append(f"{label} has no unique spectrum mode")
+        return False
+    valid = True
+    for key in ("frequency_real_hz", "frequency_imag_hz"):
+        actual, expected = mode.get(key), matches[0].get(key)
+        if not _finite(actual) or not _finite(expected) or abs(actual - expected) > 1e-9 * max(1.0, abs(expected)):
+            reasons.append(f"{label} {key} differs from the numeric spectrum")
+            valid = False
+    return valid
+
+
 def _validate_exported_mode_fields(
     case_dir: Path,
     case: str,
@@ -692,6 +706,9 @@ def _validate_exported_mode_fields(
         reasons.append("modal field phase certificate did not pass")
     for mode in certificate.get("modes", []):
         index = mode.get("sample_index")
+        if not _modal_frequency_matches_spectrum(mode, sample_map.get(index, {}), f"modal field sample {index}", reasons):
+            certificate["status"] = "fail"
+            certificate["qualification"] = "NOT VERIFIED"
         actual = mode.get("k_vector_rad_per_m")
         expected = sample_map.get(index, {}).get("k_vector")
         if not isinstance(actual, list) or not isinstance(expected, list) or len(actual) != 3 or len(expected) != 3 or any(
@@ -780,7 +797,9 @@ def _validate_branches(
     if not isinstance(values, list):
         reasons.append("branches.branches is missing or is not an array")
         return [], _new_check("fail", branch_count=0, target_band_count=0)
+    initial_reason_count = len(reasons)
     parsed: list[dict[str, Any]] = []
+    seen_branch_ids: set[int] = set()
     for branch in values:
         if not isinstance(branch, Mapping):
             reasons.append("branches contains a non-object branch")
@@ -790,6 +809,10 @@ def _validate_branches(
         if not isinstance(branch_id, int) or isinstance(branch_id, bool) or not isinstance(points, list):
             reasons.append("branch is missing an integer branch_id or points array")
             continue
+        if branch_id < 0 or branch_id in seen_branch_ids:
+            reasons.append(f"branch_id {branch_id} must be nonnegative and unique")
+            continue
+        seen_branch_ids.add(branch_id)
         parsed.append(dict(branch))
     parsed.sort(key=lambda item: int(item["branch_id"]))
     expected_indices = {0} if case == "c0" else set(range(EXPECTED_PATH_SAMPLE_COUNT))
@@ -833,7 +856,7 @@ def _validate_branches(
         reasons.append(f"only {len(complete)} complete tracked branches are available; {target} are required")
     selected = complete[:target]
     return selected, _new_check(
-        "pass" if len(selected) == target else "fail",
+        "pass" if len(selected) == target and len(reasons) == initial_reason_count else "fail",
         branch_count=len(parsed),
         complete_branch_count=len(complete),
         target_band_count=target,
@@ -1055,6 +1078,12 @@ def _safe_relative_path(case_dir: Path, value: object, label: str, reasons: list
         reasons.append(f"{label} escapes the case output directory")
         return None
     candidate = case_dir.joinpath(*relative.parts)
+    for entry in (candidate, *candidate.parents):
+        if entry.is_symlink() or (hasattr(entry, "is_junction") and entry.is_junction()):
+            reasons.append(f"{label} contains a symlink or junction")
+            return None
+        if entry == case_dir:
+            break
     try:
         resolved_case = case_dir.resolve()
         resolved_candidate = candidate.resolve()
@@ -1356,6 +1385,13 @@ def _measure_ks_profile(run, sample_index, branch_id, vector, parameters, label,
         return {"status": "unverified"}
     metadata_file = Path(run["_metadata_file"])
     result = measure_n0_field(metadata_file.parent, sample_index, points[0]["raw_mode_index"], expected_k=vector, equilibrium_manifest=run["manifest"])
+    samples = [item for item in run["spectrum"].get("samples", [])
+               if isinstance(item, Mapping) and item.get("sample_index") == sample_index]
+    if len(samples) != 1:
+        reasons.append(f"{label} has no unique spectrum sample for its field")
+    else:
+        for mode in result.get("phase_certificate", {}).get("modes", []):
+            _modal_frequency_matches_spectrum(mode, samples[0], label, reasons)
     hashes = {item["path"]: item["sha256"] for item in result.get("file_hashes", [])}
     if metadata_file.name != "metadata.json" or hashes.get("metadata.json") != "sha256:" + str(run["_metadata_hash"]):
         reasons.append(f"{label} profile metadata is not bound to the numeric run")
@@ -1427,7 +1463,9 @@ def _validate_ks(
         profiles.append(_measure_ks_profile(run, sample_index, branch_id, vector, parameters, f"Kalinikos–Slavin sample {index}", reasons))
         k_actual = _vector_norm(vector)
         declared_k = sample.get("k_rad_per_m")
-        if _finite(declared_k) and _relative_error(k_actual, float(declared_k)) > 1.0e-8:
+        if not _finite(declared_k) or declared_k < 0:
+            reasons.append(f"Kalinikos–Slavin sample {index} requires finite nonnegative k_rad_per_m")
+        elif _relative_error(k_actual, float(declared_k)) > 1.0e-8:
             reasons.append(f"Kalinikos–Slavin sample {index} declares k inconsistent with the numeric spectrum")
         scale = max(1.0, k_actual)
         if abs(vector[2]) > 1.0e-8 * scale:
