@@ -20,6 +20,14 @@ param(
 
   [string]$OutputDir,
 
+  [string]$InitialMagnetizationState,
+
+  [string]$InitialMagnetizationStateFormat,
+
+  [string]$InitialMagnetizationStateDataset,
+
+  [Nullable[int]]$InitialMagnetizationStateSampleIndex,
+
   [switch]$BuildOnly,
 
   [Alias("skip_local_changes")]
@@ -61,6 +69,18 @@ if ($env:FULLMAG_STORAGE_MANAGED_ENTRY -ne "1") {
   )
   if ($ScriptPath) { $managedArguments += @("-ScriptPath", $ScriptPath) }
   if ($OutputDir) { $managedArguments += @("-OutputDir", $OutputDir) }
+  if ($InitialMagnetizationState) {
+    $managedArguments += @("-InitialMagnetizationState", $InitialMagnetizationState)
+  }
+  if ($InitialMagnetizationStateFormat) {
+    $managedArguments += @("-InitialMagnetizationStateFormat", $InitialMagnetizationStateFormat)
+  }
+  if ($InitialMagnetizationStateDataset) {
+    $managedArguments += @("-InitialMagnetizationStateDataset", $InitialMagnetizationStateDataset)
+  }
+  if ($null -ne $InitialMagnetizationStateSampleIndex) {
+    $managedArguments += @("-InitialMagnetizationStateSampleIndex", $InitialMagnetizationStateSampleIndex.ToString())
+  }
   if ($BuildOnly) { $managedArguments += "-BuildOnly" }
   if ($SkipLocalChanges) { $managedArguments += "-SkipLocalChanges" }
   $managedExitCode = Invoke-FullmagStorageManagedScript `
@@ -689,6 +709,27 @@ if ($RunMode -eq "interactive") {
 $cliArguments += $resolvedScript
 if ($resolvedOutputDir) {
   $cliArguments += @("--output-dir", $resolvedOutputDir)
+}
+if ($InitialMagnetizationState) {
+  $resolvedInitialState = if ([System.IO.Path]::IsPathRooted($InitialMagnetizationState)) {
+    Resolve-AbsolutePath $InitialMagnetizationState
+  }
+  else {
+    Resolve-AbsolutePath (Join-Path $RepoRoot $InitialMagnetizationState)
+  }
+  if (-not (Test-Path -LiteralPath $resolvedInitialState -PathType Leaf)) {
+    throw "Initial magnetization state not found: $resolvedInitialState"
+  }
+  $cliArguments += @("--initial-magnetization-state", $resolvedInitialState)
+  if ($InitialMagnetizationStateFormat) {
+    $cliArguments += @("--initial-magnetization-state-format", $InitialMagnetizationStateFormat)
+  }
+  if ($InitialMagnetizationStateDataset) {
+    $cliArguments += @("--initial-magnetization-state-dataset", $InitialMagnetizationStateDataset)
+  }
+  if ($null -ne $InitialMagnetizationStateSampleIndex) {
+    $cliArguments += @("--initial-magnetization-state-sample-index", $InitialMagnetizationStateSampleIndex.ToString())
+  }
 }
 if ($Backend -ne "auto") {
   $cliArguments += @("--backend", $Backend)

@@ -42,3 +42,19 @@ Jeżeli runtime nie publikuje dryfu referencji, analizator porównuje zapisane
 `m_initial` z checkpointami constrained na rzeczywistych indeksach maski i
 oznacza źródło jako `state_artifact_comparison`; brak któregoś artefaktu nadal
 pozostaje ostrzeżeniem.
+
+## Walidacja baseline → frozen
+
+Przed budową profilu rozmiaru uruchom test parowany dla jednego seed radius:
+
+```text
+python tests/standard_problems/bimeron/goebel_2019/frozen_size/paired_validation.py \
+  --run --seed-radius-nm 5 --device gpu
+```
+
+`p0` relaksuje teksturę bez zamrożonych spinów i mierzy `R_area`, `R_core`
+oraz położenia przeciwnych ekstremów `m_z`. Następnie `p3` ładuje zapisany
+stan baseline, zamraża dwa zmierzone ekstrema oraz centrum, a po constrained
+hold wykonuje release. `paired_summary.json` i `paired_report.md` zapisują
+porównanie stanu początkowego, hold i release; ten przebieg jest warunkiem
+interpretacji późniejszego sweepu `R -> E`.

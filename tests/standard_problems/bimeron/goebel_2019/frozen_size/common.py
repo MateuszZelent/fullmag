@@ -10,6 +10,7 @@ quantity reported by the analysis.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import json
 import math
 import os
 from typing import Any
@@ -256,6 +257,7 @@ class FrozenCase:
     release_max_steps: int
     field_every_steps: int
     hold_sample_period_s: float
+    pin_centres_nm: tuple[tuple[float, float], tuple[float, float]] | None = None
 
     @property
     def cell_m(self) -> tuple[float, float, float]:
@@ -283,6 +285,24 @@ class FrozenCase:
         return self.ring_width_nm * 1e-9
 
     @property
+    def core_centres_m(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        """Return the static core-pin centres for this case."""
+
+        if self.pin_centres_nm is not None:
+            return tuple(
+                (x_nm * 1e-9, y_nm * 1e-9)
+                for x_nm, y_nm in self.pin_centres_nm
+            )  # type: ignore[return-value]
+        return discrete_core_centres_m(
+            self.preset_radius_m,
+            self.wall_width_m,
+            self.cell_m[0],
+            helicity_rad=self.helicity_rad,
+            vorticity=self.vorticity,
+            background_sign=self.background_sign,
+        )
+
+    @property
     def case_id(self) -> str:
         return (
             f"R{self.target_radius_nm:g}nm-w{self.wall_width_nm:g}nm-"
@@ -291,6 +311,7 @@ class FrozenCase:
 
     def metadata(self) -> dict[str, Any]:
         value = asdict(self)
+        centres = self.core_centres_m
         value.update(
             {
                 "case_id": self.case_id,
@@ -311,17 +332,19 @@ class FrozenCase:
                 ],
                 "discrete_core_centres_nm": [
                     [x * 1e9, y * 1e9]
-                    for x, y in discrete_core_centres_m(
-                        self.preset_radius_m,
-                        self.wall_width_m,
-                        self.cell_m[0],
-                        helicity_rad=self.helicity_rad,
-                        vorticity=self.vorticity,
-                        background_sign=self.background_sign,
-                    )
+                    for x, y in centres
                 ],
-                "core_centres_source": "discrete_initial_mz_extrema_on_cell_centres.v1",
+                "core_centres_source": (
+                    "baseline_measured_mz_extrema.v1"
+                    if self.pin_centres_nm is not None
+                    else "discrete_initial_mz_extrema_on_cell_centres.v1"
+                ),
             }
+        )
+        value["pin_centres_nm"] = (
+            [[float(x), float(y)] for x, y in self.pin_centres_nm]
+            if self.pin_centres_nm is not None
+            else None
         )
         return value
 
@@ -379,6 +402,35 @@ def case_from_environment() -> FrozenCase:
     hold_sample_period_s = _env_float(
         "FULLMAG_BIMERON_HOLD_SAMPLE_PERIOD_S", DEFAULT_HOLD_SAMPLE_PERIOD_S
     )
+    pin_centres_nm: tuple[tuple[float, float], tuple[float, float]] | None = None
+    raw_pin_centres = os.environ.get("FULLMAG_BIMERON_PIN_CENTRES_NM", "").strip()
+    if raw_pin_centres:
+        try:
+            decoded = json.loads(raw_pin_centres)
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                "FULLMAG_BIMERON_PIN_CENTRES_NM must be JSON [[x,y],[x,y]]"
+            ) from error
+        if (
+            not isinstance(decoded, list)
+            or len(decoded) != 2
+            or any(
+                not isinstance(pair, list)
+                or len(pair) != 2
+                or any(
+                    isinstance(item, bool) or not isinstance(item, (int, float))
+                    for item in pair
+                )
+                for pair in decoded
+            )
+        ):
+            raise ValueError(
+                "FULLMAG_BIMERON_PIN_CENTRES_NM must be JSON [[x,y],[x,y]]"
+            )
+        parsed = tuple((float(pair[0]), float(pair[1])) for pair in decoded)
+        if any(not math.isfinite(value) for pair in parsed for value in pair):
+            raise ValueError("FULLMAG_BIMERON_PIN_CENTRES_NM values must be finite")
+        pin_centres_nm = parsed  # type: ignore[assignment]
     if ring_width_nm <= 0.0:
         raise ValueError("FULLMAG_BIMERON_RING_WIDTH_NM must be positive")
     if protocol == "ring" and ring_width_nm >= 2.0 * target_radius_nm:
@@ -407,4 +459,5 @@ def case_from_environment() -> FrozenCase:
         release_max_steps=release_max_steps,
         field_every_steps=field_every_steps,
         hold_sample_period_s=hold_sample_period_s,
+        pin_centres_nm=pin_centres_nm,
     )

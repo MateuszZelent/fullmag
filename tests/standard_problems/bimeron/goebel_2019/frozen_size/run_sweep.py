@@ -140,7 +140,7 @@ def _assert_within(path: Path, root: Path) -> Path:
 
 
 def _environment(case: dict[str, Any], args: argparse.Namespace) -> dict[str, str]:
-    return {
+    environment = {
         "FULLMAG_STORAGE_PROFILE": PROFILE,
         "FULLMAG_BIMERON_DEVICE": args.device,
         "FULLMAG_BIMERON_TARGET_R_NM": str(case["target_radius_nm"]),
@@ -152,7 +152,9 @@ def _environment(case: dict[str, Any], args: argparse.Namespace) -> dict[str, st
         "FULLMAG_BIMERON_HELICITY_RAD": str(case.get("helicity_rad", args.helicity_rad)),
         "FULLMAG_BIMERON_VORTICITY": str(case.get("vorticity", args.vorticity)),
         "FULLMAG_BIMERON_BACKGROUND_SIGN": str(case.get("background_sign", args.background_sign)),
-        "FULLMAG_BIMERON_RELEASE": "1" if args.release else "0",
+        "FULLMAG_BIMERON_RELEASE": "1"
+        if bool(case.get("release", getattr(args, "release", False)))
+        else "0",
         "FULLMAG_BIMERON_RELAX_TIME_S": str(args.relax_time_s),
         "FULLMAG_BIMERON_HOLD_TIME_S": str(args.hold_time_s),
         "FULLMAG_BIMERON_RELEASE_TIME_S": str(args.release_time_s),
@@ -163,6 +165,11 @@ def _environment(case: dict[str, Any], args: argparse.Namespace) -> dict[str, st
         "FULLMAG_BIMERON_RELEASE_MAX_STEPS": str(args.release_max_steps),
         "FULLMAG_BIMERON_FIELD_EVERY_STEPS": str(args.field_every_steps),
     }
+    pin_centres = case.get("pin_centres_nm")
+    environment["FULLMAG_BIMERON_PIN_CENTRES_NM"] = (
+        json.dumps(pin_centres, separators=(",", ":")) if pin_centres is not None else ""
+    )
+    return environment
 
 
 def _binary_path(repo: Path, layout: dict[str, Any]) -> Path:
@@ -278,6 +285,7 @@ def _launch(
     args: argparse.Namespace,
     *,
     build: bool,
+    initial_magnetization_state: Path | None = None,
 ) -> Path | None:
     env = {**os.environ, **_environment(case, args)}
     binary = _binary_path(repo, layout)
@@ -305,6 +313,17 @@ def _launch(
             "-OutputDir",
             str(output),
         ]
+        if initial_magnetization_state is not None:
+            command.extend(
+                [
+                    "-InitialMagnetizationState",
+                    str(initial_magnetization_state),
+                    "-InitialMagnetizationStateFormat",
+                    "zarr",
+                    "-InitialMagnetizationStateDataset",
+                    "m",
+                ]
+            )
     else:
         if build:
             _run_process(["just", "build", "fullmag"], cwd=repo, env=env, log=output / "build.log")
@@ -326,6 +345,17 @@ def _launch(
             "--output-dir",
             str(output),
         ]
+        if initial_magnetization_state is not None:
+            command.extend(
+                [
+                    "--initial-magnetization-state",
+                    str(initial_magnetization_state),
+                    "--initial-magnetization-state-format",
+                    "zarr",
+                    "--initial-magnetization-state-dataset",
+                    "m",
+                ]
+            )
     launcher_log = output / "launcher.log"
     _run_process(command, cwd=repo, env=env, log=launcher_log)
     return _workspace_from_launcher_log(launcher_log)
