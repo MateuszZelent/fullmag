@@ -413,7 +413,9 @@ zmiany do `runtime_metadata.dispersion_validation` i planu FEM.
 
 Porównanie KS n=0 dotyczy jednorodnej warstwy, równowagi w płaszczyźnie,
 modu podstawowego o prawie jednorodnym profilu po grubości oraz odpowiedniej
-orientacji BV lub DE. Nie kwalifikuje antydotów, modów wyższych ani dowolnie
+orientacji BV lub DE. Walidator wymaga dodatniej zgodności kierunku pola z
+magnetyzacją i odrzuca niezerowe DMI, anizotropię oraz niejednorodne Ms/A,
+których ta postać wzoru nie zawiera. Nie kwalifikuje antydotów, modów wyższych ani dowolnie
 grubych warstw. Zakres zależy od grubości, materiału, pola i hybrydyzacji modów;
 samo zaakceptowanie parametrów przez planner nie dowodzi stosowalności.
 Wymagane są zgodność częstości z zadanym `max_relative_error`, kontrola profilu
@@ -429,7 +431,7 @@ Współczynnik P00 jest obliczany stabilnie: dla małego bezwymiarowego argument
 a poza nim `1+expm1(-x)/x`. Granica w zerze wynosi zero. Generator CSV
 importuje `scripts/verify_fem_frequency_domain_eigen_artifacts.py::p00_demag_factor`,
 aby współczynnik i częstość korzystały z tej samej realizacji. Rust stosuje tę
-samą postać w `eigen_path_guards.rs::kalinikos_slab_n0_frequency_hz`.
+samą postać w `eigen/artifacts/modal_manifest.rs::kalinikos_slab_n0_frequency_hz`.
 Test `test_frequency_is_continuous_at_gamma` sprawdza częstość BV i DE,
 nie tylko pomocniczy współczynnik. To kontrola referencji analitycznej,
 nie dowód wykonania FEM.
@@ -451,6 +453,32 @@ The control room should show:
 - residual norm and converged mode count;
 - last checkpoint or last emitted artifact;
 - clear dense-path warning when no internal iteration telemetry exists.
+
+### Jawna polityka wykonania natywnego CPU
+
+Obecny adapter publikuje `execution_policy=petsc_sequential_cpu`,
+`execution_scope=single_process_shared_memory`, `communicator=PETSC_COMM_SELF`
+oraz `scalability_scope=single_process_only`. Sparse/matrix-free nie oznacza
+w tej realizacji obliczeń rozproszonych MPI. Polityka jest obecnie ustalona
+przez adapter, a nie wybierana przez dowolne opcje użytkownika.
+
+Dla dynamicznego demagu Floqueta rozwiązanie potencjału używa PREONLY/LU,
+a układ przesunięty GMRES/Jacobi. Manifest rozdziela `poisson_ksp_*` od
+`ksp_*` układu przesuniętego. Wartości tolerancji i limitów odczytuje
+`KSPGetTolerances`; zachowano domyślną tolerancję absolutną PETSc.
+`poisson_iteration_semantics=preonly_factorization_no_iterative_convergence`
+wyjaśnia, że tolerancje Poissona nie dowodzą iteracyjnej zbieżności PREONLY.
+Weryfikacja wymaga nadal residualu oryginalnego operatora.
+
+Początkowy komunikat postępu ma `max_iterations=None`, dopóki callback
+natywnego solvera nie dostarczy rozwiązanego limitu. Nie publikuje stałej 300.
+Mapowanie: `slepc_modal_eigen.hpp::SLEPcTinyGyrotropicModalEigenResult`,
+`modal/floquet_modal_solver.cpp::solve_floquet_shared_domain_sparse_modal_spectrum`,
+`production_cpu_modal_eigen.cpp::solve_sparse_production_modal_payload`
+w `backends/fem/cpu/frequency_domain/` oraz
+`crates/fullmag-runner/src/fem/eigen_native_window.rs::execute_native_modal_window`.
+Regresja natywna została dodana; jej kompilacja nie została wykonana w tym
+review z powodu obowiązującego ograniczenia użytkownika.
 
 ## Current limitations
 

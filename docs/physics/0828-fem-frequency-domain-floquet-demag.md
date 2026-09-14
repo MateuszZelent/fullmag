@@ -344,7 +344,7 @@ FFT peak is not a modal eigenvalue.
 
 | Solver | Device | Status | Boundary |
 |---|---|---|---|
-| FEM | CPU | source_visible / unvalidated | Full Bloch prolongation source is present; dynamic demagnetization-k and solver connection are not qualified. |
+| FEM | CPU | source_visible / unvalidated | Natywna assemblacja Floqueta i połączenie sparse SLEPc są obecne w źródłach; wykonanie i fizyka B4–B6 pozostają niezweryfikowane. |
 | FEM | GPU | source_visible / unvalidated | Shared physics is specified; device operator, residency, parity and runtime are not qualified. |
 | FDM | CPU | not-applicable | This page owns an FEM scalar-potential realization; FDM needs a separate convolution-k owner. |
 | FDM | GPU | not-applicable | This page owns an FEM scalar-potential realization; FDM needs a separate convolution-k owner. |
@@ -502,9 +502,10 @@ fallback may erase the physical k or report a K0 calculation as nonzero-k.
 
 Walidator Floqueta kontroluje cykle fazowe i transport bazy stycznej.
 W źródłach istnieją bounded providery, rekonstrukcja potencjału, certyfikacja
-algebraiczna oraz publikacja wyników. Skalowalne połączenie wspólnego operatora
-MFEM z modalnym SLEPc jest w trakcie wdrożenia. Wiersze oznaczone jako planned
-opisują wcześniejsze granice dowodów; żaden z nich nie stanowi kwalifikacji
+algebraiczna oraz publikacja wyników. Połączenie wspólnego operatora
+MFEM z modalnym sparse SLEPc jest zaimplementowane w źródłach CPU.
+Obecna polityka PETSc jest jednoprocesowa; nie stanowi dowodu skalowania MPI.
+Wiersze planned dla 2.5D/GPU pozostają otwarte; żaden wpis nie stanowi kwalifikacji
 pełnego benchmarku COMSOL. Bieżące kryteria wykonania B0–B6 zapisano w
 `docs/superpowers/plans/2026-09-12-eigensolve-dispersion-implementation-status.md`.
 
@@ -516,8 +517,8 @@ pełnego benchmarku COMSOL. Bieżące kryteria wykonania B0–B6 zapisano w
 | K-path expansion | common | crates/fullmag-runner/src/eigen/path.rs + expand_k_sampling | Expand declared k points and paths. | source visible; runtime unvalidated |
 | Existing Floquet checks | FEM response | backends/fem/src/frequency_domain/driven_response_solver.cpp + validate_driven_response_floquet_phase_constraints | Check seam phase, frame and cycle consistency. | source visible; nonzero-k demag unavailable |
 | Existing shared-domain assembly | FEM CPU | backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp + assemble_poisson_airbox_shared_domain | Keep the K0/shared-domain owner separate from Floquet-k. | source visible; physics unvalidated |
-| Full Bloch tangent prolongation | FEM CPU planned | backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp + class FloquetTangentProlongation | Apply phase and tangent-frame transport with the interleaved local layout. | integrated in native CPU Floquet source; managed execution and physics unverified |
-| Full Bloch reduced action | FEM CPU planned | backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp + class FloquetReducedMagneticOperator | Define the matrix-free C^H A C boundary. | integrated in native CPU Floquet source; managed execution and physics unverified |
+| Full Bloch tangent prolongation | FEM CPU | backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp + class FloquetTangentProlongation | Apply phase and tangent-frame transport with the interleaved local layout. | integrated in native CPU Floquet source; managed execution and physics unverified |
+| Full Bloch reduced action | FEM CPU | backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp + class FloquetReducedMagneticOperator | Define the matrix-free C^H A C boundary. | integrated in native CPU Floquet source; managed execution and physics unverified |
 | Contract regression | documentation | scripts/test_frequency_domain_math_contract_docs.py + test_dynamic_demag_and_response_observables_use_si_contract | Freeze algebra, units and honest support wording. | source visible; not numerical evidence |
 
 (validation)=
@@ -615,8 +616,8 @@ visibility into runtime or physical qualification.
 | K-path expansion | common | crates/fullmag-runner/src/eigen/path.rs + expand_k_sampling | Expand single points and paths. | runner tests | source visible; runtime unvalidated |
 | Floquet seam validation | FEM response | backends/fem/src/frequency_domain/driven_response_solver.cpp + validate_driven_response_floquet_phase_constraints | Validate phase cycles and tangent-frame transport. | focused source tests | source visible; demag-k unavailable |
 | K0/shared-domain Poisson | FEM CPU | backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp + assemble_poisson_airbox_shared_domain | Preserve existing K0/provider owner. | existing FEM source tests | source visible; nonzero-k unvalidated |
-| Native full Bloch prolongation | FEM CPU planned | backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp + class FloquetTangentProlongation | Foundational phase/frame map for interleaved local coefficients. | fem_floquet_magnetic_operator_contract; not compiled here | integrated in native CPU Floquet source; managed execution and physics unverified |
-| Native reduced action | FEM CPU planned | backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp + class FloquetReducedMagneticOperator | Foundational C^H A C MFEM boundary. | same standalone contract test; not a FEM run | integrated in native CPU Floquet source; managed execution and physics unverified |
+| Native full Bloch prolongation | FEM CPU | backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp + class FloquetTangentProlongation | Foundational phase/frame map for interleaved local coefficients. | fem_floquet_magnetic_operator_contract; not compiled here | integrated in native CPU Floquet source; managed execution and physics unverified |
+| Native reduced action | FEM CPU | backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp + class FloquetReducedMagneticOperator | Foundational C^H A C MFEM boundary. | same standalone contract test; not a FEM run | integrated in native CPU Floquet source; managed execution and physics unverified |
 | Dynamic nonzero-k demagnetization oracle | FEM CPU planned | backends/fem/include/frequency_domain/floquet_dynamic_demag_k.hpp + build_floquet_dynamic_demag_k_real_split | Provide the bounded dense Schur oracle for complex nonzero-k dynamic demagnetization; mesh assembly and production qualification remain separate. | fem_floquet_dynamic_demag_k_contract source is present; compile/runtime unvalidated | source visible; uncompiled/unvalidated |
 | MFEM Floquet airbox bridge | FEM CPU planned | backends/fem/cpu/frequency_domain/floquet_airbox_operator.hpp + assemble_floquet_airbox_dynamic_demag_k | Materialize bounded `C(k)^H P_full(k) C(k)` and `C(k)^H A_{phi q}` blocks, then delegate Schur elimination to the dynamic demag-k provider; production mesh assembly and capability promotion remain separate. | fem_floquet_airbox_operator_contract source is present; compile/runtime unvalidated | source visible; uncompiled/unvalidated |
 | Waveguide nonzero-k demagnetization oracle | FEM CPU planned | backends/fem/include/frequency_domain/floquet_waveguide_demag_k.hpp + build_floquet_waveguide_demag_k_real_split | Provide the bounded 2.5D modified-Helmholtz and Schur oracle; transverse MFEM assembly and open-boundary convergence remain separate. | fem_floquet_waveguide_demag_k_contract source is present; compile/runtime unvalidated | source visible; uncompiled/unvalidated |
@@ -628,3 +629,5 @@ visibility into runtime or physical qualification.
 
 | Spójna masa P1 wyników | FEM CPU postprocessing | crates/fullmag-runner/src/fem/eigen_mass_metric.rs + SharedDomainSparseMass | Norma z fazowymi wkładami elementowymi, bez gęstej macierzy | Test parytetu z referencją | source visible; runtime unvalidated |
 | Pełny potencjał i gradient | FEM CPU postprocessing | crates/fullmag-runner/src/fem/eigen_physical_potential.rs + physical_potential_artifacts | Rekonstrukcja fazowa oraz gradient elementowy z tą samą skalą co dm | Test rekonstrukcji; pełny benchmark pozostaje wymagany | source visible; runtime unvalidated |
+
+| Natywny modalny sparse Floquet | FEM CPU | backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp + solve_floquet_shared_domain_sparse_modal_spectrum | MatShell Schura, SLEPc i diagnostyka obu układów KSP | Test kontraktu źródłowego; kompilacja testów nieuruchomiona | implemented in source; managed execution and physics NOT VERIFIED |
