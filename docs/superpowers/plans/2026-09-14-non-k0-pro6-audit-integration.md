@@ -107,3 +107,26 @@ Wymagania dla nowej kontroli:
 To przygotowanie kontroli, nie dowód jej implementacji ani wykonania FEM.
 Kontrola fazy wyeksportowanego pola została już podłączona w `ecf945a`;
 wcześniejszy opis jej braku w tym dokumencie jest historycznym checkpointem.
+
+
+## Checkpoint: n=0 podłączone do kontroli KS
+
+Helper `a10e13139` i jawne wsparcie magnetyczne `e6f25b6da` są teraz
+wykorzystywane przez `_validate_ks`. Każda kontrola BV/DE odczytuje pole
+surowego modu wskazanego w tabeli gałęzi, sprawdza fazę, k oraz powiązanie
+metadanych z numerycznym zestawem. Canonical `parameters.json` zawiera jawne
+kryterium 99% kwadratu normy w stałej podprzestrzeni i osobny limit udziału
+podłużnego. Uzasadnienie i zakres opisano w nocie 0828; nie jest to dowód
+błędu częstotliwości poniżej 1% ani uniwersalna granica fizyki DE.
+
+Dowody źródłowe: zestaw bramki/runnera 50 testów i 28 podtestów przeszedł;
+trzy później dodane regresje odrzucenia także przeszły. Brak pola,
+niejednorodny profil mimo zgodnej częstotliwości oraz brak polityki progów
+nie kwalifikują C1. Syntetyczne pola testowe nie stanowią kampanii FEM.
+
+Pozostają otwarte: transfer równowagi między różnymi siatkami A1,
+niezależne certyfikaty operatora q/phi oraz wykonanie i ocena kampanii
+C0/C1/A1. B4–B6 nie są zamknięte. Odczyt runnera z tej sesji nadal wskazuje
+aktywny job 44 `635451d7648a446a83e8d88e21c0279b` dla starszego
+`28f552b959455957bbf6dada8a522a241425552c`; nie jest on dowodem aktualnej
+wersji i nie został zatrzymany przez tę pracę.

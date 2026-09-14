@@ -21,6 +21,7 @@ import math
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
+from comsol_n0_field_certificate import measure_n0_field
 from verify_fem_frequency_domain_eigen_artifacts import (
     kalinikos_slab_n0_frequency_hz,
     require_kalinikos_slab_n0_material_and_bias,
@@ -1104,6 +1105,8 @@ def _load_numeric_bundle(
         "diagnostics": "eigen/diagnostics/solver.v1.json",
     }
     loaded: dict[str, Any] = {}
+    metadata_file: Path | None = None
+    metadata_hash: str | None = None
     for logical, default_relative in default_paths.items():
         spec = artifacts.get(logical)
         if not isinstance(spec, Mapping):
@@ -1123,6 +1126,8 @@ def _load_numeric_bundle(
             continue
         assert value is not None
         loaded[logical] = value
+        if logical == "metadata":
+            metadata_file, metadata_hash = path, expected_hash
     if set(loaded) != set(default_paths):
         return None
     _validate_payload_schemas(loaded, label, reasons)
@@ -1160,6 +1165,8 @@ def _load_numeric_bundle(
     elif _metadata_backend_plan(metadata) is None:
         reasons.append(f"{label} has no metadata.execution_plan.backend_plan")
     _validate_bundle_modal_payload(loaded, label, reasons)
+    loaded["_metadata_file"] = str(metadata_file)
+    loaded["_metadata_hash"] = metadata_hash
     return loaded
 
 
@@ -1336,6 +1343,33 @@ def _vector_norm(vector: Sequence[float]) -> float:
     return math.sqrt(sum(value * value for value in vector))
 
 
+def _measure_ks_profile(run, sample_index, branch_id, vector, parameters, label, reasons):
+    policy = parameters.get("ks_n0_profile")
+    keys = ("max_projection_residual", "max_longitudinal_leakage_fraction")
+    if not isinstance(policy, Mapping) or any(not _finite(policy.get(key)) or not 0 < policy[key] < 1 for key in keys):
+        reasons.append(f"{label} requires explicit finite n0 profile tolerances in (0, 1)")
+        return {"status": "unverified"}
+    points = [point for branch in run["branches"]["branches"] if isinstance(branch, Mapping) and branch.get("branch_id") == branch_id
+              for point in branch.get("points", []) if isinstance(point, Mapping) and point.get("sample_index") == sample_index]
+    if len(points) != 1 or type(points[0].get("raw_mode_index")) is not int:
+        reasons.append(f"{label} has no unique raw mode for the profile")
+        return {"status": "unverified"}
+    metadata_file = Path(run["_metadata_file"])
+    result = measure_n0_field(metadata_file.parent, sample_index, points[0]["raw_mode_index"], expected_k=vector)
+    hashes = {item["path"]: item["sha256"] for item in result.get("file_hashes", [])}
+    if metadata_file.name != "metadata.json" or hashes.get("metadata.json") != "sha256:" + str(run["_metadata_hash"]):
+        reasons.append(f"{label} profile metadata is not bound to the numeric run")
+    if result.get("status") != "measured":
+        reasons.append(f"{label} n0 profile measurement failed: {result.get('reasons')}")
+    else:
+        metrics = result["metrics"]
+        for metric, key in (("projection_residual", keys[0]), ("longitudinal_leakage_fraction", keys[1])):
+            if not _finite(metrics.get(metric)) or metrics[metric] > policy[key]:
+                reasons.append(f"{label} n0 {metric} exceeds benchmark tolerance {policy[key]}")
+    result["acceptance_policy"] = dict(policy)
+    return result
+
+
 def _validate_ks(
     case_dir: Path,
     case: str,
@@ -1357,6 +1391,7 @@ def _validate_ks(
         return _new_check("fail")
     geometries: set[str] = set()
     errors: list[float] = []
+    profiles: list[dict[str, Any]] = []
     for index, sample in enumerate(samples):
         if not isinstance(sample, Mapping):
             reasons.append(f"Kalinikos–Slavin sample {index} is not an object")
@@ -1389,6 +1424,7 @@ def _validate_ks(
             f"Kalinikos–Slavin sample {index}",
             reasons,
         )
+        profiles.append(_measure_ks_profile(run, sample_index, branch_id, vector, parameters, f"Kalinikos–Slavin sample {index}", reasons))
         k_actual = _vector_norm(vector)
         declared_k = sample.get("k_rad_per_m")
         if _finite(declared_k) and _relative_error(k_actual, float(declared_k)) > 1.0e-8:
@@ -1418,6 +1454,7 @@ def _validate_ks(
     return _new_check(
         "pass" if len(reasons) == initial_reason_count and geometries == {"backward_volume", "damon_eshbach"} and errors and maximum <= KS_RELATIVE_TOLERANCE and ks.get("status") == "pass" else "fail",
         sample_count=len(samples),
+        n0_profiles=profiles,
         geometries=sorted(geometries),
         max_relative_error=maximum if math.isfinite(maximum) else None,
         tolerance=KS_RELATIVE_TOLERANCE,

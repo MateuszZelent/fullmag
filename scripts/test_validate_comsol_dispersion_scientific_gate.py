@@ -69,15 +69,40 @@ def _native_metadata(case, mesh_id, airbox_m, requested_modes):
         {"pair_id": "y_faces", "node_a": index, "node_b": index + 2}
         for index in (0, 1, 4, 5)
     ]
+    tet4_connectivity = [
+        [0, 1, 3, 7],
+        [0, 3, 2, 7],
+        [0, 2, 6, 7],
+        [0, 6, 4, 7],
+        [0, 4, 5, 7],
+        [0, 5, 1, 7],
+    ]
+    canonical_cells = {
+        "types": ["tet4"] * len(tet4_connectivity),
+        "offsets": list(range(0, 4 * len(tet4_connectivity) + 1, 4)),
+        "nodes": [node for cell in tet4_connectivity for node in cell],
+    }
     demag = case != "c0"
     plan = {
         "kind": "fem_eigen", "mesh_name": mesh_id,
         "mesh": {"mesh_name": mesh_id, "nodes": nodes,
+            "cells": canonical_cells, "element_markers": [1] * len(tet4_connectivity),
             "periodic_node_pairs": node_pairs,
             "periodic_boundary_pairs": [
                 {"pair_id": "x_faces", "translation": [2e-7, 0.0, 0.0]},
                 {"pair_id": "y_faces", "translation": [0.0, 2e-7, 0.0]},
             ]},
+        "mesh_parts": [
+            {
+                "id": "magnetic_object",
+                "role": "magnetic_object",
+                "element_selector": {
+                    "kind": "element_range",
+                    "start": 0,
+                    "count": len(tet4_connectivity),
+                },
+            },
+        ],
         "hmax": {"mesh-L1": 5e-9, "mesh-L2": 2.5e-9, "mesh-L3": 1.25e-9}.get(mesh_id, 5e-9), "fe_order": 1,
         "material": {"name": "Permalloy", "saturation_magnetisation": 800000.0,
             "exchange_stiffness": 1.3e-11, "damping": 0.5,
@@ -131,6 +156,29 @@ def _write_mode_fields(root, samples):
                 "payload_sha256": "sha256:" + hashlib.sha256(data).hexdigest(),
             })
 
+
+def _rewrite_mode_field_with_z_sign_profile(root: Path, *, sample_index: int = 0, raw_mode_index: int = 0) -> None:
+    """Rewrite one KS payload with a z+/z- envelope while preserving Bloch seams."""
+    metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
+    plan = metadata["execution_plan"]["backend_plan"]
+    nodes = plan["mesh"]["nodes"]
+    spectrum = json.loads((root / "eigen/spectrum.v2.json").read_text(encoding="utf-8"))
+    sample = next(item for item in spectrum["samples"] if item["sample_index"] == sample_index)
+    k = sample["k_vector"]
+    values = []
+    for node in nodes:
+        argument = sum(a * b for a, b in zip(k, node))
+        phase = complex(math.cos(argument), -math.sin(argument))
+        sign = -1.0 if node[2] > 0.0 else 1.0
+        for value in (0j, sign * phase, 1j * sign * phase):
+            values.extend((value.real, value.imag))
+    data = struct.pack(f"<{len(values)}d", *values)
+    relative = f"eigen/mode_fields/sample_{sample_index:04}/mode_{raw_mode_index:04}/vector.bin"
+    (root / relative).write_bytes(data)
+    mode_path = root / f"eigen/modes/sample_{sample_index:04}/mode_{raw_mode_index:04}.json"
+    mode = json.loads(mode_path.read_text(encoding="utf-8"))
+    mode["payload_sha256"] = "sha256:" + hashlib.sha256(data).hexdigest()
+    _write_json(mode_path, mode)
 
 def _write_native_context(root, case, mesh_id, airbox_m, requested_modes, samples):
     _write_json(root / "metadata.json", _native_metadata(case, mesh_id, airbox_m, requested_modes))
@@ -353,6 +401,8 @@ def _make_case(root: Path, case: str = "c1") -> Path:
         ks_samples_de = [{"sample_index": 0, "k_vector": [0.0, 1.0e7, 0.0], "modes": [{"raw_mode_index": 0, "frequency_real_hz": de_frequency, "frequency_imag_hz": 0.0}]}]
         ks_branches_de = [{"branch_id": 0, "points": [{"sample_index": 0, "raw_mode_index": 0, "frequency_real_hz": de_frequency, "frequency_imag_hz": 0.0}]}]
         ks_de = _write_bundle(case_dir, "validation/ks/de", ks_samples_de, ks_branches_de, mesh_id="ks-de", airbox_m=2.0e-6, requested_modes=1)
+        _write_mode_fields(case_dir / "validation/ks/bv", ks_samples)
+        _write_mode_fields(case_dir / "validation/ks/de", ks_samples_de)
     for name, mesh_id, airbox, scale, modes in (("mesh_coarse", "mesh-L1", 2.0e-6, 1.0, 24), ("mesh_medium", "mesh-L2", 2.0e-6, 1.001, 24), ("mesh_fine", "mesh-L3", 2.0e-6, 1.00125, 24), ("airbox_coarse", "mesh-L1", 2.0e-6, 1.0, 24), ("airbox_medium", "mesh-L1", 4.0e-6, 1.001, 24), ("airbox_fine", "mesh-L1", 8.0e-6, 1.00125, 24), ("modes_24", "mesh-L1", 2.0e-6, 1.0, 24), ("modes_48", "mesh-L1", 2.0e-6, 1.001, 48)):
         scaled_samples, scaled_branches = _scaled_payload(samples, branches, scale)
         convergence_runs[name] = _write_bundle(case_dir, f"validation/convergence/{name}", scaled_samples, scaled_branches, mesh_id=mesh_id, airbox_m=airbox, requested_modes=modes)
@@ -635,6 +685,75 @@ class ScientificGateTests(unittest.TestCase):
         self.assertEqual(report["checks"]["spectrum_samples"]["sample_count"], 61)
         self.assertEqual(report["checks"]["kalinikos_slab_n0"]["status"], "pass")
 
+    def test_missing_ks_profile_vector_is_not_qualified(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            vector_path = case_dir / (
+                "validation/ks/bv/eigen/mode_fields/"
+                "sample_0000/mode_0000/vector.bin"
+            )
+            vector_path.unlink()
+            report = gate.validate_case(
+                case_dir,
+                "c1",
+                parameters_path=PARAMETERS,
+                kpath_path=KPATH,
+            )
+        self.assertEqual(report["status"], "not_qualified")
+        check = report["checks"]["kalinikos_slab_n0"]
+        self.assertEqual(check["status"], "fail")
+        self.assertTrue(
+            any("n0 profile measurement failed" in reason for reason in report["reasons"]),
+            report["reasons"],
+        )
+
+    def test_hashed_nonuniform_ks_profile_is_not_qualified_despite_frequency_match(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            _rewrite_mode_field_with_z_sign_profile(case_dir / "validation/ks/bv")
+            report = gate.validate_case(
+                case_dir,
+                "c1",
+                parameters_path=PARAMETERS,
+                kpath_path=KPATH,
+            )
+        self.assertEqual(report["status"], "not_qualified")
+        check = report["checks"]["kalinikos_slab_n0"]
+        self.assertEqual(check["status"], "fail")
+        profile = check["n0_profiles"][0]
+        self.assertEqual(profile["status"], "measured")
+        self.assertGreater(
+            profile["metrics"]["projection_residual"],
+            0.01,
+        )
+        self.assertTrue(
+            any("n0 projection_residual exceeds" in reason for reason in report["reasons"]),
+            report["reasons"],
+        )
+
+    def test_missing_ks_profile_policy_is_a_gate_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+            parameters.pop("ks_n0_profile")
+            parameters_path = Path(directory) / "parameters-without-ks-profile.json"
+            _write_json(parameters_path, parameters)
+            report = gate.validate_case(
+                case_dir,
+                "c1",
+                parameters_path=parameters_path,
+                kpath_path=KPATH,
+            )
+        self.assertEqual(report["status"], "not_qualified")
+        check = report["checks"]["kalinikos_slab_n0"]
+        self.assertEqual(check["status"], "fail")
+        self.assertTrue(
+            any(
+                "requires explicit finite n0 profile tolerances" in reason
+                for reason in report["reasons"]
+            ),
+            report["reasons"],
+        )
     def test_ks_check_rejects_invalid_control_even_when_frequencies_agree(self):
         with tempfile.TemporaryDirectory() as directory:
             case_dir = _make_case(Path(directory), "c1")

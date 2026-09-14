@@ -779,7 +779,27 @@ między certyfikacją a pomiarem unieważnia wynik. Dekoder
 objętości `mesh_parts` na magnetyk i powietrze.
 
 Status `measured` oznacza wyłącznie wykonany pomiar obwiedni. Nie oznacza
-kwalifikacji modelu KS ani całej kampanii. Integracja pomiaru z warunkiem
-akceptacji C1 pozostaje osobnym krokiem. Średnie pola w raporcie mają suffix
+kwalifikacji modelu KS ani całej kampanii. Bramka `_validate_ks` w `scripts/validate_comsol_dispersion_scientific_gate.py`
+wykonuje pomiar dla wskazanego surowego modu każdej kontroli BV/DE C1.
+Wymaga zgodności hasha metadanych pomiaru z metadanymi numerycznego zestawu. Średnie pola w raporcie mają suffix
 `_scaled` i są podane po podzieleniu wejściowego pola przez `field_scale`;
 nie wolno interpretować ich jako nieprzeskalowanej amplitudy fizycznej.
+
+
+### Kryterium profilu dla kontroli KS benchmarku C1
+
+W `docs/guides/comsol-dispersion-benchmark/parameters.json` benchmark ustala
+`ks_n0_profile.max_projection_residual = 0.01`: co najmniej 99% kwadratu normy
+poprzecznej obwiedni ma należeć do stałej podprzestrzeni. Jest to jawne
+kryterium wyboru profilu referencyjnego, nie oszacowanie błędu częstotliwości
+KS. Osobne `max_longitudinal_leakage_fraction = 1e-8` ogranicza udział
+podłużny. Oba parametry są bezwymiarowe; wymagane są skończone wartości
+w przedziale otwartym (0, 1). Nie mają ukrytych wartości domyślnych.
+
+Kryterium dotyczy tylko modów wskazanych w kontrolach BV/DE C1. Przekroczenie
+progu oznacza brak kwalifikacji porównania z jednorodnym modelem n=0, nie
+automatycznie błąd FEM. Pole z lokalizacją powierzchniową może poprawnie nie
+spełnić kryterium. Pozostają niezależne wymagania zgodności częstotliwości,
+siatki, airboxu i operatora. Dobór 99% jest konwencją tego benchmarku; jego
+przydatność dla uzyskanych modów trzeba sprawdzić w kampanii, bez rozluźniania
+progu po obejrzeniu niezgodnego wyniku.

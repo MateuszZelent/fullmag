@@ -57,5 +57,9 @@
   "controls_finite_dirichlet_box": {
     "Nz_uniform_gamma": 0.9975062344139651,
     "with_demag_gamma_hz": 9299249697.068401
+  },
+  "ks_n0_profile": {
+    "max_projection_residual": 0.01,
+    "max_longitudinal_leakage_fraction": 1e-08
   }
 }
