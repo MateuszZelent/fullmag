@@ -103,7 +103,7 @@ def _preload_cuda_driver_compatibility_libraries(
     for directory in compatibility_paths:
         # Keep the container's POSIX spelling even when the host-side tests
         # import this module on Windows.
-        library_path = f"{str(directory).rstrip('/\\\\')}/libcuda.so.1"
+        library_path = str(directory).rstrip("/\\") + "/libcuda.so.1"
         try:
             ctypes.CDLL(library_path, mode=ctypes.RTLD_GLOBAL)
         except OSError as error:
