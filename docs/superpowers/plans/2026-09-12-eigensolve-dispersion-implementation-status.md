@@ -3,18 +3,34 @@
 ## Aktualizacja po review — 2026-09-14
 
 Stan: **W TRAKCIE**, fizyka non-k0 **NOT VERIFIED**. Sprawdzony HEAD:
-`95763e6a7f3d6a7c19657bd214d5d805082b926b`; branch i worktree pozostają
+`55aadf7f2cbfd2fced91b3cf896e8e17cbb7ce61`, plus niezacommitowane poprawki
+bramki naukowej i profilu produkcyjnego SLEPc bez kompilacji unit testów; branch i worktree pozostają
 te same. Checkpoint z 13 września poniżej stanowi historię, również w zakresie
 runnera, jobów, tokena i wolnego miejsca; nie jest aktualnym health-checkiem.
 
 | Problem review | Implementacja | Dowód / pozostała praca |
 |---|---|---|
-| Walidacja przełącza FEM na analitykę | Naprawa w toku | Wymagane rozdzielenie routingu i test regresji |
-| P00 przy k do zera | Python poprawiony; Rust w trakcie ujednolicania | 10 testów generatora passed, w tym częstość BV/DE przy małym k; brak kompilacji Rust |
+| Walidacja przełącza FEM na analitykę | Naprawiona w źródłach | Usunięte obejścia planera/runnera; kontrakt manifestu i 8 testów DE/BV passed; native niekompilowany |
+| P00 przy k do zera | Wspólne stabilne kernele Python i Rust | 27 testów Python, w tym 80-cyfrowa referencja Decimal i ciągłość częstości; brak kompilacji Rust |
 | Sztywne 3e6 rad/m i 5 GHz | Usunięte z walidatorów Python/plannera; defaulty zachowane | 2 testy Python API passed, w tym zakres C1 i NaN/Inf; planner niekompilowany |
 | Bramka naukowa C0/C1/A1 | Implementacja w toku | B4–B6 otwarte do rzeczywistych wyników i zbieżności |
-| Dokumentacja | Aktualizacja w toku | Rozdzielono stan źródeł i dowody fizyczne |
-| Polityka solvera / telemetria | Naprawa w toku | Wymagana zgodność z rzeczywistą konfiguracją |
+| Dokumentacja | Noty 0600/0828 i spec artefaktów zaktualizowane | 10 testów dokumentacji, 32 testy jej narzędzi, source-map 0828 pass; checkpoint aktualizowany wraz z pracą |
+| Polityka solvera / telemetria | Naprawiona w źródłach | Jawny single-process CPU, KSPGetTolerances dla obu układów, usunięte zgadywane 300; native niekompilowany |
+
+
+### Ostatnia kontrola roboczego snapshotu
+
+[Review bieżącego stanu](2026-09-14-non-k0-current-review.md) zawiera zakres,
+ustalenia i ograniczenia. Kontrole P00/KS/agregacji: **51 passed**. Kontrole
+bramki naukowej i runnera benchmarku: **11 passed, 2 failed**; pozytywny fixture
+nie odpowiada jeszcze aktualnemu formatowi natywnych artefaktów. Są to wyniki
+roboczej wersji w trakcie poprawek, a nie dowody dla przyszłego commita.
+
+Nowy profil `fem-cpu-slepc-runtime-v1` jest w implementacji i review. Nie został
+wdrożony ani wykonany. Ma budować produkcyjny runtime i sprawdzać rzeczywiste
+wsparcie SLEPc bez kompilowania testów jednostkowych. Zgodność identyfikatora
+źródeł w binarnym startup stamp z receipt wymaga osobnej kontroli. B4–B6 nadal
+pozostają otwarte; żaden test fixture nie zastępuje zbieżności numerycznej.
 
 Testy Python uruchomiono z `-B` i wyłączonym cache pytest. Pierwsze zebranie
 testów API nie znalazło pakietu `fullmag`; ponowienie z repozytoryjnym
@@ -22,7 +38,7 @@ testów API nie znalazło pakietu `fullmag`; ponowienie z repozytoryjnym
 Obowiązuje zakaz kompilacji testów jednostkowych. Żaden z powyższych wyników
 nie jest dowodem wykonania natywnego MFEM/SLEPc ani poprawności pełnego widma.
 
-Aktualny odczyt `just runner-container-status` (2026-09-14):
+Wcześniejszy odczyt `just runner-container-status` (2026-09-14; nie ponowiony przy tej aktualizacji):
 `worker_alive=true`, `accepting_jobs=true`, około 48.0 GB wolnego miejsca.
 Job 43 `9ce502f938a64abd85d74d4e391b5d3a` jest `running`, dla czystego
 commita `95763e6a7f3d6a7c19657bd214d5d805082b926b`; nie obejmuje zmian review.
@@ -31,6 +47,51 @@ Kontrole: 7 testów istniejącego walidatora DE/BV passed, 10 testów dokumentac
 passed, walidacja source-map noty 0828 exit 0. Są to dowody źródłowe,
 a nie wynik obliczenia dyspersji. Dodano regresję planera C1 i ujemnego k;
 pozostaje niekompilowana zgodnie z ograniczeniem użytkownika.
+
+Dodatkowa kontrola stosowalności KS: odrzucenie pola przeciwnego/poprzecznego,
+niezerowego DMI/anizotropii i niejednorodnych pól Ms/A. Wynik: **18 passed**
+(11 regresji stosowalności oraz 7 istniejących testów DE/BV).
+Review nowej bramki naukowej wykazało, że same deklaracje częstości w evidence
+nie wystarczają; wymagane jest powiązanie obserwacji z rzeczywistymi artefaktami
+kontrolnymi i zagęszczonymi. Ten punkt pozostaje w naprawie.
+
+Przyrost `da9a0ecf54767823dcc8eb1f4a62807ced0e61cb`:
+niezależne referencje Decimal (80 cyfr) dla P00 i częstości BV/DE oraz
+przenośne asercje ścieżek Windows/Linux. Generator: **27 passed**.
+Pełny walidator: **199 passed, 3 failed** wyłącznie na separatorach ścieżek;
+po poprawie trzech asercji ich ponowienie: **3 passed**, 199 deselected.
+Nie jest to ponowne wykonanie wszystkich 202 testów po poprawce.
+Staged lista dwóch plików i diff/check zostały sprawdzone przed commitem.
+Równoległy commit `cfab8109d7e44a7693b8c6d405cb2450611d1ead` zawierał
+wcześniejsze zmiany całego worktree; jego obecność nie stanowi kwalifikacji.
+
+Przyrost `052bf7d0f9626b8d6e0d9600a06d57d28e3250fb` domyka kontrakt
+numerycznego porównania: usunięty stary wariant solvera referencyjnego,
+manifest wskazuje KS jako niezależny model, walidator akceptuje tę postać
+i odrzuca analityczne źródło dynamicznego demagu dla wyniku numerycznego.
+Osiem testów DE/BV (w tym nowa regresja manifestu) passed. Rust: sprawdzony
+źródłowo i przez rustfmt przez agenta routingu; brak kompilacji. Recepta
+samodzielnego generatora CSV pozostaje jawnym wejściem do analityki.
+
+Dokumentacja polityki i mapy źródeł została zapisana w
+`be01c536032f3dbff9752bd1abc341b93be760ba`. Przeszło 10 testów dokumentacji,
+32 testy narzędzi scientific-documentation-contract oraz walidator mapy 0828.
+Odczyt profili wykazał brak istniejącej trasy SLEPc runtime-only:
+`fem-cpu-release` ustawia SLEPc OFF, a `fem-cpu-slepc-modal-v1` wymaga
+kompilacji kontraktów. Trwa przygotowanie odrębnego profilu produkcyjnego bez
+kompilacji testów; nie wdrożono go do aktywnego koordynatora.
+Wcześniejszy test bramki/runnera: 12 passed, 1 failed (asercja treści komunikatu);
+ponadto review wskazało niezgodności z rzeczywistym schematem manifestu oraz
+brakujące kontrole zgodności danych. Nie wolno oznaczać bramki jako ukończonej
+na podstawie samego usunięcia tej asercji.
+
+Przyrost `55aadf7f2cbfd2fced91b3cf896e8e17cbb7ce61`: przykład low-k po
+usunięciu analitycznego obejścia otrzymał po 2 mikrometry powietrza, zamiast
+10 nm. Odczyt publicznego DSL i eksport ProblemIR potwierdził domenę
+80 x 80 x 4020 nm, film 20 nm oraz zachowaną walidację DE/BV. Test regresji
+przeszedł (1 passed). Jednowymiarowe oszacowanie częstości Gamma dla
+Dirichleta daje błąd względem otwartej warstwy 0.194%, wcześniej 21.9%.
+To oszacowanie brzegowe i test wejścia, nie wykonanie FEM ani zbieżność siatki.
 
 ## Historyczny checkpoint — 2026-09-13
 
