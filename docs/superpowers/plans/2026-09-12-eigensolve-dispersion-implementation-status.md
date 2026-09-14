@@ -4,8 +4,9 @@
 ## Bieżący checkpoint po poprawce ciągłości częstotliwości — 2026-09-14
 
 Aktualny worktree `eigensolve-dispersion-plan-20260912` na branchu
-`codex/eigensolve-dispersion-plan-20260912` ma HEAD
-`3b8065466` (`Add explicit dispersion frequency continuity checks`).
+`codex/eigensolve-dispersion-plan-20260912` zawiera implementację ciągłości z
+`3b8065466` oraz ten checkpoint; bieżący commit potwierdza
+`git rev-parse HEAD`.
 Worktree jest czysty. Ten checkpoint rozdziela dowody źródłowe od wykonania
 managed runtime i od kwalifikacji fizycznej.
 
@@ -16,7 +17,7 @@ managed runtime i od kwalifikacji fizycznej.
 | Zakres C1 | Zaimplementowane w plannerze/walidatorze | Brak sztywnych limitów `3e6 rad/m` i `5 GHz`; pozostaje walidacja stosowalności modelu |
 | Bramka naukowa C0/C1/A1 | Kod bramki gotowy, wynik naukowy otwarty | Wymagane rzeczywiste 61 próbek, 8 gałęzi, Kittel/KS i zbieżność mesh/airbox/mode-count |
 | Polityka PETSc/telemetria | Zaimplementowane w źródłach | Sequential PETSc, LU dla Poissona, GMRES/Jacobi dla układu przesuniętego, odczyt rzeczywistych limitów |
-| Managed runtime | W TRAKCIE | Job `669d35c722c54745aed4965d6de191ed` (commit `fbbc87a4`) kompiluje się na obrazie koordynatora `sha256:42596c689843141ec68cf782d50ae9bcf90bc1d219c553b665186ecce3b1af36`; po zakończeniu potrzebny jest nowy job dla HEAD `3b8065466` |
+| Managed runtime | W TRAKCIE | Job `669d35c722c54745aed4965d6de191ed` (commit `fbbc87a4`) kompiluje się na obrazie koordynatora `sha256:42596c689843141ec68cf782d50ae9bcf90bc1d219c553b665186ecce3b1af36`; po zakończeniu potrzebny jest nowy job dla bieżącego HEAD tego worktree |
 | Kwalifikacja fizyki i release | NOT VERIFIED | Nie ma jeszcze receiptu z poprawnym runtime ani wyników benchmarku C0/C1/A1; B4–B6 pozostają otwarte |
 
 Weryfikacja po zmianie: `test_validate_comsol_dispersion_scientific_gate.py`
