@@ -43,7 +43,10 @@ CONVERGENCE_RELATIVE_TOLERANCE = 5.0e-3
 MAX_IMAGINARY_TO_REAL_RATIO = 1.0e-6
 MAX_TANGENT_LEAKAGE = 1.0e-6
 MAX_EIGEN_RESIDUAL = 1.0e-6
-MAX_PHASE_RESIDUAL = 1.0e-6
+# Keep the scientific gate aligned with the independently recomputed Bloch
+# field certificate.  A looser value here would allow a field to pass the
+# bundle-level gate after the certificate has rejected the same phase error.
+MAX_PHASE_RESIDUAL = 1.0e-8
 NUMERIC_FREQUENCY_SOURCE = "numeric_modal_solver_with_analytic_comparison"
 PRODUCTION_SOLVER_MODEL = "slepc_multi_shift_invert_production_cpu_dense"
 _REQUIRED_ARTIFACTS = (

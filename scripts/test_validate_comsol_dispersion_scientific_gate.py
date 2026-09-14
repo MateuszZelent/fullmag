@@ -534,6 +534,21 @@ class ScientificGateTests(unittest.TestCase):
             self.assertTrue(any("phase residual" in reason for reason in report["reasons"]))
             self.assertFalse(any("payload_sha256 does not match" in reason for reason in report["reasons"]))
 
+    def test_bundle_phase_residual_uses_certificate_tolerance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            spectrum_path = case_dir / "eigen/spectrum.v2.json"
+            spectrum = json.loads(spectrum_path.read_text(encoding="utf-8"))
+            spectrum["samples"][10]["modes"][0]["phase_constraint_residual"] = 2.0e-8
+            _write_json(spectrum_path, spectrum)
+            evidence_path = case_dir / gate.EVIDENCE_RELATIVE_PATH
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifact_bindings"]["spectrum_v2_sha256"] = _sha256(spectrum_path)
+            _write_json(evidence_path, evidence)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+            self.assertEqual(report["status"], "not_qualified")
+            self.assertTrue(any("phase constraint residual" in reason for reason in report["reasons"]))
+
     def test_valid_gamma_field_cannot_substitute_for_nonzero_k_sample(self):
         with tempfile.TemporaryDirectory() as directory:
             case_dir = _make_case(Path(directory), "c1")
