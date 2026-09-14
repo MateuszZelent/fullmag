@@ -275,6 +275,7 @@ pub(crate) fn execute_fem_eigen_path(
     execution: PlannedFemEigenExecution<'_>,
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
+    source_relax_handoff: Option<&fem_eigen::AcceptedFemRelaxStageHandoff>,
 ) -> Result<ExecutedRun, RunError> {
     let engine = match execution.lane() {
         FemEigenExecutionLane::Cpu => FemEngine::CpuNative,
@@ -305,6 +306,7 @@ pub(crate) fn execute_fem_eigen_path(
         engine: FemEngine,
         mode_artifacts: RefCell<Vec<AuxiliaryArtifact>>,
         publication_outputs: Vec<OutputIR>,
+        source_relax_handoff: Option<fem_eigen::AcceptedFemRelaxStageHandoff>,
         relax_handoff: RefCell<Option<fem_eigen::AcceptedFemEigenEquilibriumHandoff>>,
         periodic_airbox_k0_metrics:
             RefCell<Option<crate::eigen::K0KittelPeriodicAirboxDemagMetrics>>,
@@ -330,27 +332,61 @@ pub(crate) fn execute_fem_eigen_path(
                 existing_handoff.is_some(),
                 existing_handoff.as_ref(),
             )?;
+            let initial_stage_handoff = if existing_handoff.is_none() {
+                self.source_relax_handoff.as_ref()
+            } else {
+                None
+            };
 
             let executed = if self.execution.resolution().is_some() {
-                fem_eigen::execute_planned_fem_eigen_with_handoff(
-                    self.execution,
-                    &point_plan,
-                    outputs,
-                    existing_handoff.as_ref(),
-                )?
+                if let Some(handoff) = initial_stage_handoff {
+                    fem_eigen::execute_planned_fem_eigen_with_stage_handoff(
+                        self.execution,
+                        &point_plan,
+                        outputs,
+                        handoff,
+                    )?
+                } else {
+                    fem_eigen::execute_planned_fem_eigen_with_handoff(
+                        self.execution,
+                        &point_plan,
+                        outputs,
+                        existing_handoff.as_ref(),
+                    )?
+                }
             } else {
                 match self.engine {
-                    FemEngine::CpuNative => fem_eigen::execute_cpu_fem_eigen_with_handoff(
-                        &point_plan,
-                        outputs,
-                        existing_handoff.as_ref(),
-                    )?,
-                    FemEngine::NativeGpu => fem_eigen::execute_gpu_fem_eigen_with_handoff(
-                        &point_plan,
-                        outputs,
-                        None,
-                        existing_handoff.as_ref(),
-                    )?,
+                    FemEngine::CpuNative => {
+                        if let Some(handoff) = initial_stage_handoff {
+                            fem_eigen::execute_cpu_fem_eigen_with_stage_handoff(
+                                &point_plan,
+                                outputs,
+                                handoff,
+                            )?
+                        } else {
+                            fem_eigen::execute_cpu_fem_eigen_with_handoff(
+                                &point_plan,
+                                outputs,
+                                existing_handoff.as_ref(),
+                            )?
+                        }
+                    }
+                    FemEngine::NativeGpu => {
+                        if let Some(handoff) = initial_stage_handoff {
+                            fem_eigen::execute_gpu_fem_eigen_with_stage_handoff(
+                                &point_plan,
+                                outputs,
+                                handoff,
+                            )?
+                        } else {
+                            fem_eigen::execute_gpu_fem_eigen_with_handoff(
+                                &point_plan,
+                                outputs,
+                                None,
+                                existing_handoff.as_ref(),
+                            )?
+                        }
+                    }
                 }
             };
             if existing_handoff.is_none()
@@ -498,6 +534,7 @@ pub(crate) fn execute_fem_eigen_path(
         engine,
         mode_artifacts: RefCell::new(Vec::new()),
         publication_outputs: outputs.to_vec(),
+        source_relax_handoff: source_relax_handoff.cloned(),
         relax_handoff: RefCell::new(None),
         periodic_airbox_k0_metrics: RefCell::new(None),
     };

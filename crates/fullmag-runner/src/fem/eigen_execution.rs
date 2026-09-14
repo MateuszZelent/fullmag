@@ -523,6 +523,34 @@ pub(crate) fn execute_planned_fem_eigen_with_progress_and_stage_handoff(
     Ok(run)
 }
 
+pub(crate) fn execute_planned_fem_eigen_with_stage_handoff(
+    execution: PlannedFemEigenExecution<'_>,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    handoff: &AcceptedFemRelaxStageHandoff,
+) -> Result<ExecutedRun, RunError> {
+    if bias_field_sweep_requested(plan) {
+        validate_planned_execution(execution, plan)?;
+        return execute_planned_bias_field_sweep(execution, plan, outputs, None);
+    }
+    let prepared = prepare_single_k_stage_continuation(plan, handoff)?;
+    validate_planned_execution(execution, &prepared)?;
+    let mut run = execute_fem_eigen_inner(
+        &prepared,
+        outputs,
+        execution.lane() == FemEigenExecutionLane::Gpu,
+        true,
+        None,
+        0,
+        None,
+        None,
+        Some(handoff),
+        Some(execution),
+    )?;
+    bind_stage_continuation_artifacts(&mut run, handoff)?;
+    Ok(run)
+}
+
 pub(crate) fn execute_cpu_fem_eigen(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
@@ -610,6 +638,31 @@ pub(crate) fn execute_cpu_fem_eigen_with_progress_and_stage_handoff(
         false,
         native_cpu_modal_window_enabled(&prepared),
         Some(progress),
+        0,
+        None,
+        None,
+        Some(handoff),
+        None,
+    )?;
+    bind_stage_continuation_artifacts(&mut run, handoff)?;
+    Ok(run)
+}
+
+pub(crate) fn execute_cpu_fem_eigen_with_stage_handoff(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    handoff: &AcceptedFemRelaxStageHandoff,
+) -> Result<ExecutedRun, RunError> {
+    if bias_field_sweep_requested(plan) {
+        return execute_bias_field_sweep(plan, outputs, false, None);
+    }
+    let prepared = prepare_single_k_stage_continuation(plan, handoff)?;
+    let mut run = execute_fem_eigen_inner(
+        &prepared,
+        outputs,
+        false,
+        native_cpu_modal_window_enabled(&prepared),
+        None,
         0,
         None,
         None,
@@ -746,6 +799,14 @@ pub(crate) fn execute_gpu_fem_eigen_with_progress_and_stage_handoff(
     )?;
     bind_stage_continuation_artifacts(&mut run, handoff)?;
     Ok(run)
+}
+
+pub(crate) fn execute_gpu_fem_eigen_with_stage_handoff(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    handoff: &AcceptedFemRelaxStageHandoff,
+) -> Result<ExecutedRun, RunError> {
+    execute_gpu_fem_eigen_with_progress_and_stage_handoff(plan, outputs, None, handoff)
 }
 
 fn execute_native_gpu_k0_kittel_modal(

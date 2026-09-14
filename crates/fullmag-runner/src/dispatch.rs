@@ -2683,7 +2683,7 @@ pub(crate) fn execute_fem_eigen(
     } {
         executed
     } else if matches!(plan.k_sampling, Some(fullmag_ir::KSamplingIR::Path { .. })) {
-        crate::fem::execute_fem_eigen_path(execution, plan, outputs)?
+        crate::fem::execute_fem_eigen_path(execution, plan, outputs, None)?
     } else if execution.resolution().is_some() {
         fem_eigen::execute_planned_fem_eigen(execution, plan, outputs)?
     } else {
@@ -2719,7 +2719,7 @@ pub(crate) fn execute_fem_eigen_with_progress(
     } {
         executed
     } else if matches!(plan.k_sampling, Some(fullmag_ir::KSamplingIR::Path { .. })) {
-        crate::fem::execute_fem_eigen_path(execution, plan, outputs)?
+        crate::fem::execute_fem_eigen_path(execution, plan, outputs, None)?
     } else if execution.resolution().is_some() {
         fem_eigen::execute_planned_fem_eigen_with_progress(execution, plan, outputs, progress)?
     } else {
@@ -2744,9 +2744,14 @@ pub(crate) fn execute_fem_eigen_with_progress_and_stage_handoff(
     handoff: &fem_eigen::AcceptedFemRelaxStageHandoff,
 ) -> Result<ExecutedRun, RunError> {
     if matches!(plan.k_sampling, Some(fullmag_ir::KSamplingIR::Path { .. })) {
-        return Err(RunError {
-            message: "relax_stage_handoff_requires_single_k_target".to_string(),
-        });
+        let mut executed = crate::fem::execute_fem_eigen_path(
+            execution,
+            plan,
+            outputs,
+            Some(handoff),
+        )?;
+        execution.bind_execution_provenance(&mut executed.provenance);
+        return Ok(executed);
     }
     let mut executed = if let Some(executed) = {
         #[cfg(test)]
