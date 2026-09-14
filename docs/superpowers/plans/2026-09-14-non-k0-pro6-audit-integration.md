@@ -70,3 +70,40 @@ Sześć wcześniejszych zadań nie znika: routing → NK-17; P00 → NK-18; usun
 **B4–B6 pozostają otwarte.** Dodatkowym warunkiem ich zamknięcia jest weryfikacja właściwego operatora i pola, nie tylko wykonanie benchmarku. Robocza bramka nadal wymaga podłączenia kontroli fazy i profilu n=0. Przygotowany profil `fem-cpu-slepc-runtime-v1` nie dowodzi przebudowania solvera ani wykonania kampanii. Stan runnera trzeba sprawdzić przed kolejnym run; historyczny numer joba nie jest aktualnym dowodem.
 
 Po zmianie operatora/version/konwencji aktualizować klucz cache i ponownie obliczyć wyniki kwalifikacyjne. Historycznych artefaktów nie przepisywać na nowy status. Raport postępu ma oddzielać implementację, testy źródeł, managed runtime, naukę oraz release; nie podajemy pozornego procentu przez zliczenie kart.
+
+## Checkpoint kontroli KS i przygotowania profilu n=0
+
+Po commicie `475a502451ec5b07cbf3f58fa28b6cda8da9f86d` zapis JSON bramki
+jest objęty testem rzeczywistego CLI. Kontrola KS ma dodatkowo odrzucać
+logiczne wartości JSON w identyfikatorach oraz zwracać `fail`, gdy jej
+kontrole wejść, geometrii lub pochodzenia zgłosiły błąd, nawet przy zgodnych
+częstotliwościach. Nie zmienia to tolerancji modelu ani statusu kampanii FEM.
+
+Następny etap identyfikacji n=0 wymaga rekonstrukcji magnetycznej metryki
+Tet4 w pełnym porządku węzłów `vector.bin`. Źródła:
+`MeshTopology` i `magnetic_element_mask_from_markers` w
+`crates/fullmag-engine/src/fem.rs`, `SharedDomainSparseMass::from_topology`
+w `crates/fullmag-runner/src/fem/eigen_mass_metric.rs`. Obecna implementacja
+interpretuje marker 0 jako powietrze tylko przy jednoczesnej obecności markerów
+niezerowych; walidator benchmarku musi sprawdzić domeny i geometrię, zamiast
+bezwarunkowo przyjąć tę konwencję dla niejednoznacznego artefaktu.
+
+Wymagania dla nowej kontroli:
+
+- Sprawdzić rzeczywiste pole, jego hash, surowy indeks modu, wektor k i fazę.
+- Wyłączyć powietrze; nie przypisywać wag aktywnych węzłów do pełnego pola bez mapy indeksów.
+- Po usunięciu fazy Blocha wyznaczyć projekcję na stały profil poprzeczny,
+  używając masy zgodnej Tet4. Masa skupiona jest inną aproksymacją normy,
+  nie zamiennikiem gwarantującym identyczny wynik.
+- Osobno raportować składową podłużną. Projekcja globalna sprawdza także
+  harmoniczną w płaszczyźnie, a nie wyłącznie profil przez grubość.
+- Ustalić jawny zakres i kryterium benchmarku przed kwalifikacją: nie ma
+  obecnie zatwierdzonego progu błędu profilu. Tolerancja częstotliwości KS
+  nie wyznacza tego progu. Lokalizacja powierzchniowa DE nie jest sama w sobie
+  błędem solvera; może wykluczać zastosowanie jednorodnego przybliżenia n=0.
+- Testować nierówne objętości, zmianę globalnej fazy i skali, pole n=1,
+  wyższe harmoniczne w płaszczyźnie oraz niezerowe wartości w airboxie.
+
+To przygotowanie kontroli, nie dowód jej implementacji ani wykonania FEM.
+Kontrola fazy wyeksportowanego pola została już podłączona w `ecf945a`;
+wcześniejszy opis jej braku w tym dokumencie jest historycznym checkpointem.

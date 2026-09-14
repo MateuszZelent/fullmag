@@ -1345,6 +1345,7 @@ def _validate_ks(
 ) -> dict[str, Any]:
     if case != "c1":
         return _new_check("not_applicable", reason="the homogeneous slab KS control is applicable to c1 only")
+    initial_reason_count = len(reasons)
     controls = evidence.get("analytic_controls") if isinstance(evidence, Mapping) else None
     ks = controls.get("kalinikos_slab_n0") if isinstance(controls, Mapping) else None
     if not isinstance(ks, Mapping):
@@ -1375,7 +1376,7 @@ def _validate_ks(
         )
         sample_index = sample.get("sample_index")
         branch_id = sample.get("branch_id", 0)
-        if not isinstance(sample_index, int) or not isinstance(branch_id, int):
+        if type(sample_index) is not int or type(branch_id) is not int or sample_index < 0 or branch_id < 0:
             reasons.append(f"Kalinikos–Slavin sample {index} lacks integer sample_index/branch_id")
             continue
         observed, vector = _bundle_observation(run, sample_index, branch_id, f"Kalinikos–Slavin sample {index}", reasons)
@@ -1415,7 +1416,7 @@ def _validate_ks(
         reasons.append("Kalinikos–Slavin evidence is not explicitly marked pass")
     maximum = max(errors, default=math.inf)
     return _new_check(
-        "pass" if geometries == {"backward_volume", "damon_eshbach"} and errors and maximum <= KS_RELATIVE_TOLERANCE and ks.get("status") == "pass" else "fail",
+        "pass" if len(reasons) == initial_reason_count and geometries == {"backward_volume", "damon_eshbach"} and errors and maximum <= KS_RELATIVE_TOLERANCE and ks.get("status") == "pass" else "fail",
         sample_count=len(samples),
         geometries=sorted(geometries),
         max_relative_error=maximum if math.isfinite(maximum) else None,

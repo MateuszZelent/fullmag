@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import copy
 import hashlib
 import json
 import importlib.util
@@ -633,6 +634,20 @@ class ScientificGateTests(unittest.TestCase):
         self.assertEqual(report["checks"]["tracked_branches"]["target_band_count"], 8)
         self.assertEqual(report["checks"]["spectrum_samples"]["sample_count"], 61)
         self.assertEqual(report["checks"]["kalinikos_slab_n0"]["status"], "pass")
+
+    def test_ks_check_rejects_invalid_control_even_when_frequencies_agree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            baseline = json.loads((case_dir / gate.EVIDENCE_RELATIVE_PATH).read_text(encoding="utf-8"))
+            parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+            for field, value in (("sample_index", False), ("branch_id", False), ("k_rad_per_m", 2.0e7)):
+                with self.subTest(field=field):
+                    evidence = copy.deepcopy(baseline)
+                    evidence["analytic_controls"]["kalinikos_slab_n0"]["samples"][0][field] = value
+                    reasons = []
+                    check = gate._validate_ks(case_dir, "c1", evidence, parameters, reasons)
+                    self.assertEqual(check["status"], "fail", reasons)
+                    self.assertTrue(reasons)
 
     def test_missing_evidence_is_unqualified_with_explicit_reasons(self):
         with tempfile.TemporaryDirectory() as directory:
