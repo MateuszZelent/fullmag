@@ -112,6 +112,14 @@ akceptuje oba profile SLEPc, a źródło `fullmag-bin` i `libfullmag_fem` w tras
 runtime-only jest powiązane hashami. Sam receipt pozostaje `NOT VERIFIED` i nie
 jest dowodem CTest ani kwalifikacji fizycznej.
 
+Ponieważ CUDA-enabled `libfullmag_fem` może zachować transitive
+`libcuda.so.1` także w CPU lane, trusted post-build probe dodaje wyłącznie
+image-owned `/usr/local/cuda/compat` do `LD_LIBRARY_PATH`, gdy zawiera
+loadable SONAME. Nie włącza to GPU ani nie zmienia resolved device; zapis
+`cuda_driver_compatibility_paths` w `runtime-attestation.json` dokumentuje
+ścieżkę loadera używaną tylko do tej attestacji. Usługa `fem-modal-cpu` ma
+ten sam jawny compatibility path, lecz nie żąda urządzenia Docker GPU.
+
 Przy mniej niż 8 GiB wolnego miejsca job pozostaje w kolejce. Nie jest to twarda
 kwota dyskowa: pojedynczy etap może zużyć więcej miejsca. `runner-retention-plan`
 jest **tylko podglądem**. Rozważa własne terminalne execution po 24 h dla sukcesu

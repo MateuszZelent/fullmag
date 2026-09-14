@@ -51,6 +51,12 @@ ALLOWED_WORKSPACE_MOUNTPOINTS = frozenset(
     {".fullmag-build", ".fullmag-cargo", ".fullmag-rustup"}
 )
 
+# CUDA-enabled FEM libraries can retain a transitive libcuda.so.1 dependency
+# even when the selected runtime lane is CPU-only. The pinned CUDA image owns
+# the compatibility driver, so the probe must expose that directory explicitly
+# without requiring a host NVIDIA driver or a GPU device.
+CUDA_DRIVER_COMPATIBILITY_PATHS = (Path("/usr/local/cuda/compat"),)
+
 # Preserve declared toolchain discovery, not arbitrary command overrides or
 # credentials embedded in an image/environment. Execution paths are set below.
 TOOLCHAIN_ENVIRONMENT = frozenset({
@@ -64,6 +70,22 @@ TOOLCHAIN_ENVIRONMENT = frozenset({
 
 class BuildEntryPointError(ValueError):
     """A fail-closed build-entrypoint contract or execution error."""
+
+
+def _cuda_driver_compatibility_paths(
+    candidates: tuple[Path, ...] | None = None,
+) -> tuple[str, ...]:
+    """Return image-owned directories that provide a loadable libcuda SONAME."""
+
+    paths = candidates if candidates is not None else CUDA_DRIVER_COMPATIBILITY_PATHS
+    available: list[str] = []
+    for candidate in paths:
+        try:
+            if (candidate / "libcuda.so.1").is_file():
+                available.append(str(candidate))
+        except OSError:
+            continue
+    return tuple(available)
 
 
 @dataclass(frozen=True)
@@ -1027,7 +1049,8 @@ def _attest_slepc_runtime(
 
     probe_environment = dict(environment)
     probe_environment["FULLMAG_REPO_ROOT"] = str(workspace)
-    library_paths = [str(library_directory)]
+    compatibility_paths = _cuda_driver_compatibility_paths()
+    library_paths = [str(library_directory), *compatibility_paths]
     existing_library_path = probe_environment.get("LD_LIBRARY_PATH")
     if existing_library_path:
         library_paths.append(existing_library_path)
@@ -1179,6 +1202,7 @@ def _attest_slepc_runtime(
             "binary": "outputs/.fullmag/local/bin/fullmag-bin",
             "availability": availability,
             "startup_stamp": startup_stamp,
+            "cuda_driver_compatibility_paths": list(compatibility_paths),
             "source": source,
         },
     )

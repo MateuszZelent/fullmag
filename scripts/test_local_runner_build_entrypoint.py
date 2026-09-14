@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import stat
 import tempfile
@@ -326,11 +327,21 @@ class BuildEntryPointTests(unittest.TestCase):
             + str(self._identity()["source_snapshot_sha256"])
             + "\n",
         )
+        probe_environment: dict[str, str] = {}
+
+        def fake_probe(*args, **kwargs):
+            probe_environment.update(kwargs["env"])
+            return probe
+
         identity = self._identity()
         with patch.object(
             entrypoint.subprocess,
             "run",
-            return_value=probe,
+            side_effect=fake_probe,
+        ), patch.object(
+            entrypoint,
+            "_cuda_driver_compatibility_paths",
+            return_value=("/usr/local/cuda/compat",),
         ), patch.object(
             entrypoint.os,
             "access",
@@ -361,9 +372,28 @@ class BuildEntryPointTests(unittest.TestCase):
         )
         self.assertEqual(runtime_attestation["status"], "pass")
         self.assertTrue(runtime_attestation["availability"]["native_fem_cpu_available"])
+        self.assertEqual(
+            runtime_attestation["cuda_driver_compatibility_paths"],
+            ["/usr/local/cuda/compat"],
+        )
+        self.assertEqual(
+            probe_environment["LD_LIBRARY_PATH"].split(os.pathsep)[:2],
+            [str(runtime_library.parent), "/usr/local/cuda/compat"],
+        )
         self.assertEqual(dependency_attestation["status"], "pass")
         self.assertTrue(
             dependency_attestation["dependency"]["modal_eigen_native_cpu_slepc_available"]
+        )
+
+    def test_cuda_driver_compatibility_helper_requires_loadable_soname(self) -> None:
+        compatibility = self.root / "cuda" / "compat"
+        compatibility.mkdir(parents=True)
+        (compatibility / "libcuda.so.1").write_bytes(b"driver")
+        missing = self.root / "missing"
+
+        self.assertEqual(
+            entrypoint._cuda_driver_compatibility_paths((compatibility, missing)),
+            (str(compatibility),),
         )
 
     def test_slepc_runtime_probe_rejects_unavailable_native_fem(self) -> None:
