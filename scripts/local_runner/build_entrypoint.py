@@ -88,6 +88,33 @@ def _cuda_driver_compatibility_paths(
     return tuple(available)
 
 
+def _preload_cuda_driver_compatibility_libraries(
+    compatibility_paths: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Load image-owned CUDA compatibility drivers before native ``dlopen``.
+
+    Updating ``LD_LIBRARY_PATH`` in a running Python process does not reliably
+    change glibc's search path for a later ``ctypes.CDLL`` call.  Preloading
+    the absolute SONAME path makes the dependency available to the native FEM
+    library while keeping the host driver and GPU out of the CPU lane.
+    """
+
+    loaded: list[str] = []
+    for directory in compatibility_paths:
+        # Keep the container's POSIX spelling even when the host-side tests
+        # import this module on Windows.
+        library_path = f"{str(directory).rstrip('/\\\\')}/libcuda.so.1"
+        try:
+            ctypes.CDLL(library_path, mode=ctypes.RTLD_GLOBAL)
+        except OSError as error:
+            raise BuildEntryPointError(
+                "CUDA compatibility driver cannot be preloaded: "
+                f"{library_path}: {error}"
+            ) from error
+        loaded.append(str(library_path))
+    return tuple(loaded)
+
+
 @dataclass(frozen=True)
 class Profile:
     name: str
@@ -1050,6 +1077,9 @@ def _attest_slepc_runtime(
     probe_environment = dict(environment)
     probe_environment["FULLMAG_REPO_ROOT"] = str(workspace)
     compatibility_paths = _cuda_driver_compatibility_paths()
+    preloaded_compatibility_libraries = _preload_cuda_driver_compatibility_libraries(
+        compatibility_paths
+    )
     library_paths = [str(library_directory), *compatibility_paths]
     existing_library_path = probe_environment.get("LD_LIBRARY_PATH")
     if existing_library_path:
@@ -1203,6 +1233,9 @@ def _attest_slepc_runtime(
             "availability": availability,
             "startup_stamp": startup_stamp,
             "cuda_driver_compatibility_paths": list(compatibility_paths),
+            "cuda_driver_compatibility_libraries_preloaded": list(
+                preloaded_compatibility_libraries
+            ),
             "source": source,
         },
     )

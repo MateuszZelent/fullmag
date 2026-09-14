@@ -319,6 +319,12 @@ class BuildEntryPointTests(unittest.TestCase):
         class FakeLibrary:
             fullmag_fem_get_frequency_domain_dependency_info = FakeQuery()
 
+        cdll_calls: list[tuple[str, int]] = []
+
+        def fake_cdll(path: str, *, mode: int = 0) -> FakeLibrary:
+            cdll_calls.append((path, mode))
+            return FakeLibrary()
+
         probe = entrypoint.subprocess.CompletedProcess(
             [str(runtime_bin)],
             0,
@@ -349,7 +355,7 @@ class BuildEntryPointTests(unittest.TestCase):
         ), patch.object(
             entrypoint.ctypes,
             "CDLL",
-            return_value=FakeLibrary(),
+            side_effect=fake_cdll,
         ):
             entrypoint._attest_slepc_runtime(
                 self.workspace,
@@ -375,6 +381,17 @@ class BuildEntryPointTests(unittest.TestCase):
         self.assertEqual(
             runtime_attestation["cuda_driver_compatibility_paths"],
             ["/usr/local/cuda/compat"],
+        )
+        self.assertEqual(
+            runtime_attestation["cuda_driver_compatibility_libraries_preloaded"],
+            ["/usr/local/cuda/compat/libcuda.so.1"],
+        )
+        self.assertEqual(
+            cdll_calls,
+            [
+                ("/usr/local/cuda/compat/libcuda.so.1", entrypoint.ctypes.RTLD_GLOBAL),
+                (str(runtime_library), 0),
+            ],
         )
         self.assertEqual(
             probe_environment["LD_LIBRARY_PATH"].split(os.pathsep)[:2],
