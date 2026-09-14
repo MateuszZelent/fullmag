@@ -8,6 +8,7 @@ import json
 import importlib.util
 import math
 import struct
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -403,6 +404,19 @@ class ScientificGateTests(unittest.TestCase):
                 self.assertEqual(report["status"], "not_qualified")
                 self.assertTrue(any("dispersion.csv" in reason for reason in report["reasons"]))
                 self.assertFalse(any("binding does not match" in reason for reason in report["reasons"]))
+
+    def test_cli_serializes_real_gate_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c0")
+            process = subprocess.run(
+                [sys.executable, "-B", str(REPO_ROOT / "scripts/validate_comsol_dispersion_scientific_gate.py"),
+                 str(case_dir), "--case", "c0", "--parameters", str(PARAMETERS)],
+                capture_output=True, text=True, encoding="utf-8", check=False,
+            )
+            self.assertEqual(process.returncode, 0, process.stderr)
+            report = json.loads(process.stdout)
+            self.assertEqual(report["status"], "qualified")
+            self.assertIn("eigen/spectrum.v2.json", report["artifact_bindings"])
 
     def test_rehashed_wrong_phase_is_not_qualified(self):
         with tempfile.TemporaryDirectory() as directory:

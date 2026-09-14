@@ -4846,8 +4846,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help=(
             "require realistic thin-film low-k Damon-Eshbach and "
-            "backward-volume dispersion scenarios with |k| <= 3e6 rad/m, "
-            "frequency window <= 5 GHz, and Kalinikos n=0 analytic agreement"
+            "backward-volume dispersion scenarios within the homogeneous thin-film "
+            "Kalinikos n=0 model applicability, with analytic agreement"
         ),
     )
     return parser.parse_args(argv)

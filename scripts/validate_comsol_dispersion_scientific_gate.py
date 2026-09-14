@@ -1914,7 +1914,7 @@ def validate_case(
             "airbox_convergence": convergence["airbox"],
             "mode_count_convergence": convergence["mode_count"],
         },
-        "artifact_bindings": artifacts,
+        "artifact_bindings": {path.as_posix(): record for path, record in artifacts.items()},
         "evidence_path": EVIDENCE_RELATIVE_PATH.as_posix(),
         "parameters_path": str(parameters_path),
     }
