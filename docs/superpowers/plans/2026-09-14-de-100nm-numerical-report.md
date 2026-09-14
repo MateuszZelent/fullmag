@@ -159,3 +159,101 @@ solvera do wartości otwartej domeny. Zbieżność powietrza pozostaje wymagana.
 Narzędzie porównania zapisuje oba odniesienia Gamma oddzielnie. Po zmianie
 przeszło 5 testów, w tym kontrola granicy dużego airboxu. To nadal wartości
 analityczne i testy źródeł, nie wyniki FEM.
+
+## Zakres ważności analityki
+
+Harms i Duine, *Theory of the dipole-exchange spin wave spectrum in ferromagnetic
+films with in-plane magnetization revisited* (JMMM, 2022), wskazują ograniczenia
+przybliżenia diagonalnego Kalinikosa–Slavina dla grubszych filmów i znaczenie
+sprzężenia modów. Źródło pierwotne: https://arxiv.org/abs/2109.10597.
+Dla parametrów pilota długość wymiany sqrt(2A/(mu0 Ms²)) wynosi 5.6858 nm,
+a t/lex = 17.5877. Wniosek dla tej walidacji: zgodność z jednomodową krzywą
+nie może być jedyną bramką certyfikacji. Po uzyskaniu FEM trzeba sprawdzić
+profile modów, zbieżność i — jeżeli wystąpi rozbieżność poza błędem numerycznym —
+porównać z odniesieniem uwzględniającym sprzężenie modów lub pełne warunki
+brzegowe. Nie określono z samej publikacji wartości błędu dla naszego pilota.
+
+
+## Checkpoint aktywnego workera 44
+
+Potwierdzono zywy proces build_entrypoint w kontenerze workera 44.
+Po 44 minutach 40 sekundach od startu workera licznik wchar wynosil
+289884742 bajty, a rchar wzrosl z 689000837 do 767039394 bajtow.
+Kod materialize_capsule po kopiowaniu ponownie sprawdza rozmiary, hashe
+i uprawnienia plikow. Obserwacja jest zgodna z postepem przygotowania
+zrodel; brak jeszcze procesu kompilacji i native-build.stdout.log.
+Probe run_de_100nm_pilot --dry-run zatrzymal preflight z powodu stanu
+running buildu. Nie uruchomiono symulacji i nie uzyskano wynikow FEM.
+
+Aktualizacja: po okolo 46 minutach przygotowania worker rozpoczal
+native-build (make install-cli-dev). Potwierdzono proces rustc oraz
+log stderr z kompilacja fullmag-quantities, fullmag-fdm-demag i fullmag-ir.
+To dowod rozpoczecia kompilacji, nie jej sukcesu ani uruchomienia FEM.
+
+
+## Referencja z pelnymi warunkami brzegowymi
+
+Kandydatem do niezaleznego odniesienia jest pelny problem brzegowy
+Harmsa-Duine (https://arxiv.org/html/2109.10597v2, rownania 7-15):
+szesc rozwiazan bulkowych i szesc warunkow brzegowych tworzy macierz
+6x6. Warunki obejmuja swobodna wymiane na obu powierzchniach oraz
+ciaglosc pola magnetostatycznego. Nalezy rozwiazywac pelny problem,
+a nie bez kontroli bledu przyjmowac pozniejsza aproksymacje artykulu.
+
+Dostosowanie do pilota jest osobnym wyprowadzeniem: dla q=abs(k)
+i warstwy powietrza a, eliminacja potencjalu Laplacea zakonczonego
+Dirichletem daje eta=q*coth(q*a), z granica eta(0)=1/a.
+Dla konwencji Fullmag h=-grad(phi) warunki na filmie wynosza
+d_z phi + eta*phi - delta_Mz = 0 u gory oraz
+d_z phi - eta*phi - delta_Mz = 0 u dolu.
+Publikacja stosuje potencjal z przeciwnym znakiem h=+grad(w);
+nie wolno bezposrednio kopiowac znakow jej BC do Fullmaga.
+
+Ta referencja nie zostala jeszcze zaimplementowana ani obliczona.
+Wymaga kontroli Gamma, granicy otwartego airboxu, kompletnosci korzeni
+i profili modow. Porownanie FEM musi obejmowac zbieznosc siatki i airboxu
+oraz sledzenie fizycznej galezi, zamiast doboru najblizszej czestotliwosci.
+Sama zgodnosc z jednomodowym KS nie zamyka certyfikacji tego przypadku.
+
+
+## Pomocnicze obliczenie sprzezonych modow
+
+Skrypt scripts/de100_coupled_reference_diagnostic.py zachowuje
+reprodukowalny eksperyment Galerkina: baza kosinusowa Neumanna w filmie,
+pelne jadro Greena Dirichleta i jego pochodne, hermitowski operator
+energii oraz pelny blokowy problem LL. Parametry sa celowo ustalone
+na wartosci pilota. Skrypt nie uruchamia FEM i nie nadaje kwalifikacji.
+
+W wykonanej kontroli N=1,8,16 oraz Q=160,320 i dodatkowo N=16,24
+z Q=640,1280 odtworzono Gamma 9.205971992409074 GHz.
+Dla N=24, Q=1280, k=20e6 pierwsze trzy dodatnie czestotliwosci
+wyniosly 11.232180144, 15.205061727 i 17.434764420 GHz.
+Dla k=40e6: 12.674833906, 16.148817927 i 19.087643924 GHz.
+To posortowane wartosci wlasne referencji diagnostycznej, a nie
+zidentyfikowane galezie DE i nie dane FEM. Zwiekszenie N oraz Q
+daje mniejsze zmiany, lecz nie ustanowiono jeszcze tolerancji akceptacji.
+Nadal wymagane: niezalezny przeglad rownan i znakow, kontrola
+shootingiem, residuale, zbieznosc i profile modow.
+
+
+## Zakonczony etap native-build zadania 44
+
+Log workera potwierdzil: stage native-build end exit_code=0.
+Nastepnie rozpoczal sie contract-slepc-modal przez
+scripts/run_fem_cpu_slepc_modal_contract.sh slepc-modal.
+Sukces kompilacji nie oznacza jeszcze sukcesu calego joba ani FEM DE.
+Przed uruchomieniem pilota nadal wymagane sa terminalny succeeded,
+receipt oraz weryfikacja tozsamosci i hashy artefaktow.
+
+
+## Przeglad rownan referencji diagnostycznej
+
+Niezalezny przeglad potwierdzil jadro Dirichleta, dystrybucyjny
+czlon delta w Dzz, normalizacje i skalowanie gamma0*Ms.
+Dodatkowa kontrola rachunku fazy ustalila: skrypt stosuje
+exp(-i*omega*time+i*k*y), czyli konwencje sprzezona do Fullmaga.
+Znak +i*k w Dyz jest spojny z operatorem +i*sqrt(K)*J*sqrt(K).
+Przy porownywaniu przyszlych zespolonych profili nalezy wykonac
+sprzezenie; sama zgodnosc widma i reciprocity nie wykrywa tej roznicy.
+Konwencje zapisano jawnie w docstringu. Nadal brakuje cross-checku
+shootingiem, residuali modow i identyfikacji fizycznych galezi.
