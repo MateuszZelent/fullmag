@@ -27,7 +27,9 @@ study.interactive(False)
 study.wait_for_solve(True)
 study.universe(
     mode="auto",
-    size=(80e-9, 80e-9, 40e-9),
+    # Keep Dirichlet boundaries far from the 20 nm film: 2 um per side.
+    # A 40 nm total domain would give Nz=0.5 at Gamma, not the open-film Nz=1.
+    size=(80e-9, 80e-9, 4.02e-6),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )

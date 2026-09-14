@@ -7046,6 +7046,23 @@ class ProblemApiTests(unittest.TestCase):
             {"backward_volume", "damon_eshbach"},
         )
 
+    def test_numeric_de_bv_example_has_far_dirichlet_boundaries(self) -> None:
+        import math
+        example = Path(__file__).resolve().parents[3] / "examples/fem_eigenmodes_dispersion_de_bv_low_k.py"
+        loaded = fm.load_problem_from_script(example, lightweight_assets=True)
+        ir = loaded.problem.to_ir(requested_backend="fem", execution_mode="strict", execution_precision="double", include_geometry_assets=False)
+        metadata = ir["problem_meta"]["runtime_metadata"]
+        thickness = metadata["dispersion_validation"]["film_thickness_m"]
+        height = metadata["study_universe"]["size"][2]
+        padding = (height - thickness) / 2
+        self.assertAlmostEqual(padding, 2e-6, delta=1e-15)
+        # Independent uniform-slab Gamma boundary estimate, not a FEM run.
+        h = 0.05 / (4 * math.pi * 1e-7)
+        ms = 140e3
+        nz = 1 - thickness / height
+        boundary_error = 1 - math.sqrt((h + ms * nz) / (h + ms))
+        self.assertLess(boundary_error, 0.01)
+
     def test_thin_film_de_bv_dispersion_validation_accepts_c1_range(self) -> None:
         validation = fm.ThinFilmDEBVDispersionValidation(
             film_thickness_m=10e-9,

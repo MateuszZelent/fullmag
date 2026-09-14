@@ -420,6 +420,12 @@ grubych warstw. Zakres zależy od grubości, materiału, pola i hybrydyzacji mod
 samo zaakceptowanie parametrów przez planner nie dowodzi stosowalności.
 Wymagane są zgodność częstości z zadanym `max_relative_error`, kontrola profilu
 modu oraz zbieżność siatki i zewnętrznej granicy magnetostatycznej.
+Przykład `examples/fem_eigenmodes_dispersion_de_bv_low_k.py` ma film
+20 nm i po 2 mikrometry powietrza z obu stron (domena 4.02 mikrometra).
+Poprzednia domena 40 nm dawała po 10 nm powietrza i silnie zmieniała kontrolę
+Gamma z granicą Dirichleta. Większy odstęp zmniejsza ten błąd brzegowy,
+lecz nie zastępuje numerycznego sprawdzenia zbieżności.
+
 Skończony airbox należy porównywać z odpowiednią korektą lub granicą zbieżności,
 a nie utożsamiać z otwartą przestrzenią. Dla C1 grubość wynosi 10 nm,
 maksimum na odcinku Gamma-X wynosi pi/(200 nm), a okno musi obejmować
