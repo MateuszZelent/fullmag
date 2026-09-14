@@ -2,6 +2,7 @@
 
 import type { components } from "@/kernel/api/generated/openapi-v2-types";
 import { DATA_FIELDS_PATH } from "@/kernel/api/apiPaths";
+import { publishViewport3DLiveRefreshRevisions } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 import {
   useCallback,
   useEffect,
@@ -6410,6 +6411,19 @@ export function useViewport3DSceneModel({
     topologyRevision: topology.revision,
     tracker: resourceCounts,
   });
+  useEffect(() => {
+    publishViewport3DLiveRefreshRevisions({
+      displayed: fieldVectorDisplayedRevision,
+      prepared: fieldVectorPreparedRevision,
+      received: fieldVectorPayloadRevisionString,
+      requested: fieldVectorRevisionString,
+    });
+  }, [
+    fieldVectorDisplayedRevision,
+    fieldVectorPayloadRevisionString,
+    fieldVectorPreparedRevision,
+    fieldVectorRevisionString,
+  ]);
   const hslReferenceVisible = resolveHslReferenceVisible(
     commandState.widgets.hslReferenceMode,
     vectorColorMode,

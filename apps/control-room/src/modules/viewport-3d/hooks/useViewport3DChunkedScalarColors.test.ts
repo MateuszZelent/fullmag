@@ -16,6 +16,7 @@ import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import type { Viewport3DFieldRenderModel } from "../viewport3dRenderModel";
 import {
   attachViewport3DFieldColorBuildReference,
+  buildViewport3DChunkedGlobalBuildKey,
   chunkedScalarColorStateIsCompatible,
   createViewport3DFieldColorBuildReference,
   filterViewport3DChunkedScalarColorEntries,
@@ -928,5 +929,47 @@ describe("useViewport3DChunkedScalarColors", () => {
     expect(sceneModelSource).toContain("primaryMagnitudeFieldMeta");
     expect(sceneModelSource).toContain("resolveScalarRange(fieldVector, scalarColorMode)");
     expect(sceneModelSource).toContain("fieldScalarRangesByMode");
+  });
+});
+
+describe("buildViewport3DChunkedGlobalBuildKey", () => {
+  const base = { modesKey: "magnitude:r1", partModesKey: "" };
+
+  it("changes when a new sample arrives with unchanged mode and range (LR-06)", () => {
+    const first = buildViewport3DChunkedGlobalBuildKey({
+      ...base,
+      fieldIdentity: "7:4096",
+    });
+    const second = buildViewport3DChunkedGlobalBuildKey({
+      ...base,
+      fieldIdentity: "8:4096",
+    });
+
+    expect(first).not.toBe(second);
+  });
+
+  it("stays stable for the same sample so an unchanged revision does not rebuild", () => {
+    expect(
+      buildViewport3DChunkedGlobalBuildKey({ ...base, fieldIdentity: "7:4096" }),
+    ).toBe(
+      buildViewport3DChunkedGlobalBuildKey({ ...base, fieldIdentity: "7:4096" }),
+    );
+  });
+
+  it("keeps the part key segment and appends the sample identity", () => {
+    const key = buildViewport3DChunkedGlobalBuildKey({
+      fieldIdentity: "9:128",
+      modesKey: "magnitude:r1",
+      partModesKey: "part-a:m:9:128:magnitude:viridis:r1:mesh:full",
+    });
+
+    expect(key).toContain("magnitude:r1||part-a:m:9:128");
+    expect(key.endsWith("||field=9:128")).toBe(true);
+  });
+
+  it("marks a missing sample explicitly instead of collapsing to the bare modes key", () => {
+    expect(
+      buildViewport3DChunkedGlobalBuildKey({ ...base, fieldIdentity: "none" }),
+    ).toBe("magnitude:r1||field=none");
   });
 });

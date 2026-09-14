@@ -1712,10 +1712,17 @@ function checkFdmCuboidSceneModelReuse() {
   ]);
   requireTokens(sceneSource, "Viewport3DScene FDM model reuse", [
     "fdmTargetViews: readonly Viewport3DFdmTargetRenderView[]",
-    "fdmTargetViews.map((view) => ({",
+    "fdmTargetViews.map((view) => (",
     "instanceModel={view.sourceModel}",
     "instanceOrdinals={view.instanceOrdinals}",
     "fdmTargetViews={fdmTargetViews}",
+  ]);
+  // LR-01: etapowanie sceny nie może już zerować danych pola w warstwach.
+  // Powrót tych literałów oznaczałby regres migotania opisany w
+  // docs/audits/2026-09-13-live-refresh-remediation-masterplan.md.
+  forbidTokens(sceneSource, "Viewport3DScene FDM model reuse", [
+    "fieldVector: null,",
+    "surfaceColors: null,",
   ]);
   requireTokens(layerSource, "FdmCuboidLayer precomputed instance model", [
     "instanceModel?: FdmCuboidInstanceModel | null",

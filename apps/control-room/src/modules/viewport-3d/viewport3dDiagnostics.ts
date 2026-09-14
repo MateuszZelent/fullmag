@@ -7,6 +7,7 @@ import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry"
 import {
   recordVisualizationDebugPerformanceMetric,
   recordVisualizationDebugResourceCounts,
+  recordVisualizationDebugRetentionRejection,
   recordVisualizationDebugViewportFrame,
 } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 import {
@@ -297,6 +298,7 @@ export class Viewport3DResourceTracker {
       ...this.counts,
       retentionRejections: (this.counts.retentionRejections ?? 0) + 1,
     };
+    recordVisualizationDebugRetentionRejection(reason);
   }
 
   getRetentionRejectionCounts(): Viewport3DRetentionRejectionCounts {

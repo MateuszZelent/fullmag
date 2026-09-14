@@ -45,6 +45,7 @@ Instrukcje dotyczą GPT-Astra, GPT-Sol, GPT-Luna oraz innych agentów pracujący
 
 ## Build i dowody
 
+- Tymczasowo nie buduj testów jednostkowych ani nie uruchamiaj zadań, których celem jest ich kompilacja; zakaz obowiązuje do odwołania przez użytkownika.
 - Na hoście z konfiguracją `Fullmag_build_runner` domyślnie zlecaj pełne buildy przez jego kolejkę — zarówno dla `mastera`, jak i branchy/worktree. Użyj skilla `local-build-runner` i [instrukcji runnera](docs/guides/local-container-runner.md). Jeden koordynator obsługuje cały projekt; nie twórz runnera per branch i nie uruchamiaj starego hostowego wykonawcy ani równoległego ciężkiego builda poza kolejką.
 - Jawnie wybierz katalog źródeł oraz `snapshot` albo pełny SHA commita. Katalog klienta nie musi być katalogiem budowanego kodu: przy zewnętrznym kliencie podaj `--worktree <absolutny-checkout>`. Brak dostępnego zatwierdzonego klienta, niezdrowy runner lub nieobsługiwany profil oznacza blokadę tej trasy, nie zgodę na cichy fallback. Nie zamieniaj żądanego GPU na CPU. Testy lekkie i odrębne bramki runtime/nauki zachowują swoje recepty; sukces buildu nie zastępuje ich dowodów.
 
