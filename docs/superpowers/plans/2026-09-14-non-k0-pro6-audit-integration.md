@@ -435,3 +435,23 @@ zestawem punktów kontrolnych; wraz z poprawnym pełnym C1: 2 passed.
 Zgodność ścieżek nadal nie dowodzi fizycznej zgodności profili własnych.
 
 Weryfikacja etapu kompletnosci zbieznosci: 67 passed, 51 subtests passed (exit 0), glowna bramka + runner benchmarku + agregacja. Runner o 11:46 UTC raportuje active_jobs=[] i idle; nowy profil runtime-only nadal nie jest na allowliscie starego obrazu eb6aabed. Wczesniejsza blokada aktywnym job44 ustapila, aktualizacja koordynatora i build aktualnego SHA pozostaja do wykonania.
+
+### Bieżący checkpoint — niezależna referencja DE i managed build, 2026-09-14
+
+Commit `5ea07f5e0` dodał pomocniczą kolokację Czebyszewa z pełnymi warunkami
+brzegowymi LL–Poissona dla filmu 100 nm. Testy diagnostyki: **5 passed**;
+uruchomienie dla stopni 32/48/64 i k = 0, 20 oraz 40 Mrad/m daje stabilne trzy
+pierwsze częstotliwości oraz jawne residua singularnego pencil. Jest to
+niezależny cross-check równań, fazy i BC opisany w
+`2026-09-14-de-full-bc-collocation-method.md`, nie wynik FEM i nie kwalifikacja.
+
+Po tym commicie zestaw walidatora scientific gate, certyfikatów pól, równowagi,
+n0, agregacji i obu referencji DE zakończył się wynikiem **91 passed, 51
+subtests passed** (exit 0). Jest to dowód logiki kontraktów i fixture'ów.
+
+Managed runner pozostaje na starym obrazie `sha256:eb6aabed…`; aktywny job
+`5f98c295fb5540e9a499b834e5bd981a` używa wcześniejszego SHA
+`75f0e4f30c81c04954997dc0d384108edc478819`, a worker nie ma jeszcze terminalnego
+receipt. Nie wykonano wymiany obrazu ani uruchomienia aktualnego commita.
+Kwalifikacja native FEM, 61 próbek C1/A1, osiem gałęzi, zbieżność mesh/airbox
+oraz porównanie z COMSOL/TetraX pozostają **NOT VERIFIED**.
