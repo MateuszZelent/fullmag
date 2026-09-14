@@ -300,3 +300,20 @@ posłuży on do ustalenia bramki porównania.
 
 Build 44 nadal wykonuje etap `contract-slepc-modal`; główna kompilacja
 runtime zakończyła się kodem 0. Pilot FEM pozostaje **NOT VERIFIED**.
+
+### Build 44: terminalny błąd ostatniego kontraktu
+
+Stan końcowy job `635451d7648a446a83e8d88e21c0279b`: `failed`, exit 2.
+Runtime zbudował się z exit 0. Siedem programów kontraktowych zbudowano,
+ale kompilacja `fem_floquet_modal_solver_contract` zakończyła się błędem:
+`poisson_airbox_shared_domain.hpp:18: fatal error: mfem.hpp: No such file or directory`.
+CTest nie został wykonany; wcześniejsze zbudowane cele nie oznaczają zaliczonych testów.
+
+Przyczyna źródłowa: cel dołącza nagłówek współdzielonej domeny korzystający
+z MFEM, lecz nie miał zależności od importowanego celu MFEM. Sąsiednie
+kontrakty mają tę zależność. Poprawka w `backends/fem/CMakeLists.txt`
+dodaje `MFEM::mfem` albo `mfem` także dla kontraktu solvera Floquet.
+Przejrzano obie gałęzie warunkowe i rzeczywisty include w pliku testu.
+Odtworzenie kompilacji i wykonanie ośmiu kontraktów w nowym managed buildzie
+pozostaje wymagane. Nie zmieniono kapsuły ani artefaktów buildu 44.
+Pilot FEM nadal nie został uruchomiony.
