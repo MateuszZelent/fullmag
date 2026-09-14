@@ -130,3 +130,38 @@ C0/C1/A1. B4–B6 nie są zamknięte. Odczyt runnera z tej sesji nadal wskazuje
 aktywny job 44 `635451d7648a446a83e8d88e21c0279b` dla starszego
 `28f552b959455957bbf6dada8a522a241425552c`; nie jest on dowodem aktualnej
 wersji i nie został zatrzymany przez tę pracę.
+
+
+## Korekta kolejności: źródło m0 przed transferem siatkowym
+
+Przegląd źródeł po `c44c53b62` wykazał, że porównanie tablicy
+`backend_plan.equilibrium_magnetization` nie jest wystarczającym dowodem
+porównania stanów użytych w solverze. `eigen_execution.rs` w
+`execute_fem_eigen_inner` przyjmuje `initial_magnetization_override`, a
+`materialize_equilibrium` zwraca osobne `equilibrium`. Benchmark
+`tests/standard_problems/mumag/comsol_nonzero_k_dispersion/problem.py`
+żąda `equilibrium_source="relax"`.
+
+Rzeczywisty eksport znajduje się w `eigen_shared_domain.rs`: artefakt
+`equilibrium_artifact.v7` zawiera `m0: equilibrium`, certyfikat akceptacji,
+sygnatury siatki/fizyki/materiału/granic i moment siły. `LinearizationState.v6`
+zawiera `m0: operator_m0`; funkcja `extend_equilibrium_m0_to_air_nodes`
+rozszerza je w powietrzu według `fixed_unit_z_on_nonmagnetic_nodes_v1`.
+Porównywanie wszystkich węzłów do osi x byłoby zatem błędne nawet dla
+jednorodnego magnetyka C1. `eigen_native_artifacts.rs` publikuje oba pliki,
+a `eigen_path_manifest.rs` publikuje listy `equilibrium_artifact_v7_paths`
+i `linearization_state_v6_paths` dla ścieżki k.
+
+Wymagana kolejność dalszej pracy:
+
+1. Odczytać rzeczywiste artefakty równowagi/linearyzacji wskazane dla próbek;
+   powiązać ich digesty, siatkę i użyty stan z wynikami modalnymi. Brak takiego
+   dowodu nie może być zastępowany początkową tablicą planu.
+2. Kontrolować m0 i kryterium jednorodności C1 wyłącznie na magnetycznym
+   wsparciu; wartości rozszerzenia w airboxie nie są magnetyzacją próbki.
+3. Dopiero następnie porównać przestrzennie rzeczywiste m0 między siatkami A1
+   i umożliwić ich różną liczbę węzłów. Samo usunięcie tablic z sygnatury
+   osłabiłoby kontrolę fizyki zamiast naprawić transfer.
+
+To nowo zidentyfikowana luka dowodu w walidatorze. Eksport źródłowy nie jest
+jeszcze potwierdzeniem dostępności kompletnych artefaktów w kampanii runtime.
