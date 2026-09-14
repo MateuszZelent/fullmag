@@ -17,6 +17,17 @@ def reference(k):
     return kalinikos_slab_n0_frequency_hz(k_norm=abs(k), **PARAMETERS)
 
 
+def finite_airbox_gamma_hz(air_each_side_m=2e-6):
+    """Uniform Gamma control with phi=0 at the two finite z boundaries."""
+    if not math.isfinite(air_each_side_m) or air_each_side_m <= 0:
+        raise ValueError("Air padding must be finite and positive")
+    thickness = PARAMETERS["film_thickness_m"]
+    nz = 1 - thickness / (thickness + 2*air_each_side_m)
+    bias = PARAMETERS["bias_field_a_per_m"]
+    return PARAMETERS["gamma0_rad_s_per_a_m"]/(2*math.pi)*math.sqrt(
+        bias*(bias + PARAMETERS["saturation_magnetisation_a_per_m"]*nz))
+
+
 def read_modes(path):
     with path.open(encoding="utf-8-sig", newline="") as stream:
         raw = list(csv.DictReader(stream))
@@ -88,6 +99,9 @@ def main(argv=None):
             "model_sha256":request["model_sha256"],"source_job":request["job"],
             "dispersion_sha256":hashlib.sha256(source.read_bytes()).hexdigest(),
             "selected_branch":args.branch_id,"mode_rows":len(rows),
+            "gamma_open_film_hz":reference(0),
+            "gamma_finite_airbox_hz":finite_airbox_gamma_hz(),
+            "air_padding_each_side_m_assumed":2e-6,
             "max_abs_relative_difference":max(abs(r["relative_difference"]) for r in comparison) if comparison else None,
             "limitations":["Verify approved material and geometry against the run input.",
                            "Uniform n=0 approximation; thickness-mode coupling is omitted.",

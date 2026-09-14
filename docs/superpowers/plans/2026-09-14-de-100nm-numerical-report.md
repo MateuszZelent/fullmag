@@ -147,3 +147,15 @@ podmiany gałęzi oraz granicy Gamma/reciprocity. To dane testowe, nie wyniki FE
 Narzędzie nie zostało jeszcze wykonane na rzeczywistym spektrum, ponieważ build
 44 nie dostarczył runtime. Żaden syntetyczny wykres nie jest przedstawiany jako
 wynik symulacji.
+
+## Kontrola Gamma dla warunków brzegowych pilota
+
+Dla jednorodnego modu Gamma i phi=0 na obu granicach z, współczynnik wynosi
+Nz = 1 − t/(t + 2a), gdzie t=100 nm i a=2 µm: Nz=0.9756097561.
+Kontrola Kittela dla tej skończonej domeny daje 9.205971992 GHz,
+a dla nieskończonego filmu 9.309813711 GHz. Różnica −1.1154% jest różnicą
+modeli brzegowych. Nie można uznać jej samej za błąd numeryczny ani dostrajać
+solvera do wartości otwartej domeny. Zbieżność powietrza pozostaje wymagana.
+Narzędzie porównania zapisuje oba odniesienia Gamma oddzielnie. Po zmianie
+przeszło 5 testów, w tym kontrola granicy dużego airboxu. To nadal wartości
+analityczne i testy źródeł, nie wyniki FEM.
