@@ -3984,11 +3984,9 @@ def validate_low_k_de_bv_analytic_dispersion(
             "analytic_thin_film_de_bv_reference_not_fem_demag_k",
             "manifest.validation.dynamic_demag_operator_source",
         )
-    elif reference_model not in (None, ""):
-        fail(
-            "manifest.validation.dispersion_reference_model must be empty for "
-            "numeric modal solver DE/BV comparison artifacts"
-        )
+    else:
+        require_equal(reference_model, "kalinikos_slab_n0", "manifest.validation.dispersion_reference_model")
+        require_equal(dynamic_demag_source, "numeric_modal_solver", "manifest.validation.dynamic_demag_operator_source")
     require_equal(
         canonical_dispersion_validation(
             manifest_validation,

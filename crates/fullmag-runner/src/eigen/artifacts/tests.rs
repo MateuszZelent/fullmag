@@ -2006,59 +2006,6 @@ fn production_dispersion_with_de_bv_validation_writes_analytic_columns() {
 }
 
 #[test]
-fn de_bv_reference_model_cannot_change_numeric_manifest_source() {
-    let temp = TempDirGuard::new("eigen-artifacts-de-bv-reference-source");
-    let mut result =
-        sample_result_with_solver_model(EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0);
-    result.include_demag = true;
-    result.samples[0].sample.path_s = 1.0;
-    result.samples[0].sample.k_vector = [3.0e6, 0.0, 0.0];
-    result.dispersion_validation = Some(fullmag_ir::FemEigenDispersionValidationIR {
-        kind: "thin_film_de_bv_low_k".to_string(),
-        analytic_model: "kalinikos_slab_n0".to_string(),
-        film_thickness_m: 20e-9,
-        equilibrium_magnetization: [1.0, 0.0, 0.0],
-        film_normal: [0.0, 0.0, 1.0],
-        frequency_window_hz: fullmag_ir::FemEigenDispersionValidationWindowIR {
-            min: 0.0,
-            max: 5.0e9,
-        },
-        max_k_rad_per_m: 3.0e6,
-        max_relative_error: 0.10,
-        scenarios: vec![fullmag_ir::FemEigenDispersionValidationScenarioIR {
-            geometry: "backward_volume".to_string(),
-            branch_id: "branch_0".to_string(),
-            sample_indices: vec![0],
-        }],
-    });
-
-    write_frequency_domain_eigen_manifest(&temp.path, &result)
-        .expect("frequency-domain manifest should write");
-
-    let manifest: Value = serde_json::from_slice(
-        &std::fs::read(temp.path.join("frequency_domain/manifest.v1.json"))
-            .expect("frequency-domain manifest should be written"),
-    )
-    .expect("frequency-domain manifest should parse");
-    assert_eq!(
-        manifest["requested_execution"]["include_demag"],
-        Value::Bool(true)
-    );
-    assert_eq!(
-        manifest["validation"]["dispersion_frequency_source"],
-        "numeric_modal_solver_with_analytic_comparison"
-    );
-    assert_eq!(
-        manifest["validation"]["dispersion_reference_model"],
-        "kalinikos_slab_n0"
-    );
-    assert_eq!(
-        manifest["validation"]["dynamic_demag_operator_source"],
-        "numeric_modal_solver"
-    );
-}
-
-#[test]
 fn production_cpu_shift_invert_mode_artifacts_use_production_phasor_contract() {
     let temp = TempDirGuard::new("eigen-artifacts-production-phasor");
     let result = sample_result_with_solver_model(EigenSolverModel::ProductionCpuShiftInvert);

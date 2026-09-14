@@ -860,11 +860,13 @@ the DE and BV paths when both scenarios need a `k=0` anchor, so each published
 CSV row has one unambiguous validation geometry.
 Writers must derive those analytic columns from the declared DE/BV validation
 intent and the run's material/bias/reference context, not from the solver-model
-name alone. A future production CPU/GPU modal solver that carries the same
-`thin_film_de_bv_low_k` validation intent must therefore publish the same
-analytic reference and relative-error columns; the current
-`reference_thin_film_de_bv_kalinikos_n0` adapter is only one producer of that
-contract.
+name alone. A production CPU/GPU modal solver that carries the same
+`thin_film_de_bv_low_k` validation intent therefore publishes the numeric
+branch together with the independent analytic reference and relative-error
+columns. The standalone
+`scripts/generate_comsol_analytic_reference.py` command is the explicit
+reference-solver route; validation metadata must never select that model in the
+FEM execution path.
 The shared artifact plotter
 `scripts/plot_fem_frequency_domain_eigen_artifacts.py --dispersion-png` must
 use the same columns when present: numerical solver points remain the primary
@@ -905,12 +907,14 @@ narrow one-dimensional film sweeps in the two standard geometries:
   magnetization;
 - backward-volume (BV): in-plane `k` parallel to the equilibrium magnetization.
 
-The default target range is `|k| <= 2e6..3e6 rad/m` (`2..3 1/um`) with a
-low-GHz modal/frequency window such as `0..5e9 Hz`. Accepted production bundles
-must record enough material, geometry, bias-field, demag-model, and boundary
-provenance for validators to compare the published branch against the applicable
-analytic DE/BV dispersion. Broader k-direction scans may be added as stress or
-coverage tests, but they are not the primary scientific acceptance path.
+The low-k preset uses `|k| <= 2e6..3e6 rad/m` (`2..3 1/um`) with a low-GHz
+modal/frequency window such as `0..5e9 Hz`. These values are a convenient
+default for the slab oracle, not a universal planner limit. Accepted bundles
+must record enough material, geometry, bias-field, demag-model, boundary, and
+model-applicability provenance for validators to compare the published branch
+against the applicable analytic DE/BV dispersion. Broader k-direction scans
+may be added as stress or coverage tests, but they are not the primary
+scientific acceptance path.
 Regression tests should follow the same shape: separate DE and BV fixtures,
 sample only the documented low-k range needed for the analytic comparison, and
 use a modal/frequency window no wider than the low-GHz acceptance band by
@@ -924,19 +928,21 @@ this acceptance shape. It requires
 `kind = "thin_film_de_bv_low_k"`,
 `analytic_model = "kalinikos_slab_n0"`, `film_thickness_m`,
 `equilibrium_magnetization`, `film_normal`, `frequency_window_hz`,
-`max_k_rad_per_m <= 3e6`, and scenario entries for both `damon_eshbach` and
-`backward_volume`. Each scenario names the `branch_id` and `sample_indices` to
-check; validators reject out-of-range k, out-of-plane k, wrong DE/BV
-orientation, windows above 5 GHz, missing scenarios, and branch frequencies
-whose relative error exceeds the declared tolerance.
+finite positive `max_k_rad_per_m`, and scenario entries for both
+`damon_eshbach` and `backward_volume`. Each scenario names the `branch_id` and
+`sample_indices` to check; validators reject out-of-range k, out-of-plane k,
+wrong DE/BV orientation, samples outside the declared frequency window,
+missing scenarios, material or bias configurations outside the slab model's
+applicability, and branch frequencies whose relative error exceeds the
+declared tolerance.
 Runtime-produced bundles obtain this validation block from authored
 `problem_meta.runtime_metadata.dispersion_validation`; Python scripts should set
 it with `study.dispersion_validation(fm.ThinFilmDEBVDispersionValidation(...))`
 or the equivalent flat `fm.dispersion_validation(...)` helper rather than
 hand-writing backend-plan metadata. The FEM eigen planner copies this payload
 into the typed `FemEigenDispersionValidationIR`
-`backend_plan.dispersion_validation` field, rejecting unsupported shape, broad
-k ranges, missing DE/BV scenarios, invalid vectors, or windows above 5 GHz at
+`backend_plan.dispersion_validation` field, rejecting unsupported shape,
+missing DE/BV scenarios, invalid vectors, or non-positive/non-finite ranges at
 planning time. Runtime modal k-path bundles must also mirror the same payload
 in `frequency_domain/manifest.v1.json.validation.dispersion_validation`, so API
 and Control Room consumers can inspect the declared DE/BV analytic acceptance
@@ -947,19 +953,17 @@ and checks that exact validation intent against the published branch data.
 The same `validation` object must also state where the published branch
 frequencies came from:
 
-- `dispersion_frequency_source = "analytic_reference_model"` for the current
-  CPU/reference `reference_thin_film_de_bv_kalinikos_n0` slice;
-- `dispersion_reference_model = "kalinikos_slab_n0"` for that analytic
-  reference slice;
-- `dynamic_demag_operator_source =
-  "analytic_thin_film_de_bv_reference_not_fem_demag_k"` for that slice, so
-  validators and Control Room do not mistake it for a numerical FEM
-  dynamic-demag-k operator;
-- future production CPU/GPU modal solvers that emit the same analytic columns
-  must use `dispersion_frequency_source =
-  "numeric_modal_solver_with_analytic_comparison"` and leave
-  `dispersion_reference_model` empty unless they are themselves an analytic
-  reference adapter.
+- `dispersion_frequency_source =
+  "numeric_modal_solver_with_analytic_comparison"` for a FEM branch that was
+  actually solved numerically;
+- `dispersion_reference_model = "kalinikos_slab_n0"` identifies the independent
+  comparison oracle and does not change the FEM solver selection;
+- `dynamic_demag_operator_source = "numeric_modal_solver"` is required for
+  nonzero-k demagnetizing runs, so validators and Control Room can distinguish
+  actual FEM dynamic demag from the separate reference CSV;
+- `analytic_reference_model` and
+  `analytic_thin_film_de_bv_reference_not_fem_demag_k` are legacy values and
+  must not be emitted by the current FEM runner.
 
 ## modes/sample_XXXX/mode_YYYY.json
 

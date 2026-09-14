@@ -359,7 +359,6 @@ fn tet4_volume(nodes: [[f64; 3]; 4]) -> f64 {
 pub enum EigenSolverModel {
     ReferenceScalarTangent,
     ReferenceFull2x2Tangent,
-    ReferenceThinFilmDeBvKalinikosN0,
     ReferenceK0KittelSyntheticDemagFactor,
     LinearizedLlgTangentPlane,
     ProductionCpuShiftInvert,
@@ -372,7 +371,6 @@ impl EigenSolverModel {
         match self {
             Self::ReferenceScalarTangent => "reference_scalar_tangent",
             Self::ReferenceFull2x2Tangent => "reference_full_2x2_tangent",
-            Self::ReferenceThinFilmDeBvKalinikosN0 => "reference_thin_film_de_bv_kalinikos_n0",
             Self::ReferenceK0KittelSyntheticDemagFactor => {
                 "reference_k0_kittel_synthetic_demag_factor"
             }
