@@ -910,7 +910,7 @@ class ScientificGateTests(unittest.TestCase):
 
     def test_comparison_spectrum_rejects_duplicate_samples_and_bool_indices(self):
         from unittest.mock import patch
-        baseline = {"spectrum": {"samples": [{"sample_index": 0, "k_vector": [0., 0., 0.],
+        baseline = {"spectrum": {"sample_count": 1, "mode_count": 1, "samples": [{"sample_index": 0, "k_vector": [0., 0., 0.],
                     "modes": [{"raw_mode_index": 0}]}]},
                     "diagnostics": {"sample_count": 1, "mode_count": 1}}
         for defect in ("duplicate", "bool_sample", "bool_mode", "negative_mode", "bad_k"):
@@ -922,6 +922,7 @@ class ScientificGateTests(unittest.TestCase):
                     second["modes"][0]["raw_mode_index"] = 1
                     bundle["spectrum"]["samples"].append(second)
                     bundle["diagnostics"].update(sample_count=2, mode_count=2)
+                    bundle["spectrum"].update(sample_count=2, mode_count=2)
                 elif defect == "bool_sample": sample["sample_index"] = False
                 elif defect == "bool_mode": sample["modes"][0]["raw_mode_index"] = False
                 elif defect == "negative_mode": sample["modes"][0]["raw_mode_index"] = -1
@@ -930,6 +931,25 @@ class ScientificGateTests(unittest.TestCase):
                 with patch.object(gate, "_validate_modal_quality", return_value=True):
                     gate._validate_bundle_modal_payload(bundle, "control", reasons)
                 self.assertTrue(reasons)
+
+    def test_comparison_counts_must_match_contents_with_integer_types(self):
+        from unittest.mock import patch
+        baseline = {"spectrum": {"sample_count": 1, "mode_count": 1,
+                    "samples": [{"sample_index": 0, "k_vector": [0., 0., 0.], "modes": [{"raw_mode_index": 0}]}]},
+                    "diagnostics": {"sample_count": 1, "mode_count": 1}}
+        with patch.object(gate, "_validate_modal_quality", return_value=True):
+            reasons = []
+            gate._validate_bundle_modal_payload(baseline, "control", reasons)
+            self.assertFalse(reasons)
+            for source in ("spectrum", "diagnostics"):
+                for key in ("sample_count", "mode_count"):
+                    for value in (None, True, 2):
+                        with self.subTest(source=source, key=key, value=value):
+                            bundle = copy.deepcopy(baseline)
+                            bundle[source][key] = value
+                            reasons = []
+                            gate._validate_bundle_modal_payload(bundle, "control", reasons)
+                            self.assertTrue(any(key in reason for reason in reasons))
 
     def test_bundle_checks_points_outside_selected_control(self):
         modes = [{"raw_mode_index": raw, "frequency_real_hz": 1e9 + raw, "frequency_imag_hz": 0.0} for raw in (0, 1)]
@@ -957,6 +977,26 @@ class ScientificGateTests(unittest.TestCase):
                     gate._load_numeric_bundle(case_dir, descriptor, "KS", reasons, require_demag=True)
                     self.assertTrue(any(f"manifest {field}" in reason for reason in reasons), reasons)
                     self.assertFalse(any("SHA256 does not match" in reason for reason in reasons), reasons)
+
+    def test_convergence_cannot_use_only_control_samples(self):
+        samples = [{"sample_index": index, "modes": [{"raw_mode_index": raw, "frequency_real_hz": 1e9 + raw} for raw in range(8)]}
+                   for index in (0, 10, 20, 30, 40, 50, 60)]
+        branches = [{"branch_id": raw, "points": [{"sample_index": sample["sample_index"], "raw_mode_index": raw,
+                     "frequency_real_hz": 1e9 + raw} for sample in samples]} for raw in range(8)]
+        reasons = []
+        gate._validate_convergence_coverage({"spectrum": {"samples": samples}, "branches": {"branches": branches}}, "c1", "mesh fine", reasons)
+        self.assertTrue(any("complete benchmark sample set" in reason for reason in reasons))
+        self.assertTrue(any("complete tracked branches" in reason for reason in reasons))
+
+    def test_convergence_path_checks_noncontrol_sample(self):
+        primary = {"spectrum": {"samples": [{"sample_index": i, "k_vector": [float(i), 0., 0.]} for i in range(61)]}}
+        candidate = copy.deepcopy(primary)
+        reasons = []
+        gate._validate_convergence_path(candidate, primary, "fine", reasons)
+        self.assertFalse(reasons)
+        candidate["spectrum"]["samples"][17]["k_vector"][1] = 1.0
+        gate._validate_convergence_path(candidate, primary, "fine", reasons)
+        self.assertTrue(any("sample 17 wavevector differs" in reason for reason in reasons))
 
     def test_missing_evidence_is_unqualified_with_explicit_reasons(self):
         with tempfile.TemporaryDirectory() as directory:

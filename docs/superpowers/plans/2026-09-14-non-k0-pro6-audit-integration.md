@@ -416,3 +416,22 @@ manifest.analysis_family=magnetic_frequency_domain i study_product=modal_eigen.
 Pełne sprawdzenie pozostałej semantyki manifestu nadal otwarte.
 
 Regresja manifestu podmienia study_product/analysis_family i ponownie przelicza descriptor SHA256; odmowa wynika z semantyki, nie z nieaktualnego hasha. Laczny zestaw glownej bramki, certyfikatu pola i n0: 65 passed, 39 subtests passed (exit 0). Bez wykonania FEM.
+
+Liczniki comparison spectrum i solver diagnostics sa teraz porownywane z rzeczywista liczba probek/modow; wymagane sa int, nie bool. Regresje obejmuja brak, bool i rozbieznosc obu licznikow w obu artefaktach: 2 passed, 12 subtests passed wraz z poprawnym C1. To zgodnosc deklaracji z zawartoscia, nie dowod kompletnosci widma fizycznego.
+
+
+Przebiegi zbieżności wymagają teraz pełnego zbioru indeksów próbek
+(C0: {0}; C1/A1: 0..60) oraz wymaganych kompletnych gałęzi przez istniejący
+walidator branches. Same punkty kontrolne nie kwalifikują całego przebiegu.
+Regresja siedmiu punktów kontrolnych i poprawny pełny C1: 2 passed.
+Porównania błędu nadal mają jawne punkty kontrolne; zgodność indeksów nie
+zastępuje pełnego sprawdzenia geometrii ścieżki ani kompletności widma.
+
+
+Kontrola zbieżności porównuje teraz każdy opublikowany k_vector z primary
+spectrum dla tego samego sample_index. Brak primary uniemożliwia tę
+weryfikację i jest zgłaszany jako błąd. Regresja zmienia próbkę 17 poza
+zestawem punktów kontrolnych; wraz z poprawnym pełnym C1: 2 passed.
+Zgodność ścieżek nadal nie dowodzi fizycznej zgodności profili własnych.
+
+Weryfikacja etapu kompletnosci zbieznosci: 67 passed, 51 subtests passed (exit 0), glowna bramka + runner benchmarku + agregacja. Runner o 11:46 UTC raportuje active_jobs=[] i idle; nowy profil runtime-only nadal nie jest na allowliscie starego obrazu eb6aabed. Wczesniejsza blokada aktywnym job44 ustapila, aktualizacja koordynatora i build aktualnego SHA pozostaja do wykonania.

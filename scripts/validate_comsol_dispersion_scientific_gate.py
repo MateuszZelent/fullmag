@@ -1267,10 +1267,10 @@ def _validate_bundle_modal_payload(
             seen.add(key)
             mode_count += 1
             _validate_modal_quality(mode, f"{label} spectrum sample {sample_index} mode {raw_mode_index}", reasons)
-    if diagnostics.get("sample_count") != len(samples):
-        reasons.append(f"{label} solver diagnostics sample_count does not match spectrum")
-    if diagnostics.get("mode_count") != mode_count:
-        reasons.append(f"{label} solver diagnostics mode_count does not match spectrum")
+    for source_name, source in (("spectrum", spectrum), ("solver diagnostics", diagnostics)):
+        for key, expected in (("sample_count", len(samples)), ("mode_count", mode_count)):
+            if type(source.get(key)) is not int or source[key] != expected:
+                reasons.append(f"{label} {source_name} {key} does not match spectrum contents")
 
 
 def _validate_bundle_branches(bundle, label, reasons):
@@ -1693,6 +1693,41 @@ def _backend_signature(metadata: Mapping[str, Any], *, vary: str | None = None) 
         return None
 
 
+def _validate_convergence_coverage(bundle, case, label, reasons):
+    samples = bundle["spectrum"].get("samples", [])
+    expected = {0} if case == "c0" else set(range(EXPECTED_PATH_SAMPLE_COUNT))
+    actual = {sample.get("sample_index") for sample in samples
+              if isinstance(sample, Mapping) and type(sample.get("sample_index")) is int}
+    if actual != expected:
+        reasons.append(f"{label} does not cover the complete benchmark sample set")
+    modes = {(sample["sample_index"], mode["raw_mode_index"]): mode["frequency_real_hz"]
+             for sample in samples if isinstance(sample, Mapping) and type(sample.get("sample_index")) is int
+             and isinstance(sample.get("modes"), list)
+             for mode in sample["modes"] if isinstance(mode, Mapping) and type(mode.get("raw_mode_index")) is int
+             and _finite(mode.get("frequency_real_hz"))}
+    branch_reasons = []
+    _validate_branches(bundle["branches"], case, modes, branch_reasons)
+    reasons.extend(f"{label}: {reason}" for reason in branch_reasons)
+
+
+def _validate_convergence_path(bundle, primary, label, reasons):
+    if not isinstance(primary, Mapping):
+        reasons.append(f"{label} requires the primary spectrum for path verification")
+        return
+    reference_samples = primary.get("spectrum", {}).get("samples", [])
+    references = {item["sample_index"]: item.get("k_vector") for item in reference_samples
+                  if isinstance(item, Mapping) and type(item.get("sample_index")) is int}
+    for sample in bundle["spectrum"].get("samples", []):
+        if not isinstance(sample, Mapping) or type(sample.get("sample_index")) is not int:
+            continue
+        index = sample["sample_index"]
+        actual, expected = sample.get("k_vector"), references.get(index)
+        if not isinstance(actual, list) or not isinstance(expected, list) or len(actual) != 3 or len(expected) != 3 or any(
+            not _finite(a) or not _finite(b) or abs(a-b) > 1e-8 * max(1.0, abs(b)) for a, b in zip(actual, expected)
+        ):
+            reasons.append(f"{label} sample {index} wavevector differs from the primary path")
+
+
 def _validate_convergence_pair(
     case_dir: Path,
     evidence: Mapping[str, Any] | None,
@@ -1725,6 +1760,10 @@ def _validate_convergence_pair(
     right = _load_numeric_bundle(case_dir, runs.get(right_name), f"convergence.{key}.{right_name}", reasons, require_demag=case in PATH_CASES)
     if left is None or right is None:
         return _new_check("fail")
+    _validate_convergence_coverage(left, case, f"convergence.{key}.{left_name}", reasons)
+    _validate_convergence_coverage(right, case, f"convergence.{key}.{right_name}", reasons)
+    _validate_convergence_path(left, primary_bundle, f"convergence.{key}.{left_name}", reasons)
+    _validate_convergence_path(right, primary_bundle, f"convergence.{key}.{right_name}", reasons)
     if key in {"mesh", "airbox"}:
         left_identity = _bundle_identity(left, key)
         right_identity = _bundle_identity(right, key)
