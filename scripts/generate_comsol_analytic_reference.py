@@ -30,6 +30,7 @@ if str(PYTHON_PACKAGE) not in sys.path:
 
 from verify_fem_frequency_domain_eigen_artifacts import (  # noqa: E402
     kalinikos_slab_n0_frequency_hz,
+    p00_demag_factor,
 )
 from tests.standard_problems.mumag.comsol_nonzero_k_dispersion.config import (  # noqa: E402
     AEX_J_PER_M,
@@ -84,34 +85,6 @@ def _require_positive(value: float, name: str) -> float:
     if not math.isfinite(parsed) or parsed <= 0.0:
         raise ValueError(f"{name} must be finite and positive")
     return parsed
-
-
-def p00_demag_factor(k_norm: float, film_thickness_m: float) -> float:
-    """Return the n=0 dynamic thin-film factor P00(k*t).
-
-    The series near ``k*t=0`` avoids cancellation in ``1-exp(-k*t)`` and
-    makes the Gamma/Kittel limit executable in double precision.
-    """
-
-    k_norm = _require_finite_nonnegative(k_norm, "k_norm")
-    film_thickness_m = _require_positive(film_thickness_m, "film_thickness_m")
-    kd = k_norm * film_thickness_m
-    if kd == 0.0:
-        return 0.0
-    if abs(kd) < 1.0e-4:
-        # 1 - (1 - exp(-x))/x = x/2 - x^2/6 + x^3/24 - x^4/120 + ...
-        p00 = kd * (
-            0.5
-            + kd * (
-                -1.0 / 6.0
-                + kd * (1.0 / 24.0 + kd * (-1.0 / 120.0 + kd / 720.0))
-            )
-        )
-    else:
-        p00 = 1.0 - (-math.expm1(-kd)) / kd
-    if not math.isfinite(p00) or not 0.0 <= p00 < 1.0:
-        raise ValueError("P00(k*t) must be finite and lie in [0, 1)")
-    return p00
 
 
 def exchange_field_A_per_m(k_norm: float) -> float:

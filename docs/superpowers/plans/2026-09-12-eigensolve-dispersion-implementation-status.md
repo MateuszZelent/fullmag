@@ -1,5 +1,39 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Aktualizacja po review — 2026-09-14
+
+Stan: **W TRAKCIE**, fizyka non-k0 **NOT VERIFIED**. Sprawdzony HEAD:
+`95763e6a7f3d6a7c19657bd214d5d805082b926b`; branch i worktree pozostają
+te same. Checkpoint z 13 września poniżej stanowi historię, również w zakresie
+runnera, jobów, tokena i wolnego miejsca; nie jest aktualnym health-checkiem.
+
+| Problem review | Implementacja | Dowód / pozostała praca |
+|---|---|---|
+| Walidacja przełącza FEM na analitykę | Naprawa w toku | Wymagane rozdzielenie routingu i test regresji |
+| P00 przy k do zera | Python poprawiony; Rust w trakcie ujednolicania | 10 testów generatora passed, w tym częstość BV/DE przy małym k; brak kompilacji Rust |
+| Sztywne 3e6 rad/m i 5 GHz | Usunięte z walidatorów Python/plannera; defaulty zachowane | 2 testy Python API passed, w tym zakres C1 i NaN/Inf; planner niekompilowany |
+| Bramka naukowa C0/C1/A1 | Implementacja w toku | B4–B6 otwarte do rzeczywistych wyników i zbieżności |
+| Dokumentacja | Aktualizacja w toku | Rozdzielono stan źródeł i dowody fizyczne |
+| Polityka solvera / telemetria | Naprawa w toku | Wymagana zgodność z rzeczywistą konfiguracją |
+
+Testy Python uruchomiono z `-B` i wyłączonym cache pytest. Pierwsze zebranie
+testów API nie znalazło pakietu `fullmag`; ponowienie z repozytoryjnym
+`PYTHONPATH=packages/fullmag-py/src` zakończyło się powodzeniem.
+Obowiązuje zakaz kompilacji testów jednostkowych. Żaden z powyższych wyników
+nie jest dowodem wykonania natywnego MFEM/SLEPc ani poprawności pełnego widma.
+
+Aktualny odczyt `just runner-container-status` (2026-09-14):
+`worker_alive=true`, `accepting_jobs=true`, około 48.0 GB wolnego miejsca.
+Job 43 `9ce502f938a64abd85d74d4e391b5d3a` jest `running`, dla czystego
+commita `95763e6a7f3d6a7c19657bd214d5d805082b926b`; nie obejmuje zmian review.
+Nie uruchomiono nowego buildu ani nie zmieniono koordynatora.
+Kontrole: 7 testów istniejącego walidatora DE/BV passed, 10 testów dokumentacji
+passed, walidacja source-map noty 0828 exit 0. Są to dowody źródłowe,
+a nie wynik obliczenia dyspersji. Dodano regresję planera C1 i ujemnego k;
+pozostaje niekompilowana zgodnie z ograniczeniem użytkownika.
+
+## Historyczny checkpoint — 2026-09-13
+
 Data: 2026-09-13. Status zadania: **W TRAKCIE**. Kwalifikacja solvera non-k0: **NOT VERIFIED**.
 
 ## Aktualne kryterium ukończenia — 2026-09-13

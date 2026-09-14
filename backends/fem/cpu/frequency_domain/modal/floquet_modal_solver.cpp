@@ -901,6 +901,11 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
     result.ksp_type = "gmres";
     result.pc_type = "jacobi";
     result.factorization_package = "none";
+    result.poisson_ksp_type = "preonly";
+    result.poisson_pc_type = "lu";
+    result.poisson_factorization_package = "petsc_default_lu";
+    result.poisson_iteration_semantics =
+        "preonly_factorization_no_iterative_convergence";
     result.nullspace_policy = "nonzero_k_invertible_poisson";
     result.unsupported_reason = "";
 
@@ -987,21 +992,30 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
         destroy_all();
         return result;
     }
+    const PetscReal poisson_ksp_rtol = std::max(
+        static_cast<PetscReal>(1.0e-13),
+        std::min(
+            static_cast<PetscReal>(1.0e-10),
+            static_cast<PetscReal>(1.0e-3 * std::max(
+                spectral_request.residual_tolerance,
+                1.0e-10))));
+    // Keep both KSP layers explicit.  PETSC_DEFAULT is part of the selected
+    // PETSc policy here; query the resolved value below instead of reporting
+    // a guessed zero or introducing a hidden absolute-tolerance constant.
+    const PetscInt requested_linear_iterations =
+        spectral_request.max_linear_iterations > 0
+            ? static_cast<PetscInt>(spectral_request.max_linear_iterations)
+            : PETSC_DEFAULT;
     PC poisson_pc = nullptr;
     if (KSPGetPC(context.p_ksp, &poisson_pc) != 0 ||
         PCSetType(poisson_pc, PCLU) != 0 ||
         PCFactorSetShiftType(poisson_pc, MAT_SHIFT_NONZERO) != 0 ||
         KSPSetTolerances(
             context.p_ksp,
-            std::max(1.0e-13, std::min(1.0e-10,
-                                       1.0e-3 * std::max(
-                                           spectral_request.residual_tolerance,
-                                           1.0e-10))),
+            poisson_ksp_rtol,
             PETSC_DEFAULT,
             PETSC_DEFAULT,
-            spectral_request.max_linear_iterations > 0
-                ? static_cast<PetscInt>(spectral_request.max_linear_iterations)
-                : PETSC_DEFAULT) != 0 ||
+            requested_linear_iterations) != 0 ||
         KSPSetErrorIfNotConverged(context.p_ksp, PETSC_TRUE) != 0 ||
         KSPSetUp(context.p_ksp) != 0 ||
         VecCreateSeq(PETSC_COMM_SELF, context.phi_split_count, &context.phi_rhs) != 0 ||
@@ -1014,6 +1028,27 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
         destroy_all();
         return result;
     }
+    PetscReal poisson_actual_rtol = 0.0;
+    PetscReal poisson_actual_atol = 0.0;
+    PetscReal poisson_actual_dtol = 0.0;
+    PetscInt poisson_actual_max_iterations = 0;
+    if (KSPGetTolerances(
+            context.p_ksp,
+            &poisson_actual_rtol,
+            &poisson_actual_atol,
+            &poisson_actual_dtol,
+            &poisson_actual_max_iterations) != 0) {
+        result.status = "solve_error";
+        result.unsupported_reason = "floquet_poisson_ksp_tolerance_query_failed";
+        destroy_all();
+        return result;
+    }
+    (void)poisson_actual_dtol;
+    result.poisson_ksp_rtol = static_cast<double>(poisson_actual_rtol);
+    result.poisson_ksp_atol = static_cast<double>(poisson_actual_atol);
+    result.poisson_ksp_max_iterations = poisson_actual_max_iterations > 0
+        ? static_cast<int>(poisson_actual_max_iterations)
+        : 0;
     if (MatCreateShell(
             PETSC_COMM_SELF,
             context.q_split_count,
@@ -1084,9 +1119,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
             shifted_ksp_tolerance,
             PETSC_DEFAULT,
             PETSC_DEFAULT,
-            spectral_request.max_linear_iterations > 0
-                ? static_cast<PetscInt>(spectral_request.max_linear_iterations)
-                : PETSC_DEFAULT) != 0 ||
+            requested_linear_iterations) != 0 ||
         KSPSetErrorIfNotConverged(shifted_ksp, PETSC_TRUE) != 0 ||
         VecCreateSeq(PETSC_COMM_SELF, split_dimension, &xr) != 0 ||
         VecCreateSeq(PETSC_COMM_SELF, split_dimension, &xi) != 0) {
@@ -1095,10 +1128,26 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
         destroy_all();
         return result;
     }
-    result.ksp_rtol = static_cast<double>(shifted_ksp_tolerance);
-    result.ksp_atol = 0.0;
-    result.ksp_max_iterations = spectral_request.max_linear_iterations > 0
-        ? spectral_request.max_linear_iterations
+    PetscReal shifted_actual_rtol = 0.0;
+    PetscReal shifted_actual_atol = 0.0;
+    PetscReal shifted_actual_dtol = 0.0;
+    PetscInt shifted_actual_max_iterations = 0;
+    if (KSPGetTolerances(
+            shifted_ksp,
+            &shifted_actual_rtol,
+            &shifted_actual_atol,
+            &shifted_actual_dtol,
+            &shifted_actual_max_iterations) != 0) {
+        result.status = "solve_error";
+        result.unsupported_reason = "floquet_shifted_ksp_tolerance_query_failed";
+        destroy_all();
+        return result;
+    }
+    (void)shifted_actual_dtol;
+    result.ksp_rtol = static_cast<double>(shifted_actual_rtol);
+    result.ksp_atol = static_cast<double>(shifted_actual_atol);
+    result.ksp_max_iterations = shifted_actual_max_iterations > 0
+        ? static_cast<int>(shifted_actual_max_iterations)
         : 0;
 
     if (EPSSolve(eps) != 0) {

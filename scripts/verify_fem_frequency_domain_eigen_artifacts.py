@@ -3814,6 +3814,51 @@ def vector_dot(
     return sum(left * right for left, right in zip(lhs, rhs))
 
 
+def p00_demag_factor(k_norm: float, film_thickness_m: float) -> float:
+    """Stable slab P00; dimensionless argument k*t, with the Kittel limit."""
+    if not math.isfinite(k_norm) or k_norm < 0.0:
+        raise ValueError("k_norm must be finite and non-negative")
+    if not math.isfinite(film_thickness_m) or film_thickness_m <= 0.0:
+        raise ValueError("film_thickness_m must be finite and positive")
+    kd = k_norm * film_thickness_m
+    if not math.isfinite(kd):
+        raise ValueError("k*t must be finite")
+    if kd < 1.0e-4:
+        return kd * (0.5 + kd * (-1.0 / 6.0 + kd * (1.0 / 24.0 + kd * (-1.0 / 120.0 + kd / 720.0))))
+    return 1.0 + math.expm1(-kd) / kd
+
+
+def require_kalinikos_slab_n0_material_and_bias(
+    plan: dict, material: dict, magnetization_direction: tuple[float, float, float]
+) -> None:
+    """Reject physics omitted by the homogeneous, field-aligned slab oracle."""
+    bias_direction = unit_vector(require_vector3(plan.get("external_field"), "external_field"), "external_field")
+    if vector_dot(bias_direction, magnetization_direction) < 1.0 - 1.0e-6:
+        fail("Kalinikos n=0 requires bias aligned with equilibrium magnetization")
+    for field in ("interfacial_dmi", "bulk_dmi"):
+        value = plan.get(field)
+        if value is not None and require_finite_number(value, field) != 0.0:
+            fail(f"Kalinikos n=0 does not include {field}")
+    for field in ("uniaxial_anisotropy", "uniaxial_anisotropy_k2", "cubic_anisotropy_kc1", "cubic_anisotropy_kc2", "cubic_anisotropy_kc3"):
+        value = material.get(field)
+        if value is not None and require_finite_number(value, field) != 0.0:
+            fail(f"Kalinikos n=0 does not include {field}")
+    for field, scalar in (("ms_field", "saturation_magnetisation"), ("a_field", "exchange_stiffness")):
+        values = material.get(field)
+        if values is not None:
+            if not isinstance(values, list) or not values:
+                fail(f"Kalinikos n=0 requires a nonempty uniform {field}")
+            expected = require_finite_number(material.get(scalar), scalar)
+            for value in values:
+                if not math.isclose(require_finite_number(value, field), expected, rel_tol=1e-12, abs_tol=0.0):
+                    fail(f"Kalinikos n=0 requires uniform {field} matching {scalar}")
+    for field in ("ku_field", "ku2_field", "kc1_field", "kc2_field", "kc3_field"):
+        values = material.get(field)
+        if values is not None:
+            if not isinstance(values, list) or any(require_finite_number(value, field) != 0.0 for value in values):
+                fail(f"Kalinikos n=0 does not include {field}")
+
+
 def kalinikos_slab_n0_frequency_hz(
     *,
     k_norm: float,
@@ -3831,11 +3876,7 @@ def kalinikos_slab_n0_frequency_hz(
         * k_norm
         / (MU0 * saturation_magnetisation_a_per_m)
     )
-    if k_norm == 0.0:
-        p_factor = 0.0
-    else:
-        kd = k_norm * film_thickness_m
-        p_factor = 1.0 - (1.0 - math.exp(-kd)) / kd
+    p_factor = p00_demag_factor(k_norm, film_thickness_m)
     common = bias_field_a_per_m + exchange_field
     if geometry == "damon_eshbach":
         factor_a = common + saturation_magnetisation_a_per_m * (1.0 - p_factor)
@@ -3973,14 +4014,12 @@ def validate_low_k_de_bv_analytic_dispersion(
         validation.get("frequency_window_hz"),
         "metadata.execution_plan.backend_plan.dispersion_validation.frequency_window_hz",
     )
-    if frequency_window_hz[1] > 5.0e9:
-        fail("DE/BV low-k analytic dispersion frequency window must not exceed 5 GHz")
     max_k = require_finite_number(
         validation.get("max_k_rad_per_m"),
         "metadata.execution_plan.backend_plan.dispersion_validation.max_k_rad_per_m",
     )
-    if max_k <= 0.0 or max_k > 3.0e6:
-        fail("DE/BV low-k analytic dispersion max_k_rad_per_m must be in (0, 3e6]")
+    if max_k <= 0.0:
+        fail("DE/BV low-k analytic dispersion max_k_rad_per_m must be positive")
     film_thickness = require_finite_number(
         validation.get("film_thickness_m"),
         "metadata.execution_plan.backend_plan.dispersion_validation.film_thickness_m",
@@ -4042,6 +4081,7 @@ def validate_low_k_de_bv_analytic_dispersion(
     )
     if abs(vector_dot(magnetization_direction, film_normal)) > 1.0e-6:
         fail("DE/BV low-k analytic dispersion requires in-plane equilibrium magnetization")
+    require_kalinikos_slab_n0_material_and_bias(plan, material, magnetization_direction)
 
     scenarios = require_object_list(
         validation.get("scenarios"),

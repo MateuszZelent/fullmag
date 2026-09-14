@@ -8432,7 +8432,7 @@ mod tests {
     }
 
     #[test]
-    fn de_bv_low_k_dispersion_validation_uses_analytic_reference_solver() {
+    fn de_bv_validation_does_not_select_an_analytic_solver() {
         let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
             points: vec![
                 fullmag_ir::KPointIR {
@@ -8501,7 +8501,7 @@ mod tests {
             ],
         });
 
-        let run = execute_fem_eigen(
+        let error = execute_fem_eigen(
             legacy_fem_eigen_execution(FemEngine::CpuNative),
             &plan,
             &[
@@ -8514,69 +8514,14 @@ mod tests {
                 },
             ],
         )
-        .expect("DE/BV low-k validation target should use the analytic reference solver");
-
-        let spectrum = run
-            .auxiliary_artifacts
-            .iter()
-            .find(|artifact| artifact.relative_path == "eigen/spectrum.v2.json")
-            .expect("analytic reference solver must publish spectrum.v2");
-        let spectrum_json: serde_json::Value =
-            serde_json::from_slice(&spectrum.bytes).expect("spectrum.v2 must be JSON");
-        assert_eq!(
-            spectrum_json["solver_id"],
-            "reference_thin_film_de_bv_kalinikos_n0"
+        .expect_err("DE/BV validation metadata must not select an analytic solver");
+        assert!(
+            error.message.contains("dynamic demag")
+                || error.message.contains("Floquet")
+                || error.message.contains("airbox"),
+            "unexpected error: {}",
+            error.message
         );
-        assert_eq!(spectrum_json["sample_count"], 6);
-        let manifest = run
-            .auxiliary_artifacts
-            .iter()
-            .find(|artifact| artifact.relative_path == "frequency_domain/manifest.v1.json")
-            .expect("analytic reference solver must publish frequency-domain manifest");
-        let manifest_json: serde_json::Value =
-            serde_json::from_slice(&manifest.bytes).expect("manifest must be JSON");
-        assert_eq!(
-            manifest_json["validation"]["dispersion_validation"]["kind"],
-            "thin_film_de_bv_low_k"
-        );
-        assert_eq!(
-            manifest_json["validation"]["dispersion_frequency_source"],
-            "analytic_reference_model"
-        );
-        assert_eq!(
-            manifest_json["validation"]["dispersion_reference_model"],
-            "kalinikos_slab_n0"
-        );
-        assert_eq!(
-            manifest_json["validation"]["dynamic_demag_operator_source"],
-            "analytic_thin_film_de_bv_reference_not_fem_demag_k"
-        );
-        assert_eq!(manifest_json["requested_execution"]["include_demag"], true);
-        assert_eq!(manifest_json["capabilities"]["validation_artifact"], true);
-
-        let mode_error = execute_fem_eigen(
-            legacy_fem_eigen_execution(FemEngine::CpuNative),
-            &plan,
-            &[
-                OutputIR::EigenSpectrum {
-                    quantity: "frequency_hz".to_string(),
-                },
-                OutputIR::DispersionCurve {
-                    name: "dispersion".to_string(),
-                    include_branch_table: true,
-                },
-                OutputIR::EigenMode {
-                    field: "mode".to_string(),
-                    indices: vec![0],
-                    branches: vec![],
-                    sample_selector: None,
-                },
-            ],
-        )
-        .expect_err("analytic reference mode fields must fail closed without mesh identity");
-        assert!(mode_error
-            .message
-            .contains("mode field publication requires valid source mesh identity"));
     }
 
     #[test]

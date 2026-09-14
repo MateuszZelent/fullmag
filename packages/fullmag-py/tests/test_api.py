@@ -7046,17 +7046,27 @@ class ProblemApiTests(unittest.TestCase):
             {"backward_volume", "damon_eshbach"},
         )
 
-    def test_thin_film_de_bv_dispersion_validation_rejects_broad_k_range(self) -> None:
-        with self.assertRaisesRegex(ValueError, "max_k_rad_per_m"):
-            fm.ThinFilmDEBVDispersionValidation(
-                film_thickness_m=80e-9,
-                equilibrium_magnetization=(1.0, 0.0, 0.0),
-                scenarios=[
-                    fm.DispersionValidationScenario("bv", "branch_0", [0, 1, 2]),
-                    fm.DispersionValidationScenario("de", "branch_0", [0, 3, 4]),
-                ],
-                max_k_rad_per_m=4.0e6,
-            )
+    def test_thin_film_de_bv_dispersion_validation_accepts_c1_range(self) -> None:
+        validation = fm.ThinFilmDEBVDispersionValidation(
+            film_thickness_m=10e-9,
+            equilibrium_magnetization=(1.0, 0.0, 0.0),
+            scenarios=[
+                fm.DispersionValidationScenario("bv", "branch_0", [0, 1, 2]),
+                fm.DispersionValidationScenario("de", "branch_0", [0, 3, 4]),
+            ],
+            max_k_rad_per_m=1.5707963267948966e7,
+            frequency_window_hz=(0.0, 15e9),
+        )
+        self.assertEqual(validation.to_ir()["frequency_window_hz"], {"min": 0.0, "max": 15e9})
+        self.assertEqual(validation.to_ir()["max_k_rad_per_m"], 1.5707963267948966e7)
+        for bounds in [(0.0, float("nan")), (0.0, float("inf")), (float("nan"), 15e9)]:
+            with self.assertRaisesRegex(ValueError, "finite"):
+                fm.ThinFilmDEBVDispersionValidation(
+                    film_thickness_m=10e-9,
+                    equilibrium_magnetization=(1.0, 0.0, 0.0),
+                    scenarios=validation.scenarios,
+                    frequency_window_hz=bounds,
+                )
 
     def test_study_k0_kittel_validation_lowers_to_runtime_metadata(self) -> None:
         script = """

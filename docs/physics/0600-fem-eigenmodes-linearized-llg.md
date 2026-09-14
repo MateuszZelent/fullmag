@@ -404,13 +404,35 @@ geometries:
   magnetization;
 - backward-volume (BV): in-plane `k` parallel to the equilibrium magnetization.
 
-The default validation range is `|k| <= 2e6..3e6 rad/m` (`2..3 1/um`) and a
-low-frequency modal window such as `0..5e9 Hz`, unless the material/bias setup
-requires a narrower window. Those sweeps must be compared with the applicable
-analytic dispersion for the documented film thickness, saturation
-magnetization, exchange, bias field, demag model, and boundary assumptions. The
-existing higher-k exchange-only checks may remain as unit/sign stress tests, but
-they are not a substitute for the DE/BV low-k acceptance sweeps.
+Domyślny preset `ThinFilmDEBVDispersionValidation` zachowuje
+`max_k_rad_per_m=3e6` i `frequency_window_hz=(0, 5e9)` w jednostkach SI.
+Nie są to uniwersalne granice fizyczne modelu. Użytkownik może podać dowolne
+skończone dodatnie maksimum wektora falowego oraz skończone, uporządkowane
+okno częstotliwości z nieujemnym minimum. Oba parametry przechodzą bez
+zmiany do `runtime_metadata.dispersion_validation` i planu FEM.
+
+Porównanie KS n=0 dotyczy jednorodnej warstwy, równowagi w płaszczyźnie,
+modu podstawowego o prawie jednorodnym profilu po grubości oraz odpowiedniej
+orientacji BV lub DE. Nie kwalifikuje antydotów, modów wyższych ani dowolnie
+grubych warstw. Zakres zależy od grubości, materiału, pola i hybrydyzacji modów;
+samo zaakceptowanie parametrów przez planner nie dowodzi stosowalności.
+Wymagane są zgodność częstości z zadanym `max_relative_error`, kontrola profilu
+modu oraz zbieżność siatki i zewnętrznej granicy magnetostatycznej.
+Skończony airbox należy porównywać z odpowiednią korektą lub granicą zbieżności,
+a nie utożsamiać z otwartą przestrzenią. Dla C1 grubość wynosi 10 nm,
+maksimum na odcinku Gamma-X wynosi pi/(200 nm), a okno musi obejmować
+częstość Kittela około 9.31 GHz. Odcinki ukośne wymagają osobnego modelu
+kątowego; nie wolno oznaczać ich jako BV albo DE.
+
+Współczynnik P00 jest obliczany stabilnie: dla małego bezwymiarowego argumentu
+`x=|k|*t` używane jest rozwinięcie `x/2-x^2/6+x^3/24-x^4/120+x^5/720`,
+a poza nim `1+expm1(-x)/x`. Granica w zerze wynosi zero. Generator CSV
+importuje `scripts/verify_fem_frequency_domain_eigen_artifacts.py::p00_demag_factor`,
+aby współczynnik i częstość korzystały z tej samej realizacji. Rust stosuje tę
+samą postać w `eigen_path_guards.rs::kalinikos_slab_n0_frequency_hz`.
+Test `test_frequency_is_continuous_at_gamma` sprawdza częstość BV i DE,
+nie tylko pomocniczy współczynnik. To kontrola referencji analitycznej,
+nie dowód wykonania FEM.
 
 This is the route to COMSOL-class behavior: sparse operators, spectral targeting,
 preconditioned shifted solves, and clear diagnostics.  The UI must expose this
@@ -432,18 +454,21 @@ The control room should show:
 
 ## Current limitations
 
-- CPU reference path plus transitional sparse LOBPCG for selected real-valued
-  cases; a native SLEPc selected-spectrum implementation exists, but its
-  real-scalar imaginary-axis target correction and production qualification
-  remain open
-- no residual / orthogonality / tangent leakage diagnostics exported yet
-- the canonical gyrotropic pencil and eigenvalue mapping are documented in
-  note 0831, but executable adapters remain gated until their macrospin,
-  phasor, and original-operator residual tests pass
-- nonzero-k Floquet demag is explicitly rejected until dynamic demag-k exists
-- real shared-domain MFEM Poisson-airbox modal assembly remains unavailable;
-  the current synthetic algebra oracle and native SLEPc adapter do not prove it
-- interactive preview snapshots are not supported for FEM eigen plans
+Stan źródeł sprawdzony 2026-09-14 na bazie commita
+`95763e6a7f3d6a7c19657bd214d5d805082b926b`, z poprawkami review w worktree:
+
+- FEM CPU ma zintegrowaną ścieżkę shared-domain MFEM/Floquet i sparse SLEPc;
+  samo istnienie tej ścieżki nie dowodzi wykonania ani poprawności demag-k.
+- Eksport obejmuje diagnostykę residuali, normę masową, rekonstrukcję
+  potencjału i pole elementowe. Ich kompletność i wartości wymagają kontroli
+  na rzeczywistym wyniku modelu C0/C1/A1.
+- Nie ma potwierdzonej w tym checkpointcie pełnej kwalifikacji B4–B6:
+  Kittel/KS, 61 punktów i 8 gałęzi oraz zbieżność siatki/airboxa/liczby modów.
+- Referencja analityczna jest oddzielnym produktem. Jej poprawne wartości
+  nie kwalifikują FEM ani nie zastępują zaakceptowanej równowagi numerycznej.
+- Wyniki FDM CPU, FDM GPU i FEM GPU nie są kwalifikowane przez tę ścieżkę
+  FEM CPU. Obsługa 2.5D pozostaje osobnym kontraktem.
+- Interaktywne snapshoty podglądu FEM eigen nie są obsługiwane.
 
 ## Acceptance expectations for this phase
 

@@ -8,11 +8,12 @@ validation shape for thin-film spin-wave dispersion:
 - DE samples with k perpendicular to m0,
 - |k| <= 3e6 rad/m,
 - modal window up to 5 GHz,
-- analytic Kalinikos slab n=0 comparison intent.
+- an independent Kalinikos slab n=0 comparison intent.
 
-It intentionally requests dynamic demag with nonzero-k Floquet conditions.
-That operator is still M10 work, so this script is a canonical target input and
-validation fixture, not a currently passing managed runtime gate.
+The validation metadata is postsolve comparison intent. It does not select an
+analytic solver or synthesize FEM modes. The run therefore requires the native
+CPU Floquet-airbox dynamic-demag path; if that capability is unavailable, the
+planner must reject the input rather than silently replacing the FEM solve.
 """
 
 import fullmag as fm
@@ -21,6 +22,9 @@ import fullmag as fm
 study = fm.study("fem_eigenmodes_dispersion_de_bv_low_k")
 study.engine("fem")
 study.device("cpu", precision="double")
+study.mode("strict")
+study.interactive(False)
+study.wait_for_solve(True)
 study.universe(
     mode="auto",
     size=(80e-9, 80e-9, 40e-9),
@@ -36,7 +40,8 @@ film.alpha = 0.001
 film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 film.mesh(maximum_element_size=40e-9, order=1)
 
-study.pbc(x=True, y=True)
+study.pbc(x=True, y=True, demag="periodic_airbox_k0")
+study.demag(model="airbox", variant="dirichlet")
 study.build_domain_mesh()
 study.b_ext(0.05, 0.0, 0.0)
 
@@ -79,4 +84,5 @@ study.stages.add_eigenmodes(
         samples_per_segment=[2, 1, 2],
     ),
     bc=fm.FloquetBC(["x_faces", "y_faces"]),
+    magnetostatic_bc="floquet_airbox",
 )

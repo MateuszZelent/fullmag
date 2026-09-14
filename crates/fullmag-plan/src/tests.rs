@@ -10536,6 +10536,18 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
         other => panic!("expected FEM eigen plan, got {other:?}"),
     }
 
+    let mut c1 = ir.clone();
+    let mut c1_validation = dispersion_validation.clone();
+    c1_validation["film_thickness_m"] = serde_json::json!(10e-9);
+    c1_validation["max_k_rad_per_m"] = serde_json::json!(std::f64::consts::PI / 200e-9);
+    c1_validation["frequency_window_hz"]["max"] = serde_json::json!(15e9);
+    c1.problem_meta.runtime_metadata.insert("dispersion_validation".to_string(), c1_validation.clone());
+    let c1_plan = plan(&c1).expect("C1 comparison range must not be capped by the low-k preset");
+    match c1_plan.backend_plan {
+        BackendPlanIR::FemEigen(fem) => assert_eq!(serde_json::to_value(fem.dispersion_validation).unwrap(), c1_validation),
+        other => panic!("expected FEM eigen plan, got {other:?}"),
+    }
+
     let mut invalid = ir;
     invalid.problem_meta.runtime_metadata.insert(
         "dispersion_validation".to_string(),
@@ -10545,7 +10557,7 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
             "film_thickness_m": 80.0e-9,
             "equilibrium_magnetization": [1.0, 0.0, 0.0],
             "film_normal": [0.0, 0.0, 1.0],
-            "max_k_rad_per_m": 4.0e6,
+            "max_k_rad_per_m": -1.0,
             "frequency_window_hz": {
                 "min": 0.0,
                 "max": 5.0e9
@@ -10565,7 +10577,7 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
         }),
     );
     let err =
-        plan(&invalid).expect_err("FEM eigen dispersion validation must reject broad k range");
+        plan(&invalid).expect_err("FEM eigen dispersion validation must reject nonpositive k range");
     assert!(err
         .reasons
         .iter()
@@ -12325,8 +12337,9 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
             closed: false,
         });
     }
-    let planned =
-        plan(&ir).expect("low-k DE/BV analytic reference should bypass Floquet-demag guard");
+    let planned = plan(&ir).expect(
+        "DE/BV analytic metadata should remain a postsolve comparison on the numeric Floquet-airbox lane",
+    );
     match planned.backend_plan {
         BackendPlanIR::FemEigen(fem) => {
             assert!(fem.operator.include_demag);

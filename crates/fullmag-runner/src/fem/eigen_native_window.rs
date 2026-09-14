@@ -117,7 +117,10 @@ pub(super) fn execute_native_modal_window(
             candidate_modes: plan.count as usize,
             computed_modes: 0,
             iteration: Some(0),
-            max_iterations: Some(300),
+            // The native adapter reports its resolved EPS budget through the
+            // callback. Do not publish a guessed outer-iteration cap before
+            // that callback has supplied the configured value.
+            max_iterations: None,
             residual: None,
             warning: None,
             ..Default::default()
@@ -939,7 +942,10 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
             candidate_modes: plan.count as usize,
             computed_modes: 0,
             iteration: Some(0),
-            max_iterations: Some(300),
+            // The native adapter reports its resolved EPS budget through the
+            // callback. Do not publish a guessed outer-iteration cap before
+            // that callback has supplied the configured value.
+            max_iterations: None,
             residual: None,
             warning: None,
             ..Default::default()

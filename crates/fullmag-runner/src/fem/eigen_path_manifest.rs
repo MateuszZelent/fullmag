@@ -660,11 +660,9 @@ pub(super) fn eigen_path_dispersion_frequency_source(
     if result.dispersion_validation.is_none() {
         return serde_json::Value::Null;
     }
-    if result.solver_model == crate::eigen::EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0 {
-        serde_json::json!("analytic_reference_model")
-    } else {
-        serde_json::json!("numeric_modal_solver_with_analytic_comparison")
-    }
+    // Validation metadata is postsolve comparison intent. It must never select
+    // an analytic solver or change the native FEM execution path.
+    serde_json::json!("numeric_modal_solver_with_analytic_comparison")
 }
 
 pub(super) fn eigen_path_dispersion_reference_model(
@@ -673,11 +671,11 @@ pub(super) fn eigen_path_dispersion_reference_model(
     if result.dispersion_validation.is_none() {
         return serde_json::Value::Null;
     }
-    if result.solver_model == crate::eigen::EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0 {
-        serde_json::json!("kalinikos_slab_n0")
-    } else {
-        serde_json::Value::Null
-    }
+    result
+        .dispersion_validation
+        .as_ref()
+        .map(|validation| serde_json::json!(validation.analytic_model))
+        .unwrap_or(serde_json::Value::Null)
 }
 
 pub(super) fn eigen_path_dynamic_demag_operator_source(
@@ -686,11 +684,7 @@ pub(super) fn eigen_path_dynamic_demag_operator_source(
     if result.dispersion_validation.is_none() {
         return serde_json::Value::Null;
     }
-    if result.solver_model == crate::eigen::EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0 {
-        serde_json::json!("analytic_thin_film_de_bv_reference_not_fem_demag_k")
-    } else {
-        serde_json::json!("numeric_modal_solver")
-    }
+    serde_json::json!("numeric_modal_solver")
 }
 
 pub(super) fn eigen_path_capability(status: &str, reason: &str) -> serde_json::Value {

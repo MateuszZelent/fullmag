@@ -1999,13 +1999,14 @@ fn production_dispersion_with_de_bv_validation_writes_analytic_columns() {
         manifest["validation"]["dynamic_demag_operator_source"],
         "numeric_modal_solver"
     );
-    assert!(manifest["validation"]
-        .get("dispersion_reference_model")
-        .is_none());
+    assert_eq!(
+        manifest["validation"]["dispersion_reference_model"],
+        "kalinikos_slab_n0"
+    );
 }
 
 #[test]
-fn de_bv_reference_manifest_names_analytic_frequency_source_not_demag_k() {
+fn de_bv_reference_model_cannot_change_numeric_manifest_source() {
     let temp = TempDirGuard::new("eigen-artifacts-de-bv-reference-source");
     let mut result =
         sample_result_with_solver_model(EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0);
@@ -2045,7 +2046,7 @@ fn de_bv_reference_manifest_names_analytic_frequency_source_not_demag_k() {
     );
     assert_eq!(
         manifest["validation"]["dispersion_frequency_source"],
-        "analytic_reference_model"
+        "numeric_modal_solver_with_analytic_comparison"
     );
     assert_eq!(
         manifest["validation"]["dispersion_reference_model"],
@@ -2053,7 +2054,7 @@ fn de_bv_reference_manifest_names_analytic_frequency_source_not_demag_k() {
     );
     assert_eq!(
         manifest["validation"]["dynamic_demag_operator_source"],
-        "analytic_thin_film_de_bv_reference_not_fem_demag_k"
+        "numeric_modal_solver"
     );
 }
 

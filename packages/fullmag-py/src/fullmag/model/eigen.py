@@ -151,8 +151,8 @@ def _normalize_frequency_window(value: Sequence[float]) -> tuple[float, float]:
         raise ValueError("frequency_window_hz minimum must be >= 0")
     if hi <= lo:
         raise ValueError("frequency_window_hz maximum must be greater than minimum")
-    if hi > 5.0e9:
-        raise ValueError("frequency_window_hz maximum must not exceed 5 GHz")
+    if not math.isfinite(lo) or not math.isfinite(hi):
+        raise ValueError("frequency_window_hz bounds must be finite")
     return (lo, hi)
 
 
@@ -254,8 +254,6 @@ class ThinFilmDEBVDispersionValidation:
     def __post_init__(self) -> None:
         require_positive(self.film_thickness_m, "film_thickness_m")
         max_k = require_positive(self.max_k_rad_per_m, "max_k_rad_per_m")
-        if max_k > 3.0e6:
-            raise ValueError("max_k_rad_per_m must not exceed 3e6")
         max_relative_error = require_positive(self.max_relative_error, "max_relative_error")
         if max_relative_error > 0.25:
             raise ValueError("max_relative_error must not exceed 0.25")

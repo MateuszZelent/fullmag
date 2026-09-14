@@ -420,29 +420,20 @@ fn write_eigen_solver_diagnostics_artifact(
 
 fn dispersion_frequency_source(result: &PathSolveResult) -> Option<&'static str> {
     result.dispersion_validation.as_ref()?;
-    if result.solver_model == EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0 {
-        Some("analytic_reference_model")
-    } else {
-        Some("numeric_modal_solver_with_analytic_comparison")
-    }
+    // The validation block declares an independent comparison oracle. It is
+    // evaluated after the native modal solve and must never select an analytic
+    // replacement for that solve.
+    Some("numeric_modal_solver_with_analytic_comparison")
 }
 
 fn dispersion_reference_model(result: &PathSolveResult) -> Option<&'static str> {
-    result.dispersion_validation.as_ref()?;
-    if result.solver_model == EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0 {
-        Some("kalinikos_slab_n0")
-    } else {
-        None
-    }
+    let validation = result.dispersion_validation.as_ref()?;
+    (validation.analytic_model == "kalinikos_slab_n0").then_some("kalinikos_slab_n0")
 }
 
 fn dispersion_dynamic_demag_operator_source(result: &PathSolveResult) -> Option<&'static str> {
     result.dispersion_validation.as_ref()?;
-    if result.solver_model == EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0 {
-        Some("analytic_thin_film_de_bv_reference_not_fem_demag_k")
-    } else {
-        Some("numeric_modal_solver")
-    }
+    Some("numeric_modal_solver")
 }
 
 pub fn write_frequency_domain_eigen_manifest(
@@ -1048,12 +1039,8 @@ pub(super) fn kalinikos_slab_n0_frequency_hz(
 ) -> f64 {
     let exchange_field = 2.0 * exchange_stiffness_j_per_m * k_norm * k_norm
         / (crate::MU0 * saturation_magnetisation_a_per_m);
-    let p_factor = if k_norm == 0.0 {
-        0.0
-    } else {
-        let kd = k_norm * film_thickness_m;
-        1.0 - (1.0 - (-kd).exp()) / kd
-    };
+    let kd = k_norm * film_thickness_m;
+    let p_factor = crate::fem::eigen_math::thin_film_p00(kd);
     let common = bias_field_a_per_m + exchange_field;
     let (factor_a, factor_b) = match geometry {
         "damon_eshbach" => (

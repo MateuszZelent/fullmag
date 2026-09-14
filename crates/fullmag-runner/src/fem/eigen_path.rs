@@ -285,8 +285,7 @@ pub(crate) fn execute_fem_eigen_path(
     }
     let native_cpu_floquet_demag_path =
         engine == FemEngine::CpuNative && native_cpu_modal_window_enabled(plan);
-    if !de_bv_low_k_analytic_reference_enabled(plan)
-        && !(k0_kittel_synthetic_demag_factor_enabled(plan) && !bias_field_sweep_requested(plan))
+    if !(k0_kittel_synthetic_demag_factor_enabled(plan) && !bias_field_sweep_requested(plan))
         && !native_cpu_floquet_demag_path
     {
         fem_eigen::reject_unsupported_floquet_dynamic_demag(
@@ -318,9 +317,6 @@ pub(crate) fn execute_fem_eigen_path(
             outputs: &[OutputIR],
             sample: &KSampleDescriptor,
         ) -> Result<SingleKSolveResult, crate::types::RunError> {
-            if de_bv_low_k_analytic_reference_enabled(plan) {
-                return solve_de_bv_low_k_analytic_reference_single_k(plan, sample);
-            }
             if k0_kittel_synthetic_demag_factor_enabled(plan) && plan.bias_field_samples.is_empty()
             {
                 return solve_k0_kittel_synthetic_demag_factor_single_k(plan, sample);
@@ -530,15 +526,16 @@ pub(crate) fn execute_fem_eigen_path(
     let branch_table_requested = selection.branch_table_requested();
     let mut mode_artifacts = adapter.mode_artifacts.into_inner();
     deduplicate_auxiliary_artifacts_by_path(&mut mode_artifacts);
-    // Analytic reference solvers do not synthesize topology-bound mode fields
-    // unless the caller explicitly requested EigenMode output.  In particular,
-    // an EigenSpectrum-only K0 field sweep must not trigger a hidden mode-bundle
-    // write and then fail on a mesh identity that was never requested.
+    // The synthetic K0 validation oracle does not synthesize topology-bound mode
+    // fields unless the caller explicitly requested EigenMode output. In
+    // particular, an EigenSpectrum-only K0 field sweep must not trigger a
+    // hidden mode-bundle write and then fail on a mesh identity that was never
+    // requested. DE/BV validation always reaches this point through the native
+    // FEM solve and therefore never needs a synthetic mode fallback.
     if mode_artifacts.is_empty()
         && mode_fields_requested
-        && (de_bv_low_k_analytic_reference_enabled(plan)
-            || (k0_kittel_synthetic_demag_factor_enabled(plan)
-                && !bias_field_sweep_requested(plan)))
+        && k0_kittel_synthetic_demag_factor_enabled(plan)
+        && !bias_field_sweep_requested(plan)
     {
         mode_artifacts = eigen_path_mode_artifacts_from_result(&path_result)?;
     }

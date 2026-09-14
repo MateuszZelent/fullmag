@@ -2022,6 +2022,29 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
         std::string(slepc_result.solver_adapter) +
         "\",\"solver_model\":\"slepc_shift_invert_production_cpu\","
         "\"solver_family\":\"slepc_shift_invert_production_cpu\","
+        "\"execution_policy\":\"" +
+        std::string(slepc_result.execution_policy) +
+        "\",\"execution_scope\":\"" +
+        std::string(slepc_result.execution_scope) +
+        "\",\"communicator\":\"" +
+        std::string(slepc_result.communicator) +
+        "\",\"scalability_scope\":\"" +
+        std::string(slepc_result.scalability_scope) +
+        "\",\"poisson_ksp_type\":\"" +
+        std::string(slepc_result.poisson_ksp_type) +
+        "\",\"poisson_pc_type\":\"" +
+        std::string(slepc_result.poisson_pc_type) +
+        "\",\"poisson_factorization_package\":\"" +
+        std::string(slepc_result.poisson_factorization_package) +
+        "\",\"poisson_iteration_semantics\":\"" +
+        std::string(slepc_result.poisson_iteration_semantics) +
+        "\",\"poisson_ksp_rtol\":" +
+        format_double(slepc_result.poisson_ksp_rtol) +
+        ",\"poisson_ksp_atol\":" +
+        format_double(slepc_result.poisson_ksp_atol) +
+        ",\"poisson_ksp_max_iterations\":" +
+        std::to_string(slepc_result.poisson_ksp_max_iterations) +
+        ","
         "\"eps_type\":\"" +
         std::string(slepc_result.eps_type) +
         "\",\"slepc_problem_type\":\"" +
@@ -2229,7 +2252,29 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         std::string(kSparseSolverModel) +
         "\",\"solver_family\":\"" +
         std::string(kSparseSolverModel) +
-        "\",\"eps_type\":\"" +
+        "\",\"execution_policy\":\"" +
+        std::string(slepc_result.execution_policy) +
+        "\",\"execution_scope\":\"" +
+        std::string(slepc_result.execution_scope) +
+        "\",\"communicator\":\"" +
+        std::string(slepc_result.communicator) +
+        "\",\"scalability_scope\":\"" +
+        std::string(slepc_result.scalability_scope) +
+        "\",\"poisson_ksp_type\":\"" +
+        std::string(slepc_result.poisson_ksp_type) +
+        "\",\"poisson_pc_type\":\"" +
+        std::string(slepc_result.poisson_pc_type) +
+        "\",\"poisson_factorization_package\":\"" +
+        std::string(slepc_result.poisson_factorization_package) +
+        "\",\"poisson_iteration_semantics\":\"" +
+        std::string(slepc_result.poisson_iteration_semantics) +
+        "\",\"poisson_ksp_rtol\":" +
+        format_double(slepc_result.poisson_ksp_rtol) +
+        ",\"poisson_ksp_atol\":" +
+        format_double(slepc_result.poisson_ksp_atol) +
+        ",\"poisson_ksp_max_iterations\":" +
+        std::to_string(slepc_result.poisson_ksp_max_iterations) +
+        ",\"eps_type\":\"" +
         std::string(slepc_result.eps_type) +
         "\",\"slepc_problem_type\":\"" +
         std::string(slepc_result.problem_type) +

@@ -305,13 +305,6 @@ pub(crate) fn validate_bias_field_sample_execution_resolutions(
 }
 
 fn fem_eigen_reference_oracle_requested(plan: &FemEigenPlanIR) -> bool {
-    let analytic = plan
-        .dispersion_validation
-        .as_ref()
-        .is_some_and(|validation| {
-            validation.kind == "thin_film_de_bv_low_k"
-                && validation.analytic_model == "kalinikos_slab_n0"
-        });
     let synthetic = plan
         .k0_kittel_validation
         .as_ref()
@@ -321,5 +314,9 @@ fn fem_eigen_reference_oracle_requested(plan: &FemEigenPlanIR) -> bool {
                 && validation.demag_kind.as_deref() == Some("synthetic_demag_factor")
                 && validation.model == "thin_film_in_plane"
         });
-    analytic || synthetic
+    // A DE/BV analytic model is a postsolve comparison oracle. It must not
+    // alter execution resolution or be treated as a replacement solver. The
+    // K0 synthetic factor remains a separate explicitly scoped oracle until
+    // its numeric airbox lane is available.
+    synthetic
 }

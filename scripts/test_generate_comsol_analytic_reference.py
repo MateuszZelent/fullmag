@@ -88,3 +88,12 @@ def test_main_writes_deterministic_csv(tmp_path: Path) -> None:
         "backward_volume",
         "damon_eshbach",
     }
+
+
+@pytest.mark.parametrize("geometry", ["backward_volume", "damon_eshbach"])
+@pytest.mark.parametrize("k", [1e-12, 1e-9, 1e-6])
+def test_frequency_is_continuous_at_gamma(geometry: str, k: float) -> None:
+    module = load_generator_module()
+    assert module.frequency_hz(k, geometry) == pytest.approx(
+        module.frequency_hz(0.0, geometry), rel=1e-12
+    )

@@ -208,21 +208,6 @@ pub(super) fn k0_kittel_periodic_airbox_field_sweep_requested(plan: &FemEigenPla
         })
 }
 
-pub(super) fn de_bv_low_k_analytic_reference_enabled(plan: &FemEigenPlanIR) -> bool {
-    plan.operator.include_demag
-        && matches!(
-            plan.spin_wave_bc.kind(),
-            fullmag_ir::SpinWaveBoundaryKindIR::Floquet
-        )
-        && plan
-            .dispersion_validation
-            .as_ref()
-            .is_some_and(|validation| {
-                validation.kind == "thin_film_de_bv_low_k"
-                    && validation.analytic_model == "kalinikos_slab_n0"
-            })
-}
-
 pub(super) fn k0_kittel_synthetic_demag_factor_enabled(plan: &FemEigenPlanIR) -> bool {
     plan.operator.include_demag
         && plan.enable_demag
@@ -319,84 +304,6 @@ pub(super) fn solve_k0_kittel_synthetic_demag_factor_single_k(
     })
 }
 
-pub(super) fn solve_de_bv_low_k_analytic_reference_single_k(
-    plan: &FemEigenPlanIR,
-    sample: &crate::eigen::KSampleDescriptor,
-) -> Result<crate::eigen::SingleKSolveResult, RunError> {
-    let validation = plan
-        .dispersion_validation
-        .as_ref()
-        .ok_or_else(|| RunError {
-            message: "DE/BV analytic reference solver requires dispersion_validation".to_string(),
-        })?;
-    let k_norm = vector_norm(sample.k_vector);
-    if k_norm > validation.max_k_rad_per_m * (1.0 + 1.0e-12) {
-        return Err(RunError {
-            message: format!(
-                "DE/BV analytic reference sample exceeds low-k range: {} > {}",
-                k_norm, validation.max_k_rad_per_m
-            ),
-        });
-    }
-    let geometry = de_bv_geometry_for_k(sample.k_vector, validation)?;
-    let frequency_hz = kalinikos_slab_n0_frequency_hz(
-        k_norm,
-        geometry,
-        vector_norm(plan.external_field.unwrap_or([0.0, 0.0, 0.0])),
-        validation.film_thickness_m,
-        plan.material.exchange_stiffness,
-        plan.material.saturation_magnetisation,
-        plan.gyromagnetic_ratio,
-    )?;
-    if frequency_hz < validation.frequency_window_hz.min
-        || frequency_hz > validation.frequency_window_hz.max
-    {
-        return Err(RunError {
-            message: format!(
-                "DE/BV analytic reference frequency is outside validation window: {} Hz",
-                frequency_hz
-            ),
-        });
-    }
-    let omega = std::f64::consts::TAU * frequency_hz;
-    Ok(crate::eigen::SingleKSolveResult {
-        sample: sample.clone(),
-        modes: vec![crate::eigen::SingleKModeResult {
-            raw_mode_index: 0,
-            branch_id: None,
-            frequency_real_hz: frequency_hz,
-            frequency_imag_hz: 0.0,
-            angular_frequency_rad_per_s: omega,
-            eigenvalue_real: omega / plan.gyromagnetic_ratio,
-            eigenvalue_imag: 0.0,
-            norm: 1.0,
-            mass_norm: Some(1.0),
-            max_amplitude: 1.0,
-            residual_norm: Some(0.0),
-            residual_linf: Some(0.0),
-            tangent_leakage_mean_abs: Some(0.0),
-            tangent_leakage_max_abs: Some(0.0),
-            tangent_leakage_weighted_relative_l2: Some(0.0),
-            dominant_polarization: geometry.to_string(),
-            reduced_vector: Some(vec![num_complex::Complex64::new(1.0, 0.0)]),
-            lifted_real: Some(vec![[0.0, 1.0, 0.0]]),
-            lifted_imag: Some(vec![[0.0, 0.0, 1.0]]),
-            amplitude: Some(vec![1.0]),
-            phase: Some(vec![0.0]),
-            node_mass_weights: None,
-            component_participation:
-                crate::eigen::ModalParticipationObservable::unavailable_without_context("cpu"),
-        }],
-        relaxation_steps: 0,
-        solver_model: crate::eigen::EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0,
-        solver_notes: vec![
-            "reference_thin_film_de_bv_kalinikos_n0".to_string(),
-            format!("geometry={geometry}"),
-        ],
-        solver_diagnostics: None,
-    })
-}
-
 pub(super) fn kalinikos_slab_n0_frequency_hz(
     k_norm: f64,
     geometry: &str,
@@ -413,12 +320,8 @@ pub(super) fn kalinikos_slab_n0_frequency_hz(
     }
     let exchange_field = 2.0 * exchange_stiffness_j_per_m * k_norm * k_norm
         / (crate::MU0 * saturation_magnetisation_a_per_m);
-    let p_factor = if k_norm == 0.0 {
-        0.0
-    } else {
-        let kd = k_norm * film_thickness_m;
-        1.0 - (1.0 - (-kd).exp()) / kd
-    };
+    let kd = k_norm * film_thickness_m;
+    let p_factor = crate::fem::eigen_math::thin_film_p00(kd);
     let common = bias_field_a_per_m + exchange_field;
     let (factor_a, factor_b) = match geometry {
         "damon_eshbach" => (

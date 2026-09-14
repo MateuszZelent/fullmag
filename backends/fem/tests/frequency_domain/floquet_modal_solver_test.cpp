@@ -340,6 +340,33 @@ void executes_native_sparse_matshell_above_dense_bound()
 
     const auto result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
         operator_view, spectral);
+    check(result.execution_policy != nullptr &&
+              std::strcmp(result.execution_policy, "petsc_sequential_cpu") == 0,
+          "native Floquet result exposes the sequential PETSc policy");
+    check(result.execution_scope != nullptr &&
+              std::strcmp(result.execution_scope, "single_process_shared_memory") == 0,
+          "native Floquet result exposes its single-process execution scope");
+    check(result.communicator != nullptr &&
+              std::strcmp(result.communicator, "PETSC_COMM_SELF") == 0,
+          "native Floquet result exposes the PETSc communicator");
+    check(result.scalability_scope != nullptr &&
+              std::strcmp(result.scalability_scope, "single_process_only") == 0,
+          "native Floquet result does not claim distributed scalability");
+    check(result.poisson_ksp_type != nullptr &&
+              std::strcmp(result.poisson_ksp_type, "preonly") == 0 &&
+              result.poisson_pc_type != nullptr &&
+              std::strcmp(result.poisson_pc_type, "lu") == 0,
+          "native Floquet result exposes the Poisson LU policy");
+    check(result.poisson_iteration_semantics != nullptr &&
+              std::strcmp(
+                  result.poisson_iteration_semantics,
+                  "preonly_factorization_no_iterative_convergence") == 0,
+          "native Floquet result distinguishes Poisson factorization from iteration");
+    check(result.ksp_type != nullptr &&
+              std::strcmp(result.ksp_type, "gmres") == 0 &&
+              result.pc_type != nullptr &&
+              std::strcmp(result.pc_type, "jacobi") == 0,
+          "native Floquet result exposes the shifted GMRES policy");
 #if FULLMAG_FEM_WITH_SLEPC
     check(result.ok, "native Floquet MatShell regression solves with SLEPc");
     check(result.accepted_mode_count == 1,

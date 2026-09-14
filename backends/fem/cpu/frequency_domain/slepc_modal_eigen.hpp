@@ -65,6 +65,13 @@ struct SLEPcTinyGyrotropicModalEigenResult {
     bool ok = false;
     const char *status = "unavailable";
     const char *solver_adapter = "slepc_modal_eigen";
+    // The current native modal adapter uses sequential PETSc objects. Keep
+    // this execution scope explicit in every diagnostic result so a passing
+    // solve cannot be mistaken for MPI/distributed scalability evidence.
+    const char *execution_policy = "petsc_sequential_cpu";
+    const char *execution_scope = "single_process_shared_memory";
+    const char *communicator = "PETSC_COMM_SELF";
+    const char *scalability_scope = "single_process_only";
     const char *eps_type = "krylovschur";
     const char *problem_type = "gnhep";
     const char *spectral_transform = "shift_invert";
@@ -72,6 +79,10 @@ struct SLEPcTinyGyrotropicModalEigenResult {
     const char *ksp_type = "preonly";
     const char *pc_type = "lu";
     const char *factorization_package = "petsc_lu";
+    const char *poisson_ksp_type = "";
+    const char *poisson_pc_type = "";
+    const char *poisson_factorization_package = "";
+    const char *poisson_iteration_semantics = "";
     const char *nullspace_policy = "none";
     const char *unsupported_reason = "";
     int converged_eigenpair_count = 0;
@@ -80,8 +91,11 @@ struct SLEPcTinyGyrotropicModalEigenResult {
     int outer_iterations = 0;
     int linear_iterations_total = 0;
     int ksp_max_iterations = 0;
+    int poisson_ksp_max_iterations = 0;
     double ksp_rtol = 0.0;
     double ksp_atol = 0.0;
+    double poisson_ksp_rtol = 0.0;
+    double poisson_ksp_atol = 0.0;
     double ksp_final_residual = 0.0;
     double lambda_real = 0.0;
     double lambda_imag = 0.0;

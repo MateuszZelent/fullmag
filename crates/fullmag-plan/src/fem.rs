@@ -1240,11 +1240,10 @@ fn validate_eigen_dispersion_validation(
         );
     }
     if !(validation.max_k_rad_per_m.is_finite()
-        && validation.max_k_rad_per_m > 0.0
-        && validation.max_k_rad_per_m <= 3.0e6)
+        && validation.max_k_rad_per_m > 0.0)
     {
         errors.push(
-            "runtime_metadata.dispersion_validation.max_k_rad_per_m must be in (0, 3e6]"
+            "runtime_metadata.dispersion_validation.max_k_rad_per_m must be finite and positive"
                 .to_string(),
         );
     }
@@ -1261,11 +1260,10 @@ fn validate_eigen_dispersion_validation(
     if !(window.min.is_finite()
         && window.max.is_finite()
         && window.min >= 0.0
-        && window.max > window.min
-        && window.max <= 5.0e9)
+        && window.max > window.min)
     {
         errors.push(
-            "runtime_metadata.dispersion_validation.frequency_window_hz must be finite, ordered, non-negative, and not exceed 5 GHz"
+            "runtime_metadata.dispersion_validation.frequency_window_hz must be finite, ordered, and non-negative"
                 .to_string(),
         );
     }
@@ -1332,15 +1330,6 @@ fn validate_eigen_dispersion_validation(
     } else {
         Err(PlanError { reasons: errors })
     }
-}
-
-fn allows_low_k_de_bv_analytic_reference(
-    validation: &Option<FemEigenDispersionValidationIR>,
-) -> bool {
-    validation.as_ref().is_some_and(|validation| {
-        validation.kind == "thin_film_de_bv_low_k"
-            && validation.analytic_model == "kalinikos_slab_n0"
-    })
 }
 
 fn k_sampling_is_gamma_only(k_sampling: &Option<fullmag_ir::KSamplingIR>) -> bool {
@@ -4893,7 +4882,6 @@ pub(crate) fn plan_fem_eigen(
             spin_wave_bc.kind(),
             fullmag_ir::SpinWaveBoundaryKindIR::Floquet
         )
-        && !allows_low_k_de_bv_analytic_reference(&dispersion_validation)
         && !allows_k0_kittel_synthetic_demag_factor(&k0_kittel_validation, &k_sampling)
         && !floquet_airbox_dynamic_demag_cpu_path
     {
@@ -4904,7 +4892,7 @@ pub(crate) fn plan_fem_eigen(
             );
         } else {
             errors.push(
-                "dynamic demag for Floquet periodic FEM requires magnetostatic_bc='floquet_airbox' and the validated CPU Poisson-airbox path; disable demag or use an analytic/reference lane"
+                "dynamic demag for Floquet periodic FEM requires magnetostatic_bc='floquet_airbox' and the validated CPU Poisson-airbox path; disable demag or provide a numeric supported lane"
                     .to_string(),
             );
         }

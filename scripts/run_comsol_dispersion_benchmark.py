@@ -43,6 +43,11 @@ import fullmag_storage  # noqa: E402  (the path setup above is intentional)
 from local_runner.build_executor import validate_build_receipt  # noqa: E402
 from local_runner.build_source import bind_identity  # noqa: E402
 from local_runner.worker_entrypoint import canonical, verify_source  # noqa: E402
+from validate_comsol_dispersion_scientific_gate import (  # noqa: E402
+    GATE_SCHEMA as SCIENTIFIC_GATE_SCHEMA,
+    validate_case as validate_scientific_case,
+    validate_requested_cases,
+)
 
 
 PROFILE = "fem-cpu-slepc-modal-v1"
@@ -717,6 +722,11 @@ def _run_request(
             "slepc": True,
             "artifact_root": "build-run/artifacts/outputs/.fullmag/local",
         },
+        "scientific_gate": {
+            "schema": SCIENTIFIC_GATE_SCHEMA,
+            "evidence_relative_path": "validation/scientific_gate.v1.json",
+            "missing_evidence_policy": "NOT VERIFIED",
+        },
         "output_dir": str(output_dir),
         "orchestrator_sha256": _sha256_file(Path(__file__).resolve()),
         "compose_command": list(command),
@@ -806,18 +816,55 @@ def _execute(
         raise BenchmarkError("managed Compose benchmark could not start") from error
 
     case_results: list[dict[str, Any]] = []
+    scientific_case_results: dict[str, dict[str, Any]] = {}
+    scientific_gate: dict[str, Any] | None = None
     artifact_error: str | None = None
     if return_code == 0 and not timed_out:
         try:
             for case in cases:
-                case_results.append(_validate_case_artifacts(output_dir / case, case))
+                artifact_result = _validate_case_artifacts(output_dir / case, case)
+                scientific_result = validate_scientific_case(
+                    output_dir / case,
+                    case,
+                    parameters_path=Path(context.source_tree)
+                    / "docs"
+                    / "guides"
+                    / "comsol-dispersion-benchmark"
+                    / "parameters.json",
+                    kpath_path=Path(context.source_tree)
+                    / "docs"
+                    / "guides"
+                    / "comsol-dispersion-benchmark"
+                    / "kpath.csv",
+                )
+                case_results.append(
+                    {
+                        **artifact_result,
+                        "scientific_gate": scientific_result,
+                    }
+                )
+                scientific_case_results[case] = scientific_result
+            scientific_gate = validate_requested_cases(scientific_case_results, cases)
         except (BenchmarkError, OSError, UnicodeError, ValueError) as error:
             artifact_error = str(error)
-    status = "completed_unqualified" if return_code == 0 and not timed_out and artifact_error is None else "failed"
+    if return_code == 0 and not timed_out and artifact_error is None:
+        status = (
+            "completed_qualified"
+            if scientific_gate is not None and scientific_gate.get("status") == "qualified"
+            else "completed_unqualified"
+        )
+        qualification = (
+            "QUALIFIED"
+            if status == "completed_qualified"
+            else "NOT VERIFIED"
+        )
+    else:
+        status = "failed"
+        qualification = "NOT VERIFIED"
     result = {
         "schema": RUN_RESULT_SCHEMA,
         "status": status,
-        "qualification": "NOT VERIFIED",
+        "qualification": qualification,
         "started_at_unix": started,
         "finished_at_unix": time.time(),
         "return_code": return_code,
@@ -826,6 +873,14 @@ def _execute(
         "cases": case_results,
         "requested_cases": list(cases),
         "artifact_error": artifact_error,
+        "scientific_gate": scientific_gate
+        or {
+            "schema_version": SCIENTIFIC_GATE_SCHEMA,
+            "status": "not_qualified",
+            "qualification": "NOT VERIFIED",
+            "requested_cases": list(cases),
+            "reasons": ["scientific gate did not run because the managed execution or artifact gate failed"],
+        },
         "source": {
             "job_id": context.job["job_id"],
             "worktree_id": context.job["worktree_id"],
@@ -844,7 +899,7 @@ def _execute(
         },
     }
     _write_new_json(output_dir / "run-result.json", result)
-    return 0 if status == "completed_unqualified" else 1
+    return 0 if status in {"completed_unqualified", "completed_qualified"} else 1
 
 
 def _parse_cases(value: str) -> tuple[str, ...]:

@@ -21,6 +21,23 @@ pub(super) fn angular_frequency_from_raw_eigenvalue(
     gyromagnetic_ratio * eigenvalue
 }
 
+/// Stable thin-film n=0 demagnetizing factor
+///
+/// `P00(k t) = 1 - (1 - exp(-k t))/(k t)` loses significant digits near
+/// Gamma when written with `exp` and two subtractions. Keep the Taylor branch
+/// and `expm1` branch in one runner-owned kernel so postsolve comparison and
+/// FEM path helpers cannot silently diverge.
+pub(crate) fn thin_film_p00(kd: f64) -> f64 {
+    if kd == 0.0 {
+        return 0.0;
+    }
+    if kd.abs() < 1.0e-4 {
+        return kd
+            * (0.5 + kd * (-1.0 / 6.0 + kd * (1.0 / 24.0 + kd * (-1.0 / 120.0 + kd / 720.0))));
+    }
+    1.0 + (-kd).exp_m1() / kd
+}
+
 pub(super) fn dot(a: Vector3, b: Vector3) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
