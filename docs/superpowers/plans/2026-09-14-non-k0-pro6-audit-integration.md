@@ -1,0 +1,72 @@
+# Nonzero-k — włączenie audytu GPT PRO 6 do planu napraw
+
+Data: 2026-09-14. Status: **plan zaktualizowany; implementacja i kwalifikacja nadal w toku**.
+
+## Baza i sposób interpretacji
+
+Audyt użytkownika dotyczy mastera `33aa26fe8b48b6df1bab77e96eb31afa6c6b90a8`. Przegląd aktualności wykonano względem worktree `eigensolve-dispersion-plan-20260912`, branch `codex/eigensolve-dispersion-plan-20260912`, HEAD `3833c93eb2d52f575e2b8c67d7723225bc3cd61c`; robocze zmiany bramki naukowej pozostają niezacommitowane. Te dwie wersje nie są równoważne.
+
+Źródła: [audyt NK-01–20](../../raports/fullmag_nonzero_k_audit_33aa26f/AUDYT_NONZERO_K_EIGENSOLVE.md), [szczegółowe karty napraw i testów](../../raports/fullmag_nonzero_k_audit_33aa26f/PLAN_NAPRAW_NONZERO_K_EIGENSOLVE.md), [rejestr kontroli autora](../../raports/fullmag_nonzero_k_audit_33aa26f/verification_log.json). Wszystkie sześć sum SHA256 z pakietu sprawdzono: zgodne. Oryginałów nie zmieniono.
+
+Przyjmujemy wszystkie 20 kart jako pozycje śledzone, ale nie jako 20 nowych awarii każdej obecnej ścieżki. Kod starego Rust Full2x2, nowy native sparse Floquet shared-domain CPU oraz GPU Γ mają osobne zakresy. Odtworzenia W01–W13 autora są świadkami algebraicznymi, nie wykonaniem Fullmag. Ten przegląd aktualności nie obejmował kompilacji ani nowego native run. Brak dowodu wykonania oznacza **NOT VERIFIED**.
+
+## Rejestr aktualności i pracy do zamknięcia
+
+„Częściowo” oznacza obejście problemu w konkretnej ścieżce albo osłonę przez reject; nie pełną naprawę fizyki. Status źródłowy nie zalicza bramki naukowej.
+
+| ID / priorytet | Aktualność w worktree | Następny krok i warunek zamknięcia |
+|---|---|---|
+| NK-01 P0 | Stare dodatkowe osadzenie nadal obecne; nowy sparse CPU używa osobnej konstrukcji | Odciąć wadliwy adapter od produkcji; jeden fizyczny pencil 2N, realifikacja najwyżej raz; W01, polaryzacja i Γ w obu reprezentacjach |
+| NK-02 P0 | Stary decoder nadal certyfikuje układ osadzony | Niezerowy odzyskany q, stabilna normalizacja, niezależne residuum oryginalnego pencil; W02/W13 i uszkodzenia q/map |
+| NK-03 P0 | Proxy pola zamiast Hessianu pozostaje w Rust Full2x2 | Pochodna tego samego dyskretnego LLG co relaksacja; test energii/pola/JVP dla każdej interakcji. Sam h_parallel w ograniczonym native modelu nie dowodzi tego samego błędu |
+| NK-04 P1 | Problem starej bazy pozostaje; nowy native ma elementowy montaż ograniczeń | Zweryfikować pełne bloki baz i masę; lokalne SO(2), szwy i niekolinearne m0, leakage w kwadraturze |
+| NK-05 P1 | Early return K1/Kc1 pozostaje; native odrzuca anizotropię | Niezależne K2/Kc2 i zgodność konwencji energii; reject nie oznacza obsługi |
+| NK-06 P1 | Obcinanie signed H0 pozostaje w starym operatorze | Zachować znak; oddzielić stacjonarność od stabilności, minimum/maksimum/siodło i tłumienie |
+| NK-07 P0 | Heurystyczne DMI pozostaje; nowy native odrzuca DMI | Szczelny reject, następnie weak form/JVP z energii; znaki D/k/m0, orientacja, jednostki i trzy siatki |
+| NK-08 P1 | Tekstowe rozpoznawanie interakcji nadal w starym ABI | Wersjonowane, typowane inventory; brak/nieznane dane odrzucane; test producer–backend i wariantów serializacji |
+| NK-09 P1 | Częściowo nieaktualny zarzut braku kodu: istnieje sparse dynamic-demag CPU | Certyfikować q/φ, energię i sprzężenia, zakres geometrii i materiałów; managed runtime i zbieżność nadal otwarte |
+| NK-10 P1 | GPU nonzero-k nadal niedostępne | Zachować guard; osobna implementacja tego samego operatora i sprzętowa kwalifikacja bez fallbacku CPU |
+| NK-11 P1 | Potwierdzony skrót GPU Γ: wybór po normie pola i syntetyczny wektor | Egzekwować validation-only macrospin albo rzeczywiste eigenvectory; count/target, niejednorodność i residuum przed publikacją |
+| NK-12 P1 | Gęsta stara ścieżka pozostaje; nowa sparse nie stanowi jej naprawy | Wycofać dense z produkcyjnego zakresu; oszacowanie przed alokacją i pomiary nnz/RSS/Krylov/LU |
+| NK-13 P1 | Stary λ-pencil nadal ma błędny realny target; nowy obrócony operator ma poprawny target częstotliwościowy w źródłach | Test wysokiego wąskiego okna przy małym subspace; target zgodny ze zmienną spektralną. Realny target obróconego operatora nie jest sam w sobie błędem |
+| NK-14 P2 | Sekwencyjna realizacja nadal ogranicza skalowanie; polityka opisana w źródłach | Najpierw rzeczywista telemetria, potem niezależne procesy k i osobno distributed solve; pomiar zamiast obietnicy MPI |
+| NK-15 P2 | Stare twierdzenie o None nieaktualne w wrapperze: callbacki Some | Zweryfikować native cancel/progress w kosztownych fazach, częściowe artefakty i resume; sama obecność callbacku nie wystarcza |
+| NK-16 P1 | Naprawiony w źródłach zakres audytu: metryka masowa, missing/zero, Hungarian, raw IDs i podprzestrzenie degeneracji | Wykonać niewykonane testy Rust oraz native tracking; W08, ortogonalność vs brak danych, luki, raw IDs [2,7] |
+| NK-17 P1 | Obejście analytic usunięte w źródłach; porównanie po solve | Natywny test mutacyjny i pochodzenie wyniku; analityka nie może zaliczyć bramki FEM |
+| NK-18 P1 | Stabilne P00 Python/Rust w źródłach; testy wysokiej precyzji Python istnieją | Zachować poprawkę; potwierdzić Rust i native ciągłość Γ, nie powtarzać wadliwej formuły jako oracle |
+| NK-19 P1 | scale.max(1) i drop 1e-15 pozostają w helperach reference | Zachować nanoskopową masę, skalować obie strony równoważnie, jawny reject osobliwości; certyfikat na oryginalnym operatorze |
+| NK-20 P2 | Istnieje nowszy shared-domain operator obok prototypu | Osobne przestrzenie q/φ, lokalne Ms, źródło tylko w magnetyku, jedna reprezentacja Blocha; parity operator-action i pomiary pamięci |
+
+Źródła bieżącego kodu: `crates/fullmag-runner/src/fem/eigen_operator.rs`, `eigen_anisotropy.rs`, `eigen_solve.rs`, `eigen_native_window.rs`, `eigen_native_result.rs`, `eigen_execution.rs`, `eigen_capability.rs`, `eigen_policy.rs`; `crates/fullmag-runner/src/eigen/tracking.rs`; `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp`, `slepc_modal_eigen.cpp`, `modal/floquet_modal_solver.cpp`, `floquet_airbox_operator.cpp`, `operators/poisson_airbox_shared_domain.cpp`. Konkretne karty oryginału wskazują stare linie; nie traktować ich numerów jako numeracji nowego HEAD.
+
+## Kolejność wdrożenia po korekcie
+
+1. **Osłony i zakres (PR-A): NK-01/03/07/08/11.** Prześledzić Python → ProblemIR → planner → runner → ABI dla każdego adaptera; wadliwy lub niewspierany model nie może być produkcyjnym wynikiem. Zabezpieczenia GPU/DMI zachować. Nie wyłączać poprawnej ograniczonej ścieżki tylko na podstawie nazwy sąsiedniego helpera.
+2. **Niezależne orakle i operator (PR-B/C): NK-03/04/05/06/07.** Przenieść świadków do trwałych testów regresyjnych z poprawnymi oczekiwaniami; uzupełnić notę naukową przed zmianą semantyki. Wymagać JVP/energii, anizotropii pojedynczych współczynników i niezmienniczości bazy. Zakaz kompilacji unit testów nadal obowiązuje; przygotowany test nie jest testem wykonanym.
+3. **Pencil i certyfikat (PR-D): NK-01/02/13/19.** Jedna fizyczna przestrzeń, jednoznaczne konwencje λ↔f, projekcja niezerowa, norma bez absolutnego floor, residua oryginalnych bloków i kompletność okna. Weryfikować także nowy obrócony sparse operator, zamiast mechanicznie zmieniać target na urojony.
+4. **Sparse CPU i demag (PR-E/G): NK-09/12/14/20.** Wykorzystać istniejącą implementację shared-domain; mały pełny descriptor porównać ze Schurem. Kontrola źródła, adjoint, energii, Γ/gauge, ograniczeń materiału oraz zasobów. Nie odbudowywać od zera funkcji już obecnych.
+5. **Gałęzie, referencje i bramka (PR-F): NK-16/17/18 oraz dotychczasowe C0/C1/A1.** Dokończyć fizyczny overlap/podprzestrzenie, kontrolę fazy wyeksportowanego pola i identyfikację profilu n=0. Zgodność samych częstotliwości nie identyfikuje modu.
+6. **GPU i odporność (PR-H/I): NK-10/11/15.** Osobne dowody GPU operator-action i eigensolve, wykonane urządzenie, cancel/resume oraz partial/completed; potem pomiary HPC.
+7. **Kwalifikacja (PR-J).** Dokładny SHA, obraz, biblioteki, receipt, pola i kompletne pomiary. Każdy zakres CPU/GPU kwalifikować oddzielnie. Brak wyniku nie jest pass; nie scalać kwalifikacji całego nonzero-k na podstawie jednego pilota CPU.
+
+Nazwy PR-A–J oznaczają granice logiczne z planu audytora, nie utworzone PR ani obowiązek dziesięciu osobnych branchy. Spójne, sprawdzone fragmenty zapisujemy etapami w istniejącym worktree.
+
+## Rozszerzone kryteria naukowe
+
+- W01/W02/W13: nierówne sztywności, sprzężenie poprzeczne, znak precesji, zerowa projekcja, skale wektora 1e-100…1e100, uszkodzenie operatora/mapy/pola.
+- Dyskretna dyspersja wymienna P1 według orakla z sekcji 4.2 planu audytora: Γ, małe k, środek i brzeg strefy; zgodność masy, jednostek i redukcji. To model 1D, nie uniwersalny wzór siatki 3D.
+- Ciągłość Γ bez zmiany modelu fizycznego; dwa sformułowania Blocha porównywać jako tę samą przekształconą przestrzeń albo przez zbieżność. Nie wymagać identyczności dwóch niezależnych przestrzeni P1.
+- Pole demag dla zadanego q przed eigensolve, energia, pełny descriptor vs Schur, residua q i φ; gauge wyłącznie przy rzeczywistym nullspace.
+- C0/C1/A1: 61 próbek i wymagane 8 gałęzi, skończone zgodne artefakty, Kittel/KS w zakresie ważności oraz fizyczne pola. Rozszerzyć kampanię do **co najmniej trzech poziomów siatki i trzech odległości airboxu**, z osobną zbieżnością liczby modów. Dotychczasowe dwa poziomy są wstępnym porównaniem, nie pełną nową bramką.
+- Początkowy proponowany próg fizycznego residualu 1e-8 po skalowaniu oraz tolerancje orakli wymagają uzasadnienia w benchmarku; nie utożsamiać błędu algebraicznego z błędem modelu KS. Nie rozluźniać tolerancji w celu ukrycia błędnego operatora.
+- Tracking: Hungarian vs greedy, fizyczna metryka, zerowy overlap vs brak pola, degeneracje/podprzestrzenie, narodziny i zaniki oraz jawna niejednoznaczność.
+
+Dodatkowe ryzyka audytu pozostają osobnymi zadaniami, nie potwierdzonymi awariami: **R1** kompletność wszystkich żądanych par i naroży; **R2** zmienne materiały i topologie inne niż tet4 (poprawna realizacja albo reject); **R3** brak podwójnej fazy i poprawne warunki naturalne; **R4** kompletność okien, niezależność modów i czułość niehermitowska.
+
+## Powiązanie z dotychczasowym planem
+
+Sześć wcześniejszych zadań nie znika: routing → NK-17; P00 → NK-18; usunięcie uniwersalnych limitów k/f → zakres modelu w C0/C1/A1; bramka naukowa → NK-02/09/13/16/20 i R1–R4; dokumentacja/provenance → wszystkie etapy; jawna polityka PETSc i rzeczywista telemetria → NK-14/15. Usunięcie limitu nie rozszerza automatycznie fizycznej ważności modelu.
+
+**B4–B6 pozostają otwarte.** Dodatkowym warunkiem ich zamknięcia jest weryfikacja właściwego operatora i pola, nie tylko wykonanie benchmarku. Robocza bramka nadal wymaga podłączenia kontroli fazy i profilu n=0. Przygotowany profil `fem-cpu-slepc-runtime-v1` nie dowodzi przebudowania solvera ani wykonania kampanii. Stan runnera trzeba sprawdzić przed kolejnym run; historyczny numer joba nie jest aktualnym dowodem.
+
+Po zmianie operatora/version/konwencji aktualizować klucz cache i ponownie obliczyć wyniki kwalifikacyjne. Historycznych artefaktów nie przepisywać na nowy status. Raport postępu ma oddzielać implementację, testy źródeł, managed runtime, naukę oraz release; nie podajemy pozornego procentu przez zliczenie kart.

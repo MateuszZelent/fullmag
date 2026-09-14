@@ -1,5 +1,38 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+
+## Audyt GPT PRO 6 — korekta priorytetów 2026-09-14
+
+Obowiązuje [integracja 20 ustaleń i zaktualizowana kolejność napraw](2026-09-14-non-k0-pro6-audit-integration.md).
+Audyt bazuje na master `33aa26f`; aktualność sprawdzono na worktree HEAD
+`3833c93eb2d52f575e2b8c67d7723225bc3cd61c` oraz roboczych plikach bramki.
+Najpierw osłony starego adaptera, fizyczny operator i certyfikat odzyskanego modu;
+potem kwalifikacja istniejącej sparse ścieżki CPU z demag. NK-17/18 są poprawione
+w źródłach; nie oznacza to native qualification. B4–B6 nadal otwarte, teraz także
+z kontrolą pola/fazy/n=0 i kampanią co najmniej 3 siatek oraz 3 airboxów.
+Poniższe checkpointy zachowują historię; starsze SHA, wyniki testów i statusy jobów
+nie opisują automatycznie stanu bieżącego. Aktualizacja planu nie stanowi naprawy NK-01–20.
+
+### Wdrożenie trzech poziomów zbieżności — 2026-09-14
+
+Robocza bramka v2 wymaga coarse/medium/fine dla mesh i airbox (C0 bez demag:
+not_applicable). Sprawdza kierunek zmiany hmax/odległości, fizykę wspólną dla
+przebiegów, oba sąsiednie przyrosty częstości i brak rosnącego trendu ponad
+margines 1e-8. Nie wyznacza z tego automatycznie błędu continuum.
+Test regresyjny wykazał wcześniej fałszywe qualified dla dwóch poziomów
+(mesh i airbox); po poprawce zestaw bramka/agregacja/benchmark:
+**36 passed, 15 subtests passed**. Są to interpretowane testy z syntetycznymi
+artefaktami, nie wynik kampanii FEM. Dodatkowo naprawiono pomylenie bezwymiarowego
+airbox.factor (401) z paddingiem w metrach (2e-6): tożsamość airboxu pochodzi teraz
+z DomainFrameIR. Test red→green potwierdził błąd. Kontrola rzeczywistych pól/fazy
+jest w toku; review wykrywa też ryzyko porównania różnych siatek przez surowe
+tablice równowagi w sygnaturze, które wymaga dalszej korekty przed kwalifikacją.
+
+Odczyt managed runnera przy tej aktualizacji: worker_alive=true,
+accepting_jobs=true, job 44 `635451d7648a446a83e8d88e21c0279b` nadal running,
+źródło `28f552b959455957bbf6dada8a522a241425552c`. Nie restartowano runnera;
+nowy obraz koordynatora pozostaje niewdrożony. Ten job nie kwalifikuje HEAD3833.
+
 ## Aktualizacja po review — 2026-09-14
 
 Stan: **W TRAKCIE**, fizyka non-k0 **NOT VERIFIED**. Sprawdzony HEAD:
@@ -26,11 +59,20 @@ bramki naukowej i runnera benchmarku: **11 passed, 2 failed**; pozytywny fixture
 nie odpowiada jeszcze aktualnemu formatowi natywnych artefaktów. Są to wyniki
 roboczej wersji w trakcie poprawek, a nie dowody dla przyszłego commita.
 
-Nowy profil `fem-cpu-slepc-runtime-v1` jest w implementacji i review. Nie został
-wdrożony ani wykonany. Ma budować produkcyjny runtime i sprawdzać rzeczywiste
-wsparcie SLEPc bez kompilowania testów jednostkowych. Zgodność identyfikatora
-źródeł w binarnym startup stamp z receipt wymaga osobnej kontroli. B4–B6 nadal
-pozostają otwarte; żaden test fixture nie zastępuje zbieżności numerycznej.
+Profil `fem-cpu-slepc-runtime-v1` oraz jego obsługa w benchmarku są zapisane
+w commicie `a020f46f0829362d942b7eeebbdd923afcc6f0f2`. Wspólny zestaw
+kontroli entrypoint/executor/client/benchmark: **80 passed, 4 subtests passed**.
+Hash biblioteki wiąże konfigurację CMake z runtime, a startup stamp musi mieć
+snapshot zgodny z receipt. To dowód kontraktu źródłowego, nie wykonania FEM.
+
+Recepta `just runner-coordinator-image` zakończyła się exit 0 i przygotowała
+obraz `sha256:4e52622ba0da64d8f4de76539ec4bff6f1511c7c6fd74370c3a7827de9ffcd0e`.
+Obraz nie został wdrożony. Odczyt runnera po buildzie wykazał aktywne zadanie
+`635451d7648a446a83e8d88e21c0279b` (44), stan running, profil
+`fem-cpu-slepc-modal-v1`, źródło `28f552b959455957bbf6dada8a522a241425552c`.
+Nie zatrzymano ani nie podmieniono aktywnego koordynatora. Jego allow-list nie
+obejmuje jeszcze nowego profilu. Zbudowanie obrazu nie stanowi kwalifikacji
+managed runtime ani B4–B6.
 
 Testy Python uruchomiono z `-B` i wyłączonym cache pytest. Pierwsze zebranie
 testów API nie znalazło pakietu `fullmag`; ponowienie z repozytoryjnym
