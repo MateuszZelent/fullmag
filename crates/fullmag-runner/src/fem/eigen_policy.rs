@@ -176,6 +176,32 @@ pub(super) fn native_cpu_modal_window_has_bloch_floquet_payload_path(
     })
 }
 
+/// Return whether the periodic, no-demag Gamma lane can use the native
+/// shift-invert modal adapter with the explicit runner-side tangent operator.
+///
+/// A real full-2x2 operator has a broad spectrum, so the legacy sparse
+/// lowest-mode LOBPCG path cannot satisfy a finite frequency window reliably:
+/// it may spend a long time producing low candidates and still return no mode
+/// in the requested band.  This bounded lane has no dynamic demag payload and
+/// therefore can transport the assembled runner operator to the native
+/// shift-invert solver without claiming the shared-domain airbox contract.
+pub(super) fn native_cpu_modal_window_has_periodic_k0_runner_operator_path(
+    plan: &FemEigenPlanIR,
+) -> bool {
+    matches!(
+        plan.target,
+        fullmag_ir::EigenTargetIR::FrequencyWindow { .. }
+    ) && matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
+        && matches!(
+            plan.damping_policy,
+            EigenDampingPolicyIR::Ignore
+        )
+        && !plan.enable_demag
+        && !plan.operator.include_demag
+        && matches!(plan.spin_wave_bc.kind(), SpinWaveBoundaryKindIR::Periodic)
+        && k_sampling_is_single_k0(plan.k_sampling.as_ref())
+}
+
 pub(super) fn k0_kittel_periodic_airbox_validation_requested(plan: &FemEigenPlanIR) -> bool {
     plan.k0_kittel_validation
         .as_ref()

@@ -1,6 +1,7 @@
 use super::eigen_constants::SHARED_DOMAIN_K0_RUNTIME_UNAVAILABLE_REASON;
 use super::eigen_policy::{
     k_sampling_is_single_k0, native_cpu_modal_window_has_bloch_floquet_payload_path,
+    native_cpu_modal_window_has_periodic_k0_runner_operator_path,
     native_modal_target_frequency_hz, shared_domain_k0_modal_requested,
 };
 use super::eigen_reduction::{is_gamma_k_sampling, k_sampling_contains_nonzero};
@@ -36,6 +37,9 @@ pub(super) fn native_gpu_k0_kittel_modal_supported(plan: &FemEigenPlanIR) -> boo
 pub(super) fn native_cpu_modal_window_enabled(plan: &FemEigenPlanIR) -> bool {
     if shared_domain_k0_modal_requested(plan) {
         return native_shared_domain_cpu_modal_supported(plan);
+    }
+    if native_cpu_modal_window_has_periodic_k0_runner_operator_path(plan) {
+        return true;
     }
     if native_cpu_modal_window_has_floquet_dynamic_demag_path(plan) {
         return true;
