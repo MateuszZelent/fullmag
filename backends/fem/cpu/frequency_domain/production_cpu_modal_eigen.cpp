@@ -91,6 +91,13 @@ std::string with_operator_diagnostics(
 
 std::string format_double(double value) noexcept
 {
+    // JSON has no NaN/Infinity literals.  A failed or incomplete native
+    // solve may leave a diagnostic scalar non-finite; publish null so the
+    // runner can parse the envelope and reject the result through its
+    // finite-value/certification gates instead of failing on malformed JSON.
+    if (!std::isfinite(value)) {
+        return "null";
+    }
     char buffer[64]{};
     const int written = std::snprintf(buffer, sizeof(buffer), "%.17g", value);
     if (written <= 0 || static_cast<std::size_t>(written) >= sizeof(buffer)) {
