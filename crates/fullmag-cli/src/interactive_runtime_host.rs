@@ -4,7 +4,6 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use fullmag_ir::{BackendPlanIR, ExecutionPlanIR, FemDomainMeshModeIR};
-use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::control_room::*;
@@ -16,31 +15,6 @@ use super::*;
 struct CurrentLiveControlState {
     display_selection: CurrentDisplaySelection,
     queue: VecDeque<SessionCommand>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ApiStatusDisplaySelection {
-    active_quantity_id: String,
-    view_mode: String,
-    field_component: String,
-    auto_contrast: bool,
-    slice_mode: String,
-    slice_layer: i32,
-    vector_density: u32,
-    max_points: u32,
-    x_chosen_size: u32,
-    y_chosen_size: u32,
-}
-
-#[derive(Debug, Deserialize)]
-struct ApiStatusResources {
-    display_revision: u64,
-}
-
-#[derive(Debug, Deserialize)]
-struct ApiStatusSnapshot {
-    display: ApiStatusDisplaySelection,
-    resources: ApiStatusResources,
 }
 
 pub(super) struct CurrentLiveDisplaySelectionHandle {
@@ -386,16 +360,8 @@ fn is_display_sync_kind(kind: &str) -> bool {
 fn apply_display_sync_to_state(state: &mut CurrentLiveControlState, command: &SessionCommand) {
     let typed = crate::command_bridge::classify_command(command);
     match typed {
-        Some(fullmag_runner::LiveControlCommand::SetDisplaySelection(_)) => {
-            let resolved = command.display_selection.clone().or_else(|| {
-                command
-                    .preview_config
-                    .as_ref()
-                    .map(CurrentDisplaySelection::from_preview_request)
-            });
-            if let Some(display_selection) = resolved {
-                state.display_selection = display_selection;
-            }
+        Some(fullmag_runner::LiveControlCommand::SetDisplaySelection(display_selection)) => {
+            state.display_selection = display_selection;
         }
         _ => {}
     }
@@ -592,7 +558,10 @@ impl InteractiveRuntimeHost {
         let continuation_slice = continuation_magnetization.as_deref();
         self.ensure_base_runtime_ready(continuation_slice, live_workspace);
 
-        if self.dynamic_idle_preview_supported && !self.multilayer_idle_snapshot {
+        if self.runtime.is_none()
+            && self.dynamic_idle_preview_supported
+            && !self.multilayer_idle_snapshot
+        {
             let preview_request = self.control.preview_request();
             spawn_interactive_preview_cache_refresh(
                 self.base_problem.clone(),
@@ -621,7 +590,9 @@ impl InteractiveRuntimeHost {
             0
         };
 
-        if self.dynamic_idle_preview_supported {
+        if self.runtime.is_some() {
+            self.refresh_idle_preview(continuation_magnetization.as_deref(), live_workspace);
+        } else if self.dynamic_idle_preview_supported {
             if self.multilayer_idle_snapshot {
                 if let Err(error) = self.refresh_multilayer_idle_preview(
                     continuation_magnetization.as_deref(),
@@ -712,7 +683,10 @@ impl InteractiveRuntimeHost {
             .map(|state| state.generation)
             .unwrap_or(0);
 
-        if self.dynamic_idle_preview_supported && !self.multilayer_idle_snapshot {
+        if self.runtime.is_none()
+            && self.dynamic_idle_preview_supported
+            && !self.multilayer_idle_snapshot
+        {
             let preview_request = self.control.preview_request();
             spawn_interactive_preview_cache_refresh(
                 self.base_problem.clone(),
@@ -872,7 +846,10 @@ impl InteractiveRuntimeHost {
             clear_cached_preview_fields(state);
         });
 
-        if self.dynamic_idle_preview_supported && !self.multilayer_idle_snapshot {
+        if self.runtime.is_none()
+            && self.dynamic_idle_preview_supported
+            && !self.multilayer_idle_snapshot
+        {
             let preview_request = self.control.preview_request();
             spawn_interactive_preview_cache_refresh(
                 self.base_problem.clone(),
@@ -965,10 +942,10 @@ impl InteractiveRuntimeHost {
                     "warn",
                     format!("Idle live preview snapshot failed: {}", error),
                 );
-                self.runtime = None;
-            } else {
-                return;
             }
+            // An observation failure does not invalidate the accepted solver
+            // state or authorize reconstructing a different runtime.
+            return;
         }
 
         if self.dynamic_idle_preview_supported {
@@ -1169,14 +1146,38 @@ fn refresh_interactive_preview_runtime_display(
         }
         fullmag_runner::DisplayPayload::GlobalScalar { .. } => None,
     };
+    let quantities = idle_observation_quantities(display_selection);
+    let quantity_refs: Vec<&str> = quantities.iter().map(String::as_str).collect();
+    let fields = if quantity_refs.is_empty() {
+        Vec::new()
+    } else {
+        runtime.snapshot_vector_fields(
+            &quantity_refs,
+            &full_field_materialization_request(display_selection.preview_request()),
+        )?
+    };
     live_workspace.update(|state| {
         apply_step_stats_to_idle_live_state(state, &step_stats);
         state.live_state.latest_step.preview_field = preview_field.clone();
         if let Some(preview_field) = preview_field.as_ref() {
             upsert_cached_preview_field(state, preview_field);
         }
+        for field in &fields {
+            upsert_cached_preview_field(state, field);
+        }
     });
     Ok(())
+}
+
+fn idle_observation_quantities(display_selection: &CurrentDisplaySelection) -> Vec<String> {
+    let mut demand = display_selection.clone();
+    // Older control-plane payloads have no demand list. Keep their selected
+    // spatial quantity working without eagerly materializing the whole catalog.
+    if demand.observation_quantities.is_empty() {
+        demand.observation_quantities.push(display_selection.selection.quantity.clone());
+    }
+    demand.canonicalize_observation_quantities();
+    demand.observation_quantities
 }
 
 fn apply_step_stats_to_idle_live_state(
@@ -1225,6 +1226,28 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Condvar, Mutex};
     use std::time::Duration;
+
+    #[test]
+    fn idle_observation_demand_is_canonical_and_not_eager() {
+        let mut display = fullmag_runner::DisplaySelectionState::default();
+        display.observation_quantities = vec![
+            "h_demag".into(), "H_demag".into(), "eden_total".into(),
+            "E_total".into(), "unknown".into(),
+        ];
+        assert_eq!(
+            super::idle_observation_quantities(&display),
+            vec!["H_demag".to_string(), "eden_total".to_string()]
+        );
+    }
+
+    #[test]
+    fn legacy_idle_display_materializes_only_selected_spatial_quantity() {
+        let mut display = fullmag_runner::DisplaySelectionState::default();
+        display.selection.quantity = "H_eff".into();
+        assert_eq!(super::idle_observation_quantities(&display), vec!["H_eff"]);
+        display.selection.quantity = "E_total".into();
+        assert!(super::idle_observation_quantities(&display).is_empty());
+    }
 
     fn workspace_state_for_energy_refresh() -> LocalLiveWorkspaceState {
         let mut live_state = bootstrap_live_state("awaiting_command");
@@ -1814,33 +1837,14 @@ fn current_live_session_matches(owner_session_id: &str) -> Option<bool> {
 }
 
 fn current_live_display_selection() -> Result<CurrentDisplaySelection> {
-    let status = current_live_api_client()
-        .get(format!("{}/v1/live/current/status", api_base_url()))
+    current_live_api_client()
+        .get(internal_live_api_url("display-selection"))
         .send()
         .context("failed to fetch current live status for display selection")?
         .error_for_status()
         .context("current live status endpoint returned error")?
-        .json::<ApiStatusSnapshot>()
-        .context("failed to decode current live status")?;
-
-    Ok(CurrentDisplaySelection::from_preview_request(
-        &fullmag_runner::LivePreviewRequest {
-            revision: status.resources.display_revision,
-            quantity: status.display.active_quantity_id,
-            component: if status.display.view_mode.eq_ignore_ascii_case("3d") {
-                "3D".to_string()
-            } else {
-                status.display.field_component
-            },
-            layer: status.display.slice_layer.max(0) as u32,
-            all_layers: status.display.slice_mode == "all",
-            every_n: status.display.vector_density,
-            x_chosen_size: status.display.x_chosen_size,
-            y_chosen_size: status.display.y_chosen_size,
-            auto_scale_enabled: status.display.auto_contrast,
-            max_points: status.display.max_points,
-        },
-    ))
+        .json::<CurrentDisplaySelection>()
+        .context("failed to decode canonical live display selection")
 }
 
 fn upsert_runtime_engine_metadata(metadata: &mut Option<Value>, runtime_engine: Value) {

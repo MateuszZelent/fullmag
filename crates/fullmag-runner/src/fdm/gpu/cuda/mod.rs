@@ -5,6 +5,8 @@ pub(crate) mod charge_transport;
 #[cfg(feature = "cuda")]
 pub(crate) mod direct_minimizer;
 pub(crate) mod execute;
+#[cfg(feature = "cuda")]
+pub(crate) mod live_observations;
 #[cfg(test)]
 #[path = "spin_transport_tests.rs"]
 mod gpu_m1_transport_session;
