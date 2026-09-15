@@ -2,7 +2,7 @@
 
 - Status: zatwierdzony kontrakt fizyczny; authoring, typed IR, kompilacja planu, FDM CPU/CUDA runtime oraz FEM CPU P1 RK zaimplementowane i zweryfikowane w zarządzanych recepturach
 - Właściciele: Fullmag physics, planner i backend teams
-- Ostatnia aktualizacja: 2026-08-21
+- Ostatnia aktualizacja: 2026-09-15
 - Powiązane ADR: `docs/adr/0026-frozen-spins-constraint-and-selection-model.md`
 - Powiązane specyfikacje: `docs/specs/selection-expr-v1.md`, `docs/specs/frozen-spins-v1.md`
 
@@ -157,8 +157,25 @@ pozostać źródłem wartości sąsiada w stencilach swobodnych DOF.
 | $\mathbf m_i^{\mathrm{candidate}}$ | Stan kandydujący przed przywróceniem zamrożonej referencji | $1$ |
 | $\mathbf m_U$ | Stan magnetyzacji na swobodnej domenie | $1$ |
 | $\mathbf m_F^\star$ | Referencyjny stan magnetyzacji na zamrożonej domenie | $1$ |
+| $R$ | Zadany promień tekstury bimeronu | $\mathrm{m}$ |
+| $F_R$ | Maska frozen spins dla zadanego promienia tekstury | $1$ |
+| $U_R$ | Swobodne DOF poza maską frozen spins | $1$ |
+| $R_\mathrm{area}$ | Promień z pola obszaru z ujemną składową x | $\mathrm{m}$ |
+| $R_\mathrm{core}$ | Pomocniczy promień wyznaczony z położeń rdzeni | $\mathrm{m}$ |
+| $m_x$ | Składowa x zredukowanej magnetyzacji | $1$ |
+| $\operatorname{area}$ | Pole geometryczne obszaru w płaszczyźnie | $\mathrm{m^2}$ |
+| $\pi$ | Stała koła | $1$ |
 | $E$ | Pełna energia mikromagnetyczna | $\mathrm{J}$ |
 | $E_{\mathrm c}$ | Energia ograniczona jako funkcja swobodnego stanu | $\mathrm{J}$ |
+| $E_\mathrm{bg}$ | Energia zbieżnego, niezależnego tła skierowanego w +x | $\mathrm{J}$ |
+| $\Delta E$ | Energia nadmiarowa względem tła | $\mathrm{J}$ |
+| $T_f$ | Maksymalny moment po free DOF przeliczony na T | $\mathrm{T}$ |
+| $\mu_0$ | Przenikalność magnetyczna próżni | $\mathrm{N\,A^{-2}}$ |
+| $\epsilon_E$ | Względny rozrzut energii w końcowym oknie | $1$ |
+| $\epsilon_{\Delta E}$ | Rozrzut okna względem skali energii nadmiarowej | $1$ |
+| $E_j$ | Energia próbki końcowego okna | $\mathrm{J}$ |
+| $E_\mathrm{floor}$ | Minimalna skala używana w mianowniku kryterium nadwyżki energii | $\mathrm{J}$ |
+| $j$ | Indeks próbki końcowego okna | $1$ |
 | $\mathbf R_i$ | Pełny złożony RHS magnetyzacji | $\mathrm{s^{-1}}$ |
 | $\mathbf R_{\mathrm{LLG},i}$ | Składnik RHS LLG | $\mathrm{s^{-1}}$ |
 | $\mathbf R_{\mathrm{STT},i}$ | Składnik RHS STT | $\mathrm{s^{-1}}$ |
@@ -409,6 +426,97 @@ typów i binarnej maski poza cienkim statusem. Browser gate wymaga aktualnej
 rewizji zasobu, widocznego overlayu, zdrowego WebGL i niezerowego drawing
 buffera.
 
+### 10.4. Profil energii bimeronu z ograniczeniem frozen spins
+
+Profil rozmiaru bimeronu jest eksperymentem na rodzinie ograniczonych zadań,
+a nie powtórzeniem swobodnej relaksacji dla każdego zadanego promienia. Dla
+każdego $R$ najpierw budowana jest niezależna tekstura początkowa
+$\mathbf m^{(0)}(R)$, następnie przechwytywana jest referencja
+$\mathbf m_F^\star(R)$ na jawnej masce $F_R$. Etapy
+`constrained_relax` i `constrained_hold` rozwiązują
+
+```{math}
+:label: eq-frozen-bimeron-profile-energy
+E_c(R;F_R)=E\!\left(\mathbf m_U(R),\mathbf m_F^\star(R)\right),
+\qquad U_R=A\setminus F_R,
+```
+
+czyli pełną energię układu z ustalonymi spinami, wraz z ich wkładem do pól
+exchange, demag i DMI. Profil raportuje energię z tego samego etapu co stan,
+z którego wyznaczono $R_\mathrm{area}$; stan po opcjonalnym `release` jest
+osobnym pomiarem stabilności i nie zastępuje energii ograniczonej.
+
+Rozmiar główny definiujemy przez pole obszaru odwróconej magnetyzacji:
+
+```{math}
+:label: eq-frozen-bimeron-profile-radius
+R_\mathrm{area}=\sqrt{\frac{\operatorname{area}(m_x<0)}{\pi}},
+```
+
+a $R_\mathrm{core}$ pozostaje pomocniczą odległością od rdzeni. Obie wielkości
+mają jednostkę m (w raportach mogą być prezentowane w nm). Dla jednorazowej
+kontroli materiału $P0$ można zmierzyć swobodny stan równowagowy, ale nie
+odejmuje się jego energii od punktu profilu, dopóki niezależna relaksacja tła
+$+x$ nie osiągnie własnego kryterium stopu.
+
+Jeżeli tło jest zbieżne, energia nadmiarowa wynosi
+
+```{math}
+:label: eq-frozen-bimeron-profile-excess
+\Delta E(R)=E_c(R;F_R)-E_\mathrm{bg},
+```
+
+w J. Przy niezbieżnym lub brakującym tle $\Delta E$ ma wartość nieznaną i
+pozostaje pusta w artefaktach; skończona energia terminalna tła sama nie jest
+referencją fizyczną.
+
+Kryterium relaksacji jest liczone po swobodnych DOF. Raportowany moment w T
+jest przeliczeniem redukcji po $U_R$:
+
+```{math}
+:label: eq-frozen-bimeron-profile-free-torque
+T_{f}=\mu_0\max_{i\in U_R}
+\left\lVert\mathbf m_i\times\mathbf H_{\mathrm{eff},i}\right\rVert_2.
+```
+
+W pilocie FDM GPU FP64 stosowany jest roboczy `tolT=10^{-5}` T, zapisany w
+metadanych. $10^{-6}$ T jest testem czułości, a nie domyślnym powodem odrzucenia
+krótkiego pilota. Zbieżność wymaga jednak również stabilności energii i
+rozmiaru w końcowym oknie; status `max_steps` lub `max_physical_time` pozostaje
+`not_converged`.
+
+Dla okna energii definiujemy bezwymiarowy rozrzut
+
+```{math}
+:label: eq-frozen-bimeron-profile-energy-window
+\epsilon_E=\frac{\max_j E_j-\min_j E_j}{\left|\operatorname{mean}_j E_j\right|},
+\qquad
+\epsilon_{\Delta E}=\frac{\max_j E_j-\min_j E_j}
+{\max\!\left(|\Delta E|,E_\mathrm{floor}\right)}.
+```
+
+Robocze progi pilota to $\epsilon_E\le 10^{-3}$ jako kontrola oczywistej
+niestabilności oraz $\epsilon_{\Delta E}\le 5\times10^{-2}$ przy
+$E_\mathrm{floor}=10^{-21}$ J. Są to progi stabilności jednego punktu, nie
+tolerancja zgodności energii pomiędzy różnymi maskami. P2, P3 i pierścień
+nakładają różne ograniczenia, więc ich rozrzut jest raportowany jako bias
+protokołu i nie jest bramką akceptacji jednej krzywej $E(R)$.
+
+W tej realizacji główną ścieżką jest FDM GPU FP64 strict z `llg_overdamped`.
+CUDA emituje kontrolną redukcję free torque na urządzeniu, a pełne redukcje
+energii są pobierane tylko w zaplanowanych snapshotach. `projected_gradient_bb`
+pozostaje kandydatem do osobnej kwalifikacji: dopóki natywna pętla prób nie
+udowodni przywracania referencji przy każdej retrakcji/Armijo i nie ma nowego
+receiptu strict, wyników BB nie wolno mieszać z zaakceptowanym profilem.
+
+Scenariusz nie dodaje nowej publicznej klasy Python ani nowego pola
+`ProblemIR`; wykorzystuje istniejący `FrozenSpins`, resolved mask/reference,
+stage IDs i certyfikaty hash. `run_sweep.py`, `analyze.py`, `verify.py` i
+`report.py` zapisują razem target $R$, zmierzone promienie, pełną energię,
+ewentualne $\Delta E$, torque po free DOF, status stopu, maskę i referencję.
+FEM CPU/GPU pozostają osobnymi torami walidacji i nie są wnioskiem z profilu
+FDM.
+
 Szczegółowy ledger i wszystkie początkowe statusy `UNQUALIFIED` znajdują się w
 `docs/validation/frozen-spins-qualification-matrix.md`.
 
@@ -426,6 +534,10 @@ Szczegółowy ledger i wszystkie początkowe statusy `UNQUALIFIED` znajdują si�
   topologii.
 - Sparse runtime mask/reference i kompresja hot-loop nie są częścią V1; dense
   jest bezpieczną reprezentacją referencyjną do czasu profilowania.
+- Profil $E(R)$ pozostaje warunkowy na protokole kotwienia, siatce, szerokości
+  ściany i zbieżnym tle. Obecny pilot jest diagnostyczny; zaakceptowana krzywa
+  wymaga zbieżnych punktów po obu stronach minimum oraz osobnej kontroli wpływu
+  wielkości pinu i siatki.
 
 (frozen-spins-scientific-bibliography)=
 ## 12. Bibliografia naukowa
@@ -449,6 +561,9 @@ Szczegółowy ledger i wszystkie początkowe statusy `UNQUALIFIED` znajdują si�
 | Final-RHS masking | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v1-final-rhs` | Kolejność maskowania torque | wspólny | przyszłe STT/SOT/thermal fixtures | planned_contract | `worktree/uncommitted`; path + anchor only |
 | Candidate restore | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v1-candidate-restore` | Niezmienność kandydatów | wspólny | przyszłe integrator/minimizer fixtures | planned_contract | `worktree/uncommitted`; path + anchor only |
 | Redukcje po $U$ i $A$ | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v1-free-reductions` | Metryki free/all z tego samego pre-constraint stanu | wspólny | przyszłe convergence fixtures | planned_contract | `worktree/uncommitted`; path + anchor only |
+| Profil energii bimeronu | `tests/standard_problems/bimeron/goebel_2019/frozen_size/scenario_fdm.py` | `FROZEN` | Związana energia, pomiar $R$ i free torque przy frozen spins | FDM GPU FP64 | pilot w storage; punkty `not_converged` | diagnostic, not accepted | `worktree/uncommitted`; path + symbol only |
+| Referencja tła i $\Delta E$ | `tests/standard_problems/bimeron/goebel_2019/frozen_size/analyze.py` | `_background_reference_status` | Tło używane wyłącznie po zbieżności; brak tła zachowuje `null` | FDM | reanaliza z `background_not_converged` | diagnostic, not accepted | `worktree/uncommitted`; path + symbol only |
+| Stabilność i bias protokołu | `tests/standard_problems/bimeron/goebel_2019/frozen_size/run_sweep.py` | `_protocol_energy_spread` | Okno energii względem $E_\mathrm{total}$ i $\Delta E$; spread P2/P3/ring nie jest bramką | FDM | authoring smoke i pilot diagnostyczny | diagnostic, not accepted | `worktree/uncommitted`; path + symbol only |
 | TPI essential true DOF | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v1-tpi` | Kontrakt tangent-plane | FEM CPU/GPU | przyszły managed FEM gate | planned_contract | `worktree/uncommitted`; path + anchor only |
 | Capture timing i epoki | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v1-capture` | Atomowa maska/referencja, transitions i resume | wspólny | przyszły revision/restart fixture | planned_contract | `worktree/uncommitted`; path + anchor only |
 | Zgodność overlap | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v1-overlap` | Dokładna zgodność resolved reference przed atomowym committem | wspólny | przyszły cross-epoch overlap fixture | planned_contract | `worktree/uncommitted`; path + anchor only |

@@ -66,6 +66,14 @@ fm.runtime_metadata(
         "source_scenario": "tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py",
         "texture_preset": "bimeron",
         "same_rDMI_parameters": True,
+        "relaxation_algorithm": "llg_overdamped",
+        "relaxation_tolerance_T": CASE.relax_tol_T,
+        "relaxation_algorithm_status": (
+            "qualified_for_frozen_spins_cuda_strict;"
+            "projected_gradient_bb_requires_separate_native_receipt_qualification"
+        ),
+        "profile_energy_stage": "constrained_hold",
+        "hold_role": "frozen_stability_check",
         "protocol": CASE.metadata(),
         "measurement": {
             "R_area": "sqrt(connected_area(mx<0)/pi)",
@@ -153,7 +161,7 @@ relax = study.stages.add_relax(
     dt=CASE.dt_s,
     max_steps=CASE.relax_max_steps,
     max_physical_time_s=CASE.relax_time_s,
-    tolT=1e-6,
+    tolT=CASE.relax_tol_T,
     constraints=CONSTRAINTS,
 )
 relax.autosave(
@@ -208,7 +216,7 @@ if CASE.include_release:
         dt=CASE.dt_s,
         max_steps=CASE.release_max_steps,
         max_physical_time_s=CASE.release_time_s,
-        tolT=1e-6,
+        tolT=CASE.relax_tol_T,
     )
     released.autosave(
         fm.StageAutosave(

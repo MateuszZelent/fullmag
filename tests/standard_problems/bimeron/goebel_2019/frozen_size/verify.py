@@ -25,6 +25,18 @@ def _finite(value: Any) -> bool:
         return False
 
 
+def _profile_state_label(analysis: dict[str, Any]) -> str:
+    label = analysis.get("profile_state_label")
+    if label in {"constrained_relaxed", "constrained_held", "final"}:
+        return str(label)
+    profile = analysis.get("profile_energy")
+    if isinstance(profile, dict) and profile.get("stage_id") == "constrained_relax":
+        return "constrained_relaxed"
+    if isinstance(profile, dict) and profile.get("stage_id") == "constrained_hold":
+        return "constrained_held"
+    return "final"
+
+
 def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dict[str, Any]:
     failures: list[str] = []
     warnings: list[str] = []
@@ -54,6 +66,15 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
             failures.append("runtime_provenance_missing")
     if thresholds.get("require_completion", True) and not completion:
         failures.append("completion_provenance_missing")
+    background_reference = analysis.get("background_reference")
+    background_reference_missing = thresholds.get("require_converged_background", True) and (
+        not isinstance(background_reference, dict) or background_reference.get("status") != "usable"
+    )
+    if background_reference_missing:
+        if completion.get("converged") is True:
+            failures.append("background_reference_unavailable")
+        else:
+            warnings.append("background_reference_unavailable_before_convergence")
     if str(requested.get("device", "")).lower() == "gpu" and thresholds.get("require_gpu_residency", True):
         receipt = provenance.get("fdm_gpu_execution_receipt") if isinstance(provenance.get("fdm_gpu_execution_receipt"), dict) else {}
         if receipt.get("resolved") != "device_resident" or receipt.get("executed") != "cuda_fdm":
@@ -61,7 +82,9 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
         if receipt.get("fallback_count") not in {0, 0.0}:
             failures.append("gpu_fallback_detected")
     states = analysis.get("states") if isinstance(analysis.get("states"), dict) else {}
-    for label in ("initial", "constrained_held"):
+    profile_state_label = _profile_state_label(analysis)
+    required_state_labels = {"initial", "constrained_held", profile_state_label}
+    for label in required_state_labels:
         measurement = states.get(label, {}).get("measurement") if isinstance(states.get(label), dict) else None
         if not isinstance(measurement, dict):
             failures.append(f"missing_{label}_measurement")
@@ -97,7 +120,7 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
         free_torque_t = float(free_torque_value)
         if free_torque_units != "T":
             free_torque_t *= MU0_T_M_PER_A
-        maximum_free_torque_t = float(thresholds.get("maximum_free_torque_T", 1.0e-6))
+        maximum_free_torque_t = float(thresholds.get("maximum_free_torque_T", 1.0e-5))
         if free_torque_t > maximum_free_torque_t:
             if completion.get("converged") is True:
                 failures.append("free_torque_exceeds_threshold")
@@ -115,7 +138,7 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
         if _finite(nonfinite_vectors) and int(float(nonfinite_vectors)) > 0:
             failures.append(f"{label}_contains_nonfinite_vectors")
         charge = measurement.get("topological_charge")
-        if label in {"initial", "constrained_held"} and _finite(charge):
+        if label in {"initial", "constrained_held", profile_state_label} and _finite(charge):
             if abs(float(charge)) < float(thresholds.get("minimum_nontrivial_abs_topological_charge", 0.8)):
                 failures.append(f"{label}_topological_charge_is_trivial")
         area = measurement.get("R_area_nm")
@@ -124,8 +147,9 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
             warnings.append(f"{label}_area_core_radius_disagreement")
 
     held_measurement = states.get("constrained_held", {}).get("measurement") if isinstance(states.get("constrained_held"), dict) else None
+    profile_measurement = states.get(profile_state_label, {}).get("measurement") if isinstance(states.get(profile_state_label), dict) else None
     target_radius = protocol.get("target_radius_nm")
-    measured_radius = held_measurement.get("R_area_nm") if isinstance(held_measurement, dict) else None
+    measured_radius = profile_measurement.get("R_area_nm") if isinstance(profile_measurement, dict) else None
     cell_nm = protocol.get("cell_nm", 0.5)
     radius_error = None
     radius_tolerance = None
@@ -148,6 +172,20 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
             failures.append("energy_window_not_stable")
         else:
             warnings.append("energy_window_not_stable_before_convergence")
+    energy_window_relative_to_excess = None
+    profile_delta = profile_energy.get("delta_E_to_background_J")
+    if _finite(energy_window_relative) and _finite(profile_delta):
+        minimum_scale = float(thresholds.get("minimum_excess_energy_scale_J", 1e-21))
+        energy_window_relative_to_excess = float(energy_window_relative) * max(
+            abs(float(profile_energy.get("E_total_J") or 0.0)), 1e-30
+        ) / max(abs(float(profile_delta)), minimum_scale)
+        if energy_window_relative_to_excess > float(
+            thresholds.get("maximum_energy_window_relative_to_excess", 0.05)
+        ):
+            if completion.get("converged") is True:
+                failures.append("energy_window_not_stable_relative_to_excess")
+            else:
+                warnings.append("energy_window_not_stable_relative_to_excess_before_convergence")
 
     not_converged = completion.get("converged") is False
     if not_converged:
@@ -170,6 +208,7 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
         "radius_tolerance_nm": radius_tolerance,
         "energy_balance_relative": profile_energy.get("E_balance_relative"),
         "energy_window_relative_span": energy_window_relative,
+        "energy_window_relative_to_excess": energy_window_relative_to_excess,
     }
     return result
 

@@ -1,8 +1,8 @@
 """Render a Markdown report from a frozen-spin size-sweep summary.
 
 The report keeps measured, diagnostic, and accepted points separate.  It
-never interpolates across a failed or non-converged case and always labels the
-profile energy as the constrained-hold measurement.
+never interpolates across a failed or non-converged case and pairs the profile
+energy with the state from the same constrained stage.
 """
 
 from __future__ import annotations
@@ -34,6 +34,18 @@ def _measurement(result: dict[str, Any], state: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _profile_state(result: dict[str, Any]) -> str:
+    label = result.get("profile_state_label")
+    if label in {"constrained_relaxed", "constrained_held", "final"}:
+        return str(label)
+    profile = result.get("profile_energy")
+    if isinstance(profile, dict) and profile.get("stage_id") == "constrained_relax":
+        return "constrained_relaxed"
+    if isinstance(profile, dict) and profile.get("stage_id") == "constrained_hold":
+        return "constrained_held"
+    return "final"
+
+
 def _verification(result: dict[str, Any]) -> dict[str, Any]:
     artifact_root = result.get("artifact_root")
     if not artifact_root:
@@ -58,7 +70,7 @@ def _classification(result: dict[str, Any], verification: dict[str, Any]) -> str
             return "execution_not_verified"
         return "failed"
     protocol = result.get("protocol") if isinstance(result.get("protocol"), dict) else {}
-    held = _measurement(result, "constrained_held")
+    held = _measurement(result, _profile_state(result))
     target = _number(protocol.get("target_radius_nm"))
     measured = _number(held.get("R_area_nm"))
     cell = _number(protocol.get("cell_nm")) or 0.5
@@ -112,10 +124,11 @@ def render_report(summary: dict[str, Any]) -> str:
         rows.append((result, verification, _classification(result, verification)))
     rows.sort(key=lambda item: _number((item[0].get("protocol") or {}).get("target_radius_nm")) or float("inf"))
 
+    background = summary.get("background") if isinstance(summary.get("background"), dict) else {}
     lines = [
         "# Frozen-spin bimeron size profile",
         "",
-        "This report is generated from `profile_summary.json`. The profile energy is the last measured energy of `constrained_hold`; `energy` in each case is the terminal value after release when release is enabled.",
+        "This report is generated from `profile_summary.json`. The profile energy is paired with the state from its constrained stage; `energy` in each case is the terminal value after release when release is enabled.",
         "",
         f"- Sweep schema: `{summary.get('schema_version', 'unknown')}`",
         f"- Cases: {len(rows)}",
@@ -124,23 +137,36 @@ def render_report(summary: dict[str, Any]) -> str:
         "- Physical lane: FDM, requested GPU, FP64, strict mode; inspect each runtime receipt before interpreting a point.",
         "- The reported free torque is sampled from the last constrained stage; release torque is retained separately in the case analysis.",
         "",
-        "## Size-to-energy table",
-        "",
-        "| R target (nm) | R area hold (nm) | R core release (nm) | Q hold | E profile (J) | ΔE to background (J) | frozen DOF | max free torque (T) | verification | classification |",
-        "|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
     ]
+    if background.get("status") != "usable":
+        lines.append(
+            "- Background reference is unavailable for subtraction: "
+            f"`{background.get('reason', 'not_provided')}`. ΔE values are omitted until the +x run converges."
+        )
+    lines.extend(
+        [
+            "",
+            "## Size-to-energy table",
+            "",
+            "| R target (nm) | R area profile (nm) | R area hold (nm) | R core release (nm) | Q profile | E profile (J) | ΔE to background (J) | frozen DOF | max free torque (T) | verification | classification |",
+            "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
+        ]
+    )
     for result, verification, classification in rows:
         protocol = result.get("protocol") if isinstance(result.get("protocol"), dict) else {}
         profile = result.get("profile_energy") if isinstance(result.get("profile_energy"), dict) else {}
+        profile_state = _profile_state(result)
+        profile_measurement = _measurement(result, profile_state)
         held = _measurement(result, "constrained_held")
         released = _measurement(result, "released")
         frozen = result.get("frozen_runtime") if isinstance(result.get("frozen_runtime"), dict) else {}
         lines.append(
-            "| {target} | {area} | {core} | {q} | {energy} | {delta} | {frozen_count} | {free_torque} | {status} | {classification} |".format(
+            "| {target} | {profile_area} | {hold_area} | {core} | {q} | {energy} | {delta} | {frozen_count} | {free_torque} | {status} | {classification} |".format(
                 target=_fmt(protocol.get("target_radius_nm")),
-                area=_fmt(held.get("R_area_nm")),
+                profile_area=_fmt(profile_measurement.get("R_area_nm")),
+                hold_area=_fmt(held.get("R_area_nm")),
                 core=_fmt(released.get("R_core_nm")),
-                q=_fmt(held.get("topological_charge")),
+                q=_fmt(profile_measurement.get("topological_charge")),
                 energy=_fmt_energy(profile.get("E_total_J")),
                 delta=_fmt_energy(profile.get("delta_E_to_background_J")),
                 frozen_count=frozen.get("frozen_dof_count", "—"),
@@ -190,24 +216,50 @@ def render_report(summary: dict[str, Any]) -> str:
             )
         )
 
+    spread_rows = summary.get("diagnostics", {}).get("protocol_energy_spread", []) if isinstance(summary.get("diagnostics"), dict) else []
+    if isinstance(spread_rows, list) and spread_rows:
+        lines.extend(
+            [
+                "",
+                "## Protocol energy spread (diagnostic)",
+                "",
+                "P2, P3, and P-ring impose different constraints. Their energy spread is reported as protocol bias and is not used as a rejection tolerance.",
+                "",
+                "| R target (nm) | protocols | spread (J) | spread / |E| | spread / |ΔE| |",
+                "|---:|---|---:|---:|---:|",
+            ]
+        )
+        for spread in spread_rows:
+            protocols = ", ".join(str(value) for value in spread.get("protocols", []))
+            lines.append(
+                "| {target} | {protocols} | {spread} | {relative_total} | {relative_excess} |".format(
+                    target=_fmt(spread.get("target_radius_nm")),
+                    protocols=protocols or "—",
+                    spread=_fmt_energy(spread.get("spread_J")),
+                    relative_total=_fmt(spread.get("spread_relative_to_total")),
+                    relative_excess=_fmt(spread.get("spread_relative_to_excess")),
+                )
+            )
+
     lines.extend(
         [
             "",
             "## Measurement uncertainty and final-window diagnostics",
             "",
-            "| R target (nm) | R area uncertainty (nm) | R core uncertainty (nm) | energy-window relative span | energy-balance relative residual | radius error (nm) | radius tolerance (nm) |",
-            "|---:|---:|---:|---:|---:|---:|---:|",
+                "| R target (nm) | R area uncertainty (nm) | R core uncertainty (nm) | energy-window / E_total | energy-window / delta_E | energy-balance relative residual | radius error (nm) | radius tolerance (nm) |",
+                "|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for result, verification, _classification_value in rows:
         protocol = result.get("protocol") if isinstance(result.get("protocol"), dict) else {}
-        held = _measurement(result, "constrained_held")
+        profile_measurement = _measurement(result, _profile_state(result))
         lines.append(
-            "| {target} | {area_uncertainty} | {core_uncertainty} | {window} | {balance} | {radius_error} | {radius_tolerance} |".format(
+                "| {target} | {area_uncertainty} | {core_uncertainty} | {window} | {window_excess} | {balance} | {radius_error} | {radius_tolerance} |".format(
                 target=_fmt(protocol.get("target_radius_nm")),
-                area_uncertainty=_fmt(held.get("R_area_uncertainty_nm")),
-                core_uncertainty=_fmt(held.get("R_core_uncertainty_nm")),
-                window=_fmt(verification.get("energy_window_relative_span")),
+                area_uncertainty=_fmt(profile_measurement.get("R_area_uncertainty_nm")),
+                    core_uncertainty=_fmt(profile_measurement.get("R_core_uncertainty_nm")),
+                    window=_fmt(verification.get("energy_window_relative_span")),
+                    window_excess=_fmt(verification.get("energy_window_relative_to_excess")),
                 balance=_fmt(verification.get("energy_balance_relative")),
                 radius_error=_fmt(verification.get("radius_error_nm")),
                 radius_tolerance=_fmt(verification.get("radius_tolerance_nm")),

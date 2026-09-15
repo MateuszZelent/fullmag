@@ -201,16 +201,28 @@ def _last_row(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
     return dict(rows[-1]) if rows else {}
 
 
-def _constrained_metric_row(rows: Sequence[dict[str, Any]], fallback: dict[str, Any]) -> dict[str, Any]:
+def _constrained_metric_row(
+    rows: Sequence[dict[str, Any]],
+    fallback: dict[str, Any],
+    *,
+    preferred_stage: str = "constrained_hold",
+) -> dict[str, Any]:
     """Select torque/counter metrics from the constrained profile stage.
 
     A release stage is intentionally free to move, so its terminal torque is
-    not the convergence metric for the frozen-spin profile.  Prefer the last
-    hold sample, then constrained-relax, and only use the terminal row for a
-    protocol without a constrained stage.
+    not the convergence metric for the frozen-spin profile.  The preferred
+    stage is explicit because a direct minimizer reports accepted steps in
+    ``constrained_relax``, while a time-domain LLG run traditionally uses the
+    later hold stage as its stability sample.
     """
 
-    for stage_id in ("constrained_hold", "constrained_relax"):
+    stage_order = [preferred_stage]
+    stage_order.extend(
+        stage_id
+        for stage_id in ("constrained_relax", "constrained_hold")
+        if stage_id not in stage_order
+    )
+    for stage_id in stage_order:
         candidates = [row for row in rows if row.get("_stage_id") == stage_id]
         if candidates:
             return dict(candidates[-1])
@@ -739,12 +751,19 @@ def _torque_t(metrics: dict[str, Any]) -> float | None:
     return value
 
 
-def _convergence_diagnostics(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
+def _convergence_diagnostics(
+    rows: Sequence[dict[str, Any]], *, preferred_stage: str = "constrained_hold"
+) -> dict[str, Any]:
     """Summarize the final constrained window without claiming convergence."""
 
-    stage_rows = [row for row in rows if row.get("_stage_id") == "constrained_hold"]
+    stage_rows = [row for row in rows if row.get("_stage_id") == preferred_stage]
     if not stage_rows:
-        stage_rows = [row for row in rows if row.get("_stage_id") == "constrained_relax"]
+        fallback_stage = (
+            "constrained_relax"
+            if preferred_stage == "constrained_hold"
+            else "constrained_hold"
+        )
+        stage_rows = [row for row in rows if row.get("_stage_id") == fallback_stage]
     if not stage_rows:
         stage_rows = list(rows)
     if not stage_rows:
@@ -830,12 +849,110 @@ def _runtime_provenance(
     return result
 
 
+def _background_reference_status(
+    root: Path,
+    workspace_root: Path | None = None,
+) -> dict[str, Any]:
+    """Return whether a background energy is safe to use as a reference.
+
+    A finite terminal energy is not enough: the +x background must have
+    reached the solver's convergence criterion before it can be subtracted
+    from a constrained texture.  Keeping this decision in the analyzer also
+    protects direct ``analyze.py --background`` invocations from silently
+    producing a misleading ``delta_E_to_background_J``.
+    """
+
+    root = root.resolve()
+    workspace_root = workspace_root.resolve() if workspace_root is not None else None
+    cached_analysis = root / "analysis.json"
+    if cached_analysis.is_file():
+        try:
+            cached = json.loads(cached_analysis.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            cached = None
+        if isinstance(cached, dict):
+            if cached.get("status") != "measured":
+                return {
+                    "status": "unavailable",
+                    "reason": "background_not_measured",
+                    "energy_J": None,
+                }
+            cached_energy = (
+                cached.get("energy", {}).get("E_total_J")
+                if isinstance(cached.get("energy"), dict)
+                else None
+            )
+            cached_runtime = cached.get("runtime_provenance")
+            cached_completion = (
+                cached_runtime.get("completion")
+                if isinstance(cached_runtime, dict)
+                and isinstance(cached_runtime.get("completion"), dict)
+                else None
+            )
+            if _number(cached_energy) is None:
+                return {
+                    "status": "unavailable",
+                    "reason": "background_energy_not_finite",
+                    "energy_J": None,
+                }
+            if cached_completion is None:
+                return {
+                    "status": "unavailable",
+                    "reason": "background_completion_missing",
+                    "energy_J": None,
+                }
+            if cached_completion.get("converged") is not True:
+                return {
+                    "status": "unavailable",
+                    "reason": "background_not_converged",
+                    "energy_J": None,
+                    "completion": cached_completion,
+                }
+            return {
+                "status": "usable",
+                "reason": "background_converged",
+                "energy_J": float(cached_energy),
+                "completion": cached_completion,
+            }
+    metadata, _metadata_path = _metadata_for_root(root, workspace_root)
+    runtime = _runtime_provenance(metadata, root=root, workspace_root=workspace_root)
+    completion = runtime.get("completion")
+    rows = _trace_rows(root, workspace_root)
+    terminal_energy = _energy_from_row(_last_row(rows)).get("E_total_J")
+    if _number(terminal_energy) is None:
+        return {
+            "status": "unavailable",
+            "reason": "background_energy_not_finite",
+            "energy_J": None,
+        }
+    if not isinstance(completion, dict):
+        return {
+            "status": "unavailable",
+            "reason": "background_completion_missing",
+            "energy_J": None,
+        }
+    if completion.get("converged") is not True:
+        return {
+            "status": "unavailable",
+            "reason": "background_not_converged",
+            "energy_J": None,
+            "completion": completion,
+        }
+    return {
+        "status": "usable",
+        "reason": "background_converged",
+        "energy_J": terminal_energy,
+        "completion": completion,
+    }
+
+
 def analyze_case(
     root: Path,
     *,
     workspace_root: Path | None = None,
     fallback_cell_nm: float = 0.5,
     background_energy_j: float | None = None,
+    background_reference: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = root.resolve()
     workspace_root = workspace_root.resolve() if workspace_root is not None else None
@@ -846,6 +963,22 @@ def analyze_case(
         or {}
     )
     protocol = experiment.get("protocol", {}) if isinstance(experiment, dict) else {}
+    relaxation_algorithm = (
+        str(experiment.get("relaxation_algorithm", "")).strip().lower()
+        if isinstance(experiment, dict)
+        else ""
+    )
+    profile_stage_preference = (
+        str(experiment.get("profile_energy_stage", "")).strip()
+        if isinstance(experiment, dict)
+        else ""
+    )
+    if profile_stage_preference not in {"constrained_relax", "constrained_hold"}:
+        profile_stage_preference = (
+            "constrained_relax"
+            if relaxation_algorithm in {"projected_gradient_bb", "nonlinear_cg"}
+            else "constrained_hold"
+        )
     cell_nm = _number(protocol.get("cell_nm")) if isinstance(protocol, dict) else None
     nx, ny, nz, hx, hy, hz = _grid_from_metadata(root, cell_nm or fallback_cell_nm)
     rows = _trace_rows(root, workspace_root)
@@ -858,16 +991,33 @@ def analyze_case(
     else:
         energy["delta_E_to_background_J"] = None
     stage_energy = _stage_energy(rows, background_energy_j)
-    profile_stage_id = "constrained_hold"
+    profile_stage_id = profile_stage_preference
     profile_energy = stage_energy.get(profile_stage_id)
     if profile_energy is None:
-        profile_stage_id = "constrained_relax"
+        profile_stage_id = (
+            "constrained_hold"
+            if profile_stage_preference == "constrained_relax"
+            else "constrained_relax"
+        )
         profile_energy = stage_energy.get(profile_stage_id)
     if profile_energy is None and stage_energy:
         profile_stage_id, profile_energy = next(reversed(stage_energy.items()))
     if profile_energy is None:
         profile_stage_id = "terminal"
         profile_energy = dict(energy)
+    profile_state_label = (
+        "constrained_relaxed"
+        if profile_stage_id == "constrained_relax"
+        else "constrained_held"
+        if profile_stage_id == "constrained_hold"
+        else "final"
+    )
+    if background_reference is None:
+        background_reference = {
+            "status": "provided" if background_energy_j is not None else "not_provided",
+            "reason": "caller_supplied_energy" if background_energy_j is not None else "no_background_argument",
+            "energy_J": background_energy_j,
+        }
 
     states: dict[str, Any] = {}
     state_values: dict[str, list[tuple[float, float, float]]] = {}
@@ -892,7 +1042,11 @@ def analyze_case(
         except Exception as error:
             states[label] = {"path": str(path), "measurement_error": str(error)}
 
-    constrained_row = _constrained_metric_row(rows, final_row)
+    constrained_row = _constrained_metric_row(
+        rows,
+        final_row,
+        preferred_stage=profile_stage_preference,
+    )
     frozen_runtime = _resolved_frozen_metrics(
         root, workspace_root, _frozen_metrics(constrained_row)
     )
@@ -917,12 +1071,17 @@ def analyze_case(
         "energy": energy,
         "stage_energy": stage_energy,
         "profile_energy": {**profile_energy, "stage_id": profile_stage_id},
-        "convergence_diagnostics": _convergence_diagnostics(rows),
+        "profile_state_label": profile_state_label,
+        "convergence_diagnostics": _convergence_diagnostics(
+            rows,
+            preferred_stage=profile_stage_preference,
+        ),
         "runtime_provenance": _runtime_provenance(
             metadata,
             root=root,
             workspace_root=workspace_root,
         ),
+        "background_reference": background_reference,
         "frozen_runtime": frozen_runtime,
         "states": states,
         "source_metadata_present": metadata_path is not None,
@@ -932,8 +1091,9 @@ def analyze_case(
 
 
 def background_energy(root: Path, workspace_root: Path | None = None) -> float | None:
-    rows = _trace_rows(root, workspace_root)
-    return _energy_from_row(_last_row(rows)).get("E_total_J")
+    status = _background_reference_status(root, workspace_root)
+    value = status.get("energy_J")
+    return float(value) if status.get("status") == "usable" and _number(value) is not None else None
 
 
 def main() -> int:
@@ -944,8 +1104,18 @@ def main() -> int:
     parser.add_argument("--background-workspace", type=Path, help="managed session directory for the background run")
     parser.add_argument("--output", type=Path, help="write analysis JSON to this path")
     args = parser.parse_args()
-    background = background_energy(args.background, args.background_workspace) if args.background else None
-    summary = analyze_case(args.root, workspace_root=args.workspace, background_energy_j=background)
+    background_reference = (
+        _background_reference_status(args.background, args.background_workspace)
+        if args.background
+        else {"status": "not_provided", "reason": "no_background_argument", "energy_J": None}
+    )
+    background = background_reference.get("energy_J") if background_reference.get("status") == "usable" else None
+    summary = analyze_case(
+        args.root,
+        workspace_root=args.workspace,
+        background_energy_j=background,
+        background_reference=background_reference,
+    )
     encoded = json.dumps(summary, indent=2, ensure_ascii=False) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

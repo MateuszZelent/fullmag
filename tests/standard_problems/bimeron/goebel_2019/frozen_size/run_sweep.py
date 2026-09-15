@@ -11,6 +11,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -25,6 +26,7 @@ if str(_ROOT) not in sys.path:
 from tests.standard_problems.bimeron.goebel_2019.frozen_size.common import (
     DEFAULT_CELL_NM,
     DEFAULT_PIN_RADIUS_NM,
+    DEFAULT_RELAX_TOL_T,
     DEFAULT_RING_WIDTH_NM,
     DEFAULT_WALL_WIDTH_NM,
     preset_radius_for_contour,
@@ -40,7 +42,10 @@ ANALYZER_REL = Path("tests/standard_problems/bimeron/goebel_2019/frozen_size/ana
 THRESHOLDS_REL = Path("tests/standard_problems/bimeron/goebel_2019/frozen_size/thresholds.v1.json")
 # A free-relaxation P0 run is a one-time control for the material parameters,
 # not a profile point to repeat at every target radius.
-DEFAULT_PROFILE_PROTOCOLS = ("p2", "p3", "ring")
+# The annulus is the primary size constraint for E(R).  P2/P3 remain useful
+# diagnostic protocols, but mixing their different constraints into the
+# default profile would make one curve protocol-dependent.
+DEFAULT_PROFILE_PROTOCOLS = ("ring",)
 
 
 def _repo_root() -> Path:
@@ -121,6 +126,7 @@ def _case_matrix(args: argparse.Namespace) -> list[dict[str, Any]]:
                     "protocol": protocol,
                     "cell_nm": args.cell_nm,
                     "pin_radius_nm": args.pin_radius_nm,
+                    "relax_tol_T": args.tol_t,
                     "ring_width_nm": args.ring_width_nm,
                     "helicity_rad": args.helicity_rad,
                     "vorticity": args.vorticity,
@@ -159,6 +165,7 @@ def _environment(case: dict[str, Any], args: argparse.Namespace) -> dict[str, st
         if bool(case.get("release", getattr(args, "release", False)))
         else "0",
         "FULLMAG_BIMERON_RELAX_TIME_S": str(args.relax_time_s),
+        "FULLMAG_BIMERON_TOL_T": str(args.tol_t),
         "FULLMAG_BIMERON_HOLD_TIME_S": str(args.hold_time_s),
         "FULLMAG_BIMERON_RELEASE_TIME_S": str(args.release_time_s),
         "FULLMAG_BIMERON_HOLD_SAMPLE_PERIOD_S": str(
@@ -380,6 +387,98 @@ def _write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def _background_reference_contract(path: Path) -> dict[str, Any]:
+    """Classify a background artifact before using its energy for ΔE."""
+
+    try:
+        analysis = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"status": "unavailable", "reason": "background_analysis_missing", "energy_J": None}
+    if not isinstance(analysis, dict) or analysis.get("status") != "measured":
+        return {"status": "unavailable", "reason": "background_not_measured", "energy_J": None}
+    energy = analysis.get("energy") if isinstance(analysis.get("energy"), dict) else {}
+    value = energy.get("E_total_J")
+    try:
+        finite_energy = value is not None and math.isfinite(float(value))
+    except (TypeError, ValueError):
+        finite_energy = False
+    runtime = analysis.get("runtime_provenance") if isinstance(analysis.get("runtime_provenance"), dict) else {}
+    completion = runtime.get("completion") if isinstance(runtime.get("completion"), dict) else {}
+    if not finite_energy:
+        return {"status": "unavailable", "reason": "background_energy_not_finite", "energy_J": None}
+    if completion.get("converged") is not True:
+        return {
+            "status": "unavailable",
+            "reason": "background_not_converged",
+            "energy_J": None,
+            "completion": completion,
+        }
+    return {
+        "status": "usable",
+        "reason": "background_converged",
+        "energy_J": float(value),
+        "completion": completion,
+    }
+
+
+def _protocol_energy_spread(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Summarize protocol-dependent energy spread without rejecting points.
+
+    P2, P3, and P-ring solve different constrained variational problems. Their
+    spread is therefore an experimental bias diagnostic, not a numerical
+    tolerance or a cross-protocol acceptance gate.
+    """
+
+    groups: dict[tuple[float, float, float], list[dict[str, Any]]] = {}
+    for result in results:
+        protocol = result.get("protocol") if isinstance(result.get("protocol"), dict) else {}
+        profile = result.get("profile_energy") if isinstance(result.get("profile_energy"), dict) else {}
+        try:
+            target = float(protocol.get("target_radius_nm"))
+            wall = float(protocol.get("wall_width_nm"))
+            cell = float(protocol.get("cell_nm"))
+            energy = float(profile.get("E_total_J"))
+        except (TypeError, ValueError):
+            continue
+        if not all(math.isfinite(value) for value in (target, wall, cell, energy)):
+            continue
+        groups.setdefault((target, wall, cell), []).append(
+            {
+                "protocol": protocol.get("protocol"),
+                "energy_J": energy,
+                "delta_E_to_background_J": profile.get("delta_E_to_background_J"),
+            }
+        )
+    diagnostics: list[dict[str, Any]] = []
+    for (target, wall, cell), entries in sorted(groups.items()):
+        if len(entries) < 2:
+            continue
+        energies = [float(entry["energy_J"]) for entry in entries]
+        spread = max(energies) - min(energies)
+        excess = [
+            float(entry["delta_E_to_background_J"])
+            for entry in entries
+            if isinstance(entry.get("delta_E_to_background_J"), (int, float))
+            and math.isfinite(float(entry["delta_E_to_background_J"]))
+        ]
+        excess_scale = abs(sum(excess) / len(excess)) if excess else None
+        diagnostics.append(
+            {
+                "target_radius_nm": target,
+                "wall_width_nm": wall,
+                "cell_nm": cell,
+                "protocols": [entry.get("protocol") for entry in entries],
+                "min_energy_J": min(energies),
+                "max_energy_J": max(energies),
+                "spread_J": spread,
+                "spread_relative_to_total": spread / max(abs(sum(energies) / len(energies)), 1e-30),
+                "spread_relative_to_excess": spread / excess_scale if excess_scale and excess_scale > 0.0 else None,
+                "interpretation": "protocol_bias_diagnostic_only",
+            }
+        )
+    return diagnostics
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -402,6 +501,10 @@ def _write_profile_csv(path: Path, results: list[dict[str, Any]]) -> None:
         "profile_delta_E_to_background_J",
         "terminal_E_total_J",
         "terminal_delta_E_to_background_J",
+        "profile_state_label",
+        "R_area_profile_nm",
+        "R_area_profile_uncertainty_nm",
+        "Q_profile",
         "R_area_hold_nm",
         "R_area_uncertainty_nm",
         "R_core_release_nm",
@@ -409,6 +512,7 @@ def _write_profile_csv(path: Path, results: list[dict[str, Any]]) -> None:
         "radius_error_nm",
         "radius_tolerance_nm",
         "energy_window_relative_span",
+        "energy_window_relative_to_excess",
         "energy_balance_relative",
         "frozen_dof_count",
         "free_dof_count",
@@ -421,6 +525,17 @@ def _write_profile_csv(path: Path, results: list[dict[str, Any]]) -> None:
         protocol = result.get("protocol") if isinstance(result.get("protocol"), dict) else {}
         profile = result.get("profile_energy") if isinstance(result.get("profile_energy"), dict) else {}
         terminal = result.get("energy") if isinstance(result.get("energy"), dict) else {}
+        profile_state_label = result.get("profile_state_label")
+        if profile_state_label not in {"constrained_relaxed", "constrained_held", "final"}:
+            profile_state_label = (
+                "constrained_relaxed"
+                if profile.get("stage_id") == "constrained_relax"
+                else "constrained_held"
+                if profile.get("stage_id") == "constrained_hold"
+                else "final"
+            )
+        profile_state = result.get("states", {}).get(profile_state_label, {}) if isinstance(result.get("states"), dict) else {}
+        profile_measurement = profile_state.get("measurement") if isinstance(profile_state, dict) and isinstance(profile_state.get("measurement"), dict) else {}
         held = result.get("states", {}).get("constrained_held", {}) if isinstance(result.get("states"), dict) else {}
         held_measurement = held.get("measurement") if isinstance(held, dict) and isinstance(held.get("measurement"), dict) else {}
         released = result.get("states", {}).get("released", {}) if isinstance(result.get("states"), dict) else {}
@@ -451,6 +566,10 @@ def _write_profile_csv(path: Path, results: list[dict[str, Any]]) -> None:
                 "profile_delta_E_to_background_J": profile.get("delta_E_to_background_J"),
                 "terminal_E_total_J": terminal.get("E_total_J"),
                 "terminal_delta_E_to_background_J": terminal.get("delta_E_to_background_J"),
+                "profile_state_label": profile_state_label,
+                "R_area_profile_nm": profile_measurement.get("R_area_nm"),
+                "R_area_profile_uncertainty_nm": profile_measurement.get("R_area_uncertainty_nm"),
+                "Q_profile": profile_measurement.get("topological_charge"),
                 "R_area_hold_nm": held_measurement.get("R_area_nm"),
                 "R_area_uncertainty_nm": held_measurement.get("R_area_uncertainty_nm"),
                 "R_core_release_nm": released_measurement.get("R_core_nm"),
@@ -458,6 +577,7 @@ def _write_profile_csv(path: Path, results: list[dict[str, Any]]) -> None:
                 "radius_error_nm": verification_payload.get("radius_error_nm"),
                 "radius_tolerance_nm": verification_payload.get("radius_tolerance_nm"),
                 "energy_window_relative_span": verification_payload.get("energy_window_relative_span"),
+                "energy_window_relative_to_excess": verification_payload.get("energy_window_relative_to_excess"),
                 "energy_balance_relative": verification_payload.get("energy_balance_relative"),
                 "frozen_dof_count": frozen.get("frozen_dof_count"),
                 "free_dof_count": frozen.get("free_dof_count"),
@@ -538,6 +658,11 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
 
     background_path: Path | None = None
     background_workspace: Path | None = None
+    background_contract: dict[str, Any] = {
+        "status": "not_requested",
+        "reason": "with_background_disabled",
+        "energy_J": None,
+    }
     # Reuse the compatible managed binary when the profile has already been
     # prepared.  This keeps a resumed sweep from rebuilding or allocating a
     # second target tree solely because a new case was added.
@@ -600,9 +725,11 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
             )
         else:
             background_workspace = _workspace_from_launcher_log(background_path / "launcher.log")
+        background_contract = _background_reference_contract(background_analysis)
         manifest["background"] = {
             "path": str(background_path),
             "analysis": str(background_analysis),
+            **background_contract,
         }
         _write_json(output_root / "sweep_request.json", manifest)
 
@@ -648,6 +775,11 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
             ]
             if workspace:
                 analyze_command.extend(["--workspace", str(workspace)])
+            # Pass an existing background artifact to the analyzer even when
+            # its contract is currently unavailable.  The analyzer records
+            # the reason and withholds Delta E; omitting the argument would
+            # erase the distinction between "not requested" and
+            # "requested but not converged" from the case provenance.
             if background_path:
                 analyze_command.extend(["--background", str(background_path)])
                 if background_workspace:
@@ -679,6 +811,10 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
         },
         "accepted_case_count": passed_count,
         "interpolation_allowed": passed_count == len(results) and bool(results),
+    }
+    manifest["diagnostics"] = {
+        "protocol_energy_spread": _protocol_energy_spread(results),
+        "protocol_spread_is_acceptance_gate": False,
     }
     _write_json(output_root / "profile_summary.json", manifest)
     _write_profile_csv(output_root / "profile_energy.csv", results)
@@ -713,6 +849,7 @@ def main() -> int:
     parser.add_argument("--fail-fast", action="store_true")
     parser.add_argument("--allow-diagnostic", action="store_true", help="return success while retaining a diagnostic (not accepted) profile")
     parser.add_argument("--relax-time-s", type=float, default=2e-11)
+    parser.add_argument("--tol-t", type=float, default=float(os.environ.get("FULLMAG_BIMERON_TOL_T", str(DEFAULT_RELAX_TOL_T))))
     parser.add_argument("--hold-time-s", type=float, default=1e-10)
     parser.add_argument("--release-time-s", type=float, default=2e-11)
     parser.add_argument("--relax-max-steps", type=int, default=8000)

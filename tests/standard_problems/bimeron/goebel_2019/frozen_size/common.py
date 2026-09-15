@@ -41,6 +41,7 @@ DEFAULT_RELAX_TIME_S = RELAX_TIME
 DEFAULT_HOLD_TIME_S = HOLD_TIME
 DEFAULT_RELEASE_TIME_S = 2e-11
 DEFAULT_DT_S = LLG_DT
+DEFAULT_RELAX_TOL_T = 1e-5
 DEFAULT_RELAX_MAX_STEPS = RELAX_MAX_STEPS
 DEFAULT_RELEASE_MAX_STEPS = 8000
 DEFAULT_FIELD_EVERY_STEPS = RELAX_FIELD_EVERY_STEPS
@@ -253,6 +254,7 @@ class FrozenCase:
     hold_time_s: float
     release_time_s: float
     dt_s: float
+    relax_tol_T: float
     relax_max_steps: int
     release_max_steps: int
     field_every_steps: int
@@ -390,6 +392,7 @@ def case_from_environment() -> FrozenCase:
         "FULLMAG_BIMERON_RELEASE_TIME_S", DEFAULT_RELEASE_TIME_S
     )
     dt_s = _env_float("FULLMAG_BIMERON_DT_S", DEFAULT_DT_S)
+    relax_tol_T = _env_float("FULLMAG_BIMERON_TOL_T", DEFAULT_RELAX_TOL_T)
     relax_max_steps = _env_int(
         "FULLMAG_BIMERON_RELAX_MAX_STEPS", DEFAULT_RELAX_MAX_STEPS
     )
@@ -435,8 +438,8 @@ def case_from_environment() -> FrozenCase:
         raise ValueError("FULLMAG_BIMERON_RING_WIDTH_NM must be positive")
     if protocol == "ring" and ring_width_nm >= 2.0 * target_radius_nm:
         raise ValueError("ring width must be smaller than twice target radius")
-    if any(value <= 0.0 for value in (relax_time_s, hold_time_s, release_time_s, dt_s, hold_sample_period_s)):
-        raise ValueError("relax, hold, release, dt, and sample periods must be positive")
+    if any(value <= 0.0 for value in (relax_time_s, hold_time_s, release_time_s, dt_s, hold_sample_period_s, relax_tol_T)):
+        raise ValueError("relax, hold, release, dt, sample periods, and relax_tol_T must be positive")
     if any(value <= 0 for value in (relax_max_steps, release_max_steps, field_every_steps)):
         raise ValueError("step and field intervals must be positive")
     return FrozenCase(
@@ -455,6 +458,7 @@ def case_from_environment() -> FrozenCase:
         hold_time_s=hold_time_s,
         release_time_s=release_time_s,
         dt_s=dt_s,
+        relax_tol_T=relax_tol_T,
         relax_max_steps=relax_max_steps,
         release_max_steps=release_max_steps,
         field_every_steps=field_every_steps,

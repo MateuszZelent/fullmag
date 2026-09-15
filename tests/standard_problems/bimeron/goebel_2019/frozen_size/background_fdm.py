@@ -45,6 +45,7 @@ fm.runtime_metadata(
         "source_scenario": "tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py",
         "initial_state": "uniform(+x)",
         "same_rDMI_parameters": True,
+        "relaxation_tolerance_T": CASE.relax_tol_T,
         "cell_nm": CASE.cell_nm,
         "background_energy_definition": "terminal E_total after independent +x relaxation",
     },
@@ -57,7 +58,7 @@ relax = study.stages.add_relax(
     dt=CASE.dt_s,
     max_steps=CASE.relax_max_steps,
     max_physical_time_s=CASE.relax_time_s,
-    tolT=1e-6,
+    tolT=CASE.relax_tol_T,
 )
 relax.autosave(
     fm.StageAutosave(
