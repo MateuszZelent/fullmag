@@ -81,6 +81,35 @@ def test_runtime_manifest_rejects_skipped_local_changes(tmp_path: Path, monkeypa
     )
 
 
+def test_runtime_manifest_distinguishes_headless_frontend_toolchain(
+    tmp_path: Path, monkeypatch
+) -> None:
+    layout = _layout(tmp_path)
+    identity = _identity()
+    (tmp_path / "windows-runtime" / "build-manifest.json").write_text(
+        json.dumps(
+            {
+                "git_commit": identity["head_commit_full"],
+                "source_snapshot_sha256": identity["source_snapshot_sha256"],
+                "worktree_state": "clean",
+                "cuda": True,
+                "local_changes_check": "enforced",
+                "node_version": "v24.19.0",
+                "pnpm_version": "10.8.1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(run_sweep, "_source_identity", lambda _repo: identity)
+
+    assert run_sweep._managed_runtime_matches_source(
+        tmp_path, layout, device="gpu", needs_control_room_toolchain=True
+    )
+    assert not run_sweep._managed_runtime_matches_source(
+        tmp_path, layout, device="gpu", needs_control_room_toolchain=False
+    )
+
+
 def test_profile_csv_keeps_verification_diagnostics_when_status_is_embedded(tmp_path: Path) -> None:
     case_root = tmp_path / "case"
     case_root.mkdir()

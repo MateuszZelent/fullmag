@@ -201,7 +201,12 @@ def run(namespace: argparse.Namespace) -> dict[str, Any]:
         "git_branch": subprocess.check_output(["git", "branch", "--show-current"], cwd=repo, text=True).strip(),
         "device": namespace.device,
         "source_identity": source_identity,
-        "managed_runtime_matches_source_preflight": _managed_runtime_matches_source(repo, layout, device=namespace.device),
+        "managed_runtime_matches_source_preflight": _managed_runtime_matches_source(
+            repo,
+            layout,
+            device=namespace.device,
+            needs_control_room_toolchain=False,
+        ),
         "runtime_manifest": str(Path(layout["build_root"]) / "windows-runtime" / "build-manifest.json"),
     }
     baseline_case = _case(

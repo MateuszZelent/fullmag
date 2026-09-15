@@ -218,6 +218,7 @@ def _managed_runtime_matches_source(
     layout: dict[str, Any],
     *,
     device: str,
+    needs_control_room_toolchain: bool | None = None,
 ) -> bool:
     """Return whether the cached Windows runtime is safe to reuse.
 
@@ -252,6 +253,16 @@ def _managed_runtime_matches_source(
         return False
     if device == "gpu" and manifest.get("cuda") is not True:
         return False
+    if needs_control_room_toolchain is not None:
+        # The Windows launcher records Node/pnpm only for interactive/static
+        # frontend runs.  A headless run built from an interactive receipt is
+        # rejected by the launcher even when the native binaries match, so
+        # make that distinction part of the preflight as well.
+        has_control_room_toolchain = bool(
+            manifest.get("node_version") and manifest.get("pnpm_version")
+        )
+        if has_control_room_toolchain != needs_control_room_toolchain:
+            return False
     return manifest.get("local_changes_check") != "skipped"
 
 
@@ -531,7 +542,12 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
     # The Windows launcher performs the authoritative check again; this
     # preflight prevents a stale binary from being selected for the first case
     # and turning an otherwise resumable sweep into a predictable failure.
-    built = _managed_runtime_matches_source(repo, layout, device=args.device)
+    built = _managed_runtime_matches_source(
+        repo,
+        layout,
+        device=args.device,
+        needs_control_room_toolchain=False,
+    )
     manifest["source"]["managed_runtime_matches_source_preflight"] = built
     manifest["source"]["runtime_manifest"] = str(_runtime_manifest_path(layout))
     if args.with_background:
