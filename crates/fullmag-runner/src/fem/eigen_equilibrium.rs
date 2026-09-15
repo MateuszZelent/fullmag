@@ -26,7 +26,11 @@ use fullmag_engine::Vector3;
 // rejects otherwise identical fields once the applied field is large, while a
 // pure relative tolerance is unsafe around a zero field.  Keep both terms
 // explicit so the handoff contract remains auditable in SI units.
-const FIELD_HANDOFF_ABS_TOL_A_PER_M: f64 = 1.0e-8;
+// The exchange field can be mathematically zero for a uniform equilibrium,
+// while the accepted and recomputed FEM vectors still differ by a few ulps
+// after projection through the shared mesh.  Keep this floor tiny relative to
+// physical fields (~1e5 A/m), but above that representation noise.
+const FIELD_HANDOFF_ABS_TOL_A_PER_M: f64 = 1.0e-7;
 const FIELD_HANDOFF_REL_TOL: f64 = 1.0e-12;
 
 fn max_vector_field_difference_on_magnetic_nodes(
