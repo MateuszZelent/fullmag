@@ -1577,6 +1577,23 @@ pub(super) fn full_2x2_native_operator_diagnostics_json(
     let Some(object) = diagnostics.as_object_mut() else {
         return diagnostics;
     };
+    // This spectrum is an optional diagnostic, not part of the native solve.
+    // Running a dense Cholesky/inverse/eigendecomposition for a production
+    // sized operator would duplicate the modal workload and can exhaust the
+    // runner before SLEPc receives the request.  Keep the bounded diagnostic
+    // for small contract cases and report the explicit omission otherwise.
+    const DIAGNOSTIC_SPECTRUM_MAX_DOF: usize = 4096;
+    if stiffness_field.nrows() > DIAGNOSTIC_SPECTRUM_MAX_DOF {
+        object.insert(
+            "generalized_field_spectrum_status".to_string(),
+            serde_json::json!("skipped_large_operator"),
+        );
+        object.insert(
+            "generalized_field_spectrum_max_dof".to_string(),
+            serde_json::json!(DIAGNOSTIC_SPECTRUM_MAX_DOF),
+        );
+        return diagnostics;
+    }
     let regularized_mass = regularize_periodic_mass_if_needed(mass.clone(), &plan.spin_wave_bc);
     let Some(cholesky) = regularized_mass.cholesky() else {
         object.insert(
