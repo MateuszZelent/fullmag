@@ -31,7 +31,6 @@ from tests.standard_problems.mumag.comsol_nonzero_k_dispersion.config import (
     INTERFACE_HMAX_M,
     INTERFACE_THICKNESS_M,
     INTERFACE_TRANSITION_DISTANCE_M,
-    MODE_COUNT,
     MS_A_PER_M,
     RELAX_ALPHA,
     RELAX_DT_S,
@@ -44,6 +43,7 @@ from tests.standard_problems.mumag.comsol_nonzero_k_dispersion.config import (
     case_from_environment,
     guide_metadata,
     mode_field_selection,
+    requested_mode_count,
 )
 
 
@@ -187,7 +187,7 @@ else:
     dynamic_demag_bc = "open"
 
 study.stages.add_eigenmodes(
-    count=MODE_COUNT,
+    count=requested_mode_count(CASE),
     target="frequency_window",
     frequency_min=FREQUENCY_WINDOW_HZ[0],
     frequency_max=FREQUENCY_WINDOW_HZ[1],

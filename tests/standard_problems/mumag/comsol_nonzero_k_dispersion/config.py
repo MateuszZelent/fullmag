@@ -39,6 +39,7 @@ RELAX_TORQUE_TOLERANCE_A_PER_M = 1.0
 RELAX_MAX_STEPS = 50_000
 
 MODE_COUNT = 24
+C0_MODE_COUNT = 1
 TARGET_BANDS = 8
 MODE_FIELD_SAMPLE_INDICES = (0, 10, 20, 40, 50, 60)
 INITIAL_SHIFT_HZ = 1.0e9
@@ -76,6 +77,12 @@ class BenchmarkCase:
     @property
     def study_name(self) -> str:
         return f"{BENCHMARK_ID}-{self.key}"
+
+
+def requested_mode_count(case: BenchmarkCase) -> int:
+    """Return the modal budget required by the scientific gate for a case."""
+
+    return C0_MODE_COUNT if not case.use_path else MODE_COUNT
 
 
 _CASES: dict[str, BenchmarkCase] = {
@@ -154,8 +161,8 @@ def mode_field_selection(case: BenchmarkCase) -> tuple[tuple[int, ...], tuple[in
         )
     all_fields = raw in {"1", "true", "yes"}
     if all_fields:
-        return tuple(range(MODE_COUNT)), ()
-    return tuple(range(TARGET_BANDS)), (
+        return tuple(range(requested_mode_count(case))), ()
+    return (tuple(range(TARGET_BANDS)) if case.use_path else (0,)), (
         MODE_FIELD_SAMPLE_INDICES if case.use_path else (0,)
     )
 
@@ -171,7 +178,17 @@ def guide_metadata(case: BenchmarkCase) -> dict[str, object]:
     """Return auditable input/output metadata without claiming execution."""
 
     mode_indices, sample_indices = mode_field_selection(case)
-    all_fields = len(mode_indices) == MODE_COUNT and not sample_indices
+    all_fields = not sample_indices
+    if all_fields:
+        mode_field_policy = (
+            "all_61_samples_x_24_modes"
+            if case.use_path
+            else "all_1_sample_x_1_mode"
+        )
+    else:
+        mode_field_policy = (
+            f"first_{len(mode_indices)}_modes_at_control_samples"
+        )
     return {
         "schema_version": "fullmag.comsol_nonzero_k_benchmark.v1",
         "benchmark_id": BENCHMARK_ID,
@@ -233,8 +250,8 @@ def guide_metadata(case: BenchmarkCase) -> dict[str, object]:
             "frequency_window_hz": list(FREQUENCY_WINDOW_HZ),
             "initial_shift_hz": INITIAL_SHIFT_HZ,
             "initial_shift_status": "guide reference; public DSL has no shift parameter",
-            "requested_mode_count": MODE_COUNT,
-            "comparison_band_count": TARGET_BANDS,
+            "requested_mode_count": requested_mode_count(case),
+            "comparison_band_count": 1 if not case.use_path else TARGET_BANDS,
             "k_sampling": (
                 "Gamma"
                 if not case.use_path
@@ -259,7 +276,7 @@ def guide_metadata(case: BenchmarkCase) -> dict[str, object]:
             "dispersion": "dispersion.csv plus path metadata",
             "modes": "all requested raw modes at selected samples",
             "mode_field_export": {
-                "policy": "all_61_samples_x_24_modes" if all_fields else "first_8_modes_at_control_samples",
+                "policy": mode_field_policy,
                 "mode_indices": list(mode_indices),
                 "sample_indices": list(sample_indices),
                 "all_fields_opt_in": "FULLMAG_COMSOL_DISPERSION_ALL_FIELDS=1",

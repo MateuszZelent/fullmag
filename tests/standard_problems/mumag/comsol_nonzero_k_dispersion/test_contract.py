@@ -31,6 +31,7 @@ from tests.standard_problems.mumag.comsol_nonzero_k_dispersion.config import (
     BIAS_FIELD_T,
     COMSOL_A_FIELD_A_M,
     CONTROL_LABELS,
+    C0_MODE_COUNT,
     FREQUENCY_WINDOW_HZ,
     GAMMA_M_PER_A_S,
     HOLE_RADIUS_M,
@@ -178,7 +179,8 @@ def _assert_common_pipeline(
 
     eigen = eigen_ir["study"]
     assert eigen["operator"] == {"kind": "full_2x2", "include_demag": case != "c0"}
-    assert eigen["count"] == MODE_COUNT
+    expected_mode_count = C0_MODE_COUNT if case == "c0" else MODE_COUNT
+    assert eigen["count"] == expected_mode_count
     assert eigen["target"] == {
         "kind": "frequency_window",
         "frequency_min_hz": FREQUENCY_WINDOW_HZ[0],
@@ -197,7 +199,8 @@ def _assert_common_pipeline(
         "eigen_mode",
     ]
     mode_output = eigen["sampling"]["outputs"][-1]
-    assert mode_output["indices"] == list(range(TARGET_BANDS))
+    expected_mode_indices = (0,) if case == "c0" else tuple(range(TARGET_BANDS))
+    assert mode_output["indices"] == list(expected_mode_indices)
     sample_selector = mode_output["sample_selector"]
     assert sample_selector["sample_indices"] == list(
         MODE_FIELD_SAMPLE_INDICES if case != "c0" else (0,)
