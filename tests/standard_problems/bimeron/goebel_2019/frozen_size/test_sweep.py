@@ -7,6 +7,10 @@ from pathlib import Path
 from tests.standard_problems.bimeron.goebel_2019.frozen_size import run_sweep
 
 
+def test_default_profile_protocols_do_not_repeat_free_relaxation() -> None:
+    assert run_sweep.DEFAULT_PROFILE_PROTOCOLS == ("p2", "p3", "ring")
+
+
 def _layout(root: Path) -> dict[str, object]:
     target = root / "target"
     (target / "x86_64-pc-windows-msvc" / "release").mkdir(parents=True)

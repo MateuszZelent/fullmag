@@ -38,6 +38,9 @@ SCENARIO_REL = Path("tests/standard_problems/bimeron/goebel_2019/frozen_size/sce
 BACKGROUND_REL = Path("tests/standard_problems/bimeron/goebel_2019/frozen_size/background_fdm.py")
 ANALYZER_REL = Path("tests/standard_problems/bimeron/goebel_2019/frozen_size/analyze.py")
 THRESHOLDS_REL = Path("tests/standard_problems/bimeron/goebel_2019/frozen_size/thresholds.v1.json")
+# A free-relaxation P0 run is a one-time control for the material parameters,
+# not a profile point to repeat at every target radius.
+DEFAULT_PROFILE_PROTOCOLS = ("p2", "p3", "ring")
 
 
 def _repo_root() -> Path:
@@ -687,7 +690,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", action="store_true", help="execute through the managed launcher")
     parser.add_argument("--series", choices=("pilot", "main", "small-wall", "all"), default="pilot")
-    parser.add_argument("--protocols", default="p0,p2,p3,ring")
+    parser.add_argument(
+        "--protocols",
+        default=",".join(DEFAULT_PROFILE_PROTOCOLS),
+        help=(
+            "comma-separated constrained protocols for the size profile; "
+            "run --protocols p0 separately for the one-time free-relaxation control"
+        ),
+    )
     parser.add_argument("--device", choices=("cpu", "gpu"), default=os.environ.get("FULLMAG_BIMERON_DEVICE", "gpu"))
     parser.add_argument("--cell-nm", type=float, default=DEFAULT_CELL_NM)
     parser.add_argument("--pin-radius-nm", type=float, default=DEFAULT_PIN_RADIUS_NM)
