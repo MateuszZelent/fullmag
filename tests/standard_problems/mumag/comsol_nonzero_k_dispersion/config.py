@@ -34,7 +34,10 @@ COMSOL_A_FIELD_A_M = 2.0 * AEX_J_PER_M / (MU0_H_PER_M * MS_A_PER_M)
 
 RELAX_ALPHA = 0.5
 EIGEN_ALPHA = 0.0
-RELAX_DT_S = 1.0e-14
+# Keep the explicit RK23 relaxation step below the conservative exchange
+# limit of the finest tetrahedra.  The previous 1e-14 s value was rejected by
+# the strict FEM runtime for this mesh (dt_limit ~= 9.36e-15 s).
+RELAX_DT_S = 5.0e-15
 RELAX_TORQUE_TOLERANCE_A_PER_M = 1.0
 RELAX_MAX_STEPS = 50_000
 

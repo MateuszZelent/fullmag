@@ -881,3 +881,18 @@ Obecne granice dowodu są niezmienione: nie wykonano jeszcze C0/C1/A1,
 61 punktów Γ–X–M–Γ ani porównania z COMSOL/TetraX. Ponowne zgłoszenie
 managed joba z commitem `377230523` wymaga osobnej zgody z powodu aktywnej
 reguły automatycznego przeglądu dotyczącej budowania testów.
+
+### Aktualizacja 2026-09-15 — pierwszy natywny przebieg C0 i korekta kroku
+
+Managed runtime `fem-cpu-slepc-runtime-v1` z commitem
+`be546257895a89733f6ce81162fc1f4073a5fb6a` zakończył się poprawnie (`exit_code=0`),
+a receipt i attestation potwierdziły dostępność natywnego FEM CPU/SLEPc w double
+precision. Pierwszy przebieg C0 przeszedł do materializacji siatki, ale został
+odrzucony przez bramkę stabilności: dla siatki 614333 tetraedrów limit wymiany
+wyniósł `9.363104e-15 s`, podczas gdy kontrakt żądał `dt_s=1.0e-14 s`.
+Nie powstał więc artefakt częstotliwości.
+
+`RELAX_DT_S` zmieniono na `5.0e-15 s`, z zachowaniem jawnego `rk23` i ścisłego
+trybu CPU. Następny krok to nowy managed build z tą zmianą i ponowne C0;
+częstotliwość, wykres oraz kwalifikacja naukowa pozostają **NOT VERIFIED** do
+czasu odczytu niepustych artefaktów solvera.
