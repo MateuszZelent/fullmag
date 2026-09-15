@@ -701,6 +701,7 @@ pub(super) fn eigen_path_tracking_outputs(outputs: &[OutputIR], mode_count: u32)
 pub(super) fn eigen_path_mode_tracking_vector(
     artifacts: &[crate::types::AuxiliaryArtifact],
     raw_mode_index: usize,
+    active_nodes: Option<&[usize]>,
 ) -> Option<Vec<num_complex::Complex64>> {
     let legacy_path = format!("eigen/modes/mode_{raw_mode_index:04}.json");
     let mode = artifacts
@@ -714,8 +715,21 @@ pub(super) fn eigen_path_mode_tracking_vector(
         return None;
     }
 
-    let mut vector = Vec::with_capacity(sample_count * 3);
-    for index in 0..sample_count {
+    let indices: Vec<usize> = match active_nodes {
+        Some(nodes) => {
+            if nodes.iter().any(|node| *node >= sample_count) {
+                return None;
+            }
+            nodes.to_vec()
+        }
+        None => (0..sample_count).collect(),
+    };
+    if indices.is_empty() {
+        return None;
+    }
+
+    let mut vector = Vec::with_capacity(indices.len() * 3);
+    for index in indices {
         let real_sample = real.get(index).copied().unwrap_or([0.0, 0.0, 0.0]);
         let imag_sample = imag.get(index).copied().unwrap_or([0.0, 0.0, 0.0]);
         for component in 0..3 {

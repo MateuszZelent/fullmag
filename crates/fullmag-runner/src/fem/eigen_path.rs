@@ -10,8 +10,10 @@ use crate::eigen::output_selection::{select_eigen_outputs, SampleModeId};
 use crate::eigen::KSampleDescriptor;
 use crate::fem::eigen_capability::native_cpu_modal_window_enabled;
 use crate::fem::eigen_execution_resolution::{FemEigenExecutionLane, PlannedFemEigenExecution};
+use crate::fem::eigen_reduction::build_reduction_map;
 use crate::fem_eigen;
 use crate::types::{AuxiliaryArtifact, ExecutedRun, RunError};
+use fullmag_engine::fem::MeshTopology;
 
 #[path = "eigen_path_artifacts.rs"]
 mod eigen_path_artifacts;
@@ -332,6 +334,18 @@ pub(crate) fn execute_fem_eigen_path(
                 existing_handoff.is_some(),
                 existing_handoff.as_ref(),
             )?;
+            let tracking_active_nodes = MeshTopology::from_ir(&point_plan.mesh)
+                .map_err(|error| RunError {
+                    message: format!("eigen path tracking mesh topology: {error}"),
+                })
+                .and_then(|topology| {
+                    build_reduction_map(
+                        &topology,
+                        &point_plan.spin_wave_bc,
+                        point_plan.k_sampling.as_ref(),
+                    )
+                })?
+                .active_nodes;
             let initial_stage_handoff = if existing_handoff.is_none() {
                 self.source_relax_handoff.as_ref()
             } else {
@@ -449,6 +463,17 @@ pub(crate) fn execute_fem_eigen_path(
                     })?;
             let node_mass_weights =
                 eigen_path_node_mass_weights_from_json(&spectrum["node_mass_weights"]);
+            if let Some(weights) = node_mass_weights.as_ref() {
+                if weights.len() != tracking_active_nodes.len() {
+                    return Err(RunError {
+                        message: format!(
+                            "eigen path FE mass metadata has {} weights for {} active tracking nodes",
+                            weights.len(),
+                            tracking_active_nodes.len()
+                        ),
+                    });
+                }
+            }
 
             let mut modes = Vec::with_capacity(modes_array.len());
             for mode_json in modes_array {
@@ -488,6 +513,7 @@ pub(crate) fn execute_fem_eigen_path(
                     reduced_vector: eigen_path_mode_tracking_vector(
                         &executed.auxiliary_artifacts,
                         mode_json["index"].as_u64().unwrap_or(0) as usize,
+                        Some(&tracking_active_nodes),
                     ),
                     lifted_real: None,
                     lifted_imag: None,
