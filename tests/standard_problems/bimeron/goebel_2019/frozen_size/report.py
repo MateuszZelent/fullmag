@@ -11,6 +11,7 @@ import argparse
 import json
 import math
 from pathlib import Path
+import sys
 from typing import Any
 
 MU0_T_M_PER_A = 4.0 * math.pi * 1.0e-7
@@ -150,6 +151,46 @@ def _plot_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return rows
+
+
+def _load_state_array(path: Path) -> Any | None:
+    """Load one magnetization checkpoint through the public state reader."""
+
+    try:
+        import numpy as np
+
+        source_root = Path(__file__).resolve().parents[5]
+        package_root = source_root / "packages" / "fullmag-py" / "src"
+        if str(package_root) not in sys.path and package_root.is_dir():
+            sys.path.insert(0, str(package_root))
+        import fullmag  # type: ignore
+
+        loaded = fullmag.load_magnetization(path, format="auto", dataset="m", sample=-1)
+        return np.asarray(loaded.values, dtype=float)
+    except Exception:
+        return None
+
+
+def _map_candidates(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    """Choose at most three measured states spanning the available radii."""
+
+    candidates: list[dict[str, Any]] = []
+    for result in summary.get("results", []):
+        if not isinstance(result, dict):
+            continue
+        state = _profile_state(result)
+        states = result.get("states") if isinstance(result.get("states"), dict) else {}
+        payload = states.get(state) if isinstance(states.get(state), dict) else {}
+        path = payload.get("path")
+        measurement = payload.get("measurement") if isinstance(payload, dict) else {}
+        radius = _number(measurement.get("R_area_nm")) if isinstance(measurement, dict) else None
+        if not path or radius is None:
+            continue
+        candidates.append({"result": result, "state": state, "path": Path(str(path)), "radius_nm": radius})
+    candidates.sort(key=lambda item: item["radius_nm"])
+    if len(candidates) <= 3:
+        return candidates
+    return [candidates[0], candidates[len(candidates) // 2], candidates[-1]]
 
 
 def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
@@ -298,6 +339,85 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
         plt.close(fig)
         files.append({"kind": "radius_retention", "path": radius_path.name})
 
+    # State maps are deliberately separate per case: a montage would hide
+    # missing states and make a frozen mask from one R look like another.
+    for candidate in _map_candidates(summary):
+        result = candidate["result"]
+        protocol = result.get("protocol") if isinstance(result.get("protocol"), dict) else {}
+        measurement = _measurement(result, candidate["state"])
+        grid = measurement.get("measurement_grid") if isinstance(measurement.get("measurement_grid"), dict) else {}
+        try:
+            nx = int(grid["nx"])
+            ny = int(grid["ny"])
+            nz = int(grid.get("nz", 1))
+            cell_x = float(grid.get("cell_nm", [0.5, 0.5, 0.5])[0])
+            cell_y = float(grid.get("cell_nm", [0.5, 0.5, 0.5])[1])
+        except (KeyError, TypeError, ValueError, IndexError):
+            continue
+        if min(nx, ny, nz) <= 0:
+            continue
+        values = _load_state_array(candidate["path"])
+        if values is None or values.ndim != 2 or values.shape[1] != 3 or values.shape[0] != nx * ny * nz:
+            continue
+        try:
+            import numpy as np
+
+            layer = values.reshape((nz, ny, nx, 3))[nz // 2]
+            mx = layer[:, :, 0]
+            mz = layer[:, :, 2]
+            x_edges = (np.arange(nx + 1) - nx / 2.0) * cell_x
+            y_edges = (np.arange(ny + 1) - ny / 2.0) * cell_y
+            x_centres = (x_edges[:-1] + x_edges[1:]) * 0.5
+            y_centres = (y_edges[:-1] + y_edges[1:]) * 0.5
+        except (ImportError, ValueError):
+            continue
+        frozen = result.get("frozen_runtime") if isinstance(result.get("frozen_runtime"), dict) else {}
+        frozen_indices = frozen.get("frozen_cell_indices") if isinstance(frozen.get("frozen_cell_indices"), list) else []
+        frozen_points: list[tuple[float, float]] = []
+        for index in frozen_indices:
+            try:
+                flat = int(index)
+                if 0 <= flat < nx * ny * nz:
+                    flat_2d = flat % (nx * ny)
+                    frozen_points.append((float(x_centres[flat_2d % nx]), float(y_centres[flat_2d // nx])))
+            except (TypeError, ValueError, IndexError):
+                continue
+        extent_nm = max(_number(protocol.get("target_radius_nm")) or candidate["radius_nm"], candidate["radius_nm"]) + 8.0
+        extent_nm = min(extent_nm, float(nx * cell_x) / 2.0)
+        fig, axes = plt.subplots(1, 2, figsize=(10.0, 4.0), constrained_layout=True, sharex=True, sharey=True)
+        for axis, component, label, cmap in (
+            (axes[0], mx, "$m_x$", "coolwarm"),
+            (axes[1], mz, "$m_z$", "PuOr"),
+        ):
+            image = axis.pcolormesh(x_edges, y_edges, component, shading="auto", cmap=cmap, vmin=-1.0, vmax=1.0)
+            axis.contour(x_centres, y_centres, mx, levels=[0.0], colors="black", linewidths=0.9)
+            if frozen_points:
+                axis.scatter(
+                    [point[0] for point in frozen_points],
+                    [point[1] for point in frozen_points],
+                    marker="s",
+                    s=18,
+                    facecolors="none",
+                    edgecolors="black",
+                    linewidths=0.8,
+                    label="frozen cells",
+                )
+            axis.set_xlim(-extent_nm, extent_nm)
+            axis.set_ylim(float(y_edges[0]), float(y_edges[-1]))
+            axis.set_xlabel("x (nm)")
+            axis.set_title(label)
+            axis.grid(True, alpha=0.15, linewidth=0.5)
+            fig.colorbar(image, ax=axis, fraction=0.046, pad=0.04)
+        axes[0].set_ylabel("y (nm)")
+        if frozen_points:
+            axes[1].legend(loc="upper right", fontsize=8)
+        case_id = str(protocol.get("case_id", f"R{candidate['radius_nm']:g}nm"))
+        map_path = output_root / f"profile_map_{case_id}.png"
+        fig.suptitle(f"Frozen-spin state: {case_id} ({candidate['state']})")
+        fig.savefig(map_path, dpi=180)
+        plt.close(fig)
+        files.append({"kind": "magnetization_map", "path": map_path.name, "case_id": case_id})
+
     return {
         "status": "written",
         "observation_count": len(rows),
@@ -345,6 +465,7 @@ def render_report(summary: dict[str, Any]) -> str:
                 "energy_total": "Profile energy E_total versus measured R_area",
                 "energy_excess": "Excess energy Delta E versus measured R_area",
                 "radius_retention": "Target versus measured R_area",
+                "magnetization_map": "Magnetization map with frozen cells and mx=0 contour",
             }.get(kind, kind)
             lines.append(f"![{label}]({plot['path']})")
             lines.append("")
