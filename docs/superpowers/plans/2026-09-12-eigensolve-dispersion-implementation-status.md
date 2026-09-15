@@ -1,6 +1,30 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
 
+## Aktualizacja stanu źródeł i runtime — 2026-09-16
+
+Bieżący checkout to worktree `eigensolve-dispersion-plan-20260912`, branch
+`codex/eigensolve-dispersion-plan-20260912`, HEAD
+`d7676ac1f6f43a114675746a2c2d9ae7afe54d22`. Worktree jest czysty; branch ma
+cztery lokalne commity ponad `origin/codex/eigensolve-dispersion-plan-20260912`.
+Poniższa tabela opisuje aktualny snapshot, a dalsze sekcje zachowują historię.
+
+| Zakres | Stan źródła | Aktualny dowód / ograniczenie |
+|---|---|---|
+| Analityka kontra FEM | DE/BV jest postsolve oracle; ścieżka `dispersion_validation` przechodzi przez numeryczny solve. Jawny syntetyczny solver pozostaje wyłącznie ograniczonym K0-3 oracle. | Kod rozdziela `reference_oracle` od produkcyjnej `FemEigenExecutionResolutionIR`; brak jeszcze dowodu fizycznego z pełnego runtime. |
+| P00 i ciągłość przy Γ | Stabilny Taylor + `expm1` istnieje w Pythonie i Rust; bramka porównuje także ciągłość częstotliwości. | Dowód źródłowy; wynik native nadal oczekuje na benchmark. |
+| Zakres C1 | Planner nie narzuca `3e6 rad/m` ani `5 GHz`; limity są parametrami walidacji i presetów. | Kanoniczny C1 obejmuje 61 próbek do X; pozostaje sprawdzenie na artefaktach native. |
+| Bramka naukowa | Runner wywołuje scientific gate po sprawdzeniu artefaktów; gate wymaga 61 próbek, 8 gałęzi, Kittel/KS, finite rows, residualu, fazy oraz zbieżności. | Status nadal `NOT VERIFIED`, bo nie ma jeszcze zakończonego C0/C1/A1. |
+| Operator Floquet | Sprzężenie shared-domain stosuje `A_qphi=-mu0*A_phiq^H`; wynik przechowuje właścicieli MFEM form/coefficientów. | Wymaga kompilacji i wykonania managed MFEM/SLEPc; źródło nie jest dowodem runtime. |
+| Telemetria/polityka | Początkowe `max_iterations=None`; callback publikuje rzeczywisty limit. Jawna polityka PETSc pozostaje single-process CPU. | Pomiar skalowania i runtime są otwarte. |
+| Ostatni C0 | Stary przebieg na wcześniejszym buildzie doszedł do solvera, ale zakończył się błędem parsera JSON (`nan`/`inf`) w diagnostyce CPU. | Naprawiono oba formatery CPU (modalny i contour); poprzedni wynik nie kwalifikuje fizyki. |
+| Bieżący managed build | Job `e561e57080e04861a6294686cf61a92d`, profil `fem-cpu-slepc-runtime-v1`, commit `d7676ac1f`, stan `queued`. | Slot zajmuje niezależny job `e3de5a1cc36842658f6afffe715db413`; po buildzie trzeba ponowić C0, następnie C1/A1. |
+
+Kwalifikacja naukowa, wykres dyspersji z rzeczywistego operatora oraz release
+pozostają otwarte. Syntetyczne wartości analityczne i testy kontraktowe nie są
+dowodem wykonania natywnego FEM.
+
+
 ## Aktualizacja po uruchomieniu natywnego C0 i osłonach skalowania — 2026-09-15
 
 Aktualny checkout to worktree `eigensolve-dispersion-plan-20260912`, branch
