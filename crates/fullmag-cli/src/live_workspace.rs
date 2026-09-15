@@ -2260,6 +2260,47 @@ mod tests {
     }
 
     #[test]
+    fn asynchronous_initial_snapshot_keeps_its_capture_coordinates() {
+        let mut state = workspace_with_domain_mesh().snapshot();
+        let mut field = preview_field("H_demag", 1, 2.0);
+        field.source_step = 0;
+        field.source_time_seconds = Some(0.0);
+        field.source_revision = 17;
+        let mut update = preview_update(field);
+        update.stats.step = 27;
+        update.stats.time = 3.5e-12;
+
+        ingest_preview_fields_from_update(&mut state, &mut update);
+
+        let pending = state.pending_preview_fields.to_vec();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].source_step, 0);
+        assert_eq!(pending[0].source_time_seconds, Some(0.0));
+        assert_eq!(pending[0].source_revision, 17);
+    }
+
+    #[test]
+    fn asynchronous_capture_coordinates_follow_stage_offsets_not_delivery_step() {
+        let mut field = preview_field("H_demag", 1, 2.0);
+        field.source_step = 0;
+        field.source_time_seconds = Some(0.0);
+        field.source_revision = 17;
+        let mut update = preview_update(field);
+        update.stats.step = 27;
+        update.stats.time = 3.5e-12;
+        let mut update = crate::step_utils::offset_step_update(update, 100, 1e-9, false);
+        let mut state = workspace_with_domain_mesh().snapshot();
+
+        ingest_preview_fields_from_update(&mut state, &mut update);
+
+        let pending = state.pending_preview_fields.to_vec();
+        assert_eq!(update.stats.step, 127);
+        assert_eq!(pending[0].source_step, 100);
+        assert_eq!(pending[0].source_time_seconds, Some(1e-9));
+        assert_eq!(pending[0].source_revision, 17);
+    }
+
+    #[test]
     fn full_grid_materialized_fields_promote_to_latest_without_preview_cache() {
         let mut state = workspace_with_domain_mesh().snapshot();
         let mut field = preview_field("H_demag", 1, 2.0);
@@ -5783,7 +5824,9 @@ fn align_preview_field_source_coordinates(
     source_step: u64,
     source_time_seconds: Option<f64>,
 ) {
-    if field.source_step == 0 && source_step > 0 {
+    // A captured initial state legitimately has step zero. Only legacy payloads
+    // without an explicit capture time inherit the receiving solver's step.
+    if field.source_step == 0 && field.source_time_seconds.is_none() && source_step > 0 {
         field.source_step = source_step;
     }
     if field.source_time_seconds.is_none() {

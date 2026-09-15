@@ -2466,6 +2466,10 @@ async fn main() {
         .route("/v2/platform/vision", get(vision))
         // ── Internal runner bridge (not part of the public browser contract) ──
         .route(
+            "/v1/internal/live/current/display-selection",
+            get(read_current_live_display_selection),
+        )
+        .route(
             "/v1/internal/live/current/snapshot",
             post(sync_current_live_snapshot),
         )
@@ -3353,6 +3357,14 @@ async fn dequeue_current_live_command(
         Some(command) => Ok(Json(command).into_response()),
         None => Ok(StatusCode::NO_CONTENT.into_response()),
     }
+}
+
+async fn read_current_live_display_selection(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<CurrentDisplaySelection>, ApiError> {
+    let _transition = state.current_live_session_transition.lock().await;
+    let _ = current_live_session_id(&state).await?;
+    Ok(Json(state.current_display_selection.read().await.clone()))
 }
 
 async fn wait_current_live_control(

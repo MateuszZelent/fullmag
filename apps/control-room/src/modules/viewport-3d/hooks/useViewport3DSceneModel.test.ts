@@ -621,6 +621,33 @@ describe("airbox vector sample budget", () => {
 });
 
 describe("FDM target visualization boundary", () => {
+  it("uses committed object quantity and component after reloading the browser", () => {
+    const visualization = new ObjectVisualizationController();
+    const target = { id: "object:film", kind: "object" as const };
+    const resolved = resolveViewport3DFdmTargetVisualization({
+      snapshot: visualization.getSnapshot(),
+      target,
+      visualizationState: {
+        revision: 8,
+        targets: {
+          objects: [{
+            scope: "object", scope_id: "film",
+            settings: {
+              active_quantity_id: "H_demag",
+              surface_color_source: "component_z",
+              surface_visible: true, visible: true,
+            },
+          }],
+          parts: [], airbox: {},
+        },
+      } as never,
+    });
+    expect(resolved.effectiveSettings).toMatchObject({
+      activeQuantityId: "H_demag", surfaceColorSource: "component_z",
+      shaderVisible: true, visible: true,
+    });
+  });
+
   it("keeps local FDM object patches effective when a FEM registry entry is present", () => {
     const visualization = new ObjectVisualizationController();
     const target = { id: "object:film", kind: "object" as const };

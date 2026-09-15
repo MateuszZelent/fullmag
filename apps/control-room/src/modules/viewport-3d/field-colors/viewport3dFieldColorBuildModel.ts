@@ -1,5 +1,6 @@
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 
+import { srgbToLinearChannel } from "../viewport3dColorSpace";
 import {
   buildSurfaceFaceScalarColors,
   buildThicknessAverageZScalarColors,
@@ -16,6 +17,8 @@ import {
   type Viewport3DVectorColorMode,
 } from "../viewport3dVectorColoring";
 import { isDivergingScalarPalette } from "../../../shared/visualization/scalarColorPalette";
+
+const FALLBACK_GRAY_RGB = [0.5, 0.5, 0.5] as const;
 
 export type Viewport3DFieldColorBuildTarget =
   | {
@@ -408,25 +411,33 @@ function writeFieldColor(
     );
   }
   if (colors.length > 0) {
-    const [red, green, blue] = colorAt(
-      fieldVector,
-      pointIndex,
-      colorMode,
-      range,
-      colorPalette,
+    writeLinearRgb(
+      colors,
+      targetIndex,
+      colorAt(fieldVector, pointIndex, colorMode, range, colorPalette),
     );
-    const target = targetIndex * 3;
-    colors[target] = red;
-    colors[target + 1] = green;
-    colors[target + 2] = blue;
   }
 }
 
 function writeFallbackGray(colors: Float32Array, targetIndex: number): void {
+  writeLinearRgb(colors, targetIndex, FALLBACK_GRAY_RGB);
+}
+
+/**
+ * Mirrors writeLinearRgb() in viewport3dFieldMapping.ts: colours are authored
+ * in sRGB but `ScalarColorBuffer.colors` is uploaded into a three.js colour
+ * attribute, which the renderer reads as linear-sRGB. See
+ * viewport3dColorSpace.ts.
+ */
+function writeLinearRgb(
+  colors: Float32Array,
+  targetIndex: number,
+  rgb: readonly [number, number, number],
+): void {
   const target = targetIndex * 3;
-  colors[target] = 0.5;
-  colors[target + 1] = 0.5;
-  colors[target + 2] = 0.5;
+  colors[target] = srgbToLinearChannel(rgb[0]);
+  colors[target + 1] = srgbToLinearChannel(rgb[1]);
+  colors[target + 2] = srgbToLinearChannel(rgb[2]);
 }
 
 function writeVectorValue(

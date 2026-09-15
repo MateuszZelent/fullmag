@@ -2506,24 +2506,25 @@ function selectViewport3DObjectVisualizationSnapshot(
 }
 
 /**
- * FDM scene targets are client-side structured-grid views. The FEM
- * visualization registry can still be present in the session resource, but
- * it must not replace the local FDM target state used by the grid renderer.
+ * Structured-grid targets use the same canonical visualization resource as
+ * the Inspector. Local snapshots only supply pending edits and preferences.
  */
 export function resolveViewport3DFdmTargetVisualization({
   inheritedSettings,
   snapshot,
   target,
+  visualizationState,
 }: {
   inheritedSettings?: VisualizationTargetSettings;
   snapshot: ObjectVisualizationSnapshot;
   target: VisualizationTargetRef;
+  visualizationState?: VisualizationStateResource | null;
 }) {
   return resolveTargetVisualization({
     inheritedSettings,
     snapshot,
     target,
-    visualizationState: null,
+    visualizationState,
   });
 }
 
@@ -3556,6 +3557,7 @@ export function useViewport3DSceneModel({
       const resolved = resolveViewport3DFdmTargetVisualization({
         snapshot: objectVisualizationSnapshot,
         target,
+        visualizationState: renderingState,
       }).effectiveSettings;
       settingsById.set(
         domain.layerId,
@@ -3574,6 +3576,7 @@ export function useViewport3DSceneModel({
     fdmNativeLayerDomains,
     fdmMultilayerLayerActiveMasks.data,
     objectVisualizationSnapshot,
+    renderingState,
   ]);
   const nativeLayerFieldRequests = useMemo<
     ReadonlyMap<string, Viewport3DFieldResourceRequest>
@@ -3606,6 +3609,7 @@ export function useViewport3DSceneModel({
         inheritedSettings: globalObjectBaseSettings,
         snapshot: objectVisualizationSnapshot,
         target: definition.target,
+        visualizationState: renderingState,
       }).effectiveSettings;
       settingsById.set(
         definition.target.id,
@@ -3620,6 +3624,7 @@ export function useViewport3DSceneModel({
         inheritedSettings,
         snapshot: objectVisualizationSnapshot,
         target: definition.target,
+        visualizationState: renderingState,
       }).effectiveSettings;
       settingsById.set(
         definition.target.id,
@@ -3632,6 +3637,7 @@ export function useViewport3DSceneModel({
     fdmTargetDefinitionsResult,
     globalObjectBaseSettings,
     objectVisualizationSnapshot,
+    renderingState,
   ]);
   const fdmTargetSettings = useMemo(
     () => [...fdmTargetSettingsById.values()],
