@@ -1,6 +1,29 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
 
+## Aktualizacja po audycie i managed runtime — 2026-09-15
+
+Aktualny checkout to worktree `eigensolve-dispersion-plan-20260912`, branch
+`codex/eigensolve-dispersion-plan-20260912`, HEAD
+`d1926afede8531ade4ccdd8e2c3f57369a4a4ec1`. Branch jest zsynchronizowany z
+`origin` (ahead/behind `0/0`), a working tree pozostaje czysty. Poniższy stan
+dotyczy bieżącego źródła; wcześniejsze SHA, joby i wyniki w tym dokumencie są
+wyłącznie historią.
+
+| Zakres audytu | Stan źródła | Dowód wykonania / ograniczenie |
+|---|---|---|
+| Analityka kontra FEM | `dispersion_validation` jest porównaniem postsolve; `eigen_path.rs` wykonuje numeryczny single-k solve, a kolumny analityczne są dopisywane do CSV po wyniku. Produkcyjna rozdzielczość odrzuca referencyjny/syntetyczny solver. | Nie jest to jeszcze dowód natywnego wyniku; aktywny C0 musi zakończyć się receipt'em i artefaktami. |
+| Stabilność `P00` przy `k→0` | Python i Rust używają wspólnego schematu Taylor + `expm1`; bramka sprawdza ciągłość częstości, nie tylko współczynnika. | Dowód źródłowy/testy kontraktowe; brak zakończonej kampanii FEM. |
+| Zakres C1 | Planner nie narzuca już stałych `3e6 rad/m` ani `5 GHz`; zakres wynika z metadanych i sprawdzanej stosowalności modelu. | C1 nadal wymaga rzeczywistych próbek i zgodności z analityką w dozwolonym zakresie. |
+| Bramka naukowa | Runner wywołuje walidator scientific gate; wymaga pełnych przypadków C0/C1/A1, ścieżki 61 próbek, ośmiu gałęzi, pól, Kittel/KS i zbieżności. | Status pozostaje `NOT VERIFIED`, dopóki nie ma kompletnych wyników. |
+| Polityka solvera/telemetria | Adapter publikuje rzeczywiste limity z callbacku; początkowe `max_iterations` pozostaje `None`, zamiast stałej `300`. Polityka PETSc jest jawnie opisana. | Weryfikacja managed runtime i pomiar skalowania pozostają otwarte. |
+| Managed C0 | Build `7776c9b90d364df3a25f3397f5a35da5` z HEAD `d1926af...` zakończył się poprawnie. Powtórzony C0 używa `fem_cpu_native`, 614806 tetraedrów i 108668 węzłów; po relaksacji trwa natywny eigensolve 24 modów. | Proces jest aktywny, ale nie ma jeszcze terminalnego receipt'u ani wykresu; nie kwalifikować. |
+
+To zamyka niespójność checkpointu z bieżącym kodem, ale nie zamyka
+kwalifikacji fizycznej. Niezależny audyt może analizować branch już po pushu;
+wynik C0 i późniejsza kampania C1/A1 muszą być oceniane osobno.
+
+
 ## Bieżący checkpoint po poprawce ciągłości częstotliwości — 2026-09-14
 
 Aktualny worktree `eigensolve-dispersion-plan-20260912` na branchu
