@@ -722,6 +722,7 @@ mod tests {
             include_demag: false,
             dispersion_validation: None,
             k0_kittel_validation: None,
+            solver_policy: None,
             dispersion_analytic_reference: None,
             k0_kittel_periodic_airbox_demag: None,
         }

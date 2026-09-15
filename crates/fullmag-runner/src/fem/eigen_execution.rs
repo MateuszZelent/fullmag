@@ -39,6 +39,7 @@ use super::eigen_output::{
 use super::eigen_policy::{
     native_modal_damping_policy, native_modal_equilibrium_source_kind,
     native_modal_frequency_max_hz, native_modal_frequency_min_hz, native_modal_k_vector,
+    native_modal_solver_policy,
     native_modal_spin_wave_bc_kind, native_modal_target_frequency_hz, native_modal_target_kind,
     resolved_demag_realization, shared_domain_k0_modal_requested,
 };
@@ -724,6 +725,7 @@ pub(crate) fn execute_gpu_fem_eigen_with_handoff(
         });
     }
 
+    let solver_policy = native_modal_solver_policy(plan);
     let native_result = native_fem::solve_native_modal_eigen(native_fem::NativeModalEigenRequest {
         mesh_asset_id: &plan.mesh_name,
         equilibrium_source_kind: native_modal_equilibrium_source_kind(&plan.equilibrium),
@@ -742,9 +744,9 @@ pub(crate) fn execute_gpu_fem_eigen_with_handoff(
         target_frequency_hz: native_modal_target_frequency_hz(&plan.target),
         frequency_min_hz: native_modal_frequency_min_hz(&plan.target),
         frequency_max_hz: native_modal_frequency_max_hz(&plan.target),
-        residual_tolerance: 1.0e-8,
-        max_outer_iterations: 300,
-        max_linear_iterations: 1000,
+        residual_tolerance: solver_policy.residual_tolerance,
+        max_outer_iterations: solver_policy.max_outer_iterations,
+        max_linear_iterations: solver_policy.max_linear_iterations,
         output_directory: None,
         write_partial_artifacts: false,
         completeness_policy: 0,

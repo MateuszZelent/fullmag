@@ -896,3 +896,21 @@ Nie powstał więc artefakt częstotliwości.
 trybu CPU. Następny krok to nowy managed build z tą zmianą i ponowne C0;
 częstotliwość, wykres oraz kwalifikacja naukowa pozostają **NOT VERIFIED** do
 czasu odczytu niepustych artefaktów solvera.
+
+
+### Aktualizacja 2026-09-15 — jawna polityka solvera modalnego
+
+Dodano `FemEigenSolverPolicyIR` oraz mapowanie `runtime_metadata.modal_solver_policy`
+do natywnego adaptera PETSc/SLEPc. Brak polityki zachowuje natywne domyślne
+wartości; runner nie nakłada już ukrytych limitów `300/1000`. Żądane limity,
+tolerancja i rozwiązane przez EPS/KSP limity są rozdzielone w diagnostyce.
+Walidacja odrzuca wartości zerowe i przekraczające natywny zakres `i32`.
+
+Zmiana jest w bieżącym worktree i wymaga osobnego managed builda; aktywny job
+`56a8e337581144899a91d90274d43ee5` buduje wcześniejszy czysty commit
+`20d6ae76f8bac504a835a791d205e0e2494a3bea`, więc nie stanowi jeszcze dowodu
+dla tej poprawki. Dopóki ten build się nie zakończy, nie ma nowego binarium
+do uruchomienia C0. Po jego zakończeniu pozostają: ponowny C0 po korekcie
+`RELAX_DT_S=5e-15`, następnie C1 i A1, niepuste artefakty solvera, bramka
+61 próbek/8 gałęzi, zgodność Kittel/KS oraz zbieżność siatki, airboxa i liczby
+modów.

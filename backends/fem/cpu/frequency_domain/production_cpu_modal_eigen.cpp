@@ -1037,6 +1037,8 @@ std::string production_window_diagnostics_json(
             std::string(policy.ksp_type) +
             "\",\"pc_type\":\"" +
             std::string(policy.pc_type) +
+            "\",\"max_outer_iterations\":" +
+            std::to_string(policy.max_outer_iterations) +
             "\",\"ksp_rtol\":" +
             format_double(policy.ksp_rtol) +
             ",\"ksp_atol\":" +
@@ -1600,10 +1602,18 @@ void emit_production_shift_invert_progress(
 
     const int outer_iteration =
         slepc_result.outer_iterations > 0 ? slepc_result.outer_iterations : 1;
+    const int max_outer_iterations =
+        slepc_result.max_outer_iterations > 0 ?
+            slepc_result.max_outer_iterations :
+            request.max_outer_iterations;
     const int linear_iteration =
         slepc_result.linear_iterations_total > 0 ?
             slepc_result.linear_iterations_total :
             1;
+    const int max_linear_iterations =
+        slepc_result.ksp_max_iterations > 0 ?
+            slepc_result.ksp_max_iterations :
+            request.max_linear_iterations;
     const std::string stop_reason_json = stop_reason == nullptr ?
         "null" :
         std::string("\"") + escape_json_string(stop_reason) + "\"";
@@ -1629,11 +1639,11 @@ void emit_production_shift_invert_progress(
         ",\"outer_iteration\":" +
         std::to_string(outer_iteration) +
         ",\"max_outer_iterations\":" +
-        std::to_string(request.max_outer_iterations) +
+        std::to_string(max_outer_iterations) +
         ",\"linear_iteration\":" +
         std::to_string(linear_iteration) +
         ",\"max_linear_iterations\":" +
-        std::to_string(request.max_linear_iterations) +
+        std::to_string(max_linear_iterations) +
         ",\"current_residual_relative_l2\":" +
         format_double(slepc_result.max_relative_residual) +
         ",\"target_residual_relative_l2\":" +

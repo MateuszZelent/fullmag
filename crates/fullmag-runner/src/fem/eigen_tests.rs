@@ -3371,6 +3371,7 @@ fn minimal_native_modal_plan() -> FemEigenPlanIR {
         mode_tracking: None,
         dispersion_validation: None,
         k0_kittel_validation: None,
+        solver_policy: None,
     }
 }
 

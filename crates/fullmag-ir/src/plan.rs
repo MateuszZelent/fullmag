@@ -1591,6 +1591,22 @@ pub struct FemEigenDispersionValidationIR {
     pub scenarios: Vec<FemEigenDispersionValidationScenarioIR>,
 }
 
+/// Optional native modal-solver controls carried by a resolved FEM eigen plan.
+///
+/// An omitted value delegates resolution to the native PETSc/SLEPc adapter.
+/// This keeps backend defaults observable instead of silently imposing a
+/// runner-side iteration cap.  Values supplied here are requested limits,
+/// while the native diagnostics remain the authority for resolved limits.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemEigenSolverPolicyIR {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub residual_tolerance: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_outer_iterations: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_linear_iterations: Option<u32>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct FemEigenK0KittelValidationMaterialIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1732,6 +1748,8 @@ pub struct FemEigenPlanIR {
     pub dispersion_validation: Option<FemEigenDispersionValidationIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub k0_kittel_validation: Option<FemEigenK0KittelValidationIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver_policy: Option<FemEigenSolverPolicyIR>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

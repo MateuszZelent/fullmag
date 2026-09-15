@@ -28,6 +28,7 @@ use super::eigen_policy::{
     native_cpu_modal_window_has_bloch_floquet_payload_path, native_modal_damping_policy,
     native_modal_equilibrium_source_kind, native_modal_floquet_periodic_pairs,
     native_modal_frequency_max_hz, native_modal_frequency_min_hz, native_modal_k_vector,
+    native_modal_solver_policy,
     native_modal_spin_wave_bc_kind, native_modal_target_frequency_hz, native_modal_target_kind,
     resolved_demag_realization, shared_domain_k0_modal_requested,
 };
@@ -389,6 +390,7 @@ pub(super) fn execute_native_modal_window(
     } else {
         Vec::new()
     };
+    let solver_policy = native_modal_solver_policy(plan);
     let native_result = native_fem::solve_native_modal_eigen(native_fem::NativeModalEigenRequest {
         mesh_asset_id: &plan.mesh_name,
         equilibrium_source_kind: native_modal_equilibrium_source_kind(&plan.equilibrium),
@@ -407,9 +409,9 @@ pub(super) fn execute_native_modal_window(
         target_frequency_hz: native_modal_target_frequency_hz(&plan.target),
         frequency_min_hz: native_modal_frequency_min_hz(&plan.target),
         frequency_max_hz: native_modal_frequency_max_hz(&plan.target),
-        residual_tolerance: 1.0e-8,
-        max_outer_iterations: 300,
-        max_linear_iterations: 1000,
+        residual_tolerance: solver_policy.residual_tolerance,
+        max_outer_iterations: solver_policy.max_outer_iterations,
+        max_linear_iterations: solver_policy.max_linear_iterations,
         output_directory: None,
         // The native production solver currently returns modal payloads to the
         // runner; its optional native diagnostic writer is reserved for the
@@ -1007,6 +1009,7 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
             }
         }
     };
+    let solver_policy = native_modal_solver_policy(plan);
     let native_result = native_fem::solve_native_modal_eigen(native_fem::NativeModalEigenRequest {
         mesh_asset_id: &plan.mesh_name,
         equilibrium_source_kind: native_modal_equilibrium_source_kind(&plan.equilibrium),
@@ -1031,9 +1034,9 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
         target_frequency_hz: native_modal_target_frequency_hz(&plan.target),
         frequency_min_hz: native_modal_frequency_min_hz(&plan.target),
         frequency_max_hz: native_modal_frequency_max_hz(&plan.target),
-        residual_tolerance: 1.0e-8,
-        max_outer_iterations: 300,
-        max_linear_iterations: 1000,
+        residual_tolerance: solver_policy.residual_tolerance,
+        max_outer_iterations: solver_policy.max_outer_iterations,
+        max_linear_iterations: solver_policy.max_linear_iterations,
         output_directory: None,
         write_partial_artifacts: false,
         completeness_policy: 1,
@@ -1642,6 +1645,21 @@ pub(super) fn native_solver_diagnostics_json(
             "mu0_T_m_per_A": MU0,
         })
     });
+    let requested_policy = plan.solver_policy.as_ref();
+    object.insert(
+        "modal_solver_policy".to_string(),
+        serde_json::json!({
+            "source": if requested_policy.is_some() {
+                "resolved_fem_eigen_plan"
+            } else {
+                "native_petsc_slepc_defaults"
+            },
+            "delegates_to_native_defaults": requested_policy.is_none(),
+            "requested_residual_tolerance": requested_policy.and_then(|policy| policy.residual_tolerance),
+            "requested_max_outer_iterations": requested_policy.and_then(|policy| policy.max_outer_iterations),
+            "requested_max_linear_iterations": requested_policy.and_then(|policy| policy.max_linear_iterations),
+        }),
+    );
     if matches!(
         plan.spin_wave_bc.kind(),
         fullmag_ir::SpinWaveBoundaryKindIR::Floquet

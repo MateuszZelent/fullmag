@@ -3973,6 +3973,7 @@ mod tests {
             include_demag: true,
             dispersion_validation: None,
             k0_kittel_validation: None,
+            solver_policy: None,
             dispersion_analytic_reference: None,
             k0_kittel_periodic_airbox_demag: None,
         };
@@ -4582,6 +4583,7 @@ mod tests {
             mode_tracking: None,
             dispersion_validation: None,
             k0_kittel_validation: None,
+            solver_policy: None,
         }
     }
 
@@ -6680,6 +6682,7 @@ mod tests {
             include_demag: plan.operator.include_demag,
             dispersion_validation: None,
             k0_kittel_validation: None,
+            solver_policy: None,
             dispersion_analytic_reference: None,
             k0_kittel_periodic_airbox_demag: None,
         };
@@ -6923,6 +6926,7 @@ mod tests {
             include_demag: true,
             dispersion_validation: None,
             k0_kittel_validation: None,
+            solver_policy: None,
             dispersion_analytic_reference: None,
             k0_kittel_periodic_airbox_demag: None,
         };
@@ -7018,6 +7022,7 @@ mod tests {
             include_demag: true,
             dispersion_validation: None,
             k0_kittel_validation: None,
+            solver_policy: None,
             dispersion_analytic_reference: None,
             k0_kittel_periodic_airbox_demag: None,
         };
@@ -8202,6 +8207,7 @@ mod tests {
             include_demag: plan.operator.include_demag,
             dispersion_validation: None,
             k0_kittel_validation: None,
+            solver_policy: None,
             dispersion_analytic_reference: None,
             k0_kittel_periodic_airbox_demag: None,
         };
@@ -8274,6 +8280,7 @@ mod tests {
             include_demag: plan.operator.include_demag,
             dispersion_validation: None,
             k0_kittel_validation: None,
+            solver_policy: None,
             dispersion_analytic_reference: None,
             k0_kittel_periodic_airbox_demag: None,
         };
@@ -8370,6 +8377,7 @@ mod tests {
             include_demag: plan.operator.include_demag,
             dispersion_validation: None,
             k0_kittel_validation: None,
+            solver_policy: None,
             dispersion_analytic_reference: None,
             k0_kittel_periodic_airbox_demag: None,
         };

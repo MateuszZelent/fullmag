@@ -273,9 +273,27 @@ solve_slepc_gyrotropic_modal_eigen_with_matrices(
     }
     result.ksp_rtol = static_cast<double>(ksp_rtol);
     result.ksp_atol = static_cast<double>(ksp_atol);
-    result.ksp_max_iterations = request.max_linear_iterations > 0 ?
-        request.max_linear_iterations :
-        0;
+    PetscReal resolved_eps_tolerance = 0.0;
+    PetscInt resolved_eps_max_iterations = 0;
+    if (EPSGetTolerances(eps, &resolved_eps_tolerance, &resolved_eps_max_iterations) == 0) {
+        result.max_outer_iterations = static_cast<int>(
+            std::max<PetscInt>(0, resolved_eps_max_iterations));
+    }
+    PetscReal resolved_ksp_rtol = 0.0;
+    PetscReal resolved_ksp_atol = 0.0;
+    PetscReal resolved_ksp_dtol = 0.0;
+    PetscInt resolved_ksp_max_iterations = 0;
+    if (KSPGetTolerances(
+            ksp,
+            &resolved_ksp_rtol,
+            &resolved_ksp_atol,
+            &resolved_ksp_dtol,
+            &resolved_ksp_max_iterations) == 0) {
+        result.ksp_rtol = static_cast<double>(resolved_ksp_rtol);
+        result.ksp_atol = static_cast<double>(resolved_ksp_atol);
+        result.ksp_max_iterations = static_cast<int>(
+            std::max<PetscInt>(0, resolved_ksp_max_iterations));
+    }
 
     PetscInt outer_iterations = 0;
     PetscInt linear_iterations = 0;

@@ -3,6 +3,7 @@ use fullmag_ir::{
     EnergyTermIR, ExchangeBoundaryCondition, ExecutionPlanIR, ExecutionPrecision,
     FemEigenBiasFieldSamplePlanIR, FemEigenDispersionValidationIR, FemEigenEngineIR,
     FemEigenExecutionResolutionIR, FemEigenK0KittelValidationIR, FemEigenPlanIR,
+    FemEigenSolverPolicyIR,
     FemFrequencyDomainEquilibriumProvenanceIR, FemFrequencyResponsePlanIR, FemMagnetoelasticPlanIR,
     FemMechanicalModeIR, FemMechanicalPlanIR, FemPlanIR, GeometryEntryIR, MagnetostrictionLawIR,
     MechanicalLoadIR, OutputPlanIR, ProblemIR, ProvenancePlanIR, SeedPolicy, ThermalSeedConfig,
@@ -1088,6 +1089,63 @@ fn eigen_k0_kittel_validation(
         })?;
     validate_eigen_k0_kittel_validation(&validation)?;
     Ok(Some(validation))
+}
+
+fn eigen_solver_policy(
+    problem: &ProblemIR,
+) -> Result<Option<FemEigenSolverPolicyIR>, PlanError> {
+    let Some(value) = problem
+        .problem_meta
+        .runtime_metadata
+        .get("modal_solver_policy")
+    else {
+        return Ok(None);
+    };
+    let policy = serde_json::from_value::<FemEigenSolverPolicyIR>(value.clone()).map_err(|error| {
+        PlanError {
+            reasons: vec![format!(
+                "runtime_metadata.modal_solver_policy is invalid: {error}"
+            )],
+        }
+    })?;
+    let mut errors = Vec::new();
+    if let Some(tolerance) = policy.residual_tolerance {
+        if !tolerance.is_finite() || tolerance <= 0.0 {
+            errors.push(
+                "runtime_metadata.modal_solver_policy.residual_tolerance must be finite and > 0"
+                    .to_string(),
+            );
+        }
+    }
+    if policy.max_outer_iterations == Some(0) {
+        errors.push(
+            "runtime_metadata.modal_solver_policy.max_outer_iterations must be > 0 when supplied"
+                .to_string(),
+        );
+    }
+    if policy.max_outer_iterations.is_some_and(|value| value > i32::MAX as u32) {
+        errors.push(
+            "runtime_metadata.modal_solver_policy.max_outer_iterations must fit the native signed iteration limit"
+                .to_string(),
+        );
+    }
+    if policy.max_linear_iterations == Some(0) {
+        errors.push(
+            "runtime_metadata.modal_solver_policy.max_linear_iterations must be > 0 when supplied"
+                .to_string(),
+        );
+    }
+    if policy.max_linear_iterations.is_some_and(|value| value > i32::MAX as u32) {
+        errors.push(
+            "runtime_metadata.modal_solver_policy.max_linear_iterations must fit the native signed iteration limit"
+                .to_string(),
+        );
+    }
+    if errors.is_empty() {
+        Ok(Some(policy))
+    } else {
+        Err(PlanError { reasons: errors })
+    }
 }
 
 fn validate_eigen_k0_kittel_validation(
@@ -4861,6 +4919,13 @@ pub(crate) fn plan_fem_eigen(
             None
         }
     };
+    let solver_policy = match eigen_solver_policy(problem) {
+        Ok(policy) => policy,
+        Err(error) => {
+            errors.extend(error.reasons);
+            None
+        }
+    };
     if let (Some(sweep), Some(validation)) =
         (bias_field_sweep.as_ref(), k0_kittel_validation.as_ref())
     {
@@ -5275,6 +5340,7 @@ pub(crate) fn plan_fem_eigen(
         mode_tracking: mode_tracking.clone(),
         dispersion_validation,
         k0_kittel_validation,
+        solver_policy,
     };
 
     let study_note = format!(

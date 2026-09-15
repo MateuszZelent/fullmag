@@ -127,6 +127,7 @@ pub(super) fn native_modal_progress_event(
             object
                 .get("max_outer_iterations")
                 .and_then(serde_json::Value::as_u64)
+                .filter(|value| *value > 0)
                 .and_then(|value| u32::try_from(value).ok())
         },
         residual,

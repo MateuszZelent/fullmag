@@ -476,6 +476,14 @@ a układ przesunięty GMRES/Jacobi. Manifest rozdziela `poisson_ksp_*` od
 wyjaśnia, że tolerancje Poissona nie dowodzą iteracyjnej zbieżności PREONLY.
 Weryfikacja wymaga nadal residualu oryginalnego operatora.
 
+Domyślnie plan nie narzuca po stronie runnera limitu iteracji: brak
+`runtime_metadata.modal_solver_policy` deleguje do domyślnych wartości
+PETSc/SLEPc. Jeżeli plan poda `residual_tolerance`, `max_outer_iterations`
+lub `max_linear_iterations`, są to wartości żądane; diagnostyka natywna
+publikuje osobno wartości rzeczywiście rozwiązane przez EPS/KSP. Ta ścieżka
+jest zintegrowana w źródłach, lecz nie została jeszcze potwierdzona w
+managed runtime dla benchmarku C0/C1/A1.
+
 Początkowy komunikat postępu ma `max_iterations=None`, dopóki callback
 natywnego solvera nie dostarczy rozwiązanego limitu. Nie publikuje stałej 300.
 Mapowanie: `slepc_modal_eigen.hpp::SLEPcTinyGyrotropicModalEigenResult`,

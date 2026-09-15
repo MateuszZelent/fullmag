@@ -7,6 +7,34 @@ use fullmag_ir::{
     SpinWaveBoundaryConditionIR, SpinWaveBoundaryKindIR,
 };
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct NativeModalSolverPolicy {
+    pub(super) residual_tolerance: f64,
+    pub(super) max_outer_iterations: i32,
+    pub(super) max_linear_iterations: i32,
+}
+
+/// Resolve the requested modal policy at the Rust/native boundary.
+///
+/// Zero is the native ABI sentinel for PETSc/SLEPc defaults.  The runner must
+/// not replace an omitted policy with an undocumented iteration cap.
+pub(super) fn native_modal_solver_policy(plan: &FemEigenPlanIR) -> NativeModalSolverPolicy {
+    let requested = plan.solver_policy.as_ref();
+    NativeModalSolverPolicy {
+        residual_tolerance: requested
+            .and_then(|policy| policy.residual_tolerance)
+            .unwrap_or(0.0),
+        max_outer_iterations: requested
+            .and_then(|policy| policy.max_outer_iterations)
+            .and_then(|value| i32::try_from(value).ok())
+            .unwrap_or(0),
+        max_linear_iterations: requested
+            .and_then(|policy| policy.max_linear_iterations)
+            .and_then(|value| i32::try_from(value).ok())
+            .unwrap_or(0),
+    }
+}
+
 pub(super) fn native_modal_equilibrium_source_kind(
     equilibrium: &EquilibriumSourceIR,
 ) -> &'static str {

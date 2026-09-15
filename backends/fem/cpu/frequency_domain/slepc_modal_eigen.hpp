@@ -89,6 +89,7 @@ struct SLEPcTinyGyrotropicModalEigenResult {
     int accepted_mode_count = 0;
     int selected_eigenpair_index = -1;
     int outer_iterations = 0;
+    int max_outer_iterations = 0;
     int linear_iterations_total = 0;
     int ksp_max_iterations = 0;
     int poisson_ksp_max_iterations = 0;
