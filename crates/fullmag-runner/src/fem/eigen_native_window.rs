@@ -349,6 +349,49 @@ pub(super) fn execute_native_modal_window(
     let runner_tangent_mass_row_major = runner_operator
         .map(|(_, mass)| dmatrix_to_row_major(mass))
         .unwrap_or_default();
+    // The production SLEPc adapter has a sparse CSR route, but the runner
+    // still keeps the dense matrices for modal-vector reconstruction and
+    // diagnostics.  Transporting CSR as well lets the native solve use the
+    // sparse operator instead of materialising another PETSc dense matrix.
+    // This is intentionally limited to the non-shared-domain owner: the
+    // shared-domain path already owns its sparse operator in native MFEM.
+    let runner_sparse_storage = if runner_operator.is_some() {
+        let tangent_dof = runner_stiffness_omega
+            .as_ref()
+            .map(|matrix| matrix.nrows())
+            .unwrap_or(0);
+        Some((
+            csr_matrix_from_row_major(
+                &runner_stiffness_row_major,
+                tangent_dof,
+                tangent_dof,
+                "stiffness",
+            )?,
+            csr_matrix_from_row_major(
+                &runner_gyrotropic_row_major,
+                tangent_dof,
+                tangent_dof,
+                "gyrotropic",
+            )?,
+            csr_matrix_from_row_major(
+                &runner_tangent_mass_row_major,
+                tangent_dof,
+                tangent_dof,
+                "mass",
+            )?,
+        ))
+    } else {
+        None
+    };
+    let runner_sparse_operator = runner_sparse_storage
+        .as_ref()
+        .map(|(stiffness, gyrotropic, mass)| {
+            native_fem::NativeModalEigenSparseOperatorProblem {
+                stiffness_csr: stiffness.view(),
+                gyrotropic_csr: gyrotropic.view(),
+                mass_csr: mass.view(),
+            }
+        });
     let runner_native_modal_topology = runner_operator
         .map(|_| {
             MeshTopology::from_ir(&plan.mesh).map_err(|error| RunError {
@@ -425,7 +468,7 @@ pub(super) fn execute_native_modal_window(
         progress_callback: Some(&progress_callback),
         tiny_validation_problem: None,
         mfem_operator_problem: runner_mfem_operator_problem,
-        mfem_sparse_operator_problem: None,
+        mfem_sparse_operator_problem: runner_sparse_operator,
         poisson_airbox_block_problem: None,
         shared_domain_problem,
         shared_domain_floquet_periodic_pairs: &shared_domain_pairs,
@@ -1281,6 +1324,91 @@ fn dmatrix_to_row_major(matrix: &DMatrix<f64>) -> Vec<f64> {
         }
     }
     values
+}
+
+struct OwnedCsrMatrix {
+    row_count: usize,
+    column_count: usize,
+    row_offsets: Vec<u32>,
+    column_indices: Vec<u32>,
+    values: Vec<f64>,
+}
+
+impl OwnedCsrMatrix {
+    fn view(&self) -> native_fem::NativeModalEigenCsrMatrixView<'_> {
+        native_fem::NativeModalEigenCsrMatrixView {
+            row_count: self.row_count as u64,
+            column_count: self.column_count as u64,
+            row_offsets: &self.row_offsets,
+            column_indices: &self.column_indices,
+            values: &self.values,
+        }
+    }
+}
+
+fn csr_matrix_from_row_major(
+    values: &[f64],
+    row_count: usize,
+    column_count: usize,
+    label: &str,
+) -> Result<OwnedCsrMatrix, RunError> {
+    if row_count > u32::MAX as usize || column_count > u32::MAX as usize {
+        return Err(RunError {
+            message: format!(
+                "native modal {label} CSR dimensions exceed the adapter ABI: {row_count}x{column_count}"
+            ),
+        });
+    }
+    let expected_len = row_count
+        .checked_mul(column_count)
+        .ok_or_else(|| RunError {
+            message: format!("native modal {label} CSR dimension overflow"),
+        })?;
+    if values.len() != expected_len {
+        return Err(RunError {
+            message: format!(
+                "native modal {label} CSR source has {} values, expected {expected_len}",
+                values.len()
+            ),
+        });
+    }
+
+    let mut row_offsets = Vec::with_capacity(row_count.saturating_add(1));
+    let mut column_indices = Vec::new();
+    let mut csr_values = Vec::new();
+    row_offsets.push(0);
+    for row in 0..row_count {
+        let row_start = row * column_count;
+        for column in 0..column_count {
+            let value = values[row_start + column];
+            if value == 0.0 {
+                continue;
+            }
+            if !value.is_finite() {
+                return Err(RunError {
+                    message: format!(
+                        "native modal {label} CSR contains a non-finite value at ({row},{column})"
+                    ),
+                });
+            }
+            column_indices.push(column as u32);
+            csr_values.push(value);
+        }
+        if column_indices.len() > u32::MAX as usize {
+            return Err(RunError {
+                message: format!("native modal {label} CSR nonzero count exceeds the adapter ABI"),
+            });
+        }
+        row_offsets.push(column_indices.len() as u32);
+    }
+
+    Ok(OwnedCsrMatrix {
+        row_count,
+        column_count,
+        row_offsets,
+        column_indices,
+        values: csr_values,
+    })
 }
 
 fn matrix_abs_max(matrix: &DMatrix<f64>) -> f64 {
