@@ -191,6 +191,12 @@ C1 jest właściwą bramką analityczną. Otwór A1 nie ma dokładnej jednorodne
 referencji slab i po przejściu C1 należy porównywać go bezpośrednio z COMSOL-em
 (oraz, pomocniczo, z TetraX) przy tych samych warunkach brzegowych.
 
+W bramce naukowej pełna ścieżka 61 punktów C1 jest porównywana z otwartofilmowym
+jądrem Kalinikosa–Slawina `P00`. Korekta `Nz` z finite airboxa służy wyłącznie
+do kontroli jednorodnego modu w Γ i zbieżności wysokości airboxa. Nie wolno
+zastępować nią jądra dla `k != 0`, ponieważ stały skalar nie jest dokładną
+funkcją Greena skończonego airboxa.
+
 ## 7. Siatka i rozwiązanie własne
 
 Zbuduj trzy siatki; dla pierwszego uruchomienia wystarczy L1, przed całym sweepem wykonaj kontrole C0/C1.

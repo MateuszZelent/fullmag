@@ -561,22 +561,6 @@ def _validate_benchmark_metadata(
     return valid
 
 
-def _finite_box_nz(parameters: Mapping[str, Any]) -> float | None:
-    """Uniform Nz correction from the same finite-Dirichlet-box model used by
-    the Kittel control (``controls_finite_dirichlet_box``): ``Nz = 1 - t/(t + 2a)``
-    with ``t`` the film thickness and ``a`` the airbox half-height
-    (``geometry.air_padding_each_side_m``). See
-    docs/guides/comsol-nonzero-k-dispersion-benchmark.md section 6.1, which
-    documents this as the actual quantity of physical interest for this
-    benchmark's boundary setup (not the infinite-film limit).
-    """
-    thickness = _nested(parameters, "geometry", "film_thickness_m")
-    airbox = _nested(parameters, "geometry", "air_padding_each_side_m")
-    if not _finite_positive(thickness) or not _finite(airbox) or float(airbox) < 0.0:
-        return None
-    return 1.0 - float(thickness) / (float(thickness) + 2.0 * float(airbox))
-
-
 def _kalinikos_frequency_hz_general_phi(
     k: float,
     sin_squared_phi: float,
@@ -609,16 +593,12 @@ def _kalinikos_frequency_hz_general_phi(
     was ~6.5 GHz on this benchmark, nowhere near zero). It was discarded in favor
     of the form implemented here, which does reduce correctly.
 
-    The angle-independent factor ``F00`` additionally carries the same finite
-    Dirichlet-airbox correction the Kittel control uses (see ``_finite_box_nz``):
-    the local, k-independent out-of-plane demagnetizing contribution "1" in
-    "Ms*(1-P00)" is replaced by "Nz" (Nz=1 recovers the infinite-film limit).
-    This is exact at k=0 (both phi=0 and phi=pi/2 reduce there to the identical,
-    angle-independent finite-box Kittel value, matching
-    ``controls_finite_dirichlet_box.with_demag_gamma_hz`` to machine precision)
-    and preserves the correct qualitative k-dependence (the correction is scaled
-    by Nz rather than added as an offset, so it stays bounded in [0, Ms] and does
-    not go negative or diverge at large k).
+    The finite Dirichlet airbox is intentionally not folded into this oracle;
+    the angle-independent factor ``F00`` uses the open-film term.
+    The finite-airbox offset and its convergence are checked independently by
+    the Gamma-point Kittel and airbox controls.  A uniform Nz substitution is
+    not an exact finite-airbox Green function, so it must not be presented as a
+    nonzero-k analytic reference.
     """
     thickness = _nested(parameters, "geometry", "film_thickness_m")
     ms = _nested(parameters, "material", "Ms_A_per_m")
@@ -631,9 +611,6 @@ def _kalinikos_frequency_hz_general_phi(
         return None
     if k < 0.0 or not (-1.0e-9 <= sin_squared_phi <= 1.0 + 1.0e-9):
         return None
-    nz = _finite_box_nz(parameters)
-    if nz is None:
-        return None
     sin_squared_phi = min(max(sin_squared_phi, 0.0), 1.0)
     try:
         p_factor = p00_demag_factor(float(k), float(thickness))
@@ -641,7 +618,7 @@ def _kalinikos_frequency_hz_general_phi(
         return None
     exchange_field = 2.0 * float(aex) * float(k) * float(k) / (float(mu0) * float(ms))
     common = float(bias) + exchange_field
-    angle_independent = common + float(ms) * nz * (1.0 - p_factor)
+    angle_independent = common + float(ms) * (1.0 - p_factor)
     angle_dependent = common + float(ms) * p_factor * sin_squared_phi
     if angle_independent <= 0.0 or angle_dependent <= 0.0:
         return None

@@ -460,6 +460,20 @@ def _make_case(root: Path, case: str = "c1") -> Path:
 
 
 class ScientificGateTests(unittest.TestCase):
+    def test_nonzero_k_oracle_does_not_apply_scalar_finite_airbox_correction(self):
+        parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+        narrow = copy.deepcopy(parameters)
+        wide = copy.deepcopy(parameters)
+        narrow["geometry"]["air_padding_each_side_m"] = 2.0e-6
+        wide["geometry"]["air_padding_each_side_m"] = 8.0e-6
+        for k, sin_squared_phi in ((1.0e7, 0.0), (1.0e7, 1.0), (2.0e7, 0.25)):
+            with self.subTest(k=k, sin_squared_phi=sin_squared_phi):
+                self.assertAlmostEqual(
+                    gate._kalinikos_frequency_hz_general_phi(k, sin_squared_phi, narrow),
+                    gate._kalinikos_frequency_hz_general_phi(k, sin_squared_phi, wide),
+                    places=6,
+                )
+
     def test_comparison_label_cannot_override_missing_native_execution(self):
         for changes in ({"production_native_solver_available": False}, {"validation_only": True}):
             with self.subTest(changes=changes):
