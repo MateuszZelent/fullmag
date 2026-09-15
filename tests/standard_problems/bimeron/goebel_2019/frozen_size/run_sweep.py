@@ -31,7 +31,7 @@ from tests.standard_problems.bimeron.goebel_2019.frozen_size.common import (
     DEFAULT_WALL_WIDTH_NM,
     preset_radius_for_contour,
 )
-from tests.standard_problems.bimeron.goebel_2019.frozen_size.report import render_report
+from tests.standard_problems.bimeron.goebel_2019.frozen_size.report import render_report, write_plots
 from tests.standard_problems.bimeron.goebel_2019.frozen_size.verify import verify_analysis
 
 
@@ -827,6 +827,7 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
         "protocol_energy_spread": _protocol_energy_spread(results),
         "protocol_spread_is_acceptance_gate": False,
     }
+    manifest["plots"] = write_plots(manifest, output_root)
     _write_json(output_root / "profile_summary.json", manifest)
     _write_profile_csv(output_root / "profile_energy.csv", results)
     (output_root / "profile_report.md").write_text(render_report(manifest), encoding="utf-8")

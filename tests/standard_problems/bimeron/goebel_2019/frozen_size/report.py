@@ -116,6 +116,196 @@ def _free_torque_t(frozen: dict[str, Any]) -> float | None:
     return value
 
 
+def _plot_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    """Collect finite profile observations for static scientific figures."""
+
+    rows: list[dict[str, Any]] = []
+    for result in summary.get("results", []):
+        if not isinstance(result, dict):
+            continue
+        protocol = result.get("protocol") if isinstance(result.get("protocol"), dict) else {}
+        profile = result.get("profile_energy") if isinstance(result.get("profile_energy"), dict) else {}
+        measurement = _measurement(result, _profile_state(result))
+        verification = _verification(result)
+        classification = _classification(result, verification)
+        target = _number(protocol.get("target_radius_nm"))
+        measured = _number(measurement.get("R_area_nm"))
+        energy = _number(profile.get("E_total_J"))
+        delta = _number(profile.get("delta_E_to_background_J"))
+        if energy is None:
+            continue
+        if measured is None:
+            measured = target
+        if measured is None:
+            continue
+        rows.append(
+            {
+                "protocol": str(protocol.get("protocol", "unknown")),
+                "target_nm": target,
+                "measured_nm": measured,
+                "measured_uncertainty_nm": _number(measurement.get("R_area_uncertainty_nm")),
+                "energy_J": energy,
+                "delta_J": delta,
+                "classification": classification,
+            }
+        )
+    return rows
+
+
+def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
+    """Write report figures without fitting through failed or missing points.
+
+    The energy figure always shows the measured area radius against the full
+    profile energy.  A separate excess-energy figure is emitted only when a
+    converged background makes ``Delta E`` finite.  Marker fill carries the
+    accepted/diagnostic distinction while color identifies the constraint
+    protocol.
+    """
+
+    output_root = output_root.resolve()
+    output_root.mkdir(parents=True, exist_ok=True)
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.lines import Line2D
+    except ImportError as error:
+        return {
+            "status": "unavailable",
+            "reason": f"matplotlib_unavailable: {error}",
+            "files": [],
+        }
+
+    rows = _plot_rows(summary)
+    protocols = sorted({row["protocol"] for row in rows})
+    palette = {protocol: color for protocol, color in zip(protocols, plt.get_cmap("tab10").colors)}
+    files: list[dict[str, str]] = []
+
+    def _scatter(ax: Any, values: list[dict[str, Any]], y_key: str, *, y_label: str, title: str) -> None:
+        for protocol in protocols:
+            entries = [row for row in values if row["protocol"] == protocol]
+            if not entries:
+                continue
+            color = palette[protocol]
+            accepted = [row for row in entries if row["classification"] == "accepted"]
+            diagnostic = [row for row in entries if row["classification"] != "accepted"]
+            for subset, filled in ((accepted, True), (diagnostic, False)):
+                if not subset:
+                    continue
+                ax.scatter(
+                    [row["measured_nm"] for row in subset],
+                    [row[y_key] for row in subset],
+                    s=42,
+                    marker="o",
+                    color=color,
+                    facecolors=color if filled else "none",
+                    edgecolors=color,
+                    linewidths=1.2,
+                    zorder=3,
+                )
+        protocol_handles = [
+            Line2D([0], [0], marker="o", linestyle="none", markersize=6,
+                   markerfacecolor=palette[protocol], markeredgecolor=palette[protocol],
+                   label=protocol)
+            for protocol in protocols
+        ]
+        status_handles = [
+            Line2D([0], [0], marker="o", linestyle="none", markersize=6,
+                   markerfacecolor="black", markeredgecolor="black", label="accepted"),
+            Line2D([0], [0], marker="o", linestyle="none", markersize=6,
+                   markerfacecolor="none", markeredgecolor="black", label="diagnostic / failed"),
+        ]
+        if protocol_handles:
+            legend_protocol = ax.legend(handles=protocol_handles, title="protocol", loc="best")
+            ax.add_artist(legend_protocol)
+        if protocols:
+            ax.legend(handles=status_handles, title="classification", loc="lower right")
+        ax.set_xlabel(r"$R_{\mathrm{area}}$ (nm)")
+        ax.set_ylabel(y_label)
+        ax.set_title(title)
+        ax.grid(True, alpha=0.25, linewidth=0.7)
+        ax.margins(x=0.08, y=0.12)
+
+    fig, ax = plt.subplots(figsize=(7.2, 4.4), constrained_layout=True)
+    _scatter(
+        ax,
+        rows,
+        "energy_J",
+        y_label=r"$E_{\mathrm{total}}$ (J)",
+        title="Frozen-spin bimeron profile energy",
+    )
+    if not rows:
+        ax.text(0.5, 0.5, "No finite profile observations", transform=ax.transAxes,
+                ha="center", va="center")
+    total_path = output_root / "profile_energy_total.png"
+    fig.savefig(total_path, dpi=180)
+    plt.close(fig)
+    files.append({"kind": "energy_total", "path": total_path.name})
+
+    delta_rows = [row for row in rows if row["delta_J"] is not None]
+    if delta_rows:
+        fig, ax = plt.subplots(figsize=(7.2, 4.4), constrained_layout=True)
+        _scatter(
+            ax,
+            delta_rows,
+            "delta_J",
+            y_label=r"$\Delta E$ (J)",
+            title="Frozen-spin bimeron excess energy",
+        )
+        delta_path = output_root / "profile_delta_energy.png"
+        fig.savefig(delta_path, dpi=180)
+        plt.close(fig)
+        files.append({"kind": "energy_excess", "path": delta_path.name})
+
+    radius_rows = [row for row in rows if row["target_nm"] is not None]
+    if radius_rows:
+        fig, ax = plt.subplots(figsize=(6.4, 4.8), constrained_layout=True)
+        for protocol in protocols:
+            entries = [row for row in radius_rows if row["protocol"] == protocol]
+            if not entries:
+                continue
+            color = palette[protocol]
+            for row in entries:
+                accepted = row["classification"] == "accepted"
+                ax.errorbar(
+                    row["target_nm"],
+                    row["measured_nm"],
+                    yerr=row["measured_uncertainty_nm"],
+                    fmt="o",
+                    color=color,
+                    markerfacecolor=color if accepted else "none",
+                    markeredgecolor=color,
+                    markersize=6,
+                    capsize=3,
+                    linewidth=1.0,
+                )
+        low = min(min(row["target_nm"], row["measured_nm"]) for row in radius_rows)
+        high = max(max(row["target_nm"], row["measured_nm"]) for row in radius_rows)
+        span = max(high - low, 1.0)
+        ax.plot([low - 0.05 * span, high + 0.05 * span],
+                [low - 0.05 * span, high + 0.05 * span],
+                linestyle="--", color="0.45", linewidth=0.9, label="ideal R_measured = R_target")
+        ax.set_xlabel(r"$R_{\mathrm{target}}$ (nm)")
+        ax.set_ylabel(r"$R_{\mathrm{area}}$ measured (nm)")
+        ax.set_title("Frozen-spin radius retention")
+        ax.grid(True, alpha=0.25, linewidth=0.7)
+        ax.legend(loc="best")
+        ax.set_xlim(low - 0.08 * span, high + 0.08 * span)
+        ax.set_ylim(low - 0.08 * span, high + 0.08 * span)
+        radius_path = output_root / "profile_radius_retention.png"
+        fig.savefig(radius_path, dpi=180)
+        plt.close(fig)
+        files.append({"kind": "radius_retention", "path": radius_path.name})
+
+    return {
+        "status": "written",
+        "observation_count": len(rows),
+        "files": files,
+        "interpolation": "none",
+    }
+
+
 def render_report(summary: dict[str, Any]) -> str:
     results = [value for value in summary.get("results", []) if isinstance(value, dict)]
     rows: list[tuple[dict[str, Any], dict[str, Any], str]] = []
@@ -143,6 +333,27 @@ def render_report(summary: dict[str, Any]) -> str:
             "- Background reference is unavailable for subtraction: "
             f"`{background.get('reason', 'not_provided')}`. ΔE values are omitted until the +x run converges."
         )
+    plots = summary.get("plots") if isinstance(summary.get("plots"), dict) else {}
+    plot_files = plots.get("files") if isinstance(plots.get("files"), list) else []
+    if plot_files:
+        lines.extend(["", "## Plots", ""])
+        for plot in plot_files:
+            if not isinstance(plot, dict) or not plot.get("path"):
+                continue
+            kind = str(plot.get("kind", "plot"))
+            label = {
+                "energy_total": "Profile energy E_total versus measured R_area",
+                "energy_excess": "Excess energy Delta E versus measured R_area",
+                "radius_retention": "Target versus measured R_area",
+            }.get(kind, kind)
+            lines.append(f"![{label}]({plot['path']})")
+            lines.append("")
+        lines.append(
+            "Markers are filled only for accepted points; open markers are diagnostic or failed. "
+            "No line is fitted through missing or non-converged points."
+        )
+    elif plots.get("status") == "unavailable":
+        lines.extend(["", f"- Plot generation unavailable: `{plots.get('reason', 'unknown')}`."])
     lines.extend(
         [
             "",
@@ -286,7 +497,10 @@ def main() -> int:
     parser.add_argument("summary", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    report = render_report(_load(args.summary))
+    summary = _load(args.summary)
+    if args.output:
+        summary["plots"] = write_plots(summary, args.output.parent)
+    report = render_report(summary)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(report, encoding="utf-8")
