@@ -25,6 +25,11 @@ struct FloquetAirboxDynamicDemagKProblem {
     // with the original bounded oracle.
     const mfem::ComplexSparseMatrix *tangent_constraint = nullptr;
     std::array<double, 3> k_rad_per_m{};
+    // Reciprocal magnetic feedback scale applied to A_qphi = scale *
+    // A_phiq^H.  The shared-domain physical path sets this to -mu0; the
+    // bounded legacy oracle keeps the dimensionless default of +1 for its
+    // algebraic fixtures.
+    double qphi_feedback_scale = 1.0;
     FloquetDynamicDemagKGaugePolicy gauge_policy =
         FloquetDynamicDemagKGaugePolicy::require_invertible;
     double pivot_tolerance = 1.0e-14;
@@ -99,7 +104,7 @@ FrequencyDomainStatus assemble_floquet_airbox_shared_domain_blocks(
 //
 //     P(k)       = C(k)^H P_full(k) C(k),
 //     A_phiq(k)  = C(k)^H A_phiq,full(k),
-//     A_qphi(k)  = A_phiq(k)^H,
+//     A_qphi(k)  = qphi_feedback_scale * A_phiq(k)^H,
 //     D(k)       = -A_qphi(k) P(k)^-1 A_phiq(k),
 //
 // and return D in the real-split tangent layout expected by the modal ABI.

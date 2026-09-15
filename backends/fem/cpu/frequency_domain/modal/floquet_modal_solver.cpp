@@ -1109,7 +1109,22 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
             spectral_transform,
             static_cast<PetscScalar>(omega_rad_s_from_frequency_hz(
                 std::max(0.0, spectral_request.target_frequency_hz)))) != 0 ||
-        STSetPreconditionerMat(spectral_transform, context.rotated_a_qq) != 0 ||
+        // context.rotated_a_qq is the real-split of -i*phase_sign*A_qq.  A_qq
+        // is the Hermitian magnetic-Hessian block and therefore has a REAL
+        // diagonal; rotating it by -i maps that real diagonal into the
+        // off-diagonal 2x2 slots of the real-split layout and leaves the
+        // matrix's own main diagonal IDENTICALLY ZERO (see create_real_split_
+        // matrix: for a diagonal entry, rotation_sign != 0 gives block_real =
+        // sign*Im(value) = 0).  PCJACOBI would then silently substitute 1.0
+        // for every zero diagonal entry, degenerating to the identity.
+        // context.a_qq (the UNROTATED real-split of A_qq, already built above
+        // and already live for the MatShell action) has exactly the diagonal
+        // Jacobi needs: Re(A_qq_jj) in both real/imag block positions.  The
+        // -sigma*B contribution to the shifted operator's diagonal is zero
+        // regardless (B_qq is real skew-symmetric/anti-Hermitian and so has a
+        // zero diagonal itself), so context.a_qq's diagonal is a faithful
+        // approximation of the full shifted operator's diagonal.
+        STSetPreconditionerMat(spectral_transform, context.a_qq) != 0 ||
         STGetKSP(spectral_transform, &shifted_ksp) != 0 ||
         KSPSetType(shifted_ksp, KSPGMRES) != 0 ||
         KSPGetPC(shifted_ksp, &shifted_pc) != 0 ||

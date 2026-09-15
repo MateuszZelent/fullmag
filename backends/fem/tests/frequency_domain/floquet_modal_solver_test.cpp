@@ -208,7 +208,7 @@ void admits_sparse_bloch_operator_without_demag()
           "sparse Floquet owner rejects a dynamic demag request");
     check(std::strcmp(
               demag_admission.reason,
-              "floquet_sparse_modal_requires_dense_dynamic_demag_owner") == 0,
+              "floquet_sparse_modal_requires_shared_domain_sparse_owner") == 0,
           "sparse dynamic demag rejection reason is stable");
 }
 
@@ -301,16 +301,25 @@ void executes_native_sparse_matshell_above_dense_bound()
     const std::complex<double> q_phi_coupling(0.25, 0.0);
     const std::complex<double> phi_q_coupling(0.25, 0.0);
 
+    // a_qq models the Hermitian magnetic-Hessian block (K + D), which has a
+    // REAL diagonal in production (see FIX H3's rotated_a_qq zero-diagonal
+    // analysis).  The imaginary "rotate to a real target frequency" factor
+    // therefore lives on b_qq's diagonal here instead of a_qq's: for a
+    // decoupled diagonal row, (-i*phase_sign*A_eff)/b = mu, and choosing
+    // b = -i makes mu = phase_sign*A_eff and lambda_imag = A_eff directly
+    // (independent of phase_sign, since phase_sign^2 == 1), so a REAL
+    // a_diagonal reproduces exactly the same expected eigenvalues as the
+    // previous purely-imaginary construction did.
     std::vector<std::complex<double>> a_diagonal(q_dimension);
     std::vector<std::complex<double>> b_diagonal(
-        q_dimension, std::complex<double>(1.0, 0.0));
+        q_dimension, std::complex<double>(0.0, -1.0));
     a_diagonal[0u] = q_phi_coupling * phi_q_coupling +
-        std::complex<double>(0.0, expected_omega);
+        std::complex<double>(expected_omega, 0.0);
     for (std::size_t row = 1u; row < q_dimension; ++row) {
         a_diagonal[row] = std::complex<double>(
-            0.0,
             fd::omega_rad_s_from_frequency_hz(
-                expected_frequency_hz + 400.0 * static_cast<double>(row)));
+                expected_frequency_hz + 400.0 * static_cast<double>(row)),
+            0.0);
     }
 
     const auto a_qq = diagonal_complex_csr(q_dimension, a_diagonal);

@@ -23,7 +23,7 @@ from typing import Any, Mapping, Sequence
 
 from comsol_n0_field_certificate import measure_n0_field
 from verify_fem_frequency_domain_eigen_artifacts import (
-    kalinikos_slab_n0_frequency_hz,
+    p00_demag_factor,
     require_kalinikos_slab_n0_material_and_bias,
     validate_mode_diagnostics_fields,
 )
@@ -38,9 +38,32 @@ EXPECTED_PATH_SAMPLE_COUNT = 61
 EXPECTED_TARGET_BANDS = 8
 EXPECTED_CONTROL_SAMPLES = (0, 10, 20, 30, 40, 50, 60)
 KITTEL_RELATIVE_TOLERANCE = 1.0e-3
-KS_RELATIVE_TOLERANCE = 2.0e-2
+# Independently verified (see scripts/test_validate_comsol_dispersion_scientific_gate.py
+# and the audit note below) with the Kalinikos-Slavin n=0 formula: across the C1
+# benchmark's Gamma-X segment (pure backward-volume geometry, k parallel to M), the
+# physical dispersion excursion is only ~1.4649% (9.2428 GHz at Gamma-adjacent low-k
+# to 9.3782 GHz at X, both slightly below the Gamma value due to the small
+# demagnetizing dip before exchange stiffening dominates). A 2.0e-2 (2%) tolerance is
+# therefore LARGER than the entire physical signal it is meant to gate: a solver that
+# returns a k-independent (flat) frequency at every sample would pass unnoticed. This
+# value is chosen to sit at roughly 1/5 of the smallest branch excursion (comfortably
+# under the audit's suggested 1/4-1/3 ceiling) while remaining 3x looser than
+# KITTEL_RELATIVE_TOLERANCE to allow for legitimate FEM discretization/mesh noise
+# accumulated across 61 k-samples and off-axis propagation angles (the single-point
+# Gamma Kittel check has no such accumulation).
+KS_RELATIVE_TOLERANCE = 3.0e-3
 KS_FREQUENCY_CONTINUITY_TOLERANCE = 2.0 * KS_RELATIVE_TOLERANCE
-CONVERGENCE_RELATIVE_TOLERANCE = 5.0e-3
+# Independently verified with the finite-Dirichlet-box demagnetizing-factor model
+# Nz = 1 - t/(t + 2*a) (t = film thickness, a = airbox half-height): for the C1
+# benchmark parameters, the modeled frequency shift between successive airbox sizes
+# is ~1.133e-3 (1um->2um) and ~5.675e-4 (2um->4um). The prior 5.0e-3 tolerance is
+# therefore looser than the smallest real, modeled convergence increment, so a solver
+# with literally no dependence on airbox height (or one whose dependence differs from
+# the modeled physics by an amount comparable to or larger than the true effect) would
+# still silently pass. 2.0e-4 sits comfortably below the smallest modeled increment
+# (~1/3 of 5.675e-4) while leaving headroom for real discretization noise on top of
+# the modeled airbox effect.
+CONVERGENCE_RELATIVE_TOLERANCE = 2.0e-4
 MAX_IMAGINARY_TO_REAL_RATIO = 1.0e-6
 MAX_TANGENT_LEAKAGE = 1.0e-6
 MAX_EIGEN_RESIDUAL = 1.0e-6
@@ -139,6 +162,7 @@ def _load_parameters(parameters_path: Path) -> tuple[dict[str, Any] | None, list
     assert value is not None
     required = (
         ("geometry", "film_thickness_m"),
+        ("geometry", "air_padding_each_side_m"),
         ("material", "Ms_A_per_m"),
         ("material", "Aex_J_per_m"),
         ("material", "mu0_H_per_m"),
@@ -537,11 +561,65 @@ def _validate_benchmark_metadata(
     return valid
 
 
-def _kalinikos_frequency_hz(
+def _finite_box_nz(parameters: Mapping[str, Any]) -> float | None:
+    """Uniform Nz correction from the same finite-Dirichlet-box model used by
+    the Kittel control (``controls_finite_dirichlet_box``): ``Nz = 1 - t/(t + 2a)``
+    with ``t`` the film thickness and ``a`` the airbox half-height
+    (``geometry.air_padding_each_side_m``). See
+    docs/guides/comsol-nonzero-k-dispersion-benchmark.md section 6.1, which
+    documents this as the actual quantity of physical interest for this
+    benchmark's boundary setup (not the infinite-film limit).
+    """
+    thickness = _nested(parameters, "geometry", "film_thickness_m")
+    airbox = _nested(parameters, "geometry", "air_padding_each_side_m")
+    if not _finite_positive(thickness) or not _finite(airbox) or float(airbox) < 0.0:
+        return None
+    return 1.0 - float(thickness) / (float(thickness) + 2.0 * float(airbox))
+
+
+def _kalinikos_frequency_hz_general_phi(
     k: float,
-    geometry: str,
+    sin_squared_phi: float,
     parameters: Mapping[str, Any],
 ) -> float | None:
+    """Kalinikos-Slavin n=0 dipole-exchange dispersion at an arbitrary in-plane
+    propagation angle ``phi`` between the wavevector ``k`` and the (in-plane)
+    equilibrium magnetization, given here through ``sin_squared_phi = sin(phi)**2``.
+
+    General published form (theta = 90 deg: both M and k in-plane):
+
+        X    = H + omega_M-equivalent exchange field, i.e. (bias + 2*Aex*k^2/(mu0*Ms))
+        P00  = p00_demag_factor(k, film_thickness_m)   (0 at k=0, 1 as k*d -> inf)
+        F00  = X + Ms*(1 - P00)          (angle-independent factor)
+        F90  = X + Ms*P00*sin^2(phi)     (angle-dependent factor)
+        omega^2 = F00 * F90
+
+    This reduces EXACTLY (verified numerically to machine precision for many k
+    spanning the C1 benchmark's 0..X-point range) to the existing backward-volume
+    special case at phi=0 (sin^2(phi)=0, giving omega^2 = X*(X+Ms*(1-P00))) and to
+    the existing damon-eshbach special case at phi=pi/2 (sin^2(phi)=1, giving
+    omega^2 = (X+Ms*(1-P00))*(X+Ms*P00)) -- i.e. exactly the two dispatched
+    formulas this function replaces, for all k, not just in a limit.
+
+    A candidate general formula quoted from an external audit note (of the form
+    F00 = P + sin^2(phi)*(1 - P*(1+cos^2(phi)) + omega_M*P*(1-P)*sin^2(phi)/X),
+    used as omega^2 = X*(X+omega_M*F00)) was checked numerically against both
+    special cases and found NOT to reduce correctly at phi=0 (it collapses to the
+    open, no-demag Kittel value instead of the backward-volume value; the diff
+    was ~6.5 GHz on this benchmark, nowhere near zero). It was discarded in favor
+    of the form implemented here, which does reduce correctly.
+
+    The angle-independent factor ``F00`` additionally carries the same finite
+    Dirichlet-airbox correction the Kittel control uses (see ``_finite_box_nz``):
+    the local, k-independent out-of-plane demagnetizing contribution "1" in
+    "Ms*(1-P00)" is replaced by "Nz" (Nz=1 recovers the infinite-film limit).
+    This is exact at k=0 (both phi=0 and phi=pi/2 reduce there to the identical,
+    angle-independent finite-box Kittel value, matching
+    ``controls_finite_dirichlet_box.with_demag_gamma_hz`` to machine precision)
+    and preserves the correct qualitative k-dependence (the correction is scaled
+    by Nz rather than added as an offset, so it stays bounded in [0, Ms] and does
+    not go negative or diverge at large k).
+    """
     thickness = _nested(parameters, "geometry", "film_thickness_m")
     ms = _nested(parameters, "material", "Ms_A_per_m")
     aex = _nested(parameters, "material", "Aex_J_per_m")
@@ -549,24 +627,57 @@ def _kalinikos_frequency_hz(
     gamma0 = _nested(parameters, "material", "gamma0_m_per_A_s")
     bias_values = _nested(parameters, "bias_H_A_per_m")
     bias = bias_values[0] if isinstance(bias_values, list) and bias_values else None
-    if not all(_finite(value) for value in (k, thickness, ms, aex, mu0, gamma0, bias)):
+    if not all(_finite(value) for value in (k, thickness, ms, aex, mu0, gamma0, bias, sin_squared_phi)):
         return None
-    if geometry not in {"backward_volume", "damon_eshbach"} or k < 0.0:
+    if k < 0.0 or not (-1.0e-9 <= sin_squared_phi <= 1.0 + 1.0e-9):
         return None
+    nz = _finite_box_nz(parameters)
+    if nz is None:
+        return None
+    sin_squared_phi = min(max(sin_squared_phi, 0.0), 1.0)
     try:
-        return float(
-            kalinikos_slab_n0_frequency_hz(
-                k_norm=k,
-                geometry=geometry,
-                bias_field_a_per_m=float(bias),
-                film_thickness_m=float(thickness),
-                exchange_stiffness_j_per_m=float(aex),
-                saturation_magnetisation_a_per_m=float(ms),
-                gamma0_rad_s_per_a_m=float(gamma0),
-            )
-        )
-    except (ValueError, SystemExit):
+        p_factor = p00_demag_factor(float(k), float(thickness))
+    except ValueError:
         return None
+    exchange_field = 2.0 * float(aex) * float(k) * float(k) / (float(mu0) * float(ms))
+    common = float(bias) + exchange_field
+    angle_independent = common + float(ms) * nz * (1.0 - p_factor)
+    angle_dependent = common + float(ms) * p_factor * sin_squared_phi
+    if angle_independent <= 0.0 or angle_dependent <= 0.0:
+        return None
+    return float(gamma0) * math.sqrt(angle_independent * angle_dependent) / (2.0 * math.pi)
+
+
+def _sin_squared_phi_from_k_vector(vector: Sequence[float]) -> float | None:
+    """sin^2(phi) between an in-plane wavevector and the canonical x-aligned
+    equilibrium magnetization (validated elsewhere as [1, 0, 0]).  At k=0 the
+    angle is undefined but immaterial (both KS factors coincide with the
+    Kittel value regardless of phi), so 0.0 is returned.
+    """
+    if len(vector) != 3 or not all(_finite(value) for value in vector):
+        return None
+    kx, ky, kz = (float(value) for value in vector)
+    in_plane_scale = max(1.0, abs(kx), abs(ky))
+    if abs(kz) > 1.0e-8 * in_plane_scale:
+        return None
+    denominator = kx * kx + ky * ky
+    if denominator <= 0.0:
+        return 0.0
+    return (ky * ky) / denominator
+
+
+def _kalinikos_frequency_hz(
+    k: float,
+    geometry: str,
+    parameters: Mapping[str, Any],
+) -> float | None:
+    """Backward-compatible BV/DE dispatch, re-expressed as the two special
+    cases (phi=0, phi=pi/2) of :func:`_kalinikos_frequency_hz_general_phi` so
+    there is a single implementation of the underlying physics to maintain."""
+    if geometry not in {"backward_volume", "damon_eshbach"} or not _finite(k) or k < 0.0:
+        return None
+    sin_squared_phi = 0.0 if geometry == "backward_volume" else 1.0
+    return _kalinikos_frequency_hz_general_phi(k, sin_squared_phi, parameters)
 
 
 def _new_check(status: str, **values: Any) -> dict[str, Any]:
@@ -1093,6 +1204,90 @@ def _validate_kittel(
     )
 
 
+def _validate_dispersion_analytic_coverage(
+    case: str,
+    selected_branches: Sequence[Mapping[str, Any]],
+    expected_path: Mapping[int, tuple[float, float, float]],
+    parameters: Mapping[str, Any],
+    reasons: list[str],
+) -> dict[str, Any]:
+    """Compare EVERY canonical k-path sample's fundamental-branch frequency
+    against the Kalinikos-Slavin n=0 analytic oracle at that sample's actual
+    (possibly oblique) propagation angle.
+
+    Unlike ``_validate_ks`` (which only checks producer-supplied evidence
+    samples and can be satisfied by as few as two, from auxiliary runs), this
+    check has no external "evidence" dependency: it is self-contained and runs
+    against the PRIMARY qualified run's own dispersion.csv/branches.v2.json
+    data for every one of the EXPECTED_PATH_SAMPLE_COUNT (61) samples. A
+    solver whose dispersion is wrong or constant on any sample of the tracked
+    fundamental branch is caught here, regardless of what (if anything) a
+    producer chose to supply as separate KS evidence.
+
+    Only applicable to c1: c0 has a single Gamma sample (already covered by
+    the Kittel control) and a1's antidot lattice breaks the homogeneous-slab
+    analytic applicability (same restriction as ``_validate_kittel``).
+    """
+    if case != "c1":
+        return _new_check(
+            "not_applicable",
+            reason="the homogeneous slab KS oracle covers c1's full k-path only; c0 has one sample (Kittel) and a1's antidot breaks homogeneous-slab applicability",
+        )
+    initial_reason_count = len(reasons)
+    if not selected_branches:
+        reasons.append("dispersion analytic coverage has no selected fundamental branch")
+        return _new_check("fail")
+    fundamental = selected_branches[0]
+    points = fundamental.get("points")
+    point_map: dict[int, Mapping[str, Any]] = {
+        point["sample_index"]: point
+        for point in (points if isinstance(points, list) else [])
+        if isinstance(point, Mapping) and isinstance(point.get("sample_index"), int)
+    }
+    expected_indices = set(range(EXPECTED_PATH_SAMPLE_COUNT))
+    missing_samples = sorted(expected_indices - set(point_map))
+    if missing_samples:
+        reasons.append(f"dispersion analytic coverage is missing fundamental-branch samples {missing_samples}")
+    errors: list[tuple[int, float, float, float]] = []
+    for index in sorted(expected_indices & set(point_map)):
+        point = point_map[index]
+        vector = expected_path.get(index)
+        if vector is None:
+            reasons.append(f"dispersion analytic coverage sample {index} has no canonical k-vector")
+            continue
+        observed = point.get("frequency_real_hz", point.get("frequency_hz"))
+        if not _finite_positive(observed):
+            reasons.append(f"dispersion analytic coverage sample {index} has no finite positive fundamental-branch frequency")
+            continue
+        sin_squared_phi = _sin_squared_phi_from_k_vector(vector)
+        if sin_squared_phi is None:
+            reasons.append(f"dispersion analytic coverage sample {index} k-vector is not in-plane")
+            continue
+        k_actual = _vector_norm(vector)
+        expected = _kalinikos_frequency_hz_general_phi(k_actual, sin_squared_phi, parameters)
+        if not _finite_positive(expected):
+            reasons.append(f"dispersion analytic coverage sample {index} has no finite analytic reference")
+            continue
+        error = _relative_error(float(observed), float(expected))
+        errors.append((index, error, float(observed), float(expected)))
+        if error > KS_RELATIVE_TOLERANCE:
+            reasons.append(
+                f"dispersion analytic coverage sample {index} fundamental-branch frequency "
+                f"{float(observed):.6g} Hz deviates from the Kalinikos-Slavin n=0 prediction "
+                f"{float(expected):.6g} Hz by {error:.6g}, exceeds {KS_RELATIVE_TOLERANCE:.6g}"
+            )
+    worst = max(errors, key=lambda item: item[1], default=None)
+    complete = not missing_samples and len(errors) == EXPECTED_PATH_SAMPLE_COUNT
+    return _new_check(
+        "pass" if len(reasons) == initial_reason_count and complete else "fail",
+        sample_count=len(errors),
+        expected_sample_count=EXPECTED_PATH_SAMPLE_COUNT,
+        tolerance=KS_RELATIVE_TOLERANCE,
+        max_relative_error=worst[1] if worst else None,
+        max_error_sample_index=worst[0] if worst else None,
+    )
+
+
 def _safe_relative_path(case_dir: Path, value: object, label: str, reasons: list[str]) -> Path | None:
     if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
         reasons.append(f"{label} is not a safe relative path")
@@ -1489,12 +1684,57 @@ def _measure_ks_profile(run, sample_index, branch_id, vector, parameters, label,
     return result
 
 
+def _require_matching_evidence_cell_geometry(
+    primary_metadata: Mapping[str, Any] | None,
+    run_metadata: Mapping[str, Any] | None,
+    label: str,
+    reasons: list[str],
+) -> None:
+    """Reject an auxiliary evidence run whose in-plane simulation cell differs
+    from the primary qualified run's own cell.
+
+    Without this, an auxiliary run from a DIFFERENT physical system (a
+    different lattice period, hence a different k-path) could be silently
+    accepted as Kalinikos-Slavin evidence for an unrelated primary run: only
+    material/thickness/airbox were checked against the canonical parameters,
+    never the in-plane cell size against the primary run being qualified.
+    """
+    if not isinstance(primary_metadata, Mapping) or not isinstance(run_metadata, Mapping):
+        reasons.append(f"{label} cannot bind evidence cell geometry to the primary run (missing metadata)")
+        return
+    primary_benchmark = _metadata_benchmark_block(primary_metadata)
+    run_benchmark = _metadata_benchmark_block(run_metadata)
+    if not isinstance(primary_benchmark, Mapping) or not isinstance(run_benchmark, Mapping):
+        reasons.append(f"{label} cannot bind evidence cell geometry to the primary run (missing benchmark metadata)")
+        return
+    primary_geometry = primary_benchmark.get("geometry")
+    run_geometry = run_benchmark.get("geometry")
+    if not isinstance(primary_geometry, Mapping) or not isinstance(run_geometry, Mapping):
+        reasons.append(f"{label} cannot bind evidence cell geometry to the primary run (missing geometry block)")
+        return
+    primary_size = primary_geometry.get("film_size_m")
+    run_size = run_geometry.get("film_size_m")
+    if not isinstance(primary_size, list) or len(primary_size) != 3 or not isinstance(run_size, list) or len(run_size) != 3:
+        reasons.append(f"{label} cannot bind evidence cell geometry to the primary run (missing film_size_m)")
+        return
+    for axis, name in ((0, "x"), (1, "y")):
+        _require_metadata_number(
+            run_size[axis],
+            primary_size[axis],
+            f"{label}.geometry.film_size_m[{name}] (in-plane simulation cell size)",
+            reasons,
+            tolerance=1.0e-8,
+        )
+
+
 def _validate_ks(
     case_dir: Path,
     case: str,
     evidence: Mapping[str, Any] | None,
     parameters: Mapping[str, Any],
     reasons: list[str],
+    *,
+    primary_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if case != "c1":
         return _new_check("not_applicable", reason="the homogeneous slab KS control is applicable to c1 only")
@@ -1527,6 +1767,12 @@ def _validate_ks(
             run,
             f"Kalinikos–Slavin sample {index}",
             parameters,
+            reasons,
+        )
+        _require_matching_evidence_cell_geometry(
+            primary_metadata,
+            run.get("metadata"),
+            f"Kalinikos–Slavin sample {index}",
             reasons,
         )
         sample_index = sample.get("sample_index")
@@ -2102,7 +2348,11 @@ def validate_case(
             evidence = None
     evidence_check = _validate_evidence_binding(case_dir, evidence, artifacts, case, reasons)
     kittel_check = _validate_kittel(case, selected_branches, parameters or {}, reasons) if parameters else _new_check("missing")
-    ks_check = _validate_ks(case_dir, case, evidence, parameters or {}, reasons) if parameters else _new_check("missing")
+    ks_check = _validate_ks(case_dir, case, evidence, parameters or {}, reasons, primary_metadata=metadata or None) if parameters else _new_check("missing")
+    dispersion_analytic_check = (
+        _validate_dispersion_analytic_coverage(case, selected_branches, expected_path, parameters or {}, reasons)
+        if parameters else _new_check("missing")
+    )
     convergence = {
         key: _validate_convergence(
             case_dir,
@@ -2143,6 +2393,7 @@ def validate_case(
             "dispersion_csv": csv_check,
             "kittel": kittel_check,
             "kalinikos_slab_n0": ks_check,
+            "dispersion_analytic_coverage": dispersion_analytic_check,
             "mesh_convergence": convergence["mesh"],
             "airbox_convergence": convergence["airbox"],
             "mode_count_convergence": convergence["mode_count"],

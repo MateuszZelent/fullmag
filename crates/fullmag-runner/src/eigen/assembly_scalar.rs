@@ -104,33 +104,54 @@ pub fn apply_reference_bloch_shift(
     }
 }
 
+/// Self-contained fallback solver for the reference scalar-projected
+/// generalized eigenproblem `K x = lambda M x`.
+///
+/// Per audit finding (2026-09-15 eigensolve-dispersion-correctness audit),
+/// this function previously formed `M^-1 * K` (not symmetric in general,
+/// even when `M` and `K` are) and fed it to `nalgebra::SymmetricEigen`,
+/// which only reads one triangle of its input and therefore silently
+/// produces wrong results for a non-symmetric matrix; it also silently
+/// substituted an identity matrix whenever `M` was singular. Both issues are
+/// unambiguously unsafe regardless of whether this function has callers, so
+/// this now uses the same Cholesky-congruence reduction already used
+/// correctly for the same class of problem in
+/// `crate::fem::eigen_solve::solve_real_symmetric_eigenpairs`: factor
+/// `M = L * L^T`, form the symmetric matrix `L^-1 * K * L^-T`, eigendecompose
+/// that with `SymmetricEigen`, then transform eigenvectors back via `L^-T`.
+/// If `M` is not positive-definite (Cholesky fails), or its Cholesky factor
+/// is singular, this now returns an explicit error instead of silently
+/// substituting an identity matrix.
 pub fn solve_dense_reference_modes(
     operator: &AssembledScalarOperator,
     count: usize,
-) -> Vec<(f64, DVector<f64>)> {
+) -> Result<Vec<(f64, DVector<f64>)>, String> {
     if operator.dimension() == 0 || count == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    // Transitional dense path:
-    // In the current repo the production logic already uses dense LAPACK /
-    // cuSolver wrappers. This helper is intentionally simple and acts as a
-    // self-contained fallback for refactoring and tests.
-    let mass_inv = operator
-        .mass
-        .clone()
-        .try_inverse()
-        .unwrap_or_else(|| DMatrix::identity(operator.dimension(), operator.dimension()));
-    let effective = mass_inv * operator.stiffness.clone();
-    let eig = SymmetricEigen::new(effective);
+    let cholesky = operator.mass.clone().cholesky().ok_or_else(|| {
+        "solve_dense_reference_modes: mass matrix is not positive-definite (Cholesky failed); \
+         refusing to silently substitute an identity matrix"
+            .to_string()
+    })?;
+    let l = cholesky.l();
+    let l_inv = l.clone().try_inverse().ok_or_else(|| {
+        "solve_dense_reference_modes: failed to invert mass matrix Cholesky factor".to_string()
+    })?;
+    let transformed = &l_inv * operator.stiffness.clone() * l_inv.transpose();
+    let eig = SymmetricEigen::new(transformed);
     let mut pairs: Vec<(f64, DVector<f64>)> = eig
         .eigenvalues
         .iter()
         .enumerate()
-        .map(|(i, value)| (*value, eig.eigenvectors.column(i).into_owned()))
+        .map(|(i, value)| {
+            let lifted = l_inv.transpose() * eig.eigenvectors.column(i).into_owned();
+            (*value, lifted)
+        })
         .collect();
-    pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
     pairs.truncate(count);
-    pairs
+    Ok(pairs)
 }
 
 #[cfg(test)]

@@ -983,6 +983,17 @@ pub(crate) fn solve_native_driven_frequency_response(
     solve_native_driven_frequency_response_impl(request)
 }
 
+/// Absolute threshold, in rad/m, below which a k-vector component is
+/// treated as exactly zero for Gamma-point classification.
+///
+/// This must match the looser threshold already used by the rest of the
+/// runner's Floquet/k-path guards (`eigen_path_guards.rs`, `1.0e-12`)
+/// rather than `f64::EPSILON` (~2.22e-16), so a k-path sample is classified
+/// as Gamma consistently across the codebase instead of only here being far
+/// stricter and treating tiny (but numerically-zero-in-practice) residual
+/// k-components as nonzero.
+const GAMMA_POINT_K_COMPONENT_ABS_TOLERANCE_RAD_PER_M: f64 = 1.0e-12;
+
 #[allow(dead_code)]
 pub(crate) fn solve_native_modal_eigen(
     request: NativeModalEigenRequest<'_>,
@@ -992,9 +1003,11 @@ pub(crate) fn solve_native_modal_eigen(
         NativeModalExecutionTarget::ProductionCpu
     ) && request.include_demag
         && request.spin_wave_bc_kind == "floquet"
-        && request
-            .k_vector_rad_m
-            .is_some_and(|values| values.iter().any(|value| value.abs() > f64::EPSILON))
+        && request.k_vector_rad_m.is_some_and(|values| {
+            values
+                .iter()
+                .any(|value| value.abs() > GAMMA_POINT_K_COMPONENT_ABS_TOLERANCE_RAD_PER_M)
+        })
         && request.shared_domain_problem.is_some()
         && request.mfem_operator_problem.is_some();
     let production_shared_domain_required = matches!(
@@ -1002,9 +1015,11 @@ pub(crate) fn solve_native_modal_eigen(
         NativeModalExecutionTarget::ProductionCpu | NativeModalExecutionTarget::ProductionGpu
     ) && request.include_demag
         && request.spin_wave_bc_kind == "periodic"
-        && request
-            .k_vector_rad_m
-            .is_none_or(|values| values.iter().all(|value| value.abs() <= f64::EPSILON));
+        && request.k_vector_rad_m.is_none_or(|values| {
+            values
+                .iter()
+                .all(|value| value.abs() <= GAMMA_POINT_K_COMPONENT_ABS_TOLERANCE_RAD_PER_M)
+        });
     validate_native_modal_request_payload_ownership_with_provider(
         request.execution_target,
         production_shared_domain_required,

@@ -711,6 +711,10 @@ FrequencyDomainStatus assemble_floquet_airbox_dynamic_demag_k(
             problem.workspace_budget_bytes)) {
         return fail(out_result, "Floquet airbox dynamic demag-k materialization exceeds its workspace budget");
     }
+    if (!std::isfinite(problem.qphi_feedback_scale) ||
+        problem.qphi_feedback_scale == 0.0) {
+        return fail(out_result, "Floquet airbox reciprocal q-phi feedback scale must be finite and nonzero");
+    }
 
     try {
         const int full_phi = static_cast<int>(full_phi_from_operator);
@@ -793,7 +797,8 @@ FrequencyDomainStatus assemble_floquet_airbox_dynamic_demag_k(
         for (std::uint64_t row = 0; row < q; ++row) {
             for (std::uint64_t column = 0; column < reduced_phi; ++column) {
                 a_qphi[static_cast<std::size_t>(row * reduced_phi + column)] = std::conj(
-                    a_phiq[static_cast<std::size_t>(column * q + row)]);
+                    a_phiq[static_cast<std::size_t>(column * q + row)]) *
+                    problem.qphi_feedback_scale;
             }
         }
 

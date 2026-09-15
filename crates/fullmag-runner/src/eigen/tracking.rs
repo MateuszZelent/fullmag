@@ -71,31 +71,79 @@ fn normalized_complex_overlap(a: &[Complex64], b: &[Complex64]) -> Option<f64> {
     overlap.is_finite().then(|| overlap.clamp(0.0, 1.0))
 }
 
+/// Fixed number of tangent (Cartesian) components stored per mesh node in a
+/// mode-tracking `reduced_vector`. This must be a known constant rather than
+/// inferred as `a.len() / weights_a.len()`: with the mismatched indexing
+/// described in audit finding H1 (`reduced_vector` covers every mesh node,
+/// `node_mass_weights` covers only active nodes), that division can
+/// coincidentally come out even and silently pair a weight with the wrong
+/// node's DOFs, producing a wrong overlap value with no diagnostic at all.
+/// Requiring an exact `a.len() == weights_a.len() * TRACKING_VECTOR_COMPONENTS_PER_NODE`
+/// relationship instead turns that silent-wrong-answer failure mode into a
+/// clean, detectable `MassWeightedOverlapOutcome::LengthMismatch`.
+pub(crate) const TRACKING_VECTOR_COMPONENTS_PER_NODE: usize = 3;
+
+/// Outcome of attempting to compute a mass-weighted modal overlap between
+/// two tracking vectors (audit finding H1).
+///
+/// This is deliberately richer than `Option<f64>`: a genuine index/length
+/// mismatch between an artifact's `reduced_vector` (full mesh-node order)
+/// and its `node_mass_weights` (today, active-node order only -- see the
+/// module-level note near `modal_overlap_views`) is evidence of a real data
+/// problem, not merely "no mass metric was supplied", and callers must be
+/// able to tell the two apart instead of silently mislabeling one as the
+/// other.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum MassWeightedOverlapOutcome {
+    /// A mass-weighted overlap value was actually computed.
+    Computed(f64),
+    /// Both sides carried a `reduced_vector` and `node_mass_weights`, but
+    /// their lengths were inconsistent with the fixed
+    /// `TRACKING_VECTOR_COMPONENTS_PER_NODE`-per-node layout (e.g. modes
+    /// from incompatible mesh reductions, or -- currently the common case in
+    /// production, see audit finding H1 -- `node_mass_weights` published in
+    /// active-node order while `reduced_vector` is published in full
+    /// mesh-node order).
+    LengthMismatch,
+    /// The mass metric could not be evaluated for another reason: empty
+    /// input, non-finite entries, or a node whose weight does not agree
+    /// between the two sides within tolerance. This is an unavailable
+    /// physical metric; callers must not silently replace it with an
+    /// unweighted overlap.
+    NotComputable,
+}
+
 /// Compute the normalized modal overlap in the FE mass metric when the
-/// solver supplied one positive weight for every active node.  The tracking
-/// vectors contain the same number of per-node components as the lifted mode
-/// representation (three Cartesian components for the native FEM path), so
-/// the component count is inferred from the vector length.  Returning
-/// `None` keeps the Euclidean overlap as an explicit compatibility fallback
-/// for legacy artifacts and reduced vectors without an aligned mass metric.
-fn normalized_mass_weighted_complex_overlap(
+/// solver supplied one weight per active node.  See
+/// `TRACKING_VECTOR_COMPONENTS_PER_NODE` for why the per-node component
+/// count is a fixed constant rather than inferred from the input lengths.
+///
+/// A weight of exactly `0.0` on both sides is treated as an explicit
+/// "inactive / padding" sentinel for that node (skipped, not counted as a
+/// failure): this lets a future `node_mass_weights` representation that is
+/// broadcast to the full mesh-node count with `0.0` for inactive nodes (see
+/// audit finding H1, option (b)) be handled without change here, while a
+/// node considered active by either side must still have a strictly
+/// positive, mutually agreeing weight on both sides.
+pub(crate) fn mass_weighted_overlap_outcome(
     a: &[Complex64],
     b: &[Complex64],
     weights_a: &[f64],
     weights_b: &[f64],
-) -> Option<f64> {
-    if a.is_empty()
-        || b.is_empty()
-        || a.len() != b.len()
-        || weights_a.is_empty()
-        || weights_a.len() != weights_b.len()
-        || a.len() % weights_a.len() != 0
-    {
-        return None;
+) -> MassWeightedOverlapOutcome {
+    use MassWeightedOverlapOutcome::{Computed, LengthMismatch, NotComputable};
+
+    if a.is_empty() || b.is_empty() || weights_a.is_empty() || weights_b.is_empty() {
+        return NotComputable;
     }
-    let components_per_node = a.len() / weights_a.len();
-    if components_per_node == 0 {
-        return None;
+    let expected_vector_len = weights_a
+        .len()
+        .checked_mul(TRACKING_VECTOR_COMPONENTS_PER_NODE);
+    if a.len() != b.len()
+        || weights_a.len() != weights_b.len()
+        || expected_vector_len != Some(a.len())
+    {
+        return LengthMismatch;
     }
 
     let mut scale_a = 0.0_f64;
@@ -103,13 +151,13 @@ fn normalized_mass_weighted_complex_overlap(
     for (lhs, rhs) in a.iter().zip(b) {
         if !lhs.re.is_finite() || !lhs.im.is_finite() || !rhs.re.is_finite() || !rhs.im.is_finite()
         {
-            return None;
+            return NotComputable;
         }
         scale_a = scale_a.max(lhs.norm());
         scale_b = scale_b.max(rhs.norm());
     }
     if !(scale_a.is_finite() && scale_a > 0.0 && scale_b.is_finite() && scale_b > 0.0) {
-        return None;
+        return NotComputable;
     }
 
     let mut numerator = Complex64::new(0.0, 0.0);
@@ -118,18 +166,26 @@ fn normalized_mass_weighted_complex_overlap(
     for node in 0..weights_a.len() {
         let weight_a = weights_a[node];
         let weight_b = weights_b[node];
-        if !(weight_a.is_finite() && weight_b.is_finite() && weight_a > 0.0 && weight_b > 0.0) {
-            return None;
+        if !(weight_a.is_finite() && weight_b.is_finite()) {
+            return NotComputable;
+        }
+        if weight_a == 0.0 && weight_b == 0.0 {
+            // Explicit inactive/padding sentinel on both sides: this node
+            // contributes nothing to the overlap.
+            continue;
+        }
+        if !(weight_a > 0.0 && weight_b > 0.0) {
+            return NotComputable;
         }
         // A mode pair is comparable only when both artifacts describe the
         // same FE metric.  Do not silently average or otherwise alter a
         // mismatched mass diagonal.
         if (weight_a - weight_b).abs() > 1.0e-12 * weight_a.max(weight_b) {
-            return None;
+            return NotComputable;
         }
         let weight = 0.5 * (weight_a + weight_b);
-        let start = node * components_per_node;
-        for component in 0..components_per_node {
+        let start = node * TRACKING_VECTOR_COMPONENTS_PER_NODE;
+        for component in 0..TRACKING_VECTOR_COMPONENTS_PER_NODE {
             let lhs = a[start + component] / scale_a;
             let rhs = b[start + component] / scale_b;
             numerator += weight * lhs.conj() * rhs;
@@ -145,11 +201,15 @@ fn normalized_mass_weighted_complex_overlap(
         && numerator.re.is_finite()
         && numerator.im.is_finite())
     {
-        return None;
+        return NotComputable;
     }
 
     let overlap = numerator.norm() / denominator;
-    overlap.is_finite().then(|| overlap.clamp(0.0, 1.0))
+    if overlap.is_finite() {
+        Computed(overlap.clamp(0.0, 1.0))
+    } else {
+        NotComputable
+    }
 }
 
 fn complex_overlap(a: &[Complex64], b: &[Complex64]) -> f64 {
@@ -195,11 +255,21 @@ fn modal_overlap_views(
 ) -> Option<f64> {
     match (prev.reduced_vector, current.reduced_vector) {
         (Some(a), Some(b)) => match (prev.node_mass_weights, current.node_mass_weights) {
-            (Some(weights_a), Some(weights_b)) => {
-                normalized_mass_weighted_complex_overlap(a, b, weights_a, weights_b)
-                    .or_else(|| normalized_complex_overlap(a, b))
-            }
-            _ => normalized_complex_overlap(a, b),
+            (Some(weights_a), Some(weights_b)) => match mass_weighted_overlap_outcome(
+                a,
+                b,
+                weights_a,
+                weights_b,
+            ) {
+                MassWeightedOverlapOutcome::Computed(value) => Some(value),
+                MassWeightedOverlapOutcome::LengthMismatch
+                | MassWeightedOverlapOutcome::NotComputable => None,
+            },
+            (None, None) => normalized_complex_overlap(a, b),
+            // A mass metric present on only one side cannot be compared
+            // physically. Do not hide the asymmetric artifact contract by
+            // silently switching this edge to an unweighted overlap.
+            (Some(_), None) | (None, Some(_)) => None,
         },
         _ => None,
     }
@@ -1666,7 +1736,7 @@ mod tests {
     }
 
     #[test]
-    fn modal_overlap_falls_back_to_euclidean_for_unaligned_mass_metadata() {
+    fn modal_overlap_rejects_unaligned_mass_metadata_without_euclidean_fallback() {
         let mut previous = mode(0, 1.0, [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)]);
         let mut current = previous.clone();
         previous.reduced_vector = Some(vec![
@@ -1684,7 +1754,41 @@ mod tests {
         previous.node_mass_weights = Some(vec![1.0, 2.0, 3.0]);
         current.node_mass_weights = Some(vec![1.0, 2.0]);
 
-        assert!((modal_overlap(&previous, &current).unwrap() - 1.0).abs() < 1.0e-12);
+        assert_eq!(
+            mass_weighted_overlap_outcome(
+                previous.reduced_vector.as_ref().unwrap(),
+                current.reduced_vector.as_ref().unwrap(),
+                previous.node_mass_weights.as_ref().unwrap(),
+                current.node_mass_weights.as_ref().unwrap(),
+            ),
+            MassWeightedOverlapOutcome::LengthMismatch
+        );
+        assert!(modal_overlap(&previous, &current).is_none());
+        let cfg = ModeTrackingIR {
+            method: ModeTrackingMethodIR::OverlapHungarian,
+            frequency_window_hz: None,
+            overlap_floor: 0.5,
+            max_branch_gap: 0,
+        };
+        assert!(tracking_edge_score(&previous, &current, &cfg).is_none());
+    }
+
+    #[test]
+    fn modal_overlap_rejects_asymmetric_mass_metadata() {
+        let mut previous = mode(0, 1.0, [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)]);
+        let mut current = previous.clone();
+        previous.reduced_vector = Some(vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ]);
+        current.reduced_vector = previous.reduced_vector.clone();
+        previous.node_mass_weights = Some(vec![1.0, 1.0]);
+
+        assert!(modal_overlap(&previous, &current).is_none());
     }
 
     #[test]

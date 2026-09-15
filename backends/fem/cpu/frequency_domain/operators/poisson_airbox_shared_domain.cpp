@@ -3235,6 +3235,18 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
             out_result->status = FrequencyDomainStatus::operator_error;
             return out_result->status;
         }
+        // The demag Schur complement D = -A_qphi * P^-1 * A_phiq must be a
+        // positive semidefinite representation of the magnetostatic
+        // self-energy.  complex_csr_conjugate_transpose only produces the
+        // bare adjoint A_phiq^H; the reciprocal feedback block additionally
+        // carries a -mu0 factor (matching the k=0 lane's
+        // -mu0 * ms / gamma0 * torque_projection assembly above, where the
+        // -gamma0 in torque_projection cancels against the 1/gamma0 in that
+        // product, leaving -mu0), so apply it explicitly here:
+        // A_qphi = -mu0 * A_phiq^H.
+        for (auto &value : a_qphi.values) {
+            value *= Complex(-request.mu0_T_m_A, 0.0);
+        }
         out_result->floquet_a_qphi = std::move(a_qphi);
         if (out_result->floquet_a_qq.row_count == 0u ||
             out_result->floquet_b_qq.row_count == 0u ||
@@ -3254,12 +3266,60 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         }
         out_result->floquet_sparse_operator_ready = true;
 
+        if (boundary_kind == PoissonAirboxBoundaryKind::pure_neumann) {
+            // P_red(k) = C(k)^H P_full(k) C(k) is exactly singular at k=0
+            // and becomes numerically ill-conditioned (condition number
+            // growing like 1/(|k|*L)^2) as |k| -> 0 for a pure-Neumann
+            // boundary, because the constant-potential null space is only
+            // suppressed by the periodic phase factor to order |k|*L.  The
+            // downstream require_invertible factorization uses a fixed
+            // pivot tolerance (see floquet_dynamic_demag_k.cpp /
+            // floquet_waveguide_demag_k.cpp), so silently proceeding here
+            // would produce numerically meaningless results instead of
+            // failing.  Fail closed instead of attempting a k-aware gauge
+            // construction, which is out of scope here.
+            mfem::Vector floquet_bb_min;
+            mfem::Vector floquet_bb_max;
+            mesh->GetBoundingBox(floquet_bb_min, floquet_bb_max);
+            double floquet_characteristic_length = 0.0;
+            for (int axis = 0; axis < mesh->Dimension(); ++axis) {
+                floquet_characteristic_length = std::max(
+                    floquet_characteristic_length,
+                    floquet_bb_max(axis) - floquet_bb_min(axis));
+            }
+            const double floquet_k_magnitude = std::sqrt(
+                (*floquet_k_rad_per_m)[0] * (*floquet_k_rad_per_m)[0] +
+                (*floquet_k_rad_per_m)[1] * (*floquet_k_rad_per_m)[1] +
+                (*floquet_k_rad_per_m)[2] * (*floquet_k_rad_per_m)[2]);
+            constexpr double kMinimumPureNeumannKTimesLength = 1.0e-3;
+            if (!std::isfinite(floquet_characteristic_length) ||
+                !(floquet_characteristic_length > 0.0) ||
+                !std::isfinite(floquet_k_magnitude) ||
+                !(floquet_k_magnitude * floquet_characteristic_length >
+                  kMinimumPureNeumannKTimesLength)) {
+                copy_error(
+                    out_result->error_message,
+                    "pure_neumann Floquet gauge is ill-conditioned for k close to "
+                    "zero (k*L below safe threshold); use a Dirichlet or Robin "
+                    "boundary for small-k dispersion points, or increase |k|");
+                out_result->status = FrequencyDomainStatus::validation_error;
+                return out_result->status;
+            }
+            // phi_mean_weights above is the k=0 integral(N_i) dV gauge
+            // weight populated by the real k=0 pure-Neumann null-space
+            // projection a few hundred lines earlier; it does not describe
+            // the Floquet/nonzero-k null space and must not be threaded
+            // through into this Floquet result as if it did.
+            out_result->phi_mean_weights.clear();
+        }
+
         FloquetAirboxDynamicDemagKProblem floquet_problem{};
         floquet_problem.scalar_operator = floquet_blocks.scalar_operator.get();
         floquet_problem.scalar_constraint = floquet_blocks.scalar_constraint.get();
         floquet_problem.tangent_source = floquet_blocks.tangent_source.get();
         floquet_problem.tangent_constraint = floquet_blocks.tangent_constraint.get();
         floquet_problem.k_rad_per_m = *floquet_k_rad_per_m;
+        floquet_problem.qphi_feedback_scale = -request.mu0_T_m_A;
         floquet_problem.gauge_policy = FloquetDynamicDemagKGaugePolicy::require_invertible;
         floquet_problem.workspace_budget_bytes = 256ull * 1024ull * 1024ull;
         if (materialize_dense_floquet) {

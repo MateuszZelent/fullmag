@@ -974,7 +974,7 @@ fn select_k0_kittel_gpu_field_eigenvalue(
             let rhs = target_field
                 .map(|target| (*right - target).abs())
                 .unwrap_or(*right);
-            lhs.partial_cmp(&rhs).unwrap_or(std::cmp::Ordering::Equal)
+            lhs.total_cmp(&rhs)
         })
         .ok_or_else(|| RunError {
             message:
@@ -1624,8 +1624,20 @@ pub(super) fn execute_fem_eigen_inner(
                 norm,
             )
         };
+        if !eigenvalue_real.is_finite() || eigenvalue_real < 0.0 {
+            // A negative or non-finite eigenvalue indicates a non-minimum
+            // equilibrium (an unstable/soft mode, or an unconverged
+            // relaxation), never a legitimate zero-frequency acoustic mode.
+            // `sort_and_truncate_{real,complex}_modes` in eigen_solve.rs
+            // already reject these before this loop runs; this guard is
+            // defense-in-depth so a fabricated 0 Hz mode can never be
+            // published even if that upstream invariant is ever violated
+            // (audit finding H7).
+            continue;
+        }
         let angular_frequency_real =
-            angular_frequency_from_eigenvalue(plan.gyromagnetic_ratio, eigenvalue_real);
+            angular_frequency_from_eigenvalue(plan.gyromagnetic_ratio, eigenvalue_real)
+                .expect("eigenvalue_real validated non-negative and finite above");
         let angular_frequency_imag = if eigenvalue_imag.abs() > 0.0 {
             angular_frequency_from_raw_eigenvalue(plan.gyromagnetic_ratio, eigenvalue_imag)
         } else {
