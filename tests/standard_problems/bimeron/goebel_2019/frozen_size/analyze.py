@@ -779,7 +779,12 @@ def _convergence_diagnostics(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _runtime_provenance(metadata: dict[str, Any]) -> dict[str, Any]:
+def _runtime_provenance(
+    metadata: dict[str, Any],
+    *,
+    root: Path | None = None,
+    workspace_root: Path | None = None,
+) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key in (
         "requested_execution",
@@ -793,6 +798,35 @@ def _runtime_provenance(metadata: dict[str, Any]) -> dict[str, Any]:
             value = _find_nested(metadata, key)
         if value is not None:
             result[key] = value
+    # A profile ends with a finite ``constrained_hold`` stage so that the
+    # energy and frozen-reference drift can be measured.  The runtime's
+    # terminal metadata therefore describes that measurement stage, whose
+    # completion is naturally ``converged=false`` even when the preceding
+    # constrained relaxation stopped on the torque tolerance.  Use the
+    # constrained relaxation completion as the convergence provenance while
+    # preserving the terminal completion for auditability.
+    terminal_completion = result.get("completion")
+    if root is not None:
+        for stage_root in _stage_roots_for(root, workspace_root):
+            candidate = stage_root / "metadata.json"
+            if not candidate.is_file():
+                continue
+            try:
+                stage_metadata = json.loads(candidate.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            active_stage_id = _find_nested(stage_metadata, "active_stage_id")
+            if active_stage_id != "constrained_relax":
+                continue
+            stage_completion = stage_metadata.get("completion")
+            if not isinstance(stage_completion, dict):
+                stage_completion = _find_nested(stage_metadata, "completion")
+            if isinstance(stage_completion, dict):
+                if isinstance(terminal_completion, dict):
+                    result["terminal_completion"] = terminal_completion
+                result["completion"] = stage_completion
+                result["completion_source"] = "constrained_relax"
+            break
     return result
 
 
@@ -884,7 +918,11 @@ def analyze_case(
         "stage_energy": stage_energy,
         "profile_energy": {**profile_energy, "stage_id": profile_stage_id},
         "convergence_diagnostics": _convergence_diagnostics(rows),
-        "runtime_provenance": _runtime_provenance(metadata),
+        "runtime_provenance": _runtime_provenance(
+            metadata,
+            root=root,
+            workspace_root=workspace_root,
+        ),
         "frozen_runtime": frozen_runtime,
         "states": states,
         "source_metadata_present": metadata_path is not None,

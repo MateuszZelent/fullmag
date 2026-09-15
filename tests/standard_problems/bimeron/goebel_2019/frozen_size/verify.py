@@ -129,7 +129,10 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
     cell_nm = protocol.get("cell_nm", 0.5)
     radius_error = None
     radius_tolerance = None
-    if _finite(target_radius) and _finite(measured_radius):
+    # P0 is the one-time free-relaxation control.  Its purpose is to measure
+    # the natural equilibrium radius, so comparing it with the requested seed
+    # radius would incorrectly turn the control into a profile point.
+    if name != "p0" and _finite(target_radius) and _finite(measured_radius):
         radius_error = abs(float(measured_radius) - float(target_radius))
         radius_tolerance = max(0.5 * float(cell_nm), 0.02 * float(target_radius))
         if radius_error > radius_tolerance:
