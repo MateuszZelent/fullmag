@@ -174,7 +174,14 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
             warnings.append("energy_window_not_stable_before_convergence")
     energy_window_relative_to_excess = None
     profile_delta = profile_energy.get("delta_E_to_background_J")
-    if _finite(energy_window_relative) and _finite(profile_delta):
+    energy_window_span = convergence.get("energy_window_span_J")
+    if _finite(energy_window_span) and _finite(profile_delta):
+        energy_window_relative_to_excess = float(energy_window_span) / max(
+            abs(float(profile_delta)), float(thresholds.get("minimum_excess_energy_scale_J", 1e-21))
+        )
+    elif _finite(energy_window_relative) and _finite(profile_delta):
+        # Keep compatibility with older summaries that only recorded the
+        # relative span.  New runs always take the direct span branch above.
         minimum_scale = float(thresholds.get("minimum_excess_energy_scale_J", 1e-21))
         energy_window_relative_to_excess = float(energy_window_relative) * max(
             abs(float(profile_energy.get("E_total_J") or 0.0)), 1e-30
