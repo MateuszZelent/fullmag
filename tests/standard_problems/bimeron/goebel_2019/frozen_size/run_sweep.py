@@ -46,6 +46,8 @@ THRESHOLDS_REL = Path("tests/standard_problems/bimeron/goebel_2019/frozen_size/t
 # diagnostic protocols, but mixing their different constraints into the
 # default profile would make one curve protocol-dependent.
 DEFAULT_PROFILE_PROTOCOLS = ("ring",)
+CONTROL_TARGET_R_NM = 3.0
+CONTROL_WALL_WIDTH_NM = 3.0
 
 
 def _repo_root() -> Path:
@@ -115,8 +117,17 @@ def _targets(series: str) -> list[tuple[float, float]]:
 def _case_matrix(args: argparse.Namespace) -> list[dict[str, Any]]:
     protocols = [item.strip().lower() for item in args.protocols.split(",") if item.strip()]
     result: list[dict[str, Any]] = []
-    for target_nm, wall_nm in _targets(args.series):
-        for protocol in protocols:
+    target_pairs = _targets(args.series)
+    for protocol in protocols:
+        # P0 is a one-time material/background control.  Never expand it over
+        # the requested R grid: a free relaxation cannot preserve each seeded
+        # radius and would only repeat the same basin search.
+        protocol_targets = (
+            [(CONTROL_TARGET_R_NM, CONTROL_WALL_WIDTH_NM)]
+            if protocol == "p0"
+            else target_pairs
+        )
+        for target_nm, wall_nm in protocol_targets:
             case_id = _label(target_nm, wall_nm, protocol, args.cell_nm, args.pin_radius_nm)
             result.append(
                 {
@@ -831,7 +842,7 @@ def main() -> int:
         default=",".join(DEFAULT_PROFILE_PROTOCOLS),
         help=(
             "comma-separated constrained protocols for the size profile; "
-            "run --protocols p0 separately for the one-time free-relaxation control"
+            "p0 is always reduced to one R=3 nm, w_seed=3 nm free-relaxation control"
         ),
     )
     parser.add_argument("--device", choices=("cpu", "gpu"), default=os.environ.get("FULLMAG_BIMERON_DEVICE", "gpu"))
