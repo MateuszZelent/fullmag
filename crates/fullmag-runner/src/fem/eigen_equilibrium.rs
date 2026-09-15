@@ -21,6 +21,14 @@ use fullmag_engine::MaterialParameters;
 use fullmag_engine::TimeIntegrator;
 use fullmag_engine::Vector3;
 
+// The relaxation producer and the modal consumer evaluate the same static
+// fields through different native code paths.  A pure absolute tolerance
+// rejects otherwise identical fields once the applied field is large, while a
+// pure relative tolerance is unsafe around a zero field.  Keep both terms
+// explicit so the handoff contract remains auditable in SI units.
+const FIELD_HANDOFF_ABS_TOL_A_PER_M: f64 = 1.0e-8;
+const FIELD_HANDOFF_REL_TOL: f64 = 1.0e-12;
+
 fn max_vector_field_difference_on_magnetic_nodes(
     left: &[Vector3],
     right: &[Vector3],
@@ -39,6 +47,45 @@ fn max_vector_field_difference_on_magnetic_nodes(
                 .fold(0.0, f64::max)
         })
         .reduce(f64::max)
+}
+
+fn max_vector_field_amplitude(left: &[Vector3], right: &[Vector3]) -> Option<f64> {
+    if left.len() != right.len() {
+        return None;
+    }
+    Some(
+        left.iter()
+            .chain(right)
+            .flat_map(|field| field.iter().copied())
+            .map(f64::abs)
+            .fold(0.0, f64::max),
+    )
+}
+
+fn max_vector_field_amplitude_on_magnetic_nodes(
+    left: &[Vector3],
+    right: &[Vector3],
+    magnetic_node_volumes: &[f64],
+) -> Option<f64> {
+    if left.len() != right.len() || left.len() != magnetic_node_volumes.len() {
+        return None;
+    }
+    Some(
+        left.iter()
+            .zip(right)
+            .zip(magnetic_node_volumes)
+            .filter(|(_, volume)| **volume > 0.0)
+            .flat_map(|((left, right), _)| left.iter().chain(right).copied())
+            .map(f64::abs)
+            .fold(0.0, f64::max),
+    )
+}
+
+fn field_handoff_tolerance(scale_a_per_m: f64) -> Option<f64> {
+    if !scale_a_per_m.is_finite() {
+        return None;
+    }
+    Some(FIELD_HANDOFF_ABS_TOL_A_PER_M + FIELD_HANDOFF_REL_TOL * scale_a_per_m.max(1.0))
 }
 use fullmag_ir::EquilibriumSourceIR;
 use fullmag_ir::FemEigenPlanIR;
@@ -377,10 +424,22 @@ pub(super) fn materialize_equilibrium(
                         ),
                     }
                 })?;
-                if !difference.is_finite() || difference > 1.0e-8 {
+                let scale = max_vector_field_amplitude(accepted, recomputed).ok_or_else(|| {
+                    RunError {
+                        message: format!(
+                            "relax_stage_handoff_{label}_recompute_mismatch: accepted and recomputed field shapes differ"
+                        ),
+                    }
+                })?;
+                let tolerance = field_handoff_tolerance(scale).ok_or_else(|| RunError {
+                    message: format!(
+                        "relax_stage_handoff_{label}_recompute_mismatch: accepted/recomputed field scale is not finite"
+                    ),
+                })?;
+                if !difference.is_finite() || difference > tolerance {
                     return Err(RunError {
                         message: format!(
-                            "relax_stage_handoff_{label}_recompute_mismatch: accepted/recomputed maximum difference {difference:.3e} exceeds 1.000e-8 A/m"
+                            "relax_stage_handoff_{label}_recompute_mismatch: accepted/recomputed maximum difference {difference:.3e} exceeds tolerance {tolerance:.3e} A/m (field scale {scale:.3e} A/m)"
                         ),
                     });
                 }
@@ -399,10 +458,21 @@ pub(super) fn materialize_equilibrium(
         .ok_or_else(|| RunError {
             message: "relax_stage_handoff_h_ext0_recompute_mismatch: accepted and recomputed field shapes differ or the mesh has no magnetic nodes".to_string(),
         })?;
-        if !h_ext_difference.is_finite() || h_ext_difference > 1.0e-8 {
+        let h_ext_scale = max_vector_field_amplitude_on_magnetic_nodes(
+            &handoff.certified_fields.h_ext_a_per_m,
+            &observables.external_field,
+            &magnetic_node_volumes,
+        )
+        .ok_or_else(|| RunError {
+            message: "relax_stage_handoff_h_ext0_recompute_mismatch: accepted and recomputed field shapes differ or the mesh has no magnetic nodes".to_string(),
+        })?;
+        let h_ext_tolerance = field_handoff_tolerance(h_ext_scale).ok_or_else(|| RunError {
+            message: "relax_stage_handoff_h_ext0_recompute_mismatch: accepted/recomputed field scale is not finite".to_string(),
+        })?;
+        if !h_ext_difference.is_finite() || h_ext_difference > h_ext_tolerance {
             return Err(RunError {
                 message: format!(
-                    "relax_stage_handoff_h_ext0_recompute_mismatch: accepted/recomputed maximum magnetic-node difference {h_ext_difference:.3e} exceeds 1.000e-8 A/m"
+                    "relax_stage_handoff_h_ext0_recompute_mismatch: accepted/recomputed maximum magnetic-node difference {h_ext_difference:.3e} exceeds tolerance {h_ext_tolerance:.3e} A/m (field scale {h_ext_scale:.3e} A/m)"
                 ),
             });
         }
