@@ -612,6 +612,16 @@ FrequencyDomainStatus assemble_floquet_airbox_shared_domain_blocks(
             return FrequencyDomainStatus::validation_error;
         }
 
+        // ComplexSparseMatrix returned by SesquilinearForm is a non-owning
+        // view of the form's real/imaginary sparse matrices.  Move every
+        // owner together with the view; moving only operator_matrix would
+        // leave both that view and its coefficient references dangling when
+        // scalar_result goes out of scope.
+        out_result->scalar_k_squared_coefficient =
+            std::move(scalar_result.k_squared_coefficient);
+        out_result->scalar_k_coefficient = std::move(scalar_result.k_coefficient);
+        out_result->scalar_robin_coefficient = std::move(scalar_result.robin_coefficient);
+        out_result->scalar_form = std::move(scalar_result.form);
         out_result->scalar_operator = std::move(scalar_result.operator_matrix);
         out_result->scalar_constraint = std::move(scalar_constraint_result.constraint_matrix);
         out_result->tangent_source = std::move(source_result.source_matrix);

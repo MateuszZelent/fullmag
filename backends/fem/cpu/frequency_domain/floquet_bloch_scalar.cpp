@@ -141,27 +141,32 @@ FrequencyDomainStatus assemble_floquet_bloch_scalar_operator(
     try {
         const bool shifted_envelope =
             request.representation == FloquetBlochScalarRepresentation::shifted_envelope;
-        mfem::ConstantCoefficient k_squared_coefficient(k_squared);
-        mfem::VectorConstantCoefficient k_coefficient(k_vector);
-        mfem::ConstantCoefficient robin_coefficient(request.robin_beta);
+        out_result->k_squared_coefficient =
+            std::make_unique<mfem::ConstantCoefficient>(k_squared);
+        out_result->k_coefficient =
+            std::make_unique<mfem::VectorConstantCoefficient>(k_vector);
+        if (request.robin_beta > 0.0) {
+            out_result->robin_coefficient =
+                std::make_unique<mfem::ConstantCoefficient>(request.robin_beta);
+        }
         out_result->form = std::make_unique<mfem::SesquilinearForm>(
             request.scalar_space,
             mfem::ComplexOperator::HERMITIAN);
         out_result->form->AddDomainIntegrator(new mfem::DiffusionIntegrator(), nullptr);
         if (shifted_envelope && k_squared > 0.0) {
             out_result->form->AddDomainIntegrator(
-                new mfem::MassIntegrator(k_squared_coefficient),
+                new mfem::MassIntegrator(*out_result->k_squared_coefficient),
                 nullptr);
             out_result->form->AddDomainIntegrator(
                 nullptr,
-                new mfem::ConvectionIntegrator(k_coefficient));
+                new mfem::ConvectionIntegrator(*out_result->k_coefficient));
             out_result->form->AddDomainIntegrator(
                 nullptr,
-                new mfem::ConservativeConvectionIntegrator(k_coefficient));
+                new mfem::ConservativeConvectionIntegrator(*out_result->k_coefficient));
         }
         if (request.robin_beta > 0.0) {
             out_result->form->AddBoundaryIntegrator(
-                new mfem::BoundaryMassIntegrator(robin_coefficient),
+                new mfem::BoundaryMassIntegrator(*out_result->robin_coefficient),
                 nullptr,
                 *request.robin_boundary_marker);
         }

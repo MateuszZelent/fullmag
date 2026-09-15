@@ -38,6 +38,13 @@ struct FloquetBlochScalarAssemblyRequest {
 };
 
 struct FloquetBlochScalarAssemblyResult {
+    // The MFEM integrators retain references to these coefficients.  They
+    // therefore have to outlive the assembled form and the sparse matrix
+    // view returned from that form.  Keep the coefficient owners in the
+    // result so moving the result does not leave dangling references.
+    std::unique_ptr<mfem::ConstantCoefficient> k_squared_coefficient{};
+    std::unique_ptr<mfem::VectorConstantCoefficient> k_coefficient{};
+    std::unique_ptr<mfem::ConstantCoefficient> robin_coefficient{};
     std::unique_ptr<mfem::SesquilinearForm> form{};
     std::unique_ptr<mfem::ComplexSparseMatrix> operator_matrix{};
 };

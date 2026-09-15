@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace fullmag::fem::frequency_domain {
@@ -76,6 +77,13 @@ struct FloquetAirboxSharedDomainBlockRequest {
 };
 
 struct FloquetAirboxSharedDomainBlockResult {
+    // The scalar sparse matrix borrows storage owned by the MFEM form, and
+    // its integrators borrow the coefficient objects below.  Keep all owners
+    // with the block result for the entire lifetime of the Schur solve.
+    std::unique_ptr<mfem::ConstantCoefficient> scalar_k_squared_coefficient{};
+    std::unique_ptr<mfem::VectorConstantCoefficient> scalar_k_coefficient{};
+    std::unique_ptr<mfem::ConstantCoefficient> scalar_robin_coefficient{};
+    std::unique_ptr<mfem::SesquilinearForm> scalar_form{};
     std::unique_ptr<mfem::ComplexSparseMatrix> scalar_operator{};
     std::unique_ptr<mfem::ComplexSparseMatrix> scalar_constraint{};
     std::unique_ptr<mfem::ComplexSparseMatrix> tangent_source{};
