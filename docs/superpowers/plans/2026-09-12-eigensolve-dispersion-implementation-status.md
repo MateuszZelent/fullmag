@@ -5,8 +5,9 @@
 
 Bieżący checkout to worktree `eigensolve-dispersion-plan-20260912`, branch
 `codex/eigensolve-dispersion-plan-20260912`, HEAD
-`d7676ac1f6f43a114675746a2c2d9ae7afe54d22`. Worktree jest czysty; branch ma
-cztery lokalne commity ponad `origin/codex/eigensolve-dispersion-plan-20260912`.
+`d7676ac1f6f43a114675746a2c2d9ae7afe54d22`. Worktree jest czysty przed tym
+checkpointem; branch ma lokalne commity ponad
+`origin/codex/eigensolve-dispersion-plan-20260912`.
 Poniższa tabela opisuje aktualny snapshot, a dalsze sekcje zachowują historię.
 
 | Zakres | Stan źródła | Aktualny dowód / ograniczenie |
