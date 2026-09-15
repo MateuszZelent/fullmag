@@ -419,6 +419,12 @@ bool cancel_requested(const ModalEigenRequest &request) noexcept
 
 std::string format_double(double value) noexcept
 {
+    // JSON has no NaN/Infinity literals. A failed or incomplete modal solve
+    // may leave a diagnostic quantity non-finite; encode that state as null
+    // so the scientific finite-value gate can reject it explicitly.
+    if (!std::isfinite(value)) {
+        return "null";
+    }
     char buffer[64]{};
     const int written = std::snprintf(buffer, sizeof(buffer), "%.17g", value);
     if (written <= 0 || static_cast<std::size_t>(written) >= sizeof(buffer)) {
@@ -2496,13 +2502,13 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             ",\"augmented_phi_dof_count\":" +
             std::to_string(augmented_phi_dof_count) +
             ",\"frequency_hz\":" +
-            std::to_string(poisson_result.frequency_hz) +
+            format_double(poisson_result.frequency_hz) +
             ",\"omega_rad_s\":" +
-            std::to_string(poisson_result.omega_rad_s) +
+            format_double(poisson_result.omega_rad_s) +
             ",\"poisson_constraint_relative_residual\":" +
-            std::to_string(poisson_result.poisson_constraint_relative_residual) +
+            format_double(poisson_result.poisson_constraint_relative_residual) +
             ",\"relative_reference_frequency_error\":" +
-            std::to_string(poisson_result.relative_reference_frequency_error) +
+            format_double(poisson_result.relative_reference_frequency_error) +
             ",\"periodic_mesh_certificate\":{\"schema_version\":\"" +
             std::string(request.poisson_airbox_periodic_mesh_certificate_schema != nullptr
                             ? request.poisson_airbox_periodic_mesh_certificate_schema
