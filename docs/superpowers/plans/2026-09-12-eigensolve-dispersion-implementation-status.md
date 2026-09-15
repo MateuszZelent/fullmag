@@ -1,14 +1,13 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
 
-## Aktualizacja po pierwszej natywnej próbie C0 i korekcie kontraktu — 2026-09-15
+## Aktualizacja po uruchomieniu natywnego C0 i osłonach skalowania — 2026-09-15
 
 Aktualny checkout to worktree `eigensolve-dispersion-plan-20260912`, branch
 `codex/eigensolve-dispersion-plan-20260912`, HEAD
-`be546257895a89733f6ce81162fc1f4073a5fb6a`. Commit jest wypchnięty na
-`origin`; bieżąca aktualizacja checkpointu jest jedyną zmianą roboczą.
-Wcześniejsze SHA, joby i wyniki
-pozostają historią; poniższy wpis opisuje bieżący kontrakt i najnowsze dowody.
+`82e726b13`. Branch jest wypchnięty na `origin`. Wcześniejsze SHA, joby i wyniki
+pozostają historią; poniższy wpis opisuje aktualny kod i najnowsze dowody
+wykonania.
 
 | Zakres audytu | Stan źródła | Dowód wykonania / ograniczenie |
 |---|---|---|
@@ -16,14 +15,14 @@ pozostają historią; poniższy wpis opisuje bieżący kontrakt i najnowsze dowo
 | Stabilność `P00` przy `k→0` | Python i Rust używają wspólnego schematu Taylor + `expm1`; bramka sprawdza ciągłość częstości, nie tylko współczynnika. | Dowód źródłowy/testy kontraktowe; brak zakończonej kampanii FEM. |
 | Zakres C1 | Planner nie narzuca już stałych `3e6 rad/m` ani `5 GHz`; zakres wynika z metadanych i sprawdzanej stosowalności modelu. | C1 nadal wymaga rzeczywistych próbek i zgodności z analityką w dozwolonym zakresie. |
 | Bramka naukowa | Runner wywołuje walidator scientific gate; wymaga pełnych przypadków C0/C1/A1, ścieżki 61 próbek, ośmiu gałęzi, pól, Kittel/KS i zbieżności. | Status pozostaje `NOT VERIFIED`, dopóki nie ma kompletnych wyników. |
-| Polityka solvera/telemetria | Adapter publikuje rzeczywiste limity z callbacku; początkowe `max_iterations` pozostaje `None`, zamiast stałej `300`. Polityka PETSc jest jawnie opisana. | Weryfikacja managed runtime i pomiar skalowania pozostają otwarte. |
-| Kontrakt modalny C0 | C0 żąda jednego modu i eksportuje jeden tryb w próbce Γ; C1/A1 zachowują 24 żądane mody i osiem pasm w próbkach kontrolnych. | `tests/.../test_contract.py`: 12 passed; commit `be5462578`. |
-| Pierwszy managed C0 | Build `7776c9b90d364df3a25f3397f7a35da5` zakończył się poprawnie. Natywny solve użył `fem_cpu_native`, 614806 tetraedrów i 108668 węzłów; relaksacja i wejście w SLEPc przeszły. Eksport zakończył się błędem `requested mode 5 has no legacy payload artifact for Cartesian field export`, bo stary kontrakt żądał ośmiu pól dla C0. | `run-result.json` ma `status=failed`, `qualification=NOT VERIFIED`; nie ma kwalifikowanej częstotliwości ani wykresu. |
-| Bieżący managed C0 | Job `8ac963aa3c9a4d90940c7c1b95317240` buduje runtime z HEAD `be5462578`, source digest `1e739f62…`, po czym uruchomi C0 z jednym modem. | Job jest `running`; trzeba uzyskać terminalny receipt i zweryfikować artefakty przed raportem częstotliwości. |
+| Polityka solvera/telemetria | Adapter publikuje rzeczywiste limity z callbacku; początkowe `max_iterations` pozostaje `None`, zamiast stałej `300`. Polityka PETSc jest jawnie opisana. | Weryfikacja managed runtime z bieżącym HEAD i pomiar skalowania pozostają otwarte. |
+| Transport operatora | Runner zachowuje macierze do rekonstrukcji modalnej, ale przekazuje także jawny CSR; duża diagnostyka gęsta jest pomijana i raportuje `skipped_large_operator`. | Commity `c69c16b7` i `82e726b1`; wymagany jest nowy managed build i wynik runtime. |
+| Ostatni managed build | Job `56a8e337581144899a91d90274d43ee5` zakończył się `succeeded` dla profilu `fem-cpu-slepc-runtime-v1`, lecz źródło receiptu to wcześniejszy commit `20d6ae76`; wynik kwalifikuje tylko build, nie fizykę. | Nie jest dowodem dla HEAD `82e726b13`. |
+| Bieżący managed C0 | Run `03066685758b414b820531c15dd8f807`, przypadek C0, używa runtime z joba `56a8e337...`; kontener jest żywy i natywny SLEPc raportował postęp do kroku 30. | Brak terminalnego receiptu i artefaktów widma; należy dokończyć ten przebieg albo, po jego terminalnym stanie, uruchomić nowy build z bieżącego HEAD. |
 
-Pierwsza próba potwierdziła, że natywny pipeline dochodzi do solvera, ale nie
-zamknęła bramki naukowej. Dopiero bieżący przebieg może dostarczyć pierwszą
-zweryfikowaną częstotliwość; C1/A1 i wykres dyspersji nadal pozostają otwarte.
+Pierwszy aktualny przebieg potwierdza wejście do natywnego solvera, ale nie
+zamknął jeszcze etapu zapisu artefaktów. C0 jest tylko kontrolą w punkcie Γ;
+C1/A1, pełna ścieżka 61 próbek i wykres dyspersji nadal pozostają otwarte.
 
 
 ## Bieżący checkpoint po poprawce ciągłości częstotliwości — 2026-09-14
