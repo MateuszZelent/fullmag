@@ -8,6 +8,7 @@ import pytest
 
 from tests.standard_problems.bimeron.goebel_2019.frozen_size.analyze import (
     _constrained_metric_row,
+    _grid_from_metadata,
     analyze_case,
 )
 
@@ -99,6 +100,31 @@ def test_analyzer_reads_managed_stage_layout_and_resolved_grid(tmp_path: Path) -
     assert result["states"]["final"]["measurement"]["max_unit_norm_defect"] == pytest.approx(math.sqrt(2.0) - 1.0)
     assert result["states"]["final"]["measurement"]["R_area_uncertainty_nm"] == 0.25
     assert result["convergence_diagnostics"]["sample_count"] == 1
+
+
+def test_analyzer_uses_workspace_grid_when_run_metadata_is_not_ready(tmp_path: Path) -> None:
+    root = tmp_path / "case"
+    workspace = tmp_path / "workspace"
+    _write_json(
+        workspace / "stages" / "stage_01_flat_relax" / "metadata.json",
+        {
+            "execution_plan": {
+                "backend_plan": {
+                    "grid": {"cells": [8, 4, 1]},
+                    "cell_size": [2.5e-10, 2.5e-10, 5e-10],
+                }
+            }
+        },
+    )
+
+    assert _grid_from_metadata(root, workspace_root=workspace) == (
+        8,
+        4,
+        1,
+        2.5e-10,
+        2.5e-10,
+        5e-10,
+    )
 
 
 def test_analyzer_uses_resolved_static_mask_when_trace_omits_counts(tmp_path: Path) -> None:

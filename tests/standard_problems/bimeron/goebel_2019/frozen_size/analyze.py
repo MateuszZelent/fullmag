@@ -263,11 +263,22 @@ def _state_quality(values: Sequence[Sequence[float]]) -> dict[str, Any]:
     }
 
 
-def _grid_from_metadata(root: Path, fallback_cell_nm: float = 0.5) -> tuple[int, int, int, float, float, float]:
+def _grid_from_metadata(
+    root: Path,
+    fallback_cell_nm: float = 0.5,
+    workspace_root: Path | None = None,
+) -> tuple[int, int, int, float, float, float]:
     metadata_path = root / "metadata.json"
     metadata: Any = {}
     if metadata_path.is_file():
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    elif workspace_root is not None:
+        # Interactive runs may be interrupted after the runtime history has
+        # been written but before the run directory receives its own metadata.
+        # Use that authoritative stage metadata instead of assuming the
+        # baseline 0.5 nm cube (which would incorrectly add a second film
+        # layer to the h=0.25 nm in-plane refinement).
+        metadata, _ = _metadata_for_root(workspace_root)
     execution_plan = _find_nested(metadata, "execution_plan") or {}
     plan = execution_plan.get("backend_plan") if isinstance(execution_plan, dict) else None
     if not isinstance(plan, dict):
@@ -980,7 +991,11 @@ def analyze_case(
             else "constrained_hold"
         )
     cell_nm = _number(protocol.get("cell_nm")) if isinstance(protocol, dict) else None
-    nx, ny, nz, hx, hy, hz = _grid_from_metadata(root, cell_nm or fallback_cell_nm)
+    nx, ny, nz, hx, hy, hz = _grid_from_metadata(
+        root,
+        cell_nm or fallback_cell_nm,
+        workspace_root=workspace_root,
+    )
     rows = _trace_rows(root, workspace_root)
     final_row = _last_row(rows)
     energy = _energy_from_row(final_row)
