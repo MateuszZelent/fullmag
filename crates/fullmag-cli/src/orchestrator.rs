@@ -1405,7 +1405,10 @@ impl LiveProgressCadence {
 }
 
 fn has_heavy_live_payload(update: &fullmag_runner::StepUpdate) -> bool {
-    update.magnetization.is_some()
+    let live_magnetization_disabled = crate::live_workspace::feature_flags()
+        .disable_live_magnetization
+        && !update.finished;
+    (!live_magnetization_disabled && update.magnetization.is_some())
         || update.preview_field.is_some()
         || update
             .cached_preview_fields
