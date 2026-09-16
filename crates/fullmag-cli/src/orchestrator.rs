@@ -1604,6 +1604,9 @@ fn apply_live_step_update_to_workspace_state(
         "running".to_string()
     };
     state.run = running_run_manifest_from_update(run_id, session_id, artifact_dir, &update);
+    let disable_live_magnetization = crate::live_workspace::feature_flags()
+        .disable_live_magnetization
+        && !update.finished;
     let previous_magnetization = state.live_state.latest_step.magnetization.take();
     let previous_fem_mesh_generation_id =
         state.live_state.latest_step.fem_mesh_generation_id.take();
@@ -1634,9 +1637,16 @@ fn apply_live_step_update_to_workspace_state(
         finished: update.finished,
     };
     state.live_state = live_state_manifest_from_update(update);
+    if disable_live_magnetization {
+        // Large-grid runs do not need a full m vector in every control-plane
+        // frame. Keep the authoritative saved states and terminal artifacts,
+        // but remove the expensive live carrier after bootstrap.
+        state.latest_fields.0.remove("m");
+    }
     if state.live_state.latest_step.magnetization.is_none()
         && !incoming_has_magnetization
         && !incoming_has_magnetization_preview
+        && !disable_live_magnetization
     {
         state.live_state.latest_step.magnetization = previous_magnetization;
     }
@@ -1674,6 +1684,10 @@ fn ingest_magnetization_field_from_update(
     state: &mut LocalLiveWorkspaceState,
     update: &mut fullmag_runner::StepUpdate,
 ) -> bool {
+    if crate::live_workspace::feature_flags().disable_live_magnetization && !update.finished {
+        update.magnetization = None;
+        return false;
+    }
     let Some(values) = update.magnetization.take() else {
         return false;
     };
