@@ -30,6 +30,7 @@ from tests.standard_problems.bimeron.goebel_2019.frozen_size.common import (
     DEFAULT_RELAX_TOL_T,
     DEFAULT_RING_WIDTH_NM,
     DEFAULT_WALL_WIDTH_NM,
+    material_from_environment,
     preset_radius_for_contour,
 )
 from tests.standard_problems.bimeron.goebel_2019.frozen_size.report import (
@@ -166,6 +167,7 @@ def _assert_within(path: Path, root: Path) -> Path:
 
 
 def _environment(case: dict[str, Any], args: argparse.Namespace) -> dict[str, str]:
+    material = material_from_environment().metadata()
     environment = {
         "FULLMAG_STORAGE_PROFILE": PROFILE,
         "FULLMAG_BIMERON_DEVICE": args.device,
@@ -198,6 +200,10 @@ def _environment(case: dict[str, Any], args: argparse.Namespace) -> dict[str, st
         "FULLMAG_BIMERON_RELAX_ALGORITHM": os.environ.get(
             "FULLMAG_BIMERON_RELAX_ALGORITHM", "llg_overdamped"
         ),
+        "FULLMAG_BIMERON_MSAT_A_PER_M": str(material["Ms_Apm"]),
+        "FULLMAG_BIMERON_AEX_J_PER_M": str(material["Aex_Jpm"]),
+        "FULLMAG_BIMERON_D_J_PER_M2": str(material["D_Jpm2"]),
+        "FULLMAG_BIMERON_KU_J_PER_M3": str(material["Ku_Jpm3"]),
     }
     pin_centres = case.get("pin_centres_nm")
     environment["FULLMAG_BIMERON_PIN_CENTRES_NM"] = (

@@ -67,6 +67,41 @@ def _env_int(name: str, default: int) -> int:
     return value
 
 
+@dataclass(frozen=True)
+class MaterialParameters:
+    """Material values used by one frozen-size experiment run.
+
+    The published Göbel values remain the defaults.  Environment overrides are
+    deliberately scoped to this experiment so a parameter-screening run can
+    carry its exact physical inputs in the runtime metadata.
+    """
+
+    msat_Apm: float
+    aex_Jpm: float
+    d_Jpm2: float
+    ku_Jpm3: float
+
+    def metadata(self) -> dict[str, float]:
+        return {
+            "Ms_Apm": self.msat_Apm,
+            "Aex_Jpm": self.aex_Jpm,
+            "D_Jpm2": self.d_Jpm2,
+            "Ku_Jpm3": self.ku_Jpm3,
+        }
+
+
+def material_from_environment() -> MaterialParameters:
+    values = MaterialParameters(
+        msat_Apm=_env_float("FULLMAG_BIMERON_MSAT_A_PER_M", MS),
+        aex_Jpm=_env_float("FULLMAG_BIMERON_AEX_J_PER_M", AEX),
+        d_Jpm2=_env_float("FULLMAG_BIMERON_D_J_PER_M2", D_ROTATED),
+        ku_Jpm3=_env_float("FULLMAG_BIMERON_KU_J_PER_M3", KU_X),
+    )
+    if any(value <= 0.0 for value in (values.msat_Apm, values.aex_Jpm, values.d_Jpm2, values.ku_Jpm3)):
+        raise ValueError("Ms, Aex, D, and Ku overrides must be positive")
+    return values
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
