@@ -42,6 +42,9 @@ oddziela spełnienie kontraktu od ostrzeżeń i oznacza limit czasu/kroków jako
 `not_converged`. `profile_summary.json` zachowuje pełną strukturę wyników,
 `profile_energy.csv` udostępnia płaską tabelę `R -> E`, a `report.py` generuje
 `profile_report.md` bez łączenia niezaakceptowanych punktów gładką krzywą.
+Jednorazowy wynik wolnej relaksacji można dołączyć do raportu przez
+`report.py profile_summary.json --free-reference <free-analysis.json>`; jest
+wtedy pokazany jako osobny punkt kontrolny, a nie kolejny punkt sweepu.
 Runtime frozen-spins v1 publikuje `max_torque_Apm` jako maksimum po wolnych
 stopniach swobody; analizator mapuje tę wartość do `free_torque_metric` i
 przelicza ją na tesle. Jeżeli nie ma kontraktowo zgodnej metryki, wynik
