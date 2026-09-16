@@ -12,6 +12,14 @@ maski, dwóm pinom przy analitycznych ekstremach `m_z`, dwóm pinom z pinem
 centralnym oraz cienkiemu pierścieniowi wokół konturu. Wszystkie piny obejmują
 pełną grubość filmu i nie dodają sztucznej energii karnej.
 
+Domyślny algorytm `constrained_relax` to `llg_overdamped`. Do szybkiego
+testu diagnostycznego można jawnie ustawić
+`FULLMAG_BIMERON_RELAX_ALGORITHM=projected_gradient_bb` (skrót: `bb`). Dla
+tego wariantu czas fizyczny relaksacji jest pomijany, a limit stanowią kroki
+algorytmu. Wynik jest oznaczony jako diagnostyczny do czasu osobnego,
+zarządzanego receipt potwierdzającego pełną ścieżkę FrozenSpins dla PG-BB;
+nie należy łączyć go automatycznie z kwalifikowaną krzywą LLG.
+
 Najpierw wyświetl macierz:
 
 ```text

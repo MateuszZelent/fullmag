@@ -33,6 +33,16 @@ CASE: FrozenCase = case_from_environment()
 REQUESTED_DEVICE = os.environ.get("FULLMAG_BIMERON_DEVICE", "gpu").strip().lower()
 if REQUESTED_DEVICE not in {"cpu", "gpu"}:
     raise ValueError("FULLMAG_BIMERON_DEVICE must be cpu or gpu")
+RELAX_ALGORITHM = os.environ.get(
+    "FULLMAG_BIMERON_RELAX_ALGORITHM", "llg_overdamped"
+).strip().lower()
+RELAX_ALGORITHM = {"bb": "projected_gradient_bb"}.get(
+    RELAX_ALGORITHM, RELAX_ALGORITHM
+)
+if RELAX_ALGORITHM not in {"llg_overdamped", "projected_gradient_bb"}:
+    raise ValueError(
+        "FULLMAG_BIMERON_RELAX_ALGORITHM must be llg_overdamped or projected_gradient_bb"
+    )
 
 study = fm.study("goebel_2019_bimeron_frozen_size_fdm")
 study.engine("fdm")
@@ -66,10 +76,12 @@ fm.runtime_metadata(
         "source_scenario": "tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py",
         "texture_preset": "bimeron",
         "same_rDMI_parameters": True,
-        "relaxation_algorithm": "llg_overdamped",
+        "relaxation_algorithm": RELAX_ALGORITHM,
         "relaxation_tolerance_T": CASE.relax_tol_T,
         "relaxation_algorithm_status": (
-            "qualified_for_frozen_spins_cuda_strict;"
+            "qualified_for_frozen_spins_cuda_strict"
+            if RELAX_ALGORITHM == "llg_overdamped"
+            else "diagnostic_only;"
             "projected_gradient_bb_requires_separate_native_receipt_qualification"
         ),
         "profile_energy_stage": "constrained_hold",
@@ -154,16 +166,20 @@ study.stages.add_save_state(
     dataset="m",
 )
 
-relax = study.stages.add_relax(
-    stage_id="constrained_relax",
-    algorithm="llg_overdamped",
-    solver="rk45",
-    dt=CASE.dt_s,
-    max_steps=CASE.relax_max_steps,
-    max_physical_time_s=CASE.relax_time_s,
-    tolT=CASE.relax_tol_T,
-    constraints=CONSTRAINTS,
-)
+relax_kwargs: dict[str, object] = {
+    "stage_id": "constrained_relax",
+    "algorithm": RELAX_ALGORITHM,
+    "max_steps": CASE.relax_max_steps,
+    "tolT": CASE.relax_tol_T,
+    "constraints": CONSTRAINTS,
+}
+if RELAX_ALGORITHM == "llg_overdamped":
+    relax_kwargs.update(
+        solver="rk45",
+        dt=CASE.dt_s,
+        max_physical_time_s=CASE.relax_time_s,
+    )
+relax = study.stages.add_relax(**relax_kwargs)
 relax.autosave(
     fm.StageAutosave(
         target="constrained",
