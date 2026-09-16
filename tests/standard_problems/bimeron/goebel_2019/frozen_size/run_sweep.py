@@ -197,6 +197,9 @@ def _environment(case: dict[str, Any], args: argparse.Namespace) -> dict[str, st
         "FULLMAG_BIMERON_DT_S": str(
             os.environ.get("FULLMAG_BIMERON_DT_S", str(DEFAULT_DT_S))
         ),
+        "FULLMAG_BIMERON_ALPHA": str(
+            os.environ.get("FULLMAG_BIMERON_ALPHA", str(ALPHA))
+        ),
         "FULLMAG_BIMERON_RELAX_ALGORITHM": os.environ.get(
             "FULLMAG_BIMERON_RELAX_ALGORITHM", "llg_overdamped"
         ),

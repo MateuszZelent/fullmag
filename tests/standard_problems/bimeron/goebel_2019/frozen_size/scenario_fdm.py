@@ -18,9 +18,9 @@ import os
 import fullmag as fm
 
 from tests.standard_problems.bimeron.goebel_2019.frozen_size.common import (
-    ALPHA,
     TRACK_SIZE,
     FrozenCase,
+    alpha_from_environment,
     case_from_environment,
     material_from_environment,
 )
@@ -28,6 +28,7 @@ from tests.standard_problems.bimeron.goebel_2019.frozen_size.common import (
 
 CASE: FrozenCase = case_from_environment()
 MATERIAL = material_from_environment()
+RELAX_ALPHA = alpha_from_environment()
 REQUESTED_DEVICE = os.environ.get("FULLMAG_BIMERON_DEVICE", "gpu").strip().lower()
 if REQUESTED_DEVICE not in {"cpu", "gpu"}:
     raise ValueError("FULLMAG_BIMERON_DEVICE must be cpu or gpu")
@@ -52,7 +53,7 @@ study.pbc(x=True, demag="truncated_images")
 film = study.geometry(fm.Box(size=TRACK_SIZE, name="film"), name="film")
 film.Ms = MATERIAL.msat_Apm
 film.Aex = MATERIAL.aex_Jpm
-film.alpha = ALPHA
+film.alpha = RELAX_ALPHA
 film.Ku1 = MATERIAL.ku_Jpm3
 film.anisU = (1.0, 0.0, 0.0)
 film.m = fm.texture.bimeron(
@@ -75,6 +76,7 @@ fm.runtime_metadata(
         "texture_preset": "bimeron",
         "same_rDMI_parameters": True,
         "relaxation_algorithm": RELAX_ALGORITHM,
+        "alpha": RELAX_ALPHA,
         "relaxation_tolerance_T": CASE.relax_tol_T,
         "relaxation_algorithm_status": (
             "qualified_for_frozen_spins_cuda_strict"

@@ -41,6 +41,7 @@ DEFAULT_RELAX_TIME_S = RELAX_TIME
 DEFAULT_HOLD_TIME_S = HOLD_TIME
 DEFAULT_RELEASE_TIME_S = 2e-11
 DEFAULT_DT_S = LLG_DT
+DEFAULT_ALPHA = ALPHA
 DEFAULT_RELAX_TOL_T = 1e-5
 DEFAULT_RELAX_MAX_STEPS = RELAX_MAX_STEPS
 DEFAULT_RELEASE_MAX_STEPS = 8000
@@ -100,6 +101,15 @@ def material_from_environment() -> MaterialParameters:
     if any(value <= 0.0 for value in (values.msat_Apm, values.aex_Jpm, values.d_Jpm2, values.ku_Jpm3)):
         raise ValueError("Ms, Aex, D, and Ku overrides must be positive")
     return values
+
+
+def alpha_from_environment() -> float:
+    """Return the damping used by this experiment's time-domain relaxation."""
+
+    value = _env_float("FULLMAG_BIMERON_ALPHA", DEFAULT_ALPHA)
+    if value <= 0.0:
+        raise ValueError("FULLMAG_BIMERON_ALPHA must be positive")
+    return value
 
 
 def _env_bool(name: str, default: bool = False) -> bool:

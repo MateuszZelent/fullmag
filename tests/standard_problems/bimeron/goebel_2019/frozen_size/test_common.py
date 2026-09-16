@@ -5,6 +5,7 @@ import math
 import pytest
 
 from tests.standard_problems.bimeron.goebel_2019.frozen_size.common import (
+    alpha_from_environment,
     contour_radius_from_preset,
     discrete_core_centres_m,
     material_from_environment,
@@ -71,3 +72,14 @@ def test_material_overrides_reject_non_positive(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("FULLMAG_BIMERON_KU_J_PER_M3", "0")
     with pytest.raises(ValueError, match="must be positive"):
         material_from_environment()
+
+
+def test_alpha_override_is_explicit_and_positive(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FULLMAG_BIMERON_ALPHA", "1.0")
+    assert alpha_from_environment() == 1.0
+
+
+def test_alpha_override_rejects_non_positive(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FULLMAG_BIMERON_ALPHA", "0")
+    with pytest.raises(ValueError, match="must be positive"):
+        alpha_from_environment()
