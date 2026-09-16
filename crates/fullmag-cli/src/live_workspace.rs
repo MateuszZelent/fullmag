@@ -5221,6 +5221,7 @@ fn current_live_publisher_loop(
     wake_rx: mpsc::Receiver<()>,
 ) {
     const LIVENESS_HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+    let configured_publish_interval = configured_live_publish_interval();
     let mut last_publish_at: Option<Instant> = None;
     let mut successful_publish_window = SuccessfulPublishWindow::default();
     let mut slow_publish_count: u64 = 0;
@@ -5248,11 +5249,13 @@ fn current_live_publisher_loop(
             if owner_session_lost(&session_id, enable_api_fallback) {
                 return;
             }
-            let min_interval = if fast_mode.load(Ordering::Acquire) {
-                LIVE_PUBLISH_FAST_INTERVAL
-            } else {
-                LIVE_PUBLISH_MIN_INTERVAL
-            };
+            let min_interval = configured_publish_interval.unwrap_or_else(|| {
+                if fast_mode.load(Ordering::Acquire) {
+                    LIVE_PUBLISH_FAST_INTERVAL
+                } else {
+                    LIVE_PUBLISH_MIN_INTERVAL
+                }
+            });
             if let Some(last_publish_at) = last_publish_at {
                 let elapsed = last_publish_at.elapsed();
                 if elapsed < min_interval {
@@ -5451,6 +5454,15 @@ fn current_live_publisher_loop(
             eprintln!("fullmag final live scalar sync warning: {error:#}");
         }
     }
+}
+
+/// Allow large interactive runs to trade update frequency for solver throughput.
+/// The default communication policy remains unchanged; an explicit positive
+/// millisecond value is required to opt in to a slower UI publication cadence.
+fn configured_live_publish_interval() -> Option<std::time::Duration> {
+    let value = std::env::var("FULLMAG_LIVE_PUBLISH_INTERVAL_MS").ok()?;
+    let millis = value.trim().parse::<u64>().ok()?;
+    (millis > 0).then(|| std::time::Duration::from_millis(millis))
 }
 
 fn owner_session_lost(session_id: &str, enabled: bool) -> bool {
