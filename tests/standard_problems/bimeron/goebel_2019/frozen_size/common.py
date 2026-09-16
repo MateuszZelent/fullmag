@@ -265,8 +265,16 @@ class FrozenCase:
 
     @property
     def cell_m(self) -> tuple[float, float, float]:
-        cell = self.cell_nm * 1e-9
-        return (cell, cell, cell)
+        """Return the in-plane sweep cell and the fixed film thickness cell.
+
+        ``cell_nm`` is the in-plane resolution used for the size profile.  The
+        physical film thickness remains the baseline ``CELL[2]`` so that a
+        refinement from 0.5 nm to 0.25 nm does not silently introduce a second
+        layer in the FDM domain.
+        """
+
+        in_plane = self.cell_nm * 1e-9
+        return (in_plane, in_plane, CELL[2])
 
     @property
     def target_radius_m(self) -> float:

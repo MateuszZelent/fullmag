@@ -7,6 +7,8 @@ import fullmag as fm
 import pytest
 
 from tests.standard_problems.bimeron.goebel_2019.frozen_size.common import (
+    CELL,
+    case_from_environment,
     contour_minimum_radius_m,
     contour_radius_from_preset,
     preset_radius_for_contour,
@@ -30,6 +32,14 @@ def test_contour_inverse_matches_source_profile() -> None:
         assert contour_radius_from_preset(preset, 3e-9) == pytest.approx(target, rel=1e-12)
     with pytest.raises(ValueError, match="contour minimum"):
         preset_radius_for_contour(contour_minimum_radius_m(3e-9) * 0.99, 3e-9)
+
+
+def test_in_plane_refinement_keeps_single_film_thickness_cell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FULLMAG_BIMERON_CELL_NM", "0.25")
+    case = case_from_environment()
+    assert case.cell_m == pytest.approx((0.25e-9, 0.25e-9, CELL[2]))
 
 
 @pytest.mark.parametrize("protocol", ["p0", "p2", "p3", "ring"])
