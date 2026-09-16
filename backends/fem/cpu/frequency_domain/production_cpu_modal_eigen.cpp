@@ -1046,7 +1046,7 @@ std::string production_window_diagnostics_json(
             std::string(policy.pc_type) +
             "\",\"max_outer_iterations\":" +
             std::to_string(policy.max_outer_iterations) +
-            "\",\"ksp_rtol\":" +
+            ",\"ksp_rtol\":" +
             format_double(policy.ksp_rtol) +
             ",\"ksp_atol\":" +
             format_double(policy.ksp_atol) +
