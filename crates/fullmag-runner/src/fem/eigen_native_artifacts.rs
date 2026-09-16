@@ -13,7 +13,7 @@ use super::eigen_output::{
     write_eigen_v2_bundle,
 };
 use super::eigen_policy::resolved_demag_realization;
-use super::eigen_projection::project_complex_2x2_mode_to_tangent_basis;
+use super::eigen_projection::project_complex_2x2_mode_to_tangent_basis_with_periodic_map;
 use super::eigen_reduction::ReductionMap;
 use super::eigen_solve::mode_tangent_leakage;
 use super::eigen_types::SharedDomainLinearizationState;
@@ -504,9 +504,11 @@ pub(super) fn native_modal_artifacts(
 
     for (mode_index, mode) in modes.iter().enumerate() {
         let (real, imag, amplitude, phase, max_amplitude) =
-            project_complex_2x2_mode_to_tangent_basis(
+            project_complex_2x2_mode_to_tangent_basis_with_periodic_map(
                 equilibrium.len(),
                 &reduction.active_nodes,
+                &reduction.node_map,
+                &reduction.node_phases,
                 &mode.vector,
                 bases,
             );

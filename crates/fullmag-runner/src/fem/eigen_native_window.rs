@@ -1860,6 +1860,64 @@ pub(super) fn native_solver_diagnostics_json(
     if let Some(result_raw) = result_raw {
         merge_poisson_airbox_modal_result_diagnostics(object, result_raw)?;
     }
+    // The native CPU window adapter reports its execution lane and solver
+    // availability in the backend payload, but older payloads did not carry
+    // the common execution attestation consumed by the artifact manifest.
+    // Bind it only when both explicit production facts are present; absence
+    // must remain an unqualified result rather than becoming a guessed claim.
+    let native_production_cpu = object
+        .get("production_solver_available")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+        && object.get("execution_lane").and_then(serde_json::Value::as_str)
+            == Some("production_cpu")
+        && object.get("validation_only").and_then(serde_json::Value::as_bool) != Some(true);
+    if native_production_cpu {
+        object.insert(
+            "production_native_solver_available".to_string(),
+            serde_json::json!(true),
+        );
+        let solver_algorithm = object
+            .get("solver_model")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!("native_cpu_modal_window"));
+        let resolved = object
+            .entry("resolved_execution".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        let resolved = resolved.as_object_mut().ok_or_else(|| RunError {
+            message: "native resolved_execution diagnostics must be an object".to_string(),
+        })?;
+        resolved
+            .entry("backend".to_string())
+            .or_insert_with(|| serde_json::json!("fem"));
+        resolved
+            .entry("device".to_string())
+            .or_insert_with(|| serde_json::json!("cpu"));
+        resolved
+            .entry("precision".to_string())
+            .or_insert_with(|| serde_json::json!("double"));
+        resolved
+            .entry("engine".to_string())
+            .or_insert_with(|| serde_json::json!("petsc_slepc"));
+        resolved
+            .entry("native_backend".to_string())
+            .or_insert_with(|| serde_json::json!("native_cpu"));
+        resolved
+            .entry("reference_or_production".to_string())
+            .or_insert_with(|| serde_json::json!("production"));
+        resolved
+            .entry("solver_library".to_string())
+            .or_insert_with(|| serde_json::json!("petsc_slepc"));
+        resolved
+            .entry("solver_algorithm".to_string())
+            .or_insert(solver_algorithm);
+        resolved
+            .entry("solve_kind".to_string())
+            .or_insert_with(|| serde_json::json!("modal_eigen"));
+        resolved
+            .entry("fallback_used".to_string())
+            .or_insert_with(|| serde_json::json!(false));
+    }
     insert_native_poisson_airbox_hardened_contract(object, plan, gpu_attestation)?;
     // The hardened contract normalizes the lane-specific execution object;
     // enrich it last so native provenance fields cannot be discarded by that

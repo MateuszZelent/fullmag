@@ -388,7 +388,20 @@ def _pair_contract(
         if not any(item != 0.0 for item in translation):
             reasons.append(f"{label}.translation must be non-zero")
         if pair_id in boundary_by_id:
-            reasons.append(f"duplicate periodic boundary pair_id {pair_id!r}")
+            existing = boundary_by_id[pair_id]
+            scale = max(
+                1.0e-30,
+                *(abs(item) for item in (*existing, *translation)),
+            )
+            tolerance = DEFAULT_GEOMETRY_ABS_TOLERANCE_M + (
+                DEFAULT_GEOMETRY_REL_TOLERANCE * scale
+            )
+            if max(
+                abs(existing[index] - translation[index]) for index in range(3)
+            ) > tolerance:
+                reasons.append(
+                    f"conflicting periodic boundary translations for pair_id {pair_id!r}"
+                )
             continue
         boundary_by_id[pair_id] = translation
         boundary_ids.append(pair_id)

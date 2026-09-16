@@ -73,6 +73,20 @@ MAX_EIGEN_RESIDUAL = 1.0e-6
 MAX_PHASE_RESIDUAL = 1.0e-8
 NUMERIC_FREQUENCY_SOURCE = "numeric_modal_solver_with_analytic_comparison"
 PRODUCTION_SOLVER_MODEL = "slepc_multi_shift_invert_production_cpu_dense"
+PRODUCTION_SOLVER_MODELS = frozenset(
+    {
+        # Historical public token retained for existing bundles.
+        PRODUCTION_SOLVER_MODEL,
+        # Current native PETSc/SLEPc payload identifies the sparse CSR
+        # operator actually handed to the managed CPU adapter.
+        "slepc_multi_shift_invert_production_cpu_sparse_csr",
+        # Native shared-domain production adapters used by the demagnetizing
+        # C1/A1 lanes.
+        "floquet_airbox_cpu_schur_slepc",
+        "k0_poisson_airbox_cpu_schur_slepc",
+        "k0_poisson_airbox_cpu_full_coupled_slepc",
+    }
+)
 _REQUIRED_ARTIFACTS = (
     Path("metadata.json"),
     Path("eigen/spectrum.v2.json"),
@@ -125,6 +139,10 @@ def _nested(value: Mapping[str, Any], *keys: str) -> object:
             return None
         current = current.get(key)
     return current
+
+
+def _is_production_solver_model(value: object) -> bool:
+    return isinstance(value, str) and value in PRODUCTION_SOLVER_MODELS
 
 
 def _number(value: object, label: str, reasons: list[str]) -> float | None:
@@ -1124,7 +1142,7 @@ def _validate_numeric_source(
     dynamic_source = _nested(manifest, "validation", "dynamic_demag_operator_source")
     solver_model = diagnostics.get("solver_model")
     native_execution = (
-        solver_model == PRODUCTION_SOLVER_MODEL
+        _is_production_solver_model(solver_model)
         and diagnostics.get("production_native_solver_available") is True
         and diagnostics.get("validation_only") is not True
     )
@@ -1138,7 +1156,7 @@ def _validate_numeric_source(
         reasons.append("analytic reference is declared as the frequency source; an analytic source cannot qualify a FEM run")
     elif source != NUMERIC_FREQUENCY_SOURCE and not native_attested:
         reasons.append(f"frequency source {source!r} is neither the numeric comparison source nor a native production attestation")
-    if solver_model != PRODUCTION_SOLVER_MODEL:
+    if not _is_production_solver_model(solver_model):
         reasons.append(f"solver_model {solver_model!r} is not the managed production SLEPc modal solver")
     if case in {"c1", "a1"} and dynamic_source != "numeric_modal_solver":
         reasons.append("dynamic demagnetization source is not declared as numeric_modal_solver")
@@ -1367,13 +1385,13 @@ def _load_numeric_bundle(
         native_attested = (
             source is None
             and isinstance(diagnostics, Mapping)
-            and diagnostics.get("solver_model") == PRODUCTION_SOLVER_MODEL
+            and _is_production_solver_model(diagnostics.get("solver_model"))
             and diagnostics.get("production_native_solver_available") is True
             and _nested(manifest, "resolved_execution", "reference_or_production") == "production"
         )
         if not native_attested:
             reasons.append(f"{label} frequency source {source!r} is not the numeric FEM source")
-    if not isinstance(diagnostics, Mapping) or diagnostics.get("solver_model") != PRODUCTION_SOLVER_MODEL:
+    if not isinstance(diagnostics, Mapping) or not _is_production_solver_model(diagnostics.get("solver_model")):
         reasons.append(f"{label} does not identify the managed production SLEPc modal solver")
     if not isinstance(diagnostics, Mapping) or diagnostics.get("production_native_solver_available") is not True:
         reasons.append(f"{label} lacks the native production solver attestation")
