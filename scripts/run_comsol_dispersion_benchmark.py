@@ -98,6 +98,12 @@ REQUIRED_CASE_ARTIFACTS = (
     "eigen/metadata/eigen_summary.json",
     "frequency_domain/manifest.v1.json",
 )
+# The native modal summary carries the accepted relax-to-eigen certificate.
+# For a shared-domain FEM run that certificate intentionally contains the
+# node-wise equilibrium fields, so its JSON is larger than the small control
+# plane artifacts.  Keep a bounded, explicit budget rather than applying the
+# generic 16 MiB JSON limit and rejecting a valid native result.
+MAX_EIGEN_SUMMARY_BYTES = 256 * 1024 * 1024
 
 
 class BenchmarkError(RuntimeError):
@@ -810,7 +816,11 @@ def _validate_case_artifacts(case_dir: Path, case: str) -> dict[str, Any]:
         }
     spectrum = _json_file(case_dir / "eigen/spectrum.v2.json", f"{case} spectrum")
     branches = _json_file(case_dir / "eigen/branches.v2.json", f"{case} branches")
-    _json_file(case_dir / "eigen/metadata/eigen_summary.json", f"{case} eigen summary")
+    _json_file(
+        case_dir / "eigen/metadata/eigen_summary.json",
+        f"{case} eigen summary",
+        max_bytes=MAX_EIGEN_SUMMARY_BYTES,
+    )
     _json_file(case_dir / "frequency_domain/manifest.v1.json", f"{case} frequency-domain manifest")
     if spectrum.get("schema_version") != "eigen_spectrum.v2":
         raise BenchmarkError(f"{case} spectrum schema is invalid")
