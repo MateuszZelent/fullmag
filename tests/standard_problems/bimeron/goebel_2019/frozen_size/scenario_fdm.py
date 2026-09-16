@@ -73,7 +73,7 @@ fm.runtime_metadata(
     "bimeron_frozen_size",
     {
         "schema_version": "bimeron_frozen_size.experiment.v1",
-        "source_scenario": "tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py",
+        "source_scenario": "tests/standard_problems/bimeron/goebel_2019/frozen_size/scenario_fdm.py",
         "texture_preset": "bimeron",
         "same_rDMI_parameters": True,
         "relaxation_algorithm": RELAX_ALGORITHM,

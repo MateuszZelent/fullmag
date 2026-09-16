@@ -25,6 +25,7 @@ if str(_ROOT) not in sys.path:
 
 from tests.standard_problems.bimeron.goebel_2019.frozen_size.common import (
     DEFAULT_CELL_NM,
+    DEFAULT_DT_S,
     DEFAULT_PIN_RADIUS_NM,
     DEFAULT_RELAX_TOL_T,
     DEFAULT_RING_WIDTH_NM,
@@ -187,6 +188,12 @@ def _environment(case: dict[str, Any], args: argparse.Namespace) -> dict[str, st
         "FULLMAG_BIMERON_RELEASE_MAX_STEPS": str(args.release_max_steps),
         "FULLMAG_BIMERON_FIELD_EVERY_STEPS": str(args.field_every_steps),
         "FULLMAG_BIMERON_TABLE_EVERY_STEPS": str(args.table_every_steps),
+        "FULLMAG_BIMERON_DT_S": str(
+            os.environ.get("FULLMAG_BIMERON_DT_S", str(DEFAULT_DT_S))
+        ),
+        "FULLMAG_BIMERON_RELAX_ALGORITHM": os.environ.get(
+            "FULLMAG_BIMERON_RELAX_ALGORITHM", "llg_overdamped"
+        ),
     }
     pin_centres = case.get("pin_centres_nm")
     environment["FULLMAG_BIMERON_PIN_CENTRES_NM"] = (
@@ -862,11 +869,11 @@ def main() -> int:
     parser.add_argument("--reuse", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")
     parser.add_argument("--allow-diagnostic", action="store_true", help="return success while retaining a diagnostic (not accepted) profile")
-    parser.add_argument("--relax-time-s", type=float, default=2e-11)
+    parser.add_argument("--relax-time-s", type=float, default=2e-10)
     parser.add_argument("--tol-t", type=float, default=float(os.environ.get("FULLMAG_BIMERON_TOL_T", str(DEFAULT_RELAX_TOL_T))))
     parser.add_argument("--hold-time-s", type=float, default=1e-10)
     parser.add_argument("--release-time-s", type=float, default=2e-11)
-    parser.add_argument("--relax-max-steps", type=int, default=8000)
+    parser.add_argument("--relax-max-steps", type=int, default=20000)
     parser.add_argument("--release-max-steps", type=int, default=8000)
     parser.add_argument("--field-every-steps", type=int, default=1000)
     parser.add_argument(
