@@ -12,6 +12,10 @@ maski, dwóm pinom przy analitycznych ekstremach `m_z`, dwóm pinom z pinem
 centralnym oraz cienkiemu pierścieniowi wokół konturu. Wszystkie piny obejmują
 pełną grubość filmu i nie dodają sztucznej energii karnej.
 
+Parametr `cell_nm` określa rozdzielczość w płaszczyźnie `xy`; komórka w osi `z`
+pozostaje równa grubości warstwy 0,5 nm. Dzięki temu wariant `h=0.25 nm` ma
+jedną warstwę FDM (320 000 komórek), a nie sztucznie wprowadzoną drugą warstwę.
+
 Domyślny algorytm `constrained_relax` to `llg_overdamped`. Do szybkiego
 testu diagnostycznego można jawnie ustawić
 `FULLMAG_BIMERON_RELAX_ALGORITHM=projected_gradient_bb` (skrót: `bb`). Dla
