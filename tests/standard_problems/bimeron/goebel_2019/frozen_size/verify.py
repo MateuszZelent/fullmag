@@ -149,21 +149,37 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
     held_measurement = states.get("constrained_held", {}).get("measurement") if isinstance(states.get("constrained_held"), dict) else None
     profile_measurement = states.get(profile_state_label, {}).get("measurement") if isinstance(states.get(profile_state_label), dict) else None
     target_radius = protocol.get("target_radius_nm")
-    measured_radius = profile_measurement.get("R_area_nm") if isinstance(profile_measurement, dict) else None
+    measured_area_radius = profile_measurement.get("R_area_nm") if isinstance(profile_measurement, dict) else None
+    measured_core_radius = profile_measurement.get("R_core_nm") if isinstance(profile_measurement, dict) else None
     cell_nm = protocol.get("cell_nm", 0.5)
     radius_error = None
+    area_radius_error = None
+    core_radius_error = None
     radius_tolerance = None
+    controlled_radius_name = "R_core" if name in {"p2", "p3"} else "R_area"
+    controlled_radius = measured_core_radius if controlled_radius_name == "R_core" else measured_area_radius
     # P0 is the one-time free-relaxation control.  Its purpose is to measure
     # the natural equilibrium radius, so comparing it with the requested seed
     # radius would incorrectly turn the control into a profile point.
-    if name != "p0" and _finite(target_radius) and _finite(measured_radius):
-        radius_error = abs(float(measured_radius) - float(target_radius))
+    if _finite(target_radius) and _finite(measured_area_radius):
+        area_radius_error = abs(float(measured_area_radius) - float(target_radius))
+    if _finite(target_radius) and _finite(measured_core_radius):
+        core_radius_error = abs(float(measured_core_radius) - float(target_radius))
+    if name != "p0" and _finite(target_radius) and _finite(controlled_radius):
+        radius_error = abs(float(controlled_radius) - float(target_radius))
         radius_tolerance = max(0.5 * float(cell_nm), 0.02 * float(target_radius))
-        if radius_error > radius_tolerance:
+        # Measurements are reported in nanometres and can carry a few ulps
+        # from the cell-centre reduction.  Keep the physical tolerance strict
+        # while avoiding a false failure at an exactly-on-the-boundary value.
+        if radius_error > radius_tolerance + 1.0e-9:
             if completion.get("converged") is True:
                 failures.append("radius_mismatch")
             else:
                 warnings.append("radius_mismatch_before_convergence")
+        elif name in {"p2", "p3"} and _finite(area_radius_error) and float(area_radius_error) > radius_tolerance:
+            warnings.append("area_radius_mismatch_for_core_control")
+    elif name in {"p2", "p3"} and name != "p0":
+        failures.append("missing_core_radius_for_core_control")
 
     convergence = analysis.get("convergence_diagnostics") if isinstance(analysis.get("convergence_diagnostics"), dict) else {}
     energy_window_relative = convergence.get("energy_window_relative_span")
@@ -186,13 +202,13 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
         energy_window_relative_to_excess = float(energy_window_relative) * max(
             abs(float(profile_energy.get("E_total_J") or 0.0)), 1e-30
         ) / max(abs(float(profile_delta)), minimum_scale)
-        if energy_window_relative_to_excess > float(
-            thresholds.get("maximum_energy_window_relative_to_excess", 0.05)
-        ):
-            if completion.get("converged") is True:
-                failures.append("energy_window_not_stable_relative_to_excess")
-            else:
-                warnings.append("energy_window_not_stable_relative_to_excess_before_convergence")
+    if _finite(energy_window_relative_to_excess) and energy_window_relative_to_excess > float(
+        thresholds.get("maximum_energy_window_relative_to_excess", 0.05)
+    ):
+        if completion.get("converged") is True:
+            failures.append("energy_window_not_stable_relative_to_excess")
+        else:
+            warnings.append("energy_window_not_stable_relative_to_excess_before_convergence")
 
     not_converged = completion.get("converged") is False
     if not_converged:
@@ -213,6 +229,10 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
         "free_torque_T": free_torque_t,
         "radius_error_nm": radius_error,
         "radius_tolerance_nm": radius_tolerance,
+        "radius_coordinate": controlled_radius_name,
+        "radius_coordinate_nm": controlled_radius,
+        "area_radius_error_nm": area_radius_error,
+        "core_radius_error_nm": core_radius_error,
         "energy_balance_relative": profile_energy.get("E_balance_relative"),
         "energy_window_relative_span": energy_window_relative,
         "energy_window_relative_to_excess": energy_window_relative_to_excess,

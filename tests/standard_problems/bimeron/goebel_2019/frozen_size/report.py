@@ -65,27 +65,84 @@ def _classification(result: dict[str, Any], verification: dict[str, Any]) -> str
     status = str(verification.get("status", "not_run"))
     if status == "not_converged":
         return "not_converged"
+    protocol = result.get("protocol") if isinstance(result.get("protocol"), dict) else {}
+    protocol_name = str(protocol.get("protocol", ""))
+    # Older P2/P3 verification files used R_area as the acceptance coordinate.
+    # Reclassify a radius-only failure when the core coordinate already meets
+    # the protocol tolerance, so historical artifacts remain interpretable.
+    if status != "passed" and protocol_name in {"p2", "p3"}:
+        failures = verification.get("failures")
+        if isinstance(failures, list) and "radius_mismatch" in failures:
+            observation = _radius_observation(result)
+            remaining = [item for item in failures if item != "radius_mismatch"]
+            if (
+                not remaining
+                and observation.get("error_nm") is not None
+                and observation.get("tolerance_nm") is not None
+                and float(observation["error_nm"]) <= float(observation["tolerance_nm"]) + 1.0e-9
+            ):
+                status = "passed"
     if status != "passed":
         failures = verification.get("failures")
         if isinstance(failures, list) and any("gpu" in str(item) or "runtime" in str(item) for item in failures):
             return "execution_not_verified"
         return "failed"
-    protocol = result.get("protocol") if isinstance(result.get("protocol"), dict) else {}
+    observation = _radius_observation(result)
+    if (
+        observation.get("error_nm") is not None
+        and observation.get("tolerance_nm") is not None
+        and float(observation["error_nm"]) > float(observation["tolerance_nm"]) + 1.0e-9
+    ):
+        return "radius_mismatch"
+    if protocol_name in {"p2", "p3"} and (
+        _number(observation.get("area_error_nm")) is not None
+        and observation.get("tolerance_nm") is not None
+        and float(observation["area_error_nm"]) > float(observation["tolerance_nm"]) + 1.0e-9
+    ):
+        pin_bias = True
+    else:
+        pin_bias = False
     held = _measurement(result, _profile_state(result))
-    target = _number(protocol.get("target_radius_nm"))
-    measured = _number(held.get("R_area_nm"))
-    cell = _number(protocol.get("cell_nm")) or 0.5
-    if target is not None and measured is not None:
-        tolerance = max(0.5 * cell, 0.02 * target)
-        if abs(measured - target) > tolerance:
-            return "radius_mismatch"
     charge = _number(held.get("topological_charge"))
     if charge is None or abs(charge) < 0.8:
         return "topology_changed"
     frozen = result.get("frozen_runtime") if isinstance(result.get("frozen_runtime"), dict) else {}
     if not frozen.get("frozen_mask_sha256") or not frozen.get("frozen_reference_sha256"):
         return "execution_not_verified"
+    if pin_bias:
+        return "pin_bias"
     return "accepted"
+
+
+def _radius_observation(result: dict[str, Any]) -> dict[str, Any]:
+    """Return the protocol coordinate and both radius diagnostics."""
+
+    protocol = result.get("protocol") if isinstance(result.get("protocol"), dict) else {}
+    measurement = _measurement(result, _profile_state(result))
+    protocol_name = str(protocol.get("protocol", ""))
+    target = _number(protocol.get("target_radius_nm"))
+    area = _number(measurement.get("R_area_nm"))
+    core = _number(measurement.get("R_core_nm"))
+    cell = _number(protocol.get("cell_nm")) or 0.5
+    coordinate_name = "R_core" if protocol_name in {"p2", "p3"} else "R_area"
+    coordinate = core if coordinate_name == "R_core" else area
+    if coordinate is None and coordinate_name == "R_core":
+        coordinate = area
+    tolerance = max(0.5 * cell, 0.02 * target) if target is not None else None
+    return {
+        "protocol": protocol_name,
+        "target_nm": target,
+        "coordinate_name": coordinate_name,
+        "coordinate_nm": coordinate,
+        "area_nm": area,
+        "core_nm": core,
+        "area_error_nm": abs(area - target) if area is not None and target is not None else None,
+        "core_error_nm": abs(core - target) if core is not None and target is not None else None,
+        "error_nm": abs(coordinate - target) if coordinate is not None and target is not None else None,
+        "tolerance_nm": tolerance,
+        "area_uncertainty_nm": _number(measurement.get("R_area_uncertainty_nm")),
+        "core_uncertainty_nm": _number(measurement.get("R_core_uncertainty_nm")),
+    }
 
 
 def _number(value: Any) -> float | None:
@@ -129,14 +186,18 @@ def _plot_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
         measurement = _measurement(result, _profile_state(result))
         verification = _verification(result)
         classification = _classification(result, verification)
-        target = _number(protocol.get("target_radius_nm"))
-        measured = _number(measurement.get("R_area_nm"))
+        radius = _radius_observation(result)
+        target = radius["target_nm"]
+        measured = radius["area_nm"]
+        controlled = radius["coordinate_nm"]
         energy = _number(profile.get("E_total_J"))
         delta = _number(profile.get("delta_E_to_background_J"))
         if energy is None:
             continue
         if measured is None:
             measured = target
+        if controlled is None:
+            controlled = measured
         if measured is None:
             continue
         rows.append(
@@ -144,7 +205,18 @@ def _plot_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
                 "protocol": str(protocol.get("protocol", "unknown")),
                 "target_nm": target,
                 "measured_nm": measured,
-                "measured_uncertainty_nm": _number(measurement.get("R_area_uncertainty_nm")),
+                "controlled_nm": controlled,
+                "controlled_uncertainty_nm": (
+                    radius["core_uncertainty_nm"]
+                    if radius["coordinate_name"] == "R_core"
+                    else radius["area_uncertainty_nm"]
+                ),
+                "coordinate_name": radius["coordinate_name"],
+                "area_nm": radius["area_nm"],
+                "core_nm": radius["core_nm"],
+                "area_error_nm": radius["area_error_nm"],
+                "core_error_nm": radius["core_error_nm"],
+                "measured_uncertainty_nm": radius["area_uncertainty_nm"],
                 "energy_J": energy,
                 "delta_J": delta,
                 "classification": classification,
@@ -196,11 +268,12 @@ def _map_candidates(summary: dict[str, Any]) -> list[dict[str, Any]]:
 def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
     """Write report figures without fitting through failed or missing points.
 
-    The energy figure always shows the measured area radius against the full
-    profile energy.  A separate excess-energy figure is emitted only when a
-    converged background makes ``Delta E`` finite.  Marker fill carries the
-    accepted/diagnostic distinction while color identifies the constraint
-    protocol.
+    The primary energy figures show the measured area radius against the full
+    profile energy.  Additional figures use the protocol-controlled radius:
+    R_area for P-ring and R_core for P2/P3.  A separate excess-energy figure is
+    emitted only when a converged background makes ``Delta E`` finite.  Marker
+    fill carries the accepted/diagnostic distinction while color identifies
+    the constraint protocol.
     """
 
     output_root = output_root.resolve()
@@ -223,7 +296,16 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
     palette = {protocol: color for protocol, color in zip(protocols, plt.get_cmap("tab10").colors)}
     files: list[dict[str, str]] = []
 
-    def _scatter(ax: Any, values: list[dict[str, Any]], y_key: str, *, y_label: str, title: str) -> None:
+    def _scatter(
+        ax: Any,
+        values: list[dict[str, Any]],
+        y_key: str,
+        *,
+        y_label: str,
+        title: str,
+        x_key: str = "measured_nm",
+        x_label: str = r"$R_{\mathrm{area}}$ (nm)",
+    ) -> None:
         for protocol in protocols:
             entries = [row for row in values if row["protocol"] == protocol]
             if not entries:
@@ -235,7 +317,7 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
                 if not subset:
                     continue
                 ax.scatter(
-                    [row["measured_nm"] for row in subset],
+                    [row[x_key] for row in subset],
                     [row[y_key] for row in subset],
                     s=42,
                     marker="o",
@@ -262,7 +344,7 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
             ax.add_artist(legend_protocol)
         if protocols:
             ax.legend(handles=status_handles, title="classification", loc="lower right")
-        ax.set_xlabel(r"$R_{\mathrm{area}}$ (nm)")
+        ax.set_xlabel(x_label)
         ax.set_ylabel(y_label)
         ax.set_title(title)
         ax.grid(True, alpha=0.25, linewidth=0.7)
@@ -298,6 +380,40 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
         fig.savefig(delta_path, dpi=180)
         plt.close(fig)
         files.append({"kind": "energy_excess", "path": delta_path.name})
+
+    controlled_rows = [row for row in rows if row["controlled_nm"] is not None]
+    if controlled_rows:
+        fig, ax = plt.subplots(figsize=(7.2, 4.4), constrained_layout=True)
+        _scatter(
+            ax,
+            controlled_rows,
+            "energy_J",
+            x_key="controlled_nm",
+            x_label=r"$R_{\mathrm{protocol}}$ (nm)",
+            y_label=r"$E_{\mathrm{total}}$ (J)",
+            title="Frozen-spin energy by protocol-controlled radius",
+        )
+        controlled_path = output_root / "profile_energy_controlled.png"
+        fig.savefig(controlled_path, dpi=180)
+        plt.close(fig)
+        files.append({"kind": "energy_controlled", "path": controlled_path.name})
+
+    controlled_delta_rows = [row for row in controlled_rows if row["delta_J"] is not None]
+    if controlled_delta_rows:
+        fig, ax = plt.subplots(figsize=(7.2, 4.4), constrained_layout=True)
+        _scatter(
+            ax,
+            controlled_delta_rows,
+            "delta_J",
+            x_key="controlled_nm",
+            x_label=r"$R_{\mathrm{protocol}}$ (nm)",
+            y_label=r"$\Delta E$ (J)",
+            title="Frozen-spin excess energy by controlled radius",
+        )
+        controlled_delta_path = output_root / "profile_delta_energy_controlled.png"
+        fig.savefig(controlled_delta_path, dpi=180)
+        plt.close(fig)
+        files.append({"kind": "energy_excess_controlled", "path": controlled_delta_path.name})
 
     radius_rows = [row for row in rows if row["target_nm"] is not None]
     if radius_rows:
@@ -338,6 +454,44 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
         fig.savefig(radius_path, dpi=180)
         plt.close(fig)
         files.append({"kind": "radius_retention", "path": radius_path.name})
+
+        fig, ax = plt.subplots(figsize=(6.4, 4.8), constrained_layout=True)
+        for protocol in protocols:
+            entries = [row for row in radius_rows if row["protocol"] == protocol]
+            if not entries:
+                continue
+            color = palette[protocol]
+            for row in entries:
+                accepted = row["classification"] == "accepted"
+                ax.errorbar(
+                    row["target_nm"],
+                    row["controlled_nm"],
+                    yerr=row["controlled_uncertainty_nm"],
+                    fmt="o",
+                    color=color,
+                    markerfacecolor=color if accepted else "none",
+                    markeredgecolor=color,
+                    markersize=6,
+                    capsize=3,
+                    linewidth=1.0,
+                )
+        low = min(min(row["target_nm"], row["controlled_nm"]) for row in radius_rows)
+        high = max(max(row["target_nm"], row["controlled_nm"]) for row in radius_rows)
+        span = max(high - low, 1.0)
+        ax.plot([low - 0.05 * span, high + 0.05 * span],
+                [low - 0.05 * span, high + 0.05 * span],
+                linestyle="--", color="0.45", linewidth=0.9, label="ideal R_measured = R_target")
+        ax.set_xlabel(r"$R_{\mathrm{target}}$ (nm)")
+        ax.set_ylabel(r"$R_{\mathrm{protocol}}$ measured (nm)")
+        ax.set_title("Protocol-controlled radius retention")
+        ax.grid(True, alpha=0.25, linewidth=0.7)
+        ax.legend(loc="best")
+        ax.set_xlim(low - 0.08 * span, high + 0.08 * span)
+        ax.set_ylim(low - 0.08 * span, high + 0.08 * span)
+        controlled_radius_path = output_root / "profile_radius_controlled.png"
+        fig.savefig(controlled_radius_path, dpi=180)
+        plt.close(fig)
+        files.append({"kind": "radius_controlled", "path": controlled_radius_path.name})
 
     # State maps are deliberately separate per case: a montage would hide
     # missing states and make a frozen mask from one R look like another.
@@ -464,7 +618,10 @@ def render_report(summary: dict[str, Any]) -> str:
             label = {
                 "energy_total": "Profile energy E_total versus measured R_area",
                 "energy_excess": "Excess energy Delta E versus measured R_area",
+                "energy_controlled": "Profile energy E_total versus protocol-controlled radius",
+                "energy_excess_controlled": "Excess energy Delta E versus protocol-controlled radius",
                 "radius_retention": "Target versus measured R_area",
+                "radius_controlled": "Target versus protocol-controlled radius",
                 "magnetization_map": "Magnetization map with frozen cells and mx=0 contour",
             }.get(kind, kind)
             lines.append(f"![{label}]({plot['path']})")
@@ -480,8 +637,8 @@ def render_report(summary: dict[str, Any]) -> str:
             "",
             "## Size-to-energy table",
             "",
-            "| R target (nm) | R area profile (nm) | R area hold (nm) | R core release (nm) | Q profile | E profile (J) | ΔE to background (J) | frozen DOF | max free torque (T) | verification | classification |",
-            "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
+            "| R target (nm) | coordinate | R coordinate profile (nm) | R area profile (nm) | R area hold (nm) | R core hold/release (nm) | Q profile | E profile (J) | ΔE to background (J) | frozen DOF | max free torque (T) | verification | classification |",
+            "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
         ]
     )
     for result, verification, classification in rows:
@@ -491,13 +648,19 @@ def render_report(summary: dict[str, Any]) -> str:
         profile_measurement = _measurement(result, profile_state)
         held = _measurement(result, "constrained_held")
         released = _measurement(result, "released")
+        radius = _radius_observation(result)
         frozen = result.get("frozen_runtime") if isinstance(result.get("frozen_runtime"), dict) else {}
+        core_release = _number(released.get("R_core_nm"))
+        if core_release is None:
+            core_release = _number(held.get("R_core_nm"))
         lines.append(
-            "| {target} | {profile_area} | {hold_area} | {core} | {q} | {energy} | {delta} | {frozen_count} | {free_torque} | {status} | {classification} |".format(
+            "| {target} | {coordinate} | {coordinate_value} | {profile_area} | {hold_area} | {core} | {q} | {energy} | {delta} | {frozen_count} | {free_torque} | {status} | {classification} |".format(
                 target=_fmt(protocol.get("target_radius_nm")),
+                coordinate=radius["coordinate_name"],
+                coordinate_value=_fmt(radius["coordinate_nm"]),
                 profile_area=_fmt(profile_measurement.get("R_area_nm")),
                 hold_area=_fmt(held.get("R_area_nm")),
-                core=_fmt(released.get("R_core_nm")),
+                core=_fmt(core_release),
                 q=_fmt(profile_measurement.get("topological_charge")),
                 energy=_fmt_energy(profile.get("E_total_J")),
                 delta=_fmt_energy(profile.get("delta_E_to_background_J")),
@@ -578,25 +741,59 @@ def render_report(summary: dict[str, Any]) -> str:
             "",
             "## Measurement uncertainty and final-window diagnostics",
             "",
-                "| R target (nm) | R area uncertainty (nm) | R core uncertainty (nm) | energy-window / E_total | energy-window / delta_E | energy-balance relative residual | radius error (nm) | radius tolerance (nm) |",
-                "|---:|---:|---:|---:|---:|---:|---:|---:|",
+            "| R target (nm) | coordinate | coordinate error (nm) | coordinate tolerance (nm) | R area uncertainty (nm) | R core uncertainty (nm) | energy-window / E_total | energy-window / delta_E | energy-balance relative residual |",
+            "|---:|---|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for result, verification, _classification_value in rows:
         protocol = result.get("protocol") if isinstance(result.get("protocol"), dict) else {}
         profile_measurement = _measurement(result, _profile_state(result))
+        radius = _radius_observation(result)
         lines.append(
-                "| {target} | {area_uncertainty} | {core_uncertainty} | {window} | {window_excess} | {balance} | {radius_error} | {radius_tolerance} |".format(
+            "| {target} | {coordinate} | {radius_error} | {radius_tolerance} | {area_uncertainty} | {core_uncertainty} | {window} | {window_excess} | {balance} |".format(
                 target=_fmt(protocol.get("target_radius_nm")),
+                coordinate=radius["coordinate_name"],
+                radius_error=_fmt(radius["error_nm"]),
+                radius_tolerance=_fmt(radius["tolerance_nm"]),
                 area_uncertainty=_fmt(profile_measurement.get("R_area_uncertainty_nm")),
-                    core_uncertainty=_fmt(profile_measurement.get("R_core_uncertainty_nm")),
-                    window=_fmt(verification.get("energy_window_relative_span")),
-                    window_excess=_fmt(verification.get("energy_window_relative_to_excess")),
+                core_uncertainty=_fmt(profile_measurement.get("R_core_uncertainty_nm")),
+                window=_fmt(verification.get("energy_window_relative_span")),
+                window_excess=_fmt(verification.get("energy_window_relative_to_excess")),
                 balance=_fmt(verification.get("energy_balance_relative")),
-                radius_error=_fmt(verification.get("radius_error_nm")),
-                radius_tolerance=_fmt(verification.get("radius_tolerance_nm")),
             )
         )
+
+    pin_bias_rows = [
+        (result, verification)
+        for result, verification, classification in rows
+        if classification == "pin_bias"
+    ]
+    if pin_bias_rows:
+        lines.extend(
+            [
+                "",
+                "## Pin-bias diagnostics",
+                "",
+                "For P2/P3 the core coordinate satisfies the requested radius while the area radius records the finite frozen-pin footprint. These points remain usable for the conditional profile and are marked as `pin_bias` until the pin geometry is refined.",
+                "",
+                "| R target (nm) | protocol | R core (nm) | R area (nm) | area error (nm) | E profile (J) |",
+                "|---:|---|---:|---:|---:|---:|",
+            ]
+        )
+        for result, verification in pin_bias_rows:
+            protocol = result.get("protocol") if isinstance(result.get("protocol"), dict) else {}
+            radius = _radius_observation(result)
+            profile = result.get("profile_energy") if isinstance(result.get("profile_energy"), dict) else {}
+            lines.append(
+                "| {target} | {protocol} | {core} | {area} | {area_error} | {energy} |".format(
+                    target=_fmt(radius["target_nm"]),
+                    protocol=protocol.get("protocol", "—"),
+                    core=_fmt(radius["core_nm"]),
+                    area=_fmt(radius["area_nm"]),
+                    area_error=_fmt(radius["area_error_nm"]),
+                    energy=_fmt_energy(profile.get("E_total_J")),
+                )
+            )
 
     lines.extend(["", "## Interpretation and gaps", ""])
     classifications = {classification for _result, _verification_value, classification in rows}
@@ -605,6 +802,7 @@ def render_report(summary: dict[str, Any]) -> str:
     else:
         lines.append("No point is classified as an accepted minimum curve point. The current pilot is diagnostic until the solver reaches its convergence criterion.")
     lines.append("The constrained profile is conditional on the protocol, pin size, seed wall width, grid, PBC, demagnetization realization, and captured reference; it is not a global minimum or a free energy at finite temperature.")
+    lines.append("For P2/P3, the accepted radius coordinate is R_core; deviations in R_area are retained as pin-bias diagnostics. P-ring uses R_area as its coordinate.")
     for result, verification, _classification_value in rows:
         protocol = result.get("protocol") if isinstance(result.get("protocol"), dict) else {}
         warnings = verification.get("warnings")

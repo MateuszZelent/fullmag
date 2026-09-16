@@ -16,7 +16,7 @@ use crate::dispatch::FdmEngine;
 use crate::fdm::gpu::cuda::native::{NativeFdmBackend, NativeFdmPreviewSnapshot};
 use crate::quantities::{
     active_fdm_preview_quantities, field_materialization_quantity_ids, normalized_quantity_name,
-    quantity_spec, QuantityShape,
+    quantity_spec, QuantityId, QuantityShape,
 };
 use crate::types::{
     LiveFieldMaterializationState, LiveFieldMaterializationStatus, LivePreviewField,
@@ -329,6 +329,13 @@ fn requested_observation_demand(
     // Keep the active selection in the union while older callers are still
     // producing only `selection.quantity`.
     requested.push(display_state.selection.quantity.clone());
+    // A solver-owned Frozen Spins mask is a spatial runtime diagnostic, not a
+    // presentation choice. Keep it in the native observation demand whenever
+    // the active plan exposes the quantity so script-authored interactive runs
+    // publish the mask even when the user is viewing magnetization.
+    if supported.contains(QuantityId::FrozenSpins.as_str()) {
+        requested.push(QuantityId::FrozenSpins.as_str().to_string());
+    }
 
     let mut quantities = Vec::new();
     let mut errors = BTreeMap::<String, String>::new();
@@ -1071,6 +1078,24 @@ mod tests {
         assert_eq!(demand.revision, 11);
         assert_eq!(demand.quantities, ["H_demag", "m", "H_eff"]);
         assert_eq!(demand.active_quantity.as_deref(), Some("H_eff"));
+    }
+
+    #[test]
+    fn demand_keeps_solver_owned_frozen_spins_mask_in_runtime_payload() {
+        let mut display = DisplaySelectionState::default();
+        display.revision = 12;
+        display.observation_quantities = vec!["m".to_string()];
+        display.selection.quantity = "m".to_string();
+        let supported = ["m", "frozen_spins"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>();
+
+        let (demand, errors) = requested_observation_demand(&display, &supported);
+
+        assert!(errors.is_empty());
+        assert_eq!(demand.quantities, ["m", "frozen_spins"]);
+        assert_eq!(demand.active_quantity.as_deref(), Some("m"));
     }
 
     #[test]

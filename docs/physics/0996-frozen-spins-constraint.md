@@ -2,7 +2,7 @@
 
 - Status: zatwierdzony kontrakt fizyczny; authoring, typed IR, kompilacja planu, FDM CPU/CUDA runtime oraz FEM CPU P1 RK zaimplementowane i zweryfikowane w zarządzanych recepturach
 - Właściciele: Fullmag physics, planner i backend teams
-- Ostatnia aktualizacja: 2026-09-15
+- Ostatnia aktualizacja: 2026-09-16
 - Powiązane ADR: `docs/adr/0026-frozen-spins-constraint-and-selection-model.md`
 - Powiązane specyfikacje: `docs/specs/selection-expr-v1.md`, `docs/specs/frozen-spins-v1.md`
 
@@ -458,6 +458,12 @@ mają jednostkę m (w raportach mogą być prezentowane w nm). Dla jednorazowej
 kontroli materiału $P0$ można zmierzyć swobodny stan równowagowy, ale nie
 odejmuje się jego energii od punktu profilu, dopóki niezależna relaksacja tła
 $+x$ nie osiągnie własnego kryterium stopu.
+
+Dla protokołów P2/P3 zamrożony dysk kontroluje przede wszystkim położenie
+rdzeni, dlatego współrzędną akceptacji jest $R_\mathrm{core}$. Odchylenie
+$R_\mathrm{area}$ od celu pozostaje jawną diagnostyką `pin_bias` i nie jest
+mieszane z główną gałęzią P-ring. Dla P-ring współrzędną profilu pozostaje
+$R_\mathrm{area}$.
 
 Jeżeli tło jest zbieżne, energia nadmiarowa wynosi
 
