@@ -4,11 +4,10 @@
 ## Aktualizacja stanu źródeł i runtime — 2026-09-16
 
 Bieżący checkout to worktree `eigensolve-dispersion-plan-20260912`, branch
-`codex/eigensolve-dispersion-plan-20260912`, HEAD
-`cad08908c`. Worktree jest czysty przed tym
-checkpointem; branch ma cztery lokalne commity ponad
-`origin/codex/eigensolve-dispersion-plan-20260912`. Ostatni commit naprawia
-serializację JSON diagnostyki modalnego okna CPU (`ksp_rtol`), która przerwała
+`codex/eigensolve-dispersion-plan-20260912`; aktualny HEAD należy zweryfikować
+przez `git rev-parse HEAD`. Worktree jest czysty przed tym checkpointem.
+Commit źródłowy `5f53ee304` naprawia serializację JSON diagnostyki modalnego
+okna CPU (`ksp_rtol`), która przerwała
 poprzedni przebieg C0 przed walidacją artefaktów.
 Poniższa tabela opisuje aktualny snapshot, a dalsze sekcje zachowują historię.
 
