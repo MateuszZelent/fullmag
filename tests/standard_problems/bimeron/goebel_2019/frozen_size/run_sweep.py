@@ -138,6 +138,7 @@ def _case_matrix(args: argparse.Namespace) -> list[dict[str, Any]]:
                     "cell_nm": args.cell_nm,
                     "pin_radius_nm": args.pin_radius_nm,
                     "relax_tol_T": args.tol_t,
+                    "table_every_steps": args.table_every_steps,
                     "ring_width_nm": args.ring_width_nm,
                     "helicity_rad": args.helicity_rad,
                     "vorticity": args.vorticity,
@@ -185,6 +186,7 @@ def _environment(case: dict[str, Any], args: argparse.Namespace) -> dict[str, st
         "FULLMAG_BIMERON_RELAX_MAX_STEPS": str(args.relax_max_steps),
         "FULLMAG_BIMERON_RELEASE_MAX_STEPS": str(args.release_max_steps),
         "FULLMAG_BIMERON_FIELD_EVERY_STEPS": str(args.field_every_steps),
+        "FULLMAG_BIMERON_TABLE_EVERY_STEPS": str(args.table_every_steps),
     }
     pin_centres = case.get("pin_centres_nm")
     environment["FULLMAG_BIMERON_PIN_CENTRES_NM"] = (
@@ -867,6 +869,11 @@ def main() -> int:
     parser.add_argument("--relax-max-steps", type=int, default=8000)
     parser.add_argument("--release-max-steps", type=int, default=8000)
     parser.add_argument("--field-every-steps", type=int, default=1000)
+    parser.add_argument(
+        "--table-every-steps",
+        type=int,
+        default=int(os.environ.get("FULLMAG_BIMERON_TABLE_EVERY_STEPS", "10")),
+    )
     args = parser.parse_args()
     if args.limit is not None and args.limit <= 0:
         parser.error("--limit must be positive")

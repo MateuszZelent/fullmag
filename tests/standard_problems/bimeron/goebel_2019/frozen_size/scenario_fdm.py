@@ -185,7 +185,7 @@ relax.autosave(
         target="constrained",
         layout="separate",
         table=fm.TableAutosave(
-            every_steps=10,
+            every_steps=CASE.table_every_steps,
             quantities=TABLE_QUANTITIES,
             table_id="constrained_relax",
         ),

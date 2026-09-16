@@ -45,6 +45,7 @@ DEFAULT_RELAX_TOL_T = 1e-5
 DEFAULT_RELAX_MAX_STEPS = RELAX_MAX_STEPS
 DEFAULT_RELEASE_MAX_STEPS = 8000
 DEFAULT_FIELD_EVERY_STEPS = RELAX_FIELD_EVERY_STEPS
+DEFAULT_TABLE_EVERY_STEPS = 10
 DEFAULT_HOLD_SAMPLE_PERIOD_S = HOLD_SAMPLE_PERIOD
 
 
@@ -258,6 +259,7 @@ class FrozenCase:
     relax_max_steps: int
     release_max_steps: int
     field_every_steps: int
+    table_every_steps: int
     hold_sample_period_s: float
     pin_centres_nm: tuple[tuple[float, float], tuple[float, float]] | None = None
 
@@ -402,6 +404,9 @@ def case_from_environment() -> FrozenCase:
     field_every_steps = _env_int(
         "FULLMAG_BIMERON_FIELD_EVERY_STEPS", DEFAULT_FIELD_EVERY_STEPS
     )
+    table_every_steps = _env_int(
+        "FULLMAG_BIMERON_TABLE_EVERY_STEPS", DEFAULT_TABLE_EVERY_STEPS
+    )
     hold_sample_period_s = _env_float(
         "FULLMAG_BIMERON_HOLD_SAMPLE_PERIOD_S", DEFAULT_HOLD_SAMPLE_PERIOD_S
     )
@@ -440,7 +445,7 @@ def case_from_environment() -> FrozenCase:
         raise ValueError("ring width must be smaller than twice target radius")
     if any(value <= 0.0 for value in (relax_time_s, hold_time_s, release_time_s, dt_s, hold_sample_period_s, relax_tol_T)):
         raise ValueError("relax, hold, release, dt, sample periods, and relax_tol_T must be positive")
-    if any(value <= 0 for value in (relax_max_steps, release_max_steps, field_every_steps)):
+    if any(value <= 0 for value in (relax_max_steps, release_max_steps, field_every_steps, table_every_steps)):
         raise ValueError("step and field intervals must be positive")
     return FrozenCase(
         target_radius_nm=target_radius_nm,
@@ -462,6 +467,7 @@ def case_from_environment() -> FrozenCase:
         relax_max_steps=relax_max_steps,
         release_max_steps=release_max_steps,
         field_every_steps=field_every_steps,
+        table_every_steps=table_every_steps,
         hold_sample_period_s=hold_sample_period_s,
         pin_centres_nm=pin_centres_nm,
     )
