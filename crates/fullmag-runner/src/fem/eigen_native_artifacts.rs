@@ -205,7 +205,7 @@ pub(super) fn native_modal_artifacts(
                 serde_json::json!(handoff.content_sha256()),
             );
             object.insert(
-                "source_mesh_topology_sha256".to_string(),
+                "relax_to_eigen_source_mesh_topology_sha256".to_string(),
                 serde_json::json!(handoff.source_mesh_topology_sha256()),
             );
             object.insert(
@@ -214,29 +214,18 @@ pub(super) fn native_modal_artifacts(
             );
         }
     }
-    // A cached equilibrium is a valid source for the shared-domain modal
-    // solve, but it intentionally has no in-memory relax-to-eigen handoff.
-    // The publication contract still needs the topology identity that was
-    // validated at the native boundary.  Derive it from the exact mesh being
-    // published rather than leaving the field absent (or inventing a
-    // placeholder), so cache-backed production runs remain fail-closed on any
-    // later mesh drift.
+    // The modal payload is indexed in the exact mesh carried by this plan.
+    // Bind the public source identity to that mesh for every lane.  A
+    // relax-to-eigen handoff is retained as a separate provenance record: its
+    // source identity describes the accepted handoff, while this identity
+    // describes the mesh on which the published modal field is stored.  The
+    // distinction matters when a stage adapter rebuilds an equivalent plan
+    // before artifact publication.
     if let Some(object) = solver_diagnostics.as_object_mut() {
-        let production_k0_adapter = matches!(
-            object
-                .get("solver_adapter")
-                .and_then(serde_json::Value::as_str),
-            Some("k0_poisson_airbox_cpu_full_coupled_slepc")
-                | Some("k0_poisson_airbox_cpu_schur_slepc")
-                | Some("k0_poisson_airbox_gpu_petsc_slepc")
-                | Some("k0_poisson_airbox_gpu_modal_device_krylov")
+        object.insert(
+            "source_mesh_topology_sha256".to_string(),
+            serde_json::json!(plan.mesh.topology_fingerprint_v6()),
         );
-        if production_k0_adapter && !object.contains_key("source_mesh_topology_sha256") {
-            object.insert(
-                "source_mesh_topology_sha256".to_string(),
-                serde_json::json!(plan.mesh.topology_fingerprint_v6()),
-            );
-        }
     }
     let sample_diagnostics = solver_diagnostics.clone();
     if let Some(object) = solver_diagnostics.as_object_mut() {
