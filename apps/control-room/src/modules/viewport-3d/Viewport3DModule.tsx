@@ -1459,9 +1459,10 @@ export default function Viewport3DModule({
     }),
     [],
   );
+  const runtimeFrozenSpinsFieldEnabled = Boolean(solverStatus.data?.run_id);
   const runtimeFrozenSpinsFieldResource = useViewport3DFieldVectorRequest(
     runtimeFrozenSpinsFieldRequest,
-    runtimeFrozenSpins !== null,
+    runtimeFrozenSpinsFieldEnabled,
   );
   const runtimeFrozenSpinsFieldVector = runtimeFrozenSpinsFieldResource.data;
   const frozenSpinsPreviewId = useFrozenSpinsActivePreviewId();
@@ -1517,8 +1518,11 @@ export default function Viewport3DModule({
       sceneModel.fdmDomain,
     ],
   );
-  const runtimeFrozenSpinsPreviewId = runtimeFrozenSpins
-    ? `runtime:${solverStatus.data?.run_id ?? "session"}:${runtimeFrozenSpins.mask_sha256}`
+  const runtimeFrozenSpinsRunId = solverStatus.data?.run_id ?? "";
+  const runtimeFrozenSpinsFieldRevision =
+    runtimeFrozenSpinsFieldResource.payloadRevision ?? "field";
+  const runtimeFrozenSpinsPreviewId = runtimeFrozenSpinsRunId
+    ? `runtime:${runtimeFrozenSpinsRunId}:${runtimeFrozenSpins?.mask_sha256 ?? runtimeFrozenSpinsFieldRevision}`
     : "";
   const runtimeFrozenSpinsOverlayModel = useMemo(
     () =>
@@ -1528,14 +1532,17 @@ export default function Viewport3DModule({
         fdmDomain: sceneModel.fdmDomain,
         femCarrier: femFrozenSpinsCarrier,
         fieldVector: runtimeFrozenSpinsFieldVector,
-        maskSha256: runtimeFrozenSpins?.mask_sha256 ?? "",
+        maskSha256:
+          runtimeFrozenSpins?.mask_sha256 ?? runtimeFrozenSpinsFieldRevision,
         previewId: runtimeFrozenSpinsPreviewId,
       }),
     [
       femFrozenSpinsCarrier,
       runtimeFrozenSpins,
+      runtimeFrozenSpinsFieldRevision,
       runtimeFrozenSpinsFieldVector,
       runtimeFrozenSpinsPreviewId,
+      runtimeFrozenSpinsRunId,
       sceneModel.fdmDomain,
     ],
   );
