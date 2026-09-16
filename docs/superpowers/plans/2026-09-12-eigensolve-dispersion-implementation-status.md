@@ -5,9 +5,11 @@
 
 Bieżący checkout to worktree `eigensolve-dispersion-plan-20260912`, branch
 `codex/eigensolve-dispersion-plan-20260912`, HEAD
-`d7676ac1f6f43a114675746a2c2d9ae7afe54d22`. Worktree jest czysty przed tym
-checkpointem; branch ma lokalne commity ponad
-`origin/codex/eigensolve-dispersion-plan-20260912`.
+`cad08908c`. Worktree jest czysty przed tym
+checkpointem; branch ma cztery lokalne commity ponad
+`origin/codex/eigensolve-dispersion-plan-20260912`. Ostatni commit naprawia
+serializację JSON diagnostyki modalnego okna CPU (`ksp_rtol`), która przerwała
+poprzedni przebieg C0 przed walidacją artefaktów.
 Poniższa tabela opisuje aktualny snapshot, a dalsze sekcje zachowują historię.
 
 | Zakres | Stan źródła | Aktualny dowód / ograniczenie |
@@ -18,8 +20,8 @@ Poniższa tabela opisuje aktualny snapshot, a dalsze sekcje zachowują historię
 | Bramka naukowa | Runner wywołuje scientific gate po sprawdzeniu artefaktów; gate wymaga 61 próbek, 8 gałęzi, Kittel/KS, finite rows, residualu, fazy oraz zbieżności. | Status nadal `NOT VERIFIED`, bo nie ma jeszcze zakończonego C0/C1/A1. |
 | Operator Floquet | Sprzężenie shared-domain stosuje `A_qphi=-mu0*A_phiq^H`; wynik przechowuje właścicieli MFEM form/coefficientów. | Wymaga kompilacji i wykonania managed MFEM/SLEPc; źródło nie jest dowodem runtime. |
 | Telemetria/polityka | Początkowe `max_iterations=None`; callback publikuje rzeczywisty limit. Jawna polityka PETSc pozostaje single-process CPU. | Pomiar skalowania i runtime są otwarte. |
-| Ostatni C0 | Stary przebieg na wcześniejszym buildzie doszedł do solvera, ale zakończył się błędem parsera JSON (`nan`/`inf`) w diagnostyce CPU. | Naprawiono oba formatery CPU (modalny i contour); poprzedni wynik nie kwalifikuje fizyki. |
-| Bieżący managed build | Job `e561e57080e04861a6294686cf61a92d`, profil `fem-cpu-slepc-runtime-v1`, commit `d7676ac1f`, stan `queued`. | Slot zajmuje niezależny job `e3de5a1cc36842658f6afffe715db413`; po buildzie trzeba ponowić C0, następnie C1/A1. |
+| Ostatni C0 | Przebieg na wcześniejszym buildzie doszedł do natywnego solvera, ale zakończył się błędem parsera JSON w diagnostyce modalnego CPU (`123"ksp_rtol`). | Błąd serializacji naprawiono w `5f53ee304`; poprzedni wynik nie kwalifikuje fizyki. Po poprawionym buildzie trzeba ponowić C0. |
+| Bieżący managed build | Job `a39c46d3dd484cc385c64924d1e0ec8b`, profil `fem-cpu-slepc-runtime-v1`, commit `5f53ee304`, stan `running`; runner potwierdza zdrowie i przyjęcie joba. | Log kompilacji jest jeszcze pusty w początkowej fazie przygotowania. Po zakończeniu trzeba uruchomić C0, następnie C1/A1. Kwalifikacja pozostaje `NOT VERIFIED`. |
 
 Kwalifikacja naukowa, wykres dyspersji z rzeczywistego operatora oraz release
 pozostają otwarte. Syntetyczne wartości analityczne i testy kontraktowe nie są
