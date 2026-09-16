@@ -657,7 +657,13 @@ pub(super) fn append_eigen_path_k0_kittel_validation_artifacts(
 pub(super) fn eigen_path_dispersion_frequency_source(
     result: &crate::eigen::PathSolveResult,
 ) -> serde_json::Value {
-    if result.dispersion_validation.is_none() {
+    let native_production = matches!(
+        result.solver_model,
+        crate::eigen::EigenSolverModel::ProductionCpuShiftInvert
+            | crate::eigen::EigenSolverModel::ProductionGpuDenseK0Macrospin
+            | crate::eigen::EigenSolverModel::ProductionGpuModalDeviceKrylov
+    );
+    if result.dispersion_validation.is_none() && !native_production {
         return serde_json::Value::Null;
     }
     // Validation metadata is postsolve comparison intent. It must never select
@@ -681,7 +687,12 @@ pub(super) fn eigen_path_dispersion_reference_model(
 pub(super) fn eigen_path_dynamic_demag_operator_source(
     result: &crate::eigen::PathSolveResult,
 ) -> serde_json::Value {
-    if result.dispersion_validation.is_none() {
+    let native_production = matches!(
+        result.solver_model,
+        crate::eigen::EigenSolverModel::ProductionCpuShiftInvert
+            | crate::eigen::EigenSolverModel::ProductionGpuModalDeviceKrylov
+    );
+    if result.dispersion_validation.is_none() && !(result.include_demag && native_production) {
         return serde_json::Value::Null;
     }
     serde_json::json!("numeric_modal_solver")

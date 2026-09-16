@@ -1401,7 +1401,11 @@ def _load_numeric_bundle(
         reasons.append(f"{label} is not bound to a production numeric execution")
     if not isinstance(diagnostics, Mapping) or diagnostics.get("schema_version") != "frequency_domain_modal_solver_diagnostics.v1":
         reasons.append(f"{label} lacks the native modal solver diagnostics schema")
-    if not isinstance(diagnostics, Mapping) or diagnostics.get("complete") is not True or diagnostics.get("status") != "ready":
+    if (
+        not isinstance(diagnostics, Mapping)
+        or diagnostics.get("complete") is not True
+        or diagnostics.get("status") not in {"ready", "ok"}
+    ):
         reasons.append(f"{label} native modal solver diagnostics are not complete and ready")
     if require_demag and dynamic_source != "numeric_modal_solver":
         reasons.append(f"{label} does not identify numeric_modal_solver as dynamic-demag source")

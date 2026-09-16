@@ -543,6 +543,7 @@ pub(super) fn eigen_path_single_k_solver_model(
         if production_solver_available
             && execution_lane == Some("production_cpu")
             && (solver_model == Some("slepc_multi_shift_invert_production_cpu_dense")
+                || solver_model == Some("slepc_multi_shift_invert_production_cpu_sparse_csr")
                 || solver_adapter == Some("k0_poisson_airbox_cpu_full_coupled_slepc")
                 || solver_adapter == Some("k0_poisson_airbox_cpu_schur_slepc"))
             && spectral_transform == Some("shift_invert")

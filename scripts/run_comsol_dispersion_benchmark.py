@@ -44,6 +44,8 @@ from local_runner.build_executor import validate_build_receipt  # noqa: E402
 from local_runner.build_source import bind_identity  # noqa: E402
 from local_runner.worker_entrypoint import canonical, verify_source  # noqa: E402
 from validate_comsol_dispersion_scientific_gate import (  # noqa: E402
+    EVIDENCE_RELATIVE_PATH,
+    EVIDENCE_SCHEMA,
     GATE_SCHEMA as SCIENTIFIC_GATE_SCHEMA,
     validate_case as validate_scientific_case,
     validate_requested_cases,
@@ -92,9 +94,11 @@ FLOQUET_TARGETS = (
 )
 MODAL_TARGETS = (MODAL_TARGET, *FLOQUET_TARGETS)
 REQUIRED_CASE_ARTIFACTS = (
+    "metadata.json",
     "eigen/spectrum.v2.json",
     "eigen/branches.v2.json",
     "eigen/dispersion.csv",
+    "eigen/diagnostics/solver.v1.json",
     "eigen/metadata/eigen_summary.json",
     "frequency_domain/manifest.v1.json",
 )
@@ -854,6 +858,92 @@ def _validate_case_artifacts(case_dir: Path, case: str) -> dict[str, Any]:
     }
 
 
+def _write_scientific_evidence(
+    case_dir: Path,
+    case: str,
+    artifact_result: Mapping[str, Any],
+) -> None:
+    """Bind the primary numeric artifacts without inventing missing science.
+
+    The runner can prove artifact identity and native execution here.  Mesh,
+    airbox, mode-count and Kalinikos–Slavin controls require separate managed
+    runs, so they are recorded as pending until those bundles are supplied;
+    the scientific gate remains fail-closed in the meantime.
+    """
+    manifest = _json_file(
+        case_dir / "frequency_domain/manifest.v1.json",
+        f"{case} frequency-domain manifest",
+    )
+    diagnostics = _json_file(
+        case_dir / "eigen/diagnostics/solver.v1.json",
+        f"{case} solver diagnostics",
+    )
+    validation = manifest.get("validation")
+    validation = validation if isinstance(validation, Mapping) else {}
+    solver_model = diagnostics.get("solver_model")
+    production_attested = (
+        diagnostics.get("production_native_solver_available") is True
+        and diagnostics.get("validation_only") is not True
+        and isinstance(manifest.get("resolved_execution"), Mapping)
+        and manifest["resolved_execution"].get("reference_or_production") == "production"
+    )
+    frequency_source = validation.get("dispersion_frequency_source")
+    if frequency_source is None and production_attested:
+        frequency_source = "native_solver_attested"
+    dynamic_source = validation.get("dynamic_demag_operator_source")
+    hashes = artifact_result.get("required_artifact_hashes")
+    if not isinstance(hashes, Mapping):
+        raise BenchmarkError(f"{case} artifact hash map is missing")
+    required_bindings = {
+        "metadata.json": "metadata_sha256",
+        "eigen/spectrum.v2.json": "spectrum_v2_sha256",
+        "eigen/branches.v2.json": "branches_v2_sha256",
+        "eigen/dispersion.csv": "dispersion_csv_sha256",
+        "frequency_domain/manifest.v1.json": "manifest_sha256",
+        "eigen/diagnostics/solver.v1.json": "solver_diagnostics_sha256",
+    }
+    artifact_bindings: dict[str, str] = {}
+    for relative, binding_key in required_bindings.items():
+        record = hashes.get(relative)
+        if not isinstance(record, Mapping) or not isinstance(record.get("sha256"), str):
+            raise BenchmarkError(f"{case} artifact hash is missing for {relative}")
+        artifact_bindings[binding_key] = record["sha256"]
+    pending_reason = (
+        "separate managed comparison bundles are required; the primary run "
+        "must not be reused as convergence evidence"
+    )
+    evidence = {
+        "schema_version": EVIDENCE_SCHEMA,
+        "case_id": case,
+        "numeric_run": {
+            "frequency_source": frequency_source,
+            "solver_model": solver_model,
+            "analytic_solver_used_for_frequencies": (
+                False
+                if frequency_source
+                in {"native_solver_attested", "numeric_modal_solver_with_analytic_comparison"}
+                else None
+            ),
+            "dynamic_demag_operator_source": dynamic_source,
+        },
+        "artifact_bindings": artifact_bindings,
+        "analytic_controls": {},
+        "convergence": {
+            "mesh": {"status": "pending", "reason": pending_reason},
+            "airbox": (
+                {
+                    "status": "not_applicable",
+                    "reason": "C0 disables dynamic demagnetization by construction",
+                }
+                if case == "c0"
+                else {"status": "pending", "reason": pending_reason}
+            ),
+            "mode_count": {"status": "pending", "reason": pending_reason},
+        },
+    }
+    _write_new_json(case_dir / EVIDENCE_RELATIVE_PATH, evidence)
+
+
 def _execute(
     context: BuildContext,
     output_dir: Path,
@@ -895,6 +985,7 @@ def _execute(
         try:
             for case in cases:
                 artifact_result = _validate_case_artifacts(output_dir / case, case)
+                _write_scientific_evidence(output_dir / case, case, artifact_result)
                 scientific_result = validate_scientific_case(
                     output_dir / case,
                     case,
