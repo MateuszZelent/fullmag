@@ -32,7 +32,11 @@ from tests.standard_problems.bimeron.goebel_2019.frozen_size.common import (
     DEFAULT_WALL_WIDTH_NM,
     preset_radius_for_contour,
 )
-from tests.standard_problems.bimeron.goebel_2019.frozen_size.report import render_report, write_plots
+from tests.standard_problems.bimeron.goebel_2019.frozen_size.report import (
+    free_reference_from_analysis,
+    render_report,
+    write_plots,
+)
 from tests.standard_problems.bimeron.goebel_2019.frozen_size.verify import verify_analysis
 
 
@@ -674,6 +678,10 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
         "cases": cases,
         "background": None,
     }
+    if args.free_reference:
+        manifest["free_reference"] = free_reference_from_analysis(
+            args.free_reference
+        )
     _write_json(output_root / "sweep_request.json", manifest)
 
     background_path: Path | None = None
@@ -863,6 +871,11 @@ def main() -> int:
     parser.add_argument("--vorticity", type=int, choices=(-1, 1), default=int(os.environ.get("FULLMAG_BIMERON_VORTICITY", "-1")))
     parser.add_argument("--background-sign", type=int, choices=(-1, 1), default=int(os.environ.get("FULLMAG_BIMERON_BACKGROUND_SIGN", "1")))
     parser.add_argument("--output-root", type=Path)
+    parser.add_argument(
+        "--free-reference",
+        type=Path,
+        help="optional analysis.json from the one-time free bimeron control",
+    )
     parser.add_argument("--limit", type=int)
     parser.add_argument("--release", action="store_true")
     parser.add_argument("--with-background", action=argparse.BooleanOptionalAction, default=True)

@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from tests.standard_problems.bimeron.goebel_2019.frozen_size.report import render_report
+from tests.standard_problems.bimeron.goebel_2019.frozen_size.report import (
+    free_reference_from_analysis,
+    render_report,
+)
 
 
 def test_report_keeps_non_converged_points_out_of_accepted_curve(tmp_path: Path) -> None:
@@ -61,3 +64,37 @@ def test_report_keeps_non_converged_points_out_of_accepted_curve(tmp_path: Path)
     assert "No point is classified as an accepted minimum curve point" in report
     assert "| 3 | 3 | 2.8 | -1 |" in report
     assert "| not_converged | not_converged |" in report
+
+
+def test_report_includes_optional_free_control(tmp_path: Path) -> None:
+    analysis = tmp_path / "free-analysis.json"
+    analysis.write_text(
+        json.dumps(
+            {
+                "status": "measured",
+                "profile_energy": {"E_total_J": -8.1e-18},
+                "states": {
+                    "constrained_held": {
+                        "measurement": {
+                            "R_area_nm": 2.62,
+                            "R_core_nm": 2.75,
+                            "topological_charge": -1.0,
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary = {
+        "schema_version": "bimeron_frozen_size.sweep.v1",
+        "background": {"status": "usable", "energy_J": -8.3e-18},
+        "results": [],
+        "free_reference": free_reference_from_analysis(analysis),
+    }
+
+    report = render_report(summary)
+
+    assert "## Free-relaxation control" in report
+    assert "| 2.62 | 2.75 | -1 |" in report
+    assert "-8.100000e-18" in report

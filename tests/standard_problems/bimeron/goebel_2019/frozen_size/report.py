@@ -24,6 +24,61 @@ def _load(path: Path) -> dict[str, Any]:
     return value
 
 
+def free_reference_from_analysis(path: Path) -> dict[str, Any]:
+    """Extract one measured free-relaxation control for a profile report."""
+
+    analysis = _load(path)
+    profile = analysis.get("profile_energy")
+    profile = profile if isinstance(profile, dict) else {}
+    states = analysis.get("states")
+    states = states if isinstance(states, dict) else {}
+    state = states.get("constrained_held")
+    state = state if isinstance(state, dict) else {}
+    measurement = state.get("measurement")
+    measurement = measurement if isinstance(measurement, dict) else {}
+    energy = _number(profile.get("E_total_J"))
+    area = _number(measurement.get("R_area_nm"))
+    core = _number(measurement.get("R_core_nm"))
+    charge = _number(measurement.get("topological_charge"))
+    if energy is None or area is None:
+        raise ValueError(
+            f"{path} does not contain finite free-control energy and R_area"
+        )
+    return {
+        "path": str(path.resolve()),
+        "status": analysis.get("status", "unknown"),
+        "R_area_nm": area,
+        "R_core_nm": core,
+        "Q": charge,
+        "E_total_J": energy,
+    }
+
+
+def _free_reference(summary: dict[str, Any]) -> dict[str, Any] | None:
+    value = summary.get("free_reference")
+    if not isinstance(value, dict):
+        return None
+    area = _number(value.get("R_area_nm"))
+    energy = _number(value.get("E_total_J"))
+    if area is None or energy is None:
+        return None
+    reference = dict(value)
+    reference["R_area_nm"] = area
+    reference["E_total_J"] = energy
+    reference["R_core_nm"] = _number(value.get("R_core_nm"))
+    reference["Q"] = _number(value.get("Q"))
+    background = summary.get("background")
+    background_energy = (
+        _number(background.get("energy_J"))
+        if isinstance(background, dict)
+        else None
+    )
+    reference["delta_E_to_background_J"] = (
+        energy - background_energy if background_energy is not None else None
+    )
+    return reference
+
+
 def _measurement(result: dict[str, Any], state: str) -> dict[str, Any]:
     states = result.get("states")
     if not isinstance(states, dict):
@@ -294,6 +349,7 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
     rows = _plot_rows(summary)
     protocols = sorted({row["protocol"] for row in rows})
     palette = {protocol: color for protocol, color in zip(protocols, plt.get_cmap("tab10").colors)}
+    free_reference = _free_reference(summary)
     files: list[dict[str, str]] = []
 
     def _scatter(
@@ -358,6 +414,22 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
         y_label=r"$E_{\mathrm{total}}$ (J)",
         title="Frozen-spin bimeron profile energy",
     )
+    if free_reference is not None:
+        ax.scatter(
+            [free_reference["R_area_nm"]],
+            [free_reference["E_total_J"]],
+            marker="*",
+            s=120,
+            color="black",
+            zorder=5,
+        )
+        ax.annotate(
+            "free control",
+            (free_reference["R_area_nm"], free_reference["E_total_J"]),
+            xytext=(6, 7),
+            textcoords="offset points",
+            fontsize=8,
+        )
     if not rows:
         ax.text(0.5, 0.5, "No finite profile observations", transform=ax.transAxes,
                 ha="center", va="center")
@@ -376,6 +448,22 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
             y_label=r"$\Delta E$ (J)",
             title="Frozen-spin bimeron excess energy",
         )
+        if free_reference is not None and free_reference["delta_E_to_background_J"] is not None:
+            ax.scatter(
+                [free_reference["R_area_nm"]],
+                [free_reference["delta_E_to_background_J"]],
+                marker="*",
+                s=120,
+                color="black",
+                zorder=5,
+            )
+            ax.annotate(
+                "free control",
+                (free_reference["R_area_nm"], free_reference["delta_E_to_background_J"]),
+                xytext=(6, 7),
+                textcoords="offset points",
+                fontsize=8,
+            )
         delta_path = output_root / "profile_delta_energy.png"
         fig.savefig(delta_path, dpi=180)
         plt.close(fig)
@@ -589,6 +677,7 @@ def render_report(summary: dict[str, Any]) -> str:
     rows.sort(key=lambda item: _number((item[0].get("protocol") or {}).get("target_radius_nm")) or float("inf"))
 
     background = summary.get("background") if isinstance(summary.get("background"), dict) else {}
+    free_reference = _free_reference(summary)
     lines = [
         "# Frozen-spin bimeron size profile",
         "",
@@ -632,6 +721,27 @@ def render_report(summary: dict[str, Any]) -> str:
         )
     elif plots.get("status") == "unavailable":
         lines.extend(["", f"- Plot generation unavailable: `{plots.get('reason', 'unknown')}`."])
+    if free_reference is not None:
+        lines.extend(
+            [
+                "",
+                "## Free-relaxation control",
+                "",
+                "The free bimeron is a one-time control for the material and is shown as a reference marker; it is not a repeated profile point for every target R.",
+                "",
+                "| R area (nm) | R core (nm) | Q | E total (J) | ΔE to background (J) | status |",
+                "|---:|---:|---:|---:|---:|---|",
+                "| {area} | {core} | {charge} | {energy} | {delta} | {status} |".format(
+                    area=_fmt(free_reference.get("R_area_nm")),
+                    core=_fmt(free_reference.get("R_core_nm")),
+                    charge=_fmt(free_reference.get("Q")),
+                    energy=_fmt_energy(free_reference.get("E_total_J")),
+                    delta=_fmt_energy(free_reference.get("delta_E_to_background_J")),
+                    status=free_reference.get("status", "unknown"),
+                ),
+                f"Source: `{free_reference.get('path', 'not recorded')}`",
+            ]
+        )
     lines.extend(
         [
             "",
@@ -815,8 +925,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("summary", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--free-reference",
+        type=Path,
+        help="optional analysis.json from the one-time free bimeron control",
+    )
     args = parser.parse_args()
     summary = _load(args.summary)
+    if args.free_reference is not None:
+        summary["free_reference"] = free_reference_from_analysis(args.free_reference)
     if args.output:
         summary["plots"] = write_plots(summary, args.output.parent)
     report = render_report(summary)
