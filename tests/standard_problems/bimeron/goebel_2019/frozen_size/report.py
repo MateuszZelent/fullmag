@@ -258,6 +258,7 @@ def _plot_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
         rows.append(
             {
                 "protocol": str(protocol.get("protocol", "unknown")),
+                "cell_nm": _number(protocol.get("cell_nm")),
                 "target_nm": target,
                 "measured_nm": measured,
                 "controlled_nm": controlled,
@@ -360,7 +361,8 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
         y_label: str,
         title: str,
         x_key: str = "measured_nm",
-        x_label: str = r"$R_{\mathrm{area}}$ (nm)",
+        x_label: str = r"$R_{\mathrm{area}}$ (radius, nm)",
+        xerr_key: str | None = None,
     ) -> None:
         for protocol in protocols:
             entries = [row for row in values if row["protocol"] == protocol]
@@ -383,6 +385,22 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
                     linewidths=1.2,
                     zorder=3,
                 )
+                if xerr_key is not None:
+                    for row in subset:
+                        uncertainty = _number(row.get(xerr_key))
+                        if uncertainty is None or uncertainty <= 0.0:
+                            continue
+                        ax.errorbar(
+                            row[x_key],
+                            row[y_key],
+                            xerr=uncertainty,
+                            fmt="none",
+                            ecolor=color,
+                            elinewidth=0.9,
+                            capsize=2.5,
+                            alpha=0.65,
+                            zorder=2,
+                        )
         protocol_handles = [
             Line2D([0], [0], marker="o", linestyle="none", markersize=6,
                    markerfacecolor=palette[protocol], markeredgecolor=palette[protocol],
@@ -413,8 +431,16 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
         "energy_J",
         y_label=r"$E_{\mathrm{total}}$ (J)",
         title="Frozen-spin bimeron profile energy",
+        xerr_key="measured_uncertainty_nm",
     )
     if free_reference is not None:
+        ax.axvline(
+            free_reference["R_area_nm"],
+            linestyle=":",
+            linewidth=0.9,
+            color="0.25",
+            zorder=1,
+        )
         ax.scatter(
             [free_reference["R_area_nm"]],
             [free_reference["E_total_J"]],
@@ -430,6 +456,35 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
             textcoords="offset points",
             fontsize=8,
         )
+    if rows:
+        minimum = min(rows, key=lambda row: row["energy_J"])
+        ax.annotate(
+            "lowest sampled",
+            (minimum["measured_nm"], minimum["energy_J"]),
+            xytext=(18, 22),
+            textcoords="offset points",
+            fontsize=8,
+            color="0.2",
+            arrowprops={"arrowstyle": "->", "color": "0.35", "linewidth": 0.8},
+        )
+        cell_values = [row["cell_nm"] for row in rows if row.get("cell_nm") is not None]
+        if cell_values:
+            ax.text(
+                0.02,
+                0.03,
+                f"measured $R_{{\\mathrm{{area}}}}$; in-plane cell = {cell_values[0]:g} nm",
+                transform=ax.transAxes,
+                fontsize=8,
+                color="0.25",
+                ha="left",
+                va="bottom",
+            )
+        diameter_axis = ax.secondary_xaxis(
+            "top",
+            functions=(lambda radius: 2.0 * radius, lambda diameter: 0.5 * diameter),
+        )
+        diameter_axis.set_xlabel(r"$2R_{\mathrm{area}}$ (diameter, nm)")
+        diameter_axis.tick_params(axis="x", which="both", labelsize=9)
     if not rows:
         ax.text(0.5, 0.5, "No finite profile observations", transform=ax.transAxes,
                 ha="center", va="center")
@@ -447,6 +502,7 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
             "delta_J",
             y_label=r"$\Delta E$ (J)",
             title="Frozen-spin bimeron excess energy",
+            xerr_key="measured_uncertainty_nm",
         )
         if free_reference is not None and free_reference["delta_E_to_background_J"] is not None:
             ax.scatter(
@@ -477,7 +533,7 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
             controlled_rows,
             "energy_J",
             x_key="controlled_nm",
-            x_label=r"$R_{\mathrm{protocol}}$ (nm)",
+            x_label=r"$R_{\mathrm{protocol}}$ (radius, nm)",
             y_label=r"$E_{\mathrm{total}}$ (J)",
             title="Frozen-spin energy by protocol-controlled radius",
         )
@@ -494,7 +550,7 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
             controlled_delta_rows,
             "delta_J",
             x_key="controlled_nm",
-            x_label=r"$R_{\mathrm{protocol}}$ (nm)",
+            x_label=r"$R_{\mathrm{protocol}}$ (radius, nm)",
             y_label=r"$\Delta E$ (J)",
             title="Frozen-spin excess energy by controlled radius",
         )
