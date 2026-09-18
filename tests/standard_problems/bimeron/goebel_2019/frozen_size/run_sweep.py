@@ -131,10 +131,56 @@ def _targets(series: str) -> list[tuple[float, float]]:
     ]
 
 
+def _requested_targets(args: argparse.Namespace) -> list[tuple[float, float]]:
+    """Resolve an optional explicit radius grid and seed wall width."""
+
+    custom_range = any(
+        value is not None
+        for value in (args.radius_start_nm, args.radius_stop_nm, args.radius_step_nm)
+    )
+    if custom_range:
+        if not all(
+            value is not None
+            for value in (args.radius_start_nm, args.radius_stop_nm, args.radius_step_nm)
+        ):
+            raise ValueError(
+                "radius-start-nm, radius-stop-nm, and radius-step-nm must be provided together"
+            )
+        start = float(args.radius_start_nm)
+        stop = float(args.radius_stop_nm)
+        step = float(args.radius_step_nm)
+        if start <= 0.0 or stop < start or step <= 0.0:
+            raise ValueError("custom radius range must satisfy 0 < start <= stop and step > 0")
+        count = round((stop - start) / step)
+        if not math.isclose(
+            start + count * step,
+            stop,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        ):
+            raise ValueError("custom radius range must contain an integer number of steps")
+        wall = (
+            float(args.wall_width_nm)
+            if args.wall_width_nm is not None
+            else DEFAULT_WALL_WIDTH_NM
+        )
+        if wall <= 0.0:
+            raise ValueError("wall-width-nm must be positive")
+        return [(round(start + index * step, 6), wall) for index in range(count + 1)]
+
+    targets = _targets(args.series)
+    if args.wall_width_nm is not None:
+        wall = float(args.wall_width_nm)
+        if wall <= 0.0:
+            raise ValueError("wall-width-nm must be positive")
+        targets = [(radius, wall) for radius, _default_wall in targets]
+    return targets
+
+
 def _case_matrix(args: argparse.Namespace) -> list[dict[str, Any]]:
     protocols = [item.strip().lower() for item in args.protocols.split(",") if item.strip()]
     result: list[dict[str, Any]] = []
-    target_pairs = _targets(args.series)
+    target_pairs = _requested_targets(args)
     for protocol in protocols:
         # P0 is a one-time material/background control.  Never expand it over
         # the requested R grid: a free relaxation cannot preserve each seeded
@@ -1104,6 +1150,14 @@ def main() -> int:
     )
     parser.add_argument("--web-port", type=int, default=int(os.environ.get("FULLMAG_BIMERON_WEB_PORT", "3100")))
     parser.add_argument("--cell-nm", type=float, default=DEFAULT_CELL_NM)
+    parser.add_argument("--radius-start-nm", type=float, help="first radius in an explicit profile grid")
+    parser.add_argument("--radius-stop-nm", type=float, help="last radius in an explicit profile grid")
+    parser.add_argument("--radius-step-nm", type=float, help="spacing in an explicit profile grid")
+    parser.add_argument(
+        "--wall-width-nm",
+        type=float,
+        help="override the seed wall width for every requested profile point",
+    )
     parser.add_argument("--track-x-nm", type=float, default=None)
     parser.add_argument("--track-y-nm", type=float, default=None)
     parser.add_argument("--pin-radius-nm", type=float, default=DEFAULT_PIN_RADIUS_NM)
@@ -1146,8 +1200,12 @@ def main() -> int:
         parser.error("--track-x-nm and --track-y-nm must be positive")
     if args.web_port <= 0 or args.web_port > 65535:
         parser.error("--web-port must be between 1 and 65535")
+    try:
+        requested_targets = _requested_targets(args)
+    except ValueError as error:
+        parser.error(str(error))
     if args.series == "dense":
-        dense_extent_nm = max(target + 4.0 * wall for target, wall in _targets("dense"))
+        dense_extent_nm = max(target + 4.0 * wall for target, wall in requested_targets)
         if dense_extent_nm >= 0.5 * args.track_y_nm:
             parser.error(
                 "dense series needs transverse half-width larger than target radius plus four wall widths; "
