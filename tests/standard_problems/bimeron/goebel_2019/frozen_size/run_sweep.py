@@ -400,21 +400,22 @@ def _interactive_completion_contract(
     server alive after the solver finishes.  A sweep must therefore stop its
     own process tree only after the last stage has been completed and its
     checkpoint is present; waiting for the launcher process to exit would
-    otherwise deadlock the next case.
+    otherwise deadlock the next case.  ``_run_interactive_process`` also
+    waits for the launcher’s ``interactive workspace ready`` marker so the
+    runtime has flushed source metadata before the process tree is stopped.
     """
 
     if script.name == BACKGROUND_REL.name:
         return "flat_save_state", output / "states" / "background_relaxed_m.zarr.zip"
     released = bool(case.get("release", getattr(args, "release", False)))
     if released:
-        # The runtime currently reports the logical released-relax stage as
-        # ``flat_relax`` in its compact CLI log.  The state artifact remains
-        # the unambiguous completion marker for this branch.
-        return "flat_relax", output / "states" / "released_m.zarr.zip"
-    # Likewise, the logical constrained-hold stage is emitted as ``flat_run``
-    # by the runtime.  Waiting for the DSL stage id would leave an interactive
-    # sweep server alive after the final checkpoint had already been written.
-    return "flat_run", output / "states" / "constrained_held_m.zarr.zip"
+        return "flat_save_state", output / "states" / "released_m.zarr.zip"
+    # The logical constrained hold is emitted as ``flat_run`` while it is
+    # running, but the final checkpoint is written by the following
+    # ``flat_save_state`` stage.  Wait for that final stage so the source
+    # metadata and state export are flushed before stopping the interactive
+    # process tree.
+    return "flat_save_state", output / "states" / "constrained_held_m.zarr.zip"
 
 
 def _stop_interactive_process_tree(process: subprocess.Popen[str]) -> None:
@@ -461,6 +462,7 @@ def _run_interactive_process(
     log.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     pattern = re.compile(rf"\[fullmag\] stage \d+/\d+ \({re.escape(final_stage)}\) completed")
+    workspace_ready_marker = "interactive workspace ready"
     with log.open("w", encoding="utf-8") as stream:
         process = subprocess.Popen(
             command,
@@ -478,7 +480,11 @@ def _run_interactive_process(
                     content = log.read_text(encoding="utf-8", errors="replace")
                 except OSError:
                     content = ""
-                finished = pattern.search(content) is not None and final_artifact.is_file()
+                finished = (
+                    pattern.search(content) is not None
+                    and final_artifact.is_file()
+                    and workspace_ready_marker in content
+                )
                 if finished:
                     _stop_interactive_process_tree(process)
                     return
