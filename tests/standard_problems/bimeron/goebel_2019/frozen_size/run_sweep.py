@@ -494,17 +494,29 @@ def _run_interactive_process(
             raise
 
 
-def _workspace_from_launcher_log(log: Path) -> Path | None:
+def _workspace_from_launcher_log(log: Path, repo: Path | None = None) -> Path | None:
     if not log.is_file():
         return None
     content = log.read_text(encoding="utf-8", errors="replace")
     matches = list(re.finditer(r'"workspace_dir"\s*:\s*"((?:\\.|[^"])*)"', content))
-    if not matches:
+    if matches:
+        try:
+            return Path(json.loads(f'"{matches[-1].group(1)}"'))
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
+    if repo is None:
         return None
-    try:
-        return Path(json.loads(f'"{matches[-1].group(1)}"'))
-    except (json.JSONDecodeError, OSError, ValueError):
+    session_matches = list(re.finditer(r"^[- ]*workspace_id:\s*(\S+)", content, re.MULTILINE))
+    if not session_matches:
         return None
+    candidate = (
+        repo
+        / ".fullmag"
+        / "local-live"
+        / "history"
+        / session_matches[-1].group(1).strip()
+    )
+    return candidate if candidate.is_dir() else None
 
 
 def _launch(
@@ -602,7 +614,7 @@ def _launch(
         )
     else:
         _run_process(command, cwd=repo, env=env, log=launcher_log)
-    return _workspace_from_launcher_log(launcher_log)
+    return _workspace_from_launcher_log(launcher_log, repo)
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -952,7 +964,9 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
                 log=background_path / "analysis.log",
             )
         else:
-            background_workspace = _workspace_from_launcher_log(background_path / "launcher.log")
+            background_workspace = _workspace_from_launcher_log(
+                background_path / "launcher.log", repo
+            )
         background_contract = _background_reference_contract(background_analysis)
         manifest["background"] = {
             "path": str(background_path),
