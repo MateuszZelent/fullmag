@@ -15,8 +15,10 @@ import math
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
+import time
 from typing import Any
 
 _ROOT = Path(__file__).resolve().parents[5]
@@ -58,6 +60,7 @@ DEFAULT_PROFILE_PROTOCOLS = ("ring",)
 CONTROL_TARGET_R_NM = 3.0
 CONTROL_WALL_WIDTH_NM = 3.0
 DENSE_TRACK_Y_NM = 80.0
+INTERACTIVE_COMPLETION_TIMEOUT_S = 6.0 * 60.0 * 60.0
 
 
 def _repo_root() -> Path:
@@ -227,6 +230,15 @@ def _environment(case: dict[str, Any], args: argparse.Namespace) -> dict[str, st
     return environment
 
 
+def _analysis_environment(repo: Path, environment: dict[str, str]) -> dict[str, str]:
+    """Make the checkout-local experiment helpers importable by managed Python."""
+
+    result = dict(environment)
+    existing = result.get("PYTHONPATH", "")
+    result["PYTHONPATH"] = str(repo) + (os.pathsep + existing if existing else "")
+    return result
+
+
 def _binary_path(repo: Path, layout: dict[str, Any]) -> Path:
     target = Path(layout["env"]["CARGO_TARGET_DIR"])
     if os.name == "nt":
@@ -329,6 +341,159 @@ def _run_process(command: list[str], *, cwd: Path, env: dict[str, str], log: Pat
         raise RuntimeError(f"Fullmag command failed with exit code {completed.returncode}; see {log}")
 
 
+def _run_analysis_process(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    output: Path,
+    log: Path,
+) -> dict[str, Any]:
+    """Run the managed reader and let the host process persist its JSON.
+
+    The bundled managed interpreter is intentionally read-only outside its
+    runtime tree on Windows.  Asking it to write an analysis file therefore
+    fails even though it can read the native state.  The analyzer already
+    emits one JSON document on stdout, so keep the managed process read-only
+    and persist the validated document from the host-side sweep process.
+    """
+
+    completed = subprocess.run(
+        command,
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(
+        (completed.stdout or "") + ("\n" + completed.stderr if completed.stderr else ""),
+        encoding="utf-8",
+    )
+    raw = (completed.stdout or "").strip()
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(
+            f"managed analyzer did not emit JSON (exit {completed.returncode}); see {log}"
+        ) from error
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"managed analyzer emitted non-object JSON; see {log}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    if completed.returncode not in {0, 2}:
+        raise RuntimeError(f"managed analyzer failed with exit code {completed.returncode}; see {log}")
+    if payload.get("status") == "incomplete":
+        raise RuntimeError(f"managed analyzer returned an incomplete artifact; see {log}")
+    return payload
+
+
+def _interactive_completion_contract(
+    script: Path,
+    output: Path,
+    case: dict[str, Any],
+    args: argparse.Namespace,
+) -> tuple[str, Path]:
+    """Return the final stage and artifact that prove an interactive run is done.
+
+    The managed interactive launcher intentionally keeps the Control Room
+    server alive after the solver finishes.  A sweep must therefore stop its
+    own process tree only after the last stage has been completed and its
+    checkpoint is present; waiting for the launcher process to exit would
+    otherwise deadlock the next case.
+    """
+
+    if script.name == BACKGROUND_REL.name:
+        return "flat_save_state", output / "states" / "background_relaxed_m.zarr.zip"
+    released = bool(case.get("release", getattr(args, "release", False)))
+    if released:
+        return "released_relax", output / "states" / "released_m.zarr.zip"
+    return "constrained_hold", output / "states" / "constrained_held_m.zarr.zip"
+
+
+def _stop_interactive_process_tree(process: subprocess.Popen[str]) -> None:
+    """Stop the exact interactive launcher tree after its final artifact exists."""
+
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        # CTRL_BREAK gives the PowerShell wrapper a chance to close the web
+        # and API children cleanly.  The PID-tree fallback is scoped to this
+        # just-created launcher, so stale sessions on another port are not
+        # touched.
+        try:
+            process.send_signal(signal.CTRL_BREAK_EVENT)
+            process.wait(timeout=10.0)
+            return
+        except (OSError, subprocess.TimeoutExpired):
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+    else:
+        process.terminate()
+    try:
+        process.wait(timeout=20.0)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=20.0)
+
+
+def _run_interactive_process(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    log: Path,
+    final_stage: str,
+    final_artifact: Path,
+) -> None:
+    """Run one inspectable case and close its server after solver completion."""
+
+    log.parent.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    pattern = re.compile(rf"\[fullmag\] stage \d+/\d+ \({re.escape(final_stage)}\) completed")
+    with log.open("w", encoding="utf-8") as stream:
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=env,
+            stdout=stream,
+            stderr=subprocess.STDOUT,
+            text=True,
+            creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0),
+        )
+        try:
+            while True:
+                returncode = process.poll()
+                try:
+                    content = log.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    content = ""
+                finished = pattern.search(content) is not None and final_artifact.is_file()
+                if finished:
+                    _stop_interactive_process_tree(process)
+                    return
+                if returncode is not None:
+                    raise RuntimeError(
+                        f"Fullmag interactive command exited with code {returncode} before "
+                        f"{final_stage} completed; see {log}"
+                    )
+                if time.monotonic() - started > INTERACTIVE_COMPLETION_TIMEOUT_S:
+                    _stop_interactive_process_tree(process)
+                    raise RuntimeError(
+                        f"Fullmag interactive command exceeded {INTERACTIVE_COMPLETION_TIMEOUT_S:g}s "
+                        f"without completing {final_stage}; see {log}"
+                    )
+                time.sleep(0.5)
+        except BaseException:
+            if process.poll() is None:
+                _stop_interactive_process_tree(process)
+            raise
+
+
 def _workspace_from_launcher_log(log: Path) -> Path | None:
     if not log.is_file():
         return None
@@ -423,7 +588,20 @@ def _launch(
                 ]
             )
     launcher_log = output / "launcher.log"
-    _run_process(command, cwd=repo, env=env, log=launcher_log)
+    if args.run_mode == "interactive":
+        final_stage, final_artifact = _interactive_completion_contract(
+            script, output, case, args
+        )
+        _run_interactive_process(
+            command,
+            cwd=repo,
+            env=env,
+            log=launcher_log,
+            final_stage=final_stage,
+            final_artifact=final_artifact,
+        )
+    else:
+        _run_process(command, cwd=repo, env=env, log=launcher_log)
     return _workspace_from_launcher_log(launcher_log)
 
 
@@ -761,15 +939,16 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
                 _analysis_python(repo, layout),
                 str(repo / ANALYZER_REL),
                 str(background_path),
-                "--output",
-                str(background_analysis),
             ]
             if background_workspace:
                 analyze_background.extend(["--workspace", str(background_workspace)])
-            _run_process(
+            _run_analysis_process(
                 analyze_background,
                 cwd=repo,
-                env={**os.environ, **_environment(background_case, args)},
+                env=_analysis_environment(
+                    repo, {**os.environ, **_environment(background_case, args)}
+                ),
+                output=background_analysis,
                 log=background_path / "analysis.log",
             )
         else:
@@ -819,8 +998,6 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
                 _analysis_python(repo, layout),
                 str(repo / ANALYZER_REL),
                 str(case_root),
-                "--output",
-                str(analysis_path),
             ]
             if workspace:
                 analyze_command.extend(["--workspace", str(workspace)])
@@ -833,7 +1010,15 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
                 analyze_command.extend(["--background", str(background_path)])
                 if background_workspace:
                     analyze_command.extend(["--background-workspace", str(background_workspace)])
-            _run_process(analyze_command, cwd=repo, env={**os.environ, **_environment(case, args)}, log=case_root / "analysis.log")
+            _run_analysis_process(
+                analyze_command,
+                cwd=repo,
+                env=_analysis_environment(
+                    repo, {**os.environ, **_environment(case, args)}
+                ),
+                output=analysis_path,
+                log=case_root / "analysis.log",
+            )
             analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
             verification = _verify_case(repo, analysis, case_root)
             if isinstance(analysis, dict):
