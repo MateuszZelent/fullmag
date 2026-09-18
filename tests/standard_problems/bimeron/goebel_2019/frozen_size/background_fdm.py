@@ -46,6 +46,8 @@ fm.runtime_metadata(
         "same_rDMI_parameters": True,
         "material": MATERIAL.metadata(),
         "alpha": RELAX_ALPHA,
+        "track_size_m": list(TRACK_SIZE),
+        "track_size_nm": [value * 1e9 for value in TRACK_SIZE],
         "relaxation_tolerance_T": CASE.relax_tol_T,
         "cell_nm": CASE.cell_nm,
         "background_energy_definition": "terminal E_total after independent +x relaxation",

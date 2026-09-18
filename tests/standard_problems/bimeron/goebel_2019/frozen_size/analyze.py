@@ -19,6 +19,11 @@ from typing import Any, Iterable, Sequence
 
 MU0 = 4.0 * math.pi * 1e-7
 
+try:
+    from tests.standard_problems.bimeron.goebel_2019.frozen_size.common import TRACK_SIZE
+except ImportError:  # pragma: no cover - direct standalone analyzer invocation
+    TRACK_SIZE = (500e-9, 40e-9, 0.5e-9)
+
 
 def _number(value: Any) -> float | None:
     try:
@@ -307,10 +312,17 @@ def _grid_from_metadata(
                 return (*counts, *sizes)
         except (TypeError, ValueError):
             pass
-    # The experiment geometry is fixed at 500 x 40 x 0.5 nm.  Metadata from
-    # older runners may omit the resolved grid, so derive it from the case.
+    # Metadata from older runners may omit the resolved grid, so derive it
+    # from the experiment geometry selected by the current environment.
     h = fallback_cell_nm * 1e-9
-    return round(500e-9 / h), round(40e-9 / h), round(0.5e-9 / h), h, h, h
+    return (
+        round(TRACK_SIZE[0] / h),
+        round(TRACK_SIZE[1] / h),
+        1,
+        h,
+        h,
+        TRACK_SIZE[2],
+    )
 
 
 def _plane(values: Sequence[Sequence[float]], nx: int, ny: int, nz: int) -> list[tuple[float, float, float]]:

@@ -24,11 +24,14 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from tests.standard_problems.bimeron.goebel_2019.frozen_size.common import (
+    DEFAULT_ALPHA,
     DEFAULT_CELL_NM,
     DEFAULT_DT_S,
     DEFAULT_PIN_RADIUS_NM,
     DEFAULT_RELAX_TOL_T,
     DEFAULT_RING_WIDTH_NM,
+    DEFAULT_TRACK_X_NM,
+    DEFAULT_TRACK_Y_NM,
     DEFAULT_WALL_WIDTH_NM,
     material_from_environment,
     preset_radius_for_contour,
@@ -54,6 +57,7 @@ THRESHOLDS_REL = Path("tests/standard_problems/bimeron/goebel_2019/frozen_size/t
 DEFAULT_PROFILE_PROTOCOLS = ("ring",)
 CONTROL_TARGET_R_NM = 3.0
 CONTROL_WALL_WIDTH_NM = 3.0
+DENSE_TRACK_Y_NM = 80.0
 
 
 def _repo_root() -> Path:
@@ -114,6 +118,10 @@ def _targets(series: str) -> list[tuple[float, float]]:
         return [(radius, 3.0) for radius in (2.75, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0)]
     if series == "small-wall":
         return [(radius, 1.5) for radius in (2.0, 2.5, 2.75, 3.0, 4.0, 5.0)]
+    if series == "dense":
+        # R=3 nm is the smallest valid contour for the default 3 nm wall;
+        # sample every 0.5 nm through a 20 nm radius.
+        return [(round(3.0 + 0.5 * index, 6), 3.0) for index in range(35)]
     return [
         *((radius, 3.0) for radius in (2.75, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0)),
         *((radius, 1.5) for radius in (2.0, 2.5, 2.75, 3.0, 4.0, 5.0)),
@@ -143,6 +151,8 @@ def _case_matrix(args: argparse.Namespace) -> list[dict[str, Any]]:
                     "protocol": protocol,
                     "cell_nm": args.cell_nm,
                     "pin_radius_nm": args.pin_radius_nm,
+                    "track_x_nm": args.track_x_nm,
+                    "track_y_nm": args.track_y_nm,
                     "relax_tol_T": args.tol_t,
                     "table_every_steps": args.table_every_steps,
                     "ring_width_nm": args.ring_width_nm,
@@ -174,6 +184,8 @@ def _environment(case: dict[str, Any], args: argparse.Namespace) -> dict[str, st
         "FULLMAG_BIMERON_TARGET_R_NM": str(case["target_radius_nm"]),
         "FULLMAG_BIMERON_WALL_WIDTH_NM": str(case["wall_width_nm"]),
         "FULLMAG_BIMERON_PROTOCOL": case["protocol"],
+        "FULLMAG_BIMERON_TRACK_X_NM": str(case.get("track_x_nm", args.track_x_nm)),
+        "FULLMAG_BIMERON_TRACK_Y_NM": str(case.get("track_y_nm", args.track_y_nm)),
         "FULLMAG_BIMERON_CELL_NM": str(case["cell_nm"]),
         "FULLMAG_BIMERON_PIN_RADIUS_NM": str(case["pin_radius_nm"]),
         "FULLMAG_BIMERON_RING_WIDTH_NM": str(case.get("ring_width_nm", args.ring_width_nm)),
@@ -198,7 +210,7 @@ def _environment(case: dict[str, Any], args: argparse.Namespace) -> dict[str, st
             os.environ.get("FULLMAG_BIMERON_DT_S", str(DEFAULT_DT_S))
         ),
         "FULLMAG_BIMERON_ALPHA": str(
-            os.environ.get("FULLMAG_BIMERON_ALPHA", str(ALPHA))
+            os.environ.get("FULLMAG_BIMERON_ALPHA", str(DEFAULT_ALPHA))
         ),
         "FULLMAG_BIMERON_RELAX_ALGORITHM": os.environ.get(
             "FULLMAG_BIMERON_RELAX_ALGORITHM", "llg_overdamped"
@@ -361,7 +373,9 @@ def _launch(
             "-Device",
             args.device,
             "-RunMode",
-            "headless",
+            args.run_mode,
+            "-WebPort",
+            str(args.web_port),
             "-ScriptPath",
             str(script),
             "-OutputDir",
@@ -381,6 +395,11 @@ def _launch(
     else:
         if build:
             _run_process(["just", "build", "fullmag"], cwd=repo, env=env, log=output / "build.log")
+        binary_arguments = [str(binary), str(script), "--backend", "fdm", "--output-dir", str(output)]
+        if args.run_mode == "interactive":
+            binary_arguments.extend(["-i", "--web-port", str(args.web_port)])
+        else:
+            binary_arguments.extend(["--headless", "--json"])
         command = [
             _python(),
             str(repo / "scripts" / "fullmag_storage.py"),
@@ -390,14 +409,7 @@ def _launch(
             "--profile",
             PROFILE,
             "--",
-            str(binary),
-            str(script),
-            "--backend",
-            "fdm",
-            "--headless",
-            "--json",
-            "--output-dir",
-            str(output),
+            *binary_arguments,
         ]
         if initial_magnetization_state is not None:
             command.extend(
@@ -711,7 +723,7 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
         repo,
         layout,
         device=args.device,
-        needs_control_room_toolchain=False,
+        needs_control_room_toolchain=args.run_mode == "interactive",
     )
     manifest["source"]["managed_runtime_matches_source_preflight"] = built
     manifest["source"]["runtime_manifest"] = str(_runtime_manifest_path(layout))
@@ -863,7 +875,7 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", action="store_true", help="execute through the managed launcher")
-    parser.add_argument("--series", choices=("pilot", "main", "small-wall", "all"), default="pilot")
+    parser.add_argument("--series", choices=("pilot", "main", "small-wall", "dense", "all"), default="pilot")
     parser.add_argument(
         "--protocols",
         default=",".join(DEFAULT_PROFILE_PROTOCOLS),
@@ -873,7 +885,16 @@ def main() -> int:
         ),
     )
     parser.add_argument("--device", choices=("cpu", "gpu"), default=os.environ.get("FULLMAG_BIMERON_DEVICE", "gpu"))
+    parser.add_argument(
+        "--run-mode",
+        choices=("interactive", "headless"),
+        default=os.environ.get("FULLMAG_BIMERON_RUN_MODE", "interactive"),
+        help="launch each case with the inspectable UI or without the frontend",
+    )
+    parser.add_argument("--web-port", type=int, default=int(os.environ.get("FULLMAG_BIMERON_WEB_PORT", "3100")))
     parser.add_argument("--cell-nm", type=float, default=DEFAULT_CELL_NM)
+    parser.add_argument("--track-x-nm", type=float, default=None)
+    parser.add_argument("--track-y-nm", type=float, default=None)
     parser.add_argument("--pin-radius-nm", type=float, default=DEFAULT_PIN_RADIUS_NM)
     parser.add_argument("--ring-width-nm", type=float, default=DEFAULT_RING_WIDTH_NM)
     parser.add_argument("--helicity-rad", type=float, default=float(os.environ.get("FULLMAG_BIMERON_HELICITY_RAD", "0")))
@@ -906,6 +927,21 @@ def main() -> int:
     args = parser.parse_args()
     if args.limit is not None and args.limit <= 0:
         parser.error("--limit must be positive")
+    if args.track_x_nm is None:
+        args.track_x_nm = DEFAULT_TRACK_X_NM
+    if args.track_y_nm is None:
+        args.track_y_nm = DENSE_TRACK_Y_NM if args.series == "dense" else DEFAULT_TRACK_Y_NM
+    if args.track_x_nm <= 0.0 or args.track_y_nm <= 0.0:
+        parser.error("--track-x-nm and --track-y-nm must be positive")
+    if args.web_port <= 0 or args.web_port > 65535:
+        parser.error("--web-port must be between 1 and 65535")
+    if args.series == "dense":
+        dense_extent_nm = max(target + 4.0 * wall for target, wall in _targets("dense"))
+        if dense_extent_nm >= 0.5 * args.track_y_nm:
+            parser.error(
+                "dense series needs transverse half-width larger than target radius plus four wall widths; "
+                "use --track-y-nm at least 80"
+            )
     repo = _repo_root()
     cases = _case_matrix(args)
     if not args.run:

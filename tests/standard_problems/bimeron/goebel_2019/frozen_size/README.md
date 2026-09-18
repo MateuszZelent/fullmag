@@ -15,6 +15,9 @@ pełną grubość filmu i nie dodają sztucznej energii karnej.
 Parametr `cell_nm` określa rozdzielczość w płaszczyźnie `xy`; komórka w osi `z`
 pozostaje równa grubości warstwy 0,5 nm. Dzięki temu wariant `h=0.25 nm` ma
 jedną warstwę FDM (320 000 komórek), a nie sztucznie wprowadzoną drugą warstwę.
+Eksperyment może jawnie zwiększyć szerokość toru przez
+`FULLMAG_BIMERON_TRACK_Y_NM`; seria `dense` używa 80 nm i próbuje promienie od
+3 do 20 nm co 0,5 nm, pozostawiając zapas na ścianę bimeronu.
 
 Domyślny algorytm `constrained_relax` to `llg_overdamped`. Do szybkiego
 testu diagnostycznego można jawnie ustawić
@@ -28,6 +31,12 @@ Najpierw wyświetl macierz:
 
 ```text
 python tests/standard_problems/bimeron/goebel_2019/frozen_size/run_sweep.py --series pilot
+```
+
+Pełny gęsty profil z podglądem w UI uruchamia się przez serię `dense`:
+
+```text
+python tests/standard_problems/bimeron/goebel_2019/frozen_size/run_sweep.py --run --series dense --cell-nm 0.5 --track-y-nm 80 --run-mode interactive --web-port 3100 --table-every-steps 500 --field-every-steps 1000 --hold-time-s 2e-12 --with-background
 ```
 
 Uruchomienie korzysta z profilu storage zarejestrowanego dla tego worktree i

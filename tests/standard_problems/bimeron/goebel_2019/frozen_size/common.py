@@ -33,7 +33,14 @@ from tests.standard_problems.bimeron.goebel_2019.common import (
 )
 
 TEMPERATURE = 0.0
+# Keep the published 500 x 40 x 0.5 nm geometry as the default while allowing
+# the frozen-size experiment to enlarge the transverse track for a dense,
+# large-radius profile.  The override is local to this experiment and never
+# changes the standard Göbel problem.
+_BASE_TRACK_SIZE = TRACK_SIZE
 DEFAULT_CELL_NM = CELL[0] * 1e9
+DEFAULT_TRACK_X_NM = _BASE_TRACK_SIZE[0] * 1e9
+DEFAULT_TRACK_Y_NM = _BASE_TRACK_SIZE[1] * 1e9
 DEFAULT_WALL_WIDTH_NM = BIMERON_WALL_WIDTH * 1e9
 DEFAULT_PIN_RADIUS_NM = 0.5
 DEFAULT_RING_WIDTH_NM = 0.5
@@ -66,6 +73,23 @@ def _env_int(name: str, default: int) -> int:
         return int(default)
     value = int(raw)
     return value
+
+
+def track_size_from_environment() -> tuple[float, float, float]:
+    """Return the experiment track geometry in metres.
+
+    Only the in-plane transverse extent is normally changed for the dense
+    profile.  The film thickness remains the published single-cell value.
+    """
+
+    x_nm = _env_float("FULLMAG_BIMERON_TRACK_X_NM", DEFAULT_TRACK_X_NM)
+    y_nm = _env_float("FULLMAG_BIMERON_TRACK_Y_NM", DEFAULT_TRACK_Y_NM)
+    if x_nm <= 0.0 or y_nm <= 0.0:
+        raise ValueError("FULLMAG_BIMERON_TRACK_X_NM and _Y_NM must be positive")
+    return (x_nm * 1e-9, y_nm * 1e-9, _BASE_TRACK_SIZE[2])
+
+
+TRACK_SIZE = track_size_from_environment()
 
 
 @dataclass(frozen=True)
@@ -377,6 +401,8 @@ class FrozenCase:
                 "wall_width_m": self.wall_width_m,
                 "pin_radius_m": self.pin_radius_m,
                 "ring_width_m": self.ring_width_m,
+                "track_size_nm": [value * 1e9 for value in TRACK_SIZE],
+                "track_size_m": list(TRACK_SIZE),
                 "analytic_contour_radius_nm": contour_radius_from_preset(
                     self.preset_radius_m, self.wall_width_m
                 )

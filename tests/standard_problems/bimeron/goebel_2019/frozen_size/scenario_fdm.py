@@ -86,6 +86,8 @@ fm.runtime_metadata(
         ),
         "profile_energy_stage": "constrained_hold",
         "hold_role": "frozen_stability_check",
+        "track_size_m": list(TRACK_SIZE),
+        "track_size_nm": [value * 1e9 for value in TRACK_SIZE],
         "protocol": CASE.metadata(),
         "material": MATERIAL.metadata(),
         "measurement": {
