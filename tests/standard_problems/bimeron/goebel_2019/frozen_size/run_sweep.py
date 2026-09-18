@@ -407,8 +407,14 @@ def _interactive_completion_contract(
         return "flat_save_state", output / "states" / "background_relaxed_m.zarr.zip"
     released = bool(case.get("release", getattr(args, "release", False)))
     if released:
-        return "released_relax", output / "states" / "released_m.zarr.zip"
-    return "constrained_hold", output / "states" / "constrained_held_m.zarr.zip"
+        # The runtime currently reports the logical released-relax stage as
+        # ``flat_relax`` in its compact CLI log.  The state artifact remains
+        # the unambiguous completion marker for this branch.
+        return "flat_relax", output / "states" / "released_m.zarr.zip"
+    # Likewise, the logical constrained-hold stage is emitted as ``flat_run``
+    # by the runtime.  Waiting for the DSL stage id would leave an interactive
+    # sweep server alive after the final checkpoint had already been written.
+    return "flat_run", output / "states" / "constrained_held_m.zarr.zip"
 
 
 def _stop_interactive_process_tree(process: subprocess.Popen[str]) -> None:
