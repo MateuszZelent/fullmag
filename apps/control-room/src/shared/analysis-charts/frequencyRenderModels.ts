@@ -117,10 +117,19 @@ export function compatibleFrequencySeries(
   if (!first) return [];
   return series.filter((entry) =>
     entry.points.length > 0 &&
-    entry.quantity === first.quantity &&
     entry.unit === first.unit &&
-    entry.xUnit === first.xUnit
+    entry.xUnit === first.xUnit &&
+    (entry.quantity === first.quantity ||
+      isAnalyticFrequencyOverlayPair(first.quantity, entry.quantity))
   );
+}
+
+function isAnalyticFrequencyOverlayPair(
+  firstQuantity: string,
+  candidateQuantity: string,
+): boolean {
+  return (firstQuantity === "frequency" && candidateQuantity === "analytic_frequency") ||
+    (firstQuantity === "analytic_frequency" && candidateQuantity === "frequency");
 }
 
 export function frequencyYAxisLabel(series: readonly FrequencyDomainChartSeries[]): string {

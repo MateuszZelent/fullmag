@@ -23,6 +23,7 @@ import {
   frequencyResponseSeriesUnit,
   frequencyDomainChartRouteOverrideFromSelection,
   frequencyDomainChartRouteOverrideFromSubview,
+  frequencyDomainManifestSupportsChartRoute,
   frequencyDomainResultContextFromManifest,
   routeFrequencyDomainCalculationMode,
   type FrequencyDomainJsonArtifactLike,
@@ -1250,6 +1251,74 @@ describe("frequencyDomainChartModels", () => {
       }),
     );
     expect(route.supportingCharts).toContain("response-field-overlay");
+  });
+
+  it("requires the manifest calculation mode to match a requested modal route", () => {
+    const freeModesManifest = {
+      artifacts: { spectrum_v2_path: "eigen/spectrum.v2.json" },
+      requested_execution: { calculation_mode: "free_modes" },
+      stage_kind: "eigenmodes",
+    };
+
+    expect(
+      frequencyDomainManifestSupportsChartRoute(freeModesManifest, {
+        mode: "free_modes",
+        primaryChart: "modal-spectrum",
+      }),
+    ).toBe(true);
+    expect(
+      frequencyDomainManifestSupportsChartRoute(freeModesManifest, {
+        mode: "fmr_modal",
+        primaryChart: "modal-spectrum",
+      }),
+    ).toBe(false);
+  });
+
+  it("requires the manifest calculation mode to match a requested response route", () => {
+    const responseManifest = {
+      artifacts: { response_sweep_v2_path: "response/sweep.v2.json" },
+      requested_execution: { calculation_mode: "frequency_response" },
+      stage_kind: "frequency_response",
+    };
+
+    expect(
+      frequencyDomainManifestSupportsChartRoute(responseManifest, {
+        mode: "frequency_response",
+        primaryChart: "response-sweep",
+      }),
+    ).toBe(true);
+    expect(
+      frequencyDomainManifestSupportsChartRoute(responseManifest, {
+        mode: "fmr_response",
+        primaryChart: "response-sweep",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not infer modal-driven comparison from unrelated artifacts", () => {
+    const freeModesManifest = {
+      artifacts: {
+        response_sweep_v2_path: "response/sweep.v2.json",
+        spectrum_v2_path: "eigen/spectrum.v2.json",
+      },
+      equilibrium_identity: "eq-1",
+      geometry_identity: "geometry-1",
+      mesh_identity: "mesh-1",
+      requested_execution: {
+        boundary_context: "finite_open",
+        calculation_mode: "free_modes",
+      },
+      run_id: "run-1",
+      stage_id: "stage-1",
+      study_product: "modal_eigen",
+    };
+
+    expect(
+      frequencyDomainManifestSupportsChartRoute(freeModesManifest, {
+        mode: "fmr_modal_driven",
+        primaryChart: "comparison",
+      }),
+    ).toBe(false);
   });
 
   it("classifies driven response only from typed physical evidence", () => {

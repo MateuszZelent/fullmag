@@ -691,7 +691,8 @@ export function frequencyDomainManifestSupportsChartRoute(
 ): boolean {
   const publishedRoute = routeFrequencyDomainCalculationMode(manifestPayload);
   if (requestedRoute.primaryChart !== "comparison") {
-    return requestedRoute.primaryChart === publishedRoute.primaryChart;
+    return requestedRoute.mode === publishedRoute.mode &&
+      requestedRoute.primaryChart === publishedRoute.primaryChart;
   }
 
   const manifest = record(manifestPayload);
@@ -703,6 +704,7 @@ export function frequencyDomainManifestSupportsChartRoute(
     stringValue(artifacts?.response_sweep_v1_path) != null;
 
   return (
+    publishedRoute.mode === requestedRoute.mode &&
     requestedRoute.mode === "fmr_modal_driven" &&
     hasModalArtifact &&
     hasDrivenArtifact &&

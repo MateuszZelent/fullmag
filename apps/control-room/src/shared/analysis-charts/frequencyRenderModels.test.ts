@@ -60,4 +60,44 @@ describe("frequency render models", () => {
     expect(model.xAxis.label).toBe("frequency [GHz]");
     expect(model.yAxes[0]?.label).toBe("Amplitude [a.u.]");
   });
+
+  it("keeps an analytic dispersion overlay with the numerical frequency series", () => {
+    const series: FrequencyDomainChartSeries[] = [
+      {
+        id: "numerical",
+        label: "Branch acoustic",
+        points: [{ rowIndex: 0, x: 1, y: 2 }],
+        quantity: "frequency",
+        source,
+        status: "ready",
+        unit: "GHz",
+        xUnit: "rad/m",
+      },
+      {
+        id: "analytic",
+        label: "Branch acoustic analytic",
+        points: [{ rowIndex: 0, x: 1, y: 2.1 }],
+        quantity: "analytic_frequency",
+        source,
+        status: "ready",
+        unit: "GHz",
+        xUnit: "rad/m",
+      },
+      {
+        id: "phase",
+        label: "Phase",
+        points: [{ rowIndex: 0, x: 1, y: 0.2 }],
+        quantity: "phase",
+        source,
+        status: "ready",
+        unit: "rad",
+        xUnit: "rad/m",
+      },
+    ];
+
+    const model = frequencySeriesRenderModel(series, "Dispersion", "k-path s");
+
+    expect(model.series.map((entry) => entry.id)).toEqual(["numerical", "analytic"]);
+    expect(model.yAxes).toEqual([{ label: "Branch acoustic [GHz]", unit: "GHz" }]);
+  });
 });
