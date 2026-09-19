@@ -308,9 +308,11 @@ describe("CameraControls", () => {
     expect(source).toContain("handlePointerDownCapture");
     expect(source).toContain('addEventListener("pointerdown", handlePointerDownCapture');
     expect(source).toContain("capture: true");
-    expect(source).toContain("controls.enabled = false");
-    expect(source).toContain('addEventListener("pointerup", restoreControls');
-    expect(source).toContain('addEventListener("pointercancel", restoreControls');
+    expect(source).toContain("holdViewport3DCameraControls(controls)");
+    expect(source).toContain('addEventListener("pointerup", handlePointerEnd');
+    expect(source).toContain('addEventListener("pointercancel", handlePointerEnd');
+    expect(source).toContain("if (event.pointerId === hudPointerId) restoreControls();");
+    expect(source).toContain("if (event.button !== 0 || !event.isPrimary) return;");
   });
 
   it("does not regress Canvas DPR during orbit interactions", () => {

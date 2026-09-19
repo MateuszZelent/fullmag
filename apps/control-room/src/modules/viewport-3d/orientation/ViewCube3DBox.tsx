@@ -16,14 +16,17 @@ import {
   DoubleSide,
   Raycaster,
   Matrix4,
+  SRGBColorSpace,
   Vector2,
   Vector3,
   type Intersection,
   type Group,
+  type Mesh,
   type Object3D,
 } from "three";
 
 import type { Viewport3DColors } from "../viewport3dTypes";
+import { holdViewport3DCameraControls } from "../layers/viewport3DCameraControlsHold";
 import type { Direction3 } from "./cameraOrientation";
 import { AxisLabelSprite } from "./AxisLabelSprite";
 import {
@@ -40,6 +43,7 @@ import {
   getViewCubeAxisLabels,
   resolveViewCubeBoxHitDirection,
   resolveViewCubeTargetCell,
+  viewCubeFaceMatrix,
   type ViewCubeFaceModel,
   type ViewCubeTargetKind,
 } from "./viewCubeModel";
@@ -65,45 +69,8 @@ const VIEW_CUBE_FACE_GRID_POINTS = buildViewCubeFaceGridPoints(
   VIEW_CUBE_HALF,
   VIEW_CUBE_EDGE_SIZE,
 );
-const VIEW_CUBE_FACE_PLACEMENTS: Record<
-  ViewCubeFaceModel["id"],
-  {
-    axis: "x" | "y" | "z";
-    position: [number, number, number];
-    rotation: [number, number, number];
-  }
-> = {
-  right: {
-    axis: "x",
-    position: [VIEW_CUBE_HALF, 0, 0],
-    rotation: [0, Math.PI / 2, 0],
-  },
-  left: {
-    axis: "x",
-    position: [-VIEW_CUBE_HALF, 0, 0],
-    rotation: [0, -Math.PI / 2, 0],
-  },
-  top: {
-    axis: "z",
-    position: [0, 0, VIEW_CUBE_HALF],
-    rotation: [0, 0, 0],
-  },
-  bottom: {
-    axis: "z",
-    position: [0, 0, -VIEW_CUBE_HALF],
-    rotation: [0, Math.PI, 0],
-  },
-  front: {
-    axis: "y",
-    position: [0, VIEW_CUBE_HALF, 0],
-    rotation: [-Math.PI / 2, 0, 0],
-  },
-  back: {
-    axis: "y",
-    position: [0, -VIEW_CUBE_HALF, 0],
-    rotation: [Math.PI / 2, 0, 0],
-  },
-};
+const VIEW_CUBE_EDGE_POINTS = VIEW_CUBE_EDGE_LINES.flatMap((edge) => edge.points);
+const VIEW_CUBE_GRID_POINTS = VIEW_CUBE_FACE_GRID_POINTS.flat();
 
 const VIEW_CUBE_FACE_LABELS: Record<ViewCubeFaceModel["id"], string> = {
   right: "RIGHT",
@@ -131,6 +98,7 @@ export function ViewCube3DBox({
   const camera = useThree((state) => state.camera);
   const gl = useThree((state) => state.gl);
   const cubeGroupRef = useRef<Group>(null);
+  const hitBoxRef = useRef<Mesh>(null);
   const onSnapRef = useLatestRef(onSnap);
   const axisLabels = getViewCubeAxisLabels();
   const faces = useMemo(() => buildViewCubeFaces(), []);
@@ -159,16 +127,15 @@ export function ViewCube3DBox({
 
   useEffect(() => {
     const element = gl.domElement;
-    let cachedRect = element.getBoundingClientRect();
-    const resizeObserver = new ResizeObserver(() => {
-      cachedRect = element.getBoundingClientRect();
-    });
 
     const handlePointerDown = (event: PointerEvent) => {
+      if (event.button !== 0 || !event.isPrimary) return;
       const group = cubeGroupRef.current;
-      if (!group) return;
+      const hitBox = hitBoxRef.current;
+      if (!group || !hitBox) return;
 
-      const rect = cachedRect;
+      // Layout shifts and scrolling can move the canvas without resizing it.
+      const rect = element.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) return;
 
       const x = event.clientX - rect.left;
@@ -182,7 +149,7 @@ export function ViewCube3DBox({
       raycaster.setFromCamera(pointer, camera);
 
       const direction = resolveViewCubeNativeHitDirection(
-        raycaster.intersectObject(group, true),
+        raycaster.intersectObject(hitBox, false),
       );
       if (!direction) return;
 
@@ -192,7 +159,6 @@ export function ViewCube3DBox({
       onSnapRef.current(direction);
     };
 
-    resizeObserver.observe(element);
     element.addEventListener("pointerdown", handlePointerDown, {
       capture: true,
     });
@@ -200,7 +166,6 @@ export function ViewCube3DBox({
       element.removeEventListener("pointerdown", handlePointerDown, {
         capture: true,
       });
-      resizeObserver.disconnect();
     };
   }, [camera, gl, onSnapRef, raycastState]);
 
@@ -208,6 +173,7 @@ export function ViewCube3DBox({
     <group>
       <group ref={cubeGroupRef}>
         <mesh
+          ref={hitBoxRef}
           renderOrder={WIDGET_RENDER_ORDER}
           userData={{ viewCubeFallbackBox: true }}
         >
@@ -237,23 +203,20 @@ export function ViewCube3DBox({
               faceHovered={faceHovered}
               hoveredTargetId={hoveredTargetId}
               onHoverChange={setHoveredTargetId}
-              onSnap={onSnap}
               textures={faceTextures}
             />
           );
         })}
-        {VIEW_CUBE_EDGE_LINES.map((edge) => (
           <Line
-            key={viewCubeSegmentKey(edge.points)}
+            segments
             color={String(colors.wire)}
             depthTest={false}
             lineWidth={1.8}
             opacity={0.55}
-            points={edge.points}
+            points={VIEW_CUBE_EDGE_POINTS}
             renderOrder={WIDGET_RENDER_ORDER + 2}
             transparent
           />
-        ))}
       </group>
       <group position={[0, 0, -VIEW_CUBE_HALF]}>
         <OrbitRing3D
@@ -304,38 +267,27 @@ function OrbitRing3D({
 }) {
   const [hovered, setHovered] = useState(false);
   const isDragging = useRef(false);
+  const activePointerId = useRef<number | null>(null);
+  const dragController = useRef<AbortController | null>(null);
   const lastPointer = useRef({ x: 0, y: 0 });
   const controlsRef = useRef(controls);
   const onOrbitRef = useLatestRef(onOrbit);
   const onOrbitEndRef = useLatestRef(onOrbitEnd);
-  const previousControlsEnabledRef = useRef<boolean | null>(null);
+  const releaseControlsRef = useRef<(() => void) | null>(null);
   const dragListenersAttachedRef = useRef(false);
-  const dragMoveListenerRef = useRef<((event: PointerEvent) => void) | null>(
-    null,
-  );
-  const dragEndListenerRef = useRef<((event: PointerEvent) => void) | null>(
-    null,
-  );
 
   useEffect(() => {
     controlsRef.current = controls;
   }, [controls]);
 
   const restoreOrbitControls = useCallback(() => {
-    const orbitControls = controlsRef.current;
-    if (
-      orbitControls &&
-      previousControlsEnabledRef.current !== null &&
-      typeof orbitControls.enabled === "boolean"
-    ) {
-      orbitControls.enabled = previousControlsEnabledRef.current;
-    }
-    previousControlsEnabledRef.current = null;
+    releaseControlsRef.current?.();
+    releaseControlsRef.current = null;
   }, []);
 
   const handleMove = useCallback(
     (e: PointerEvent) => {
-      if (!isDragging.current) return;
+      if (!isDragging.current || e.pointerId !== activePointerId.current) return;
       e.preventDefault();
       e.stopPropagation();
       const dx = e.clientX - lastPointer.current.x;
@@ -348,8 +300,9 @@ function OrbitRing3D({
   const detachWindowDragListeners = useCallback(() => {
     if (!dragListenersAttachedRef.current) return;
     dragListenersAttachedRef.current = false;
-    dragMoveListenerRef.current = null;
-    dragEndListenerRef.current = null;
+    dragController.current?.abort();
+    dragController.current = null;
+    activePointerId.current = null;
   }, []);
 
   const handleUp = useCallback(() => {
@@ -365,16 +318,12 @@ function OrbitRing3D({
   const attachWindowDragListeners = useCallback(() => {
     if (dragListenersAttachedRef.current) return;
     dragListenersAttachedRef.current = true;
-    const dragMoveListener = (event: PointerEvent) => handleMove(event);
-    const dragEndListener = () => handleUp();
-    dragMoveListenerRef.current = dragMoveListener;
-    dragEndListenerRef.current = dragEndListener;
-  }, [handleMove, handleUp]);
-
-  useEffect(() => {
     const listenerController = new AbortController();
+    dragController.current = listenerController;
     const dragMoveListener = (event: PointerEvent) => handleMove(event);
-    const dragEndListener = () => handleUp();
+    const dragEndListener = (event: PointerEvent) => {
+      if (event.pointerId === activePointerId.current) handleUp();
+    };
     window.addEventListener("pointermove", dragMoveListener, {
       capture: true,
       signal: listenerController.signal,
@@ -387,12 +336,10 @@ function OrbitRing3D({
       capture: true,
       signal: listenerController.signal,
     });
-    return () => {
-      listenerController.abort();
-      detachWindowDragListeners();
-      restoreOrbitControls();
-    };
-  }, [detachWindowDragListeners, handleMove, handleUp, restoreOrbitControls]);
+    window.addEventListener("blur", handleUp, { signal: listenerController.signal });
+  }, [handleMove, handleUp]);
+
+  useEffect(() => () => handleUp(), [handleUp]);
 
   return (
     <group renderOrder={WIDGET_RENDER_ORDER + 1}>
@@ -404,18 +351,13 @@ function OrbitRing3D({
         }}
         onPointerOut={() => setHovered(false)}
         onPointerDown={(e) => {
+          if (e.nativeEvent.button !== 0 || !e.nativeEvent.isPrimary || isDragging.current) return;
           e.stopPropagation();
           e.nativeEvent.preventDefault();
           e.nativeEvent.stopImmediatePropagation();
-          if (
-            controlsRef.current &&
-            previousControlsEnabledRef.current === null &&
-            typeof controlsRef.current.enabled === "boolean"
-          ) {
-            previousControlsEnabledRef.current = controlsRef.current.enabled;
-            controlsRef.current.enabled = false;
-          }
+          releaseControlsRef.current = holdViewport3DCameraControls(controlsRef.current);
           isDragging.current = true;
+          activePointerId.current = e.nativeEvent.pointerId;
           lastPointer.current = {
             x: e.nativeEvent.clientX,
             y: e.nativeEvent.clientY,
@@ -516,7 +458,6 @@ function ViewCubeFacePanel({
   faceHovered,
   hoveredTargetId,
   onHoverChange,
-  onSnap,
   textures,
 }: {
   colors: Viewport3DColors;
@@ -524,14 +465,13 @@ function ViewCubeFacePanel({
   faceHovered: boolean;
   hoveredTargetId: string | null;
   onHoverChange: (id: string | null) => void;
-  onSnap: (direction: Direction3) => void;
   textures: { hovered: CanvasTexture; normal: CanvasTexture };
 }) {
-  const placement = VIEW_CUBE_FACE_PLACEMENTS[face.id];
+  const placement = useMemo(() => viewCubeFaceMatrix(face, VIEW_CUBE_HALF), [face]);
   const label = VIEW_CUBE_FACE_LABELS[face.id];
 
   return (
-    <group position={placement.position} rotation={placement.rotation}>
+    <group matrix={placement} matrixAutoUpdate={false}>
       {face.targets.map((target, index) => {
         const cell = resolveViewCubeTargetCell(
           index,
@@ -550,12 +490,6 @@ function ViewCubeFacePanel({
         return (
           <mesh
             key={`${face.id}:${target.id}`}
-            onPointerDown={(event) => {
-              event.stopPropagation();
-              event.nativeEvent.preventDefault();
-              event.nativeEvent.stopImmediatePropagation();
-              onSnap(target.direction as Direction3);
-            }}
             onPointerOut={() => onHoverChange(null)}
             onPointerOver={(event) => {
               event.stopPropagation();
@@ -590,18 +524,16 @@ function ViewCubeFacePanel({
           </mesh>
         );
       })}
-      {VIEW_CUBE_FACE_GRID_POINTS.map((line) => (
         <Line
-          key={viewCubeSegmentKey(line)}
+          segments
           color={String(colors.wire)}
           depthTest={false}
           lineWidth={1.0}
           opacity={faceHovered ? 0.3 : 0.15}
-          points={line}
+          points={VIEW_CUBE_GRID_POINTS}
           renderOrder={WIDGET_RENDER_ORDER + 4}
           transparent
         />
-      ))}
       <AutoOrientText
         color={String(colors.textPrimary ?? colors.wire)}
         outlineColor={String(colors.background ?? colors.panel)}
@@ -757,6 +689,7 @@ function buildViewCubeFaceTexture(
   }
 
   const texture = new CanvasTexture(canvas);
+  texture.colorSpace = SRGBColorSpace;
   texture.needsUpdate = true;
   texture.anisotropy = 4;
   return texture;
@@ -785,6 +718,7 @@ function buildViewCubeLabelTexture(
   }
 
   const texture = new CanvasTexture(canvas);
+  texture.colorSpace = SRGBColorSpace;
   texture.needsUpdate = true;
   texture.anisotropy = 4;
   return texture;
@@ -866,19 +800,13 @@ function buildViewCubeFaceGridPoints(
   ];
 }
 
-function viewCubeSegmentKey(
-  line: [[number, number, number], [number, number, number]],
-): string {
-  return `${line[0].join(",")}:${line[1].join(",")}`;
-}
-
 function trimPositiveAxisLabel(label: string): string {
   return label.startsWith("+") ? label.slice(1) : label;
 }
 
 /** Convert any Three.js ColorRepresentation to { r, g, b } in 0-255 range. */
 function colorToRgba(c: import("three").ColorRepresentation): { r: number; g: number; b: number } {
-  const col = new Color(c);
+  const col = new Color(c).convertLinearToSRGB();
   return { r: Math.round(col.r * 255), g: Math.round(col.g * 255), b: Math.round(col.b * 255) };
 }
 

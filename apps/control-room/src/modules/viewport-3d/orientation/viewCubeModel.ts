@@ -1,4 +1,15 @@
+import { Matrix4, Vector3 } from "three";
+
 export type ViewCubeTargetKind = "face" | "edge" | "corner";
+
+/** Keep rendered cells and physical snap directions in the same basis. */
+export function viewCubeFaceMatrix(face: ViewCubeFaceModel, half: number): Matrix4 {
+  return new Matrix4().makeBasis(
+    new Vector3(...face.right),
+    new Vector3(...face.up),
+    new Vector3(...face.normal),
+  ).setPosition(new Vector3(...face.normal).multiplyScalar(half));
+}
 
 export interface ViewCubeAxisLabels {
   x: string;
@@ -93,11 +104,11 @@ export function buildViewCubeFaces(): readonly ViewCubeFaceModel[] {
     {
       id: "right",
       normal: [1, 0, 0],
-      right: [0, -1, 0],
+      right: [0, 1, 0],
       targets: buildFaceTargets(
         [1, 0, 0],
         [0, 0, 1],
-        [0, -1, 0],
+        [0, 1, 0],
         trimPositive(axisLabels.x),
       ),
       up: [0, 0, 1],
@@ -105,11 +116,11 @@ export function buildViewCubeFaces(): readonly ViewCubeFaceModel[] {
     {
       id: "left",
       normal: [-1, 0, 0],
-      right: [0, 1, 0],
+      right: [0, -1, 0],
       targets: buildFaceTargets(
         [-1, 0, 0],
         [0, 0, 1],
-        [0, 1, 0],
+        [0, -1, 0],
         axisLabels.x.replace("+", "-"),
       ),
       up: [0, 0, 1],
@@ -117,11 +128,11 @@ export function buildViewCubeFaces(): readonly ViewCubeFaceModel[] {
     {
       id: "front",
       normal: [0, 1, 0],
-      right: [1, 0, 0],
+      right: [-1, 0, 0],
       targets: buildFaceTargets(
         [0, 1, 0],
         [0, 0, 1],
-        [1, 0, 0],
+        [-1, 0, 0],
         trimPositive(axisLabels.y),
       ),
       up: [0, 0, 1],
@@ -129,11 +140,11 @@ export function buildViewCubeFaces(): readonly ViewCubeFaceModel[] {
     {
       id: "back",
       normal: [0, -1, 0],
-      right: [-1, 0, 0],
+      right: [1, 0, 0],
       targets: buildFaceTargets(
         [0, -1, 0],
         [0, 0, 1],
-        [-1, 0, 0],
+        [1, 0, 0],
         axisLabels.y.replace("+", "-"),
       ),
       up: [0, 0, 1],
