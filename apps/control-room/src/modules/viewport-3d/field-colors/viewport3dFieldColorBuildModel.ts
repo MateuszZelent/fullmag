@@ -411,33 +411,40 @@ function writeFieldColor(
     );
   }
   if (colors.length > 0) {
-    writeLinearRgb(
+    writeColorBufferRgb(
       colors,
       targetIndex,
       colorAt(fieldVector, pointIndex, colorMode, range, colorPalette),
+      colorMode === "orientation" ? "srgb" : "linear",
     );
   }
 }
 
 function writeFallbackGray(colors: Float32Array, targetIndex: number): void {
-  writeLinearRgb(colors, targetIndex, FALLBACK_GRAY_RGB);
+  writeColorBufferRgb(colors, targetIndex, FALLBACK_GRAY_RGB, "srgb");
 }
 
 /**
- * Mirrors writeLinearRgb() in viewport3dFieldMapping.ts: colours are authored
- * in sRGB but `ScalarColorBuffer.colors` is uploaded into a three.js colour
- * attribute, which the renderer reads as linear-sRGB. See
- * viewport3dColorSpace.ts.
+ * Writes a colour into a ScalarColorBuffer. Scalar palette helpers already
+ * return Linear-sRGB values; orientation colours and neutral fallbacks are
+ * sRGB and need exactly one EOTF conversion before upload.
  */
-function writeLinearRgb(
+function writeColorBufferRgb(
   colors: Float32Array,
   targetIndex: number,
   rgb: readonly [number, number, number],
+  inputColorSpace: "linear" | "srgb",
 ): void {
   const target = targetIndex * 3;
-  colors[target] = srgbToLinearChannel(rgb[0]);
-  colors[target + 1] = srgbToLinearChannel(rgb[1]);
-  colors[target + 2] = srgbToLinearChannel(rgb[2]);
+  if (inputColorSpace === "srgb") {
+    colors[target] = srgbToLinearChannel(rgb[0]);
+    colors[target + 1] = srgbToLinearChannel(rgb[1]);
+    colors[target + 2] = srgbToLinearChannel(rgb[2]);
+    return;
+  }
+  colors[target] = rgb[0];
+  colors[target + 1] = rgb[1];
+  colors[target + 2] = rgb[2];
 }
 
 function writeVectorValue(
