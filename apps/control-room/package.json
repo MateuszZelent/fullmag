@@ -23,7 +23,7 @@
     "storybook": "storybook dev -p 6006",
     "build:storybook": "storybook build",
     "check:architecture-hygiene": "node scripts/check-architecture-hygiene.mjs",
-    "check:api-hygiene": "node scripts/check-api-hygiene.mjs",
+    "check:api-hygiene": "node --test scripts/check-api-hygiene.node-test.mjs && node scripts/check-api-hygiene.mjs",
     "generate:api": "pnpm run generate:openapi-v2 && pnpm run generate:api-v2-types && pnpm run generate:api-v2-client",
     "generate:api-v2-client": "node scripts/generate-v2-client.mjs",
     "generate:api-v2-types": "openapi-typescript src/kernel/api/generated/openapi-v2.json --output src/kernel/api/generated/openapi-v2-types.ts",
