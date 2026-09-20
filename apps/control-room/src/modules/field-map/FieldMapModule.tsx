@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import { decodeFieldVector } from "@/kernel/api/codecs";
@@ -331,32 +331,35 @@ function useFieldMapModuleController() {
       selectedFieldContext.stageId,
     ],
   );
-  const retainedPlanarFrameRef = useRef<{
+  const [retainedPlanarFrame, setRetainedPlanarFrame] = useState<{
     identityKey: string;
     model: NonNullable<typeof freshRenderModel>;
   } | null>(null);
-  const retainedPlanarFrame = retainedPlanarFrameRef.current;
+  // Retention affects rendered output, so keep it in React state rather than
+  // reading a mutable ref during render. The identity/model guards converge
+  // after one retry and discard frames when the semantic view changes.
+  if (freshRenderModel) {
+    if (
+      retainedPlanarFrame?.identityKey !== planarViewIdentityKey ||
+      retainedPlanarFrame.model !== freshRenderModel
+    ) {
+      setRetainedPlanarFrame({
+        identityKey: planarViewIdentityKey,
+        model: freshRenderModel,
+      });
+    }
+  } else if (
+    retainedPlanarFrame &&
+    retainedPlanarFrame.identityKey !== planarViewIdentityKey
+  ) {
+    setRetainedPlanarFrame(null);
+  }
   const renderModel =
     freshRenderModel ??
     (retainedPlanarFrame &&
     retainedPlanarFrame.identityKey === planarViewIdentityKey
       ? retainedPlanarFrame.model
       : null);
-  useEffect(() => {
-    if (freshRenderModel) {
-      retainedPlanarFrameRef.current = {
-        identityKey: planarViewIdentityKey,
-        model: freshRenderModel,
-      };
-      return;
-    }
-    if (
-      retainedPlanarFrameRef.current &&
-      retainedPlanarFrameRef.current.identityKey !== planarViewIdentityKey
-    ) {
-      retainedPlanarFrameRef.current = null;
-    }
-  }, [freshRenderModel, planarViewIdentityKey]);
   const pinnedAxisState = useMemo(() => {
     if (!renderModel || !probe.data) return null;
     const axisFrame = {
@@ -456,7 +459,6 @@ function useFieldMapModuleController() {
     canonicalPlanar,
     canonicalSampleError,
     evidence,
-    frame,
     mask,
     meshOverlay,
     meta,
@@ -479,7 +481,6 @@ export default function FieldMapModule() {
     canonicalPlanar,
     canonicalSampleError,
     evidence,
-    frame,
     mask,
     meshOverlay,
     meta,
@@ -585,7 +586,7 @@ export default function FieldMapModule() {
         <strong>{plan.quantityId}</strong>
         <span>{presentationPlanar.component}</span>
         <span>{renderModel.display.legendUnit}</span>
-        {surfaceProjectionStatus(meta.data) === "ambiguous" ? (
+        {meta.data && surfaceProjectionStatus(meta.data) === "ambiguous" ? (
           <span className="fm-field-map__diagnostic" role="status">
             Ambiguous surface: {meta.data.overlap_count} overlaps,{" "}
             {meta.data.fold_count} folds
