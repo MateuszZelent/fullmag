@@ -473,6 +473,7 @@ export function buildSurfaceFaceScalarColors(
         );
     for (let corner = 0; corner < 3; corner += 1) {
       const targetIndex = faceIndex * 3 + corner;
+      const colorOffset = targetIndex * 3;
       writeLinearRgb(colors, targetIndex, rgb);
       if (scalarValues) {
         scalarValues[targetIndex] = normalizeScalarValueForShaderAttribute(
@@ -627,6 +628,7 @@ export function buildThicknessAverageZScalarColors(
         );
     for (let corner = 0; corner < 3; corner += 1) {
       const targetIndex = faceIndex * 3 + corner;
+      const colorOffset = targetIndex * 3;
       writeLinearRgb(colors, targetIndex, rgb);
       if (scalarValues) {
         scalarValues[targetIndex] = normalizeScalarValueForShaderAttribute(

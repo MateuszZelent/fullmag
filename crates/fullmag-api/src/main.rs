@@ -2466,6 +2466,10 @@ async fn main() {
         .route("/v2/platform/vision", get(vision))
         // ── Internal runner bridge (not part of the public browser contract) ──
         .route(
+            "/v1/internal/live/current/display-selection",
+            get(read_current_live_display_selection),
+        )
+        .route(
             "/v1/internal/live/current/snapshot",
             post(sync_current_live_snapshot),
         )
@@ -3140,41 +3144,45 @@ where
     let has_cached_display_fields =
         clear_preview_cache || selected_cached_display_fields_match_selection;
     let preview_config = display_selection.preview_request();
-    let mut current = state.current_live_state.write().await;
-    let (mut next, previous_snapshot) = match current.take() {
-        Some(existing) if existing.session.session_id == session_id => {
-            let previous_snapshot = existing.clone();
-            (existing, Some(previous_snapshot))
+    // Work on a clone and keep the last accepted snapshot visible while this
+    // update derives previews/realtime resources. Taking the value out of the
+    // lock makes readers observe `None` for the whole duration of a slow frame
+    // and causes the UI session collection to report that no local session
+    // exists.
+    let (mut next, previous_snapshot) = {
+        let current = state.current_live_state.read().await;
+        match current.as_ref() {
+            Some(existing) if existing.session.session_id == session_id => {
+                let previous_snapshot = existing.clone();
+                (previous_snapshot.clone(), Some(previous_snapshot))
+            }
+            Some(_) => return Err(ApiError::conflict("current_live_session_mismatch")),
+            _ => (
+                default_current_live_state(&CurrentLiveSnapshotRequest {
+                    frozen_spins_runtime_status: None,
+                    session_id: session_id.to_string(),
+                    session: None,
+                    session_status: None,
+                    metadata: None,
+                    mesh_workspace: None,
+                    stage_execution: None,
+                    simulation_preparation: None,
+                    run: None,
+                    live_state: None,
+                    coupled_checkpoint: None,
+                    latest_scalar_row: None,
+                    latest_fields: None,
+                    replace_latest_fields: false,
+                    field_generation: None,
+                    preview_fields: None,
+                    clear_preview_cache: false,
+                    engine_log: None,
+                    solver_profile: None,
+                    fem_mesh: None,
+                }),
+                None,
+            ),
         }
-        Some(existing) => {
-            *current = Some(existing);
-            return Err(ApiError::conflict("current_live_session_mismatch"));
-        }
-        _ => (
-            default_current_live_state(&CurrentLiveSnapshotRequest {
-                frozen_spins_runtime_status: None,
-                session_id: session_id.to_string(),
-                session: None,
-                session_status: None,
-                metadata: None,
-                mesh_workspace: None,
-                stage_execution: None,
-                simulation_preparation: None,
-                run: None,
-                live_state: None,
-                coupled_checkpoint: None,
-                latest_scalar_row: None,
-                latest_fields: None,
-                replace_latest_fields: false,
-                field_generation: None,
-                preview_fields: None,
-                clear_preview_cache: false,
-                engine_log: None,
-                solver_profile: None,
-                fem_mesh: None,
-            }),
-            None,
-        ),
     };
     let previous_preview = next.preview.clone();
     let previous_revisions = match previous_snapshot.as_ref() {
@@ -3187,8 +3195,6 @@ where
     };
     let apply_start = std::time::Instant::now();
     if let Err(error) = apply(&mut next) {
-        *current = Some(next);
-        drop(current);
         *state.current_live_connectivity.write().await =
             crate::schemas::status::SessionConnectivity::Degraded;
         return Err(error);
@@ -3196,26 +3202,12 @@ where
     let apply_ms = apply_start.elapsed().as_micros();
     next.display_selection = display_selection.clone();
     next.preview_config = preview_config.clone();
-    if next.scene_document.is_none() && !next.session.script_path.trim().is_empty() {
-        match load_scene_document_state(
-            &state.repo_root,
-            &state.current_workspace_root,
-            Path::new(next.session.script_path.trim()),
-        ) {
-            Ok(mut scene_document) => {
-                normalize_scene_document_magnetization_assets(&mut scene_document);
-                next.builder_adapter = scene_document_builder_projection(&scene_document).ok();
-                next.scene_document = Some(scene_document);
-            }
-            Err(e) => {
-                eprintln!(
-                    "[fullmag-api] failed to load scene document for '{}': {:?}",
-                    next.session.script_path.trim(),
-                    e
-                );
-            }
-        }
-    }
+    // Expose the live session before hydrating the authoring scene.  Scene
+    // export is a managed Python operation and may wait for a runner job for
+    // tens of seconds; making the first live snapshot wait here leaves the
+    // session collection empty while the UI is bootstrapping.  The authoring
+    // scene is loaded lazily by get_or_load_current_live_scene_document once
+    // the session has become visible.
     let has_fresh_preview = live_state_has_fresh_preview(next.live_state.as_ref());
     let should_rebuild_preview = !state.feature_flags.disable_preview_3d
         && (has_fresh_preview
@@ -3311,13 +3303,11 @@ where
                 })
         } else {
             None
-        };
+    };
     if state.current_live_session_epoch.load(Ordering::Relaxed) != admission_epoch {
-        *current = Some(next);
         return Err(ApiError::conflict("current_live_session_transitioned"));
     }
-    *current = Some(next);
-    drop(current);
+    *state.current_live_state.write().await = Some(next);
     crate::router_v2::handlers::sessions::status::record_current_live_heartbeat(state).await;
 
     if let Some(sample) = scalar_sample {
@@ -3367,6 +3357,14 @@ async fn dequeue_current_live_command(
         Some(command) => Ok(Json(command).into_response()),
         None => Ok(StatusCode::NO_CONTENT.into_response()),
     }
+}
+
+async fn read_current_live_display_selection(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<CurrentDisplaySelection>, ApiError> {
+    let _transition = state.current_live_session_transition.lock().await;
+    let _ = current_live_session_id(&state).await?;
+    Ok(Json(state.current_display_selection.read().await.clone()))
 }
 
 async fn wait_current_live_control(
@@ -3809,21 +3807,54 @@ async fn sync_current_live_script(
         .map(Json)
 }
 
+async fn load_scene_document_state_async(
+    state: &AppState,
+    script_path: &Path,
+) -> Result<SceneDocument, ApiError> {
+    let repo_root = state.repo_root.clone();
+    let workspace_root = state.current_workspace_root.clone();
+    let script_path = script_path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        load_scene_document_state(&repo_root, &workspace_root, &script_path)
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("scene document helper task failed: {error}")))?
+}
+
 pub(crate) async fn get_or_load_current_live_scene_document(
     state: &Arc<AppState>,
 ) -> Result<SceneDocument, ApiError> {
+    let script_path = {
+        let current = state.current_live_state.read().await;
+        let snapshot = current
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        if let Some(scene_document) = snapshot.scene_document.clone() {
+            return Ok(scene_document);
+        }
+        let script_path = snapshot.session.script_path.trim();
+        if script_path.is_empty() {
+            return Err(ApiError::not_found(
+                "no scene document available for current workspace",
+            ));
+        }
+        script_path.to_string()
+    };
+
+    // Scene export invokes the Python helper and must not run while the
+    // current-state write lock is held. Otherwise one slow helper request
+    // blocks the session list and the browser reports no local session.
+    let mut current_scene =
+        load_scene_document_state_async(state, Path::new(&script_path)).await?;
+    normalize_scene_document_magnetization_assets(&mut current_scene);
+    let builder_adapter = scene_document_builder_projection(&current_scene).ok();
+
     let mut current = state.current_live_state.write().await;
     let snapshot = current
         .as_mut()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-    if snapshot.scene_document.is_none() && !snapshot.session.script_path.trim().is_empty() {
-        let mut current_scene = load_scene_document_state(
-            &state.repo_root,
-            &state.current_workspace_root,
-            Path::new(snapshot.session.script_path.trim()),
-        )?;
-        normalize_scene_document_magnetization_assets(&mut current_scene);
-        snapshot.builder_adapter = scene_document_builder_projection(&current_scene).ok();
+    if snapshot.scene_document.is_none() {
+        snapshot.builder_adapter = builder_adapter;
         snapshot.scene_document = Some(current_scene);
     }
     snapshot
@@ -3862,21 +3893,36 @@ pub(crate) async fn commit_current_live_scene_document(
         summary = %scene_magnetization_summary(&scene_document),
         "frontend scene update received"
     );
-    let (scene_document, realtime_state, preset_texture_change_logs, live_rebuild_stats) = {
+    let scene_path_to_load = {
+        let current = state.current_live_state.read().await;
+        let snapshot = current
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        if snapshot.scene_document.is_none() && !snapshot.session.script_path.trim().is_empty() {
+            Some(PathBuf::from(snapshot.session.script_path.trim()))
+        } else {
+            None
+        }
+    };
+    if let Some(scene_path) = scene_path_to_load {
+        // Exporting the current scene invokes Python. Resolve it before taking
+        // the state write lock so a slow helper cannot block session reads.
+        let mut current_scene = load_scene_document_state_async(state, &scene_path).await?;
+        normalize_scene_document_magnetization_assets(&mut current_scene);
+        let builder_adapter = scene_document_builder_projection(&current_scene).ok();
+        let mut current = state.current_live_state.write().await;
+        if let Some(snapshot) = current.as_mut() {
+            if snapshot.scene_document.is_none() {
+                snapshot.builder_adapter = builder_adapter;
+                snapshot.scene_document = Some(current_scene);
+            }
+        }
+    }
+    let (scene_document, realtime_snapshot, display_revision, preset_texture_change_logs, live_rebuild_stats) = {
         let mut current = state.current_live_state.write().await;
         let snapshot = current
             .as_mut()
             .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-        if snapshot.scene_document.is_none() && !snapshot.session.script_path.trim().is_empty() {
-            let mut current_scene = load_scene_document_state(
-                &state.repo_root,
-                &state.current_workspace_root,
-                Path::new(snapshot.session.script_path.trim()),
-            )?;
-            normalize_scene_document_magnetization_assets(&mut current_scene);
-            snapshot.builder_adapter = scene_document_builder_projection(&current_scene).ok();
-            snapshot.scene_document = Some(current_scene);
-        }
         if let Some(current_scene) = snapshot.scene_document.as_ref() {
             if scene_document.revision != current_scene.revision {
                 return Err(ApiError::conflict(format!(
@@ -3964,21 +4010,22 @@ pub(crate) async fn commit_current_live_scene_document(
             snapshot.mesh_revision = snapshot.mesh_revision.wrapping_add(1).max(1);
             snapshot.mesh_build_revision = snapshot.mesh_build_revision.wrapping_add(1).max(1);
         }
-        let realtime_state = current_live_realtime_state_from_snapshot(
-            state,
-            snapshot,
-            snapshot.display_selection.revision,
-        )
-        .await;
         let preset_texture_change_logs =
             detect_preset_texture_changes(previous_scene.as_ref(), &scene_document);
         (
             scene_document,
-            realtime_state,
+            snapshot.clone(),
+            snapshot.display_selection.revision,
             preset_texture_change_logs,
             live_rebuild_stats,
         )
     };
+    let realtime_state = current_live_realtime_state_from_snapshot(
+        state,
+        &realtime_snapshot,
+        display_revision,
+    )
+    .await;
 
     publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0).await?;
     eprintln!(

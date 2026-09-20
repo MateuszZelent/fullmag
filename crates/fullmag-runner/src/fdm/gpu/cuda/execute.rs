@@ -14,6 +14,8 @@ use crate::fdm::gpu::cuda::artifacts::{
     capture_initial_cuda_fields, record_cuda_due_outputs, record_cuda_final_outputs,
 };
 #[cfg(feature = "cuda")]
+use crate::fdm::gpu::cuda::live_observations::FdmLiveObservationScheduler;
+#[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::native::{NativeFdmBackend, NativeStatsPolicy};
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::spin_transport::{
@@ -440,6 +442,9 @@ pub(crate) fn execute_cuda_fdm(
     let mut direct_minimizer_torque_confirmed = false;
     let mut current_stats = backend.snapshot_step_stats(plan.grid.cells)?;
     ensure_single_object_scalars(&mut current_stats, "free");
+    let mut live_observations = live
+        .as_ref()
+        .map(|_| FdmLiveObservationScheduler::new(plan, plan.grid.cells));
     let mut final_frozen_checkpoint = frozen_spins_checkpoint_value(
         plan,
         frozen_spins_state.as_ref(),
@@ -455,14 +460,18 @@ pub(crate) fn execute_cuda_fdm(
             plan,
             cell_count,
             direct_minimizer,
-            current_stats,
+            current_stats.clone(),
             live.as_mut(),
             &mut artifacts,
             &mut steps,
             &mut energy_plateau,
             last_preview_revision,
+            live_observations.as_mut(),
         )?;
         latest_stats = outcome.latest_stats;
+        if let Some(stats) = latest_stats.clone() {
+            current_stats = stats;
+        }
         cancelled = outcome.cancelled;
         direct_minimizer_torque_confirmed = outcome.torque_confirmed;
         numerical_stagnation = outcome.numerical_stagnation;
@@ -531,16 +540,25 @@ pub(crate) fn execute_cuda_fdm(
                     );
                     let preview_targets_global_scalar =
                         display_is_global_scalar(&display_selection);
-                    let preview_field = if preview_due && !preview_targets_global_scalar {
-                        let request = display_selection.preview_request();
-                        Some(backend.copy_live_preview_field(
-                            &request,
-                            plan.grid.cells,
-                            plan.active_mask.as_deref(),
-                        )?)
-                    } else {
-                        None
-                    };
+                    let mut observation_publication = live_observations.as_mut().map(|scheduler| {
+                        scheduler.observe(
+                            &backend,
+                            &display_selection,
+                            current_stats.step,
+                            current_stats.time,
+                            current_stats.dt,
+                        )
+                    });
+                    let (preview_field, cached_preview_fields) =
+                        if let Some(publication) = observation_publication.as_mut() {
+                            publication.apply_to_stats(&mut current_stats);
+                            (
+                                publication.preview_field.take(),
+                                publication.cached_preview_fields.take(),
+                            )
+                        } else {
+                            (None, None)
+                        };
                     let action = (live.on_step)(StepUpdate {
                         coupled_checkpoint: final_frozen_checkpoint.clone(),
                         stats: current_stats.clone(),
@@ -548,7 +566,7 @@ pub(crate) fn execute_cuda_fdm(
                         fem_mesh_generation_id: None,
                         magnetization: None,
                         preview_field,
-                        cached_preview_fields: None,
+                        cached_preview_fields,
                         hysteresis_field_m_t: None,
                         hysteresis_point_index: None,
                         hysteresis_settle_step_index: None,
@@ -685,17 +703,29 @@ pub(crate) fn execute_cuda_fdm(
                 } else {
                     None
                 };
-                let preview_field = if preview_due && !preview_targets_global_scalar {
-                    let selection = display_selection.as_ref().expect("checked preview_due");
-                    let request = selection.preview_request();
-                    Some(backend.copy_live_preview_field(
-                        &request,
-                        plan.grid.cells,
-                        plan.active_mask.as_deref(),
-                    )?)
-                } else {
-                    None
-                };
+                let mut observation_publication = display_selection
+                    .as_ref()
+                    .and_then(|display_selection| {
+                        live_observations.as_mut().map(|scheduler| {
+                            scheduler.observe(
+                                &backend,
+                                display_selection,
+                                stats.step,
+                                stats.time,
+                                stats.dt,
+                            )
+                        })
+                    });
+                let (preview_field, cached_preview_fields) =
+                    if let Some(publication) = observation_publication.as_mut() {
+                        publication.apply_to_stats(&mut sampled_stats);
+                        (
+                            publication.preview_field.take(),
+                            publication.cached_preview_fields.take(),
+                        )
+                    } else {
+                        (None, None)
+                    };
                 let action = (live.on_step)(StepUpdate {
                     coupled_checkpoint: final_frozen_checkpoint.clone(),
                     stats: sampled_stats.clone(),
@@ -703,7 +733,7 @@ pub(crate) fn execute_cuda_fdm(
                     fem_mesh_generation_id: None,
                     magnetization,
                     preview_field,
-                    cached_preview_fields: None,
+                    cached_preview_fields,
                     hysteresis_field_m_t: None,
                     hysteresis_point_index: None,
                     hysteresis_settle_step_index: None,
@@ -792,6 +822,54 @@ pub(crate) fn execute_cuda_fdm(
         latest_stats.as_ref().map_or(0.0, |stats| stats.time),
         latest_stats.as_ref().map_or(0.0, |stats| stats.dt),
     )?;
+    if let Some(scheduler) = live_observations.as_mut() {
+        let terminal_display_state = live
+            .as_ref()
+            .and_then(|consumer| consumer.display_selection.map(|get| get()))
+            .unwrap_or_default();
+        let publish_terminal_update = live
+            .as_ref()
+            .is_some_and(|consumer| consumer.display_selection.is_some());
+        let terminal_capture = latest_stats
+            .clone()
+            .unwrap_or_else(|| current_stats.clone());
+        let mut publication = scheduler.finish(
+            &backend,
+            &terminal_display_state,
+            terminal_capture.step,
+            terminal_capture.time,
+            terminal_capture.dt,
+        );
+        let mut terminal_stats = terminal_capture;
+        publication.apply_to_stats(&mut terminal_stats);
+        if latest_stats.is_some() {
+            latest_stats = Some(terminal_stats.clone());
+        }
+        if publish_terminal_update {
+            if let Some(live) = live.as_mut() {
+                let action = (live.on_step)(StepUpdate {
+                    coupled_checkpoint: final_frozen_checkpoint.clone(),
+                    stats: terminal_stats,
+                    grid: live.grid,
+                    fem_mesh_generation_id: None,
+                    magnetization: None,
+                    preview_field: publication.preview_field.take(),
+                    cached_preview_fields: publication.cached_preview_fields.take(),
+                    hysteresis_field_m_t: None,
+                    hysteresis_point_index: None,
+                    hysteresis_settle_step_index: None,
+                    hysteresis_settle_step_kind: None,
+                    hysteresis_settle_step_method: None,
+                    scalar_row_due: false,
+                    terminal_field_snapshot: false,
+                    finished: false,
+                });
+                if action == StepAction::Stop {
+                    cancelled = true;
+                }
+            }
+        }
+    }
     if let Some(session) = gpu_transport.as_mut() {
         backend.unbind_gpu_transport()?;
         session.close().map_err(|error| RunError {

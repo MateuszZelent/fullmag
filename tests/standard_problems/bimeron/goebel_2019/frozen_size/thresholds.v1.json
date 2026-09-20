@@ -1,0 +1,17 @@
+{
+  "schema_version": "bimeron_frozen_size.thresholds.v1",
+  "frozen_reference_max_drift": 1e-15,
+  "minimum_nontrivial_abs_topological_charge": 0.8,
+  "maximum_area_core_radius_difference_nm": 3.0,
+  "maximum_state_norm_defect": 1e-12,
+  "maximum_energy_balance_relative": 1e-9,
+  "maximum_energy_window_relative_span": 1e-3,
+  "require_finite_energy": true,
+  "require_finite_profile_energy": true,
+  "require_runtime_provenance": true,
+  "require_completion": true,
+  "require_gpu_residency": true,
+  "require_positive_frozen_dof_for_constrained_protocols": true,
+  "require_frozen_hashes": true,
+  "maximum_free_torque_T": 1e-6
+}

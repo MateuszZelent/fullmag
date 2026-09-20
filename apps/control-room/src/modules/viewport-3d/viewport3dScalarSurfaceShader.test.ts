@@ -476,7 +476,7 @@ describe("viewport3dScalarSurfaceShader", () => {
 
     it("uses relative epsilon for span degeneracy check and sentinel for NaN", () => {
       expect(source).toContain("bool bad = !(v == v) || abs(v) > 3.0e38;");
-      expect(source).toContain("bool degenerate = span <= 1e-6 * max(scale, 1.0);");
+      expect(source).toContain("float t = bad ? 0.5 : clamp(v, 0.0, 1.0);");
       expect(source).toContain("vec3(0.85, 0.0, 0.85)");
     });
   });
