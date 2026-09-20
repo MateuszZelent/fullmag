@@ -14,6 +14,16 @@ from pathlib import Path
 import sys
 from typing import Any
 
+_ROOT = Path(__file__).resolve().parents[5]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from tests.standard_problems.bimeron.goebel_2019.frozen_size.provenance import (
+    compare_contract,
+    contract_missing_evidence,
+    load_artifact_contract,
+)
+
 MU0_T_M_PER_A = 4.0 * math.pi * 1.0e-7
 
 
@@ -24,10 +34,65 @@ def _load(path: Path) -> dict[str, Any]:
     return value
 
 
-def free_reference_from_analysis(path: Path) -> dict[str, Any]:
-    """Extract one measured free-relaxation control for a profile report."""
+def free_reference_from_analysis(
+    path: Path,
+    *,
+    expected_contract: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Extract a compatible, converged one-time free-relaxation control.
+
+    A finite energy is insufficient: the artifact must explicitly identify a
+    p0 run, report convergence, and carry a complete provenance contract.  If
+    a profile supplies its expected physical contract, the material, grid,
+    execution lane, and source snapshot are compared before subtraction;
+    exact case reuse additionally compares the numerical policy.
+    """
 
     analysis = _load(path)
+    if analysis.get("status") != "measured":
+        raise ValueError(f"{path} is not a measured free-control analysis")
+    protocol = analysis.get("protocol")
+    if not isinstance(protocol, dict) or str(protocol.get("protocol", "")).lower() != "p0":
+        raise ValueError(f"{path} is not a p0 free-relaxation control")
+    runtime = analysis.get("runtime_provenance")
+    completion = runtime.get("completion") if isinstance(runtime, dict) else None
+    if not isinstance(completion, dict) or completion.get("converged") is not True:
+        raise ValueError(f"{path} free-control relaxation is not converged")
+    embedded_contract = analysis.get("provenance_contract")
+    sidecar_path = path.parent / "request_contract.json"
+    contract = (
+        load_artifact_contract(path.parent)
+        if sidecar_path.is_file() or path.name == "analysis.json"
+        else embedded_contract
+    )
+    missing = contract_missing_evidence(contract)
+    if missing:
+        raise ValueError(
+            f"{path} lacks required provenance evidence: {', '.join(missing)}"
+        )
+    if expected_contract is not None:
+        mismatches = compare_contract(
+            expected_contract,
+            contract,
+            physical_only=True,
+        )
+        if mismatches:
+            raise ValueError(
+                f"{path} does not match the requested physical contract: "
+                + "; ".join(mismatches)
+            )
+    verification_status = analysis.get("verification_status")
+    verification_path = path.parent / "verification.json"
+    if verification_path.is_file():
+        try:
+            verification = _load(verification_path)
+        except (OSError, json.JSONDecodeError, ValueError) as error:
+            raise ValueError(f"{path} has an invalid verification receipt") from error
+        verification_status = verification.get("status")
+    if verification_status != "passed":
+        raise ValueError(
+            f"{path} free-control verification is {verification_status!r}; expected passed"
+        )
     profile = analysis.get("profile_energy")
     profile = profile if isinstance(profile, dict) else {}
     states = analysis.get("states")
@@ -40,6 +105,17 @@ def free_reference_from_analysis(path: Path) -> dict[str, Any]:
     area = _number(measurement.get("R_area_nm"))
     core = _number(measurement.get("R_core_nm"))
     charge = _number(measurement.get("topological_charge"))
+    if charge is None or abs(charge) < 0.8:
+        raise ValueError(f"{path} does not contain a bimeron-like p0 state (|Q| < 0.8)")
+    norm_defect = _number(measurement.get("max_unit_norm_defect"))
+    if norm_defect is None or norm_defect > 1.0e-12:
+        raise ValueError(f"{path} has no qualified unit-norm state")
+    frozen = analysis.get("frozen_runtime")
+    if not isinstance(frozen, dict) or "frozen_dof_count" not in frozen:
+        raise ValueError(f"{path} does not report frozen DOF count")
+    frozen_count = _number(frozen.get("frozen_dof_count"))
+    if frozen_count is None or frozen_count != 0.0:
+        raise ValueError(f"{path} is constrained; free reference requires zero frozen DOF")
     if energy is None or area is None:
         raise ValueError(
             f"{path} does not contain finite free-control energy and R_area"
@@ -51,12 +127,18 @@ def free_reference_from_analysis(path: Path) -> dict[str, Any]:
         "R_core_nm": core,
         "Q": charge,
         "E_total_J": energy,
+        "provenance_contract": contract,
+        "provenance_contract_sha256": contract.get("contract_sha256"),
     }
 
 
 def _free_reference(summary: dict[str, Any]) -> dict[str, Any] | None:
     value = summary.get("free_reference")
     if not isinstance(value, dict):
+        return None
+    if contract_missing_evidence(value.get("provenance_contract")):
+        # Historical summaries without a persisted contract remain readable,
+        # but their reference cannot participate in a new energy comparison.
         return None
     area = _number(value.get("R_area_nm"))
     energy = _number(value.get("E_total_J"))
@@ -71,6 +153,8 @@ def _free_reference(summary: dict[str, Any]) -> dict[str, Any] | None:
     background_energy = (
         _number(background.get("energy_J"))
         if isinstance(background, dict)
+        and background.get("status") == "usable"
+        and background.get("contract_sha256")
         else None
     )
     reference["delta_E_to_background_J"] = (
@@ -206,6 +290,36 @@ def _number(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+def _qualification_scope(summary: dict[str, Any]) -> tuple[str, bool, str]:
+    """Resolve the policy scope and a human-readable label for reports/plots."""
+
+    qualification = summary.get("qualification")
+    qualification = qualification if isinstance(qualification, dict) else {}
+    policy = summary.get("qualification_policy")
+    policy = policy if isinstance(policy, dict) else {}
+    scope = str(
+        qualification.get("scope")
+        or policy.get("scope")
+        or "scope_not_recorded"
+    )
+    strict_value = qualification.get("strict_release")
+    if not isinstance(strict_value, bool):
+        strict_value = policy.get("strict_release")
+    strict_release = bool(strict_value) if isinstance(strict_value, bool) else scope in {
+        "strict_profile",
+        "strict_release",
+    }
+    if scope == "scope_not_recorded":
+        label = "qualification policy not recorded"
+    elif scope == "working_profile_not_release" or not strict_release:
+        label = "working profile — not release qualification"
+    elif scope in {"strict_profile", "strict_release"} or strict_release:
+        label = "strict profile qualification"
+    else:
+        label = f"qualification scope: {scope}"
+    return scope, strict_release, label
 
 
 def _fmt(value: Any, digits: int = 6) -> str:
@@ -348,6 +462,12 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
         }
 
     rows = _plot_rows(summary)
+    _scope, _strict_release, scope_label = _qualification_scope(summary)
+    scope_legend_label = (
+        "accepted — working policy"
+        if not _strict_release
+        else "accepted — strict policy"
+    )
     protocols = sorted({row["protocol"] for row in rows})
     palette = {protocol: color for protocol, color in zip(protocols, plt.get_cmap("tab10").colors)}
     free_reference = _free_reference(summary)
@@ -409,7 +529,7 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
         ]
         status_handles = [
             Line2D([0], [0], marker="o", linestyle="none", markersize=6,
-                   markerfacecolor="black", markeredgecolor="black", label="accepted"),
+                   markerfacecolor="black", markeredgecolor="black", label=scope_legend_label),
             Line2D([0], [0], marker="o", linestyle="none", markersize=6,
                    markerfacecolor="none", markeredgecolor="black", label="diagnostic / failed"),
         ]
@@ -420,7 +540,7 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
             ax.legend(handles=status_handles, title="classification", loc="lower right")
         ax.set_xlabel(x_label)
         ax.set_ylabel(y_label)
-        ax.set_title(title)
+        ax.set_title(f"{title} — {scope_label}")
         ax.grid(True, alpha=0.25, linewidth=0.7)
         ax.margins(x=0.08, y=0.12)
 
@@ -589,7 +709,7 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
                 linestyle="--", color="0.45", linewidth=0.9, label="ideal R_measured = R_target")
         ax.set_xlabel(r"$R_{\mathrm{target}}$ (nm)")
         ax.set_ylabel(r"$R_{\mathrm{area}}$ measured (nm)")
-        ax.set_title("Frozen-spin radius retention")
+        ax.set_title(f"Frozen-spin radius retention — {scope_label}")
         ax.grid(True, alpha=0.25, linewidth=0.7)
         ax.legend(loc="best")
         ax.set_xlim(low - 0.08 * span, high + 0.08 * span)
@@ -627,7 +747,7 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
                 linestyle="--", color="0.45", linewidth=0.9, label="ideal R_measured = R_target")
         ax.set_xlabel(r"$R_{\mathrm{target}}$ (nm)")
         ax.set_ylabel(r"$R_{\mathrm{protocol}}$ measured (nm)")
-        ax.set_title("Protocol-controlled radius retention")
+        ax.set_title(f"Protocol-controlled radius retention — {scope_label}")
         ax.grid(True, alpha=0.25, linewidth=0.7)
         ax.legend(loc="best")
         ax.set_xlim(low - 0.08 * span, high + 0.08 * span)
@@ -711,7 +831,9 @@ def write_plots(summary: dict[str, Any], output_root: Path) -> dict[str, Any]:
             axes[1].legend(loc="upper right", fontsize=8)
         case_id = str(protocol.get("case_id", f"R{candidate['radius_nm']:g}nm"))
         map_path = output_root / f"profile_map_{case_id}.png"
-        fig.suptitle(f"Frozen-spin state: {case_id} ({candidate['state']})")
+        fig.suptitle(
+            f"Frozen-spin state: {case_id} ({candidate['state']}) — {scope_label}"
+        )
         fig.savefig(map_path, dpi=180)
         plt.close(fig)
         files.append({"kind": "magnetization_map", "path": map_path.name, "case_id": case_id})
@@ -734,6 +856,15 @@ def render_report(summary: dict[str, Any]) -> str:
 
     background = summary.get("background") if isinstance(summary.get("background"), dict) else {}
     free_reference = _free_reference(summary)
+    qualification_scope, strict_release, scope_label = _qualification_scope(summary)
+    qualification = summary.get("qualification")
+    qualification = qualification if isinstance(qualification, dict) else {}
+    qualification_policy = summary.get("qualification_policy")
+    qualification_policy = qualification_policy if isinstance(qualification_policy, dict) else {}
+    release_qualified = qualification.get("release_qualified")
+    if not isinstance(release_qualified, bool):
+        release_qualified = qualification_policy.get("release_qualified", False)
+    release_qualified = bool(release_qualified)
     lines = [
         "# Frozen-spin bimeron size profile",
         "",
@@ -743,6 +874,7 @@ def render_report(summary: dict[str, Any]) -> str:
         f"- Cases: {len(rows)}",
         f"- Background: `{(summary.get('background') or {}).get('analysis', 'not recorded')}`",
         f"- Source: `{(summary.get('source') or {}).get('git_head', 'unknown')}`; branch `{(summary.get('source') or {}).get('branch_id', 'unknown')}`",
+        f"- Qualification scope: `{qualification_scope}`; `{scope_label}`; strict release gate: `{strict_release}`; release-qualified: `{release_qualified}`",
         "- Physical lane: FDM, requested GPU, FP64, strict mode; inspect each runtime receipt before interpreting a point.",
         "- The reported free torque is sampled from the last constrained stage; release torque is retained separately in the case analysis.",
         "",
@@ -967,6 +1099,10 @@ def render_report(summary: dict[str, Any]) -> str:
         lines.append("Accepted points are listed individually; no smooth curve is fitted across other classifications.")
     else:
         lines.append("No point is classified as an accepted minimum curve point. The current pilot is diagnostic until the solver reaches its convergence criterion.")
+    lines.append(
+        f"Verification status is evaluated under the `{qualification_scope}` policy; "
+        + ("it is not release qualification." if not release_qualified else "it is release-qualified.")
+    )
     lines.append("The constrained profile is conditional on the protocol, pin size, seed wall width, grid, PBC, demagnetization realization, and captured reference; it is not a global minimum or a free energy at finite temperature.")
     lines.append("For P2/P3, the accepted radius coordinate is R_core; deviations in R_area are retained as pin-bias diagnostics. P-ring uses R_area as its coordinate.")
     for result, verification, _classification_value in rows:

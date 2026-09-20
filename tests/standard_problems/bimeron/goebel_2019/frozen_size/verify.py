@@ -88,6 +88,8 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
         measurement = states.get(label, {}).get("measurement") if isinstance(states.get(label), dict) else None
         if not isinstance(measurement, dict):
             failures.append(f"missing_{label}_measurement")
+        elif measurement.get("area_component_contour_ambiguous") is True:
+            failures.append(f"{label}_area_component_contour_ambiguous")
     protocol = analysis.get("protocol") if isinstance(analysis.get("protocol"), dict) else {}
     name = str(protocol.get("protocol", ""))
     frozen = analysis.get("frozen_runtime") if isinstance(analysis.get("frozen_runtime"), dict) else {}
@@ -116,9 +118,14 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
     free_torque_t = None
     if free_status != "emitted":
         warnings.append("free_torque_metric_not_emitted: full/all torque must not be interpreted as free-only")
-    elif _finite(free_torque_value):
+        failures.append("free_torque_metric_unavailable")
+    elif not _finite(free_torque_value) or float(free_torque_value) < 0.0:
+        failures.append("free_torque_metric_not_finite_or_negative")
+    elif free_torque_units not in {"T", "A/m", "Apm"}:
+        failures.append("free_torque_metric_units_unknown")
+    else:
         free_torque_t = float(free_torque_value)
-        if free_torque_units != "T":
+        if free_torque_units in {"A/m", "Apm"}:
             free_torque_t *= MU0_T_M_PER_A
         maximum_free_torque_t = float(thresholds.get("maximum_free_torque_T", 1.0e-5))
         if free_torque_t > maximum_free_torque_t:
@@ -210,6 +217,8 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
         else:
             warnings.append("energy_window_not_stable_relative_to_excess_before_convergence")
 
+    if completion.get("converged") is not True and completion.get("converged") is not False:
+        failures.append("convergence_status_missing")
     not_converged = completion.get("converged") is False
     if not_converged:
         warnings.append(
@@ -218,6 +227,9 @@ def verify_analysis(analysis: dict[str, Any], thresholds: dict[str, Any]) -> dic
     status = "failed" if failures else ("not_converged" if not_converged else "passed")
     result = {
         "schema_version": "bimeron_frozen_size.verification.v1",
+        "threshold_policy": thresholds.get("schema_version"),
+        "qualification_scope": thresholds.get("qualification_scope", "strict_profile"),
+        "maximum_free_torque_T": thresholds.get("maximum_free_torque_T"),
         "artifact_root": analysis.get("artifact_root"),
         "case_id": protocol.get("case_id"),
         "status": status,

@@ -74,12 +74,12 @@ fm.runtime_metadata(
         "schema_version": "bimeron_frozen_size.experiment.v1",
         "source_scenario": "tests/standard_problems/bimeron/goebel_2019/frozen_size/scenario_fdm.py",
         "texture_preset": "bimeron",
-        "same_rDMI_parameters": True,
+        "material_parameters_source": "explicit_material_metadata_with_environment_overrides",
         "relaxation_algorithm": RELAX_ALGORITHM,
         "alpha": RELAX_ALPHA,
         "relaxation_tolerance_T": CASE.relax_tol_T,
         "relaxation_algorithm_status": (
-            "qualified_for_frozen_spins_cuda_strict"
+            "implemented_frozen_spins_path;experiment_qualification_requires_verification"
             if RELAX_ALGORITHM == "llg_overdamped"
             else "diagnostic_only;"
             "projected_gradient_bb_requires_separate_native_receipt_qualification"
@@ -91,8 +91,8 @@ fm.runtime_metadata(
         "protocol": CASE.metadata(),
         "material": MATERIAL.metadata(),
         "measurement": {
-            "R_area": "sqrt(connected_area(mx<0)/pi)",
-            "R_core": "half distance between opposite mz extrema",
+            "R_area": "sqrt(selected_connected_area(background_sign*mx<0)/pi)",
+            "R_core": "half minimum-image distance between texture-local opposite mz extrema",
             "topological_charge": "Berg-Luscher plaquette sum",
             "energy": "E_total and component terms from solver trace",
         },
@@ -125,8 +125,9 @@ def _constraint_for_case() -> fm.FrozenSpins | None:
     elif CASE.protocol == "p3":
         selector = left | right | _disk_selector(0.0, 0.0, CASE.pin_radius_m)
     elif CASE.protocol == "ring":
-        outer_radius = CASE.target_radius_m + CASE.ring_width_m / 2.0
-        inner_radius = CASE.target_radius_m - CASE.ring_width_m / 2.0
+        ring_radius = CASE.target_radius_m + CASE.ring_radius_offset_nm * 1e-9
+        outer_radius = ring_radius + CASE.ring_width_m / 2.0
+        inner_radius = ring_radius - CASE.ring_width_m / 2.0
         if inner_radius <= 0.0:
             raise ValueError("ring width must be smaller than twice target radius")
         outer = _disk_selector(0.0, 0.0, outer_radius)

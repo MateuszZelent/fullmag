@@ -43,6 +43,14 @@ from tests.standard_problems.bimeron.goebel_2019.frozen_size.report import (
     render_report,
     write_plots,
 )
+from tests.standard_problems.bimeron.goebel_2019.frozen_size.provenance import (
+    CONTRACT_FILENAME,
+    build_contract,
+    compare_contract,
+    contract_sha256,
+    contract_missing_evidence,
+    load_artifact_contract,
+)
 from tests.standard_problems.bimeron.goebel_2019.frozen_size.verify import verify_analysis
 
 
@@ -199,12 +207,17 @@ def _case_matrix(args: argparse.Namespace) -> list[dict[str, Any]]:
                     "wall_width_nm": wall_nm,
                     "protocol": protocol,
                     "cell_nm": args.cell_nm,
+                    "cell_size_nm": [args.cell_nm, args.cell_nm, 0.5],
                     "pin_radius_nm": args.pin_radius_nm,
+                    "track_size_nm": [args.track_x_nm, args.track_y_nm, 0.5],
                     "track_x_nm": args.track_x_nm,
                     "track_y_nm": args.track_y_nm,
                     "relax_tol_T": args.tol_t,
                     "table_every_steps": args.table_every_steps,
                     "ring_width_nm": args.ring_width_nm,
+                    "ring_radius_offset_nm": float(
+                        os.environ.get("FULLMAG_BIMERON_RING_RADIUS_OFFSET_NM", "0.0")
+                    ),
                     "helicity_rad": args.helicity_rad,
                     "vorticity": args.vorticity,
                     "background_sign": args.background_sign,
@@ -238,6 +251,12 @@ def _environment(case: dict[str, Any], args: argparse.Namespace) -> dict[str, st
         "FULLMAG_BIMERON_CELL_NM": str(case["cell_nm"]),
         "FULLMAG_BIMERON_PIN_RADIUS_NM": str(case["pin_radius_nm"]),
         "FULLMAG_BIMERON_RING_WIDTH_NM": str(case.get("ring_width_nm", args.ring_width_nm)),
+        "FULLMAG_BIMERON_RING_RADIUS_OFFSET_NM": str(
+            case.get(
+                "ring_radius_offset_nm",
+                os.environ.get("FULLMAG_BIMERON_RING_RADIUS_OFFSET_NM", "0.0"),
+            )
+        ),
         "FULLMAG_BIMERON_HELICITY_RAD": str(case.get("helicity_rad", args.helicity_rad)),
         "FULLMAG_BIMERON_VORTICITY": str(case.get("vorticity", args.vorticity)),
         "FULLMAG_BIMERON_BACKGROUND_SIGN": str(case.get("background_sign", args.background_sign)),
@@ -680,7 +699,11 @@ def _write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-def _background_reference_contract(path: Path) -> dict[str, Any]:
+def _background_reference_contract(
+    path: Path,
+    *,
+    expected_contract: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Classify a background artifact before using its energy for ΔE."""
 
     try:
@@ -689,6 +712,28 @@ def _background_reference_contract(path: Path) -> dict[str, Any]:
         return {"status": "unavailable", "reason": "background_analysis_missing", "energy_J": None}
     if not isinstance(analysis, dict) or analysis.get("status") != "measured":
         return {"status": "unavailable", "reason": "background_not_measured", "energy_J": None}
+    actual_contract = load_artifact_contract(path.parent)
+    missing = contract_missing_evidence(actual_contract)
+    if missing:
+        return {
+            "status": "unavailable",
+            "reason": "background_contract_missing",
+            "energy_J": None,
+            "contract_missing_evidence": missing,
+        }
+    if expected_contract is not None:
+        differences = compare_contract(
+            expected_contract,
+            actual_contract,
+            physical_only=True,
+        )
+        if differences:
+            return {
+                "status": "unavailable",
+                "reason": "background_contract_mismatch",
+                "energy_J": None,
+                "contract_mismatches": differences,
+            }
     energy = analysis.get("energy") if isinstance(analysis.get("energy"), dict) else {}
     value = energy.get("E_total_J")
     try:
@@ -711,6 +756,7 @@ def _background_reference_contract(path: Path) -> dict[str, Any]:
         "reason": "background_converged",
         "energy_J": float(value),
         "completion": completion,
+        "contract_sha256": actual_contract.get("contract_sha256") if isinstance(actual_contract, dict) else None,
     }
 
 
@@ -778,6 +824,65 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _thresholds_path(repo: Path, args: argparse.Namespace | None = None) -> Path:
+    """Resolve the versioned verification policy selected for a sweep."""
+
+    value = getattr(args, "thresholds", THRESHOLDS_REL) if args is not None else THRESHOLDS_REL
+    path = Path(value)
+    if not path.is_absolute():
+        path = repo / path
+    path = path.resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"threshold policy does not exist: {path}")
+    return path
+
+
+def _case_contract(
+    repo: Path,
+    case: dict[str, Any],
+    args: argparse.Namespace,
+    source: dict[str, Any],
+    *,
+    kind: str = "case",
+) -> dict[str, Any]:
+    thresholds = _thresholds_path(repo, args)
+    return build_contract(
+        case=case,
+        environment=_environment(case, args),
+        source=source,
+        thresholds_sha256=_sha256_file(thresholds),
+        kind=kind,
+    )
+
+
+def _control_case(args: argparse.Namespace) -> dict[str, Any]:
+    """Return the one-time free-control request used for compatibility checks."""
+
+    target = CONTROL_TARGET_R_NM
+    wall = CONTROL_WALL_WIDTH_NM
+    return {
+        "case_id": "free-reference-p0",
+        "target_radius_nm": target,
+        "wall_width_nm": wall,
+        "protocol": "p0",
+        "cell_nm": args.cell_nm,
+        "cell_size_nm": [args.cell_nm, args.cell_nm, 0.5],
+        "pin_radius_nm": max(DEFAULT_PIN_RADIUS_NM, args.pin_radius_nm),
+        "track_size_nm": [args.track_x_nm, args.track_y_nm, 0.5],
+        "track_x_nm": args.track_x_nm,
+        "track_y_nm": args.track_y_nm,
+        "ring_width_nm": args.ring_width_nm,
+        "ring_radius_offset_nm": float(
+            os.environ.get("FULLMAG_BIMERON_RING_RADIUS_OFFSET_NM", "0.0")
+        ),
+        "helicity_rad": args.helicity_rad,
+        "vorticity": args.vorticity,
+        "background_sign": args.background_sign,
+        "release": False,
+        "preset_radius_nm": preset_radius_for_contour(target * 1e-9, wall * 1e-9) * 1e9,
+    }
 
 
 def _write_profile_csv(path: Path, results: list[dict[str, Any]]) -> None:
@@ -884,7 +989,13 @@ def _write_profile_csv(path: Path, results: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def _verify_case(repo: Path, analysis: dict[str, Any], artifact_root: Path) -> dict[str, Any]:
+def _verify_case(
+    repo: Path,
+    analysis: dict[str, Any],
+    artifact_root: Path,
+    *,
+    thresholds_path: Path | None = None,
+) -> dict[str, Any]:
     """Persist the verification receipt for every measured case.
 
     ``verify_analysis`` intentionally returns ``not_converged`` as a normal
@@ -893,8 +1004,19 @@ def _verify_case(repo: Path, analysis: dict[str, Any], artifact_root: Path) -> d
     a failed case.
     """
 
-    thresholds = json.loads((repo / THRESHOLDS_REL).read_text(encoding="utf-8"))
+    policy_path = thresholds_path if thresholds_path is not None else _thresholds_path(repo)
+    thresholds = json.loads(policy_path.read_text(encoding="utf-8"))
+    if not isinstance(thresholds, dict):
+        raise ValueError(f"threshold policy must be a JSON object: {policy_path}")
+    thresholds = dict(thresholds)
+    thresholds.setdefault("policy_path", str(policy_path))
+    thresholds.setdefault("policy_sha256", _sha256_file(policy_path))
     verification = verify_analysis(analysis, thresholds)
+    verification["threshold_policy"] = {
+        "path": str(policy_path),
+        "sha256": _sha256_file(policy_path),
+        "schema_version": thresholds.get("schema_version"),
+    }
     _write_json(artifact_root / "verification.json", verification)
     return verification
 
@@ -906,6 +1028,21 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
     git_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
     git_branch = subprocess.check_output(["git", "branch", "--show-current"], cwd=repo, text=True).strip()
     branch_id = git_branch or f"detached@{git_head[:12]}"
+    thresholds_path = _thresholds_path(repo, args)
+    threshold_policy = json.loads(thresholds_path.read_text(encoding="utf-8"))
+    if not isinstance(threshold_policy, dict):
+        raise ValueError(f"threshold policy must be a JSON object: {thresholds_path}")
+    qualification_scope = str(
+        threshold_policy.get("qualification_scope", "strict_profile")
+    )
+    strict_release = bool(
+        threshold_policy.get(
+            "strict_release",
+            qualification_scope in {"strict_profile", "strict_release"},
+        )
+    )
+    # A single experiment cannot establish product/four-lane release readiness.
+    release_qualified = False
     for case in cases:
         case["branch_id"] = branch_id
     source = {
@@ -930,8 +1067,8 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
                 "sha256": _sha256_file(repo / ANALYZER_REL),
             },
             "thresholds": {
-                "path": str(repo / THRESHOLDS_REL),
-                "sha256": _sha256_file(repo / THRESHOLDS_REL),
+                "path": str(thresholds_path),
+                "sha256": _sha256_file(thresholds_path),
             },
         },
     }
@@ -946,10 +1083,31 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
         },
         "cases": cases,
         "background": None,
+        "qualification_policy": {
+            "schema_version": threshold_policy.get("schema_version"),
+            "path": str(thresholds_path),
+            "sha256": _sha256_file(thresholds_path),
+            "scope": qualification_scope,
+            "strict_release": strict_release,
+            "release_qualified": release_qualified,
+        },
+        "provenance_contract": {
+            "schema_version": "bimeron_frozen_size.case_contract.v1",
+            "source_contract_sha256": contract_sha256(source),
+            "reuse_requires_contract": True,
+        },
     }
     if args.free_reference:
+        free_expected = _case_contract(
+            repo,
+            _control_case(args),
+            args,
+            source,
+            kind="free_reference",
+        )
         manifest["free_reference"] = free_reference_from_analysis(
-            args.free_reference
+            args.free_reference,
+            expected_contract=free_expected,
         )
     _write_json(output_root / "sweep_request.json", manifest)
 
@@ -975,26 +1133,84 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
     )
     manifest["source"]["managed_runtime_matches_source_preflight"] = built
     manifest["source"]["runtime_manifest"] = str(_runtime_manifest_path(layout))
+    if not built:
+        raise RuntimeError(
+            "managed runtime does not match the requested source/device/toolchain; "
+            "prepare it through the approved Fullmag build-runner route before starting "
+            "the interactive sweep (the sweep never performs an implicit host build)"
+        )
     if args.with_background:
         background_path = output_root / f"background-h{args.cell_nm:g}nm".replace(".", "p")
         background_path = _assert_within(background_path, runs_root)
         background_analysis = background_path / "analysis.json"
+        background_case = {
+            "case_id": f"background-h{args.cell_nm:g}nm".replace(".", "p"),
+            "target_radius_nm": 5.0,
+            "wall_width_nm": DEFAULT_WALL_WIDTH_NM,
+            "protocol": "p0",
+            "cell_nm": args.cell_nm,
+            "cell_size_nm": [args.cell_nm, args.cell_nm, 0.5],
+            "pin_radius_nm": max(DEFAULT_PIN_RADIUS_NM, args.pin_radius_nm),
+            "track_size_nm": [args.track_x_nm, args.track_y_nm, 0.5],
+            "track_x_nm": args.track_x_nm,
+            "track_y_nm": args.track_y_nm,
+            "ring_width_nm": args.ring_width_nm,
+            "ring_radius_offset_nm": float(
+                os.environ.get("FULLMAG_BIMERON_RING_RADIUS_OFFSET_NM", "0.0")
+            ),
+            "helicity_rad": args.helicity_rad,
+            "vorticity": args.vorticity,
+            "background_sign": args.background_sign,
+            "release": False,
+        }
+        background_expected_contract = _case_contract(
+            repo, background_case, args, source, kind="background"
+        )
         background_is_measured = False
         if background_analysis.is_file():
-            try:
-                background_is_measured = json.loads(background_analysis.read_text(encoding="utf-8")).get("status") == "measured"
-            except (OSError, json.JSONDecodeError):
-                background_is_measured = False
+            background_is_measured = (
+                _background_reference_contract(
+                    background_analysis,
+                    expected_contract=background_expected_contract,
+                ).get("status")
+                == "usable"
+            )
+            if background_is_measured:
+                # Reusing a run is stricter than comparing physical references:
+                # the numerical stop policy and script hashes must also match.
+                background_is_measured = not compare_contract(
+                    background_expected_contract,
+                    load_artifact_contract(background_path),
+                )
+            if not background_is_measured and args.reuse:
+                status = _background_reference_contract(
+                    background_analysis,
+                    expected_contract=background_expected_contract,
+                )
+                raise RuntimeError(
+                    "existing background artifact is not compatible with the requested physical contract; "
+                    f"use a new output root instead of --reuse ({status.get('reason')}: "
+                    f"{status.get('contract_mismatches') or status.get('contract_missing_evidence') or ''})"
+                )
+        if not background_is_measured and background_path.exists() and any(background_path.iterdir()):
+            raise RuntimeError(
+                "background output already exists but has no compatible provenance contract; "
+                f"choose a new output root instead of overwriting historical artifacts: {background_path}"
+            )
         if not background_is_measured:
-            background_case = {
-                "target_radius_nm": 5.0,
-                "wall_width_nm": DEFAULT_WALL_WIDTH_NM,
-                "protocol": "p0",
-                "cell_nm": args.cell_nm,
-                "pin_radius_nm": max(DEFAULT_PIN_RADIUS_NM, args.pin_radius_nm),
-            }
             background_path.mkdir(parents=True, exist_ok=True)
-            _write_json(background_path / "request.json", {"kind": "background", "case": background_case})
+            _write_json(
+                background_path / "request_contract.json",
+                background_expected_contract,
+            )
+            _write_json(
+                background_path / "request.json",
+                {
+                    "kind": "background",
+                    "case": background_case,
+                    "provenance_contract": background_expected_contract,
+                },
+            )
             background_workspace = _launch(
                 repo,
                 layout,
@@ -1002,7 +1218,7 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
                 background_path,
                 background_case,
                 args,
-                build=not built,
+                build=False,
             )
             built = True
             analyze_background = [
@@ -1021,11 +1237,20 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
                 output=background_analysis,
                 log=background_path / "analysis.log",
             )
+            background_analysis_value = json.loads(
+                background_analysis.read_text(encoding="utf-8")
+            )
+            if isinstance(background_analysis_value, dict):
+                background_analysis_value["provenance_contract"] = background_expected_contract
+                _write_json(background_analysis, background_analysis_value)
         else:
             background_workspace = _workspace_from_launcher_log(
                 background_path / "launcher.log", repo
             )
-        background_contract = _background_reference_contract(background_analysis)
+        background_contract = _background_reference_contract(
+            background_analysis,
+            expected_contract=background_expected_contract,
+        )
         manifest["background"] = {
             "path": str(background_path),
             "analysis": str(background_analysis),
@@ -1038,7 +1263,16 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
         case_root = _assert_within(output_root / case["case_id"], runs_root)
         case["artifact_root"] = str(case_root)
         analysis_path = case_root / "analysis.json"
+        expected_contract = _case_contract(repo, case, args, source)
         if analysis_path.is_file() and args.reuse:
+            actual_contract = load_artifact_contract(case_root)
+            missing = contract_missing_evidence(actual_contract)
+            differences = compare_contract(expected_contract, actual_contract)
+            if missing or differences:
+                raise RuntimeError(
+                    "existing case artifact is not compatible with the requested provenance contract; "
+                    f"use a new output root instead of --reuse (missing={missing}, mismatches={differences})"
+                )
             reused = json.loads(analysis_path.read_text(encoding="utf-8"))
             if isinstance(reused, dict):
                 verification_path = case_root / "verification.json"
@@ -1054,7 +1288,16 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
         if case_root.exists() and any(case_root.iterdir()):
             raise RuntimeError(f"case output already exists; use --reuse or choose another output root: {case_root}")
         case_root.mkdir(parents=True, exist_ok=True)
-        _write_json(case_root / "request.json", {"schema_version": "bimeron_frozen_size.case_request.v1", "case": case, "environment": _environment(case, args)})
+        _write_json(case_root / CONTRACT_FILENAME, expected_contract)
+        _write_json(
+            case_root / "request.json",
+            {
+                "schema_version": "bimeron_frozen_size.case_request.v1",
+                "case": case,
+                "environment": _environment(case, args),
+                "provenance_contract": expected_contract,
+            },
+        )
         try:
             workspace = _launch(
                 repo,
@@ -1063,7 +1306,7 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
                 case_root,
                 case,
                 args,
-                build=not built,
+                build=False,
             )
             built = True
             analyze_command = [
@@ -1092,9 +1335,19 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
                 log=case_root / "analysis.log",
             )
             analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
-            verification = _verify_case(repo, analysis, case_root)
+            if not isinstance(analysis, dict):
+                raise RuntimeError(f"analyzer output is not a JSON object: {analysis_path}")
+            analysis["provenance_contract"] = expected_contract
+            _write_json(analysis_path, analysis)
+            verification = _verify_case(
+                repo,
+                analysis,
+                case_root,
+                thresholds_path=thresholds_path,
+            )
             if isinstance(analysis, dict):
                 analysis["verification_status"] = verification.get("status")
+                _write_json(analysis_path, analysis)
             results.append(analysis)
         except Exception as error:
             failure = {"schema_version": "bimeron_frozen_size.case_failure.v1", "case": case, "error": str(error)}
@@ -1111,6 +1364,14 @@ def _run_sweep(repo: Path, layout: dict[str, Any], cases: list[dict[str, Any]], 
     passed_count = sum(status == "passed" for status in verification_statuses)
     manifest["qualification"] = {
         "status": "passed" if results and passed_count == len(results) else "diagnostic",
+        "scope": qualification_scope,
+        "strict_release": strict_release,
+        "release_qualified": release_qualified,
+        "status_meaning": (
+            "passed_selected_working_profile_policy_not_release"
+            if not strict_release
+            else "passed_selected_strict_profile_policy"
+        ),
         "case_count": len(results),
         "verification_status_counts": {
             status: verification_statuses.count(status) for status in sorted(set(verification_statuses))
@@ -1170,6 +1431,12 @@ def main() -> int:
         "--free-reference",
         type=Path,
         help="optional analysis.json from the one-time free bimeron control",
+    )
+    parser.add_argument(
+        "--thresholds",
+        type=Path,
+        default=THRESHOLDS_REL,
+        help="versioned verification policy JSON (default: thresholds.v1.json)",
     )
     parser.add_argument("--limit", type=int)
     parser.add_argument("--release", action="store_true")

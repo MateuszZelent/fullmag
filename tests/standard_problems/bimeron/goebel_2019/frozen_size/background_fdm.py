@@ -32,7 +32,7 @@ film.Aex = MATERIAL.aex_Jpm
 film.alpha = RELAX_ALPHA
 film.Ku1 = MATERIAL.ku_Jpm3
 film.anisU = (1.0, 0.0, 0.0)
-film.m = fm.texture.uniform(1.0, 0.0, 0.0)
+film.m = fm.texture.uniform(float(CASE.background_sign), 0.0, 0.0)
 
 study.terms.add(fm.RotatedInterfacialDMI(D=MATERIAL.d_Jpm2))
 study.demag(realization="auto")
@@ -41,16 +41,17 @@ fm.runtime_metadata(
     "bimeron_frozen_size_background",
     {
         "schema_version": "bimeron_frozen_size.background.v1",
-        "source_scenario": "tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py",
-        "initial_state": "uniform(+x)",
-        "same_rDMI_parameters": True,
+        "source_scenario": "tests/standard_problems/bimeron/goebel_2019/frozen_size/background_fdm.py",
+        "initial_state": f"uniform({CASE.background_sign:+d}x)",
+        "background_sign": CASE.background_sign,
+        "material_parameters_source": "explicit_material_metadata_with_environment_overrides",
         "material": MATERIAL.metadata(),
         "alpha": RELAX_ALPHA,
         "track_size_m": list(TRACK_SIZE),
         "track_size_nm": [value * 1e9 for value in TRACK_SIZE],
         "relaxation_tolerance_T": CASE.relax_tol_T,
         "cell_nm": CASE.cell_nm,
-        "background_energy_definition": "terminal E_total after independent +x relaxation",
+        "background_energy_definition": "terminal E_total after independent uniform-background relaxation",
     },
 )
 

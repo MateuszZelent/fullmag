@@ -160,14 +160,16 @@ pozostać źródłem wartości sąsiada w stencilach swobodnych DOF.
 | $R$ | Zadany promień tekstury bimeronu | $\mathrm{m}$ |
 | $F_R$ | Maska frozen spins dla zadanego promienia tekstury | $1$ |
 | $U_R$ | Swobodne DOF poza maską frozen spins | $1$ |
-| $R_\mathrm{area}$ | Promień z pola obszaru z ujemną składową x | $\mathrm{m}$ |
+| $R_\mathrm{area}$ | Promień z pola wybranej składowej odwróconej magnetyzacji | $\mathrm{m}$ |
 | $R_\mathrm{core}$ | Pomocniczy promień wyznaczony z położeń rdzeni | $\mathrm{m}$ |
 | $m_x$ | Składowa x zredukowanej magnetyzacji | $1$ |
+| $b$ | Znak tła magnetyzacji, równy +1 lub -1 | $1$ |
+| $C$ | Wybrana składowa obszaru odwróconej magnetyzacji | $\mathrm{m^2}$ |
 | $\operatorname{area}$ | Pole geometryczne obszaru w płaszczyźnie | $\mathrm{m^2}$ |
 | $\pi$ | Stała koła | $1$ |
 | $E$ | Pełna energia mikromagnetyczna | $\mathrm{J}$ |
 | $E_{\mathrm c}$ | Energia ograniczona jako funkcja swobodnego stanu | $\mathrm{J}$ |
-| $E_\mathrm{bg}$ | Energia zbieżnego, niezależnego tła skierowanego w +x | $\mathrm{J}$ |
+| $E_\mathrm{bg}$ | Energia zbieżnego, niezależnego tła o zadanym znaku | $\mathrm{J}$ |
 | $\Delta E$ | Energia nadmiarowa względem tła | $\mathrm{J}$ |
 | $T_f$ | Maksymalny moment po free DOF przeliczony na T | $\mathrm{T}$ |
 | $\mu_0$ | Przenikalność magnetyczna próżni | $\mathrm{N\,A^{-2}}$ |
@@ -450,14 +452,20 @@ Rozmiar główny definiujemy przez pole obszaru odwróconej magnetyzacji:
 
 ```{math}
 :label: eq-frozen-bimeron-profile-radius
-R_\mathrm{area}=\sqrt{\frac{\operatorname{area}(m_x<0)}{\pi}},
+R_\mathrm{area}=\sqrt{\frac{\operatorname{area}(C)}{\pi}},
+\qquad C\subset\{b m_x<0\},
 ```
 
-a $R_\mathrm{core}$ pozostaje pomocniczą odległością od rdzeni. Obie wielkości
+a $C$ jest pojedynczą wybraną składową spójną, a $b$ znakiem tła.
+Pole wyznacza interpolacja liniowa na trójkątach siatki środków komórek;
+wyspy poza wybraną teksturą nie powiększają promienia.
+$R_\mathrm{core}$ oznacza połowę najkrótszej odległości pomiędzy lokalnymi
+ekstremami $m_z$ z uwzględnieniem periodycznego kierunku x. Obie wielkości
 mają jednostkę m (w raportach mogą być prezentowane w nm). Dla jednorazowej
 kontroli materiału $P0$ można zmierzyć swobodny stan równowagowy, ale nie
-odejmuje się jego energii od punktu profilu, dopóki niezależna relaksacja tła
-$+x$ nie osiągnie własnego kryterium stopu.
+traktujemy jego energii jako energii tła. Referencja do energii nadmiarowej
+pochodzi z niezależnej relaksacji jednorodnego tła o znaku $b$ i wymaga
+własnej zbieżności oraz zgodności parametrów fizycznych.
 
 Dla protokołów P2/P3 zamrożony dysk kontroluje przede wszystkim położenie
 rdzeni, dlatego współrzędną akceptacji jest $R_\mathrm{core}$. Odchylenie
@@ -485,9 +493,11 @@ T_{f}=\mu_0\max_{i\in U_R}
 \left\lVert\mathbf m_i\times\mathbf H_{\mathrm{eff},i}\right\rVert_2.
 ```
 
-W pilocie FDM GPU FP64 stosowany jest roboczy `tolT=10^{-5}` T, zapisany w
-metadanych. $10^{-6}$ T jest testem czułości, a nie domyślnym powodem odrzucenia
-krótkiego pilota. Zbieżność wymaga jednak również stabilności energii i
+Polityka surowa `thresholds.v1.json` zachowuje próg $10^{-5}$ T.
+Osobna polityka `thresholds.working.v2.json` używa roboczego progu
+$5\times10^{-3}$ T, a kontrola dłuższej relaksacji używa $10^{-3}$ T.
+Identyfikator i hash polityki są zapisywane w receipt; zmiana polityki nie
+przepisuje historycznej oceny. Zbieżność wymaga również stabilności energii i
 rozmiaru w końcowym oknie; status `max_steps` lub `max_physical_time` pozostaje
 `not_converged`.
 
@@ -507,6 +517,20 @@ $E_\mathrm{floor}=10^{-21}$ J. Są to progi stabilności jednego punktu, nie
 tolerancja zgodności energii pomiędzy różnymi maskami. P2, P3 i pierścień
 nakładają różne ograniczenia, więc ich rozrzut jest raportowany jako bias
 protokołu i nie jest bramką akceptacji jednej krzywej $E(R)$.
+
+Mały rozrzut końcowego okna nie jest oszacowaniem błędu względem równowagi.
+Kontrola porównuje energię po dłuższej relaksacji, przy tej samej masce,
+oraz oddzielnie bada szerokość i radialne przesunięcie pierścienia. Pełne
+wektory przejęte z presetu narzucają więcej niż sam rozmiar; minimum profilu
+jest warunkowe względem maski i ściany początkowej. Zmiana liczby frozen
+cells nie służy wymuszaniu gładkości. Skala połowy komórki w pomiarze
+promienia jest wskaźnikiem rozdzielczości, nie przedziałem ufności.
+Test parowany zamraża fragment rzeczywistego stanu P0 i porównuje pełne
+pole oraz energię przed i po relaksacji; dokładny transfer pliku sam nie
+dowodzi zachowania równowagi. Nowe kontrole runtime pozostają `NOT VERIFIED`.
+Nie zmienia się publiczny DSL ani ProblemIR; są to ograniczenia istniejącego
+eksperymentu FDM GPU. Pozostałe trzy realizacje nie otrzymują kwalifikacji
+na podstawie tego profilu.
 
 W tej realizacji główną ścieżką jest FDM GPU FP64 strict z `llg_overdamped`.
 CUDA emituje kontrolną redukcję free torque na urządzeniu, a pełne redukcje
@@ -568,6 +592,7 @@ Szczegółowy ledger i wszystkie początkowe statusy `UNQUALIFIED` znajdują si�
 | Candidate restore | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v1-candidate-restore` | Niezmienność kandydatów | wspólny | przyszłe integrator/minimizer fixtures | planned_contract | `worktree/uncommitted`; path + anchor only |
 | Redukcje po $U$ i $A$ | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v1-free-reductions` | Metryki free/all z tego samego pre-constraint stanu | wspólny | przyszłe convergence fixtures | planned_contract | `worktree/uncommitted`; path + anchor only |
 | Profil energii bimeronu | `tests/standard_problems/bimeron/goebel_2019/frozen_size/scenario_fdm.py` | `FROZEN` | Związana energia, pomiar $R$ i free torque przy frozen spins | FDM GPU FP64 | pilot w storage; punkty `not_converged` | diagnostic, not accepted | `worktree/uncommitted`; path + symbol only |
+| Pomiar wybranej tekstury | `tests/standard_problems/bimeron/goebel_2019/frozen_size/analyze.py` | `_measure` | Spójna składowa, znak tła i najkrótsza odległość przez PBC | FDM postprocessing | `test_analyzer.py` | testy źródłowe; nowy runtime `NOT VERIFIED` | `worktree/uncommitted`; path + symbol only |
 | Referencja tła i $\Delta E$ | `tests/standard_problems/bimeron/goebel_2019/frozen_size/analyze.py` | `_background_reference_status` | Tło używane wyłącznie po zbieżności; brak tła zachowuje `null` | FDM | reanaliza z `background_not_converged` | diagnostic, not accepted | `worktree/uncommitted`; path + symbol only |
 | Stabilność i bias protokołu | `tests/standard_problems/bimeron/goebel_2019/frozen_size/run_sweep.py` | `_protocol_energy_spread` | Okno energii względem $E_\mathrm{total}$ i $\Delta E$; spread P2/P3/ring nie jest bramką | FDM | authoring smoke i pilot diagnostyczny | diagnostic, not accepted | `worktree/uncommitted`; path + symbol only |
 | TPI essential true DOF | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v1-tpi` | Kontrakt tangent-plane | FEM CPU/GPU | przyszły managed FEM gate | planned_contract | `worktree/uncommitted`; path + anchor only |

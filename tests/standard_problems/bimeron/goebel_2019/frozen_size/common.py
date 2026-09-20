@@ -331,6 +331,7 @@ class FrozenCase:
     table_every_steps: int
     hold_sample_period_s: float
     pin_centres_nm: tuple[tuple[float, float], tuple[float, float]] | None = None
+    ring_radius_offset_nm: float = 0.0
 
     @property
     def cell_m(self) -> tuple[float, float, float]:
@@ -518,6 +519,11 @@ def case_from_environment() -> FrozenCase:
         if any(not math.isfinite(value) for pair in parsed for value in pair):
             raise ValueError("FULLMAG_BIMERON_PIN_CENTRES_NM values must be finite")
         pin_centres_nm = parsed  # type: ignore[assignment]
+    ring_radius_offset_nm = _env_float("FULLMAG_BIMERON_RING_RADIUS_OFFSET_NM", 0.0)
+    if not math.isfinite(ring_radius_offset_nm):
+        raise ValueError("ring radius offset must be finite")
+    if protocol == "ring" and target_radius_nm + ring_radius_offset_nm <= ring_width_nm / 2.0:
+        raise ValueError("offset ring must have positive inner radius")
     if ring_width_nm <= 0.0:
         raise ValueError("FULLMAG_BIMERON_RING_WIDTH_NM must be positive")
     if protocol == "ring" and ring_width_nm >= 2.0 * target_radius_nm:
@@ -549,4 +555,5 @@ def case_from_environment() -> FrozenCase:
         table_every_steps=table_every_steps,
         hold_sample_period_s=hold_sample_period_s,
         pin_centres_nm=pin_centres_nm,
+        ring_radius_offset_nm=ring_radius_offset_nm,
     )
