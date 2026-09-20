@@ -403,6 +403,40 @@ describe("viewport3dScalarSurfaceShader", () => {
       expect(source).toContain("#include <colorspace_fragment>");
       expect(source).toContain("vec3 color = srgbToLinearVec3(shaded);");
     });
+
+    it("converts and encodes in the orientation fragment shader too", () => {
+      // The orientation surface used to write `shaded` straight into
+      // gl_FragColor. On the default canvas that happened to look right, but
+      // PostProcessingLayer renders into a linear target whenever Bloom or AO
+      // is enabled, and there the unencoded surface washed out while scalar
+      // surfaces stayed correct.
+      const orientationShader = source.slice(
+        source.indexOf("const ORIENTATION_SURFACE_FRAGMENT_SHADER"),
+      );
+      expect(orientationShader).toContain("vec3 srgbToLinearVec3(vec3 c)");
+      expect(orientationShader).toContain("vec3 color = srgbToLinearVec3(shaded);");
+      expect(orientationShader).toContain("#include <colorspace_fragment>");
+    });
+  });
+
+  describe("orientation colour mapping parity with the CPU path", () => {
+    const source = readFileSync(
+      new URL("./viewport3dScalarSurfaceShader.ts", import.meta.url),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+
+    it("uses a constant saturation and the normalised z for lightness", () => {
+      // Must stay identical to magnetizationHslRgb() in
+      // orientation/magnetizationColor.ts. Saturation derived from
+      // length(normalized.xy) = sin(theta) double-counts the polar angle,
+      // which the lightness already carries, and greys out mid-latitudes.
+      expect(source).toContain("float saturation = 1.0;");
+      expect(source).toContain(
+        "float lightness = clamp(normalized.z * 0.5 + 0.5, 0.0, 1.0);",
+      );
+      expect(source).not.toContain("clamp(length(normalized.xy), 0.0, 1.0)");
+      expect(source).not.toContain("normalized.z * 0.25 + 0.5");
+    });
   });
 
   describe("S-04 · Clipping planes support", () => {

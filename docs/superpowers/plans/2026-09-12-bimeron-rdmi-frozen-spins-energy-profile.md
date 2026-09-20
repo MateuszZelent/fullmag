@@ -1,8 +1,10 @@
 # Plan symulacji: energia bimeronu z rDMI przy rozmiarze utrzymywanym przez frozen spins
 
-Data: 2026-09-12. Zakres: plan eksperymentu numerycznego; bez implementacji i nowych przebiegów solvera.
+Data: 2026-09-12. Aktualizacja metodologii: 2026-09-15. Zakres: plan eksperymentu numerycznego i jego weryfikacji.
 
-**Zalecenie:** wykonać pilotaż z trzema małymi zamrożonymi obszarami, porównać go z cienką zamrożoną obwiednią, a dopiero po sprawdzeniu rzeczywistego rozmiaru i wpływu kotwic uruchomić serię energii. Wynikiem będzie energia lokalnie zrelaksowanej tekstury przy określonym protokole ograniczenia. Samo ustawienie `radius=R` i zamrożenie kilku spinów nie gwarantuje utrzymania rozmiaru ani istnienia bimeronu dla dowolnego R.
+**Zalecenie:** swobodną relaksację bimeronu wykonać raz jako kontrolę materiału i wyznaczenie jednego $R_\mathrm{eq}$; nie powtarzać jej dla każdego zadanego R. Właściwy profil budować z tekstur zainicjalizowanych dla kolejnych R i relaksowanych przy frozen spins. Najpierw wykonać pilotaż z trzema małymi zamrożonymi obszarami i cienką obwiednią, a dopiero po sprawdzeniu utrzymania R i wpływu kotwic uruchomić serię energii. Wynikiem będzie energia lokalnie zrelaksowanej tekstury przy określonym protokole ograniczenia. Samo ustawienie `radius=R` i zamrożenie kilku spinów nie gwarantuje utrzymania rozmiaru ani istnienia bimeronu dla dowolnego R.
+
+**Decyzja wykonawcza (2026-09-15):** główna seria FDM GPU FP64 strict używa `llg_overdamped` dla etapów `constrained_relax` i `constrained_hold`. `projected_gradient_bb` pozostaje kandydatem do osobnego benchmarku, ale obecna single-grid CUDA ścieżka direct-minimizer nie ma jeszcze kwalifikowanego receipt dla FrozenSpins: pętla prób jest sterowana po stronie runnera, a końcowy dowód operatorów nie potwierdza pełnego device-resident wykonania. Nie wolno mieszać takich przebiegów z zaakceptowaną krzywą $E(R)$ ani obchodzić guardu przez ręczne oznaczenie receipt. Powrót do BB wymaga osobnego kontraktu natywnej projekcji referencji FrozenSpins, testu zachowania przy retraction/Armijo oraz nowego managed strict proof.
 
 ## 1. Odszukana baza i granice dotychczasowego wyniku
 
@@ -104,7 +106,7 @@ Wszystkie maski są statyczne w czasie danego przebiegu, obejmują pełną grubo
 
 | Protokół | Zamrożony obszar | Co kontroluje i jak interpretować wynik |
 | --- | --- | --- |
-| P0 | Brak | Swobodna relaksacja; odniesienie i pomiar naturalnego rozmiaru |
+| P0 | Brak | Jednorazowa kontrola swobodnej relaksacji i pomiar naturalnego rozmiaru; nie jest punktem profilu powtarzanym dla każdego R |
 | P2 | Dwa małe dyski przy przeciwnych rdzeniach $m_z$ | Odległość i orientację pary; sprawdza, czy trzecia kotwica jest potrzebna |
 | **P3 — pierwszy kandydat** | Te same dwa dyski oraz mały dysk w centrum $m_x\approx-1$ | Dodatkowo utrzymuje centralną odwróconą magnetyzację; nadal pozwala na deformację ściany |
 | **P-ring — kontrola** | Cienki pierścień wokół początkowego konturu $m_x=0$ | Mocniej utrzymuje obwiednię, ale narzuca większą część kształtu i profilu ściany |
@@ -147,6 +149,8 @@ $$
 =E[\mathbf m^*_{R,P,a}]-E[\mathbf m_\mathrm{bg}].
 $$
 
+Nie definiujemy osobnego swobodnie zrelaksowanego punktu dla każdego R. Przy ustalonych parametrach materiałowych taka relaksacja ma wrócić do tego samego minimum $R_\mathrm{eq}$ albo do stanu jednorodnego i nie tworzy rodziny stanów o zadanym rozmiarze. Wartość bez frozen spins służy tylko do jednorazowej kontroli zbieżności i do interpretacji późniejszego release.
+
 $\mathbf m_\mathrm{bg}$ to swobodnie zrelaksowany stan bez bimeronu, rozpoczęty od +x, z tą samą geometrią, siatką, PBC, demag i parametrami materiałowymi. Pozwalamy mu uzyskać skręcenie przy otwartych brzegach. Dla każdej siatki obliczamy własne $E_\mathrm{bg}$; nie odejmujemy energii z innej dyskretyzacji.
 
 Zapisujemy jednocześnie `E_total`, wymianę, `E_rotated_dmi`, anizotropię, `E_demag`, ewentualne pozostałe aktywne składniki i ich sumę w J. Odczytane bazowe CSV używa ID `E_ex`, `E_ani`, `E_ext`, `E_demag`, `E_rotated_dmi`, `E_dmi` i `E_total`; dla tego scenariusza zwykłe `E_dmi` i `E_ext` są zerowe. Nie sumować rDMI drugi raz przez zbiorczy alias. Przed wykonaniem potwierdzić ID i semantykę agregatów w katalogu wybranego commita.
@@ -161,18 +165,18 @@ Wynik dotyczy tego konkretnego toru, warunków brzegowych i 0 K. Nie jest energi
 
 1. Ustalić wersję rDMI po trwających poprawkach; zapisać commit, ewentualny diff, fingerprint bibliotek, wejściowy skrypt/IR oraz requested/resolved engine, device, precision, demag i PBC. Nie modyfikować aktywnego worktree innego zadania.
 2. Powtórzyć istniejący scenariusz FDM bez kotwic i aktualny weryfikator Göbla. Historyczne 15/15 nie zastępuje nowych bramek.
-3. Dorelaksować swobodny bimeron do spełnienia kryteriów poniżej; zapisać $R_\mathrm{eq,area}$, $R_\mathrm{eq,core}$, energię i kształt. Oddzielnie zrelaksować tło +x.
+3. Dorelaksować jeden reprezentatywny swobodny bimeron do spełnienia kryteriów poniżej; zapisać $R_\mathrm{eq,area}$, $R_\mathrm{eq,core}$, energię i kształt. Ten przebieg jest kontrolą materiału, nie osobnym baseline'em dla każdego R. Oddzielnie zrelaksować tło +x.
 4. Na małym, niejednorodnym przypadku z tymi samymi interakcjami i PBC sprawdzić połączenie **rDMI + FrozenSpins + wybrany integrator i relaksacja**: niezmienność referencji, ruch free DOFs, energię i pole na styku frozen–free, aktywację i późniejsze zwolnienie. Osobne zielone testy rDMI i frozen spins nie wystarczają.
 
 ### Etap B — pilotaż maski
 
-Wykonać P0, P2, P3 i P-ring dla `R_target = 3, 5, 10 nm`: 12 przebiegów. To weryfikuje okolice małego bimeronu, rozmiar pośredni i duży stan bliski starej inicjalizacji. Gdy nowe $R_\mathrm{eq}$ leży daleko od 3 nm, dodać punkt blisko niego.
+Wykonać P2, P3 i P-ring dla `R_target = 3, 5, 10 nm`: 9 przebiegów z aktywną maską. To weryfikuje okolice małego bimeronu, rozmiar pośredni i duży stan bliski starej inicjalizacji. P0 wykonać najwyżej raz w Etapie A; jeśli pilotaż zawiera P0 przy kilku R, traktować je wyłącznie jako diagnostyczne powtórzenia swobodnej ucieczki, a nie punkty profilu. Gdy $R_\mathrm{eq}$ leży daleko od 3 nm, dodać zamrożony punkt blisko niego.
 
 Każdy przebieg: inicjalizacja → pomiar `m_initial` → utworzenie/capture maski → constrained relaxation → zapis stanu i pełnej energii → dalsza relaksacja/test trwania z tą samą referencją. Wybrane stany następnie przechodzą do osobnej gałęzi **release**: wyłączyć ograniczenie, zachować dokładnie końcową magnetyzację i relaksować dalej. Energia profilu jest zapisywana przed release.
 
 ### Etap C — seria R
 
-Po przyjęciu protokołu wykonać główną serię dla `R_target = 2,75; 3; 4; 5; 6; 8; 10 nm` przy `w_seed = 3 nm` oraz punkt przy rzeczywistym $R_\mathrm{eq}$, jeśli dopuszcza go ten preset. Osobna seria małych rozmiarów: `R_target = 2; 2,5; 2,75; 3; 4; 5 nm`, stałe `w_seed = 1,5 nm`, siatka co najmniej h = 0,25 nm. Wspólne punkty służą do kontroli wpływu referencji. Dodatkowe R = 12 nm traktować jako sprawdzenie wpływu brzegów w tym samym torze; zmiana szerokości toru byłaby odrębnym eksperymentem.
+Po przyjęciu protokołu wykonać główną serię zamrożonych tekstur dla `R_target = 2,75; 3; 4; 5; 6; 8; 10 nm` przy `w_seed = 3 nm`. Jednorazowy $R_\mathrm{eq}$ z Etapu A pozostaje punktem kontrolnym, a nie dodatkowym powtarzanym baseline'em. Osobna seria małych rozmiarów: `R_target = 2; 2,5; 2,75; 3; 4; 5 nm`, stałe `w_seed = 1,5 nm`, siatka co najmniej h = 0,25 nm. Wspólne punkty służą do kontroli wpływu referencji. Dodatkowe R = 12 nm traktować jako sprawdzenie wpływu brzegów w tym samym torze; zmiana szerokości toru byłaby odrębnym eksperymentem.
 
 Jest to proponowany zakres, nie gwarancja istnienia wszystkich stanów. Rozmiary z nierozdzielonymi rdzeniami, nachodzącymi pinami lub kontaktem tekstury z brzegiem są odrzucane albo badane na lepszej siatce.
 
@@ -199,8 +203,8 @@ Przy h = 0,25 nm mamy 320 000 komórek, przy h = 0,125 nm 1 280 000. Całej seri
 Wartości poniżej są proponowanymi progami roboczymi; przed serią trzeba je skalibrować na pilotażu i zapisać w wersjonowanym pliku progów.
 
 - Wszystkie zamrożone wektory pozostają zgodne z zapisaną referencją; mierzyć maksymalny błąd i hash referencji. Docelowo błąd FP64 nie większy niż $10^{-12}$, chyba że kontrakt danej reprezentacji wymaga innej jawnie uzasadnionej tolerancji.
-- Zbieżność mierzyć wyłącznie na free DOFs, np. $T_f=\max_{i\notin F}|\mathbf m_i\times\mathbf B_{\mathrm{eff},i}|$ w T. Startowy próg $10^{-6}$ T odpowiada `tolT` bazowego scenariusza. Sprawdzić znaczenie raportowanej ilości; norma już wyzerowanego RHS lub średnia rozcieńczona przez piny nie zastępuje tej kontroli.
-- Wymagać także ustalenia energii i rozmiaru w końcowym oknie oraz po przedłużeniu relaksacji. Skalę błędu energii odnosić do energii nadmiarowej bimeronu i różnic między sąsiednimi punktami, a nie dużej energii całego toru. Ustalić próg absolutny z rozrzutu powtórzeń; orientacyjnie celować w zmianę mniejszą niż 0,1% energii nadmiarowej po przedłużeniu.
+- Zbieżność mierzyć wyłącznie na free DOFs, np. $T_f=\max_{i\notin F}|\mathbf m_i\times\mathbf B_{\mathrm{eff},i}|$ w T. Dla roboczego pilota przyjmujemy wyważony próg `tolT=10^{-5}` T: jest zapisany w metadanych i zawsze pokazujemy zmierzone $T_f$. Próg $10^{-6}$ T pozostaje opcjonalnym testem czułości, a nie automatycznym warunkiem odrzucającym każdy punkt pilota. Norma już wyzerowanego RHS lub średnia rozcieńczona przez piny nie zastępuje tej kontroli.
+- Wymagać także ustalenia energii i rozmiaru w końcowym oknie oraz po przedłużeniu relaksacji. Skalę błędu energii odnosić do energii nadmiarowej bimeronu i różnic między sąsiednimi punktami, a nie dużej energii całego toru. Zachować pomocniczy limit 0,1% względem $|E_\mathrm{total}|$ jako kontrolę oczywistej niestabilności, lecz główny roboczy limit okna ustalać względem $|\Delta E|$ z tła, z dolną skalą absolutną; pilotażowo przyjmujemy 5% $|\Delta E|$. Rozrzut P2/P3/pierścień raportować jako bias różnych ograniczeń i nie używać go jako bramki akceptacji jednej krzywej.
 - Dla wykresu o zadanym $R_\mathrm{area}$: $|R_\mathrm{area}-R_\mathrm{target}|\leq\max(0{,}5h,0{,}02R_\mathrm{target})$. To tolerancja robocza, nie deklaracja dokładności subkomórkowej. Pokazać niepewność R i nie akceptować punktów, których niepewność uniemożliwia rozróżnienie sąsiadów serii.
 - Ładunek topologiczny ma zachować znak i pozostać blisko −1, początkowo $|Q+1|<0{,}05$, z uwzględnieniem otwartych brzegów. Dwa przeciwne rdzenie, jedna zamknięta centralna obwiednia oraz kontrola całego pola są konieczne obok Q. Zachowany Q sam nie dowodzi właściwego bimeronu.
 - Wektory pozostają skończone i jednostkowe, energie mają zgodne jednostki, a suma aktywnych składników zgadza się z `E_total` w tolerancji redukcji. Gwałtowne skoki po zmianie maski muszą zostać wyjaśnione przed interpolacją krzywej.

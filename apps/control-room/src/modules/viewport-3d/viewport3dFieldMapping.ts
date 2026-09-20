@@ -2,6 +2,7 @@ import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import type { SurfaceFieldProjectionMode } from "@/kernel/visualization/ObjectVisualizationController";
 
 import { buildFdmFieldIndexResolver } from "./model/fdmFieldIndexing";
+import { srgbToLinearChannel } from "./viewport3dColorSpace";
 
 import {
   normalizeViewport3DVectorColorMode,
@@ -114,6 +115,7 @@ export interface ChunkedFieldTransformOptions {
 export const VIEWPORT_3D_SYNC_COLOR_POINT_LIMIT = 50_000;
 const LOW_CONFIDENCE_ORIENTATION_RGB = [0.6, 0.6, 0.6] as const;
 const MISSING_PROJECTED_DATA_RGB = [0.5, 0.5, 0.5] as const;
+const MISSING_FIELD_COVERAGE_RGB = [0.5, 0.5, 0.5] as const;
 const REDUCED_MAGNETIZATION_LOW_NORM_EPSILON = 1e-3;
 
 export function fieldTransformNeedsChunking(
@@ -185,10 +187,7 @@ export function buildSampledScalarColors(
   for (let index = 0; index < pointIndices.length; index += 1) {
     const pointIndex = pointIndices[index] ?? 0;
     if (pointIndex >= fieldVector.pointCount) {
-      const target = index * 3;
-      colors[target] = 0.5;
-      colors[target + 1] = 0.5;
-      colors[target + 2] = 0.5;
+      writeLinearRgb(colors, index, MISSING_FIELD_COVERAGE_RGB);
       continue;
     }
     if (scalarValues) {
@@ -197,17 +196,11 @@ export function buildSampledScalarColors(
         range,
       );
     }
-    const [red, green, blue] = colorAt(
-      fieldVector,
-      pointIndex,
-      resolvedColorMode,
-      range,
-      colorPalette,
+    writeLinearRgb(
+      colors,
+      index,
+      colorAt(fieldVector, pointIndex, resolvedColorMode, range, colorPalette),
     );
-    const target = index * 3;
-    colors[target] = red;
-    colors[target + 1] = green;
-    colors[target + 2] = blue;
   }
 
   return {
@@ -275,7 +268,6 @@ export function buildFdmSampledScalarColors(
 
   for (let index = 0; index < cellOrdinals.length; index += 1) {
     const fieldIndex = indexing.resolve(cellOrdinals[index] ?? -1);
-    const target = index * 3;
     if (fieldIndex === null) return null;
     if (scalarValues) {
       scalarValues[index] = normalizeScalarValueForShaderAttribute(
@@ -283,16 +275,11 @@ export function buildFdmSampledScalarColors(
         range,
       );
     }
-    const [red, green, blue] = colorAt(
-      fieldVector,
-      fieldIndex,
-      resolvedColorMode,
-      range,
-      colorPalette,
+    writeLinearRgb(
+      colors,
+      index,
+      colorAt(fieldVector, fieldIndex, resolvedColorMode, range, colorPalette),
     );
-    colors[target] = red;
-    colors[target + 1] = green;
-    colors[target + 2] = blue;
   }
 
   return {
@@ -353,17 +340,11 @@ export function buildMappedVertexScalarColors(
         range,
       );
     }
-    const [red, green, blue] = colorAt(
-      fieldVector,
-      index,
-      resolvedColorMode,
-      range,
-      colorPalette,
+    writeLinearRgb(
+      colors,
+      nodeIndex,
+      colorAt(fieldVector, index, resolvedColorMode, range, colorPalette),
     );
-    const target = nodeIndex * 3;
-    colors[target] = red;
-    colors[target + 1] = green;
-    colors[target + 2] = blue;
   }
 
   return {
@@ -492,10 +473,7 @@ export function buildSurfaceFaceScalarColors(
         );
     for (let corner = 0; corner < 3; corner += 1) {
       const targetIndex = faceIndex * 3 + corner;
-      const colorOffset = targetIndex * 3;
-      colors[colorOffset] = rgb[0];
-      colors[colorOffset + 1] = rgb[1];
-      colors[colorOffset + 2] = rgb[2];
+      writeLinearRgb(colors, targetIndex, rgb);
       if (scalarValues) {
         scalarValues[targetIndex] = normalizeScalarValueForShaderAttribute(
           scalar,
@@ -649,10 +627,7 @@ export function buildThicknessAverageZScalarColors(
         );
     for (let corner = 0; corner < 3; corner += 1) {
       const targetIndex = faceIndex * 3 + corner;
-      const colorOffset = targetIndex * 3;
-      colors[colorOffset] = rgb[0];
-      colors[colorOffset + 1] = rgb[1];
-      colors[colorOffset + 2] = rgb[2];
+      writeLinearRgb(colors, targetIndex, rgb);
       if (scalarValues) {
         scalarValues[targetIndex] = normalizeScalarValueForShaderAttribute(
           scalar,
@@ -1439,19 +1414,38 @@ function writeScalarColors(
       );
     }
     if (colors.length > 0) {
-      const [red, green, blue] = colorAt(
-        fieldVector,
+      writeLinearRgb(
+        colors,
         index,
-        colorMode,
-        range,
-        colorPalette,
+        colorAt(fieldVector, index, colorMode, range, colorPalette),
       );
-      const target = index * 3;
-      colors[target] = red;
-      colors[target + 1] = green;
-      colors[target + 2] = blue;
     }
   }
+}
+
+/**
+ * Writes one sRGB colour into a vertex/instance colour buffer, converting it
+ * to linear-sRGB on the way in.
+ *
+ * `ScalarColorBuffer.colors` is uploaded verbatim into a three.js `color` or
+ * `instanceColor` attribute, and three.js reads those as values that are
+ * already in its Linear-sRGB working space -- then encodes them to sRGB on
+ * output. Every producer feeding this function (the HSL sphere, the scalar
+ * palettes) authors in sRGB, so without this conversion the transfer function
+ * was applied twice and every mid-tone was lifted towards white. See
+ * viewport3dColorSpace.ts for the numbers, and note that the surface shaders
+ * perform the identical conversion in GLSL -- CPU-built colours and
+ * shader-computed colours only match because both convert.
+ */
+function writeLinearRgb(
+  colors: Float32Array,
+  targetIndex: number,
+  rgb: readonly [number, number, number],
+): void {
+  const target = targetIndex * 3;
+  colors[target] = srgbToLinearChannel(rgb[0]);
+  colors[target + 1] = srgbToLinearChannel(rgb[1]);
+  colors[target + 2] = srgbToLinearChannel(rgb[2]);
 }
 
 function writeVectorValue(

@@ -547,6 +547,7 @@ export function resolveViewport3DPrimaryFieldQuery({
   );
   if (
     fdmVectorsVisible ||
+    Boolean(fdmSurfaceColorMode) ||
     fdmTopographyEnabled ||
     viewport3DFieldRenderOptionsNeedFullVectorData(fieldRenderOptions) ||
     scalarFieldComponentRequest.needsFullVector
@@ -1371,9 +1372,13 @@ function resolveViewport3DPrimaryFieldPassDemands({
     fdmSurfaceColorMode,
   );
   if (
-    fieldRenderOptions.scalarColorsVisible !== false &&
-    (scalarFieldComponentRequest.component ||
-      scalarFieldComponentRequest.needsFullVector)
+    // The cuboid surface is independent of the topology mesh scalar pass.
+    // Disabling that pass must not erase the FDM surface demand and fall back
+    // to a component-only carrier during a presentation change.
+    Boolean(fdmSurfaceColorMode) ||
+    (fieldRenderOptions.scalarColorsVisible !== false &&
+      (scalarFieldComponentRequest.component ||
+        scalarFieldComponentRequest.needsFullVector))
   ) {
     demands.push({
       component: "full",

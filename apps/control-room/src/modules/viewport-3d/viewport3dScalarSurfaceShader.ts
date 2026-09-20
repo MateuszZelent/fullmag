@@ -540,6 +540,19 @@ vec3 orientationHslToRgb(float hueRadians, float saturation, float lightness) {
   return vec3(c + m, m, x + m);
 }
 
+vec3 srgbToLinearVec3(vec3 c) {
+  vec3 lower = c / 12.92;
+  vec3 higher = pow((c + 0.055) / 1.055, vec3(2.4));
+  return mix(lower, higher, step(vec3(0.04045), c));
+}
+
+// Mirrors magnetizationHslRgb() in orientation/magnetizationColor.ts exactly.
+// Saturation is the same constant the CPU path uses; the polar angle is
+// carried by the lightness alone. Deriving saturation from
+// length(normalized.xy) = sin(theta) double-counted that angle -- chroma came
+// out as (1 - |nz|) * sin(theta) instead of (1 - |nz|) -- so this shader drew
+// mid-latitudes noticeably greyer than the glyphs and the HUD legend drew the
+// very same vector.
 vec3 orientationColor(vec3 vectorValue) {
   float magnitude = length(vectorValue);
   if (magnitude <= 1e-30) {
@@ -548,7 +561,7 @@ vec3 orientationColor(vec3 vectorValue) {
 
   vec3 normalized = vectorValue / magnitude;
   float hueRadians = atan(normalized.y, normalized.x);
-  float saturation = clamp(length(normalized.xy), 0.0, 1.0);
+  float saturation = 1.0;
   float lightness = clamp(normalized.z * 0.5 + 0.5, 0.0, 1.0);
   return orientationHslToRgb(hueRadians, saturation, lightness);
 }
@@ -560,6 +573,13 @@ void main() {
   vec3 n = normalize(vNormalView) * (gl_FrontFacing ? 1.0 : -1.0);
   float ndl = clamp(dot(n, normalize(vec3(0.35, 0.55, 0.75))) * 0.5 + 0.5, 0.0, 1.0);
   vec3 shaded = base * mix(1.0, 0.55 + 0.75 * ndl, fmShadeStrength);
-  gl_FragColor = vec4(shaded, fmOpacity);
+  // Same colour-space handling as SCALAR_SURFACE_FRAGMENT_SHADER. Writing the
+  // sRGB value straight out happened to look right on the default canvas, but
+  // PostProcessingLayer renders the scene into a linear target whenever Bloom
+  // or AO is enabled -- there the unencoded orientation surface washed out
+  // while scalar surfaces stayed correct.
+  vec3 color = srgbToLinearVec3(shaded);
+  gl_FragColor = vec4(color, fmOpacity);
+  #include <colorspace_fragment>
 }
 `;
