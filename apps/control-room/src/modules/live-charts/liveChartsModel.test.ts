@@ -4,7 +4,10 @@ import {
   buildLiveChartsTableQuery,
   compatibleLiveChartPanes,
   liveChartDescriptorDefaults,
+  liveChartInitialRange,
   liveChartPreset,
+  liveChartQuerySemantic,
+  normalizeLiveChartRangeForXAxis,
 } from "./liveChartsModel";
 
 describe("liveChartsModel", () => {
@@ -45,7 +48,27 @@ describe("liveChartsModel", () => {
     const tailTime = buildLiveChartsTableQuery({ columns: ["t", "mx"], cursor: 12, latestX: 4e-9, range: { mode: "tailTime", durationS: 1e-9 }, targetPoints: 800, xAxisId: "t" });
     expect(tailTime).toMatchObject({ toT: 4e-9, includeTail: false });
     expect(tailTime.fromT).toBeCloseTo(3e-9);
-    expect(buildLiveChartsTableQuery({ columns: ["step", "mx"], cursor: 12, latestX: 10, range: { mode: "fixed", fromSI: 3, toSI: 8 }, targetPoints: 800, xAxisId: "step" })).toMatchObject({ fromRow: 3, toRow: 8, includeTail: false });
+    expect(liveChartInitialRange({ mode: "fixed", fromSI: 8, toSI: 3 })).toEqual({ fromValue: 3, toValue: 8 });
     expect(buildLiveChartsTableQuery({ columns: ["step", "mx"], cursor: 12, latestX: 10, range: { mode: "fullDecimated" }, targetPoints: 800, xAxisId: "step" })).toMatchObject({ includeTail: false, limit: 800, targetPoints: 800 });
+  });
+
+  it("keeps fixed step values out of row-cursor bounds after request normalization", () => {
+    const range = { mode: "fixed", fromSI: 200, toSI: 300 } as const;
+    const normalized = normalizeLiveChartRangeForXAxis(range, "step");
+    const query = buildLiveChartsTableQuery({ columns: ["step", "mx"], cursor: 12, latestX: 300, range, targetPoints: 800, xAxisId: "step" });
+
+    expect(normalized).toEqual({ mode: "fullDecimated" });
+    expect(query).toMatchObject({ cursor: undefined, includeTail: false, limit: 50_000, targetPoints: 800 });
+    expect(query.fromRow).toBeUndefined();
+    expect(query.toRow).toBeUndefined();
+  });
+
+  it("keeps fixed non-time and explicit full-decimation query semantics distinct", () => {
+    const fixed = liveChartQuerySemantic({ mode: "fixed", fromSI: 200, toSI: 300 }, 800, "step");
+    const full = liveChartQuerySemantic({ mode: "fullDecimated" }, 800, "step");
+
+    expect(fixed).toMatchObject({ limit: 50_000, mode: "fixedNonTimeWindow", targetPoints: 800 });
+    expect(full).toMatchObject({ limit: 800, mode: "fullDecimated", targetPoints: 800 });
+    expect(JSON.stringify(fixed)).not.toBe(JSON.stringify(full));
   });
 });

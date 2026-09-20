@@ -7,7 +7,7 @@ import { formatChartDisplayValue, createChartDisplayTransform } from "@/shared/a
 import { compatibleLiveChartPanes } from "../liveChartsModel";
 import type { LiveChartsViewProps } from "../liveChartsViewTypes";
 
-export function LiveChartSurface({ fitRequest, onChartSelected, onExport, onPointSelected, onRangeSelected, onRequestedExportHandled, onSeriesChange, presentation, requestedExportFormat, series, selectedSeriesIds, title, xAxisLabel }: Pick<LiveChartsViewProps, "fitRequest" | "onChartSelected" | "onExport" | "onPointSelected" | "onRangeSelected" | "onRequestedExportHandled" | "onSeriesChange" | "presentation" | "requestedExportFormat" | "series" | "selectedSeriesIds" | "title" | "xAxisLabel">) {
+export function LiveChartSurface({ descriptorId, fitRequest, initialRange = null, onChartSelected, onExport, onPointSelected, onRangeSelected, onRequestedExportHandled, onSeriesChange, presentation, requestedExportFormat, series, selectedSeriesIds, title, xAxisLabel }: Pick<LiveChartsViewProps, "descriptorId" | "fitRequest" | "initialRange" | "onChartSelected" | "onExport" | "onPointSelected" | "onRangeSelected" | "onRequestedExportHandled" | "onSeriesChange" | "presentation" | "requestedExportFormat" | "series" | "selectedSeriesIds" | "title" | "xAxisLabel">) {
   const selected = new Set(selectedSeriesIds);
   const panes = compatibleLiveChartPanes(series);
   if (panes.length === 0) {
@@ -29,8 +29,8 @@ export function LiveChartSurface({ fitRequest, onChartSelected, onExport, onPoin
     const revision = paneSeries.find((item) => item.dataRevision != null)?.dataRevision ?? presentationRevision(presentation);
     return <ChartSection key={pane.unit} title={panelTitle} status={{ presentation, primary: "Live", pointSummary: paneSeries[0]?.points.length ? `${paneSeries[0].points.length.toLocaleString()} rows` : undefined }} legend={<ChartLegend items={legend} onSelectedSeriesIdsChange={(ids) => { onChartSelected(); onSeriesChange(ids); }} selectedSeriesIds={selectedSeriesIds} />}>
       {paneSeries.length > 0 && visible.length === 0 ? <div className="fm-live-charts__empty" role="status">Select at least one signal</div> : <InteractiveChartSurface
-        allSeries={paneSeries} fitRequest={fitRequest} presentation={presentation} requestedExportFormat={requestedExportFormat} series={visible} xAxisLabel={xAxisLabel}
-        surface={{ ariaLabel: `${panelTitle} live chart`, chartId: `live-charts:${panelTitle}:${paneSeries.map((item) => `${item.id}:${item.points.length}`).join("|")}`, presentationCopy: { empty: "No live samples", error: "Live samples unavailable", hidden: "All selected series are hidden", loading: "Loading live samples" }, provenance: { dataRevision: paneSeries[0]?.dataRevision ?? null, decimation: "minmax_lttb", descriptorId: `live:${title.toLowerCase()}`, query: title, resourceKey: paneSeries[0]?.source.resourceKey ?? "data.table:default" } }}
+        allSeries={paneSeries} fitRequest={fitRequest} initialRange={initialRange} presentation={presentation} requestedExportFormat={requestedExportFormat} series={visible} xAxisLabel={xAxisLabel}
+        surface={{ ariaLabel: `${panelTitle} live chart`, chartId: `live-charts:${descriptorId}:${pane.unit}:${xAxisLabel ?? "x"}`, presentationCopy: { empty: "No live samples", error: "Live samples unavailable", hidden: "All selected series are hidden", loading: "Loading live samples" }, provenance: { dataRevision: paneSeries[0]?.dataRevision ?? null, decimation: "minmax_lttb", descriptorId: `live:${title.toLowerCase()}`, query: title, resourceKey: paneSeries[0]?.source.resourceKey ?? "data.table:default" } }}
         onExportRequested={onExport} onPointSelected={(seriesId, pointIndex) => { if (revision != null) onPointSelected(seriesId, pointIndex, revision); }} onRangeSelected={onRangeSelected} onRequestedExportHandled={onRequestedExportHandled}
       />}
     </ChartSection>;

@@ -5,6 +5,7 @@ import type { LiveChartPresetId } from "./liveChartsModel";
 export interface LiveChartsViewProps {
   descriptorId: LiveChartPresetId;
   fitRequest: number;
+  initialRange?: { fromValue: number; toValue: number } | null;
   isFollowing: boolean;
   onDescriptorChange: (id: LiveChartPresetId) => void;
   onExport: (format: "csv" | "tsv" | "png") => void;

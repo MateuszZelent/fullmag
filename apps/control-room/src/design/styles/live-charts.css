@@ -1,6 +1,7 @@
 .fm-live-charts {
   display: grid;
   gap: var(--fm-space-3);
+  grid-template-rows: auto minmax(0, 1fr);
   height: 100%;
   min-height: 0;
   padding: var(--fm-space-3);
@@ -15,11 +16,16 @@
 
 .fm-live-charts__preset { max-width: 13rem; }
 
-.fm-live-charts__surface { min-height: 0; }
+.fm-live-charts__surface {
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+}
 
 .fm-live-charts__panes {
   display: grid;
   gap: var(--fm-space-3);
+  min-width: 0;
 }
 
 .fm-live-charts__empty {

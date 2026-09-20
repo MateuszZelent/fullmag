@@ -11,7 +11,7 @@ import {
 import type { ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
 import { analysisColumnDescriptorsForQuery, chartTableWindowFromBinary, chartTableWindowValue, mergeChartTableWindows } from "@/shared/domain/analysis/chartDataPlan";
 
-import { buildLiveChartsTableQuery } from "../liveChartsModel";
+import { buildLiveChartsTableQuery, liveChartQuerySemantic } from "../liveChartsModel";
 import type { ChartRangePreference } from "@/kernel/workspace/liveChartPreferences";
 
 export function shouldLoadLiveTableRows({ active, hasSchema, paused }: { active: boolean; hasSchema: boolean; paused: boolean }): boolean {
@@ -56,7 +56,11 @@ export function useLiveTableData({
   const latestX = state.table && state.table.rowCount > 0
     ? chartTableWindowValue(state.table, state.table.rowCount - 1, state.table.columns.findIndex((column) => column.column_id === xAxisId)) ?? null
     : null;
-  const queryKey = useMemo(() => JSON.stringify({ queryColumns, range, targetPoints, xAxisId }), [queryColumns, range, targetPoints, xAxisId]);
+  const querySemantic = useMemo(
+    () => liveChartQuerySemantic(range, targetPoints, xAxisId),
+    [range, targetPoints, xAxisId],
+  );
+  const queryKey = useMemo(() => JSON.stringify({ queryColumns, querySemantic, xAxisId }), [queryColumns, querySemantic, xAxisId]);
   const query = useMemo(() => buildLiveChartsTableQuery({ columns: queryColumns, cursor: state.queryKey === queryKey ? state.cursor : undefined, latestX: state.queryKey === queryKey ? latestX : null, range, targetPoints, xAxisId }), [latestX, queryColumns, queryKey, range, state.cursor, state.queryKey, targetPoints, xAxisId]);
   const hasSchema = queryColumns.length > 0;
   const rows = useTableRowsBinaryResource("default", {

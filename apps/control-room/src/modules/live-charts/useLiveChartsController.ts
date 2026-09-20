@@ -13,7 +13,7 @@ import { buildScalarChartSeries } from "@/shared/domain/analysis/scalarTableChar
 
 import { useLiveEnergyData } from "./hooks/useLiveEnergyData";
 import { useLiveTableData } from "./hooks/useLiveTableData";
-import { liveChartDescriptorDefaults, liveChartPreset, type LiveChartPresetId } from "./liveChartsModel";
+import { liveChartDescriptorDefaults, liveChartInitialRange, liveChartPreset, type LiveChartPresetId } from "./liveChartsModel";
 import { liveChartsCommandRequests } from "./liveChartsCommandRequests";
 import { resolveLiveChartSelectedSeriesIds } from "./liveChartsSelection";
 
@@ -93,6 +93,15 @@ export function useLiveChartsController(selection: SelectionController) {
   const preferences = useLiveChartPreferencesHydration(descriptorId);
   const defaults = liveChartDescriptorDefaults(descriptorId);
   const descriptor = preferences.descriptor ?? defaults;
+  const rangeMode = descriptor.range.mode;
+  const rangeFromSI = rangeMode === "fixed" ? descriptor.range.fromSI : null;
+  const rangeToSI = rangeMode === "fixed" ? descriptor.range.toSI : null;
+  const initialRange = useMemo(
+    () => rangeMode === "fixed" && rangeFromSI !== null && rangeToSI !== null
+      ? liveChartInitialRange({ mode: "fixed", fromSI: rangeFromSI, toSI: rangeToSI })
+      : null,
+    [rangeFromSI, rangeMode, rangeToSI],
+  );
   const commandAction = useSyncExternalStore(liveChartsCommandRequests.subscribe, liveChartsCommandRequests.getSnapshot, liveChartsCommandRequests.getSnapshot);
   const commandFitRequest = useSyncExternalStore(liveChartsCommandRequests.subscribe, liveChartsCommandRequests.getFitRequestSnapshot, liveChartsCommandRequests.getFitRequestSnapshot);
   const paused = descriptor.liveMode === "paused";
@@ -173,6 +182,7 @@ export function useLiveChartsController(selection: SelectionController) {
   return {
     descriptorId,
     fitRequest,
+    initialRange,
     isFollowing: !paused,
     onDescriptorChange: (next: LiveChartPresetId) => liveChartsWorkspaceStore.setSelectedDescriptorId(next),
     onExport: (format: "csv" | "tsv" | "png") => setLocalRequestedExportFormat(format),
