@@ -8,7 +8,11 @@
 
 **Stos technologiczny:** Python DSL, Rust IR/planner/runner/API, MFEM/hypre CPU, istniejące konserwatywne RT0 i adaptacyjne Biot–Savart, natywne realizacje FEM/FDM, Next.js 16/React, generowany OpenAPI v2, istniejący facade i resource hooks, Vitest/Playwright oraz kontenerowe recipes `just`.
 
-**Status:** plan do wykonania; poniższe zmiany, nowe funkcje, pliki, recipes i nazwy testów nie są deklaracją ich aktualnego istnienia. Ten dokument nie wykonuje refaktoryzacji. Podstawą jest dirty snapshot audytu, HEAD `e4f653cfaa4505b8659b1ad173b7aec2b67aaad5`, lokalny master `7faa259c5597ba447c413f2aea0ff66d6110b297`.
+**Status na 2026-09-20:** częściowo zaimplementowany, bez końcowego odbioru produkcyjnego. Punkt wznowienia: HEAD `d95ddb72a193ef6bcd06a5624f144e6c2f8c5cf8`. Czytaj najpierw [stan i kolejkę dalszej pracy](../../validation/antenna/continuation-2026-09-20.md), następnie odpowiednie zadania T00–T18. Wpisy implementacyjne z 2026-09-09–12 dokumentują postęp; pozostałe propozycje plików, funkcji i testów nadal wymagają sprawdzenia w źródłach.
+
+**Jak czytać checklistę:** `[x]` oznacza zamknięcie podanego zakresu, a `[ ]` brak pełnego odbioru danej pozycji; część takich pozycji ma już implementację lub historyczny wynik testu. Nie wyliczać procentu ukończenia z liczby checkboxów. Dopiski o pozytywnych testach nie zamykają automatycznie całego zadania ani innych backendów. Wynik historyczny wymaga wskazania rewizji i zakresu; zmiana właściciela kodu wymaga ponownej weryfikacji.
+
+Pierwotna podstawa planowania: dirty snapshot audytu, HEAD `e4f653cfaa4505b8659b1ad173b7aec2b67aaad5`, lokalny master `7faa259c5597ba447c413f2aea0ff66d6110b297`. Późniejszą integrację opisuje [punkt bazowy](../../validation/antenna/integration-baseline.md). Nie jest to potwierdzenie synchronizacji z najnowszym zdalnym masterem na 2026-09-20.
 
 Rozpoczęcie: 2026-09-08. Ukończenie dokumentu: 2026-09-09. Nazwa pliku zachowuje datę rozpoczęcia wspólnego audytu i planowania.
 

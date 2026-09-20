@@ -6,7 +6,7 @@ import math
 import re
 import tempfile
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Mapping, Sequence, cast
 
 from fullmag._validation import (
     AUTO_SINC_NYQUIST_GUARD_FACTOR,
@@ -1094,6 +1094,15 @@ def _export_stage_draft_with_identity(stage: LoadedStage) -> dict[str, object]:
 def _export_study_pipeline_node(stage: LoadedStage, *, index: int) -> dict[str, object]:
     draft = _export_stage_draft_with_identity(stage)
     stage_kind = _infer_pipeline_stage_kind(draft)
+    if stage_kind == "antenna_field_solve":
+        definition = cast(dict[str, object], draft["definition"])
+        # The executor resolves the definition from the canonical problem model.
+        draft = {
+            "kind": "antenna_field_solve",
+            "entrypoint_kind": stage.entrypoint_kind,
+            "stage_id": definition["id"],
+            "port_mode_ids": copy.deepcopy(definition["port_mode_ids"]),
+        }
     if stage_kind == "run":
         draft = {
             key: draft[key]

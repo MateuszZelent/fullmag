@@ -104,9 +104,18 @@ def test_antenna_solve_is_exported_as_one_pipeline_node() -> None:
     assert node["id"] == "solve_antenna_1"
     assert node["stage_kind"] == "antenna_field_solve"
     assert node["payload"]["kind"] == "antenna_field_solve"
-    assert node["payload"]["definition"]["id"] == "solve_antenna_1"
+    assert node["payload"] == {
+        "kind": "antenna_field_solve",
+        "entrypoint_kind": "flat_antenna_field_solve",
+        "stage_id": "solve_antenna_1",
+        "port_mode_ids": ["port_1"],
+    }
     draft = export_builder_draft(loaded)
     assert draft["antenna_field_solve_stages"][0]["id"] == "solve_antenna_1"
+    assert draft["antenna_field_solve_stages"][0]["port_mode_ids"] == ["port_1"]
+    assert loaded.pipeline_base_problem().to_ir(include_geometry_assets=False)[
+        "antenna_field_solve_stages"
+    ][0]["id"] == node["payload"]["stage_id"]
 
 
 def test_antenna_stage_ids_share_the_flat_pipeline_namespace() -> None:

@@ -6,26 +6,26 @@
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "planned_not_qualified",
-      "reason": "Implementation plan only; qualification gates required"
+      "status": "development_executable",
+      "reason": "Stan 2026-09-20: czesciowa implementacja i historyczny kontrakt Zeemana/FFI; pelne bramki T05/T06/T13 i odbior T18 pozostaja otwarte."
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "planned_not_qualified",
-      "reason": "Implementation plan only; qualification gates required"
+      "reason": "Stan 2026-09-20: brak pelnego dowodu antenowej trajektorii na FEM GPU; wymagane T16 i T18."
     },
     {
       "solver": "FDM",
       "device": "CPU",
       "status": "planned_not_qualified",
-      "reason": "Implementation plan only; qualification gates required"
+      "reason": "Stan 2026-09-20: istnieja testy CPU/reference bazy i waveformu; publiczny pipeline oraz projekcja na rzeczywiste komorki pozostaja otwarte w T09/T16."
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "planned_not_qualified",
-      "reason": "Implementation plan only; qualification gates required"
+      "reason": "Stan 2026-09-20: brak pelnego dowodu projekcji, uploadu CUDA i parity anteny; wymagane T16 i T18."
     }
   ],
   "symbols": [],
