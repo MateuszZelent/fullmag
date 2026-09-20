@@ -47,6 +47,7 @@ describe("LiveChartsModule", () => {
   it("renders an explicit loading state while the live resource has no series yet", () => {
     const html = renderToStaticMarkup(
       <LiveChartSurface
+        descriptorId="magnetization"
         fitRequest={0}
         onChartSelected={() => undefined}
         onExport={() => undefined}
@@ -64,6 +65,40 @@ describe("LiveChartsModule", () => {
 
     expect(html).toContain("Loading live samples");
     expect(html).toContain("Magnetization");
+  });
+
+  it("keeps the pane renderer identity stable when live samples append", () => {
+    const renderChart = (pointCount: number) => renderToStaticMarkup(
+      <LiveChartSurface
+        descriptorId="magnetization"
+        fitRequest={0}
+        onChartSelected={() => undefined}
+        onExport={() => undefined}
+        onPointSelected={() => undefined}
+        onRangeSelected={() => undefined}
+        onRequestedExportHandled={() => undefined}
+        onSeriesChange={() => undefined}
+        presentation={{ kind: "ready", revision: pointCount }}
+        series={[{
+          id: "mx",
+          label: "mx",
+          points: Array.from({ length: pointCount }, (_, rowIndex) => ({ rowIndex, x: rowIndex, y: rowIndex })),
+          quantity: "mx",
+          source: { kind: "data.table.rows" as const, resourceKey: "resource", tableId: "default" },
+          status: "ready" as const,
+          unit: "1",
+          xUnit: "1",
+        }]}
+        selectedSeriesIds={["mx"]}
+        title="Magnetization"
+        xAxisLabel="step"
+      />,
+    );
+    const firstKey = renderChart(1).match(/data-chart-model-key="([^"]+)"/)?.[1];
+    const nextKey = renderChart(4).match(/data-chart-model-key="([^"]+)"/)?.[1];
+
+    expect(firstKey).toBe("live-charts:magnetization:1:step");
+    expect(nextKey).toBe(firstKey);
   });
 
   it("completes fit and export commands only after their mounted request is handled", async () => {

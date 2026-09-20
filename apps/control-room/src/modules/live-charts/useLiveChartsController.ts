@@ -18,8 +18,8 @@ import { useLiveEnergyData } from "./hooks/useLiveEnergyData";
 import { useLiveTableData } from "./hooks/useLiveTableData";
 import {
   isLiveChartServerXAxisId,
-  isLiveChartTimeXAxisId,
   liveChartDescriptorDefaults,
+  liveChartInitialRange,
   liveChartPreset,
   liveChartRangesEqual,
   normalizeLiveChartRangeForXAxis,
@@ -118,6 +118,15 @@ export function useLiveChartsController(selection: SelectionController) {
   const preferences = useLiveChartPreferencesHydration(descriptorId);
   const defaults = liveChartDescriptorDefaults(descriptorId);
   const descriptor = preferences.descriptor ?? defaults;
+  const rangeMode = descriptor.range.mode;
+  const rangeFromSI = rangeMode === "fixed" ? descriptor.range.fromSI : null;
+  const rangeToSI = rangeMode === "fixed" ? descriptor.range.toSI : null;
+  const initialRange = useMemo(
+    () => rangeMode === "fixed" && rangeFromSI !== null && rangeToSI !== null
+      ? liveChartInitialRange({ mode: "fixed", fromSI: rangeFromSI, toSI: rangeToSI })
+      : null,
+    [rangeFromSI, rangeMode, rangeToSI],
+  );
   const commandAction = useSyncExternalStore(liveChartsCommandRequests.subscribe, liveChartsCommandRequests.getSnapshot, liveChartsCommandRequests.getSnapshot);
   const commandFitRequest = useSyncExternalStore(liveChartsCommandRequests.subscribe, liveChartsCommandRequests.getFitRequestSnapshot, liveChartsCommandRequests.getFitRequestSnapshot);
   const paused = descriptor.liveMode === "paused";
@@ -196,6 +205,7 @@ export function useLiveChartsController(selection: SelectionController) {
     descriptorId,
     exportErrorFormat,
     fitRequest,
+    initialRange,
     isFollowing: !paused,
     presentation,
     requestedExportRequest,
@@ -330,7 +340,7 @@ function createLiveChartsViewActions({
     onExport,
     onFit: () => setLocalFitRequest((value) => value + 1),
     onRangeSelected: (fromSI: number, toSI: number) => {
-      if (descriptorId !== "energy" && !isLiveChartTimeXAxisId(effectiveXAxisId)) return;
+      if (descriptorId !== "energy" && !isLiveChartServerXAxisId(effectiveXAxisId)) return;
       liveChartsWorkspaceStore.setRange({ fromSI, toSI });
       preferences.setDescriptorRange(descriptorId, { mode: "fixed", fromSI, toSI });
     },
