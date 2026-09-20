@@ -10,6 +10,9 @@ import FieldMapModule from "./FieldMapModule";
 
 const mocks = vi.hoisted(() => ({
   meta: vi.fn(),
+  metaData: new Map<boolean, unknown>(),
+  scalarData: { data: new ArrayBuffer(8), etag: "scalar-authoritative" },
+  projectionStatus: vi.fn(() => "resolved"),
   probeData: null as null | { occupancy: string; scalar: number | null; u_m: number; v_m: number },
   queuePatch: vi.fn(),
   renderModel: vi.fn(),
@@ -48,7 +51,7 @@ vi.mock("./model/fieldMapRenderModel", () => ({
   normalizePlanarColorRange: () => null,
   projectPlanarVectors: () => null,
   resolveFieldMapAuxiliaryDiagnostics: () => [],
-  surfaceProjectionStatus: () => "resolved",
+  surfaceProjectionStatus: mocks.projectionStatus,
 }));
 
 vi.mock("./renderer/PlanarSurface", () => ({
@@ -85,7 +88,7 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
     mocks.meta(...args);
     const requestedSource = args[1] as { kind?: string } | undefined;
     const isDefault = requestedSource?.kind === "default";
-    return mocks.renderReady
+    const resource = mocks.renderReady
       ? {
           data: {
             canonical_unit: "A/m",
@@ -131,12 +134,18 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
           status: "ready",
         }
       : { data: null, error: null, status: "idle" };
+    // Resource hooks retain the same data object until its revision changes.
+    if (resource.data) {
+      if (!mocks.metaData.has(isDefault)) mocks.metaData.set(isDefault, resource.data);
+      return { ...resource, data: mocks.metaData.get(isDefault) };
+    }
+    return resource;
   },
   usePlanarMaskResource: () => ({ data: null, error: null, status: "idle" }),
   usePlanarMeshOverlayResource: () => ({ data: null, error: null, status: "idle" }),
   usePlanarProbeResource: () => ({ data: mocks.probeData, error: null, status: mocks.probeData ? "ready" : "idle" }),
   usePlanarScalarResource: () => mocks.renderReady
-    ? { data: { data: new ArrayBuffer(8), etag: "scalar-authoritative" }, error: null, status: "ready" }
+    ? { data: mocks.scalarData, error: null, status: "ready" }
     : { data: null, error: null, status: "idle" },
   usePlanarVectorResource: () => ({ data: null, error: null, status: "idle" }),
 }));
@@ -170,6 +179,7 @@ vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
 describe("FieldMapModule planar state ownership", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.metaData.clear();
     mocks.visualization.data = null;
     mocks.visualization.error = null;
     mocks.visualization.status = "loading";
@@ -187,6 +197,44 @@ describe("FieldMapModule planar state ownership", () => {
     expect(mocks.meta).toHaveBeenCalledWith("", { kind: "default" }, expect.any(Object), {
       enabled: false,
     });
+  });
+
+  it("keeps the retained frame without reading missing metadata during refresh", async () => {
+    mocks.visualization.data = {
+      planar: {
+        component: "magnitude", quantity_id: "m", source: { kind: "default" },
+        colormap: "viridis", range: { mode: "auto" },
+        interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
+        vector_style: { color_mode: "orientation", length_mode: "uniform", scale: 1 },
+        default_slice: { operator: { kind: "plane_sample" }, plane: "xy", position_fraction: 0.5 },
+        layers: { raster: true, mesh: false, vectors: false },
+        resolution: { width: 256, height: 128 }, view_scope: { kind: "monitor_target" },
+      },
+    };
+    mocks.visualization.status = "ready";
+    mocks.renderReady = true;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<FieldMapModule />));
+      expect(mocks.projectionStatus).toHaveBeenCalled();
+      mocks.projectionStatus.mockClear();
+      mocks.renderReady = false;
+      await act(async () => root.render(<FieldMapModule />));
+      expect(container.innerHTML).toContain("fm-field-map__canvas-stack");
+      expect(mocks.projectionStatus).not.toHaveBeenCalled();
+      const previous = mocks.visualization.data!;
+      mocks.visualization.data = {
+        ...previous,
+        planar: { ...(previous.planar as object), component: "x" },
+      };
+      await act(async () => root.render(<FieldMapModule />));
+      expect(container.innerHTML).not.toContain("fm-field-map__canvas-stack");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
   });
 
   it("hydrates the same loading snapshot without reading client-only field-map identity", async () => {

@@ -12,6 +12,24 @@ const model: ChartRenderModel = {
   yAxes: [{ label: "magnetization", unit: "1" }],
 };
 
+type DataZoomListener = (event: unknown) => void;
+
+function createDataZoomChart(dataZoom: unknown) {
+  const listeners = new Map<string, DataZoomListener>();
+  const chart = {
+    dispose: vi.fn(),
+    getDataURL: vi.fn(() => "data:image/png;base64,proof"),
+    getOption: vi.fn(() => ({ dataZoom })),
+    off: vi.fn(),
+    on: vi.fn((name: string, listener: DataZoomListener) => {
+      listeners.set(name, listener);
+    }),
+    resize: vi.fn(),
+    setOption: vi.fn(),
+  };
+  return { chart, listeners };
+}
+
 describe("chart renderer owner", () => {
   it("owns exactly one lifecycle and is inert after dispose", () => {
     const chart = { dispatchAction: vi.fn(), dispose: vi.fn(), getDataURL: vi.fn(() => "data:image/png;base64,proof"), resize: vi.fn(), setOption: vi.fn() };
@@ -29,9 +47,78 @@ describe("chart renderer owner", () => {
     expect(engine.init).toHaveBeenCalledTimes(1);
     expect(chart.setOption).toHaveBeenCalledTimes(1);
     expect(chart.resize).toHaveBeenCalledTimes(1);
-    expect(chart.dispatchAction).toHaveBeenCalledWith({ type: "dataZoom", start: 0, end: 100 });
-    expect(chart.dispatchAction).toHaveBeenCalledWith({ type: "dataZoom", startValue: 1e-9, endValue: 2e-9 });
+    expect(chart.dispatchAction).toHaveBeenCalledWith(
+      { type: "dataZoom", start: 0, end: 100 },
+      { silent: true },
+    );
+    expect(chart.dispatchAction).toHaveBeenCalledWith(
+      { type: "dataZoom", startValue: 1e-9, endValue: 2e-9 },
+      { silent: true },
+    );
     expect(chart.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes a user percentage zoom from ECharts calculated values", () => {
+    const onDataZoom = vi.fn();
+    const { chart, listeners } = createDataZoomChart([
+      { id: "other-window", startValue: 10, endValue: 20 },
+      { id: "x-window", startValue: 0.183, endValue: 3.819 },
+    ]);
+    const owner = createChartRendererOwner(
+      { init: () => chart },
+      { dataZoom: onDataZoom },
+    );
+    owner.mount({} as HTMLElement);
+
+    listeners.get("dataZoom")?.({
+      batch: [{ dataZoomId: "x-window", dataZoomIndex: 1, end: 95.4, start: 18.3 }],
+      type: "datazoom",
+    });
+
+    expect(onDataZoom).toHaveBeenCalledWith({
+      batch: [{ dataZoomId: "x-window", dataZoomIndex: 1, end: 95.4, endValue: 3.819, start: 18.3, startValue: 0.183 }],
+      type: "datazoom",
+    });
+  });
+
+  it("uses the dataZoom index when an event has no id and preserves finite value actions", () => {
+    const onDataZoom = vi.fn();
+    const { chart, listeners } = createDataZoomChart([
+      { id: "other-window", startValue: 10, endValue: 20 },
+      { id: "x-window", startValue: 0.183, endValue: 3.819 },
+    ]);
+    const owner = createChartRendererOwner(
+      { init: () => chart },
+      { dataZoom: onDataZoom },
+    );
+    owner.mount({} as HTMLElement);
+
+    listeners.get("dataZoom")?.({ dataZoomIndex: 0, end: 100, start: 0, type: "datazoom" });
+    listeners.get("dataZoom")?.({
+      dataZoomId: "x-window",
+      end: 80,
+      endValue: 5,
+      start: 20,
+      startValue: 2,
+      type: "datazoom",
+    });
+
+    expect(onDataZoom).toHaveBeenNthCalledWith(1, {
+      dataZoomIndex: 0,
+      end: 100,
+      endValue: 20,
+      start: 0,
+      startValue: 10,
+      type: "datazoom",
+    });
+    expect(onDataZoom).toHaveBeenNthCalledWith(2, {
+      dataZoomId: "x-window",
+      end: 80,
+      endValue: 5,
+      start: 20,
+      startValue: 2,
+      type: "datazoom",
+    });
   });
 
   it("encodes stable semantic row identity in renderer data", () => {
@@ -47,7 +134,7 @@ describe("chart renderer owner", () => {
   it("keeps dimensionless axes unscaled, enables ECharts aria and removes the bottom slider", () => {
     const option = chartRenderModelToEChartsOption(model);
     expect(option.aria).toMatchObject({ enabled: true });
-    expect(option.dataZoom).toEqual([{ filterMode: "none", type: "inside", zoomOnMouseWheel: "ctrl" }]);
+    expect(option.dataZoom).toEqual([{ id: "fullmag-x-window", filterMode: "none", type: "inside", zoomOnMouseWheel: "ctrl" }]);
     expect(option.xAxis).toMatchObject({ name: "time [s]" });
     expect(option.yAxis).toEqual(expect.arrayContaining([expect.objectContaining({ name: "magnetization" })]));
     const formatter = (option.tooltip as { formatter: (params: unknown) => string }).formatter;

@@ -11,8 +11,9 @@ describe("OrientationHudLayer", () => {
     const commitEnd = source.indexOf("useEffect(", source.indexOf("const commitOrbit"));
     const cameraCommitBlock = source.slice(snapStart, commitEnd);
 
-    expect(cameraCommitBlock).toContain("commitCameraChange(nextCamera)");
-    expect(cameraCommitBlock).toContain("onCameraChange(nextCamera)");
+    expect(cameraCommitBlock).toContain("commitCameraChange(nextCamera, epoch)");
+    expect(source).toContain("onCameraChange(nextCamera, epoch)");
+    expect(cameraCommitBlock).toContain("commitCameraChange(pending.camera, pending.epoch)");
     expect(cameraCommitBlock).not.toContain("viewport3dStore.setCamera(");
   });
 

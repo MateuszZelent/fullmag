@@ -81,6 +81,7 @@ jobs:
           set -euo pipefail
           node_bin="$(command -v node)"
           test "$("$node_bin" --version)" = "v24.18.0"
+          PATH=/usr/bin:/bin "$node_bin" --test apps/control-room/scripts/check-api-hygiene.node-test.mjs
           PATH=/usr/bin:/bin "$node_bin" apps/control-room/scripts/check-api-hygiene.mjs
 
   control-room-contracts:

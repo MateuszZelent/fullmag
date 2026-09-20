@@ -1030,6 +1030,19 @@ describe("FdmCuboidLayer model", () => {
     );
   });
 
+  it("mutates the owned surface material through its Three.js ref", () => {
+    const layerSource = readFileSync(fdmCuboidLayerPath, "utf8").replace(/\r\n/g, "\n");
+
+    expect(layerSource).toContain(
+      "const surfaceMaterialRef = useRef<MeshBasicMaterial>(null);",
+    );
+    expect(layerSource).toContain("ref={surfaceMaterialRef}");
+    expect(layerSource).toContain(
+      "surfaceMaterialRef.current.needsUpdate = true;",
+    );
+    expect(layerSource).not.toContain("surfaceMaterial.needsUpdate = true;");
+  });
+
   it("does not recreate FDM materials for vector-only setting changes", () => {
     const layerSource = readFileSync(fdmCuboidLayerPath, "utf8").replace(/\r\n/g, "\n");
     const surfaceMaterialBlock = layerSource.slice(

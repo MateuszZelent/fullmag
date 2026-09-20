@@ -212,12 +212,12 @@ describe("EChartsCanvasSurface", () => {
       await Promise.resolve();
     });
     const first = echarts.init.mock.results.at(-1)?.value;
-    expect(first?.dispatchAction).toHaveBeenCalledWith({ type: "dataZoom", startValue: 2, endValue: 8 });
+    expect(first?.dispatchAction).toHaveBeenCalledWith({ type: "dataZoom", startValue: 2, endValue: 8 }, { silent: true });
 
     await act(async () => {
       firstRoot.render(<EChartsCanvasSurface initialRange={{ fromValue: 3, toValue: 7 }} model={dummyModel} />);
     });
-    expect(first?.dispatchAction).toHaveBeenCalledWith({ type: "dataZoom", startValue: 3, endValue: 7 });
+    expect(first?.dispatchAction).toHaveBeenCalledWith({ type: "dataZoom", startValue: 3, endValue: 7 }, { silent: true });
     await act(async () => firstRoot.unmount());
 
     const secondRoot = createRoot(container as unknown as Element);
@@ -228,7 +228,7 @@ describe("EChartsCanvasSurface", () => {
     });
     const second = echarts.init.mock.results.at(-1)?.value;
     expect(second).not.toBe(first);
-    expect(second?.dispatchAction).toHaveBeenCalledWith({ type: "dataZoom", startValue: 4, endValue: 6 });
+    expect(second?.dispatchAction).toHaveBeenCalledWith({ type: "dataZoom", startValue: 4, endValue: 6 }, { silent: true });
     await act(async () => secondRoot.unmount());
     dom.restore();
   });
@@ -255,7 +255,7 @@ describe("EChartsCanvasSurface", () => {
       root.render(<EChartsCanvasSurface initialRange={null} model={dummyModel} />);
     });
     expect(instance?.dispatchAction).toHaveBeenCalledTimes(1);
-    expect(instance?.dispatchAction).toHaveBeenCalledWith({ type: "dataZoom", start: 0, end: 100 });
+    expect(instance?.dispatchAction).toHaveBeenCalledWith({ type: "dataZoom", start: 0, end: 100 }, { silent: true });
 
     await act(async () => {
       root.render(<EChartsCanvasSurface initialRange={null} model={dummyModel} />);
