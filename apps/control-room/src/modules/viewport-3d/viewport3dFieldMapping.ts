@@ -187,7 +187,12 @@ export function buildSampledScalarColors(
   for (let index = 0; index < pointIndices.length; index += 1) {
     const pointIndex = pointIndices[index] ?? 0;
     if (pointIndex >= fieldVector.pointCount) {
-      writeLinearRgb(colors, index, MISSING_FIELD_COVERAGE_RGB);
+      writeColorBufferRgb(
+        colors,
+        index,
+        MISSING_FIELD_COVERAGE_RGB,
+        "srgb",
+      );
       continue;
     }
     if (scalarValues) {
@@ -196,10 +201,11 @@ export function buildSampledScalarColors(
         range,
       );
     }
-    writeLinearRgb(
+    writeColorBufferRgb(
       colors,
       index,
       colorAt(fieldVector, pointIndex, resolvedColorMode, range, colorPalette),
+      resolvedColorMode === "orientation" ? "srgb" : "linear",
     );
   }
 
@@ -275,10 +281,11 @@ export function buildFdmSampledScalarColors(
         range,
       );
     }
-    writeLinearRgb(
+    writeColorBufferRgb(
       colors,
       index,
       colorAt(fieldVector, fieldIndex, resolvedColorMode, range, colorPalette),
+      resolvedColorMode === "orientation" ? "srgb" : "linear",
     );
   }
 
@@ -340,10 +347,11 @@ export function buildMappedVertexScalarColors(
         range,
       );
     }
-    writeLinearRgb(
+    writeColorBufferRgb(
       colors,
       nodeIndex,
       colorAt(fieldVector, index, resolvedColorMode, range, colorPalette),
+      resolvedColorMode === "orientation" ? "srgb" : "linear",
     );
   }
 
@@ -474,7 +482,14 @@ export function buildSurfaceFaceScalarColors(
     for (let corner = 0; corner < 3; corner += 1) {
       const targetIndex = faceIndex * 3 + corner;
       const colorOffset = targetIndex * 3;
-      writeLinearRgb(colors, targetIndex, rgb);
+      writeColorBufferRgb(
+        colors,
+        targetIndex,
+        rgb,
+        degradedFaces[faceIndex] === 1 || resolvedColorMode === "orientation"
+          ? "srgb"
+          : "linear",
+      );
       if (scalarValues) {
         scalarValues[targetIndex] = normalizeScalarValueForShaderAttribute(
           scalar,
@@ -629,7 +644,14 @@ export function buildThicknessAverageZScalarColors(
     for (let corner = 0; corner < 3; corner += 1) {
       const targetIndex = faceIndex * 3 + corner;
       const colorOffset = targetIndex * 3;
-      writeLinearRgb(colors, targetIndex, rgb);
+      writeColorBufferRgb(
+        colors,
+        targetIndex,
+        rgb,
+        degradedFaces[faceIndex] === 1 || resolvedColorMode === "orientation"
+          ? "srgb"
+          : "linear",
+      );
       if (scalarValues) {
         scalarValues[targetIndex] = normalizeScalarValueForShaderAttribute(
           scalar,
@@ -1416,38 +1438,40 @@ function writeScalarColors(
       );
     }
     if (colors.length > 0) {
-      writeLinearRgb(
+      writeColorBufferRgb(
         colors,
         index,
         colorAt(fieldVector, index, colorMode, range, colorPalette),
+        colorMode === "orientation" ? "srgb" : "linear",
       );
     }
   }
 }
 
 /**
- * Writes one sRGB colour into a vertex/instance colour buffer, converting it
- * to linear-sRGB on the way in.
+ * Writes one colour into a vertex/instance colour buffer.
  *
- * `ScalarColorBuffer.colors` is uploaded verbatim into a three.js `color` or
- * `instanceColor` attribute, and three.js reads those as values that are
- * already in its Linear-sRGB working space -- then encodes them to sRGB on
- * output. Every producer feeding this function (the HSL sphere, the scalar
- * palettes) authors in sRGB, so without this conversion the transfer function
- * was applied twice and every mid-tone was lifted towards white. See
- * viewport3dColorSpace.ts for the numbers, and note that the surface shaders
- * perform the identical conversion in GLSL -- CPU-built colours and
- * shader-computed colours only match because both convert.
+ * `scalarColorRgb()` already returns Linear-sRGB values for scalar palettes,
+ * while orientation colours and neutral sentinels are authored in sRGB. The
+ * input space must therefore be explicit: converting every input here would
+ * apply the sRGB EOTF twice to scalar palette values.
  */
-function writeLinearRgb(
+function writeColorBufferRgb(
   colors: Float32Array,
   targetIndex: number,
   rgb: readonly [number, number, number],
+  inputColorSpace: "linear" | "srgb",
 ): void {
   const target = targetIndex * 3;
-  colors[target] = srgbToLinearChannel(rgb[0]);
-  colors[target + 1] = srgbToLinearChannel(rgb[1]);
-  colors[target + 2] = srgbToLinearChannel(rgb[2]);
+  if (inputColorSpace === "srgb") {
+    colors[target] = srgbToLinearChannel(rgb[0]);
+    colors[target + 1] = srgbToLinearChannel(rgb[1]);
+    colors[target + 2] = srgbToLinearChannel(rgb[2]);
+    return;
+  }
+  colors[target] = rgb[0];
+  colors[target + 1] = rgb[1];
+  colors[target + 2] = rgb[2];
 }
 
 function writeVectorValue(
