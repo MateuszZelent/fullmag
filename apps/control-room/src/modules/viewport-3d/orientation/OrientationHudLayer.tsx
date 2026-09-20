@@ -14,6 +14,12 @@ import {
 } from "three";
 
 import { viewport3dStore } from "../viewport3dStore";
+import {
+  markViewport3DCameraGestureChanged,
+  settleViewport3DCameraGesture,
+  type Viewport3DCameraGestureRef,
+} from "../layers/viewport3DCameraGesture";
+import { beginOrientationCameraGesture, commitOrientationCameraGesture } from "./orientationCameraGesture";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type {
@@ -32,7 +38,7 @@ import {
 import { resolveOrientationHudAnchors } from "./hudLayout";
 import {
   HSL_REFERENCE_AXES,
-  magnetizationHslRgb,
+  magnetizationHslLinearRgb,
 } from "./magnetizationColor";
 import {
   ORBIT_SENSITIVITY,
@@ -46,11 +52,12 @@ import {
 } from "./ViewCube3DBox";
 
 interface OrientationHudLayerProps {
+  cameraGestureRef: Viewport3DCameraGestureRef;
   colors: Viewport3DColors;
   hslReferenceVisible: boolean;
-  onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
-  onCameraInteractionEnd?: () => void;
-  onCameraInteractionStart?: () => void;
+  onCameraChange: (camera: Viewport3DCameraState, epoch?: number) => Promise<void> | void;
+  onCameraInteractionEnd?: (epoch?: number) => void;
+  onCameraInteractionStart?: (epoch?: number) => void;
   rotationMode: Viewport3DRotationMode;
   tracker: Viewport3DResourceTracker;
   viewCubeVisible: boolean;
@@ -65,6 +72,7 @@ interface AnchorVectors {
 }
 
 export const OrientationHudLayer = memo(function OrientationHudLayer({
+  cameraGestureRef,
   colors,
   hslReferenceVisible,
   onCameraChange,
@@ -81,16 +89,18 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
       ? (state.controls as ViewportCameraControlsHandle | undefined)
       : undefined,
   );
-  const pendingOrbitCameraRef = useRef<Viewport3DCameraState | null>(null);
+  const pendingOrbitCameraRef = useRef<{ camera: Viewport3DCameraState; epoch: number } | null>(null);
   const controlsTargetRef = useRef(new Vector3());
   const commitCameraChange = useCallback(
-    (nextCamera: Viewport3DCameraState) => {
-      onCameraInteractionStart?.();
-      void Promise.resolve(onCameraChange(nextCamera))
-        .catch(() => undefined)
-        .finally(() => onCameraInteractionEnd?.());
+    (nextCamera: Viewport3DCameraState, epoch: number) => {
+      void commitOrientationCameraGesture(
+        cameraGestureRef,
+        epoch,
+        () => onCameraChange(nextCamera, epoch),
+        onCameraInteractionEnd,
+      ).catch(() => undefined);
     },
-    [onCameraChange, onCameraInteractionEnd, onCameraInteractionStart],
+    [cameraGestureRef, onCameraChange, onCameraInteractionEnd],
   );
   const getCurrentCamera = useCallback(
     () => {
@@ -142,12 +152,17 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
           : snapCameraToDirection(currentCamera, direction)),
       };
 
+      const epoch = beginOrientationCameraGesture(cameraGestureRef);
+      if (epoch < 0) return;
+      pendingOrbitCameraRef.current = null;
+      onCameraInteractionStart?.(epoch);
       applyLiveCamera(nextCamera);
-      commitCameraChange(nextCamera);
+      markViewport3DCameraGestureChanged(cameraGestureRef, epoch);
+      commitCameraChange(nextCamera, epoch);
       tracker.recordDirtyFrame("orientation-hud-snap");
       invalidate();
     },
-    [applyLiveCamera, commitCameraChange, getCurrentCamera, invalidate, rotationMode, tracker],
+    [applyLiveCamera, cameraGestureRef, commitCameraChange, getCurrentCamera, invalidate, onCameraInteractionStart, rotationMode, tracker],
   );
 
   const onOrbit = useCallback(
@@ -159,16 +174,19 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
           : orbitCameraAroundTarget(currentCamera, deltaX, ORBIT_SENSITIVITY)),
       };
 
+      const pending = pendingOrbitCameraRef.current;
+      const epoch = pending?.epoch ?? beginOrientationCameraGesture(cameraGestureRef);
+      if (epoch < 0) return;
+      if (!pending) onCameraInteractionStart?.(epoch);
+      if (!markViewport3DCameraGestureChanged(cameraGestureRef, epoch)) return;
       applyLiveCamera(nextCamera);
-      if (!pendingOrbitCameraRef.current) {
-        onCameraInteractionStart?.();
-      }
-      pendingOrbitCameraRef.current = nextCamera;
+      pendingOrbitCameraRef.current = { camera: nextCamera, epoch };
       tracker.recordDirtyFrame("orientation-hud-orbit");
       invalidate();
     },
     [
       applyLiveCamera,
+      cameraGestureRef,
       getCurrentCamera,
       invalidate,
       onCameraInteractionStart,
@@ -177,25 +195,21 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
     ],
   );
   const commitOrbit = useCallback(() => {
-    const nextCamera = pendingOrbitCameraRef.current;
-    if (!nextCamera) {
-      onCameraInteractionEnd?.();
-      return;
-    }
+    const pending = pendingOrbitCameraRef.current;
+    if (!pending) return;
     pendingOrbitCameraRef.current = null;
-    void Promise.resolve(onCameraChange(nextCamera))
-      .catch(() => undefined)
-      .finally(() => onCameraInteractionEnd?.());
-  }, [onCameraChange, onCameraInteractionEnd]);
+    commitCameraChange(pending.camera, pending.epoch);
+  }, [commitCameraChange]);
 
   useEffect(
     () => () => {
-      if (pendingOrbitCameraRef.current) {
-        pendingOrbitCameraRef.current = null;
-        onCameraInteractionEnd?.();
+      const pending = pendingOrbitCameraRef.current;
+      pendingOrbitCameraRef.current = null;
+      if (pending && settleViewport3DCameraGesture(cameraGestureRef, pending.epoch)) {
+        onCameraInteractionEnd?.(pending.epoch);
       }
     },
-    [onCameraInteractionEnd],
+    [cameraGestureRef, onCameraInteractionEnd],
   );
 
   if (!viewCubeVisible && !hslReferenceVisible) {
@@ -395,7 +409,8 @@ function buildHslSphereGeometry(): BufferGeometry {
   const colors = new Float32Array(position.count * 3);
 
   for (let index = 0; index < position.count; index += 1) {
-    const [red, green, blue] = magnetizationHslRgb(
+    // Vertex colors use linear-sRGB; CSS axis colors remain in sRGB.
+    const [red, green, blue] = magnetizationHslLinearRgb(
       position.getX(index),
       position.getY(index),
       position.getZ(index),

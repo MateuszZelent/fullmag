@@ -203,8 +203,7 @@ import {
   type Viewport3DVisualProfile,
 } from "./viewport3dVisualProfile";
 import {
-  beginViewport3DFieldUpdateHold,
-  endViewport3DFieldUpdateHold,
+  createViewport3DInteractionFieldHold,
 } from "./viewport3dFieldUpdateHold";
 import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
 import { installViewport3DThreeConsolePolicy } from "./viewport3dThreeConsolePolicy";
@@ -1610,28 +1609,18 @@ export default function Viewport3DModule({
     },
     [kernel.cameraRegistry],
   );
-  const cameraFieldUpdateHoldRef = useRef(false);
+  const cameraFieldUpdateHold = useMemo(() => createViewport3DInteractionFieldHold(), []);
   const beginCameraInteraction = useCallback((epoch?: number) => {
-    if (!cameraFieldUpdateHoldRef.current) {
-      cameraFieldUpdateHoldRef.current = true;
-      beginViewport3DFieldUpdateHold();
-    }
+    cameraFieldUpdateHold.begin(epoch);
     kernel.cameraRegistry.beginInteraction(epoch);
-  }, [kernel.cameraRegistry]);
+  }, [cameraFieldUpdateHold, kernel.cameraRegistry]);
   const endCameraInteraction = useCallback((epoch?: number) => {
     kernel.cameraRegistry.endInteraction(epoch);
-    if (cameraFieldUpdateHoldRef.current) {
-      cameraFieldUpdateHoldRef.current = false;
-      endViewport3DFieldUpdateHold();
-    }
-  }, [kernel.cameraRegistry]);
+    cameraFieldUpdateHold.end(epoch);
+  }, [cameraFieldUpdateHold, kernel.cameraRegistry]);
   useEffect(
-    () => () => {
-      if (!cameraFieldUpdateHoldRef.current) return;
-      cameraFieldUpdateHoldRef.current = false;
-      endViewport3DFieldUpdateHold();
-    },
-    [],
+    () => () => cameraFieldUpdateHold.end(),
+    [cameraFieldUpdateHold],
   );
   const changeRegionOverlaySource = useCallback(
     (source: RegionDiagnosticOverlaySource) => {

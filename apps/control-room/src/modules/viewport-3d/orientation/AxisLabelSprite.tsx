@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
-import { CanvasTexture } from "three";
+import { CanvasTexture, SRGBColorSpace } from "three";
 
 import { WIDGET_RENDER_ORDER } from "./orientationHudConstants";
 
@@ -62,6 +62,7 @@ function buildAxisLabelTexture(
     context.fillText(label, 64, 34);
   }
   const texture = new CanvasTexture(canvas);
+  texture.colorSpace = SRGBColorSpace;
   texture.needsUpdate = true;
   return texture;
 }

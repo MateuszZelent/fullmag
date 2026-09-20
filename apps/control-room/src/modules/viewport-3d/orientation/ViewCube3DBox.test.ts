@@ -43,7 +43,7 @@ describe("ViewCube3DBox", () => {
     expect(effectBlock).not.toContain(
       'window.addEventListener("pointermove", handleMove',
     );
-    expect(effectBlock).toContain("detachWindowDragListeners();");
+    expect(orbitRingBlock).toContain("useEffect(() => () => handleUp(), [handleUp]);");
   });
 
   it("uses the native view cube hit path without a duplicate fallback mesh pointerdown", () => {
@@ -81,9 +81,8 @@ describe("ViewCube3DBox", () => {
 
     expect(source).toContain('addEventListener("pointerdown", handlePointerDown');
     expect(source).toContain("capture: true");
-    expect(source).toContain("let cachedRect = element.getBoundingClientRect();");
-    expect(source).toContain("new ResizeObserver");
-    expect(source).toContain("raycaster.intersectObject(group, true)");
+    expect(source).toContain("const rect = element.getBoundingClientRect();");
+    expect(source).toContain("raycaster.intersectObject(hitBox, false)");
     expect(source).toContain("viewCubeTargetDirection");
     expect(source).toContain("viewCubeFallbackBox");
   });
