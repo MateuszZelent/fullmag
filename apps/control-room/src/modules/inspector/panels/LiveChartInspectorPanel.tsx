@@ -88,7 +88,7 @@ export function LiveChartInspectorPanel({ selection }: InspectorPanelProps) {
           <label className="fm-inspector-field-row__label" htmlFor="fm-live-chart-range">Window</label>
           <Select value={descriptor?.range.mode ?? "follow"} onValueChange={setRange}>
             <SelectTrigger id="fm-live-chart-range" aria-label="Live Chart window" className="fm-live-chart-inspector__select">
-              <SelectValue>{descriptor?.range.mode === "fixed" ? "Selected range" : undefined}</SelectValue>
+              <SelectValue />
             </SelectTrigger>
             <SelectContent>
               {descriptor?.range.mode === "fixed" ? <SelectItem value="fixed" disabled>Selected range</SelectItem> : null}

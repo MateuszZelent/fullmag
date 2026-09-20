@@ -1,11 +1,25 @@
+import type { ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { liveChartPreferencesStore } from "@/kernel/workspace/liveChartPreferences";
 
 import { resolveInspectorPanel } from "../inspectorRegistry";
 
+const selectValueProps = vi.hoisted(() => vi.fn());
+vi.mock("@/shared/ui/Select", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/shared/ui/Select")>();
+  return {
+    ...actual,
+    SelectValue: (props: ComponentProps<typeof actual.SelectValue>) => {
+      selectValueProps(props);
+      return <actual.SelectValue {...props} />;
+    },
+  };
+});
+
 describe("LiveChartInspectorPanel", () => {
   it("labels the persisted fixed window instead of showing an empty selector", () => {
+    selectValueProps.mockClear();
     const snapshot = liveChartPreferencesStore.getServerHydrationSnapshot();
     const mock = vi.spyOn(liveChartPreferencesStore, "getServerHydrationSnapshot").mockReturnValue({
       ...snapshot,
@@ -28,6 +42,12 @@ describe("LiveChartInspectorPanel", () => {
       }} />);
       expect(html).toContain("Selected range (step)");
       expect(html).toContain("200.000 … 300.000");
+      // Radix owns the value's children via a portal. Explicit text conflicts
+      // with that portal when the selected window changes during zoom.
+      expect(selectValueProps).toHaveBeenCalled();
+      for (const [props] of selectValueProps.mock.calls) {
+        expect(props.children).toBeUndefined();
+      }
     } finally {
       mock.mockRestore();
     }
