@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn thin_film_p00_matches_expm1_branch_away_from_gamma() {
-        for kd in [1.0e-3, 0.01, 0.15707963267948966, 1.0] {
+        for kd in [1.0e-3_f64, 0.01, 0.15707963267948966, 1.0] {
             let expected: f64 = 1.0 + (-kd).exp_m1() / kd;
             assert!((thin_film_p00(kd) - expected).abs() < 1.0e-15);
         }
