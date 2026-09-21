@@ -23,6 +23,19 @@ dla tego HEAD, pełnej ścieżki C1/A1 (61 próbek, 8 gałęzi), zbieżności si
 airboxu/liczby modów ani browser proof. Nie uruchamiano ciężkiego buildu przy
 ograniczonej przestrzeni runnera.
 
+### Kontynuacja po synchronizacji — 2026-09-21
+
+Po tym checkpointcie poprawiono dwa regresy ujawnione przez CI: synchronizacja
+żądań obserwacyjnych nie zwiększa już rewizji widoku drugi raz w ramach jednej
+mutacji (`ae6c690ec`), a test checkpointu korzysta z identyfikatora wygenerowanego
+przez endpoint zamiast z nieaktualnego identyfikatora stałego (`613ca6a0b`).
+Oczekiwanie testu inspekcji archiwum uwzględnia konserwatywne ostrzeżenie dla
+`project/current_live_snapshot.json` bez typowanych referencji, wprowadzone w
+najnowszym `masterze`. Bieżący HEAD to `613ca6a0bc4246e53de86563da5aaef0b053d236`;
+te poprawki oczekują na nowe uruchomienie CI. Nie zmienia to granicy naukowej:
+brakuje świeżego managed receipt FEM, niepustego solve dla `k≠0` i kwalifikacji
+pełnej relacji dyspersji.
+
 ## Audyt i korekta stanu — 2026-09-19
 
 Bieżące ustalenia: [audyt implementacji i frontendu](../../audits/2026-09-19-dispersion-implementation-audit.md).
