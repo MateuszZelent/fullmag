@@ -849,6 +849,18 @@ W tej samej iteracji helpery runtime i formatter pasma zostały wydzielone z
 pliku komponentu do modułów modelu. React Doctor nie zgłasza już ostrzeżeń
 `only-export-components` dla tego obszaru.
 
+**Uzupełnienie implementacyjne 2026-09-21 (harness browser):** dodano
+`apps/control-room/scripts/smoke-antenna-authoring-ui.mjs` oraz helper i test
+kontraktu Node. Smoke ma jawnie ograniczony zakres pierwszej fazy T15:
+`create → Explorer → conductor/port/solution → ready thin metadata → WebGL`
+z kontrolowanymi odpowiedziami zasobów pola/katalogu. Nie jest jeszcze pełnym
+`smoke-antenna-workflow.mjs`: nie wykonuje native solve, Relax/LLG,
+export/reload, waveform/reuse, stale ani lifecycle field-map. Próba wykonania
+21.09.2026 ma status **not run**: API nie nasłuchiwało, a launcher
+`just control-room-v2` został zatrzymany przez storage guard na realnych
+`node_modules`; ich migracja wymaga osobnej, jawnej decyzji i nie została
+wykonana.
+
 **Pliki:** istniejące AntennaObjectPanel/Model/test, geometry command i test, Explorer/ribbon; nowe panele w `apps/control-room/src/modules/inspector/panels/antenna/`: `AntennaConductorPanel.tsx`, `AntennaPortPanel.tsx`, `AntennaSolutionPanel.tsx`, `AntennaProjectionPanel.tsx`, `SolvedAntennaDrivePanel.tsx`, `AntennaSpectrumPanel.tsx`.
 
 - [ ] Rozdzielić etykiety „Pole regionalne” i „Antena przewodnikowa”. Stary regional panel pozostaje edytorem regional drive; nie używać go jako fallback dla brakującej konfiguracji solved source.

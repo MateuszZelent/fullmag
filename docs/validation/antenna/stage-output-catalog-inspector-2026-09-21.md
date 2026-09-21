@@ -48,6 +48,16 @@ stage nie jest używany do udawania gotowego pola, gdy brakuje właściwego
 - lokalny `pnpm exec react-doctor --verbose --scope changed`: **OK**, wynik
   `91/100`, **No issues found** po wydzieleniu helperów z pliku komponentu;
 - `git diff --check`: **OK**;
+- `node --test apps/control-room/scripts/lib/antenna-authoring-browser.test.mjs`:
+  **3/3**, kontrakt sceny anteny i stabilne ID węzłów Explorera;
+- dodano `smoke:antenna-authoring-ui`, który wykonuje realny Playwright
+  przebieg `create → Explorer → conductor/port/solution → ready metadata` z
+  kontrolowanym thin-metadata fixture oraz sprawdzeniem canvas/WebGL. Próba
+  uruchomienia 2026-09-21 nie wystartowała: lokalny API na `127.0.0.1:3100`
+  był nieaktywny, a repozytoryjny `just control-room-v2` zatrzymał się na
+  ochronie storage, ponieważ worktree zawiera realne katalogi
+  `node_modules` wymagające jawnej migracji. Nie przenoszono ani nie usuwano
+  tych danych;
 - typecheck Control Room zatrzymuje się na trzech znanych błędach nullability
   w `src/modules/field-map/FieldMapModule.tsx:588-591`; w zmienionych plikach
   nie zgłoszono błędu;
@@ -56,7 +66,10 @@ stage nie jest używany do udawania gotowego pola, gdy brakuje właściwego
 
 ## Pozostaje otwarte
 
-Ten krok domyka prezentację metadanych katalogu w Inspectorze, ale nie jest
-dowodem pełnego przepływu `create → solve → inspect → stale`. Nadal trzeba
-wykonać realny browser smoke, sprawdzić stabilność React/WebGL oraz połączyć
-stage z natywnym polem FDM/FEM zgodnie z T16.
+Ten krok domyka prezentację metadanych katalogu w Inspectorze i dodaje
+reproducible smoke harness, ale nie jest dowodem pełnego przepływu
+`create → solve → inspect → stale`: smoke wymaga przygotowanego API/frontendu
+i obecnie ma status **not run — storage/environment blocker**. Nadal trzeba
+wykonać go przeciwko działającej usłudze, dodać Relax/Run, export/reload,
+waveform/reuse, stale/geometry oraz osobny lifecycle field-map, a następnie
+połączyć stage z natywnym polem FDM/FEM zgodnie z T16.
