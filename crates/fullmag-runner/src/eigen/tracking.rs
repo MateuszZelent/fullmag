@@ -1387,10 +1387,10 @@ mod tests {
         }
     }
 
-    fn mode(
+    fn mode<const N: usize>(
         raw_mode_index: usize,
         frequency_real_hz: f64,
-        vector: [Complex64; 2],
+        vector: [Complex64; N],
     ) -> SingleKModeResult {
         SingleKModeResult {
             raw_mode_index,
@@ -1982,24 +1982,40 @@ mod tests {
     #[test]
     fn rotated_degenerate_modes_use_mass_weighted_principal_angle_transport() {
         let inverse_sqrt_two = 2.0_f64.sqrt().recip();
-        // The first coordinate carries twice the FE mass of the second.  The
-        // two seed vectors are therefore mass-orthogonal even though the
-        // raw-coordinate rotation below is not Euclidean-normalized.
+        // The first active node carries twice the FE mass of the second.  The
+        // vectors use the native three Cartesian entries per node so the
+        // fixture obeys the same reduced-vector contract as FEM artifacts.
         let first = [
             Complex64::new(inverse_sqrt_two, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
             Complex64::new(0.0, 0.0),
         ];
         let second = [
             Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
             Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
         ];
         let rotated_first = [
             first[0] * inverse_sqrt_two,
-            second[1] * inverse_sqrt_two,
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            second[3] * inverse_sqrt_two,
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
         ];
         let rotated_second = [
             -first[0] * inverse_sqrt_two,
-            second[1] * inverse_sqrt_two,
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            second[3] * inverse_sqrt_two,
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
         ];
         let mut previous_first = mode(0, 1.0e9, first);
         let mut previous_second = mode(1, 1.0e9, second);
@@ -2069,9 +2085,42 @@ mod tests {
 
     #[test]
     fn unequal_rank_subspaces_are_rejected_without_a_false_continuity_claim() {
-        let mut first = mode(0, 1.0e9, [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)]);
-        let mut second = mode(1, 1.0e9, [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)]);
-        let mut current = mode(0, 1.0e9, [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)]);
+        let mut first = mode(
+            0,
+            1.0e9,
+            [
+                Complex64::new(1.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+            ],
+        );
+        let mut second = mode(
+            1,
+            1.0e9,
+            [
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(1.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+            ],
+        );
+        let mut current = mode(
+            0,
+            1.0e9,
+            [
+                Complex64::new(1.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+            ],
+        );
         let weights = Some(vec![1.0, 1.0]);
         first.node_mass_weights = weights.clone();
         second.node_mass_weights = weights.clone();
@@ -2088,18 +2137,34 @@ mod tests {
         let first = [
             Complex64::new(inverse_sqrt_two, 0.0),
             Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
         ];
         let second = [
             Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
             Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
         ];
         let rotated_first = [
             first[0] * inverse_sqrt_two,
-            second[1] * inverse_sqrt_two,
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            second[3] * inverse_sqrt_two,
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
         ];
         let rotated_second = [
             -first[0] * inverse_sqrt_two,
-            second[1] * inverse_sqrt_two,
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            second[3] * inverse_sqrt_two,
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
         ];
         let weights = vec![2.0, 1.0];
         let mut previous_first = mode(0, 0.9e9, first);
@@ -2173,18 +2238,34 @@ mod tests {
         let first = [
             Complex64::new(inverse_sqrt_two, 0.0),
             Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
         ];
         let second = [
             Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
             Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
         ];
         let rotated_first = [
             first[0] * inverse_sqrt_two,
-            second[1] * inverse_sqrt_two,
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            second[3] * inverse_sqrt_two,
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
         ];
         let rotated_second = [
             -first[0] * inverse_sqrt_two,
-            second[1] * inverse_sqrt_two,
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            second[3] * inverse_sqrt_two,
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
         ];
         let weights = vec![2.0, 1.0];
         let mut first_at_zero = mode(0, 1.0e9, first);
