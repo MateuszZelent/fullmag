@@ -156,7 +156,14 @@ jobs:
       - name: Run browser fixture smoke
         env:
           CONTROL_ROOM_AUDIT_ARTIFACTS_DIR: ${{ runner.temp }}/viewport-3d-browser-audit
-        run: ./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-smoke
+        run: |
+          if ./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-smoke; then
+            exit 0
+          fi
+          echo "Browser fixture smoke left the following lockfile diff:" >&2
+          git diff --no-ext-diff -- pnpm-lock.yaml >&2 || true
+          git status --short >&2
+          exit 1
 
       - name: Verify browser fixture smoke negative control
         env:
