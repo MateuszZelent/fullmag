@@ -851,6 +851,17 @@ legacy/maski; nie zastępuje docelowego pełnego 3D solve przewodnika. Zarządza
 `fem-cpu` po zmianie. T13 nadal wymaga numerycznej bramki RHS/energy/torque,
 wszystkich integratorów i waveformów oraz osobnej kwalifikacji GPU.
 
+**Czysty receipt builda 2026-09-21:** po commitach `38febcef2`, `eb2559d2a`
+i `780680003` ponowiono tę samą receptę na czystym HEAD
+`eb2559d2aeec364bd6f23a2cf6825cf1e0cdf6b2`. Zakończyła się kodem 0,
+`Build mode: fem-cpu` oraz komunikatem `Windows FEM cpu container build is
+ready`. Resolver wskazał state root
+`D:/git/fullmag/storage/runtimes/microwave-antenna-latest-2026090-78aaec16ccf52671/fem-cpu`
+i build root
+`D:/git/fullmag/storage/builds/microwave-antenna-latest-2026090-78aaec16ccf52671/windows-fem-cpu`.
+Jest to dowód kompilacji i tożsamości czystego źródła, nie dowód numerycznej
+zgodności LLG; testów jednostkowych Rust nadal nie kompilowano.
+
 ## T14. Domknąć OpenAPI, zasoby i realtime
 
 Uzupełnienie implementacyjne 2026-09-21: `SolvedAntennaDriveResource` ma

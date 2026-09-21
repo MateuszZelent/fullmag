@@ -351,6 +351,10 @@ Naprawiono tę niespójność bez dodawania drugiego solvera pola:
   zakończyła kompilację `fullmag-runner`, CLI, API i `fullmag-py-core` w trybie
   `fem-cpu` po poprawce adaptera. Build wykonał ścieżkę kontenerową; nie użyto
   hostowego `cargo` jako dowodu FEM.
+- Po commitach `38febcef2`, `eb2559d2a` i `780680003` tę samą receptę
+  powtórzono na czystym HEAD `eb2559d2aeec364bd6f23a2cf6825cf1e0cdf6b2`;
+  receipt zakończył się kodem 0, `Build mode: fem-cpu` i komunikatem
+  `Windows FEM cpu container build is ready`.
 - `git diff --check`: **OK**. Testów jednostkowych Rust nie kompilowano zgodnie
   z blokadą sesji. Nie wykonano jeszcze end-to-end porównania RHS/energii z
   niezależnym oraklem ani kwalifikacji GPU.

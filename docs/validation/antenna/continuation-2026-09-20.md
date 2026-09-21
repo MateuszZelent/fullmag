@@ -34,6 +34,12 @@ numeryczny: nie uruchamiano testów jednostkowych Rust, pełnej trajektorii LLG,
 niezależnego orakla RHS/energii/torque ani kwalifikacji GPU. T13 pozostaje
 otwarte.
 
+Po commitach `38febcef2`, `eb2559d2a` i `780680003` build powtórzono na
+czystym HEAD `eb2559d2aeec364bd6f23a2cf6825cf1e0cdf6b2`; zakończył się kodem 0,
+`Build mode: fem-cpu` i komunikatem `Windows FEM cpu container build is ready`.
+Artefakty runtime pozostały pod `D:/git/fullmag/storage`; nie utworzono
+nowych wyników na `C:`.
+
 Kolejność lektury: ten dokument → [plan T00–T18](../../superpowers/plans/2026-09-08-microwave-antenna-refactoring-plan.md) → [audyt F01–F13](../../audits/2026-09-08-microwave-antenna-worktree-audit.md) → [punkt bazowy integracji](integration-baseline.md) → [ADR 0017](../../adr/0017-staged-antenna-field-basis-workflow.md) i notatka 0950.
 
 ## 2. Znaczenie statusów i korekta poprzedniego podsumowania
