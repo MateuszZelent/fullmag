@@ -45,7 +45,7 @@ const mocks = vi.hoisted(() => ({
     } as unknown,
     error: null as Error | null,
     revision: 12,
-    status: "ready" as const,
+    status: "ready" as "idle" | "loading" | "ready" | "stale" | "error",
   },
 }));
 
@@ -118,11 +118,13 @@ describe("AntennaObjectPanel authoring stability", () => {
   });
 
   it("uses the scene revision and preserves waveform parameters while save is pending", async () => {
-    let resolveReplace: ((response: { scene_revision: number }) => void) | null = null;
+    const replaceResolution: {
+      resolve: ((response: { scene_revision: number }) => void) | null;
+    } = { resolve: null };
     mocks.replaceFieldDrive.mockImplementation(
       () =>
         new Promise<{ scene_revision: number }>((resolve) => {
-          resolveReplace = resolve;
+          replaceResolution.resolve = resolve;
         }),
     );
 
@@ -158,7 +160,10 @@ describe("AntennaObjectPanel authoring stability", () => {
       expect(frequency.disabled).toBe(false);
       expect(dom.document.activeElement).toBe(frequency);
 
-      resolveReplace?.({ scene_revision: 13 });
+      if (!replaceResolution.resolve) {
+        throw new Error("field drive save did not become pending");
+      }
+      replaceResolution.resolve({ scene_revision: 13 });
       await act(async () => undefined);
     } finally {
       await act(async () => root.unmount());

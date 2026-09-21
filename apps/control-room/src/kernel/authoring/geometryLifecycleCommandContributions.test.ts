@@ -760,6 +760,7 @@ describe("geometry lifecycle command contributions", () => {
         ]),
       },
     });
+    if (!request) throw new Error("antenna add command did not submit a transaction");
     const currentTransports = request.merge_patch?.current_transports as Array<{
       boundaries?: Array<{ id?: string }>;
     }> | undefined;
@@ -775,7 +776,7 @@ describe("geometry lifecycle command contributions", () => {
     expect(port?.branches).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ terminal_selector_ref: expect.anything() }),
     ]));
-    expect(request?.merge_patch).not.toHaveProperty("field_drives");
+    expect(request.merge_patch).not.toHaveProperty("field_drives");
     expect(selection.get()).toMatchObject({
       kind: "object.root",
       label: "Microstrip antenna",
