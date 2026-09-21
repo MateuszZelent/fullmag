@@ -2,9 +2,22 @@ import { describe, expect, it } from "vitest";
 
 import { DATA_TABLE_ROWS_PATH } from "@/kernel/api/apiPaths";
 
-import { buildScalarTableSeries } from "./scalarTableChart";
+import { buildScalarTableSeries, resolveScalarTableXAxisId } from "./scalarTableChart";
 
 describe("buildScalarTableSeries", () => {
+  it("keeps every unit family for a consumer that renders separate panes", () => {
+    const table = {
+      columns: [
+        { column_id: "step", label: "Step", unit: "1" },
+        { column_id: "mx", label: "mx", unit: "1" },
+        { column_id: "energy", label: "Energy", unit: "J" },
+        { column_id: "torque", label: "Torque", unit: "A/m" },
+      ],
+      rows: [[0, 0.8, 1e-18, 2e-3]],
+    };
+    expect(buildScalarTableSeries({ table, unitLayout: "split-panes" }).map((series) => series.unit)).toEqual(["1", "J", "A/m"]);
+    expect(buildScalarTableSeries({ table }).map((series) => series.unit)).toEqual(["1", "J"]);
+  });
   it("keeps canonical quantity, component, reduction, scope, and dimension on table series", () => {
     const [series] = buildScalarTableSeries({
       table: {
@@ -57,5 +70,10 @@ describe("buildScalarTableSeries", () => {
       unit: "1",
       xUnit: "1",
     }]);
+  });
+
+  it("resolves a stale saved axis to the published table axis", () => {
+    expect(resolveScalarTableXAxisId(["step", "t", "mx"], "removed-axis")).toBe("step");
+    expect(resolveScalarTableXAxisId(["t", "mx"], "removed-axis")).toBe("t");
   });
 });

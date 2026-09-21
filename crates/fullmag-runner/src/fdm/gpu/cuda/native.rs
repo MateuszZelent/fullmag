@@ -53,6 +53,7 @@ enum CudaSnapshotObservable {
     HExt,
     HOe,
     HAni,
+    HRotatedDmi,
     HEff,
     EdenEx,
     EdenDemag,
@@ -60,6 +61,7 @@ enum CudaSnapshotObservable {
     EdenDrive,
     EdenAni,
     EdenDmi,
+    EdenRotatedDmi,
     EdenTotal,
 }
 
@@ -72,6 +74,7 @@ impl CudaSnapshotObservable {
             QuantityId::HExt => Self::HExt,
             QuantityId::HOe => Self::HOe,
             QuantityId::HAni => Self::HAni,
+            QuantityId::HDmiRotated => Self::HRotatedDmi,
             QuantityId::HEff => Self::HEff,
             QuantityId::EdenEx => Self::EdenEx,
             QuantityId::EdenDemag => Self::EdenDemag,
@@ -79,6 +82,7 @@ impl CudaSnapshotObservable {
             QuantityId::EdenDrive => Self::EdenDrive,
             QuantityId::EdenAni => Self::EdenAni,
             QuantityId::EdenDmi => Self::EdenDmi,
+            QuantityId::EdenRotatedDmi => Self::EdenRotatedDmi,
             QuantityId::EdenTotal => Self::EdenTotal,
             _ => return None,
         })
@@ -94,6 +98,7 @@ impl CudaSnapshotObservable {
                 | Self::EdenDrive
                 | Self::EdenAni
                 | Self::EdenDmi
+                | Self::EdenRotatedDmi
                 | Self::EdenTotal
         )
     }
@@ -791,6 +796,7 @@ pub(crate) struct NativeFdmBackend {
     gpu_transport_bound: bool,
     adaptive_timestep_enabled: bool,
     stats_policy: NativeStatsPolicy,
+    rotated_dmi_only: bool,
 }
 
 #[cfg(feature = "cuda")]
@@ -979,6 +985,7 @@ pub(crate) struct NativeFdmPreviewSnapshot {
     plan: GridPreviewPlan,
     quantity: String,
     ready: Option<NativeFieldSnapshotReady>,
+    torque_inputs: Option<Box<(NativeFdmFieldSnapshot, NativeFdmFieldSnapshot, f64, bool)>>,
 }
 
 #[cfg(feature = "cuda")]
@@ -1242,6 +1249,33 @@ impl NativeFdmBackend {
             }
         }
 
+        if let Some(dmi_d) = plan.rotated_interfacial_dmi {
+            let descriptor = ffi::fullmag_fdm_rotated_interfacial_dmi_desc_v1 {
+                abi_version: ffi::FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1,
+                struct_size: std::mem::size_of::<ffi::fullmag_fdm_rotated_interfacial_dmi_desc_v1>()
+                    as u32,
+                has_rotated_interfacial_dmi: 1,
+                reserved0: 0,
+                dmi_d_rotated_interfacial: dmi_d,
+            };
+            let status = unsafe {
+                ffi::fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(handle, &descriptor)
+            };
+            if status != ffi::FULLMAG_FDM_OK {
+                let message = unsafe {
+                    let err = ffi::fullmag_fdm_backend_last_error(handle);
+                    if err.is_null() {
+                        "failed to configure rotated interfacial DMI on CUDA FDM multilayer backend"
+                            .to_string()
+                    } else {
+                        CStr::from_ptr(err).to_string_lossy().to_string()
+                    }
+                };
+                unsafe { ffi::fullmag_fdm_backend_destroy(handle) };
+                return Err(RunError { message });
+            }
+        }
+
         let first_material = plan.layers.first().map(|layer| &layer.material);
         let cell_count = plan
             .layers
@@ -1279,6 +1313,9 @@ impl NativeFdmBackend {
             gpu_transport_bound: false,
             adaptive_timestep_enabled: false,
             stats_policy: NativeStatsPolicy::full(1),
+            rotated_dmi_only: plan.rotated_interfacial_dmi.is_some()
+                && plan.interfacial_dmi.is_none()
+                && plan.bulk_dmi.is_none(),
         })
     }
 
@@ -1871,6 +1908,12 @@ impl NativeFdmBackend {
             struct_size: std::mem::size_of::<ffi::fullmag_fdm_plan_desc_v2>() as u32,
             base: plan_desc,
             time_policy,
+            has_rotated_interfacial_dmi: if plan.rotated_interfacial_dmi.is_some() {
+                1
+            } else {
+                0
+            },
+            dmi_D_rotated_interfacial: plan.rotated_interfacial_dmi.unwrap_or(0.0),
         };
 
         let mut handle = std::ptr::null_mut();
@@ -1992,7 +2035,14 @@ impl NativeFdmBackend {
             gpu_transport_bound: false,
             adaptive_timestep_enabled: adaptive.is_some(),
             stats_policy,
+            rotated_dmi_only: plan.rotated_interfacial_dmi.is_some()
+                && plan.interfacial_dmi.is_none()
+                && plan.bulk_dmi.is_none(),
         })
+    }
+
+    fn split_dmi_energy(&self, aggregate_dmi_energy: f64) -> (f64, f64) {
+        crate::types::split_rotated_only_dmi_energy(self.rotated_dmi_only, aggregate_dmi_energy)
     }
 
     pub(crate) fn stats_policy(&self) -> NativeStatsPolicy {
@@ -2119,6 +2169,7 @@ impl NativeFdmBackend {
 
         let native_metrics =
             validate_native_step_metrics(stats.max_torque_Apm, stats.max_rhs_amplitude)?;
+        let (e_dmi, e_rotated_dmi) = self.split_dmi_energy(stats.dmi_energy_joules);
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -2127,7 +2178,8 @@ impl NativeFdmBackend {
             e_demag: stats.demag_energy_joules,
             e_ext: stats.external_energy_joules,
             e_ani: stats.anisotropy_energy_joules + stats.cubic_energy_joules,
-            e_dmi: stats.dmi_energy_joules,
+            e_dmi,
+            e_rotated_dmi,
             e_total: stats.total_energy_joules,
             max_h_eff: stats.max_effective_field_amplitude,
             max_h_demag: stats.max_demag_field_amplitude,
@@ -2711,6 +2763,13 @@ impl NativeFdmBackend {
         )
     }
 
+    pub fn copy_h_rotated_dmi(&self, cell_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
+        self.copy_field(
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI,
+            cell_count,
+        )
+    }
+
     pub fn copy_h_eff(&self, cell_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
         self.copy_field(
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
@@ -2813,6 +2872,18 @@ impl NativeFdmBackend {
         )
     }
 
+    pub fn copy_layer_h_rotated_dmi(
+        &self,
+        layer_index: u32,
+        cell_count: usize,
+    ) -> Result<Vec<[f64; 3]>, RunError> {
+        self.copy_layer_field(
+            layer_index,
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI,
+            cell_count,
+        )
+    }
+
     #[allow(dead_code)]
     pub fn copy_layer_h_dmi_f32(
         &self,
@@ -2822,6 +2893,18 @@ impl NativeFdmBackend {
         self.copy_layer_field_f32(
             layer_index,
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DMI,
+            cell_count,
+        )
+    }
+
+    pub fn copy_layer_h_rotated_dmi_f32(
+        &self,
+        layer_index: u32,
+        cell_count: usize,
+    ) -> Result<Vec<[f32; 3]>, RunError> {
+        self.copy_layer_field_f32(
+            layer_index,
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI,
             cell_count,
         )
     }
@@ -2960,6 +3043,23 @@ impl NativeFdmBackend {
     ) -> Result<NativeFdmPreviewSnapshot, RunError> {
         let plan = plan_grid_preview(request, original_grid);
         let quantity = normalized_quantity_name(&request.quantity)?.to_string();
+        if quantity == "torque" {
+            // Capture both inputs before returning to the solver. Waiting and
+            // deriving torque happen on the observation worker, never against
+            // a later live state. Sample only after evaluating the nonlinear field.
+            let magnetization = self.begin_field_snapshot("m", 0, 0.0, 0.0)?;
+            let effective_field = self.begin_field_snapshot("H_eff", 0, 0.0, 0.0)?;
+            return Ok(NativeFdmPreviewSnapshot {
+                handle: std::ptr::null_mut(),
+                request: request.clone(),
+                plan,
+                quantity,
+                ready: None,
+                torque_inputs: Some(Box::new((
+                    magnetization, effective_field, self.damping, self.precession_enabled,
+                ))),
+            });
+        }
         if quantity == QuantityId::FrozenSpins.as_str() {
             let values = self.frozen_mask_values()?;
             let sampled = resample_grid_scalars(&values, &plan);
@@ -2972,6 +3072,7 @@ impl NativeFdmBackend {
                 request: request.clone(),
                 plan,
                 quantity,
+                torque_inputs: None,
                 ready: Some(NativeFieldSnapshotReady {
                     data,
                     info: NativeFieldSnapshotInfo {
@@ -3006,6 +3107,7 @@ impl NativeFdmBackend {
             plan,
             quantity,
             ready: None,
+            torque_inputs: None,
         })
     }
 
@@ -3369,6 +3471,7 @@ impl NativeFdmBackend {
         let magnetization = self.copy_m(cell_count)?;
         let native_metrics =
             validate_native_step_metrics(stats.max_torque_Apm, stats.max_rhs_amplitude)?;
+        let (e_dmi, e_rotated_dmi) = self.split_dmi_energy(stats.dmi_energy_joules);
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -3377,7 +3480,8 @@ impl NativeFdmBackend {
             e_demag: stats.demag_energy_joules,
             e_ext: stats.external_energy_joules,
             e_ani: stats.anisotropy_energy_joules + stats.cubic_energy_joules,
-            e_dmi: stats.dmi_energy_joules,
+            e_dmi,
+            e_rotated_dmi,
             e_total: stats.total_energy_joules,
             max_dm_dt: native_metrics.max_rhs_norm_per_s,
             max_rhs_norm_per_s: native_metrics.max_rhs_norm_per_s,
@@ -3511,6 +3615,26 @@ impl NativeFdmFieldSnapshot {
 #[cfg(feature = "cuda")]
 impl NativeFdmPreviewSnapshot {
     fn ensure_ready(&mut self) -> Result<&NativeFieldSnapshotReady, RunError> {
+        if let Some(inputs) = self.torque_inputs.take() {
+            let (mut magnetization, mut effective_field, damping, precession) = *inputs;
+            let m = decode_snapshot_vectors(magnetization.ensure_ready()?)?;
+            let h = decode_snapshot_vectors(effective_field.ensure_ready()?)?;
+            let expected_cells = self.plan.original_grid.iter().map(|n| *n as usize).product::<usize>();
+            if m.len() != h.len() || m.len() != expected_cells {
+                return Err(RunError { message: "torque snapshot input sizes differ".into() });
+            }
+            let torque = compute_torque_field(&m, &h, damping, precession);
+            let sampled = crate::preview::resample_grid_vectors(&torque, &self.plan);
+            let data = sampled.iter().flatten().flat_map(|v| v.to_ne_bytes()).collect();
+            self.ready = Some(NativeFieldSnapshotReady {
+                data,
+                info: NativeFieldSnapshotInfo {
+                    cell_count: sampled.len(), component_count: 3,
+                    scalar_bytes: std::mem::size_of::<f64>(),
+                    scalar_type: NativeFieldSnapshotScalarType::F64,
+                },
+            });
+        }
         if self.ready.is_none() {
             let mut data = std::ptr::null();
             let mut len_bytes = 0u64;
@@ -3684,6 +3808,9 @@ fn snapshot_observable(name: &str) -> Option<ffi::fullmag_fdm_observable> {
         CudaSnapshotObservable::HExt => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EXT,
         CudaSnapshotObservable::HOe => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_OE,
         CudaSnapshotObservable::HAni => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ANI,
+        CudaSnapshotObservable::HRotatedDmi => {
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI
+        }
         CudaSnapshotObservable::HEff => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
         CudaSnapshotObservable::EdenEx => {
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_EX
@@ -3703,6 +3830,9 @@ fn snapshot_observable(name: &str) -> Option<ffi::fullmag_fdm_observable> {
         CudaSnapshotObservable::EdenDmi => {
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_DMI
         }
+        CudaSnapshotObservable::EdenRotatedDmi => {
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_ROTATED_DMI
+        }
         CudaSnapshotObservable::EdenTotal => {
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_TOTAL
         }
@@ -3718,6 +3848,62 @@ fn is_scalar_quantity_name(name: &str) -> bool {
                 || CudaSnapshotObservable::from_quantity(id)
                     .is_some_and(CudaSnapshotObservable::is_scalar)
         })
+}
+
+#[cfg(all(test, feature = "cuda"))]
+mod torque_preview_snapshot_tests {
+    use super::*;
+
+    fn captured(name: &str, values: [f64; 3]) -> NativeFdmFieldSnapshot {
+        NativeFdmFieldSnapshot {
+            handle: std::ptr::null_mut(), name: name.into(), step: 7,
+            time: 1e-12, solver_dt: 1e-13,
+            ready: Some(NativeFieldSnapshotReady {
+                data: values.iter().flat_map(|v| v.to_ne_bytes()).collect(),
+                info: NativeFieldSnapshotInfo {
+                    cell_count: 1, component_count: 3, scalar_bytes: 8,
+                    scalar_type: NativeFieldSnapshotScalarType::F64,
+                },
+            }),
+        }
+    }
+
+    #[test]
+    fn torque_preview_derives_captured_inputs_in_tesla() {
+        let request = LivePreviewRequest { quantity: "torque".into(), ..Default::default() };
+        let snapshot = NativeFdmPreviewSnapshot {
+            handle: std::ptr::null_mut(), plan: plan_grid_preview(&request, [1, 1, 1]),
+            request, quantity: "torque".into(), ready: None,
+            torque_inputs: Some(Box::new((
+                captured("m", [1.0, 0.0, 0.0]),
+                captured("H_eff", [0.0, 1.0 / crate::MU0, 0.0]), 0.5, true,
+            ))),
+        };
+        let field = snapshot.into_live_preview_field(None).unwrap();
+        for (actual, expected) in field.vector_field_values.iter().zip([0.0, 0.4, -0.8]) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        assert_eq!(field.vector_field_values.len(), 3);
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn decode_snapshot_vectors(ready: &NativeFieldSnapshotReady) -> Result<Vec<[f64; 3]>, RunError> {
+    validate_native_snapshot_payload("torque input", ready.info, ready.data.len())?;
+    if ready.info.component_count != 3 {
+        return Err(RunError { message: "torque snapshot requires vector inputs".into() });
+    }
+    Ok(ready.data.chunks_exact(3 * ready.info.scalar_bytes).map(|cell| {
+        std::array::from_fn(|component| {
+            let offset = component * ready.info.scalar_bytes;
+            match ready.info.scalar_type {
+                NativeFieldSnapshotScalarType::F32 =>
+                    f32::from_ne_bytes(cell[offset..offset + 4].try_into().unwrap()) as f64,
+                NativeFieldSnapshotScalarType::F64 =>
+                    f64::from_ne_bytes(cell[offset..offset + 8].try_into().unwrap()),
+            }
+        })
+    }).collect())
 }
 
 #[cfg(feature = "cuda")]
@@ -4082,6 +4268,7 @@ mod tests {
             gpu_transport_bound: false,
             adaptive_timestep_enabled: false,
             stats_policy: NativeStatsPolicy::full(1),
+            rotated_dmi_only: false,
         };
         let request = LivePreviewRequest {
             quantity: "frozen_spins".to_string(),
@@ -5038,6 +5225,7 @@ mod tests {
                             .unwrap_or([0.0, 1.0, 0.0]),
                     }),
                 interfacial_dmi: plan.interfacial_dmi,
+                rotated_interfacial_dmi: plan.rotated_interfacial_dmi,
                 bulk_dmi: plan.bulk_dmi,
                 zhang_li_stt: None,
                 slonczewski_stt: None,
@@ -7102,6 +7290,10 @@ mod exact_metric_contract_tests {
     #[test]
     fn dynamic_native_stats_map_the_same_energy_components_as_snapshot_stats() {
         let source = include_str!("native.rs");
+        let production_source = source
+            .split("#[cfg(test)]\nmod exact_metric_contract_tests")
+            .next()
+            .expect("production source prefix");
         let dynamic_stats = source
             .split("pub fn step_interruptible")
             .nth(1)
@@ -7114,8 +7306,18 @@ mod exact_metric_contract_tests {
             "dynamic native stats must include cubic anisotropy in e_ani"
         );
         assert!(
-            dynamic_stats.contains("e_dmi: stats.dmi_energy_joules"),
+            dynamic_stats.contains("e_dmi,") && dynamic_stats.contains("e_rotated_dmi,"),
             "dynamic native stats must map the native DMI energy"
+        );
+        assert!(
+            production_source.contains("rotated_dmi_only: bool"),
+            "the native wrapper must remember when aggregate DMI is exactly rotated DMI"
+        );
+        assert!(
+            dynamic_stats.contains(
+                "let (e_dmi, e_rotated_dmi) = self.split_dmi_energy(stats.dmi_energy_joules)"
+            ),
+            "dynamic native stats must expose exact rotated-only energy"
         );
         let average_stats = source
             .split("pub fn apply_average_m_to_step_stats(")

@@ -1,6 +1,6 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "e46c18b1f3415b8c38a2d8c8bf4afa1a439cbdcf",
     "path": "public_docs/site/physics/interactions/dmi/index.md",
     "title": "Dzyaloshinskii–Moriya interaction",
     "interaction": "dmi"
@@ -35,7 +35,7 @@
     {
       "id": "python-owner",
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
-      "symbol": "class InterfacialDMI",
+      "symbol": "class RotatedInterfacialDMI",
       "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
     }
   ],

@@ -17,8 +17,9 @@ describe("ChartControlBar", () => {
     );
 
     expect(html).toContain("Live");
-    expect(html).toContain("1,600");
-    expect(html).toContain("5,000");
+    const numberFormat = new Intl.NumberFormat();
+    expect(html).toContain(numberFormat.format(1600));
+    expect(html).toContain(numberFormat.format(5000));
     expect(html).toContain("Follow");
     expect(html).toContain("Fit");
   });

@@ -992,6 +992,10 @@ def _normalize_interaction_entry(
     if not isinstance(raw, dict):
         return None
     kind = str(raw.get("kind") or "").strip()
+    if kind == "rotated_interfacial_dmi":
+        raise ValueError(
+            "rotated_interfacial_dmi is study-scoped and cannot appear in object physics_stack"
+        )
     if kind not in _INTERACTION_ORDER:
         return None
     if kind in {"exchange", "demag"}:
@@ -1064,6 +1068,72 @@ def _ensure_physics_stack(
         if entry is not None:
             ordered.append(entry)
     return ordered
+
+
+def _validate_dmi_scope_exclusivity(
+    objects: object,
+    rotated_interfacial_dmi: object,
+    *,
+    materials: Mapping[str, Mapping[str, object]] | None = None,
+) -> None:
+    if _number_or_none(rotated_interfacial_dmi) is None:
+        return
+    conflicts: set[str] = set()
+    if isinstance(objects, list):
+        for obj in objects:
+            if not isinstance(obj, Mapping):
+                continue
+            if str(obj.get("role") or "magnet") != "magnet":
+                continue
+            stack = obj.get("physics_stack")
+            if materials is not None:
+                material_ref = str(obj.get("material_ref") or "")
+                material = materials.get(material_ref, {})
+                stack = _ensure_physics_stack(
+                    stack,
+                    material_dind=material.get("Dind"),
+                    material_dbulk=material.get("Dbulk"),
+                )
+            elif not isinstance(stack, list):
+                continue
+            for entry in stack:
+                if not isinstance(entry, Mapping):
+                    continue
+                kind = str(entry.get("kind") or "").strip()
+                if kind in {"interfacial_dmi", "bulk_dmi"} and entry.get(
+                    "enabled", True
+                ) is not False:
+                    conflicts.add(kind)
+    if conflicts:
+        raise ValueError(
+            "rotated_interfacial_dmi is study-scoped and cannot coexist with active "
+            f"object-scoped {', '.join(sorted(conflicts))}"
+        )
+
+
+def _validate_rotated_dmi_exchange_requirement(
+    rotated_interfacial_dmi: object,
+    exchange_enabled: object,
+) -> None:
+    """Reject a nonzero open-boundary rotated DMI term without study Exchange.
+
+    SceneDocument does not yet carry an explicit PBC declaration, therefore a
+    missing/false study switch is treated as an open-boundary authoring state.
+    The planner remains responsible for the fully-periodic exception once it
+    is represented in ProblemIR.
+    """
+    d = _number_or_none(rotated_interfacial_dmi)
+    if d is None or d == 0.0:
+        return
+    disabled = exchange_enabled is False or (
+        isinstance(exchange_enabled, str)
+        and exchange_enabled.strip().lower() == "false"
+    )
+    if disabled:
+        raise ValueError(
+            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange "
+            "for the coupled natural boundary condition"
+        )
 
 
 def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]:
@@ -1163,6 +1233,15 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             }
         )
 
+    _validate_dmi_scope_exclusivity(
+        objects,
+        builder.get("rotated_interfacial_dmi"),
+    )
+    _validate_rotated_dmi_exchange_requirement(
+        builder.get("rotated_interfacial_dmi"),
+        builder.get("exchange_enabled", True),
+    )
+
     raw_current_modules = builder.get("current_modules") or []
     if not isinstance(raw_current_modules, list):
         raise ValueError("current_modules must be a list")
@@ -1217,6 +1296,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "demag_enabled": bool(builder.get("demag_enabled", True)),
             "demag_realization": builder.get("demag_realization"),
             "external_field": builder.get("external_field"),
+            "rotated_interfacial_dmi": builder.get("rotated_interfacial_dmi"),
             "solver": builder.get("solver") or {},
             "universe_mesh": builder.get("universe"),
             "shared_domain_mesh": builder.get("mesh") or {},
@@ -1261,10 +1341,26 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
 
 
 def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
+    raw_study = scene.get("study")
     materials = {
         str(material.get("id", "")): dict(material.get("properties") or {})
         for material in (scene.get("materials") or [])
     }
+    _validate_dmi_scope_exclusivity(
+        scene.get("objects"),
+        raw_study.get("rotated_interfacial_dmi")
+        if isinstance(raw_study, Mapping)
+        else None,
+        materials=materials,
+    )
+    _validate_rotated_dmi_exchange_requirement(
+        raw_study.get("rotated_interfacial_dmi")
+        if isinstance(raw_study, Mapping)
+        else None,
+        raw_study.get("exchange_enabled", True)
+        if isinstance(raw_study, Mapping)
+        else True,
+    )
     magnetization_assets = {
         str(asset.get("id", "")): dict(asset)
         for asset in (scene.get("magnetization_assets") or [])
@@ -1377,6 +1473,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "demag_enabled": bool(study.get("demag_enabled", True)),
         "demag_realization": study.get("demag_realization"),
         "external_field": study.get("external_field"),
+        "rotated_interfacial_dmi": study.get("rotated_interfacial_dmi"),
         "solver": study.get("solver") or {},
         "mesh": study.get("shared_domain_mesh") or study.get("mesh_defaults") or {},
         "universe": study.get("universe_mesh") or scene.get("universe"),
@@ -1484,6 +1581,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
             and len(builder.get("external_field")) == 3
             else None
         ),
+        "rotated_interfacial_dmi": builder.get("rotated_interfacial_dmi"),
         "solver": solver_override,
         "mesh": {
             "algorithm_2d": mesh.get("algorithm_2d"),

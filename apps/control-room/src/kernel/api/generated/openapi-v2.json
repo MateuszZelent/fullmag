@@ -3902,6 +3902,12 @@
       },
       "CommandStatusResource": {
         "properties": {
+          "client_intent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "command_id": {
             "type": "string"
           },
@@ -4429,6 +4435,13 @@
             ]
           },
           "final_exchange_energy": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "final_rotated_dmi_energy": {
             "format": "double",
             "type": [
               "number",
@@ -22278,6 +22291,175 @@
         ],
         "type": "object"
       },
+      "ProjectArchiveDurability": {
+        "enum": [
+          "memory_only"
+        ],
+        "type": "string"
+      },
+      "ProjectArchiveRequest": {
+        "properties": {
+          "archive_base64": {
+            "description": "Base64-encoded `.fms` archive bytes.",
+            "type": "string"
+          },
+          "display_name": {
+            "description": "Stable label used for diagnostics; it is not a filesystem path.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "display_name",
+          "archive_base64"
+        ],
+        "type": "object"
+      },
+      "ProjectCreateRequest": {
+        "properties": {
+          "name": {
+            "description": "User-facing project name. It is the only authoring input accepted by\nthe first bytes-only create operation.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "ProjectDocumentMode": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "read_write"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "read_only"
+                ],
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ProjectDocumentResource": {
+        "properties": {
+          "archive_base64": {
+            "description": "Canonical or source-preserving `.fms` bytes for the next host adapter.",
+            "type": "string"
+          },
+          "dirty": {
+            "type": "boolean"
+          },
+          "durability": {
+            "$ref": "#/components/schemas/ProjectArchiveDurability",
+            "description": "Bytes-only transport never claims filesystem or power-loss durability."
+          },
+          "migration": {
+            "$ref": "#/components/schemas/ProjectMigrationResource"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ProjectDocumentMode"
+          },
+          "name": {
+            "type": "string"
+          },
+          "persisted_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "project_id",
+          "name",
+          "schema_version",
+          "revision",
+          "dirty",
+          "mode",
+          "migration",
+          "archive_base64",
+          "durability"
+        ],
+        "type": "object"
+      },
+      "ProjectMigrationResource": {
+        "properties": {
+          "can_write": {
+            "type": "boolean"
+          },
+          "migrated": {
+            "type": "boolean"
+          },
+          "preserved_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "source_schema": {
+            "type": "string"
+          },
+          "target_schema": {
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "source_schema",
+          "target_schema",
+          "migrated",
+          "can_write",
+          "warnings",
+          "preserved_paths"
+        ],
+        "type": "object"
+      },
       "QuantityCatalogEntry": {
         "properties": {
           "capability_state": {
@@ -31875,7 +32057,18 @@
                 "$ref": "#/components/schemas/RuntimeCommandIntent"
               },
               {
-                "description": "Acknowledged as terminally rejected until the runtime owns a safe\nexecution-plan replanning lifecycle for FDM grid and membership data.",
+                "properties": {
+                  "mesh_options": {
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  }
+                },
+                "type": "object"
+              },
+              {
+                "description": "Replan the FDM grid and membership masks from the committed scene.",
                 "properties": {
                   "kind": {
                     "enum": [
@@ -31890,7 +32083,7 @@
                 "type": "object"
               }
             ],
-            "description": "Acknowledged as terminally rejected until the runtime owns a safe\nexecution-plan replanning lifecycle for FDM grid and membership data."
+            "description": "Replan the FDM grid and membership masks from the committed scene."
           },
           {
             "allOf": [
@@ -35471,6 +35664,72 @@
         },
         "tags": [
           "platform"
+        ]
+      }
+    },
+    "/v2/persistence/projects": {
+      "post": {
+        "operationId": "persistence_post_persistence_projects",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectDocumentResource"
+                }
+              }
+            },
+            "description": "Created runtime-free project document bytes"
+          },
+          "400": {
+            "description": "Invalid project name or archive encoding"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/open": {
+      "post": {
+        "operationId": "persistence_post_persistence_projects_open",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectArchiveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectDocumentResource"
+                }
+              }
+            },
+            "description": "Opened and validated runtime-free project document"
+          },
+          "400": {
+            "description": "Invalid or unsupported project archive"
+          }
+        },
+        "tags": [
+          "persistence"
         ]
       }
     },
@@ -48357,7 +48616,7 @@
             }
           },
           {
-            "description": "Interaction kind: exchange | demag | interfacial_dmi | uniaxial_anisotropy",
+            "description": "Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy",
             "in": "path",
             "name": "interaction_kind",
             "required": true,
@@ -48398,7 +48657,7 @@
             }
           },
           {
-            "description": "Interaction kind: exchange | demag | interfacial_dmi | uniaxial_anisotropy",
+            "description": "Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy",
             "in": "path",
             "name": "interaction_kind",
             "required": true,

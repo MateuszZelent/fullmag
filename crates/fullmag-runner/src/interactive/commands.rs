@@ -93,7 +93,7 @@ pub enum LiveControlCommand {
     Close,
 
     /// Synchronize display selection from the canonical display resource.
-    SetDisplaySelection(super::DisplaySelection),
+    SetDisplaySelection(super::DisplaySelectionState),
 
     /// Execute a sequence of stages (run/relax) automatically.
     RunSequence { stages: Vec<SequenceStage> },
@@ -153,9 +153,10 @@ pub fn parse_session_command(
         "resume" => Some(LiveControlCommand::Resume),
         "stop" | "break" => Some(LiveControlCommand::Break),
         "close" => Some(LiveControlCommand::Close),
-        "display_sync" => display_selection
-            .cloned()
-            .map(|ds| LiveControlCommand::SetDisplaySelection(ds.selection)),
+        "display_sync" => display_selection.cloned().map(|mut display| {
+            display.canonicalize_observation_quantities();
+            LiveControlCommand::SetDisplaySelection(display)
+        }),
         "run_sequence" => {
             let stages = stages.unwrap_or_default();
             if stages.is_empty() {
@@ -166,5 +167,41 @@ pub fn parse_session_command(
         }
         "skip" | "skip_stage" => Some(LiveControlCommand::SkipStage),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_session_command, LiveControlCommand};
+    use crate::interactive::DisplaySelectionState;
+
+    #[test]
+    fn display_sync_preserves_the_bounded_observation_demand() {
+        let mut display = DisplaySelectionState::default();
+        display.observation_quantities = vec![
+            "h_demag".to_string(),
+            "H_demag".to_string(),
+            "E_total".to_string(),
+            "frozen_spins".to_string(),
+        ];
+
+        let command = parse_session_command(
+            "display_sync",
+            None,
+            None,
+            None,
+            None,
+            Some(&display),
+            None,
+        )
+        .expect("display sync should produce a typed command");
+
+        let LiveControlCommand::SetDisplaySelection(display) = command else {
+            panic!("display sync should preserve the display state payload");
+        };
+        assert_eq!(
+            display.observation_quantities,
+            vec!["H_demag".to_string(), "frozen_spins".to_string()]
+        );
     }
 }

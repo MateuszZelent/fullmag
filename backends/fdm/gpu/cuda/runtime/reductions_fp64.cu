@@ -1552,13 +1552,13 @@ __global__ void cubic_anisotropy_energy_blocks_kernel(
     if (threadIdx.x == 0) block_out[blockIdx.x] = shared[0];
 }
 
-// --- DMI energy kernel (interfacial + bulk) ---
+// --- DMI energy kernel (interfacial + rotated interfacial + bulk) ---
 template <typename Scalar>
 __global__ void dmi_energy_blocks_kernel(
     const Scalar *mx, const Scalar *my, const Scalar *mz,
     double *block_out, uint64_t n, double coeff,
-    int has_interfacial, int has_bulk,
-    double D_int, double D_bulk,
+    int has_interfacial, int has_rotated_interfacial, int has_bulk,
+    double D_int, double D_rotated_int, double D_bulk,
     int nx, int ny, int nz,
     int periodic_x, int periodic_y, int periodic_z,
     double inv_2dx, double inv_2dy, double inv_2dz,
@@ -1636,6 +1636,27 @@ __global__ void dmi_energy_blocks_kernel(
             energy += coeff * D_int * (mmz * (dmx_dx + dmy_dy) - mmx * dmz_dx - mmy * dmz_dy);
         }
 
+        if (has_rotated_interfacial) {
+            const double sx = 2.0 * coeff * inv_2dx;
+            const double sy = 2.0 * coeff * inv_2dy;
+            if ((periodic_x || ix + 1 < nx) &&
+                (!has_active_mask || active_mask[xp] != 0)) {
+                const double right_x = to_f64(mx[xp]);
+                const double right_z = to_f64(mz[xp]);
+                energy += D_rotated_int * sx *
+                    (0.5 * (mmz + right_z) * (right_x - mmx) -
+                     0.5 * (mmx + right_x) * (right_z - mmz));
+            }
+            if ((periodic_y || iy + 1 < ny) &&
+                (!has_active_mask || active_mask[yp] != 0)) {
+                const double right_x = to_f64(mx[yp]);
+                const double right_y = to_f64(my[yp]);
+                energy += D_rotated_int * sy *
+                    (0.5 * (mmx + right_x) * (right_y - mmy) -
+                     0.5 * (mmy + right_y) * (right_x - mmx));
+            }
+        }
+
         if (has_bulk) {
             // E_bulk = D * m · (curl m) * V
             double dmz_dy = (to_f64(mz[yp]) - to_f64(mz[ym])) * inv_2dy;
@@ -1698,7 +1719,8 @@ double reduce_cubic_anisotropy_energy_fp32(Context &ctx) {
 
 double reduce_dmi_energy_fp64(Context &ctx) {
     ++ctx.endpoint_field_cache.energy_reduction_count;
-    if (!ctx.has_interfacial_dmi && !ctx.has_bulk_dmi) return 0.0;
+    if (!ctx.has_interfacial_dmi && !ctx.has_rotated_interfacial_dmi &&
+        !ctx.has_bulk_dmi) return 0.0;
     uint64_t blocks = launch_grid_for(ctx.cell_count);
     double coeff = ctx.dx * ctx.dy * ctx.dz;
     dmi_energy_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
@@ -1706,8 +1728,10 @@ double reduce_dmi_energy_fp64(Context &ctx) {
         static_cast<const double *>(ctx.m.y),
         static_cast<const double *>(ctx.m.z),
         ctx.reduction_scratch, ctx.cell_count, coeff,
-        ctx.has_interfacial_dmi ? 1 : 0, ctx.has_bulk_dmi ? 1 : 0,
-        ctx.D_interfacial, ctx.D_bulk,
+        ctx.has_interfacial_dmi ? 1 : 0,
+        ctx.has_rotated_interfacial_dmi ? 1 : 0,
+        ctx.has_bulk_dmi ? 1 : 0,
+        ctx.D_interfacial, ctx.D_rotated_interfacial, ctx.D_bulk,
         static_cast<int>(ctx.nx), static_cast<int>(ctx.ny), static_cast<int>(ctx.nz),
         ctx.periodic_x ? 1 : 0, ctx.periodic_y ? 1 : 0, ctx.periodic_z ? 1 : 0,
         0.5 / ctx.dx, 0.5 / ctx.dy, 0.5 / ctx.dz,
@@ -1718,7 +1742,8 @@ double reduce_dmi_energy_fp64(Context &ctx) {
 
 double reduce_dmi_energy_fp32(Context &ctx) {
     ++ctx.endpoint_field_cache.energy_reduction_count;
-    if (!ctx.has_interfacial_dmi && !ctx.has_bulk_dmi) return 0.0;
+    if (!ctx.has_interfacial_dmi && !ctx.has_rotated_interfacial_dmi &&
+        !ctx.has_bulk_dmi) return 0.0;
     uint64_t blocks = launch_grid_for(ctx.cell_count);
     double coeff = ctx.dx * ctx.dy * ctx.dz;
     dmi_energy_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
@@ -1726,8 +1751,10 @@ double reduce_dmi_energy_fp32(Context &ctx) {
         static_cast<const float *>(ctx.m.y),
         static_cast<const float *>(ctx.m.z),
         ctx.reduction_scratch, ctx.cell_count, coeff,
-        ctx.has_interfacial_dmi ? 1 : 0, ctx.has_bulk_dmi ? 1 : 0,
-        ctx.D_interfacial, ctx.D_bulk,
+        ctx.has_interfacial_dmi ? 1 : 0,
+        ctx.has_rotated_interfacial_dmi ? 1 : 0,
+        ctx.has_bulk_dmi ? 1 : 0,
+        ctx.D_interfacial, ctx.D_rotated_interfacial, ctx.D_bulk,
         static_cast<int>(ctx.nx), static_cast<int>(ctx.ny), static_cast<int>(ctx.nz),
         ctx.periodic_x ? 1 : 0, ctx.periodic_y ? 1 : 0, ctx.periodic_z ? 1 : 0,
         0.5 / ctx.dx, 0.5 / ctx.dy, 0.5 / ctx.dz,

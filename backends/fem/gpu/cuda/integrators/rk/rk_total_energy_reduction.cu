@@ -78,7 +78,7 @@ bool gpu_rk_reduce_total_energy_scalar(
         !ctx.zeeman.regional_drives.empty(),
         ctx.anisotropy.uniaxial_enabled,
         ctx.anisotropy.cubic_enabled,
-        ctx.dmi.interfacial_enabled,
+        ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled,
         ctx.dmi.bulk_enabled,
         ctx.magnetoelastic.enabled,
         output);

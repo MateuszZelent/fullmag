@@ -127,10 +127,12 @@ __global__ void dmi_element_residual_kernel(
     double *__restrict__ residual_z,
     double *__restrict__ energy_out,
     double uniform_d,
+    double uniform_rotated_d,
     double nx,
     double ny,
     double nz,
     bool use_d_field,
+    bool rotated_enabled,
     bool bulk_mode,
     int element_count)
 {
@@ -161,7 +163,7 @@ __global__ void dmi_element_residual_kernel(
         }
         elem_d *= 0.25;
     }
-    if (elem_d == 0.0) {
+    if (elem_d == 0.0 && (!rotated_enabled || uniform_rotated_d == 0.0)) {
         return;
     }
 
@@ -216,6 +218,21 @@ __global__ void dmi_element_residual_kernel(
                 }
                 residual[comp] = weight * (shape * dw_dm + grad_action);
             }
+            if (rotated_enabled && uniform_rotated_d != 0.0) {
+                const double dr = uniform_rotated_d;
+                const double dw_dm[3] = {
+                    dr * (-grad_m[2][0] + grad_m[1][1]),
+                    -dr * grad_m[0][1],
+                    dr * grad_m[0][0],
+                };
+                residual[0] += weight *
+                    (shape * dw_dm[0] +
+                     dr * (m_q[2] * grad_shape[0] - m_q[1] * grad_shape[1]));
+                residual[1] += weight *
+                    (shape * dw_dm[1] + dr * m_q[0] * grad_shape[1]);
+                residual[2] += weight *
+                    (shape * dw_dm[2] - dr * m_q[0] * grad_shape[0]);
+            }
         }
         dmi_atomic_add_double(&residual_x[node], residual[0]);
         dmi_atomic_add_double(&residual_y[node], residual[1]);
@@ -233,6 +250,11 @@ __global__ void dmi_element_residual_kernel(
             m_q[1] * grad_m_dot_n[1] +
             m_q[2] * grad_m_dot_n[2];
         energy = elem_d * (m_dot_n * div_m - m_grad_mn) * weight;
+        if (rotated_enabled && uniform_rotated_d != 0.0) {
+            energy += uniform_rotated_d *
+                (m_q[2] * grad_m[0][0] - m_q[0] * grad_m[2][0] +
+                 m_q[0] * grad_m[1][1] - m_q[1] * grad_m[0][1]) * weight;
+        }
     }
     if (energy_out != nullptr) {
         dmi_atomic_add_double(energy_out, energy);
@@ -244,8 +266,9 @@ __global__ void dmi_energy_difference_kernel(
     const double *m0x, const double *m0y, const double *m0z,
     const double *m1x, const double *m1y, const double *m1z,
     const double *d_field, double *delta_out, double *absolute_out,
-    double uniform_d,
-    double nx, double ny, double nz, bool use_d_field, bool bulk_mode, int element_count)
+    double uniform_d, double uniform_rotated_d,
+    double nx, double ny, double nz, bool use_d_field, bool rotated_enabled,
+    bool bulk_mode, int element_count)
 {
     const int e = blockIdx.x * blockDim.x + threadIdx.x;
     if (e >= element_count) return;
@@ -351,6 +374,38 @@ __global__ void dmi_energy_difference_kernel(
              fabs(interfacial_terms[2]) + fabs(interfacial_terms[3]) +
              fabs(interfacial_terms[4]) + fabs(interfacial_terms[5]) +
              fabs(interfacial_terms[6]) + fabs(interfacial_terms[7])));
+        if (rotated_enabled && uniform_rotated_d != 0.0) {
+            const double rotated_terms[8] = {
+                s[2] * gq[0][0],
+                q[2] * gs[0][0],
+                -s[0] * gq[2][0],
+                -q[0] * gs[2][0],
+                s[0] * gq[1][1],
+                q[0] * gs[1][1],
+                -s[1] * gq[0][1],
+                -q[1] * gs[0][1],
+            };
+            const double rotated_prefactor = 0.5 * uniform_rotated_d * volume;
+            double rotated_sum = 0.0;
+            double rotated_absolute = 0.0;
+            for (double term : rotated_terms) {
+                rotated_sum += term;
+                rotated_absolute += fabs(term);
+            }
+            const double rotated_arithmetic_scale =
+                abs_s[2] * abs_gq[0][0] +
+                abs_q[2] * abs_gs[0][0] +
+                abs_s[0] * abs_gq[2][0] +
+                abs_q[0] * abs_gs[2][0] +
+                abs_s[0] * abs_gq[1][1] +
+                abs_q[0] * abs_gs[1][1] +
+                abs_s[1] * abs_gq[0][1] +
+                abs_q[1] * abs_gs[0][1];
+            delta += rotated_prefactor * rotated_sum;
+            absolute_delta += 0.5 * fabs(uniform_rotated_d) * fabs(volume) *
+                geometry_condition_scale *
+                (rotated_arithmetic_scale + rotated_absolute);
+        }
     }
     dmi_atomic_add_double(delta_out, delta);
     dmi_atomic_add_double(absolute_out, absolute_delta);
@@ -411,10 +466,12 @@ void fullmag_cuda_dmi_field_energy(
     double *energy_out,
     double uniform_ms,
     double uniform_d,
+    double uniform_rotated_d,
     double nx,
     double ny,
     double nz,
     bool use_d_field,
+    bool rotated_enabled,
     bool bulk_mode,
     int element_count,
     int node_count,
@@ -447,10 +504,12 @@ void fullmag_cuda_dmi_field_energy(
             residual_z,
             energy_out,
             uniform_d,
+            uniform_rotated_d,
             nx,
             ny,
             nz,
             use_d_field,
+            rotated_enabled,
             bulk_mode,
             element_count);
     }
@@ -476,13 +535,14 @@ void fullmag_cuda_dmi_energy_difference(
     const double *m1x, const double *m1y, const double *m1z,
     const double *d_field, double *element_delta,
     double *element_absolute_terms,
-    double uniform_d, double nx, double ny, double nz,
-    bool use_d_field, bool bulk_mode, int element_count, cudaStream_t stream)
+    double uniform_d, double uniform_rotated_d, double nx, double ny, double nz,
+    bool use_d_field, bool rotated_enabled, bool bulk_mode, int element_count,
+    cudaStream_t stream)
 {
     dmi_energy_difference_kernel<<<(element_count + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         nodes_xyz, elements, magnetic_element_mask, m0x, m0y, m0z, m1x, m1y, m1z,
-        d_field, element_delta, element_absolute_terms, uniform_d,
-        nx, ny, nz, use_d_field, bulk_mode, element_count);
+        d_field, element_delta, element_absolute_terms, uniform_d, uniform_rotated_d,
+        nx, ny, nz, use_d_field, rotated_enabled, bulk_mode, element_count);
 }
 
 } // namespace fullmag::fem

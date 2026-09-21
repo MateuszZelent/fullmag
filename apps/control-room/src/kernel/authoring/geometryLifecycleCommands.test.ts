@@ -137,11 +137,11 @@ describe("geometry lifecycle command adapters", () => {
     );
 
     expect(result.status).toBe("completed");
-    expect(result.detail.command_id).toBe("cmd-1");
+    expect(result.detail?.command_id).toBe("cmd-1");
     expect(detail).toHaveBeenCalledTimes(2);
   });
 
-  it("fails closed when a terminal command has no new mesh revision", async () => {
+  it("keeps publication unconfirmed when a completed command has no new mesh revision", async () => {
     const detail = vi.fn().mockResolvedValue({
       command_id: "cmd-2",
       status: "completed",
@@ -155,7 +155,8 @@ describe("geometry lifecycle command adapters", () => {
       { baseMeshRevision: 7, pollDelaysMs: [0] },
     );
 
-    expect(result.status).toBe("failed");
+    expect(result.status).toBe("pending");
+    expect(result.observation).toBe("publication-unconfirmed");
     expect(result.message).toContain("mesh revision");
   });
 
@@ -175,6 +176,7 @@ describe("geometry lifecycle command adapters", () => {
     );
 
     expect(result).toEqual({
+      commandId: "cmd-failed",
       detail: expect.objectContaining({ command_id: "cmd-failed" }),
       message: "mesh generator rejected the domain",
       status: "failed",
@@ -227,4 +229,62 @@ describe("geometry lifecycle command adapters", () => {
     expect(result.status).toBe("completed");
     expect(detail).toHaveBeenCalledTimes(2);
   });
+
+  it("keeps a long-running command pending and resumes the same authoritative id", async () => {
+    vi.useFakeTimers();
+    try {
+      const detail = vi.fn().mockResolvedValue({
+        command_id: "cmd-long", status: "running", resource_invalidations: [],
+      });
+      const pending = awaitMeshCommandTerminal({ detail } as never, "cmd-long", {
+        baseMeshRevision: 7, pollDelaysMs: [0, 310_000],
+      });
+      await vi.advanceTimersByTimeAsync(310_000);
+      expect(await pending).toMatchObject({
+        commandId: "cmd-long", status: "pending", observation: "waiting",
+      });
+      expect(vi.getTimerCount()).toBe(0);
+      detail.mockResolvedValue({
+        command_id: "cmd-long", status: "completed",
+        resource_invalidations: [{ resource_key: "data/domain/topology", revision: 8 }],
+      });
+      expect(await awaitMeshCommandTerminal({ detail } as never, "cmd-long", {
+        baseMeshRevision: 7, pollDelaysMs: [0],
+      })).toMatchObject({ commandId: "cmd-long", status: "completed" });
+      expect(detail.mock.calls.every(([id]) => id === "cmd-long")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports lost observation without reporting a mesh failure or leaving timers", async () => {
+    const detail = vi.fn().mockRejectedValue(new Error("network disconnected"));
+    const result = await awaitMeshCommandTerminal({ detail } as never, "cmd-offline", {
+      pollDelaysMs: [0, 10_000],
+    });
+    expect(result).toMatchObject({
+      commandId: "cmd-offline", detail: null, status: "pending", observation: "disconnected",
+    });
+    expect(detail).toHaveBeenCalledOnce();
+  });
+
+  it("never completes a command with another command's resource", async () => {
+    const detail = vi.fn().mockResolvedValue({
+      command_id: "cmd-foreign", status: "completed",
+      resource_invalidations: [{ resource_key: "data/domain/topology", revision: 99 }],
+    });
+    const result = await awaitMeshCommandTerminal({ detail } as never, "cmd-own", {
+      baseMeshRevision: 7, pollDelaysMs: [0],
+    });
+    expect(result).toMatchObject({ commandId: "cmd-own", detail: null, status: "pending" });
+  });
+
+  it("does not make an extra unbudgeted detail request for an empty observation budget", async () => {
+    const detail = vi.fn();
+    expect(await awaitMeshCommandTerminal({ detail } as never, "cmd-empty", {
+      pollDelaysMs: [],
+    })).toMatchObject({ commandId: "cmd-empty", detail: null, status: "pending" });
+    expect(detail).not.toHaveBeenCalled();
+  });
+
 });

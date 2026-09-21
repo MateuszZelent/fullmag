@@ -6,9 +6,6 @@ use crate::schemas::diagnostics::SolverProfileCommandConfig;
 use crate::schemas::relaxation::RelaxationAlgorithm;
 use crate::types::MeshCommandTarget;
 
-pub const FDM_GRID_REFRESH_DEFERRED_REASON: &str =
-    "FDM grid and membership masks are immutable execution-plan artifacts; standalone refresh is deferred until a safe replanning lifecycle exists.";
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct RuntimeCommandIntent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -218,11 +215,13 @@ pub enum StructuredCommandRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         mesh_reason: Option<String>,
     },
-    /// Acknowledged as terminally rejected until the runtime owns a safe
-    /// execution-plan replanning lifecycle for FDM grid and membership data.
+    /// Replan the FDM grid and membership masks from the committed scene.
     FdmGridRefresh {
         #[serde(default, flatten)]
         intent: RuntimeCommandIntent,
+        #[schema(value_type = Object, nullable)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mesh_options: Option<Value>,
     },
     SetSolverProfile {
         #[serde(default, flatten)]

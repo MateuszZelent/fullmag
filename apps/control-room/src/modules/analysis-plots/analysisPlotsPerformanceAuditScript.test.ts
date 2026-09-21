@@ -92,7 +92,10 @@ describe("analysis plots performance audit", () => {
     );
     expect(existsSync(auditScriptUrl)).toBe(true);
 
-    const auditScript = readFileSync(auditScriptUrl, "utf8");
+    const auditScript = readFileSync(auditScriptUrl, "utf8").replace(
+      /\r\n/g,
+      "\n",
+    );
     expect(auditScript).toContain("assertChartPerformanceProof");
     expect(auditScript).toContain("ChartPerformanceProof");
     expect(auditScript).toContain("phase: \"cold\"");
@@ -156,7 +159,10 @@ describe("analysis plots performance audit", () => {
   });
 
   it("stress-tests Quick Chart beside 3D with measured lifecycle and isolation budgets", () => {
-    const auditScript = readFileSync(auditScriptUrl, "utf8");
+    const auditScript = readFileSync(auditScriptUrl, "utf8").replace(
+      /\r\n/g,
+      "\n",
+    );
 
     expect(auditScript).toContain("CONTROL_ROOM_CHART_PERFORMANCE_TAB_SWITCHES");
     expect(auditScript).toContain("100");

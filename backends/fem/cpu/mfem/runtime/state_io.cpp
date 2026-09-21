@@ -558,6 +558,7 @@ int context_upload_magnetization_f64(
     if (!ctx.mfem_context.ready) {
         if (ctx.exchange.enabled || ctx.demag.enabled || ctx.anisotropy.uniaxial_enabled ||
             ctx.anisotropy.cubic_enabled || ctx.dmi.interfacial_enabled ||
+            ctx.dmi.rotated_interfacial_enabled ||
             ctx.dmi.bulk_enabled || ctx.oersted.has_cylinder || ctx.oersted.has_explicit_field ||
             ctx.magnetoelastic.enabled || ctx.stt.zhang_li_enabled ||
             ctx.stt.slonczewski_enabled || ctx.thermal_brown.temperature > 0.0) {

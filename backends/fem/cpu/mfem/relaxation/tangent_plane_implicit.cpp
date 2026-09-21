@@ -513,6 +513,7 @@ bool has_active_dmi_tangent_operator(const Context &ctx)
 {
     return (ctx.dmi.interfacial_enabled &&
             (ctx.dmi.interfacial_D != 0.0 || !ctx.material_fields.Dind_field.empty())) ||
+        (ctx.dmi.rotated_interfacial_enabled && ctx.dmi.rotated_interfacial_D != 0.0) ||
         (ctx.dmi.bulk_enabled &&
          (ctx.dmi.bulk_D != 0.0 || !ctx.material_fields.Dbulk_field.empty()));
 }
@@ -628,7 +629,7 @@ public:
 
         if (use_dmi) {
             dmi_delta_xyz_.assign(delta_m_xyz_.size(), 0.0);
-            if (ctx_.dmi.interfacial_enabled) {
+            if (ctx_.dmi.interfacial_enabled || ctx_.dmi.rotated_interfacial_enabled) {
                 if (!compute_interfacial_dmi_field(
                         ctx_, delta_m_xyz_, interfacial_delta_xyz_, nullptr, local_error)) {
                      failed_ = true;

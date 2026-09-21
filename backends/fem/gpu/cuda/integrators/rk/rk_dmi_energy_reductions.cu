@@ -80,10 +80,12 @@ bool gpu_rk_reduce_final_dmi_energy_terms(
             gpu.reductions.scalar_workspace,
             ctx.material_fields.material.saturation_magnetisation,
             bulk_mode ? ctx.dmi.bulk_D : ctx.dmi.interfacial_D,
+            bulk_mode ? 0.0 : ctx.dmi.rotated_interfacial_D,
             ctx.dmi.interface_normal[0],
             ctx.dmi.interface_normal[1],
             ctx.dmi.interface_normal[2],
             bulk_mode ? !ctx.material_fields.Dbulk_field.empty() : !ctx.material_fields.Dind_field.empty(),
+            !bulk_mode && ctx.dmi.rotated_interfacial_enabled,
             bulk_mode,
             static_cast<int>(ctx.mesh.n_elements),
             n,
@@ -110,7 +112,7 @@ bool gpu_rk_reduce_final_dmi_energy_terms(
         }
         return true;
     };
-    if (ctx.dmi.interfacial_enabled &&
+    if ((ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled) &&
         !compute_dmi_energy(false, GpuFinalScalarSlot::DmiEnergy)) {
         return false;
     }

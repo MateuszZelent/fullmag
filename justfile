@@ -145,6 +145,14 @@ windows-build backend="fdm" device="cpu" frontend="dev" skip_local_changes="fals
       powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag.ps1" -BuildMode true -BuildOnly -Frontend "$frontend" -Backend "$backend" -Device "$device" "${skip_local_changes_args[@]}"; \
     fi
 
+# Run targeted Rust tests in the same Windows-managed FEM container lane.
+windows-test-fem device="cpu" package="fullmag-api" filter="remesh":
+    device="{{device}}"; package="{{package}}"; filter="{{filter}}"; \
+    case "$device" in device=*) device="${device#device=}" ;; --device=*) device="${device#--device=}" ;; esac; \
+    case "$package" in package=*) package="${package#package=}" ;; --package=*) package="${package#--package=}" ;; esac; \
+    case "$filter" in filter=*) filter="${filter#filter=}" ;; --filter=*) filter="${filter#--filter=}" ;; esac; \
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag_fem.ps1" -BuildMode true -BuildOnly -Backend fem -Device "$device" -TestPackage "$package" -TestFilter "$filter"
+
 ensure-python:
     @set -euo pipefail; \
       mkdir -p "{{repo_root}}/.fullmag/local"; \
@@ -166,7 +174,7 @@ ensure-python:
       if [ -f "$stamp" ] && cmp -s <(printf '%s\n' "$fingerprint") "$stamp"; then \
         echo "Reusing Fullmag Python dependencies (stamp unchanged)."; \
       else \
-        "{{repo_python}}" -m pip install 'numpy>=1.24' 'scipy>=1.10' 'gmsh>=4.12' 'meshio>=5.3' 'trimesh>=4.2' 'h5py>=3.8' 'zarr>=2.18,<3' 'rich>=13.7' 'matplotlib>=3.7' 'pytest>=9,<10'; \
+        "{{repo_python}}" -m pip install 'numpy>=1.24' 'scipy>=1.10' 'gmsh>=4.12' 'meshio>=5.3' 'trimesh>=4.2' 'h5py>=3.8' 'zarr>=2.18,<3' 'rich>=13.7' 'matplotlib>=3.7' 'Pillow>=10,<13' 'pytest>=9,<10'; \
         printf '%s\n' "$fingerprint" > "$stamp"; \
       fi
 
@@ -222,6 +230,49 @@ package target="fullmag":
 
 check:
     cargo +nightly check --locked --workspace --exclude fullmag-desktop
+
+# Source-only persistence check: does not compile unit/integration tests or solvers.
+check-session-persistence:
+    cargo check --locked -p fullmag-session --lib
+
+# Run only after the operator has allowed compilation of these regression tests.
+verify-session-persistence:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --repo-root "{{repo_root}}"
+
+# Source-only application crate check; uses the dedicated canonical-storage
+# route and does not compile unit/integration tests.
+check-project-application:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route project-application-check --repo-root "{{repo_root}}"
+
+# Reserved for explicit test permission; kept separate from the source check.
+verify-project-application:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route project-application-test --repo-root "{{repo_root}}"
+
+# Managed compile check for the shared CLI, Python and desktop Open entrypoints.
+check-project-entrypoints:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route project-entrypoint-check --repo-root "{{repo_root}}"
+
+# Managed runtime-free API smoke with source identity, bounded HTTP scope and
+# controlled process-restart project reconnect.
+verify-project-api-runtime:
+    {{storage_python}} "{{repo_root}}/scripts/verify_project_api_runtime.py" --repo-root "{{repo_root}}"
+
+# Managed realtime transport smoke with an empty scratch session.  This checks
+# the websocket handshake and after_seq reconnect without starting a solver.
+verify-project-realtime-runtime:
+    {{storage_python}} "{{repo_root}}/scripts/verify_project_api_runtime.py" --include-websocket --repo-root "{{repo_root}}"
+
+# Managed active-run runtime smoke with source identity and reconnect continuity.
+verify-project-active-run-runtime:
+    {{storage_python}} "{{repo_root}}/scripts/verify_project_active_run_runtime.py" --repo-root "{{repo_root}}"
+
+# Managed runtime-free CLI smoke for the shared project Open entrypoint.
+verify-project-entrypoint-runtime:
+    {{storage_python}} "{{repo_root}}/scripts/verify_project_entrypoint_runtime.py" --repo-root "{{repo_root}}"
+
+# Managed runtime-free Python binding smoke for the shared project Open entrypoint.
+verify-project-python-runtime:
+    {{storage_python}} "{{repo_root}}/scripts/verify_project_python_runtime.py" --repo-root "{{repo_root}}"
 
 test:
     cargo +nightly test --locked --workspace --exclude fullmag-desktop
@@ -302,9 +353,9 @@ verify-fem-meshing-production:
     bash scripts/verify_fem_meshing_production.sh
 
 verify-fem-mixed-p1-capability-contract:
-    python3 scripts/validate_mixed_p1_capability_contract.py
-    python3 -m unittest scripts.test_validate_mixed_p1_capability_contract
-    cargo test --locked -p fullmag-runner --no-default-features capabilities::tests::
+    {{storage_python}} scripts/validate_mixed_p1_capability_contract.py
+    {{storage_python}} -m unittest scripts.test_validate_mixed_p1_capability_contract
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route fem-capability-contract --repo-root "{{repo_root}}"
 
 verify-fem-mixed-prism-airbox-runtime:
     just ensure-managed-fem-runtime
@@ -5379,7 +5430,7 @@ run-headless-bench script:
 
 fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
     bash -euo pipefail -c '\
-      r="{{repo_root}}"; build="false"; force="false"; windows="false"; frontend="dev"; backend="auto"; device="auto"; run_mode="interactive"; script=""; web_port="3100"; skip_local_changes="false"; seen_options=""; \
+      r="{{repo_root}}"; build="false"; force="false"; windows="false"; frontend="dev"; backend="auto"; device="auto"; run_mode="interactive"; script=""; web_port="0"; skip_local_changes="false"; seen_options=""; \
       for raw in "{{opt_1}}" "{{opt_2}}" "{{opt_3}}" "{{opt_4}}" "{{opt_5}}" "{{opt_6}}" "{{opt_7}}" "{{opt_8}}"; do \
         [ -n "$raw" ] || continue; \
         key="${raw%%=*}"; value="$raw"; if [ "$key" != "$raw" ]; then value="${raw#*=}"; fi; \

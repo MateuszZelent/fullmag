@@ -7,6 +7,7 @@
 use fullmag_ir::FdmPlanIR;
 
 use crate::artifact_pipeline::ArtifactRecorder;
+use crate::fdm::gpu::cuda::live_observations::FdmLiveObservationScheduler;
 use crate::fdm::gpu::cuda::native::NativeFdmBackend;
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::relaxation::direct_minimizer::{
@@ -113,6 +114,7 @@ pub(crate) fn execute_direct_minimizer(
     steps: &mut Vec<StepStats>,
     energy_plateau: &mut RelaxationEnergyPlateauWindow,
     mut last_preview_revision: Option<u64>,
+    mut live_observations: Option<&mut FdmLiveObservationScheduler>,
 ) -> Result<CudaDirectMinimizerOutcome, RunError> {
     let control = direct_minimizer.control;
     let mut latest_stats = Some(current_stats.clone());
@@ -159,16 +161,25 @@ pub(crate) fn execute_direct_minimizer(
                     current_stats.step,
                 );
                 let preview_targets_global_scalar = display_is_global_scalar(&display_selection);
-                let preview_field = if preview_due && !preview_targets_global_scalar {
-                    let request = display_selection.preview_request();
-                    Some(backend.copy_live_preview_field(
-                        &request,
-                        plan.grid.cells,
-                        plan.active_mask.as_deref(),
-                    )?)
-                } else {
-                    None
-                };
+                let mut observation_publication = live_observations.as_mut().map(|scheduler| {
+                    scheduler.observe(
+                        backend,
+                        &display_selection,
+                        current_stats.step,
+                        current_stats.time,
+                        current_stats.dt,
+                    )
+                });
+                let (preview_field, cached_preview_fields) =
+                    if let Some(publication) = observation_publication.as_mut() {
+                        publication.apply_to_stats(&mut current_stats);
+                        (
+                            publication.preview_field.take(),
+                            publication.cached_preview_fields.take(),
+                        )
+                    } else {
+                        (None, None)
+                    };
                 let action = (live.on_step)(StepUpdate {
                     coupled_checkpoint: None,
                     stats: current_stats.clone(),
@@ -176,7 +187,7 @@ pub(crate) fn execute_direct_minimizer(
                     fem_mesh_generation_id: None,
                     magnetization: Some(flatten_vectors(&state.magnetization)),
                     preview_field,
-                    cached_preview_fields: None,
+                    cached_preview_fields,
                     hysteresis_field_m_t: None,
                     hysteresis_point_index: None,
                     hysteresis_settle_step_index: None,

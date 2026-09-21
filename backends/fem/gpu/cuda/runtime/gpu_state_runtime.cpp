@@ -21,7 +21,8 @@ namespace fullmag::fem {
 
 bool gpu_state_requires_tetrahedral_mesh_geometry(const Context &ctx)
 {
-    return ctx.dmi.interfacial_enabled || ctx.dmi.bulk_enabled ||
+    return ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled ||
+        ctx.dmi.bulk_enabled ||
         ctx.stt.zhang_li_enabled;
 }
 

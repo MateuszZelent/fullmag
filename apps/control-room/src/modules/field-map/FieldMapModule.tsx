@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import { decodeFieldVector } from "@/kernel/api/codecs";
@@ -244,7 +244,7 @@ function useFieldMapModuleController() {
       },
     });
   }, [visualizationSync]);
-  const renderModel = useMemo(() => {
+  const freshRenderModel = useMemo(() => {
     if (!meta.data || !scalar.data || !frame || !presentationPlanar) return null;
     const scalarValues = decodeFieldVector(scalar.data.data).values;
     const vectorValues = vectors.data
@@ -300,6 +300,63 @@ function useFieldMapModuleController() {
       vectors: vectorValues,
     });
   }, [canonicalPlanar?.resolution.vector_budget, effectiveWireframeStyle, frame, mask.data, meshOverlay.data, meta.data, presentationPlanar, scalar.data, vectors.data]);
+  // LR-10: rewizja próbki jest częścią klucza zasobu, więc każda nowa rewizja
+  // tworzy świeży wpis store bez danych. Bez retencji rodzic renderował wtedy
+  // FieldMapStatus zamiast PlanarSurface, a cleanup zwalniał renderer i worker
+  // oraz czyścił canvas — obraz mapy 2D znikał przy każdym odświeżeniu.
+  // Trzymamy ostatnią zgodną klatkę, ale wyłącznie dla tej samej semantycznej
+  // tożsamości widoku: zmiana monitora, wielkości, komponentu, rozdzielczości,
+  // snapshotu czy etapu odrzuca retencję, zamiast pokazywać cudzy raster.
+  const planarViewIdentityKey = useMemo(
+    () =>
+      JSON.stringify({
+        component: canonicalPlanar?.component ?? null,
+        quality: canonicalPlanar?.quality ?? null,
+        quantityId: canonicalPlanar?.quantity_id ?? null,
+        resolution: [
+          canonicalPlanar?.resolution.width ?? 0,
+          canonicalPlanar?.resolution.height ?? 0,
+        ],
+        snapshotId: selectedFieldContext.snapshotId ?? null,
+        sourceId: canonicalSourceMonitorId ?? null,
+        sourceKind: canonicalSourceKind ?? null,
+        stageId: selectedFieldContext.stageId ?? null,
+        viewScope: canonicalPlanar?.view_scope ?? null,
+      }),
+    [
+      canonicalPlanar,
+      canonicalSourceKind,
+      canonicalSourceMonitorId,
+      selectedFieldContext.snapshotId,
+      selectedFieldContext.stageId,
+    ],
+  );
+  const retainedPlanarFrameRef = useRef<{
+    identityKey: string;
+    model: NonNullable<typeof freshRenderModel>;
+  } | null>(null);
+  const retainedPlanarFrame = retainedPlanarFrameRef.current;
+  const renderModel =
+    freshRenderModel ??
+    (retainedPlanarFrame &&
+    retainedPlanarFrame.identityKey === planarViewIdentityKey
+      ? retainedPlanarFrame.model
+      : null);
+  useEffect(() => {
+    if (freshRenderModel) {
+      retainedPlanarFrameRef.current = {
+        identityKey: planarViewIdentityKey,
+        model: freshRenderModel,
+      };
+      return;
+    }
+    if (
+      retainedPlanarFrameRef.current &&
+      retainedPlanarFrameRef.current.identityKey !== planarViewIdentityKey
+    ) {
+      retainedPlanarFrameRef.current = null;
+    }
+  }, [freshRenderModel, planarViewIdentityKey]);
   const pinnedAxisState = useMemo(() => {
     if (!renderModel || !probe.data) return null;
     const axisFrame = {
@@ -475,10 +532,10 @@ export default function FieldMapModule() {
       />
     );
   }
-  if (meta.status === "ready" && (!meta.data || !scalar.data)) {
+  if (meta.status === "ready" && (!meta.data || !scalar.data) && !renderModel) {
     return <FieldMapStatus message="No planar field is published for this revision." />;
   }
-  if (!meta.data || !scalar.data || !frame || !renderModel) {
+  if (!renderModel) {
     return <FieldMapStatus message="Loading planar field…" planarStatus="loading" />;
   }
 
@@ -528,7 +585,7 @@ export default function FieldMapModule() {
         <strong>{plan.quantityId}</strong>
         <span>{presentationPlanar.component}</span>
         <span>{renderModel.display.legendUnit}</span>
-        {surfaceProjectionStatus(meta.data) === "ambiguous" ? (
+        {meta.data && surfaceProjectionStatus(meta.data) === "ambiguous" ? (
           <span className="fm-field-map__diagnostic" role="status">
             Ambiguous surface: {meta.data.overlap_count} overlaps,{" "}
             {meta.data.fold_count} folds

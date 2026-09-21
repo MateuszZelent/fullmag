@@ -63,8 +63,8 @@ pub(crate) use plan::{
 #[cfg(feature = "fem-gpu")]
 pub(crate) use runtime_info::{
     stage_completion_from_ffi, stage_completion_is_representability_stationary,
-    strict_gpu_runtime_build_info, DeviceInfo, NativeFemDataResidency,
-    NativeFemGpuRkPlanInfo, NativeFemGpuStateInfo,
+    strict_gpu_runtime_build_info, DeviceInfo, NativeFemDataResidency, NativeFemGpuRkPlanInfo,
+    NativeFemGpuStateInfo,
 };
 #[cfg(feature = "fem-gpu")]
 pub(crate) use stage_coupled::StageM2CoupledProvider;
@@ -966,6 +966,7 @@ pub(crate) struct NativeFemBackend {
     demag_preconditioner: Option<String>,
     adaptive_max_error: Option<f64>,
     backend_create_wall_time_ns: Option<u64>,
+    rotated_dmi_only: bool,
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -1473,6 +1474,7 @@ impl NativeFemEnergyDensityTerms {
             uniaxial_anisotropy: native_fem_plan_has_uniaxial_anisotropy(plan),
             cubic_anisotropy: native_fem_plan_has_cubic_anisotropy(plan),
             interfacial_dmi: plan.interfacial_dmi.is_some()
+                || plan.rotated_interfacial_dmi.is_some()
                 || plan
                     .dind_field
                     .as_ref()
@@ -1544,6 +1546,157 @@ pub(crate) fn can_materialize_preview_quantity(
         || NativeFemEnergyDensityTerms::from_plan(plan)
             .observables_for(id.as_str())
             .is_some()
+}
+
+#[cfg(test)]
+fn make_test_plan() -> fullmag_ir::FemPlanIR {
+    use fullmag_ir::{
+        ExchangeBoundaryCondition, ExecutionPrecision, FemPlanIR, IntegratorChoice, MaterialIR,
+        MeshIR,
+    };
+
+    FemPlanIR {
+        frozen_spins: None,
+        mesh_name: "unit_tet".to_string(),
+        mesh_source: Some("meshes/unit_tet.msh".to_string()),
+        mesh: MeshIR {
+            mesh_name: "unit_tet".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
+            element_markers: vec![1],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
+            boundary_markers: vec![1],
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: std::collections::HashMap::new(),
+        },
+        object_segments: Vec::new(),
+        mesh_parts: Vec::new(),
+        mesh_build_report: None,
+        domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
+        domain_frame: None,
+        fe_order: 1,
+        hmax: 0.4,
+        initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+        material: MaterialIR {
+            name: "Py".to_string(),
+            saturation_magnetisation: 800e3,
+            exchange_stiffness: 13e-12,
+            damping: 0.5,
+            uniaxial_anisotropy: None,
+            anisotropy_axis: None,
+            uniaxial_anisotropy_k2: None,
+            cubic_anisotropy_kc1: None,
+            cubic_anisotropy_kc2: None,
+            cubic_anisotropy_kc3: None,
+            cubic_anisotropy_axis1: None,
+            cubic_anisotropy_axis2: None,
+            ms_field: None,
+            a_field: None,
+            alpha_field: None,
+            ku_field: None,
+            ku2_field: None,
+            kc1_field: None,
+            kc2_field: None,
+            kc3_field: None,
+            interfacial_dmi: None,
+            bulk_dmi: None,
+            dind_field: None,
+            dbulk_field: None,
+        },
+        anisotropy_axis_field: None,
+        ms_element_field: None,
+        a_element_field: None,
+        region_materials: Vec::new(),
+        enable_exchange: true,
+        enable_demag: false,
+        external_field: Some([1.0, 2.0, 3.0]),
+        antenna_zeeman_masks: Vec::new(),
+        field_drives: Vec::new(),
+        field_drive_geometry_masks: Vec::new(),
+        time_stage: Default::default(),
+        current_modules: vec![],
+        spin_transport_plans: vec![],
+        gyromagnetic_ratio: 2.211e5,
+        precision: ExecutionPrecision::Double,
+        exchange_bc: ExchangeBoundaryCondition::Neumann,
+        integrator: Some(IntegratorChoice::Heun),
+        fixed_timestep: Some(1e-13),
+        adaptive_timestep: None,
+        field_refresh: None,
+        relaxation: None,
+        demag_realization: None,
+        air_box_config: None,
+        interfacial_dmi: None,
+        rotated_interfacial_dmi: None,
+        dmi_interface_normal: None,
+        bulk_dmi: None,
+        dind_field: None,
+        dbulk_field: None,
+        temperature: None,
+        current_density: None,
+        stt_degree: None,
+        stt_beta: None,
+        stt_spin_polarization: None,
+        stt_lambda: None,
+        stt_epsilon_prime: None,
+        stt_thickness: None,
+        stt_fixed_layer_position: None,
+        spin_torque_contract: None,
+        has_oersted_cylinder: false,
+        oersted_current: None,
+        oersted_radius: None,
+        oersted_center: None,
+        oersted_axis: None,
+        oersted_field_xyz: None,
+        oersted_time_dep_kind: 0,
+        oersted_time_dep_freq: 0.0,
+        oersted_time_dep_phase: 0.0,
+        oersted_time_dep_offset: 0.0,
+        oersted_time_dep_t_on: 0.0,
+        oersted_time_dep_t_off: 0.0,
+        magnetoelastic: None,
+        mechanics: None,
+        demag_solver_policy: None,
+        thermal_seed_config: None,
+        oersted_realization: None,
+        gpu_device_index: None,
+        mfem_device_string: None,
+        use_consistent_mass: None,
+    }
+}
+
+#[cfg(test)]
+mod energy_density_terms_tests {
+    use super::*;
+
+    #[test]
+    fn rotated_dmi_is_an_aggregate_operand_for_eden_dmi_and_eden_total() {
+        let mut plan = make_test_plan();
+        plan.interfacial_dmi = None;
+        plan.bulk_dmi = None;
+        plan.rotated_interfacial_dmi = Some(3.0e-3);
+
+        let terms = NativeFemEnergyDensityTerms::from_plan(&plan);
+
+        assert!(
+            terms.interfacial_dmi,
+            "rotated interfacial DMI must activate the aggregate DMI operand"
+        );
+        assert_eq!(
+            terms.observables_for("eden_dmi"),
+            Some(vec![("H_dmi", -0.5)])
+        );
+        assert_eq!(
+            terms.observables_for("eden_total"),
+            Some(vec![("H_ex", -0.5), ("H_ext", -1.0), ("H_dmi", -0.5)])
+        );
+    }
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -2914,13 +3067,17 @@ impl NativeFemBackend {
             plan_desc.mfem_device_string = cs.as_ptr();
         }
 
-        let handle = unsafe {
-            if let Some(ref cfg) = adaptive_cfg {
-                ffi::fullmag_fem_backend_create_v2(&plan_desc, cfg)
-            } else {
-                ffi::fullmag_fem_backend_create(&plan_desc)
-            }
+        let plan_desc_v2 = ffi::fullmag_fem_plan_desc_v2 {
+            abi_version: ffi::FULLMAG_FEM_PLAN_DESC_V2_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_plan_desc_v2>() as u32,
+            base: plan_desc,
+            has_rotated_interfacial_dmi: i32::from(plan.rotated_interfacial_dmi.is_some()),
+            rotated_interfacial_dmi_constant: plan.rotated_interfacial_dmi.unwrap_or(0.0),
         };
+        let adaptive_ptr = adaptive_cfg
+            .as_ref()
+            .map_or(std::ptr::null(), |cfg| cfg as *const _);
+        let handle = unsafe { ffi::fullmag_fem_backend_create_v3(&plan_desc_v2, adaptive_ptr) };
         if handle.is_null() {
             let availability = native_availability();
             return Err(RunError {
@@ -2989,6 +3146,11 @@ impl NativeFemBackend {
                     .as_nanos()
                     .min(u128::from(u64::MAX)) as u64,
             ),
+            rotated_dmi_only: plan.rotated_interfacial_dmi.is_some()
+                && plan.interfacial_dmi.is_none()
+                && plan.bulk_dmi.is_none()
+                && plan.dind_field.is_none()
+                && plan.dbulk_field.is_none(),
         };
         Ok(backend)
     }
@@ -2996,6 +3158,10 @@ impl NativeFemBackend {
     fn attach_backend_create_timing(&mut self, stats: &mut StepStats) {
         stats.backend_create_wall_time_ns =
             self.backend_create_wall_time_ns.take().unwrap_or_default();
+    }
+
+    fn split_dmi_energy(&self, aggregate: f64) -> (f64, f64) {
+        crate::types::split_rotated_only_dmi_energy(self.rotated_dmi_only, aggregate)
     }
 
     fn apply_demag_solver_policy_to_step_stats(&self, stats: &mut StepStats) {
@@ -3159,8 +3325,7 @@ impl NativeFemBackend {
     ) -> Result<Option<runtime_info::NativeFemDemagFemBemProvenance>, RunError> {
         let mut provenance = ffi::fullmag_fem_demag_fem_bem_provenance_v1 {
             abi_version: ffi::FULLMAG_FEM_DEMAG_FEM_BEM_PROVENANCE_V1_ABI_VERSION,
-            struct_size:
-                std::mem::size_of::<ffi::fullmag_fem_demag_fem_bem_provenance_v1>() as u32,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_demag_fem_bem_provenance_v1>() as u32,
             ..Default::default()
         };
         let rc = unsafe {
@@ -3370,6 +3535,7 @@ impl NativeFemBackend {
 
         let relaxation_subphase_wall_time_ns = relaxation_driver_subphase_wall_time_ns(&stats);
         let torque_apm = validate_native_step_stats(&stats)?;
+        let (e_dmi, e_rotated_dmi) = self.split_dmi_energy(stats.dmi_energy_joules);
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -3382,7 +3548,8 @@ impl NativeFemBackend {
             e_ext: stats.external_energy_joules,
             e_drive: stats.drive_energy_joules,
             e_ani: stats.anisotropy_energy_joules,
-            e_dmi: stats.dmi_energy_joules,
+            e_dmi,
+            e_rotated_dmi,
             e_total: stats.total_energy_joules,
             max_dm_dt: stats.max_rhs_amplitude,
             max_h_eff: stats.max_effective_field_amplitude,
@@ -3818,6 +3985,7 @@ impl NativeFemBackend {
         }
         let relaxation_subphase_wall_time_ns = relaxation_driver_subphase_wall_time_ns(&stats);
         let torque_apm = validate_native_step_stats(&stats)?;
+        let (e_dmi, e_rotated_dmi) = self.split_dmi_energy(stats.dmi_energy_joules);
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -3830,7 +3998,8 @@ impl NativeFemBackend {
             e_ext: stats.external_energy_joules,
             e_drive: stats.drive_energy_joules,
             e_ani: stats.anisotropy_energy_joules,
-            e_dmi: stats.dmi_energy_joules,
+            e_dmi,
+            e_rotated_dmi,
             e_total: stats.total_energy_joules,
             max_dm_dt: stats.max_rhs_amplitude,
             max_h_eff: stats.max_effective_field_amplitude,
@@ -4184,6 +4353,7 @@ impl NativeFemBackend {
 
         let accepted_energy_proof: Option<(f64, f64, f64, f64)> = None;
         let torque_apm = validate_native_step_stats(&stats)?;
+        let (e_dmi, e_rotated_dmi) = self.split_dmi_energy(stats.dmi_energy_joules);
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -4196,7 +4366,8 @@ impl NativeFemBackend {
             e_ext: stats.external_energy_joules,
             e_drive: stats.drive_energy_joules,
             e_ani: stats.anisotropy_energy_joules,
-            e_dmi: stats.dmi_energy_joules,
+            e_dmi,
+            e_rotated_dmi,
             e_total: stats.total_energy_joules,
             max_dm_dt: stats.max_rhs_amplitude,
             max_h_eff: stats.max_effective_field_amplitude,
@@ -5898,122 +6069,6 @@ mod tests {
         &rest[..end]
     }
 
-    fn make_test_plan() -> FemPlanIR {
-        FemPlanIR {
-            frozen_spins: None,
-            mesh_name: "unit_tet".to_string(),
-            mesh_source: Some("meshes/unit_tet.msh".to_string()),
-            mesh: MeshIR {
-                mesh_name: "unit_tet".to_string(),
-                nodes: vec![
-                    [0.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0],
-                    [0.0, 0.0, 1.0],
-                ],
-                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
-                element_markers: vec![1],
-                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
-                boundary_markers: vec![1],
-                periodic_boundary_pairs: Vec::new(),
-                periodic_node_pairs: Vec::new(),
-                per_domain_quality: std::collections::HashMap::new(),
-            },
-            object_segments: Vec::new(),
-            mesh_parts: Vec::new(),
-            mesh_build_report: None,
-            domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
-            domain_frame: None,
-            fe_order: 1,
-            hmax: 0.4,
-            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
-            material: MaterialIR {
-                name: "Py".to_string(),
-                saturation_magnetisation: 800e3,
-                exchange_stiffness: 13e-12,
-                damping: 0.5,
-                uniaxial_anisotropy: None,
-                anisotropy_axis: None,
-                uniaxial_anisotropy_k2: None,
-                cubic_anisotropy_kc1: None,
-                cubic_anisotropy_kc2: None,
-                cubic_anisotropy_kc3: None,
-                cubic_anisotropy_axis1: None,
-                cubic_anisotropy_axis2: None,
-                ms_field: None,
-                a_field: None,
-                alpha_field: None,
-                ku_field: None,
-                ku2_field: None,
-                kc1_field: None,
-                kc2_field: None,
-                kc3_field: None,
-                interfacial_dmi: None,
-                bulk_dmi: None,
-                dind_field: None,
-                dbulk_field: None,
-            },
-            anisotropy_axis_field: None,
-            ms_element_field: None,
-            a_element_field: None,
-            region_materials: Vec::new(),
-            enable_exchange: true,
-            enable_demag: false,
-            external_field: Some([1.0, 2.0, 3.0]),
-            antenna_zeeman_masks: Vec::new(),
-            field_drives: Vec::new(),
-            field_drive_geometry_masks: Vec::new(),
-            time_stage: Default::default(),
-            current_modules: vec![],
-            spin_transport_plans: vec![],
-            gyromagnetic_ratio: 2.211e5,
-            precision: ExecutionPrecision::Double,
-            exchange_bc: ExchangeBoundaryCondition::Neumann,
-            integrator: Some(IntegratorChoice::Heun),
-            fixed_timestep: Some(1e-13),
-            adaptive_timestep: None,
-            field_refresh: None,
-            relaxation: None,
-            demag_realization: None,
-            air_box_config: None,
-            interfacial_dmi: None,
-            dmi_interface_normal: None,
-            bulk_dmi: None,
-            dind_field: None,
-            dbulk_field: None,
-            temperature: None,
-            current_density: None,
-            stt_degree: None,
-            stt_beta: None,
-            stt_spin_polarization: None,
-            stt_lambda: None,
-            stt_epsilon_prime: None,
-            stt_thickness: None,
-            stt_fixed_layer_position: None,
-            spin_torque_contract: None,
-            has_oersted_cylinder: false,
-            oersted_current: None,
-            oersted_radius: None,
-            oersted_center: None,
-            oersted_axis: None,
-            oersted_field_xyz: None,
-            oersted_time_dep_kind: 0,
-            oersted_time_dep_freq: 0.0,
-            oersted_time_dep_phase: 0.0,
-            oersted_time_dep_offset: 0.0,
-            oersted_time_dep_t_on: 0.0,
-            oersted_time_dep_t_off: 0.0,
-            magnetoelastic: None,
-            mechanics: None,
-            demag_solver_policy: None,
-            thermal_seed_config: None,
-            oersted_realization: None,
-            gpu_device_index: None,
-            mfem_device_string: None,
-            use_consistent_mass: None,
-        }
-    }
-
     #[test]
     fn task5_energy_density_terms_follow_resolved_spatial_operator_contracts() {
         let mut plan = make_test_plan();
@@ -7358,6 +7413,7 @@ mod tests {
             demag_realization: None,
             air_box_config: None,
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             dmi_interface_normal: None,
             bulk_dmi: None,
             dind_field: None,

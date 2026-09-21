@@ -145,7 +145,9 @@ pub async fn replace_display(
     State(state): State<Arc<AppState>>,
     Json(replacement): Json<DisplaySelection>,
 ) -> Result<Json<DisplaySelection>, ApiError> {
-    apply_display_replace(state.clone(), replacement).await?;
+    apply_display_replace(&state, replacement).await?;
+    let display_revision = synchronize_observation_quantities(&state).await?;
+    emit_display_realtime_change(&state, display_revision).await?;
     let selection = state.current_display_selection.read().await;
     let presentation = state.current_display_presentation.read().await;
     Ok(Json(build_display_selection_response(
@@ -174,7 +176,7 @@ pub async fn replace_visualization_state(
         .await?;
     validate_planar_source_selection(&state, &replacement.planar.source).await?;
     let display_replacement = visualization_state_to_display_selection(&replacement);
-    apply_display_replace(state.clone(), display_replacement).await?;
+    apply_display_replace(&state, display_replacement).await?;
     {
         let mut presentation = state.current_display_presentation.write().await;
         presentation.visualization_layers = Some(replacement.layers);
@@ -195,6 +197,8 @@ pub async fn replace_visualization_state(
             &canonicalized.warnings,
         );
     }
+    let display_revision = synchronize_observation_quantities(&state).await?;
+    emit_display_realtime_change(&state, display_revision).await?;
     let selection = state.current_display_selection.read().await;
     let presentation = state.current_display_presentation.read().await;
     let live_snapshot = state.current_live_state.read().await;
@@ -247,18 +251,17 @@ pub async fn patch_visualization_state(
         }
     }
     let display_patch = visualization_patch_to_display_patch(&update);
-    let display_revision = {
+    {
         let mut selection = state.current_display_selection.write().await;
         let mut presentation = state.current_display_presentation.write().await;
         let mut next_selection = selection.clone();
         let mut next_presentation = presentation.clone();
         apply_display_patch_to_state(&mut next_selection, &mut next_presentation, display_patch);
         apply_visualization_presentation_patch(&mut next_presentation, &update)?;
-        let revision = next_selection.revision;
         *selection = next_selection;
         *presentation = next_presentation;
-        revision
-    };
+    }
+    let display_revision = synchronize_observation_quantities(&state).await?;
     emit_display_realtime_change(&state, display_revision).await?;
     let selection = state.current_display_selection.read().await;
     let presentation = state.current_display_presentation.read().await;
@@ -271,7 +274,7 @@ pub async fn patch_visualization_state(
 }
 
 async fn apply_display_replace(
-    state: Arc<AppState>,
+    state: &Arc<AppState>,
     replacement: DisplaySelection,
 ) -> Result<(), ApiError> {
     let mut selection = state.current_display_selection.write().await;
@@ -303,11 +306,6 @@ async fn apply_display_replace(
     presentation.vector_glyphs = replacement.vector_glyphs;
 
     selection.revision = selection.revision.wrapping_add(1);
-    let display_revision = selection.revision;
-    drop(presentation);
-    drop(selection);
-    emit_display_realtime_change(&state, display_revision).await?;
-
     Ok(())
 }
 
@@ -315,22 +313,24 @@ async fn apply_display_patch(
     state: Arc<AppState>,
     update: DisplayPatch,
 ) -> Result<DisplaySelection, ApiError> {
-    let mut sel = state.current_display_selection.write().await;
-    let mut presentation = state.current_display_presentation.write().await;
-    let response = apply_display_patch_to_state(&mut sel, &mut presentation, update);
-    let display_revision = sel.revision;
-    drop(presentation);
-    drop(sel);
+    {
+        let mut sel = state.current_display_selection.write().await;
+        let mut presentation = state.current_display_presentation.write().await;
+        apply_display_patch_to_state(&mut sel, &mut presentation, update);
+    }
+    let display_revision = synchronize_observation_quantities(&state).await?;
     emit_display_realtime_change(&state, display_revision).await?;
 
-    Ok(response)
+    let selection = state.current_display_selection.read().await;
+    let presentation = state.current_display_presentation.read().await;
+    Ok(build_display_selection_response(&selection, &presentation))
 }
 
 fn apply_display_patch_to_state(
     sel: &mut CurrentDisplaySelection,
     presentation: &mut DisplayPresentationState,
     update: DisplayPatch,
-) -> DisplaySelection {
+) {
     if let Some(q) = update.active_quantity_id {
         sel.selection.quantity = q;
     }
@@ -384,7 +384,6 @@ fn apply_display_patch_to_state(
     sel.selection.canonicalize();
 
     sel.revision = sel.revision.wrapping_add(1);
-    build_display_selection_response(&sel, &presentation)
 }
 
 fn validate_visualization_state_patch(update: &VisualizationStatePatch) -> Result<(), ApiError> {
@@ -2133,6 +2132,69 @@ pub(crate) fn build_visualization_state_response(
     }
 }
 
+/// Reconcile the internal observation demand with the canonical visualization
+/// projection. The demand is deliberately kept on `DisplaySelectionState` so
+/// the existing display-sync/control-plane handoff carries it without a new
+/// endpoint or a physics command. Callers are mutation paths; GET remains
+/// side-effect free and legacy empty-demand payloads retain their fallback.
+async fn synchronize_observation_quantities(state: &Arc<AppState>) -> Result<u64, ApiError> {
+    let mut selection = state.current_display_selection.write().await;
+    let presentation = state.current_display_presentation.read().await;
+    let live_snapshot = state.current_live_state.read().await;
+    let visualization = build_visualization_state_response(
+        &selection,
+        &presentation,
+        live_snapshot.as_ref(),
+    );
+    let observation_quantities = observation_quantities_for_visualization_state(&visualization);
+    apply_observation_quantities(&mut selection, observation_quantities);
+    Ok(selection.revision)
+}
+
+fn apply_observation_quantities(
+    selection: &mut CurrentDisplaySelection,
+    observation_quantities: Vec<String>,
+) -> bool {
+    if selection.observation_quantities == observation_quantities {
+        return false;
+    }
+    selection.observation_quantities = observation_quantities;
+    selection.revision = selection.revision.wrapping_add(1);
+    true
+}
+
+fn observation_quantities_for_visualization_state(
+    visualization: &VisualizationStateResource,
+) -> Vec<String> {
+    // Retain the global active quantity as a compatibility baseline even when
+    // its target is hidden or solid-only. Legacy display-sync consumers only
+    // know this selection and must continue to observe it when no demand list
+    // is present; target-specific demands below remain visibility-gated.
+    let mut candidates = vec![visualization.quantity.active_quantity_id.clone()];
+    for target in std::iter::once(&visualization.targets.airbox)
+        .chain(visualization.targets.objects.iter())
+        .chain(visualization.targets.parts.iter())
+    {
+        if target_requests_spatial_observation(&target.settings) {
+            candidates.push(target.settings.active_quantity_id.clone());
+        }
+    }
+
+    let mut canonical = CurrentDisplaySelection::default();
+    canonical.observation_quantities = candidates;
+    canonical.canonicalize_observation_quantities();
+    canonical.observation_quantities
+}
+
+fn target_requests_spatial_observation(
+    settings: &VisualizationResolvedTargetSettings,
+) -> bool {
+    settings.visible
+        && ((settings.surface_visible
+            && !matches!(settings.surface_color_source, SurfaceColorSource::Solid))
+            || (settings.vectors_visible && settings.vector_budget > 0))
+}
+
 const MAX_VISUALIZATION_RESTORE_WARNINGS: usize = 16;
 const AIRBOX_OVERRIDE_ORDERING_WARNING: &str =
     "visualization_override_migration_ambiguous_airbox_ordering: persisted Airbox aliases lack per-entry revision/timestamp evidence; canonical identity was retained when unambiguous and conflicting legacy entries were dropped";
@@ -2645,6 +2707,84 @@ mod visualization_override_migration_tests {
             surface_color_source_for_quantity("m", VectorColorMode::Orientation),
             SurfaceColorSource::Orientation
         );
+    }
+
+    #[test]
+    fn observation_demand_unions_visible_targets_and_excludes_hidden_solid_only_targets() {
+        let selection = CurrentDisplaySelection::default();
+        let presentation = DisplayPresentationState::default();
+        let mut visualization = build_visualization_state_response(&selection, &presentation, None);
+        let base_settings = object_target_settings(
+            "m",
+            &visualization.quantity.colormap,
+            &visualization.layers,
+            &visualization.vector_style,
+        );
+
+        let mut visible_override = base_settings.clone();
+        visible_override.active_quantity_id = "frozen_spins".to_string();
+
+        let mut hidden = base_settings.clone();
+        hidden.active_quantity_id = "H_eff".to_string();
+        hidden.visible = false;
+
+        let mut solid_only = base_settings;
+        solid_only.active_quantity_id = "H_demag".to_string();
+        solid_only.surface_color_source = SurfaceColorSource::Solid;
+        solid_only.vectors_visible = false;
+
+        visualization.targets.objects = vec![
+            VisualizationTargetRegistryEntry {
+                scope: VisualizationScopeKind::Object,
+                scope_id: "object-visible".to_string(),
+                label: "Visible".to_string(),
+                source: VisualizationTargetSource::SceneObject,
+                settings: visible_override,
+                override_state: None,
+            },
+            VisualizationTargetRegistryEntry {
+                scope: VisualizationScopeKind::Object,
+                scope_id: "object-hidden".to_string(),
+                label: "Hidden".to_string(),
+                source: VisualizationTargetSource::SceneObject,
+                settings: hidden,
+                override_state: None,
+            },
+            VisualizationTargetRegistryEntry {
+                scope: VisualizationScopeKind::Object,
+                scope_id: "object-solid".to_string(),
+                label: "Solid".to_string(),
+                source: VisualizationTargetSource::SceneObject,
+                settings: solid_only,
+                override_state: None,
+            },
+        ];
+
+        assert_eq!(
+            observation_quantities_for_visualization_state(&visualization),
+            vec!["m".to_string(), "frozen_spins".to_string()]
+        );
+    }
+
+    #[test]
+    fn observation_demand_change_advances_display_revision_once() {
+        let mut selection = CurrentDisplaySelection::default();
+        let initial_revision = selection.revision;
+
+        assert!(apply_observation_quantities(
+            &mut selection,
+            vec!["m".to_string()]
+        ));
+        assert_eq!(
+            selection.revision,
+            initial_revision.wrapping_add(1),
+            "a changed demand must be delivered under a new display revision"
+        );
+        assert!(!apply_observation_quantities(
+            &mut selection,
+            vec!["m".to_string()]
+        ));
+        assert_eq!(selection.revision, initial_revision.wrapping_add(1));
     }
 
     fn airbox_override(

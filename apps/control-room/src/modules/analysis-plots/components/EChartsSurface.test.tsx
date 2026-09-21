@@ -239,6 +239,70 @@ describe("EChartsSurface", () => {
     }
   });
 
+  it("retains the mounted Analysis chart owner while initial samples arrive", async () => {
+    const dom = installSimulationPreparationTestDom();
+    globalThis.getComputedStyle = (() => ({
+      direction: "ltr",
+      getPropertyValue: () => "",
+    })) as unknown as typeof getComputedStyle;
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    try {
+      await act(async () => {
+        root.render(
+          <EChartsSurface
+            presentation={{ kind: "ready", revision: 41 }}
+            series={[]}
+            xAxisLabel="step"
+          />,
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const mountedSurface = findElement(
+        container,
+        (element) => element.getAttribute("class") === "fm-analysis-chart-surface",
+        "initial Analysis chart surface",
+      );
+      const mountedCanvas = findElement(
+        container,
+        (element) => element.getAttribute("class") === "fm-analysis-plots__echarts",
+        "initial Analysis chart canvas",
+      );
+      const initCount = echarts.init.mock.calls.length;
+
+      await act(async () => {
+        root.render(
+          <EChartsSurface
+            presentation={{ kind: "ready", revision: 42 }}
+            series={series}
+            xAxisLabel="step"
+          />,
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(findElement(
+        container,
+        (element) => element.getAttribute("class") === "fm-analysis-chart-surface",
+        "loaded Analysis chart surface",
+      )).toBe(mountedSurface);
+      expect(findElement(
+        container,
+        (element) => element.getAttribute("class") === "fm-analysis-plots__echarts",
+        "loaded Analysis chart canvas",
+      )).toBe(mountedCanvas);
+      expect(mountedCanvas.getAttribute("data-retained")).toBe("true");
+      expect(echarts.init).toHaveBeenCalledTimes(initCount);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("does not mislabel intentionally hidden series as missing table samples", () => {
     const model = tableSeriesRenderModel([], series, "step");
 

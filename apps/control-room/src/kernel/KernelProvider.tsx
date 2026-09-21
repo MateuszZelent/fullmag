@@ -81,6 +81,7 @@ import { VisualizationDebugController } from "./visualization/VisualizationDebug
 import { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
 import { VISUALIZATION_TARGET_COMMANDS } from "./visualization/visualizationCommandContributions";
 import { ObjectMoveToolController } from "./authoring/ObjectMoveToolController";
+import { ProjectDocumentController } from "./persistence/ProjectDocumentController";
 import { resolveControlRoomModules } from "@/modules";
 
 installPerformanceMeasureGuard();
@@ -113,6 +114,7 @@ function createKernel(): KernelApi {
     binaryDecodeScheduler,
     diagnostics,
   });
+  const projectDocument = new ProjectDocumentController(api);
   const commands = new CommandRegistry();
   commands.attach(bus);
   commands.attachDiagnostics(commandDiagnostics);
@@ -203,6 +205,7 @@ function createKernel(): KernelApi {
     modeComposition,
     modules,
     objectMoveTool,
+    projectDocument,
     realtime,
     realtimeConnection,
     resources,
@@ -302,6 +305,9 @@ function RealtimeConnector({ kernel }: { kernel: KernelApi }) {
     const client = new RealtimeClient({
       bridge: kernel.realtime,
       diagnostics: kernel.diagnostics,
+      onReconnected: () => {
+        kernel.realtime.handleReconnect();
+      },
       onStatusChange: (status) => {
         kernel.realtimeConnection.update(status);
         kernel.bus.emit("session:status-changed", { status });

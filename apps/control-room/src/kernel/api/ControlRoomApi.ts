@@ -181,6 +181,8 @@ import {
   PERSISTENCE_FIELD_STATE_IMPORTS_PATH,
   PERSISTENCE_IMPORT_INSPECTIONS_PATH,
   PERSISTENCE_IMPORTS_PATH,
+  PERSISTENCE_PROJECT_OPEN_PATH,
+  PERSISTENCE_PROJECTS_PATH,
   PLATFORM_CAPABILITIES_PATH,
   PLATFORM_HEALTH_PATH,
   SESSIONS_PATH,
@@ -434,6 +436,9 @@ import type {
   SessionImportCommitResponse,
   SessionImportInspectRequest,
   SessionImportInspectResponse,
+  ProjectArchiveRequest,
+  ProjectCreateRequest,
+  ProjectDocumentResource,
   SolverEnergyCurrentResource,
   SolverEnergyHistoryResource,
   SolverProfileResource,
@@ -2578,6 +2583,20 @@ export class ControlRoomApi {
           SessionImportInspectResponse,
           SessionImportInspectRequest
         >(PERSISTENCE_IMPORT_INSPECTIONS_PATH, request, options),
+    },
+    projects: {
+      create: (request: ProjectCreateRequest, options?: RequestOptions) =>
+        this.postJson<ProjectDocumentResource, ProjectCreateRequest>(
+          PERSISTENCE_PROJECTS_PATH,
+          request,
+          options,
+        ),
+      open: (request: ProjectArchiveRequest, options?: RequestOptions) =>
+        this.postJson<ProjectDocumentResource, ProjectArchiveRequest>(
+          PERSISTENCE_PROJECT_OPEN_PATH,
+          request,
+          options,
+        ),
     },
   };
 

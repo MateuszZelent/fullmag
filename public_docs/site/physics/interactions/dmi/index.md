@@ -9,14 +9,17 @@ owner: fullmag-public-docs
 (public-docs-physics-interactions-dmi-root)=
 # Dzyaloshinskii–Moriya interaction
 
-Fullmag distinguishes interfacial and bulk Dzyaloshinskii–Moriya interaction (DMI). They have
+Fullmag exposes three distinct Dzyaloshinskii–Moriya interaction (DMI) variants:
+conventional interfacial DMI, isotropic bulk DMI, and rotated interfacial DMI. They have
 different symmetry, field operators, natural boundary terms, and backend restrictions.
+Boundary conditions and validation are cross-cutting pages, not additional DMI variants.
 
 ```{toctree}
 :maxdepth: 1
 
 interfacial
 bulk
+rotated-interfacial
 boundary-conditions
 validation
 ```

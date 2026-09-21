@@ -24,6 +24,7 @@ import {
   Timer,
   Undo2,
   Upload,
+  X,
 } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -48,7 +49,6 @@ const HIDDEN_PLACEHOLDER_COMMAND_IDS = new Set([
   "workspace.preferences",
   "workspace.docs",
   "workspace.about",
-  "workspace.save-sync",
   "workspace.undo",
   "workspace.redo",
   "workspace.view-2d",
@@ -89,8 +89,11 @@ const MAIN_MENU_DEFINITIONS: AppMenuNode[] = [
     label: "File",
     children: [
       { id: "workspace.new-problem", label: "New Problem", icon: <FilePlus2 size={14} />, shortcut: "Ctrl+N" },
-      { id: "study.import-state", label: "Import .fms State", icon: <Upload size={14} />, shortcut: "Ctrl+O" },
-      { id: "workspace.save-sync", label: "Save / Sync", icon: <Save size={14} />, shortcut: "Ctrl+S" },
+      { id: "workspace.new-project", label: "New Project", icon: <FilePlus2 size={14} />, shortcut: "Ctrl+Shift+N" },
+      { id: "workspace.open-project", label: "Open Project", icon: <Upload size={14} />, shortcut: "Ctrl+O" },
+      { id: "study.import-state", label: "Restore Runtime State", icon: <Upload size={14} />, shortcut: "Ctrl+Shift+O" },
+      { id: "workspace.save-project", label: "Save Project", icon: <Save size={14} />, shortcut: "Ctrl+S" },
+      { id: "workspace.close-project", label: "Close Project", icon: <X size={14} />, shortcut: "Ctrl+W" },
       { id: "workspace.export-python", label: "Export Python DSL", icon: <FileCode2 size={14} /> },
     ],
   },
@@ -169,7 +172,7 @@ const MAIN_MENU_DEFINITIONS: AppMenuNode[] = [
 ];
 
 const QUICK_ACTION_DEFINITIONS: HeaderQuickAction[] = [
-  { id: "workspace.save-sync", label: "Save / Sync", icon: <Save size={14} /> },
+  { id: "workspace.save-project", label: "Save Project", icon: <Save size={14} /> },
   { id: "workspace.undo", label: "Undo", icon: <Undo2 size={14} /> },
   { id: "workspace.redo", label: "Redo", icon: <Redo2 size={14} /> },
 ];

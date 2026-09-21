@@ -3,6 +3,7 @@ name = "fullmag-session"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+rust-version = "1.89"
 
 [dependencies]
 anyhow.workspace = true

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   AIRBOX_GRADING_MODES,
   buildAirboxMeshPolicyReplaceRequest,
+  updateAirboxMeshPolicyDraft,
   airboxMeshPolicyDraftDirty,
   defaultUniverseMeshPolicyResource,
   draftFromUniverseMeshPolicyResource,
@@ -267,5 +268,60 @@ describe("Airbox mesh policy draft", () => {
     ).toEqual({
       error: "Universe mesh policy config must be a JSON object.",
     });
+  });
+});
+
+
+describe("mesh policy JSON edits", () => {
+  it("submits a JSON edit instead of the stale form value", () => {
+    const draft = draftFromUniverseMeshPolicyResource({ config: { airbox_hmax: 1e-8 }, revision: 1 });
+    const result = buildAirboxMeshPolicyReplaceRequest({ ...draft, configText: '{"airbox_hmax":2e-8,"extension":{"keep":true}}' });
+    expect(result).toMatchObject({ request: { config: { airbox_hmax: 2e-8, extension: { keep: true } } } });
+  });
+
+  it("preserves deletion of an authored JSON parameter", () => {
+    const draft = draftFromUniverseMeshPolicyResource({ config: { airbox_hmax: 1e-8 }, revision: 1 });
+    const result = buildAirboxMeshPolicyReplaceRequest({ ...draft, configText: '{}' });
+    expect("request" in result).toBe(true);
+    if ("request" in result) expect(result.request?.config).not.toHaveProperty("airbox_hmax");
+  });
+
+  it("rejects invalid authored JSON parameter values without erasing them", () => {
+    const draft = draftFromUniverseMeshPolicyResource({ config: { airbox_hmax: 1e-8 }, revision: 1 });
+    const result = buildAirboxMeshPolicyReplaceRequest({ ...draft, configText: '{"airbox_hmax":"wrong"}' });
+    expect(result).toHaveProperty("error");
+  });
+});
+
+
+describe("synchronized mesh parameter editing", () => {
+  it("keeps JSON and form edits coherent through a complete round trip", () => {
+    const initial = draftFromUniverseMeshPolicyResource({ config: { airbox_hmax: 1e-8, extension: { keep: true } }, revision: 1 });
+    const json = updateAirboxMeshPolicyDraft(initial, { configText: '{"airbox_hmax":2e-8,"extension":{"keep":true}}' });
+    expect(json.airboxHmax).toBe("2e-8");
+    const form = updateAirboxMeshPolicyDraft(json, { airboxHmax: "3e-8" });
+    expect(JSON.parse(form.configText)).toMatchObject({ airbox_hmax: 3e-8, extension: { keep: true } });
+    expect(buildAirboxMeshPolicyReplaceRequest(form)).toMatchObject({ request: { config: { airbox_hmax: 3e-8 } } });
+    const removed = updateAirboxMeshPolicyDraft(form, { airboxHmax: "" });
+    expect(JSON.parse(removed.configText)).not.toHaveProperty("airbox_hmax");
+  });
+
+  it("preserves incomplete JSON and recovers the structured editor when corrected", () => {
+    const initial = draftFromUniverseMeshPolicyResource({ config: { airbox_hmax: 1e-8, extension: { keep: true } }, revision: 1 });
+    const invalid = updateAirboxMeshPolicyDraft(initial, { configText: '{"airbox_hmax":' });
+    expect(invalid.configText).toBe('{"airbox_hmax":');
+    expect(buildAirboxMeshPolicyReplaceRequest(invalid)).toHaveProperty("error");
+    const fixed = updateAirboxMeshPolicyDraft(invalid, { configText: '{"airbox_hmax":4e-8}' });
+    expect(fixed.airboxHmax).toBe("4e-8");
+    expect(buildAirboxMeshPolicyReplaceRequest(fixed)).toMatchObject({ request: { config: { airbox_hmax: 4e-8 } } });
+  });
+
+  it("preserves invalid structured text and prevents submission until corrected", () => {
+    const initial = draftFromUniverseMeshPolicyResource({ config: { airbox_hmax: 1e-8, extension: { keep: true } }, revision: 1 });
+    const invalid = updateAirboxMeshPolicyDraft(initial, { airboxHmax: "2e-" });
+    expect(invalid.airboxHmax).toBe("2e-");
+    expect(buildAirboxMeshPolicyReplaceRequest(invalid)).toHaveProperty("error");
+    const fixed = updateAirboxMeshPolicyDraft(invalid, { airboxHmax: "2e-8" });
+    expect(buildAirboxMeshPolicyReplaceRequest(fixed)).toMatchObject({ request: { config: { airbox_hmax: 2e-8 } } });
   });
 });

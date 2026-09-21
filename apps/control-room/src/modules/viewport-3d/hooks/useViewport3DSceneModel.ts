@@ -2,11 +2,13 @@
 
 import type { components } from "@/kernel/api/generated/openapi-v2-types";
 import { DATA_FIELDS_PATH } from "@/kernel/api/apiPaths";
+import { publishViewport3DLiveRefreshRevisions } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 import {
   useCallback,
   useEffect,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
   type ComponentProps,
 } from "react";
@@ -253,6 +255,7 @@ import {
 import {
   buildViewport3DDiagnostics,
   type Viewport3DResourceCounts,
+  type Viewport3DResourceTracker,
 } from "../viewport3dDiagnostics";
 import {
   getViewport3DBuildDiagnosticsSnapshotVersion,
@@ -345,7 +348,7 @@ import {
   getViewport3DCacheStats as getCacheStats,
   resolveViewport3DFieldVectorResourceKey,
   resolveViewport3DFieldVectorRequestResourceKey,
-  viewport3DFieldVectorMatchesRequestIdentity,
+  resolveViewport3DFieldVectorIdentityMatch,
   useViewport3DAirboxFieldVectors,
   useViewport3DDomainMeta,
   useViewport3DDomainTopology,
@@ -1881,6 +1884,133 @@ export function resolveViewport3DDisplayedLiveValue<TValue>(
   return holdActive ? previousDisplayed : incoming;
 }
 
+export interface Viewport3DPrimaryFieldRetainedState {
+  envelope: Viewport3DFieldVectorEnvelope;
+  revision: string | null;
+}
+
+export interface ResolvePrimaryFieldDisplayedEnvelopeResult {
+  displayedEnvelope: Viewport3DFieldVectorEnvelope | null;
+  displayedRevision: string | null;
+  nextRetained: Viewport3DPrimaryFieldRetainedState | null;
+}
+
+export function resolvePrimaryFieldDisplayedEnvelope({
+  incomingEnvelope,
+  status,
+  preparedRevision,
+  retained,
+  request,
+  tracker,
+}: {
+  incomingEnvelope: Viewport3DFieldVectorEnvelope | null;
+  status: string;
+  preparedRevision: string | null;
+  retained: Viewport3DPrimaryFieldRetainedState | null;
+  request: Pick<Viewport3DFieldResourceRequest, "quantityId" | "query">;
+  tracker?: Viewport3DResourceTracker;
+}): ResolvePrimaryFieldDisplayedEnvelopeResult {
+  if (status === "ready" && incomingEnvelope) {
+    const incomingMatch = resolveViewport3DFieldVectorIdentityMatch(
+      incomingEnvelope,
+      request,
+    );
+    if (incomingMatch.matches) {
+      if (
+        retained &&
+        retained.envelope.data === incomingEnvelope.data &&
+        retained.envelope.retained === false &&
+        retained.revision === preparedRevision
+      ) {
+        return {
+          displayedEnvelope: retained.envelope,
+          displayedRevision: preparedRevision,
+          nextRetained: retained,
+        };
+      }
+      const freshEnvelope: Viewport3DFieldVectorEnvelope =
+        incomingEnvelope.retained === false
+          ? incomingEnvelope
+          : {
+              ...incomingEnvelope,
+              retained: false,
+            };
+      return {
+        displayedEnvelope: freshEnvelope,
+        displayedRevision: preparedRevision,
+        nextRetained: {
+          envelope: freshEnvelope,
+          revision: preparedRevision,
+        },
+      };
+    }
+  }
+
+  if (retained) {
+    const retainedMatch = resolveViewport3DFieldVectorIdentityMatch(
+      retained.envelope,
+      request,
+    );
+    if (retainedMatch.matches) {
+      if (retained.envelope.retained === true) {
+        return {
+          displayedEnvelope: retained.envelope,
+          displayedRevision: retained.revision,
+          nextRetained: retained,
+        };
+      }
+      const retainedEnvelope: Viewport3DFieldVectorEnvelope = {
+        ...retained.envelope,
+        retained: true,
+      };
+      return {
+        displayedEnvelope: retainedEnvelope,
+        displayedRevision: retained.revision,
+        nextRetained: {
+          envelope: retainedEnvelope,
+          revision: retained.revision,
+        },
+      };
+    }
+    tracker?.recordRetentionRejection(retainedMatch.reason);
+    return {
+      displayedEnvelope: null,
+      displayedRevision: null,
+      nextRetained: null,
+    };
+  }
+
+  if (status !== "ready" && incomingEnvelope) {
+    const incomingMatch = resolveViewport3DFieldVectorIdentityMatch(
+      incomingEnvelope,
+      request,
+    );
+    if (incomingMatch.matches) {
+      const retainedEnvelope: Viewport3DFieldVectorEnvelope =
+        incomingEnvelope.retained === true
+          ? incomingEnvelope
+          : {
+              ...incomingEnvelope,
+              retained: true,
+            };
+      return {
+        displayedEnvelope: retainedEnvelope,
+        displayedRevision: preparedRevision,
+        nextRetained: {
+          envelope: retainedEnvelope,
+          revision: preparedRevision,
+        },
+      };
+    }
+  }
+
+  return {
+    displayedEnvelope: null,
+    displayedRevision: null,
+    nextRetained: null,
+  };
+}
+
 export function sameViewport3DQuantityId(left: string, right: string): boolean {
   return sameRenderableFieldQuantityId(left, right);
 }
@@ -2506,24 +2636,25 @@ function selectViewport3DObjectVisualizationSnapshot(
 }
 
 /**
- * FDM scene targets are client-side structured-grid views. The FEM
- * visualization registry can still be present in the session resource, but
- * it must not replace the local FDM target state used by the grid renderer.
+ * Structured-grid targets use the same canonical visualization resource as
+ * the Inspector. Local snapshots only supply pending edits and preferences.
  */
 export function resolveViewport3DFdmTargetVisualization({
   inheritedSettings,
   snapshot,
   target,
+  visualizationState,
 }: {
   inheritedSettings?: VisualizationTargetSettings;
   snapshot: ObjectVisualizationSnapshot;
   target: VisualizationTargetRef;
+  visualizationState?: VisualizationStateResource | null;
 }) {
   return resolveTargetVisualization({
     inheritedSettings,
     snapshot,
     target,
-    visualizationState: null,
+    visualizationState,
   });
 }
 
@@ -2649,6 +2780,7 @@ export function useViewport3DSceneModel({
   meshSizeHighlightSelection,
   resourceCounts,
   selection,
+  tracker,
 }: {
   commandState: ReturnType<typeof useViewport3DCommandState>;
   colors: Viewport3DSceneProps["colors"] | null;
@@ -2656,6 +2788,7 @@ export function useViewport3DSceneModel({
   meshSizeHighlightSelection: MeshHistogramBinElementsResource | null;
   resourceCounts: Viewport3DResourceCounts;
   selection: Selection;
+  tracker?: Viewport3DResourceTracker;
 }) {
   const primitiveDraftOverlay = usePrimitiveDraftOverlay();
   const { analysisFieldOverlay } = useKernel();
@@ -3606,6 +3739,7 @@ export function useViewport3DSceneModel({
         inheritedSettings: globalObjectBaseSettings,
         snapshot: objectVisualizationSnapshot,
         target: definition.target,
+        visualizationState: renderingState,
       }).effectiveSettings;
       settingsById.set(
         definition.target.id,
@@ -3620,6 +3754,7 @@ export function useViewport3DSceneModel({
         inheritedSettings,
         snapshot: objectVisualizationSnapshot,
         target: definition.target,
+        visualizationState: renderingState,
       }).effectiveSettings;
       settingsById.set(
         definition.target.id,
@@ -3632,6 +3767,7 @@ export function useViewport3DSceneModel({
     fdmTargetDefinitionsResult,
     globalObjectBaseSettings,
     objectVisualizationSnapshot,
+    renderingState,
   ]);
   const fdmTargetSettings = useMemo(
     () => [...fdmTargetSettingsById.values()],
@@ -3941,19 +4077,19 @@ export function useViewport3DSceneModel({
   const magneticPartFieldVectors = useViewport3DPartFieldVectors(
     magneticPartFieldQueries,
     magneticPartFieldQueries.size > 0,
-    { selectedTargetId: selectedVisualizationTargetId },
+    { selectedTargetId: selectedVisualizationTargetId, tracker },
   );
   const targetQuantityFieldVectors = useViewport3DQuantityFieldVectors(
     targetQuantityFieldRequests,
     targetQuantityFieldRequests.size > 0,
-    { selectedTargetId: selectedVisualizationTargetId },
+    { selectedTargetId: selectedVisualizationTargetId, tracker },
   );
   const airboxFieldVectors = useViewport3DAirboxFieldVectors(
     airboxSettings.activeQuantityId,
     airboxFieldVectorParts,
     airboxFieldVectorEnabled && airboxFieldVectorParts.length > 0,
     airboxFieldVectorRequests,
-    { selectedTargetId: selectedVisualizationTargetId },
+    { selectedTargetId: selectedVisualizationTargetId, tracker },
     fieldCatalog.data,
   );
   const rawFieldRenderOptions = useViewport3DFieldRenderOptions({
@@ -4454,27 +4590,48 @@ export function useViewport3DSceneModel({
       fieldVectorResourceKey,
     ],
   );
-  const incomingFieldVectorReady = Boolean(
-    fieldVector.status === "ready" &&
-      incomingFieldVectorEnvelope &&
-      viewport3DFieldVectorMatchesRequestIdentity(
-        incomingFieldVectorEnvelope,
-        primaryFieldRequest,
-      ),
-  );
-  const previousFieldVectorCompatible = Boolean(
-    fieldVector.status !== "ready" &&
-      incomingFieldVectorEnvelope &&
-      viewport3DFieldVectorMatchesRequestIdentity(
-        incomingFieldVectorEnvelope,
-        primaryFieldRequest,
-      ),
-  );
-  const displayedFieldVectorEnvelope = resolveViewport3DDisplayedLiveValue(
-    incomingFieldVectorReady ? incomingFieldVectorEnvelope : null,
-    previousFieldVectorCompatible ? incomingFieldVectorEnvelope : null,
-    fieldVector.status !== "ready",
-  );
+  const [primaryFieldRetained, setPrimaryFieldRetained] =
+    useState<Viewport3DPrimaryFieldRetainedState | null>(null);
+  const fieldVectorRevisionString =
+    fieldVector.revision == null ? null : String(fieldVector.revision);
+  const fieldVectorPayloadRevisionString =
+    fieldVector.payloadRevision == null
+      ? null
+      : String(fieldVector.payloadRevision);
+  const fieldVectorPreparedRevision =
+    fieldVectorPayloadRevisionString ?? fieldVectorRevisionString;
+  const {
+    displayedEnvelope: displayedFieldVectorEnvelope,
+    displayedRevision: fieldVectorDisplayedRevision,
+    nextRetained: nextPrimaryFieldRetained,
+  } = useMemo(() => {
+    if (!fieldVectorEnabled) {
+      return {
+        displayedEnvelope: null,
+        displayedRevision: null,
+        nextRetained: null,
+      };
+    }
+    return resolvePrimaryFieldDisplayedEnvelope({
+      incomingEnvelope: incomingFieldVectorEnvelope,
+      status: fieldVector.status,
+      preparedRevision: fieldVectorPreparedRevision,
+      retained: primaryFieldRetained,
+      request: primaryFieldRequest,
+      tracker,
+    });
+  }, [
+    fieldVector.status,
+    fieldVectorEnabled,
+    fieldVectorPreparedRevision,
+    incomingFieldVectorEnvelope,
+    primaryFieldRequest,
+    primaryFieldRetained,
+    tracker,
+  ]);
+  if (nextPrimaryFieldRetained !== primaryFieldRetained) {
+    setPrimaryFieldRetained(nextPrimaryFieldRetained);
+  }
   const displayedFieldVector = displayedFieldVectorEnvelope?.data ?? null;
   const analysisComplexFieldQuery = useMemo(
     () =>
@@ -6234,6 +6391,7 @@ export function useViewport3DSceneModel({
     buildFallbacks: buildFallbackDiagnostics,
     cache: getCacheStats(),
     dataPlaneIssues,
+    displayedRevision: fieldVectorDisplayedRevision,
     fieldDemandDiagnostics,
     fieldPayloadRevision: fieldVector.payloadRevision ?? null,
     fieldRevision: fieldVector.payloadRevision ?? fieldVector.revision,
@@ -6248,12 +6406,28 @@ export function useViewport3DSceneModel({
       ? fdmTargetViews.length
       : femDomain.objectPartIds.size,
     pipelineDiagnostics: buildPipelineDiagnostics,
+    preparedRevision: fieldVectorPreparedRevision,
     quantityId: primaryFieldQuantityId,
+    receivedRevision: fieldVectorPayloadRevisionString,
+    requestedRevision: fieldVectorRevisionString,
     surfaceColorStatus: chunkedScalarColors.status,
     targetDiagnostics: fieldRenderModel?.targetDiagnostics,
     topologyRevision: topology.revision,
     tracker: resourceCounts,
   });
+  useEffect(() => {
+    publishViewport3DLiveRefreshRevisions({
+      displayed: fieldVectorDisplayedRevision,
+      prepared: fieldVectorPreparedRevision,
+      received: fieldVectorPayloadRevisionString,
+      requested: fieldVectorRevisionString,
+    });
+  }, [
+    fieldVectorDisplayedRevision,
+    fieldVectorPayloadRevisionString,
+    fieldVectorPreparedRevision,
+    fieldVectorRevisionString,
+  ]);
   const hslReferenceVisible = resolveHslReferenceVisible(
     commandState.widgets.hslReferenceMode,
     vectorColorMode,

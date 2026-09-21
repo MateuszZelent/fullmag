@@ -327,6 +327,15 @@ pub fn table_column_meta(column: &str) -> Option<TableColumnMeta> {
             "float",
         ),
         "e_ani" => ("e_ani", "E ani", "J", "energy", None, Some("sum"), "float"),
+        "e_rotated_dmi" => (
+            "e_rotated_dmi",
+            "E rotated DMI",
+            "J",
+            "energy",
+            None,
+            Some("sum"),
+            "float",
+        ),
         "e_dmi" => ("e_dmi", "E dmi", "J", "energy", None, Some("sum"), "float"),
         "e_total" => (
             "e_total",
@@ -448,6 +457,7 @@ pub fn table_column_value(stats: &StepStats, column: &str) -> Result<f64, String
         "e_ext" => stats.e_ext,
         "e_drive" => stats.e_drive,
         "e_ani" => stats.e_ani,
+        "e_rotated_dmi" => stats.e_rotated_dmi,
         "e_dmi" => stats.e_dmi,
         "e_total" => stats.e_total,
         "max_dm_dt" => stats.max_dm_dt,
@@ -706,6 +716,25 @@ mod tests {
         let mut step = stats(1, 1e-12);
         step.e_drive = -7.5e-20;
         assert_eq!(table_column_value(&step, "e_drive").unwrap(), -7.5e-20);
+    }
+
+    #[test]
+    fn rotated_dmi_energy_is_a_supported_table_quantity() {
+        let config = TableAutosaveConfig::from_ir(&fullmag_ir::TableAutosaveIR {
+            kind: "table_autosave".to_string(),
+            table_id: DEFAULT_TABLE_ID.to_string(),
+            sample_period_s: Some(1e-12),
+            sample_period_policy: None,
+            resolved_sample_period_s: None,
+            every_steps: None,
+            quantities: vec!["e_rotated_dmi".to_string()],
+            expressions: Vec::new(),
+        })
+        .expect("rotated DMI energy should be accepted");
+        assert_eq!(config.columns[0].quantity_id, "e_rotated_dmi");
+        let mut step = stats(1, 1e-12);
+        step.e_rotated_dmi = 4.0e-20;
+        assert_eq!(table_column_value(&step, "e_rotated_dmi").unwrap(), 4.0e-20);
     }
 
     #[test]

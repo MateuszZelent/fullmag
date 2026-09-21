@@ -54,6 +54,8 @@ export interface ChartRenderResultSelectionRef {
 }
 
 export interface ChartRenderSeries {
+  /** Stable palette slot supplied by the model builder when visibility is filtered. */
+  colorIndex?: number;
   id: string;
   kind: "line" | "scatter";
   label: string;
@@ -244,6 +246,19 @@ function* iterateXValues(series: readonly ChartRenderSeries[]): Iterable<number>
   }
 }
 
+function chartSeriesColor(
+  series: ChartRenderSeries,
+  visibleIndex: number,
+  palette: readonly string[],
+): string | undefined {
+  if (palette.length === 0) return undefined;
+  const explicitIndex = Number.isInteger(series.colorIndex) && series.colorIndex! >= 0
+    ? series.colorIndex!
+    : null;
+  const index = explicitIndex ?? visibleIndex;
+  return palette[index % palette.length];
+}
+
 /**
  * Converts a neutral ChartRenderModel to ECharts options.
  *
@@ -252,6 +267,7 @@ function* iterateXValues(series: readonly ChartRenderSeries[]): Iterable<number>
  * - `sampling` is NEVER set; data is already server-decimated (minmax_lttb).
  * - The external Fullmag legend is the single series-visibility owner.
  * - Tooltip formatter is plain-text only; no raw HTML from series names.
+ * - Series colors honor explicit model slots, so external legend filtering cannot renumber them.
  * - Axis labels use auto-scaling: SI prefix is extracted from data range and moved
  *   to the axis name. Tick labels become clean numbers (1, 2, 3 ns, not 1e-9, 2e-9).
  * - Canvas receives resolved token values, never CSS variable strings.
@@ -309,23 +325,27 @@ export function chartRenderModelToEChartsOption(
     // ECharts built-in legend is DISABLED to prevent independent toggling.
     legend: { show: false },
 
-    series: model.series.map((series) => ({
-      // NOTE: No `sampling` property — data is already server-decimated.
-      connectNulls: false,
-      data: series.points.map((point) => [point.x, point.y, point.rowIndex]),
-      emphasis: {
-        lineStyle: { width: 3 },
-        scale: false,
-      },
-      lineStyle: { width: 1.5 },
-      name: seriesDisplayName(series, yScales),
-      progressive: 0,
-      showSymbol: series.kind === "scatter",
-      symbol: series.kind === "scatter" ? "circle" : "none",
-      symbolSize: 4,
-      type: series.kind,
-      yAxisIndex: series.yAxis,
-    })),
+    series: model.series.map((series, visibleIndex) => {
+      const color = chartSeriesColor(series, visibleIndex, palette);
+      return {
+        // NOTE: No `sampling` property — data is already server-decimated.
+        connectNulls: false,
+        data: series.points.map((point) => [point.x, point.y, point.rowIndex]),
+        emphasis: {
+          lineStyle: { color, width: 3 },
+          scale: false,
+        },
+        itemStyle: color ? { color } : undefined,
+        lineStyle: { color, width: 1.5 },
+        name: seriesDisplayName(series, yScales),
+        progressive: 0,
+        showSymbol: series.kind === "scatter",
+        symbol: series.kind === "scatter" ? "circle" : "none",
+        symbolSize: 4,
+        type: series.kind,
+        yAxisIndex: series.yAxis,
+      };
+    }),
 
     tooltip: {
       backgroundColor: bgSurface,

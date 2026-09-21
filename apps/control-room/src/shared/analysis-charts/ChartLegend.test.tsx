@@ -74,4 +74,21 @@ describe("ChartLegend", () => {
 
     expect(received).toEqual([]);
   });
+
+  it("restores the full owning catalog after Shift+solo from a filtered view", () => {
+    let received: string[] | null = null;
+    const legend = ChartLegend({
+      availableSeriesIds: ["s1", "s2"],
+      items: [dummyItems[0]!],
+      onSelectedSeriesIdsChange: (next) => {
+        received = next;
+      },
+      selectedSeriesIds: ["s1"],
+    }) as ReactElement<{
+      children: ReactElement<{ onClick: (event: { shiftKey: boolean }) => void }>[];
+    }>;
+    legend.props.children[0]!.props.onClick({ shiftKey: true });
+
+    expect(received).toEqual(["s1", "s2"]);
+  });
 });

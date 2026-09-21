@@ -1438,6 +1438,7 @@ export default function Viewport3DModule({
       : null,
     resourceCounts,
     selection,
+    tracker,
   });
   const frozenSpinsPreviewId = useFrozenSpinsActivePreviewId();
   const frozenSpinsPreview = useFrozenSpinsPreviewResource(

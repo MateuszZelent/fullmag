@@ -17,9 +17,14 @@
 pub mod capture;
 pub mod cas;
 pub mod communication_policy;
+mod durability;
 pub mod fms;
+pub mod mesh_operation;
+pub mod reachability;
+pub mod repository_path;
 pub mod store;
 pub mod types;
+mod writer;
 
 // Re-export the most commonly used items at crate root.
 pub use capture::{
@@ -27,6 +32,13 @@ pub use capture::{
     CheckpointSnapshotProvider,
 };
 pub use cas::{hex_sha256, CasStore};
-pub use fms::{inspect_fms, pack_fms, preflight_fms, unpack_fms, FmsPreflight, PackOptions};
-pub use store::SessionStore;
+pub use durability::{
+    durability_capability, DirectorySyncCapability, DurabilityCapability, PowerLossCapability,
+    PublicationUncertain,
+};
+pub use fms::{
+    inspect_fms, pack_fms, pack_fms_file, preflight_fms, unpack_fms, FmsPreflight, PackOptions,
+};
+pub use store::{GcPlan, SessionStore};
 pub use types::*;
+pub use writer::WriteTransaction;

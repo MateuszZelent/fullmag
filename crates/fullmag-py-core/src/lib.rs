@@ -1,5 +1,6 @@
 use fullmag_engine::fem::MeshTopology;
 use fullmag_engine::fem_solution_transfer::{normalize_unit_vectors, transfer_fem_field_to_grid};
+use fullmag_application::{DocumentMode, FileProjectRepository, ProjectApplication, ProjectSource};
 use fullmag_ir::{
     validate_mesh_for_execution, BackendPlanIR, MeshIR, ProblemIR, TextureMappingIR,
     TextureProjectionMode,
@@ -27,6 +28,45 @@ fn validate_mesh_ir_json(mesh_ir_json: &str) -> PyResult<bool> {
     validate_mesh_for_execution(&mesh)
         .map_err(|errors| PyValueError::new_err(errors.join("; ")))?;
     Ok(true)
+}
+
+/// Open a `.fms` project definition through the shared application boundary.
+///
+/// This is deliberately an inspect/open operation: it parses the project and
+/// migration report without restoring a runtime session or starting a solve.
+#[pyfunction]
+fn open_project_json(path: String) -> PyResult<String> {
+    let mut application = ProjectApplication::new(FileProjectRepository::new());
+    let opened = application
+        .open(ProjectSource::Path(PathBuf::from(&path)))
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    let view = opened.view;
+    let mode = match view.mode {
+        DocumentMode::ReadWrite => serde_json::json!({"kind": "read_write"}),
+        DocumentMode::ReadOnly { reason } => {
+            serde_json::json!({"kind": "read_only", "reason": reason})
+        }
+    };
+    let migration = serde_json::json!({
+        "source_schema": view.migration.source_schema,
+        "target_schema": view.migration.target_schema,
+        "migrated": view.migration.migrated,
+        "can_write": view.migration.can_write,
+        "warnings": view.migration.warnings,
+        "preserved_paths": view.migration.preserved_paths,
+    });
+    serde_json::to_string(&serde_json::json!({
+        "operation": "open_project",
+        "path": path,
+        "project_id": view.project_id,
+        "schema_version": view.schema_version,
+        "revision": view.revision,
+        "dirty": view.dirty,
+        "mode": mode,
+        "migration": migration,
+        "runtime": "untouched",
+    }))
+    .map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
 /// Run a ProblemIR JSON through the reference FDM runner.
@@ -264,6 +304,7 @@ fn extract_fem_mesh_ir_json(ir_json: &str) -> PyResult<Option<String>> {
 fn fullmag_py_core(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(validate_ir_json, module)?)?;
     module.add_function(wrap_pyfunction!(validate_mesh_ir_json, module)?)?;
+    module.add_function(wrap_pyfunction!(open_project_json, module)?)?;
     module.add_function(wrap_pyfunction!(run_problem_json, module)?)?;
     module.add_function(wrap_pyfunction!(sample_preset_texture_v2_json, module)?)?;
     module.add_function(wrap_pyfunction!(resample_fem_to_fdm_grid_json, module)?)?;

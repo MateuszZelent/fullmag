@@ -101,11 +101,63 @@ algorytmicznego; `ExactResume` wymaga pełnego checkpointu wszystkich nośników
 waliduje integralność i buduje kandydacki runtime, a następnie wykonuje dokładnie
 jeden atomowy swap. Porażka pozostawia aktywną sesję bez zmian.
 
+### D-07a. `OpenDocument` nie jest `RestoreRuntime`
+
+Otwarcie dokumentu CAE jest operacją authoringową. `OpenDocument` odczytuje i
+waliduje manifest, schema, definicje, studies oraz zachowane nieznane pola i
+asset references. Może otworzyć niekompletny draft bez GPU, meshera i solwera.
+Nie wykonuje kodu skryptu, nie uruchamia `PreparationPlan`, nie buduje mesha,
+nie wywołuje `Compute` i nie zmienia `LiveRuntime` bieżącej sesji.
+
+`OpenDocument` może utworzyć nowy kontekst dokumentu albo read-only projection
+do istniejącej sesji, ale nie nadaje dokumentowi prawa do publikowania wyniku.
+Hostowe ścieżki build storage, cache i runtime nie są częścią tożsamości
+otwieranego dokumentu.
+
+### D-07b. Jawny `RestoreRuntime`
+
+Odtworzenie runtime'u jest odrębną, jawnie żądaną operacją. Wymaga wybranego
+checkpointu, klasy restore i zgodności wszystkich primary carriers, integratora,
+RNG, domeny, planu, ABI, precision oraz engine/runtime identity. Operacja buduje
+kandydacki `LiveRuntime` poza aktywnym runtime'em i wykonuje jeden atomowy swap
+tylko po pełnej walidacji. Brak wymaganej części daje typed error i nie zmienia
+aktywnego runtime'u.
+
+`LogicalResume` tworzy nową gałąź z jawną utratą stanu algorytmicznego; nie jest
+ukrytym `ExactResume`. `ExactResume` jest dostępny wyłącznie dla checkpointu,
+który przechowuje wymagany stan kontynuacji i pasuje do bieżącego kontraktu.
+`OpenDocument` nie może samoczynnie awansować do żadnej z tych klas.
+
 ### D-08. Fail-closed zamiast rekonstrukcji
 
 Brak primary carriera daje `unsupported_missing_primary_state` z listą braków,
 nigdy przybliżenie ani zero. Dotyczy to między innymi RNG/thermal,
 charge/spin, dynamicznego Oersteda i nośników mechanicznych.
+
+### D-09. Demand obserwacji podczas aktywnego stage
+
+Widoczne odbiorniki zgłaszają sumę wymaganych quantity przez istniejący,
+wersjonowany display-sync. Wybór jednej quantity nie unieważnia potrzeb innych
+obiektów. Zmiana komponentu lub palety pozostaje operacją prezentacji.
+
+Aktywna pętla solvera obsługuje demand na granicy zaakceptowanego stanu przez
+rezydentny materializer/cache swojego lane'u. Ogólna kolejka `compute_fields`
+nie jest harmonogramem obserwacji podczas run/relax. Nie powstaje drugi runtime,
+owner fizyki ani ścieżka fallbacku urządzenia.
+
+Transfer do publikacji używa ograniczonego handoff: skończony budżet pamięci,
+ograniczona częstotliwość i batch w locie, zastępowanie przestarzałego demand,
+jawny błąd obserwacji. Snapshot zachowuje capture step/time/revision niezależnie
+od kroku odbioru. Worker kończy pracę przed zniszczeniem natywnego kontekstu.
+Pełne pola trafiają do istniejącego binary data plane; próbkowany preview nie
+może podszywać się pod pełne dane. Dostępność kontraktu nie jest dowodem
+implementacji adaptera ani kwalifikacji każdego lane'u.
+
+Rozwinięcie implementacyjne i stan bramek:
+`docs/superpowers/plans/2026-09-15-live-observation-demand.md`.
+Rollback handoff zachowuje bezpieczną obsługę idle i jawny brak live danych;
+nie przywraca przebudowy runtime per kliknięcie ani fałszywej publikacji starego
+pola jako nowego.
 
 ## Konsekwencje i obowiązki implementacyjne
 
@@ -118,6 +170,8 @@ charge/spin, dynamicznego Oersteda i nośników mechanicznych.
   drugi codec.
 - Availability zależy od katalogu, fizyki, planu, lane'u i primary carriers,
   nie od materialization/cache.
+- Otwarcie dokumentu, przygotowanie obliczenia i restore runtime'u są osobnymi
+  use case'ami oraz osobnymi punktami provenance.
 - Source presence, executability, validation i production qualification są
   raportowane osobno. Task 0 nie promuje żadnej capability.
 
@@ -145,7 +199,9 @@ autosave descriptors, zasoby HTTP v2 i transakcyjne `.fms`. Stare komendy są
 aliasami wyłącznie do czasu migracji wszystkich klientów; kryterium usunięcia
 to brak konsumentów oraz przejście contract guards. Rollback implementacji nie
 może przywrócić eager terminal-all-fields jako kontraktu ani historycznego
-swapu `LiveRuntime`.
+swapu `LiveRuntime`. Reader `OpenDocument` może zostać wdrożony przed writerem
+i przed `RestoreRuntime`; rollback nie może zamienić otwarcia dokumentu w
+niejawny restore ani uruchomić solvera.
 
 ## Testy i walidacja
 

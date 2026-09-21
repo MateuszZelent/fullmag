@@ -134,6 +134,9 @@ const char *first_unsupported_elementwise_ms_cpu_owner(const Context &ctx)
     if (ctx.dmi.interfacial_enabled) {
         return "interfacial DMI";
     }
+    if (ctx.dmi.rotated_interfacial_enabled) {
+        return "rotated interfacial DMI";
+    }
     if (ctx.dmi.bulk_enabled) {
         return "bulk DMI";
     }

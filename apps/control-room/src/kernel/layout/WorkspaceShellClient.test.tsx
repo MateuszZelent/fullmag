@@ -72,7 +72,10 @@ describe("WorkspaceShellClient session collection gate", () => {
       await settle();
       expect(findByAttribute(container, "data-state", "session-error")).toBeTruthy();
       expect(container.textContent).toContain("Session list unavailable");
-      expect(container.textContent).not.toContain("Create a simulation");
+      expect(container.textContent).toContain("Create a simulation");
+      expect(container.textContent).toContain("New project");
+      expect(container.textContent).toContain("Open project");
+      expect(container.textContent).toContain("Project files remain available independently");
       expect(currentStatus).not.toHaveBeenCalled();
     } finally {
       await dispose();

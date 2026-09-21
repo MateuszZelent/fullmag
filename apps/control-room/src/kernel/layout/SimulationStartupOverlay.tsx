@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { Button } from "@/shared/ui/Button";
 import { Progress } from "@/shared/ui/Progress";
@@ -31,6 +37,19 @@ import {
 import { useLayoutSelector } from "./useLayout";
 
 export type SimulationStartupOverlayState = SimulationPreparationViewModel;
+
+export const WorkspaceStartupInteractionContext = createContext(false);
+
+export function useWorkspaceStartupInteractionBlocked(): boolean {
+  return useContext(WorkspaceStartupInteractionContext);
+}
+
+export function shouldMountWorkspaceChildren(
+  startupVisible: boolean,
+  childrenMounted: boolean,
+): boolean {
+  return childrenMounted || !startupVisible;
+}
 
 interface SimulationStartupOverlayOptions {
   readonly allowMissingSessionSmoke?: boolean;
@@ -120,10 +139,16 @@ export function SimulationStartupOverlayView({
     state.progress.kind === "determinate" ? state.progress.value : undefined;
 
   return (
-    <div className="fm-simulation-startup" data-state={state.kind}>
+    <div
+      className="fm-simulation-startup"
+      data-interaction-state="blocked"
+      data-state={state.kind}
+    >
       <section
         aria-labelledby="fm-simulation-startup-title"
         className="fm-simulation-startup__panel"
+        role={state.failure ? undefined : "dialog"}
+        aria-modal={state.failure ? undefined : "true"}
       >
         <header className="fm-simulation-startup__header">
           <div className="fm-simulation-startup__heading-row">
@@ -213,7 +238,7 @@ export function SimulationStartupOverlayView({
 
         <footer className="fm-simulation-startup__footer">
           <p>
-            The workspace opens after solver initialization completes.
+            Simulation controls will be available when initialization finishes.
           </p>
           {(state.failure && state.preparation) || state.kind === "resource-error" ? (
             <SimulationPreparationFailureActions
@@ -594,42 +619,60 @@ function preparationDuringRealtimeDisruption(
 export function WorkspaceStartupGateView({
   children,
   state,
+  preserveMountedWorkspace = false,
 }: {
   children: ReactNode;
   state: SimulationStartupOverlayState;
+  /** Keep the workspace mounted after its first successful preparation. */
+  preserveMountedWorkspace?: boolean;
 }) {
-  if (state.isVisible) {
-    return (
-      <>
-        <SimulationStartupOverlayView state={state} />
-        <SimulationStartupDiagnosticsDock />
-      </>
-    );
-  }
-
-  return (
-    <>
-      {children}
-      <SimulationStartupOverlayView state={state} />
-    </>
+  const [childrenMounted, setChildrenMounted] = useState(() => !state.isVisible);
+  const shouldMountChildren = shouldMountWorkspaceChildren(
+    state.isVisible,
+    preserveMountedWorkspace && childrenMounted,
   );
-}
-
-function SimulationStartupDiagnosticsDock() {
-  const isVisible = useLayoutSelector(
+  const diagnosticsRequested = useLayoutSelector(
     (layout) =>
       layout.panelVisible.bottom &&
       layout.focusedSlot === "panel-bottom" &&
       layout.activeBottomPanelTab === "diagnostics",
   );
 
+  useEffect(() => {
+    if (!preserveMountedWorkspace || !shouldMountChildren || childrenMounted) {
+      return;
+    }
+
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setChildrenMounted(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [childrenMounted, preserveMountedWorkspace, shouldMountChildren]);
+
+  return (
+    <WorkspaceStartupInteractionContext.Provider
+      value={state.isVisible && shouldMountChildren}
+    >
+      {shouldMountChildren ? children : null}
+      {!shouldMountChildren && diagnosticsRequested ? (
+        <SimulationStartupDiagnosticsDock />
+      ) : null}
+      <SimulationStartupOverlayView state={state} />
+    </WorkspaceStartupInteractionContext.Provider>
+  );
+}
+
+function SimulationStartupDiagnosticsDock() {
   return (
     <aside
-      aria-hidden={!isVisible}
-      className="fm-simulation-startup__diagnostics-dock"
-      hidden={!isVisible}
+      aria-label="Simulation diagnostics"
+      className="fm-workspace-bottom-panel"
+      data-startup-diagnostics="visible"
     >
-      {isVisible ? <SlotHost slotId="panel-bottom" /> : null}
+      <SlotHost slotId="panel-bottom" />
     </aside>
   );
 }

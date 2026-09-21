@@ -165,6 +165,39 @@ describe("RealtimeClient", () => {
     expect(statuses.at(-1)).toBe("idle");
   });
 
+  it("notifies the kernel only after an established socket reconnects", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const sockets: FakeWebSocket[] = [];
+    const reconnectCallbacks: Array<() => void> = [];
+    const reconnected = vi.fn();
+    const client = new RealtimeClient({
+      bridge: new RealtimeInvalidationBridge(resources),
+      createSocket: () => {
+        const socket = new FakeWebSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      onReconnected: reconnected,
+      scheduleReconnect: (callback) => {
+        reconnectCallbacks.push(callback);
+        return () => {};
+      },
+      url: `ws://127.0.0.1:8765${SESSION_EVENTS_WS_PATH}`,
+    });
+
+    client.connect();
+    sockets[0].emit("open", "");
+    expect(reconnected).not.toHaveBeenCalled();
+
+    sockets[0].emit("close", "");
+    reconnectCallbacks[0]();
+    sockets[1].emit("open", "");
+    expect(reconnected).toHaveBeenCalledTimes(1);
+
+    client.close();
+  });
+
   it("reconnects with the last processed sequence cursor", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);

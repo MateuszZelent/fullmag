@@ -412,11 +412,15 @@ impl ExchangeLlgProblem {
     pub fn dmi_field(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
         self.ensure_state_matches_grid(state)?;
         let interfacial = self.interfacial_dmi_field(state.magnetization());
+        let rotated = self.rotated_interfacial_dmi_field(state.magnetization());
         let bulk = self.bulk_dmi_field(state.magnetization());
         Ok(interfacial
             .iter()
+            .zip(rotated.iter())
             .zip(bulk.iter())
-            .map(|(interfacial, bulk)| crate::add(*interfacial, *bulk))
+            .map(|((interfacial, rotated), bulk)| {
+                crate::add(crate::add(*interfacial, *rotated), *bulk)
+            })
             .collect())
     }
 

@@ -38,7 +38,7 @@ describe("LiveChartsModule", () => {
       id: `series-${index}`, label: unit, points: [{ rowIndex: 0, x: 0, y: index + 1 }], quantity: unit,
       source: { kind: "data.table.rows" as const, resourceKey: "resource", tableId: "default" }, status: "ready" as const, unit, xUnit: "1",
     }));
-    const html = renderToStaticMarkup(<LiveChartSurface fitRequest={0} onChartSelected={() => undefined} onExport={() => undefined} onPointSelected={() => undefined} onRangeSelected={() => undefined} onRequestedExportHandled={() => undefined} onSeriesChange={() => undefined} presentation={{ kind: "ready", revision: 1 }} requestedExportFormat={null} series={series} selectedSeriesIds={series.map((item) => item.id)} title="Custom" xAxisLabel="step" />);
+    const html = renderToStaticMarkup(<LiveChartSurface fitRequest={0} onChartSelected={() => undefined} onExport={() => undefined} onPointSelected={() => undefined} onRangeSelected={() => undefined} onRequestedExportHandled={() => undefined} onSeriesChange={() => undefined} presentation={{ kind: "ready", revision: 1 }} series={series} selectedSeriesIds={series.map((item) => item.id)} title="Custom" xAxisLabel="step" />);
     expect(html).toContain("Custom — A/m");
     expect(html).toContain("Custom — J");
     expect(html).toContain("Custom — s");
@@ -55,7 +55,6 @@ describe("LiveChartsModule", () => {
         onRequestedExportHandled={() => undefined}
         onSeriesChange={() => undefined}
         presentation={{ kind: "initial-loading" }}
-        requestedExportFormat={null}
         series={[]}
         selectedSeriesIds={[]}
         title="Magnetization"

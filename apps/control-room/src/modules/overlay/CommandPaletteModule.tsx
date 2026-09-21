@@ -4,10 +4,6 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
-import {
-  isMeshBuildConfirmCommandId,
-  requestMeshBuildConfirmation,
-} from "@/kernel/authoring/meshBuildConfirmation";
 import type { CommandActiveResource } from "@/kernel/commands/commandTypes";
 import type {
   CommandContext,
@@ -309,15 +305,6 @@ function OpenCommandPalette({
         onClose={close}
         onOpenCommandDetail={setSelectedCommandId}
         onExecute={(commandId) => {
-          if (isMeshBuildConfirmCommandId(commandId)) {
-            requestMeshBuildConfirmation(kernel.bus, {
-              commandId,
-              source: "palette",
-              sourceDetail: "command-palette",
-            });
-            close();
-            return;
-          }
           void executePaletteCommand(
             kernel.commands,
             commandId,

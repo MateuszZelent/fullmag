@@ -509,6 +509,13 @@ class BuildExecutorTests(unittest.TestCase):
         with self.assertRaises(executor.CoordinatorError):
             executor.attest_build_container(inspected, journal)
 
+    def test_supported_profiles_include_current_contracts_and_slepc(self):
+        self.assertEqual(('fem', 'cpu'), executor.profile_lane('fem-cpu-current-contracts-v1'))
+        self.assertEqual(('fem', 'gpu'), executor.profile_lane('fem-gpu-current-contracts-v1'))
+        self.assertEqual(('fem', 'cpu'), executor.profile_lane('fem-cpu-slepc-modal-v1'))
+        with self.assertRaises(ValueError):
+            executor.profile_lane('nonexistent-profile')
+
 
 if __name__ == '__main__':
     unittest.main()

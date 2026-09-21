@@ -1132,6 +1132,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "fontdue",
+ "fullmag-application",
  "fullmag-authoring",
  "fullmag-build-info",
  "fullmag-ir",
@@ -1153,6 +1154,18 @@ dependencies = [
  "utoipa",
  "utoipa-swagger-ui",
  "uuid",
+]
+
+[[package]]
+name = "fullmag-application"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "uuid",
+ "zip",
 ]
 
 [[package]]
@@ -1191,6 +1204,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "fullmag-application",
  "fullmag-build-info",
  "fullmag-engine",
  "fullmag-ir",
@@ -1209,12 +1223,15 @@ dependencies = [
 name = "fullmag-desktop"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "fullmag-application",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-shell",
+ "tempfile",
  "url",
 ]
 
@@ -1280,6 +1297,7 @@ dependencies = [
 name = "fullmag-py-core"
 version = "0.1.0"
 dependencies = [
+ "fullmag-application",
  "fullmag-engine",
  "fullmag-ir",
  "fullmag-plan",

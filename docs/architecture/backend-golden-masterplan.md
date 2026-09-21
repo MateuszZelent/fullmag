@@ -660,16 +660,44 @@ własnością wykonania i muszą przejść bez reinterpretacji przez IR, API i U
 
 ## 8. Architektura FDM
 
-FDM ma dwie różne role, które muszą pozostać jawne:
+FDM ma dwa poziomy własności, które muszą pozostać jawne:
 
-- natywny kompilowany backend FDM pod `backends/fdm`,
-- wsparcie Rust CPU/reference używane do walidacji, uruchomień bez GPU i
-  parity checks.
+- strategiczny kompilowany backend FDM pod `backends/fdm`, który jest miejscem
+  produkcyjnego CUDA oraz przyszłych natywnych realizacji CPU;
+- bieżąca Rustowa ścieżka `FdmEngine::CpuReference`, używana jako CPU
+  execution route i trusted reference oracle.
 
-Natywny backend FDM jest produkcyjną ścieżką kompilowaną. Kod Rust CPU reference
-nie może być przedstawiany jako zamiennik natywnego FDM. Jeśli funkcja jest
-potrzebna w obu miejscach, najpierw definiujemy wspólny kontrakt, a potem
-realizujemy go osobno w backendzie natywnym i lane referencyjnym.
+W repozytorium nie ma jeszcze osobnego, wystawionego przez `FdmEngine`,
+kompilowanego native CPU solvera pełnego FDM LLG. Zgodnie z ADR 0032 nie wolno
+wyprowadzać jego istnienia z samego katalogu `backends/fdm` ani zastępować
+`CpuReference` przez zmianę nazwy wrappera. Bieżące mapowanie zachowuje:
+
+| Requested / resolved lane | Engine | Właściciel bieżącej realizacji |
+|---|---|---|
+| FDM CPU / `auto -> cpu` | `CpuReference` | Rust reference/current CPU route |
+| FDM GPU | `CudaFdm` | `backends/fdm` native CUDA |
+
+`CpuReference` może być używany do wykonania CPU i walidacji, ale jego
+provenance musi pozostać jawne. Przyszły native CPU wymaga osobnego engine,
+ABI, capability, requested/resolved/executed provenance, parity i
+workload-scoped qualification. Nie jest skutkiem tego planu.
+
+Jeśli funkcja jest potrzebna w obu miejscach, najpierw definiujemy wspólny
+kontrakt, a potem realizujemy go osobno w backendzie natywnym i lane
+referencyjnym. Forced GPU nadal kończy się błędem, gdy CUDA nie jest dostępne;
+nie może po cichu użyć `CpuReference`.
+
+### 8.1. Bieżące rozstrzygnięcie FDM CPU (ADR 0032)
+
+`crates/fullmag-runner/src/solver_runtime/engine.rs::FdmEngine` oraz
+`crates/fullmag-runner/src/solvers/fdm/execute.rs::execute_fdm` są źródłem
+bieżącego dispatchu, dopóki nie zostanie przyjęta późniejsza decyzja. Runner
+publikuje requested, resolved i executed engine oraz fallback reason; `auto`
+nie znika z provenance, a jawne `gpu` nie może rozwiązać się do CPU.
+
+Status capability i status physics validation są niezależne. Wpis o
+`CpuReference` albo `CudaFdm` nie jest dowodem native CPU ownership, parity ani
+production qualification.
 
 Dopracowania natywnego FDM CUDA są dozwolone, ale powinny być wąskie:
 
@@ -790,6 +818,21 @@ Własność implementacji:
 - właściciele GPU demag żyją pod `backends/fem/gpu/cuda/demag_poisson`
   albo pod przyszłym jawnym natywnym właścicielem GPU BEM/FMM,
 - ścisłe requesty GPU nie mogą po cichu spadać do CPU Poisson.
+
+Bieżący Fredkin-Koehler/FEM-BEM ma rozpoznawalny wariant w `ProblemIR`,
+plannerze i native provenance, a istniejący opis capability `Demag` obejmuje
+body-only FK CPU source path. Publiczna capability projection runnera jest
+jednak Poisson-focused (`crates/fullmag-runner/src/capabilities.rs`), więc
+uzgodnienie planner/runtime/resource reporting pozostaje **NOT VERIFIED** w
+P0. Brak FK w tej projekcji nie jest dowodem braku legalnej realizacji i nie
+upoważnia do wyłączenia istniejącej ścieżki planner/native; do czasu
+reconciliacji zachowuje się bieżące zachowanie i raportuje rozbieżność.
+
+CPU i GPU muszą mieć osobne dowody źródłowe oraz osobne receipts: CPU
+`hierarchical_h2`, GPU `device_hypre_fem_bem` (jeżeli dany branch je wybierze).
+Żaden z tych sygnałów nie jest sam w sobie parity, physics validation ani
+production qualification. Generic BEM/FMM pozostają `unsupported`/deferred
+zgodnie z plannerem.
 
 ## 10. Polityka Refaktoru Runnera
 

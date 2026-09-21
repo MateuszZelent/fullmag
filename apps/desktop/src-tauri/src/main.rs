@@ -62,6 +62,10 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::open_file_dialog,
+            commands::open_project_dialog,
+            commands::open_project_archive_dialog,
+            commands::open_project_path,
+            commands::save_project_archive,
             commands::reveal_in_file_manager,
             commands::get_app_config,
         ])

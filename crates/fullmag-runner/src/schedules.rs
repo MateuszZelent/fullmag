@@ -54,6 +54,7 @@ pub(crate) fn collect_scalar_schedules(
                     | "E_demag"
                     | "E_ext"
                     | "E_drive"
+                    | "E_rotated_dmi"
                     | "E_total"
                     | "time"
                     | "step"

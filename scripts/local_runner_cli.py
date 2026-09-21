@@ -29,6 +29,7 @@ def main(argv=None):
     sub.add_parser('retention-plan')
     container_config = sub.add_parser('container-configure')
     container_config.add_argument('--image-id', required=True)
+    container_config.add_argument('--port', type=int, default=None)
     profile_activation = container_config.add_mutually_exclusive_group()
     profile_activation.add_argument('--enable-current-contracts', action='store_true')
     profile_activation.add_argument('--enable-slepc-modal', action='store_true')
@@ -88,6 +89,7 @@ def main(argv=None):
                     layout,
                     args.image_id,
                     owner=owner,
+                    port=args.port,
                     enable_current_contracts=args.enable_current_contracts,
                     enable_slepc_modal=args.enable_slepc_modal,
                 )

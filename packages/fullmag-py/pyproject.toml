@@ -21,6 +21,9 @@ meshing = [
     "scipy>=1.10,<2",
     "trimesh>=4.2,<5",
 ]
+figures = [
+    "Pillow>=10,<13",
+]
 
 [dependency-groups]
 dev = [

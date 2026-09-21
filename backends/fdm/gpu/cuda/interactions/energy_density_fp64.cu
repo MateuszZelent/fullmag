@@ -90,6 +90,7 @@ __global__ void energy_density_kernel(
     const double *kc2_field,
     const double *kc3_field,
     int include_interfacial_dmi,
+    int include_rotated_interfacial_dmi,
     int include_bulk_dmi,
     int kind,
     double ms,
@@ -106,6 +107,7 @@ __global__ void energy_density_kernel(
     double evaluation_time_s,
     double drive_scale,
     double d_interfacial,
+    double d_rotated_interfacial,
     double d_bulk,
     double inv_2dx,
     double inv_2dy,
@@ -197,8 +199,10 @@ __global__ void energy_density_kernel(
         }
     }
 
-    if ((wants_total || kind == FULLMAG_FDM_OBSERVABLE_EDEN_DMI) &&
-        (include_interfacial_dmi || include_bulk_dmi)) {
+    const bool wants_rotated_dmi =
+        kind == FULLMAG_FDM_OBSERVABLE_EDEN_ROTATED_DMI;
+    if ((wants_total || kind == FULLMAG_FDM_OBSERVABLE_EDEN_DMI || wants_rotated_dmi) &&
+        (include_interfacial_dmi || include_rotated_interfacial_dmi || include_bulk_dmi)) {
         const int flat = static_cast<int>(index);
         const int plane = nx * ny;
         const int iz = flat / plane;
@@ -211,6 +215,14 @@ __global__ void energy_density_kernel(
         int yp = neighbor_index(iy, ny, nx, flat, 1, periodic_y);
         int zm = neighbor_index(iz, nz, plane, flat, -1, periodic_z);
         int zp = neighbor_index(iz, nz, plane, flat, 1, periodic_z);
+        const bool has_xm = (periodic_x || ix > 0) &&
+            (!has_active_mask || active_mask[xm] != 0);
+        const bool has_xp = (periodic_x || ix + 1 < nx) &&
+            (!has_active_mask || active_mask[xp] != 0);
+        const bool has_ym = (periodic_y || iy > 0) &&
+            (!has_active_mask || active_mask[ym] != 0);
+        const bool has_yp = (periodic_y || iy + 1 < ny) &&
+            (!has_active_mask || active_mask[yp] != 0);
         if (has_active_mask) {
             if (active_mask[xm] == 0) xm = flat;
             if (active_mask[xp] == 0) xp = flat;
@@ -220,14 +232,44 @@ __global__ void energy_density_kernel(
             if (active_mask[zp] == 0) zp = flat;
         }
 
-        if (include_interfacial_dmi) {
+        if (include_interfacial_dmi && !wants_rotated_dmi) {
             const double dmx_dx = (static_cast<double>(mx[xp]) - static_cast<double>(mx[xm])) * inv_2dx;
             const double dmy_dy = (static_cast<double>(my[yp]) - static_cast<double>(my[ym])) * inv_2dy;
             const double dmz_dx = (static_cast<double>(mz[xp]) - static_cast<double>(mz[xm])) * inv_2dx;
             const double dmz_dy = (static_cast<double>(mz[yp]) - static_cast<double>(mz[ym])) * inv_2dy;
             dmi_density += d_interfacial * (mmz * (dmx_dx + dmy_dy) - mmx * dmz_dx - mmy * dmz_dy);
         }
-        if (include_bulk_dmi) {
+        if (include_rotated_interfacial_dmi) {
+            if (has_xp) {
+                const double right_x = static_cast<double>(mx[xp]);
+                const double right_z = static_cast<double>(mz[xp]);
+                dmi_density += d_rotated_interfacial * inv_2dx *
+                    ((mmz + right_z) * 0.5 * (right_x - mmx) -
+                     (mmx + right_x) * 0.5 * (right_z - mmz));
+            }
+            if (has_xm) {
+                const double left_x = static_cast<double>(mx[xm]);
+                const double left_z = static_cast<double>(mz[xm]);
+                dmi_density += d_rotated_interfacial * inv_2dx *
+                    ((left_z + mmz) * 0.5 * (mmx - left_x) -
+                     (left_x + mmx) * 0.5 * (mmz - left_z));
+            }
+            if (has_yp) {
+                const double right_x = static_cast<double>(mx[yp]);
+                const double right_y = static_cast<double>(my[yp]);
+                dmi_density += d_rotated_interfacial * inv_2dy *
+                    ((mmx + right_x) * 0.5 * (right_y - mmy) -
+                     (mmy + right_y) * 0.5 * (right_x - mmx));
+            }
+            if (has_ym) {
+                const double left_x = static_cast<double>(mx[ym]);
+                const double left_y = static_cast<double>(my[ym]);
+                dmi_density += d_rotated_interfacial * inv_2dy *
+                    ((left_x + mmx) * 0.5 * (mmy - left_y) -
+                     (left_y + mmy) * 0.5 * (mmx - left_x));
+            }
+        }
+        if (include_bulk_dmi && !wants_rotated_dmi) {
             const double dmz_dy = (static_cast<double>(mz[yp]) - static_cast<double>(mz[ym])) * inv_2dy;
             const double dmy_dz = (static_cast<double>(my[zp]) - static_cast<double>(my[zm])) * inv_2dz;
             const double dmx_dz = (static_cast<double>(mx[zp]) - static_cast<double>(mx[zm])) * inv_2dz;
@@ -247,8 +289,9 @@ __global__ void energy_density_kernel(
 }
 
 bool is_energy_density_observable(fullmag_fdm_observable observable) {
-    return observable >= FULLMAG_FDM_OBSERVABLE_EDEN_EX &&
-        observable <= FULLMAG_FDM_OBSERVABLE_EDEN_TOTAL;
+    return (observable >= FULLMAG_FDM_OBSERVABLE_EDEN_EX &&
+            observable <= FULLMAG_FDM_OBSERVABLE_EDEN_TOTAL) ||
+        observable == FULLMAG_FDM_OBSERVABLE_EDEN_ROTATED_DMI;
 }
 
 } // namespace
@@ -329,6 +372,7 @@ bool launch_energy_density_observable(
             ctx.kc2_field,
             ctx.kc3_field,
             ctx.has_interfacial_dmi ? 1 : 0,
+            ctx.has_rotated_interfacial_dmi ? 1 : 0,
             ctx.has_bulk_dmi ? 1 : 0,
             static_cast<int>(observable),
             ctx.Ms,
@@ -344,7 +388,7 @@ bool launch_energy_density_observable(
             ctx.cell_count,
             ctx.current_time,
             drive_scale,
-            ctx.D_interfacial, ctx.D_bulk,
+            ctx.D_interfacial, ctx.D_rotated_interfacial, ctx.D_bulk,
             0.5 / ctx.dx, 0.5 / ctx.dy, 0.5 / ctx.dz,
             ctx.periodic_x ? 1 : 0, ctx.periodic_y ? 1 : 0, ctx.periodic_z ? 1 : 0);
     } else {
@@ -394,6 +438,7 @@ bool launch_energy_density_observable(
             ctx.kc2_field,
             ctx.kc3_field,
             ctx.has_interfacial_dmi ? 1 : 0,
+            ctx.has_rotated_interfacial_dmi ? 1 : 0,
             ctx.has_bulk_dmi ? 1 : 0,
             static_cast<int>(observable),
             ctx.Ms,
@@ -409,7 +454,7 @@ bool launch_energy_density_observable(
             ctx.cell_count,
             ctx.current_time,
             drive_scale,
-            ctx.D_interfacial, ctx.D_bulk,
+            ctx.D_interfacial, ctx.D_rotated_interfacial, ctx.D_bulk,
             0.5 / ctx.dx, 0.5 / ctx.dy, 0.5 / ctx.dz,
             ctx.periodic_x ? 1 : 0, ctx.periodic_y ? 1 : 0, ctx.periodic_z ? 1 : 0);
     }

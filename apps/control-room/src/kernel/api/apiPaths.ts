@@ -990,6 +990,14 @@ export const PERSISTENCE_ASSET_IMPORT_PATH = openApiV2Path(
   "/v2/sessions/current/persistence/assets/import",
 );
 
+export const PERSISTENCE_PROJECTS_PATH = openApiV2Path(
+  "/v2/persistence/projects",
+);
+
+export const PERSISTENCE_PROJECT_OPEN_PATH = openApiV2Path(
+  "/v2/persistence/projects/open",
+);
+
 export const PERSISTENCE_RECOVERY_PATH = openApiV2Path(
   "/v2/sessions/current/persistence/recovery",
 );

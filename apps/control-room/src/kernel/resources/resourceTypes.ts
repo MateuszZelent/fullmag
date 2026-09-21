@@ -28,6 +28,8 @@ export interface ResourceStateFacets {
 export interface ResourceResult<TData> {
   data: TData | null;
   error: Error | null;
+  /** LR-09: błąd nieudanego odświeżenia przy zachowanych danych. */
+  refreshError?: Error | null;
   refetch: () => void;
   revision: ResourceRevision | null;
   status: ResourceStatus;

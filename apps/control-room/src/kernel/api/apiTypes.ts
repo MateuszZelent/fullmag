@@ -811,6 +811,12 @@ export type SessionImportInspectRequest =
   components["schemas"]["SessionImportInspectRequest"];
 export type SessionImportInspectResponse =
   components["schemas"]["SessionImportInspectResponse"];
+export type ProjectCreateRequest =
+  components["schemas"]["ProjectCreateRequest"];
+export type ProjectArchiveRequest =
+  components["schemas"]["ProjectArchiveRequest"];
+export type ProjectDocumentResource =
+  components["schemas"]["ProjectDocumentResource"];
 type GeneratedStructuredCommandRequest =
   components["schemas"]["StructuredCommandRequest"];
 type RuntimeCommandIntent = components["schemas"]["RuntimeCommandIntent"];
@@ -820,9 +826,17 @@ type MeshBuildCommandRequest = RuntimeCommandIntent & {
   mesh_reason?: string | null;
   mesh_target?: components["schemas"]["MeshCommandTarget"] | null;
 };
+type FdmGridRefreshCommandRequest = RuntimeCommandIntent & {
+  kind: "fdm_grid_refresh";
+  mesh_options?: JsonObject | null;
+};
 export type StructuredCommandRequest =
-  | Exclude<GeneratedStructuredCommandRequest, { kind: "mesh_build" }>
-  | MeshBuildCommandRequest;
+  | Exclude<
+      GeneratedStructuredCommandRequest,
+      { kind: "mesh_build" } | { kind: "fdm_grid_refresh" }
+    >
+  | MeshBuildCommandRequest
+  | FdmGridRefreshCommandRequest;
 export type UniversePatchRequest = components["schemas"]["UniversePatchRequest"];
 export type UniverseResource = components["schemas"]["UniverseResource"];
 export type VisualizationStatePatch =
@@ -896,6 +910,9 @@ export interface FieldVectorResponseMetadata {
   scopeId: string | null;
   scopeKind: string | null;
   snapshotId: string | null;
+  stageId?: string | null;
+  phaseRad?: number | null;
+  view?: string | null;
   valueCount: number | null;
 }
 
@@ -943,5 +960,7 @@ export interface BinaryRequestOptions extends RequestOptions {
 export function isOptionalObjectInteractionKind(
   kind: ObjectInteractionKind,
 ): boolean {
-  return kind === "interfacial_dmi" || kind === "uniaxial_anisotropy";
+  return (
+    kind === "interfacial_dmi" || kind === "uniaxial_anisotropy"
+  );
 }

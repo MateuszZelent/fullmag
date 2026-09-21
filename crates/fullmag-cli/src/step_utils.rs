@@ -152,6 +152,21 @@ pub(crate) fn offset_step_update(
 ) -> fullmag_runner::StepUpdate {
     update.stats.step = update.stats.step.saturating_add(step_offset);
     update.stats.time += time_offset;
+    for status in &mut update.stats.field_materialization_states {
+        status.source_step = status.source_step.saturating_add(step_offset);
+    }
+    for field in update.preview_field.iter_mut().chain(
+        update.cached_preview_fields.iter_mut().flat_map(|fields| fields.iter_mut()),
+    ) {
+        // Explicit capture coordinates are stage-local, just like StepStats.
+        // Legacy unstamped fields inherit the adjusted stats at ingestion.
+        if field.source_time_seconds.is_some() || field.source_step > 0 {
+            field.source_step = field.source_step.saturating_add(step_offset);
+        }
+        if let Some(time) = &mut field.source_time_seconds {
+            *time += time_offset;
+        }
+    }
     update.finished = finished;
     update
 }
@@ -372,6 +387,7 @@ pub(crate) fn live_state_manifest_from_update(
             e_ext: update.stats.e_ext,
             e_ani: update.stats.e_ani,
             e_dmi: update.stats.e_dmi,
+            e_rotated_dmi: update.stats.e_rotated_dmi,
             e_total: update.stats.e_total,
             max_dm_dt: update.stats.max_dm_dt,
             max_h_eff: update.stats.max_h_eff,
@@ -412,6 +428,7 @@ pub(crate) fn running_run_manifest_from_update(
         final_e_ext: Some(update.stats.e_ext),
         final_e_ani: Some(update.stats.e_ani),
         final_e_dmi: Some(update.stats.e_dmi),
+        final_e_rotated_dmi: Some(update.stats.e_rotated_dmi),
         final_e_total: Some(update.stats.e_total),
         artifact_dir: artifact_dir.display().to_string(),
     }

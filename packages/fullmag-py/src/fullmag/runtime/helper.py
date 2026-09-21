@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import hashlib
 import json
 import os
 import sys
@@ -11,6 +10,7 @@ from typing import Sequence
 
 from fullmag._progress import emit_progress
 from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision
+from fullmag.model.canonical import canonical_json_sha256
 from fullmag.runtime.loader import apply_ir_runtime_device_selection, load_problem_from_script
 from fullmag.runtime.scene_document import (
     build_builder_from_scene_document,
@@ -28,12 +28,7 @@ def _write_executed_problem_ir_identity(problem_ir: dict[str, object]) -> None:
     output = os.environ.get("FULLMAG_BENCH_EXECUTED_PROBLEM_IR_SHA256_FILE")
     if output is None:
         return
-    canonical_bytes = json.dumps(
-        problem_ir,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    problem_ir_sha256 = hashlib.sha256(canonical_bytes).hexdigest()
+    problem_ir_sha256 = canonical_json_sha256(problem_ir)
     path = Path(output)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     temporary.write_text(problem_ir_sha256 + "\n", encoding="ascii")

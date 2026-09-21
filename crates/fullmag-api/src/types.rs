@@ -334,6 +334,8 @@ pub(crate) struct RunManifest {
     pub final_e_ani: Option<f64>,
     #[serde(default)]
     pub final_e_dmi: Option<f64>,
+    #[serde(default)]
+    pub final_e_rotated_dmi: Option<f64>,
     pub final_e_total: Option<f64>,
     pub artifact_dir: String,
 }
@@ -527,6 +529,8 @@ pub(crate) struct ScalarRow {
     pub e_ani: f64,
     #[serde(default)]
     pub e_dmi: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub e_rotated_dmi: Option<f64>,
     pub e_total: f64,
     pub max_dm_dt: f64,
     pub max_h_eff: f64,
@@ -576,6 +580,8 @@ pub(crate) struct StepUpdateView {
     pub e_ani: f64,
     #[serde(default)]
     pub e_dmi: f64,
+    #[serde(default, alias = "E_rotated_dmi")]
+    pub e_rotated_dmi: f64,
     pub e_total: f64,
     pub max_dm_dt: f64,
     pub max_h_eff: f64,
@@ -653,6 +659,7 @@ impl StepUpdateView {
             e_ext: self.e_ext,
             e_ani: self.e_ani,
             e_dmi: self.e_dmi,
+            e_rotated_dmi: self.e_rotated_dmi,
             e_total: self.e_total,
             max_dm_dt: self.max_dm_dt,
             max_h_eff: self.max_h_eff,
@@ -1531,6 +1538,27 @@ mod tests {
     use super::*;
     use fullmag_authoring::scene_document_from_script_builder;
 
+    #[test]
+    fn legacy_scalar_row_without_rotated_dmi_keeps_component_missing() {
+        let row: ScalarRow = serde_json::from_value(serde_json::json!({
+            "step": 1,
+            "time": 0.0,
+            "solver_dt": 1.0e-12,
+            "mx": 0.0,
+            "my": 0.0,
+            "mz": 1.0,
+            "e_ex": 0.0,
+            "e_demag": 0.0,
+            "e_ext": 0.0,
+            "e_total": 0.0,
+            "max_dm_dt": 0.0,
+            "max_h_eff": 0.0,
+            "max_h_demag": 0.0
+        }))
+        .expect("legacy scalar row should remain readable");
+        assert_eq!(row.e_rotated_dmi, None);
+    }
+
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {
             revision: 3,
@@ -1543,6 +1571,7 @@ mod tests {
             demag_realization: None,
             fdm: None,
             external_field: None,
+            rotated_interfacial_dmi: None,
             solver: fullmag_authoring::ScriptBuilderSolverState {
                 integrator: "rk45".to_string(),
                 fixed_timestep: String::new(),
@@ -1769,6 +1798,7 @@ mod tests {
             e_ext: 0.0,
             e_ani: 0.0,
             e_dmi: 0.0,
+            e_rotated_dmi: 0.0,
             e_total: 0.0,
             max_dm_dt: 0.0,
             max_h_eff: 0.0,

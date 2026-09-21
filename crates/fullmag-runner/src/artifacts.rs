@@ -4253,14 +4253,14 @@ pub(crate) fn write_scalars_csv(path: &Path, steps: &[StepStats]) -> std::io::Re
 pub(crate) fn write_scalars_csv_header(writer: &mut impl Write) -> std::io::Result<()> {
     writeln!(
         writer,
-        "step,time,solver_dt,mx,my,mz,E_ex,E_demag,E_ext,E_drive,E_ani,E_dmi,E_total,max_dm_dt,max_h_eff,max_h_demag,max_torque_Apm,max_torque_T"
+        "step,time,solver_dt,mx,my,mz,E_ex,E_demag,E_ext,E_drive,E_ani,E_rotated_dmi,E_dmi,E_total,max_dm_dt,max_h_eff,max_h_demag,max_torque_Apm,max_torque_T"
     )
 }
 
 pub(crate) fn write_scalar_row(writer: &mut impl Write, step: &StepStats) -> std::io::Result<()> {
     writeln!(
         writer,
-        "{},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e}",
+        "{},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e}",
         step.step,
         step.time,
         step.dt,
@@ -4272,6 +4272,7 @@ pub(crate) fn write_scalar_row(writer: &mut impl Write, step: &StepStats) -> std
         step.e_ext,
         step.e_drive,
         step.e_ani,
+        step.e_rotated_dmi,
         step.e_dmi,
         step.e_total,
         step.max_dm_dt,
@@ -5352,11 +5353,14 @@ mod tests {
     }
 
     #[test]
-    fn dmi_field_artifact_units_include_bulk_quantity() {
+    fn dmi_field_artifact_units_include_bulk_and_rotated_quantities() {
         assert_eq!(field_unit("H_dmi"), "A/m");
         assert_eq!(field_unit("H_dmi.x"), "A/m");
         assert_eq!(field_unit("H_dmi_bulk"), "A/m");
         assert_eq!(field_unit("H_dmi_bulk.z"), "A/m");
+        assert_eq!(field_unit("H_rotated_dmi"), "A/m");
+        assert_eq!(field_unit("H_rotated_dmi.y"), "A/m");
+        assert_eq!(field_unit("eden_rotated_dmi"), "J/m³");
     }
 
     #[test]
@@ -5867,6 +5871,7 @@ mod tests {
                 fft: None,
                 external_field: None,
                 interfacial_dmi: None,
+                rotated_interfacial_dmi: None,
                 bulk_dmi: None,
                 gyromagnetic_ratio: 2.211e5,
                 precision: ExecutionPrecision::Double,
@@ -6543,6 +6548,7 @@ mod tests {
                 demag_realization: None,
                 air_box_config: None,
                 interfacial_dmi: None,
+                rotated_interfacial_dmi: None,
                 dmi_interface_normal: None,
                 bulk_dmi: None,
                 dind_field: None,

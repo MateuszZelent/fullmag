@@ -2058,12 +2058,15 @@ pub(crate) fn validate_oersted_energy_terms(problem: &ProblemIR, errors: &mut Ve
 }
 
 pub(crate) fn validate_dmi_energy_terms(problem: &ProblemIR, errors: &mut Vec<String>) {
+    let mut rotated_interfacial_dmi_count = 0usize;
+    let mut conventional_dmi_count = 0usize;
     for (index, term) in problem.energy_terms.iter().enumerate() {
         match term {
             EnergyTermIR::InterfacialDmi {
                 d,
                 interface_normal,
             } => {
+                conventional_dmi_count += 1;
                 if !d.is_finite() {
                     errors.push(format!(
                         "energy_terms[{index}] interfacial_dmi D must be finite"
@@ -2085,13 +2088,58 @@ pub(crate) fn validate_dmi_energy_terms(problem: &ProblemIR, errors: &mut Vec<St
                     }
                 }
             }
+            EnergyTermIR::RotatedInterfacialDmi { d } => {
+                rotated_interfacial_dmi_count += 1;
+                if !d.is_finite() {
+                    errors.push(format!(
+                        "energy_terms[{index}] rotated_interfacial_dmi D must be finite"
+                    ));
+                }
+            }
             EnergyTermIR::BulkDmi { d } => {
+                conventional_dmi_count += 1;
                 if !d.is_finite() {
                     errors.push(format!("energy_terms[{index}] bulk_dmi D must be finite"));
                 }
             }
             _ => {}
         }
+    }
+    // Material-derived DMI is part of the same executable Hamiltonian as
+    // explicit energy terms. Count only materials referenced by a magnet:
+    // dormant material records must not change the semantics of the active
+    // Hamiltonian or make an otherwise valid rotated-DMI plan fail closed.
+    let referenced_materials = problem
+        .magnets
+        .iter()
+        .map(|magnet| magnet.material.as_str())
+        .collect::<BTreeSet<_>>();
+    for material in &problem.materials {
+        if !referenced_materials.contains(material.name.as_str()) {
+            continue;
+        }
+        if material.interfacial_dmi.is_some()
+            || material.bulk_dmi.is_some()
+            || material
+                .dind_field
+                .as_ref()
+                .is_some_and(|values| !values.is_empty())
+            || material
+                .dbulk_field
+                .as_ref()
+                .is_some_and(|values| !values.is_empty())
+        {
+            conventional_dmi_count += 1;
+        }
+    }
+    if rotated_interfacial_dmi_count > 1 {
+        errors.push("at most one rotated_interfacial_dmi energy term is supported".to_string());
+    }
+    if rotated_interfacial_dmi_count > 0 && conventional_dmi_count > 0 {
+        errors.push(
+            "rotated_interfacial_dmi cannot be combined with interfacial_dmi or bulk_dmi until independent field and energy observables are materialized"
+                .to_string(),
+        );
     }
 }
 

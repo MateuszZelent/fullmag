@@ -15,9 +15,12 @@ describe("MeshBuildDialog performance contracts", () => {
     expect(dialogSource).toContain("shouldLoadMeshBuildDialogFemResources");
     expect(dialogSource).toContain("enabled: explicitFemLane");
     expect(dialogSource).toContain("FDM_MESH_COMMAND_NOT_APPLICABLE_REASON");
-    expect(dialogSource).toContain("shouldLoadRuntimeMeshBuild(state.open, runtimeStatus)");
-    expect(dialogSource).toContain("shouldLoadRuntimeMeshSummary(state.open, runtimeStatus)");
-    expect(dialogSource).toContain("shouldLoadRuntimeMeshManifest(state.open, runtimeStatus)");
+    expect(dialogSource).not.toContain("setInterval(");
+    expect(dialogSource).not.toContain("isSuccess");
+    expect(dialogSource).toContain('kernel.bus.on("mesh:build-observed"');
+    expect(dialogSource).toContain(
+      "scene_revision: stableSnapshotBefore.sceneRevision",
+    );
     expect(dialogSource).not.toContain("const sessionStatus = useSessionStatus();");
     expect(dialogSource).not.toContain("sessionStatus.data");
   });

@@ -18,6 +18,7 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 fullmag-build-info.workspace = true
+fullmag-application = { path = "../fullmag-application" }
 fullmag-engine = { path = "../fullmag-engine" }
 fullmag-ir = { path = "../fullmag-ir" }
 fullmag-plan = { path = "../fullmag-plan" }

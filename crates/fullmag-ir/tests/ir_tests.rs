@@ -6866,6 +6866,96 @@ fn validation_rejects_invalid_dmi_energy_terms() {
 }
 
 #[test]
+fn rotated_interfacial_dmi_round_trips_and_preserves_signed_d() {
+    let term = EnergyTermIR::RotatedInterfacialDmi { d: -3.0e-3 };
+    let json = serde_json::to_value(&term).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({"kind": "rotated_interfacial_dmi", "D": -3.0e-3})
+    );
+    assert_eq!(serde_json::from_value::<EnergyTermIR>(json).unwrap(), term);
+}
+
+#[test]
+fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
+    let mut non_finite = ProblemIR::bootstrap_example();
+    non_finite
+        .energy_terms
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: f64::NAN });
+    let errors = non_finite
+        .validate()
+        .expect_err("non-finite rotated interfacial DMI must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("rotated_interfacial_dmi D must be finite")));
+
+    let mut duplicate = ProblemIR::bootstrap_example();
+    duplicate.energy_terms.extend([
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        EnergyTermIR::RotatedInterfacialDmi { d: -3.0e-3 },
+    ]);
+    let errors = duplicate
+        .validate()
+        .expect_err("duplicate rotated interfacial DMI terms must fail validation");
+    assert!(errors.iter().any(|error| {
+        error.contains("at most one rotated_interfacial_dmi energy term is supported")
+    }));
+
+    let mut mixed = ProblemIR::bootstrap_example();
+    mixed.energy_terms.extend([
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        EnergyTermIR::BulkDmi { d: 1.0e-3 },
+    ]);
+    let errors = mixed
+        .validate()
+        .expect_err("mixed rotated and conventional DMI must fail validation");
+    assert!(errors.iter().any(|error| {
+        error
+            .contains("rotated_interfacial_dmi cannot be combined with interfacial_dmi or bulk_dmi")
+    }));
+
+    let mut material_mixed = ProblemIR::bootstrap_example();
+    material_mixed
+        .energy_terms
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 });
+    material_mixed.materials[0].interfacial_dmi = Some(1.0e-3);
+    let errors = material_mixed
+        .validate()
+        .expect_err("material conventional DMI must not mix with rotated DMI");
+    assert!(errors.iter().any(|error| {
+        error
+            .contains("rotated_interfacial_dmi cannot be combined with interfacial_dmi or bulk_dmi")
+    }));
+
+    let mut dormant_material = ProblemIR::bootstrap_example();
+    dormant_material
+        .energy_terms
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 });
+    let mut unused_material = dormant_material.materials[0].clone();
+    unused_material.name = "unused".to_string();
+    unused_material.interfacial_dmi = Some(1.0e-3);
+    dormant_material.materials.push(unused_material);
+    assert!(
+        dormant_material.validate().is_ok(),
+        "an unreferenced material DMI must not conflict with the active rotated-DMI term"
+    );
+}
+
+#[test]
+fn empty_material_dmi_fields_do_not_conflict_with_rotated_dmi() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.energy_terms
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 });
+    ir.materials[0].dind_field = Some(Vec::new());
+    ir.materials[0].dbulk_field = Some(Vec::new());
+
+    assert!(
+        ir.validate().is_ok(),
+        "empty material DMI field placeholders must remain inactive"
+    );
+}
+
+#[test]
 fn validation_rejects_invalid_material_dmi_values() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.materials[0].interfacial_dmi = Some(f64::NAN);

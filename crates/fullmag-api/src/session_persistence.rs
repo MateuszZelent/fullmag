@@ -782,8 +782,14 @@ async fn read_canonical_script(state: &AppState) -> Result<Vec<u8>, ApiError> {
     Ok(script)
 }
 
-fn session_store_run_artifact_dir(store: &SessionStore, run_id: &str) -> PathBuf {
-    store.root().join("runs").join(run_id).join("artifacts")
+fn session_store_run_artifact_dir(store: &SessionStore, run_id: &str) -> Result<PathBuf, ApiError> {
+    fullmag_session::repository_path::validate_store_id(run_id)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    fullmag_session::repository_path::checked_path(
+        store.root(),
+        &format!("runs/{run_id}/artifacts"),
+    )
+    .map_err(|error| ApiError::conflict(error.to_string()))
 }
 
 fn copy_artifact_tree(source: &Path, destination: &Path) -> Result<(), ApiError> {
@@ -811,6 +817,12 @@ fn copy_artifact_tree(source: &Path, destination: &Path) -> Result<(), ApiError>
                 entry.path().display()
             ))
         })?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| ApiError::conflict("non-UTF8 solved artifact name"))?;
+        fullmag_session::repository_path::checked_path(source, &name)
+            .map_err(|error| ApiError::conflict(error.to_string()))?;
         let target = destination.join(entry.file_name());
         if file_type.is_symlink() {
             return Err(ApiError::conflict(format!(
@@ -842,6 +854,9 @@ fn capture_solved_artifacts(
     run_id: &str,
     source: &Path,
 ) -> Result<PathBuf, ApiError> {
+    let _lease = store
+        .write_transaction()
+        .map_err(|error| ApiError::conflict(error.to_string()))?;
     if !source.is_dir() {
         return Err(ApiError::conflict(format!(
             "solved session export requires an existing artifact directory for run '{run_id}': {}",
@@ -849,7 +864,7 @@ fn capture_solved_artifacts(
         )));
     }
 
-    let destination = session_store_run_artifact_dir(store, run_id);
+    let destination = session_store_run_artifact_dir(store, run_id)?;
     if destination.exists() {
         let source_canonical = source.canonicalize().map_err(|error| {
             ApiError::internal(format!(
@@ -868,11 +883,14 @@ fn capture_solved_artifacts(
         }
     }
 
-    let temporary = store.root().join("runs").join(format!(
-        ".artifacts.save-{}-{}",
-        std::process::id(),
-        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-    ));
+    let temporary = fullmag_session::repository_path::checked_path(
+        store.root(),
+        &format!("runs/.artifacts.save-{}", uuid::Uuid::new_v4()),
+    )
+    .map_err(|error| ApiError::conflict(error.to_string()))?;
+    std::fs::create_dir(&temporary).map_err(|error| {
+        ApiError::internal(format!("creating exclusive artifact staging: {error}"))
+    })?;
     if let Err(error) = copy_artifact_tree(source, &temporary) {
         let _ = std::fs::remove_dir_all(&temporary);
         return Err(error);
@@ -890,11 +908,8 @@ fn capture_solved_artifacts(
         )));
     }
 
-    let previous = destination.with_file_name(format!(
-        "artifacts.previous-{}-{}",
-        std::process::id(),
-        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-    ));
+    let previous =
+        destination.with_file_name(format!("artifacts.previous-{}", uuid::Uuid::new_v4()));
     if destination.exists() {
         std::fs::rename(&destination, &previous).map_err(|error| {
             let _ = std::fs::remove_dir_all(&temporary);
@@ -1039,6 +1054,11 @@ pub(crate) async fn export_session(
     };
 
     let export_profile = FmsExportProfile::for_profile(req.profile);
+    let docs = collect_project_documents(&state, req.ui_state.as_ref(), script).await;
+    // No await may occur while this thread-owned transaction is held.
+    let _transaction = store
+        .write_transaction()
+        .map_err(|error| ApiError::conflict(error.to_string()))?;
     if export_profile.include_artifacts() {
         let (run_manifest, artifact_source) = run_capture.as_ref().ok_or_else(|| {
             ApiError::conflict("solved session export requires an active run artifact directory")
@@ -1048,7 +1068,6 @@ pub(crate) async fn export_session(
         })?;
         capture_solved_artifacts(&store, &run_manifest.run_id, artifact_source)?;
     }
-    let docs = collect_project_documents(&state, req.ui_state.as_ref(), script).await;
     let script = docs
         .get("main.py")
         .expect("validated canonical script must be present in project documents");
@@ -1076,10 +1095,6 @@ pub(crate) async fn export_session(
             .commit_run(&run_manifest)
             .map_err(|e| ApiError::internal(e.to_string()))?;
     }
-    store
-        .commit_session(&session_manifest)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
     // Pack to in-memory buffer.
     let mut buf = Cursor::new(Vec::new());
     pack_fms(
@@ -1092,6 +1107,10 @@ pub(crate) async fn export_session(
         &opts,
     )
     .map_err(|e| ApiError::internal(format!("packing .fms: {e}")))?;
+
+    store
+        .commit_session(&session_manifest)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let fms_bytes = buf.into_inner();
     let fms_base64 = base64_encode(&fms_bytes);
@@ -1790,6 +1809,7 @@ pub(crate) async fn restore_checkpoint(
     live_state.latest_step.e_ext = common_state.energies.zeeman;
     live_state.latest_step.e_ani = common_state.energies.anisotropy;
     live_state.latest_step.e_dmi = common_state.energies.dmi;
+    live_state.latest_step.e_rotated_dmi = common_state.energies.rotated_dmi;
     live_state.latest_step.e_total = common_state.energies.total;
     live_state.latest_step.magnetization = Some(flat_magnetization);
     snapshot.coupled_checkpoint = coupled_checkpoint;
@@ -2194,6 +2214,7 @@ impl LiveCheckpointProvider {
                 zeeman: latest.e_ext,
                 anisotropy: latest.e_ani,
                 dmi: latest.e_dmi,
+                rotated_dmi: latest.e_rotated_dmi,
                 total: latest.e_total,
             },
             magnetization,

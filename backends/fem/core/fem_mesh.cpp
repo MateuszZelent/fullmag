@@ -573,7 +573,8 @@ bool validate_supported_physics_topology(
         mfem_device == "cpu" || mfem_device == "cuda";
     const bool has_dmi =
         plan.has_interfacial_dmi != 0 || plan.has_bulk_dmi != 0 ||
-        plan.dind_field_len != 0u || plan.dbulk_field_len != 0u;
+        ctx.dmi.rotated_interfacial_enabled || plan.dind_field_len != 0u ||
+        plan.dbulk_field_len != 0u;
     const bool dmi_supported = !has_dmi || mfem_device == "cpu";
     const bool no_other_extended_physics =
         plan.ms_field_len == 0u && plan.a_field_len == 0u &&
@@ -769,7 +770,8 @@ bool validate_periodic_plan_compatibility(Context &ctx, std::string &error)
             return false;
         }
     }
-    if (ctx.dmi.interfacial_enabled || ctx.dmi.bulk_enabled) {
+    if (ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled ||
+        ctx.dmi.bulk_enabled) {
         if (!validate_periodic_scalar_field_classes(ctx, ctx.material_fields.Dind_field, "Dind_field", error) ||
             !validate_periodic_scalar_field_classes(ctx, ctx.material_fields.Dbulk_field, "Dbulk_field", error)) {
             return false;

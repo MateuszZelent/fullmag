@@ -209,14 +209,17 @@ pub(crate) fn fem_energy_density_values(
             active_mask,
             quantity,
         )?,
-        "eden_dmi" => field_dot_energy_density(
-            &observables.magnetization,
-            &observables.dmi_field,
-            saturation_magnetisation,
-            -0.5,
-            active_mask,
-            quantity,
-        )?,
+        "eden_dmi" => {
+            let aggregate_dmi_field = aggregate_dmi_field(observables)?;
+            field_dot_energy_density(
+                &observables.magnetization,
+                &aggregate_dmi_field,
+                saturation_magnetisation,
+                -0.5,
+                active_mask,
+                quantity,
+            )?
+        }
         "eden_total" => {
             let mut total = vec![0.0; observables.magnetization.len()];
             for term in ["eden_ex", "eden_demag", "eden_ext", "eden_ani", "eden_dmi"] {
@@ -236,6 +239,36 @@ pub(crate) fn fem_energy_density_values(
         _ => return Ok(None),
     };
     Ok(Some(values))
+}
+
+fn aggregate_dmi_field(observables: &StateObservables) -> Result<Vec<[f64; 3]>, RunError> {
+    let node_count = observables.magnetization.len();
+    let mut aggregate = vec![[0.0, 0.0, 0.0]; node_count];
+    for (label, field) in [
+        ("conventional DMI", &observables.dmi_field),
+        ("rotated DMI", &observables.rotated_dmi_field),
+        ("bulk DMI", &observables.bulk_dmi_field),
+    ] {
+        if field.is_empty() {
+            continue;
+        }
+        if field.len() != node_count {
+            return Err(RunError {
+                message: format!(
+                    "FEM aggregate DMI field requires {} nodes for {}, got {}",
+                    node_count,
+                    label,
+                    field.len()
+                ),
+            });
+        }
+        for (target, source) in aggregate.iter_mut().zip(field) {
+            target[0] += source[0];
+            target[1] += source[1];
+            target[2] += source[2];
+        }
+    }
+    Ok(aggregate)
 }
 
 fn field_dot_energy_density(
@@ -295,6 +328,7 @@ pub(crate) fn build_problem_and_state(
     if !plan.mesh.periodic_node_pairs.is_empty()
         && (plan.enable_demag
             || plan.interfacial_dmi.is_some()
+            || plan.rotated_interfacial_dmi.is_some()
             || plan.bulk_dmi.is_some()
             || has_time_varying_antenna(plan))
     {
@@ -411,7 +445,8 @@ pub(crate) fn build_problem_and_state(
             return Err(RunError {
                 message: format!(
                     "Internal FEM baseline engine does not support the following interaction terms: {}; \
-                     supported: exchange, demag (poisson), zeeman, interfacial_dmi, bulk_dmi. \
+                     supported: exchange, demag (poisson), zeeman, interfacial_dmi, \
+                     rotated_interfacial_dmi, bulk_dmi. \
                      Use the native FEM GPU backend for these interactions.",
                     unsupported_terms.join(", ")
                 ),
@@ -434,6 +469,7 @@ pub(crate) fn build_problem_and_state(
         uniaxial_anisotropy: None,
         cubic_anisotropy: None,
         interfacial_dmi: plan.interfacial_dmi,
+        rotated_interfacial_dmi: plan.rotated_interfacial_dmi,
         bulk_dmi: plan.bulk_dmi,
         zhang_li_stt: None,
         slonczewski_stt: None,
@@ -761,13 +797,16 @@ fn execute_reference_fem_impl(
         if let Some(next) = report.suggested_next_dt {
             dt = next;
         }
-        let latest_stats = StepStats {
+        let rotated_dmi_energy =
+            rotated_dmi_energy_from_magnetization(&problem, state.magnetization());
+        let mut latest_stats = StepStats {
             step: step_count,
             time: report.time_seconds,
             dt: report.dt_used,
             e_ex: report.exchange_energy_joules,
             e_demag: report.demag_energy_joules,
             e_ext: report.external_energy_joules,
+            e_dmi: report.dmi_energy_joules,
             e_total: report.total_energy_joules,
             max_dm_dt: report.max_rhs_amplitude,
             max_rhs_norm_per_s: report.max_rhs_amplitude,
@@ -780,6 +819,15 @@ fn execute_reference_fem_impl(
             wall_time_ns: wall_elapsed,
             ..StepStats::default()
         };
+        // `StepReport::dmi_energy_joules` is the aggregate conventional +
+        // rotated channel.  Keep the aggregate in `e_dmi` while exposing the
+        // rotated contribution separately so live/relaxation telemetry cannot
+        // silently report an rDMI run as zero-DMI.
+        latest_stats.set_dmi_energy_components(
+            report.dmi_energy_joules - rotated_dmi_energy,
+            0.0,
+            rotated_dmi_energy,
+        );
         current_stats = enrich_step_stats_from_magnetization(
             latest_stats.clone(),
             state.magnetization(),
@@ -1456,6 +1504,53 @@ pub(crate) fn observe_state(
         problem.material.damping,
         problem.dynamics.precession_enabled,
     );
+    let has_rotated_dmi = problem
+        .terms
+        .rotated_interfacial_dmi
+        .is_some_and(|d| d != 0.0);
+    let has_bulk_dmi = problem
+        .terms
+        .bulk_dmi
+        .is_some_and(|d| d != 0.0);
+    let rotated_dmi_field = if has_rotated_dmi {
+        problem.rotated_interfacial_dmi_field_from_vectors(&observables.magnetization)
+    } else {
+        Vec::new()
+    };
+    let bulk_dmi_field = if has_bulk_dmi {
+        problem.bulk_dmi_field_from_vectors(&observables.magnetization)
+    } else {
+        Vec::new()
+    };
+    let rotated_dmi_energy =
+        rotated_dmi_energy_from_magnetization(problem, &observables.magnetization);
+    // `FemLlgProblem::observe` returns the aggregate interfacial + rotated +
+    // bulk DMI field. Remove each independently materialized component so
+    // `H_dmi`, `H_rotated_dmi`, and `H_dmi_bulk` remain disjoint observables.
+    let conventional_dmi_field = if has_rotated_dmi || has_bulk_dmi {
+        observables
+            .dmi_field
+            .iter()
+            .enumerate()
+            .map(|(index, total)| {
+                let rotated = rotated_dmi_field
+                    .get(index)
+                    .copied()
+                    .unwrap_or([0.0, 0.0, 0.0]);
+                let bulk = bulk_dmi_field
+                    .get(index)
+                    .copied()
+                    .unwrap_or([0.0, 0.0, 0.0]);
+                [
+                    total[0] - rotated[0] - bulk[0],
+                    total[1] - rotated[1] - bulk[1],
+                    total[2] - rotated[2] - bulk[2],
+                ]
+            })
+            .collect()
+    } else {
+        observables.dmi_field
+    };
     Ok(StateObservables {
         magnetization: observables.magnetization,
         torque_field,
@@ -1466,10 +1561,11 @@ pub(crate) fn observe_state(
         drive_field: vec![[0.0, 0.0, 0.0]; observables.effective_field.len()],
         effective_field: observables.effective_field,
         anisotropy_field: Vec::new(),
-        dmi_field: Vec::new(),
+        dmi_field: conventional_dmi_field,
+        rotated_dmi_field,
         magnetoelastic_field: Vec::new(),
         cubic_anisotropy_field: Vec::new(),
-        bulk_dmi_field: Vec::new(),
+        bulk_dmi_field,
         oersted_field: Vec::new(),
         thermal_field: Vec::new(),
         exchange_energy: observables.exchange_energy_joules,
@@ -1477,7 +1573,8 @@ pub(crate) fn observe_state(
         external_energy: observables.external_energy_joules,
         drive_energy: 0.0,
         anisotropy_energy: 0.0,
-        dmi_energy: 0.0,
+        dmi_energy: observables.dmi_energy_joules - rotated_dmi_energy,
+        rotated_dmi_energy,
         total_energy: observables.total_energy_joules,
         max_dm_dt: observables.max_rhs_amplitude,
         max_rhs_all_norm_per_s: observables.max_rhs_all_amplitude,
@@ -1490,6 +1587,27 @@ pub(crate) fn observe_state(
         max_torque_all_Apm: observables.max_torque_all_Apm,
         per_object_scalars: std::collections::HashMap::new(),
     })
+}
+
+/// Return the independently materialized rotated-interfacial DMI energy.
+///
+/// `StepReport` and the engine's aggregate observables intentionally expose
+/// one DMI energy channel.  Consumers that publish component telemetry must
+/// derive the rotated part with the same active-term semantics used by
+/// `observe_state`; in particular, an authored zero coefficient is a no-op.
+fn rotated_dmi_energy_from_magnetization(
+    problem: &FemLlgProblem,
+    magnetization: &[[f64; 3]],
+) -> f64 {
+    if problem
+        .terms
+        .rotated_interfacial_dmi
+        .is_some_and(|d| d != 0.0)
+    {
+        problem.rotated_interfacial_dmi_energy_from_vectors(magnetization)
+    } else {
+        0.0
+    }
 }
 
 fn make_step_stats(
@@ -1528,6 +1646,7 @@ fn make_step_stats(
         &observables.magnetization,
         magnetic_node_volumes,
     );
+    stats.set_dmi_energy_components(observables.dmi_energy, 0.0, observables.rotated_dmi_energy);
     stats.per_object_scalars = fem_per_object_scalars(
         object_segments,
         mesh_parts,
@@ -1852,6 +1971,7 @@ mod tests {
             demag_realization: None,
             air_box_config: None,
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             bulk_dmi: None,
             dind_field: None,
             dbulk_field: None,
@@ -2248,6 +2368,7 @@ mod tests {
             demag_realization: None,
             air_box_config: None,
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             bulk_dmi: None,
             dind_field: None,
             dbulk_field: None,
@@ -2450,6 +2571,7 @@ mod tests {
                 boundary_marker_source: None,
             }),
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             bulk_dmi: None,
             dind_field: None,
             dbulk_field: None,
@@ -2535,6 +2657,124 @@ mod tests {
             "DMI terms should contribute to H_eff, got {}",
             last.max_h_eff
         );
+
+        let (problem, state) = build_problem_and_state(&plan)
+            .expect("FEM DMI problem should build for observable separation");
+        let observables = observe_state(&problem, &state, &[])
+            .expect("FEM DMI observables should be separable");
+        assert!(
+            observables
+                .dmi_field
+                .iter()
+                .flatten()
+                .any(|value| value.abs() > 0.0),
+            "interfacial DMI field should remain in H_dmi"
+        );
+        assert!(
+            observables
+                .bulk_dmi_field
+                .iter()
+                .flatten()
+                .any(|value| value.abs() > 0.0),
+            "bulk DMI field should be exposed separately as H_dmi_bulk"
+        );
+    }
+
+    #[test]
+    fn rotated_dmi_is_forwarded_to_fem_observable_adapter() {
+        let mut plan = make_test_plan(false);
+        plan.enable_exchange = false;
+        plan.rotated_interfacial_dmi = Some(3e-3);
+        plan.initial_magnetization = vec![
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ];
+
+        let magnetization = plan.initial_magnetization.clone();
+        let observables = fem_observables_for_magnetization(&plan, &magnetization)
+            .expect("rotated DMI should be supported by the FEM reference observable adapter");
+
+        assert_eq!(observables.dmi_field.len(), plan.mesh.nodes.len());
+        assert!(
+            observables
+                .dmi_field
+                .iter()
+                .flatten()
+                .any(|component| component.abs() > 0.0),
+            "rotated DMI must contribute to the aggregate FEM DMI field"
+        );
+        assert!(
+            observables.max_effective_field_amplitude > 0.0,
+            "rotated DMI must contribute to FEM H_eff"
+        );
+    }
+
+    #[test]
+    fn reference_live_step_stats_preserve_rotated_dmi_energy_component() {
+        let mut plan = make_test_plan(false);
+        plan.enable_exchange = false;
+        plan.rotated_interfacial_dmi = Some(3e-3);
+        plan.initial_magnetization = vec![
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ];
+
+        let result = execute_reference_fem(&plan, 1e-13, &[], None, None)
+            .expect("reference FEM rotated-DMI run should succeed");
+        let step = result
+            .result
+            .steps
+            .last()
+            .expect("rotated-DMI run must publish a step");
+
+        assert!(
+            step.e_rotated_dmi.abs() > 0.0,
+            "live step telemetry must expose the rotated DMI energy"
+        );
+        assert!(
+            (step.e_dmi - step.e_rotated_dmi).abs() < 1e-30,
+            "with only rotated DMI active, aggregate and rotated energies must agree"
+        );
+    }
+
+    #[test]
+    fn reference_rotated_dmi_energy_treats_any_exact_nonzero_coefficient_as_active() {
+        let mut plan = make_test_plan(false);
+        plan.enable_exchange = false;
+        plan.rotated_interfacial_dmi = Some(1.0e-31);
+        plan.initial_magnetization = vec![
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ];
+
+        let magnetization = plan.initial_magnetization.clone();
+        let (problem, _) = build_problem_and_state(&plan)
+            .expect("tiny nonzero rotated DMI should build in the FEM reference path");
+        let energy = rotated_dmi_energy_from_magnetization(&problem, &magnetization);
+
+        assert_ne!(
+            energy, 0.0,
+            "FEM telemetry must not silently drop a finite nonzero rotated-DMI coefficient"
+        );
+    }
+
+    #[test]
+    fn equilibrium_identity_rejects_rotated_dmi_source_plans() {
+        let mut plan = make_test_plan(false);
+        plan.rotated_interfacial_dmi = Some(3e-3);
+
+        let error = crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1::from_relax_plan(
+            &plan,
+        )
+        .expect_err("an equilibrium identity must not omit rotated-DMI physics");
+        assert!(error.message.contains("equilibrium_identity_scope_unsupported"));
+        assert!(error.message.contains("DMI data"));
     }
 
     #[test]
@@ -2601,6 +2841,38 @@ mod tests {
                 .iter()
                 .any(|value| value.abs() > 0.0),
             "expected FEM eden_total preview to contain nonzero scalar values"
+        );
+    }
+
+    #[test]
+    fn fem_snapshot_eden_dmi_includes_rotated_interfacial_component() {
+        let mut plan = make_test_plan(false);
+        plan.enable_exchange = false;
+        plan.rotated_interfacial_dmi = Some(3e-3);
+        plan.initial_magnetization = vec![
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ];
+
+        let fields = snapshot_vector_fields(
+            &plan,
+            &["eden_dmi"],
+            &crate::LivePreviewRequest::default(),
+        )
+        .expect("FEM rotated-DMI energy-density preview should succeed");
+        let dmi = fields
+            .iter()
+            .find(|field| field.quantity == "eden_dmi")
+            .expect("eden_dmi preview should be present");
+        assert_eq!(dmi.spatial_kind, "mesh");
+        assert_eq!(dmi.vector_field_values.len(), plan.mesh.nodes.len());
+        assert!(
+            dmi.vector_field_values
+                .iter()
+                .any(|value| value.abs() > 0.0),
+            "rotated interfacial DMI must be represented in FEM eden_dmi"
         );
     }
 
@@ -2710,6 +2982,7 @@ mod tests {
             effective_field: Vec::new(),
             anisotropy_field: Vec::new(),
             dmi_field: Vec::new(),
+            rotated_dmi_field: Vec::new(),
             magnetoelastic_field: Vec::new(),
             cubic_anisotropy_field: Vec::new(),
             bulk_dmi_field: Vec::new(),
@@ -2721,6 +2994,7 @@ mod tests {
             drive_energy: 0.0,
             anisotropy_energy: 0.0,
             dmi_energy: 0.0,
+            rotated_dmi_energy: 0.0,
             total_energy: 0.0,
             max_dm_dt: 0.0,
             max_rhs_all_norm_per_s: 0.0,

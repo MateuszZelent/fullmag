@@ -281,7 +281,7 @@ pub struct FmsCheckpoint {
 
 impl FmsCheckpoint {
     pub fn new(run_id: &str, step: u64, time_s: f64, dt: f64) -> Self {
-        let cp_id = format!("cp-{:06}", step);
+        let cp_id = format!("cp-{:06}-{}", step, uuid::Uuid::new_v4());
         Self {
             checkpoint_id: cp_id.clone(),
             run_id: run_id.into(),
@@ -361,6 +361,8 @@ pub struct SolverEnergies {
     #[serde(default)]
     pub dmi: f64,
     #[serde(default)]
+    pub rotated_dmi: f64,
+    #[serde(default)]
     pub total: f64,
 }
 
@@ -424,7 +426,9 @@ impl TensorDtype {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TensorChunk {
     pub object_ref: String,
+    /// Byte offset in the complete decoded tensor (not an element index).
     pub offset: usize,
+    /// Exact number of bytes in this CAS object and its tensor range.
     pub length: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,

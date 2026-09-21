@@ -175,6 +175,8 @@ pub struct GlobalQuantityRow {
     pub e_drive: f64,
     pub e_ani: f64,
     pub e_dmi: f64,
+    #[serde(default, alias = "E_rotated_dmi")]
+    pub e_rotated_dmi: f64,
     pub e_el: f64,
     pub e_kin_el: f64,
     pub e_total: f64,
@@ -200,6 +202,7 @@ impl GlobalQuantityRow {
             "e_drive" => Some(self.e_drive),
             "e_ani" => Some(self.e_ani),
             "e_dmi" => Some(self.e_dmi),
+            "e_rotated_dmi" => Some(self.e_rotated_dmi),
             "e_el" => Some(self.e_el),
             "e_kin_el" => Some(self.e_kin_el),
             "e_total" => Some(self.e_total),

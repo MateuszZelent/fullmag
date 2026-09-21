@@ -2585,6 +2585,7 @@ fn frequency_response_demag_backend_plan(
         demag_realization: plan.demag_realization,
         air_box_config: plan.air_box_config.clone(),
         interfacial_dmi: None,
+        rotated_interfacial_dmi: None,
         dmi_interface_normal: None,
         bulk_dmi: None,
         dind_field: None,

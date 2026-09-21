@@ -78,6 +78,7 @@ PHYSICS_REFERENCE_PAGES = frozenset(
         "physics/interactions/dmi/boundary-conditions.md",
         "physics/interactions/dmi/bulk.md",
         "physics/interactions/dmi/interfacial.md",
+        "physics/interactions/dmi/rotated-interfacial.md",
         "physics/interactions/dmi/validation.md",
         "physics/interactions/thermal-noise/index.md",
         "physics/interactions/zeeman/index.md",
@@ -113,6 +114,7 @@ PHYSICS_REFERENCE_STATUSES = {
 DMI_SUBPAGES = (
     "interfacial",
     "bulk",
+    "rotated-interfacial",
     "boundary-conditions",
     "validation",
 )
@@ -222,6 +224,7 @@ REFERENCE_PAGE_TITLES = {
     "physics/interactions/anisotropy/cubic.md": "Cubic anisotropy",
     "physics/interactions/dmi/bulk.md": "Bulk Dzyaloshinskii–Moriya interaction",
     "physics/interactions/dmi/interfacial.md": "Interfacial Dzyaloshinskii–Moriya interaction",
+    "physics/interactions/dmi/rotated-interfacial.md": "Rotated interfacial Dzyaloshinskii–Moriya interaction",
     "physics/interactions/demagnetization/multilayer-convolution.md": "FDM multilayer convolution",
     "python-api/discretization/fdm-multilayer-convolution.md": "FDM multilayer convolution — Python, ProblemIR, and UI",
     "physics/interactions/thermal-noise/index.md": "Thermal Brown noise",

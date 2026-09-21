@@ -88,6 +88,30 @@ void dmi_accumulate_bulk_residual(
          data.m_q[1] * data.grad_shape[0]);
 }
 
+void dmi_accumulate_rotated_interfacial_residual(
+    const DmiElementData &data,
+    double d,
+    double residual[3])
+{
+    if (residual == nullptr || d == 0.0 || data.weight == 0.0) {
+        return;
+    }
+
+    const double dw_dm[3] = {
+        d * (-data.grad_m[2][0] + data.grad_m[1][1]),
+        -d * data.grad_m[0][1],
+        d * data.grad_m[0][0],
+    };
+    residual[0] += data.weight *
+        (data.shape * dw_dm[0] +
+         d * (data.m_q[2] * data.grad_shape[0] -
+              data.m_q[1] * data.grad_shape[1]));
+    residual[1] += data.weight *
+        (data.shape * dw_dm[1] + d * data.m_q[0] * data.grad_shape[1]);
+    residual[2] += data.weight *
+        (data.shape * dw_dm[2] - d * data.m_q[0] * data.grad_shape[0]);
+}
+
 bool dmi_project_lumped_field(
     const double *residual_xyz,
     const double *lumped_mass,

@@ -648,7 +648,7 @@ const studyTab: RibbonTabContent = {
         { id: "study.resume",icon: icon(Play,        { fill: "currentColor" }), label: "Resume",                 iconColor: C.green },
         { id: "study.save-checkpoint", icon: icon(Save), label: "Save Checkpoint", iconColor: C.blue },
         { id: "study.restore-checkpoint", icon: icon(RotateCcw), label: "Restore", iconColor: C.lavender },
-        { id: "study.import-state", icon: icon(Upload), label: "Import State", iconColor: C.lavender },
+        { id: "study.import-state", icon: icon(Upload), label: "Restore Runtime State", iconColor: C.lavender },
         { id: "study.export-state", icon: icon(Download), label: "Export State", iconColor: C.sapphire },
         { id: "study.discard-paused-state", icon: icon(Scissors), label: "Discard", iconColor: C.red },
         { id: "study.stop",  icon: icon(Square,      { fill: "currentColor" }), label: "Stop",                   iconColor: C.red },

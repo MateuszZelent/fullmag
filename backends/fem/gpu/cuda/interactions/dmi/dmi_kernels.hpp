@@ -33,10 +33,12 @@ void fullmag_cuda_dmi_field_energy(
     double *energy_out,
     double uniform_ms,
     double uniform_d,
+    double uniform_rotated_d,
     double nx,
     double ny,
     double nz,
     bool use_d_field,
+    bool rotated_enabled,
     bool bulk_mode,
     int element_count,
     int node_count,
@@ -49,8 +51,8 @@ void fullmag_cuda_dmi_energy_difference(
     const double *m1x, const double *m1y, const double *m1z,
     const double *d_field, double *element_delta,
     double *element_absolute_terms,
-    double uniform_d, double nx, double ny, double nz,
-    bool use_d_field, bool bulk_mode, int element_count,
+    double uniform_d, double uniform_rotated_d, double nx, double ny, double nz,
+    bool use_d_field, bool rotated_enabled, bool bulk_mode, int element_count,
     cudaStream_t stream = nullptr);
 
 } // namespace fullmag::fem

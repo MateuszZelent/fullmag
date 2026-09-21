@@ -20,6 +20,14 @@ param(
 
   [string]$OutputDir,
 
+  [string]$InitialMagnetizationState,
+
+  [string]$InitialMagnetizationStateFormat,
+
+  [string]$InitialMagnetizationStateDataset,
+
+  [Nullable[int]]$InitialMagnetizationStateSampleIndex,
+
   [switch]$BuildOnly,
 
   [Alias("skip_local_changes")]
@@ -41,7 +49,14 @@ if (-not (Test-Path -LiteralPath $StorageAdapter -PathType Leaf)) {
 }
 . $StorageAdapter
 $StorageDevice = if ($Device -eq "gpu") { "gpu" } else { "cpu" }
-$StorageProfile = "windows-native-fdm-$StorageDevice"
+# A registered task may provide its own profile so builds and run artifacts
+# remain isolated from the shared default FDM lanes.  The storage resolver
+# validates the value and all paths before the managed entrypoint is entered.
+$StorageProfile = if ($env:FULLMAG_STORAGE_PROFILE -and $env:FULLMAG_STORAGE_PROFILE.Trim()) {
+  $env:FULLMAG_STORAGE_PROFILE.Trim()
+} else {
+  "windows-native-fdm-$StorageDevice"
+}
 
 if ($env:FULLMAG_STORAGE_MANAGED_ENTRY -ne "1") {
   $managedArguments = @(
@@ -54,6 +69,18 @@ if ($env:FULLMAG_STORAGE_MANAGED_ENTRY -ne "1") {
   )
   if ($ScriptPath) { $managedArguments += @("-ScriptPath", $ScriptPath) }
   if ($OutputDir) { $managedArguments += @("-OutputDir", $OutputDir) }
+  if ($InitialMagnetizationState) {
+    $managedArguments += @("-InitialMagnetizationState", $InitialMagnetizationState)
+  }
+  if ($InitialMagnetizationStateFormat) {
+    $managedArguments += @("-InitialMagnetizationStateFormat", $InitialMagnetizationStateFormat)
+  }
+  if ($InitialMagnetizationStateDataset) {
+    $managedArguments += @("-InitialMagnetizationStateDataset", $InitialMagnetizationStateDataset)
+  }
+  if ($null -ne $InitialMagnetizationStateSampleIndex) {
+    $managedArguments += @("-InitialMagnetizationStateSampleIndex", $InitialMagnetizationStateSampleIndex.ToString())
+  }
   if ($BuildOnly) { $managedArguments += "-BuildOnly" }
   if ($SkipLocalChanges) { $managedArguments += "-SkipLocalChanges" }
   $managedExitCode = Invoke-FullmagStorageManagedScript `
@@ -129,6 +156,23 @@ function Prepend-PathEntry {
   param([Parameter(Mandatory = $true)][string]$Path)
   if (Test-Path -LiteralPath $Path -PathType Container) {
     $env:Path = $Path + [System.IO.Path]::PathSeparator + $env:Path
+  }
+}
+
+function Get-Sha256File {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  $hasher = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+      return ([BitConverter]::ToString($hasher.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+      $stream.Dispose()
+    }
+  }
+  finally {
+    $hasher.Dispose()
   }
 }
 
@@ -293,7 +337,7 @@ function Get-DirectorySha256 {
     Sort-Object FullName |
     ForEach-Object {
       $relative = [System.IO.Path]::GetRelativePath($Path, $_.FullName).Replace('\', '/')
-      $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+      $hash = Get-Sha256File $_.FullName
       "$relative|$hash"
     })
   $bytes = [System.Text.Encoding]::UTF8.GetBytes(($records -join "`n") + "`n")
@@ -544,9 +588,9 @@ if ($BuildMode -eq "true") {
     node_version = if ($needsControlRoomToolchain) { (& node --version).Trim() } else { $null }
     pnpm_version = if ($needsControlRoomToolchain) { $PinnedPnpmVersion } else { $null }
     static_web_sha256 = if ($Frontend -eq "static") { Get-DirectorySha256 (Split-Path -Parent $StaticControlRoom) } else { $null }
-    binary_sha256 = (Get-FileHash -LiteralPath $FullmagExe -Algorithm SHA256).Hash.ToLowerInvariant()
-    api_binary_sha256 = (Get-FileHash -LiteralPath $FullmagApiExe -Algorithm SHA256).Hash.ToLowerInvariant()
-    native_fdm_dll_sha256 = if ($nativeFdmDll) { (Get-FileHash -LiteralPath $nativeFdmDll -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }
+    binary_sha256 = Get-Sha256File $FullmagExe
+    api_binary_sha256 = Get-Sha256File $FullmagApiExe
+    native_fdm_dll_sha256 = if ($nativeFdmDll) { Get-Sha256File $nativeFdmDll } else { $null }
     built_at_utc = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
   }
   Write-JsonAtomic -Path $ManifestPath -Value $manifest
@@ -584,8 +628,8 @@ else {
   if (-not $SkipLocalChanges -and [string]$manifest.local_changes_check -eq "skipped") {
     throw "Existing Windows runtime was built with -SkipLocalChanges; rerun with -SkipLocalChanges to acknowledge the unqualified receipt"
   }
-  $binaryHash = (Get-FileHash -LiteralPath $FullmagExe -Algorithm SHA256).Hash.ToLowerInvariant()
-  $apiBinaryHash = (Get-FileHash -LiteralPath $FullmagApiExe -Algorithm SHA256).Hash.ToLowerInvariant()
+  $binaryHash = Get-Sha256File $FullmagExe
+  $apiBinaryHash = Get-Sha256File $FullmagApiExe
   if ([string]$manifest.binary_sha256 -ne $binaryHash -or
       [string]$manifest.api_binary_sha256 -ne $apiBinaryHash) {
     throw "Existing Windows runtime binary hash does not match its manifest; rerun with build=True"
@@ -602,7 +646,7 @@ else {
     if (-not (Test-Path -LiteralPath $nativeDll -PathType Leaf)) {
       throw "Native CUDA backend DLL is missing at $nativeDll; rerun with build=True"
     }
-    $nativeDllHash = (Get-FileHash -LiteralPath $nativeDll -Algorithm SHA256).Hash.ToLowerInvariant()
+    $nativeDllHash = Get-Sha256File $nativeDll
     if ([string]$manifest.native_fdm_dll_sha256 -ne $nativeDllHash) {
       throw "Native CUDA backend DLL hash does not match the build manifest; rerun with build=True"
     }
@@ -665,6 +709,30 @@ if ($RunMode -eq "interactive") {
 $cliArguments += $resolvedScript
 if ($resolvedOutputDir) {
   $cliArguments += @("--output-dir", $resolvedOutputDir)
+}
+if ($InitialMagnetizationState) {
+  $resolvedInitialState = if ([System.IO.Path]::IsPathRooted($InitialMagnetizationState)) {
+    Resolve-AbsolutePath $InitialMagnetizationState
+  }
+  else {
+    Resolve-AbsolutePath (Join-Path $RepoRoot $InitialMagnetizationState)
+  }
+  if (-not (Test-Path -LiteralPath $resolvedInitialState -PathType Leaf)) {
+    throw "Initial magnetization state not found: $resolvedInitialState"
+  }
+  $cliArguments += @("--initial-magnetization-state", $resolvedInitialState)
+  if ($InitialMagnetizationStateFormat) {
+    $cliArguments += @("--initial-magnetization-state-format", $InitialMagnetizationStateFormat)
+  }
+  if ($InitialMagnetizationStateDataset) {
+    $cliArguments += @("--initial-magnetization-state-dataset", $InitialMagnetizationStateDataset)
+  }
+  if ($null -ne $InitialMagnetizationStateSampleIndex) {
+    # Clap treats a negative value passed as a separate argv item as another
+    # option. Keep the option and value in one argv item so sample -1 reaches
+    # the state reader unchanged.
+    $cliArguments += "--initial-magnetization-state-sample-index=$($InitialMagnetizationStateSampleIndex.ToString())"
+  }
 }
 if ($Backend -ne "auto") {
   $cliArguments += @("--backend", $Backend)
