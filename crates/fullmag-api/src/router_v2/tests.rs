@@ -15947,9 +15947,9 @@ async fn authoring_scene_put_commits_scene_document() {
         .map(|snapshot| snapshot.region_realization_revisions)
         .expect("region revisions should be present");
     assert!(revisions_after_topology.topology > 0);
-    assert_eq!(revisions_after_topology.membership, 0);
-    assert_eq!(revisions_after_topology.coefficients, 0);
-    assert_eq!(revisions_after_topology.initial_state, 0);
+    assert!(revisions_after_topology.membership > 0);
+    assert!(revisions_after_topology.coefficients > 0);
+    assert!(revisions_after_topology.initial_state > 0);
     drop(guard);
 
     let mut metadata_only = committed;
