@@ -9,7 +9,12 @@ import { liveChartExportModel, visibleLiveChartPanes } from "../liveChartsPresen
 import { LiveChartSignals } from "./LiveChartSignals";
 import type { LiveChartsViewProps } from "../liveChartsViewTypes";
 
-export function LiveChartSurface({ exportErrorFormat, fitRequest, onChartSelected, onPointSelected, onRangeSelected, onRequestedExportFailed, onRequestedExportHandled, onSeriesChange, presentation, requestedExportRequest, series, selectedSeriesIds, title, xAxisLabel }: Pick<LiveChartsViewProps, "exportErrorFormat" | "fitRequest" | "onChartSelected" | "onExport" | "onPointSelected" | "onRangeSelected" | "onRequestedExportFailed" | "onRequestedExportHandled" | "onSeriesChange" | "presentation" | "requestedExportRequest" | "series" | "selectedSeriesIds" | "title" | "xAxisLabel">) {
+type LiveChartSurfaceProps = Pick<LiveChartsViewProps, "exportErrorFormat" | "fitRequest" | "onChartSelected" | "onExport" | "onPointSelected" | "onRangeSelected" | "onRequestedExportFailed" | "onRequestedExportHandled" | "onSeriesChange" | "presentation" | "requestedExportRequest" | "series" | "selectedSeriesIds" | "title" | "xAxisLabel"> & {
+  /** Legacy callers may still provide the descriptor identity. */
+  descriptorId?: LiveChartsViewProps["descriptorId"];
+};
+
+export function LiveChartSurface({ exportErrorFormat, fitRequest, onChartSelected, onPointSelected, onRangeSelected, onRequestedExportFailed, onRequestedExportHandled, onSeriesChange, presentation, requestedExportRequest, series, selectedSeriesIds, title, xAxisLabel }: LiveChartSurfaceProps) {
   const selected = new Set(selectedSeriesIds);
   const panes = visibleLiveChartPanes(series, selectedSeriesIds);
   const exportRequest = requestedExportRequest ?? null;

@@ -35,7 +35,10 @@ import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import { useMeshHistogramBinElementsResource } from "@/kernel/resources/geometryLifecycleResources";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
-import { useFieldMetaResource } from "@/kernel/resources/studyRuntimeResources";
+import {
+  useFieldMetaResource,
+  useSolverStatusResource,
+} from "@/kernel/resources/studyRuntimeResources";
 import {
   frozenSpinsMaskIdFromResource,
   useFrozenSpinsActivePreviewId,
@@ -120,7 +123,10 @@ import type { Viewport3DAirboxFrameState } from "./layers/Viewport3DScene";
 import { recordViewport3DCameraTrajectorySample } from "./layers/viewport3DCameraTrajectoryProbe";
 import { resolveViewport3DTargetSurfaceLayerInput } from "./layers/viewport3DLayerPassInputs";
 import type { RegionOverlaySelection } from "./layers/RegionOverlayLayer";
-import { buildFrozenSpinsOverlayModel } from "./layers/FrozenSpinsOverlay";
+import {
+  buildFrozenSpinsOverlayModel,
+  buildFrozenSpinsOverlayModelFromField,
+} from "./layers/FrozenSpinsOverlay";
 import {
   DEFAULT_REGION_DIAGNOSTIC_OVERLAY_STATE,
   regionDiagnosticOverlayMode,
@@ -161,6 +167,9 @@ import {
 } from "./viewport3dDiagnostics";
 import { useViewport3DWorkerRuntime } from "./viewport3dWorkerRuntime";
 import { createViewport3DEventManager } from "./viewport3dEventManager";
+import {
+  useViewport3DFieldVectorRequest,
+} from "./viewport3dResources";
 import { retainViewport3DMeshSizeHighlight } from "./viewport3dMeshSizeHighlight";
 import {
   formatViewport3DInspectComponents,
@@ -203,8 +212,7 @@ import {
   type Viewport3DVisualProfile,
 } from "./viewport3dVisualProfile";
 import {
-  beginViewport3DFieldUpdateHold,
-  endViewport3DFieldUpdateHold,
+  createViewport3DInteractionFieldHold,
 } from "./viewport3dFieldUpdateHold";
 import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
 import { installViewport3DThreeConsolePolicy } from "./viewport3dThreeConsolePolicy";
@@ -1440,6 +1448,23 @@ export default function Viewport3DModule({
     selection,
     tracker,
   });
+  const solverStatus = useSolverStatusResource({ enabled: true });
+  const runtimeFrozenSpins = solverStatus.data?.frozen_spins ?? null;
+  const runtimeFrozenSpinsFieldRequest = useMemo(
+    () => ({
+      consumers: ["frozen-spins-runtime-overlay"],
+      quantityId: "frozen_spins",
+      query: { component: "full", scope_kind: "full" } as const,
+      requestId: "frozen_spins-runtime-overlay",
+    }),
+    [],
+  );
+  const runtimeFrozenSpinsFieldEnabled = Boolean(solverStatus.data?.run_id);
+  const runtimeFrozenSpinsFieldResource = useViewport3DFieldVectorRequest(
+    runtimeFrozenSpinsFieldRequest,
+    runtimeFrozenSpinsFieldEnabled,
+  );
+  const runtimeFrozenSpinsFieldVector = runtimeFrozenSpinsFieldResource.data;
   const frozenSpinsPreviewId = useFrozenSpinsActivePreviewId();
   const frozenSpinsPreview = useFrozenSpinsPreviewResource(
     frozenSpinsPreviewId ?? "",
@@ -1493,6 +1518,35 @@ export default function Viewport3DModule({
       sceneModel.fdmDomain,
     ],
   );
+  const runtimeFrozenSpinsRunId = solverStatus.data?.run_id ?? "";
+  const runtimeFrozenSpinsFieldRevision =
+    runtimeFrozenSpinsFieldResource.payloadRevision ?? "field";
+  const runtimeFrozenSpinsPreviewId = runtimeFrozenSpinsRunId
+    ? `runtime:${runtimeFrozenSpinsRunId}:${runtimeFrozenSpins?.mask_sha256 ?? runtimeFrozenSpinsFieldRevision}`
+    : "";
+  const runtimeFrozenSpinsOverlayModel = useMemo(
+    () =>
+      buildFrozenSpinsOverlayModelFromField({
+        current: true,
+        expectedTopologyFingerprint: runtimeFrozenSpins?.topology_fingerprint,
+        fdmDomain: sceneModel.fdmDomain,
+        femCarrier: femFrozenSpinsCarrier,
+        fieldVector: runtimeFrozenSpinsFieldVector,
+        maskSha256:
+          runtimeFrozenSpins?.mask_sha256 ?? runtimeFrozenSpinsFieldRevision,
+        previewId: runtimeFrozenSpinsPreviewId,
+      }),
+    [
+      femFrozenSpinsCarrier,
+      runtimeFrozenSpins,
+      runtimeFrozenSpinsFieldRevision,
+      runtimeFrozenSpinsFieldVector,
+      runtimeFrozenSpinsPreviewId,
+      sceneModel.fdmDomain,
+    ],
+  );
+  const effectiveFrozenSpinsOverlayModel =
+    frozenSpinsOverlayModel ?? runtimeFrozenSpinsOverlayModel;
   const { onSelectDomain, onSelectFdmCell, onSelectFdmTarget, onSelectFdmUniverseOutsideSupport, onSelectObject, onSelectPart, onSelectPlanarMonitor, onSelectRegion } =
     useViewport3DSelectionHandlers({
       domainId,
@@ -1610,28 +1664,18 @@ export default function Viewport3DModule({
     },
     [kernel.cameraRegistry],
   );
-  const cameraFieldUpdateHoldRef = useRef(false);
+  const cameraFieldUpdateHold = useMemo(() => createViewport3DInteractionFieldHold(), []);
   const beginCameraInteraction = useCallback((epoch?: number) => {
-    if (!cameraFieldUpdateHoldRef.current) {
-      cameraFieldUpdateHoldRef.current = true;
-      beginViewport3DFieldUpdateHold();
-    }
+    cameraFieldUpdateHold.begin(epoch);
     kernel.cameraRegistry.beginInteraction(epoch);
-  }, [kernel.cameraRegistry]);
+  }, [cameraFieldUpdateHold, kernel.cameraRegistry]);
   const endCameraInteraction = useCallback((epoch?: number) => {
     kernel.cameraRegistry.endInteraction(epoch);
-    if (cameraFieldUpdateHoldRef.current) {
-      cameraFieldUpdateHoldRef.current = false;
-      endViewport3DFieldUpdateHold();
-    }
-  }, [kernel.cameraRegistry]);
+    cameraFieldUpdateHold.end(epoch);
+  }, [cameraFieldUpdateHold, kernel.cameraRegistry]);
   useEffect(
-    () => () => {
-      if (!cameraFieldUpdateHoldRef.current) return;
-      cameraFieldUpdateHoldRef.current = false;
-      endViewport3DFieldUpdateHold();
-    },
-    [],
+    () => () => cameraFieldUpdateHold.end(),
+    [cameraFieldUpdateHold],
   );
   const changeRegionOverlaySource = useCallback(
     (source: RegionDiagnosticOverlaySource) => {
@@ -1673,7 +1717,7 @@ export default function Viewport3DModule({
       onCameraPatch={patchCameraState}
       onClearSelection={clear}
       onFdmUniverseOverlayVisibilityChange={changeFdmUniverseOverlayVisibility}
-      frozenSpinsOverlayModel={frozenSpinsOverlayModel}
+      frozenSpinsOverlayModel={effectiveFrozenSpinsOverlayModel}
       frozenSpinsOverlayVisible={frozenSpinsOverlayVisible}
       onFrozenSpinsOverlayVisibilityChange={setFrozenSpinsOverlayVisible}
       onRegionOverlaySourceChange={changeRegionOverlaySource}
@@ -2527,6 +2571,9 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       data-frozen-spins-preview-current={
         sceneProps.frozenSpinsOverlayModel?.current ? "true" : "false"
       }
+      data-frozen-spins-overlay-source={
+        sceneProps.frozenSpinsOverlayModel?.source ?? "none"
+      }
       data-inspect-enabled={sceneProps.inspectEnabled ? "true" : "false"}
       data-primitive-object-count={sceneProps.primitiveModel?.objects.length ?? 0}
       data-primitive-object-ids={primitiveObjectIds}
@@ -2680,6 +2727,9 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
               {sceneProps.frozenSpinsOverlayModel.carrierKind === "fdm-cells"
                 ? "FDM cells"
                 : "FEM true DOFs"}
+              {sceneProps.frozenSpinsOverlayModel.source === "runtime-field"
+                ? " · runtime field"
+                : " · preview mask"}
               {sceneProps.frozenSpinsOverlayModel.current
                 ? " · current"
                 : " · stale preview"}

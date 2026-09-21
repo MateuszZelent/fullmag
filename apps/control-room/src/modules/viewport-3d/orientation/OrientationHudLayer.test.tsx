@@ -12,6 +12,7 @@ describe("OrientationHudLayer", () => {
     const cameraCommitBlock = source.slice(snapStart, commitEnd);
 
     expect(cameraCommitBlock).toContain("commitCameraChange(nextCamera)");
+    expect(source).toContain("onCameraChange(nextCamera)");
     expect(cameraCommitBlock).toContain("onCameraChange(nextCamera)");
     expect(cameraCommitBlock).not.toContain("viewport3dStore.setCamera(");
   });

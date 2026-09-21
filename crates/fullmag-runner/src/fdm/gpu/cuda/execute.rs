@@ -16,7 +16,7 @@ use crate::fdm::gpu::cuda::artifacts::{
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::live_observations::FdmLiveObservationScheduler;
 #[cfg(feature = "cuda")]
-use crate::fdm::gpu::cuda::native::{NativeFdmBackend, NativeStatsPolicy};
+use crate::fdm::gpu::cuda::native::{NativeFdmBackend, NativeStatsMode, NativeStatsPolicy};
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::spin_transport::{
     GpuM1TransportSession, NativeGpuM1TransportAbi, PreparedGpuM1Descriptor,
@@ -224,7 +224,13 @@ fn resolve_observation_policy(
         }
         _ => 1,
     };
-    let native = if mask == 0 {
+    // Relaxation control needs a fresh free-DOF torque on every accepted
+    // step.  Ask the native CUDA lane for scalar diagnostics directly so the
+    // host does not reconstruct them by copying the full vector field back
+    // after every step.
+    let native = if plan.relaxation.is_some() {
+        NativeStatsPolicy::control(1)
+    } else if mask == 0 {
         NativeStatsPolicy::none(stride)
     } else {
         NativeStatsPolicy::requested(stride, mask)
@@ -440,7 +446,11 @@ pub(crate) fn execute_cuda_fdm(
     let mut cancelled = false;
     let mut numerical_stagnation = false;
     let mut direct_minimizer_torque_confirmed = false;
-    let mut current_stats = backend.snapshot_step_stats(plan.grid.cells)?;
+    let mut current_stats = if observation_policy.native.mode == NativeStatsMode::Control {
+        backend.snapshot_step_stats_with_policy(plan.grid.cells, NativeStatsPolicy::full(1))?
+    } else {
+        backend.snapshot_step_stats(plan.grid.cells)?
+    };
     ensure_single_object_scalars(&mut current_stats, "free");
     let mut live_observations = live
         .as_ref()
@@ -594,9 +604,16 @@ pub(crate) fn execute_cuda_fdm(
                 continue;
             };
             let due_scalar_row = scalar_row_due(&scalar_schedules, stats.time);
-            let control_observation_due = plan.relaxation.is_some();
-            let native_stats_observed = due_scalar_row || control_observation_due;
-            if native_stats_observed {
+            let native_relaxation_full = plan.relaxation.is_some()
+                && observation_policy.native.mode == NativeStatsMode::Full;
+            let native_relaxation_control = plan.relaxation.is_some()
+                && observation_policy.native.mode == NativeStatsMode::Control;
+            let native_stats_observed =
+                due_scalar_row && !native_relaxation_full && !native_relaxation_control;
+            if native_relaxation_control && due_scalar_row {
+                stats = backend
+                    .snapshot_step_stats_with_policy(plan.grid.cells, NativeStatsPolicy::full(1))?;
+            } else if native_stats_observed {
                 stats = backend.snapshot_step_stats(plan.grid.cells)?;
             }
             ensure_single_object_scalars(&mut stats, "free");
@@ -667,7 +684,11 @@ pub(crate) fn execute_cuda_fdm(
                 let preview_targets_global_scalar = display_selection
                     .as_ref()
                     .is_some_and(display_is_global_scalar);
-                if preview_due && preview_targets_global_scalar && !native_stats_observed {
+                if preview_due
+                    && preview_targets_global_scalar
+                    && !native_stats_observed
+                    && !native_relaxation_control
+                {
                     stats = backend.snapshot_step_stats(plan.grid.cells)?;
                     ensure_single_object_scalars(&mut stats, "free");
                     sampled_stats = stats.clone();
@@ -703,9 +724,8 @@ pub(crate) fn execute_cuda_fdm(
                 } else {
                     None
                 };
-                let mut observation_publication = display_selection
-                    .as_ref()
-                    .and_then(|display_selection| {
+                let mut observation_publication =
+                    display_selection.as_ref().and_then(|display_selection| {
                         live_observations.as_mut().map(|scheduler| {
                             scheduler.observe(
                                 &backend,
@@ -769,7 +789,11 @@ pub(crate) fn execute_cuda_fdm(
                 &mut steps,
                 &mut artifacts,
             )?;
-            let energy_plateau_range = energy_plateau.record(stats.e_total);
+            let energy_plateau_range = if native_relaxation_control && !due_scalar_row {
+                energy_plateau.range()
+            } else {
+                energy_plateau.record(stats.e_total)
+            };
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                     || torque_confirmation.observe_stats(
@@ -788,7 +812,11 @@ pub(crate) fn execute_cuda_fdm(
     }
 
     if latest_stats.is_some() && observation_policy.native.quantity_mask != 0 {
-        let mut final_stats = backend.snapshot_step_stats(plan.grid.cells)?;
+        let mut final_stats = if observation_policy.native.mode == NativeStatsMode::Control {
+            backend.snapshot_step_stats_with_policy(plan.grid.cells, NativeStatsPolicy::full(1))?
+        } else {
+            backend.snapshot_step_stats(plan.grid.cells)?
+        };
         ensure_single_object_scalars(&mut final_stats, "free");
         latest_stats = Some(final_stats.clone());
     }

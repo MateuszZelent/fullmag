@@ -46,6 +46,8 @@ import {
 } from "./ViewCube3DBox";
 
 interface OrientationHudLayerProps {
+  /** Kept optional for callers compiled against the pre-consolidation gesture contract. */
+  cameraGestureRef?: unknown;
   colors: Viewport3DColors;
   hslReferenceVisible: boolean;
   onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;

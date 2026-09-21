@@ -8,6 +8,7 @@ import { MathUtils, type Camera } from "three";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { isViewport3DImmediatePointerDownRegion } from "../viewport3dEventManager";
+import { holdViewport3DCameraControls } from "./viewport3DCameraControlsHold";
 import { nearTuple3, sameTuple3 } from "../viewport3dMath";
 import type { Viewport3DBounds } from "../viewport3dRenderModel";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
@@ -800,7 +801,7 @@ function useOrbitCameraControlsModel({
   const cameraGestureEndedRef = useRef(false);
   const activeGestureEpochRef = useRef<number | null>(null);
   const trajectoryFrameRef = useRef(0);
-  const previousHudControlsEnabledRef = useRef<boolean | null>(null);
+  const releaseHudControlsRef = useRef<(() => void) | null>(null);
   const suppressNextRestCommitRef = useRef(false);
   const cameraControlsPoseCommitTimeoutRef = useRef<ReturnType<
     typeof setTimeout
@@ -912,31 +913,36 @@ function useOrbitCameraControlsModel({
   useEffect(() => {
     const element = gl.domElement;
     const listenerController = new AbortController();
+    let hudPointerId: number | null = null;
 
     const restoreControls = () => {
-      const previousEnabled = previousHudControlsEnabledRef.current;
-      previousHudControlsEnabledRef.current = null;
-      const controls = controlsRef.current;
-      if (!controls || previousEnabled === null) return;
-      controls.enabled = previousEnabled;
+      releaseHudControlsRef.current?.();
+      releaseHudControlsRef.current = null;
+      hudPointerId = null;
     };
 
     const handlePointerDownCapture = (event: PointerEvent) => {
+      if (event.button !== 0 || !event.isPrimary) return;
       if (!isViewport3DImmediatePointerDownRegion(event)) return;
       const controls = controlsRef.current;
-      if (!controls || previousHudControlsEnabledRef.current !== null) return;
-      previousHudControlsEnabledRef.current = Boolean(controls.enabled);
-      controls.enabled = false;
+      if (!controls || releaseHudControlsRef.current) return;
+      releaseHudControlsRef.current = holdViewport3DCameraControls(controls);
+      hudPointerId = event.pointerId;
     };
 
-    window.addEventListener("pointerup", restoreControls, {
+    const handlePointerEnd = (event: PointerEvent) => {
+      if (event.pointerId === hudPointerId) restoreControls();
+    };
+
+    window.addEventListener("pointerup", handlePointerEnd, {
       capture: true,
       signal: listenerController.signal,
     });
-    window.addEventListener("pointercancel", restoreControls, {
+    window.addEventListener("pointercancel", handlePointerEnd, {
       capture: true,
       signal: listenerController.signal,
     });
+    window.addEventListener("blur", restoreControls, { signal: listenerController.signal });
     element.addEventListener("pointerdown", handlePointerDownCapture, {
       capture: true,
       signal: listenerController.signal,

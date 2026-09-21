@@ -14,11 +14,22 @@ from dataclasses import dataclass
 import json
 import math
 from pathlib import Path
+import sys
 from typing import Any, Iterable, Sequence
 
 
-MU0 = 4.0 * math.pi * 1e-7
+_ROOT = Path(__file__).resolve().parents[5]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
+from tests.standard_problems.bimeron.goebel_2019.frozen_size.provenance import (
+    compare_contract,
+    contract_missing_evidence,
+    load_artifact_contract,
+)
+
+
+MU0 = 4.0 * math.pi * 1e-7
 
 def _number(value: Any) -> float | None:
     try:
@@ -201,16 +212,28 @@ def _last_row(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
     return dict(rows[-1]) if rows else {}
 
 
-def _constrained_metric_row(rows: Sequence[dict[str, Any]], fallback: dict[str, Any]) -> dict[str, Any]:
+def _constrained_metric_row(
+    rows: Sequence[dict[str, Any]],
+    fallback: dict[str, Any],
+    *,
+    preferred_stage: str = "constrained_hold",
+) -> dict[str, Any]:
     """Select torque/counter metrics from the constrained profile stage.
 
     A release stage is intentionally free to move, so its terminal torque is
-    not the convergence metric for the frozen-spin profile.  Prefer the last
-    hold sample, then constrained-relax, and only use the terminal row for a
-    protocol without a constrained stage.
+    not the convergence metric for the frozen-spin profile.  The preferred
+    stage is explicit because a direct minimizer reports accepted steps in
+    ``constrained_relax``, while a time-domain LLG run traditionally uses the
+    later hold stage as its stability sample.
     """
 
-    for stage_id in ("constrained_hold", "constrained_relax"):
+    stage_order = [preferred_stage]
+    stage_order.extend(
+        stage_id
+        for stage_id in ("constrained_relax", "constrained_hold")
+        if stage_id not in stage_order
+    )
+    for stage_id in stage_order:
         candidates = [row for row in rows if row.get("_stage_id") == stage_id]
         if candidates:
             return dict(candidates[-1])
@@ -251,11 +274,21 @@ def _state_quality(values: Sequence[Sequence[float]]) -> dict[str, Any]:
     }
 
 
-def _grid_from_metadata(root: Path, fallback_cell_nm: float = 0.5) -> tuple[int, int, int, float, float, float]:
+def _grid_from_metadata(
+    root: Path,
+    workspace_root: Path | None = None,
+) -> tuple[int, int, int, float, float, float]:
     metadata_path = root / "metadata.json"
     metadata: Any = {}
     if metadata_path.is_file():
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    elif workspace_root is not None:
+        # Interactive runs may be interrupted after the runtime history has
+        # been written but before the run directory receives its own metadata.
+        # Use that authoritative stage metadata instead of assuming the
+        # baseline 0.5 nm cube (which would incorrectly add a second film
+        # layer to the h=0.25 nm in-plane refinement).
+        metadata, _ = _metadata_for_root(workspace_root)
     execution_plan = _find_nested(metadata, "execution_plan") or {}
     plan = execution_plan.get("backend_plan") if isinstance(execution_plan, dict) else None
     if not isinstance(plan, dict):
@@ -284,10 +317,44 @@ def _grid_from_metadata(root: Path, fallback_cell_nm: float = 0.5) -> tuple[int,
                 return (*counts, *sizes)
         except (TypeError, ValueError):
             pass
-    # The experiment geometry is fixed at 500 x 40 x 0.5 nm.  Metadata from
-    # older runners may omit the resolved grid, so derive it from the case.
-    h = fallback_cell_nm * 1e-9
-    return round(500e-9 / h), round(40e-9 / h), round(0.5e-9 / h), h, h, h
+    # A missing resolved grid must not be reconstructed from the operator's
+    # current environment.  That can silently measure a field with a different
+    # mesh (and, in particular, a different number of z cells).  The launcher
+    # writes the case request next to the artifact; accept that saved contract
+    # as a lower-level authoritative source when the managed runtime metadata
+    # is not available.
+    request_path = root / "request.json"
+    if request_path.is_file():
+        try:
+            request = json.loads(request_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            request = {}
+        case = request.get("case") if isinstance(request, dict) else None
+        if isinstance(case, dict):
+            saved_cell = case.get("cell_size_m")
+            cell_scale = 1.0
+            if saved_cell is None:
+                saved_cell = case.get("cell_size_nm")
+                cell_scale = 1e-9
+            saved_track = case.get("track_size_m")
+            track_scale = 1.0
+            if saved_track is None:
+                saved_track = case.get("track_size_nm")
+                track_scale = 1e-9
+            if isinstance(saved_cell, list) and len(saved_cell) == 3 and isinstance(saved_track, list) and len(saved_track) == 3:
+                try:
+                    cell_values = tuple(float(value) * cell_scale for value in saved_cell)
+                    track_values = tuple(float(value) * track_scale for value in saved_track)
+                    if all(value > 0.0 for value in cell_values + track_values):
+                        counts = tuple(round(track_values[index] / cell_values[index]) for index in range(3))
+                        if all(count > 0 for count in counts):
+                            return (*counts, *cell_values)
+                except (TypeError, ValueError, ZeroDivisionError):
+                    pass
+    raise ValueError(
+        "resolved grid metadata is missing; refusing to infer nx/ny/nz or "
+        "cell sizes from the current environment"
+    )
 
 
 def _plane(values: Sequence[Sequence[float]], nx: int, ny: int, nz: int) -> list[tuple[float, float, float]]:
@@ -329,7 +396,7 @@ def _polygon_area(points: Sequence[tuple[float, float]]) -> float:
 def _clip_triangle_to_negative(
     vertices: Sequence[tuple[float, float, float]]
 ) -> list[tuple[float, float]]:
-    """Clip one linear triangle to ``m_x <= 0`` for contour area."""
+    """Clip one linear triangle to ``longitudinal <= 0`` for contour area."""
 
     clipped: list[tuple[float, float]] = []
     previous = vertices[-1]
@@ -353,16 +420,28 @@ def _clip_triangle_to_negative(
 
 
 def _interpolated_negative_area(
-    plane: Sequence[Sequence[float]], nx: int, ny: int, hx: float, hy: float
+    plane: Sequence[Sequence[float]],
+    nx: int,
+    ny: int,
+    hx: float,
+    hy: float,
+    *,
+    component: set[tuple[int, int]] | None = None,
+    background_sign: int = 1,
+    diagnostics: dict[str, int] | None = None,
 ) -> float:
-    """Estimate the closed ``m_x=0`` area with piecewise-linear triangles.
+    """Estimate the selected ``background_sign*m_x=0`` area.
 
     Magnetization samples live at cell centres.  Each adjacent centre quad is
     split into two triangles and clipped at the zero contour.  The periodic x
     seam is unwrapped while measuring so a contour crossing that seam does not
-    acquire a spurious long edge.
+    acquire a spurious long edge.  When ``component`` is supplied, triangles
+    from disconnected negative components are excluded from the result.
     """
 
+    if background_sign not in {-1, 1}:
+        raise ValueError("background_sign must be -1 or 1")
+    selected = component
     area = 0.0
     for iy in range(ny - 1):
         for ix in range(nx):
@@ -371,13 +450,63 @@ def _interpolated_negative_area(
             x1 = (ix + 1) * hx
             y0 = iy * hy
             y1 = (iy + 1) * hy
-            p00 = (x0, y0, float(plane[iy * nx + ix][0]))
-            p10 = (x1, y0, float(plane[iy * nx + jx][0]))
-            p01 = (x0, y1, float(plane[(iy + 1) * nx + ix][0]))
-            p11 = (x1, y1, float(plane[(iy + 1) * nx + jx][0]))
-            area += _polygon_area(_clip_triangle_to_negative((p00, p10, p11)))
-            area += _polygon_area(_clip_triangle_to_negative((p00, p11, p01)))
+            corners = (
+                (ix, iy),
+                (jx, iy),
+                (ix, iy + 1),
+                (jx, iy + 1),
+            )
+            values = tuple(background_sign * float(plane[y * nx + x][0]) for x, y in corners)
+            points = (
+                (x0, y0, values[0]),
+                (x1, y0, values[1]),
+                (x0, y1, values[2]),
+                (x1, y1, values[3]),
+            )
+            for triangle_indices in ((0, 1, 3), (0, 3, 2)):
+                triangle_corners = [corners[index] for index in triangle_indices]
+                negative_corners = {
+                    corner for corner, value in zip(triangle_corners, (points[index][2] for index in triangle_indices))
+                    if value < 0.0
+                }
+                if selected is not None:
+                    # A triangle that contains a negative vertex from another
+                    # disconnected component is intentionally omitted.  Its
+                    # contour belongs to that other polygon and adding it here
+                    # would make R_area depend on unrelated islands.
+                    if negative_corners & selected and not negative_corners.issubset(selected):
+                        if diagnostics is not None:
+                            diagnostics["mixed_component_triangle_count"] = diagnostics.get(
+                                "mixed_component_triangle_count", 0
+                            ) + 1
+                    if not (negative_corners & selected) or not negative_corners.issubset(selected):
+                        continue
+                triangle = tuple(points[index] for index in triangle_indices)
+                area += _polygon_area(_clip_triangle_to_negative(triangle))
     return area
+
+
+def _unwrap_component_x(
+    component: set[tuple[int, int]], nx: int
+) -> dict[tuple[int, int], int]:
+    """Unwrap x indices across the periodic seam using the largest empty gap."""
+
+    if not component:
+        return {}
+    unique_x = sorted({ix for ix, _iy in component})
+    if len(unique_x) == 1:
+        start = unique_x[0]
+    else:
+        gaps = [
+            ((unique_x[(index + 1) % len(unique_x)] - unique_x[index]) % nx)
+            for index in range(len(unique_x))
+        ]
+        cut = max(range(len(gaps)), key=gaps.__getitem__)
+        start = unique_x[(cut + 1) % len(unique_x)]
+    return {
+        (ix, iy): start + ((ix - start) % nx)
+        for ix, iy in component
+    }
 
 
 def _component_shape(
@@ -390,8 +519,9 @@ def _component_shape(
             "component_semi_axes_nm": None,
             "component_aspect_ratio": None,
         }
+    unwrapped = _unwrap_component_x(component, nx)
     points = [
-        ((ix + 0.5) * hx - 0.5 * nx * hx, (iy + 0.5) * hy - 0.5 * ny * hy)
+        ((unwrapped[(ix, iy)] + 0.5) * hx - 0.5 * nx * hx, (iy + 0.5) * hy - 0.5 * ny * hy)
         for ix, iy in component
     ]
     xs = [point[0] for point in points]
@@ -416,7 +546,17 @@ def _component_shape(
     }
 
 
-def _measure(values: Sequence[Sequence[float]], *, nx: int, ny: int, nz: int, cell: tuple[float, float, float]) -> dict[str, Any]:
+def _measure(
+    values: Sequence[Sequence[float]],
+    *,
+    nx: int,
+    ny: int,
+    nz: int,
+    cell: tuple[float, float, float],
+    background_sign: int = 1,
+) -> dict[str, Any]:
+    if background_sign not in {-1, 1}:
+        raise ValueError("background_sign must be -1 or 1")
     plane = _plane(values, nx, ny, nz)
     hx, hy, _ = cell
     centre_ix = nx // 2
@@ -425,13 +565,15 @@ def _measure(values: Sequence[Sequence[float]], *, nx: int, ny: int, nz: int, ce
     def at(ix: int, iy: int) -> tuple[float, float, float]:
         return plane[iy * nx + ix]
 
-    negative = [vector[0] < 0.0 for vector in plane]
+    longitudinal = [background_sign * vector[0] for vector in plane]
+    negative = [value < 0.0 for value in longitudinal]
     negative_indices = [
         (ix, iy)
         for iy in range(ny)
         for ix in range(nx)
         if negative[iy * nx + ix]
     ]
+    negative_set = set(negative_indices)
     seed = min(
         negative_indices,
         key=lambda item: abs(item[0] - centre_ix) + abs(item[1] - centre_iy),
@@ -458,7 +600,17 @@ def _measure(values: Sequence[Sequence[float]], *, nx: int, ny: int, nz: int, ce
             pending[:] = [(x, y) for x, y in pending if 0 <= y < ny]
 
     area_cell_count = len(component) * hx * hy
-    area_interpolated = _interpolated_negative_area(plane, nx, ny, hx, hy)
+    contour_diagnostics: dict[str, int] = {"mixed_component_triangle_count": 0}
+    area_interpolated = _interpolated_negative_area(
+        plane,
+        nx,
+        ny,
+        hx,
+        hy,
+        component=component,
+        background_sign=background_sign,
+        diagnostics=contour_diagnostics,
+    )
     area = area_interpolated if area_interpolated > 0.0 else area_cell_count
     cell_radius_nm = math.sqrt(area_cell_count / math.pi) * 1e9 if area_cell_count > 0.0 else None
     interpolated_radius_nm = (
@@ -472,12 +624,28 @@ def _measure(values: Sequence[Sequence[float]], *, nx: int, ny: int, nz: int, ce
         else None
     )
     radius_grid_uncertainty_nm = 0.5 * max(hx, hy) * 1e9
-    mz_values = [(at(ix, iy)[2], ix, iy) for iy in range(ny) for ix in range(nx)]
+    # The mz extrema sit at the centre of the bimeron cores and can be one
+    # raster cell outside the strict longitudinal component (the old profile
+    # has mx≈+0.016 at both extrema).  Include one four-neighbour shell, but
+    # never import a negative cell from another disconnected component.  This
+    # keeps R_core local to the selected texture without reverting to global
+    # film extrema.
+    core_indices_set = set(component)
+    for ix, iy in component:
+        for candidate in (((ix - 1) % nx, iy), ((ix + 1) % nx, iy), (ix, iy - 1), (ix, iy + 1)):
+            cx, cy = candidate
+            if 0 <= cy < ny and (candidate not in negative_set or candidate in component):
+                core_indices_set.add(candidate)
+    core_indices = sorted(core_indices_set)
+    mz_values = [(at(ix, iy)[2], ix, iy) for ix, iy in core_indices]
     min_mz, min_ix, min_iy = min(mz_values, key=lambda value: value[0]) if mz_values else (float("nan"), 0, 0)
     max_mz, max_ix, max_iy = max(mz_values, key=lambda value: value[0]) if mz_values else (float("nan"), 0, 0)
     min_xy = ((min_ix + 0.5) * hx - 0.5 * nx * hx, (min_iy + 0.5) * hy - 0.5 * ny * hy)
     max_xy = ((max_ix + 0.5) * hx - 0.5 * nx * hx, (max_iy + 0.5) * hy - 0.5 * ny * hy)
-    core_distance = math.hypot(max_xy[0] - min_xy[0], max_xy[1] - min_xy[1])
+    lx = nx * hx
+    dx = (max_xy[0] - min_xy[0] + 0.5 * lx) % lx - 0.5 * lx
+    dy = max_xy[1] - min_xy[1]
+    core_distance = math.hypot(dx, dy) if mz_values else 0.0
 
     charge = 0.0
     for iy in range(ny - 1):
@@ -494,6 +662,11 @@ def _measure(values: Sequence[Sequence[float]], *, nx: int, ny: int, nz: int, ce
         "area_interpolated_m2": area_interpolated,
         "R_area_interpolated_nm": math.sqrt(area_interpolated / math.pi) * 1e9 if area_interpolated > 0.0 else None,
         "area_method": "piecewise_linear_mx_zero_contour" if area_interpolated > 0.0 else "negative_cell_count",
+        "area_component_scope": "selected_connected_component",
+        "area_component_count": 1 if component else 0,
+        "area_component_contour_ambiguous": contour_diagnostics["mixed_component_triangle_count"] > 0,
+        "area_component_contour_diagnostics": contour_diagnostics,
+        "background_sign": background_sign,
         "area_cell_count_m2": area_cell_count,
         "area_cell_count": len(component),
         "R_area_cell_count_nm": cell_radius_nm,
@@ -502,7 +675,11 @@ def _measure(values: Sequence[Sequence[float]], *, nx: int, ny: int, nz: int, ce
             radius_grid_uncertainty_nm,
             contour_raster_delta_nm or 0.0,
         ),
+        "R_area_uncertainty_kind": "grid_resolution_estimate",
         "R_core_uncertainty_nm": radius_grid_uncertainty_nm,
+        "R_core_uncertainty_kind": "grid_resolution_estimate",
+        "R_core_extrema_scope": "selected_component_plus_one_cell_nonnegative_neighborhood",
+        "R_core_distance_method": "periodic_x_minimum_image_euclidean_y",
         "R_core_m": core_distance / 2.0 if core_distance > 0.0 else None,
         "R_core_nm": core_distance * 0.5e9 if core_distance > 0.0 else None,
         "mz_min": min_mz,
@@ -739,12 +916,19 @@ def _torque_t(metrics: dict[str, Any]) -> float | None:
     return value
 
 
-def _convergence_diagnostics(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
+def _convergence_diagnostics(
+    rows: Sequence[dict[str, Any]], *, preferred_stage: str = "constrained_hold"
+) -> dict[str, Any]:
     """Summarize the final constrained window without claiming convergence."""
 
-    stage_rows = [row for row in rows if row.get("_stage_id") == "constrained_hold"]
+    stage_rows = [row for row in rows if row.get("_stage_id") == preferred_stage]
     if not stage_rows:
-        stage_rows = [row for row in rows if row.get("_stage_id") == "constrained_relax"]
+        fallback_stage = (
+            "constrained_relax"
+            if preferred_stage == "constrained_hold"
+            else "constrained_hold"
+        )
+        stage_rows = [row for row in rows if row.get("_stage_id") == fallback_stage]
     if not stage_rows:
         stage_rows = list(rows)
     if not stage_rows:
@@ -779,7 +963,12 @@ def _convergence_diagnostics(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _runtime_provenance(metadata: dict[str, Any]) -> dict[str, Any]:
+def _runtime_provenance(
+    metadata: dict[str, Any],
+    *,
+    root: Path | None = None,
+    workspace_root: Path | None = None,
+) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key in (
         "requested_execution",
@@ -793,18 +982,170 @@ def _runtime_provenance(metadata: dict[str, Any]) -> dict[str, Any]:
             value = _find_nested(metadata, key)
         if value is not None:
             result[key] = value
+    # A profile ends with a finite ``constrained_hold`` stage so that the
+    # energy and frozen-reference drift can be measured.  The runtime's
+    # terminal metadata therefore describes that measurement stage, whose
+    # completion is naturally ``converged=false`` even when the preceding
+    # constrained relaxation stopped on the torque tolerance.  Use the
+    # constrained relaxation completion as the convergence provenance while
+    # preserving the terminal completion for auditability.
+    terminal_completion = result.get("completion")
+    if root is not None:
+        for stage_root in _stage_roots_for(root, workspace_root):
+            candidate = stage_root / "metadata.json"
+            if not candidate.is_file():
+                continue
+            try:
+                stage_metadata = json.loads(candidate.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            active_stage_id = _find_nested(stage_metadata, "active_stage_id")
+            if active_stage_id != "constrained_relax":
+                continue
+            stage_completion = stage_metadata.get("completion")
+            if not isinstance(stage_completion, dict):
+                stage_completion = _find_nested(stage_metadata, "completion")
+            if isinstance(stage_completion, dict):
+                if isinstance(terminal_completion, dict):
+                    result["terminal_completion"] = terminal_completion
+                result["completion"] = stage_completion
+                result["completion_source"] = "constrained_relax"
+            break
     return result
+
+
+def _background_reference_status(
+    root: Path,
+    workspace_root: Path | None = None,
+    expected_contract: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return whether a background energy is safe to use as a reference.
+
+    A finite terminal energy is not enough: the +x background must have
+    reached the solver's convergence criterion before it can be subtracted
+    from a constrained texture.  Keeping this decision in the analyzer also
+    protects direct ``analyze.py --background`` invocations from silently
+    producing a misleading ``delta_E_to_background_J``.
+    """
+
+    root = root.resolve()
+    workspace_root = workspace_root.resolve() if workspace_root is not None else None
+    contract = load_artifact_contract(root)
+    missing_contract = contract_missing_evidence(contract)
+    if missing_contract:
+        return {
+            "status": "unavailable",
+            "reason": "background_contract_missing",
+            "energy_J": None,
+            "contract_missing_evidence": missing_contract,
+        }
+    if expected_contract is not None:
+        contract_mismatches = compare_contract(
+            expected_contract,
+            contract,
+            physical_only=True,
+        )
+        if contract_mismatches:
+            return {
+                "status": "unavailable",
+                "reason": "background_contract_mismatch",
+                "energy_J": None,
+                "contract_mismatches": contract_mismatches,
+            }
+    cached_analysis = root / "analysis.json"
+    if cached_analysis.is_file():
+        try:
+            cached = json.loads(cached_analysis.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            cached = None
+        if isinstance(cached, dict):
+            if cached.get("status") != "measured":
+                return {
+                    "status": "unavailable",
+                    "reason": "background_not_measured",
+                    "energy_J": None,
+                }
+            cached_energy = (
+                cached.get("energy", {}).get("E_total_J")
+                if isinstance(cached.get("energy"), dict)
+                else None
+            )
+            cached_runtime = cached.get("runtime_provenance")
+            cached_completion = (
+                cached_runtime.get("completion")
+                if isinstance(cached_runtime, dict)
+                and isinstance(cached_runtime.get("completion"), dict)
+                else None
+            )
+            if _number(cached_energy) is None:
+                return {
+                    "status": "unavailable",
+                    "reason": "background_energy_not_finite",
+                    "energy_J": None,
+                }
+            if cached_completion is None:
+                return {
+                    "status": "unavailable",
+                    "reason": "background_completion_missing",
+                    "energy_J": None,
+                }
+            if cached_completion.get("converged") is not True:
+                return {
+                    "status": "unavailable",
+                    "reason": "background_not_converged",
+                    "energy_J": None,
+                    "completion": cached_completion,
+                }
+            return {
+                "status": "usable",
+                "reason": "background_converged",
+                "energy_J": float(cached_energy),
+                "completion": cached_completion,
+                "contract_sha256": contract.get("contract_sha256") if isinstance(contract, dict) else None,
+            }
+    metadata, _metadata_path = _metadata_for_root(root, workspace_root)
+    runtime = _runtime_provenance(metadata, root=root, workspace_root=workspace_root)
+    completion = runtime.get("completion")
+    rows = _trace_rows(root, workspace_root)
+    terminal_energy = _energy_from_row(_last_row(rows)).get("E_total_J")
+    if _number(terminal_energy) is None:
+        return {
+            "status": "unavailable",
+            "reason": "background_energy_not_finite",
+            "energy_J": None,
+        }
+    if not isinstance(completion, dict):
+        return {
+            "status": "unavailable",
+            "reason": "background_completion_missing",
+            "energy_J": None,
+        }
+    if completion.get("converged") is not True:
+        return {
+            "status": "unavailable",
+            "reason": "background_not_converged",
+            "energy_J": None,
+            "completion": completion,
+        }
+    return {
+        "status": "usable",
+        "reason": "background_converged",
+        "energy_J": terminal_energy,
+        "completion": completion,
+        "contract_sha256": contract.get("contract_sha256") if isinstance(contract, dict) else None,
+    }
 
 
 def analyze_case(
     root: Path,
     *,
     workspace_root: Path | None = None,
-    fallback_cell_nm: float = 0.5,
     background_energy_j: float | None = None,
+    background_reference: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = root.resolve()
     workspace_root = workspace_root.resolve() if workspace_root is not None else None
+    provenance_contract = load_artifact_contract(root)
     metadata, metadata_path = _metadata_for_root(root, workspace_root)
     experiment = (
         _find_nested(metadata, "bimeron_frozen_size")
@@ -812,8 +1153,39 @@ def analyze_case(
         or {}
     )
     protocol = experiment.get("protocol", {}) if isinstance(experiment, dict) else {}
-    cell_nm = _number(protocol.get("cell_nm")) if isinstance(protocol, dict) else None
-    nx, ny, nz, hx, hy, hz = _grid_from_metadata(root, cell_nm or fallback_cell_nm)
+    background_sign_value = (
+        protocol.get("background_sign")
+        if isinstance(protocol, dict)
+        else None
+    )
+    if background_sign_value is None and isinstance(experiment, dict):
+        background_sign_value = experiment.get("background_sign")
+    try:
+        background_sign = int(background_sign_value)
+    except (TypeError, ValueError):
+        background_sign = 1
+    if background_sign not in {-1, 1}:
+        background_sign = 1
+    relaxation_algorithm = (
+        str(experiment.get("relaxation_algorithm", "")).strip().lower()
+        if isinstance(experiment, dict)
+        else ""
+    )
+    profile_stage_preference = (
+        str(experiment.get("profile_energy_stage", "")).strip()
+        if isinstance(experiment, dict)
+        else ""
+    )
+    if profile_stage_preference not in {"constrained_relax", "constrained_hold"}:
+        profile_stage_preference = (
+            "constrained_relax"
+            if relaxation_algorithm in {"projected_gradient_bb", "nonlinear_cg"}
+            else "constrained_hold"
+        )
+    nx, ny, nz, hx, hy, hz = _grid_from_metadata(
+        root,
+        workspace_root=workspace_root,
+    )
     rows = _trace_rows(root, workspace_root)
     final_row = _last_row(rows)
     energy = _energy_from_row(final_row)
@@ -824,16 +1196,33 @@ def analyze_case(
     else:
         energy["delta_E_to_background_J"] = None
     stage_energy = _stage_energy(rows, background_energy_j)
-    profile_stage_id = "constrained_hold"
+    profile_stage_id = profile_stage_preference
     profile_energy = stage_energy.get(profile_stage_id)
     if profile_energy is None:
-        profile_stage_id = "constrained_relax"
+        profile_stage_id = (
+            "constrained_hold"
+            if profile_stage_preference == "constrained_relax"
+            else "constrained_relax"
+        )
         profile_energy = stage_energy.get(profile_stage_id)
     if profile_energy is None and stage_energy:
         profile_stage_id, profile_energy = next(reversed(stage_energy.items()))
     if profile_energy is None:
         profile_stage_id = "terminal"
         profile_energy = dict(energy)
+    profile_state_label = (
+        "constrained_relaxed"
+        if profile_stage_id == "constrained_relax"
+        else "constrained_held"
+        if profile_stage_id == "constrained_hold"
+        else "final"
+    )
+    if background_reference is None:
+        background_reference = {
+            "status": "provided" if background_energy_j is not None else "not_provided",
+            "reason": "caller_supplied_energy" if background_energy_j is not None else "no_background_argument",
+            "energy_J": background_energy_j,
+        }
 
     states: dict[str, Any] = {}
     state_values: dict[str, list[tuple[float, float, float]]] = {}
@@ -852,13 +1241,24 @@ def analyze_case(
             values = _state_values(path)
             if label in {"initial", "constrained_relaxed", "constrained_held"}:
                 state_values[label] = values
-            measurement = _measure(values, nx=nx, ny=ny, nz=nz, cell=(hx, hy, hz))
+            measurement = _measure(
+                values,
+                nx=nx,
+                ny=ny,
+                nz=nz,
+                cell=(hx, hy, hz),
+                background_sign=background_sign,
+            )
             measurement.update(_state_quality(values))
             states[label] = {"path": str(path), "measurement": measurement}
         except Exception as error:
             states[label] = {"path": str(path), "measurement_error": str(error)}
 
-    constrained_row = _constrained_metric_row(rows, final_row)
+    constrained_row = _constrained_metric_row(
+        rows,
+        final_row,
+        preferred_stage=profile_stage_preference,
+    )
     frozen_runtime = _resolved_frozen_metrics(
         root, workspace_root, _frozen_metrics(constrained_row)
     )
@@ -877,25 +1277,42 @@ def analyze_case(
         "schema_version": "bimeron_frozen_size.analysis.v1",
         "artifact_root": str(root),
         "protocol": protocol,
-        "accepted_step_count": len(rows),
-        "terminal_step": final_row.get("step"),
+        # Autosave rows are sampled observations, not the complete accepted
+        # step history.  Do not expose their count (or the terminal step
+        # index) under the misleading accepted_step_count name.
+        "accepted_step_count": None,
+        "accepted_step_count_source": "not_emitted_in_sampled_trace",
+        "trace_sample_count": len(rows),
+        "terminal_step_index": final_row.get("step"),
         "terminal_time_s": _row_value(final_row, "time", "t"),
         "energy": energy,
         "stage_energy": stage_energy,
         "profile_energy": {**profile_energy, "stage_id": profile_stage_id},
-        "convergence_diagnostics": _convergence_diagnostics(rows),
-        "runtime_provenance": _runtime_provenance(metadata),
+        "profile_state_label": profile_state_label,
+        "convergence_diagnostics": _convergence_diagnostics(
+            rows,
+            preferred_stage=profile_stage_preference,
+        ),
+        "runtime_provenance": _runtime_provenance(
+            metadata,
+            root=root,
+            workspace_root=workspace_root,
+        ),
+        "background_reference": background_reference,
         "frozen_runtime": frozen_runtime,
         "states": states,
         "source_metadata_present": metadata_path is not None,
         "status": "measured" if terminal_energy is not None and states else "incomplete",
     }
+    if provenance_contract is not None:
+        summary["provenance_contract"] = provenance_contract
     return summary
 
 
 def background_energy(root: Path, workspace_root: Path | None = None) -> float | None:
-    rows = _trace_rows(root, workspace_root)
-    return _energy_from_row(_last_row(rows)).get("E_total_J")
+    status = _background_reference_status(root, workspace_root)
+    value = status.get("energy_J")
+    return float(value) if status.get("status") == "usable" and _number(value) is not None else None
 
 
 def main() -> int:
@@ -906,8 +1323,32 @@ def main() -> int:
     parser.add_argument("--background-workspace", type=Path, help="managed session directory for the background run")
     parser.add_argument("--output", type=Path, help="write analysis JSON to this path")
     args = parser.parse_args()
-    background = background_energy(args.background, args.background_workspace) if args.background else None
-    summary = analyze_case(args.root, workspace_root=args.workspace, background_energy_j=background)
+    expected_contract = load_artifact_contract(args.root.resolve())
+    if args.background and expected_contract is None:
+        background_reference = {
+            "status": "unavailable",
+            "reason": "case_contract_missing",
+            "energy_J": None,
+        }
+    elif args.background:
+        background_reference = _background_reference_status(
+            args.background,
+            args.background_workspace,
+            expected_contract=expected_contract,
+        )
+    else:
+        background_reference = {
+            "status": "not_provided",
+            "reason": "no_background_argument",
+            "energy_J": None,
+        }
+    background = background_reference.get("energy_J") if background_reference.get("status") == "usable" else None
+    summary = analyze_case(
+        args.root,
+        workspace_root=args.workspace,
+        background_energy_j=background,
+        background_reference=background_reference,
+    )
     encoded = json.dumps(summary, indent=2, ensure_ascii=False) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

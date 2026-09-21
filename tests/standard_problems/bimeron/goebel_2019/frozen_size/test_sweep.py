@@ -7,6 +7,10 @@ from pathlib import Path
 from tests.standard_problems.bimeron.goebel_2019.frozen_size import run_sweep
 
 
+def test_default_profile_protocols_do_not_repeat_free_relaxation() -> None:
+    assert run_sweep.DEFAULT_PROFILE_PROTOCOLS == ("ring",)
+
+
 def _layout(root: Path) -> dict[str, object]:
     target = root / "target"
     (target / "x86_64-pc-windows-msvc" / "release").mkdir(parents=True)
@@ -78,6 +82,35 @@ def test_runtime_manifest_rejects_skipped_local_changes(tmp_path: Path, monkeypa
 
     assert not run_sweep._managed_runtime_matches_source(
         tmp_path, layout, device="cpu"
+    )
+
+
+def test_runtime_manifest_distinguishes_headless_frontend_toolchain(
+    tmp_path: Path, monkeypatch
+) -> None:
+    layout = _layout(tmp_path)
+    identity = _identity()
+    (tmp_path / "windows-runtime" / "build-manifest.json").write_text(
+        json.dumps(
+            {
+                "git_commit": identity["head_commit_full"],
+                "source_snapshot_sha256": identity["source_snapshot_sha256"],
+                "worktree_state": "clean",
+                "cuda": True,
+                "local_changes_check": "enforced",
+                "node_version": "v24.19.0",
+                "pnpm_version": "10.8.1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(run_sweep, "_source_identity", lambda _repo: identity)
+
+    assert run_sweep._managed_runtime_matches_source(
+        tmp_path, layout, device="gpu", needs_control_room_toolchain=True
+    )
+    assert not run_sweep._managed_runtime_matches_source(
+        tmp_path, layout, device="gpu", needs_control_room_toolchain=False
     )
 
 

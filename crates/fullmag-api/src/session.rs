@@ -35,6 +35,25 @@ pub(crate) struct FrozenSpinsPreviewRecord {
 
 const MAX_FROZEN_SPINS_PREVIEWS: usize = 32;
 
+// Large-grid live runs do not need these duplicated spatial carriers in the
+// control-plane snapshot while the solver is active. The authoritative
+// magnetization and material fields remain in the saved run artifacts; field
+// metadata and on-demand data-plane routes are unaffected.
+const LARGE_LIVE_FIELD_QUANTITIES: [&str; 6] = [
+    "m",
+    "mat_ms",
+    "mat_aex",
+    "mat_alpha",
+    "mat_dind",
+    "mat_dbulk",
+];
+
+fn drop_large_live_field_carriers(latest_fields: &mut LatestFields) {
+    for quantity in LARGE_LIVE_FIELD_QUANTITIES {
+        latest_fields.remove(quantity);
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct FrozenSpinsPreviewStore {
     records: BTreeMap<String, FrozenSpinsPreviewRecord>,
@@ -1968,8 +1987,16 @@ pub(crate) fn apply_current_live_snapshot(
     current: &mut SessionStateResponse,
     req: CurrentLiveSnapshotRequest,
 ) -> Result<(), ApiError> {
+    apply_current_live_snapshot_with_options(current, req, false)
+}
+
+pub(crate) fn apply_current_live_snapshot_with_options(
+    current: &mut SessionStateResponse,
+    req: CurrentLiveSnapshotRequest,
+    drop_live_magnetization: bool,
+) -> Result<(), ApiError> {
     let mut candidate = current.clone();
-    apply_current_live_snapshot_in_place(&mut candidate, req)?;
+    apply_current_live_snapshot_in_place(&mut candidate, req, drop_live_magnetization)?;
     *current = candidate;
     Ok(())
 }
@@ -1977,6 +2004,7 @@ pub(crate) fn apply_current_live_snapshot(
 fn apply_current_live_snapshot_in_place(
     current: &mut SessionStateResponse,
     mut req: CurrentLiveSnapshotRequest,
+    drop_live_magnetization: bool,
 ) -> Result<(), ApiError> {
     let apply_start = std::time::Instant::now();
     if matches!(
@@ -2056,6 +2084,9 @@ fn apply_current_live_snapshot_in_place(
     if let Some(metadata) = req.metadata {
         apply_current_live_metadata(current, metadata);
     }
+    if drop_live_magnetization {
+        drop_large_live_field_carriers(&mut current.latest_fields);
+    }
     apply_frozen_spins_runtime_status(current, req.frozen_spins_runtime_status.take());
     if let Some(mesh_workspace) = req.mesh_workspace {
         apply_mesh_workspace_update(current, mesh_workspace);
@@ -2083,6 +2114,10 @@ fn apply_current_live_snapshot_in_place(
         if let Some(fem_mesh) = live_state.latest_step.fem_mesh.take() {
             apply_fem_mesh_update(current, fem_mesh);
         }
+        if drop_live_magnetization {
+            live_state.latest_step.magnetization = None;
+            drop_large_live_field_carriers(&mut current.latest_fields);
+        }
         current.live_state = Some(live_state);
     }
     if let Some(coupled_checkpoint) = req.coupled_checkpoint {
@@ -2095,6 +2130,9 @@ fn apply_current_live_snapshot_in_place(
         bind_scalar_observation_frame(current, row);
     }
     if let Some(latest_fields) = req.latest_fields.as_mut() {
+        if drop_live_magnetization {
+            drop_large_live_field_carriers(latest_fields);
+        }
         bind_latest_field_observation_frames(current, latest_fields);
     }
     if let Some(row) = req.latest_scalar_row {
@@ -2108,6 +2146,9 @@ fn apply_current_live_snapshot_in_place(
         } else {
             merge_latest_fields(&mut current.latest_fields, latest_fields);
         }
+    }
+    if drop_live_magnetization {
+        drop_large_live_field_carriers(&mut current.latest_fields);
     }
     if req.replace_latest_fields {
         if let Some(generation) = req.field_generation.as_ref() {
@@ -2220,6 +2261,14 @@ pub(crate) fn apply_current_live_runtime_frame(
     current: &mut SessionStateResponse,
     frame: CurrentLiveRuntimeFrameRequest,
 ) -> Result<(), ApiError> {
+    apply_current_live_runtime_frame_with_options(current, frame, false)
+}
+
+pub(crate) fn apply_current_live_runtime_frame_with_options(
+    current: &mut SessionStateResponse,
+    frame: CurrentLiveRuntimeFrameRequest,
+    drop_live_magnetization: bool,
+) -> Result<(), ApiError> {
     let apply_start = std::time::Instant::now();
     let mut affected_field_quantities = BTreeSet::new();
     if let Some(preview_field) = current
@@ -2255,7 +2304,7 @@ pub(crate) fn apply_current_live_runtime_frame(
         // frames, causing the control-room 3D viewport to show stale /
         // static textures and vectors.
         if let Some(prev) = current.live_state.as_ref() {
-            if live_state.latest_step.magnetization.is_none() {
+            if !drop_live_magnetization && live_state.latest_step.magnetization.is_none() {
                 live_state.latest_step.magnetization = prev.latest_step.magnetization.clone();
             }
             if live_state.latest_step.fem_mesh_generation_id.is_none() {
@@ -2265,6 +2314,10 @@ pub(crate) fn apply_current_live_runtime_frame(
             if live_state.latest_step.preview_field.is_none() {
                 live_state.latest_step.preview_field = prev.latest_step.preview_field.clone();
             }
+        }
+        if drop_live_magnetization {
+            live_state.latest_step.magnetization = None;
+            drop_large_live_field_carriers(&mut current.latest_fields);
         }
         // Promote the active preview field into preview_cache so that API
         // query handlers (get_field_meta, get_field_vector, etc.) can find

@@ -1175,6 +1175,10 @@ template <typename Scalar>
 __global__ void cross_max_norm_blocks_kernel(
     const Scalar *ax, const Scalar *ay, const Scalar *az,
     const Scalar *bx, const Scalar *by, const Scalar *bz,
+    const uint8_t *active_mask,
+    const uint8_t *frozen_mask,
+    int has_active_mask,
+    int has_frozen_mask,
     double *block_out,
     uint64_t n)
 {
@@ -1184,6 +1188,10 @@ __global__ void cross_max_norm_blocks_kernel(
 
     double local_max = 0.0;
     for (; idx < n; idx += stride) {
+        if ((has_active_mask && active_mask[idx] == 0) ||
+            (has_frozen_mask && frozen_mask[idx] != 0)) {
+            continue;
+        }
         double a0 = to_f64(ax[idx]), a1 = to_f64(ay[idx]), a2 = to_f64(az[idx]);
         double b0 = to_f64(bx[idx]), b1 = to_f64(by[idx]), b2 = to_f64(bz[idx]);
         double cx = a1 * b2 - a2 * b1;
@@ -1216,6 +1224,10 @@ double reduce_max_cross_norm_fp64(Context &ctx,
     cross_max_norm_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
         static_cast<const double *>(ax), static_cast<const double *>(ay), static_cast<const double *>(az),
         static_cast<const double *>(bx), static_cast<const double *>(by), static_cast<const double *>(bz),
+        ctx.active_mask,
+        ctx.frozen_mask,
+        ctx.has_active_mask ? 1 : 0,
+        ctx.has_frozen_mask ? 1 : 0,
         ctx.reduction_scratch, n);
     double max_norm_sq = finalize_max_reduction(ctx, ctx.reduction_scratch, blocks);
     return std::sqrt(max_norm_sq);
@@ -1229,6 +1241,10 @@ double reduce_max_cross_norm_fp32(Context &ctx,
     cross_max_norm_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
         static_cast<const float *>(ax), static_cast<const float *>(ay), static_cast<const float *>(az),
         static_cast<const float *>(bx), static_cast<const float *>(by), static_cast<const float *>(bz),
+        ctx.active_mask,
+        ctx.frozen_mask,
+        ctx.has_active_mask ? 1 : 0,
+        ctx.has_frozen_mask ? 1 : 0,
         ctx.reduction_scratch, n);
     double max_norm_sq = finalize_max_reduction(ctx, ctx.reduction_scratch, blocks);
     return std::sqrt(max_norm_sq);

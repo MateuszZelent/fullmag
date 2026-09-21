@@ -340,7 +340,8 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
       id === "planar-monitor.duplicate" ||
       id === "planar-monitor.rename"
     ) {
-      if (!context.api || typeof input?.monitorId !== "string") {
+      const monitorId = input?.monitorId;
+      if (!context.api || typeof monitorId !== "string") {
         return {
           message: "Planar monitor API or monitor id is missing.",
           status: "failed",
@@ -357,7 +358,7 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
               ? await context.api!.model.planarMonitors.list()
               : null;
             return context.api!.model.planarMonitors.remove(
-              input.monitorId!,
+              monitorId,
               {
                 expected_scene_revision:
                   baseRevision ?? collection!.scene_revision,
@@ -368,7 +369,7 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
         revision = response.scene_revision;
         if (
           visualization.planar?.source.kind === "monitor" &&
-          visualization.planar.source.monitor_id === input.monitorId
+          visualization.planar.source.monitor_id === monitorId
         ) {
           if (!queuePlanarSourceSelection(context, { kind: "default" }, visualization)) {
             return {
@@ -387,7 +388,7 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
               ? await context.api!.model.planarMonitors.list()
               : null;
             return context.api!.model.planarMonitors.duplicate(
-              input.monitorId!,
+              monitorId,
               {
                 expected_scene_revision:
                   baseRevision ?? collection!.scene_revision,
@@ -406,7 +407,8 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
           };
         }
       } else {
-        if (typeof input.newName !== "string" || !input.newName.trim()) {
+        const newName = input?.newName;
+        if (typeof newName !== "string" || !newName.trim()) {
           context.layout?.setPanelVisible("right", true);
           return {
             message: "Edit the monitor name in the Inspector.",
@@ -421,14 +423,14 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
               ? await context.api!.model.planarMonitors.list()
               : null;
             const current = await context.api!.model.planarMonitors.get(
-              input.monitorId!,
+              monitorId,
             );
             return context.api!.model.planarMonitors.patch(
-              input.monitorId!,
+              monitorId,
               {
                 expected_scene_revision:
                   baseRevision ?? collection!.scene_revision,
-                monitor: { ...current.monitor, name: input.newName!.trim() },
+                monitor: { ...current.monitor, name: newName.trim() },
               },
             );
           },

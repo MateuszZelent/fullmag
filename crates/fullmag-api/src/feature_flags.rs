@@ -14,7 +14,8 @@
 //!   "disable_charts": true,
 //!   "disable_preview_2d": false,
 //!   "disable_preview_3d": true,
-//!   "disable_session_state_broadcast": false
+//!   "disable_session_state_broadcast": false,
+//!   "disable_live_magnetization": true
 //! }
 //! ```
 //!
@@ -40,6 +41,10 @@ pub struct FeatureFlags {
     /// The frontend will only receive `chart_state` and binary payloads.
     #[serde(default)]
     pub disable_session_state_broadcast: bool,
+    /// When true, do not retain the full live magnetization vector in the API
+    /// snapshot after bootstrap. Saved terminal artifacts remain authoritative.
+    #[serde(default)]
+    pub disable_live_magnetization: bool,
 }
 
 impl FeatureFlags {
@@ -85,6 +90,7 @@ impl FeatureFlags {
             disable_preview_2d: env_flag("FULLMAG_DISABLE_PREVIEW_2D"),
             disable_preview_3d: env_flag("FULLMAG_DISABLE_PREVIEW_3D"),
             disable_session_state_broadcast: env_flag("FULLMAG_DISABLE_SESSION_STATE_BROADCAST"),
+            disable_live_magnetization: env_flag("FULLMAG_DISABLE_LIVE_MAGNETIZATION"),
         }
     }
 
@@ -94,6 +100,7 @@ impl FeatureFlags {
             || self.disable_preview_2d
             || self.disable_preview_3d
             || self.disable_session_state_broadcast
+            || self.disable_live_magnetization
     }
 
     /// Human-readable summary of active flags for startup log.
@@ -110,6 +117,9 @@ impl FeatureFlags {
         }
         if self.disable_session_state_broadcast {
             active.push("session_state_broadcast");
+        }
+        if self.disable_live_magnetization {
+            active.push("live_magnetization");
         }
         if active.is_empty() {
             "none".to_string()

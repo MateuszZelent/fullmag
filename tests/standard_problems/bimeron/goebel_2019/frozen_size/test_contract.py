@@ -7,6 +7,8 @@ import fullmag as fm
 import pytest
 
 from tests.standard_problems.bimeron.goebel_2019.frozen_size.common import (
+    CELL,
+    case_from_environment,
     contour_minimum_radius_m,
     contour_radius_from_preset,
     preset_radius_for_contour,
@@ -14,6 +16,28 @@ from tests.standard_problems.bimeron.goebel_2019.frozen_size.common import (
 
 
 SCRIPT = Path(__file__).with_name("scenario_fdm.py")
+
+
+def test_ring_offset_changes_mask_not_seed_radius(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FULLMAG_BIMERON_PROTOCOL", "ring")
+    monkeypatch.setenv("FULLMAG_BIMERON_TARGET_R_NM", "6.5")
+    monkeypatch.setenv("FULLMAG_BIMERON_RING_RADIUS_OFFSET_NM", "0.125")
+    case = case_from_environment()
+    assert case.target_radius_nm == 6.5
+    assert case.metadata()["ring_radius_offset_nm"] == 0.125
+    loaded = fm.load_problem_from_script(SCRIPT, lightweight_assets=True)
+    relax = next(s for s in loaded.stages if s.stage_id == "constrained_relax")
+    selector = relax.problem.magnetization_constraints[0].selector.to_ir()
+    outer, complement = selector["expressions"]
+    assert outer["geometry"]["radius_m"] == pytest.approx(6.875e-9, rel=1e-12, abs=0)
+    assert complement["expression"]["geometry"]["radius_m"] == pytest.approx(6.375e-9, rel=1e-12, abs=0)
+
+
+def test_offset_cannot_make_ring_inner_radius_nonpositive(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FULLMAG_BIMERON_PROTOCOL", "ring")
+    monkeypatch.setenv("FULLMAG_BIMERON_RING_RADIUS_OFFSET_NM", "-100")
+    with pytest.raises(ValueError, match="positive inner radius"):
+        case_from_environment()
 
 
 def _load(monkeypatch: pytest.MonkeyPatch, *, protocol: str, target_nm: str = "5"):
@@ -32,6 +56,14 @@ def test_contour_inverse_matches_source_profile() -> None:
         preset_radius_for_contour(contour_minimum_radius_m(3e-9) * 0.99, 3e-9)
 
 
+def test_in_plane_refinement_keeps_single_film_thickness_cell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FULLMAG_BIMERON_CELL_NM", "0.25")
+    case = case_from_environment()
+    assert case.cell_m == pytest.approx((0.25e-9, 0.25e-9, CELL[2]))
+
+
 @pytest.mark.parametrize("protocol", ["p0", "p2", "p3", "ring"])
 def test_scenario_preserves_goebel_parameters_and_declares_protocol(monkeypatch: pytest.MonkeyPatch, protocol: str) -> None:
     loaded = _load(monkeypatch, protocol=protocol)
@@ -42,7 +74,7 @@ def test_scenario_preserves_goebel_parameters_and_declares_protocol(monkeypatch:
         "constrained_hold",
         "save_state-3",
     ]
-    assert loaded.problem.runtime_metadata["bimeron_frozen_size"]["same_rDMI_parameters"] is True
+    assert loaded.problem.runtime_metadata["bimeron_frozen_size"]["material_parameters_source"] == "explicit_material_metadata_with_environment_overrides"
     assert loaded.problem.runtime_metadata["bimeron_frozen_size"]["protocol"]["protocol"] == protocol
 
     relax = next(stage for stage in loaded.stages if stage.stage_id == "constrained_relax")

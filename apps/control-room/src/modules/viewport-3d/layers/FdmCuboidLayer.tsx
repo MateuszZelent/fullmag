@@ -1135,6 +1135,10 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
       usesInstanceColors,
     ],
   );
+  const surfaceMaterialRef = useRef<MeshBasicMaterial | null>(null);
+  useEffect(() => {
+    surfaceMaterialRef.current = surfaceMaterial;
+  }, [surfaceMaterial]);
   const wireframePolicy = RENDER_POLICIES.featureEdges;
   const wireframeColor = wireframeColorFromSettings(renderSettings, colors.wire);
   const wireframeOpacity = renderPlan.wireframe.opacity;
@@ -1204,7 +1208,8 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     if (!usesInstanceColors && surface.instanceColor !== null) {
       surface.instanceColor = null;
       colorRevisionRef.current = null;
-      surfaceMaterial.needsUpdate = true;
+      const material = surfaceMaterialRef.current;
+      if (material) material.needsUpdate = true;
       colorChanged = true;
     }
     if (usesInstanceColors && surfaceColors) {
@@ -1257,7 +1262,7 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     invalidate,
     preparedInstances,
     recordSurfaceAdoption,
-    surfaceMaterial,
+    surfaceMaterialRef,
     fieldBufferId,
     sessionIdentity,
     surfaceColors,

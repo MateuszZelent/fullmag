@@ -889,6 +889,14 @@ impl NativeStatsPolicy {
         }
     }
 
+    pub(crate) const fn control(stride: u32) -> Self {
+        Self {
+            mode: NativeStatsMode::Control,
+            stride,
+            quantity_mask: ffi::FULLMAG_FDM_STATS_QUANTITY_CONTROL,
+        }
+    }
+
     pub(crate) const fn none(stride: u32) -> Self {
         Self {
             mode: NativeStatsMode::None,
@@ -3503,6 +3511,30 @@ impl NativeFdmBackend {
         );
         step_stats.per_object_scalars = single_object_scalars("free", &step_stats);
         Ok(step_stats)
+    }
+
+    pub(crate) fn snapshot_step_stats_with_policy(
+        &mut self,
+        grid: [u32; 3],
+        policy: NativeStatsPolicy,
+    ) -> Result<StepStats, RunError> {
+        let previous = self.stats_policy();
+        let changed = previous != policy;
+        if changed {
+            self.set_stats_policy(policy)?;
+        }
+        let snapshot = self.snapshot_step_stats(grid);
+        let restored = if changed {
+            self.set_stats_policy(previous)
+        } else {
+            Ok(())
+        };
+        match (snapshot, restored) {
+            (Ok(stats), Ok(())) => Ok(stats),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(_), Err(error)) => Err(error),
+            (Err(error), Err(_restore_error)) => Err(error),
+        }
     }
 
     fn last_error_or(&self, fallback: &str) -> RunError {

@@ -82,6 +82,45 @@ def _analysis(*, radius_nm: float = 3.0, converged: bool = True) -> dict:
     }
 
 
+def test_missing_convergence_cannot_pass() -> None:
+    for invalid in (None, 0, 1, "true"):
+        analysis = _analysis()
+        analysis["runtime_provenance"]["completion"] = {"converged": invalid}
+        result = verify_analysis(analysis, THRESHOLDS)
+        assert result["status"] == "failed"
+        assert "convergence_status_missing" in result["failures"]
+
+
+def test_ambiguous_disconnected_contour_is_not_accepted() -> None:
+    analysis = _analysis()
+    analysis["states"]["constrained_held"]["measurement"]["area_component_contour_ambiguous"] = True
+    result = verify_analysis(analysis, THRESHOLDS)
+    assert result["status"] == "failed"
+    assert "constrained_held_area_component_contour_ambiguous" in result["failures"]
+
+
+def test_working_policy_does_not_change_strict_policy() -> None:
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).parent
+    strict = json.loads((root / "thresholds.v1.json").read_text())
+    working = json.loads((root / "thresholds.working.v2.json").read_text())
+    assert strict["maximum_free_torque_T"] == 1e-5
+    assert working["maximum_free_torque_T"] == 0.005
+    result = verify_analysis(_analysis(), working)
+    assert result["qualification_scope"] == "working_profile_not_release"
+
+
+def test_unknown_torque_cannot_satisfy_convergence_gate() -> None:
+    for value, units in ((None, "T"), (float("nan"), "T"), (0.0, "unknown"), (-1.0, "T")):
+        analysis = _analysis()
+        analysis["frozen_runtime"].update(free_torque_metric=value, free_torque_metric_units=units)
+        result = verify_analysis(analysis, THRESHOLDS)
+        assert result["status"] == "failed"
+        assert any(reason.startswith("free_torque_metric_") for reason in result["failures"])
+
+
 def test_verifier_reports_radius_mismatch_after_convergence() -> None:
     result = verify_analysis(_analysis(radius_nm=3.5), THRESHOLDS)
     assert result["status"] == "failed"

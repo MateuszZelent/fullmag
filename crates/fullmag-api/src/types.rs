@@ -903,6 +903,10 @@ impl LatestFields {
         self.0.insert(quantity, value);
     }
 
+    pub(crate) fn remove(&mut self, quantity: &str) {
+        self.0.remove(quantity);
+    }
+
     pub(crate) fn entries(&self) -> impl Iterator<Item = (&String, &Value)> {
         self.0.iter()
     }

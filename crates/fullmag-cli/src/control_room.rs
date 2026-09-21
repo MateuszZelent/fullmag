@@ -16,6 +16,14 @@ use crate::types::*;
 pub(crate) const LOCALHOST_HTTP_HOST: &str = "localhost";
 pub(crate) const LOOPBACK_V4_OCTETS: [u8; 4] = [127, 0, 0, 1];
 
+// Keep the internal API target on IPv4 on Windows.  `localhost` may resolve
+// to an unrelated IPv6 listener (for example WSL or Docker port forwarding)
+// before the native Fullmag API bound to 127.0.0.1 gets a chance to answer.
+#[cfg(windows)]
+const DEFAULT_API_HOST: &str = "127.0.0.1";
+#[cfg(not(windows))]
+const DEFAULT_API_HOST: &str = LOCALHOST_HTTP_HOST;
+
 static RESOLVED_API_PORT: OnceLock<u16> = OnceLock::new();
 
 #[cfg(windows)]
@@ -27,8 +35,20 @@ pub(crate) fn api_port() -> u16 {
     *RESOLVED_API_PORT.get().expect("API port not yet resolved")
 }
 
+fn api_host_from_configured(configured: Option<&str>) -> String {
+    configured
+        .map(str::trim)
+        .filter(|host| !host.is_empty())
+        .unwrap_or(DEFAULT_API_HOST)
+        .to_string()
+}
+
+fn api_host() -> String {
+    api_host_from_configured(std::env::var("FULLMAG_API_HOST").ok().as_deref())
+}
+
 pub(crate) fn api_base_url() -> String {
-    format!("http://localhost:{}", api_port())
+    format!("http://{}:{}", api_host(), api_port())
 }
 
 pub(crate) fn swagger_ui_url() -> String {
@@ -1188,7 +1208,7 @@ pub(crate) fn open_in_tauri(
         .env("FULLMAG_UI_URL", &ready.web_url)
         .env(
             "FULLMAG_API_BASE",
-            format!("http://localhost:{}/", ready.api_port),
+            format!("http://{}:{}/", api_host(), ready.api_port),
         )
         .env("FULLMAG_LAUNCH_INTENT", intent)
         .stdin(Stdio::null())

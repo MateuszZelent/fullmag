@@ -274,6 +274,7 @@ describe("LiveChartsModule resource flow", () => {
     ];
     const html = renderToStaticMarkup(
       <LiveChartSurface
+        descriptorId="magnetization"
         fitRequest={0}
         onChartSelected={() => undefined}
         onExport={() => undefined}

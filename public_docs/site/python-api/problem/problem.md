@@ -143,6 +143,7 @@ constraint = FrozenSpins(
 | `Problem.mechanical_loads` | sequence | `()` | mixed | mechanical loads | `mechanical_loads` |
 | `Problem.selections` | `Sequence[SelectionDefinition]` | `()` | $1$ | unique definitions; reference existence, cycles, and complexity validated | canonical selection definitions |
 | `Problem.magnetization_constraints` | `Sequence[FrozenSpins]` | `()` | $1$ | typed constraints; selection/object/region/stage references validated | canonical magnetization constraints |
+| `Problem.parameters` | `ParameterLibrary \| None` | `None` | mixed | optional versioned SI-normalized authoring parameters; references and dimensions resolve at construction; solver values remain resolved SI quantities | `parameters` |
 | `Problem.pbc` | `FdmPbc \| tuple[bool,bool,bool] \| None` | `None` | $1$ | requested periodic axes and demag policy | `backend_policy.pbc` |
 
 ### Canonical stage-first authoring

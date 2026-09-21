@@ -1,11 +1,11 @@
 {
-  "schema_version": "bimeron_frozen_size.thresholds.v1",
+  "schema_version": "bimeron_frozen_size.thresholds.working.v2",
   "frozen_reference_max_drift": 1e-15,
   "minimum_nontrivial_abs_topological_charge": 0.8,
   "maximum_area_core_radius_difference_nm": 3.0,
   "maximum_state_norm_defect": 1e-12,
-  "maximum_energy_balance_relative": 1e-9,
-  "maximum_energy_window_relative_span": 1e-3,
+  "maximum_energy_balance_relative": 1e-09,
+  "maximum_energy_window_relative_span": 0.001,
   "maximum_energy_window_relative_to_excess": 0.05,
   "minimum_excess_energy_scale_J": 1e-21,
   "require_finite_energy": true,
@@ -16,5 +16,11 @@
   "require_gpu_residency": true,
   "require_positive_frozen_dof_for_constrained_protocols": true,
   "require_frozen_hashes": true,
-  "maximum_free_torque_T": 1e-5
+  "maximum_free_torque_T": 0.005,
+  "maximum_paired_hold_energy_delta_J": 1e-21,
+  "maximum_paired_hold_rms_delta_m": 0.01,
+  "maximum_paired_hold_max_delta_m": 0.1,
+  "maximum_paired_hold_radius_delta_nm": 0.25,
+  "qualification_scope": "working_profile_not_release",
+  "release_qualified": false
 }

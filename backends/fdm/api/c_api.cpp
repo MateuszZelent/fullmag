@@ -2081,7 +2081,9 @@ int fullmag_fdm_backend_set_stats_policy_v1(
     fullmag_fdm_set_operator_device_requirement(
         *ctx->execution_receipt,
         FULLMAG_FDM_OPERATOR_REDUCTION,
-        ctx->adaptive_enabled || ctx->stats_mode == FULLMAG_FDM_STATS_FULL);
+        ctx->adaptive_enabled ||
+            ctx->stats_mode == FULLMAG_FDM_STATS_FULL ||
+            ctx->stats_mode == FULLMAG_FDM_STATS_CONTROL);
     ctx->endpoint_field_cache.stats_valid = false;
     ctx->endpoint_field_cache.stats_quantity_mask = 0;
     ctx->last_error.clear();

@@ -33,7 +33,14 @@ from tests.standard_problems.bimeron.goebel_2019.common import (
 )
 
 TEMPERATURE = 0.0
+# Keep the published 500 x 40 x 0.5 nm geometry as the default while allowing
+# the frozen-size experiment to enlarge the transverse track for a dense,
+# large-radius profile.  The override is local to this experiment and never
+# changes the standard Göbel problem.
+_BASE_TRACK_SIZE = TRACK_SIZE
 DEFAULT_CELL_NM = CELL[0] * 1e9
+DEFAULT_TRACK_X_NM = _BASE_TRACK_SIZE[0] * 1e9
+DEFAULT_TRACK_Y_NM = _BASE_TRACK_SIZE[1] * 1e9
 DEFAULT_WALL_WIDTH_NM = BIMERON_WALL_WIDTH * 1e9
 DEFAULT_PIN_RADIUS_NM = 0.5
 DEFAULT_RING_WIDTH_NM = 0.5
@@ -41,9 +48,12 @@ DEFAULT_RELAX_TIME_S = RELAX_TIME
 DEFAULT_HOLD_TIME_S = HOLD_TIME
 DEFAULT_RELEASE_TIME_S = 2e-11
 DEFAULT_DT_S = LLG_DT
+DEFAULT_ALPHA = ALPHA
+DEFAULT_RELAX_TOL_T = 1e-5
 DEFAULT_RELAX_MAX_STEPS = RELAX_MAX_STEPS
 DEFAULT_RELEASE_MAX_STEPS = 8000
 DEFAULT_FIELD_EVERY_STEPS = RELAX_FIELD_EVERY_STEPS
+DEFAULT_TABLE_EVERY_STEPS = 10
 DEFAULT_HOLD_SAMPLE_PERIOD_S = HOLD_SAMPLE_PERIOD
 
 
@@ -62,6 +72,67 @@ def _env_int(name: str, default: int) -> int:
     if raw is None or not raw.strip():
         return int(default)
     value = int(raw)
+    return value
+
+
+def track_size_from_environment() -> tuple[float, float, float]:
+    """Return the experiment track geometry in metres.
+
+    Only the in-plane transverse extent is normally changed for the dense
+    profile.  The film thickness remains the published single-cell value.
+    """
+
+    x_nm = _env_float("FULLMAG_BIMERON_TRACK_X_NM", DEFAULT_TRACK_X_NM)
+    y_nm = _env_float("FULLMAG_BIMERON_TRACK_Y_NM", DEFAULT_TRACK_Y_NM)
+    if x_nm <= 0.0 or y_nm <= 0.0:
+        raise ValueError("FULLMAG_BIMERON_TRACK_X_NM and _Y_NM must be positive")
+    return (x_nm * 1e-9, y_nm * 1e-9, _BASE_TRACK_SIZE[2])
+
+
+TRACK_SIZE = track_size_from_environment()
+
+
+@dataclass(frozen=True)
+class MaterialParameters:
+    """Material values used by one frozen-size experiment run.
+
+    The published Göbel values remain the defaults.  Environment overrides are
+    deliberately scoped to this experiment so a parameter-screening run can
+    carry its exact physical inputs in the runtime metadata.
+    """
+
+    msat_Apm: float
+    aex_Jpm: float
+    d_Jpm2: float
+    ku_Jpm3: float
+
+    def metadata(self) -> dict[str, float]:
+        return {
+            "Ms_Apm": self.msat_Apm,
+            "Aex_Jpm": self.aex_Jpm,
+            "D_Jpm2": self.d_Jpm2,
+            "Ku_Jpm3": self.ku_Jpm3,
+        }
+
+
+def material_from_environment() -> MaterialParameters:
+    values = MaterialParameters(
+        msat_Apm=_env_float("FULLMAG_BIMERON_MSAT_A_PER_M", MS),
+        aex_Jpm=_env_float("FULLMAG_BIMERON_AEX_J_PER_M", AEX),
+        d_Jpm2=_env_float("FULLMAG_BIMERON_D_J_PER_M2", D_ROTATED),
+        ku_Jpm3=_env_float("FULLMAG_BIMERON_KU_J_PER_M3", KU_X),
+    )
+    if any(value <= 0.0 for value in (values.msat_Apm, values.aex_Jpm, values.d_Jpm2, values.ku_Jpm3)):
+        raise ValueError("Ms, Aex, D, and Ku overrides must be positive")
+    return values
+
+
+def alpha_from_environment() -> float:
+    """Return the damping used by this experiment's time-domain relaxation."""
+
+    value = _env_float("FULLMAG_BIMERON_ALPHA", DEFAULT_ALPHA)
+    if value <= 0.0:
+        raise ValueError("FULLMAG_BIMERON_ALPHA must be positive")
     return value
 
 
@@ -253,16 +324,27 @@ class FrozenCase:
     hold_time_s: float
     release_time_s: float
     dt_s: float
+    relax_tol_T: float
     relax_max_steps: int
     release_max_steps: int
     field_every_steps: int
+    table_every_steps: int
     hold_sample_period_s: float
     pin_centres_nm: tuple[tuple[float, float], tuple[float, float]] | None = None
+    ring_radius_offset_nm: float = 0.0
 
     @property
     def cell_m(self) -> tuple[float, float, float]:
-        cell = self.cell_nm * 1e-9
-        return (cell, cell, cell)
+        """Return the in-plane sweep cell and the fixed film thickness cell.
+
+        ``cell_nm`` is the in-plane resolution used for the size profile.  The
+        physical film thickness remains the baseline ``CELL[2]`` so that a
+        refinement from 0.5 nm to 0.25 nm does not silently introduce a second
+        layer in the FDM domain.
+        """
+
+        in_plane = self.cell_nm * 1e-9
+        return (in_plane, in_plane, CELL[2])
 
     @property
     def target_radius_m(self) -> float:
@@ -320,6 +402,8 @@ class FrozenCase:
                 "wall_width_m": self.wall_width_m,
                 "pin_radius_m": self.pin_radius_m,
                 "ring_width_m": self.ring_width_m,
+                "track_size_nm": [value * 1e9 for value in TRACK_SIZE],
+                "track_size_m": list(TRACK_SIZE),
                 "analytic_contour_radius_nm": contour_radius_from_preset(
                     self.preset_radius_m, self.wall_width_m
                 )
@@ -390,6 +474,7 @@ def case_from_environment() -> FrozenCase:
         "FULLMAG_BIMERON_RELEASE_TIME_S", DEFAULT_RELEASE_TIME_S
     )
     dt_s = _env_float("FULLMAG_BIMERON_DT_S", DEFAULT_DT_S)
+    relax_tol_T = _env_float("FULLMAG_BIMERON_TOL_T", DEFAULT_RELAX_TOL_T)
     relax_max_steps = _env_int(
         "FULLMAG_BIMERON_RELAX_MAX_STEPS", DEFAULT_RELAX_MAX_STEPS
     )
@@ -398,6 +483,9 @@ def case_from_environment() -> FrozenCase:
     )
     field_every_steps = _env_int(
         "FULLMAG_BIMERON_FIELD_EVERY_STEPS", DEFAULT_FIELD_EVERY_STEPS
+    )
+    table_every_steps = _env_int(
+        "FULLMAG_BIMERON_TABLE_EVERY_STEPS", DEFAULT_TABLE_EVERY_STEPS
     )
     hold_sample_period_s = _env_float(
         "FULLMAG_BIMERON_HOLD_SAMPLE_PERIOD_S", DEFAULT_HOLD_SAMPLE_PERIOD_S
@@ -431,13 +519,18 @@ def case_from_environment() -> FrozenCase:
         if any(not math.isfinite(value) for pair in parsed for value in pair):
             raise ValueError("FULLMAG_BIMERON_PIN_CENTRES_NM values must be finite")
         pin_centres_nm = parsed  # type: ignore[assignment]
+    ring_radius_offset_nm = _env_float("FULLMAG_BIMERON_RING_RADIUS_OFFSET_NM", 0.0)
+    if not math.isfinite(ring_radius_offset_nm):
+        raise ValueError("ring radius offset must be finite")
+    if protocol == "ring" and target_radius_nm + ring_radius_offset_nm <= ring_width_nm / 2.0:
+        raise ValueError("offset ring must have positive inner radius")
     if ring_width_nm <= 0.0:
         raise ValueError("FULLMAG_BIMERON_RING_WIDTH_NM must be positive")
     if protocol == "ring" and ring_width_nm >= 2.0 * target_radius_nm:
         raise ValueError("ring width must be smaller than twice target radius")
-    if any(value <= 0.0 for value in (relax_time_s, hold_time_s, release_time_s, dt_s, hold_sample_period_s)):
-        raise ValueError("relax, hold, release, dt, and sample periods must be positive")
-    if any(value <= 0 for value in (relax_max_steps, release_max_steps, field_every_steps)):
+    if any(value <= 0.0 for value in (relax_time_s, hold_time_s, release_time_s, dt_s, hold_sample_period_s, relax_tol_T)):
+        raise ValueError("relax, hold, release, dt, sample periods, and relax_tol_T must be positive")
+    if any(value <= 0 for value in (relax_max_steps, release_max_steps, field_every_steps, table_every_steps)):
         raise ValueError("step and field intervals must be positive")
     return FrozenCase(
         target_radius_nm=target_radius_nm,
@@ -455,9 +548,12 @@ def case_from_environment() -> FrozenCase:
         hold_time_s=hold_time_s,
         release_time_s=release_time_s,
         dt_s=dt_s,
+        relax_tol_T=relax_tol_T,
         relax_max_steps=relax_max_steps,
         release_max_steps=release_max_steps,
         field_every_steps=field_every_steps,
+        table_every_steps=table_every_steps,
         hold_sample_period_s=hold_sample_period_s,
         pin_centres_nm=pin_centres_nm,
+        ring_radius_offset_nm=ring_radius_offset_nm,
     )

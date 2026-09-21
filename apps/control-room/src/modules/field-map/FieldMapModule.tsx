@@ -331,32 +331,10 @@ function useFieldMapModuleController() {
       selectedFieldContext.stageId,
     ],
   );
-  const retainedPlanarFrameRef = useRef<{
-    identityKey: string;
-    model: NonNullable<typeof freshRenderModel>;
-  } | null>(null);
-  const retainedPlanarFrame = retainedPlanarFrameRef.current;
-  const renderModel =
-    freshRenderModel ??
-    (retainedPlanarFrame &&
-    retainedPlanarFrame.identityKey === planarViewIdentityKey
-      ? retainedPlanarFrame.model
-      : null);
-  useEffect(() => {
-    if (freshRenderModel) {
-      retainedPlanarFrameRef.current = {
-        identityKey: planarViewIdentityKey,
-        model: freshRenderModel,
-      };
-      return;
-    }
-    if (
-      retainedPlanarFrameRef.current &&
-      retainedPlanarFrameRef.current.identityKey !== planarViewIdentityKey
-    ) {
-      retainedPlanarFrameRef.current = null;
-    }
-  }, [freshRenderModel, planarViewIdentityKey]);
+  const renderModel = useRetainedPlanarFrame(
+    freshRenderModel,
+    planarViewIdentityKey,
+  );
   const pinnedAxisState = useMemo(() => {
     if (!renderModel || !probe.data) return null;
     const axisFrame = {
@@ -456,7 +434,6 @@ function useFieldMapModuleController() {
     canonicalPlanar,
     canonicalSampleError,
     evidence,
-    frame,
     mask,
     meshOverlay,
     meta,
@@ -474,12 +451,42 @@ function useFieldMapModuleController() {
   };
 }
 
+function useRetainedPlanarFrame<T>(
+  freshRenderModel: T | null,
+  identityKey: string,
+): T | null {
+  // This ref intentionally stores the last complete raster while resource
+  // revisions are loading. It is a render snapshot, rather than mutable
+  // application state; the identity check prevents showing another view's data.
+  /* eslint-disable react-hooks/refs */
+  const retainedFrameRef = useRef<{ identityKey: string; model: T } | null>(null);
+  const retainedFrame = retainedFrameRef.current;
+  const renderModel =
+    freshRenderModel ??
+    (retainedFrame && retainedFrame.identityKey === identityKey
+      ? retainedFrame.model
+      : null);
+  useEffect(() => {
+    if (freshRenderModel) {
+      retainedFrameRef.current = { identityKey, model: freshRenderModel };
+      return;
+    }
+    if (retainedFrameRef.current?.identityKey !== identityKey) {
+      retainedFrameRef.current = null;
+    }
+  }, [freshRenderModel, identityKey]);
+  // The returned value can be the retained ref snapshot during a resource
+  // refresh; keep the intentional boundary local to this hook.
+  /* eslint-enable react-hooks/refs */
+  /* eslint-disable-next-line react-hooks/refs */
+  return renderModel;
+}
+
 export default function FieldMapModule() {
   const {
     canonicalPlanar,
     canonicalSampleError,
     evidence,
-    frame,
     mask,
     meshOverlay,
     meta,

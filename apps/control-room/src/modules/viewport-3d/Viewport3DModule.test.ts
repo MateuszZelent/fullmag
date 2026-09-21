@@ -2036,8 +2036,13 @@ describe("Viewport3DModule scene wiring", () => {
     );
 
     expect(source).toContain("const beginCameraInteraction = useCallback");
-    expect(source).toContain("beginViewport3DFieldUpdateHold();");
-    expect(source).toContain("endViewport3DFieldUpdateHold();");
+    expect(source).toContain(
+      "const cameraFieldUpdateHold = useMemo(() => createViewport3DInteractionFieldHold(), []);",
+    );
+    expect(source).toContain("cameraFieldUpdateHold.begin(epoch);");
+    expect(source).toContain("cameraFieldUpdateHold.end(epoch);");
+    expect(source).toContain("kernel.cameraRegistry.beginInteraction(epoch);");
+    expect(source).toContain("kernel.cameraRegistry.endInteraction(epoch);");
     expect(source).not.toContain("onPointerDownCapture={holdFieldUpdatesForPointerGesture}");
     expect(source).not.toContain("onPointerUpCapture={releaseFieldUpdatePointerHold}");
   });
