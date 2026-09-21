@@ -125,6 +125,7 @@ from .physics_scope import (
     build_physics_graph,
 )
 from .selection import Selection, SelectionDefinition, SelectionScalar
+from .parameters import ParameterDefinition, ParameterExpression, ParameterLibrary, ParameterValue
 from .spin_torque import (
     ConstantEnvelope,
     InterfaceCppSTT,
@@ -190,6 +191,10 @@ __all__ = [
     "Selection",
     "SelectionDefinition",
     "SelectionScalar",
+    "ParameterDefinition",
+    "ParameterExpression",
+    "ParameterLibrary",
+    "ParameterValue",
     "BackendTarget",
     "CubicAnisotropy",
     "ThermalNoise",

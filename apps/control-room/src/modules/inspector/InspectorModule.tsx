@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useMemo } from "react";
+
 import { useKernel } from "@/kernel/KernelContext";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
@@ -9,11 +11,60 @@ import {
 } from "@/kernel/selection/useSelection";
 
 import { InspectorDirtySelectionGuard } from "./InspectorDirtySelectionGuard";
-import { InspectorEditSessionProvider } from "./InspectorEditSession";
+import {
+  InspectorEditSessionProvider,
+  useInspectorEditSession,
+} from "./InspectorEditSession";
 import { resolveInspectorDescriptor } from "./inspectorDescriptor";
 import { resolveInspectorPanel } from "./inspectorRegistry";
 import { resolveUnknownInspectorRoute } from "./inspectorRouteCatalog";
 import { InspectorShell } from "./InspectorShell";
+
+function PendingFormBridge() {
+  const kernel = useKernel();
+  const session = useInspectorEditSession();
+  const owner = useMemo(() => Symbol("inspector-pending-form"), []);
+  const applying = session?.applying ?? false;
+  const dirty = session?.dirty ?? false;
+  const lockReason = session?.lockReason;
+  const mode = session?.mode ?? "immediate";
+  const valid = session?.valid ?? true;
+  const form = useMemo(
+    () =>
+      session
+        ? {
+            apply: session.apply,
+            applying,
+            dirty,
+            lockReason,
+            mode,
+            reset: session.reset,
+            valid,
+          }
+        : null,
+    [
+      session,
+      applying,
+      dirty,
+      lockReason,
+      mode,
+      valid,
+    ],
+  );
+
+  useEffect(() => {
+    const registry = kernel.pendingForms;
+    if (!registry) return;
+    if (!form) {
+      registry.unregister(owner);
+      return;
+    }
+    registry.register(owner, form);
+    return () => registry.unregister(owner);
+  }, [form, kernel.pendingForms, owner]);
+
+  return null;
+}
 
 export default function InspectorModule() {
   const kernel = useKernel();
@@ -41,6 +92,7 @@ export default function InspectorModule() {
   return (
     <WorkspaceRenderProfiler id="InspectorModule">
       <InspectorEditSessionProvider>
+        <PendingFormBridge />
         <InspectorDirtySelectionGuard controller={kernel.selection} selection={selection}>
         {(guardedSelection) => {
           const panel = resolveInspectorPanel(guardedSelection);

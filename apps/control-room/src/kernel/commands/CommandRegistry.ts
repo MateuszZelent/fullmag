@@ -62,6 +62,11 @@ export class CommandRegistry {
     return () => this.listeners.delete(listener);
   }
 
+  /** Notify command surfaces that contextual enabled/active state changed. */
+  refresh(): void {
+    this.notify();
+  }
+
   /** Check if a command is enabled in the given context. */
   isEnabled(id: CommandId, context: CommandContext): boolean {
     const cmd = this.commands.get(id);

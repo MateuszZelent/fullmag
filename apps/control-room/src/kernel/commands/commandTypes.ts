@@ -13,6 +13,8 @@ import type { VisualizationTargetRef } from "../visualization/ObjectVisualizatio
 import type { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import type { ObjectMoveToolController } from "../authoring/ObjectMoveToolController";
+import type { AuthoringHistoryController } from "../authoring/AuthoringHistoryController";
+import type { PendingFormRegistry } from "../authoring/PendingFormRegistry";
 import type { ProjectDocumentController } from "../persistence/ProjectDocumentController";
 
 export type CommandId = string;
@@ -32,6 +34,8 @@ export interface CommandContext {
     | "test";
   api?: ControlRoomApi;
   analysisFieldOverlay?: AnalysisFieldOverlayController;
+  authoringHistory?: AuthoringHistoryController;
+  pendingForms?: PendingFormRegistry;
   bus?: EventBus<KernelEventMap>;
   chartViewportHandoff?: ChartViewportHandoffController;
   cameraRegistry?: CameraRegistryController;

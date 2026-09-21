@@ -156,6 +156,11 @@ from fullmag.model.problem import (
     resolve_geometry_sources,
     RuntimeSelection,
 )
+from fullmag.model.parameters import (
+    ParameterDefinition,
+    ParameterExpression,
+    ParameterLibrary,
+)
 from fullmag.model.discretization import (
     FDM,
     FDMGrid,
@@ -2490,6 +2495,7 @@ class _WorldState:
     _demag_enabled: bool = True
     _demag_realization: str | None = None
     _thermal_noise: ThermalNoise | None = None
+    _parameters: ParameterLibrary = field(default_factory=ParameterLibrary)
 
     # Magnets (ordered)
     _magnets: list[MagnetHandle] = field(default_factory=list)
@@ -5557,6 +5563,25 @@ class StudyBuilder:
         name(problem_name)
         return self
 
+    def parameter(
+        self,
+        parameter_name: str,
+        value: object,
+        *,
+        unit: str = "1",
+        display_unit: str | None = None,
+        description: str | None = None,
+    ) -> ParameterDefinition:
+        """Declare one versioned authoring parameter in this study."""
+
+        return parameter(
+            parameter_name,
+            value,
+            unit=unit,
+            display_unit=display_unit,
+            description=description,
+        )
+
     def load(
         self,
         target: object,
@@ -6293,6 +6318,36 @@ def study(problem_name: str | None = None) -> StudyBuilder:
     if problem_name is not None:
         require_non_empty(problem_name, "problem_name")
     return StudyBuilder(problem_name)
+
+
+def parameter(
+    parameter_name: str,
+    value: object,
+    *,
+    unit: str = "1",
+    display_unit: str | None = None,
+    description: str | None = None,
+) -> ParameterDefinition:
+    """Declare a versioned SI-normalized authoring parameter.
+
+    A numeric ``value`` is converted to a constant expression using ``unit``.
+    Callers can pass :class:`ParameterExpression` for references or arithmetic.
+    The definition is stored in the current context and lowered into
+    ``ProblemIR`` when a problem is materialized.
+    """
+
+    if isinstance(value, ParameterExpression):
+        if unit != "1":
+            raise ValueError("unit is only accepted for numeric parameter values")
+        expression = value
+    else:
+        expression = ParameterExpression.constant(value, unit=unit)
+    return _state._parameters.define(
+        parameter_name,
+        expression,
+        display_unit=display_unit,
+        description=description,
+    )
 
 
 def demag(
@@ -9008,6 +9063,7 @@ def _build_problem(
         geometry_asset_cache=s._geometry_asset_cache,
         magnetization_constraints=tuple(s._magnetization_constraints),
         pbc=s._pbc,
+        parameters=s._parameters if s._parameters.names else None,
     )
 
 

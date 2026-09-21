@@ -96,7 +96,12 @@ function invalidateAuthoringResources(
 }
 
 export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
-  const { api, resources, selection: selectionController } = useKernel();
+  const {
+    api,
+    authoringHistory,
+    resources,
+    selection: selectionController,
+  } = useKernel();
   const scene = useSceneResource();
   const validation = useGeometryValidationResource();
   const object = resolveGeometryObjectPanelModel(selection, scene.data);
@@ -250,6 +255,14 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         region_name: optionalRef(draft.region),
         transform: transform.transform,
       });
+      if (scene.data) {
+        authoringHistory?.record({
+          after: response.committed_scene,
+          before: scene.data,
+          committedRevision: response.scene_revision,
+          label: `Create ${draft.name.trim() || objectId}`,
+        });
+      }
       const revision = acknowledgedAuthoringSceneRevision(response);
       invalidateAuthoringResources(
         resources,
@@ -318,6 +331,14 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         base_revision: draft.baseRevision,
         geometry: geometry.geometry,
       });
+      if (scene.data) {
+        authoringHistory?.record({
+          after: response.committed_scene,
+          before: scene.data,
+          committedRevision: response.scene_revision,
+          label: `Edit geometry ${draft.name}`,
+        });
+      }
       invalidateAuthoringResources(
         resources,
         response.scene_revision,
@@ -345,13 +366,21 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     setPending(true);
     try {
       const translation = transform.transform.translation as [number, number, number];
-      await commitObjectTranslation({
+      const result = await commitObjectTranslation({
         api,
         baseRevision: draft.baseRevision,
         objectId: draft.objectId,
         resources,
         translation,
       });
+      if (scene.data && result.committedScene) {
+        authoringHistory?.record({
+          after: result.committedScene,
+          before: scene.data,
+          committedRevision: result.revision,
+          label: `Edit transform ${draft.name}`,
+        });
+      }
       setFeedback({ kind: "success", message: "Transform committed." });
     } catch (error) {
       if (isPrimitiveDraftRevisionConflict(error)) {

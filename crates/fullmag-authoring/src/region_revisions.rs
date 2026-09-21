@@ -114,11 +114,16 @@ fn classify_object_transition(
     after: &SceneObject,
     impact: &mut RegionRealizationImpact,
 ) {
-    if before.geometry != after.geometry
-        || before.transform != after.transform
-        || before.object_mesh != after.object_mesh
-        || before.mesh_override != after.mesh_override
-    {
+    if before.geometry != after.geometry || before.transform != after.transform {
+        // Geometry and object transforms change the occupied domain.  Mesh
+        // topology, region membership, material coefficients and initial
+        // state masks must not continue to advertise the previous domain.
+        impact.topology = true;
+        impact.membership = true;
+        impact.coefficients = true;
+        impact.initial_state = true;
+    }
+    if before.object_mesh != after.object_mesh || before.mesh_override != after.mesh_override {
         impact.topology = true;
     }
 
@@ -341,6 +346,30 @@ mod tests {
         topology.objects[0].geometry.geometry_kind = "cylinder".to_string();
         assert_eq!(
             classify_region_realization_impact(&before, &topology),
+            RegionRealizationImpact {
+                topology: true,
+                membership: true,
+                coefficients: true,
+                initial_state: true,
+            }
+        );
+
+        let mut transformed = before.clone();
+        transformed.objects[0].transform.translation = [1.0, 0.0, 0.0];
+        assert_eq!(
+            classify_region_realization_impact(&before, &transformed),
+            RegionRealizationImpact {
+                topology: true,
+                membership: true,
+                coefficients: true,
+                initial_state: true,
+            }
+        );
+
+        let mut mesh_policy = before.clone();
+        mesh_policy.objects[0].object_mesh = Some(Default::default());
+        assert_eq!(
+            classify_region_realization_impact(&before, &mesh_policy),
             RegionRealizationImpact {
                 topology: true,
                 ..Default::default()

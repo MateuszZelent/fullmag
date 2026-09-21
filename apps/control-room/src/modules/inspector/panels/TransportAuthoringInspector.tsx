@@ -9,6 +9,7 @@ import type {
   TransportValidationRequest,
   TransportValidationResponse,
 } from "@/kernel/api/apiTypes";
+import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   invalidateSpinAuthoringResources,
@@ -87,7 +88,7 @@ export function TransportAuthoringInspector({
     sourceCutId?: string;
   } | null;
 }) {
-  const { api, resources } = useKernel();
+  const { api, authoringHistory, resources } = useKernel();
   const current = useCurrentTransportsResource({ enabled: family === "current_transport" });
   const spin = useSpinTransportsResource({ enabled: family === "spin_transport" });
   const active = family === "current_transport" ? current : spin;
@@ -259,10 +260,19 @@ export function TransportAuthoringInspector({
       if (!capability?.authoring_allowed || validation?.semantic.valid !== true || validation.execution.authoring_allowed !== true) {
         throw new Error(capability?.reason ?? validation?.execution.reason ?? "Latest clone-only validation does not permit mutation.");
       }
-      const request = { base_revision: active.data.scene_revision };
-      const commit = family === "current_transport"
-        ? await api.model.deleteCurrentTransport(selectedId, request)
-        : await api.model.deleteSpinTransport(selectedId, request);
+      const commit = await runAuthoringMutationWithHistory(
+        { api, authoringHistory },
+        `Delete ${family} ${selectedId}`,
+        async ({ baseRevision }) => {
+          const request = {
+            base_revision:
+              baseRevision ?? active.data!.scene_revision,
+          };
+          return family === "current_transport"
+            ? api.model.deleteCurrentTransport(selectedId, request)
+            : api.model.deleteSpinTransport(selectedId, request);
+        },
+      );
       invalidateSpinAuthoringResources(resources, commit, transportMutationResourceKeys(family));
       setLocalSelectionKey("");
       setFeedback({ kind: "success", message: "Transport resource deleted." });

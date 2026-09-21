@@ -536,7 +536,7 @@ export type StudyRuntimePatchRequest =
 export type StudyRuntimeResource =
   components["schemas"]["StudyRuntimeResource"];
 export type AuthoringTransactionRequest =
-  | { kind: "replace_scene"; scene: JsonObject }
+  | { base_revision?: number | null; kind: "replace_scene"; scene: JsonObject }
   | (BaseAuthoringTransaction & {
       kind: "merge_patch";
       merge_patch: JsonObject;

@@ -2,6 +2,7 @@ import {
   BookOpen,
   Box,
   Braces,
+  Check,
   Command,
   Cpu,
   Database,
@@ -15,6 +16,7 @@ import {
   Pause,
   Play,
   Redo2,
+  RotateCcw,
   Save,
   Search,
   Settings,
@@ -49,8 +51,6 @@ const HIDDEN_PLACEHOLDER_COMMAND_IDS = new Set([
   "workspace.preferences",
   "workspace.docs",
   "workspace.about",
-  "workspace.undo",
-  "workspace.redo",
   "workspace.view-2d",
   "execution.fdm-cpu",
   "execution.fdm-gpu",
@@ -101,6 +101,8 @@ const MAIN_MENU_DEFINITIONS: AppMenuNode[] = [
     id: "edit",
     label: "Edit",
     children: [
+      { id: "workspace.apply-inspector", label: "Apply Inspector Changes", icon: <Check size={14} />, shortcut: "Ctrl+Shift+Enter" },
+      { id: "workspace.reset-inspector", label: "Reset Inspector Changes", icon: <RotateCcw size={14} /> },
       { id: "workspace.undo", label: "Undo", icon: <Undo2 size={14} />, shortcut: "Ctrl+Z" },
       { id: "workspace.redo", label: "Redo", icon: <Redo2 size={14} />, shortcut: "Ctrl+Y" },
       { id: "workspace.command-palette", label: "Command Palette", icon: <Command size={14} />, shortcut: "Ctrl+Shift+P" },
@@ -173,6 +175,7 @@ const MAIN_MENU_DEFINITIONS: AppMenuNode[] = [
 
 const QUICK_ACTION_DEFINITIONS: HeaderQuickAction[] = [
   { id: "workspace.save-project", label: "Save Project", icon: <Save size={14} /> },
+  { id: "workspace.apply-inspector", label: "Apply Inspector", icon: <Check size={14} /> },
   { id: "workspace.undo", label: "Undo", icon: <Undo2 size={14} /> },
   { id: "workspace.redo", label: "Redo", icon: <Redo2 size={14} /> },
 ];

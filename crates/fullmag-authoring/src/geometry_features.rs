@@ -8,9 +8,12 @@
 //! explicit final feature.  The sequence is descriptive only; meshing and
 //! solver preparation remain separate consumers.
 
-use crate::{GeometryDiagnostic, GeometryDiagnosticSeverity, SceneDocument, SceneGeometry};
+use crate::{
+    GeometryDiagnostic, GeometryDiagnosticSeverity, GeometryRegionCandidate, SceneDocument,
+    SceneGeometry,
+};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 /// One authored geometry operation in a stable feature sequence.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -41,6 +44,102 @@ pub struct GeometryFeatureSequence {
     pub features: Vec<GeometryFeature>,
     #[serde(default)]
     pub diagnostics: Vec<GeometryDiagnostic>,
+}
+
+/// Resolution state for a selection after a geometry operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GeometrySelectionResolutionStatus {
+    Empty,
+    Resolved,
+    Ambiguous,
+}
+
+/// Stable lineage carried by a selection candidate before a mesh evaluator
+/// decides whether a split/merge policy is acceptable.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GeometrySelectionLineage {
+    pub selection_id: String,
+    pub status: GeometrySelectionResolutionStatus,
+    #[serde(default)]
+    pub candidate_ids: Vec<String>,
+    #[serde(default)]
+    pub source_body_ids: Vec<String>,
+    #[serde(default)]
+    pub diagnostics: Vec<GeometryDiagnostic>,
+}
+
+/// Classify a candidate set without silently choosing one face/body.
+///
+/// This is deliberately independent of a mesh evaluator.  A single candidate
+/// with one source body is resolved; no candidates are empty; multiple
+/// candidates or a candidate with multiple source bodies are ambiguous until
+/// an explicit selection policy/repair operation resolves the lineage.
+pub fn classify_geometry_selection_lineage(
+    selection_id: &str,
+    candidates: &[GeometryRegionCandidate],
+) -> GeometrySelectionLineage {
+    let mut candidate_ids: Vec<String> = candidates
+        .iter()
+        .map(|candidate| candidate.id.clone())
+        .collect();
+    candidate_ids.sort();
+    candidate_ids.dedup();
+    let mut source_body_ids: Vec<String> = candidates
+        .iter()
+        .flat_map(|candidate| {
+            if candidate.source_body_ids.is_empty() {
+                vec![candidate.source_body_id.clone()]
+            } else {
+                candidate.source_body_ids.clone()
+            }
+        })
+        .collect();
+    source_body_ids.sort();
+    source_body_ids.dedup();
+
+    let (status, diagnostic) = if candidates.is_empty() {
+        (
+            GeometrySelectionResolutionStatus::Empty,
+            Some(diagnostic(
+                "GEOMETRY_SELECTION_EMPTY",
+                "Selection produced no geometry candidates.",
+                selection_id,
+                None,
+                &["build_mesh", "run_solver"],
+            )),
+        )
+    } else if candidates.len() != 1
+        || candidates.iter().any(|candidate| {
+            let sources = if candidate.source_body_ids.is_empty() {
+                std::slice::from_ref(&candidate.source_body_id)
+            } else {
+                candidate.source_body_ids.as_slice()
+            };
+            sources.len() != 1 || sources[0].trim().is_empty()
+        })
+    {
+        (
+            GeometrySelectionResolutionStatus::Ambiguous,
+            Some(diagnostic(
+                "GEOMETRY_SELECTION_AMBIGUOUS",
+                "Selection lineage has multiple candidate bodies and requires an explicit policy.",
+                selection_id,
+                None,
+                &["build_mesh", "run_solver"],
+            )),
+        )
+    } else {
+        (GeometrySelectionResolutionStatus::Resolved, None)
+    };
+
+    GeometrySelectionLineage {
+        selection_id: selection_id.to_string(),
+        status,
+        candidate_ids,
+        source_body_ids,
+        diagnostics: diagnostic.into_iter().collect(),
+    }
 }
 
 /// Lower one existing scene object into a stable, inspectable feature sequence.
@@ -90,7 +189,7 @@ pub fn build_geometry_feature_sequence(
         object_id: object_id.to_string(),
         kind: "transform".to_string(),
         parameters: transform_parameters,
-        input_feature_ids: terminal.into_iter().collect(),
+        input_feature_ids: vec![terminal],
     });
     result.terminal_feature_id = Some(transform_id);
     result
@@ -257,7 +356,7 @@ fn diagnostic(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{json, Map};
 
     fn scene_with_geometry(geometry: SceneGeometry) -> SceneDocument {
         let mut scene = SceneDocument::default();
@@ -297,6 +396,11 @@ mod tests {
             bounds_min: None,
             bounds_max: None,
         });
+        let mut second_object = scene.objects[0].clone();
+        second_object.id = "airbox".to_string();
+        second_object.name = "Airbox".to_string();
+        let mut scene = scene;
+        scene.objects.push(second_object);
         let first = build_geometry_feature_sequence(&scene, "film");
         let mut reordered = scene.clone();
         reordered.objects.reverse();
@@ -344,5 +448,43 @@ mod tests {
         assert_eq!(transform.parameters["translation"], json!([1.0, 2.0, 3.0]));
         assert_eq!(transform.parameters["scale"], json!([2.0, 1.0, 0.5]));
         assert_eq!(transform.input_feature_ids.len(), 1);
+    }
+
+    fn candidate(id: &str, body_ids: &[&str]) -> GeometryRegionCandidate {
+        GeometryRegionCandidate {
+            id: id.to_string(),
+            object_id: "film".to_string(),
+            source_body_id: body_ids[0].to_string(),
+            source_body_ids: body_ids.iter().map(|value| (*value).to_string()).collect(),
+            material_ref: "mat".to_string(),
+            magnetization_ref: None,
+            bounds_min: [0.0, 0.0, 0.0],
+            bounds_max: [1.0, 1.0, 1.0],
+            source_geometry_path: "objects/film/geometry".to_string(),
+        }
+    }
+
+    #[test]
+    fn selection_lineage_refuses_empty_and_split_candidates() {
+        let empty = classify_geometry_selection_lineage("sel", &[]);
+        assert_eq!(empty.status, GeometrySelectionResolutionStatus::Empty);
+        assert_eq!(empty.diagnostics[0].code, "GEOMETRY_SELECTION_EMPTY");
+
+        let split = classify_geometry_selection_lineage(
+            "sel",
+            &[
+                candidate("left", &["body:left"]),
+                candidate("right", &["body:right"]),
+            ],
+        );
+        assert_eq!(split.status, GeometrySelectionResolutionStatus::Ambiguous);
+        assert_eq!(split.candidate_ids, vec!["left", "right"]);
+        assert_eq!(split.source_body_ids, vec!["body:left", "body:right"]);
+        assert_eq!(split.diagnostics[0].code, "GEOMETRY_SELECTION_AMBIGUOUS");
+
+        let resolved =
+            classify_geometry_selection_lineage("sel", &[candidate("one", &["body:one"])]);
+        assert_eq!(resolved.status, GeometrySelectionResolutionStatus::Resolved);
+        assert!(resolved.diagnostics.is_empty());
     }
 }

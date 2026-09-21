@@ -1,6 +1,6 @@
 # Produkcyjny plan refaktoryzacji całego Fullmaga
 
-Data: 20.09.2026. Status wszystkich pakietów: **PLANNED**. Baza audytu: `14c8e73a6f3c55f4fc080835a6156f2a4db8f111`. Docelowe zachowanie: [architektura i kontrakty](02-architektura-i-kontrakty.md); wymagane dowody: [kwalifikacja](04-kwalifikacja-i-scenariusze.md).
+Data planu: 20.09.2026. Status normatywnego zakresu: **PLANNED**; bieżące wykonanie etapów jest w [tabeli statusu](06-status-realizacji.md). Baza audytu: `14c8e73a6f3c55f4fc080835a6156f2a4db8f111`. Docelowe zachowanie: [architektura i kontrakty](02-architektura-i-kontrakty.md); wymagane dowody: [kwalifikacja](04-kwalifikacja-i-scenariusze.md).
 
 ## 1. Wynik i granice wykonania
 

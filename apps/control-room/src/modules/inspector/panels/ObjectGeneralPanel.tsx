@@ -117,7 +117,12 @@ function invalidateAuthoringResources(
 
 export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
   const kernel = useKernel();
-  const { api, resources, selection: selectionController } = kernel;
+  const {
+    api,
+    authoringHistory,
+    resources,
+    selection: selectionController,
+  } = kernel;
   const scene = useSceneResource();
   const validation = useGeometryValidationResource();
   const object = resolveObjectGeneralPanelModel(selection, scene.data);
@@ -196,6 +201,14 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         typeof response.revision === "number"
           ? response.revision
           : (object.revision ?? 0) + 1;
+      if (scene.data) {
+        authoringHistory?.record({
+          after: response,
+          before: scene.data,
+          committedRevision: nextRevision,
+          label: `Edit identity ${draftName}`,
+        });
+      }
       invalidateAuthoringResources(resources, nextRevision);
       setFeedback({ kind: "success", message: "Object identity committed." });
     } catch (error) {
@@ -212,6 +225,14 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
       const response = await deleteObjectTransaction(api, object.objectId, {
         base_revision: object.revision,
       });
+      if (scene.data) {
+        authoringHistory?.record({
+          after: response.committed_scene,
+          before: scene.data,
+          committedRevision: response.scene_revision,
+          label: `Delete ${object.name}`,
+        });
+      }
       invalidateAuthoringResources(
         resources,
         response.scene_revision,

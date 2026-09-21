@@ -6,6 +6,10 @@ import {
 } from "../api/apiPaths";
 import type { RegionListResource } from "../api/apiTypes";
 import type { CommandContext, CommandContribution } from "../commands/commandTypes";
+import {
+  authoringWriteOptions,
+  runAuthoringMutationWithHistory,
+} from "./authoringHistoryMutation";
 
 function selectedRegion(
   context: Pick<CommandContext, "selection">,
@@ -121,7 +125,23 @@ function regionPriorityCommand(
           status: "failed",
         };
       }
-      await context.api.model.reorderObjectRegions(target.objectId, nextOrder);
+      await runAuthoringMutationWithHistory(
+        context,
+        `Move ${target.regionId} region priority ${direction}`,
+        async ({ baseRevision }) => {
+          const options = authoringWriteOptions(baseRevision);
+          return options
+            ? context.api!.model.reorderObjectRegions(
+                target.objectId,
+                nextOrder,
+                options,
+              )
+            : context.api!.model.reorderObjectRegions(
+                target.objectId,
+                nextOrder,
+              );
+        },
+      );
       invalidateAuthoringModel(context);
       return { status: "completed" };
     },
@@ -156,7 +176,25 @@ export const REGION_COMMANDS: CommandContribution[] = [
       if (!target || !context.api) {
         return { message: regionDisabledReason(context) ?? undefined, status: "failed" };
       }
-      await context.api.model.duplicateObjectRegion(target.objectId, target.regionId, {});
+      await runAuthoringMutationWithHistory(
+        context,
+        `Duplicate region ${target.regionId}`,
+        async ({ baseRevision }) => {
+          const options = authoringWriteOptions(baseRevision);
+          return options
+            ? context.api!.model.duplicateObjectRegion(
+                target.objectId,
+                target.regionId,
+                {},
+                options,
+              )
+            : context.api!.model.duplicateObjectRegion(
+                target.objectId,
+                target.regionId,
+                {},
+              );
+        },
+      );
       invalidateAuthoringModel(context);
       return { status: "completed" };
     },
@@ -174,7 +212,23 @@ export const REGION_COMMANDS: CommandContribution[] = [
       if (!target || !context.api) {
         return { message: regionDisabledReason(context) ?? undefined, status: "failed" };
       }
-      await context.api.model.deleteObjectRegion(target.objectId, target.regionId);
+      await runAuthoringMutationWithHistory(
+        context,
+        `Delete region ${target.regionId}`,
+        async ({ baseRevision }) => {
+          const options = authoringWriteOptions(baseRevision);
+          return options
+            ? context.api!.model.deleteObjectRegion(
+                target.objectId,
+                target.regionId,
+                options,
+              )
+            : context.api!.model.deleteObjectRegion(
+                target.objectId,
+                target.regionId,
+              );
+        },
+      );
       invalidateAuthoringModel(context);
       context.selection?.clear("inspector");
       return { status: "completed" };
@@ -199,7 +253,20 @@ export const REGION_COMMANDS: CommandContribution[] = [
       if (!couplingId || !context.api) {
         return { message: couplingDisabledReason(context) ?? undefined, status: "failed" };
       }
-      await context.api.model.patchCoupling(couplingId, { enabled: false });
+      await runAuthoringMutationWithHistory(
+        context,
+        `Disable coupling ${couplingId}`,
+        async ({ baseRevision }) => {
+          const options = authoringWriteOptions(baseRevision);
+          return options
+            ? context.api!.model.patchCoupling(
+                couplingId,
+                { enabled: false },
+                options,
+              )
+            : context.api!.model.patchCoupling(couplingId, { enabled: false });
+        },
+      );
       invalidateAuthoringModel(context);
       return { status: "completed" };
     },
@@ -217,7 +284,16 @@ export const REGION_COMMANDS: CommandContribution[] = [
       if (!couplingId || !context.api) {
         return { message: couplingDisabledReason(context) ?? undefined, status: "failed" };
       }
-      await context.api.model.deleteCoupling(couplingId);
+      await runAuthoringMutationWithHistory(
+        context,
+        `Delete coupling ${couplingId}`,
+        async ({ baseRevision }) => {
+          const options = authoringWriteOptions(baseRevision);
+          return options
+            ? context.api!.model.deleteCoupling(couplingId, options)
+            : context.api!.model.deleteCoupling(couplingId);
+        },
+      );
       invalidateAuthoringModel(context);
       context.selection?.clear("inspector");
       return { status: "completed" };
