@@ -46,7 +46,9 @@ pub mod boundary_geometry;
 
 pub use antenna_composition::{bind_antenna_field_solve, bind_antenna_field_solve_v03};
 pub use antenna_projection::resolve_fem_antenna_projection_mask;
-pub use antenna_validity::{antenna_waveform_bandwidth_notes, classify_antenna_waveform_bandwidth};
+pub use antenna_validity::{
+    antenna_validity_notes, antenna_waveform_bandwidth_notes, classify_antenna_waveform_bandwidth,
+};
 pub use error::PlanError;
 pub use fdm::{
     checked_multilayer_aggregate_memory_bytes, checked_multilayer_pair_kernel_footprint,
@@ -217,6 +219,10 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
         .provenance
         .notes
         .extend(antenna_waveform_bandwidth_notes(problem));
+    execution_plan
+        .provenance
+        .notes
+        .extend(antenna_validity_notes(problem));
 
     if problem.physics_graph.is_some() {
         let notes = physics_graph_provenance_notes(problem, resolved_backend)

@@ -579,9 +579,11 @@ wall-time/peak-memory oraz kontenerowego benchmarku direct RT0.
 - [ ] Zastąpić stałą miliona par jawnie wersjonowaną polityką wykonania. Zachować limit domyślny dopóki benchmark nie uzasadni innego; błąd preflight pokazuje oba rozmiary i koszt.
 - [ ] Blokować targety dla ograniczenia pamięci i granic anulowania. Licznik globalny obejmuje wszystkie bloki, porty i retries; nie resetować budżetu dla każdego bloku, aby obchodzić limit.
 - [ ] Nie zmniejszać automatycznie gęstości próbkowania. Użytkownik może jawnie zmienić target/rozdzielczość lub zatwierdzić większy budżet obliczeń w konfiguracji badania; proweniencja zapisuje decyzję.
-- [ ] Dodać diagnostykę `eta_wave`/`eta_skin` z 0950, zakres ważności oraz źródło `f_max`: sinusoid/cutoff sinc, zadeklarowane pasmo sampled waveform; dla nieznanego pasma zwracać `validity_bandwidth_unknown`.
+- [x] Dodać diagnostykę `eta_wave`/`eta_skin` z 0950 dla stałej, sinusoidy i sinc/cutoff, z jawnym źródłem `f_max`; dla nieznanego pasma zwracać `validity_bandwidth_unknown`.
+- [ ] Dodać osobny, jawny kontrakt deklarowanego pasma dla sampled waveform; nie uznawać samego czasu próbkowania za fizyczny `f_max`.
 - [ ] Prostokątny pulse i skok nie mają skończonego idealnego pasma. Nie wyznaczać `f_max` wyłącznie jako odwrotności długości impulsu. Wymagać opisania bandwidth/rise-time lub zwrócić brak oceny.
-- [ ] Ostrzeżenia przeliczać przy zmianie waveform, ale nie stawiać przez to bazy jako stale. Dla wielu aktywnych portów oceniać ich pasma i wspólne źródło.
+- [x] Ostrzeżenia przeliczać przy zmianie waveform, ale nie stawiać przez to bazy jako stale. Planner publikuje osobną notę dla każdego `SolvedAntennaDriveIR`.
+- [ ] Dla wielu aktywnych portów agregować wspólne ograniczenie pasma i wspólne źródło pola; obecna diagnostyka pozostaje per-drive.
 - [ ] Zapisać measured wall time, peak memory, pairs, refined pairs, error i cancellation latency. Dopiero jeśli direct solver nie spełnia potrzeb, zaprojektować oddzielnie kwalifikowany fast operator; samo zwiększenie limitu nie jest optymalizacją.
 
 Uzupełnienie implementacyjne 2026-09-12: `fullmag-ir` publikuje wersjonowany
@@ -593,6 +595,20 @@ piecewise-linear pozostają `validity_bandwidth_unknown`, bez heurystyki
 unieważniania statycznej bazy pola. Obliczanie `eta_wave`/`eta_skin` z geometrii
 i materiału, agregacja budżetów między blokami oraz pomiar wall-time/peak-memory
 pozostają otwarte.
+
+Uzupełnienie implementacyjne 2026-09-21: planner publikuje również wersjonowaną
+notę `antenna_validity.v1`. Dla znanego pasma rozwiązuje geometrię przez
+`antenna_target_projection → antenna_field_solve_stage → geometry.source_object_id`
+i odczytuje `length_m`, `thickness_m` oraz `conductivity_s_per_m` wyłącznie z
+`MicrostripAntenna` lub `CpwAntenna`. Obliczane są wielkości
+$\eta_{wave}=L_{max}f_{max}/c$ oraz
+$\eta_{skin}=t_{max}/\delta$, gdzie
+$\delta=\sqrt{2/(2\pi f_{max}\mu_0\sigma)}$; próg ostrzeżenia wynosi
+`0.1`, zgodnie z 0950. Brak skończonego pasma, brak geometrii lub niepoprawne
+parametry pozostają jawnie `status=unknown`; nie jest używana heurystyka
+`1/duration`. Jest to preflight diagnostyczny, a nie dowód poprawności
+solvera ani kwalifikacja GPU. Szczegóły i ślad weryfikacyjny zapisano w
+`docs/validation/antenna/validity-diagnostics-2026-09-21.md`.
 
 Kontrakt arytmetyczny testu:
 

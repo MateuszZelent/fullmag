@@ -131,6 +131,12 @@
       "path": "crates/fullmag-ir/src/field_drive_validation.rs",
       "symbol": "classify_antenna_waveform_bandwidth",
       "responsibility": "Classify the finite authored f_max source for constant, sinusoidal, and sinc drives, and fail closed for pulse or piecewise-linear waveforms without a declared bandwidth."
+    },
+    {
+      "id": "antenna-validity-preflight",
+      "path": "crates/fullmag-plan/src/antenna_validity.rs",
+      "symbol": "antenna_validity_notes",
+      "responsibility": "Publish the 0950 separable-field validity diagnostics eta_wave and eta_skin from the resolved conductor geometry and the versioned waveform bandwidth classification; remain explicitly unknown when bandwidth or geometry is unavailable."
     }
   ],
   "public_api": {
