@@ -80,18 +80,23 @@ pełne ograniczenie wspólnego źródła `H_ant_basis`.
   Rust: **OK**;
 - parser AST Python dla DSL i regresji: **OK**;
 - `git diff --check`: **OK**;
+- `pnpm --dir apps/control-room generate:api`: **OK**; wygenerowano OpenAPI
+  v2 oraz `openapi-v2-types.ts`;
+- `check:api-hygiene`: **not qualified** przez wcześniejsze literalne URL-e w
+  testach viewportu, niezwiązane z anteną;
 - pełne testy Rust oraz kontenerowy runtime nie zostały uruchomione w tej
   sesji zgodnie z obowiązującą blokadą kompilacji testów jednostkowych.
 
 ## Granice
 
-Pole nie jest jeszcze formalnie typowane w zasobie OpenAPI ani dostępne jako
-edytowalny parametr Inspectora. Dedykowany panel `SolvedAntennaDrive` pokazuje
-jednak read-only wartość deklaracji: skończone `f_max_hz`, `not declared` lub
-`invalid declaration`. Formatter nie wyprowadza pasma z czasu impulsu ani
-próbkowania. Typ OpenAPI, edycja i pełny browser smoke pozostają zadaniem
-T14/T15; obecna zmiana zapewnia kanoniczny IR, planner provenance i
-bezpieczną prezentację bez udawania fizycznego pasma.
+Pole jest teraz formalnie typowane jako opcjonalny
+`AntennaWaveformBandwidthDeclarationResource` w OpenAPI v2 i wygenerowanym
+TypeScript. Dedykowany panel `SolvedAntennaDrive` pokazuje read-only wartość
+deklaracji: skończone `f_max_hz`, `not declared` lub `invalid declaration`.
+Formatter nie wyprowadza pasma z czasu impulsu ani próbkowania. Edycja,
+walidacja konfliktu i pełny browser smoke pozostają zadaniem T14/T15; obecna
+zmiana zapewnia kanoniczny IR, planner provenance, kontrakt API i bezpieczną
+prezentację bez udawania fizycznego pasma.
 
 Weryfikacja panelu:
 

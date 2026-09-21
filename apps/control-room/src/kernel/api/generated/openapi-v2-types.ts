@@ -4690,6 +4690,14 @@ export interface components {
             solution: components["schemas"]["AntennaFieldSolutionRefResource"];
             target: components["schemas"]["FieldTargetResource"];
         };
+        AntennaWaveformBandwidthDeclarationResource: {
+            /**
+             * Format: double
+             * @description Authored physical upper band for pulse or piecewise-linear waveforms.
+             *     It is not inferred from pulse duration, spacing, or Nyquist frequency.
+             */
+            f_max_hz: number;
+        };
         ApiErrorDiagnosticResponse: {
             code: string;
             message: string;
@@ -11331,6 +11339,7 @@ export interface components {
         SlonczewskiRealizationVersion: "slonczewski_thin_layer_homogenized.v1";
         SolvedAntennaDriveResource: {
             activation: components["schemas"]["DriveActivationResource"];
+            bandwidth_declaration?: null | components["schemas"]["AntennaWaveformBandwidthDeclarationResource"];
             id: string;
             name: string;
             /** Format: double */
@@ -14792,6 +14801,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Source spectrum sampling topology is unsupported */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     data_get_sessions_current_data_antenna_source_spectra_output_id_payloads_payload_kind: {
@@ -14847,6 +14863,13 @@ export interface operations {
             };
             /** @description Requested binary payload range is not satisfiable */
             416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Source spectrum sampling topology is unsupported */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -320,6 +320,14 @@ pub struct AntennaTargetProjectionResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
+pub struct AntennaWaveformBandwidthDeclarationResource {
+    /// Authored physical upper band for pulse or piecewise-linear waveforms.
+    /// It is not inferred from pulse duration, spacing, or Nyquist frequency.
+    pub f_max_hz: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SolvedAntennaDriveResource {
     pub id: String,
     pub name: String,
@@ -327,6 +335,8 @@ pub struct SolvedAntennaDriveResource {
     pub port_mode_id: String,
     pub peak_current_a: f64,
     pub waveform: TimeDependenceResource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bandwidth_declaration: Option<AntennaWaveformBandwidthDeclarationResource>,
     pub time_origin: FieldTimeOriginResource,
     pub activation: DriveActivationResource,
 }

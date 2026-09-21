@@ -2930,6 +2930,20 @@
         ],
         "type": "object"
       },
+      "AntennaWaveformBandwidthDeclarationResource": {
+        "additionalProperties": false,
+        "properties": {
+          "f_max_hz": {
+            "description": "Authored physical upper band for pulse or piecewise-linear waveforms.\nIt is not inferred from pulse duration, spacing, or Nyquist frequency.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "f_max_hz"
+        ],
+        "type": "object"
+      },
       "ApiErrorDiagnosticResponse": {
         "properties": {
           "code": {
@@ -30010,6 +30024,16 @@
           "activation": {
             "$ref": "#/components/schemas/DriveActivationResource"
           },
+          "bandwidth_declaration": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaWaveformBandwidthDeclarationResource"
+              }
+            ]
+          },
           "id": {
             "type": "string"
           },
@@ -39533,6 +39557,9 @@
           },
           "404": {
             "description": "Source spectrum artifact not found"
+          },
+          "422": {
+            "description": "Source spectrum sampling topology is unsupported"
           }
         },
         "tags": [
@@ -39608,6 +39635,9 @@
           },
           "416": {
             "description": "Requested binary payload range is not satisfiable"
+          },
+          "422": {
+            "description": "Source spectrum sampling topology is unsupported"
           }
         },
         "tags": [

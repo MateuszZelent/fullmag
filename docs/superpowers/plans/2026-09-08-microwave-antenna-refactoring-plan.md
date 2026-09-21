@@ -779,6 +779,14 @@ oraz że `AllTimeEvolution` nie jest aktywne podczas relaksacji. Są to dowody
 
 ## T14. Domknąć OpenAPI, zasoby i realtime
 
+Uzupełnienie implementacyjne 2026-09-21: `SolvedAntennaDriveResource` ma
+teraz jawny, opcjonalny `AntennaWaveformBandwidthDeclarationResource` z
+`f_max_hz`; `generate:api` odtworzył OpenAPI v2 i wygenerowane typy bez ręcznej
+edycji. Ten sam przebieg uzupełnił w generated contract odpowiedzi 422 dla
+nieobsługiwanej topologii widma. `check:api-hygiene` nadal zatrzymuje się na
+wcześniejszych literalnych URL-ach w testach viewportu, niezwiązanych z
+anteną.
+
 **Stan 2026-09-11:** dodano typowane endpointy metadanych opublikowanego rozwiązania pola i widma źródłowego anteny (`data/antenna/...`) z tożsamością sesji, podpisami, linkami do artefaktów oraz ETag/304. Facade `ControlRoomApi` i hooki zasobów są podłączone; wcześniej wygenerowane pliki OpenAPI/TypeScript obejmują podstawowy endpoint, ale nie odzwierciedlają jeszcze dodanej odpowiedzi `unsupported_topology` HTTP 422, ponieważ generator został zablokowany limitem użycia. Zmiana katalogu artefaktów unieważnia teraz tylko prefiksy zasobów wyników anteny; test bridge obejmuje tę izolację. Router ma fixture test gotowego pola/widma, 304, 404 i uszkodzonego manifestu (`db52f48cd0e0449784f1dde51e017c8755ccc4b0`). W `973ac36da63e2e3c45c33d979c24f24ce15c5c1a` dodano manifest `antenna_source_spectrum_artifact.v2`, cztery adresowane hashem payloady `float64_le` oraz endpoint zakresowy `.../payloads/{payload_kind}` z walidacją rozmiaru/hash, ETag/304 i HTTP Range 206; facade/hook oraz testy Rust/UI obejmują ten transport. UI rozróżnia teraz brak opublikowanego payloadu (`missing_payload`) od nieobsługiwanej topologii. Pozostają pełna walidacja świeżości, odświeżenie generated OpenAPI po odzyskaniu generatora i testy przeglądarkowe end-to-end.
 
 **Pliki:** API schema/router handlers wskazane w mapie, nowe `handlers/data/antenna.rs`, `ControlRoomApi.ts`, nowe `antennaResources.ts`, generated transport/types/paths.
@@ -810,7 +818,8 @@ teraz deklarowane `bandwidth_declaration.f_max_hz` jako osobny wiersz. Brak
 deklaracji pozostaje jawnie `not declared`, a wartość niefinitywna jest
 oznaczana jako `invalid declaration`; UI nie wyprowadza pasma z czasu impulsu
 ani z próbkowania. Formatter ma test Vitest 5/5, a ESLint zmienionych plików
-przechodzi. Formalny typ OpenAPI i edycja deklaracji nadal należą do T14/T15.
+przechodzi. Formalny typ OpenAPI jest już wygenerowany; edycja deklaracji,
+walidacja konfliktu i pełny browser smoke nadal należą do T14/T15.
 
 **Stan 2026-09-11:** dedykowane węzły Explorer i routing Inspectora są już podłączone, a `AntennaCompositionPanel` rozwiązuje authored stage/request do właściwych `output_id` i korzysta z typowanych hooków wyników anteny. Węzły `solution` i `spectrum` pokazują stan zasobu (`loading/ready/stale/error/missing`) oraz metadane manifestu; `projection` i `drive` pokazują dostępność opublikowanej bazy pola. Dodano test resolvera identyfikatorów oraz DOM regresję gotowego wyniku. Commit `d48f32cd9` dodaje dekodowanie czterech payloadów `float64_le`, bounded heatmapę `|H(k_u,k_v)|²` z peak/k-grid oraz testy gotowego i błędnego transportu; `cae985d3b` zachowuje kody `missing_payload`/`unsupported_topology` jako jawny błąd Inspectora zamiast maskowania ich jako brak zasobu. Nadal brakuje pełnego browser smoke `create → solve → inspect → stale` i diagnostyki React dla całego workflow.
 
