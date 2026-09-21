@@ -5,6 +5,34 @@ import { selectionRefFromNode } from "../explorerSelection";
 import { buildObjectExplorerNode } from "./objectExplorerNodes";
 
 describe("antenna composition explorer nodes", () => {
+  it("marks an incomplete port as warning instead of ready", () => {
+    const node = buildObjectExplorerNode(
+      { id: "antenna", label: "Microstrip", objectRole: "antenna" } as never,
+      {
+        scene: {
+          antenna_port_modes: [{
+            id: "invalid-port",
+            schema_version: "antenna_port_mode.v2",
+            source_object_id: "antenna",
+            current_transport_id: "transport-1",
+            normalization_current_a: 1,
+            branches: [{
+              id: "signal",
+              inlet_terminal_ref: "signal_in",
+              outlet_terminal_ref: "signal_out",
+              signed_weight: 1,
+            }],
+          }],
+        },
+      } as never,
+    );
+
+    const port = node.children
+      ?.find((child) => child.kind === "object.antenna")
+      ?.children?.find((child) => child.kind === "object.antenna.port");
+    expect(port).toMatchObject({ status: "warning", badge: "1 branches · invalid" });
+  });
+
   it("publishes dedicated typed children with stable resource identities", () => {
     const node = buildObjectExplorerNode(
       { id: "antenna", label: "CPW", objectRole: "antenna" } as never,
@@ -21,6 +49,11 @@ describe("antenna composition explorer nodes", () => {
               inlet_terminal_ref: "inlet",
               outlet_terminal_ref: "outlet",
               signed_weight: 1,
+            }, {
+              id: "branch-2",
+              inlet_terminal_ref: "return-inlet",
+              outlet_terminal_ref: "return-outlet",
+              signed_weight: -1,
             }],
           }],
           antenna_field_solve_stages: [{
@@ -100,6 +133,7 @@ describe("antenna composition explorer nodes", () => {
     ]);
 
     const port = antenna?.children?.find((child) => child.kind === "object.antenna.port");
+    expect(port).toMatchObject({ status: "ready", badge: "2 branches" });
     expect(selectionRefFromNode(port!)).toMatchObject({
       type: "scene-object",
       kind: "object.antenna.port",

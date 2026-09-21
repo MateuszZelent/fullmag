@@ -919,16 +919,36 @@ function defaultMicrostripCurrentTransport(objectId: string): JsonObject {
   return {
     boundaries: [
       {
-        id: "signal_terminal",
+        id: "signal_in",
         kind: "voltage_electrode",
         potential_V: 1,
         surfaces: [{ object_id: objectId, orientation: [0, -1, 0], surface_id: "y_min" }],
       },
       {
-        id: "return_terminal",
+        id: "signal_out",
         kind: "voltage_electrode",
         potential_V: 0,
         surfaces: [{ object_id: objectId, orientation: [0, 1, 0], surface_id: "y_max" }],
+      },
+      {
+        id: "return_in",
+        kind: "voltage_electrode",
+        potential_V: 1,
+        surfaces: [{ object_id: objectId, orientation: [0, 0, -1], surface_id: "z_min" }],
+      },
+      {
+        id: "return_out",
+        kind: "voltage_electrode",
+        potential_V: 0,
+        surfaces: [{ object_id: objectId, orientation: [0, 0, 1], surface_id: "z_max" }],
+      },
+      {
+        id: "insulating_outer",
+        kind: "insulating",
+        surfaces: [
+          { object_id: objectId, orientation: [-1, 0, 0], surface_id: "x_min" },
+          { object_id: objectId, orientation: [1, 0, 0], surface_id: "x_max" },
+        ],
       },
     ],
     coupling: "one_way",
@@ -949,9 +969,20 @@ function defaultMicrostripCurrentTransport(objectId: string): JsonObject {
 
 function defaultMicrostripPortMode(objectId: string): JsonObject {
   return {
+    schema_version: "antenna_port_mode.v2",
     branches: [
-      { signed_weight: 1, terminal_selector_ref: "signal_terminal" },
-      { signed_weight: -1, terminal_selector_ref: "return_terminal" },
+      {
+        id: "signal",
+        inlet_terminal_ref: "signal_in",
+        outlet_terminal_ref: "signal_out",
+        signed_weight: 1,
+      },
+      {
+        id: "return",
+        inlet_terminal_ref: "return_in",
+        outlet_terminal_ref: "return_out",
+        signed_weight: -1,
+      },
     ],
     current_transport_id: `${objectId}:current`,
     id: `${objectId}:port:common`,

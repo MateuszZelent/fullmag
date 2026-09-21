@@ -69,6 +69,37 @@ afterEach(() => {
 });
 
 describe("AntennaCompositionPanel runtime results", () => {
+  it("renders the canonical geometry_kind for a conductor Inspector", async () => {
+    mocks.scene.data = {
+      objects: [
+        {
+          id: "antenna-1",
+          name: "Microstrip antenna",
+          role: "antenna",
+          material_ref: "copper",
+          geometry: {
+            geometry_kind: "Box",
+            geometry_params: { size: [50e-9, 1e-6, 10e-9] },
+          },
+        },
+      ],
+    } as unknown as SceneResource;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(
+          <AntennaCompositionPanel kind="conductor" selection={conductorSelection()} />,
+        ),
+      );
+      expect(container.textContent).toContain("GeometryBox");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("uses a ready field-solution resource for the solution Inspector", async () => {
     mocks.scene.data = sceneFixture();
     mocks.fieldSolution.status = "ready";
@@ -208,6 +239,25 @@ function solutionSelection(): Selection {
       visualizationTargetId: "object:antenna-1",
       antennaResourceId: "solve-1",
       antennaResourceKind: "solution",
+    },
+  } as Selection;
+}
+
+function conductorSelection(): Selection {
+  return {
+    kind: "object.antenna.conductor",
+    label: "Antenna conductor",
+    moduleSource: "explorer",
+    nodeId: "object:antenna-1:antenna:conductor",
+    objectId: "antenna-1",
+    ref: {
+      kind: "object.antenna.conductor",
+      nodeId: "object:antenna-1:antenna:conductor",
+      objectId: "antenna-1",
+      type: "scene-object",
+      visualizationTargetId: "object:antenna-1",
+      antennaResourceId: "antenna-1",
+      antennaResourceKind: "conductor",
     },
   } as Selection;
 }

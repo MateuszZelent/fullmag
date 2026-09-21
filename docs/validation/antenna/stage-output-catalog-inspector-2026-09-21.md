@@ -55,7 +55,9 @@ stage nie jest używany do udawania gotowego pola, gdy brakuje właściwego
 - `pnpm --dir apps/control-room exec vitest run
   src/modules/inspector/panels/antenna/AntennaCompositionPanels.test.ts
   src/modules/inspector/panels/antenna/AntennaCompositionPanels.dom.test.tsx`:
-  **6/6**;
+  **7/7**; regresja obejmuje także dedykowany conductor Inspector i jego
+  odczyt kanonicznego `geometry.geometry_kind` (`Box`), zamiast fałszywego
+  `unavailable` z nieistniejącego pola `geometry.kind`;
 - `pnpm --dir apps/control-room exec vitest run`: **6567/6572** testów
   zaliczonych, **4** istniejące regresje poza zmianą w:
   `src/modules/inspector/inspectorCssContract.test.ts`,
@@ -79,6 +81,22 @@ stage nie jest używany do udawania gotowego pola, gdy brakuje właściwego
 - typecheck Control Room zatrzymuje się na trzech znanych błędach nullability
   w `src/modules/field-map/FieldMapModule.tsx:588-591`; w zmienionych plikach
   nie zgłoszono błędu;
+- test authoringu ujawnił i naprawił rozjazd presetu `Add Microstrip Antenna`
+  z kanonicznym portem v2. Preset wcześniej wysyłał legacy
+  `terminal_selector_ref` bez `schema_version`, więc scena nie mogła zostać
+  zdeserializowana jako `AntennaPortModeIR`. Obecnie emituje
+  `antenna_port_mode.v2`, dwie jawne gałęzie z parami
+  `inlet_terminal_ref/outlet_terminal_ref` oraz cztery rozłączne elektrody
+  (`signal_in/out`, `return_in/out`) i izolowane powierzchnie pozostałych
+  ścian. Test 42/42 wymusza ten kształt i odrzuca powrót do legacy pola;
+  jest to dowód kontraktu authoringu, nie kwalifikacja prądu ani pola FEM.
+- Explorer nie oznacza już portu jako `ready` tylko dlatego, że ma jedną
+  gałąź. Status portu jest `ready` wyłącznie dla v2 z co najmniej dwiema
+  gałęziami, unikalnymi terminalami, niezerowymi skończonymi wagami, wagą
+  dodatnią sumującą się do `1` i bilansem całkowitym `0`; w przeciwnym razie
+  badge pokazuje `invalid`, a node ma status `warning`. Test Explorera obejmuje
+  zarówno poprawny port (`2 branches`), jak i niekompletny port (`1 branches ·
+  invalid`).
 - nie uruchamiano kompilacji testów Rust, browser smoke ani dowodu
   kwalifikacji FEM/FDM GPU.
 

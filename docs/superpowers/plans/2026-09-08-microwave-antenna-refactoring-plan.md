@@ -867,6 +867,30 @@ rewizji kończy się jawnie `failed`, a równoległe komendy podlegają serwerow
 409 zamiast bezwarunkowego nadpisania. Test authoringu 42/42 obejmuje oba
 przypadki.
 
+**Uzupełnienie implementacyjne 2026-09-21 (kontrakt portu v2 w presecie):**
+Test authoringu ujawnił, że `Add Microstrip Antenna` nadal wysyłał legacy
+`terminal_selector_ref` bez discriminatora, mimo że kanoniczny
+`AntennaPortModeIR` wymaga `schema_version="antenna_port_mode.v2"` i jawnych
+par `inlet_terminal_ref/outlet_terminal_ref`. Preset został zaktualizowany:
+current transport ma cztery rozłączne elektrody (`signal_in/out` oraz
+`return_in/out`) i jawnie izolowane `x_min/x_max`, a port ma dwie gałęzie o
+wagach `+1/-1`. Test `geometryLifecycleCommandContributions.test.ts` przechodzi
+42/42 i sprawdza także brak legacy pola. Jest to naprawa serializacji i
+authoringu; nie zamyka T02/T05/T06 ani nie stanowi dowodu zbieżności solve,
+bilansu terminali lub kwalifikacji 3D FEM.
+
+W tym samym kroku poprawiono dedykowany conductor Inspector: obiekty sceny
+emitują `geometry.geometry_kind`, więc panel używa tego pola (z zachowaniem
+fallbacku dla starszego `geometry.kind`). Testy modelu/DOM kompozycji przechodzą
+7/7; zmiana dotyczy prezentacji authoringu i nie podnosi statusu gotowości
+solverów.
+
+Explorer waliduje teraz także strukturalną gotowość portu: schema v2, minimum
+dwie gałęzie, unikalne pary terminali, niezerowe skończone wagi, suma dodatnia
+równa `1` i suma wszystkich wag równa `0`. Niepoprawny port otrzymuje
+`warning` oraz badge `invalid`, a poprawny port `ready`; test Explorera obejmuje
+oba przypadki. Jest to diagnostyka authoringu, nie wynik runtime solve.
+
 **Uzupełnienie implementacyjne 2026-09-21 (harness browser):** dodano
 `apps/control-room/scripts/smoke-antenna-authoring-ui.mjs` oraz helper i test
 kontraktu Node. Smoke ma jawnie ograniczony zakres pierwszej fazy T15:

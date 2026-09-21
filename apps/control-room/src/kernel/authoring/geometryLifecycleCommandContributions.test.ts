@@ -728,9 +728,20 @@ describe("geometry lifecycle command contributions", () => {
           source_object_id: "antenna-9ix",
         }],
         antenna_port_modes: [{
+          schema_version: "antenna_port_mode.v2",
           branches: [
-            { signed_weight: 1, terminal_selector_ref: "signal_terminal" },
-            { signed_weight: -1, terminal_selector_ref: "return_terminal" },
+            {
+              id: "signal",
+              inlet_terminal_ref: "signal_in",
+              outlet_terminal_ref: "signal_out",
+              signed_weight: 1,
+            },
+            {
+              id: "return",
+              inlet_terminal_ref: "return_in",
+              outlet_terminal_ref: "return_out",
+              signed_weight: -1,
+            },
           ],
           current_transport_id: "antenna-9ix:current",
           id: "antenna-9ix:port:common",
@@ -749,6 +760,21 @@ describe("geometry lifecycle command contributions", () => {
         ]),
       },
     });
+    const currentTransports = request.merge_patch?.current_transports as Array<{
+      boundaries?: Array<{ id?: string }>;
+    }> | undefined;
+    expect(currentTransports?.[0]?.boundaries?.map((boundary) => boundary.id)).toEqual([
+      "signal_in",
+      "signal_out",
+      "return_in",
+      "return_out",
+      "insulating_outer",
+    ]);
+    const port = (request.merge_patch?.antenna_port_modes as Array<Record<string, unknown>> | undefined)?.[0];
+    expect(port?.schema_version).toBe("antenna_port_mode.v2");
+    expect(port?.branches).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ terminal_selector_ref: expect.anything() }),
+    ]));
     expect(request?.merge_patch).not.toHaveProperty("field_drives");
     expect(selection.get()).toMatchObject({
       kind: "object.root",

@@ -140,7 +140,7 @@ function conductorDetails(
       { label: "Object", value: objectId ?? "none", mono: true },
       { label: "Name", value: textValue(object?.name, objectId ?? "unavailable") },
       { label: "Role", value: textValue(object?.role) },
-      { label: "Geometry", value: textValue(geometry?.kind) },
+      { label: "Geometry", value: textValue(geometry?.geometry_kind ?? geometry?.kind) },
       { label: "Material", value: textValue(object?.material_ref, "unassigned") },
       { label: "Mesh policy", value: object?.object_mesh ? "authored" : "default" },
     ],
