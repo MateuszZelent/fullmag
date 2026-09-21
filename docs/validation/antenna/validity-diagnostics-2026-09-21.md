@@ -21,6 +21,10 @@ solved_antenna_drive.projection_ref
   -> geometry.entries[name]
 ```
 
+Te same noty są dołączane zarówno do zwykłego `ExecutionPlanIR`, jak i do
+dedykowanego `AntennaFieldSolvePlanIR`. Dzięki temu tryb „policz samą antenę”
+nie traci diagnostyki przed przejściem do późniejszego Relax/Run.
+
 Parametry przewodnika są pobierane wyłącznie z wariantów
 `GeometryEntryIR::MicrostripAntenna` i `GeometryEntryIR::CpwAntenna`:
 

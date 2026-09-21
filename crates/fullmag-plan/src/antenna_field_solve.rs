@@ -365,6 +365,23 @@ pub(crate) fn plan_antenna_field_solve_v03(
         None
     };
 
+    let mut provenance_notes = vec![
+        "dedicated antenna precomputation: conductor H1/P1 -> conservative RT0 current -> Oersted field basis; no magnetization or LLG state".into(),
+        format!(
+            "conductor mesh policy='{}', solver policy='{}'",
+            stage.conductor_mesh_policy, stage.solver_policy
+        ),
+        format!(
+            "direct Oersted budget policy='{}', source_target_pairs={}, max_source_target_pairs={}",
+            fullmag_ir::ANTENNA_DIRECT_OERSTED_BUDGET_POLICY_V1,
+            direct_oersted_pairs
+                .map_or_else(|| "not_applicable".to_string(), |pairs| pairs.to_string()),
+            fullmag_ir::ANTENNA_DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS,
+        ),
+    ];
+    provenance_notes.extend(crate::antenna_validity::antenna_waveform_bandwidth_notes(problem));
+    provenance_notes.extend(crate::antenna_validity::antenna_validity_notes(problem));
+
     Ok(AntennaFieldSolvePlanIR {
         schema_version: ANTENNA_FIELD_SOLVE_PLAN_SCHEMA_VERSION.into(),
         stage_id: stage_id.into(),
@@ -382,20 +399,7 @@ pub(crate) fn plan_antenna_field_solve_v03(
         field_sampling,
         target_refs: stage.target_refs.clone(),
         provenance: ProvenancePlanIR {
-            notes: vec![
-                "dedicated antenna precomputation: conductor H1/P1 -> conservative RT0 current -> Oersted field basis; no magnetization or LLG state".into(),
-                format!(
-                    "conductor mesh policy='{}', solver policy='{}'",
-                    stage.conductor_mesh_policy, stage.solver_policy
-                ),
-                format!(
-                    "direct Oersted budget policy='{}', source_target_pairs={}, max_source_target_pairs={}",
-                    fullmag_ir::ANTENNA_DIRECT_OERSTED_BUDGET_POLICY_V1,
-                    direct_oersted_pairs
-                        .map_or_else(|| "not_applicable".to_string(), |pairs| pairs.to_string()),
-                    fullmag_ir::ANTENNA_DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS,
-                ),
-            ],
+            notes: provenance_notes,
             integrator_resolution: None,
             physics_graph: None,
             fem_eigen_execution_resolution: None,

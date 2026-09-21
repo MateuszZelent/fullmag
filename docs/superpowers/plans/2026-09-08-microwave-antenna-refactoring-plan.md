@@ -609,6 +609,9 @@ parametry pozostają jawnie `status=unknown`; nie jest używana heurystyka
 `1/duration`. Jest to preflight diagnostyczny, a nie dowód poprawności
 solvera ani kwalifikacja GPU. Szczegóły i ślad weryfikacyjny zapisano w
 `docs/validation/antenna/validity-diagnostics-2026-09-21.md`.
+Noty są dołączane także do `AntennaFieldSolvePlanIR`, więc samodzielne
+obliczenie bazy anteny zachowuje te same parametry proweniencji co późniejszy
+Relax/Run.
 
 Kontrakt arytmetyczny testu:
 
