@@ -352,7 +352,7 @@ Naprawiono tę niespójność bez dodawania drugiego solvera pola:
   `fem-cpu` po poprawce adaptera. Build wykonał ścieżkę kontenerową; nie użyto
   hostowego `cargo` jako dowodu FEM.
 - Po commitach `38febcef2`, `eb2559d2a` i `780680003` tę samą receptę
-  powtórzono na czystym HEAD `eb2559d2aeec364bd6f23a2cf6825cf1e0cdf6b2`;
+  powtórzono na czystym HEAD `780680003b6b21e706dfcbd49959009c10493664`;
   receipt zakończył się kodem 0, `Build mode: fem-cpu` i komunikatem
   `Windows FEM cpu container build is ready`.
 - `git diff --check`: **OK**. Testów jednostkowych Rust nie kompilowano zgodnie

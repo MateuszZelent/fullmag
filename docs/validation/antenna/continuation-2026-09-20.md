@@ -6,7 +6,8 @@ Data bazowego przekazania: 2026-09-20; aktualizacja: 2026-09-21. Status całośc
 ## 1. Punkt wznowienia i zakres tego dokumentu
 
 - Worktree: `D:/git/fullmag/worktrees/microwave-antenna-latest-20260909`.
-- Rewizja kodu przy ostatniej aktualizacji: `eb2559d2aeec364bd6f23a2cf6825cf1e0cdf6b2`.
+- Rewizja worktree przy ostatniej aktualizacji: `780680003b6b21e706dfcbd49959009c10493664`;
+  kod anteny: `38febcef2`.
 - Przed aktualizacją dokumentacji lokalną zmianą był `justfile`; należy zachować ją i ustalić jej właściciela przed integracją.
 - Duże dane, buildy i wyniki: `D:/git/fullmag/storage`, z osobnym podkatalogiem zadania. Ścieżki linuksowe wewnątrz kontenera nie są Windowsowym rootem storage.
 - W tej aktualizacji sprawdzono dokumenty, historię Git, obecność wskazanych symboli i recepty. Nie uruchamiano ponownie solverów ani przeglądarkowego odbioru modułu. Poniższe pozytywne wyniki są historycznymi zapisami z 9–12 września.
@@ -35,7 +36,7 @@ niezależnego orakla RHS/energii/torque ani kwalifikacji GPU. T13 pozostaje
 otwarte.
 
 Po commitach `38febcef2`, `eb2559d2a` i `780680003` build powtórzono na
-czystym HEAD `eb2559d2aeec364bd6f23a2cf6825cf1e0cdf6b2`; zakończył się kodem 0,
+czystym HEAD `780680003b6b21e706dfcbd49959009c10493664`; zakończył się kodem 0,
 `Build mode: fem-cpu` i komunikatem `Windows FEM cpu container build is ready`.
 Artefakty runtime pozostały pod `D:/git/fullmag/storage`; nie utworzono
 nowych wyników na `C:`.
