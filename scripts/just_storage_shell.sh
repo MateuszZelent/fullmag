@@ -27,27 +27,35 @@ recipe="$1"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 resolver="${repo_root}/scripts/fullmag_storage.py"
-python_cmd=""
-python_candidates=(python3 python)
-if is_windows_shell; then
-  python_candidates=()
-  # A WindowsApps alias can precede a working interpreter in PATH.
-  while IFS= read -r candidate; do
-    [ -n "${candidate}" ] && python_candidates+=("${candidate}")
-  done < <(type -aP python python3 2>/dev/null || true)
+python_cmd="${FULLMAG_STORAGE_PYTHON:-}"
+if [ -n "${python_cmd}" ] && is_windows_shell && command -v cygpath >/dev/null 2>&1 && [[ "${python_cmd}" == *\\* || "${python_cmd}" =~ ^[A-Za-z]:[\\/] ]]; then
+  python_cmd="$(cygpath -u "${python_cmd}")"
 fi
-for python_candidate in "${python_candidates[@]}"; do
-  candidate_path=""
-  if command -v "${python_candidate}" >/dev/null 2>&1; then
-    candidate_path="$(command -v "${python_candidate}")"
-  elif [ -f "${python_candidate}" ]; then
-    candidate_path="${python_candidate}"
+if [ -n "${python_cmd}" ] && ! "${python_cmd}" -c 'import sys; assert sys.version_info.major == 3' >/dev/null 2>&1; then
+  python_cmd=""
+fi
+if [ -z "${python_cmd}" ]; then
+  python_candidates=(python3 python)
+  if is_windows_shell; then
+    python_candidates=()
+    # A WindowsApps alias can precede a working interpreter in PATH.
+    while IFS= read -r candidate; do
+      [ -n "${candidate}" ] && python_candidates+=("${candidate}")
+    done < <(type -aP python python3 2>/dev/null || true)
   fi
-  if [ -n "${candidate_path}" ] && "${candidate_path}" -c 'import sys; assert sys.version_info.major == 3' >/dev/null 2>&1; then
-    python_cmd="${candidate_path}"
-    break
-  fi
-done
+  for python_candidate in "${python_candidates[@]}"; do
+    candidate_path=""
+    if command -v "${python_candidate}" >/dev/null 2>&1; then
+      candidate_path="$(command -v "${python_candidate}")"
+    elif [ -f "${python_candidate}" ]; then
+      candidate_path="${python_candidate}"
+    fi
+    if [ -n "${candidate_path}" ] && "${candidate_path}" -c 'import sys; assert sys.version_info.major == 3' >/dev/null 2>&1; then
+      python_cmd="${candidate_path}"
+      break
+    fi
+  done
+fi
 if [ -z "${python_cmd}" ]; then
   echo "[fullmag just] Python is required for the storage resolver" >&2
   exit 2
@@ -56,6 +64,10 @@ fi
 # Recipe bodies also invoke Python by name. Keep them on the interpreter
 # that passed the probe, without changing the host's persistent PATH.
 export PATH="$(dirname "${python_cmd}"):${PATH}"
+# Nested launchers may run under a fresh Windows Bash process where the
+# POSIX-form PATH entry is not preserved. Pass the tested absolute interpreter
+# explicitly so they cannot fall back to the WindowsApps alias.
+export FULLMAG_STORAGE_PYTHON="${python_cmd}"
 
 if [ ! -f "${resolver}" ]; then
   echo "[fullmag just] common storage resolver is missing: ${resolver}" >&2
