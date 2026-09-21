@@ -763,6 +763,11 @@ describe("geometry lifecycle command contributions", () => {
     if (!request) throw new Error("antenna add command did not submit a transaction");
     const currentTransports = request.merge_patch?.current_transports as Array<{
       boundaries?: Array<{ id?: string }>;
+      solver?: {
+        engine?: string;
+        operator_version?: string;
+        physical_residual_version?: string;
+      };
     }> | undefined;
     expect(currentTransports?.[0]?.boundaries?.map((boundary) => boundary.id)).toEqual([
       "signal_in",
@@ -771,6 +776,12 @@ describe("geometry lifecycle command contributions", () => {
       "return_out",
       "insulating_outer",
     ]);
+    expect(currentTransports?.[0]?.solver).toEqual({
+      engine: "cg",
+      linear: { absolute_tolerance: 1e-12, max_iterations: 500, relative_tolerance: 1e-10 },
+      operator_version: "fv_charge_harmonic_v1",
+      physical_residual_version: "charge_balance_integrated_l2.v1",
+    });
     const port = (request.merge_patch?.antenna_port_modes as Array<Record<string, unknown>> | undefined)?.[0];
     expect(port?.schema_version).toBe("antenna_port_mode.v2");
     expect(port?.branches).not.toEqual(expect.arrayContaining([

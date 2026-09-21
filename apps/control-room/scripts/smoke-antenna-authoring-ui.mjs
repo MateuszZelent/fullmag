@@ -116,6 +116,21 @@ function fieldSolutionFixture({ objectId, stageId, outputId, session }) {
   };
 }
 
+const expectedAbortedResourcePaths = [
+  "/meshing/meshes/shared-domain/manifest",
+  "/simulation/stages/execution",
+  "/data/fdm-region-memberships",
+  "/data/domain/topology",
+];
+
+function isExpectedAntennaRequestFailure(entry) {
+  return (
+    entry.method === "GET" &&
+    entry.failure === "net::ERR_ABORTED" &&
+    expectedAbortedResourcePaths.some((path) => entry.url.includes(path))
+  );
+}
+
 function stageOutputCatalogFixture({ objectId, stageId, outputId, session }) {
   return {
     content_digest: `sha256:catalog:${stageId}`,
@@ -158,7 +173,12 @@ async function installAntennaResultFixtures(page, resolved, session) {
     ) {
       await route.fulfill({
         status: 200,
-        headers: { "content-type": "application/json", etag: '"antenna-catalog-smoke"' },
+        headers: {
+          "content-type": "application/json",
+          etag: '"antenna-catalog-smoke"',
+          "x-api-contract-version": "1.0.0",
+          "access-control-expose-headers": "x-api-contract-version,etag",
+        },
         body: JSON.stringify(stageOutputCatalogFixture({ ...resolved, session })),
       });
       return;
@@ -166,7 +186,12 @@ async function installAntennaResultFixtures(page, resolved, session) {
     if (pathname.endsWith(`/field-solutions/${encodedOutputId}`)) {
       await route.fulfill({
         status: 200,
-        headers: { "content-type": "application/json", etag: '"antenna-field-smoke"' },
+        headers: {
+          "content-type": "application/json",
+          etag: '"antenna-field-smoke"',
+          "x-api-contract-version": "1.0.0",
+          "access-control-expose-headers": "x-api-contract-version,etag",
+        },
         body: JSON.stringify(fieldSolutionFixture({ ...resolved, session })),
       });
       return;
@@ -298,6 +323,10 @@ try {
     .first();
   await solutionPanel.waitFor({ state: "visible" });
   await solutionPanel.getByText("Runtime result", { exact: true }).waitFor({ state: "visible" });
+  await solutionPanel
+    .getByText(`asset:${resolved.outputId}`, { exact: true })
+    .first()
+    .waitFor({ state: "visible", timeout: timeoutMs });
   const solutionText = await solutionPanel.textContent();
   for (const expected of [
     "Stage catalog result",
@@ -316,16 +345,25 @@ try {
   const unexpectedHttpErrors = httpErrors.filter(
     (entry) => !isExpectedScratchHttpError(entry),
   );
+  const expectedRequestFailures = requestFailures.filter(isExpectedAntennaRequestFailure);
+  const unexpectedRequestFailures = requestFailures.filter(
+    (entry) => !isExpectedAntennaRequestFailure(entry),
+  );
   const unexpectedRuntimeErrors = runtimeErrors.filter(
     (message) => !message.startsWith("Failed to load resource:"),
   );
-  if (unexpectedRuntimeErrors.length || unexpectedHttpErrors.length || requestFailures.length) {
+  if (
+    unexpectedRuntimeErrors.length ||
+    unexpectedHttpErrors.length ||
+    unexpectedRequestFailures.length
+  ) {
     throw new Error(
       `Antenna browser errors: ${JSON.stringify({
         unexpectedRuntimeErrors,
         unexpectedHttpErrors,
         expectedHttpErrors,
-        requestFailures,
+        expectedRequestFailures,
+        unexpectedRequestFailures,
       })}`,
     );
   }
@@ -356,6 +394,7 @@ try {
     },
     webgl,
     expected_http_errors: expectedHttpErrors,
+    expected_request_failures: expectedRequestFailures,
     note:
       "This smoke does not execute the native antenna solve, Relax, LLG, export/reload, stale/reuse, FFT, or field-map lifecycle.",
   };

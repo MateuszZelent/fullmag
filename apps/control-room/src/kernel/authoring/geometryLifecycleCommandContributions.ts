@@ -959,9 +959,9 @@ function defaultMicrostripCurrentTransport(objectId: string): JsonObject {
     model: "ohmic_poisson",
     name: currentId,
     solver: {
-      engine: "fem_cpu",
+      engine: "cg",
       linear: { absolute_tolerance: 1e-12, max_iterations: 500, relative_tolerance: 1e-10 },
-      operator_version: "fem_charge_conforming_h1_p1.transparent.v1",
+      operator_version: "fv_charge_harmonic_v1",
       physical_residual_version: "charge_balance_integrated_l2.v1",
     },
   };
