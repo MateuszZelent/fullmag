@@ -788,6 +788,17 @@ nieobsługiwanej topologii widma. `check:api-hygiene` nadal zatrzymuje się na
 wcześniejszych literalnych URL-ach w testach viewportu, niezwiązanych z
 anteną.
 
+Uzupełnienie implementacyjne 2026-09-21 (stage output API): dodano
+`GET /v2/sessions/current/data/antenna/stages/{stage_id}/output-catalog`.
+Handler wiąże stage z aktualnym read-modelem, rozwiązuje bezpiecznie jego
+`artifact_ref`, waliduje `stage_output_catalog.v1` oraz istnienie manifestów,
+publikuje thin metadata z tożsamością sesji/stage, digestem i ETag/304. Facade
+`ControlRoomApi`, hook `useAntennaStageOutputCatalogResource` i wygenerowane
+artefakty OpenAPI są podłączone. Katalog jest unieważniany scoped przy zmianie
+artefaktów i przy zmianie `simulation/stages/execution`; testy klienta (135/135)
+i bridge (61/61) przechodzą. Nadal pozostaje pełny resolver symbolicznego
+stage/output oraz browser smoke.
+
 **Stan 2026-09-11:** dodano typowane endpointy metadanych opublikowanego rozwiązania pola i widma źródłowego anteny (`data/antenna/...`) z tożsamością sesji, podpisami, linkami do artefaktów oraz ETag/304. Facade `ControlRoomApi` i hooki zasobów są podłączone; wcześniej wygenerowane pliki OpenAPI/TypeScript obejmują podstawowy endpoint, ale nie odzwierciedlają jeszcze dodanej odpowiedzi `unsupported_topology` HTTP 422, ponieważ generator został zablokowany limitem użycia. Zmiana katalogu artefaktów unieważnia teraz tylko prefiksy zasobów wyników anteny; test bridge obejmuje tę izolację. Router ma fixture test gotowego pola/widma, 304, 404 i uszkodzonego manifestu (`db52f48cd0e0449784f1dde51e017c8755ccc4b0`). W `973ac36da63e2e3c45c33d979c24f24ce15c5c1a` dodano manifest `antenna_source_spectrum_artifact.v2`, cztery adresowane hashem payloady `float64_le` oraz endpoint zakresowy `.../payloads/{payload_kind}` z walidacją rozmiaru/hash, ETag/304 i HTTP Range 206; facade/hook oraz testy Rust/UI obejmują ten transport. UI rozróżnia teraz brak opublikowanego payloadu (`missing_payload`) od nieobsługiwanej topologii. Pozostają pełna walidacja świeżości, odświeżenie generated OpenAPI po odzyskaniu generatora i testy przeglądarkowe end-to-end.
 
 **Pliki:** API schema/router handlers wskazane w mapie, nowe `handlers/data/antenna.rs`, `ControlRoomApi.ts`, nowe `antennaResources.ts`, generated transport/types/paths.

@@ -26,6 +26,7 @@ import {
   ANALYSIS_RESULT_BRANCH_POINTS_PATH,
   ANALYSIS_RESULT_ITEMS_PATH,
   DATA_ANTENNA_SOURCE_SPECTRUM_PAYLOAD_PATH,
+  DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH,
   SESSIONS_PATH,
   SIMULATION_PREPARATION_PATH,
 } from "./apiPaths";
@@ -90,6 +91,38 @@ describe("derived B_drive display quantity", () => {
 });
 
 describe("antenna source-spectrum binary payloads", () => {
+  it("loads a stage output catalog through the typed JSON facade", async () => {
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return jsonResponse({
+          content_digest: "sha256:catalog",
+          outputs: [],
+          port_mode_id: "port-a",
+          resource_id: "antenna/stage-output-catalog/solve-1",
+          schema_version: "stage_output_catalog.v1",
+          session_epoch: "epoch-1",
+          session_id: "session-1",
+          stage_id: "solve-1",
+          stage_kind: "antenna_field_solve",
+          stage_revision: 4,
+          status: "cancelled",
+        });
+      },
+    });
+
+    await api.data.antenna.stageOutputCatalog("solve-1");
+
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/data/antenna/stages/solve-1/output-catalog",
+    );
+    expect(DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH).toContain(
+      "/stages/{stage_id}/output-catalog",
+    );
+  });
+
   it("loads a payload through the typed v2 binary facade", async () => {
     let observedUrl = "";
     let observedHeaders = new Headers();

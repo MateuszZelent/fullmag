@@ -1076,6 +1076,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/data/antenna/stages/{stage_id}/output-catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_antenna_stages_stage_id_output_catalog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/artifacts": {
         parameters: {
             query?: never;
@@ -4684,6 +4700,36 @@ export interface components {
         AntennaSpectrumTransformResource: "spatial_fft" | "nonuniform_spatial_fft";
         /** @enum {string} */
         AntennaSpectrumWindowResource: "rectangular" | "hann" | "hamming" | "blackman";
+        AntennaStageOutputCatalogResource: {
+            content_digest: string;
+            diagnostic?: string | null;
+            outputs: components["schemas"]["AntennaStageOutputResource"][];
+            port_mode_id: string;
+            resource_id: string;
+            schema_version: string;
+            session_epoch: string;
+            session_id: string;
+            solution_id?: string | null;
+            stage_id: string;
+            stage_kind: string;
+            /** Format: int64 */
+            stage_revision: number;
+            status: string;
+        };
+        AntennaStageOutputResource: {
+            kind: string;
+            manifest_ref: string;
+            output_id: string;
+            quantity_ids: string[];
+            reused_existing: boolean;
+            solution_ref: components["schemas"]["AntennaStageOutputSolutionReferenceResource"];
+        };
+        AntennaStageOutputSolutionReferenceResource: {
+            asset_id: string;
+            content_digest: string;
+            output_id: string;
+            stage_id: string;
+        };
         AntennaTargetProjectionResource: {
             id: string;
             output_id: string;
@@ -14870,6 +14916,53 @@ export interface operations {
             };
             /** @description Source spectrum sampling topology is unsupported */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_antenna_stages_stage_id_output_catalog: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Strong ETag from a previous catalog response */
+                "If-None-Match"?: string | null;
+            };
+            path: {
+                /** @description Antenna field-solve stage identifier */
+                stage_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Published antenna stage output catalog */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AntennaStageOutputCatalogResource"];
+                };
+            };
+            /** @description Antenna stage output catalog not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Antenna stage output catalog not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Antenna stage output catalog identity conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

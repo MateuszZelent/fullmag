@@ -225,6 +225,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::data::artifacts::list_artifacts,
         crate::router_v2::handlers::data::artifacts::get_artifact,
         crate::router_v2::handlers::data::antenna::get_antenna_field_solution,
+        crate::router_v2::handlers::data::antenna::get_antenna_stage_output_catalog,
         crate::router_v2::handlers::data::antenna::get_antenna_source_spectrum,
         crate::router_v2::handlers::data::antenna::get_antenna_source_spectrum_payload,
         crate::router_v2::handlers::analysis::eigen::get_spectrum,

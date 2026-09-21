@@ -5,12 +5,12 @@
 //! remain artifacts rather than being copied into the control-plane resource.
 
 use std::collections::BTreeMap;
-use std::path::Path as FsPath;
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue};
-use fullmag_ir::FieldTargetIR;
+use fullmag_ir::{AntennaFieldSolutionRefIR, FieldTargetIR};
 use fullmag_runner::{
     AntennaSourceSpectrumArtifact, AntennaSourceSpectrumManifest, AntennaSpectrumPayloadRef,
     AntennaSpectrumPayloads,
@@ -20,11 +20,17 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
 
-use crate::artifacts::{read_json_artifact_value, require_current_live_artifact_dir};
+use crate::artifacts::{
+    read_json_artifact_value, require_current_live_artifact_dir, sanitize_artifact_relative_path,
+    try_resolve_artifact_path,
+};
 use crate::error::ApiError;
+use crate::session::current_artifact_dir;
 use crate::types::AppState;
 
 const FIELD_SOLUTION_SCHEMA: &str = "antenna_field_solution.v1";
+const ANTENNA_STAGE_OUTPUT_CATALOG_SCHEMA: &str = "stage_output_catalog.v1";
+const ANTENNA_STAGE_OUTPUT_CATALOG_NAME: &str = "stage_output_catalog.v1.json";
 const SOURCE_SPECTRUM_SCHEMA_V1: &str = "antenna_source_spectrum_artifact.v1";
 const SOURCE_SPECTRUM_SCHEMA_V2: &str = "antenna_source_spectrum_artifact.v2";
 const SUPPORTED_SOURCE_SPECTRUM_REALIZATIONS: [&str; 2] =
@@ -89,6 +95,43 @@ pub struct AntennaFieldSolutionResource {
     pub sample_topology: Option<AntennaFieldBinaryRefResource>,
     pub assumptions: Vec<String>,
     pub bases: Vec<AntennaFieldBasisResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AntennaStageOutputSolutionReferenceResource {
+    pub stage_id: String,
+    pub output_id: String,
+    pub asset_id: String,
+    pub content_digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AntennaStageOutputResource {
+    pub kind: String,
+    pub output_id: String,
+    pub solution_ref: AntennaStageOutputSolutionReferenceResource,
+    pub manifest_ref: String,
+    pub quantity_ids: Vec<String>,
+    pub reused_existing: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AntennaStageOutputCatalogResource {
+    pub resource_id: String,
+    pub session_id: String,
+    pub session_epoch: String,
+    pub stage_revision: u64,
+    pub schema_version: String,
+    pub stage_id: String,
+    pub stage_kind: String,
+    pub port_mode_id: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solution_id: Option<String>,
+    pub outputs: Vec<AntennaStageOutputResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<String>,
+    pub content_digest: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -200,6 +243,402 @@ struct StoredFieldSolutionManifest {
     sample_topology: Option<AntennaFieldBinaryRefResource>,
     assumptions: Vec<String>,
     bases: Vec<AntennaFieldBasisResource>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StoredAntennaStageOutputCatalog {
+    schema_version: String,
+    stage_id: String,
+    stage_kind: String,
+    port_mode_id: String,
+    status: String,
+    #[serde(default)]
+    solution_id: Option<String>,
+    #[serde(default)]
+    outputs: Vec<StoredAntennaStageOutput>,
+    #[serde(default)]
+    diagnostic: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StoredAntennaStageOutput {
+    kind: String,
+    output_id: String,
+    solution_ref: AntennaFieldSolutionRefIR,
+    manifest_ref: String,
+    #[serde(default)]
+    quantity_ids: Vec<String>,
+    #[serde(default)]
+    reused_existing: bool,
+}
+
+struct ResolvedAntennaStageCatalog {
+    artifact_dir: PathBuf,
+    catalog_path: PathBuf,
+    stage_id: String,
+    stage_revision: u64,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/antenna/stages/{stage_id}/output-catalog",
+    params(
+        ("stage_id" = String, Path, description = "Antenna field-solve stage identifier"),
+        ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous catalog response"),
+    ),
+    responses(
+        (status = 200, description = "Published antenna stage output catalog", body = AntennaStageOutputCatalogResource),
+        (status = 304, description = "Antenna stage output catalog not modified for the supplied ETag"),
+        (status = 404, description = "Antenna stage output catalog not found"),
+        (status = 409, description = "Antenna stage output catalog identity conflict"),
+    ),
+    tag = "data"
+)]
+pub async fn get_antenna_stage_output_catalog(
+    State(state): State<Arc<AppState>>,
+    Path(stage_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
+    let resolved = resolve_antenna_stage_catalog(&state, &stage_id).await?;
+    let bytes = std::fs::read(&resolved.catalog_path).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to read antenna stage output catalog '{}': {error}",
+            resolved.catalog_path.display()
+        ))
+    })?;
+    let catalog_digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+    let value: Value = serde_json::from_slice(&bytes).map_err(|error| {
+        ApiError::internal(format!(
+            "invalid antenna stage output catalog '{}': {error}",
+            resolved.catalog_path.display()
+        ))
+    })?;
+    let parsed = parse_antenna_stage_output_catalog(
+        &value,
+        &resolved.stage_id,
+        &resolved.artifact_dir,
+    )?;
+    let (session_id, session_epoch) = current_session_identity(&state).await?;
+    let resource = AntennaStageOutputCatalogResource {
+        resource_id: format!(
+            "antenna/stage-output-catalog/{}",
+            resolved.stage_id
+        ),
+        session_id,
+        session_epoch: session_epoch.clone(),
+        stage_revision: resolved.stage_revision,
+        schema_version: parsed.schema_version,
+        stage_id: parsed.stage_id,
+        stage_kind: parsed.stage_kind,
+        port_mode_id: parsed.port_mode_id,
+        status: parsed.status,
+        solution_id: parsed.solution_id,
+        outputs: parsed.outputs,
+        diagnostic: parsed.diagnostic,
+        content_digest: catalog_digest.clone(),
+    };
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "antenna-stage-output-catalog:{session_epoch}:{}:{}",
+        resolved.stage_id, catalog_digest
+    ));
+    Ok(crate::router_v2::handlers::shared::conditional_json_response(
+        &headers, &etag, &resource,
+    ))
+}
+
+async fn resolve_antenna_stage_catalog(
+    state: &Arc<AppState>,
+    requested_stage_id: &str,
+) -> Result<ResolvedAntennaStageCatalog, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let artifact_dir = current_artifact_dir(snapshot)
+        .ok_or_else(|| ApiError::not_found("no artifact directory for the active workspace"))?;
+    let stage_execution = snapshot
+        .stage_execution
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("stage execution read-model is not available"))?;
+    let direct_match = stage_execution
+        .stages
+        .iter()
+        .enumerate()
+        .find(|(index, record)| antenna_stage_identifier_matches(record, *index, requested_stage_id))
+        .map(|(index, record)| {
+            (
+                index,
+                record.artifact_refs.clone(),
+                record
+                    .stage_id
+                    .clone()
+                    .unwrap_or_else(|| format!("stage-{index:03}")),
+            )
+        });
+    let stage_revision = snapshot.state_version;
+    let stage_count = stage_execution.stages.len();
+    let candidates = stage_execution
+        .stages
+        .iter()
+        .enumerate()
+        .map(|(index, record)| {
+            (
+                index,
+                record.artifact_refs.clone(),
+                record
+                    .stage_id
+                    .clone()
+                    .unwrap_or_else(|| format!("stage-{index:03}")),
+            )
+        })
+        .collect::<Vec<_>>();
+    drop(guard);
+
+    let candidate_records = direct_match
+        .as_ref()
+        .map(|candidate| vec![candidate.clone()])
+        .unwrap_or(candidates);
+    for (_stage_index, artifact_refs, fallback_stage_id) in candidate_records {
+        for artifact_ref in artifact_refs {
+            let Some(catalog_path) = resolve_antenna_stage_artifact_ref(
+                &artifact_dir,
+                &artifact_ref,
+                ANTENNA_STAGE_OUTPUT_CATALOG_NAME,
+            )?
+            else {
+                continue;
+            };
+            let catalog_stage_id = read_antenna_stage_catalog_id(&catalog_path)?;
+            if direct_match.is_none()
+                && catalog_stage_id.as_deref() != Some(requested_stage_id)
+            {
+                continue;
+            }
+            return Ok(ResolvedAntennaStageCatalog {
+                artifact_dir: artifact_dir.clone(),
+                catalog_path,
+                stage_id: catalog_stage_id.unwrap_or(fallback_stage_id),
+                stage_revision,
+            });
+        }
+    }
+
+    // The final stage uses the session artifact directory itself.  Keep this
+    // fallback for older read-model snapshots that predate the explicit
+    // artifact_ref publication, while still binding it to the requested last
+    // stage rather than scanning arbitrary files.
+    if direct_match
+        .as_ref()
+        .is_some_and(|(stage_index, _, _)| *stage_index + 1 == stage_count)
+    {
+        let catalog_path = artifact_dir.join(ANTENNA_STAGE_OUTPUT_CATALOG_NAME);
+        if catalog_path.is_file() {
+            let catalog_stage_id = read_antenna_stage_catalog_id(&catalog_path)?;
+            return Ok(ResolvedAntennaStageCatalog {
+                artifact_dir,
+                catalog_path,
+                stage_id: catalog_stage_id.unwrap_or_else(|| {
+                    direct_match
+                        .as_ref()
+                        .map(|(_, _, stage_id)| stage_id.clone())
+                        .unwrap_or_else(|| requested_stage_id.to_string())
+                }),
+                stage_revision,
+            });
+        }
+    }
+
+    Err(ApiError::not_found(format!(
+        "antenna stage '{}' output catalog not found",
+        requested_stage_id
+    )))
+}
+
+fn read_antenna_stage_catalog_id(path: &FsPath) -> Result<Option<String>, ApiError> {
+    let bytes = std::fs::read(path).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to read antenna stage output catalog '{}': {error}",
+            path.display()
+        ))
+    })?;
+    let value: Value = serde_json::from_slice(&bytes).map_err(|error| {
+        ApiError::internal(format!(
+            "invalid antenna stage output catalog '{}': {error}",
+            path.display()
+        ))
+    })?;
+    Ok(value
+        .get("stage_id")
+        .and_then(Value::as_str)
+        .map(str::to_string))
+}
+
+fn resolve_antenna_stage_artifact_ref(
+    artifact_dir: &FsPath,
+    artifact_ref: &str,
+    filename: &str,
+) -> Result<Option<PathBuf>, ApiError> {
+    let candidate = FsPath::new(artifact_ref);
+    let full_path = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        artifact_dir.join(sanitize_artifact_relative_path(artifact_ref)?)
+    };
+    let expected_root = artifact_dir
+        .parent()
+        .map(FsPath::to_path_buf)
+        .unwrap_or_else(|| artifact_dir.to_path_buf());
+    if full_path.is_absolute() && !full_path.starts_with(&expected_root) {
+        return Err(ApiError::bad_request(
+            "antenna stage artifact path must stay under the active workspace",
+        ));
+    }
+    if full_path.is_file()
+        && full_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == filename)
+    {
+        return Ok(Some(full_path));
+    }
+    if full_path.is_dir() {
+        let nested = full_path.join(filename);
+        if nested.is_file() {
+            return Ok(Some(nested));
+        }
+    }
+    Ok(None)
+}
+
+fn antenna_stage_identifier_matches(
+    record: &crate::types::StageExecutionRecord,
+    index: usize,
+    requested: &str,
+) -> bool {
+    record.stage_id.as_deref() == Some(requested)
+        || format!("stage-{index:03}") == requested
+        || format!("stage_{index}") == requested
+        || index.to_string() == requested
+}
+
+#[derive(Debug)]
+struct ParsedAntennaStageOutputCatalog {
+    schema_version: String,
+    stage_id: String,
+    stage_kind: String,
+    port_mode_id: String,
+    status: String,
+    solution_id: Option<String>,
+    outputs: Vec<AntennaStageOutputResource>,
+    diagnostic: Option<String>,
+}
+
+fn parse_antenna_stage_output_catalog(
+    value: &Value,
+    expected_stage_id: &str,
+    artifact_dir: &FsPath,
+) -> Result<ParsedAntennaStageOutputCatalog, ApiError> {
+    let catalog: StoredAntennaStageOutputCatalog = serde_json::from_value(value.clone())
+        .map_err(|error| ApiError::internal(format!("invalid antenna stage output catalog: {error}")))?;
+    if catalog.schema_version != ANTENNA_STAGE_OUTPUT_CATALOG_SCHEMA {
+        return Err(ApiError::internal(format!(
+            "unsupported antenna stage output catalog schema '{}'",
+            catalog.schema_version
+        )));
+    }
+    if catalog.stage_id != expected_stage_id {
+        return Err(ApiError::conflict_with_code(
+            "stage_output_identity_conflict",
+            format!(
+                "antenna stage output catalog belongs to stage '{}' instead of '{}'",
+                catalog.stage_id, expected_stage_id
+            ),
+        ));
+    }
+    if catalog.stage_kind != "antenna_field_solve" {
+        return Err(ApiError::internal(format!(
+            "unsupported antenna stage output catalog kind '{}'",
+            catalog.stage_kind
+        )));
+    }
+    if catalog.port_mode_id.trim().is_empty() {
+        return Err(ApiError::internal(
+            "antenna stage output catalog has an empty port_mode_id",
+        ));
+    }
+    match catalog.status.as_str() {
+        "ready" if catalog.outputs.is_empty() => {
+            return Err(ApiError::internal(
+                "ready antenna stage output catalog has no outputs",
+            ));
+        }
+        "cancelled" | "failed" if !catalog.outputs.is_empty() => {
+            return Err(ApiError::internal(
+                "terminal antenna stage output catalog must not expose outputs",
+            ));
+        }
+        "ready" | "cancelled" | "failed" => {}
+        status => {
+            return Err(ApiError::internal(format!(
+                "unsupported antenna stage output catalog status '{status}'",
+            )))
+        }
+    }
+
+    let mut outputs = Vec::with_capacity(catalog.outputs.len());
+    for output in catalog.outputs {
+        if output.kind != "antenna_field_solution" {
+            return Err(ApiError::internal(format!(
+                "unsupported antenna stage output kind '{}'",
+                output.kind
+            )));
+        }
+        if output.output_id != output.solution_ref.output_id
+            || output.solution_ref.stage_id != expected_stage_id
+            || output.solution_ref.output_id.trim().is_empty()
+            || output.solution_ref.asset_id.trim().is_empty()
+            || output.solution_ref.content_digest.trim().is_empty()
+        {
+            return Err(ApiError::conflict_with_code(
+                "stage_output_identity_conflict",
+                format!(
+                    "antenna stage output '{}' has an incompatible solution reference",
+                    output.output_id
+                ),
+            ));
+        }
+        let manifest_ref = sanitize_artifact_relative_path(&output.manifest_ref)?;
+        if try_resolve_artifact_path(artifact_dir, &manifest_ref.display().to_string())?.is_none() {
+            return Err(ApiError::not_found(format!(
+                "antenna field solution manifest '{}' not found",
+                output.manifest_ref
+            )));
+        }
+        outputs.push(AntennaStageOutputResource {
+            kind: output.kind,
+            output_id: output.output_id,
+            solution_ref: AntennaStageOutputSolutionReferenceResource {
+                stage_id: output.solution_ref.stage_id,
+                output_id: output.solution_ref.output_id,
+                asset_id: output.solution_ref.asset_id,
+                content_digest: output.solution_ref.content_digest,
+            },
+            manifest_ref: manifest_ref.display().to_string().replace('\\', "/"),
+            quantity_ids: output.quantity_ids,
+            reused_existing: output.reused_existing,
+        });
+    }
+
+    Ok(ParsedAntennaStageOutputCatalog {
+        schema_version: catalog.schema_version,
+        stage_id: catalog.stage_id,
+        stage_kind: catalog.stage_kind,
+        port_mode_id: catalog.port_mode_id,
+        status: catalog.status,
+        solution_id: catalog.solution_id,
+        outputs,
+        diagnostic: catalog.diagnostic,
+    })
 }
 
 #[utoipa::path(
@@ -690,6 +1129,87 @@ async fn current_session_identity(state: &Arc<AppState>) -> Result<(String, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn antenna_stage_output_catalog_parser_accepts_ready_output_and_verifies_manifest() {
+        let artifact_dir = std::env::temp_dir().join(format!(
+            "fullmag-antenna-stage-catalog-parser-{}",
+            std::process::id()
+        ));
+        let manifest_ref = "antenna/field_solutions/solution-1/manifest.v1.json";
+        let manifest_path = manifest_ref
+            .split('/')
+            .fold(artifact_dir.clone(), |path, segment| path.join(segment));
+        std::fs::create_dir_all(manifest_path.parent().expect("manifest parent"))
+            .expect("create manifest directory");
+        std::fs::write(&manifest_path, b"{}").expect("write manifest fixture");
+        let catalog = serde_json::json!({
+            "schema_version": ANTENNA_STAGE_OUTPUT_CATALOG_SCHEMA,
+            "stage_id": "solve-1",
+            "stage_kind": "antenna_field_solve",
+            "port_mode_id": "port-1",
+            "status": "ready",
+            "outputs": [{
+                "kind": "antenna_field_solution",
+                "output_id": "solution-1",
+                "solution_ref": {
+                    "stage_id": "solve-1",
+                    "output_id": "solution-1",
+                    "asset_id": "asset-1",
+                    "content_digest": "sha256:solution-1"
+                },
+                "manifest_ref": manifest_ref,
+                "quantity_ids": ["H_ant_basis"],
+                "reused_existing": false
+            }]
+        });
+
+        let parsed = parse_antenna_stage_output_catalog(&catalog, "solve-1", &artifact_dir)
+            .expect("ready catalog should parse");
+        assert_eq!(parsed.status, "ready");
+        assert_eq!(parsed.outputs[0].solution_ref.asset_id, "asset-1");
+        assert_eq!(parsed.outputs[0].manifest_ref, manifest_ref);
+        let _ = std::fs::remove_dir_all(artifact_dir);
+    }
+
+    #[test]
+    fn antenna_stage_output_catalog_parser_rejects_stage_identity_conflict() {
+        let catalog = serde_json::json!({
+            "schema_version": ANTENNA_STAGE_OUTPUT_CATALOG_SCHEMA,
+            "stage_id": "other-stage",
+            "stage_kind": "antenna_field_solve",
+            "port_mode_id": "port-1",
+            "status": "cancelled",
+            "outputs": []
+        });
+        let error = parse_antenna_stage_output_catalog(
+            &catalog,
+            "solve-1",
+            FsPath::new("C:/fullmag/artifacts"),
+        )
+        .expect_err("catalog from another stage must fail closed");
+        assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(error.code.as_deref(), Some("stage_output_identity_conflict"));
+    }
+
+    #[test]
+    fn antenna_stage_output_catalog_parser_rejects_ready_catalog_without_outputs() {
+        let catalog = serde_json::json!({
+            "schema_version": ANTENNA_STAGE_OUTPUT_CATALOG_SCHEMA,
+            "stage_id": "solve-1",
+            "stage_kind": "antenna_field_solve",
+            "port_mode_id": "port-1",
+            "status": "ready",
+            "outputs": []
+        });
+        let error = parse_antenna_stage_output_catalog(
+            &catalog,
+            "solve-1",
+            FsPath::new("C:/fullmag/artifacts"),
+        )
+        .expect_err("ready catalog without outputs must fail closed");
+        assert_eq!(error.status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+    }
 
     #[test]
     fn source_spectrum_sampling_maps_all_target_kinds() {

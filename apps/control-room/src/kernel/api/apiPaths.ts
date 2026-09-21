@@ -356,6 +356,10 @@ export const DATA_ANTENNA_FIELD_SOLUTION_PATH = openApiV2Path(
   "/v2/sessions/current/data/antenna/field-solutions/{solution_id}",
 );
 
+export const DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH = openApiV2Path(
+  "/v2/sessions/current/data/antenna/stages/{stage_id}/output-catalog",
+);
+
 export const DATA_ANTENNA_SOURCE_SPECTRUM_PATH = openApiV2Path(
   "/v2/sessions/current/data/antenna/source-spectra/{output_id}",
 );

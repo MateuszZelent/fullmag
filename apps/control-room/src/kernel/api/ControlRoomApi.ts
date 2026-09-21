@@ -54,6 +54,7 @@ import {
   DATA_ARTIFACT_PATH,
   DATA_ARTIFACTS_PATH,
   DATA_ANTENNA_FIELD_SOLUTION_PATH,
+  DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH,
   DATA_ANTENNA_SOURCE_SPECTRUM_PATH,
   DATA_ANTENNA_SOURCE_SPECTRUM_PAYLOAD_PATH,
   DATA_DOMAIN_META_PATH,
@@ -313,6 +314,7 @@ import type {
   FrequencyDomainTextArtifactResource,
   ArtifactResource,
   AntennaFieldSolutionResource,
+  AntennaStageOutputCatalogResource,
   AntennaSpectrumPayloadKind,
   AntennaSourceSpectrumResource,
   FrequencyDomainFieldResource,
@@ -1293,6 +1295,12 @@ export class ControlRoomApi {
           DATA_ANTENNA_FIELD_SOLUTION_PATH,
           options,
           { path: { solution_id: solutionId } },
+        ),
+      stageOutputCatalog: (stageId: string, options?: RequestOptions) =>
+        this.requestJson<AntennaStageOutputCatalogResource>(
+          DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH,
+          options,
+          { path: { stage_id: stageId } },
         ),
       sourceSpectrum: (outputId: string, options?: RequestOptions) =>
         this.requestJson<AntennaSourceSpectrumResource>(

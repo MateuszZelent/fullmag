@@ -19,6 +19,7 @@ import {
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_ANTENNA_FIELD_SOLUTION_PATH,
+  DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH,
   DATA_ANTENNA_SOURCE_SPECTRUM_PATH,
   DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
   DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
@@ -90,6 +91,11 @@ const ANTENNA_FIELD_SOLUTION_PREFIX = DATA_ANTENNA_FIELD_SOLUTION_PATH.slice(
   0,
   DATA_ANTENNA_FIELD_SOLUTION_PATH.indexOf("{solution_id}"),
 );
+const ANTENNA_STAGE_OUTPUT_CATALOG_PREFIX =
+  DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH.slice(
+    0,
+    DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH.indexOf("{stage_id}"),
+  );
 const ANTENNA_SOURCE_SPECTRUM_PREFIX = DATA_ANTENNA_SOURCE_SPECTRUM_PATH.slice(
   0,
   DATA_ANTENNA_SOURCE_SPECTRUM_PATH.indexOf("{output_id}"),
@@ -594,6 +600,10 @@ export class RealtimeInvalidationBridge {
             change.revision,
           );
           this.queuePrefixInvalidation(
+            ANTENNA_STAGE_OUTPUT_CATALOG_PREFIX,
+            change.revision,
+          );
+          this.queuePrefixInvalidation(
             ANTENNA_SOURCE_SPECTRUM_PREFIX,
             change.revision,
           );
@@ -1083,6 +1093,10 @@ export class RealtimeInvalidationBridge {
           matchesStageScopedResource(
             resourceKey,
             ANALYSIS_HYSTERESIS_REVERSAL_FIELDS_PATH,
+          ) ||
+          matchesStageScopedResource(
+            resourceKey,
+            DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH,
           ),
         dependentRevision,
       );

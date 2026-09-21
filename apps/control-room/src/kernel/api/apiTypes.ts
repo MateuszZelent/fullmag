@@ -256,6 +256,8 @@ export type FrequencyDomainTextArtifactResource =
 export type ArtifactResource = components["schemas"]["ArtifactResource"];
 export type AntennaFieldSolutionResource =
   components["schemas"]["AntennaFieldSolutionResource"];
+export type AntennaStageOutputCatalogResource =
+  components["schemas"]["AntennaStageOutputCatalogResource"];
 export type AntennaSourceSpectrumResource =
   components["schemas"]["AntennaSourceSpectrumResource"];
 export type AntennaSpectrumPayloadKind =

@@ -25,6 +25,7 @@ import { frequencyDomainModeFieldMetaResourceKey } from "../resources/frequencyD
 import {
   ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
   DATA_ANTENNA_FIELD_SOLUTION_PATH,
+  DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH,
   DATA_ANTENNA_SOURCE_SPECTRUM_PATH,
   DATA_ARTIFACTS_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
@@ -268,7 +269,12 @@ describe("RealtimeInvalidationBridge", () => {
       "{output_id}",
       "spectrum-1",
     );
+    const stageOutputCatalogKey = DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH.replace(
+      "{stage_id}",
+      "solve-1",
+    );
     resources.subscribe(fieldSolutionKey, () => {});
+    resources.subscribe(stageOutputCatalogKey, () => {});
     resources.subscribe(sourceSpectrumKey, () => {});
     resources.subscribe(DATA_ARTIFACTS_PATH, () => {});
     resources.subscribe(DATA_DOMAIN_TOPOLOGY_PATH, () => {});
@@ -289,6 +295,7 @@ describe("RealtimeInvalidationBridge", () => {
     ).toBe(true);
 
     expect(resources.getRevision(fieldSolutionKey)).toBe(17);
+    expect(resources.getRevision(stageOutputCatalogKey)).toBe(17);
     expect(resources.getRevision(sourceSpectrumKey)).toBe(17);
     expect(resources.getRevision(DATA_ARTIFACTS_PATH)).toBe(17);
     expect(resources.getRevision(DATA_DOMAIN_TOPOLOGY_PATH)).toBeNull();

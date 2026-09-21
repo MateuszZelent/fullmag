@@ -736,6 +736,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::data::get_antenna_field_solution),
         )
         .route(
+            "/v2/sessions/current/data/antenna/stages/:stage_id/output-catalog",
+            get(handlers::data::get_antenna_stage_output_catalog),
+        )
+        .route(
             "/v2/sessions/current/data/antenna/source-spectra/:output_id",
             get(handlers::data::get_antenna_source_spectrum),
         )

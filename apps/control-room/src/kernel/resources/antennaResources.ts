@@ -4,12 +4,14 @@ import { useCallback } from "react";
 
 import {
   DATA_ANTENNA_FIELD_SOLUTION_PATH,
+  DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH,
   DATA_ANTENNA_SOURCE_SPECTRUM_PATH,
   DATA_ANTENNA_SOURCE_SPECTRUM_PAYLOAD_PATH,
 } from "../api/apiPaths";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import type {
   AntennaFieldSolutionResource,
+  AntennaStageOutputCatalogResource,
   AntennaSpectrumPayloadKind,
   AntennaSourceSpectrumResource,
   BinaryResourceResult,
@@ -74,6 +76,39 @@ export function useAntennaFieldSolutionResource(
     enabled: Boolean(solutionId) && options.enabled !== false,
     load,
     resolveRevision: (data) => data?.content_digest ?? null,
+    resourceKey,
+  });
+}
+
+export function useAntennaStageOutputCatalogResource(
+  stageId: string | null | undefined,
+  options: AntennaResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = stageId
+    ? concretePath(
+        DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH,
+        "stage_id",
+        stageId,
+      )
+    : `${DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH}:none`;
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      stageId
+        ? api.data.antenna
+            .stageOutputCatalog(stageId, { signal })
+            .catch(ignoreMissingAntennaResource<AntennaStageOutputCatalogResource>)
+        : Promise.resolve(null),
+    [api, stageId],
+  );
+
+  return useResource<AntennaStageOutputCatalogResource | null>({
+    enabled: Boolean(stageId) && options.enabled !== false,
+    load,
+    resolveRevision: (data) =>
+      data
+        ? `${data.stage_revision}:${data.content_digest}`
+        : null,
     resourceKey,
   });
 }

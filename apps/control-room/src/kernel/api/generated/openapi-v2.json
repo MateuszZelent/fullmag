@@ -2906,6 +2906,131 @@
         ],
         "type": "string"
       },
+      "AntennaStageOutputCatalogResource": {
+        "properties": {
+          "content_digest": {
+            "type": "string"
+          },
+          "diagnostic": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outputs": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaStageOutputResource"
+            },
+            "type": "array"
+          },
+          "port_mode_id": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "session_epoch": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "solution_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_kind": {
+            "type": "string"
+          },
+          "stage_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource_id",
+          "session_id",
+          "session_epoch",
+          "stage_revision",
+          "schema_version",
+          "stage_id",
+          "stage_kind",
+          "port_mode_id",
+          "status",
+          "outputs",
+          "content_digest"
+        ],
+        "type": "object"
+      },
+      "AntennaStageOutputResource": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "manifest_ref": {
+            "type": "string"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "quantity_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reused_existing": {
+            "type": "boolean"
+          },
+          "solution_ref": {
+            "$ref": "#/components/schemas/AntennaStageOutputSolutionReferenceResource"
+          }
+        },
+        "required": [
+          "kind",
+          "output_id",
+          "solution_ref",
+          "manifest_ref",
+          "quantity_ids",
+          "reused_existing"
+        ],
+        "type": "object"
+      },
+      "AntennaStageOutputSolutionReferenceResource": {
+        "properties": {
+          "asset_id": {
+            "type": "string"
+          },
+          "content_digest": {
+            "type": "string"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage_id",
+          "output_id",
+          "asset_id",
+          "content_digest"
+        ],
+        "type": "object"
+      },
       "AntennaTargetProjectionResource": {
         "additionalProperties": false,
         "properties": {
@@ -39638,6 +39763,58 @@
           },
           "422": {
             "description": "Source spectrum sampling topology is unsupported"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/antenna/stages/{stage_id}/output-catalog": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_antenna_stages_stage_id_output_catalog",
+        "parameters": [
+          {
+            "description": "Antenna field-solve stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Strong ETag from a previous catalog response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AntennaStageOutputCatalogResource"
+                }
+              }
+            },
+            "description": "Published antenna stage output catalog"
+          },
+          "304": {
+            "description": "Antenna stage output catalog not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "Antenna stage output catalog not found"
+          },
+          "409": {
+            "description": "Antenna stage output catalog identity conflict"
           }
         },
         "tags": [
