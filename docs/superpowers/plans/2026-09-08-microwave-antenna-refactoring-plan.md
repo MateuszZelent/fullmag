@@ -628,7 +628,7 @@ Powyższy oracle uzupełnić testem rzeczywistego plannera: input 1000×10000 pr
 **Pliki:** `antenna_stage.rs`, native charge/field wrappers, CLI `orchestrator.rs` i nowy `antenna_workflow.rs`, standardowy stage execution read-model i artefakty.
 
 - [ ] Przenieść antenową orkiestrację z monolitu do `antenna_workflow.rs`; publiczne wywołanie przyjmuje plan, artifact store i callback postępu/anulowania. Nie przenosić przy tym innych workflows.
-- [ ] Sprawdzić cache przed emisją meshing/solving. Cache hit publikuje `ready` z `reused_existing=true` bez fikcyjnego solve.
+- [x] Sprawdzić cache przed emisją meshing/solving. Cache hit publikuje `ready` z `reused_existing=true` bez fikcyjnego solve; zgodny model cache publikuje `Ready`, brak pliku `Missing`, a niezgodny podpis `Stale`.
 - [ ] Emitować meshing, solving_current, evaluating_field, projecting_targets dopiero na rzeczywistych granicach wykonania. Jeśli mesh jest wcześniej gotowy, oznaczyć etap jako reuse/skip z przyczyną.
 - [ ] Przekazać cancellation token do długich operacji i sprawdzać go między blokami pola T11. Anulowanie nie może opublikować gotowego manifestu.
 - [ ] Payloady zapisywać do task-private temporary directory, weryfikować hashe, publikować manifest jako ostatni atomowy krok. Concurrent request tej samej signature deduplikuje lub weryfikuje identyczność wyniku; nie nadpisuje istniejącego assetu.
@@ -670,6 +670,16 @@ referencję opublikowanego assetu. Przy braku trafienia zachowana jest pełna
 sekwencja rzeczywistego solve'u. Regresja lifecycle wymusza oba warianty;
 anulowanie między blokami, deduplikacja równoległych solve'ów i pełny resolver
 stage/output pozostają otwarte.
+
+Uzupełnienie implementacyjne 2026-09-21: loader runnera publikuje jawny stan
+`AntennaFieldSolutionCacheState::{Missing, Stale, Ready}`. Zgodny manifest nadal
+omija etapy solve, lecz obecny manifest z innym `asset_id` lub podpisem nie jest
+już traktowany jak zwykły cache miss: lifecycle zapisuje
+`Missing → Stale → Queued` z oczekiwanym i znalezionym ID oraz ścieżką manifestu,
+po czym wykonuje nowy solve do nowej rewizji content-addressed. Korupcja,
+niepełny manifest lub zmiana bajtów podczas odczytu nadal kończy się błędem, a
+stary immutable asset nie jest usuwany ani nadpisywany. Szczegóły zapisano w
+`docs/validation/antenna/cache-lifecycle-2026-09-21.md`.
 
 **Bramka:** `lifecycle` i `artifact`; testy fault injection obejmują przerwanie przed/po zapisie payloadu i przed publikacją manifestu. Commit: `fix: bind antenna stage lifecycle to actual execution`.
 

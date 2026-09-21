@@ -36,7 +36,7 @@ impl AntennaFieldStageStatus {
         use AntennaFieldStageStatus::*;
         matches!(
             (self, next),
-            (Missing, Queued)
+            (Missing, Queued | Stale)
                 | (Queued, Meshing)
                 // A verified immutable asset can skip the solve stages and
                 // enter the projection boundary directly.  The diagnostic
@@ -110,6 +110,17 @@ pub struct PublishedAntennaFieldSolution {
     pub manifest_path: PathBuf,
     pub signatures: AntennaFieldSolutionSignatures,
     pub reused_existing: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AntennaFieldSolutionCacheState {
+    Missing,
+    Stale {
+        expected_asset_id: String,
+        cached_asset_id: String,
+        manifest_path: PathBuf,
+    },
+    Ready(PublishedAntennaFieldSolution),
 }
 
 #[derive(Serialize)]
@@ -244,15 +255,14 @@ pub fn antenna_field_solution_asset_id(signatures: &AntennaFieldSolutionSignatur
     format!("afs-{digest}")
 }
 
-/// Reopen an immutable solution only when its full plan-derived signature is
-/// still current. A present but malformed or tampered asset is an error; a
-/// valid asset with a different signature is simply stale and must be solved
-/// again as a new content-addressed revision under the same authored output
-/// identity.
-pub fn load_cached_antenna_field_solution(
+/// Inspect the immutable solution for a plan without hiding stale revisions.
+/// A present but malformed or tampered asset is an error; a valid asset with a
+/// different signature is explicitly stale and must be solved again as a new
+/// content-addressed revision under the same authored output identity.
+pub fn inspect_cached_antenna_field_solution(
     output_root: &Path,
     plan: &AntennaFieldSolvePlanIR,
-) -> Result<Option<PublishedAntennaFieldSolution>, RunError> {
+) -> Result<AntennaFieldSolutionCacheState, RunError> {
     let signatures = antenna_field_solution_signatures(plan)?;
     let asset_id = antenna_field_solution_asset_id(&signatures);
     validate_storage_id("antenna solution_id", &plan.solution_id)?;
@@ -266,7 +276,7 @@ pub fn load_cached_antenna_field_solution(
     } else if legacy_dir.join(SOLUTION_MANIFEST_NAME).exists() {
         legacy_dir.join(SOLUTION_MANIFEST_NAME)
     } else {
-        return Ok(None);
+        return Ok(AntennaFieldSolutionCacheState::Missing);
     };
     let manifest_bytes = fs::read(&manifest_path).map_err(|error| RunError {
         message: format!(
@@ -302,7 +312,11 @@ pub fn load_cached_antenna_field_solution(
             message: format!("validate cached antenna field-solution signatures: {error}"),
         })?;
     if cached_asset_id != asset_id || cached_signatures != signatures {
-        return Ok(None);
+        return Ok(AntennaFieldSolutionCacheState::Stale {
+            expected_asset_id: asset_id,
+            cached_asset_id: cached_asset_id.to_string(),
+            manifest_path,
+        });
     }
     let reference = AntennaFieldSolutionRefIR {
         stage_id: plan.stage_id.clone(),
@@ -316,16 +330,34 @@ pub fn load_cached_antenna_field_solution(
             message: "cached antenna field-solution manifest changed while reopening asset".into(),
         });
     }
-    Ok(Some(PublishedAntennaFieldSolution {
-        reference,
-        manifest_path: if revision_dir.join(SOLUTION_MANIFEST_NAME).exists() {
-            revision_dir.join(SOLUTION_MANIFEST_NAME)
-        } else {
-            legacy_dir.join(SOLUTION_MANIFEST_NAME)
+    Ok(AntennaFieldSolutionCacheState::Ready(
+        PublishedAntennaFieldSolution {
+            reference,
+            manifest_path: if revision_dir.join(SOLUTION_MANIFEST_NAME).exists() {
+                revision_dir.join(SOLUTION_MANIFEST_NAME)
+            } else {
+                legacy_dir.join(SOLUTION_MANIFEST_NAME)
+            },
+            signatures,
+            reused_existing: true,
         },
-        signatures,
-        reused_existing: true,
-    }))
+    ))
+}
+
+/// Reopen an immutable solution only when its full plan-derived signature is
+/// still current. The compatibility helper intentionally maps a stale
+/// revision to `None`; callers that publish lifecycle state should use
+/// [`inspect_cached_antenna_field_solution`] instead.
+pub fn load_cached_antenna_field_solution(
+    output_root: &Path,
+    plan: &AntennaFieldSolvePlanIR,
+) -> Result<Option<PublishedAntennaFieldSolution>, RunError> {
+    match inspect_cached_antenna_field_solution(output_root, plan)? {
+        AntennaFieldSolutionCacheState::Ready(solution) => Ok(Some(solution)),
+        AntennaFieldSolutionCacheState::Missing | AntennaFieldSolutionCacheState::Stale { .. } => {
+            Ok(None)
+        }
+    }
 }
 
 fn validate_relative_path(path: &Path, display: &str) -> Result<(), RunError> {
@@ -820,6 +852,7 @@ mod tests {
     #[test]
     fn lifecycle_rejects_skipping_the_current_solve() {
         assert!(AntennaFieldStageStatus::Missing.can_transition_to(AntennaFieldStageStatus::Queued));
+        assert!(AntennaFieldStageStatus::Missing.can_transition_to(AntennaFieldStageStatus::Stale));
         assert!(!AntennaFieldStageStatus::Queued
             .can_transition_to(AntennaFieldStageStatus::EvaluatingField));
         assert!(AntennaFieldStageStatus::Queued
@@ -827,6 +860,35 @@ mod tests {
         assert!(AntennaFieldStageStatus::SolvingCurrent
             .can_transition_to(AntennaFieldStageStatus::Failed));
         assert!(AntennaFieldStageStatus::Ready.can_transition_to(AntennaFieldStageStatus::Stale));
+    }
+
+    #[test]
+    fn lifecycle_records_stale_cache_before_resolve() {
+        let mut state = AntennaFieldStageState {
+            stage_id: "solve".into(),
+            solution_id: "solution".into(),
+            status: AntennaFieldStageStatus::Missing,
+            transitions: Vec::new(),
+            signatures: None,
+            diagnostic: None,
+        };
+        state
+            .transition(
+                AntennaFieldStageStatus::Stale,
+                Some("immutable field solution is stale".into()),
+            )
+            .unwrap();
+        state
+            .transition(
+                AntennaFieldStageStatus::Queued,
+                Some("re-solving stale immutable field solution".into()),
+            )
+            .unwrap();
+        assert_eq!(state.status, AntennaFieldStageStatus::Queued);
+        assert_eq!(state.transitions[0].from, AntennaFieldStageStatus::Missing);
+        assert_eq!(state.transitions[0].to, AntennaFieldStageStatus::Stale);
+        assert_eq!(state.transitions[1].from, AntennaFieldStageStatus::Stale);
+        assert_eq!(state.transitions[1].to, AntennaFieldStageStatus::Queued);
     }
 
     #[test]

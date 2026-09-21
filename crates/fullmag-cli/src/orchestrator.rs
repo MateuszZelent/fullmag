@@ -6695,11 +6695,30 @@ fn execute_synthetic_stage(
                 signatures: None,
                 diagnostic: None,
             };
-            lifecycle.transition(fullmag_runner::AntennaFieldStageStatus::Queued, None)?;
-
-            if let Some(cached) =
-                fullmag_runner::load_cached_antenna_field_solution(artifact_dir, plan)?
+            let cache_state =
+                fullmag_runner::inspect_cached_antenna_field_solution(artifact_dir, plan)?;
+            if let fullmag_runner::AntennaFieldSolutionCacheState::Stale {
+                expected_asset_id,
+                cached_asset_id,
+                manifest_path,
+            } = &cache_state
             {
+                lifecycle.transition(
+                    fullmag_runner::AntennaFieldStageStatus::Stale,
+                    Some(format!(
+                        "immutable field solution is stale: cached_asset_id={cached_asset_id} expected_asset_id={expected_asset_id} manifest_path={}",
+                        manifest_path.display()
+                    )),
+                )?;
+                lifecycle.transition(
+                    fullmag_runner::AntennaFieldStageStatus::Queued,
+                    Some("re-solving stale immutable field solution".into()),
+                )?;
+            } else {
+                lifecycle.transition(fullmag_runner::AntennaFieldStageStatus::Queued, None)?;
+            }
+
+            if let fullmag_runner::AntennaFieldSolutionCacheState::Ready(cached) = cache_state {
                 lifecycle.transition(
                     fullmag_runner::AntennaFieldStageStatus::ProjectingTargets,
                     Some("reused verified immutable field solution".into()),

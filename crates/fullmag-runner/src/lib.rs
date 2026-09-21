@@ -34,8 +34,9 @@ pub use antenna_spectrum::{
     AntennaSpectrumSampleGrid, AntennaSpectrumSamplingMetadata,
 };
 pub use antenna_stage::{
-    antenna_field_solution_signatures, load_cached_antenna_field_solution,
-    load_published_antenna_field_solution, publish_antenna_field_solution_atomically,
+    antenna_field_solution_signatures, inspect_cached_antenna_field_solution,
+    load_cached_antenna_field_solution, load_published_antenna_field_solution,
+    publish_antenna_field_solution_atomically, AntennaFieldSolutionCacheState,
     AntennaFieldStageState, AntennaFieldStageStatus, AntennaFieldStageTransition,
     PublishedAntennaFieldSolution,
 };
