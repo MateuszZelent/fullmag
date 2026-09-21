@@ -54,6 +54,33 @@ pub struct SceneDocument {
     pub editor: SceneEditorState,
 }
 
+impl Default for SceneDocument {
+    fn default() -> Self {
+        Self {
+            version: default_scene_version(),
+            revision: 0,
+            scene: SceneMetadata::default(),
+            universe: None,
+            objects: Vec::new(),
+            couplings: Vec::new(),
+            materials: Vec::new(),
+            magnetization_assets: Vec::new(),
+            field_drives: SceneFieldDrivesState::default(),
+            monitors: SceneMonitorState::default(),
+            selections: Vec::new(),
+            magnetization_constraints: Vec::new(),
+            current_modules: SceneCurrentModulesState::default(),
+            current_transports: Vec::new(),
+            spin_transports: Vec::new(),
+            spin_torques: Vec::new(),
+            oersted_fields: Vec::new(),
+            study: SceneStudyState::default(),
+            outputs: SceneOutputsState::default(),
+            editor: SceneEditorState::default(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct SceneFieldDrivesState {
