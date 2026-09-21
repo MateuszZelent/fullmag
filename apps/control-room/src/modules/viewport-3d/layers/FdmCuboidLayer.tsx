@@ -1204,7 +1204,6 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     if (!usesInstanceColors && surface.instanceColor !== null) {
       surface.instanceColor = null;
       colorRevisionRef.current = null;
-      surfaceMaterial.needsUpdate = true;
       colorChanged = true;
     }
     if (usesInstanceColors && surfaceColors) {
@@ -1257,7 +1256,6 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     invalidate,
     preparedInstances,
     recordSurfaceAdoption,
-    surfaceMaterial,
     fieldBufferId,
     sessionIdentity,
     surfaceColors,
