@@ -2147,11 +2147,14 @@ async fn synchronize_observation_quantities(state: &Arc<AppState>) -> Result<u64
         live_snapshot.as_ref(),
     );
     let observation_quantities = observation_quantities_for_visualization_state(&visualization);
-    apply_observation_quantities(&mut selection, observation_quantities);
+    // Every caller has already advanced the display revision for the
+    // mutation that led here. Reconcile the derived demand under that same
+    // revision so one API mutation emits one observable revision.
+    set_observation_quantities(&mut selection, observation_quantities);
     Ok(selection.revision)
 }
 
-fn apply_observation_quantities(
+fn set_observation_quantities(
     selection: &mut CurrentDisplaySelection,
     observation_quantities: Vec<String>,
 ) -> bool {
@@ -2159,6 +2162,16 @@ fn apply_observation_quantities(
         return false;
     }
     selection.observation_quantities = observation_quantities;
+    true
+}
+
+fn apply_observation_quantities(
+    selection: &mut CurrentDisplaySelection,
+    observation_quantities: Vec<String>,
+) -> bool {
+    if !set_observation_quantities(selection, observation_quantities) {
+        return false;
+    }
     selection.revision = selection.revision.wrapping_add(1);
     true
 }
