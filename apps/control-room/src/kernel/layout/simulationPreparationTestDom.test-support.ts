@@ -148,8 +148,48 @@ export class TestNode {
   }
 }
 
+type TestAttribute = {
+  readonly name: string;
+  readonly value: string;
+};
+
+/**
+ * Minimal NamedNodeMap surface required by React's hydration reconciler.
+ * The map API remains available to the test DOM, while numeric properties
+ * mirror browser `element.attributes[index]` entries.
+ */
+class TestNamedNodeMap extends Map<string, string> {
+  get length(): number {
+    return this.size;
+  }
+
+  override set(name: string, value: string): this {
+    const result = super.set(name, value);
+    this.syncIndexedEntries();
+    return result;
+  }
+
+  override delete(name: string): boolean {
+    const deleted = super.delete(name);
+    if (deleted) this.syncIndexedEntries();
+    return deleted;
+  }
+
+  private syncIndexedEntries(): void {
+    const indexed = this as unknown as Record<string, unknown>;
+    const entries = Array.from(this.entries());
+    for (let index = 0; index < entries.length; index += 1) {
+      const [name, value] = entries[index]!;
+      indexed[String(index)] = { name, value } satisfies TestAttribute;
+    }
+    for (let index = entries.length; indexed[String(index)] !== undefined; index += 1) {
+      delete indexed[String(index)];
+    }
+  }
+}
+
 export class TestElement extends TestNode {
-  readonly attributes = new Map<string, string>();
+  readonly attributes = new TestNamedNodeMap();
   clientHeight = 0;
   clientWidth = 0;
   readonly namespaceURI = "http://www.w3.org/1999/xhtml";
@@ -251,6 +291,10 @@ export class TestElement extends TestNode {
 
   getAttribute(name: string): string | null {
     return this.attributes.get(name) ?? null;
+  }
+
+  getAttributeNames(): string[] {
+    return Array.from(this.attributes.keys());
   }
 
   getBoundingClientRect(): DOMRect {

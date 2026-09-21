@@ -212,6 +212,39 @@ new revision, and the canonical
 `recommended_fetch = "/v2/sessions/current/simulation/preparation"`. HTTP v2
 remains authoritative; the event is cache invalidation only.
 
+### Document open, runtime restore and Compute preparation
+
+`OpenDocument` belongs to the project/persistence application use case. It
+reads and validates a CAE document or draft and does not execute a script,
+build a mesh, start `Compute`, or mutate `LiveRuntime`. The current-session
+routes remain adapters during migration; this section does not introduce a
+second project API or a second writer.
+
+The first transport adapter for this use case is deliberately bytes-only:
+`POST /v2/persistence/projects` creates a new draft and returns a validated
+`.fms` archive, while `POST /v2/persistence/projects/open` reads an archive
+and returns its document projection plus canonical or source-preserving bytes.
+Both operations use the single `fullmag-application`/`FileProjectRepository`
+codec, do not publish a filesystem target, and report `memory_only` durability.
+An unknown schema remains read-only and is returned byte-for-byte. These
+endpoints are not runtime-session import or restore aliases; durable Save,
+host file selection, and the UI document lifecycle remain separate follow-up
+work.
+
+`RestoreRuntime` is an explicit operation over a compatible checkpoint. It
+builds a candidate runtime, validates primary carriers and runtime identity,
+then performs one atomic swap or leaves the active runtime unchanged. Opening a
+document never implies `RestoreRuntime`; `LogicalResume` and `ExactResume`
+retain their distinct semantics from ADR 0025.
+
+`Compute` consumes a current mesh artifact or an explicitly accepted
+`PreparationPlan`. A stale or missing mesh is a typed precondition failure; the
+Compute command does not silently dispatch `mesh_build`. The existing explicit
+`mesh_build` command remains the authorizing preparation operation, and its
+published result must carry the committed scene revision, resolved target and
+mesh identity before a dependent Compute can run. Preparation content is
+revisioned through `simulation/preparation`; it is not copied into `status`.
+
 FDM membership realization has an independent
 `region_membership_revision`; neither `mesh_revision` nor
 `domain_generation_id` substitutes for it. A revision change emits a

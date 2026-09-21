@@ -3689,7 +3689,6 @@ export function useViewport3DSceneModel({
       const resolved = resolveViewport3DFdmTargetVisualization({
         snapshot: objectVisualizationSnapshot,
         target,
-        visualizationState: renderingState,
       }).effectiveSettings;
       settingsById.set(
         domain.layerId,
@@ -3708,7 +3707,6 @@ export function useViewport3DSceneModel({
     fdmNativeLayerDomains,
     fdmMultilayerLayerActiveMasks.data,
     objectVisualizationSnapshot,
-    renderingState,
   ]);
   const nativeLayerFieldRequests = useMemo<
     ReadonlyMap<string, Viewport3DFieldResourceRequest>

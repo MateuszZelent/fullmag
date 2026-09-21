@@ -59,6 +59,10 @@ const airboxFieldCatalog = {
   revision: 3,
 } as FieldCatalogResource;
 
+function fieldVectorResourceKey(query: string): string {
+  return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?${query}`;
+}
+
 function fieldResponseMetadata(
   overrides: Partial<FieldVectorResponseMetadata> = {},
 ): FieldVectorResponseMetadata {
@@ -606,7 +610,7 @@ describe("viewport3dResources", () => {
       },
       etag: '"m-1"',
       resourceKey:
-        "/v2/sessions/current/data/fields/m?scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-1&stage_id=stage-1&phase_rad=0&view=slice-x",
+        fieldVectorResourceKey("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-1&stage_id=stage-1&phase_rad=0&view=slice-x"),
       responseMetadata: fieldResponseMetadata({
         component: "full",
         domainGenerationId: "gen-1",
@@ -690,7 +694,7 @@ describe("viewport3dResources", () => {
     const numericEnvelope: Viewport3DFieldVectorEnvelope = {
       ...baseEnvelope,
       resourceKey:
-        "/v2/sessions/current/data/fields/m?scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=1&stage_id=2&phase_rad=0&view=1",
+        fieldVectorResourceKey("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=1&stage_id=2&phase_rad=0&view=1"),
       responseMetadata: fieldResponseMetadata({
         ...baseEnvelope.responseMetadata,
         snapshotId: "1",
@@ -742,7 +746,7 @@ describe("viewport3dResources", () => {
       },
       etag: '"m-frame-a"',
       resourceKey:
-        "/v2/sessions/current/data/fields/m?scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1",
+        fieldVectorResourceKey("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1"),
       responseMetadata: fieldResponseMetadata({
         component: "full",
         domainGenerationId: "gen-1",

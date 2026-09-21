@@ -240,6 +240,7 @@ from .meshing import (
 
 # ── Flat scripting API (mumax-style) ──────────────────────
 from .world import (
+    ExecutionContext,
     B_demag,
     B_eff,
     B_exch,
@@ -326,6 +327,7 @@ from .world import (
     relax,
     relax_stage,
     reset,
+    execution_context,
     run_while,
     eigenmodes,
     eigenmodes_stage,
@@ -354,6 +356,7 @@ mesh = _MeshNamespace()
 
 __all__ = [
     "AbsorbingBoundaryLayer",
+    "ExecutionContext",
     # Class-based API
     "BackendTarget",
     "mesh",
@@ -645,6 +648,7 @@ __all__ = [
     "frequency_response",
     "frequency_response_stage",
     "save_state_stage",
+    "execution_context",
     "minimize",
     "Minimize",
     "relax",

@@ -153,6 +153,28 @@ Wrapper można ominąć surowym poleceniem, dlatego kwalifikacja musi obejmować
 rzeczywisty command, inventory przed/po, manifest i ścieżki. Nie deklaruje się
 „całkowitego zakazu zapisu” wyłącznie na podstawie dokumentacji.
 
+### Dokument CAE a infrastruktura hosta
+
+Dokument CAE i hostowa infrastruktura mają różne tożsamości oraz cykle życia:
+
+| Pojęcie | Właściciel i znaczenie | Czego nie zastępuje |
+|---|---|---|
+| `ProjectId` | Logiczny, użytkownikowy dokument CAE: authoring, studies, definicje i jawne referencje artefaktów. | Worktree, build profile i ścieżki hosta. |
+| `.fms` / ProjectRepository | Przenośny zapis dokumentu, wersji schema, manifestów i danych objętych formatem. | Aktualnego runtime'u, cache i `target/`. |
+| `worktree_id` | Tożsamość checkoutu źródeł i jego commit/dirty state. | Tożsamości dokumentu CAE. |
+| `FULLMAG_PROJECT_STORAGE_ROOT` | Hostowa granica buildów, runtime staging, logów, run artifacts, cache i locków. | `ProjectId` oraz przenośnego dokumentu. |
+
+`ProjectId` może być wykonywany z wielu worktree, profili i hostów. Run lub
+artifact może wiązać dokument przez `ProjectId`, snapshot/plan digest, source
+SHA i profile provenance, lecz `.fms` nie może przechowywać hostowej ścieżki
+storage jako swojej tożsamości. Eksport dokumentu nie kopiuje `target/`,
+mutable cache ani niezweryfikowanego runtime'u; brak infrastruktury po imporcie
+jest jawną niedostępnością, a nie zgodą na zapis do repozytorium lub `TEMP`.
+
+Otwarcie dokumentu oraz restore runtime'u są osobnymi operacjami zgodnie z
+ADR 0025. Resolver storage pozostaje granicą wykonawczą buildów i uruchomień,
+nie magazynem semantyki CAE.
+
 ## Konsekwencje
 
 ### Rozszerzenie 2026-09-11: właściwości zamiast jednego filesystemu

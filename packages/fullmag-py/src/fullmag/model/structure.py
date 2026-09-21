@@ -353,6 +353,9 @@ class ObjectRegionMaterialProxy:
         object.__setattr__(self, "_owner", owner)
 
     def __setattr__(self, name: str, value: object) -> None:
+        guard = self._owner._context_guard
+        if guard is not None:
+            guard()
         self._owner.set_material(name, value)
 
 
@@ -373,10 +376,21 @@ class ObjectRegion:
     material_transition_spec: MaterialTransitionSpec | None = None
     texture_override: RegionTextureOverride | None = None
     _delete_callback: Callable[[], None] | None = field(default=None, repr=False, compare=False)
+    _context_guard: Callable[[], None] | None = field(default=None, repr=False, compare=False)
     material: ObjectRegionMaterialProxy = field(init=False, repr=False)
     _magnetization_constraints: list[object] = field(
         default_factory=list, repr=False, compare=False
     )
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if not name.startswith("_") and name != "material":
+            try:
+                guard = object.__getattribute__(self, "_context_guard")
+            except AttributeError:
+                guard = None
+            if guard is not None:
+                guard()
+        object.__setattr__(self, name, value)
 
     def __post_init__(self) -> None:
         self.owner_object = require_non_empty(self.owner_object, "owner_object")
@@ -409,6 +423,8 @@ class ObjectRegion:
             self.set_texture(value)
 
     def set_texture(self, value: InitialMagnetization) -> "ObjectRegion":
+        if self._context_guard is not None:
+            self._context_guard()
         self.texture_override = RegionTextureOverride(value)
         return self
 
@@ -421,6 +437,8 @@ class ObjectRegion:
         priority: int | None = None,
         conflict_policy: str = "error",
     ) -> "ObjectRegion":
+        if self._context_guard is not None:
+            self._context_guard()
         field = value if isinstance(value, MaterialParameterField) else MaterialParameterField.constant(value, unit=unit)
         if self.material_transition_spec is None:
             self.material_transition_spec = _default_region_transition_for_parameter(parameter)
@@ -463,6 +481,8 @@ class ObjectRegion:
         kind: str = "mesh_relative",
         scope: str = "boundary",
     ) -> "ObjectRegion":
+        if self._context_guard is not None:
+            self._context_guard()
         self.material_transition_spec = MaterialTransitionSpec(
             kind=kind,
             cells=cells,
@@ -479,6 +499,8 @@ class ObjectRegion:
         transition_distance: float | None = None,
         order: int | None = None,
     ) -> "ObjectRegion":
+        if self._context_guard is not None:
+            self._context_guard()
         mesh_policy: dict[str, object] = {}
         if (
             minimum_element_size is not None
@@ -509,6 +531,8 @@ class ObjectRegion:
         return self
 
     def delete(self) -> None:
+        if self._context_guard is not None:
+            self._context_guard()
         if self._delete_callback is None:
             raise RuntimeError("region is not attached to an owner registry")
         self._delete_callback()
@@ -526,6 +550,8 @@ class ObjectRegion:
         empty_selection: str = "error",
         inactive_selection: str = "warn_and_intersect",
     ):
+        if self._context_guard is not None:
+            self._context_guard()
         from .constraints import FrozenSpins
         from .selection import in_region_selection
 

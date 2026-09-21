@@ -1,6 +1,17 @@
 import pytest
 
 import fullmag as fm
+from fullmag.model.canonical import canonical_json_bytes, canonical_json_sha256
+
+
+def test_problem_ir_canonical_json_is_order_independent_and_strict() -> None:
+    first = {"b": [1, 2], "a": {"unit": "A/m", "value": 800000.0}}
+    second = {"a": {"value": 800000.0, "unit": "A/m"}, "b": [1, 2]}
+
+    assert canonical_json_bytes(first) == b'{"a":{"unit":"A/m","value":800000.0},"b":[1,2]}'
+    assert canonical_json_sha256(first) == canonical_json_sha256(second)
+    with pytest.raises(ValueError, match="Out of range float values are not JSON compliant"):
+        canonical_json_bytes({"value": float("nan")})
 
 
 def test_eigenmodes_periodic_airbox_k0_serializes_canonical_intent() -> None:

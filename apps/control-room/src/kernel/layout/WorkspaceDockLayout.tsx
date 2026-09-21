@@ -15,6 +15,7 @@ import {
 } from "./layoutModel";
 import { SlotHost } from "./SlotHost";
 import { ViewportTabHost } from "./ViewportTabHost";
+import { useWorkspaceStartupInteractionBlocked } from "./SimulationStartupOverlay";
 import { useKernel } from "../KernelContext";
 import { useLayoutSelector } from "./useLayout";
 import {
@@ -74,6 +75,11 @@ function SortableWorkspaceColumn({
 export function WorkspaceDockLayout() {
   const kernel = useKernel();
   const panelVisible = useLayoutSelector((layout) => layout.panelVisible);
+  const focusedSlot = useLayoutSelector((layout) => layout.focusedSlot);
+  const activeBottomPanelTab = useLayoutSelector(
+    (layout) => layout.activeBottomPanelTab,
+  );
+  const startupInteractionBlocked = useWorkspaceStartupInteractionBlocked();
   const hasAuxViewportModule = kernel.modules.forSlot("viewport-aux").length > 0;
   const [dockState, setDockState] = useState<WorkspaceDockState>({
     layout: DEFAULT_WORKSPACE_LAYOUT,
@@ -109,6 +115,12 @@ export function WorkspaceDockLayout() {
   }, []);
 
   useEffect(() => {
+    if (dockState.restored) {
+      persistWorkspaceLayout(dockState.layout);
+    }
+  }, [dockState.layout, dockState.restored]);
+
+  useEffect(() => {
     const updateInspectorMaximum = () => {
       if (resizeFrameRef.current !== null) return;
       resizeFrameRef.current = window.requestAnimationFrame(() => {
@@ -141,7 +153,6 @@ export function WorkspaceDockLayout() {
         activeId,
         overId,
       );
-      persistWorkspaceLayout(nextLayout);
       return {
         ...currentState,
         layout: nextLayout,
@@ -161,12 +172,22 @@ export function WorkspaceDockLayout() {
   const columnAutoSaveId = `fullmag-workspace-columns:${visibleColumns
     .map((column) => column.slotId)
     .join("|")}`;
+  const startupDiagnosticsVisible =
+    startupInteractionBlocked &&
+    panelVisible.bottom &&
+    focusedSlot === "panel-bottom" &&
+    activeBottomPanelTab === "diagnostics";
+  const workspacePanelsInert = startupInteractionBlocked || undefined;
+  const bottomPanelInert =
+    startupInteractionBlocked && !startupDiagnosticsVisible
+      ? true
+      : undefined;
 
   if (!restored) {
     return (
       <div className="fm-workspace-body" data-dock-hydration-pending="true" id="fm-main-content" tabIndex={-1}>
         {panelVisible.left ? (
-          <div className="fm-dock-column">
+          <div className="fm-dock-column" inert={workspacePanelsInert}>
             <div className="fm-dock-column__handle">
               <span>Explorer</span>
               <GripVertical size={12} aria-hidden="true" />
@@ -174,7 +195,7 @@ export function WorkspaceDockLayout() {
             <SlotHost slotId="panel-left" />
           </div>
         ) : null}
-        <div className="fm-dock-column">
+        <div className="fm-dock-column" inert={workspacePanelsInert}>
           <div className="fm-dock-column__handle">
             <span>Viewport</span>
             <GripVertical size={12} aria-hidden="true" />
@@ -182,7 +203,7 @@ export function WorkspaceDockLayout() {
           <ViewportTabHost />
         </div>
         {hasAuxViewportModule ? (
-          <div className="fm-dock-column">
+          <div className="fm-dock-column" inert={workspacePanelsInert}>
             <div className="fm-dock-column__handle">
               <span>Section</span>
               <GripVertical size={12} aria-hidden="true" />
@@ -191,7 +212,7 @@ export function WorkspaceDockLayout() {
           </div>
         ) : null}
         {panelVisible.right ? (
-          <div className="fm-dock-column">
+          <div className="fm-dock-column" inert={workspacePanelsInert}>
             <div className="fm-dock-column__handle">
               <span>Inspector</span>
               <GripVertical size={12} aria-hidden="true" />
@@ -199,7 +220,17 @@ export function WorkspaceDockLayout() {
             <SlotHost slotId="panel-right" />
           </div>
         ) : null}
-        {panelVisible.bottom ? <SlotHost slotId="panel-bottom" /> : null}
+        {panelVisible.bottom ? (
+          <div
+            className="fm-workspace-bottom-panel"
+            data-startup-diagnostics={
+              startupDiagnosticsVisible ? "visible" : undefined
+            }
+            inert={bottomPanelInert}
+          >
+            <SlotHost slotId="panel-bottom" />
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -211,7 +242,12 @@ export function WorkspaceDockLayout() {
         direction="vertical"
         panelCount={mainPanelCount}
       >
-        <ResizablePanel defaultSize={78} id="workspace-main" minSize={42}>
+        <ResizablePanel
+          defaultSize={78}
+          id="workspace-main"
+          inert={workspacePanelsInert}
+          minSize={42}
+        >
           <SortableList
             id="workspace-dock-columns"
             items={visibleColumns.map((column) => column.slotId)}
@@ -279,7 +315,12 @@ export function WorkspaceDockLayout() {
             <ResizableHandle className="fm-resize-handle--horizontal" />
             <ResizablePanel
               defaultSize={layout.bottomDockDefaultSize}
+              className="fm-workspace-bottom-panel"
+              data-startup-diagnostics={
+                startupDiagnosticsVisible ? "visible" : undefined
+              }
               id="panel-bottom"
+              inert={bottomPanelInert}
               minSize={layout.bottomDockMinSize}
             >
               <SlotHost slotId="panel-bottom" />

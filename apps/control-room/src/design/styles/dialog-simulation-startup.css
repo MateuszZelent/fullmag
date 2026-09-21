@@ -411,7 +411,7 @@
   gap: var(--fm-space-2);
 }
 
-.fm-simulation-startup__diagnostics-dock {
+.fm-workspace-bottom-panel[data-startup-diagnostics="visible"] {
   position: fixed;
   inset-inline: var(--fm-space-6);
   bottom: var(--fm-space-6);
@@ -421,10 +421,7 @@
   overflow: hidden;
   border-radius: var(--fm-radius-lg);
   box-shadow: var(--fm-shadow-panel);
-}
-
-.fm-simulation-startup__diagnostics-dock[hidden] {
-  display: none;
+  pointer-events: auto;
 }
 
 @keyframes fm-simulation-startup-progress-indeterminate {
@@ -489,7 +486,7 @@
     flex-wrap: wrap;
   }
 
-  .fm-simulation-startup__diagnostics-dock {
+  .fm-workspace-bottom-panel[data-startup-diagnostics="visible"] {
     inset-inline: var(--fm-space-3);
     bottom: var(--fm-space-3);
     height: min(50vh, calc(100vh - (2 * var(--fm-space-3))));

@@ -23,6 +23,7 @@ import type { ObjectVisualizationController } from "./visualization/ObjectVisual
 import type { ModeCompositionController } from "./visualization/ModeCompositionController";
 import type { VisualizationDebugController } from "./visualization/VisualizationDebugController";
 import type { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
+import type { ProjectDocumentController } from "./persistence/ProjectDocumentController";
 
 export type SlotId =
   | "app-menu"
@@ -76,6 +77,7 @@ export interface KernelApi {
   readonly diagnosticRecorder: DiagnosticRecorderController;
   readonly modules: ModuleRegistry;
   readonly objectMoveTool: ObjectMoveToolController;
+  readonly projectDocument?: ProjectDocumentController;
   readonly realtime: RealtimeInvalidationBridge;
   readonly realtimeConnection: RealtimeConnectionController;
   readonly resources: ResourceInvalidationController;

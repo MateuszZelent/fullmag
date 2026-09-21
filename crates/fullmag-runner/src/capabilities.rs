@@ -841,6 +841,18 @@ pub fn scratch_authoring_capabilities(backend: &str) -> Option<BackendCapabiliti
 }
 
 pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilities {
+    let mut capabilities = base_capabilities_for_fem_engine(engine);
+    // Report the existing planner/native time-domain branch. This is not a
+    // runtime availability or scientific qualification claim; dispatch still
+    // enforces mesh, device and operator prerequisites.
+    capabilities
+        .supported_demag_realizations
+        .push("fredkin_koehler".to_string());
+    capabilities.capability_profile_version = "2026-09-20".to_string();
+    capabilities
+}
+
+fn base_capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilities {
     let mut capabilities = match engine {
         FemEngine::CpuNative => BackendCapabilities {
             supports_frequency_response: DEFERRED_STUDY_CAPABILITY,
@@ -1009,7 +1021,7 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
 }
 
 pub(crate) fn capabilities_for_fem_eigen_engine(engine: FemEngine) -> BackendCapabilities {
-    let mut capabilities = without_rotated_dmi_for_modal_fem(capabilities_for_fem_engine(engine));
+    let mut capabilities = without_rotated_dmi_for_modal_fem(base_capabilities_for_fem_engine(engine));
     capabilities.engine_id = match engine {
         FemEngine::CpuNative => RuntimeEngineId::FemEigenCpuBaseline,
         FemEngine::NativeGpu => RuntimeEngineId::FemEigenNativeGpu,
@@ -1020,7 +1032,7 @@ pub(crate) fn capabilities_for_fem_eigen_engine(engine: FemEngine) -> BackendCap
 pub(crate) fn capabilities_for_fem_frequency_response_validation_engine(
     engine: FemEngine,
 ) -> BackendCapabilities {
-    let mut capabilities = without_rotated_dmi_for_modal_fem(capabilities_for_fem_engine(engine));
+    let mut capabilities = without_rotated_dmi_for_modal_fem(base_capabilities_for_fem_engine(engine));
     #[cfg(feature = "fem-gpu")]
     {
         capabilities.engine_id = RuntimeEngineId::FemFrequencyResponseProductionCpu;
@@ -1411,10 +1423,23 @@ mod tests {
                     .any(|quantity| quantity == "E_rotated_dmi"));
             }
         }
-        assert_eq!(
-            fem_gpu.supported_demag_realizations,
-            fem_eigen_gpu.supported_demag_realizations
-        );
+        for time_domain in [&fem_cpu, &fem_gpu] {
+            assert!(time_domain
+                .supported_demag_realizations
+                .iter()
+                .any(|realization| realization == "fredkin_koehler"));
+        }
+        for modal in [
+            &fem_eigen_cpu,
+            &fem_response_cpu,
+            &fem_eigen_gpu,
+            &fem_response_gpu,
+        ] {
+            assert_eq!(
+                modal.supported_demag_realizations,
+                vec!["poisson_robin", "poisson_dirichlet"]
+            );
+        }
     }
 
     #[test]

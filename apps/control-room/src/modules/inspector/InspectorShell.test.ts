@@ -21,4 +21,11 @@ describe("InspectorShell scroll lifecycle", () => {
     expect(resetEffect).toContain("}, [descriptorKey]);");
     expect(resetEffect).not.toContain("descriptor.tabs");
   });
+
+  it("exposes a command-backed icon for hiding the Inspector panel", () => {
+    expect(source).toContain("PanelRightClose");
+    expect(source).toContain('aria-label="Hide Inspector"');
+    expect(source).toContain('data-panel-toggle="inspector"');
+    expect(source).toContain("onToggleVisibility");
+  });
 });

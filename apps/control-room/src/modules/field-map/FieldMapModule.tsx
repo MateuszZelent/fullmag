@@ -585,7 +585,7 @@ export default function FieldMapModule() {
         <strong>{plan.quantityId}</strong>
         <span>{presentationPlanar.component}</span>
         <span>{renderModel.display.legendUnit}</span>
-        {surfaceProjectionStatus(meta.data) === "ambiguous" ? (
+        {meta.data && surfaceProjectionStatus(meta.data) === "ambiguous" ? (
           <span className="fm-field-map__diagnostic" role="status">
             Ambiguous surface: {meta.data.overlap_count} overlaps,{" "}
             {meta.data.fold_count} folds

@@ -27081,9 +27081,11 @@ async fn session_import_rejects_late_run_snapshot_mismatch_without_publishing_or
         if let Some(name) = path.strip_prefix("project/") {
             documents.insert(name.to_string(), bytes.clone());
         } else if path.starts_with("runs/") || path.starts_with("objects/sha256/") {
-            source_store
-                .write_document(path, bytes)
-                .expect("run fixture entry should persist");
+            // Deliberately seed a synthetic corrupt import fixture without
+            // opening the public writer to control-record mutation.
+            let fixture_path = source_store.root().join(path);
+            std::fs::create_dir_all(fixture_path.parent().unwrap()).unwrap();
+            std::fs::write(fixture_path, bytes).expect("run fixture entry should persist");
         }
     }
     let snapshot = documents
@@ -27574,7 +27576,10 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         );
     }
     let json = body_json(response).await;
-    assert_eq!(json["checkpoint"]["checkpoint_id"], "cp-000042");
+    let checkpoint_id = json["checkpoint"]["checkpoint_id"]
+        .as_str()
+        .expect("checkpoint id should be present")
+        .to_string();
     assert_eq!(json["checkpoint"]["run_id"], "test-run");
     assert_eq!(json["checkpoint"]["step"], 42);
     assert_eq!(json["checkpoint"]["source"], "manual_test");
@@ -27606,7 +27611,7 @@ async fn session_checkpoint_create_captures_live_magnetization() {
     let stage_after_create = body_json(stage_after_create_response).await;
     assert_eq!(
         stage_after_create["stages"][1]["checkpoint_ref"],
-        "cp-000042"
+        checkpoint_id.as_str()
     );
     assert_eq!(
         stage_after_create["stages"][1]["state_transition"],
@@ -27622,7 +27627,9 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v2/sessions/current/persistence/checkpoints/cp-000042")
+                .uri(format!(
+                    "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}"
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -27631,7 +27638,7 @@ async fn session_checkpoint_create_captures_live_magnetization() {
 
     assert_eq!(detail_response.status(), StatusCode::OK);
     let detail = body_json(detail_response).await;
-    assert_eq!(detail["checkpoint_id"], "cp-000042");
+    assert_eq!(detail["checkpoint_id"], checkpoint_id.as_str());
     assert_eq!(detail["vector_count"], 2);
     let mut active_after_capture = coupled_checkpoint.clone();
     active_after_capture["magnetization"][0] = serde_json::json!([0.0, 0.0, 1.0]);
@@ -27649,7 +27656,9 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v2/sessions/current/persistence/checkpoints/cp-000042/restore")
+                .uri(format!(
+                    "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}/restore"
+                ))
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
@@ -27671,7 +27680,10 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         );
     }
     let restored = body_json(restore_response).await;
-    assert_eq!(restored["checkpoint"]["checkpoint_id"], "cp-000042");
+    assert_eq!(
+        restored["checkpoint"]["checkpoint_id"],
+        checkpoint_id.as_str()
+    );
     assert_eq!(restored["restore_class"], "exact_resume");
     assert_eq!(restored["restored_vector_count"], 2);
     assert_eq!(restored["field_revision"], 2);
@@ -27704,7 +27716,7 @@ async fn session_checkpoint_create_captures_live_magnetization() {
     let stage_after_restore = body_json(stage_after_restore_response).await;
     assert_eq!(
         stage_after_restore["stages"][1]["resume_from_checkpoint_ref"],
-        "cp-000042"
+        checkpoint_id.as_str()
     );
     assert_eq!(
         stage_after_restore["stages"][1]["loaded_state_ref"],
@@ -27742,7 +27754,10 @@ async fn session_checkpoint_create_captures_live_magnetization() {
 
     assert_eq!(list_response.status(), StatusCode::OK);
     let listed = body_json(list_response).await;
-    assert_eq!(listed["checkpoints"][0]["checkpoint_id"], "cp-000042");
+    assert_eq!(
+        listed["checkpoints"][0]["checkpoint_id"],
+        checkpoint_id.as_str()
+    );
 
     let _ = fs::remove_dir_all(&repo_root);
 }
@@ -49023,3 +49038,6 @@ async fn session_collection_handler_returns_a_typed_confirmed_empty_resource() {
 
 #[path = "tests/remesh_admission.rs"]
 mod remesh_admission;
+
+#[path = "tests/project_documents.rs"]
+mod project_documents;

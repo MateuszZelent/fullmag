@@ -127,6 +127,10 @@ const TEST_SESSION_IDENTITY = {
   sessionId: "test-session",
 } as const;
 
+function currentFieldVectorResourcePath(query: string): string {
+  return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?${query}`;
+}
+
 describe("viewport vector scale", () => {
   it("derives glyphs from effective sample spacing", () => {
     expect(resolveViewport3DVectorScale([500e-9, 125e-9, 54e-9], 1, 1200)).toBeCloseTo(12.1e-9, 1);
@@ -1509,7 +1513,7 @@ describe("useViewport3DSceneModel", () => {
       },
       etag: '"m-frame-a"',
       resourceKey:
-        "/v2/sessions/current/data/fields/m?scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-1",
+        currentFieldVectorResourcePath("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-1"),
       responseMetadata: {
         component: "full",
         domainGenerationId: "gen-1",
@@ -1536,7 +1540,7 @@ describe("useViewport3DSceneModel", () => {
       ...frameA,
       etag: '"m-frame-b"',
       resourceKey:
-        "/v2/sessions/current/data/fields/m?scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-wrong",
+        currentFieldVectorResourcePath("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-wrong"),
       responseMetadata: {
         ...frameA.responseMetadata!,
         fieldRevision: "rev-B",
@@ -1656,7 +1660,7 @@ describe("useViewport3DSceneModel", () => {
       },
       etag: '"m-frame-a"',
       resourceKey:
-        "/v2/sessions/current/data/fields/m?scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-1",
+        currentFieldVectorResourcePath("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-1"),
       responseMetadata: {
         component: "full",
         domainGenerationId: "gen-1",
@@ -1683,7 +1687,7 @@ describe("useViewport3DSceneModel", () => {
       ...frameA,
       etag: '"m-frame-b"',
       resourceKey:
-        "/v2/sessions/current/data/fields/m?scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-wrong",
+        currentFieldVectorResourcePath("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-wrong"),
       responseMetadata: {
         ...frameA.responseMetadata!,
         fieldRevision: "rev-B",
@@ -1918,7 +1922,7 @@ describe("useViewport3DSceneModel", () => {
       },
       etag: '"m-frame-a"',
       resourceKey:
-        "/v2/sessions/current/data/fields/m?scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-1",
+        currentFieldVectorResourcePath("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-1"),
       responseMetadata: {
         component: "full",
         domainGenerationId: "gen-1",
@@ -1945,7 +1949,7 @@ describe("useViewport3DSceneModel", () => {
       ...frameA,
       etag: '"m-frame-b"',
       resourceKey:
-        "/v2/sessions/current/data/fields/m?scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-wrong",
+        currentFieldVectorResourcePath("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-wrong"),
       responseMetadata: {
         ...frameA.responseMetadata!,
         fieldRevision: "rev-B",

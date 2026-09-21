@@ -232,6 +232,47 @@ try {
     await visibleToggle.click();
     await page.waitForTimeout(150);
   }
+  const viewportBeforePanelToggle = await page
+    .locator('[data-slot-id="viewport-main"]')
+    .boundingBox();
+  const hideInspectorButton = page.getByRole("button", {
+    name: "Hide Inspector",
+    exact: true,
+  });
+  assert(
+    await hideInspectorButton.count() === 1,
+    "Inspector must expose exactly one Hide Inspector button.",
+  );
+  await hideInspectorButton.click();
+  await page.waitForTimeout(150);
+  assert(
+    !(await panel.isVisible()),
+    "Hide Inspector did not remove the right panel from the workspace.",
+  );
+  const viewportAfterPanelHide = await page
+    .locator('[data-slot-id="viewport-main"]')
+    .boundingBox();
+  assert(
+    viewportBeforePanelToggle &&
+      viewportAfterPanelHide &&
+      viewportAfterPanelHide.width >= viewportBeforePanelToggle.width,
+    "Hiding Inspector did not preserve or expand the viewport.",
+  );
+  const panelAction = page.locator('[data-action-id="ws-panel"]').first();
+  assert(await panelAction.count() === 1, "Ribbon Panel action is unavailable.");
+  await panelAction.click();
+  const inspectorMenuItem = page.getByRole("menuitemcheckbox", {
+    name: "Inspector",
+    exact: true,
+  });
+  assert(
+    await inspectorMenuItem.count() === 1 &&
+      (await inspectorMenuItem.getAttribute("aria-checked")) === "false",
+    "Ribbon Panel menu did not report Inspector as hidden.",
+  );
+  await inspectorMenuItem.click();
+  await page.waitForTimeout(150);
+  assert(await panel.isVisible(), "Ribbon Panel menu did not restore Inspector.");
   assert(
     (await page.getByRole("dialog", { name: "Airbox visualization diagnostic" }).count()) === 0,
     "Visible must not open the removed Airbox diagnostic dialog.",
@@ -663,6 +704,7 @@ try {
       {
         consoleErrors: consoleErrors.length,
         dirtySelectionGuard: "verified",
+        inspectorPanelToggle: "verified; header icon and ribbon restore",
         previewRequests: previewRequests.length,
         physicsScopeExclusivity: "verified; both directions blocked before mutation",
         screenshots: screenshotFiles,
@@ -827,8 +869,11 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
     element.dataset.mutationStabilityMarker = marker;
     const scroller = element.closest(".fm-inspector");
     if (scroller) scroller.scrollTop = Math.min(80, scroller.scrollHeight - scroller.clientHeight);
-    performance.clearMeasures("fullmag.react.render.InspectorModule.mount");
-    performance.clearMeasures("fullmag.react.render.InspectorModule.update");
+    for (const entry of performance
+      .getEntriesByType("measure")
+      .filter((entry) => entry.name.startsWith("fullmag.react.render.InspectorModule"))) {
+      performance.clearMeasures(entry.name);
+    }
     return {
       opacity: getComputedStyle(element).opacity,
       scrollTop: scroller?.scrollTop ?? 0,

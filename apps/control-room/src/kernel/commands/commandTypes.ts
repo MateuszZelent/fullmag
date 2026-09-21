@@ -13,6 +13,7 @@ import type { VisualizationTargetRef } from "../visualization/ObjectVisualizatio
 import type { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import type { ObjectMoveToolController } from "../authoring/ObjectMoveToolController";
+import type { ProjectDocumentController } from "../persistence/ProjectDocumentController";
 
 export type CommandId = string;
 type CommandGroupId = string;
@@ -37,6 +38,7 @@ export interface CommandContext {
   input?: unknown;
   layout?: LayoutController;
   objectMoveTool?: ObjectMoveToolController;
+  projectDocument?: ProjectDocumentController;
   resourceData?: Readonly<Record<string, unknown>>;
   resources?: ResourceInvalidationController;
   selection?: SelectionController;

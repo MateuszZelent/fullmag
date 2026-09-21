@@ -65,6 +65,10 @@ pub fn capture_checkpoint(
     provider: &dyn CheckpointSnapshotProvider,
     request: &CaptureRequest,
 ) -> Result<CaptureResult> {
+    // Keep the native writer lease across every CAS/document mutation.  A
+    // checkpoint is one graph publication; per-file nested leases alone would
+    // allow GC to observe the descriptor before its payload edges exist.
+    let _lease = store.write_transaction()?;
     let step = provider.step();
     let time_s = provider.time_s();
     let dt = provider.dt();
@@ -92,6 +96,18 @@ pub fn capture_checkpoint(
         vec![m.len(), 3],
         vec!["node".into(), "c".into()],
     );
+    let m_bytes = m
+        .len()
+        .checked_mul(3)
+        .and_then(|elements| elements.checked_mul(std::mem::size_of::<f64>()))
+        .ok_or_else(|| anyhow::anyhow!("magnetization payload size overflow"))?;
+    let mut m_descriptor = m_descriptor;
+    m_descriptor.chunks.push(TensorChunk {
+        object_ref: m_hash.clone(),
+        offset: 0,
+        length: m_bytes,
+        sha256: Some(m_hash.clone()),
+    });
     let m_desc_hash = store.cas().put_json(&m_descriptor)?;
     checkpoint.field_refs.push(FieldRef {
         name: "magnetization".into(),
@@ -105,15 +121,24 @@ pub fn capture_checkpoint(
         let hash = store.store_magnetization(data)?;
         let desc =
             TensorDescriptor::new_f64(&name, vec![data.len(), 3], vec!["node".into(), "c".into()]);
+        let aux_bytes = data
+            .len()
+            .checked_mul(3)
+            .and_then(|elements| elements.checked_mul(std::mem::size_of::<f64>()))
+            .ok_or_else(|| anyhow::anyhow!("auxiliary field payload size overflow"))?;
+        let mut desc = desc;
+        desc.chunks.push(TensorChunk {
+            object_ref: hash.clone(),
+            offset: 0,
+            length: aux_bytes,
+            sha256: Some(hash.clone()),
+        });
         let desc_hash = store.cas().put_json(&desc)?;
         checkpoint.field_refs.push(FieldRef {
             name: name.clone(),
             role: FieldRole::ResumeAux,
             tensor_descriptor_ref: desc_hash,
         });
-        // Store the actual data blob with the hash as part of a separate ref pointing
-        // to the CAS object via the descriptor.
-        let _ = hash; // Hash is already stored; descriptor refs it conceptually.
     }
 
     // 6. Backend state.
@@ -130,7 +155,7 @@ pub fn capture_checkpoint(
             "runs/{}/checkpoints/{}/backend_state.json",
             checkpoint.run_id, checkpoint.checkpoint_id
         );
-        store.write_document(&bsp_path, &bsp_json)?;
+        store.write_checkpoint_payload(&checkpoint, "backend_state.json", &bsp_json)?;
         checkpoint.backend_state_ref = Some(bsp_path);
     }
 

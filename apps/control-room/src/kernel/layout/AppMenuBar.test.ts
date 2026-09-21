@@ -30,6 +30,7 @@ describe("AppMenuBar CSS contract", () => {
     expect(headerCss).toContain(".fm-header__action-btn");
     expect(headerCss).toContain(".fm-header__session-indicator");
     expect(headerCss).toContain(".fm-header__session-dot");
+    expect(headerCss).toContain(".fm-header__project-status");
     expect(headerCss).toContain("-webkit-app-region: drag");
   });
 
@@ -69,19 +70,27 @@ describe("app menu command model", () => {
     expect(exposedIds).toEqual([]);
   });
 
-  it("routes File/Open to the .fms import command instead of a dead placeholder", () => {
+  it("keeps project Open separate from runtime state restore", () => {
     const fileMenu = MAIN_MENUS.find((menu) => menu.id === "file");
+    expect(fileMenu?.children?.some((item) => item.id === "workspace.new-project")).toBe(true);
     const openItem = fileMenu?.children?.find(
       (item) => item.shortcut === "Ctrl+O",
     );
 
     expect(openItem).toMatchObject({
-      id: "study.import-state",
-      label: "Import .fms State",
+      id: "workspace.open-project",
+      label: "Open Project",
     });
     expect(
       SHELL_COMMANDS.some((command) => command.id === "workspace.open-project"),
-    ).toBe(false);
+    ).toBe(true);
+    const restoreItem = fileMenu?.children?.find(
+      (item) => item.id === "study.import-state",
+    );
+    expect(restoreItem).toMatchObject({
+      label: "Restore Runtime State",
+      shortcut: "Ctrl+Shift+O",
+    });
   });
 
   it("exposes the solver profiler toggle from the Tools menu", () => {

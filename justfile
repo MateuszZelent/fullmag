@@ -222,6 +222,49 @@ package target="fullmag":
 check:
     cargo +nightly check --locked --workspace --exclude fullmag-desktop
 
+# Source-only persistence check: does not compile unit/integration tests or solvers.
+check-session-persistence:
+    cargo check --locked -p fullmag-session --lib
+
+# Run only after the operator has allowed compilation of these regression tests.
+verify-session-persistence:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --repo-root "{{repo_root}}"
+
+# Source-only application crate check; uses the dedicated canonical-storage
+# route and does not compile unit/integration tests.
+check-project-application:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route project-application-check --repo-root "{{repo_root}}"
+
+# Reserved for explicit test permission; kept separate from the source check.
+verify-project-application:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route project-application-test --repo-root "{{repo_root}}"
+
+# Managed compile check for the shared CLI, Python and desktop Open entrypoints.
+check-project-entrypoints:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route project-entrypoint-check --repo-root "{{repo_root}}"
+
+# Managed runtime-free API smoke with source identity, bounded HTTP scope and
+# controlled process-restart project reconnect.
+verify-project-api-runtime:
+    {{storage_python}} "{{repo_root}}/scripts/verify_project_api_runtime.py" --repo-root "{{repo_root}}"
+
+# Managed realtime transport smoke with an empty scratch session.  This checks
+# the websocket handshake and after_seq reconnect without starting a solver.
+verify-project-realtime-runtime:
+    {{storage_python}} "{{repo_root}}/scripts/verify_project_api_runtime.py" --include-websocket --repo-root "{{repo_root}}"
+
+# Managed active-run runtime smoke with source identity and reconnect continuity.
+verify-project-active-run-runtime:
+    {{storage_python}} "{{repo_root}}/scripts/verify_project_active_run_runtime.py" --repo-root "{{repo_root}}"
+
+# Managed runtime-free CLI smoke for the shared project Open entrypoint.
+verify-project-entrypoint-runtime:
+    {{storage_python}} "{{repo_root}}/scripts/verify_project_entrypoint_runtime.py" --repo-root "{{repo_root}}"
+
+# Managed runtime-free Python binding smoke for the shared project Open entrypoint.
+verify-project-python-runtime:
+    {{storage_python}} "{{repo_root}}/scripts/verify_project_python_runtime.py" --repo-root "{{repo_root}}"
+
 test:
     cargo +nightly test --locked --workspace --exclude fullmag-desktop
 
@@ -301,9 +344,9 @@ verify-fem-meshing-production:
     bash scripts/verify_fem_meshing_production.sh
 
 verify-fem-mixed-p1-capability-contract:
-    python3 scripts/validate_mixed_p1_capability_contract.py
-    python3 -m unittest scripts.test_validate_mixed_p1_capability_contract
-    cargo test --locked -p fullmag-runner --no-default-features capabilities::tests::
+    {{storage_python}} scripts/validate_mixed_p1_capability_contract.py
+    {{storage_python}} -m unittest scripts.test_validate_mixed_p1_capability_contract
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route fem-capability-contract --repo-root "{{repo_root}}"
 
 verify-fem-mixed-prism-airbox-runtime:
     just ensure-managed-fem-runtime

@@ -20,6 +20,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/persistence/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["persistence_post_persistence_projects"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["persistence_post_persistence_projects_open"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/platform/asyncapi.json": {
         parameters: {
             query?: never;
@@ -9404,6 +9436,54 @@ export interface components {
             label: string;
             status: components["schemas"]["GeometrySupportStatus"];
         };
+        /** @enum {string} */
+        ProjectArchiveDurability: "memory_only";
+        ProjectArchiveRequest: {
+            /** @description Base64-encoded `.fms` archive bytes. */
+            archive_base64: string;
+            /** @description Stable label used for diagnostics; it is not a filesystem path. */
+            display_name: string;
+        };
+        ProjectCreateRequest: {
+            /**
+             * @description User-facing project name. It is the only authoring input accepted by
+             *     the first bytes-only create operation.
+             */
+            name: string;
+        };
+        ProjectDocumentMode: {
+            /** @enum {string} */
+            kind: "read_write";
+        } | {
+            /** @enum {string} */
+            kind: "read_only";
+            reason: string;
+        };
+        ProjectDocumentResource: {
+            /** @description Canonical or source-preserving `.fms` bytes for the next host adapter. */
+            archive_base64: string;
+            dirty: boolean;
+            /** @description Bytes-only transport never claims filesystem or power-loss durability. */
+            durability: components["schemas"]["ProjectArchiveDurability"];
+            migration: components["schemas"]["ProjectMigrationResource"];
+            mode: components["schemas"]["ProjectDocumentMode"];
+            name: string;
+            /** Format: int64 */
+            persisted_revision?: number | null;
+            project_id: string;
+            /** Format: int64 */
+            revision: number;
+            schema_version: string;
+            source_hash?: string | null;
+        };
+        ProjectMigrationResource: {
+            can_write: boolean;
+            migrated: boolean;
+            preserved_paths: string[];
+            source_schema: string;
+            target_schema: string;
+            warnings: string[];
+        };
         QuantityCatalogEntry: {
             /** @description Capability of the resolved backend/plan, independent of field cache. */
             capability_state: string;
@@ -12689,6 +12769,68 @@ export interface operations {
         responses: {
             /** @description V2 API discovery index */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_persistence_projects: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created runtime-free project document bytes */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectDocumentResource"];
+                };
+            };
+            /** @description Invalid project name or archive encoding */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_persistence_projects_open: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectArchiveRequest"];
+            };
+        };
+        responses: {
+            /** @description Opened and validated runtime-free project document */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectDocumentResource"];
+                };
+            };
+            /** @description Invalid or unsupported project archive */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

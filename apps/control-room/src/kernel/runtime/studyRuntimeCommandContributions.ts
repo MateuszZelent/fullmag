@@ -2410,11 +2410,11 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
   },
   {
     id: "study.import-state",
-    title: "Import State",
+    title: "Restore Runtime State",
     category: "Study",
     group: "study-recovery",
     scope: "runtime",
-    shortcut: "Ctrl+O",
+    shortcut: "Ctrl+Shift+O",
     isEnabled: isApiAvailable,
     disabledReason: disabledWithoutApi,
     run: async (context) => {

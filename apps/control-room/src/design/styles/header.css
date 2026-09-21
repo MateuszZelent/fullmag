@@ -252,6 +252,23 @@
   text-transform: uppercase;
 }
 
+.fm-header__project-status {
+  max-width: min(260px, 22vw);
+  overflow: hidden;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-header__project-status[data-project-document-state="loading"] {
+  color: var(--fm-accent);
+}
+
+.fm-header__project-status[data-project-document-state="error"] {
+  color: var(--fm-danger);
+}
+
 .fm-header__run-controls {
   display: flex;
   align-items: center;

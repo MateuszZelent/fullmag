@@ -108,6 +108,18 @@ pub(crate) enum Command {
     /// Session persistence commands (save, open, inspect, recover, gc)
     #[command(subcommand)]
     Session(SessionSubcommand),
+    /// Project definition commands.  These never restore or start a runtime.
+    #[command(subcommand)]
+    Project(ProjectSubcommand),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ProjectSubcommand {
+    /// Open a project definition through the shared application repository.
+    Open {
+        /// Path to a current or legacy `.fms` project archive.
+        path: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -139,11 +151,17 @@ pub(crate) enum SessionSubcommand {
         #[arg(long, default_value_t = false)]
         clear: bool,
     },
-    /// Run garbage collection on the session store
+    /// Preview garbage collection; deletion requires --apply and a reviewed plan
     Gc {
         /// Session store root (defaults to .fullmag/local-live/session-store)
         #[arg(long)]
         store: Option<PathBuf>,
+        /// Delete only candidates in --plan after revalidating the explicit --store
+        #[arg(long, requires_all = ["store", "plan"])]
+        apply: bool,
+        /// JSON preview previously returned by this command
+        #[arg(long)]
+        plan: Option<PathBuf>,
     },
 }
 

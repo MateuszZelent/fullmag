@@ -811,6 +811,12 @@ export type SessionImportInspectRequest =
   components["schemas"]["SessionImportInspectRequest"];
 export type SessionImportInspectResponse =
   components["schemas"]["SessionImportInspectResponse"];
+export type ProjectCreateRequest =
+  components["schemas"]["ProjectCreateRequest"];
+export type ProjectArchiveRequest =
+  components["schemas"]["ProjectArchiveRequest"];
+export type ProjectDocumentResource =
+  components["schemas"]["ProjectDocumentResource"];
 type GeneratedStructuredCommandRequest =
   components["schemas"]["StructuredCommandRequest"];
 type RuntimeCommandIntent = components["schemas"]["RuntimeCommandIntent"];
