@@ -245,10 +245,10 @@ konwencji fazy i normalizacji. Do tego czasu wynik ma status
   wave spectrum for ferromagnetic films with in-plane magnetization
   revisited*, [arXiv:2109.10597v2](https://arxiv.org/html/2109.10597v2).
 
-### Dalsza zbie¿noœæ Galerkina wzglêdem kolokacji
+### Dalsza zbieÅ¼noÅ›Ä‡ Galerkina wzglÄ™dem kolokacji
 
-Dla k=40 Mrad/m zwiêkszenie bazy i kwadratury zmniejsza ró¿nicê
-czêstotliwoœci pierwszych trzech modów. Ró¿nice w kHz:
+Dla k=40 Mrad/m zwiÄ™kszenie bazy i kwadratury zmniejsza rÃ³Å¼nicÄ™
+czÄ™stotliwoÅ›ci pierwszych trzech modÃ³w. RÃ³Å¼nice w kHz:
 
 | N | Q | mod 0 | mod 1 | mod 2 |
 |---:|---:|---:|---:|---:|
@@ -258,6 +258,6 @@ czêstotliwoœci pierwszych trzech modów. Ró¿nice w kHz:
 | 32 | 2560 | 7.168 | 17.059 | 7.529 |
 | 48 | 2560 | 1.758 | 12.294 | 5.719 |
 
-Ograniczenie bazy i ca³kowanie wp³ywaj¹ niezale¿nie na b³¹d diagnostyki
-Galerkinowskiej. Nie nale¿y traktowaæ ró¿nicy dla N=24,Q=1280 jako
-nieusuwalnego b³êdu fizycznego ani jako tolerancji akceptacji FEM.
+Ograniczenie bazy i caÅ‚kowanie wpÅ‚ywajÄ… niezaleÅ¼nie na bÅ‚Ä…d diagnostyki
+Galerkinowskiej. Nie naleÅ¼y traktowaÄ‡ rÃ³Å¼nicy dla N=24,Q=1280 jako
+nieusuwalnego bÅ‚Ä™du fizycznego ani jako tolerancji akceptacji FEM.
