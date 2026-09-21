@@ -31,6 +31,7 @@ type AntennaSolveStage = NonNullable<
 type AntennaProjection = NonNullable<
   SceneResource["antenna_target_projections"]
 >[number];
+type AntennaFieldSolutionReference = AntennaProjection["solution"];
 type AntennaDrive = NonNullable<SceneResource["solved_antenna_drives"]>[number];
 type AntennaSpectrumRequest = NonNullable<
   SceneResource["antenna_spectrum_requests"]
@@ -248,54 +249,80 @@ function solutionDetails(
   };
 }
 
-function antennaProjectionValidationMessages(
-  projection: AntennaProjection,
+function antennaSolutionReferenceValidationMessages(
+  solution: AntennaFieldSolutionReference,
   scene: SceneResource | null,
 ): string[] {
   const messages: string[] = [];
   const stages = scene?.antenna_field_solve_stages;
   if (stages) {
     const stage = stages.find(
-      (candidate) => candidate.id === projection.solution.stage_id,
+      (candidate) => candidate.id === solution.stage_id,
     );
     if (!stage) {
-      messages.push(`missing solve stage '${projection.solution.stage_id}'`);
+      messages.push(`missing solve stage '${solution.stage_id}'`);
     } else {
       const output = stage.outputs.find(
-        (candidate) => candidate.id === projection.solution.output_id,
+        (candidate) => candidate.id === solution.output_id,
       );
       if (!output) {
-        messages.push(`missing solve output '${projection.solution.output_id}'`);
+        messages.push(`missing solve output '${solution.output_id}'`);
       } else if (output.quantity !== "H_ant_basis") {
         messages.push(
-          `solve output '${projection.solution.output_id}' must publish H_ant_basis`,
+          `solve output '${solution.output_id}' must publish H_ant_basis`,
         );
       }
     }
   }
+  if (typeof solution.asset_id !== "string" || !solution.asset_id.trim()) {
+    messages.push("missing solution asset");
+  }
+  if (
+    typeof solution.content_digest !== "string" ||
+    !solution.content_digest.trim()
+  ) {
+    messages.push("missing solution content digest");
+  }
+  return messages;
+}
 
-  if (projection.target.kind === "global") return messages;
+function antennaTargetValidationMessages(
+  target: AntennaTarget,
+  scene: SceneResource | null,
+): string[] {
+  if (target.kind === "global") return [];
+  const messages: string[] = [];
   const objects = scene?.objects;
   if (!objects) return messages;
   const object = objects.find(
-    (candidate) => candidate.id === projection.target.object_id,
+    (candidate) => candidate.id === target.object_id,
   );
   if (!object) {
-    messages.push(`missing target object '${projection.target.object_id}'`);
+    messages.push(`missing target object '${target.object_id}'`);
     return messages;
   }
-  if (projection.target.kind !== "region" || !object.regions) return messages;
+  if (target.kind !== "region" || !object.regions) return messages;
   const hasRegion = object.regions.some(
     (candidate) =>
-      candidate.region_id === projection.target.region_id ||
-      candidate.name === projection.target.region_id,
+      candidate.region_id === target.region_id ||
+      candidate.name === target.region_id,
   );
   if (!hasRegion) {
     messages.push(
-      `missing target region '${projection.target.object_id}/${projection.target.region_id}'`,
+      `missing target region '${target.object_id}/${target.region_id}'`,
     );
   }
   return messages;
+}
+
+function antennaProjectionValidationMessages(
+  projection: AntennaProjection,
+  scene: SceneResource | null,
+): string[] {
+  return [
+    ...antennaSolutionReferenceValidationMessages(projection.solution, scene),
+    ...antennaTargetValidationMessages(projection.target, scene),
+  ];
 }
 
 function projectionDetails(
@@ -363,6 +390,100 @@ function antennaDriveValidationMessages(
   return messages;
 }
 
+function antennaSpectrumValidationMessages(
+  request: AntennaSpectrumRequest,
+  scene: SceneResource | null,
+): string[] {
+  const messages = [
+    ...antennaSolutionReferenceValidationMessages(request.solution_ref, scene),
+    ...antennaTargetValidationMessages(request.target, scene),
+  ];
+  const stage = scene?.antenna_field_solve_stages?.find(
+    (candidate) => candidate.id === request.solution_ref.stage_id,
+  );
+  if (scene?.antenna_port_modes) {
+    if (request.port_mode_id) {
+      const hasPort = scene.antenna_port_modes.some(
+        (candidate) => candidate.id === request.port_mode_id,
+      );
+      if (!hasPort) {
+        messages.push(`missing port mode '${request.port_mode_id}'`);
+      } else if (stage && !stage.port_mode_ids.includes(request.port_mode_id)) {
+        messages.push(
+          `port mode '${request.port_mode_id}' is not attached to solve stage '${stage.id}'`,
+        );
+      }
+    } else if (!stage || stage.port_mode_ids.length !== 1) {
+      messages.push("spectrum requires exactly one port mode when port_mode_id is omitted");
+    }
+  }
+
+  const plane = request.sampling_plane;
+  const planeValues = [
+    ...plane.origin_m,
+    ...plane.axis_u,
+    ...plane.axis_v,
+    plane.extent_u_m,
+    plane.extent_v_m,
+  ];
+  const dot = plane.axis_u.reduce(
+    (sum, value, index) => sum + value * (plane.axis_v[index] ?? 0),
+    0,
+  );
+  const normU = plane.axis_u.reduce((sum, value) => sum + value * value, 0);
+  const normV = plane.axis_v.reduce((sum, value) => sum + value * value, 0);
+  const validFrame =
+    plane.origin_m.length === 3 &&
+    plane.axis_u.length === 3 &&
+    plane.axis_v.length === 3 &&
+    planeValues.every(Number.isFinite) &&
+    Math.abs(normU - 1) <= 1e-12 &&
+    Math.abs(normV - 1) <= 1e-12 &&
+    Math.abs(dot) <= 1e-12 &&
+    plane.extent_u_m > 0 &&
+    plane.extent_v_m > 0 &&
+    Number.isInteger(plane.sample_count_u) &&
+    Number.isInteger(plane.sample_count_v) &&
+    plane.sample_count_u >= 2 &&
+    plane.sample_count_v >= 2 &&
+    (request.window === "rectangular" ||
+      (plane.sample_count_u >= 3 && plane.sample_count_v >= 3)) &&
+    (plane.interpolation === "fem_element" ||
+      plane.interpolation === "fdm_trilinear");
+  if (!validFrame) messages.push("invalid sampling frame");
+
+  if (request.transform === "spatial_fft") {
+    if (request.nonuniform_k_grid) {
+      messages.push("spatial_fft must not define nonuniform_k_grid");
+    }
+  } else {
+    const grid = request.nonuniform_k_grid;
+    const validGrid =
+      grid !== null &&
+      grid !== undefined &&
+      grid.k_u_rad_per_m.length > 0 &&
+      grid.k_v_rad_per_m.length > 0 &&
+      [...grid.k_u_rad_per_m, ...grid.k_v_rad_per_m].every(Number.isFinite);
+    if (!validGrid) {
+      messages.push("nonuniform_spatial_fft requires a finite nonuniform k-grid");
+    }
+  }
+  if (![
+    "x",
+    "y",
+    "z",
+    "u",
+    "v",
+    "normal",
+    "vector_power",
+    "transverse",
+  ].includes(request.component)) {
+    messages.push(`unsupported spectrum component '${request.component}'`);
+  }
+  if (!request.output_id.trim()) messages.push("missing spectrum output id");
+  return messages;
+}
+
 function driveDetails(
   resourceId: string | null,
   scene: SceneResource | null,
@@ -402,11 +523,13 @@ function spectrumDetails(
   if (!request) {
     return { title: "Antenna spectrum", badge: "missing", rows: [{ label: "Status", value: "Spectrum request is not present in SceneResource." }] };
   }
+  const validationMessages = antennaSpectrumValidationMessages(request, scene);
   const plane = request.sampling_plane;
   return {
     title: `Antenna spectrum ${request.id}`,
-    badge: "configured · result pending",
+    badge: validationMessages.length > 0 ? "invalid · result pending" : "configured · result pending",
     rows: [
+      { label: "Validation", value: validationMessages.join("; ") || "ready" },
       { label: "ID", value: request.id, mono: true },
       { label: "Output", value: request.output_id, mono: true },
       { label: "Solve stage", value: request.solution_ref.stage_id, mono: true },

@@ -925,6 +925,18 @@ oczekiwania na wynik; nie zmieniono oceny waveformu, amplitudy ani czasu.
 React Doctor pozostają zielone. Nadal nie jest to dowód aktywacji w LLG ani
 kwalifikacja runtime.
 
+**Uzupełnienie implementacyjne 2026-09-21 (walidacja spectrum/FFT):**
+Inspector `spectrum` współdzieli walidację solution reference i targetu, a
+dodatkowo sprawdza opcjonalny port przypięty do stage'a. Odwzorowano reguły
+IR dla sampling plane: skończony ortonormalny układ osi, dodatnie extent,
+liczniki próbek, okna wymagające co najmniej trzech próbek, dozwoloną
+interpolację oraz zgodność `spatial_fft`/`nonuniform_spatial_fft` z k-grid.
+Dozwolone komponenty i niepusty output również są sprawdzane. Niepoprawny
+request ma `Validation` i `invalid · result pending`; poprawny nadal czeka na
+rzeczywisty payload FFT. Testy modelu/DOM przechodzą 13/13 (DOM 8/8), ESLint,
+React Doctor i typecheck zmienionych plików pozostają bez nowych błędów.
+To kontrakt authoringu, nie dowód wykonania FFT ani kwalifikacja runtime.
+
 **Uzupełnienie implementacyjne 2026-09-21 (harness browser):** dodano
 `apps/control-room/scripts/smoke-antenna-authoring-ui.mjs` oraz helper i test
 kontraktu Node. Smoke ma jawnie ograniczony zakres pierwszej fazy T15:

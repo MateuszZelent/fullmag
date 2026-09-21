@@ -121,6 +121,14 @@ stage nie jest używany do udawania gotowego pola, gdy brakuje właściwego
   referencji. Braki trafiają do `Validation` i ustawiają
   `invalid · result pending`, zamiast pozostawiać pozorną gotowość. Testy
   modelu i DOM kompozycji przechodzą teraz 11/11 (DOM 6/6).
+- Inspector `spectrum` waliduje wspólną referencję stage/output/asset/digest,
+  target i opcjonalny port, a także odwzorowuje reguły IR dla płaszczyzny
+  próbkowania: skończony ortonormalny frame, dodatnie extent, liczniki
+  próbek, interpolację `fem_element`/`fdm_trilinear`, zgodność transformu z
+  k-grid oraz dozwolony komponent. Niepoprawny request pokazuje konkretne
+  komunikaty i `invalid · result pending`; poprawny request pozostaje jawnie
+  `configured · result pending` do czasu publikacji FFT. Testy kompozycji
+  przechodzą 13/13 (DOM 8/8), a regresja authoring/Inspector 60/60.
 - nie uruchamiano kompilacji testów Rust, browser smoke ani dowodu
   kwalifikacji FEM/FDM GPU.
 

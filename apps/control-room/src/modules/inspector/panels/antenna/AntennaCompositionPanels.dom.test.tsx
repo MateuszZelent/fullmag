@@ -167,6 +167,115 @@ describe("AntennaCompositionPanel runtime results", () => {
     }
   });
 
+  it("shows invalid references and sampling parameters for a spectrum request", async () => {
+    mocks.scene.data = {
+      antenna_spectrum_requests: [{
+        id: "spectrum-1",
+        component: "bad-component",
+        output_id: "fft-1",
+        solution_ref: {
+          stage_id: "missing-stage",
+          output_id: "missing-output",
+          asset_id: "",
+          content_digest: "",
+        },
+        target: { kind: "object", object_id: "missing-object" },
+        transform: "spatial_fft",
+        window: "hann",
+        normalization: "integral_si",
+        port_mode_id: "missing-port",
+        sampling_plane: {
+          axis_u: [1, 0, 0],
+          axis_v: [1, 0, 0],
+          origin_m: [0, 0, 0],
+          extent_u_m: 0,
+          extent_v_m: 1,
+          sample_count_u: 2,
+          sample_count_v: 2,
+          interpolation: "unsupported",
+          outside_policy: "error",
+        },
+        nonuniform_k_grid: null,
+      }],
+      antenna_port_modes: [],
+      antenna_field_solve_stages: [],
+      objects: [],
+    } as unknown as SceneResource;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(
+          <AntennaCompositionPanel kind="spectrum" selection={spectrumSelection()} />,
+        ),
+      );
+      expect(container.textContent).toContain("Validation");
+      expect(container.textContent).toContain("missing solve stage");
+      expect(container.textContent).toContain("missing target object");
+      expect(container.textContent).toContain("missing port mode");
+      expect(container.textContent).toContain("invalid sampling frame");
+      expect(findGroupBadge(container, "invalid · result pending")).toBeDefined();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("keeps a valid structured spectrum request explicitly pending", async () => {
+    mocks.scene.data = {
+      antenna_spectrum_requests: [{
+        id: "spectrum-1",
+        component: "x",
+        output_id: "fft-1",
+        solution_ref: {
+          stage_id: "solve-1",
+          output_id: "h-ant-1",
+          asset_id: "asset-1",
+          content_digest: "digest-1",
+        },
+        target: { kind: "global" },
+        transform: "spatial_fft",
+        window: "hann",
+        normalization: "integral_si",
+        port_mode_id: "port-1",
+        sampling_plane: {
+          axis_u: [1, 0, 0],
+          axis_v: [0, 1, 0],
+          origin_m: [0, 0, 0],
+          extent_u_m: 1,
+          extent_v_m: 1,
+          sample_count_u: 4,
+          sample_count_v: 4,
+          interpolation: "fem_element",
+          outside_policy: "error",
+        },
+        nonuniform_k_grid: null,
+      }],
+      antenna_port_modes: [{ id: "port-1" }],
+      antenna_field_solve_stages: [{
+        id: "solve-1",
+        port_mode_ids: ["port-1"],
+        outputs: [{ id: "h-ant-1", quantity: "H_ant_basis" }],
+      }],
+    } as unknown as SceneResource;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(
+          <AntennaCompositionPanel kind="spectrum" selection={spectrumSelection()} />,
+        ),
+      );
+      expect(container.textContent).toContain("Validationready");
+      expect(findGroupBadge(container, "configured · result pending")).toBeDefined();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("shows concrete port validation diagnostics", async () => {
     mocks.scene.data = {
       antenna_port_modes: [{
@@ -445,6 +554,25 @@ function driveSelection(): Selection {
       visualizationTargetId: "object:antenna-1",
       antennaResourceId: "drive-1",
       antennaResourceKind: "drive",
+    },
+  } as Selection;
+}
+
+function spectrumSelection(): Selection {
+  return {
+    kind: "object.antenna.spectrum",
+    label: "Spectrum spectrum-1",
+    moduleSource: "explorer",
+    nodeId: "object:antenna-1:antenna:spectrum:spectrum-1",
+    objectId: "antenna-1",
+    ref: {
+      kind: "object.antenna.spectrum",
+      nodeId: "object:antenna-1:antenna:spectrum:spectrum-1",
+      objectId: "antenna-1",
+      type: "scene-object",
+      visualizationTargetId: "object:antenna-1",
+      antennaResourceId: "spectrum-1",
+      antennaResourceKind: "spectrum",
     },
   } as Selection;
 }
