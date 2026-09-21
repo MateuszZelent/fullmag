@@ -52,10 +52,20 @@ niepreemptive; przerwanie zgłoszone na granicy zwraca `RunError` przed
 przekazaniem wyniku do publishera, więc ta ścieżka nie może opublikować
 `ready` po zaakceptowanym anulowaniu.
 
-To jest kontrakt runnera, nie pełne zachowanie sesji: `orchestrator.rs` musi
-jeszcze przekazać sygnał z `CurrentLiveDisplaySelectionHandle`, zapisać
-`StageStopReason::UserCancelled` i przejść do właściwego stanu
-`cancelled`/`awaiting_command`.
+Publisher ma dodatkowo wariant
+`publish_antenna_field_solution_atomically_interruptible`, który sprawdza ten
+sam sygnał po zapisie task-private payloadów i bezpośrednio przed `rename()`;
+odrzucony zapis sprząta wyłącznie własny katalog tymczasowy. Samo `rename()`
+pozostaje niepreemptive, ale nie ma już okna między kontrolą orchestratora a
+kontrolą publishera.
+
+`orchestrator.rs` przekazuje ten sygnał dla synthetic antenna stage. Przy
+anulowaniu zapisuje `AntennaFieldStageStatus::Cancelled`,
+`StageStopReason::UserCancelled` w read-modelu stage i diagnostykę w
+`synthetic_stage.json`; headless kończy podsumowanie jako `cancelled`, a sesja
+interaktywna wraca do `awaiting_command`. Pojedynczy FFI solve nadal nie jest
+preemptive, a pełny fault-injection zapisu i runtime qualification pozostają
+osobnymi bramkami.
 
 ## Weryfikacja wykonana 2026-09-21
 
@@ -75,7 +85,6 @@ jeszcze przekazać sygnał z `CurrentLiveDisplaySelectionHandle`, zapisać
 
 ## Pozostaje otwarte
 
-- przekazanie tokena z CLI do runnera oraz zapis stage stop reason po anulowaniu;
 - fault injection przerwania całego batcha przed/po zapisie payloadu albo
   manifestu;
 - pełny resolver stage/output oraz rejestracja w standardowym artifact catalog.

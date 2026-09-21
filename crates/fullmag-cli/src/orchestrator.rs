@@ -6674,12 +6674,64 @@ struct SyntheticStageOutcome {
     message: String,
 }
 
+const SYNTHETIC_ANTENNA_CANCELLED: &str =
+    "antenna field solve cancelled: interrupt_requested";
+
+fn synthetic_interrupt_requested(
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+) -> bool {
+    interrupt_requested.is_some_and(|signal| {
+        signal.load(std::sync::atomic::Ordering::Acquire)
+    })
+}
+
+fn record_cancelled_antenna_stage(
+    lifecycle: &mut fullmag_runner::AntennaFieldStageState,
+    stage_id: &str,
+    port_mode_id: &str,
+    current_stage_artifact_dir: &Path,
+    diagnostic: &str,
+) -> Result<()> {
+    lifecycle.transition(
+        fullmag_runner::AntennaFieldStageStatus::Cancelled,
+        Some(diagnostic.to_string()),
+    )?;
+    write_synthetic_stage_record(
+        current_stage_artifact_dir,
+        serde_json::json!({
+            "kind": "antenna_field_solve",
+            "stage_id": stage_id,
+            "port_mode_id": port_mode_id,
+            "stage_state": lifecycle,
+        }),
+    )?;
+    Ok(())
+}
+
 fn execute_synthetic_stage(
     action: &ResolvedScriptStageAction,
     artifact_dir: &Path,
     current_stage_artifact_dir: &Path,
     backend_plan: &BackendPlanIR,
     continuation_magnetization: Option<&[[f64; 3]]>,
+) -> Result<SyntheticStageOutcome> {
+    execute_synthetic_stage_with_interrupt(
+        action,
+        artifact_dir,
+        current_stage_artifact_dir,
+        backend_plan,
+        continuation_magnetization,
+        None,
+    )
+}
+
+fn execute_synthetic_stage_with_interrupt(
+    action: &ResolvedScriptStageAction,
+    artifact_dir: &Path,
+    current_stage_artifact_dir: &Path,
+    backend_plan: &BackendPlanIR,
+    continuation_magnetization: Option<&[[f64; 3]]>,
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<SyntheticStageOutcome> {
     match action {
         ResolvedScriptStageAction::AntennaFieldSolve {
@@ -6695,6 +6747,17 @@ fn execute_synthetic_stage(
                 signatures: None,
                 diagnostic: None,
             };
+            if synthetic_interrupt_requested(interrupt_requested) {
+                lifecycle.transition(fullmag_runner::AntennaFieldStageStatus::Queued, None)?;
+                record_cancelled_antenna_stage(
+                    &mut lifecycle,
+                    stage_id,
+                    port_mode_id,
+                    current_stage_artifact_dir,
+                    SYNTHETIC_ANTENNA_CANCELLED,
+                )?;
+                bail!("{SYNTHETIC_ANTENNA_CANCELLED}");
+            }
             let cache_state =
                 fullmag_runner::inspect_cached_antenna_field_solution(artifact_dir, plan)?;
             if let fullmag_runner::AntennaFieldSolutionCacheState::Stale {
@@ -6716,6 +6779,17 @@ fn execute_synthetic_stage(
                 )?;
             } else {
                 lifecycle.transition(fullmag_runner::AntennaFieldStageStatus::Queued, None)?;
+            }
+
+            if synthetic_interrupt_requested(interrupt_requested) {
+                record_cancelled_antenna_stage(
+                    &mut lifecycle,
+                    stage_id,
+                    port_mode_id,
+                    current_stage_artifact_dir,
+                    SYNTHETIC_ANTENNA_CANCELLED,
+                )?;
+                bail!("{SYNTHETIC_ANTENNA_CANCELLED}");
             }
 
             if let fullmag_runner::AntennaFieldSolutionCacheState::Ready(cached) = cache_state {
@@ -6761,50 +6835,94 @@ fn execute_synthetic_stage(
                 None,
             )?;
 
-            let result = match fullmag_runner::execute_antenna_field_solve_plan(plan) {
+            let result = match fullmag_runner::execute_antenna_field_solve_plan_interruptible(
+                plan,
+                interrupt_requested,
+            ) {
                 Ok(result) => result,
                 Err(error) => {
                     let diagnostic = error.to_string();
-                    let _ = lifecycle.transition(
-                        fullmag_runner::AntennaFieldStageStatus::Failed,
-                        Some(diagnostic.clone()),
-                    );
-                    let _ = write_synthetic_stage_record(
-                        current_stage_artifact_dir,
-                        serde_json::json!({
-                            "kind": "antenna_field_solve",
-                            "stage_id": stage_id,
-                            "port_mode_id": port_mode_id,
-                            "stage_state": lifecycle,
-                        }),
-                    );
+                    if synthetic_interrupt_requested(interrupt_requested) {
+                        record_cancelled_antenna_stage(
+                            &mut lifecycle,
+                            stage_id,
+                            port_mode_id,
+                            current_stage_artifact_dir,
+                            &diagnostic,
+                        )?;
+                    } else {
+                        let _ = lifecycle.transition(
+                            fullmag_runner::AntennaFieldStageStatus::Failed,
+                            Some(diagnostic.clone()),
+                        );
+                        let _ = write_synthetic_stage_record(
+                            current_stage_artifact_dir,
+                            serde_json::json!({
+                                "kind": "antenna_field_solve",
+                                "stage_id": stage_id,
+                                "port_mode_id": port_mode_id,
+                                "stage_state": lifecycle,
+                            }),
+                        );
+                    }
                     return Err(error.into());
                 }
             };
+            if synthetic_interrupt_requested(interrupt_requested) {
+                record_cancelled_antenna_stage(
+                    &mut lifecycle,
+                    stage_id,
+                    port_mode_id,
+                    current_stage_artifact_dir,
+                    SYNTHETIC_ANTENNA_CANCELLED,
+                )?;
+                bail!("{SYNTHETIC_ANTENNA_CANCELLED}");
+            }
             lifecycle.transition(
                 fullmag_runner::AntennaFieldStageStatus::ProjectingTargets,
                 None,
             )?;
-            let published = match fullmag_runner::publish_antenna_field_solution_atomically(
+            if synthetic_interrupt_requested(interrupt_requested) {
+                record_cancelled_antenna_stage(
+                    &mut lifecycle,
+                    stage_id,
+                    port_mode_id,
+                    current_stage_artifact_dir,
+                    SYNTHETIC_ANTENNA_CANCELLED,
+                )?;
+                bail!("{SYNTHETIC_ANTENNA_CANCELLED}");
+            }
+            let published = match fullmag_runner::publish_antenna_field_solution_atomically_interruptible(
                 artifact_dir,
                 &result,
+                interrupt_requested,
             ) {
                 Ok(published) => published,
                 Err(error) => {
                     let diagnostic = error.to_string();
-                    let _ = lifecycle.transition(
-                        fullmag_runner::AntennaFieldStageStatus::Failed,
-                        Some(diagnostic.clone()),
-                    );
-                    let _ = write_synthetic_stage_record(
-                        current_stage_artifact_dir,
-                        serde_json::json!({
-                            "kind": "antenna_field_solve",
-                            "stage_id": stage_id,
-                            "port_mode_id": port_mode_id,
-                            "stage_state": lifecycle,
-                        }),
-                    );
+                    if synthetic_interrupt_requested(interrupt_requested) {
+                        record_cancelled_antenna_stage(
+                            &mut lifecycle,
+                            stage_id,
+                            port_mode_id,
+                            current_stage_artifact_dir,
+                            &diagnostic,
+                        )?;
+                    } else {
+                        let _ = lifecycle.transition(
+                            fullmag_runner::AntennaFieldStageStatus::Failed,
+                            Some(diagnostic.clone()),
+                        );
+                        let _ = write_synthetic_stage_record(
+                            current_stage_artifact_dir,
+                            serde_json::json!({
+                                "kind": "antenna_field_solve",
+                                "stage_id": stage_id,
+                                "port_mode_id": port_mode_id,
+                                "stage_state": lifecycle,
+                            }),
+                        );
+                    }
                     return Err(error.into());
                 }
             };
@@ -8021,6 +8139,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     // skipped at initial launch nor replayed later.
     let mut frozen_spins_applied_scene_revision: Option<u64> = None;
     let mut paused_stage: Option<PausedInteractiveStage> = None;
+    let mut scripted_cancelled = false;
 
     // ── visualization quantity hint ──────────────────────────────────────
     // If the script declared `fm.visualization(active_quantity_id="...")`, push a
@@ -9338,18 +9457,27 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         });
 
         if let Some(action) = synthetic_action {
-            let synthetic_outcome = match execute_synthetic_stage(
+            let synthetic_interrupt_signal = display_selection_handle.running_interrupt_signal();
+            let synthetic_outcome = match execute_synthetic_stage_with_interrupt(
                 &action,
                 &artifact_dir,
                 &current_stage_artifact_dir,
                 &execution_plan.backend_plan,
                 continuation_magnetization.as_deref(),
+                Some(synthetic_interrupt_signal.as_ref()),
             ) {
                 Ok(outcome) => outcome,
                 Err(error) => {
-                    let failed_at_unix_ms = unix_time_millis()?;
+                    let synthetic_cancelled =
+                        synthetic_interrupt_requested(Some(synthetic_interrupt_signal.as_ref()));
+                    let terminal_status = if synthetic_cancelled {
+                        "cancelled"
+                    } else {
+                        "failed"
+                    };
+                    let terminal_at_unix_ms = unix_time_millis()?;
                     let mut snapshot = live_workspace.snapshot();
-                    let failed_runtime = session_runtime_selection_for_problem(
+                    let terminal_runtime = session_runtime_selection_for_problem(
                         &stage.ir,
                         Some(&execution_plan),
                         field_every_n,
@@ -9360,34 +9488,74 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     snapshot.session = build_session_manifest(
                         &session_id,
                         &run_id,
-                        "failed",
+                        terminal_status,
                         interactive_requested,
                         &script_path,
                         &final_problem_name,
-                        &failed_runtime,
+                        &terminal_runtime,
                         &artifact_dir,
                         started_at_unix_ms,
-                        failed_at_unix_ms,
+                        terminal_at_unix_ms,
                         plan_summary_json(&current_plan_summary),
                     );
                     snapshot.metadata =
-                        Some(current_live_metadata(&stage.ir, &execution_plan, "failed"));
+                        Some(current_live_metadata(
+                            &stage.ir,
+                            &execution_plan,
+                            terminal_status,
+                        ));
                     snapshot.mesh_workspace = current_mesh_workspace(
                         &stage.ir,
                         &execution_plan,
-                        "failed",
+                        terminal_status,
                         current_mesh_quality.as_ref(),
                         &current_mesh_history,
                     );
                     snapshot.run = run_manifest_from_steps(
                         &run_id,
                         &session_id,
-                        "failed",
+                        terminal_status,
                         &artifact_dir,
                         &aggregated_steps,
                     );
-                    set_live_state_status(&mut snapshot.live_state, "failed", Some(true));
+                    set_live_state_status(&mut snapshot.live_state, terminal_status, Some(true));
+                    if synthetic_cancelled {
+                        let previous_stage_execution = snapshot.stage_execution.clone();
+                        let cancelled_completion = user_cancelled_stage_completion("cancelled");
+                        let mut next_stage_execution =
+                            scripted_stage_execution_state_with_completion(
+                                stage_count,
+                                stage_index,
+                                &stage.entrypoint_kind,
+                                terminal_status,
+                                start_solver_command_id.as_deref(),
+                                Some(stage_started_at_unix_ms),
+                                Some(terminal_at_unix_ms),
+                                Some(current_stage_artifact_dir.display().to_string()),
+                                Some(&cancelled_completion),
+                                stage.incoming_transition.as_ref(),
+                            );
+                        preserve_terminal_stage_history(
+                            &mut next_stage_execution,
+                            previous_stage_execution.as_ref(),
+                        );
+                        attach_stage_fem_mesh_identity(
+                            &mut next_stage_execution,
+                            stage_index,
+                            stage_fem_mesh_asset.as_ref(),
+                        );
+                        snapshot.stage_execution = Some(next_stage_execution);
+                    }
                     live_workspace.replace(snapshot);
+                    if synthetic_cancelled {
+                        scripted_cancelled = true;
+                        display_selection_handle.clear_running_interrupt();
+                        live_workspace.push_log(
+                            "warning",
+                            format!("Synthetic stage execution cancelled: {}", error),
+                        );
+                        break;
+                    }
                     live_workspace.push_log(
                         "error",
                         format!("Synthetic stage execution failed: {}", error),
@@ -11841,7 +12009,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     }
 
     let finished_at_unix_ms = unix_time_millis()?;
-    let final_status = fullmag_runner::RunStatus::Completed;
+    let final_status = if scripted_cancelled && !interactive_requested {
+        fullmag_runner::RunStatus::Cancelled
+    } else {
+        fullmag_runner::RunStatus::Completed
+    };
 
     // If this was a FEM eigen run, read the spectrum artifact from disk so we
     // can include the mode count and lowest frequency in the summary printout.
@@ -12021,10 +12193,20 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         });
         set_live_state_status(&mut state.live_state, &summary.status, Some(true));
     });
+    let summary_level = if matches!(final_status, fullmag_runner::RunStatus::Cancelled) {
+        "warning"
+    } else {
+        "success"
+    };
+    let summary_verb = if matches!(final_status, fullmag_runner::RunStatus::Cancelled) {
+        "cancelled"
+    } else {
+        "completed"
+    };
     live_workspace.push_log(
-        "success",
+        summary_level,
         format!(
-            "Workspace completed — {} steps, final time {}",
+            "Workspace {summary_verb} — {} steps, final time {}",
             summary.total_steps,
             summary
                 .final_time

@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const SOLUTION_MANIFEST_NAME: &str = "manifest.v1.json";
 
@@ -563,10 +564,34 @@ pub fn publish_antenna_field_solution_atomically(
     publish_antenna_field_solution_atomically_with_hook(output_root, result, None)
 }
 
+pub fn publish_antenna_field_solution_atomically_interruptible(
+    output_root: &Path,
+    result: &AntennaFieldSolveResult,
+    interrupt_requested: Option<&AtomicBool>,
+) -> Result<PublishedAntennaFieldSolution, RunError> {
+    let Some(interrupt_requested) = interrupt_requested else {
+        return publish_antenna_field_solution_atomically(output_root, result);
+    };
+    let before_rename = || {
+        if interrupt_requested.load(Ordering::Acquire) {
+            return Err(RunError {
+                message: "antenna field publication cancelled before atomic rename: interrupt_requested"
+                    .into(),
+            });
+        }
+        Ok(())
+    };
+    publish_antenna_field_solution_atomically_with_hook(
+        output_root,
+        result,
+        Some(&before_rename),
+    )
+}
+
 fn publish_antenna_field_solution_atomically_with_hook(
     output_root: &Path,
     result: &AntennaFieldSolveResult,
-    before_rename: Option<&dyn Fn()>,
+    before_rename: Option<&dyn Fn() -> Result<(), RunError>>,
 ) -> Result<PublishedAntennaFieldSolution, RunError> {
     let (asset_id, signatures) = manifest_metadata(result)?;
     if result.field_solution.content_digest.is_empty() {
@@ -655,7 +680,10 @@ fn publish_antenna_field_solution_atomically_with_hook(
         return Err(error);
     }
     if let Some(before_rename) = before_rename {
-        before_rename();
+        if let Err(error) = before_rename() {
+            let _ = fs::remove_dir_all(&temporary);
+            return Err(error);
+        }
     }
     if let Err(error) = fs::rename(&temporary, &final_dir) {
         let _ = fs::remove_dir_all(&temporary);
@@ -1015,6 +1043,25 @@ mod tests {
     }
 
     #[test]
+    fn interruptible_publication_rejects_cancel_before_atomic_rename() {
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-antenna-publish-cancel-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let result = field_solve_result("solution", 2.0);
+        let signal = AtomicBool::new(true);
+        let error = publish_antenna_field_solution_atomically_interruptible(
+            &root,
+            &result,
+            Some(&signal),
+        )
+        .expect_err("cancelled publication must not return a ready asset");
+        assert!(error.message.contains("cancelled before atomic rename"));
+        assert!(!root.join("antenna/field_solutions/solution").exists());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn concurrent_identical_publication_deduplicates_after_rename_race() {
         let root = std::env::temp_dir().join(format!(
             "fullmag-antenna-publish-race-{}",
@@ -1031,6 +1078,7 @@ mod tests {
                 thread::spawn(move || {
                     let before_rename = || {
                         barrier.wait();
+                        Ok(())
                     };
                     publish_antenna_field_solution_atomically_with_hook(
                         &root,

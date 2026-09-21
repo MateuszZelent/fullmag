@@ -728,7 +728,10 @@ oraz przed materializacją artefaktu. Pojedyncze wywołanie FFI pozostaje
 niepreemptive, ale zaakceptowane anulowanie na granicy zwraca błąd przed
 przekazaniem wyniku do publishera. Przekazanie sygnału przez
 `orchestrator.rs`, zapis `StageStopReason::UserCancelled` i stan
-`cancelled/awaiting_command` pozostają kolejnym krokiem T12.
+`cancelled/awaiting_command` są teraz spięte dla synthetic antenna stage;
+publisher sprawdza ten sam sygnał bezpośrednio przed `rename()` i usuwa
+wyłącznie własny staging przy odrzuceniu. Pozostaje runtime/fault-injection
+dowodzący całego batcha oraz niepreemptive granica samego `rename()`.
 
 **Bramka:** `lifecycle` i `artifact`; testy fault injection obejmują przerwanie przed/po zapisie payloadu i przed publikacją manifestu. Commit: `fix: bind antenna stage lifecycle to actual execution`.
 

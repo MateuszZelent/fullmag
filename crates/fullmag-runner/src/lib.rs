@@ -36,9 +36,9 @@ pub use antenna_spectrum::{
 pub use antenna_stage::{
     antenna_field_solution_signatures, inspect_cached_antenna_field_solution,
     load_cached_antenna_field_solution, load_published_antenna_field_solution,
-    publish_antenna_field_solution_atomically, AntennaFieldSolutionCacheState,
-    AntennaFieldStageState, AntennaFieldStageStatus, AntennaFieldStageTransition,
-    PublishedAntennaFieldSolution,
+    publish_antenna_field_solution_atomically, publish_antenna_field_solution_atomically_interruptible,
+    AntennaFieldSolutionCacheState, AntennaFieldStageState, AntennaFieldStageStatus,
+    AntennaFieldStageTransition, PublishedAntennaFieldSolution,
 };
 mod antenna_fields;
 pub mod artifact_pipeline;
