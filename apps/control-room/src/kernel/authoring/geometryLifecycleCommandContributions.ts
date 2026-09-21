@@ -20,7 +20,11 @@ import {
   MODEL_READINESS_PATH,
   MODEL_SCENE_PATH,
 } from "../api/apiPaths";
-import type { JsonObject, JsonValue, MeshCapabilitiesResource } from "../api/apiTypes";
+import type {
+  JsonObject,
+  JsonValue,
+  MeshCapabilitiesResource,
+} from "../api/apiTypes";
 import type { CommandDetailResource, StructuredCommandRequest } from "../api/apiTypes";
 import type { CommandContext, CommandContribution, CommandResult } from "../commands/commandTypes";
 import type { Selection } from "../selection/selectionTypes";
@@ -39,6 +43,7 @@ import {
   deleteObjectTransaction,
 } from "./geometryLifecycleCommands";
 import { invalidateAuthoringMutationDependents } from "./authoringMutationInvalidation";
+import { captureAuthoringHistoryScene } from "./authoringHistoryMutation";
 import { awaitMeshBuildConfirmation, type MeshBuildConfirmCommandId } from "./meshBuildConfirmation";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 
@@ -1054,6 +1059,12 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
           ],
         },
       });
+      context.authoringHistory?.record({
+        after: response.committed_scene,
+        before: scene,
+        committedRevision: response.scene_revision,
+        label: "Add microstrip antenna",
+      });
       invalidateSceneAuthoringResources(context, response.scene_revision);
       selectCommittedObject(context, objectId, "Microstrip antenna");
       return { message: "Microstrip antenna added.", status: "completed" };
@@ -1078,10 +1089,14 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
       const primitiveKind = primitiveKindFromDraftSelection(selection);
       const objectId = draftObjectId(primitiveKind);
       const name = selection?.label ?? `New ${primitiveKind}`;
-      const baseRevision = sceneBaseRevision(context);
       if (!context.api) {
         return { message: "Control-room API is unavailable.", status: "failed" };
       }
+      const before = await captureAuthoringHistoryScene(context);
+      const baseRevision =
+        typeof before?.revision === "number" && Number.isFinite(before.revision)
+          ? before.revision
+          : sceneBaseRevision(context);
       if (baseRevision === null) {
         return {
           message: "The canonical scene revision is unavailable. Refetch the scene before committing.",
@@ -1100,6 +1115,14 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
           translation: [0, 0, 0],
         },
       });
+      if (before) {
+        context.authoringHistory?.record({
+          after: response.committed_scene,
+          before,
+          committedRevision: response.scene_revision,
+          label: `Create ${name}`,
+        });
+      }
       invalidateSceneAuthoringResources(context, response.scene_revision);
       selectCommittedObject(context, objectId, name);
       return { status: "completed" };
@@ -1122,7 +1145,16 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
         return { message: "Control-room API is unavailable.", status: "failed" };
       }
 
+      const before = await captureAuthoringHistoryScene(context);
       const response = await deleteObjectTransaction(context.api, objectId);
+      if (before) {
+        context.authoringHistory?.record({
+          after: response.committed_scene,
+          before,
+          committedRevision: response.scene_revision,
+          label: `Delete ${objectId}`,
+        });
+      }
       invalidateSceneAuthoringResources(context, response.scene_revision);
       if (context.selection?.get().objectId === objectId) {
         context.selection.clear("geometry-authoring");

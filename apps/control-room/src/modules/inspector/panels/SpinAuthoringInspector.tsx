@@ -9,6 +9,7 @@ import type {
   TransportValidationRequest,
   TransportValidationResponse,
 } from "@/kernel/api/apiTypes";
+import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   OERSTED_FIELDS_RESOURCE_KEY,
@@ -323,7 +324,7 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
   resourceId?: string | null;
   resourceIndex?: number | null;
 }) {
-  const { api, resources } = useKernel();
+  const { api, authoringHistory, resources } = useKernel();
   const torques = useSpinTorquesResource({ enabled: family === "spin_torque" });
   const oersted = useOerstedFieldsResource({ enabled: family === "oersted_field" });
   const currents = useCurrentTransportsResource({ enabled: true });
@@ -434,10 +435,19 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
     setPending(true);
     try {
       if (!capability?.authoring_allowed || validation?.execution.authoring_allowed !== true) throw new Error(capability?.reason ?? validation?.execution.reason ?? "Latest validation does not permit mutation.");
-      const request = { base_revision: active.data.scene_revision };
-      const commit = family === "spin_torque"
-        ? await api.model.deleteSpinTorque(selectedId, request)
-        : await api.model.deleteOerstedField(selectedId, request);
+      const commit = await runAuthoringMutationWithHistory(
+        { api, authoringHistory },
+        `Delete ${family} ${selectedId}`,
+        async ({ baseRevision }) => {
+          const request = {
+            base_revision:
+              baseRevision ?? active.data!.scene_revision,
+          };
+          return family === "spin_torque"
+            ? api.model.deleteSpinTorque(selectedId, request)
+            : api.model.deleteOerstedField(selectedId, request);
+        },
+      );
       invalidateSpinAuthoringResources(resources, commit, [family === "spin_torque" ? SPIN_TORQUES_RESOURCE_KEY : OERSTED_FIELDS_RESOURCE_KEY]);
       setLocalSelectedId("");
       setFeedback({ kind: "success", message: "Authoring resource deleted." });

@@ -3,6 +3,10 @@
 import { useMemo, useRef, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
+import {
+  authoringWriteOptions,
+  runAuthoringMutationWithHistory,
+} from "@/kernel/authoring/authoringHistoryMutation";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
   useMeshBuildCurrent,
@@ -135,7 +139,12 @@ export function ObjectRegionsPanel(props: InspectorPanelProps) {
 
 function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
   const kernel = useKernel();
-  const { api, resources, selection: selectionController } = kernel;
+  const {
+    api,
+    authoringHistory,
+    resources,
+    selection: selectionController,
+  } = kernel;
   const sessionDiscretization = useSessionStatusSelector(
     (status) => status.data?.domain.discretization ?? null,
   );
@@ -426,11 +435,26 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
 
     setPending(true);
     try {
-      const response = await api.model.duplicateObjectRegion(
-        model.objectId,
-        model.regionId,
-        {},
-        { baseRevision: model.revision ?? undefined },
+      const response = await runAuthoringMutationWithHistory(
+        { api, authoringHistory },
+        `Duplicate region ${model.regionId}`,
+        async ({ baseRevision }) => {
+          const options = authoringWriteOptions(
+            baseRevision ?? model.revision,
+          );
+          return options
+            ? api.model.duplicateObjectRegion(
+                model.objectId,
+                model.regionId,
+                {},
+                options,
+              )
+            : api.model.duplicateObjectRegion(
+                model.objectId,
+                model.regionId,
+                {},
+              );
+        },
       );
       const revision = revisionFromScene(response);
       publishRegionAuthoringScene(resources, response, revision);
@@ -464,8 +488,27 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
 
     setPending(true);
     try {
-      const response = await api.model.deleteRegion(model.objectId, model.regionId);
-      const revision = revisionFromScene(response);
+      const transaction = await runAuthoringMutationWithHistory(
+        { api, authoringHistory },
+        `Delete region ${model.regionId}`,
+        async ({ baseRevision }) => {
+          const options = authoringWriteOptions(
+            baseRevision ?? model.revision,
+          );
+          return options
+            ? api.model.deleteObjectRegion(
+                model.objectId,
+                model.regionId,
+                options,
+              )
+            : api.model.deleteObjectRegion(
+                model.objectId,
+                model.regionId,
+              );
+        },
+      );
+      const response = transaction.committed_scene;
+      const revision = transaction.scene_revision;
       publishRegionAuthoringScene(resources, response, revision);
       const fallback = findLastRegionSelection(
         response,

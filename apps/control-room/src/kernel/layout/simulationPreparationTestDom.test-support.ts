@@ -206,6 +206,15 @@ export class TestElement extends TestNode {
   readonly tagName: string;
   private controlValue = "";
 
+  get inputMode(): string {
+    return this.getAttribute("inputMode") ?? "";
+  }
+
+  set inputMode(value: string) {
+    if (value) this.setAttribute("inputMode", value);
+    else this.removeAttribute("inputMode");
+  }
+
   get value(): string {
     return this.controlValue;
   }
@@ -290,7 +299,7 @@ export class TestElement extends TestNode {
   }
 
   getAttribute(name: string): string | null {
-    return this.attributes.get(name) ?? null;
+    return this.attributes.get(normalizeAttributeName(name)) ?? null;
   }
 
   getAttributeNames(): string[] {
@@ -312,7 +321,7 @@ export class TestElement extends TestNode {
   }
 
   hasAttribute(name: string): boolean {
-    return this.attributes.has(name);
+    return this.attributes.has(normalizeAttributeName(name));
   }
 
   matches(selector: string): boolean {
@@ -333,12 +342,16 @@ export class TestElement extends TestNode {
   }
 
   removeAttribute(name: string): void {
-    this.attributes.delete(name);
+    this.attributes.delete(normalizeAttributeName(name));
   }
 
   setAttribute(name: string, value: string): void {
-    this.attributes.set(name, String(value));
+    this.attributes.set(normalizeAttributeName(name), String(value));
   }
+}
+
+function normalizeAttributeName(name: string): string {
+  return name.toLowerCase() === "inputmode" ? "inputmode" : name;
 }
 
 const VOID_HTML_ELEMENTS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);

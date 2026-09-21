@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { CommandContext } from "../commands/commandTypes";
+import { PendingFormRegistry } from "../authoring/PendingFormRegistry";
 
 import { SHELL_COMMANDS } from "./shellCommands";
 
@@ -155,5 +156,35 @@ describe("SHELL_COMMANDS", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("routes shared Inspector Apply and Reset commands through the pending-form registry", async () => {
+    const registry = new PendingFormRegistry();
+    const apply = vi.fn(async () => true);
+    const reset = vi.fn(async () => undefined);
+    registry.register(Symbol("inspector"), {
+      apply,
+      applying: false,
+      dirty: true,
+      mode: "staged",
+      reset,
+      valid: true,
+    });
+    const applyCommand = SHELL_COMMANDS.find(
+      (candidate) => candidate.id === "workspace.apply-inspector",
+    );
+    const resetCommand = SHELL_COMMANDS.find(
+      (candidate) => candidate.id === "workspace.reset-inspector",
+    );
+
+    expect(applyCommand?.isEnabled?.({ source: "test", pendingForms: registry })).toBe(true);
+    await expect(
+      applyCommand?.run({ source: "test", pendingForms: registry }),
+    ).resolves.toMatchObject({ status: "completed" });
+    await expect(
+      resetCommand?.run({ source: "test", pendingForms: registry }),
+    ).resolves.toMatchObject({ status: "completed" });
+    expect(apply).toHaveBeenCalledOnce();
+    expect(reset).toHaveBeenCalledOnce();
   });
 });

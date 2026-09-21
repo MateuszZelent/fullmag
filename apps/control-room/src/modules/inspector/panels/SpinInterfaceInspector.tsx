@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 
 import type { SceneSpinTransport, TransportValidationRequest, TransportValidationResponse } from "@/kernel/api/apiTypes";
+import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   SPIN_INTERFACES_RESOURCE_KEY,
@@ -153,7 +154,7 @@ function buildInterface(draft: InterfaceDraft): unknown {
 }
 
 export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) {
-  const { api, resources } = useKernel();
+  const { api, authoringHistory, resources } = useKernel();
   const projected = useSpinInterfacesResource();
   const transports = useSpinTransportsResource();
   const interfaceRef = selection.ref?.type === "spin-interface" ? selection.ref : null;
@@ -241,9 +242,10 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
     return { ...ownerRecord, interfaces } as SceneSpinTransport;
   }
 
-  async function validateOwner(resource: SceneSpinTransport) {
-    if (transports.data?.scene_revision === undefined) throw new Error("Scene revision is unavailable.");
-    const response = await api.model.validateTransport({ base_revision: transports.data.scene_revision, candidate: { kind: "spin_transport", operation: "replace", path_id: ownerId, resource }, validation_version: "transport-authoring-validation.v1" });
+  async function validateOwner(resource: SceneSpinTransport, baseRevision?: number) {
+    const revision = baseRevision ?? transports.data?.scene_revision;
+    if (revision === undefined) throw new Error("Scene revision is unavailable.");
+    const response = await api.model.validateTransport({ base_revision: revision, candidate: { kind: "spin_transport", operation: "replace", path_id: ownerId, resource }, validation_version: "transport-authoring-validation.v1" });
     if (!response.semantic.valid || !response.execution.authoring_allowed) throw new Error(response.semantic.issues[0]?.message ?? response.execution.reason ?? "Owner update is not authoring-ready.");
   }
 
@@ -259,8 +261,26 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
         if (!checked.semantic.valid || !checked.execution.authoring_allowed) throw new Error(checked.semantic.issues[0]?.message ?? checked.execution.reason ?? "Interface is not authoring-ready.");
       } else if (validation?.execution.authoring_allowed !== true) throw new Error("Latest clone-only validation does not permit mutation.");
       const resource = ownerWith(nextInterface);
-      await validateOwner(resource);
-      const commit = await api.model.replaceSpinTransport(ownerId, { base_revision: transports.data!.scene_revision, resource });
+      const commit = action === "delete"
+        ? await runAuthoringMutationWithHistory(
+            { api, authoringHistory },
+            `Delete spin interface ${selected?.interface_id ?? "new"}`,
+            async ({ baseRevision }) => {
+              const revision = baseRevision ?? transports.data!.scene_revision;
+              await validateOwner(resource, revision);
+              return api.model.replaceSpinTransport(ownerId, {
+                base_revision: revision,
+                resource,
+              });
+            },
+          )
+        : await (async () => {
+            await validateOwner(resource);
+            return api.model.replaceSpinTransport(ownerId, {
+              base_revision: transports.data!.scene_revision,
+              resource,
+            });
+          })();
       invalidateSpinAuthoringResources(resources, commit, [
         SPIN_TRANSPORTS_RESOURCE_KEY,
         SPIN_INTERFACES_RESOURCE_KEY,

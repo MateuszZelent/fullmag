@@ -3,6 +3,7 @@
 import {
   createContext,
   useContext,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -11,6 +12,10 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+
+import { KernelContext } from "@/kernel/KernelContext";
+
+import { applyInspectorSessionWithHistory } from "./InspectorHistoryBridge";
 
 export type InspectorEditMode = "staged" | "liveViewport" | "immediate";
 
@@ -139,6 +144,7 @@ export function useRegisterInspectorEditSession(
   reset: () => Promise<void> | void,
 ): void {
   const store = useContext(InspectorEditSessionContext);
+  const kernel = useContext(KernelContext);
   const applyRef = useRef(apply);
   const resetRef = useRef(reset);
   const sessionRef = useRef<InspectorEditSession | null>(
@@ -169,16 +175,31 @@ export function useRegisterInspectorEditSession(
         }
       : null;
   }, [apply, applying, dirty, lockReason, mode, reset, valid]);
+  const owner = useMemo(() => Symbol("inspector-edit-session"), []);
+  const applyWithHistory = useCallback(
+    () =>
+      applyInspectorSessionWithHistory(
+        sessionRef.current,
+        kernel
+          ? {
+              model: {
+                scene: () => kernel.api.model.scene(),
+              },
+            }
+          : null,
+        kernel?.authoringHistory ?? null,
+      ),
+    [kernel],
+  );
   const facade = useMemo<InspectorEditSession>(() => ({
-    apply: () => sessionRef.current?.apply() ?? false,
+    apply: () => applyWithHistory(),
     get applying() { return sessionRef.current?.applying ?? false; },
     get dirty() { return sessionRef.current?.dirty ?? false; },
     get lockReason() { return sessionRef.current?.lockReason; },
     get mode() { return sessionRef.current?.mode ?? "immediate"; },
     reset: () => sessionRef.current?.reset(),
     get valid() { return sessionRef.current?.valid ?? true; },
-  }), []);
-  const owner = useMemo(() => Symbol("inspector-edit-session"), []);
+  }), [applyWithHistory]);
 
   useEffect(() => {
     if (!store) return;

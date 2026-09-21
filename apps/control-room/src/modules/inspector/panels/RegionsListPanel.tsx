@@ -4,6 +4,10 @@ import { useMemo, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import {
+  authoringWriteOptions,
+  runAuthoringMutationWithHistory,
+} from "@/kernel/authoring/authoringHistoryMutation";
+import {
   useModelRegionDiagnosticsResource,
   useModelRegionsResource,
   useSceneResource,
@@ -73,7 +77,12 @@ function diagnosticSummary(item: RegionsListItem): string | null {
 }
 
 export function RegionsListPanel({ selection }: InspectorPanelProps) {
-  const { api, resources, selection: selectionController } = useKernel();
+  const {
+    api,
+    authoringHistory,
+    resources,
+    selection: selectionController,
+  } = useKernel();
   const scene = useSceneResource();
   const regions = useModelRegionsResource();
   const regionDiagnostics = useModelRegionDiagnosticsResource();
@@ -138,10 +147,24 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
 
     setPending(true);
     try {
-      const response = await api.model.createRegion(
-        model.objectId,
-        buildNewRegionPayload(draft, model.ownerBounds),
-        { baseRevision: model.revision ?? undefined },
+      const response = await runAuthoringMutationWithHistory(
+        { api, authoringHistory },
+        `Create region ${draft.name.trim()}`,
+        async ({ baseRevision }) => {
+          const options = authoringWriteOptions(
+            baseRevision ?? model.revision,
+          );
+          return options
+            ? api.model.createRegion(
+                model.objectId,
+                buildNewRegionPayload(draft, model.ownerBounds),
+                options,
+              )
+            : api.model.createRegion(
+                model.objectId,
+                buildNewRegionPayload(draft, model.ownerBounds),
+              );
+        },
       );
       const revision = revisionFromScene(response);
       publishRegionAuthoringScene(resources, response, revision);

@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
+import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import { MODEL_PLANAR_MONITORS_PATH } from "@/kernel/api/apiPaths";
 import { usePlanarMonitorsResource } from "@/kernel/resources/planarMonitorResources";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
@@ -48,15 +49,21 @@ export function CrossSectionDraftEditor({
     setConflict(false);
     try {
       const domain = await kernel.api.data.domain.meta();
-      const request = planarMonitorCreateRequestFromDraft(
-        draft,
-        monitors.data?.scene_revision ?? 0,
-        {
-          max: domain.bounds.max as [number, number, number],
-          min: domain.bounds.min as [number, number, number],
+      const created = await runAuthoringMutationWithHistory(
+        kernel,
+        `Create planar monitor ${draft.name}`,
+        async ({ baseRevision }) => {
+          const request = planarMonitorCreateRequestFromDraft(
+            draft,
+            baseRevision ?? monitors.data?.scene_revision ?? 0,
+            {
+              max: domain.bounds.max as [number, number, number],
+              min: domain.bounds.min as [number, number, number],
+            },
+          );
+          return kernel.api.model.planarMonitors.create(request);
         },
       );
-      const created = await kernel.api.model.planarMonitors.create(request);
       const monitor = created.monitor;
       discardCrossSectionDraft();
       kernel.visualizationSync.queuePatch({
