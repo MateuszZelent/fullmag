@@ -9,6 +9,7 @@ import type {
   FrozenSpinsDefinition,
   FrozenSpinsSelectionExpression,
 } from "@/kernel/api/apiTypes";
+import { antennaPortStatus } from "@/modules/antenna/antennaPortValidation";
 
 import { buildPhysicsGraphObjectNode } from "./physicsGraphTree";
 import {
@@ -21,9 +22,6 @@ import {
 type AntennaTargetResource = NonNullable<
   SceneResource["antenna_target_projections"]
 >[number]["target"];
-type AntennaPortModeResource = NonNullable<
-  SceneResource["antenna_port_modes"]
->[number];
 
 function planarMonitorObjectCreationInput(
   resources: ModelTreeResources,
@@ -354,38 +352,6 @@ function antennaCompositionNodes(
       contextCommands: ["workspace.focus-selection"],
     })),
   ];
-}
-
-function antennaPortStatus(mode: AntennaPortModeResource): ExplorerNodeStatus {
-  if (mode.schema_version !== "antenna_port_mode.v2" || mode.branches.length < 2) {
-    return "warning";
-  }
-  const terminalRefs = mode.branches.flatMap((branch) => [
-    branch.inlet_terminal_ref,
-    branch.outlet_terminal_ref,
-  ]);
-  if (
-    terminalRefs.some((reference) => reference.trim().length === 0) ||
-    new Set(terminalRefs).size !== terminalRefs.length
-  ) {
-    return "warning";
-  }
-  let totalWeight = 0;
-  let positiveWeight = 0;
-  let hasNegativeWeight = false;
-  for (const branch of mode.branches) {
-    if (!Number.isFinite(branch.signed_weight) || branch.signed_weight === 0) {
-      return "warning";
-    }
-    totalWeight += branch.signed_weight;
-    if (branch.signed_weight > 0) positiveWeight += branch.signed_weight;
-    if (branch.signed_weight < 0) hasNegativeWeight = true;
-  }
-  return Math.abs(totalWeight) <= 1e-12 &&
-    Math.abs(positiveWeight - 1) <= 1e-12 &&
-    hasNegativeWeight
-    ? "ready"
-    : "warning";
 }
 
 function targetDescription(

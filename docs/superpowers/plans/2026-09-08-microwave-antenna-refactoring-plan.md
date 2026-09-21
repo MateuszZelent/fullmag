@@ -889,7 +889,10 @@ Explorer waliduje teraz także strukturalną gotowość portu: schema v2, minimu
 dwie gałęzie, unikalne pary terminali, niezerowe skończone wagi, suma dodatnia
 równa `1` i suma wszystkich wag równa `0`. Niepoprawny port otrzymuje
 `warning` oraz badge `invalid`, a poprawny port `ready`; test Explorera obejmuje
-oba przypadki. Jest to diagnostyka authoringu, nie wynik runtime solve.
+oba przypadki. Dedykowany port Inspector pokazuje tę samą walidację w wierszu
+`Validation`, a reguły są współdzielone przez Explorer i Inspector w
+`apps/control-room/src/modules/antenna/antennaPortValidation.ts`. Jest to
+diagnostyka authoringu, nie wynik runtime solve.
 
 **Uzupełnienie implementacyjne 2026-09-21 (harness browser):** dodano
 `apps/control-room/scripts/smoke-antenna-authoring-ui.mjs` oraz helper i test

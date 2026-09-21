@@ -69,6 +69,38 @@ afterEach(() => {
 });
 
 describe("AntennaCompositionPanel runtime results", () => {
+  it("shows concrete port validation diagnostics", async () => {
+    mocks.scene.data = {
+      antenna_port_modes: [{
+        id: "invalid-port",
+        schema_version: "antenna_port_mode.v2",
+        source_object_id: "antenna-1",
+        current_transport_id: "transport-1",
+        normalization_current_a: 1,
+        branches: [{
+          id: "signal",
+          inlet_terminal_ref: "signal_in",
+          outlet_terminal_ref: "signal_out",
+          signed_weight: 1,
+        }],
+      }],
+    } as unknown as SceneResource;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(
+          <AntennaCompositionPanel kind="port" selection={portSelection()} />,
+        ),
+      );
+      expect(container.textContent).toContain("Validationrequires at least two branches");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("renders the canonical geometry_kind for a conductor Inspector", async () => {
     mocks.scene.data = {
       objects: [
@@ -258,6 +290,25 @@ function conductorSelection(): Selection {
       visualizationTargetId: "object:antenna-1",
       antennaResourceId: "antenna-1",
       antennaResourceKind: "conductor",
+    },
+  } as Selection;
+}
+
+function portSelection(): Selection {
+  return {
+    kind: "object.antenna.port",
+    label: "Port invalid-port",
+    moduleSource: "explorer",
+    nodeId: "object:antenna-1:antenna:port:invalid-port",
+    objectId: "antenna-1",
+    ref: {
+      kind: "object.antenna.port",
+      nodeId: "object:antenna-1:antenna:port:invalid-port",
+      objectId: "antenna-1",
+      type: "scene-object",
+      visualizationTargetId: "object:antenna-1",
+      antennaResourceId: "invalid-port",
+      antennaResourceKind: "port",
     },
   } as Selection;
 }

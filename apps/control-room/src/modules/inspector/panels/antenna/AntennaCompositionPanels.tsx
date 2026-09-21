@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import type { SceneResource } from "@/kernel/api/apiTypes";
+import { antennaPortValidationMessages } from "@/modules/antenna/antennaPortValidation";
 import {
   useAntennaFieldSolutionResource,
   useAntennaStageOutputCatalogResource,
@@ -158,10 +159,12 @@ function portDetails(
   if (!mode) {
     return { title: "Antenna port", badge: "missing", rows: [{ label: "Status", value: "Port mode is not present in SceneResource." }] };
   }
+  const validationMessages = antennaPortValidationMessages(mode);
   return {
     title: `Antenna port ${mode.id}`,
-    badge: `${mode.branches.length} branches`,
+    badge: `${mode.branches.length} branches${validationMessages.length > 0 ? " · invalid" : ""}`,
     rows: [
+      { label: "Validation", value: validationMessages.join("; ") || "ready" },
       { label: "ID", value: mode.id, mono: true },
       { label: "Schema", value: mode.schema_version, mono: true },
       { label: "Source object", value: mode.source_object_id, mono: true },

@@ -97,6 +97,12 @@ stage nie jest używany do udawania gotowego pola, gdy brakuje właściwego
   badge pokazuje `invalid`, a node ma status `warning`. Test Explorera obejmuje
   zarówno poprawny port (`2 branches`), jak i niekompletny port (`1 branches ·
   invalid`).
+- Dedykowany port Inspector pokazuje tę samą walidację jako wiersz
+  `Validation`, zamiast ograniczać się do surowych terminali i wag. Regresja
+  DOM dla niekompletnej gałęzi pokazuje konkretnie `requires at least two
+  branches`; reguły są współdzielone przez Explorer i Inspector w helperze
+  `src/modules/antenna/antennaPortValidation.ts`, aby badge i diagnostyka nie
+  rozjechały się semantycznie.
 - nie uruchamiano kompilacji testów Rust, browser smoke ani dowodu
   kwalifikacji FEM/FDM GPU.
 
