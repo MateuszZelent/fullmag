@@ -764,6 +764,14 @@ skalowania rozwiązanej bazy przez prąd i oceny waveformu w czasie oraz test
 braku RF w relaksacji. Publiczny skrypt pipeline, projekcja na rzeczywiste
 komórki FDM, upload CUDA i osobne dowody GPU nadal nie są zamknięte.
 
+Uzupełnienie runtime 2026-09-21: naprawiono rozjazd zegara w ścieżce FDM
+CUDA dla rozwiązanego napędu regionalnego/antenowego. Natywny integrator ma
+zegar lokalny od zera, dlatego granica CUDA mapuje `stage_local` na
+`t_solver`, a `absolute` na `t_solver + stage_start_time_s`; snapshoty `H_ant`,
+live preview i rekonstrukcja energii używają tego samego mapowania. Zmiana nie
+kwalifikuje jeszcze GPU: nadal brakuje kontenerowego dowodu double parity,
+pełnej trajektorii LLG i testu rzeczywistego runtime.
+
 ## T17. Domknąć frequency response bez pozornego wsparcia eigenmodes
 
 **Pliki:** `crates/fullmag-runner/src/frequency_response.rs`, CLI attach/resolver, IR study/drive, planner frequency response i źródła wymuszenia.

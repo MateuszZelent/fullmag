@@ -4861,9 +4861,14 @@ bool context_upload_regional_field_drives(
 
         auto &resolved = params[drive_index];
         resolved.waveform = static_cast<int>(descriptor.waveform);
+        // The native FDM integrator clock starts at zero for every stage.
+        // Convert that stage-local clock to the canonical waveform coordinate:
+        // stage_local -> t_solver, absolute -> t_solver + stage_start.  The
+        // kernel evaluates `t_solver - time_offset_s`, hence the negative
+        // offset for an absolute drive.
         resolved.time_offset_s =
             descriptor.time_origin == FULLMAG_FDM_REGIONAL_FIELD_DRIVE_STAGE_LOCAL
-                ? descriptor.stage_start_time_s : 0.0;
+                ? 0.0 : -descriptor.stage_start_time_s;
         resolved.frequency_hz = descriptor.frequency_hz;
         resolved.phase_rad = descriptor.phase_rad;
         resolved.offset = descriptor.offset;

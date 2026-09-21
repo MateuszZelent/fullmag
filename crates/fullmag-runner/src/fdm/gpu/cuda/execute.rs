@@ -110,12 +110,12 @@ fn apply_regional_drive_energy(
         if !resolved.drive.enabled {
             continue;
         }
-        let time_offset_s = match resolved.drive.time_origin {
-            fullmag_ir::FieldTimeOriginIR::StageLocal => plan.time_stage.start_time_s,
-            fullmag_ir::FieldTimeOriginIR::Absolute => 0.0,
-        };
-        let multiplier =
-            evaluate_time_dependence(&resolved.drive.waveform, stats.time - time_offset_s);
+        let waveform_time_s = super::canonical_fdm_waveform_time(
+            plan,
+            resolved.drive.time_origin,
+            stats.time,
+        );
+        let multiplier = evaluate_time_dependence(&resolved.drive.waveform, waveform_time_s);
         for (index, (m, field)) in magnetization.iter().zip(&resolved.field_xyz).enumerate() {
             if plan.active_mask.as_ref().is_some_and(|mask| !mask[index]) {
                 continue;
@@ -132,12 +132,12 @@ fn apply_regional_drive_energy(
         ) {
             continue;
         }
-        let time_offset_s = match resolved.drive.time_origin {
-            fullmag_ir::FieldTimeOriginIR::StageLocal => plan.time_stage.start_time_s,
-            fullmag_ir::FieldTimeOriginIR::Absolute => 0.0,
-        };
-        let multiplier =
-            evaluate_time_dependence(&resolved.drive.waveform, stats.time - time_offset_s);
+        let waveform_time_s = super::canonical_fdm_waveform_time(
+            plan,
+            resolved.drive.time_origin,
+            stats.time,
+        );
+        let multiplier = evaluate_time_dependence(&resolved.drive.waveform, waveform_time_s);
         for (index, (m, field)) in magnetization
             .iter()
             .zip(&resolved.field_xyz_apm_per_a)
@@ -1018,6 +1018,7 @@ mod adaptive_batch_tests {
     use super::{
         adaptive_batch_target, execute_cuda_fdm, resolve_observation_policy, OutputSchedule,
     };
+    use crate::fdm::gpu::cuda::{canonical_fdm_time, canonical_fdm_waveform_time};
     use crate::fdm::gpu::cuda::native::NativeStatsMode;
     use fullmag_ir::{
         AdaptiveTimeStepIR, AdaptiveToleranceModeIR, BackendTarget, ExchangeBoundaryCondition,
@@ -1060,6 +1061,30 @@ mod adaptive_batch_tests {
 
         assert_eq!(target, 1.0e-11);
         assert_eq!(max_steps, 64);
+    }
+
+    #[test]
+    fn native_cuda_stage_clock_maps_to_the_canonical_waveform_clock() {
+        let mut plan = FdmPlanIR::default();
+        plan.time_stage.start_time_s = 10.0;
+
+        assert_eq!(canonical_fdm_time(&plan, 0.25), 10.25);
+        assert_eq!(
+            canonical_fdm_waveform_time(
+                &plan,
+                fullmag_ir::FieldTimeOriginIR::StageLocal,
+                0.25,
+            ),
+            0.25
+        );
+        assert_eq!(
+            canonical_fdm_waveform_time(
+                &plan,
+                fullmag_ir::FieldTimeOriginIR::Absolute,
+                0.25,
+            ),
+            10.25
+        );
     }
 
     #[test]

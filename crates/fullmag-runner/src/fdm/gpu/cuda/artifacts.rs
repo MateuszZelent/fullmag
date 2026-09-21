@@ -18,9 +18,11 @@ pub(super) fn copy_resolved_antenna_field(
     plan: &FdmPlanIR,
     name: &str,
     cell_count: usize,
-    time_seconds: f64,
+    solver_time_seconds: f64,
 ) -> Result<Vec<[f64; 3]>, RunError> {
-    let mut values = resolved_antenna_zeeman_field_for_count(plan, cell_count, time_seconds);
+    let physical_time_seconds = super::canonical_fdm_time(plan, solver_time_seconds);
+    let mut values =
+        resolved_antenna_zeeman_field_for_count(plan, cell_count, physical_time_seconds);
     if values.len() != cell_count {
         return Err(RunError {
             message: format!(
@@ -364,5 +366,30 @@ mod tests {
 
         let values = copy_resolved_antenna_field(&plan, "H_ant.y", 2, 0.25).unwrap();
         assert_eq!(values, vec![[3.0, 0.0, 0.0]; 2]);
+    }
+
+    #[test]
+    fn resolved_cuda_antenna_snapshot_uses_physical_time_after_stage_restart() {
+        let mut plan = FdmPlanIR::default();
+        plan.time_stage.start_time_s = 10.0;
+        plan.antenna_zeeman_masks = vec![ResolvedAntennaZeemanMaskIR {
+            source: "antenna_1".into(),
+            object: "free".into(),
+            amplitude_b_t: 1.0e-3,
+            direction: [0.0, 1.0, 0.0],
+            spatial_profile: None,
+            waveform: Some(TimeDependenceIR::Sinusoidal {
+                frequency_hz: 1.0,
+                phase_rad: 0.0,
+                offset: 0.0,
+            }),
+            field_xyz: vec![[2.0, 3.0, 4.0]],
+        }];
+
+        let values = copy_resolved_antenna_field(&plan, "H_ant", 1, 0.25).unwrap();
+        assert_eq!(values, vec![[2.0, 3.0, 4.0]]);
+
+        let values = copy_resolved_antenna_field(&plan, "H_ant", 1, 0.75).unwrap();
+        assert_eq!(values, vec![[-2.0, -3.0, -4.0]]);
     }
 }
