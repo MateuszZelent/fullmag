@@ -236,7 +236,7 @@
     },
     {
       "id": "source-shared-assembly",
-      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp",
       "symbol": "assemble_poisson_airbox_shared_domain",
       "responsibility": "Assemble the native MFEM scalar, mixed, mass, gauge and magnetic blocks."
     },

@@ -478,3 +478,115 @@ The minimal validation set for this contract is:
   "missing `magnetostatic_bc=floquet_airbox`" from "`floquet_airbox` requested
   but the source-visible demag-k lane is not yet qualified",
 - V2 artifacts containing `path_s`, `k`, `branch_id`, and residual diagnostics.
+
+## Contract index for this page
+
+(problem-statement)=
+Frequency-domain authoring has two products: `modal_eigen` returns eigenmodes
+of the linearized LLG pencil, while `driven_response` solves a forced harmonic
+system at the requested frequencies. A response at one frequency is therefore
+not evidence that a modal dispersion path was solved.
+
+(governing-equations)=
+```{math}
+:label: eq-0700-modal-pencil
+L q = \lambda B_\alpha q, \qquad \lambda=\mathrm{i}\omega.
+```
+
+```{math}
+:label: eq-0700-forced-pencil
+(\mathrm{i}\omega B_\alpha-L)q=b.
+```
+
+```{math}
+:label: eq-0700-floquet-phase
+\delta_m^{\mathrm{dst}}=\delta_m^{\mathrm{src}}
+\exp(-\mathrm{i}\,k\cdot\Delta\mathbf r).
+```
+
+(symbols-and-si-units)=
+| Token | Meaning | SI unit |
+|---|---|---|
+| $q$ | tangent-plane unknown | $1$ |
+| $\omega$ | angular frequency | $\mathrm{rad\,s^{-1}}$ |
+| $B_\alpha$ | gyrotropic/mass operator | $\mathrm{m^3}$ |
+| $L$ | linearized restoring operator | $\mathrm{m^3\,s^{-1}}$ |
+| $b$ | projected RF drive | $\mathrm{m^3\,s^{-1}}$ |
+| $k$ | Bloch wave vector | $\mathrm{rad\,m^{-1}}$ |
+| $\lambda$ | modal eigenvalue | $\mathrm{s^{-1}}$ |
+| $\Delta\mathbf r$ | pair translation | $\mathrm{m}$ |
+
+(assumptions-and-validity)=
+The linearization assumes a supplied or accepted equilibrium with normalized
+magnetization and tangent perturbations. Floquet phases use the declared pair
+translation and the `exp(-i k dot translation)` convention. A finite airbox,
+an unqualified dynamic-demag provider, or an unsupported damping policy cannot
+be treated as an open-space or zero-wave-vector substitute.
+
+(python-api)=
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `study.stages.add_frequency_response.frequencies_hz` | `Sequence[float]` | `required` | $\mathrm{Hz}$ | finite non-empty positive sequence | driven-frequency samples | FEM CPU/GPU authoring; runtime gated | `studies[].frequency_response.frequencies_hz` |
+
+```python
+# %%
+import fullmag as fm
+
+study = fm.study("frequency_response_contract")
+study.engine("fem")
+study.stages.add_frequency_response(
+    frequencies_hz=[2.0e9],
+    include_demag=True,
+)
+```
+
+(problem-ir)=
+The stage lowers to a frequency-response entry in `StudyIR`, preserving the
+requested frequency list, drive, wave vector, boundary model, demagnetization
+choice, and requested execution lane. The planner resolves a FEM CPU or FEM
+GPU route without changing the authored product to `modal_eigen`.
+
+(round-trip-and-failure-semantics)=
+Round-trip serialization preserves requested intent and resolved execution.
+Validation errors reject non-finite or empty frequency lists, incompatible
+phase metadata, missing equilibria, and unsupported combinations. An
+unavailable lane returns an explicit capability error; it does not silently
+fall back to a K0 solve, an analytic curve, or another device.
+
+(discrete-realization)=
+The FEM tangent operator applies the gyrotropic mass and restoring operators in
+the declared phase convention. FEM CPU can use the native matrix-free
+frequency-response path for qualified K0 cases; FEM GPU has a narrower,
+explicitly gated response slice. FDM time-domain periodicity is a separate
+realization and is not a frequency-domain FEM result.
+
+(implementation-mapping)=
+Source identities for public authoring, native operator application, and the
+runner dispatch are listed below. The source map records the same identities
+so documentation validation cannot drift from the implementation.
+
+(validation)=
+Source checks cover phase serialization, operator units, and forced-versus-
+modal product separation. Runtime acceptance additionally requires non-empty
+response rows, residuals, phase certificates, demag sign checks, and mesh and
+airbox convergence for any nonzero-k claim. These checks are distinct from an
+analytic comparison curve.
+
+(limitations)=
+Nonzero-k dynamic demagnetization is source-visible on the FEM CPU
+`floquet_airbox` boundary but has no managed qualification in this snapshot.
+The GPU response slice rejects dynamic demag, full periodic exchange, and DMI
+outside its explicit capability subset. No frequency-domain result is promoted
+to release evidence without a completed runtime receipt and physics gate.
+
+(scientific-bibliography)=
+Kalinikos and Slavin, *Theory of dipole-exchange spin wave spectrum for
+ferromagnetic films*, J. Phys. C 19 (1986), DOI:10.1088/0022-3719/19/35/7013.
+
+(source-code-index)=
+| Path | Symbol | Responsibility |
+|---|---|---|
+| `packages/fullmag-py/src/fullmag/model/study.py` | `class FrequencyResponse` | Validate public driven-response parameters. |
+| `packages/fullmag-py/src/fullmag/world.py` | `frequency_response_stage` | Lower stage-first authoring to the frequency-response IR. |
+| `backends/fem/include/frequency_domain/linearized_dynamic_pencil.hpp` | `apply_Aomega` | Apply the phase-aware forced dynamic pencil. |
+| `crates/fullmag-runner/src/frequency_response.rs` | `try_execute_fem_frequency_response_native_production_cpu` | Dispatch the native FEM CPU response lane. |

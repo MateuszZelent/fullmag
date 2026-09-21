@@ -567,3 +567,102 @@ The MVP is considered correct when:
   with the final segment returning to the first point, and both publish
   `sum(samples_per_segment)+1` samples,
 - validation rejects mixing time outputs with eigen outputs.
+
+## Contract index for this page
+
+(problem-statement)=
+The page defines the FEM modal product and its separation from the analytic
+dispersion oracle. A requested nonzero wave vector is solved by the selected
+FEM lane; the analytic frequency is a postsolve comparison value.
+
+(governing-equations)=
+```{math}
+:label: eq-0600-modal-pencil
+L q = \lambda B_\alpha q, \qquad \lambda = \mathrm{i}\omega,
+\qquad f = \operatorname{Re}(\omega)/(2\pi).
+```
+
+```{math}
+:label: eq-0600-p00-reference
+P_{00}(x)=1+\frac{\exp(-x)-1}{x}, \qquad x=|k|t,
+\qquad P_{00}(0)=0.
+```
+
+(symbols-and-si-units)=
+| Token | Meaning | SI unit |
+|---|---|---|
+| $q$ | tangent-plane modal coefficients | $1$ |
+| $\lambda$ | generalized eigenvalue | $\mathrm{s^{-1}}$ |
+| $B_\alpha$ | gyrotropic/mass operator | $\mathrm{m^3}$ |
+| $\omega$ | angular frequency | $\mathrm{rad\,s^{-1}}$ |
+| $f$ | cyclic frequency | $\mathrm{Hz}$ |
+| $P_{00}$ | thin-film demagnetizing factor | $1$ |
+| $k$ | in-plane wave vector magnitude | $\mathrm{rad\,m^{-1}}$ |
+| $t$ | film thickness | $\mathrm{m}$ |
+
+(assumptions-and-validity)=
+The Kittel/KS comparison assumes a uniform in-plane equilibrium, a matching
+film geometry, and the declared finite or open magnetostatic boundary. It does
+not qualify higher modes, textured equilibria, or an unverified airbox. The
+small-$x$ series is a numerical reference only; it never substitutes for the
+FEM solve.
+
+(python-api)=
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `study.stages.add_eigenmodes.count` | `int` | `required` | $1$ | positive integer | maximum accepted modal count | FEM CPU/GPU authoring; runtime-qualified per lane | `studies[].eigenmodes.count` |
+
+```python
+# %%
+import fullmag as fm
+
+study = fm.study("fem_eigenmodes_contract")
+study.engine("fem")
+study.stages.add_eigenmodes(count=4, include_demag=True)
+```
+
+(problem-ir)=
+The Python request lowers to `StudyIR::Eigenmodes`, then to
+`BackendPlanIR::FemEigen`. Requested mode count, frequency window, k sampling,
+boundary model, and execution lane remain explicit in the IR and provenance.
+
+(round-trip-and-failure-semantics)=
+Round-trip serialization preserves requested intent and resolved execution.
+Validation errors reject non-finite ranges, incomplete equilibrium handoff,
+unsupported combinations, and synthetic K0 reference requests mixed with
+`dispersion_validation`. An unavailable lane returns a capability error and
+does not silently fall back to an analytic or CPU implementation.
+
+(discrete-realization)=
+FEM CPU uses the tangent-space operator and the native sparse modal adapter;
+FEM GPU is a separate lane. FDM lanes are outside this page's realization.
+Residuals, accepted mode count, mesh identity, phase metadata, and analytic
+comparison fields are published per sample.
+
+(implementation-mapping)=
+The stable implementation identities are listed in the source index below.
+They cover public authoring, planning, numerical execution, and the shared
+small-argument analytic reference.
+
+(validation)=
+Source contracts check P00 continuity and the FEM/analytic product split.
+Runtime acceptance additionally requires finite non-empty modal rows, residual
+and phase certificates, Kittel/KS checks, and mesh, airbox, and mode-count
+convergence. Those runtime gates remain separate from source tests.
+
+(limitations)=
+The current checkout has no new managed receipt for the full C0/C1/A1 campaign.
+The 61-sample path, eight physical branches, browser proof, and release
+qualification therefore remain `NOT VERIFIED`.
+
+(scientific-bibliography)=
+Kalinikos and Slavin, *Theory of dipole-exchange spin wave spectrum for
+ferromagnetic films*, J. Phys. C 19 (1986), DOI:10.1088/0022-3719/19/35/7013.
+
+(source-code-index)=
+| Path | Symbol | Responsibility |
+|---|---|---|
+| `packages/fullmag-py/src/fullmag/model/study.py` | `class Eigenmodes` | Validate public modal parameters. |
+| `crates/fullmag-plan/src/fem.rs` | `plan_fem_eigen` | Lower the FEM eigen study and enforce capability policy. |
+| `crates/fullmag-runner/src/fem/eigen_path.rs` | `execute_fem_eigen_path` | Execute k samples and publish postsolve comparisons. |
+| `scripts/verify_fem_frequency_domain_eigen_artifacts.py` | `p00_demag_factor` | Stable analytic P00 reference. |
