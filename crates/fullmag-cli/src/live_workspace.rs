@@ -1973,7 +1973,7 @@ mod tests {
         merge_pending_publish_payload, merge_preview_field_payloads,
         publish_idle_liveness_heartbeat, publish_pending_scalar_rows,
         replace_cached_preview_fields, reset_fem_mesh_payload_clone_count,
-        scalar_candidate_from_workspace_state, table_autosave_sample_due,
+        scalar_candidate_from_workspace_state, scalar_row_from_stats, table_autosave_sample_due,
         upsert_cached_preview_field, CurrentLivePublisher, CurrentLiveScalarRow,
         CurrentLiveSnapshotPayload, LivePublishSink, LiveTelemetryPublishGate, LocalLiveWorkspace,
         LocalLiveWorkspaceState, PendingScalarRows, ScalarSequenceKey,
@@ -2019,6 +2019,18 @@ mod tests {
         assert!(heartbeat.latest_fields.is_none());
         assert!(heartbeat.preview_fields.is_none());
         assert!(heartbeat.fem_mesh.is_none());
+    }
+
+    #[test]
+    fn scalar_row_transport_preserves_rotated_dmi_energy() {
+        let mut stats = fullmag_runner::StepStats::default();
+        stats.e_dmi = -2.0e-19;
+        stats.e_rotated_dmi = 1.5e-19;
+
+        let row = scalar_row_from_stats(&stats);
+
+        assert_eq!(row.e_dmi, -2.0e-19);
+        assert_eq!(row.e_rotated_dmi, 1.5e-19);
     }
 
     #[test]
@@ -2257,6 +2269,47 @@ mod tests {
         assert_eq!(pending[0].source_step, 27);
         assert_eq!(pending[0].source_time_seconds, Some(3.5e-12));
         assert!(update.preview_field.is_none());
+    }
+
+    #[test]
+    fn asynchronous_initial_snapshot_keeps_its_capture_coordinates() {
+        let mut state = workspace_with_domain_mesh().snapshot();
+        let mut field = preview_field("H_demag", 1, 2.0);
+        field.source_step = 0;
+        field.source_time_seconds = Some(0.0);
+        field.source_revision = 17;
+        let mut update = preview_update(field);
+        update.stats.step = 27;
+        update.stats.time = 3.5e-12;
+
+        ingest_preview_fields_from_update(&mut state, &mut update);
+
+        let pending = state.pending_preview_fields.to_vec();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].source_step, 0);
+        assert_eq!(pending[0].source_time_seconds, Some(0.0));
+        assert_eq!(pending[0].source_revision, 17);
+    }
+
+    #[test]
+    fn asynchronous_capture_coordinates_follow_stage_offsets_not_delivery_step() {
+        let mut field = preview_field("H_demag", 1, 2.0);
+        field.source_step = 0;
+        field.source_time_seconds = Some(0.0);
+        field.source_revision = 17;
+        let mut update = preview_update(field);
+        update.stats.step = 27;
+        update.stats.time = 3.5e-12;
+        let mut update = crate::step_utils::offset_step_update(update, 100, 1e-9, false);
+        let mut state = workspace_with_domain_mesh().snapshot();
+
+        ingest_preview_fields_from_update(&mut state, &mut update);
+
+        let pending = state.pending_preview_fields.to_vec();
+        assert_eq!(update.stats.step, 127);
+        assert_eq!(pending[0].source_step, 100);
+        assert_eq!(pending[0].source_time_seconds, Some(1e-9));
+        assert_eq!(pending[0].source_revision, 17);
     }
 
     #[test]
@@ -2606,6 +2659,7 @@ mod tests {
                     final_e_ext: None,
                     final_e_ani: None,
                     final_e_dmi: None,
+                    final_e_rotated_dmi: None,
                     final_e_total: None,
                     artifact_dir: String::new(),
                 },
@@ -4649,6 +4703,7 @@ mod tests {
             e_ext: 0.0,
             e_ani: 0.0,
             e_dmi: 0.0,
+            e_rotated_dmi: 0.0,
             e_total: step as f64,
             max_dm_dt: 0.0,
             max_h_eff: 0.0,
@@ -4974,6 +5029,7 @@ mod tests {
             final_e_ext: None,
             final_e_ani: None,
             final_e_dmi: None,
+            final_e_rotated_dmi: None,
             final_e_total: None,
             artifact_dir: String::new(),
         });
@@ -5422,8 +5478,12 @@ fn owner_session_lost(session_id: &str, enabled: bool) -> bool {
     else {
         return false;
     };
+    // A publisher can legitimately reach the API before its first snapshot
+    // has been accepted.  Treat the empty current workspace as a bootstrap
+    // state so the worker can publish that snapshot; only an explicitly
+    // different session means that another owner replaced us.
     if response.status() == reqwest::StatusCode::NOT_FOUND {
-        return true;
+        return false;
     }
     let Some(current_session_id) = response
         .error_for_status()
@@ -5555,6 +5615,7 @@ pub(crate) fn bootstrap_live_state(status: &str) -> LiveStateManifest {
             e_ext: 0.0,
             e_ani: 0.0,
             e_dmi: 0.0,
+            e_rotated_dmi: 0.0,
             e_total: 0.0,
             max_dm_dt: 0.0,
             max_h_eff: 0.0,
@@ -5615,6 +5676,7 @@ fn scalar_row_from_stats_with_active_runtime(
         e_ext: stats.e_ext,
         e_ani: stats.e_ani,
         e_dmi: stats.e_dmi,
+        e_rotated_dmi: stats.e_rotated_dmi,
         e_total: stats.e_total,
         max_dm_dt: stats.max_dm_dt,
         max_h_eff: stats.max_h_eff,
@@ -5779,7 +5841,9 @@ fn align_preview_field_source_coordinates(
     source_step: u64,
     source_time_seconds: Option<f64>,
 ) {
-    if field.source_step == 0 && source_step > 0 {
+    // A captured initial state legitimately has step zero. Only legacy payloads
+    // without an explicit capture time inherit the receiving solver's step.
+    if field.source_step == 0 && field.source_time_seconds.is_none() && source_step > 0 {
         field.source_step = source_step;
     }
     if field.source_time_seconds.is_none() {
@@ -6438,6 +6502,7 @@ pub(crate) fn merge_detailed_mesh_workspace(
         .expect("planned mesh workspace should be an object");
     for key in [
         "active_build",
+        "command_outcomes",
         "effective_airbox_target",
         "effective_per_object_targets",
         "last_build_summary",

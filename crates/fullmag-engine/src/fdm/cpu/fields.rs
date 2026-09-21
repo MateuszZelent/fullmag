@@ -283,6 +283,7 @@ impl ExchangeLlgProblem {
         let mel_field = self.magnetoelastic_field(magnetization);
         let ani_field = self.anisotropy_field(magnetization);
         let idmi_field = self.interfacial_dmi_field(magnetization);
+        let rdmi_field = self.rotated_interfacial_dmi_field(magnetization);
         let bdmi_field = self.bulk_dmi_field(magnetization);
         let dmi_field = idmi_field
             .iter()
@@ -292,7 +293,7 @@ impl ExchangeLlgProblem {
         let mut effective_field =
             combine_fields_4(&exchange_field, &demag_field, &external_field, &mel_field);
         for (i, h) in effective_field.iter_mut().enumerate() {
-            *h = add(add(*h, ani_field[i]), dmi_field[i]);
+            *h = add(add(add(*h, ani_field[i]), dmi_field[i]), rdmi_field[i]);
         }
         let mut cylinder_oersted_field = zero_vectors(self.grid.cell_count());
         self.oersted_field_add_into_at_time(&mut cylinder_oersted_field, time_seconds);
@@ -748,23 +749,61 @@ impl ExchangeLlgProblem {
         self.dmi_energy_with(|flat| magnetization[flat])
     }
 
+    pub fn rotated_interfacial_dmi_energy_from_vectors(&self, magnetization: &[Vector3]) -> f64 {
+        let Some(rotated) = self
+            .terms
+            .rotated_interfacial_dmi
+            .filter(|coefficient| coefficient.abs() > 0.0)
+        else {
+            return 0.0;
+        };
+        self.dmi_energy_with_coefficients(|flat| magnetization[flat], 0.0, rotated, 0.0)
+    }
+
     pub fn dmi_energy_density_from_vectors(&self, magnetization: &[Vector3]) -> Vec<f64> {
-        let interfacial_dmi = match self.terms.interfacial_dmi {
-            Some(d) if d.abs() > 0.0 => Some(d),
-            _ => None,
+        self.dmi_energy_density_with_coefficients(
+            magnetization,
+            self.terms.interfacial_dmi.unwrap_or(0.0),
+            self.terms.rotated_interfacial_dmi.unwrap_or(0.0),
+            self.terms.bulk_dmi.unwrap_or(0.0),
+        )
+    }
+
+    pub fn rotated_interfacial_dmi_energy_density_from_vectors(
+        &self,
+        magnetization: &[Vector3],
+    ) -> Vec<f64> {
+        let Some(rotated) = self
+            .terms
+            .rotated_interfacial_dmi
+            .filter(|coefficient| coefficient.abs() > 0.0)
+        else {
+            return vec![0.0; self.grid.cell_count()];
         };
-        let bulk_dmi = match self.terms.bulk_dmi {
-            Some(d) if d.abs() > 0.0 => Some(d),
-            _ => None,
-        };
-        if interfacial_dmi.is_none() && bulk_dmi.is_none() {
+        self.dmi_energy_density_with_coefficients(magnetization, 0.0, rotated, 0.0)
+    }
+
+    fn dmi_energy_density_with_coefficients(
+        &self,
+        magnetization: &[Vector3],
+        interfacial: f64,
+        rotated: f64,
+        bulk: f64,
+    ) -> Vec<f64> {
+        if interfacial == 0.0 && rotated == 0.0 && bulk == 0.0 {
             return vec![0.0; self.grid.cell_count()];
         }
 
         let cell_volume = self.cell_size.volume();
         let compute = |flat: usize| {
             if self.is_active(flat) {
-                self.dmi_cell_face_energy(&|index| magnetization[index], flat) / cell_volume
+                self.dmi_cell_face_energy_with_coefficients(
+                    &|index| magnetization[index],
+                    flat,
+                    interfacial,
+                    rotated,
+                    bulk,
+                ) / cell_volume
             } else {
                 0.0
             }
@@ -792,7 +831,11 @@ impl ExchangeLlgProblem {
             Some(d) if d.abs() > 0.0 => Some(d),
             _ => None,
         };
-        if interfacial_dmi.is_none() && bulk_dmi.is_none() {
+        let rotated_interfacial_dmi = match self.terms.rotated_interfacial_dmi {
+            Some(d) if d.abs() > 0.0 => Some(d),
+            _ => None,
+        };
+        if interfacial_dmi.is_none() && rotated_interfacial_dmi.is_none() && bulk_dmi.is_none() {
             return 0.0;
         }
 
@@ -809,24 +852,65 @@ impl ExchangeLlgProblem {
     where
         F: Fn(usize) -> Vector3 + Sync,
     {
+        self.dmi_energy_with_coefficients(
+            value,
+            self.terms.interfacial_dmi.unwrap_or(0.0),
+            self.terms.rotated_interfacial_dmi.unwrap_or(0.0),
+            self.terms.bulk_dmi.unwrap_or(0.0),
+        )
+    }
+
+    fn dmi_energy_with_coefficients<F>(
+        &self,
+        value: F,
+        interfacial: f64,
+        rotated: f64,
+        bulk: f64,
+    ) -> f64
+    where
+        F: Fn(usize) -> Vector3 + Sync,
+    {
         #[cfg(feature = "parallel")]
         {
             (0..self.grid.cell_count())
                 .into_par_iter()
                 .filter(|&flat| self.is_active(flat))
-                .map(|flat| self.dmi_cell_face_energy(&value, flat))
+                .map(|flat| {
+                    self.dmi_cell_face_energy_with_coefficients(
+                        &value,
+                        flat,
+                        interfacial,
+                        rotated,
+                        bulk,
+                    )
+                })
                 .sum()
         }
         #[cfg(not(feature = "parallel"))]
         {
             (0..self.grid.cell_count())
                 .filter(|&flat| self.is_active(flat))
-                .map(|flat| self.dmi_cell_face_energy(&value, flat))
+                .map(|flat| {
+                    self.dmi_cell_face_energy_with_coefficients(
+                        &value,
+                        flat,
+                        interfacial,
+                        rotated,
+                        bulk,
+                    )
+                })
                 .sum()
         }
     }
 
-    fn dmi_cell_face_energy<F>(&self, value: &F, flat: usize) -> f64
+    fn dmi_cell_face_energy_with_coefficients<F>(
+        &self,
+        value: &F,
+        flat: usize,
+        interfacial: f64,
+        rotated: f64,
+        bulk: f64,
+    ) -> f64
     where
         F: Fn(usize) -> Vector3,
     {
@@ -846,7 +930,16 @@ impl ExchangeLlgProblem {
                 .grid
                 .index(neighbor_index(x, self.grid.nx, 1, px), y, z);
             if self.is_active(neighbor) {
-                energy += 0.5 * self.dmi_face_energy(value(flat), value(neighbor), 0, sx);
+                energy += 0.5
+                    * Self::dmi_face_energy_with_coefficients(
+                        value(flat),
+                        value(neighbor),
+                        0,
+                        sx,
+                        interfacial,
+                        rotated,
+                        bulk,
+                    );
             }
         }
         if px || x > 0 {
@@ -854,7 +947,16 @@ impl ExchangeLlgProblem {
                 .grid
                 .index(neighbor_index(x, self.grid.nx, -1, px), y, z);
             if self.is_active(neighbor) {
-                energy += 0.5 * self.dmi_face_energy(value(neighbor), value(flat), 0, sx);
+                energy += 0.5
+                    * Self::dmi_face_energy_with_coefficients(
+                        value(neighbor),
+                        value(flat),
+                        0,
+                        sx,
+                        interfacial,
+                        rotated,
+                        bulk,
+                    );
             }
         }
         if py || y + 1 < self.grid.ny {
@@ -862,7 +964,16 @@ impl ExchangeLlgProblem {
                 .grid
                 .index(x, neighbor_index(y, self.grid.ny, 1, py), z);
             if self.is_active(neighbor) {
-                energy += 0.5 * self.dmi_face_energy(value(flat), value(neighbor), 1, sy);
+                energy += 0.5
+                    * Self::dmi_face_energy_with_coefficients(
+                        value(flat),
+                        value(neighbor),
+                        1,
+                        sy,
+                        interfacial,
+                        rotated,
+                        bulk,
+                    );
             }
         }
         if py || y > 0 {
@@ -870,7 +981,16 @@ impl ExchangeLlgProblem {
                 .grid
                 .index(x, neighbor_index(y, self.grid.ny, -1, py), z);
             if self.is_active(neighbor) {
-                energy += 0.5 * self.dmi_face_energy(value(neighbor), value(flat), 1, sy);
+                energy += 0.5
+                    * Self::dmi_face_energy_with_coefficients(
+                        value(neighbor),
+                        value(flat),
+                        1,
+                        sy,
+                        interfacial,
+                        rotated,
+                        bulk,
+                    );
             }
         }
         if pz || z + 1 < self.grid.nz {
@@ -878,7 +998,16 @@ impl ExchangeLlgProblem {
                 .grid
                 .index(x, y, neighbor_index(z, self.grid.nz, 1, pz));
             if self.is_active(neighbor) {
-                energy += 0.5 * self.dmi_face_energy(value(flat), value(neighbor), 2, sz);
+                energy += 0.5
+                    * Self::dmi_face_energy_with_coefficients(
+                        value(flat),
+                        value(neighbor),
+                        2,
+                        sz,
+                        interfacial,
+                        rotated,
+                        bulk,
+                    );
             }
         }
         if pz || z > 0 {
@@ -886,15 +1015,30 @@ impl ExchangeLlgProblem {
                 .grid
                 .index(x, y, neighbor_index(z, self.grid.nz, -1, pz));
             if self.is_active(neighbor) {
-                energy += 0.5 * self.dmi_face_energy(value(neighbor), value(flat), 2, sz);
+                energy += 0.5
+                    * Self::dmi_face_energy_with_coefficients(
+                        value(neighbor),
+                        value(flat),
+                        2,
+                        sz,
+                        interfacial,
+                        rotated,
+                        bulk,
+                    );
             }
         }
         energy
     }
 
-    fn dmi_face_energy(&self, left: Vector3, right: Vector3, axis: usize, surface: f64) -> f64 {
-        let interfacial = self.terms.interfacial_dmi.unwrap_or(0.0);
-        let bulk = self.terms.bulk_dmi.unwrap_or(0.0);
+    fn dmi_face_energy_with_coefficients(
+        left: Vector3,
+        right: Vector3,
+        axis: usize,
+        surface: f64,
+        interfacial: f64,
+        rotated: f64,
+        bulk: f64,
+    ) -> f64 {
         let average = [
             0.5 * (left[0] + right[0]),
             0.5 * (left[1] + right[1]),
@@ -904,10 +1048,12 @@ impl ExchangeLlgProblem {
         let density_integral = match axis {
             0 => {
                 interfacial * (average[2] * jump[0] - average[0] * jump[2])
+                    + rotated * (average[2] * jump[0] - average[0] * jump[2])
                     + bulk * (average[2] * jump[1] - average[1] * jump[2])
             }
             1 => {
                 interfacial * (average[2] * jump[1] - average[1] * jump[2])
+                    + rotated * (average[0] * jump[1] - average[1] * jump[0])
                     + bulk * (average[0] * jump[2] - average[2] * jump[0])
             }
             2 => bulk * (average[1] * jump[0] - average[0] * jump[1]),
@@ -977,6 +1123,36 @@ impl ExchangeLlgProblem {
         if ym {
             correction[1] += qy * magnetization[2];
             correction[2] -= qy * magnetization[1];
+        }
+        correction
+    }
+
+    fn rotated_interfacial_dmi_boundary_correction(
+        &self,
+        flat: usize,
+        magnetization: Vector3,
+        d: f64,
+        ms: f64,
+    ) -> Vector3 {
+        let [xp, xm, yp, ym, _, _] = self.dmi_boundary_faces(flat);
+        let qx = d / (MU0 * ms.max(1e-30) * self.cell_size.dx);
+        let qy = d / (MU0 * ms.max(1e-30) * self.cell_size.dy);
+        let mut correction = [0.0, 0.0, 0.0];
+        if xp {
+            correction[0] -= qx * magnetization[2];
+            correction[2] += qx * magnetization[0];
+        }
+        if xm {
+            correction[0] += qx * magnetization[2];
+            correction[2] -= qx * magnetization[0];
+        }
+        if yp {
+            correction[0] += qy * magnetization[1];
+            correction[1] -= qy * magnetization[0];
+        }
+        if ym {
+            correction[0] -= qy * magnetization[1];
+            correction[1] += qy * magnetization[0];
         }
         correction
     }
@@ -1068,6 +1244,58 @@ impl ExchangeLlgProblem {
                     pf * dx_mz + boundary[0],
                     pf * dy_mz + boundary[1],
                     -pf * (dx_mx + dy_my) + boundary[2],
+                ]
+            })
+            .collect()
+    }
+
+    pub fn rotated_interfacial_dmi_field(&self, magnetization: &[Vector3]) -> Vec<Vector3> {
+        let d = match self.terms.rotated_interfacial_dmi {
+            Some(d) if d.abs() > 0.0 => d,
+            _ => return zero_vectors(self.grid.cell_count()),
+        };
+        let nx = self.grid.nx;
+        let ny = self.grid.ny;
+        let dx = self.cell_size.dx;
+        let dy = self.cell_size.dy;
+        let px = matches!(self.boundary_policy.x, AxisBoundary::Periodic);
+        let py = matches!(self.boundary_policy.y, AxisBoundary::Periodic);
+
+        (0..self.grid.cell_count())
+            .map(|flat| {
+                if !self.is_active(flat) {
+                    return [0.0, 0.0, 0.0];
+                }
+                let ms = self.ms_at(flat).max(1e-30);
+                let pf = 2.0 * d / (MU0 * ms);
+                let x = flat % nx;
+                let y = (flat / nx) % ny;
+                let z = flat / (nx * ny);
+                let center = magnetization[flat];
+                let sample = |neighbor: usize| {
+                    if self.is_active(neighbor) {
+                        magnetization[neighbor]
+                    } else {
+                        center
+                    }
+                };
+
+                let xp = sample(self.grid.index(neighbor_index(x, nx, 1, px), y, z));
+                let xm = sample(self.grid.index(neighbor_index(x, nx, -1, px), y, z));
+                let yp = sample(self.grid.index(x, neighbor_index(y, ny, 1, py), z));
+                let ym = sample(self.grid.index(x, neighbor_index(y, ny, -1, py), z));
+
+                let dx_mz = (xp[2] - xm[2]) / (2.0 * dx);
+                let dy_my = (yp[1] - ym[1]) / (2.0 * dy);
+                let dy_mx = (yp[0] - ym[0]) / (2.0 * dy);
+                let dx_mx = (xp[0] - xm[0]) / (2.0 * dx);
+                let boundary =
+                    self.rotated_interfacial_dmi_boundary_correction(flat, center, d, ms);
+
+                [
+                    pf * (dx_mz - dy_my) + boundary[0],
+                    pf * dy_mx + boundary[1],
+                    -pf * dx_mx + boundary[2],
                 ]
             })
             .collect()
@@ -1578,6 +1806,65 @@ impl ExchangeLlgProblem {
         }
     }
 
+    pub(crate) fn rotated_interfacial_dmi_field_add_into_soa(
+        &self,
+        magnetization: &VectorFieldSoA,
+        h_eff: &mut VectorFieldSoA,
+    ) {
+        let d = match self.terms.rotated_interfacial_dmi {
+            Some(d) if d.abs() > 0.0 => d,
+            _ => return,
+        };
+        let nx = self.grid.nx;
+        let ny = self.grid.ny;
+        let dx = self.cell_size.dx;
+        let dy = self.cell_size.dy;
+        let grid = self.grid;
+        let bpx = matches!(self.boundary_policy.x, AxisBoundary::Periodic);
+        let bpy = matches!(self.boundary_policy.y, AxisBoundary::Periodic);
+
+        for flat in 0..grid.cell_count() {
+            if !self.is_active(flat) {
+                continue;
+            }
+            let ms = self.ms_at(flat).max(1e-30);
+            let pf = 2.0 * d / (MU0 * ms);
+            let x = flat % nx;
+            let y = (flat / nx) % ny;
+            let z = flat / (nx * ny);
+            let sample = |neighbor: usize| {
+                if self.is_active(neighbor) {
+                    neighbor
+                } else {
+                    flat
+                }
+            };
+
+            let xp = sample(grid.index(neighbor_index(x, nx, 1, bpx), y, z));
+            let xm = sample(grid.index(neighbor_index(x, nx, -1, bpx), y, z));
+            let yp = sample(grid.index(x, neighbor_index(y, ny, 1, bpy), z));
+            let ym = sample(grid.index(x, neighbor_index(y, ny, -1, bpy), z));
+            let dx_mz = (magnetization.z[xp] - magnetization.z[xm]) / (2.0 * dx);
+            let dy_my = (magnetization.y[yp] - magnetization.y[ym]) / (2.0 * dy);
+            let dy_mx = (magnetization.x[yp] - magnetization.x[ym]) / (2.0 * dy);
+            let dx_mx = (magnetization.x[xp] - magnetization.x[xm]) / (2.0 * dx);
+            let boundary = self.rotated_interfacial_dmi_boundary_correction(
+                flat,
+                [
+                    magnetization.x[flat],
+                    magnetization.y[flat],
+                    magnetization.z[flat],
+                ],
+                d,
+                ms,
+            );
+
+            h_eff.x[flat] += pf * (dx_mz - dy_my) + boundary[0];
+            h_eff.y[flat] += pf * dy_mx + boundary[1];
+            h_eff.z[flat] += -pf * dx_mx + boundary[2];
+        }
+    }
+
     pub(crate) fn thermal_field_add_into_soa(&self, h_eff: &mut VectorFieldSoA) {
         let thermal_dt = self.thermal_dt_for_evaluation();
         let base_factor = match thermal_base_factor(
@@ -1881,6 +2168,7 @@ impl ExchangeLlgProblem {
         self.anisotropy_field_add_into_soa(magnetization, h_eff);
         self.thermal_field_add_into_soa(h_eff);
         self.interfacial_dmi_field_add_into_soa(magnetization, h_eff);
+        self.rotated_interfacial_dmi_field_add_into_soa(magnetization, h_eff);
         self.bulk_dmi_field_add_into_soa(magnetization, h_eff);
         self.oersted_field_add_into_soa_at_time(h_eff, time_seconds);
         self.regional_field_drives_add_into_soa_at_time(h_eff, time_seconds);
@@ -2166,6 +2454,70 @@ impl ExchangeLlgProblem {
             h[0] += boundary[0];
             h[1] += boundary[1];
             h[2] += boundary[2];
+        };
+
+        #[cfg(feature = "parallel")]
+        {
+            h_eff.par_iter_mut().enumerate().for_each(|(flat, h)| {
+                compute(flat, h);
+            });
+        }
+        #[cfg(not(feature = "parallel"))]
+        {
+            for flat in 0..grid.cell_count() {
+                compute(flat, &mut h_eff[flat]);
+            }
+        }
+    }
+
+    pub(crate) fn rotated_interfacial_dmi_field_add_into(
+        &self,
+        magnetization: &[Vector3],
+        h_eff: &mut [Vector3],
+    ) {
+        let d = match self.terms.rotated_interfacial_dmi {
+            Some(d) if d.abs() > 0.0 => d,
+            _ => return,
+        };
+        let nx = self.grid.nx;
+        let ny = self.grid.ny;
+        let dx = self.cell_size.dx;
+        let dy = self.cell_size.dy;
+        let grid = self.grid;
+        let bpx = matches!(self.boundary_policy.x, AxisBoundary::Periodic);
+        let bpy = matches!(self.boundary_policy.y, AxisBoundary::Periodic);
+
+        let compute = |flat: usize, h: &mut Vector3| {
+            if !self.is_active(flat) {
+                return;
+            }
+            let ms = self.ms_at(flat).max(1e-30);
+            let pf = 2.0 * d / (MU0 * ms);
+            let x = flat % nx;
+            let y = (flat / nx) % ny;
+            let z = flat / (nx * ny);
+            let center = magnetization[flat];
+            let sample = |neighbor: usize| {
+                if self.is_active(neighbor) {
+                    magnetization[neighbor]
+                } else {
+                    center
+                }
+            };
+
+            let xp = sample(grid.index(neighbor_index(x, nx, 1, bpx), y, z));
+            let xm = sample(grid.index(neighbor_index(x, nx, -1, bpx), y, z));
+            let yp = sample(grid.index(x, neighbor_index(y, ny, 1, bpy), z));
+            let ym = sample(grid.index(x, neighbor_index(y, ny, -1, bpy), z));
+            let dx_mz = (xp[2] - xm[2]) / (2.0 * dx);
+            let dy_my = (yp[1] - ym[1]) / (2.0 * dy);
+            let dy_mx = (yp[0] - ym[0]) / (2.0 * dy);
+            let dx_mx = (xp[0] - xm[0]) / (2.0 * dx);
+            let boundary = self.rotated_interfacial_dmi_boundary_correction(flat, center, d, ms);
+
+            h[0] += pf * (dx_mz - dy_my) + boundary[0];
+            h[1] += pf * dy_mx + boundary[1];
+            h[2] += -pf * dx_mx + boundary[2];
         };
 
         #[cfg(feature = "parallel")]
@@ -2589,6 +2941,7 @@ impl ExchangeLlgProblem {
 
         // DMI terms need neighbor stencils — separate passes
         self.interfacial_dmi_field_add_into(magnetization, h_eff);
+        self.rotated_interfacial_dmi_field_add_into(magnetization, h_eff);
         self.bulk_dmi_field_add_into(magnetization, h_eff);
 
         // Oersted field from cylindrical conductor (STNO / MTJ)
@@ -2633,6 +2986,7 @@ impl ExchangeLlgProblem {
 
         telem.begin(sections::FIELD_DMI);
         self.interfacial_dmi_field_add_into(magnetization, h_eff);
+        self.rotated_interfacial_dmi_field_add_into(magnetization, h_eff);
         self.bulk_dmi_field_add_into(magnetization, h_eff);
         telem.end(sections::FIELD_DMI);
 
@@ -3411,6 +3765,7 @@ impl ExchangeLlgProblem {
         self.magnetoelastic_field_add_into(magnetization, &mut h_eff[..n]);
         self.anisotropy_field_add_into(magnetization, &mut h_eff[..n]);
         self.interfacial_dmi_field_add_into(magnetization, &mut h_eff[..n]);
+        self.rotated_interfacial_dmi_field_add_into(magnetization, &mut h_eff[..n]);
         self.bulk_dmi_field_add_into(magnetization, &mut h_eff[..n]);
         self.thermal_field_add_into(&mut h_eff[..n]);
 
@@ -3662,11 +4017,15 @@ impl ExchangeLlgProblem {
         let mel_field = self.magnetoelastic_field(magnetization);
         let ani_field = self.anisotropy_field(magnetization);
         let idmi_field = self.interfacial_dmi_field(magnetization);
+        let rdmi_field = self.rotated_interfacial_dmi_field(magnetization);
         let bdmi_field = self.bulk_dmi_field(magnetization);
         let mut h_eff =
             combine_fields_4(&exchange_field, &demag_field, &external_field, &mel_field);
         for (i, h) in h_eff.iter_mut().enumerate() {
-            *h = add(add(add(*h, ani_field[i]), idmi_field[i]), bdmi_field[i]);
+            *h = add(
+                add(add(add(*h, ani_field[i]), idmi_field[i]), rdmi_field[i]),
+                bdmi_field[i],
+            );
         }
 
         // Brown thermal field.  Keep this legacy public path on the same
@@ -3751,11 +4110,15 @@ impl ExchangeLlgProblem {
         let mel_field = self.magnetoelastic_field(magnetization);
         let ani_field = self.anisotropy_field(magnetization);
         let idmi_field = self.interfacial_dmi_field(magnetization);
+        let rdmi_field = self.rotated_interfacial_dmi_field(magnetization);
         let bdmi_field = self.bulk_dmi_field(magnetization);
         let mut h_eff =
             combine_fields_4(&exchange_field, &demag_field, &external_field, &mel_field);
         for (i, h) in h_eff.iter_mut().enumerate() {
-            *h = add(add(add(*h, ani_field[i]), idmi_field[i]), bdmi_field[i]);
+            *h = add(
+                add(add(add(*h, ani_field[i]), idmi_field[i]), rdmi_field[i]),
+                bdmi_field[i],
+            );
         }
         self.oersted_field_add_into_at_time(&mut h_eff, time_seconds);
         self.regional_field_drives_add_into_at_time(&mut h_eff, time_seconds);
@@ -3973,11 +4336,15 @@ impl ExchangeLlgProblem {
         let mel_field = self.magnetoelastic_field(magnetization);
         let ani_field = self.anisotropy_field(magnetization);
         let idmi_field = self.interfacial_dmi_field(magnetization);
+        let rdmi_field = self.rotated_interfacial_dmi_field(magnetization);
         let bdmi_field = self.bulk_dmi_field(magnetization);
         let mut effective_field =
             combine_fields_4(&exchange_field, &demag_field, &external_field, &mel_field);
         for (i, h) in effective_field.iter_mut().enumerate() {
-            *h = add(add(add(*h, ani_field[i]), idmi_field[i]), bdmi_field[i]);
+            *h = add(
+                add(add(add(*h, ani_field[i]), idmi_field[i]), rdmi_field[i]),
+                bdmi_field[i],
+            );
         }
 
         // Oersted field from cylindrical conductor (STNO / MTJ)
@@ -4298,6 +4665,35 @@ mod stt_tests {
             MaterialParameters::new(800.0e3, 13.0e-12, damping).unwrap(),
             LlgConfig::default(),
         )
+    }
+
+    #[test]
+    fn rotated_dmi_energy_helpers_short_circuit_when_term_is_absent_or_zero() {
+        // Deliberately supply no field data: an absent/zero term must return
+        // before visiting even a periodic self-neighbor in the face loop.
+        let magnetization: [Vector3; 0] = [];
+        let mut without_term = one_cell_problem(0.2);
+        without_term.boundary_policy.x = AxisBoundary::Periodic;
+        assert_eq!(
+            without_term.rotated_interfacial_dmi_energy_from_vectors(&magnetization),
+            0.0
+        );
+        assert_eq!(
+            without_term.rotated_interfacial_dmi_energy_density_from_vectors(&magnetization),
+            vec![0.0]
+        );
+
+        let mut zero_term = one_cell_problem(0.2);
+        zero_term.boundary_policy.x = AxisBoundary::Periodic;
+        zero_term.terms.rotated_interfacial_dmi = Some(0.0);
+        assert_eq!(
+            zero_term.rotated_interfacial_dmi_energy_from_vectors(&magnetization),
+            0.0
+        );
+        assert_eq!(
+            zero_term.rotated_interfacial_dmi_energy_density_from_vectors(&magnetization),
+            vec![0.0]
+        );
     }
 
     fn canonical_slonczewski_oracle(

@@ -63,6 +63,7 @@ impl NativeFdmBackend {
         } else {
             max_torque_residual_apm_from_field(&magnetization, &effective_field)
         };
+        let (e_dmi, e_rotated_dmi) = self.split_dmi_energy(stats.dmi_energy_joules);
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -71,7 +72,8 @@ impl NativeFdmBackend {
             e_demag: stats.demag_energy_joules,
             e_ext: stats.external_energy_joules,
             e_ani: stats.anisotropy_energy_joules + stats.cubic_energy_joules,
-            e_dmi: stats.dmi_energy_joules,
+            e_dmi,
+            e_rotated_dmi,
             e_total: stats.total_energy_joules,
             max_dm_dt: max_rhs_norm_from_field(
                 &magnetization,

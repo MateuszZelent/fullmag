@@ -75,24 +75,37 @@ pub(crate) async fn sync_current_live_script_with_request(
         } else {
             None
         };
-        rewrite_script_via_python_helper(
-            &state.repo_root,
-            &workspace_root,
-            &script_path,
-            overrides.as_ref(),
-        )?
+        let repo_root = state.repo_root.clone();
+        let workspace_root = workspace_root.clone();
+        let script_path_for_helper = script_path.clone();
+        run_blocking_script_operation(move || {
+            rewrite_script_via_python_helper(
+                &repo_root,
+                &workspace_root,
+                &script_path_for_helper,
+                overrides.as_ref(),
+            )
+        })
+        .await?
     } else {
         let scene_document = scene_document.as_ref().ok_or_else(|| {
             ApiError::bad_request(
                 "scratch workspace has no SceneDocument to render as a canonical script",
             )
         })?;
-        render_scene_document_via_python_helper(
-            &state.repo_root,
-            &workspace_root,
-            &script_path,
-            scene_document,
-        )?
+        let repo_root = state.repo_root.clone();
+        let workspace_root = workspace_root.clone();
+        let script_path_for_helper = script_path.clone();
+        let scene_document = scene_document.clone();
+        run_blocking_script_operation(move || {
+            render_scene_document_via_python_helper(
+                &repo_root,
+                &workspace_root,
+                &script_path_for_helper,
+                &scene_document,
+            )
+        })
+        .await?
     };
     if !has_input_script {
         let mut current = state.current_live_state.write().await;
@@ -133,19 +146,34 @@ pub(crate) async fn get_current_live_script_source(
         )));
     }
 
-    let source = std::fs::read_to_string(&script_path).map_err(|error| {
-        ApiError::internal(format!(
-            "failed to read current live script '{}': {}",
-            script_path.display(),
-            error
-        ))
-    })?;
+    let script_display = script_path.display().to_string();
+    let source_path = script_path.clone();
+    let source = run_blocking_script_operation(move || {
+        std::fs::read_to_string(&source_path).map_err(|error| {
+            ApiError::internal(format!(
+                "failed to read current live script '{}': {}",
+                source_path.display(),
+                error
+            ))
+        })
+    })
+    .await?;
 
     Ok(ScriptSourceResponse {
-        script_path: script_path.display().to_string(),
+        script_path: script_display,
         bytes: source.len(),
         source,
     })
+}
+
+async fn run_blocking_script_operation<T, F>(operation: F) -> Result<T, ApiError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, ApiError> + Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|error| ApiError::internal(format!("script helper task failed: {error}")))?
 }
 
 pub(crate) fn rewrite_script_via_python_helper(

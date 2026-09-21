@@ -1,22 +1,78 @@
+import { srgbToLinearRgb } from "../viewport3dColorSpace";
 import { clampNumber } from "../viewport3dMath";
 
+/**
+ * Saturation of the HSL sphere.
+ *
+ * Deliberately a constant. This is a *direction* colormap: the polar angle is
+ * already carried by the lightness, and |m| carries the field's units, not its
+ * orientation. Folding |m| in (the previous behaviour) meant A/m data sat
+ * permanently clamped at 1 while small-amplitude eigenmodes rendered as a flat
+ * grey. Vectors with no meaningful direction are handled by the near-zero
+ * guard below and by `isLowConfidenceOrientationVector` in
+ * viewport3dFieldMapping.ts.
+ */
+export const MAGNETIZATION_HSL_SATURATION = 1;
+
+/** Below this norm a vector has no direction to speak of. */
+const MAGNETIZATION_HSL_ZERO_NORM = 1e-30;
+
+/** Colour used where the vector carries no usable direction. */
+const MAGNETIZATION_HSL_NEUTRAL_RGB: [number, number, number] = [0.6, 0.6, 0.6];
+
+/**
+ * mumax3-style HSL sphere for a magnetisation direction.
+ *
+ *   hue        = atan2(m̂y, m̂x)    -- in-plane angle
+ *   saturation = MAGNETIZATION_HSL_SATURATION
+ *   lightness  = 0.5 · m̂z + 0.5    -- -Z black, in-plane 0.5, +Z white
+ *
+ * Every term is derived from the same normalised direction m̂, so the colour
+ * depends only on where the vector points and never on the units the field
+ * happens to be stored in.
+ *
+ * The previous implementation normalised for the hue but fed the RAW `mz` into
+ * the lightness. For anything that is not exactly unit length -- A/m data,
+ * eigenmode amplitudes, thickness- or face-averaged vectors -- `mz * 0.5 + 0.5`
+ * clamps straight to 0 or 1, so a 1 degree tilt out of plane already rendered
+ * as pure white (or pure black below the plane) while in-plane vectors still
+ * looked correct.
+ *
+ * Returns **sRGB** components in [0, 1], which is what CSS wants. For three.js
+ * `color` / `instanceColor` attributes use {@link magnetizationHslLinearRgb} --
+ * see viewport3dColorSpace.ts for why the distinction matters.
+ */
 export function magnetizationHslRgb(
   mx: number,
   my: number,
   mz: number,
 ): [number, number, number] {
   const magnitude = Math.hypot(mx, my, mz);
-  if (magnitude <= 1e-30) {
-    return [0.6, 0.6, 0.6];
+  if (magnitude <= MAGNETIZATION_HSL_ZERO_NORM) {
+    return [...MAGNETIZATION_HSL_NEUTRAL_RGB];
   }
 
   const nx = mx / magnitude;
   const ny = my / magnitude;
   const nz = mz / magnitude;
   const hueRadians = Math.atan2(ny, nx);
-  const saturation = clampNumber(Math.hypot(nx, ny), 0, 1);
   const lightness = clampNumber(nz * 0.5 + 0.5, 0, 1);
-  return orientationHslToRgb(hueRadians, saturation, lightness);
+  return orientationHslToRgb(
+    hueRadians,
+    MAGNETIZATION_HSL_SATURATION,
+    lightness,
+  );
+}
+
+/**
+ * {@link magnetizationHslRgb} in linear-sRGB, for three.js colour attributes.
+ */
+export function magnetizationHslLinearRgb(
+  mx: number,
+  my: number,
+  mz: number,
+): [number, number, number] {
+  return srgbToLinearRgb(magnetizationHslRgb(mx, my, mz));
 }
 
 export const HSL_REFERENCE_AXES = [

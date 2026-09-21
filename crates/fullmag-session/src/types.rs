@@ -361,6 +361,8 @@ pub struct SolverEnergies {
     #[serde(default)]
     pub dmi: f64,
     #[serde(default)]
+    pub rotated_dmi: f64,
+    #[serde(default)]
     pub total: f64,
 }
 

@@ -612,9 +612,13 @@ function visibleResourceState<TData>({
     if (state.status === "error") {
       return state;
     }
+    const pausedRefreshError = state.data
+      ? state.error ?? state.refreshError ?? null
+      : null;
     return {
       ...state,
       error: null,
+      refreshError: pausedRefreshError ?? undefined,
       revision: externalRevision,
       status: state.data ? "stale" : "idle",
     };

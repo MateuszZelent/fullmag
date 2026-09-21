@@ -1,4 +1,10 @@
 from pathlib import Path
+import os
+import re
+import shutil
+import subprocess
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +20,7 @@ FEM_CPU_DOCKERFILE = ROOT / "docker" / "fem-cpu" / "Dockerfile"
 SETUP = ROOT / "scripts" / "windows" / "setup_fullmag.ps1"
 STORAGE_ADAPTER = ROOT / "scripts" / "windows" / "fullmag_storage.ps1"
 STORAGE_RESOLVER = ROOT / "scripts" / "fullmag_storage.py"
+MAKE_STORAGE_SHELL = ROOT / "scripts" / "make_storage_shell.sh"
 
 
 def test_justfile_exposes_native_windows_fullmag_route() -> None:
@@ -230,6 +237,14 @@ def test_windows_launcher_reuses_existing_msvc_rust_toolchain() -> None:
     assert "x86_64-pc-windows-msvc" in launcher
     assert '"toolchain", "install"' not in launcher
     assert '"target", "add"' not in launcher
+
+
+def test_windows_launcher_hashes_files_without_optional_utility_module() -> None:
+    launcher = LAUNCHER.read_text(encoding="utf-8")
+
+    assert "function Get-Sha256File" in launcher
+    assert "System.Security.Cryptography.SHA256" in launcher
+    assert "Get-FileHash" not in launcher
 
 
 def test_windows_launcher_recognizes_pnpm_windows_swc_store_entry() -> None:
@@ -488,15 +503,88 @@ def test_windows_fem_build_mutex_is_released_before_long_running_simulation() ->
     assert '$buildMutex = $null' in launcher[release_boundary:run_boundary]
 
 
-def test_windows_fem_interactive_launch_separates_host_and_container_web_ports() -> None:
-    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+@pytest.mark.parametrize("launcher_path", [LEGACY_FEM_LAUNCHER, DOCKER_LAUNCHER])
+def test_windows_fem_interactive_launch_separates_host_and_container_web_ports(launcher_path) -> None:
+    launcher = launcher_path.read_text(encoding="utf-8")
     compose = WINDOWS_COMPOSE.read_text(encoding="utf-8")
 
     assert '$env:FULLMAG_WINDOWS_WEB_PORT = $WebPort.ToString()' in launcher
     assert '$containerWebPort = 3100' in launcher
+    assert '"FULLMAG_WEB_PUBLIC_PORT=$WebPort"' in launcher
     assert '$cliArguments += @("--web-port", $containerWebPort.ToString())' in launcher
     assert '$cliArguments += @("--web-port", $WebPort.ToString())' not in launcher
     assert '"${FULLMAG_WINDOWS_WEB_PORT:-3100}:3100"' in compose
+
+
+def test_windows_fem_default_web_port_is_selected_from_a_bindable_host_range() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+
+    assert 'fullmag opt_1=""' in justfile
+    assert 'web_port="0"' in justfile
+    assert 'scripts\\control_room_port.py' in launcher
+    assert '[int]$WebPort = 0' in launcher
+    assert "scripts\\control_room_port.py" in launcher
+    assert 'first_bindable_port' not in launcher
+    assert '"pick", "0.0.0.0"' in launcher
+    assert '$WebPort = Resolve-HostWebPort -RequestedPort $WebPort' in launcher
+    assert '3101..3199' in launcher
+
+
+@pytest.mark.parametrize(
+    "backend,explicit_port,expected",
+    [("fdm", None, "3100"), ("fem", None, "0"),
+     ("fdm", "3197", "3197"), ("fem", "3197", "3197")],
+)
+def test_fullmag_windows_dispatch_preserves_port_defaults(backend, explicit_port, expected):
+    git_bash = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe"
+    bash = str(git_bash) if os.name == "nt" and git_bash.is_file() else shutil.which("bash")
+    if bash is None:
+        pytest.skip("Bash is required to exercise the justfile parser")
+    recipe = JUSTFILE.read_text(encoding="utf-8").split('fullmag opt_1=""', 1)[1]
+    body = recipe.split("bash -euo pipefail -c '\\\n", 1)[1]
+    body = body.split("\n\n", 1)[0].rstrip()
+    assert body.endswith("'")
+    body = body[:-1].replace("\\\n", "\n")
+    options = ["windows=True", backend, "gpu", "justfile"]
+    # Use an existing file: this probe exits before invoking a real launcher.
+    options[3] = "script=justfile"
+    if explicit_port is not None:
+        options.append(f"web_port={explicit_port}")
+    body = body.replace("{{repo_root}}", ".")
+    for index in range(1, 9):
+        body = body.replace("{{opt_" + str(index) + "}}", options[index - 1] if index <= len(options) else "")
+    body = re.sub(r"exec powershell\.exe[^\n]*", 'printf "%s" "$web_port"; exit 0', body)
+    result = subprocess.run([bash, "-c", body], cwd=ROOT, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == expected
+
+
+@pytest.mark.parametrize("device", ["cpu", "gpu"])
+@pytest.mark.parametrize("override", [False, True])
+def test_windows_fem_exports_resolved_image_to_compose(device, override):
+    powershell = shutil.which("powershell.exe") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is required to exercise image selection")
+    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+    selection = launcher.split("$RuntimeImage = if", 1)[1].split("foreach ($item", 1)[0]
+    image_key = f"FULLMAG_WINDOWS_FEM_{device.upper()}_IMAGE"
+    expected = f"test/{device}:override" if override else f"test/{device}:worktree"
+    setup = (
+        "$env:FULLMAG_WINDOWS_FEM_CPU_IMAGE=$null;"
+        "$env:FULLMAG_WINDOWS_FEM_GPU_IMAGE=$null;"
+        "$DefaultFemCpuImage='test/cpu:worktree';"
+        "$DefaultFemGpuImage='test/gpu:worktree';"
+        f"$Device='{device}';"
+    )
+    if override:
+        setup += f"$env:{image_key}='{expected}';"
+    command = setup + "$RuntimeImage = if" + selection + f"[Console]::Write($env:{image_key})"
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-Command", command], capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == expected
 
 
 def test_windows_compose_uses_only_bind_mounts_for_build_and_cache() -> None:
@@ -530,6 +618,74 @@ def test_windows_compose_uses_only_bind_mounts_for_build_and_cache() -> None:
     assert "- pnpm-store:" not in compose
 
 
+def test_windows_fem_gpu_uses_scientific_python_with_runtime_dependencies() -> None:
+    compose = WINDOWS_COMPOSE.read_text(encoding="utf-8")
+
+    gpu_service = compose.split("  fullmag-windows-fem-gpu:", 1)[1].split(
+        "  fullmag-windows-fem-cpu:", 1
+    )[0]
+    cpu_service = compose.split("  fullmag-windows-fem-cpu:", 1)[1]
+    assert "FULLMAG_PYTHON: /usr/local/bin/python3" in gpu_service
+    assert "FULLMAG_PYTHON: /usr/bin/python3" not in gpu_service
+    assert "FULLMAG_PYTHON: /usr/bin/python3" in cpu_service
+
+
+def test_windows_fem_dev_bootstrap_creates_the_requested_next_target() -> None:
+    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+
+    assert '`"`$frontend_root/next/dev-$containerWebPort`"' in launcher
+    assert 'ensure_managed_link `"`$frontend_app/.next-control-room-$containerWebPort`"' in launcher
+
+
+def test_windows_fem_container_build_uses_host_managed_storage_boundary() -> None:
+    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+    make_shell = MAKE_STORAGE_SHELL.read_text(encoding="utf-8")
+
+    assert "FULLMAG_WINDOWS_CONTAINER_MANAGED=1" in launcher
+    assert "FULLMAG_CARGO_TARGET_DIR=/workspace/.fullmag-build/cargo-targets/$TargetKey" in launcher
+    assert "CARGO_TARGET_DIR=/workspace/.fullmag-build/cargo-targets/$TargetKey" in launcher
+    assert "FULLMAG_WINDOWS_CONTAINER_MANAGED" in make_shell
+    assert "/workspace/.fullmag-build/cargo-targets/*" in make_shell
+    assert "CARGO_TARGET_DIR must match FULLMAG_CARGO_TARGET_DIR" in make_shell
+    assert 'exec bash -euo pipefail -c "${recipe}"' in make_shell
+
+
+def test_windows_fem_container_storage_boundary_rejects_parent_traversal(tmp_path) -> None:
+    if os.name == "nt":
+        pytest.skip("The managed-container boundary is exercised by the Linux CI lane")
+    git_bash = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe"
+    bash = str(git_bash) if os.name == "nt" and git_bash.is_file() else shutil.which("bash")
+    if bash is None:
+        pytest.skip("Bash is required to exercise the managed container boundary")
+    escaped = "/workspace/.fullmag-build/cargo-targets/../escape"
+    python_probe = tmp_path / "python3"
+    python_probe.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    python_probe.chmod(0o755)
+    uname_probe = tmp_path / "uname"
+    uname_probe.write_text("#!/usr/bin/env bash\nprintf 'Linux\\n'\n", encoding="utf-8")
+    uname_probe.chmod(0o755)
+    probe_path = str(tmp_path)
+    if os.name == "nt":
+        probe_path = f"/{probe_path[0].lower()}{probe_path[2:].replace(chr(92), '/')}"
+    env = os.environ.copy()
+    env.pop("OS", None)
+    env.update(
+        FULLMAG_WINDOWS_CONTAINER_MANAGED="1",
+        FULLMAG_CARGO_TARGET_DIR=escaped,
+        CARGO_TARGET_DIR=escaped,
+        PATH=probe_path + ":" + env.get("PATH", ""),
+    )
+    result = subprocess.run(
+        [bash, str(MAKE_STORAGE_SHELL), "-c", "exit 0"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert "outside /workspace/.fullmag-build/cargo-targets" in result.stderr
+
+
 def test_fem_gpu_dockerfile_treats_nsight_as_optional() -> None:
     dockerfile = FEM_GPU_DOCKERFILE.read_text(encoding="utf-8")
 
@@ -560,3 +716,112 @@ def test_makefile_can_build_container_local_fem_cpu() -> None:
     assert "FULLMAG_FORCE_LOCAL_FEM_CPU" in makefile
     assert 'build_mode="fem-cpu"' in makefile
     assert '"fem-gpu"' in makefile
+
+
+@pytest.fixture(scope="module")
+def public_url_probe(tmp_path_factory):
+    rustc = shutil.which("rustc")
+    if rustc is None:
+        pytest.skip("rustc is required for the isolated launcher URL check")
+    source = CONTROL_ROOM.read_text(encoding="utf-8")
+    url_helpers = source[source.index("fn web_public_url("):source.index("\npub(crate) fn internal_live_api_url")]
+    resolver = source[source.index("fn resolve_web_port("):source.index("\npub(crate) fn port_is_listening")]
+    tmp_path = tmp_path_factory.mktemp("public-url")
+    harness = tmp_path / "public_url.rs"
+    harness.write_text(
+        '''use std::{fs, path::Path};
+        type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+        macro_rules! bail { ($($arg:tt)*) => { return Err(format!($($arg)*).into()) }; }
+        fn web_public_host() -> String { "localhost".into() }
+        fn port_is_listening(_: u16) -> bool { false }
+        fn port_is_bindable(_: u16) -> bool { true }
+        ''' + url_helpers + resolver + '''
+        fn main() -> Result<()> {
+            let mode = std::env::args().nth(1).unwrap();
+            match mode.as_str() {
+                "frontend" => println!("{}", frontend_public_url(3100)?),
+                "api" => println!("{}", web_public_url(8081)),
+                "listen" => println!("{}", resolve_web_port(None, Path::new(&std::env::args().nth(2).unwrap()))?),
+                _ => panic!("unknown probe mode"),
+            }
+            Ok(())
+        }
+        ''', encoding="utf-8",
+    )
+    executable = tmp_path / ("public_url.exe" if os.name == "nt" else "public_url")
+    subprocess.run([rustc, str(harness), "-o", str(executable)], check=True)
+
+    def run(mode, published_port, *args):
+        env = os.environ.copy()
+        env.pop("FULLMAG_WEB_PUBLIC_PORT", None)
+        if published_port is not None:
+            env["FULLMAG_WEB_PUBLIC_PORT"] = published_port
+        return subprocess.run([str(executable), mode, *map(str, args)], env=env, capture_output=True, text=True)
+
+    return run
+
+
+@pytest.mark.parametrize("published_port, expected_port", [(None, 3100), ("3101", 3101), ("65535", 65535)])
+def test_logged_control_room_url_uses_published_port(public_url_probe, published_port, expected_port):
+    result = public_url_probe("frontend", published_port)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"http://localhost:{expected_port}"
+
+
+@pytest.mark.parametrize("published_port", ["", "0", "65536", "3101x", "+3101", " 3101", "-1"])
+def test_public_frontend_port_rejects_invalid_configuration(public_url_probe, published_port):
+    result = public_url_probe("frontend", published_port)
+    assert result.returncode != 0
+    assert "FULLMAG_WEB_PUBLIC_PORT" in result.stderr
+
+
+def test_api_fallback_keeps_its_own_port(public_url_probe):
+    result = public_url_probe("api", "3101")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "http://localhost:8081"
+
+
+def test_listener_state_is_separate_from_public_url(public_url_probe, tmp_path):
+    (tmp_path / "control-room-url.txt").write_text("http://localhost:3101")
+    listen_file = tmp_path / "control-room-listen-port.txt"
+    listen_file.write_text("3100")
+    result = public_url_probe("listen", "3101", listen_file)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "3100"
+    source = CONTROL_ROOM.read_text(encoding="utf-8")
+    assert 'state_root.join("control-room-listen-port.txt")' in source
+    assert 'resolve_web_port(requested_port, &listen_port_file)?' in source
+    assert 'fs::write(&listen_port_file, web_port.to_string())' in source
+
+
+@pytest.mark.parametrize("test_filter", ["", "orchestrator::tests::fdm_grid"])
+def test_windows_fem_managed_entry_preserves_targeted_test_arguments(test_filter):
+    powershell = shutil.which("powershell.exe") or shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell is required to exercise managed test dispatch")
+    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+    dispatch = launcher.split('if ($env:FULLMAG_STORAGE_MANAGED_ENTRY -ne "1") {', 1)[1]
+    dispatch = dispatch.split("$StorageLayout =", 1)[0]
+    command = (
+        "function Invoke-FullmagStorageManagedScript { "
+        "param($RepoRoot, $Profile, $ScriptPath, $Arguments) "
+        "[Console]::Write(($Arguments | ConvertTo-Json -Compress)); return 0 };"
+        "$BuildMode='true'; $Frontend='dev'; $Backend='fem'; $Device='cpu';"
+        "$RunMode='headless'; $WebPort=0; $BuildOnly=$true;"
+        "$TestPackage='fullmag-cli';"
+        f"$TestFilter='{test_filter}';"
+        "& {" + dispatch
+    )
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-Command", command], capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    import json
+    arguments = json.loads(result.stdout)
+    assert arguments[arguments.index("-TestPackage") + 1] == "fullmag-cli"
+    assert "-BuildOnly" in arguments
+    assert arguments[arguments.index("-WebPort") + 1] == "0"
+    if test_filter:
+        assert arguments[arguments.index("-TestFilter") + 1] == test_filter
+    else:
+        assert "-TestFilter" not in arguments

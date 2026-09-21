@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-const source = readFileSync(new URL("./InspectorShell.tsx", import.meta.url), "utf8");
+const source = readFileSync(
+  new URL("./InspectorShell.tsx", import.meta.url),
+  "utf8",
+).replace(/\r\n/g, "\n");
 
 describe("InspectorShell scroll lifecycle", () => {
   it("resets scroll only when the inspector descriptor identity changes", () => {

@@ -775,7 +775,7 @@ describe("scoped mesh quality panels", () => {
     expect(html).not.toContain("ż".repeat(513));
   });
 
-  it("keeps FDM Airbox parameters geometry-only and requires a rerun or re-plan", () => {
+  it("keeps FDM Airbox parameters geometry-only and exposes the atomic grid replan", () => {
     const html = renderToStaticMarkup(
       <AirboxMeshParametersPanel
         lane="fdm"
@@ -786,7 +786,9 @@ describe("scoped mesh quality panels", () => {
     expect(html).toContain("Canonical Airbox Geometry");
     expect(html).toContain("Padding X");
     expect(html).toContain("Center X");
-    expect(html).toContain("FDM policy changes apply to the next run");
+    expect(html).toContain(
+      "Apply Airbox Policy saves the canonical policy and queues an atomic FDM grid replan.",
+    );
     expect(html).not.toContain("Maximum element growth rate");
     expect(html).not.toContain("Curvature factor");
     expect(html).not.toContain("Element grading");

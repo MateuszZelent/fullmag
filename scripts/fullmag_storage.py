@@ -141,6 +141,32 @@ def validate_managed_view(layout):
         raise StorageError(f"Wrong managed backing image: expected {layout['native_backing_image']}, observed {observed}")
 
 
+def storage_dotenv(main_repo):
+    """Read only storage settings; never execute or interpolate dotenv values."""
+    path = main_repo / ".env"
+    if not path.is_file():
+        return {}
+    values = {}
+    for number, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        key, sep, value = line.partition("=")
+        key = key.strip()
+        if not sep or key not in MANAGED_VARIABLES:
+            continue
+        value = value.strip()
+        if value.startswith(("'", '"')):
+            if len(value) < 2 or value[-1] != value[0]:
+                raise StorageError(f"Invalid storage setting at {path}:{number}")
+            value = value[1:-1]
+        else:
+            value = re.split(r"\s+#", value, maxsplit=1)[0].rstrip()
+        if value:
+            values[key] = value
+    return values
+
+
 def resolve_layout(repo_root, profile=None, environ=None):
     env = os.environ if environ is None else environ
     repo = Path(git(repo_root, "rev-parse", "--show-toplevel")).resolve()
@@ -148,6 +174,7 @@ def resolve_layout(repo_root, profile=None, environ=None):
         raise StorageError("Resolve storage from the Fullmag checkout, not a Git submodule")
     registrations = worktree_records(repo)
     main_repo = Path(registrations[0]["worktree"]).resolve()
+    env = {**storage_dotenv(main_repo), **env}
     # This Windows checkout keeps its worktrees below the canonical checkout
     # itself (`D:\\git\\fullmag\\worktrees`), so its durable storage belongs
     # to the checkout (`D:\\git\\fullmag\\storage`). Linux keeps the existing
@@ -624,11 +651,35 @@ def process_alive(pid):
         return True
 
 
+@contextmanager
+def managed_heavy_lock(layout):
+    """Share the local heavy slot with snapshot workers, including recovery.
+
+Nested managed commands are validated by build_lock below. An orphaned
+container keeps its durable queue lease even after the host file lock closes.
+"""
+    if layout['profile'].startswith('windows-') and (Path(layout['storage_root']) / 'index' / 'local-runner-container.json').exists():
+        raise StorageError('Container runner owns heavy builds on this host; submit a snapshot through just runner-build')
+    if not layout['profile'].startswith('windows-') or (
+            os.environ.get('FULLMAG_STORAGE_LOCK_TOKEN') and
+            os.environ.get('FULLMAG_STORAGE_LOCK_KEY') == layout['worktree_id']):
+        yield
+        return
+    root = Path(layout['storage_root'])
+    with file_lock(validate_path(root / 'locks' / 'fullmag-heavy.lock', root), 'heavy Fullmag job'):
+        database = validate_path(root / 'index' / 'runner-jobs.sqlite', root)
+        if database.exists():
+            from local_runner.queue import JobQueue
+            if JobQueue(database, readonly=True).active():
+                raise StorageError('A queued worker retains the heavy lease; wait or reconcile its exact container')
+        yield
+
+
 def run(layout, command):
     if not command:
         raise StorageError("A command is required after --")
     initialize(layout)
-    with build_lock(layout):
+    with managed_heavy_lock(layout), build_lock(layout):
         # `prepare-links` may have run in a separate shell and lock scope.  A
         # different lane can therefore have rebound the shared target link in
         # between; never execute a command against that stale profile.

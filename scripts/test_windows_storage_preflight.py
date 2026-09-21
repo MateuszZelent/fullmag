@@ -15,7 +15,8 @@ class WindowsStoragePreflightTests(unittest.TestCase):
     def test_invalid_override_and_forged_entry_stop_before_storage_creation(self):
         source = Path(__file__).resolve().parent
         with tempfile.TemporaryDirectory() as temporary:
-            project = Path(temporary)
+            # Keep the fixture canonical when Windows TEMP uses an 8.3 alias.
+            project = Path(temporary).resolve()
             repo = project / "fullmag"
             scripts = repo / "scripts"
             windows = scripts / "windows"

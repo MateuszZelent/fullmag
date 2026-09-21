@@ -29,6 +29,86 @@ storage-inventory:
 storage-prepare:
     @{{storage_python}} "{{repo_root}}/scripts/fullmag_storage.py" prepare-links --repo-root "{{repo_root}}" --compat --frontend
 
+# Diagnostic source-check worker; this is not a managed FEM qualification image.
+runner-image:
+    docker build --network none --pull=false -t fullmag/local-runner-source:development scripts/local_runner
+
+runner-build-image toolchain_image tag="fullmag/local-runner-build:development":
+    docker --context desktop-linux build --network none --pull=false --build-arg TOOLCHAIN_IMAGE={{quote(toolchain_image)}} -f scripts/local_runner/Dockerfile.build -t {{quote(tag)}} scripts/local_runner
+
+runner-coordinator-image:
+    docker --context desktop-linux build --network none --pull=false -f scripts/local_runner/Dockerfile.coordinator -t fullmag/build-runner:development scripts
+
+runner-container-configure image_id:
+    {{storage_python}} scripts/local_runner_cli.py container-configure --image-id {{quote(image_id)}}
+
+runner-container-start:
+    {{storage_python}} scripts/local_runner_cli.py container-start
+
+runner-container-status:
+    {{storage_python}} scripts/local_runner_cli.py container-status
+
+runner-container-stop:
+    {{storage_python}} scripts/local_runner_cli.py container-stop
+
+runner-test:
+    {{storage_python}} -m unittest discover -s scripts -p 'test_local_runner_*.py'
+    {{storage_python}} -m unittest discover -s scripts -p 'test_storage_capabilities.py'
+    {{storage_python}} -m unittest discover -s scripts/tests/local_runner -p 'test_*.py'
+
+# Diagnostic only: never enrolls a storage backend for FEM qualification.
+runner-storage-probe role="build":
+    {{storage_python}} scripts/probe_docker_storage.py --role {{quote(role)}}
+
+runner-storage-probe-case-sensitive:
+    {{storage_python}} scripts/probe_docker_storage.py --role build --case-sensitive
+
+runner-submit mode ref="":
+    {{storage_python}} scripts/local_runner_cli.py submit --source {{quote(mode)}} {{if ref == "" { "" } else { "--ref " + quote(ref) }}}
+
+runner-status job:
+    {{storage_python}} scripts/local_runner_cli.py status {{quote(job)}}
+
+runner-logs job:
+    {{storage_python}} scripts/local_runner_cli.py logs {{quote(job)}}
+
+runner-wait job timeout="30":
+    {{storage_python}} scripts/local_runner_cli.py wait {{quote(job)}} --timeout-seconds {{quote(timeout)}}
+
+runner-list:
+    {{storage_python}} scripts/local_runner_cli.py list
+
+runner-doctor:
+    {{storage_python}} scripts/local_runner_cli.py doctor
+
+runner-cancel job:
+    {{storage_python}} scripts/local_runner_cli.py cancel {{quote(job)}}
+
+runner-configure image_id:
+    {{storage_python}} scripts/local_runner_cli.py configure-image --image-id {{quote(image_id)}}
+
+runner-once:
+    {{storage_python}} scripts/local_runner_cli.py run-once
+
+# Build catalogue: immutable source selection, no user-supplied shell command.
+runner-build mode profile="fem-cpu-release" ref="":
+    {{storage_python}} scripts/local_runner_cli.py submit --operation build --profile {{quote(profile)}} --source {{quote(mode)}} {{if ref == "" { "" } else { "--ref " + quote(ref) }}}
+
+runner-configure-build profile image_id:
+    {{storage_python}} scripts/local_runner_cli.py configure-build --profile {{quote(profile)}} --image-id {{quote(image_id)}}
+
+runner-container-resume:
+    {{storage_python}} scripts/local_runner_cli.py container-resume
+
+runner-retention-plan:
+    {{storage_python}} scripts/local_runner_cli.py retention-plan
+
+runner-container-replace image_id:
+    {{storage_python}} scripts/local_runner_cli.py container-replace --image-id {{quote(image_id)}}
+
+runner-reconcile job:
+    {{storage_python}} scripts/local_runner_cli.py reconcile {{quote(job)}}
+
 # Explicit worktree ownership operations.  `quote()` keeps task metadata as
 # one shell argument even when owner/purpose contains spaces or apostrophes.
 worktree-register task_id owner purpose:
@@ -56,6 +136,14 @@ windows-build backend="fdm" device="cpu" frontend="dev" skip_local_changes="fals
       powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag.ps1" -BuildMode true -BuildOnly -Frontend "$frontend" -Backend "$backend" -Device "$device" "${skip_local_changes_args[@]}"; \
     fi
 
+# Run targeted Rust tests in the same Windows-managed FEM container lane.
+windows-test-fem device="cpu" package="fullmag-api" filter="remesh":
+    device="{{device}}"; package="{{package}}"; filter="{{filter}}"; \
+    case "$device" in device=*) device="${device#device=}" ;; --device=*) device="${device#--device=}" ;; esac; \
+    case "$package" in package=*) package="${package#package=}" ;; --package=*) package="${package#--package=}" ;; esac; \
+    case "$filter" in filter=*) filter="${filter#filter=}" ;; --filter=*) filter="${filter#--filter=}" ;; esac; \
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag_fem.ps1" -BuildMode true -BuildOnly -Backend fem -Device "$device" -TestPackage "$package" -TestFilter "$filter"
+
 ensure-python:
     @set -euo pipefail; \
       mkdir -p "{{repo_root}}/.fullmag/local"; \
@@ -77,7 +165,7 @@ ensure-python:
       if [ -f "$stamp" ] && cmp -s <(printf '%s\n' "$fingerprint") "$stamp"; then \
         echo "Reusing Fullmag Python dependencies (stamp unchanged)."; \
       else \
-        "{{repo_python}}" -m pip install 'numpy>=1.24' 'scipy>=1.10' 'gmsh>=4.12' 'meshio>=5.3' 'trimesh>=4.2' 'h5py>=3.8' 'zarr>=2.18,<3' 'rich>=13.7' 'matplotlib>=3.7' 'pytest>=9,<10'; \
+        "{{repo_python}}" -m pip install 'numpy>=1.24' 'scipy>=1.10' 'gmsh>=4.12' 'meshio>=5.3' 'trimesh>=4.2' 'h5py>=3.8' 'zarr>=2.18,<3' 'rich>=13.7' 'matplotlib>=3.7' 'Pillow>=10,<13' 'pytest>=9,<10'; \
         printf '%s\n' "$fingerprint" > "$stamp"; \
       fi
 
@@ -5300,7 +5388,7 @@ run-headless-bench script:
 
 fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
     bash -euo pipefail -c '\
-      build="false"; force="false"; windows="false"; frontend="dev"; backend="auto"; device="auto"; run_mode="interactive"; script=""; web_port="3100"; skip_local_changes="false"; seen_options=""; \
+      r="{{repo_root}}"; build="false"; force="false"; windows="false"; frontend="dev"; backend="auto"; device="auto"; run_mode="interactive"; script=""; web_port="0"; skip_local_changes="false"; seen_options=""; \
       for raw in "{{opt_1}}" "{{opt_2}}" "{{opt_3}}" "{{opt_4}}" "{{opt_5}}" "{{opt_6}}" "{{opt_7}}" "{{opt_8}}"; do \
         [ -n "$raw" ] || continue; \
         key="${raw%%=*}"; value="$raw"; if [ "$key" != "$raw" ]; then value="${raw#*=}"; fi; \
@@ -5364,19 +5452,20 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
       host_windows="false"; \
       case "$(uname -s 2>/dev/null || true)" in MINGW*|MSYS*|CYGWIN*) host_windows="true" ;; esac; \
       if [ "$backend" = "fem" ] && { [ "$windows" = "true" ] || [ "$host_windows" = "true" ]; }; then \
-        exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{ repo_root }}/scripts/windows/run_fullmag_fem.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port" "${skip_local_changes_args[@]}"; \
+        case ",$seen_options," in *",web_port,"*) ;; *) web_port="0" ;; esac; \
+        exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "$r/scripts/windows/run_fullmag_fem.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port" "${skip_local_changes_args[@]}"; \
       fi; \
       if [ "$windows" = "true" ] || [ "$host_windows" = "true" ]; then \
-        exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{ repo_root }}/scripts/windows/run_fullmag.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port" "${skip_local_changes_args[@]}"; \
+        exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "$r/scripts/windows/run_fullmag.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port" "${skip_local_changes_args[@]}"; \
       fi; \
-      if [ "$build" = "true" ]; then just ensure-python; elif [ ! -x "{{repo_python}}" ]; then echo "Python env is missing; run with build=True or force=True once." >&2; exit 2; fi; \
+      if [ "$build" = "true" ]; then just ensure-python; elif [ ! -x "$r/.fullmag/local/python/bin/python" ]; then echo "Python env is missing; run with build=True or force=True once." >&2; exit 2; fi; \
       if [ "$frontend" = "static" ]; then \
         if [ "$force" = "true" ]; then make web-build-static; \
         elif [ "$build" = "true" ]; then just build-static-control-room; \
-        elif [ ! -f "{{local_web_root}}/index.html" ] && [ ! -f "{{control_room_static_out}}/index.html" ]; then echo "Static control room is missing; run with build=True or force=True once." >&2; exit 2; fi; \
+        elif [ ! -f "$r/.fullmag/local/web/index.html" ] && [ ! -f "$r/apps/control-room/out/index.html" ]; then echo "Static control room is missing; run with build=True or force=True once." >&2; exit 2; fi; \
       fi; \
       if [ "$backend" = "fem" ]; then \
-        runtime_copy_helper="{{repo_root}}/scripts/lib/runtime_bundle_copy.sh"; \
+        runtime_copy_helper="$r/scripts/lib/runtime_bundle_copy.sh"; \
         test -f "$runtime_copy_helper" || { echo "managed FEM runtime copy helper is missing: $runtime_copy_helper" >&2; exit 2; }; \
         if [ "$force" = "true" ]; then just rebuild-fem-runtime; else just ensure-managed-fem-runtime; fi; \
         bin="{{gpu_runtime_bin}}"; path_prefix=""; \
@@ -5385,10 +5474,10 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
           if [ "$backend" = "fdm" ]; then FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 just build fullmag; else just build fullmag; fi; \
         elif [ "$build" = "true" ]; then \
           if [ "$backend" = "fdm" ]; then FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 just build fullmag; else just build fullmag; fi; \
-        elif [ ! -x "{{local_bin}}/fullmag" ]; then echo "Fullmag binary is missing; run with build=True or force=True once." >&2; exit 2; fi; \
-        bin="{{local_bin}}/fullmag"; path_prefix="{{local_bin}}:$PATH"; \
+        elif [ ! -x "$r/.fullmag/local/bin/fullmag" ]; then echo "Fullmag binary is missing; run with build=True or force=True once." >&2; exit 2; fi; \
+        bin="$r/.fullmag/local/bin/fullmag"; path_prefix="$r/.fullmag/local/bin:$PATH"; \
       fi; \
-      env_args=(FULLMAG_PYTHON="{{repo_python}}"); \
+      env_args=(FULLMAG_PYTHON="$r/.fullmag/local/python/bin/python"); \
       if [ -n "$path_prefix" ]; then env_args+=(PATH="$path_prefix"); fi; \
       if [ "$run_mode" = "headless" ]; then env_args+=(FULLMAG_API_PORT=0); fi; \
       if [ "$backend" = "fem" ]; then env_args+=(FULLMAG_FDM_EXECUTION=cpu); fi; \

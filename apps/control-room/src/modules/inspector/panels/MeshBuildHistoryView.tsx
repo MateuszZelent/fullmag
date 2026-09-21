@@ -1,5 +1,7 @@
 "use client";
 
+import { meshHistoryRestoreTarget } from "@/kernel/authoring/meshBuildHistoryRestore";
+
 import { useMemo, useState } from "react";
 
 import {
@@ -15,6 +17,7 @@ import {
   formatValue,
   MeshResourceEmpty,
 } from "./MeshResourceView";
+import { Button } from "@/shared/ui/Button";
 
 function formatDelta(value: number | null): string {
   if (value === null) return "baseline";
@@ -36,7 +39,7 @@ function qualitySummary(entry: MeshBuildHistoryEntry): string {
 }
 
 function buildOptionLabel(entry: MeshBuildHistoryEntry): string {
-  return `#${entry.index + 1} ${entry.meshName ?? "unnamed mesh"}`;
+  return `#${entry.index + 1} ${entry.meshName ?? "unnamed mesh"} · ${entry.id}`;
 }
 
 function buildReason(entry: MeshBuildHistoryEntry): string {
@@ -80,8 +83,10 @@ function MeshBuildHistoryComparisonTable({
 
 export function MeshBuildHistoryView({
   entries,
+  onRestore,
 }: {
   entries: MeshBuildHistoryEntry[];
+  onRestore?: (entry: MeshBuildHistoryEntry) => void;
 }) {
   const defaultSelection = useMemo(
     () => latestMeshBuildComparisonSelection(entries),
@@ -89,37 +94,36 @@ export function MeshBuildHistoryView({
   );
   const [requestedSelection, setRequestedSelection] =
     useState<MeshBuildHistoryComparisonSelection | null>(null);
-  const validIndices = useMemo(
-    () => new Set(entries.map((entry) => entry.index)),
+  const validIds = useMemo(
+    () => new Set(entries.map((entry) => entry.id)),
     [entries],
   );
   const selection =
     requestedSelection &&
-    validIndices.has(requestedSelection.beforeIndex) &&
-    validIndices.has(requestedSelection.afterIndex)
+    requestedSelection.beforeId &&
+    requestedSelection.afterId &&
+    validIds.has(requestedSelection.beforeId) &&
+    validIds.has(requestedSelection.afterId)
       ? requestedSelection
       : defaultSelection;
   const comparison = selection
     ? meshBuildHistoryComparisonForSelection(entries, selection)
     : null;
 
-  const updateBeforeIndex = (beforeIndex: number) => {
-    const afterIndex =
-      selection?.afterIndex !== beforeIndex && selection?.afterIndex !== undefined
-        ? selection.afterIndex
-        : (entries.find((entry) => entry.index !== beforeIndex)?.index ??
-          beforeIndex);
-    setRequestedSelection({ afterIndex, beforeIndex });
+  const updateBeforeId = (beforeId: string) => {
+    const afterId =
+      selection?.afterId !== beforeId && selection?.afterId !== undefined
+        ? selection.afterId
+        : (entries.find((entry) => entry.id !== beforeId)?.id ?? beforeId);
+    setRequestedSelection({ afterId, beforeId });
   };
 
-  const updateAfterIndex = (afterIndex: number) => {
-    const beforeIndex =
-      selection?.beforeIndex !== afterIndex &&
-      selection?.beforeIndex !== undefined
-        ? selection.beforeIndex
-        : (entries.find((entry) => entry.index !== afterIndex)?.index ??
-          afterIndex);
-    setRequestedSelection({ afterIndex, beforeIndex });
+  const updateAfterId = (afterId: string) => {
+    const beforeId =
+      selection?.beforeId !== afterId && selection?.beforeId !== undefined
+        ? selection.beforeId
+        : (entries.find((entry) => entry.id !== afterId)?.id ?? afterId);
+    setRequestedSelection({ afterId, beforeId });
   };
 
   if (entries.length === 0) {
@@ -135,18 +139,18 @@ export function MeshBuildHistoryView({
             <div className="fm-mesh-build-history__controls">
               <label>
                 <span>From</span>
-                <select
-                  className="fm-inspector-select"
+                  <select
+                    className="fm-inspector-select"
                   onChange={(event) =>
-                    updateBeforeIndex(Number(event.currentTarget.value))
+                    updateBeforeId(event.currentTarget.value)
                   }
-                  value={comparison.beforeIndex}
+                  value={selection?.beforeId ?? entries[0].id}
                 >
                   {entries.map((entry) => (
                     <option
-                      disabled={entry.index === comparison.afterIndex}
-                      key={entry.index}
-                      value={entry.index}
+                      disabled={entry.id === selection?.afterId}
+                      key={entry.id}
+                      value={entry.id}
                     >
                       {buildOptionLabel(entry)}
                     </option>
@@ -158,15 +162,15 @@ export function MeshBuildHistoryView({
                 <select
                   className="fm-inspector-select"
                   onChange={(event) =>
-                    updateAfterIndex(Number(event.currentTarget.value))
+                    updateAfterId(event.currentTarget.value)
                   }
-                  value={comparison.afterIndex}
+                  value={selection?.afterId ?? entries.at(-1)?.id}
                 >
                   {entries.map((entry) => (
                     <option
-                      disabled={entry.index === comparison.beforeIndex}
-                      key={entry.index}
-                      value={entry.index}
+                      disabled={entry.id === selection?.beforeId}
+                      key={entry.id}
+                      value={entry.id}
                     >
                       {buildOptionLabel(entry)}
                     </option>
@@ -187,7 +191,8 @@ export function MeshBuildHistoryView({
           <div
             className="fm-mesh-detail-list__item"
             data-status={entry.deltaElementCount === null ? "unknown" : "ready"}
-            key={`${entry.index}:${entry.meshName ?? "mesh"}`}
+            data-build-id={entry.id}
+            key={entry.id}
           >
             <strong>
               #{entry.index + 1} {entry.meshName ?? "unnamed mesh"}
@@ -202,6 +207,27 @@ export function MeshBuildHistoryView({
               {qualitySummary(entry)}
               {entry.qualityDataAvailable ? " / FMMQ" : ""}
             </small>
+            <small>
+              build {entry.buildId ?? entry.id} / command {entry.commandId ?? "not linked"}
+              {entry.meshTarget ? ` / target ${entry.meshTarget}` : ""}
+              {entry.durationSeconds === null ? "" : ` / ${formatValue(entry.durationSeconds)} s`}
+            </small>
+            {entry.restorable && meshHistoryRestoreTarget(entry) && onRestore ? (
+              <Button
+                size="sm"
+                type="button"
+                variant="secondary"
+                onClick={() => onRestore(entry)}
+              >
+                {meshHistoryRestoreTarget(entry) === "universe" ? "Restore Airbox policy to draft" : "Restore object policy to draft"}
+              </Button>
+            ) : (
+              <small>
+                {entry.restoreReason === "snapshot-unavailable"
+                  ? "Configuration snapshot unavailable; mesh artifact is not restored."
+                  : ""}
+              </small>
+            )}
           </div>
         ))}
       </div>

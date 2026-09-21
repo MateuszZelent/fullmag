@@ -151,8 +151,11 @@ function Invoke-FullmagStorageManagedScript {
     & $python.Source @(
       $resolver, "run", "--repo-root", $RepoRoot,
       "--profile", $Profile, "--"
-    ) @command
-    return $LASTEXITCODE
+    ) @command | Out-Host
+    # Native stdout is progress, not part of this function's return value.
+    # Callers assign the result and pass it to exit; an array of log lines
+    # plus the code would both buffer the logs and lose failure propagation.
+    return [int]$LASTEXITCODE
   }
   finally {
     if ($null -eq $previousSentinel) {

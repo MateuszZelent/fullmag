@@ -4863,6 +4863,12 @@
       },
       "CommandStatusResource": {
         "properties": {
+          "client_intent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "command_id": {
             "type": "string"
           },
@@ -5390,6 +5396,13 @@
             ]
           },
           "final_exchange_energy": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "final_rotated_dmi_energy": {
             "format": "double",
             "type": [
               "number",
@@ -32907,7 +32920,18 @@
                 "$ref": "#/components/schemas/RuntimeCommandIntent"
               },
               {
-                "description": "Acknowledged as terminally rejected until the runtime owns a safe\nexecution-plan replanning lifecycle for FDM grid and membership data.",
+                "properties": {
+                  "mesh_options": {
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  }
+                },
+                "type": "object"
+              },
+              {
+                "description": "Replan the FDM grid and membership masks from the committed scene.",
                 "properties": {
                   "kind": {
                     "enum": [
@@ -32922,7 +32946,7 @@
                 "type": "object"
               }
             ],
-            "description": "Acknowledged as terminally rejected until the runtime owns a safe\nexecution-plan replanning lifecycle for FDM grid and membership data."
+            "description": "Replan the FDM grid and membership masks from the committed scene."
           },
           {
             "allOf": [
@@ -49538,7 +49562,7 @@
             }
           },
           {
-            "description": "Interaction kind: exchange | demag | interfacial_dmi | uniaxial_anisotropy",
+            "description": "Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy",
             "in": "path",
             "name": "interaction_kind",
             "required": true,
@@ -49579,7 +49603,7 @@
             }
           },
           {
-            "description": "Interaction kind: exchange | demag | interfacial_dmi | uniaxial_anisotropy",
+            "description": "Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy",
             "in": "path",
             "name": "interaction_kind",
             "required": true,

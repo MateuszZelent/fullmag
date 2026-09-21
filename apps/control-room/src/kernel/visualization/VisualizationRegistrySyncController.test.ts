@@ -15,7 +15,7 @@ import { VisualizationRegistrySyncController } from "./VisualizationRegistrySync
 const visualizationRegistrySyncControllerSource = readFileSync(
   join(process.cwd(), "src/kernel/visualization/VisualizationRegistrySyncController.ts"),
   "utf8",
-);
+).replace(/\r\n/g, "\n");
 
 function blockBetween(source: string, startNeedle: string, endNeedle: string): string {
   const start = source.indexOf(startNeedle);

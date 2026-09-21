@@ -169,19 +169,33 @@ export function resolveViewport3DCanvasDpr({
   return Math.min(safeRatio, profile.dprCap);
 }
 
+/**
+ * S-15: the user-facing "Antialiasing" toggle previously never reached the
+ * WebGL context -- `antialiasOverride` was accepted and explicitly discarded
+ * (`void _antialiasOverride`), so context MSAA followed the visual profile
+ * alone. The flag was only read by PostProcessingLayer as the composer's
+ * `multisampling`, and the composer does not exist at all while both effects
+ * are off, which made the toggle a no-op in the default (no-effect) mode and
+ * made enabling Bloom/AO silently change edge quality.
+ *
+ * The override is now honored, with the profile keeping its veto: it can turn
+ * antialiasing OFF anywhere, and can turn it ON only where the profile allows
+ * it (`interactive-lite` deliberately runs without MSAA for performance, and
+ * must stay that way regardless of the toggle). Omitting the argument keeps
+ * the pure profile-owned behavior.
+ */
 export function resolveViewport3DCanvasGlOptions(
   profile: Viewport3DVisualProfile,
-  _antialiasOverride?: boolean,
+  antialiasOverride?: boolean,
 ): {
   alpha: false;
   antialias: boolean;
   powerPreference: "high-performance";
   preserveDrawingBuffer: boolean;
 } {
-  void _antialiasOverride;
   return {
     alpha: false,
-    antialias: profile.antialias,
+    antialias: profile.antialias && (antialiasOverride ?? true),
     powerPreference: "high-performance",
     preserveDrawingBuffer: profile.preserveDrawingBuffer,
   };

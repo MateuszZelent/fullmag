@@ -1,11 +1,14 @@
 #include "fullmag_fdm.h"
 
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <limits>
 #include <type_traits>
 
 namespace {
@@ -13,7 +16,11 @@ namespace {
 static_assert(alignof(fullmag_fdm_plan_desc) == 8);
 static_assert(sizeof(fullmag_fdm_plan_desc) == 1280);
 static_assert(alignof(fullmag_fdm_plan_desc_v2) == 8);
-static_assert(sizeof(fullmag_fdm_plan_desc_v2) == 1384);
+static_assert(sizeof(fullmag_fdm_plan_desc_v2) == 1400);
+static_assert(alignof(fullmag_fdm_multilayer_plan_desc_v2) == 8);
+static_assert(sizeof(fullmag_fdm_multilayer_plan_desc_v2) == 160);
+static_assert(alignof(fullmag_fdm_rotated_interfacial_dmi_desc_v1) == 8);
+static_assert(sizeof(fullmag_fdm_rotated_interfacial_dmi_desc_v1) == 24);
 #define FULLMAG_FDM_PLAN_V2_HEADER_FIELD(field, expected) \
     static_assert(offsetof(fullmag_fdm_plan_desc_v2, field) == expected);
 #define FULLMAG_FDM_PLAN_V2_AGGREGATE_FIELD(field, expected) \
@@ -32,7 +39,10 @@ static_assert(sizeof(fullmag_fdm_plan_desc_v2) == 1384);
 #define FULLMAG_FDM_PLAN_V2_TIME_FIELD(field, expected) \
     static_assert(offsetof(fullmag_fdm_plan_desc_v2, time_policy) + \
                       offsetof(fullmag_fdm_time_policy_desc_v2, field) == expected);
+#define FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD(field, expected) \
+    static_assert(offsetof(fullmag_fdm_plan_desc_v2, field) == expected);
 #include "fullmag_fdm_plan_desc_v2_layout.def"
+#undef FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD
 #undef FULLMAG_FDM_PLAN_V2_TIME_FIELD
 #undef FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD
 #undef FULLMAG_FDM_PLAN_V2_GRID_FIELD
@@ -47,6 +57,7 @@ constexpr std::size_t kHeaderFieldCount = 0
 #define FULLMAG_FDM_PLAN_V2_GRID_FIELD(field, expected)
 #define FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD(field, expected)
 #define FULLMAG_FDM_PLAN_V2_TIME_FIELD(field, expected)
+#define FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD(field, expected)
 #include "fullmag_fdm_plan_desc_v2_layout.def"
 ;
 constexpr std::size_t kAggregateFieldCount = 0
@@ -82,8 +93,18 @@ constexpr std::size_t kTimeFieldCount = 0
 #define FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD(field, expected)
 #undef FULLMAG_FDM_PLAN_V2_TIME_FIELD
 #define FULLMAG_FDM_PLAN_V2_TIME_FIELD(field, expected) +1
+#undef FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD
+#define FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD(field, expected)
 #include "fullmag_fdm_plan_desc_v2_layout.def"
 ;
+constexpr std::size_t kExtensionFieldCount = 0
+#undef FULLMAG_FDM_PLAN_V2_TIME_FIELD
+#define FULLMAG_FDM_PLAN_V2_TIME_FIELD(field, expected)
+#undef FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD
+#define FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD(field, expected) +1
+#include "fullmag_fdm_plan_desc_v2_layout.def"
+;
+#undef FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD
 #undef FULLMAG_FDM_PLAN_V2_TIME_FIELD
 #undef FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD
 #undef FULLMAG_FDM_PLAN_V2_GRID_FIELD
@@ -96,6 +117,7 @@ static_assert(kBaseFieldCount == 140);
 static_assert(kGridFieldCount == 6);
 static_assert(kMaterialFieldCount == 4);
 static_assert(kTimeFieldCount == 13);
+static_assert(kExtensionFieldCount == 2);
 
 void check(bool condition, const char *message) {
     if (!condition) {
@@ -218,7 +240,9 @@ void populate_distinct_semantic_sentinels(fullmag_fdm_plan_desc_v2 &plan) {
 #define FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD(field, expected)
 #define FULLMAG_FDM_PLAN_V2_TIME_FIELD(field, expected) \
     assign_sentinel(plan.time_policy.field, seed++);
+#define FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD(field, expected) assign_sentinel(plan.field, seed++);
 #include "fullmag_fdm_plan_desc_v2_layout.def"
+#undef FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD
 #undef FULLMAG_FDM_PLAN_V2_TIME_FIELD
 #undef FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD
 #undef FULLMAG_FDM_PLAN_V2_GRID_FIELD
@@ -242,7 +266,9 @@ void check_semantic_receipt(
 #define FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD(field, expected)
 #define FULLMAG_FDM_PLAN_V2_TIME_FIELD(field, expected) \
     FULLMAG_FDM_CHECK_FIELD(time_policy.field);
+#define FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD(field, expected) FULLMAG_FDM_CHECK_FIELD(field);
 #include "fullmag_fdm_plan_desc_v2_layout.def"
+#undef FULLMAG_FDM_PLAN_V2_EXTENSION_FIELD
 #undef FULLMAG_FDM_PLAN_V2_TIME_FIELD
 #undef FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD
 #undef FULLMAG_FDM_PLAN_V2_GRID_FIELD
@@ -255,6 +281,16 @@ void check_semantic_receipt(
 void owner_ingestion_receipt_preserves_every_semantic_field() {
     fullmag_fdm_plan_desc_v2 plan{};
     populate_distinct_semantic_sentinels(plan);
+    // The sentinel storage is not a real active mask.  Keep this fixture's
+    // boundary open/closed semantics explicit so it exercises receipt copying
+    // rather than the rDMI boundary-law validator.
+    plan.base.a_field = nullptr;
+    plan.base.a_field_len = 0;
+    plan.base.active_mask = nullptr;
+    plan.base.active_mask_len = 0;
+    plan.base.has_interfacial_dmi = 0;
+    plan.base.has_bulk_dmi = 0;
+    plan.has_rotated_interfacial_dmi = 1;
 
     fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
     int status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
@@ -262,9 +298,279 @@ void owner_ingestion_receipt_preserves_every_semantic_field() {
     check(ingestion != nullptr, "successful plan ingestion must allocate its narrow owner");
 
     fullmag_fdm_plan_desc_v2 receipt{};
-    status = fullmag_fdm_plan_ingestion_v2_receipt(ingestion, &receipt);
+    status = fullmag_fdm_plan_ingestion_v2_receipt_sized(
+        ingestion, &receipt, sizeof(receipt));
     check(status == FULLMAG_FDM_OK, "owner must expose its post-ingestion receipt");
     check_semantic_receipt(plan, receipt);
+    fullmag_fdm_plan_ingestion_v2_destroy(ingestion);
+}
+
+void receipt_respects_legacy_output_capacity() {
+    fullmag_fdm_plan_desc_v2 plan{};
+    populate_distinct_semantic_sentinels(plan);
+    // This receipt fixture uses semantic sentinels, not a resolved per-cell
+    // Aex field or active mask.  Keep those optional arrays absent so the
+    // rDMI boundary-law validator sees the intended scalar material path.
+    plan.base.a_field = nullptr;
+    plan.base.a_field_len = 0;
+    plan.base.active_mask = nullptr;
+    plan.base.active_mask_len = 0;
+    plan.base.has_interfacial_dmi = 0;
+    plan.base.has_bulk_dmi = 0;
+    plan.has_rotated_interfacial_dmi = 1;
+
+    fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
+    int status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
+    check(status == FULLMAG_FDM_OK, "complete v2 descriptor must enter the canonical owner");
+    check(ingestion != nullptr, "successful plan ingestion must allocate its narrow owner");
+
+    constexpr std::size_t legacy_size =
+        offsetof(fullmag_fdm_plan_desc_v2, has_rotated_interfacial_dmi);
+    struct LegacyReceiptStorage {
+        alignas(fullmag_fdm_plan_desc_v2) std::array<unsigned char, legacy_size> bytes{};
+        std::array<unsigned char, 32> guard{};
+    } storage;
+    storage.guard.fill(0xA5);
+    auto *receipt = reinterpret_cast<fullmag_fdm_plan_desc_v2 *>(storage.bytes.data());
+    const uint32_t declared_size = static_cast<uint32_t>(legacy_size);
+    std::memcpy(
+        reinterpret_cast<unsigned char *>(receipt) +
+            offsetof(fullmag_fdm_plan_desc_v2, struct_size),
+        &declared_size,
+        sizeof(declared_size));
+
+    status = fullmag_fdm_plan_ingestion_v2_receipt(ingestion, receipt);
+    check(status == FULLMAG_FDM_OK, "legacy receipt capacity must be accepted");
+    check(std::all_of(storage.guard.begin(), storage.guard.end(),
+                      [](unsigned char value) { return value == 0xA5; }),
+          "legacy receipt must not write beyond its 1384-byte capacity");
+    check(receipt->struct_size == legacy_size,
+          "legacy receipt must preserve its declared output capacity");
+    fullmag_fdm_plan_ingestion_v2_destroy(ingestion);
+}
+
+void rotated_dmi_open_boundary_requires_exchange_at_public_ingestion_boundary() {
+    fullmag_fdm_plan_desc_v2 plan{};
+    plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
+    plan.struct_size = sizeof(plan);
+    plan.base.grid = {2, 1, 1, 1.0e-9, 1.0e-9, 1.0e-9};
+    plan.base.material.saturation_magnetisation = 8.0e5;
+    plan.base.material.exchange_stiffness = 1.3e-11;
+    plan.base.material.gyromagnetic_ratio = 2.211e5;
+    plan.base.initial_magnetization_xyz = nullptr;
+    plan.base.initial_magnetization_len = 0;
+    plan.has_rotated_interfacial_dmi = 1;
+    plan.dmi_D_rotated_interfacial = 3.0e-3;
+
+    fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
+    const int status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
+    check(status == FULLMAG_FDM_ERR_INVALID,
+          "open-boundary rotated DMI without Exchange must fail at public ingestion");
+    check(ingestion == nullptr,
+          "rejected open-boundary rotated DMI must not allocate an ingestion owner");
+}
+
+void rotated_dmi_open_boundary_requires_positive_exchange_stiffness_at_public_ingestion_boundary() {
+    fullmag_fdm_plan_desc_v2 plan{};
+    plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
+    plan.struct_size = sizeof(plan);
+    plan.base.grid = {2, 1, 1, 1.0e-9, 1.0e-9, 1.0e-9};
+    plan.base.material.saturation_magnetisation = 8.0e5;
+    plan.base.material.exchange_stiffness = 0.0;
+    plan.base.material.gyromagnetic_ratio = 2.211e5;
+    plan.base.enable_exchange = 1;
+    plan.has_rotated_interfacial_dmi = 1;
+    plan.dmi_D_rotated_interfacial = 3.0e-3;
+
+    fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
+    int status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
+    check(status == FULLMAG_FDM_ERR_INVALID,
+          "open-boundary rotated DMI must reject zero resolved Aex even with Exchange");
+    check(ingestion == nullptr,
+          "zero boundary Aex rejection must not allocate an ingestion owner");
+
+    plan.base.material.exchange_stiffness = 1.3e-11;
+    status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
+    check(status == FULLMAG_FDM_OK,
+          "open-boundary rotated DMI must accept positive resolved Aex");
+    check(ingestion != nullptr,
+          "positive boundary Aex must allocate an ingestion owner");
+    fullmag_fdm_plan_ingestion_v2_destroy(ingestion);
+}
+
+void rotated_dmi_active_mask_boundary_requires_positive_exchange_stiffness_at_public_ingestion_boundary() {
+    const std::array<unsigned char, 3> active = {1, 0, 1};
+    fullmag_fdm_plan_desc_v2 plan{};
+    plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
+    plan.struct_size = sizeof(plan);
+    plan.base.grid = {3, 1, 1, 1.0e-9, 1.0e-9, 1.0e-9};
+    plan.base.material.saturation_magnetisation = 8.0e5;
+    plan.base.material.exchange_stiffness = 0.0;
+    plan.base.material.gyromagnetic_ratio = 2.211e5;
+    plan.base.enable_exchange = 1;
+    plan.base.periodic_x = 1;
+    plan.base.periodic_y = 1;
+    plan.base.periodic_z = 1;
+    plan.base.active_mask = active.data();
+    plan.base.active_mask_len = active.size();
+    plan.has_rotated_interfacial_dmi = 1;
+    plan.dmi_D_rotated_interfacial = 3.0e-3;
+
+    fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
+    int status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
+    check(status == FULLMAG_FDM_ERR_INVALID,
+          "active-mask rotated DMI must reject zero resolved Aex at the mask boundary");
+    check(ingestion == nullptr,
+          "zero active-mask boundary Aex rejection must not allocate an owner");
+
+    plan.base.material.exchange_stiffness = 1.3e-11;
+    status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
+    check(status == FULLMAG_FDM_OK,
+          "active-mask rotated DMI must accept positive resolved Aex at the mask boundary");
+    check(ingestion != nullptr,
+          "positive active-mask boundary Aex must allocate an owner");
+    fullmag_fdm_plan_ingestion_v2_destroy(ingestion);
+}
+
+void rotated_dmi_zero_is_noop_for_public_open_boundary_exchange_stiffness() {
+    fullmag_fdm_plan_desc_v2 plan{};
+    plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
+    plan.struct_size = sizeof(plan);
+    plan.base.grid = {2, 1, 1, 1.0e-9, 1.0e-9, 1.0e-9};
+    plan.base.material.exchange_stiffness = 0.0;
+    plan.has_rotated_interfacial_dmi = 1;
+    plan.dmi_D_rotated_interfacial = 0.0;
+
+    fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
+    const int status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
+    check(status == FULLMAG_FDM_OK,
+          "D=0 rotated DMI must not require Exchange or positive boundary Aex");
+    check(ingestion != nullptr,
+          "D=0 rotated DMI must still allocate an ingestion owner");
+    fullmag_fdm_plan_ingestion_v2_destroy(ingestion);
+}
+
+void rotated_dmi_fully_periodic_boundary_may_omit_exchange() {
+    fullmag_fdm_plan_desc_v2 plan{};
+    plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
+    plan.struct_size = sizeof(plan);
+    plan.base.grid = {3, 2, 1, 1.0e-9, 1.0e-9, 1.0e-9};
+    plan.base.periodic_x = 1;
+    plan.base.periodic_y = 1;
+    plan.base.periodic_z = 1;
+    plan.has_rotated_interfacial_dmi = 1;
+    plan.dmi_D_rotated_interfacial = 3.0e-3;
+
+    fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
+    const int status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
+    check(status == FULLMAG_FDM_OK,
+          "fully periodic rotated DMI need not enable Exchange for the ABI boundary law");
+    check(ingestion != nullptr, "fully periodic rotated DMI must allocate an owner");
+    fullmag_fdm_plan_ingestion_v2_destroy(ingestion);
+}
+
+void rotated_dmi_boundary_exchange_distinguishes_periodic_seams_from_mask_edges() {
+    std::array<unsigned char, 3> active = {1, 1, 1};
+    std::array<double, 3> exchange = {0.0, 1.3e-11, 1.3e-11};
+    fullmag_fdm_plan_desc_v2 plan{};
+    plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
+    plan.struct_size = sizeof(plan);
+    plan.base.grid = {3, 1, 1, 1.0e-9, 1.0e-9, 1.0e-9};
+    plan.base.material.exchange_stiffness = 1.3e-11;
+    plan.base.enable_exchange = 1;
+    plan.base.periodic_x = 1;
+    plan.base.periodic_y = 1;
+    plan.base.periodic_z = 1;
+    plan.base.active_mask = active.data();
+    plan.base.active_mask_len = active.size();
+    plan.base.a_field = exchange.data();
+    plan.base.a_field_len = exchange.size();
+    plan.has_rotated_interfacial_dmi = 1;
+    plan.dmi_D_rotated_interfacial = 3.0e-3;
+    fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
+    check(fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion) == FULLMAG_FDM_OK,
+          "a fully active periodic seam is not an open Aex boundary");
+    fullmag_fdm_plan_ingestion_v2_destroy(ingestion);
+    ingestion = nullptr;
+    active[2] = 0;
+    check(fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion) == FULLMAG_FDM_ERR_INVALID,
+          "mask boundary across the periodic seam must inspect resolved local Aex");
+    check(ingestion == nullptr, "invalid masked seam must not allocate an owner");
+    exchange[0] = 1.3e-11;
+    check(fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion) == FULLMAG_FDM_OK,
+          "positive local Aex must allow the masked periodic seam");
+    fullmag_fdm_plan_ingestion_v2_destroy(ingestion);
+}
+
+void rotated_dmi_flag_constant_and_composition_are_validated() {
+    fullmag_fdm_plan_desc_v2 plan{};
+    plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
+    plan.struct_size = sizeof(plan);
+    plan.base.periodic_x = 1;
+    plan.base.periodic_y = 1;
+    plan.base.periodic_z = 1;
+
+    const auto expect_rejected = [&plan](const char *message) {
+        fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
+        const int status =
+            fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
+        check(status == FULLMAG_FDM_ERR_INVALID, message);
+        check(ingestion == nullptr, "invalid rotated-DMI plan must not allocate an owner");
+    };
+
+    plan.has_rotated_interfacial_dmi = 2;
+    plan.dmi_D_rotated_interfacial = 3.0e-3;
+    expect_rejected("rDMI enable flag must be exactly 0 or 1");
+
+    plan.has_rotated_interfacial_dmi = 1;
+    plan.dmi_D_rotated_interfacial = std::numeric_limits<double>::quiet_NaN();
+    expect_rejected("NaN rDMI constant must be rejected");
+
+    plan.dmi_D_rotated_interfacial = std::numeric_limits<double>::infinity();
+    expect_rejected("infinite rDMI constant must be rejected");
+
+    plan.has_rotated_interfacial_dmi = 0;
+    plan.dmi_D_rotated_interfacial = std::numeric_limits<double>::quiet_NaN();
+    expect_rejected("non-finite disabled rDMI constant must be rejected");
+
+    plan.has_rotated_interfacial_dmi = 1;
+    plan.dmi_D_rotated_interfacial = 3.0e-3;
+    plan.base.has_interfacial_dmi = 1;
+    expect_rejected("rDMI cannot be combined with interfacial DMI");
+
+    plan.base.has_interfacial_dmi = 0;
+    plan.base.has_bulk_dmi = 1;
+    expect_rejected("rDMI cannot be combined with bulk DMI");
+}
+
+void legacy_v2_size_preserves_layout_and_defaults_the_extension() {
+    fullmag_fdm_plan_desc_v2 plan{};
+    plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
+    plan.struct_size =
+        static_cast<uint32_t>(offsetof(fullmag_fdm_plan_desc_v2, has_rotated_interfacial_dmi));
+    plan.base.material.saturation_magnetisation = 8.0e5;
+    plan.time_policy.adaptive_atol = 1.0e-6;
+    // Bytes beyond the declared legacy extent must never acquire semantics.
+    plan.has_rotated_interfacial_dmi = 1;
+    plan.dmi_D_rotated_interfacial = 3.0e-3;
+
+    fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
+    int status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
+    check(status == FULLMAG_FDM_OK, "legacy 1384-byte v2 descriptor must remain accepted");
+
+    fullmag_fdm_plan_desc_v2 receipt{};
+    status = fullmag_fdm_plan_ingestion_v2_receipt(ingestion, &receipt);
+    check(status == FULLMAG_FDM_OK, "legacy descriptor must expose a bounded receipt");
+    check(receipt.struct_size ==
+              offsetof(fullmag_fdm_plan_desc_v2, has_rotated_interfacial_dmi),
+          "legacy receipt must advertise its historical extent");
+    check(receipt.base.material.saturation_magnetisation == 8.0e5,
+          "legacy base field changed during ingestion");
+    check(receipt.time_policy.adaptive_atol == 1.0e-6,
+          "legacy time policy offset changed during ingestion");
+    check(receipt.has_rotated_interfacial_dmi == 0 &&
+              receipt.dmi_D_rotated_interfacial == 0.0,
+          "legacy descriptor must default the appended rotated-DMI extension");
     fullmag_fdm_plan_ingestion_v2_destroy(ingestion);
 }
 
@@ -373,6 +679,15 @@ void checked_backend_constructor_accepts_a_runtime_valid_plan() {
 
 int main() {
     owner_ingestion_receipt_preserves_every_semantic_field();
+    receipt_respects_legacy_output_capacity();
+    legacy_v2_size_preserves_layout_and_defaults_the_extension();
+    rotated_dmi_open_boundary_requires_exchange_at_public_ingestion_boundary();
+    rotated_dmi_open_boundary_requires_positive_exchange_stiffness_at_public_ingestion_boundary();
+    rotated_dmi_active_mask_boundary_requires_positive_exchange_stiffness_at_public_ingestion_boundary();
+    rotated_dmi_zero_is_noop_for_public_open_boundary_exchange_stiffness();
+    rotated_dmi_fully_periodic_boundary_may_omit_exchange();
+    rotated_dmi_boundary_exchange_distinguishes_periodic_seams_from_mask_edges();
+    rotated_dmi_flag_constant_and_composition_are_validated();
     incompatible_version_and_size_fail_before_backend_allocation();
 #if FULLMAG_FDM_CONTRACT_HAS_CUDA
     checked_backend_constructor_accepts_a_runtime_valid_plan();

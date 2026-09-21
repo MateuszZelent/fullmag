@@ -505,6 +505,16 @@ fn parse_fmmt_v2_header(bytes: &[u8]) -> Result<FmmtHeader> {
     let element_marker_count = read_u32(bytes, 28);
     let boundary_marker_count = read_u32(bytes, 32);
     let header_len = read_u32(bytes, 36) as usize;
+    let cell_ordinal_count = read_u32(bytes, 40);
+    let facet_ordinal_count = read_u32(bytes, 44);
+    for (label, count, expected) in [
+        ("cell", cell_ordinal_count, element_count),
+        ("facet", facet_ordinal_count, boundary_face_count),
+    ] {
+        if count != 0 && count != expected {
+            bail!("FMMT v2 {label} global ordinal count must be zero or {expected}, got {count}");
+        }
+    }
     if header_len != FMMT_V2_HEADER_LEN || !header_len.is_multiple_of(8) {
         bail!(
             "FMMT v2 header length must be {} and 8-byte aligned, got {}",
@@ -567,6 +577,16 @@ fn parse_fmmt_v2_header(bytes: &[u8]) -> Result<FmmtHeader> {
         4,
         "facet markers",
     )?;
+    // Optional stable identities follow the markers in the API's v2 layout.
+    // Absent sections do not introduce alignment padding.
+    for (label, count) in [
+        ("cell global ordinals", cell_ordinal_count),
+        ("facet global ordinals", facet_ordinal_count),
+    ] {
+        if count != 0 {
+            fmmt_v2_section(&mut offset, count as usize, 8, label)?;
+        }
+    }
     if bytes.len() != offset {
         bail!(
             "FMMT byte-length mismatch: expected {}, got {}",
@@ -772,6 +792,32 @@ mod tests {
                 "{error:#}"
             );
         }
+    }
+
+    #[test]
+    fn parse_fmmt_header_accepts_optional_v2_global_ordinals() {
+        for (cells, facets) in [(3u32, 0u32), (0, 2), (3, 2)] {
+            let mut bytes = mixed_fmmt_v2_payload();
+            bytes[40..44].copy_from_slice(&cells.to_le_bytes());
+            bytes[44..48].copy_from_slice(&facets.to_le_bytes());
+            for count in [cells, facets] {
+                if count != 0 {
+                    bytes.resize(bytes.len().next_multiple_of(8), 0);
+                    for ordinal in 0..count {
+                        bytes.extend_from_slice(&(u64::from(ordinal) + 100).to_le_bytes());
+                    }
+                }
+            }
+            parse_fmmt_header(&bytes).expect("optional global ordinals must be accepted");
+            bytes.pop();
+            assert!(parse_fmmt_header(&bytes).is_err(), "truncated ordinals must reject");
+        }
+    }
+
+    #[test]
+    fn parse_fmmt_header_rejects_invalid_v2_global_ordinal_counts() {
+        assert_fmmt_v2_u32_corruption(&[(40, 2)], "cell global ordinal count");
+        assert_fmmt_v2_u32_corruption(&[(44, 1)], "facet global ordinal count");
     }
 
     #[test]

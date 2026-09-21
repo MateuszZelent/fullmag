@@ -16,6 +16,14 @@ import nextConfig, {
 } from "./next.config";
 
 describe("control-room Next dev proxy config", () => {
+  it("redirects the bootstrap root before lazily compiling the workspace", async () => {
+    await expect(nextConfig.redirects?.()).resolves.toContainEqual({
+      source: "/",
+      destination: "/workspace",
+      permanent: false,
+    });
+  });
+
   it("uses the managed export child so Next cleans storage instead of a repo directory", () => {
     expect(
       resolveControlRoomDistDir({

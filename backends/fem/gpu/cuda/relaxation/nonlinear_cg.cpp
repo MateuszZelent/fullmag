@@ -173,6 +173,9 @@ uint64_t ncg_configuration_signature(const Context &ctx) noexcept
     signature = mix_signature(
         signature, static_cast<uint64_t>(ctx.dmi.interfacial_enabled));
     signature = mix_signature(
+        signature, static_cast<uint64_t>(ctx.dmi.rotated_interfacial_enabled));
+    signature = mix_signature(signature, double_signature(ctx.dmi.rotated_interfacial_D));
+    signature = mix_signature(
         signature, static_cast<uint64_t>(ctx.dmi.bulk_enabled));
     signature = mix_signature(
         signature, static_cast<uint64_t>(ctx.magnetoelastic.enabled));

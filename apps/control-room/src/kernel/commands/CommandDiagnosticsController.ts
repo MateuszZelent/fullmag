@@ -5,6 +5,7 @@ type CommandDiagnosticStatus =
   | "completed"
   | "disabled"
   | "failed"
+  | "pending"
   | "missing"
   | "submitted";
 

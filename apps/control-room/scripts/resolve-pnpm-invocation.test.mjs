@@ -212,8 +212,9 @@ describe("dev-server launcher contract", () => {
 
     expect(controlRoomLauncher).toContain("resolvePnpmInvocation");
     expect(controlRoomLauncher).toContain(
-      "const browserOrigin = `http://${formatUrlHost(browserHost)}:${port}`",
+      "const browserOrigin = resolveDevServerPublicOrigin(",
     );
+    expect(controlRoomLauncher).toContain("browserHost, port, process.env.FULLMAG_WEB_PUBLIC_PORT");
     expect(controlRoomLauncher).toContain(
       "NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL: browserOrigin",
     );

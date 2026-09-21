@@ -25,7 +25,7 @@ describe("MeshBuildDialog", () => {
 
   it("keeps FDM grid/mask refresh separate from FEM mesh controls", () => {
     expect(meshBuildDialogUnavailableMessage("fdm")).toBe(
-      "FDM grid and membership masks are immutable execution-plan artifacts; standalone refresh is deferred until a safe replanning lifecycle exists.",
+      "FDM grid and membership masks are rebuilt by an atomic execution-plan replan. Use Study → Apply Grid.",
     );
     expect(meshBuildDialogUnavailableMessage("unknown")).toBe(
       UNKNOWN_MESH_COMMAND_LANE_REASON,

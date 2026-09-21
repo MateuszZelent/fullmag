@@ -1,4 +1,6 @@
-use crate::quantities::{global_scalar_value, quantity_spec, QuantityKind};
+use crate::quantities::{
+    global_scalar_value, normalize_quantity_id, quantity_spec, QuantityKind,
+};
 use crate::types::{LivePreviewField, StepStats};
 use serde::{Deserialize, Serialize};
 
@@ -108,6 +110,11 @@ impl Default for DisplaySelection {
 pub struct DisplaySelectionState {
     pub revision: u64,
     pub selection: DisplaySelection,
+    /// Canonical union of spatial quantities currently needed by visible
+    /// visualization targets. An empty list is retained for legacy payloads;
+    /// consumers must fall back to `selection.quantity` in that case.
+    #[serde(default)]
+    pub observation_quantities: Vec<String>,
 }
 
 impl Default for DisplaySelectionState {
@@ -115,6 +122,7 @@ impl Default for DisplaySelectionState {
         Self {
             revision: 0,
             selection: DisplaySelection::default(),
+            observation_quantities: Vec::new(),
         }
     }
 }
@@ -130,9 +138,48 @@ impl DisplaySelectionState {
         Self {
             revision: request.revision,
             selection: DisplaySelection::from_preview_request(request),
+            observation_quantities: Vec::new(),
         }
     }
+
+    /// Normalize, deduplicate, and bound the spatial observation demand.
+    ///
+    /// The list is a read-side demand only. It never changes the selected
+    /// display or creates a physics command. Unknown, global-scalar, tensor,
+    /// and non-1/3-component quantities are excluded so native observers can
+    /// consume the result without a second shape policy.
+    pub fn canonicalize_observation_quantities(&mut self) {
+        let mut canonical = Vec::with_capacity(
+            MAX_OBSERVATION_QUANTITIES.min(self.observation_quantities.len()),
+        );
+        for requested in &self.observation_quantities {
+            let Ok(quantity_id) = normalize_quantity_id(requested.trim()) else {
+                continue;
+            };
+            let Some(spec) = quantity_spec(quantity_id.as_str()) else {
+                continue;
+            };
+            if !matches!(spec.shape, QuantityKind::VectorField | QuantityKind::SpatialScalar)
+                || !matches!(spec.n_comp, 1 | 3)
+            {
+                continue;
+            }
+            let quantity_id = quantity_id.as_str().to_string();
+            if !canonical.iter().any(|existing| existing == &quantity_id) {
+                canonical.push(quantity_id);
+            }
+            if canonical.len() == MAX_OBSERVATION_QUANTITIES {
+                break;
+            }
+        }
+        self.observation_quantities = canonical;
+    }
 }
+
+/// Maximum number of spatial quantities carried through the live display
+/// control-plane demand. The value bounds both serialized input and native
+/// observation work while covering the supported visualization catalog.
+pub const MAX_OBSERVATION_QUANTITIES: usize = 32;
 
 impl DisplaySelection {
     /// Classify a quantity string into its display kind.
@@ -247,5 +294,55 @@ impl DisplayPayload {
             value,
             unit: spec.unit.to_string(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DisplaySelectionState, MAX_OBSERVATION_QUANTITIES};
+
+    #[test]
+    fn observation_quantities_normalize_deduplicate_and_filter_shapes() {
+        let mut state = DisplaySelectionState::default();
+        state.observation_quantities = vec![
+            " h_demag ".to_string(),
+            "H_demag".to_string(),
+            "E_total".to_string(),
+            "frozen_spins".to_string(),
+            "unknown".to_string(),
+            "m".to_string(),
+        ];
+
+        state.canonicalize_observation_quantities();
+
+        assert_eq!(
+            state.observation_quantities,
+            vec![
+                "H_demag".to_string(),
+                "frozen_spins".to_string(),
+                "m".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn observation_quantities_are_bounded_after_canonicalization() {
+        let mut state = DisplaySelectionState::default();
+        state.observation_quantities = crate::quantities::quantity_specs()
+            .iter()
+            .filter(|spec| {
+                matches!(
+                    spec.shape,
+                    crate::quantities::QuantityKind::VectorField
+                        | crate::quantities::QuantityKind::SpatialScalar
+                ) && matches!(spec.n_comp, 1 | 3)
+            })
+            .map(|spec| spec.id.as_str().to_string())
+            .collect();
+
+        state.canonicalize_observation_quantities();
+
+        assert!(state.observation_quantities.len() <= MAX_OBSERVATION_QUANTITIES);
+        assert_eq!(state.observation_quantities.len(), MAX_OBSERVATION_QUANTITIES);
     }
 }

@@ -14,7 +14,7 @@ pub(crate) fn is_antenna_field_quantity(name: &str) -> bool {
     normalized_quantity_name(base).ok() == Some("H_ant")
 }
 
-fn copy_resolved_antenna_field(
+pub(super) fn copy_resolved_antenna_field(
     plan: &FdmPlanIR,
     name: &str,
     cell_count: usize,

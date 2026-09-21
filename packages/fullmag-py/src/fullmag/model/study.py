@@ -249,6 +249,7 @@ SUPPORTED_TABLE_AUTOSAVE_QUANTITIES = frozenset(
         "e_drive",
         "e_ani",
         "e_dmi",
+        "e_rotated_dmi",
         "e_total",
         "max_dm_dt",
         "max_h_eff",
@@ -263,6 +264,7 @@ TABLE_AUTOSAVE_QUANTITY_ALIASES = {
     "solver_dt": "dt",
     "E_total": "e_total",
     "E_drive": "e_drive",
+    "E_rotated_dmi": "e_rotated_dmi",
     "max_torque_Apm": "max_torque",
 }
 

@@ -789,6 +789,77 @@ void run_bulk_spiral_pitch_fixture()
         "bulk DMI spiral energy must track discrete spiral pitch");
 }
 
+void run_rotated_interfacial_directional_derivative_fixture()
+{
+    const double d = 3.0e-3;
+    const double grad_phi[4][3] = {
+        {-1.0, -1.0, -1.0},
+        {1.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0},
+        {0.0, 0.0, 1.0},
+    };
+    double magnetization[4][3] = {
+        {1.0, 0.1, 0.2},
+        {0.7, 0.4, 0.1},
+        {0.2, 0.9, 0.3},
+        {0.1, 0.3, 0.95},
+    };
+    for (auto &m : magnetization) normalize(m);
+    const double perturbation[4][3] = {
+        {0.10, -0.03, 0.02},
+        {-0.04, 0.08, 0.03},
+        {0.05, 0.02, -0.07},
+        {-0.02, -0.06, 0.09},
+    };
+
+    double grad_m[3][3];
+    double m_q[3];
+    compute_grad(magnetization, grad_phi, grad_m);
+    compute_centroid(magnetization, m_q);
+    double residual[12] = {};
+    for (int node = 0; node < 4; ++node) {
+        fullmag::fem::DmiElementData data{};
+        for (int comp = 0; comp < 3; ++comp) {
+            data.m_q[comp] = m_q[comp];
+            for (int dir = 0; dir < 3; ++dir) {
+                data.grad_m[comp][dir] = grad_m[comp][dir];
+            }
+        }
+        data.shape = kShape;
+        data.weight = kVolume;
+        for (int dir = 0; dir < 3; ++dir) data.grad_shape[dir] = grad_phi[node][dir];
+        fullmag::fem::dmi_accumulate_rotated_interfacial_residual(
+            data, d, &residual[node * 3]);
+    }
+    const double lumped_mass[4] = {kLumpedMass, kLumpedMass, kLumpedMass, kLumpedMass};
+    double h_xyz[12] = {};
+    std::string error;
+    check(
+        fullmag::fem::dmi_project_lumped_field(
+            residual, lumped_mass, nullptr, 4, kMs, h_xyz, error),
+        "rotated interfacial DMI lumped projection failed");
+
+    const auto energy = [&](const double m[4][3]) {
+        double grad[3][3];
+        double centroid[3];
+        compute_grad(m, grad_phi, grad);
+        compute_centroid(m, centroid);
+        return d * kVolume *
+            (centroid[2] * grad[0][0] - centroid[0] * grad[2][0] +
+             centroid[0] * grad[1][1] - centroid[1] * grad[0][1]);
+    };
+    constexpr double eps = 1.0e-4;
+    double plus[4][3];
+    double minus[4][3];
+    add_scaled_field(magnetization, perturbation, eps, plus);
+    add_scaled_field(magnetization, perturbation, -eps, minus);
+    const double derivative = (energy(plus) - energy(minus)) / (2.0 * eps);
+    const double projected = projected_action(h_xyz, perturbation);
+    check_relative_close(
+        projected, derivative, 1.0e-9,
+        "rotated interfacial DMI field action must match dE/deps");
+}
+
 } // namespace
 
 int main()
@@ -801,6 +872,7 @@ int main()
     run_bulk_fixture();
     run_bulk_directional_derivative_fixture();
     run_bulk_spiral_pitch_fixture();
+    run_rotated_interfacial_directional_derivative_fixture();
     std::printf("FEM dmi_weak_residual smoke PASS\n");
     return 0;
 }

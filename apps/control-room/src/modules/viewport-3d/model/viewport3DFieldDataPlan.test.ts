@@ -658,6 +658,24 @@ describe("viewport3DFieldDataPlan", () => {
     ]);
   });
 
+  it.each(["orientation", "x", "y", "z", "magnitude"])(
+    "keeps an FDM %s surface carrier when the mesh scalar pass is disabled",
+    (fdmSurfaceColorMode) => {
+      const plan = resolveViewport3DPrimaryFieldDemandPlan({
+        fdmInstanceModelNeedsFieldVector: false,
+        fdmSurfaceColorMode,
+        fdmTopographyEnabled: false,
+        fdmVectorsVisible: false,
+        fieldRenderOptions: { scalarColorsVisible: false },
+        primaryFieldQuantityId: "m",
+      });
+      expect(plan.request.query).toEqual({ component: "full", scope_kind: "full" });
+      expect(plan.demands).toEqual([
+        expect.objectContaining({ passKind: "surface", component: "full" }),
+      ]);
+    },
+  );
+
   it("owns the primary, scoped part, target quantity, and airbox request planners", () => {
     const primary = resolveViewport3DPrimaryFieldDemandPlan({
       fdmInstanceModelNeedsFieldVector: false,

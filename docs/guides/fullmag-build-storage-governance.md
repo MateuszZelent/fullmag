@@ -43,6 +43,17 @@ kontrakt i wykrywalne braki, a nie pełną gwarancję wykonawczą.
 
 ## Granica projektu
 
+Fizyczną ścieżkę storage danego hosta deklaruje operator w `.env` głównego
+checkoutu przez `FULLMAG_PROJECT_STORAGE_ROOT`. `.env.example` dokumentuje klucz,
+ale nie narzuca lokalizacji Windows/Linux. Resolver czyta tylko zarządzane
+zmienne storage, bez wykonywania kodu i interpolacji; zmienne procesu mają
+pierwszeństwo (w szczególności dla ścieżek wewnątrz kontenera). Wszystkie
+worktree korzystają z `.env` głównego checkoutu. Nie kopiuj pliku z sekretami.
+Poniższy układ rodzeństwa jest wyłącznie fallbackiem zgodności przy braku
+konfiguracji; nowe buildy agenta wymagają jawnej deklaracji w `.env`.
+Niestandardowy root nadal wymaga zatwierdzonego markera projektu. Instrukcje
+i skille odsyłają do resolvera, nie ustalają fizycznych ścieżek hosta.
+
 Tożsamość projektu wyznacza się z Git, a nie z bieżącego katalogu procesu:
 
 1. rozwiąż bieżący checkout przez `git rev-parse --show-toplevel`;
@@ -257,6 +268,16 @@ wywołanie nie tworzy `C:\fullmag-build`, `C:\fullmag-cache` ani
 
 ## Linux
 
+Lokalną kolejkę Docker Desktop opisuje [instrukcja runnera](local-container-runner.md).
+Jej stały koordynator jest jedynym właścicielem SQLite; host przygotowuje kapsuły
+i komunikuje się przez API. Nie zakładamy zgodności blokad Win32 i Linux na bind
+NTFS. Poniższa historyczna trasa Linux nie narzuca ext4 nowemu profilowi Desktop.
+
+Rozszerzenie z 2026-09-11: [bramka właściwości storage](storage-capability-gate.md)
+pozwala badać osobną trasę Docker Desktop bez narzucania jej ext4. Nie zmienia
+automatycznie kwalifikacji ani guardów istniejących recept Linux opisanych
+poniżej. Wyniki sondy oraz build/runtime/physics pozostają osobnymi dowodami.
+
 Linuxowy profil hosta (domyślnie `linux-host`) obsługuje natywne narzędzia tam,
 gdzie dana recepta tego wymaga. Ciężkie buildy i runtime’y używają
 container-backed `just` oraz
@@ -319,7 +340,12 @@ odpowiednie kroki. Nie obejmuje to starych, obcych worktree, cache ani wyników.
    wybierz `master`, pobierz aktualny ref i aktualizuj wyłącznie fast-forward.
    Nie resetuj, nie stashuj ani nie commituj cudzych zmian. Jeśli aktualizacja
    koliduje z nimi lub lokalny `master` jest rozbieżny, zapisz blokadę.
-   Po merge PR nie wykonuj kolejnego merge brancha zadania.
+   Zdalny merge musi mieć lokalny odpowiednik: potwierdź, że lokalny `HEAD`
+   głównego checkoutu wskazuje wynikowy commit `master`. Jeżeli główny checkout
+   nie może być użyty, ustaw pierwotny worktree na wynikowy ref tylko do
+   weryfikacji po sprawdzeniu jego procesów i mountów; cleanup wykonuje wtedy
+   inny zachowany checkout, a bez niego zapisz `blocked`. Po merge PR nie
+   wykonuj kolejnego merge brancha zadania.
 6. Zweryfikuj obecność wyniku PR na `master`, tożsamość źródeł i wymagane
    kontrole integracyjne. Sprawdź brak nowych commitów na branchu zadania od
    HEAD scalonego PR. Przy squash/rebase użyj też dowodu PR i porównania zmian;
@@ -327,10 +353,16 @@ odpowiednie kroki. Nie obejmuje to starych, obcych worktree, cache ani wyników.
 7. Przed cleanupem zapisz ścieżki buildów, logów i zachowanych wyników oraz
    stan integracji. Sprawdź dokładną rozwiązaną ścieżkę worktree, status
    obejmujący untracked files, unikalne zmiany, ownership, procesy, kontenery,
-   mounty i linki. Z głównego checkoutu wykonaj `git worktree remove` dla
-   pojedynczej zweryfikowanej ścieżki, bez `--force`. Zweryfikuj brak wpisu
-   w `git worktree list` i brak katalogu. Nie kasuj przy tym storage ani branchy
-   innych zadań. Jeśli Git odmawia, zachowaj dane i zapisz powód.
+   mounty i linki. Z dostępnego cleanup executora — głównego checkoutu albo
+   innego zachowanego checkoutu, którego nie usuwasz — wykonaj
+   `git worktree remove` dla pojedynczej zweryfikowanej ścieżki, bez `--force`.
+   Zweryfikuj brak wpisu
+   w `git worktree list` i brak katalogu. Następnie usuń lokalny branch zadania
+   dopiero po potwierdzeniu integracji: dla merge/fast-forward sprawdź ancestry,
+   a dla squash/rebase użyj stanu PR `MERGED` oraz porównania zmian. W obu
+   przypadkach potwierdź, że żaden inny worktree nie używa brancha, i sprawdź
+   jego usunięcie. Nie kasuj przy tym storage ani branchy innych zadań. Jeśli
+   Git odmawia, zachowaj dane i zapisz powód.
 8. Zaktualizuj rekord pierwotnego worktree w `storage/index` (nie rekord
    głównego checkoutu): PR, merge commit, stan cleanupu, zachowane zasoby
    i następny krok. Istniejący `worktree-finish` jedynie zapisuje stan;

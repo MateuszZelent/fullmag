@@ -11,6 +11,7 @@ import {
   draftKeyForObjectMeshPolicyResource,
   formatObjectMeshPolicyConfig,
   objectMeshPolicyDraftDirty,
+  updateObjectMeshPolicyDraft,
   resolveObjectMeshTopologyCapabilities,
   validateObjectMeshTopologyCapabilities,
 } from "./ObjectMeshPolicyPanelModel";
@@ -18,10 +19,10 @@ import {
 function objectMeshPolicyDraft(
   patch: Partial<ReturnType<typeof draftFromObjectMeshPolicyResource>>,
 ) {
-  return {
-    ...draftFromObjectMeshPolicyResource(defaultObjectMeshPolicyResource("free-layer")),
-    ...patch,
-  };
+  return updateObjectMeshPolicyDraft(
+    draftFromObjectMeshPolicyResource(defaultObjectMeshPolicyResource("free-layer")),
+    patch,
+  );
 }
 
 describe("ObjectMeshPolicyPanelModel", () => {
@@ -1042,4 +1043,78 @@ describe("ObjectMeshPolicyPanelModel", () => {
       error: "Box X max must be greater than Box X min.",
     });
   });
+});
+
+
+describe("mesh policy JSON edits", () => {
+  it("submits a JSON edit instead of the stale form value", () => {
+    const draft = draftFromObjectMeshPolicyResource({ object_id: "film", config: { maximum_element_size: 1e-8 }, revision: 1 });
+    const result = buildObjectMeshPolicyReplaceRequest({ ...draft, configText: '{"maximum_element_size":2e-8,"extension":{"keep":true}}' });
+    expect(result).toMatchObject({ request: { config: { maximum_element_size: 2e-8, extension: { keep: true } } } });
+  });
+
+  it("preserves deletion of an authored JSON parameter", () => {
+    const draft = draftFromObjectMeshPolicyResource({ object_id: "film", config: { maximum_element_size: 1e-8 }, revision: 1 });
+    const result = buildObjectMeshPolicyReplaceRequest({ ...draft, configText: '{}' });
+    expect("request" in result).toBe(true);
+    if ("request" in result) expect(result.request?.config).not.toHaveProperty("maximum_element_size");
+  });
+
+  it("rejects invalid authored JSON parameter values without erasing them", () => {
+    const draft = draftFromObjectMeshPolicyResource({ object_id: "film", config: { maximum_element_size: 1e-8 }, revision: 1 });
+    const result = buildObjectMeshPolicyReplaceRequest({ ...draft, configText: '{"maximum_element_size":"wrong"}' });
+    expect(result).toHaveProperty("error");
+  });
+});
+
+
+describe("synchronized mesh parameter editing", () => {
+  it("keeps JSON and form edits coherent through a complete round trip", () => {
+    const initial = draftFromObjectMeshPolicyResource({ object_id: "film", config: { maximum_element_size: 1e-8, extension: { keep: true } }, revision: 1 });
+    const json = updateObjectMeshPolicyDraft(initial, { configText: '{"maximum_element_size":2e-8,"extension":{"keep":true}}' });
+    expect(json.maximumElementSize).toBe("2e-8");
+    const form = updateObjectMeshPolicyDraft(json, { maximumElementSize: "3e-8" });
+    expect(JSON.parse(form.configText)).toMatchObject({ maximum_element_size: 3e-8, extension: { keep: true } });
+    expect(buildObjectMeshPolicyReplaceRequest(form)).toMatchObject({ request: { config: { maximum_element_size: 3e-8 } } });
+    const removed = updateObjectMeshPolicyDraft(form, { maximumElementSize: "" });
+    expect(JSON.parse(removed.configText)).not.toHaveProperty("maximum_element_size");
+  });
+
+  it("preserves incomplete JSON and recovers the structured editor when corrected", () => {
+    const initial = draftFromObjectMeshPolicyResource({ object_id: "film", config: { maximum_element_size: 1e-8, extension: { keep: true } }, revision: 1 });
+    const invalid = updateObjectMeshPolicyDraft(initial, { configText: '{"maximum_element_size":' });
+    expect(invalid.configText).toBe('{"maximum_element_size":');
+    expect(buildObjectMeshPolicyReplaceRequest(invalid)).toHaveProperty("error");
+    const fixed = updateObjectMeshPolicyDraft(invalid, { configText: '{"maximum_element_size":4e-8}' });
+    expect(fixed.maximumElementSize).toBe("4e-8");
+    expect(buildObjectMeshPolicyReplaceRequest(fixed)).toMatchObject({ request: { config: { maximum_element_size: 4e-8 } } });
+  });
+
+  it("preserves invalid structured text and prevents submission until corrected", () => {
+    const initial = draftFromObjectMeshPolicyResource({ object_id: "film", config: { maximum_element_size: 1e-8, extension: { keep: true } }, revision: 1 });
+    const invalid = updateObjectMeshPolicyDraft(initial, { maximumElementSize: "2e-" });
+    expect(invalid.maximumElementSize).toBe("2e-");
+    expect(buildObjectMeshPolicyReplaceRequest(invalid)).toHaveProperty("error");
+    const fixed = updateObjectMeshPolicyDraft(invalid, { maximumElementSize: "2e-8" });
+    expect(buildObjectMeshPolicyReplaceRequest(fixed)).toMatchObject({ request: { config: { maximum_element_size: 2e-8 } } });
+  });
+});
+
+
+it("does not rewrite an unrelated authored size field when editing a size parameter", () => {
+  const sizeFields = [{kind: "Box", extension: {keep: true}, params: { VIn: 1, VOut: 2, XMin: 0, XMax: 1, YMin: 0, YMax: 1, ZMin: 0, ZMax: 1, extra: 9 }}];
+  const initial = draftFromObjectMeshPolicyResource({ object_id: "film", config: { maximum_element_size: 1e-8, size_fields: sizeFields }, revision: 1 });
+  expect(buildObjectMeshPolicyReplaceRequest(initial)).toMatchObject({ request: { config: { size_fields: sizeFields } } });
+  const next = updateObjectMeshPolicyDraft(initial, { maximumElementSize: "2e-8" });
+  expect(buildObjectMeshPolicyReplaceRequest(next)).toMatchObject({ request: { config: { size_fields: sizeFields, maximum_element_size: 2e-8 } } });
+});
+
+
+it("clears dirty after an authored deletion is acknowledged even when inherited targets are present", () => {
+  const options = { effectiveTarget: { maximum_element_size: 1e-8 } };
+  const initial = draftFromObjectMeshPolicyResource({ object_id: "film", config: { maximum_element_size: 1e-8 }, effective_config: { maximum_element_size: 1e-8 }, revision: 1 }, options);
+  const removed = updateObjectMeshPolicyDraft(initial, { configText: "{}" });
+  const acknowledged = draftFromObjectMeshPolicyResource({ object_id: "film", config: {}, effective_config: { maximum_element_size: 1e-8 }, revision: 2 }, options);
+  expect(objectMeshPolicyDraftDirty(removed, acknowledged)).toBe(false);
+  expect(acknowledged.maximumElementSize).toBe("");
 });

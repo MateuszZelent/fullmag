@@ -1,5 +1,5 @@
 import { isRenderablePlanarOccupancy } from "../model/planarOccupancy";
-import { scalarColorRgb } from "@/shared/visualization/scalarColorPalette";
+import { scalarColorSrgb } from "@/shared/visualization/scalarColorPalette";
 
 export interface ColorRange {
   max: number;
@@ -44,7 +44,7 @@ export function colorizeScalarRaster(
       pixels[offset + 1] = shade;
       pixels[offset + 2] = shade;
     } else {
-      const [red, green, blue] = scalarColorRgb(t, options.colormap);
+      const [red, green, blue] = scalarColorSrgb(t, options.colormap);
       pixels[offset] = Math.round(255 * red);
       pixels[offset + 1] = Math.round(255 * green);
       pixels[offset + 2] = Math.round(255 * blue);

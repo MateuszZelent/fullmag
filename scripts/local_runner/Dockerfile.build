@@ -1,0 +1,10 @@
+# Reuse an explicitly selected, immutable Fullmag toolchain image offline.
+ARG TOOLCHAIN_IMAGE
+FROM ${TOOLCHAIN_IMAGE}
+USER root
+RUN mkdir -p /opt/fullmag-runner-tools/bin && \
+    cp -a /root/.cargo/bin/. /opt/fullmag-runner-tools/bin/ && \
+    chmod -R a+rX /opt/fullmag-runner-tools
+ENV PATH=/opt/fullmag-runner-tools/bin:/pnpm:/opt/fullmag-deps/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+USER 65532:65532
+LABEL org.fullmag.local-runner.build-contract="v1"

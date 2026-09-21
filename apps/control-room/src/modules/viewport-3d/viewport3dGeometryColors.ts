@@ -3,7 +3,6 @@ import { BufferAttribute, BufferGeometry } from "three";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 
 import {
-  buildVertexScalarColors,
   fieldTransformNeedsChunking,
   VIEWPORT_3D_SYNC_COLOR_POINT_LIMIT,
   type ScalarColorBuffer,
@@ -23,16 +22,6 @@ export function canApplyVertexScalarColors(
         maxSynchronousPoints,
       ),
   );
-}
-
-export function applyVertexScalarColors(
-  geometry: BufferGeometry,
-  fieldVector: DecodedFieldVector | null | undefined,
-  vertexCount: number,
-): boolean {
-  const colorBuffer = buildVertexScalarColors(fieldVector, vertexCount);
-
-  return applyVertexScalarColorBuffer(geometry, colorBuffer, vertexCount);
 }
 
 export function canApplyVertexScalarColorBuffer(

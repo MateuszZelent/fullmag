@@ -1,3 +1,4 @@
+import { recordVisualizationDebugPerformanceMetric } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 import { recordViewport3DGpuUploadDiagnostic } from "./viewport3dGpuUploadDiagnostics";
 import type {
   Viewport3DGpuUploadChunk,
@@ -261,6 +262,9 @@ export function createViewport3DGpuUploadManager({
     try {
       if (status === "failed") {
         rollbackTicket(ticket);
+      }
+      if (status === "aborted") {
+        recordVisualizationDebugPerformanceMetric("uploadTicketsAborted", 1);
       }
     } finally {
       cleanupTicket(ticket);

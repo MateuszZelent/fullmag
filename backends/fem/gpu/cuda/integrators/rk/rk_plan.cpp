@@ -24,7 +24,8 @@ namespace {
 
 bool has_local_field_operator(const Context &ctx)
 {
-    return ctx.dmi.interfacial_enabled || ctx.dmi.bulk_enabled ||
+    return ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled ||
+        ctx.dmi.bulk_enabled ||
         ctx.zeeman.has_external_field ||
         ctx.anisotropy.uniaxial_enabled || ctx.anisotropy.cubic_enabled ||
         ctx.magnetoelastic.enabled ||
@@ -147,7 +148,8 @@ GpuRkPlan gpu_rk_plan_device_resident(const Context &ctx, std::string &reason)
         reason = "GPU RK device-resident path requires enable_exchange=true";
         return plan;
     }
-    if ((ctx.dmi.interfacial_enabled || ctx.dmi.bulk_enabled) &&
+    if ((ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled ||
+         ctx.dmi.bulk_enabled) &&
         (!ctx.gpu_state.device.mesh_geometry.uploaded ||
             ctx.gpu_state.device.mesh_geometry.element_count != ctx.mesh.n_elements)) {
         reason = "GPU RK device-resident path requires device-resident mesh geometry for DMI";

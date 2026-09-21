@@ -39,6 +39,10 @@ export interface ObjectMeshPolicyDraft {
   cornerMaximumElementSize: string;
   cornerTransitionDistance: string;
   configText: string;
+  /** Last JSON projection shared by the structured and advanced editors. */
+  syncedConfigText?: string;
+  /** True after either editor has committed a validated JSON projection. */
+  configSynchronized?: boolean;
   curvatureFactor: string;
   edgeMaximumElementSize: string;
   edgeThickness: string;
@@ -274,12 +278,14 @@ export function draftFromObjectMeshPolicyResource(
   resource: MeshObjectConfigResource,
   options: {
     effectiveTarget?: JsonObject | null | undefined;
+    authoredOnly?: boolean;
   } = {},
 ): ObjectMeshPolicyDraft {
+  const inherited = !options.authoredOnly && resource.config == null;
   const config = {
-    ...defaultObjectMeshPolicyConfig(),
-    ...targetConfigFromEffectiveObject(options.effectiveTarget),
-    ...(resource.effective_config ?? {}),
+    ...(inherited ? defaultObjectMeshPolicyConfig() : {}),
+    ...(inherited ? targetConfigFromEffectiveObject(options.effectiveTarget) : {}),
+    ...(inherited ? resource.effective_config ?? {} : {}),
     ...(resource.config ?? {}),
   };
   const manualBox = readManualBoxSizeField(config.size_fields);
@@ -321,6 +327,7 @@ export function draftFromObjectMeshPolicyResource(
     ),
     calibrateFor: readStringText(config.calibrate_for),
     configText: formatObjectMeshPolicyConfig(resource.config),
+    syncedConfigText: formatObjectMeshPolicyConfig(resource.config),
     curvatureFactor: readNumberText(config.curvature_factor),
     edgeMaximumElementSize: readNumberText(config.edge_maximum_element_size),
     edgeThickness: readNumberText(config.edge_thickness),
@@ -442,7 +449,79 @@ function targetConfigFromEffectiveObject(
   return config;
 }
 
-export function buildObjectMeshPolicyReplaceRequest({
+export function objectMeshPolicyJsonError(configText: string): string | null {
+  const parsed = parseConfig(configText);
+  return parsed.ok ? null : parsed.error;
+}
+
+function synchronizeObjectMeshPolicyJson(draft: ObjectMeshPolicyDraft): ObjectMeshPolicyDraft {
+  if (draft.syncedConfigText === undefined || draft.configText === draft.syncedConfigText) return draft;
+  const previous = parseConfig(draft.syncedConfigText);
+  const next = parseConfig(draft.configText);
+  if (!previous.ok || !next.ok) return draft;
+  const project = (config: JsonObject) => draftFromObjectMeshPolicyResource({ object_id: "", config, revision: 0 }, { authoredOnly: true });
+  const previousFields = project(previous.value);
+  const nextFields = project(next.value);
+  const changes: Partial<ObjectMeshPolicyDraft> = {};
+  for (const key of Object.keys(nextFields) as (keyof ObjectMeshPolicyDraft)[]) {
+    if (["configText", "syncedConfigText", "configSynchronized", "present"].includes(key)) continue;
+    if (!Object.is(previousFields[key], nextFields[key])) {
+      Object.assign(changes, { [key]: nextFields[key] });
+    }
+  }
+  return { ...draft, ...changes, syncedConfigText: draft.configText, configSynchronized: true };
+}
+
+export function updateObjectMeshPolicyDraft(
+  draft: ObjectMeshPolicyDraft,
+  patch: Partial<ObjectMeshPolicyDraft>,
+): ObjectMeshPolicyDraft {
+  const next = { ...synchronizeObjectMeshPolicyJson(draft), ...patch };
+  if (Object.keys(patch).length === 1 && patch.configText !== undefined) {
+    return synchronizeObjectMeshPolicyJson(next);
+  }
+  // Presets may update JSON and structured controls together as one transaction.
+  const formDraft = { ...next, syncedConfigText: next.configText, configSynchronized: false };
+  const result = buildObjectMeshPolicyFormRequest(formDraft);
+  if ("error" in result || !result.request?.config) return formDraft;
+  const previous = buildObjectMeshPolicyFormRequest(draft);
+  const parsed = parseConfig(draft.configText);
+  let config = result.request.config;
+  if (patch.configText === undefined && parsed.ok && "request" in previous && previous.request?.config) {
+    config = { ...parsed.value };
+    const before = previous.request.config;
+    const after = result.request.config;
+    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      if (JSON.stringify(before[key]) === JSON.stringify(after[key])) continue;
+      if (Object.hasOwn(after, key)) config[key] = after[key]!;
+      else delete config[key];
+    }
+  }
+  const configText = formatObjectMeshPolicyConfig(config);
+  return { ...formDraft, configText, syncedConfigText: configText, configSynchronized: true };
+}
+
+export function buildObjectMeshPolicyReplaceRequest(
+  draft: ObjectMeshPolicyDraft,
+): ReturnType<typeof buildObjectMeshPolicyFormRequest> {
+  const synchronized = synchronizeObjectMeshPolicyJson(draft);
+  const result = buildObjectMeshPolicyFormRequest(synchronized.configSynchronized ? { ...synchronized, meshStrategy: "" } : synchronized);
+  if (!synchronized.configSynchronized || "error" in result || !result.request) return result;
+  if (!synchronized.present) return result;
+  const parsed = parseConfig(synchronized.configText);
+  if (!parsed.ok) return { error: parsed.error };
+  const config = { ...parsed.value };
+  for (const key of ["compute_quality", "per_element_quality", "exact_layer_count", "through_thickness_symmetric"]) {
+    if (config[key] !== undefined && config[key] !== null && typeof config[key] !== "boolean") {
+      return { error: key + " must be a boolean." };
+    }
+  }
+  delete config.sweep_source;
+  delete config.sweep_destination;
+  return { request: { config } };
+}
+
+function buildObjectMeshPolicyFormRequest({
   cornerExtent,
   cornerMaximumElementSize,
   cornerTransitionDistance,
@@ -827,6 +906,7 @@ function draftRecordsEqual(
 ): boolean {
   const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
   for (const key of keys) {
+    if (key === "syncedConfigText" || key === "configSynchronized") continue;
     if (key === "configText") {
       if (!jsonTextEquivalent(left[key], right[key])) return false;
     } else if (!draftValueEquivalent(left[key], right[key])) {
@@ -1017,11 +1097,15 @@ function applyManualBoxSizeField(
   if (draft.enabled) {
     const parsed = parseManualBoxSizeField(draft);
     if (!parsed.ok) return parsed;
+    const original = asRecord(fields.find((entry) => isEditableManualBoxSizeField(entry, draft.source)));
+    const params = { ...asRecord(original?.params), ...parsed.params };
+    delete params.Source;
     nextFields.push({
+      ...original,
       kind: "Box",
       source: OBJECT_POLICY_MANUAL_BOX_SOURCE,
-      params: parsed.params,
-    });
+      params,
+    } as JsonValue);
   }
 
   if (nextFields.length === 0) {
@@ -1058,10 +1142,14 @@ function applyObjectCoreRelaxationSizeField(
   if (draft.enabled) {
     const parsed = parseObjectCoreRelaxationSizeField(draft);
     if (!parsed.ok) return parsed;
+    const original = asRecord(fields.find((entry) => asRecord(entry)?.kind === OBJECT_CORE_RELAXATION_KIND));
+    const extraParams = { ...asRecord(original?.params) };
+    for (const key of ["GeometryName", "core_maximum_element_size", "edge_distance", "edge_maximum_element_size", "sampling_edge", "sampling_surface", "surface_distance", "surface_maximum_element_size"]) delete extraParams[key];
     nextFields.push({
+      ...original,
       kind: OBJECT_CORE_RELAXATION_KIND,
-      params: parsed.params,
-    });
+      params: { ...extraParams, ...parsed.params },
+    } as JsonValue);
   }
 
   if (nextFields.length === 0) {
@@ -1238,9 +1326,9 @@ function readNumberText(value: unknown): string {
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (!trimmed) return "";
-    return Number.isFinite(Number(trimmed)) ? trimmed : "";
+    return trimmed;
   }
-  return "";
+  return value == null ? "" : JSON.stringify(value);
 }
 
 function readTransitionDistanceText(value: unknown): string {

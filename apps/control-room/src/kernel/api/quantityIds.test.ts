@@ -11,6 +11,16 @@ import {
 } from "./quantityIds";
 
 describe("quantity catalog visualization selector", () => {
+  it("normalizes rotated DMI IDs and exposes canonical SI units", () => {
+    expect(resolveCanonicalQuantityId("h_rotated_dmi")).toBe("H_rotated_dmi");
+    expect(resolveCanonicalQuantityId("e_rotated_dmi")).toBe("E_rotated_dmi");
+    expect(resolveCanonicalQuantityId("eden_rotated_dmi")).toBe("eden_rotated_dmi");
+    expect(quantityUnitForColorbar("H_rotated_dmi")).toBe("A/m");
+    expect(quantityUnitForColorbar("E_rotated_dmi")).toBe("J");
+    expect(quantityUnitForColorbar("eden_rotated_dmi")).toBe("J/m³");
+    expect(isScalarSpatialQuantityId("eden_rotated_dmi")).toBe(true);
+  });
+
   it("treats the resolved Frozen Spins mask as a canonical scalar viewport quantity", () => {
     expect(resolveCanonicalQuantityId("frozen_spins")).toBe("frozen_spins");
     expect(resolveCanonicalQuantityId("frozen_mask")).toBe("frozen_spins");

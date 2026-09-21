@@ -5,6 +5,8 @@ description: "Use when a code change needs checkout isolation or the user reques
 
 # Worktree isolation
 
+Read host storage configuration through the resolver from the main checkout's `.env` (`FULLMAG_PROJECT_STORAGE_ROOT`; template `.env.example`). Do not hardcode Windows/Linux build paths or copy secrets into worktrees. Explicit process variables take precedence for validated container mapping. Git identifies the project and worktree roots; the configured storage root determines build destinations.
+
 Inspect `git status --short`, `git worktree list --porcelain`, `git rev-parse --git-dir`, `git rev-parse --git-common-dir`, and `git rev-parse --show-superproject-working-tree` before choosing a checkout. Different git/common directories do not by themselves prove isolation inside a submodule.
 
 For Fullmag, apply [the shared storage policy](../../../docs/guides/fullmag-build-storage-governance.md): derive the project root from the common Git directory and keep `worktrees` and `storage` as its siblings. Do not derive either path from `cwd.parent`. Register the task and owner before creating or reusing a worktree; the registry and the final resource state are mandatory.
@@ -16,6 +18,8 @@ Create at most one worktree per task by default, under the project's `worktrees/
 Use the user's directory preference or an existing convention. Verify a project-local worktree directory is ignored before creating it. An ignore change does not authorize a commit. Keep build caches and browser downloads in the project's approved external storage.
 
 Read the project's build instructions before installing or building anything. Set up only dependencies needed for the task; do not infer `npm install` or host `cargo build` from file presence. In Fullmag, native FEM builds start with container-backed `just` recipes.
+
+On a host enrolled with `Fullmag_build_runner`, use the `local-build-runner` skill for full builds of master and task worktrees. Reuse the single coordinator and explicitly select the source checkout/commit; creating a worktree does not authorize another runner or bypassing the queue. Keep lightweight tests and scientific runtime gates separate from build submission.
 
 Record relevant pre-existing test failures and distinguish them from regressions. Continue safe independent work; do not silently move into a shared checkout after an isolation or permission failure. Respect the host approval boundary.
 

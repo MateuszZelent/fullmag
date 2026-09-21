@@ -52,4 +52,24 @@ describe("MeshBuildHistoryView", () => {
     expect(html).toContain("#3 mesh-c");
     expect(html).toContain("Build #2 / Build #3");
   });
+
+  it("exposes an explicit restore action only for builds with a policy snapshot", () => {
+    const entries = normalizeMeshBuildHistory([
+      {
+        build_id: "build-a",
+        mesh_name: "mesh-a",
+        node_count: 10,
+        element_count: 20,
+        mesh_target: "study_domain",
+        canonical_policy_snapshot: { universe: { airbox_hmax: 1e-6 } },
+      },
+      { build_id: "legacy-b", mesh_name: "mesh-b", node_count: 14, element_count: 28 },
+    ]);
+    const html = renderToStaticMarkup(
+      <MeshBuildHistoryView entries={entries} onRestore={() => undefined} />,
+    );
+    expect(html).toContain("Restore Airbox policy to draft");
+    expect(html).toContain("Configuration snapshot unavailable");
+    expect(html).toContain('data-build-id="build-a"');
+  });
 });

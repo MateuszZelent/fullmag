@@ -440,7 +440,7 @@ pub(crate) fn session_epoch(
     }
 }
 
-pub(crate) const ACTIVE_LANE_OPERATION_IDS: [&str; 33] = [
+pub(crate) const ACTIVE_LANE_OPERATION_IDS: [&str; 34] = [
     "grid_build",
     "shared_mesh_build",
     "field_quantity",
@@ -460,6 +460,7 @@ pub(crate) const ACTIVE_LANE_OPERATION_IDS: [&str; 33] = [
     "interaction.sot",
     "interaction.stt",
     "interaction.interfacial_dmi",
+    "interaction.rotated_interfacial_dmi",
     "interaction.bulk_dmi",
     "interaction.uniaxial_anisotropy",
     "interaction.cubic_anisotropy",
@@ -695,13 +696,6 @@ fn active_lane_operations(
             requires.iter().copied(),
         )
     };
-    let deferred = |reason: &str, requires: &[&str]| {
-        operation(
-            ActiveLaneCapabilityState::Deferred,
-            reason,
-            requires.iter().copied(),
-        )
-    };
     let term_operation = |available: bool, term: &str| {
         if available {
             supported(
@@ -754,9 +748,9 @@ fn active_lane_operations(
         (
             "grid_build".into(),
             if is_fdm {
-                deferred(
-                    "FDM grid and membership masks are immutable execution-plan artifacts; standalone refresh is deferred until a safe replanning lifecycle exists.",
-                    &["discretization:fdm", "safe_replanning_lifecycle"],
+                supported(
+                    "FDM grid and membership masks are rebuilt by an atomic execution-plan replan.",
+                    &["discretization:fdm", "operation:fdm_grid_refresh"],
                 )
             } else {
                 unsupported(
@@ -891,7 +885,11 @@ fn active_lane_operations(
         (
             "interaction.dmi".into(),
             term_operation(
-                has_term(&["interfacial_dmi", "bulk_dmi"]),
+                has_term(&[
+                    "interfacial_dmi",
+                    "rotated_interfacial_dmi",
+                    "bulk_dmi",
+                ]),
                 "interaction:dmi",
             ),
         ),
@@ -923,6 +921,13 @@ fn active_lane_operations(
             term_operation(
                 has_term(&["interfacial_dmi"]),
                 "interaction:interfacial_dmi",
+            ),
+        ),
+        (
+            "interaction.rotated_interfacial_dmi".into(),
+            term_operation(
+                has_term(&["rotated_interfacial_dmi"]),
+                "interaction:rotated_interfacial_dmi",
             ),
         ),
         (

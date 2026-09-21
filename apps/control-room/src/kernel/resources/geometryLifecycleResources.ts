@@ -222,6 +222,29 @@ export const MESH_SHARED_DOMAIN_QUALITY_GATES_RESOURCE_KEY =
   MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH;
 export const MESH_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_RESOURCE_KEY =
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH;
+
+/** Invalidate every resource published by an FDM grid/membership replan. */
+export function invalidateFdmGridResources(
+  resources: Pick<ResourceInvalidationController, "invalidate">,
+  revision: ResourceRevision,
+): void {
+  for (const resourceKey of [
+    MESHING_BUILDS_PATH,
+    MESHING_BUILDS_CURRENT_PATH,
+    MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+    MESHING_SUMMARY_PATH,
+    MESHING_SEMANTICS_PATH,
+    MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+    MESHING_SHARED_DOMAIN_REPORT_PATH,
+    MESHING_SHARED_DOMAIN_QUALITY_PATH,
+    MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
+    MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH,
+    MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
+  ]) {
+    resources.invalidate(resourceKey, revision);
+  }
+}
+
 export const FDM_REGION_MEMBERSHIPS_RESOURCE_KEY =
   DATA_FDM_REGION_MEMBERSHIPS_PATH;
 export const FDM_REGION_MEMBERSHIP_BINARY_RESOURCE_KEY =
@@ -833,7 +856,7 @@ export function useMeshSharedDomainManifestResource(
   });
 }
 
-export function useMeshSharedDomainPolicyResource() {
+export function useMeshSharedDomainPolicyResource(options: ResourceHookOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
@@ -842,6 +865,7 @@ export function useMeshSharedDomainPolicyResource() {
   );
 
   return useResource<MeshSharedDomainConfigResource>({
+    enabled: options.enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey: MESH_SHARED_DOMAIN_POLICY_RESOURCE_KEY,

@@ -48,7 +48,9 @@ export interface CommandContext {
 }
 
 export interface CommandResult {
-  status: "completed" | "failed" | "cancelled";
+  status: "completed" | "failed" | "cancelled" | "pending";
+  commandId?: string;
+  observation?: "waiting" | "disconnected" | "publication-unconfirmed";
   message?: string;
 }
 

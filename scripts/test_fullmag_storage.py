@@ -21,7 +21,9 @@ class StorageTests(unittest.TestCase):
         self.addCleanup(environment.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.project = Path(self.temp.name) / "project"
+        # Windows runners may expose TEMP through an 8.3 short-name alias.
+        # Author fixture paths canonically, as required by the storage guard.
+        self.project = Path(self.temp.name).resolve() / "project"
         self.repo = self.project / "fullmag"
         self.repo.mkdir(parents=True)
         subprocess.run(["git", "init", "--quiet", str(self.repo)], check=True)
@@ -50,6 +52,24 @@ class StorageTests(unittest.TestCase):
         layout = self.resolve(profile="windows-native")
         self.assertEqual(Path(layout["storage_root"]), self.repo / "storage")
 
+    def test_dotenv_storage_root_and_process_precedence(self):
+        project_root = self.repo if os.name == "nt" else self.project
+        custom = self.project / "configured-storage"
+        custom.mkdir()
+        (custom / ".fullmag-storage.json").write_text(json.dumps({
+            "schema": storage.SCHEMA, "project_root": str(project_root)}))
+        (self.repo / ".env").write_text(
+            f'FULLMAG_PROJECT_STORAGE_ROOT="{custom}"\nUNRELATED_SECRET=ignored\n')
+        self.assertEqual(Path(self.resolve()["storage_root"]), custom)
+        self.assertNotIn("UNRELATED_SECRET", storage.storage_dotenv(self.repo))
+        self.env["FULLMAG_PROJECT_STORAGE_ROOT"] = str(project_root / "storage")
+        self.assertEqual(Path(self.resolve()["storage_root"]), project_root / "storage")
+
+    def test_dotenv_invalid_path_is_not_silently_replaced(self):
+        (self.repo / ".env").write_text("FULLMAG_PROJECT_STORAGE_ROOT=relative/path\n")
+        with self.assertRaises(storage.StorageError):
+            self.resolve()
+
     def test_nested_worktree_uses_common_project_and_isolated_build(self):
         subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=Test", "-c",
                         "user.email=test@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "fixture"], check=True)
@@ -59,6 +79,22 @@ class StorageTests(unittest.TestCase):
         other = storage.resolve_layout(worktree, profile="test", environ={})
         self.assertEqual(main["storage_root"], other["storage_root"])
         self.assertNotEqual(main["build_root"], other["build_root"])
+
+    def test_worktree_reads_main_dotenv_without_local_copy(self):
+        project_root = self.repo if os.name == "nt" else self.project
+        subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=Test", "-c",
+                        "user.email=test@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "fixture"], check=True)
+        worktree = self.project / "worktrees" / "task"
+        subprocess.run(["git", "-C", str(self.repo), "worktree", "add", "--quiet", "--detach", str(worktree)], check=True)
+        custom = self.project / "host-storage"
+        custom.mkdir()
+        (custom / ".fullmag-storage.json").write_text(json.dumps({
+            "schema": storage.SCHEMA, "project_root": str(project_root)}))
+        (self.repo / ".env").write_text(f'FULLMAG_PROJECT_STORAGE_ROOT="{custom}"\n')
+        self.assertFalse((worktree / ".env").exists())
+        layout = storage.resolve_layout(worktree, profile="test", environ={})
+        self.assertEqual(Path(layout["storage_root"]), custom)
+        self.assertNotEqual(layout["build_root"], self.resolve()["build_root"])
 
     def test_override_outside_storage_is_rejected_before_creation(self):
         self.env["CARGO_TARGET_DIR"] = str(self.project / "random-target")

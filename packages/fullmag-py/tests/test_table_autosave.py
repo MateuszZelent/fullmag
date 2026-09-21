@@ -192,6 +192,14 @@ def test_table_autosave_accepts_custom_quantities_and_rejects_empty_lists() -> N
         fm.TableAutosave(t_sampl=1e-12, quantities=[])
 
 
+def test_table_autosave_accepts_rotated_dmi_energy_alias() -> None:
+    table = fm.TableAutosave(
+        every_steps=2,
+        quantities=["E_rotated_dmi", "e_rotated_dmi"],
+    )
+    assert table.to_ir()["quantities"] == ["e_rotated_dmi"]
+
+
 def test_time_evolution_accepts_study_table_autosave_helper() -> None:
     study = fm.TimeEvolution(
         dynamics=fm.LLG(),

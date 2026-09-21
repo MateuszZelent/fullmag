@@ -360,7 +360,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
     topologyModel.nodeCount,
     colors.mesh,
   );
-  const visibleScalarColors = useViewport3DScalarColorUpload({
+  const visibleScalarColorsUpload = useViewport3DScalarColorUpload({
     colorBuffer: surfaceColorState.scalarColors,
     dirtyReason: "airbox-field-colors",
     enabled: Boolean(
@@ -376,6 +376,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
     vertexColorsEnabled: surfaceColorState.vertexColorsEnabled,
     vertexCount: topologyModel.nodeCount,
   });
+  const visibleScalarColors = visibleScalarColorsUpload.buffer;
   const requestedFieldBufferId = resolveViewport3DTargetLayerRequestedSourceIdentity({
     fieldModel,
     partId: part.id,

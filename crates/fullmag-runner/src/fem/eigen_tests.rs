@@ -324,6 +324,7 @@ fn relax_source_plan_from_eigen(plan: &FemEigenPlanIR) -> fullmag_ir::FemPlanIR 
         demag_realization: plan.demag_realization.clone(),
         air_box_config: plan.air_box_config.clone(),
         interfacial_dmi: plan.interfacial_dmi,
+        rotated_interfacial_dmi: None,
         dmi_interface_normal: plan.dmi_interface_normal,
         bulk_dmi: plan.bulk_dmi,
         dind_field: None,
@@ -496,6 +497,36 @@ fn accepted_relax_stage_handoff_v3_round_trips_and_rejects_unknown_fields() {
     let error = serde_json::from_value::<AcceptedFemRelaxStageHandoffV3Record>(extended)
         .expect_err("v3 must reject unknown fields");
     assert!(error.to_string().contains("unknown field"));
+}
+
+#[test]
+fn accepted_relax_stage_handoff_accepts_prism_source_and_checks_m0() {
+    let mut plan = minimal_native_modal_plan();
+    plan.mesh.nodes = vec![
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [0.0, 1.0, 1.0],
+    ];
+    plan.mesh.cells = fullmag_ir::FemConnectivityIR {
+        types: vec![fullmag_ir::FemCellTypeIR::Prism6],
+        offsets: vec![0, 6],
+        nodes: vec![0, 1, 2, 3, 4, 5],
+        global_ordinals: vec![0],
+        mesh_parts: Vec::new(),
+    };
+    plan.equilibrium_magnetization = vec![[1.0, 0.0, 0.0]; 6];
+    fullmag_ir::validate_mesh_for_execution(&plan.mesh)
+        .expect("prism fixture must satisfy execution mesh validation");
+    relax_handoff_from_completion(&plan, &accepted_relax_completion())
+        .expect("native prism relaxation must publish its accepted handoff");
+
+    plan.equilibrium_magnetization[5] = [0.5, 0.0, 0.0];
+    let error = relax_handoff_from_completion(&plan, &accepted_relax_completion())
+        .expect_err("prism magnetic nodes must retain unit-norm validation");
+    assert!(error.message.contains("m0_norm_mismatch"), "{}", error.message);
 }
 
 #[test]

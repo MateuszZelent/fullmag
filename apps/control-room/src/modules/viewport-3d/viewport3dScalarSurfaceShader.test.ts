@@ -1,9 +1,8 @@
-import { BufferGeometry } from "three";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
 import {
-  applyScalarShaderColorBuffer,
   canApplyScalarShaderColorBuffer,
   createScalarSurfaceShaderMaterial,
   scalarSurfaceShaderVariantKey,
@@ -54,60 +53,19 @@ function complexBuffer(): ScalarColorBuffer {
 }
 
 describe("viewport3dScalarSurfaceShader", () => {
-  it("applies scalar-value attributes for GPU palette coloring", () => {
-    const geometry = new BufferGeometry();
-    const buffer = scalarBuffer([0, 1, 2]);
-
-    expect(canApplyScalarShaderColorBuffer(buffer, 3)).toBe(true);
-    expect(applyScalarShaderColorBuffer(geometry, buffer, 3)).toBe(true);
+  it("validates whether scalar shader color buffer can be applied", () => {
+    expect(canApplyScalarShaderColorBuffer(scalarBuffer([0, 1, 2]), 3)).toBe(true);
     expect(
-      Array.from(
-        geometry.getAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE).array,
+      canApplyScalarShaderColorBuffer(
+        orientationBuffer([
+          1, 0, 0,
+          0, 0, 1,
+        ]),
+        2,
       ),
-    ).toEqual([0, 1, 2]);
-  });
-
-  it("applies vector-value attributes for GPU orientation coloring", () => {
-    const geometry = new BufferGeometry();
-    const buffer = orientationBuffer([
-      1, 0, 0,
-      0, 0, 1,
-    ]);
-
-    expect(canApplyScalarShaderColorBuffer(buffer, 2)).toBe(true);
-    expect(applyScalarShaderColorBuffer(geometry, buffer, 2)).toBe(true);
-    expect(
-      Array.from(
-        geometry.getAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE).array,
-      ),
-    ).toEqual([
-      1, 0, 0,
-      0, 0, 1,
-    ]);
-  });
-
-  it("applies complex-value attributes for shader-side mode phase projection", () => {
-    const geometry = new BufferGeometry();
-    const buffer = complexBuffer();
-
-    expect(canApplyScalarShaderColorBuffer(buffer, 2)).toBe(true);
-    expect(applyScalarShaderColorBuffer(geometry, buffer, 2)).toBe(true);
-    expect(
-      Array.from(
-        geometry.getAttribute(VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE).array,
-      ),
-    ).toEqual([
-      1, 0, 0,
-      0, 1, 0,
-    ]);
-    expect(
-      Array.from(
-        geometry.getAttribute(VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE).array,
-      ),
-    ).toEqual([
-      0, 1, 0,
-      0, 0, 1,
-    ]);
+    ).toBe(true);
+    expect(canApplyScalarShaderColorBuffer(complexBuffer(), 2)).toBe(true);
+    expect(canApplyScalarShaderColorBuffer(null, 3)).toBe(false);
   });
 
   it("creates a shader material with scalar range and palette uniforms", () => {
@@ -166,6 +124,9 @@ describe("viewport3dScalarSurfaceShader", () => {
     expect(material.uniforms.fmColorModeId.value).toBe(2);
     expect(material.vertexShader).toContain(
       VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE,
+    );
+    expect(material.vertexShader).toContain(
+      VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE,
     );
     expect(material.vertexShader).toContain("scalarFromVector");
     material.dispose();
@@ -399,5 +360,149 @@ describe("viewport3dScalarSurfaceShader", () => {
       material.dispose();
     });
   });
-});
+  describe("S-01 · View-space normal shading and shade strength uniform", () => {
+    const source = readFileSync(
+      new URL("./viewport3dScalarSurfaceShader.ts", import.meta.url),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
 
+    it("passes fmShadeStrength uniform to material and updates it", () => {
+      const material = createScalarSurfaceShaderMaterial(scalarBuffer([1, 2]), {
+        depthTest: true,
+        depthWrite: true,
+        opacity: 1,
+        polygonOffset: false,
+        polygonOffsetFactor: 0,
+        polygonOffsetUnits: 0,
+        shadeStrength: 0.6,
+        side: 0,
+        transparent: false,
+      });
+      expect(material.uniforms.fmShadeStrength.value).toBe(0.6);
+
+      updateScalarSurfaceShaderMaterial(material, scalarBuffer([1, 2]), 1, 0.2);
+      expect(material.uniforms.fmShadeStrength.value).toBe(0.2);
+      material.dispose();
+    });
+
+    it("defines vNormalView and computes shaded color in fragment shaders", () => {
+      expect(source).toContain("varying vec3 vNormalView;");
+      expect(source).toContain("vNormalView = normalize(normalMatrix * normal);");
+      expect(source).toContain("vec3 shaded = base * mix(1.0, 0.55 + 0.75 * ndl, fmShadeStrength);");
+    });
+  });
+
+  describe("S-02 / S-03 · sRGB to Linear conversion and color space handling", () => {
+    const source = readFileSync(
+      new URL("./viewport3dScalarSurfaceShader.ts", import.meta.url),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+
+    it("defines srgbToLinearVec3 and encodes linear output with colorspace_fragment", () => {
+      expect(source).toContain("vec3 srgbToLinearVec3(vec3 c)");
+      expect(source).toContain("#include <colorspace_fragment>");
+      expect(source).toContain("vec3 color = srgbToLinearVec3(shaded);");
+    });
+
+    it("converts and encodes in the orientation fragment shader too", () => {
+      // The orientation surface used to write `shaded` straight into
+      // gl_FragColor. On the default canvas that happened to look right, but
+      // PostProcessingLayer renders into a linear target whenever Bloom or AO
+      // is enabled, and there the unencoded surface washed out while scalar
+      // surfaces stayed correct.
+      const orientationShader = source.slice(
+        source.indexOf("const ORIENTATION_SURFACE_FRAGMENT_SHADER"),
+      );
+      expect(orientationShader).toContain("vec3 srgbToLinearVec3(vec3 c)");
+      expect(orientationShader).toContain("vec3 color = srgbToLinearVec3(shaded);");
+      expect(orientationShader).toContain("#include <colorspace_fragment>");
+    });
+  });
+
+  describe("orientation colour mapping parity with the CPU path", () => {
+    const source = readFileSync(
+      new URL("./viewport3dScalarSurfaceShader.ts", import.meta.url),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+
+    it("uses a constant saturation and the normalised z for lightness", () => {
+      // Must stay identical to magnetizationHslRgb() in
+      // orientation/magnetizationColor.ts. Saturation derived from
+      // length(normalized.xy) = sin(theta) double-counts the polar angle,
+      // which the lightness already carries, and greys out mid-latitudes.
+      expect(source).toContain("float saturation = 1.0;");
+      expect(source).toContain(
+        "float lightness = clamp(normalized.z * 0.5 + 0.5, 0.0, 1.0);",
+      );
+      expect(source).not.toContain("clamp(length(normalized.xy), 0.0, 1.0)");
+      expect(source).not.toContain("normalized.z * 0.25 + 0.5");
+    });
+  });
+
+  describe("S-04 · Clipping planes support", () => {
+    const source = readFileSync(
+      new URL("./viewport3dScalarSurfaceShader.ts", import.meta.url),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+
+    it("enables clipping on ShaderMaterial instances", () => {
+      const material = createScalarSurfaceShaderMaterial(scalarBuffer([0, 1]), {
+        depthTest: true,
+        depthWrite: true,
+        opacity: 1,
+        polygonOffset: false,
+        polygonOffsetFactor: 0,
+        polygonOffsetUnits: 0,
+        side: 0,
+        transparent: false,
+      });
+      expect(material.clipping).toBe(true);
+      material.dispose();
+    });
+
+    it("includes clipping plane chunks in vertex and fragment shaders", () => {
+      expect(source).toContain("#include <clipping_planes_pars_vertex>");
+      expect(source).toContain("#include <clipping_planes_vertex>");
+      expect(source).toContain("#include <clipping_planes_pars_fragment>");
+      expect(source).toContain("#include <clipping_planes_fragment>");
+    });
+  });
+
+  describe("S-05 / S-06 · Relative epsilon and NaN sentinel in fragment shader", () => {
+    const source = readFileSync(
+      new URL("./viewport3dScalarSurfaceShader.ts", import.meta.url),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+
+    it("uses relative epsilon for span degeneracy check and sentinel for NaN", () => {
+      expect(source).toContain("bool bad = !(v == v) || abs(v) > 3.0e38;");
+      expect(source).toContain("float t = bad ? 0.5 : clamp(v, 0.0, 1.0);");
+      expect(source).toContain("vec3(0.85, 0.0, 0.85)");
+    });
+  });
+
+  describe("S-12 · Safe arctangent and modal phase projection in complex shaders", () => {
+    const source = readFileSync(
+      new URL("./viewport3dScalarSurfaceShader.ts", import.meta.url),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+
+    it("defines safeAtan2 to protect against division by zero at origin", () => {
+      expect(source).toContain("float safeAtan2(float y, float x)");
+      expect(source).toContain("safeAtan2(complexImag.x, complexReal.x)");
+      expect(source).toContain("fmRepresentationId == 4");
+    });
+  });
+
+  describe("S-13 · Floquet spatial phase wrapping", () => {
+    const source = readFileSync(
+      new URL("./viewport3dScalarSurfaceShader.ts", import.meta.url),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+
+    it("defines wrapPhase and wraps Floquet theta in vertex shaders", () => {
+      expect(source).toContain("float wrapPhase(float value)");
+      expect(source).toContain("theta = wrapPhase(theta);");
+    });
+  });
+});

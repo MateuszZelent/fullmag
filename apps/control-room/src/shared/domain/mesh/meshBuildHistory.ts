@@ -1,4 +1,17 @@
 export interface MeshBuildHistoryEntry {
+  id: string;
+  buildId: string | null;
+  commandId: string | null;
+  canonicalPolicySnapshot: Record<string, unknown> | null;
+  requestedExecution: Record<string, unknown> | null;
+  resolvedExecution: Record<string, unknown> | null;
+  statePolicy: string | null;
+  meshGenerationId: string | null;
+  meshRevision: number | null;
+  sourceSceneRevision: number | null;
+  durationSeconds: number | null;
+  restorable: boolean;
+  restoreReason: string | null;
   avgQuality: number | null;
   boundaryFaceCount: number | null;
   deltaElementCount: number | null;
@@ -37,8 +50,10 @@ export interface MeshBuildHistoryComparison {
 }
 
 export interface MeshBuildHistoryComparisonSelection {
-  afterIndex: number;
-  beforeIndex: number;
+  afterId?: string;
+  beforeId?: string;
+  afterIndex?: number;
+  beforeIndex?: number;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -53,6 +68,40 @@ function asNumber(value: unknown): number | null {
 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    const result = asString(value);
+    if (result) return result;
+  }
+  return null;
+}
+
+function firstRecord(...values: unknown[]): Record<string, unknown> | null {
+  for (const value of values) {
+    const result = asRecord(value);
+    if (result) return result;
+  }
+  return null;
+}
+
+function stableLegacyId(
+  record: Record<string, unknown>,
+  index: number,
+): string {
+  const fingerprint = [
+    record.mesh_generation_id,
+    record.mesh_revision,
+    record.timestamp_unix_ms,
+    record.mesh_name,
+    record.generation_mode,
+    record.node_count,
+    record.element_count,
+  ]
+    .map((value) => (value === undefined ? "" : String(value)))
+    .join(":");
+  return `legacy-mesh-build:${fingerprint || index}`;
 }
 
 function delta(current: number | null, previous: number | null): number | null {
@@ -81,15 +130,91 @@ export function normalizeMeshBuildHistory(
   if (!Array.isArray(value)) return [];
 
   const entries: MeshBuildHistoryEntry[] = [];
+  const seenIds = new Map<string, number>();
   for (const rawEntry of value) {
     const record = asRecord(rawEntry);
     if (!record) continue;
     const quality = asRecord(record.quality);
+    const provenance = asRecord(record.mesh_provenance) ?? asRecord(record.provenance);
+    const buildId = firstString(
+      record.build_id,
+      record.buildId,
+      provenance?.build_id,
+      provenance?.buildId,
+    );
+    const commandId = firstString(
+      record.command_id,
+      record.commandId,
+      provenance?.command_id,
+      provenance?.commandId,
+    );
+    const meshGenerationId = firstString(
+      record.mesh_generation_id,
+      record.generation_id,
+      provenance?.mesh_generation_id,
+      provenance?.generation_id,
+    );
+    const targetRecord = asRecord(record.mesh_target);
+    const meshTarget = firstString(record.mesh_target) ?? (
+      targetRecord
+        ? [asString(targetRecord.kind), asString(targetRecord.object_id)]
+            .filter((value): value is string => value !== null)
+            .join(":") || null
+        : null
+    );
+    const baseId = firstString(record.history_id, record.historyId, buildId, commandId, meshGenerationId)
+      ?? stableLegacyId(record, entries.length);
+    const occurrence = seenIds.get(baseId) ?? 0;
+    seenIds.set(baseId, occurrence + 1);
+    const id = occurrence === 0 ? baseId : `${baseId}:${occurrence + 1}`;
+    const canonicalPolicySnapshot = firstRecord(
+      record.canonical_policy_snapshot,
+      record.canonicalPolicySnapshot,
+      provenance?.canonical_policy_snapshot,
+      provenance?.canonicalPolicySnapshot,
+    );
+    const requestedExecution = firstRecord(
+      record.requested_execution,
+      record.requestedExecution,
+      provenance?.requested_execution,
+      provenance?.requestedExecution,
+    );
+    const resolvedExecution = firstRecord(
+      record.resolved_execution,
+      record.resolvedExecution,
+      provenance?.resolved_execution,
+      provenance?.resolvedExecution,
+    );
+    const statePolicy = firstString(record.state_policy, record.statePolicy, provenance?.state_policy);
+    const sourceSceneRevision = asNumber(
+      record.source_scene_revision ?? provenance?.source_scene_revision,
+    );
+    const meshRevision = asNumber(record.mesh_revision ?? provenance?.mesh_revision);
+    const durationSeconds =
+      asNumber(record.mesh_time_seconds ?? record.duration_seconds ?? record.build_duration_seconds) ??
+      (() => {
+        const durationMs = asNumber(record.duration_ms);
+        return durationMs === null ? null : durationMs / 1_000;
+      })();
+    const restorable = canonicalPolicySnapshot !== null;
     const previous = entries.at(-1) ?? null;
     const nodeCount = asNumber(record.node_count);
     const elementCount = asNumber(record.element_count);
 
     entries.push({
+      id,
+      buildId,
+      commandId,
+      canonicalPolicySnapshot,
+      requestedExecution,
+      resolvedExecution,
+      statePolicy,
+      meshGenerationId,
+      meshRevision,
+      sourceSceneRevision,
+      durationSeconds,
+      restorable,
+      restoreReason: restorable ? null : "snapshot-unavailable",
       avgQuality: asNumber(quality?.avg_quality),
       boundaryFaceCount: asNumber(record.boundary_face_count),
       deltaElementCount: delta(elementCount, previous?.elementCount ?? null),
@@ -101,7 +226,7 @@ export function normalizeMeshBuildHistory(
       kind: asString(record.kind),
       meshName: asString(record.mesh_name),
       meshReason: asString(record.mesh_reason),
-      meshTarget: asString(record.mesh_target),
+      meshTarget,
       nodeCount,
       qualityDataAvailable: asRecord(record.quality_data_artifact) !== null,
       sicnP05: asNumber(quality?.sicn_p5),
@@ -158,6 +283,8 @@ export function latestMeshBuildComparisonSelection(
 ): MeshBuildHistoryComparisonSelection | null {
   if (entries.length < 2) return null;
   return {
+    afterId: entries[entries.length - 1].id,
+    beforeId: entries[entries.length - 2].id,
     afterIndex: entries[entries.length - 1].index,
     beforeIndex: entries[entries.length - 2].index,
   };
@@ -167,7 +294,15 @@ export function meshBuildHistoryComparisonForSelection(
   entries: MeshBuildHistoryEntry[],
   selection: MeshBuildHistoryComparisonSelection,
 ): MeshBuildHistoryComparison | null {
-  const before = entries.find((entry) => entry.index === selection.beforeIndex);
-  const after = entries.find((entry) => entry.index === selection.afterIndex);
+  const before = selection.beforeId
+    ? entries.find((entry) => entry.id === selection.beforeId)
+    : selection.beforeIndex === undefined
+      ? undefined
+      : entries.find((entry) => entry.index === selection.beforeIndex);
+  const after = selection.afterId
+    ? entries.find((entry) => entry.id === selection.afterId)
+    : selection.afterIndex === undefined
+      ? undefined
+      : entries.find((entry) => entry.index === selection.afterIndex);
   return before && after ? compareMeshBuildHistoryEntries(before, after) : null;
 }

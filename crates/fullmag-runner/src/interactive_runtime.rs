@@ -2700,6 +2700,8 @@ impl CpuInteractiveFdmPreviewRuntime {
                 report,
                 0,
                 self.state.magnetization(),
+                self.problem
+                    .rotated_interfacial_dmi_energy_from_vectors(self.state.magnetization()),
             ));
         }
 
@@ -2910,6 +2912,8 @@ impl CpuInteractiveFdmPreviewRuntime {
                 &report,
                 wall_elapsed,
                 self.state.magnetization(),
+                self.problem
+                    .rotated_interfacial_dmi_energy_from_vectors(self.state.magnetization()),
             );
             let mut local_stats = total_stats.clone();
             local_stats.step -= base_step;
@@ -3244,6 +3248,8 @@ impl CpuInteractiveFdmPreviewRuntime {
                 &report,
                 wall_elapsed,
                 self.state.magnetization(),
+                self.problem
+                    .rotated_interfacial_dmi_energy_from_vectors(self.state.magnetization()),
             );
             let mut local_stats = total_stats.clone();
             local_stats.step -= base_step;
@@ -3584,9 +3590,8 @@ impl CudaInteractiveFdmPreviewRuntime {
         let mut current_local_stats = self.backend.snapshot_step_stats(grid)?;
         current_local_stats.step -= base_step;
         current_local_stats.time -= base_time;
-        let initial_display_state = (checkpoint.display_selection)();
-        let mut pending_cached_preview_snapshots =
-            self.begin_cached_preview_prefetch(&initial_display_state)?;
+        let mut observations =
+            crate::fdm::gpu::cuda::live_observations::FdmLiveObservationScheduler::new(plan, grid);
 
         while self.total_time - base_time < until_seconds {
             let display_state = (checkpoint.display_selection)();
@@ -3601,35 +3606,16 @@ impl CudaInteractiveFdmPreviewRuntime {
                 current_local_stats.step,
                 field_every_n,
             );
-            let preview_field = if preview_due && !display_is_global_scalar(&display_state) {
-                let preview_cfg = display_state.preview_request();
-                Some(copy_cuda_live_preview_field(
-                    &self.backend,
-                    &self.plan_signature,
-                    &preview_cfg,
-                    grid,
-                    self.plan_signature.active_mask.as_deref(),
-                    self.total_time,
-                )?)
-            } else {
-                None
-            };
-            let cached_preview_fields = if cached_display_due {
-                match pending_cached_preview_snapshots.take() {
-                    Some(snapshots) => Some(self.resolve_cached_preview_prefetch(snapshots)?),
-                    None => {
-                        let preview_cfg = display_state.preview_request();
-                        let quantities = cached_preview_quantities_for(&display_state);
-                        if quantities.is_empty() {
-                            None
-                        } else {
-                            Some(self.snapshot_vector_fields(&quantities, &preview_cfg)?)
-                        }
-                    }
-                }
-            } else {
-                None
-            };
+            let mut publication = observations.observe(
+                &self.backend,
+                &display_state,
+                current_local_stats.step,
+                current_local_stats.time,
+                current_local_stats.dt,
+            );
+            publication.apply_to_stats(&mut current_local_stats);
+            let preview_field = publication.preview_field.take();
+            let cached_preview_fields = publication.cached_preview_fields.take();
             let action = on_step(StepUpdate {
                 coupled_checkpoint: None,
                 stats: current_local_stats.clone(),
@@ -3683,21 +3669,6 @@ impl CudaInteractiveFdmPreviewRuntime {
             if let Some(next) = total_stats.dt_suggested {
                 dt = next;
             }
-            let post_step_display_state = (checkpoint.display_selection)();
-            // Only start async cached-preview GPU→CPU copies when the next
-            // iteration will actually consume them.
-            let next_cached_step = (total_stats.step - base_step) + 1;
-            if cached_display_refresh_due(
-                last_cached_preview_revision,
-                &post_step_display_state,
-                next_cached_step,
-                field_every_n,
-            ) {
-                pending_cached_preview_snapshots =
-                    self.begin_cached_preview_prefetch(&post_step_display_state)?;
-            } else {
-                pending_cached_preview_snapshots = None;
-            }
 
             let mut local_stats = total_stats.clone();
             local_stats.step -= base_step;
@@ -3715,19 +3686,16 @@ impl CudaInteractiveFdmPreviewRuntime {
                 local_stats.step,
                 field_every_n,
             );
-            let preview_field = if preview_due && !display_is_global_scalar(&display_state) {
-                let preview_cfg = display_state.preview_request();
-                Some(copy_cuda_live_preview_field(
-                    &self.backend,
-                    &self.plan_signature,
-                    &preview_cfg,
-                    grid,
-                    self.plan_signature.active_mask.as_deref(),
-                    self.total_time,
-                )?)
-            } else {
-                None
-            };
+            let mut publication = observations.observe(
+                &self.backend,
+                &display_state,
+                local_stats.step,
+                local_stats.time,
+                local_stats.dt,
+            );
+            publication.apply_to_stats(&mut local_stats);
+            let preview_field = publication.preview_field.take();
+            let cached_preview_fields = publication.cached_preview_fields.take();
             let scalar_row_due = local_stats.step <= 1
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
@@ -3738,7 +3706,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
-                cached_preview_fields: None,
+                cached_preview_fields,
                 hysteresis_field_m_t: None,
                 hysteresis_point_index: None,
                 hysteresis_settle_step_index: None,
@@ -3791,6 +3759,14 @@ impl CudaInteractiveFdmPreviewRuntime {
             }
         }
 
+        publish_final_cuda_observations(
+            &mut observations,
+            &self.backend,
+            &(checkpoint.display_selection)(),
+            &current_local_stats,
+            grid,
+            on_step,
+        );
         let status = if paused {
             RunStatus::Paused
         } else if cancelled {
@@ -3980,9 +3956,8 @@ impl CudaInteractiveFdmPreviewRuntime {
         let mut current_local_stats = self.backend.snapshot_step_stats(grid)?;
         current_local_stats.step -= base_step;
         current_local_stats.time -= base_time;
-        let initial_display_state = (checkpoint.display_selection)();
-        let mut pending_cached_preview_snapshots =
-            self.begin_cached_preview_prefetch(&initial_display_state)?;
+        let mut observations =
+            crate::fdm::gpu::cuda::live_observations::FdmLiveObservationScheduler::new(plan, grid);
 
         while self.total_time - base_time < until_seconds {
             let display_state = (checkpoint.display_selection)();
@@ -3997,35 +3972,16 @@ impl CudaInteractiveFdmPreviewRuntime {
                 current_local_stats.step,
                 field_every_n,
             );
-            let preview_field = if preview_due && !display_is_global_scalar(&display_state) {
-                let preview_cfg = display_state.preview_request();
-                Some(copy_cuda_live_preview_field(
-                    &self.backend,
-                    &self.plan_signature,
-                    &preview_cfg,
-                    grid,
-                    self.plan_signature.active_mask.as_deref(),
-                    self.total_time,
-                )?)
-            } else {
-                None
-            };
-            let cached_preview_fields = if cached_display_due {
-                match pending_cached_preview_snapshots.take() {
-                    Some(snapshots) => Some(self.resolve_cached_preview_prefetch(snapshots)?),
-                    None => {
-                        let preview_cfg = display_state.preview_request();
-                        let quantities = cached_preview_quantities_for(&display_state);
-                        if quantities.is_empty() {
-                            None
-                        } else {
-                            Some(self.snapshot_vector_fields(&quantities, &preview_cfg)?)
-                        }
-                    }
-                }
-            } else {
-                None
-            };
+            let mut publication = observations.observe(
+                &self.backend,
+                &display_state,
+                current_local_stats.step,
+                current_local_stats.time,
+                current_local_stats.dt,
+            );
+            publication.apply_to_stats(&mut current_local_stats);
+            let preview_field = publication.preview_field.take();
+            let cached_preview_fields = publication.cached_preview_fields.take();
             let action = on_step(StepUpdate {
                 coupled_checkpoint: None,
                 stats: current_local_stats.clone(),
@@ -4079,21 +4035,6 @@ impl CudaInteractiveFdmPreviewRuntime {
             if let Some(next) = total_stats.dt_suggested {
                 dt = next;
             }
-            let post_step_display_state = (checkpoint.display_selection)();
-            // Only start async cached-preview GPU→CPU copies when the next
-            // iteration will actually consume them.
-            let next_cached_step = (total_stats.step - base_step) + 1;
-            if cached_display_refresh_due(
-                last_cached_preview_revision,
-                &post_step_display_state,
-                next_cached_step,
-                field_every_n,
-            ) {
-                pending_cached_preview_snapshots =
-                    self.begin_cached_preview_prefetch(&post_step_display_state)?;
-            } else {
-                pending_cached_preview_snapshots = None;
-            }
 
             let mut local_stats = total_stats.clone();
             local_stats.step -= base_step;
@@ -4113,19 +4054,16 @@ impl CudaInteractiveFdmPreviewRuntime {
                 local_stats.step,
                 field_every_n,
             );
-            let preview_field = if preview_due && !display_is_global_scalar(&display_state) {
-                let preview_cfg = display_state.preview_request();
-                Some(copy_cuda_live_preview_field(
-                    &self.backend,
-                    &self.plan_signature,
-                    &preview_cfg,
-                    grid,
-                    self.plan_signature.active_mask.as_deref(),
-                    self.total_time,
-                )?)
-            } else {
-                None
-            };
+            let mut publication = observations.observe(
+                &self.backend,
+                &display_state,
+                local_stats.step,
+                local_stats.time,
+                local_stats.dt,
+            );
+            publication.apply_to_stats(&mut local_stats);
+            let preview_field = publication.preview_field.take();
+            let cached_preview_fields = publication.cached_preview_fields.take();
             let scalar_row_due = local_stats.step <= 1
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
@@ -4145,7 +4083,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
-                cached_preview_fields: None,
+                cached_preview_fields,
                 hysteresis_field_m_t: None,
                 hysteresis_point_index: None,
                 hysteresis_settle_step_index: None,
@@ -4202,6 +4140,14 @@ impl CudaInteractiveFdmPreviewRuntime {
             }
         }
 
+        publish_final_cuda_observations(
+            &mut observations,
+            &self.backend,
+            &(checkpoint.display_selection)(),
+            &current_local_stats,
+            grid,
+            on_step,
+        );
         record_final_cuda_runtime_outputs(
             &self.backend,
             &self.plan_signature,
@@ -4251,6 +4197,38 @@ impl CudaInteractiveFdmPreviewRuntime {
             provenance,
         })
     }
+}
+
+#[cfg(feature = "cuda")]
+fn publish_final_cuda_observations(
+    observations: &mut crate::fdm::gpu::cuda::live_observations::FdmLiveObservationScheduler,
+    backend: &crate::fdm::gpu::cuda::native::NativeFdmBackend,
+    display: &DisplaySelectionState,
+    stats: &StepStats,
+    grid: [u32; 3],
+    on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
+) {
+    let mut publication = observations.finish(backend, display, stats.step, stats.time, stats.dt);
+    let mut stats = stats.clone();
+    publication.apply_to_stats(&mut stats);
+    let _ = on_step(StepUpdate {
+        stats,
+        grid,
+        coupled_checkpoint: None,
+        fem_mesh_generation_id: None,
+        magnetization: None,
+        preview_field: publication.preview_field.take(),
+        cached_preview_fields: publication.cached_preview_fields.take(),
+        hysteresis_field_m_t: None,
+        hysteresis_point_index: None,
+        hysteresis_settle_step_index: None,
+        hysteresis_settle_step_kind: None,
+        hysteresis_settle_step_method: None,
+        scalar_row_due: false,
+        // A delayed observation is not an authoritative terminal state batch.
+        terminal_field_snapshot: false,
+        finished: false,
+    });
 }
 
 impl CpuInteractiveFemPreviewRuntime {
@@ -4497,6 +4475,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 &report,
                 wall_elapsed,
                 self.state.magnetization(),
+                0.0,
             );
             let mut local_stats = total_stats.clone();
             local_stats.step -= base_step;
@@ -4822,6 +4801,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 &report,
                 wall_elapsed,
                 self.state.magnetization(),
+                0.0,
             );
             let mut local_stats = total_stats.clone();
             local_stats.step -= base_step;
@@ -6707,6 +6687,11 @@ fn make_step_stats(
         wall_time_ns,
         ..StepStats::default()
     };
+    stats.set_dmi_energy_components(
+        observables.dmi_energy - observables.rotated_dmi_energy,
+        0.0,
+        observables.rotated_dmi_energy,
+    );
     crate::scalar_metrics::apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
     stats.per_object_scalars = observables.per_object_scalars.clone();
     stats
@@ -6721,6 +6706,7 @@ fn make_step_stats_from_report(
     report: &fullmag_engine::StepReport,
     wall_time_ns: u64,
     magnetization: &[[f64; 3]],
+    rotated_dmi_energy: f64,
 ) -> StepStats {
     let mut stats = StepStats {
         step,
@@ -6741,6 +6727,11 @@ fn make_step_stats_from_report(
         wall_time_ns,
         ..StepStats::default()
     };
+    stats.set_dmi_energy_components(
+        report.dmi_energy_joules - rotated_dmi_energy,
+        0.0,
+        rotated_dmi_energy,
+    );
     crate::scalar_metrics::apply_average_m_to_step_stats(&mut stats, magnetization);
     stats
 }

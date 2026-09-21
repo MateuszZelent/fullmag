@@ -116,6 +116,9 @@ pub fn default_capability_matrix() -> CapabilityMatrix {
     for id in [HOe, HTherm] {
         m.set(FdmCpuReference, id, Planned);
     }
+    for id in [HDmiRotated, ERotatedDmi, EdenRotatedDmi] {
+        m.set(FdmCpuReference, id, Planned);
+    }
 
     // ── FDM CUDA ─────────────────────────────────────────────
     for id in [M, HEx, HDemag, HExt, HAnt, HEff, EEx, EDemag, EExt, ETotal] {
@@ -131,6 +134,9 @@ pub fn default_capability_matrix() -> CapabilityMatrix {
     ] {
         m.set(FdmCuda, id, Planned);
     }
+    for id in [HDmiRotated, ERotatedDmi, EdenRotatedDmi] {
+        m.set(FdmCuda, id, Planned);
+    }
 
     // ── FEM CPU Native ───────────────────────────────────────
     for id in [M, HEx, HDemag, HExt, HEff, EEx, EDemag, EExt, ETotal] {
@@ -142,6 +148,9 @@ pub fn default_capability_matrix() -> CapabilityMatrix {
     for id in [
         HAnt, HMel, HAniCubic, HDmiBulk, HOe, HTherm, MatMs, MatAex, MatAlpha, MatDind, MatDbulk,
     ] {
+        m.set(FemCpuNative, id, Planned);
+    }
+    for id in [HDmiRotated, ERotatedDmi, EdenRotatedDmi] {
         m.set(FemCpuNative, id, Planned);
     }
     // Eigenmodes on FEM
@@ -159,6 +168,9 @@ pub fn default_capability_matrix() -> CapabilityMatrix {
     for id in [
         HAnt, HMel, HAniCubic, HDmiBulk, HOe, HTherm, MatMs, MatAex, MatAlpha, MatDind, MatDbulk,
     ] {
+        m.set(FemGpu, id, Planned);
+    }
+    for id in [HDmiRotated, ERotatedDmi, EdenRotatedDmi] {
         m.set(FemGpu, id, Planned);
     }
     for id in [ModeAmplitude, ModeReal, ModeImag, ModePhase] {
@@ -196,6 +208,22 @@ mod tests {
         assert!(m.is_available(BackendFamily::FdmCpuReference, ETotal));
         assert!(m.is_available(BackendFamily::FdmCpuReference, HAni));
         assert!(!m.is_available(BackendFamily::FdmCpuReference, HOe)); // planned
+    }
+
+    #[test]
+    fn rotated_dmi_quantities_remain_planned_until_backend_operators_are_qualified() {
+        let m = default_capability_matrix();
+        for backend in [
+            BackendFamily::FdmCpuReference,
+            BackendFamily::FdmCuda,
+            BackendFamily::FemCpuNative,
+            BackendFamily::FemGpu,
+        ] {
+            for quantity in [HDmiRotated, ERotatedDmi, EdenRotatedDmi] {
+                assert_eq!(m.get(backend, quantity), QuantityCapability::Planned);
+                assert!(!m.is_available(backend, quantity));
+            }
+        }
     }
 
     #[test]

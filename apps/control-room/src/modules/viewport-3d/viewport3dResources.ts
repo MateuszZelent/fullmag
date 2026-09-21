@@ -15,7 +15,9 @@ import {
 import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
 import {
   canonicalFieldVectorQuery,
+  parseCanonicalFieldVectorResourceKey,
   serializeCanonicalFieldVectorResourceKey,
+  type CanonicalFieldVectorQuery,
 } from "@/kernel/api/fieldQueryIdentity";
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import type {
@@ -53,6 +55,7 @@ import {
   buildViewport3DFieldResourceRequestId,
   type Viewport3DFieldResourceRequest,
 } from "./model/viewport3DFieldDataPlan";
+import type { Viewport3DResourceTracker } from "./viewport3dDiagnostics";
 
 const topologyCache = new ResourceCache<DecodedTopology>({
   maxBytes: 96 * 1024 * 1024,
@@ -115,6 +118,7 @@ export interface Viewport3DFieldVectorEnvelope {
   etag: string | null;
   responseMetadata: FieldVectorResponseMetadata | null;
   resourceKey: string;
+  readonly retained?: boolean;
 }
 
 type CachedFieldVectorEnvelope = Viewport3DFieldVectorEnvelope;
@@ -264,16 +268,55 @@ function resolveLastGoodFieldVectorCollectionFromCache(
   return previous;
 }
 
-export function viewport3DFieldVectorMatchesRequestIdentity(
+export type Viewport3DFieldIdentityMismatchReason =
+  | "quantity"
+  | "scope"
+  | "generation"
+  | "carrier"
+  | "component"
+  | "snapshot"
+  | "stage"
+  | "phase"
+  | "view";
+
+export type Viewport3DFieldIdentityMatch =
+  | { readonly matches: true }
+  | {
+      readonly matches: false;
+      readonly reason: Viewport3DFieldIdentityMismatchReason;
+    };
+
+function parseEnvelopeResourceKeyQuery(
+  resourceKey: string | null | undefined,
+): CanonicalFieldVectorQuery | null {
+  if (!resourceKey) return null;
+  const pipeIndex = resourceKey.lastIndexOf("|");
+  const urlCandidate = pipeIndex >= 0 ? resourceKey.slice(pipeIndex + 1) : resourceKey;
+  return parseCanonicalFieldVectorResourceKey(urlCandidate);
+}
+
+function normalizeStringIdentity(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const stringValue = String(value).trim();
+  return stringValue.length > 0 ? stringValue : null;
+}
+
+function normalizeFiniteNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const num = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+export function resolveViewport3DFieldVectorIdentityMatch(
   envelope: Viewport3DFieldVectorEnvelope,
   request: Pick<Viewport3DFieldResourceRequest, "quantityId" | "query">,
-): boolean {
+): Viewport3DFieldIdentityMatch {
   const field = envelope.data;
   if (
     resolveCanonicalQuantityId(field.quantityId) !==
     resolveCanonicalQuantityId(request.quantityId)
   ) {
-    return false;
+    return { matches: false, reason: "quantity" };
   }
 
   const requestedScopeKind = request.query.scope_kind ?? "full";
@@ -284,61 +327,117 @@ export function viewport3DFieldVectorMatchesRequestIdentity(
     field.domainGenerationId ?? envelope.responseMetadata?.domainGenerationId ?? null;
   const responseCarrierRevision =
     field.meshTopologyHash ?? envelope.responseMetadata?.meshTopologyHash ?? null;
-  const expectedGenerationId = request.query.expected_generation_id?.trim() || null;
+  const expectedGenerationId = normalizeStringIdentity(request.query.expected_generation_id);
   const expectedCarrierRevision =
-    request.query.expected_carrier_revision?.trim() || null;
+    normalizeStringIdentity(request.query.expected_carrier_revision);
   if (
     !matchesViewport3DFieldIdentityPrecondition(
       expectedGenerationId,
       responseGenerationId,
-    ) ||
+    )
+  ) {
+    return { matches: false, reason: "generation" };
+  }
+  if (
     !matchesViewport3DFieldIdentityPrecondition(
       expectedCarrierRevision,
       responseCarrierRevision,
     )
   ) {
-    return false;
+    return { matches: false, reason: "carrier" };
   }
   if (
     envelope.responseMetadata?.identityIssues.some(
-      (issue) =>
-        issue.field === "domainGenerationId" ||
-        issue.field === "meshTopologyHash",
+      (issue) => issue.field === "domainGenerationId",
     )
   ) {
-    return false;
+    return { matches: false, reason: "generation" };
+  }
+  if (
+    envelope.responseMetadata?.identityIssues.some(
+      (issue) => issue.field === "meshTopologyHash",
+    )
+  ) {
+    return { matches: false, reason: "carrier" };
   }
   if (
     responseScopeKind !== null &&
     responseScopeKind !== requestedScopeKind
   ) {
-    return false;
+    return { matches: false, reason: "scope" };
   }
   if (requestedScopeKind !== "full" && responseScopeKind === null) {
-    return false;
+    return { matches: false, reason: "scope" };
   }
   if (requestedScopeId !== null && responseScopeId !== requestedScopeId) {
-    return false;
+    return { matches: false, reason: "scope" };
   }
   if (requestedScopeKind !== "full" && responseScopeId === null) {
-    return false;
+    return { matches: false, reason: "scope" };
   }
 
   const metadataQuantityId = envelope.responseMetadata?.quantityId;
   if (
-    metadataQuantityId === null ||
-    metadataQuantityId === undefined ||
-    resolveCanonicalQuantityId(metadataQuantityId) ===
+    metadataQuantityId !== null &&
+    metadataQuantityId !== undefined &&
+    resolveCanonicalQuantityId(metadataQuantityId) !==
       resolveCanonicalQuantityId(request.quantityId)
   ) {
-    const requestedComponent = request.query.component ?? "full";
-    const responseComponent =
-      envelope.data.nComp === 1 && requestedComponent === "full"
-        ? null
-        : envelope.responseMetadata?.component ?? null;
-    return responseComponent === null || responseComponent === requestedComponent;
+    return { matches: false, reason: "quantity" };
   }
-  return false;
+
+  const requestedComponent = request.query.component ?? "full";
+  const responseComponent =
+    envelope.data.nComp === 1 && requestedComponent === "full"
+      ? null
+      : envelope.responseMetadata?.component ?? null;
+  if (responseComponent !== null && responseComponent !== requestedComponent) {
+    return { matches: false, reason: "component" };
+  }
+
+  const parsedQuery = parseEnvelopeResourceKeyQuery(envelope.resourceKey);
+
+  const requestedSnapshotId = normalizeStringIdentity(request.query.snapshot_id);
+  const responseSnapshotId =
+    normalizeStringIdentity(envelope.responseMetadata?.snapshotId) ||
+    normalizeStringIdentity(parsedQuery?.snapshotId);
+  if (requestedSnapshotId !== responseSnapshotId) {
+    return { matches: false, reason: "snapshot" };
+  }
+
+  const requestedStageId = normalizeStringIdentity(request.query.stage_id);
+  const responseStageId =
+    normalizeStringIdentity(envelope.responseMetadata?.stageId) ||
+    normalizeStringIdentity(parsedQuery?.stageId);
+  if (requestedStageId !== responseStageId) {
+    return { matches: false, reason: "stage" };
+  }
+
+  const requestedPhaseRad = normalizeFiniteNumber(request.query.phase_rad);
+  const responsePhaseRad =
+    normalizeFiniteNumber(envelope.responseMetadata?.phaseRad) ??
+    normalizeFiniteNumber(parsedQuery?.phaseRad);
+  if (requestedPhaseRad !== responsePhaseRad) {
+    return { matches: false, reason: "phase" };
+  }
+
+  const requestedView = normalizeStringIdentity(request.query.view);
+  const responseView =
+    normalizeStringIdentity(envelope.responseMetadata?.view) ||
+    normalizeStringIdentity(parsedQuery?.view);
+  if (requestedView !== responseView) {
+    return { matches: false, reason: "view" };
+  }
+
+  // max_samples and geometry_scope are intentionally omitted because they represent budget and sampling constraints rather than semantic field identity.
+  return { matches: true };
+}
+
+export function viewport3DFieldVectorMatchesRequestIdentity(
+  envelope: Viewport3DFieldVectorEnvelope,
+  request: Pick<Viewport3DFieldResourceRequest, "quantityId" | "query">,
+): boolean {
+  return resolveViewport3DFieldVectorIdentityMatch(envelope, request).matches;
 }
 
 function matchesViewport3DFieldIdentityPrecondition(
@@ -361,6 +460,7 @@ export function resolveViewport3DFieldVectorCollectionLastGood({
   previous,
   requests,
   status,
+  tracker,
 }: {
   current: ReadonlyMap<string, Viewport3DFieldVectorEnvelope> | null | undefined;
   previous: ReadonlyMap<string, Viewport3DFieldVectorEnvelope>;
@@ -369,28 +469,40 @@ export function resolveViewport3DFieldVectorCollectionLastGood({
     Pick<Viewport3DFieldResourceRequest, "quantityId" | "query">
   >;
   status: Viewport3DFieldVectorCollectionStatus;
+  tracker?: Viewport3DResourceTracker;
 }): Map<string, Viewport3DFieldVectorEnvelope> {
   const retained = new Map<string, Viewport3DFieldVectorEnvelope>();
   for (const [requestId, request] of requests) {
     const currentEnvelope = current?.get(requestId);
     const previousEnvelope = previous.get(requestId);
-    if (
-      status === "ready" &&
-      currentEnvelope &&
-      viewport3DFieldVectorMatchesRequestIdentity(currentEnvelope, request)
-    ) {
-      retained.set(requestId, currentEnvelope);
-      continue;
-    }
-    if (status === "ready") continue;
-    if (status !== "error" && status !== "loading" && status !== "stale") {
-      continue;
+    if (status === "ready" && currentEnvelope) {
+      const currentMatch = resolveViewport3DFieldVectorIdentityMatch(
+        currentEnvelope,
+        request,
+      );
+      if (currentMatch.matches) {
+        retained.set(requestId, { ...currentEnvelope, retained: false });
+        continue;
+      }
     }
     if (
-      previousEnvelope &&
-      viewport3DFieldVectorMatchesRequestIdentity(previousEnvelope, request)
+      status !== "ready" &&
+      status !== "error" &&
+      status !== "loading" &&
+      status !== "stale"
     ) {
-      retained.set(requestId, previousEnvelope);
+      continue;
+    }
+    if (previousEnvelope) {
+      const previousMatch = resolveViewport3DFieldVectorIdentityMatch(
+        previousEnvelope,
+        request,
+      );
+      if (previousMatch.matches) {
+        retained.set(requestId, { ...previousEnvelope, retained: true });
+      } else {
+        tracker?.recordRetentionRejection(previousMatch.reason);
+      }
     }
   }
   return retained;
@@ -1467,7 +1579,11 @@ export function useViewport3DAirboxFieldVectors(
     | FieldVectorQuery
     | ReadonlyMap<string, Viewport3DAirboxFieldVectorSourceRequest> =
     FULL_FIELD_VECTOR_QUERY,
-  options: { pauseLoad?: boolean; selectedTargetId?: string | null } = {},
+  options: {
+    pauseLoad?: boolean;
+    selectedTargetId?: string | null;
+    tracker?: Viewport3DResourceTracker;
+  } = {},
   fieldCatalog?: FieldCatalogResource | null,
 ) {
   const { api, resources } = useKernel();
@@ -1654,8 +1770,15 @@ export function useViewport3DAirboxFieldVectors(
         previous: previousFieldVectorEnvelopes,
         requests,
         status: resource.status,
+        tracker: options.tracker,
       }),
-    [previousFieldVectorEnvelopes, requests, resource.data, resource.status],
+    [
+      options.tracker,
+      previousFieldVectorEnvelopes,
+      requests,
+      resource.data,
+      resource.status,
+    ],
   );
   const partStates = useMemo(
     () =>
@@ -1730,7 +1853,11 @@ export function useViewport3DQuantityFieldVectors(
     | readonly string[]
     | ReadonlyMap<string, FieldVectorQuery | Viewport3DFieldResourceRequest>,
   enabled = true,
-  options: { pauseLoad?: boolean; selectedTargetId?: string | null } = {},
+  options: {
+    pauseLoad?: boolean;
+    selectedTargetId?: string | null;
+    tracker?: Viewport3DResourceTracker;
+  } = {},
 ) {
   const { api, resources } = useKernel();
   const sessionIdentity = useViewport3DSessionIdentity();
@@ -1900,8 +2027,15 @@ export function useViewport3DQuantityFieldVectors(
         previous: previousFieldVectorEnvelopes,
         requests: requestKeys,
         status: resource.status,
+        tracker: options.tracker,
       }),
-    [previousFieldVectorEnvelopes, requestKeys, resource.data, resource.status],
+    [
+      options.tracker,
+      previousFieldVectorEnvelopes,
+      requestKeys,
+      resource.data,
+      resource.status,
+    ],
   );
   const data = useMemo(
     () =>
@@ -1980,7 +2114,11 @@ export function useViewport3DPartFieldVectors(
     { quantityId: string; query: FieldVectorQuery }
   >,
   enabled = true,
-  options: { pauseLoad?: boolean; selectedTargetId?: string | null } = {},
+  options: {
+    pauseLoad?: boolean;
+    selectedTargetId?: string | null;
+    tracker?: Viewport3DResourceTracker;
+  } = {},
 ) {
   const { api, resources } = useKernel();
   const sessionIdentity = useViewport3DSessionIdentity();
@@ -2129,8 +2267,15 @@ export function useViewport3DPartFieldVectors(
         previous: previousFieldVectorEnvelopes,
         requests: requestKeys,
         status: resource.status,
+        tracker: options.tracker,
       }),
-    [previousFieldVectorEnvelopes, requestKeys, resource.data, resource.status],
+    [
+      options.tracker,
+      previousFieldVectorEnvelopes,
+      requestKeys,
+      resource.data,
+      resource.status,
+    ],
   );
   const data = useMemo(
     () =>

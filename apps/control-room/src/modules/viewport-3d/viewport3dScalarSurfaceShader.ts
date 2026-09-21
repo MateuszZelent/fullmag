@@ -1,9 +1,4 @@
-import {
-  BufferAttribute,
-  BufferGeometry,
-  ShaderMaterial,
-  type Side,
-} from "three";
+import { ShaderMaterial, type Side } from "three";
 
 import {
   floquetPhaseAdapter,
@@ -28,6 +23,7 @@ export interface Viewport3DScalarSurfaceShaderOptions {
   polygonOffset: boolean;
   polygonOffsetFactor: number;
   polygonOffsetUnits: number;
+  shadeStrength?: number;
   side: Side;
   toneMapped?: boolean;
   transparent: boolean;
@@ -52,77 +48,6 @@ export function canApplyScalarShaderColorBuffer(
   );
 }
 
-export function applyScalarShaderColorBuffer(
-  geometry: BufferGeometry,
-  buffer: ScalarColorBuffer | null | undefined,
-  vertexCount: number,
-): boolean {
-  const scalarValues = buffer?.scalarValues;
-  const vectorValues = buffer?.vectorValues;
-  const hasScalarValues = Boolean(
-    scalarValues && scalarValues.length === vertexCount,
-  );
-  const hasVectorValues = Boolean(
-    vectorValues && vectorValues.length === vertexCount * 3,
-  );
-  const hasComplexValues = canApplyComplexShaderColorBuffer(buffer, vertexCount);
-
-  if (!hasScalarValues && !hasVectorValues && !hasComplexValues) {
-    deleteShaderAttributes(geometry);
-    return false;
-  }
-
-  if (hasScalarValues && scalarValues) {
-    setFloatAttribute(
-      geometry,
-      VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE,
-      scalarValues,
-      1,
-      vertexCount,
-    );
-  } else if (geometry.hasAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE)) {
-    geometry.deleteAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE);
-  }
-
-  if (hasVectorValues && vectorValues) {
-    setFloatAttribute(
-      geometry,
-      VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE,
-      vectorValues,
-      3,
-      vertexCount,
-    );
-  } else if (geometry.hasAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE)) {
-    geometry.deleteAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE);
-  }
-
-  if (hasComplexValues && buffer?.complexRealValues && buffer.complexImagValues) {
-    setFloatAttribute(
-      geometry,
-      VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE,
-      buffer.complexRealValues,
-      3,
-      vertexCount,
-    );
-    setFloatAttribute(
-      geometry,
-      VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE,
-      buffer.complexImagValues,
-      3,
-      vertexCount,
-    );
-  } else {
-    if (geometry.hasAttribute(VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE)) {
-      geometry.deleteAttribute(VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE);
-    }
-    if (geometry.hasAttribute(VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE)) {
-      geometry.deleteAttribute(VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE);
-    }
-  }
-
-  return true;
-}
-
 export function createScalarSurfaceShaderMaterial(
   buffer: ScalarColorBuffer,
   options: Viewport3DScalarSurfaceShaderOptions,
@@ -138,6 +63,7 @@ export function createScalarSurfaceShaderMaterial(
     : 1;
   const floquetActive = buffer.wavevectorKf ? 1 : 0;
   const material = new ShaderMaterial({
+    clipping: true,
     depthTest: options.depthTest,
     depthWrite: options.depthWrite,
     fragmentShader: orientationMode
@@ -160,6 +86,7 @@ export function createScalarSurfaceShaderMaterial(
       },
       fmScalarMax: { value: buffer.range.max },
       fmScalarMin: { value: buffer.range.min },
+      fmShadeStrength: { value: options.shadeStrength ?? 0.45 },
       fmWavevectorKf: { value: buffer.wavevectorKf ?? [0, 0, 0] },
       fmCellOrigin: { value: buffer.cellOrigin ?? [0, 0, 0] },
       fmSpatialPhaseSign: { value: spatialPhaseSign },
@@ -191,6 +118,7 @@ export function updateScalarSurfaceShaderMaterial(
   material: ShaderMaterial,
   buffer: ScalarColorBuffer,
   opacity: number,
+  shadeStrength?: number,
 ): void {
   const nextColorModeId = shaderColorModeId(buffer.colorMode);
   const orientationMode = nextColorModeId === 1;
@@ -224,6 +152,9 @@ export function updateScalarSurfaceShaderMaterial(
     buffer.amplitudeScale,
   );
   material.uniforms.fmOpacity.value = opacity;
+  if (typeof shadeStrength === "number" && Number.isFinite(shadeStrength)) {
+    material.uniforms.fmShadeStrength.value = shadeStrength;
+  }
   material.uniforms.fmPaletteId.value = scalarPaletteId(buffer.colorPalette);
   material.uniforms.fmPhaseRad.value = finitePhaseRad(buffer.complexPhaseRad) ?? 0;
   material.uniforms.fmRepresentationId.value = complexRepresentationId(
@@ -297,43 +228,6 @@ function resolveSurfaceVertexShader(
     : SCALAR_SURFACE_VERTEX_SHADER;
 }
 
-function setFloatAttribute(
-  geometry: BufferGeometry,
-  name: string,
-  values: Float32Array,
-  itemSize: number,
-  vertexCount: number,
-): void {
-  const existing = geometry.getAttribute(name);
-  if (
-    existing instanceof BufferAttribute &&
-    existing.itemSize === itemSize &&
-    existing.count === vertexCount &&
-    existing.array instanceof Float32Array
-  ) {
-    (existing.array as Float32Array).set(values);
-    existing.needsUpdate = true;
-    return;
-  }
-
-  geometry.setAttribute(name, new BufferAttribute(values, itemSize));
-}
-
-function deleteShaderAttributes(geometry: BufferGeometry): void {
-  if (geometry.hasAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE)) {
-    geometry.deleteAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE);
-  }
-  if (geometry.hasAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE)) {
-    geometry.deleteAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE);
-  }
-  if (geometry.hasAttribute(VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE)) {
-    geometry.deleteAttribute(VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE);
-  }
-  if (geometry.hasAttribute(VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE)) {
-    geometry.deleteAttribute(VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE);
-  }
-}
-
 function shaderColorModeId(mode: string | null | undefined): number {
   switch (normalizeViewport3DVectorColorMode(mode, "magnitude")) {
     case "orientation":
@@ -370,26 +264,40 @@ function scalarPaletteId(palette: string | null | undefined): number {
 }
 
 const SCALAR_SURFACE_VERTEX_SHADER = `
+#include <clipping_planes_pars_vertex>
+
 attribute float ${VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE};
 varying float vScalarValue;
+varying vec3 vNormalView;
 
 void main() {
   vScalarValue = ${VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE};
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  vNormalView = normalize(normalMatrix * normal);
+  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+  #include <clipping_planes_vertex>
+  gl_Position = projectionMatrix * mvPosition;
 }
 `;
 
 const ORIENTATION_SURFACE_VERTEX_SHADER = `
+#include <clipping_planes_pars_vertex>
+
 attribute vec3 ${VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE};
 varying vec3 vVectorValue;
+varying vec3 vNormalView;
 
 void main() {
   vVectorValue = ${VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE};
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  vNormalView = normalize(normalMatrix * normal);
+  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+  #include <clipping_planes_vertex>
+  gl_Position = projectionMatrix * mvPosition;
 }
 `;
 
 const COMPLEX_SCALAR_SURFACE_VERTEX_SHADER = `
+#include <clipping_planes_pars_vertex>
+
 attribute vec3 ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE};
 attribute vec3 ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE};
 uniform int fmColorModeId;
@@ -402,6 +310,18 @@ uniform float fmSpatialPhaseSign;
 uniform float fmTemporalPhaseSign;
 uniform int fmFloquetActive;
 varying float vScalarValue;
+varying vec3 vNormalView;
+
+float safeAtan2(float y, float x) {
+  return (abs(x) < 1e-30 && abs(y) < 1e-30) ? 0.0 : atan(y, x);
+}
+
+const float FM_PI = 3.141592653589793;
+const float FM_TWO_PI = 6.283185307179586;
+
+float wrapPhase(float value) {
+  return mod(value + FM_PI, FM_TWO_PI) - FM_PI;
+}
 
 float scalarFromVector(vec3 value) {
   if (fmColorModeId == 2) return value.x;
@@ -416,7 +336,12 @@ vec3 projectComplex(vec3 complexReal, vec3 complexImag, float theta) {
   if (fmRepresentationId == 3) {
     return fmAmplitudeScale * sqrt(complexReal * complexReal + complexImag * complexImag);
   }
-  if (fmRepresentationId == 4) return atan(complexImag, complexReal);
+  if (fmRepresentationId == 4) {
+    if (fmColorModeId == 2) return vec3(safeAtan2(complexImag.x, complexReal.x));
+    if (fmColorModeId == 3) return vec3(safeAtan2(complexImag.y, complexReal.y));
+    if (fmColorModeId == 4) return vec3(safeAtan2(complexImag.z, complexReal.z));
+    return vec3(safeAtan2(sign(dot(complexImag, complexReal)) * length(complexImag), length(complexReal)));
+  }
   return fmAmplitudeScale * (complexReal * cos(theta) - complexImag * sin(theta));
 }
 
@@ -424,16 +349,22 @@ void main() {
   float theta = fmTemporalPhaseSign * fmPhaseRad;
   if (fmFloquetActive == 1) {
     theta += fmSpatialPhaseSign * dot(fmWavevectorKf, position - fmCellOrigin);
+    theta = wrapPhase(theta);
   }
   vec3 complexReal = ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE};
   vec3 complexImag = ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE};
   vec3 projected = projectComplex(complexReal, complexImag, theta);
   vScalarValue = scalarFromVector(projected);
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  vNormalView = normalize(normalMatrix * normal);
+  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+  #include <clipping_planes_vertex>
+  gl_Position = projectionMatrix * mvPosition;
 }
 `;
 
 const COMPLEX_ORIENTATION_SURFACE_VERTEX_SHADER = `
+#include <clipping_planes_pars_vertex>
+
 attribute vec3 ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE};
 attribute vec3 ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE};
 uniform float fmPhaseRad;
@@ -445,6 +376,18 @@ uniform float fmSpatialPhaseSign;
 uniform float fmTemporalPhaseSign;
 uniform int fmFloquetActive;
 varying vec3 vVectorValue;
+varying vec3 vNormalView;
+
+float safeAtan2(float y, float x) {
+  return (abs(x) < 1e-30 && abs(y) < 1e-30) ? 0.0 : atan(y, x);
+}
+
+const float FM_PI = 3.141592653589793;
+const float FM_TWO_PI = 6.283185307179586;
+
+float wrapPhase(float value) {
+  return mod(value + FM_PI, FM_TWO_PI) - FM_PI;
+}
 
 vec3 projectComplex(vec3 complexReal, vec3 complexImag, float theta) {
   if (fmRepresentationId == 1) return fmAmplitudeScale * complexReal;
@@ -452,7 +395,13 @@ vec3 projectComplex(vec3 complexReal, vec3 complexImag, float theta) {
   if (fmRepresentationId == 3) {
     return fmAmplitudeScale * sqrt(complexReal * complexReal + complexImag * complexImag);
   }
-  if (fmRepresentationId == 4) return atan(complexImag, complexReal);
+  if (fmRepresentationId == 4) {
+    return vec3(
+      safeAtan2(complexImag.x, complexReal.x),
+      safeAtan2(complexImag.y, complexReal.y),
+      safeAtan2(complexImag.z, complexReal.z)
+    );
+  }
   return fmAmplitudeScale * (complexReal * cos(theta) - complexImag * sin(theta));
 }
 
@@ -460,22 +409,30 @@ void main() {
   float theta = fmTemporalPhaseSign * fmPhaseRad;
   if (fmFloquetActive == 1) {
     theta += fmSpatialPhaseSign * dot(fmWavevectorKf, position - fmCellOrigin);
+    theta = wrapPhase(theta);
   }
   vec3 complexReal = ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE};
   vec3 complexImag = ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE};
   vVectorValue = projectComplex(complexReal, complexImag, theta);
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  vNormalView = normalize(normalMatrix * normal);
+  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+  #include <clipping_planes_vertex>
+  gl_Position = projectionMatrix * mvPosition;
 }
 `;
 
 const SCALAR_SURFACE_FRAGMENT_SHADER = `
 precision highp float;
 
+#include <clipping_planes_pars_fragment>
+
 uniform float fmOpacity;
+uniform float fmShadeStrength;
 uniform int fmPaletteId;
 uniform float fmScalarMin;
 uniform float fmScalarMax;
 varying float vScalarValue;
+varying vec3 vNormalView;
 
 vec3 mixStops3(float t, vec3 a, vec3 b, vec3 c) {
   if (t < 0.5) {
@@ -526,18 +483,42 @@ vec3 paletteColor(float t) {
   return mixStops4(t, vec3(0.267, 0.004, 0.329), vec3(0.192, 0.408, 0.557), vec3(0.208, 0.718, 0.475), vec3(0.992, 0.906, 0.145));
 }
 
+vec3 srgbToLinearVec3(vec3 c) {
+  vec3 lower = c / 12.92;
+  vec3 higher = pow((c + 0.055) / 1.055, vec3(2.4));
+  return mix(lower, higher, step(vec3(0.04045), c));
+}
+
 void main() {
-  float span = max(fmScalarMax - fmScalarMin, 1e-12);
-  float t = clamp((vScalarValue - fmScalarMin) / span, 0.0, 1.0);
-  gl_FragColor = vec4(paletteColor(t), fmOpacity);
+  #include <clipping_planes_fragment>
+
+  float v = vScalarValue;
+  bool bad = !(v == v) || abs(v) > 3.0e38;
+
+  // fmScalarValue is normalized to [0, 1] in float64 precision before upload
+  // (see viewport3dFieldMapping.ts). Do not normalize it a second time with
+  // the raw range uniforms; that made component changes look like shading
+  // changes instead of changing the surface texture.
+  float t = bad ? 0.5 : clamp(v, 0.0, 1.0);
+  vec3 base = bad ? vec3(0.85, 0.0, 0.85) : paletteColor(t);
+  vec3 n = normalize(vNormalView) * (gl_FrontFacing ? 1.0 : -1.0);
+  float ndl = clamp(dot(n, normalize(vec3(0.35, 0.55, 0.75))) * 0.5 + 0.5, 0.0, 1.0);
+  vec3 shaded = base * mix(1.0, 0.55 + 0.75 * ndl, fmShadeStrength);
+  vec3 color = srgbToLinearVec3(shaded);
+  gl_FragColor = vec4(color, fmOpacity);
+  #include <colorspace_fragment>
 }
 `;
 
 const ORIENTATION_SURFACE_FRAGMENT_SHADER = `
 precision highp float;
 
+#include <clipping_planes_pars_fragment>
+
 uniform float fmOpacity;
+uniform float fmShadeStrength;
 varying vec3 vVectorValue;
+varying vec3 vNormalView;
 
 const float FM_PI = 3.141592653589793;
 
@@ -559,6 +540,26 @@ vec3 orientationHslToRgb(float hueRadians, float saturation, float lightness) {
   return vec3(c + m, m, x + m);
 }
 
+vec3 srgbToLinearVec3(vec3 c) {
+  vec3 lower = c / 12.92;
+  vec3 higher = pow((c + 0.055) / 1.055, vec3(2.4));
+  return mix(lower, higher, step(vec3(0.04045), c));
+}
+
+// Mirrors magnetizationHslRgb() in orientation/magnetizationColor.ts exactly.
+// Saturation is the same constant the CPU path uses; the polar angle is
+// carried by the lightness alone. Deriving saturation from
+// length(normalized.xy) = sin(theta) double-counted that angle -- chroma came
+// out as (1 - |nz|) * sin(theta) instead of (1 - |nz|) -- so this shader drew
+// mid-latitudes noticeably greyer than the glyphs and the HUD legend drew the
+// very same vector.
+//
+// The lightness also runs the full [0, 1] range again. Compressing it into
+// [0.25, 0.75] kept the poles off pure white and pure black, but it treated a
+// symptom: what actually washed the colours out was uploading sRGB values into
+// buffers three.js reads as linear (see viewport3dColorSpace.ts). With that
+// fixed, the poles belong at the ends of the scale, where the HUD legend and
+// mumax3 both put them.
 vec3 orientationColor(vec3 vectorValue) {
   float magnitude = length(vectorValue);
   if (magnitude <= 1e-30) {
@@ -567,12 +568,25 @@ vec3 orientationColor(vec3 vectorValue) {
 
   vec3 normalized = vectorValue / magnitude;
   float hueRadians = atan(normalized.y, normalized.x);
-  float saturation = clamp(length(normalized.xy), 0.0, 1.0);
+  float saturation = 1.0;
   float lightness = clamp(normalized.z * 0.5 + 0.5, 0.0, 1.0);
   return orientationHslToRgb(hueRadians, saturation, lightness);
 }
 
 void main() {
-  gl_FragColor = vec4(orientationColor(vVectorValue), fmOpacity);
+  #include <clipping_planes_fragment>
+
+  vec3 base = orientationColor(vVectorValue);
+  vec3 n = normalize(vNormalView) * (gl_FrontFacing ? 1.0 : -1.0);
+  float ndl = clamp(dot(n, normalize(vec3(0.35, 0.55, 0.75))) * 0.5 + 0.5, 0.0, 1.0);
+  vec3 shaded = base * mix(1.0, 0.55 + 0.75 * ndl, fmShadeStrength);
+  // Same colour-space handling as SCALAR_SURFACE_FRAGMENT_SHADER. Writing the
+  // sRGB value straight out happened to look right on the default canvas, but
+  // PostProcessingLayer renders the scene into a linear target whenever Bloom
+  // or AO is enabled -- there the unencoded orientation surface washed out
+  // while scalar surfaces stayed correct.
+  vec3 color = srgbToLinearVec3(shaded);
+  gl_FragColor = vec4(color, fmOpacity);
+  #include <colorspace_fragment>
 }
 `;

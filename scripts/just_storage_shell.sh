@@ -30,11 +30,21 @@ resolver="${repo_root}/scripts/fullmag_storage.py"
 python_cmd=""
 python_candidates=(python3 python)
 if is_windows_shell; then
-  python_candidates=(python python3)
+  python_candidates=()
+  # A WindowsApps alias can precede a working interpreter in PATH.
+  while IFS= read -r candidate; do
+    [ -n "${candidate}" ] && python_candidates+=("${candidate}")
+  done < <(type -aP python python3 2>/dev/null || true)
 fi
 for python_candidate in "${python_candidates[@]}"; do
+  candidate_path=""
   if command -v "${python_candidate}" >/dev/null 2>&1; then
-    python_cmd="$(command -v "${python_candidate}")"
+    candidate_path="$(command -v "${python_candidate}")"
+  elif [ -f "${python_candidate}" ]; then
+    candidate_path="${python_candidate}"
+  fi
+  if [ -n "${candidate_path}" ] && "${candidate_path}" -c 'import sys; assert sys.version_info.major == 3' >/dev/null 2>&1; then
+    python_cmd="${candidate_path}"
     break
   fi
 done
@@ -42,6 +52,10 @@ if [ -z "${python_cmd}" ]; then
   echo "[fullmag just] Python is required for the storage resolver" >&2
   exit 2
 fi
+
+# Recipe bodies also invoke Python by name. Keep them on the interpreter
+# that passed the probe, without changing the host's persistent PATH.
+export PATH="$(dirname "${python_cmd}"):${PATH}"
 
 if [ ! -f "${resolver}" ]; then
   echo "[fullmag just] common storage resolver is missing: ${resolver}" >&2
@@ -72,6 +86,24 @@ if [[ "${recipe}" == *"fullmag_storage.py"* &&
 fi
 case "${recipe}" in
   *"just --list"*|*"just --list --"*) exec "${bash_executable}" -euo pipefail -c "${recipe}" ;;
+esac
+
+# Runner actions own their storage preflight and per-job/per-worktree locks.
+# Holding the generic worktree lock while `wait` polls would prevent the
+# coordinator from executing that same worktree's queued job.
+case "${recipe}" in
+  *"test_local_runner_"*|*"scripts/tests/local_runner"*|*"test_storage_capabilities.py"*)
+    "${python_cmd}" "${resolver}" resolve --repo-root "${repo_root}" >/dev/null
+    export PYTHONDONTWRITEBYTECODE=1
+    exec bash -euo pipefail -c "${recipe}"
+    ;;
+  *"scripts/local_runner/Dockerfile.coordinator"*|*"scripts/local_runner/Dockerfile.build"*)
+    "${python_cmd}" "${resolver}" resolve --repo-root "${repo_root}" >/dev/null
+    exec bash -euo pipefail -c "${recipe}"
+    ;;
+  *"scripts/local_runner_cli.py"*)
+    FULLMAG_STORAGE_PYTHON="${python_cmd}" exec bash -euo pipefail -c "${recipe}"
+    ;;
 esac
 
 # The Windows PowerShell launchers select their own storage profile and hold

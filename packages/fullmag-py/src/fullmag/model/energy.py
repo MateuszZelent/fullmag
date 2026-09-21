@@ -147,6 +147,17 @@ class InterfacialDMI:
 
 
 @dataclass(frozen=True, slots=True)
+class RotatedInterfacialDMI:
+    D: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "D", require_finite(self.D, "D"))
+
+    def to_ir(self) -> dict[str, object]:
+        return {"kind": "rotated_interfacial_dmi", "D": self.D}
+
+
+@dataclass(frozen=True, slots=True)
 class BulkDMI:
     D: float
 

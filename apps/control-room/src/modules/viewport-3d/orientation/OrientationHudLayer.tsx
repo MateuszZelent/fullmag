@@ -32,7 +32,7 @@ import {
 import { resolveOrientationHudAnchors } from "./hudLayout";
 import {
   HSL_REFERENCE_AXES,
-  magnetizationHslRgb,
+  magnetizationHslLinearRgb,
 } from "./magnetizationColor";
 import {
   ORBIT_SENSITIVITY,
@@ -395,7 +395,11 @@ function buildHslSphereGeometry(): BufferGeometry {
   const colors = new Float32Array(position.count * 3);
 
   for (let index = 0; index < position.count; index += 1) {
-    const [red, green, blue] = magnetizationHslRgb(
+    // Linear-sRGB: this array becomes a `color` buffer attribute, which
+    // three.js reads as working-space (linear) data. Uploading the sRGB code
+    // values made the legend sphere noticeably paler than the field it is
+    // meant to explain. See viewport3dColorSpace.ts.
+    const [red, green, blue] = magnetizationHslLinearRgb(
       position.getX(index),
       position.getY(index),
       position.getZ(index),

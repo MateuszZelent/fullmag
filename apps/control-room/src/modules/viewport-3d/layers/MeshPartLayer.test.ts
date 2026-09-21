@@ -248,7 +248,7 @@ describe("MeshPartLayer", () => {
         visibleShaderColors: committedShader,
         visibleVertexColors: null,
       }),
-    ).toEqual({ buffer: committedShader, pipeline: "shader" });
+    ).toEqual({ buffer: committedShader, fresh: true, pipeline: "shader" });
   });
 
   it("keeps committed vertex colors visible while a requested shader is pending", () => {
@@ -264,7 +264,59 @@ describe("MeshPartLayer", () => {
         visibleShaderColors: null,
         visibleVertexColors: committedVertex,
       }),
-    ).toEqual({ buffer: committedVertex, pipeline: "vertex" });
+    ).toEqual({ buffer: committedVertex, fresh: true, pipeline: "vertex" });
+  });
+
+  it("preserves retained scalar colors marked fresh: false without blanking the surface (LR-02)", () => {
+    const retainedColors = {
+      colors: new Float32Array(9),
+      colorMode: "orientation",
+      range: { max: 1, min: 0 },
+    };
+
+    const committedState = resolveMeshPartCommittedScalarColorState({
+      requestedPipeline: "vertex",
+      visibleShaderColors: null,
+      visibleVertexColors: {
+        buffer: retainedColors,
+        fresh: false,
+      },
+    });
+
+    expect(committedState).toEqual({
+      buffer: retainedColors,
+      fresh: false,
+      pipeline: "vertex",
+    });
+
+    const visibleState = resolveMeshPartVisibleScalarColorState({
+      effectiveScalarColors: null,
+      meshQualityColors: null,
+      surfaceVertexCount: 3,
+      vertexColorsEnabled: true,
+      visibleScalarColors: committedState.buffer,
+    });
+
+    expect(visibleState).toEqual({
+      canUseVertexScalarColors: true,
+      hasScalarColors: true,
+    });
+
+    const visibleStateFromUploadResult = resolveMeshPartVisibleScalarColorState({
+      effectiveScalarColors: null,
+      meshQualityColors: null,
+      surfaceVertexCount: 3,
+      vertexColorsEnabled: true,
+      visibleScalarColors: {
+        buffer: retainedColors,
+        fresh: false,
+      },
+    });
+
+    expect(visibleStateFromUploadResult).toEqual({
+      canUseVertexScalarColors: true,
+      hasScalarColors: true,
+    });
   });
 
   it("keeps geometry upload identity stable across quantity, component, and colormap changes", () => {
@@ -400,7 +452,7 @@ describe("MeshPartLayer", () => {
     expect(source).toContain("<meshBasicMaterial");
     expect(source).not.toContain("<meshStandardMaterial");
     expect(source).not.toContain("MeshStandardMaterial");
-    expect(source).not.toContain("computeVertexNormals");
+    expect(source).toContain("computeVertexNormals");
   });
 
   it("does not render depth-bypassing hidden edges for magnetic-object wireframe", () => {
@@ -529,7 +581,7 @@ describe("MeshPartLayer", () => {
     const uploadSource = readFileSync(
       fileURLToPath(new URL("../hooks/useViewport3DGeometryUpload.ts", import.meta.url)),
       "utf8",
-    );
+    ).replace(/\r\n/g, "\n");
     const uploadEffect = uploadSource.slice(
       uploadSource.indexOf("useEffect(() => {"),
       uploadSource.indexOf("const abortController = new AbortController();"),
@@ -1176,7 +1228,7 @@ buildReference: null,
       range: { max: 1, min: 0 },
       scalarValues: new Float32Array([0.2, 0.8]),
     };
-    const materialProfile = { toneMapped: false };
+    const materialProfile = { shadeStrength: 0.45, toneMapped: false };
 
     it("renders exactly one DoubleSide pass with depthWrite for opaque surfaces", () => {
       const policies = resolveMeshPartSurfacePassPolicies(1.0);
@@ -1219,6 +1271,23 @@ buildReference: null,
       });
       expect(policies.renderOrderFront).toBe(RENDER_POLICIES.contextSurfaceFront.renderOrder);
       expect(policies.renderOrderFront).toBe(11);
+    });
+
+    it("passes shadeStrength to both front and back scalar shader materials (S-01)", () => {
+      const tracker = new Viewport3DResourceTracker();
+      const policies = resolveMeshPartSurfacePassPolicies(0.5);
+      const materials = createMeshPartScalarShaderMaterials({
+        buffer: dummyBuffer,
+        enabled: true,
+        materialProfile: { shadeStrength: 0.33, toneMapped: false },
+        surfaceOpacity: 0.5,
+        surfacePolicy: policies.back,
+        surfacePolicyFront: policies.front,
+        tracker,
+      });
+
+      expect(materials.back?.uniforms.fmShadeStrength.value).toBe(0.33);
+      expect(materials.front?.uniforms.fmShadeStrength.value).toBe(0.33);
     });
 
     it("creates and tracks two distinct ShaderMaterial instances for transparent scalar surfaces", () => {

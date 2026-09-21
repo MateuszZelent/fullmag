@@ -79,7 +79,7 @@ bool gpu_rk_accumulate_effective_field(
             return false;
         }
     }
-    if (ctx.dmi.interfacial_enabled) {
+    if (ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled) {
         fullmag_cuda_add_field_inplace(gpu.fields.h_dmi.x, gpu.fields.h_eff.x, n, stream);
         fullmag_cuda_add_field_inplace(gpu.fields.h_dmi.y, gpu.fields.h_eff.y, n, stream);
         fullmag_cuda_add_field_inplace(gpu.fields.h_dmi.z, gpu.fields.h_eff.z, n, stream);

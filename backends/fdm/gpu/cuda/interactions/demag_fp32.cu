@@ -266,8 +266,10 @@ __global__ void combine_effective_field_fp32_kernel(
     const double * __restrict__ kc2_field,
     const double * __restrict__ kc3_field,
     int has_interfacial_dmi,
+    int has_rotated_interfacial_dmi,
     int has_bulk_dmi,
     float D_int,
+    float D_rotated,
     float D_bulk,
     int nx, int ny, int nz,
     int periodic_x, int periodic_y, int periodic_z,
@@ -374,7 +376,7 @@ __global__ void combine_effective_field_fp32_kernel(
     }
 
     // --- DMI (MuMax-compatible natural free-surface boundary conditions) ---
-    if ((has_interfacial_dmi || has_bulk_dmi) && ms > 0.0f) {
+    if ((has_interfacial_dmi || has_rotated_interfacial_dmi || has_bulk_dmi) && ms > 0.0f) {
         int iz = idx / (ny * nx);
         int rem2 = idx - iz * ny * nx;
         int iy = rem2 / nx;
@@ -428,6 +430,19 @@ __global__ void combine_effective_field_fp32_kernel(
             hz -= dmi_pf * D_int * (dmx_dx + dmy_dy);
             add_interfacial_dmi_boundary_correction(
                 mx, my, mz, dmi_pf, D_int, inv_2dx, inv_2dy, missing, hx, hy, hz);
+        }
+
+
+        if (has_rotated_interfacial_dmi) {
+            const float dmz_dx = (m_z[xp] - m_z[xm]) * inv_2dx;
+            const float dmy_dy = (m_y[yp] - m_y[ym]) * inv_2dy;
+            const float dmx_dy = (m_x[yp] - m_x[ym]) * inv_2dy;
+            const float dmx_dx = (m_x[xp] - m_x[xm]) * inv_2dx;
+            hx += dmi_pf * D_rotated * (dmz_dx - dmy_dy);
+            hy += dmi_pf * D_rotated * dmx_dy;
+            hz -= dmi_pf * D_rotated * dmx_dx;
+            add_rotated_interfacial_dmi_boundary_correction(
+                mx, my, mz, dmi_pf, D_rotated, inv_2dx, inv_2dy, missing, hx, hy, hz);
         }
 
         if (has_bulk_dmi) {
@@ -805,8 +820,10 @@ static void launch_effective_field_fp32_impl(
         ctx.kc2_field,
         ctx.kc3_field,
         ctx.has_interfacial_dmi ? 1 : 0,
+        ctx.has_rotated_interfacial_dmi ? 1 : 0,
         ctx.has_bulk_dmi ? 1 : 0,
         static_cast<float>(ctx.D_interfacial),
+        static_cast<float>(ctx.D_rotated_interfacial),
         static_cast<float>(ctx.D_bulk),
         static_cast<int>(ctx.nx), static_cast<int>(ctx.ny), static_cast<int>(ctx.nz),
         ctx.periodic_x ? 1 : 0, ctx.periodic_y ? 1 : 0, ctx.periodic_z ? 1 : 0,
@@ -852,7 +869,7 @@ static void launch_effective_field_fp32_impl(
             ctx, "fused local field/RHS fp32 launch");
     }
     ++ctx.endpoint_field_cache.effective_field_evaluation_count;
-    if (ctx.has_interfacial_dmi || ctx.has_bulk_dmi) {
+    if (ctx.has_interfacial_dmi || ctx.has_rotated_interfacial_dmi || ctx.has_bulk_dmi) {
         fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_DMI);
     }
     if (ctx.has_uniaxial_anisotropy || ctx.has_cubic_anisotropy) {

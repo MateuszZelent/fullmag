@@ -12,6 +12,7 @@ import {
   resolveViewport3DOrthographicCameraFrame,
   resolveViewport3DOrthographicZoom,
   resolveNextViewport3DModelLayerStage,
+  resolveNextViewport3DModelLayerStageState,
   resolveAuthoredRegionOverlayVisibility,
   resolveViewport3DAirboxFrameState,
   resolveViewport3DModelLayerStageKey,
@@ -675,10 +676,10 @@ describe("Viewport3DScene scale helpers", () => {
     );
 
     expect(modelStack).toContain(
-      "{!fdmLaneActive &&\n      stageVisibility.baseGeometry &&\n      viewport3DAirboxLayerEnabledFromBrowserConfig() ? (",
+      "{!fdmLaneActive &&\n      viewport3DAirboxLayerEnabledFromBrowserConfig() ? (",
     );
     expect(modelStack).toContain(
-      "{!fdmLaneActive &&\n      stageVisibility.baseGeometry &&\n      viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (",
+      "{!fdmLaneActive &&\n      viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (",
     );
   });
 
@@ -899,6 +900,144 @@ describe("Viewport3DScene scale helpers", () => {
     expect(stageHook).toContain("window.requestAnimationFrame");
     expect(stageHook).toContain("setStageState((current) =>");
     expect(stageHook).not.toContain("startTransition");
+  });
+
+  it("does not change stage key on fdmTargetViews or fdmNativeLayerViews length changes, but does on mesh or scene identity", () => {
+    const baseTopology = {
+      airboxParts: [],
+      magneticParts: [],
+      meshGenerationId: "gen-1",
+      meshRevision: "rev-1",
+      nodeCount: 100,
+    };
+    const basePrimitive = {
+      objects: [{ id: "obj-1" }],
+      sceneRevision: "scene-rev-1",
+    };
+
+    const baseKey = resolveViewport3DModelLayerStageKey({
+      fdmNativeLayerViews: [],
+      fdmTargetViews: [],
+      primitiveModel: basePrimitive as never,
+      topologyModel: baseTopology as never,
+    });
+
+    const keyWithPopulatedViews = resolveViewport3DModelLayerStageKey({
+      fdmNativeLayerViews: [{ target: { id: "native-1" } } as never],
+      fdmTargetViews: [{ target: { id: "target-1" } } as never],
+      primitiveModel: basePrimitive as never,
+      topologyModel: baseTopology as never,
+    });
+
+    expect(keyWithPopulatedViews).toBe(baseKey);
+
+    const keyWithDifferentMeshRevision = resolveViewport3DModelLayerStageKey({
+      primitiveModel: basePrimitive as never,
+      topologyModel: {
+        ...baseTopology,
+        meshRevision: "rev-2",
+      } as never,
+    });
+    expect(keyWithDifferentMeshRevision).not.toBe(baseKey);
+
+    const keyWithDifferentMeshGeneration = resolveViewport3DModelLayerStageKey({
+      primitiveModel: basePrimitive as never,
+      topologyModel: {
+        ...baseTopology,
+        meshGenerationId: "gen-2",
+      } as never,
+    });
+    expect(keyWithDifferentMeshGeneration).not.toBe(baseKey);
+
+    const keyWithDifferentSceneRevision = resolveViewport3DModelLayerStageKey({
+      primitiveModel: {
+        ...basePrimitive,
+        sceneRevision: "scene-rev-2",
+      } as never,
+      topologyModel: baseTopology as never,
+    });
+    expect(keyWithDifferentSceneRevision).not.toBe(baseKey);
+  });
+
+  it("does not drop stage to 0 when identity is constant, and preserves stage when compatible content is present", () => {
+    const initial = {
+      resetKey: "gen-1:rev-1:100:0:0:scene-1:1",
+      stage: 3,
+    };
+
+    const sameKeyTransition = resolveNextViewport3DModelLayerStageState({
+      current: initial,
+      hasCompatibleContent: true,
+      nextResetKey: "gen-1:rev-1:100:0:0:scene-1:1",
+    });
+    expect(sameKeyTransition.didReset).toBe(false);
+    expect(sameKeyTransition.next.stage).toBe(3);
+    expect(sameKeyTransition.next.resetKey).toBe("gen-1:rev-1:100:0:0:scene-1:1");
+
+    const compatibleTransition = resolveNextViewport3DModelLayerStageState({
+      current: initial,
+      hasCompatibleContent: true,
+      nextResetKey: "gen-1:rev-2:100:0:0:scene-1:1",
+    });
+    expect(compatibleTransition.didReset).toBe(false);
+    expect(compatibleTransition.next.stage).toBe(3);
+    expect(compatibleTransition.next.resetKey).toBe("gen-1:rev-2:100:0:0:scene-1:1");
+
+    const incompatibleTransition = resolveNextViewport3DModelLayerStageState({
+      current: initial,
+      hasCompatibleContent: false,
+      nextResetKey: "gen-2:rev-1:200:0:0:scene-1:1",
+    });
+    expect(incompatibleTransition.didReset).toBe(true);
+    expect(incompatibleTransition.next.stage).toBe(0);
+    expect(incompatibleTransition.next.resetKey).toBe("gen-2:rev-1:200:0:0:scene-1:1");
+  });
+
+  it("does not zero fieldVector or colors on layer views during staging and preserves FdmCuboidLayer mounts via group visibility", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+    const modelStack = source.slice(
+      source.indexOf("function Viewport3DModelLayerStack"),
+      source.indexOf("function RegionOverlayNativePickingLayer"),
+    );
+
+    expect(modelStack).not.toContain("fieldVector: null");
+    expect(modelStack).not.toContain("surfaceColors: null");
+    expect(source).toContain("fdmTargetViews.map((view)");
+    expect(modelStack).toContain("{fdmTargetViews.map((view) => (");
+
+    expect(modelStack).toContain("<group visible={stageVisibility.baseGeometry}>");
+    expect(modelStack).not.toContain("{stageVisibility.baseGeometry &&\n      fdmCuboidLayerEnabled");
+  });
+
+  it("preserves AirboxLayer and TopologyMeshLayer mounts during staging via group visibility (B4 FEM)", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+    const modelStack = source.slice(
+      source.indexOf("function Viewport3DModelLayerStack"),
+      source.indexOf("function RegionOverlayNativePickingLayer"),
+    );
+
+    expect(modelStack).not.toContain("stageVisibility.baseGeometry &&\n      viewport3DAirboxLayerEnabledFromBrowserConfig()");
+    expect(modelStack).not.toContain("stageVisibility.baseGeometry &&\n      viewport3DTopologyMeshLayerEnabledFromBrowserConfig()");
+
+    const airboxStart = modelStack.indexOf("<AirboxLayer");
+    const airboxGroupStart = modelStack.lastIndexOf("<group", airboxStart);
+    const airboxGroupEnd = modelStack.indexOf("</group>", airboxStart) + 8;
+    const airboxBlock = modelStack.slice(airboxGroupStart, airboxGroupEnd);
+    expect(airboxBlock).toContain("visible={stageVisibility.baseGeometry}");
+    expect(airboxBlock).toContain("<AirboxLayer");
+
+    const topologyStart = modelStack.indexOf("<TopologyMeshLayer");
+    const topologyGroupStart = modelStack.lastIndexOf("<group", topologyStart);
+    const topologyGroupEnd = modelStack.indexOf("</group>", topologyStart) + 8;
+    const topologyBlock = modelStack.slice(topologyGroupStart, topologyGroupEnd);
+    expect(topologyBlock).toContain("visible={stageVisibility.baseGeometry}");
+    expect(topologyBlock).toContain("<TopologyMeshLayer");
   });
 });
 

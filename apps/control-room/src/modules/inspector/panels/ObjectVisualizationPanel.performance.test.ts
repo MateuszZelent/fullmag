@@ -2,17 +2,19 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const targetSectionSource = readFileSync(
+function readSource(path: string): string {
+  return readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+}
+
+const targetSectionSource = readSource(
   join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationTargetSection.tsx"),
-  "utf8",
 );
 const panelSource =
-  readFileSync(join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationPanel.tsx"), "utf8") +
-  readFileSync(join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationHelpers.ts"), "utf8") +
+  readSource(join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationPanel.tsx")) +
+  readSource(join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationHelpers.ts")) +
   targetSectionSource;
-const visualizationCss = readFileSync(
+const visualizationCss = readSource(
   join(process.cwd(), "src/design/styles/inspector-visualization.css"),
-  "utf8",
 );
 
 describe("ObjectVisualizationPanel performance contracts", () => {

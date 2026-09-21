@@ -34,6 +34,7 @@ pub(crate) fn select_observables<'a>(
         // PH-02: extended vector observables
         QuantityId::HAni => Ok(observables.anisotropy_field.as_slice()),
         QuantityId::HDmi => Ok(observables.dmi_field.as_slice()),
+        QuantityId::HDmiRotated => Ok(observables.rotated_dmi_field.as_slice()),
         QuantityId::HMel => Ok(observables.magnetoelastic_field.as_slice()),
         QuantityId::HAniCubic => Ok(observables.cubic_anisotropy_field.as_slice()),
         QuantityId::HDmiBulk => Ok(observables.bulk_dmi_field.as_slice()),

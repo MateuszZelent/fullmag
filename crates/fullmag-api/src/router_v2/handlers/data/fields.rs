@@ -1592,6 +1592,7 @@ fn materializer_status<'a>(
         .latest_step
         .field_materialization_states
         .iter()
+        .rev()
         .find(|status| status.quantity == quantity_id)
 }
 
@@ -8305,7 +8306,7 @@ mod tests {
         insert_field_vector_binary_headers, is_fem_runtime, parse_analysis_eigen_mode_field_id,
         parse_analysis_frequency_response_field_id, parse_component, preview_cache_is_fresher,
         project_values, push_field_descriptor, resolve_field_scope,
-        resolve_target_field_availability, resolve_transport_spatial_field,
+        resolve_target_field_availability, resolve_transport_spatial_field, materializer_status,
         serialize_analysis_field_vector_binary, FieldFreshness, FieldMaterializationState,
         FieldVectorQuery, ResolvedFieldScopeDomain, TargetFieldAvailabilityQuery,
     };
@@ -8625,6 +8626,57 @@ mod tests {
             Some("field_materialization_pending")
         );
         assert_eq!(availability.carrier_id, None);
+    }
+
+    #[test]
+    fn field_meta_uses_latest_materialization_status_after_pending() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "field-meta-latest-materialization-status"
+        }))
+        .expect("minimal live snapshot request should deserialize");
+        let mut snapshot = default_current_live_state(&request);
+        snapshot.live_state = Some(
+            serde_json::from_value(serde_json::json!({
+                "status": "running",
+                "updated_at_unix_ms": 1,
+                "latest_step": {
+                    "step": 1,
+                    "time": 0.0,
+                    "dt": 0.0,
+                    "e_ex": 0.0,
+                    "e_demag": 0.0,
+                    "e_ext": 0.0,
+                    "e_total": 0.0,
+                    "max_dm_dt": 0.0,
+                    "max_h_eff": 0.0,
+                    "wall_time_ns": 0,
+                    "grid": [1, 1, 1],
+                    "field_materialization_states": [
+                        {
+                            "quantity": "H_demag",
+                            "source_step": 1,
+                            "request_revision": 4,
+                            "state": "pending",
+                            "error": null
+                        },
+                        {
+                            "quantity": "H_demag",
+                            "source_step": 1,
+                            "request_revision": 4,
+                            "state": "complete",
+                            "error": null
+                        }
+                    ],
+                    "finished": false
+                }
+            }))
+            .expect("materialization status history should deserialize"),
+        );
+
+        assert_eq!(
+            materializer_status(&snapshot, "H_demag").map(|status| status.state),
+            Some(fullmag_runner::LiveFieldMaterializationState::Complete)
+        );
     }
 
     #[test]

@@ -152,6 +152,21 @@ pub(crate) fn offset_step_update(
 ) -> fullmag_runner::StepUpdate {
     update.stats.step = update.stats.step.saturating_add(step_offset);
     update.stats.time += time_offset;
+    for status in &mut update.stats.field_materialization_states {
+        status.source_step = status.source_step.saturating_add(step_offset);
+    }
+    for field in update.preview_field.iter_mut().chain(
+        update.cached_preview_fields.iter_mut().flat_map(|fields| fields.iter_mut()),
+    ) {
+        // Explicit capture coordinates are stage-local, just like StepStats.
+        // Legacy unstamped fields inherit the adjusted stats at ingestion.
+        if field.source_time_seconds.is_some() || field.source_step > 0 {
+            field.source_step = field.source_step.saturating_add(step_offset);
+        }
+        if let Some(time) = &mut field.source_time_seconds {
+            *time += time_offset;
+        }
+    }
     update.finished = finished;
     update
 }
@@ -372,6 +387,7 @@ pub(crate) fn live_state_manifest_from_update(
             e_ext: update.stats.e_ext,
             e_ani: update.stats.e_ani,
             e_dmi: update.stats.e_dmi,
+            e_rotated_dmi: update.stats.e_rotated_dmi,
             e_total: update.stats.e_total,
             max_dm_dt: update.stats.max_dm_dt,
             max_h_eff: update.stats.max_h_eff,
@@ -412,6 +428,7 @@ pub(crate) fn running_run_manifest_from_update(
         final_e_ext: Some(update.stats.e_ext),
         final_e_ani: Some(update.stats.e_ani),
         final_e_dmi: Some(update.stats.e_dmi),
+        final_e_rotated_dmi: Some(update.stats.e_rotated_dmi),
         final_e_total: Some(update.stats.e_total),
         artifact_dir: artifact_dir.display().to_string(),
     }
@@ -4699,7 +4716,7 @@ pub(crate) fn build_interactive_command_stage(
 ) -> Result<Option<ResolvedScriptStage>> {
     match command.kind.as_str() {
         "close" => Ok(None),
-        "solve" => {
+        "solve" if !matches!(&base_problem.study, fullmag_ir::StudyIR::Relaxation { .. }) => {
             let mut solve_command = command.clone();
             solve_command.kind = match &base_problem.study {
                 fullmag_ir::StudyIR::Relaxation { .. } => "relax".to_string(),
@@ -4737,11 +4754,16 @@ pub(crate) fn build_interactive_command_stage(
                 "interactive_run",
             )))
         }
-        "relax" => {
+        "relax" | "solve" => {
             let mut ir = base_problem.clone();
+            let preserve_authored = command.kind == "solve";
             let algorithm = match command.relax_algorithm.as_deref() {
                 Some(value) => serde_json::from_value(serde_json::json!(value))
                     .context("invalid relax_algorithm in SessionCommand")?,
+                None if preserve_authored => match &ir.study {
+                    fullmag_ir::StudyIR::Relaxation { algorithm, .. } => *algorithm,
+                    _ => unreachable!("non-relaxation solve is handled above"),
+                },
                 None => fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
             };
             reject_direct_minimizer_llg_command(algorithm, command)?;
@@ -4757,19 +4779,35 @@ pub(crate) fn build_interactive_command_stage(
                 resolve_interactive_llg_policy(dynamics, command)?;
             }
             let sampling = ir.study.sampling().clone();
-            let stop = fullmag_ir::RelaxStopIR {
-                torque_tolerance_apm: Some(command.torque_tolerance.unwrap_or(1e-4)),
-                energy_tolerance_j: command.energy_tolerance,
-                max_steps: Some(command.max_steps.unwrap_or(50_000)),
-                max_relaxation_time_s: None,
+            // Compute solves the authored study. Missing command fields are
+            // not requests to reset its enabled criteria or execution budget.
+            let mut stop = match &ir.study {
+                fullmag_ir::StudyIR::Relaxation { stop, .. } if preserve_authored => stop.clone(),
+                _ => fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1e-4),
+                    energy_tolerance_j: None,
+                    max_steps: Some(50_000),
+                    max_relaxation_time_s: None,
+                },
             };
+            if let Some(tolerance) = command.torque_tolerance {
+                stop.torque_tolerance_apm = Some(tolerance);
+            }
+            if let Some(tolerance) = command.energy_tolerance {
+                stop.energy_tolerance_j = Some(tolerance);
+            }
+            if let Some(max_steps) = command.max_steps {
+                stop.max_steps = Some(max_steps);
+            }
 
             // Default relax_alpha = 1.0 for optimal overdamped convergence
             // (user can still override to any value via command.relax_alpha)
             if algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped {
-                let effective_alpha = command.relax_alpha.unwrap_or(1.0);
-                for mat in &mut ir.materials {
-                    mat.damping = effective_alpha;
+                let effective_alpha = command.relax_alpha.or_else(|| (!preserve_authored).then_some(1.0));
+                if let Some(effective_alpha) = effective_alpha {
+                    for mat in &mut ir.materials {
+                        mat.damping = effective_alpha;
+                    }
                 }
             }
 
@@ -6995,6 +7033,47 @@ mod tests {
 
         assert_eq!(stage.entrypoint_kind, "interactive_relax");
         assert!(stage.until_seconds.is_infinite());
+    }
+
+    #[test]
+    fn build_interactive_solve_preserves_authored_relaxation() {
+        for algorithm in [
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            fullmag_ir::RelaxationAlgorithmIR::NonlinearCg,
+            fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+        ] {
+            let mut base = sample_problem_ir_with_adaptive_relax_dt(4e-16);
+            if let fullmag_ir::StudyIR::Relaxation {
+                algorithm: authored, dynamics, stop, ..
+            } = &mut base.study {
+                *authored = algorithm;
+                if algorithm != fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped {
+                    *dynamics = None;
+                }
+                stop.torque_tolerance_apm = None;
+                stop.energy_tolerance_j = Some(3e-25);
+                stop.max_steps = Some(1234);
+                stop.max_relaxation_time_s = if dynamics.is_some() { Some(7e-9) } else { None };
+            } else {
+                panic!("fixture must be a relaxation study");
+            }
+            let expected_study = serde_json::to_value(&base.study).unwrap();
+            let expected_materials = serde_json::to_value(&base.materials).unwrap();
+            let mut command = solver_command("solve");
+            command.until_seconds = None;
+            let stage = build_interactive_command_stage(&base, &command)
+                .expect("solve must retain the authored algorithm")
+                .unwrap();
+            assert_eq!(serde_json::to_value(&stage.ir.study).unwrap(), expected_study);
+            assert_eq!(serde_json::to_value(&stage.ir.materials).unwrap(), expected_materials);
+
+            command.max_steps = Some(4321);
+            let overridden = build_interactive_command_stage(&base, &command).unwrap().unwrap();
+            if let fullmag_ir::StudyIR::Relaxation { stop, .. } = &mut base.study {
+                stop.max_steps = Some(4321);
+            }
+            assert_eq!(serde_json::to_value(&overridden.ir.study).unwrap(), serde_json::to_value(&base.study).unwrap());
+        }
     }
 
     #[test]

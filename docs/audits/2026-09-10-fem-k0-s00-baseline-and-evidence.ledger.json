@@ -1,0 +1,300 @@
+{
+  "schema": "fullmag.k0-s00-ledger.v1",
+  "date": "2026-09-10",
+  "task_id": "k0-remediation-s00-20260910",
+  "owner": "Codex task 01a04c3b-7546-7cc2-b555-fde34bf26ccb",
+  "scope": "S00: baseline, preservation and selective recovery decisions only",
+  "scope_status": "verified",
+  "base_commit": "1620d2762d99b58cddcfc93f7eb505b84dfbf178",
+  "branch": "codex/k0-remediation-s00-20260910",
+  "repo_root": "C:/git/fullmag/worktrees/k0-remediation-s00-20260910",
+  "worktree_id": "k0-remediation-s00-20260910-2717a03f5c1f094a",
+  "profile": "windows-native",
+  "registry": "C:/git/fullmag/storage/index/k0-remediation-s00-20260910-2717a03f5c1f094a.json",
+  "evidence_root": "C:/git/fullmag/storage/runs/k0-remediation-s00-20260910-2717a03f5c1f094a/baseline",
+  "preserved_files": 162,
+  "preserved_bytes": 19311322,
+  "source_unchanged": true,
+  "backup_exact": true,
+  "kittel": {
+    "count": 15,
+    "max_relative_error": 5.194679480952314e-14,
+    "gamma0": 221100,
+    "Ms": 800000
+  },
+  "build_identity": {
+    "built_at_utc": "2026-09-01T15:56:42Z",
+    "git_commit": "4c7897f218eb0c32612db1f43a844502a316b4f6",
+    "source_snapshot_sha256": "e5679faa14d8f6fc5010aef436c117aad52194e02caab50f3411d49ae5a8fd3a",
+    "worktree_state": "dirty"
+  },
+  "runtime_manifest_source_matches": true,
+  "solver": {
+    "solver_adapter": "k0_poisson_airbox_cpu_schur_slepc",
+    "execution_lane": "production_cpu",
+    "outer_boundary_kind": "pure_neumann",
+    "gauge_policy": "mean_zero_augmented",
+    "robin_beta": 0,
+    "solve_succeeded": true,
+    "validation_state": "unvalidated",
+    "spectrum_completeness": "selected_only",
+    "window_complete": false,
+    "sample_count": 15
+  },
+  "fit_status": {
+    "status": "partial",
+    "validation_status": "passed",
+    "complete": false,
+    "stop_reason": "statistical_fit_covariance_not_available",
+    "runtime_id": "runtime:not_provided",
+    "run_id": "run:current",
+    "stage_id": "stage:eigenmodes"
+  },
+  "pending_commits": [
+    "f0986ede9853828dfd573a2bee12302385213321",
+    "93e1ca38423ddb661a21c76b05bb02bfaf5c9826"
+  ],
+  "merge_parents": [
+    "f0986ede9853828dfd573a2bee12302385213321",
+    "0bcd09558ac506e4ec334d24e98ce392f23d4473"
+  ],
+  "implementation_changes": [],
+  "imported_materials": [
+    "docs/superpowers/plans/2026-09-09-fem-k0-production-remediation-sol.md"
+  ],
+  "import_decision": "No solver hunks ported before S01. Source review and evidence only; Gamma port belongs to S02/S03. Do not merge 93e1 as an implementation patch.",
+  "evidence_hashes": {
+    "neumann-files.sha256.json": "a45f5fe91e28d0f73e4ac24f99fbc12fa183ae533f22f6992596418014b62b7b",
+    "reference-files.sha256.json": "bfd7b2f4ace7aca1c7171dbba7addd467cd0190b2b7b14cf31cf9623555aed2a",
+    "preservation.json": "5836ec94e05dcafea4c1ff794ebe3b7d57fdbdeacdfce465139c612d64dc52ef",
+    "checks.json": "788a1186cc48aa861db19a560d00838f05dea26f7f10d42f0b4ed0db464adb14",
+    "historical-inventory.json": "52a63f7ded5a0003c5c247f88fea5bc17cda8e7eaf90722e0cbb4d995d2611d4",
+    "reference-files/neumann-runtime-manifest.json": "ed6a404dc7b5cb0629d90115f997a7efcb6cc8ff1aa923202d1f706e55752f5b",
+    "reference-files/validator.py": "b183d33cde928a65d56de71e46f8f57a271c3c90946baeea59ee946e4d42f865",
+    "resource-snapshot.json": "680f8a07b87a0570d0821ad594f4dd78c009204587b9f567351caea9be958cdf"
+  },
+  "checks": [
+    {
+      "id": "C02-neumann-recompute",
+      "executable": "python",
+      "arguments": [
+        "-B",
+        "-c",
+        "import json,math,pathlib,sys; pts=json.loads(pathlib.Path(sys.argv[1]).read_text())[\"points\"]; exact=lambda x:221100/(2*math.pi)*math.sqrt(x[\"bias_field_a_per_m\"][0]*(x[\"bias_field_a_per_m\"][0]+800000)); errors=[abs(x[\"solved_frequency_hz\"]-exact(x))/exact(x) for x in pts]; print(json.dumps({\"count\":len(pts),\"max_relative_error\":max(errors),\"gamma0\":221100,\"Ms\":800000})); assert len(pts)==15 and max(errors)<1e-12",
+        "C:\\git\\fullmag\\storage\\runs\\k0-remediation-s00-20260910-2717a03f5c1f094a\\baseline\\neumann.zarr\\artifacts/fmr/kittel_fit.v1.json"
+      ],
+      "cwd": "C:/git/fullmag/worktrees/k0-remediation-s00-20260910",
+      "started_at": "2026-09-09T22:30:56.2261552Z",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "expected_text": "",
+      "reproduced": true,
+      "output": "C02-neumann-recompute.log"
+    },
+    {
+      "id": "C03-neumann-original",
+      "executable": "python",
+      "arguments": [
+        "-B",
+        "C:/git/fullmag/worktrees/k0-remediation-s00-20260910/scripts/verify_fem_frequency_domain_eigen_artifacts.py",
+        "C:\\git\\fullmag\\worktrees\\k0-exchange-only-diagnosis\\examples\\fem_eigen_k0_kittel_periodic_airbox.zarr/artifacts"
+      ],
+      "cwd": "C:/git/fullmag/worktrees/k0-remediation-s00-20260910",
+      "started_at": "2026-09-09T22:30:56.5039577Z",
+      "exit_code": 1,
+      "expected_exit_code": 1,
+      "expected_text": "source_mesh_topology_sha256",
+      "reproduced": true,
+      "output": "C03-neumann-original.log"
+    },
+    {
+      "id": "C03-neumann-copy",
+      "executable": "python",
+      "arguments": [
+        "-B",
+        "C:/git/fullmag/worktrees/k0-remediation-s00-20260910/scripts/verify_fem_frequency_domain_eigen_artifacts.py",
+        "C:\\git\\fullmag\\storage\\runs\\k0-remediation-s00-20260910-2717a03f5c1f094a\\baseline\\neumann.zarr\\artifacts"
+      ],
+      "cwd": "C:/git/fullmag/worktrees/k0-remediation-s00-20260910",
+      "started_at": "2026-09-09T22:30:57.1077565Z",
+      "exit_code": 1,
+      "expected_exit_code": 1,
+      "expected_text": "source_mesh_topology_sha256",
+      "reproduced": true,
+      "output": "C03-neumann-copy.log"
+    },
+    {
+      "id": "C03-neumann-kittel-options",
+      "executable": "python",
+      "arguments": [
+        "-B",
+        "C:/git/fullmag/worktrees/k0-remediation-s00-20260910/scripts/verify_fem_frequency_domain_eigen_artifacts.py",
+        "--require-k0-kittel-field-sweep",
+        "--require-k0-kittel-periodic-airbox-demag",
+        "C:\\git\\fullmag\\storage\\runs\\k0-remediation-s00-20260910-2717a03f5c1f094a\\baseline\\neumann.zarr\\artifacts"
+      ],
+      "cwd": "C:/git/fullmag/worktrees/k0-remediation-s00-20260910",
+      "started_at": "2026-09-09T22:30:57.7000015Z",
+      "exit_code": 1,
+      "expected_exit_code": 1,
+      "expected_text": "source_mesh_topology_sha256",
+      "reproduced": true,
+      "output": "C03-neumann-kittel-options.log"
+    },
+    {
+      "id": "C03-robin",
+      "executable": "python",
+      "arguments": [
+        "-B",
+        "C:/git/fullmag/worktrees/k0-remediation-s00-20260910/scripts/verify_fem_frequency_domain_eigen_artifacts.py",
+        "--require-k0-kittel-field-sweep",
+        "--require-k0-kittel-periodic-airbox-demag",
+        "C:/fullmag-cache/state/fem-gpu/reports/k0-kittel-cpu-v3/artifacts"
+      ],
+      "cwd": "C:/git/fullmag/worktrees/k0-remediation-s00-20260910",
+      "started_at": "2026-09-09T22:30:58.3308780Z",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "expected_text": "",
+      "reproduced": true,
+      "output": "C03-robin.log"
+    },
+    {
+      "id": "C01-master-finalization-ancestor",
+      "executable": "git",
+      "arguments": [
+        "-c",
+        "safe.directory=C:/git/fullmag/worktrees/k0-remediation-s00-20260910",
+        "-C",
+        "C:/git/fullmag/worktrees/k0-remediation-s00-20260910",
+        "merge-base",
+        "--is-ancestor",
+        "e3241af9a7815b63809cb8b99e83be5efbc51a18",
+        "master"
+      ],
+      "cwd": "C:/git/fullmag/worktrees/k0-remediation-s00-20260910",
+      "started_at": "2026-09-09T22:30:59.4374101Z",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "expected_text": "",
+      "reproduced": true,
+      "output": "C01-master-finalization-ancestor.log"
+    },
+    {
+      "id": "C01-master-gamma-not-ancestor",
+      "executable": "git",
+      "arguments": [
+        "-c",
+        "safe.directory=C:/git/fullmag/worktrees/k0-remediation-s00-20260910",
+        "-C",
+        "C:/git/fullmag/worktrees/k0-remediation-s00-20260910",
+        "merge-base",
+        "--is-ancestor",
+        "f0986ede9853828dfd573a2bee12302385213321",
+        "master"
+      ],
+      "cwd": "C:/git/fullmag/worktrees/k0-remediation-s00-20260910",
+      "started_at": "2026-09-09T22:30:59.5538485Z",
+      "exit_code": 1,
+      "expected_exit_code": 1,
+      "expected_text": "",
+      "reproduced": true,
+      "output": "C01-master-gamma-not-ancestor.log"
+    },
+    {
+      "id": "C01-pending-log",
+      "executable": "git",
+      "arguments": [
+        "-c",
+        "safe.directory=C:/git/fullmag/worktrees/k0-remediation-s00-20260910",
+        "-C",
+        "C:/git/fullmag/worktrees/k0-remediation-s00-20260910",
+        "log",
+        "--format=%H %P %s",
+        "master..codex/k0-exchange-only-diagnosis-20260901"
+      ],
+      "cwd": "C:/git/fullmag/worktrees/k0-remediation-s00-20260910",
+      "started_at": "2026-09-09T22:30:59.6824871Z",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "expected_text": "",
+      "reproduced": true,
+      "output": "C01-pending-log.log"
+    }
+  ],
+  "source_map": [
+    {
+      "path": "crates/fullmag-plan/src/mesh.rs",
+      "symbol": "build_air_box_config",
+      "role": "Outer boundary resolution",
+      "next_task": "S02",
+      "status": "source_anchor_only"
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",
+      "symbol": "assemble_native_magnetic_a_qq",
+      "role": "Native CPU magnetic block ownership",
+      "next_task": "S03",
+      "status": "source_anchor_only"
+    },
+    {
+      "path": "crates/fullmag-runner/src/fem/eigen_execution_resolution.rs",
+      "symbol": "resolve_fem_eigen_execution_resolution",
+      "role": "Explicit/auto lane resolution",
+      "next_task": "S02",
+      "status": "source_anchor_only"
+    },
+    {
+      "path": "crates/fullmag-runner/src/fem/relax/finalize.rs",
+      "symbol": "certify_native_linearization_recompute",
+      "role": "Equilibrium certificate and source binding",
+      "next_task": "S03",
+      "status": "source_anchor_only"
+    },
+    {
+      "path": "crates/fullmag-runner/src/fem/eigen_output.rs",
+      "symbol": "write_eigen_v2_bundle",
+      "role": "Mode identity publication; do not patch old data",
+      "next_task": "S04",
+      "status": "source_anchor_only"
+    },
+    {
+      "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py",
+      "symbol": "require_mode_source_mesh_identity",
+      "role": "Reproduced negative artifact acceptance",
+      "next_task": "S04",
+      "status": "executed_on_historical_bundle"
+    },
+    {
+      "path": "scripts/fullmag_storage.py",
+      "symbol": "resolve_layout",
+      "role": "Current host storage resolution",
+      "next_task": "S01",
+      "status": "executed_for_S00"
+    }
+  ],
+  "inventory": {
+    "root_count": 62,
+    "roots_with_modal_diagnostics": 37,
+    "marker_only_roots": 9,
+    "empty_roots": 3,
+    "Q1": "NOT VERIFIED for current production scope",
+    "Q2": "NOT VERIFIED; historical dense macrospin GPU is a separate scope",
+    "Q3": "NOT VERIFIED; bounded filename-only browser/FMS search"
+  },
+  "not_verified": [
+    "e5679 dirty snapshot equals clean f098 commit",
+    "Historical fullmag-bin hash at build time",
+    "New managed CPU runtime and convergence",
+    "GPU gauge/residency/parity",
+    "Antidot complete window",
+    "Native API/FMS/browser/WebGL",
+    "Production DOD-01-14"
+  ],
+  "lifecycle": {
+    "status": "review",
+    "canonical_record": "registry",
+    "note": "Evidence acceptance is separate from PR/merge/main-checkout update/cleanup; final state and retained resources must be recorded in registry."
+  },
+  "next_task": "S01 only after a further user execution request"
+}

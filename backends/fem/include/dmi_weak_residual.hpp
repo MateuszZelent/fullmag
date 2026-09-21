@@ -19,6 +19,11 @@ void dmi_accumulate_interfacial_residual(
     double d,
     double residual[3]);
 
+void dmi_accumulate_rotated_interfacial_residual(
+    const DmiElementData &data,
+    double d,
+    double residual[3]);
+
 void dmi_accumulate_bulk_residual(
     const DmiElementData &data,
     double d,

@@ -1,5 +1,6 @@
 import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 import { describe, expect, it } from "vitest";
 
@@ -37,7 +38,7 @@ describe("architecture hygiene script", () => {
   });
 
   it("reports the exact runtime launcher path for a legacy fallback", async () => {
-    const fixtureRoot = await mkdtemp(join("/tmp", "fullmag-architecture-hygiene-"));
+    const fixtureRoot = await mkdtemp(join(tmpdir(), "fullmag-architecture-hygiene-"));
     const launcherPath = join(fixtureRoot, "crates/fullmag-cli/src/control_room.rs");
     await mkdir(join(fixtureRoot, "crates/fullmag-cli/src"), { recursive: true });
     await writeFile(launcherPath, 'const fallback = "apps/legacy_web";\n', "utf8");

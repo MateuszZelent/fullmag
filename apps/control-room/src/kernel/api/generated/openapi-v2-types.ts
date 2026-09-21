@@ -5132,6 +5132,7 @@ export interface components {
             request_id?: string | null;
         };
         CommandStatusResource: {
+            client_intent_id?: string | null;
             command_id: string;
             completed_at_unix_ms?: number | null;
             completion_status?: string | null;
@@ -5259,6 +5260,8 @@ export interface components {
             final_dmi_energy?: number | null;
             /** Format: double */
             final_exchange_energy?: number | null;
+            /** Format: double */
+            final_rotated_dmi_energy?: number | null;
             /** Format: double */
             final_total_energy?: number | null;
             /** Format: double */
@@ -12075,6 +12078,8 @@ export interface components {
             /** @enum {string} */
             kind: "mesh_build";
         }) | (components["schemas"]["RuntimeCommandIntent"] & {
+            mesh_options?: Record<string, never> | null;
+        } & {
             /** @enum {string} */
             kind: "fdm_grid_refresh";
         }) | (components["schemas"]["RuntimeCommandIntent"] & {
@@ -21079,7 +21084,7 @@ export interface operations {
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
-                /** @description Interaction kind: exchange | demag | interfacial_dmi | uniaxial_anisotropy */
+                /** @description Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy */
                 interaction_kind: string;
             };
             cookie?: never;
@@ -21111,7 +21116,7 @@ export interface operations {
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
-                /** @description Interaction kind: exchange | demag | interfacial_dmi | uniaxial_anisotropy */
+                /** @description Object interaction kind: exchange | demag | interfacial_dmi | bulk_dmi | uniaxial_anisotropy */
                 interaction_kind: string;
             };
             cookie?: never;

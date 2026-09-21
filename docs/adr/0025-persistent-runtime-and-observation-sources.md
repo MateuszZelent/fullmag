@@ -107,6 +107,31 @@ Brak primary carriera daje `unsupported_missing_primary_state` z listą braków,
 nigdy przybliżenie ani zero. Dotyczy to między innymi RNG/thermal,
 charge/spin, dynamicznego Oersteda i nośników mechanicznych.
 
+### D-09. Demand obserwacji podczas aktywnego stage
+
+Widoczne odbiorniki zgłaszają sumę wymaganych quantity przez istniejący,
+wersjonowany display-sync. Wybór jednej quantity nie unieważnia potrzeb innych
+obiektów. Zmiana komponentu lub palety pozostaje operacją prezentacji.
+
+Aktywna pętla solvera obsługuje demand na granicy zaakceptowanego stanu przez
+rezydentny materializer/cache swojego lane'u. Ogólna kolejka `compute_fields`
+nie jest harmonogramem obserwacji podczas run/relax. Nie powstaje drugi runtime,
+owner fizyki ani ścieżka fallbacku urządzenia.
+
+Transfer do publikacji używa ograniczonego handoff: skończony budżet pamięci,
+ograniczona częstotliwość i batch w locie, zastępowanie przestarzałego demand,
+jawny błąd obserwacji. Snapshot zachowuje capture step/time/revision niezależnie
+od kroku odbioru. Worker kończy pracę przed zniszczeniem natywnego kontekstu.
+Pełne pola trafiają do istniejącego binary data plane; próbkowany preview nie
+może podszywać się pod pełne dane. Dostępność kontraktu nie jest dowodem
+implementacji adaptera ani kwalifikacji każdego lane'u.
+
+Rozwinięcie implementacyjne i stan bramek:
+`docs/superpowers/plans/2026-09-15-live-observation-demand.md`.
+Rollback handoff zachowuje bezpieczną obsługę idle i jawny brak live danych;
+nie przywraca przebudowy runtime per kliknięcie ani fałszywej publikacji starego
+pola jako nowego.
+
 ## Konsekwencje i obowiązki implementacyjne
 
 - FDM/FEM oraz CPU/GPU mają jeden neutralny kontrakt i osobne realizacje.

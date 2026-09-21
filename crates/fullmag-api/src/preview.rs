@@ -14,6 +14,7 @@ pub(crate) fn live_step_metric_value(step: &StepUpdateView, metric_key: &str) ->
         "e_ext" => Some(step.e_ext),
         "e_ani" => Some(step.e_ani),
         "e_dmi" => Some(step.e_dmi),
+        "e_rotated_dmi" => Some(step.e_rotated_dmi),
         "e_total" => Some(step.e_total),
         _ => None,
     }
@@ -163,6 +164,20 @@ mod tests {
         AIR_OBJECT_SEGMENT_ID,
     };
     use fullmag_runner::{FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload};
+
+    #[test]
+    fn preview_budget_handles_single_cell_axes() {
+        for grid in [[1000, 80, 1], [1, 80, 1000], [1000, 1, 80], [1, 1, 1000]] {
+            for budget in [1, 7, 100, 16_384, 80_000] {
+                let (x, y, stride, _) =
+                    super::fit_preview_grid_3d(grid[0], grid[1], grid[2], budget);
+                assert!((1..=grid[0]).contains(&x));
+                assert!((1..=grid[1]).contains(&y));
+                assert!(stride >= 1);
+                assert!(x * y * grid[2].div_ceil(stride) <= budget);
+            }
+        }
+    }
 
     fn test_mesh(
         nodes: Vec<[f64; 3]>,
@@ -521,13 +536,21 @@ pub(crate) fn fit_preview_grid_3d(
         let ratio_x = applied_x as f64 / requested_x as f64;
         let ratio_y = applied_y as f64 / requested_y as f64;
         let ratio_z = preview_z as f64 / full_z as f64;
-        if ratio_x >= ratio_y && ratio_x >= ratio_z && applied_x > 1 {
+        // Only consider axes that can still shrink. A single-layer film must
+        // reduce X/Y: increasing Z stride forever leaves its point count fixed.
+        if preview_z > 1
+            && (applied_x == 1 || ratio_z >= ratio_x)
+            && (applied_y == 1 || ratio_z >= ratio_y)
+        {
+            // Jump to the first stride that strictly reduces the layer count.
+            stride = full_z.div_ceil(preview_z - 1);
+            preview_z = full_z.div_ceil(stride).max(1);
+        } else if applied_x > 1 && (applied_y == 1 || ratio_x >= ratio_y) {
             applied_x -= 1;
-        } else if ratio_y >= ratio_z && applied_y > 1 {
+        } else if applied_y > 1 {
             applied_y -= 1;
         } else {
-            stride += 1;
-            preview_z = full_z.div_ceil(stride).max(1);
+            unreachable!("a one-point preview fits every positive budget");
         }
     }
 

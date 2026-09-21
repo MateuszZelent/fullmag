@@ -30,7 +30,7 @@ import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRende
 const vectorFieldLayerSource = readFileSync(
   join(process.cwd(), "src/modules/viewport-3d/layers/VectorFieldLayer.tsx"),
   "utf8",
-);
+).replace(/\r\n/g, "\n");
 import {
   shaderColorFromSettings,
   shaderUsesVertexColors,

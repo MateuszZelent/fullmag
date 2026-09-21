@@ -10,7 +10,9 @@ export interface Viewport3DMaterialProfile {
   magneticSurface: Pick<
     MeshBasicMaterialParameters,
     | "toneMapped"
-  >;
+  > & {
+    shadeStrength: number;
+  };
   primitivePreview: Pick<
     MeshBasicMaterialParameters,
     | "toneMapped"
@@ -54,6 +56,10 @@ export function resolveViewport3DMaterialProfile(
       toneMapped: visualProfile.toneMapping !== "none",
     },
     magneticSurface: {
+      shadeStrength:
+        visualProfile.id === "figure" || visualProfile.id === "capture"
+          ? 0
+          : 0.45,
       toneMapped: visualProfile.toneMapping !== "none",
     },
     primitivePreview: {
