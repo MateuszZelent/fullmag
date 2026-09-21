@@ -772,6 +772,13 @@ live preview i rekonstrukcja energii używają tego samego mapowania. Zmiana nie
 kwalifikuje jeszcze GPU: nadal brakuje kontenerowego dowodu double parity,
 pełnej trajektorii LLG i testu rzeczywistego runtime.
 
+Uzupełnienie runtime 2026-09-21 (granice waveformu): CUDA przycina teraz
+stały i adaptacyjny krok do granic `pulse`/PWL zarówno dla `field_drives`, jak
+i aktywnych `solved_antenna_drive_bases`. Harmonogram jest liczony w czasie
+fizycznym i konwertowany na lokalny zegar native; nie zmienia kroku dla
+sinusoidy ani sinc, które są ciągłe. Nadal potrzebny jest kontenerowy test
+RHS/trajectory z rzeczywistym skokiem waveformu.
+
 ## T17. Domknąć frequency response bez pozornego wsparcia eigenmodes
 
 **Pliki:** `crates/fullmag-runner/src/frequency_response.rs`, CLI attach/resolver, IR study/drive, planner frequency response i źródła wymuszenia.

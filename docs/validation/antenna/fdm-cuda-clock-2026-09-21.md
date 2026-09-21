@@ -63,3 +63,13 @@ Brak kwalifikacji GPU pozostaje jawny. Następna bramka to kontenerowy test
 double-precision: identyczny resolved basis, sinus z fazą i niezerowym
 `stage_start_time_s`, porównanie RHS/energii/snapshotu `H_ant` między CPU
 reference i CUDA oraz osobna kontrola wszystkich wspieranych integratorów.
+
+## Granice nieciągłych waveformów
+
+Ten sam patch dodaje do CUDA harmonogram granic `pulse` i PWL. Obejmuje on
+zarówno `field_drives`, jak i aktywne rozwiązane napędy antenowe. Krok stały
+oraz cel adaptacyjnego batcha są przycinane w fizycznym czasie przed
+przekazaniem do native integratora; sinusoidy i sinc nie generują sztucznych
+zdarzeń. Test helpera sprawdza wspólne granice regionalnego napędu i
+rozwiązanego napędu antenowego. To nadal test kontraktu źródłowego, a nie wynik
+uruchomienia CUDA.
