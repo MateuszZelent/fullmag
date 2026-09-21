@@ -437,6 +437,27 @@ function stageOutputCatalogRuntimeRows(
           .flatMap((output) => output.quantity_ids)
           .join(", ") || "none",
     },
+    {
+      label: "Stage assets",
+      value:
+        data.outputs.map((output) => output.solution_ref.asset_id).join(", ") ||
+        "none",
+      mono: true,
+    },
+    {
+      label: "Stage reuse",
+      value:
+        data.outputs
+          .map((output) =>
+            `${output.output_id}: ${output.reused_existing ? "reused" : "published"}`,
+          )
+          .join(", ") || "none",
+    },
+    {
+      label: "Stage manifests",
+      value: data.outputs.map((output) => output.manifest_ref).join(", ") || "none",
+      mono: true,
+    },
     { label: "Catalog digest", value: data.content_digest, mono: true },
   );
   if (data.diagnostic) {

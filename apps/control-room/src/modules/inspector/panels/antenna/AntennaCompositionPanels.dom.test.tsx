@@ -89,6 +89,9 @@ describe("AntennaCompositionPanel runtime results", () => {
       expect(container.textContent).toContain("Field signaturesha256:field");
       expect(container.textContent).toContain("Stage catalog resultready");
       expect(container.textContent).toContain("Stage quantitiesH_ant_basis");
+      expect(container.textContent).toContain("Stage assetsasset-1");
+      expect(container.textContent).toContain("Stage reusesolution-1: published");
+      expect(container.textContent).toContain("Stage manifestsmanifest.json");
       expect(findGroupBadge(container, "ready")).toBeDefined();
     } finally {
       await act(async () => root.unmount());

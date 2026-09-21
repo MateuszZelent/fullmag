@@ -22,6 +22,8 @@ Poza istniejącym wynikiem pola lub widmem panel pokazuje:
   `not attached`;
 - status stage i jego rewizję;
 - opublikowane `output_id` oraz listę `quantity_ids`;
+- asset IDs, manifest refs oraz informację, czy output został użyty ponownie,
+  czy opublikowany jako nowy;
 - digest katalogu;
 - komunikat diagnostyczny, jeśli backend go opublikował;
 - treść błędu zasobu, bez maskowania go jako brak wyniku.
