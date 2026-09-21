@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 
 import { MODEL_READINESS_PATH, MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
 import type { JsonObject, RegionalFieldDriveResource } from "@/kernel/api/apiTypes";
+import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import { useKernel } from "@/kernel/KernelContext";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import { Button } from "@/shared/ui/Button";
@@ -47,7 +48,7 @@ function invalidateSceneResource(
 }
 
 export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
-  const { api, resources } = useKernel();
+  const { api, authoringHistory, resources } = useKernel();
   const scene = useSceneResource();
   const model = resolveAntennaObjectPanelModel(selection, scene.data);
   const baseDraft = useMemo(
@@ -82,7 +83,16 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
   async function commitDraft(): Promise<void> {
     setPending(true);
     try {
-      const response = model.mode === "canonical" ? await saveCanonicalDrive() : await migrateLegacyDrive();
+      const response = await runAuthoringMutationWithHistory(
+        { api, authoringHistory },
+        model.mode === "canonical"
+          ? `Update antenna drive ${model.objectId}`
+          : `Migrate antenna drive ${model.objectId}`,
+        async ({ baseRevision }) =>
+          model.mode === "canonical"
+            ? saveCanonicalDrive(baseRevision)
+            : migrateLegacyDrive(baseRevision),
+      );
       invalidateSceneResource(resources, response.scene_revision);
       setFeedback({ kind: "success", message: model.mode === "legacy" ? "Legacy source migrated to a regional field drive." : "Antenna field drive committed." });
     } catch (error) {
@@ -92,17 +102,27 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
     }
   }
 
-  async function saveCanonicalDrive() {
+  async function saveCanonicalDrive(capturedRevision?: number | null) {
     const patch = buildAntennaCanonicalFieldDrive(selection, scene.data, draft);
     if (patch.error || !patch.drive) throw new Error(patch.error ?? "Invalid antenna drive draft.");
     const drive = patch.drive as unknown as RegionalFieldDriveResource;
-    return api.model.replaceFieldDrive(drive.id, { base_revision: scene.data?.revision ?? null, drive });
+    return api.model.replaceFieldDrive(drive.id, {
+      base_revision: capturedRevision ?? scene.data?.revision ?? null,
+      drive,
+    });
   }
 
-  async function migrateLegacyDrive() {
+  async function migrateLegacyDrive(capturedRevision?: number | null) {
     const patch = buildAntennaLegacyMigrationPatch(selection, scene.data, draft);
     if (patch.error || !patch.drives || !patch.modules) throw new Error(patch.error ?? "Invalid legacy antenna migration.");
-    return api.model.commitTransaction({ kind: "merge_patch", merge_patch: { field_drives: { drives: patch.drives as JsonObject[] }, current_modules: { modules: patch.modules as JsonObject[] } } });
+    return api.model.commitTransaction({
+      base_revision: capturedRevision ?? scene.data?.revision ?? null,
+      kind: "merge_patch",
+      merge_patch: {
+        field_drives: { drives: patch.drives as JsonObject[] },
+        current_modules: { modules: patch.modules as JsonObject[] },
+      },
+    });
   }
 
   return (

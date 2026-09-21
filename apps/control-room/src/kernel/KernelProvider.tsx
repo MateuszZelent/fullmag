@@ -81,6 +81,8 @@ import { VisualizationDebugController } from "./visualization/VisualizationDebug
 import { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
 import { VISUALIZATION_TARGET_COMMANDS } from "./visualization/visualizationCommandContributions";
 import { ObjectMoveToolController } from "./authoring/ObjectMoveToolController";
+import { AuthoringHistoryController } from "./authoring/AuthoringHistoryController";
+import { PendingFormRegistry } from "./authoring/PendingFormRegistry";
 import { ProjectDocumentController } from "./persistence/ProjectDocumentController";
 import { resolveControlRoomModules } from "@/modules";
 
@@ -121,6 +123,10 @@ function createKernel(): KernelApi {
 
   const modules = new ModuleRegistry();
   const resources = new ResourceInvalidationController(bus);
+  const authoringHistory = new AuthoringHistoryController(api, resources);
+  const pendingForms = new PendingFormRegistry();
+  authoringHistory.subscribe(() => commands.refresh());
+  pendingForms.subscribe(() => commands.refresh());
   const selection = new SelectionController(bus);
   const layout = new LayoutController(bus);
   const objectMoveTool = new ObjectMoveToolController();
@@ -129,7 +135,13 @@ function createKernel(): KernelApi {
     if (status !== "connected") {
       chartViewportHandoff.cancel("Session changed while loading a chart field.");
       objectMoveTool.clear();
+      authoringHistory.clear();
+      pendingForms.clear();
     }
+  });
+  bus.on("workspace:new-problem-requested", () => {
+    authoringHistory.clear();
+    pendingForms.clear();
   });
   const cameraRegistry = new CameraRegistryController({
     api: api.visualization,
@@ -194,6 +206,7 @@ function createKernel(): KernelApi {
   return {
     api,
     analysisFieldOverlay,
+    authoringHistory,
     bus,
     chartViewportHandoff,
     cameraRegistry,
@@ -205,6 +218,7 @@ function createKernel(): KernelApi {
     modeComposition,
     modules,
     objectMoveTool,
+    pendingForms,
     projectDocument,
     realtime,
     realtimeConnection,

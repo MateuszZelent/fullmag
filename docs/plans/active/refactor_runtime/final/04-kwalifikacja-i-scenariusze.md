@@ -200,7 +200,8 @@ Poniższe wyniki są późniejsze od audytu bazowego i nie zmieniają normatywne
 | P1 API/transport | managed API restart, empty-session WS reconnect, active-run reconnect | source/runtime identity przypięta; aktywny run zachował `session_id` i `run_id` |
 | P1 browser/UI | `smoke:inspector`, project lifecycle, mounted-workspace reconnect | Inspector toggle, New/Open/Save/Close, ten sam workspace/canvas po reconnect; browser smoke `passed` |
 | P2-C Python authoring | `final/p2/01-context-isolation.md`, `test_execution_context.py` oraz regresje ProblemIR/script builder/API | nesting/exception/async/thread/capture state i stale-handle fencing; slice `PASS`, P2 overall `IN PROGRESS` |
-| P2-A canonical bytes | `final/p2/02-canonical-ir.md`, `model/canonical.py`, helper identity tests | stabilne bajty i digest ProblemIR, odrzucenie nieprzenośnego NaN; slice `PASS`, pełny P2-A `IN PROGRESS` |
+| P2-A authoring identity | `final/p2/02-canonical-ir.md`, `model/canonical.py`, `model/parameters.py`, `Problem.parameters`, `test_parameter_ast.py`, generated-script round-trip | stabilne bajty/digest ProblemIR oraz SI-normalizowany AST parametrów podpięty do ProblemIR/flat/study facade, round-trip, cycle/dimension diagnostics i display metadata poza numerical hash; slice `PASS`, pełny P2-A `IN PROGRESS` |
+| P2-B feature sequence | `final/p2/03-geometry-feature-sequence.md`, `fullmag-authoring/src/geometry_features.rs` | stabilne ścieżki/ID, lineage wejść CSG i jawny transform; slice `IN PROGRESS`, selekcja/meshing nadal otwarte |
 | Pozostałe bramki | power-loss, pełna session-recovery, fizyczny Tauri, solver/science/release | `NOT VERIFIED`; nie wolno promować do wydania |
 
 Szczegółowe ścieżki, hashe i granice dowodów pozostają w [statusie P0](p0/03-implementation-status.md) oraz [statusie P1](p1/README.md). Ten checkpoint nie zastępuje osobnych receipts dla czterech lane’ów FDM/FEM.

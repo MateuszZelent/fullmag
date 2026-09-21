@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 
 import { SCENE_RESOURCE_KEY, useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
+import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import { useKernel } from "@/kernel/KernelContext";
 import { Button } from "@/shared/ui/Button";
 
@@ -30,7 +31,7 @@ export function ObjectAbsorbingBoundaryPanel({
   objectId,
   baseRevision,
 }: ObjectAbsorbingBoundaryPanelProps) {
-  const { api, resources } = useKernel();
+  const { api, authoringHistory, resources } = useKernel();
   const scene = useSceneResource();
   const object = useMemo(
     () => scene.data?.objects?.find((candidate) => candidate.id === objectId) ?? null,
@@ -65,7 +66,18 @@ export function ObjectAbsorbingBoundaryPanel({
     }
     setPending(true);
     try {
-      const response = await api.model.patchObject(objectId, result.patch);
+      const response = await runAuthoringMutationWithHistory(
+        { api, authoringHistory },
+        `Update absorbing boundary ${objectId}`,
+        async ({ baseRevision: capturedRevision }) => {
+          const next = buildAbsorbingBoundaryPatch(
+            draft,
+            capturedRevision ?? baseRevision,
+          );
+          if ("error" in next) throw new Error(next.error);
+          return api.model.patchObject(objectId, next.patch);
+        },
+      );
       const revision = typeof response.revision === "number" ? response.revision : (baseRevision ?? 0) + 1;
       resources.invalidate(SCENE_RESOURCE_KEY, revision);
       setFeedback({ kind: "success", message: "Absorbing boundary updated." });

@@ -3,6 +3,7 @@ import {
   MODEL_PLANAR_MONITORS_PATH,
   VISUALIZATION_STATE_PATH,
 } from "@/kernel/api/apiPaths";
+import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import type {
   PlanarFieldSource,
   VisualizationStateResource,
@@ -345,13 +346,24 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
           status: "failed",
         };
       }
-      const collection = await context.api.model.planarMonitors.list();
-      let revision = collection.scene_revision;
+      let revision: number;
       if (id === "planar-monitor.delete") {
         const visualization = await context.api.visualization.state();
-        const response = await context.api.model.planarMonitors.remove(
-          input.monitorId,
-          { expected_scene_revision: revision },
+        const response = await runAuthoringMutationWithHistory(
+          context,
+          "Delete planar monitor",
+          async ({ baseRevision }) => {
+            const collection = baseRevision === null
+              ? await context.api!.model.planarMonitors.list()
+              : null;
+            return context.api!.model.planarMonitors.remove(
+              input.monitorId!,
+              {
+                expected_scene_revision:
+                  baseRevision ?? collection!.scene_revision,
+              },
+            );
+          },
         );
         revision = response.scene_revision;
         if (
@@ -367,9 +379,21 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
         }
       } else if (id === "planar-monitor.duplicate") {
         const visualization = await context.api.visualization.state();
-        const response = await context.api.model.planarMonitors.duplicate(
-          input.monitorId,
-          { expected_scene_revision: revision },
+        const response = await runAuthoringMutationWithHistory(
+          context,
+          "Duplicate planar monitor",
+          async ({ baseRevision }) => {
+            const collection = baseRevision === null
+              ? await context.api!.model.planarMonitors.list()
+              : null;
+            return context.api!.model.planarMonitors.duplicate(
+              input.monitorId!,
+              {
+                expected_scene_revision:
+                  baseRevision ?? collection!.scene_revision,
+              },
+            );
+          },
         );
         revision = response.scene_revision;
         if (!queuePlanarSourceSelection(context, {
@@ -389,14 +413,24 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
             status: "completed",
           };
         }
-        const current = await context.api.model.planarMonitors.get(
-          input.monitorId,
-        );
-        const response = await context.api.model.planarMonitors.patch(
-          input.monitorId,
-          {
-            expected_scene_revision: revision,
-            monitor: { ...current.monitor, name: input.newName.trim() },
+        const response = await runAuthoringMutationWithHistory(
+          context,
+          "Rename planar monitor",
+          async ({ baseRevision }) => {
+            const collection = baseRevision === null
+              ? await context.api!.model.planarMonitors.list()
+              : null;
+            const current = await context.api!.model.planarMonitors.get(
+              input.monitorId!,
+            );
+            return context.api!.model.planarMonitors.patch(
+              input.monitorId!,
+              {
+                expected_scene_revision:
+                  baseRevision ?? collection!.scene_revision,
+                monitor: { ...current.monitor, name: input.newName!.trim() },
+              },
+            );
           },
         );
         revision = response.scene_revision;

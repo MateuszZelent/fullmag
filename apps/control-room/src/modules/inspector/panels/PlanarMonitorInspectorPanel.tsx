@@ -6,6 +6,10 @@ import {
   MODEL_PLANAR_MONITORS_PATH,
   VISUALIZATION_STATE_PATH,
 } from "@/kernel/api/apiPaths";
+import {
+  authoringWriteOptions,
+  runAuthoringMutationWithHistory,
+} from "@/kernel/authoring/authoringHistoryMutation";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
@@ -109,10 +113,23 @@ function CommittedPlanarMonitorEditor({
     setFeedback(null);
     setConflict(false);
     try {
-      const response = await kernel.api.model.planarMonitors.patch(monitor.id, {
-        expected_scene_revision: sceneRevision,
-        monitor: structuredClone(draft.monitor),
-      });
+      const response = await runAuthoringMutationWithHistory(
+        createCommandContext("inspector", kernel, {
+          resourceData: {
+            [VISUALIZATION_STATE_PATH]: visualizationState.data,
+          },
+          sourceDetail: "planar-monitor-inspector",
+        }),
+        "Update planar monitor",
+        async ({ baseRevision }) => {
+          const writeOptions = authoringWriteOptions(baseRevision);
+          return kernel.api.model.planarMonitors.patch(monitor.id, {
+            expected_scene_revision:
+              writeOptions?.baseRevision ?? sceneRevision,
+            monitor: structuredClone(draft.monitor),
+          });
+        },
+      );
       setDraft(planarMonitorDraftFromMonitor(response.monitor, draft.ui.displayLengthUnit));
       kernel.resources.invalidate(MODEL_PLANAR_MONITORS_PATH, response.scene_revision);
       refetch();

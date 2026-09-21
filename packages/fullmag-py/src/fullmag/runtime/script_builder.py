@@ -423,6 +423,11 @@ def render_loaded_problem_as_script(
         lines.extend(_render_study_binding(base_problem))
         lines.append("")
 
+    parameter_lines = _render_parameters(base_problem, surface=surface)
+    if parameter_lines:
+        lines.extend(parameter_lines)
+        lines.append("")
+
     lines.extend(_render_runtime(base_problem, overrides=overrides, surface=surface))
     lines.append("")
     _validate_energy_terms(base_problem, overrides=overrides)
@@ -8110,6 +8115,37 @@ def _render_study_binding(problem: Problem) -> list[str]:
     return ["study = fm.study()"]
 
 
+def _render_parameters(problem: Problem, *, surface: str) -> list[str]:
+    """Render the versioned authoring parameter library before lowering.
+
+    The generated script uses the public ``parameter`` facade, preserving the
+    same Python → ProblemIR boundary as a hand-authored script.  Expression
+    payloads are reconstructed through the validated AST parser rather than
+    emitting private implementation fields.
+    """
+
+    library = problem.parameters
+    if library is None or not library.names:
+        return []
+    call = _surface_call(surface, "parameter")
+    lines = ["# Authoring parameters"]
+    for name in library.names:
+        definition = library.definition(name)
+        entry = definition.to_ir()
+        expression = entry["expression"]
+        kwargs: list[str] = []
+        if "display_unit" in entry:
+            kwargs.append(f"display_unit={_py_repr(str(entry['display_unit']))}")
+        if "description" in entry:
+            kwargs.append(f"description={_py_repr(str(entry['description']))}")
+        suffix = ", " + ", ".join(kwargs) if kwargs else ""
+        lines.append(
+            f"{call}({_py_repr(name)}, "
+            f"fm.ParameterExpression.from_ir({_py_parameter_literal(expression)}){suffix})"
+        )
+    return lines
+
+
 def _surface_call(surface: str, name: str) -> str:
     root = "study" if surface == "study" else "fm"
     return f"{root}.{name}"
@@ -8680,6 +8716,34 @@ def _py_literal(value: object) -> str:
     if value is None:
         return "None"
     raise ValueError(f"unsupported literal for canonical rewrite: {type(value).__name__}")
+
+
+def _py_parameter_literal(value: object) -> str:
+    """Render parameter IR with exact float repr for identity round-trips."""
+
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, str):
+        return _py_repr(value)
+    if isinstance(value, tuple):
+        return "(" + ", ".join(_py_parameter_literal(item) for item in value) + ")"
+    if isinstance(value, list):
+        return "[" + ", ".join(_py_parameter_literal(item) for item in value) + "]"
+    if isinstance(value, dict):
+        items = ", ".join(
+            f"{_py_repr(str(key))}: {_py_parameter_literal(item)}"
+            for key, item in sorted(value.items())
+        )
+        return "{" + items + "}"
+    if value is None:
+        return "None"
+    raise ValueError(
+        f"unsupported literal for parameter rewrite: {type(value).__name__}"
+    )
 
 
 def _spin_wave_bc_payload(value: object) -> str | dict[str, object]:

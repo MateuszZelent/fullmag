@@ -33,6 +33,22 @@ function projectDocumentUnavailableReason(
     : "Project document lifecycle is unavailable in this shell.";
 }
 
+function authoringHistoryUnavailableReason(
+  context: Parameters<NonNullable<CommandContribution["isEnabled"]>>[0],
+): string | null {
+  return context.authoringHistory
+    ? null
+    : "Authoring history is unavailable in this shell.";
+}
+
+function pendingFormUnavailableReason(
+  context: Parameters<NonNullable<CommandContribution["isEnabled"]>>[0],
+): string | null {
+  return context.pendingForms
+    ? null
+    : "Inspector pending-form registry is unavailable in this shell.";
+}
+
 export const SHELL_COMMANDS: CommandContribution[] = [
   {
     id: "workspace.theme-toggle",
@@ -159,6 +175,7 @@ export const SHELL_COMMANDS: CommandContribution[] = [
         return { message: "Project creation cancelled.", status: "cancelled" };
       }
       const resource = await context.projectDocument.create(promptedName);
+      context.authoringHistory?.clear();
       return {
         message: `Created project ${resource.name}.`,
         status: "completed",
@@ -190,6 +207,7 @@ export const SHELL_COMMANDS: CommandContribution[] = [
         return { message: "No project file selected.", status: "cancelled" };
       }
       const resource = await context.projectDocument.open(source);
+      context.authoringHistory?.clear();
       return {
         message: `Opened project ${resource.name}.`,
         status: "completed",
@@ -252,6 +270,7 @@ export const SHELL_COMMANDS: CommandContribution[] = [
       }
       const input = context.input as { discardChanges?: boolean } | null | undefined;
       const closed = context.projectDocument.close(input?.discardChanges ?? false);
+      if (closed) context.authoringHistory?.clear();
       return closed
         ? { message: "Project closed.", status: "completed" }
         : { message: "Project close cancelled.", status: "cancelled" };
@@ -290,8 +309,112 @@ export const SHELL_COMMANDS: CommandContribution[] = [
       };
     },
   },
-  disabledPlaceholder("workspace.undo", "Undo", "Edit", "Ctrl+Z"),
-  disabledPlaceholder("workspace.redo", "Redo", "Edit", "Ctrl+Y"),
+  {
+    id: "workspace.apply-inspector",
+    title: "Apply Inspector Changes",
+    group: "workspace-authoring",
+    category: "Edit",
+    scope: "selection",
+    shortcut: "Ctrl+Shift+Enter",
+    isEnabled: (context) => context.pendingForms?.canApply() ?? false,
+    disabledReason: (context) => {
+      const unavailable = pendingFormUnavailableReason(context);
+      if (unavailable) return unavailable;
+      const snapshot = context.pendingForms?.getSnapshot();
+      if (!snapshot?.active) return "No Inspector form is active.";
+      if (snapshot.lockReason) return snapshot.lockReason;
+      if (snapshot.applying) return "Inspector changes are already being applied.";
+      if (!snapshot.dirty) return "There are no unapplied Inspector changes.";
+      if (!snapshot.valid) return "Resolve Inspector validation errors before applying.";
+      return null;
+    },
+    run: async (context) => {
+      if (!context.pendingForms) {
+        return {
+          message: pendingFormUnavailableReason(context) ?? "Inspector pending-form registry is unavailable.",
+          status: "failed",
+        };
+      }
+      return context.pendingForms.apply();
+    },
+  },
+  {
+    id: "workspace.reset-inspector",
+    title: "Reset Inspector Changes",
+    group: "workspace-authoring",
+    category: "Edit",
+    scope: "selection",
+    isEnabled: (context) => context.pendingForms?.canReset() ?? false,
+    disabledReason: (context) => {
+      const unavailable = pendingFormUnavailableReason(context);
+      if (unavailable) return unavailable;
+      const snapshot = context.pendingForms?.getSnapshot();
+      if (!snapshot?.active) return "No Inspector form is active.";
+      if (snapshot.applying) return "Inspector changes are already being applied.";
+      return snapshot.canReset ? null : "There are no unapplied Inspector changes.";
+    },
+    run: async (context) => {
+      if (!context.pendingForms) {
+        return {
+          message: pendingFormUnavailableReason(context) ?? "Inspector pending-form registry is unavailable.",
+          status: "failed",
+        };
+      }
+      return context.pendingForms.reset();
+    },
+  },
+  {
+    id: "workspace.undo",
+    title: "Undo",
+    group: "workspace-authoring",
+    category: "Edit",
+    scope: "global",
+    shortcut: "Ctrl+Z",
+    isEnabled: (context) =>
+      context.authoringHistory?.canUndo() ?? false,
+    disabledReason: (context) => {
+      const unavailable = authoringHistoryUnavailableReason(context);
+      if (unavailable) return unavailable;
+      return context.authoringHistory?.canUndo()
+        ? null
+        : "There is no committed authoring change to undo.";
+    },
+    run: async (context) => {
+      if (!context.authoringHistory) {
+        return {
+          message: authoringHistoryUnavailableReason(context) ?? "Authoring history is unavailable.",
+          status: "failed",
+        };
+      }
+      return context.authoringHistory.undo();
+    },
+  },
+  {
+    id: "workspace.redo",
+    title: "Redo",
+    group: "workspace-authoring",
+    category: "Edit",
+    scope: "global",
+    shortcut: "Ctrl+Y",
+    isEnabled: (context) =>
+      context.authoringHistory?.canRedo() ?? false,
+    disabledReason: (context) => {
+      const unavailable = authoringHistoryUnavailableReason(context);
+      if (unavailable) return unavailable;
+      return context.authoringHistory?.canRedo()
+        ? null
+        : "There is no undone authoring change to redo.";
+    },
+    run: async (context) => {
+      if (!context.authoringHistory) {
+        return {
+          message: authoringHistoryUnavailableReason(context) ?? "Authoring history is unavailable.",
+          status: "failed",
+        };
+      }
+      return context.authoringHistory.redo();
+    },
+  },
   disabledPlaceholder("workspace.view-2d", "2D Slice Workspace", "View", "2"),
   disabledPlaceholder("execution.fdm-cpu", "FDM CPU", "Simulation"),
   disabledPlaceholder("execution.fdm-gpu", "FDM GPU", "Simulation"),

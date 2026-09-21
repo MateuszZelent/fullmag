@@ -163,11 +163,11 @@ Nie przejmujemy rankingów „lepsze niż COMSOL”, twierdzeń że konkurencja 
 
 ## 7. Kontrola dokumentów finalnych
 
-Weryfikacja końcowa obejmuje istnienie wszystkich 6 plików Markdown, lokalne linki, spójność CAE-01–70 i FINAL-01–18, zakres K01–K18 i P0–P8 oraz zachowanie materiałów wejściowych. Wyniki kontroli wykonanych 20.09.2026:
+Weryfikacja końcowa obejmuje pliki Markdown pakietu finalnego i podkatalogów, lokalne linki, spójność CAE-01–70 i FINAL-01–18, zakres K01–K18 i P0–P8 oraz zachowanie materiałów wejściowych. Kontrola rewalidacyjna 21.09.2026 obejmuje 29 plików Markdown i 115 lokalnych odnośników:
 
 | Kontrola dokumentacji | Wynik |
 |---|---|
-| Pliki i lokalne odnośniki | 6 plików, brak brakujących lokalnych linków. |
+| Pliki i lokalne odnośniki | 29 plików, 115 sprawdzonych odnośników, brak brakujących lokalnych linków. |
 | Scenariusze | 70 unikalnych CAE w kolejności i 18 FINAL; wszystkie 60 bazowych zachowane. |
 | Materiały wejściowe | 18 zapisanych hashy zgodnych z bieżącymi bajtami plików; tracked materiały bazowe/Gemini bez diff. |
 | ADR inventory | Linki pokrywają wszystkie 35 aktualnych plików, także zduplikowane numery. |

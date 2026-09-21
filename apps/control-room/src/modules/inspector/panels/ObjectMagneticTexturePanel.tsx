@@ -6,6 +6,7 @@ import {
   acknowledgedAuthoringSceneRevision,
   invalidateAuthoringMutationDependents,
 } from "@/kernel/authoring/authoringMutationInvalidation";
+import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
@@ -774,7 +775,7 @@ export function ObjectMagneticTexturePanel({
   selection,
 }: InspectorPanelProps) {
   const kernel = useKernel();
-  const { api, resources } = kernel;
+  const { api, authoringHistory, resources } = kernel;
   const activeLane = useActiveLaneCapabilities();
   const scene = useSceneResource();
   const regions = useModelRegionsResource();
@@ -856,8 +857,20 @@ export function ObjectMagneticTexturePanel({
     setPending(true);
     try {
       const asset = buildObjectMagneticTextureAssetDraft(model, draft);
-      const response = await api.model.commitTransaction(
-        buildMagnetizationTransactionRequest(model, asset, asset.id),
+      const response = await runAuthoringMutationWithHistory(
+        { api, authoringHistory },
+        `Save magnetic texture ${model.objectId}`,
+        async ({ baseRevision }) => {
+          const request = buildMagnetizationTransactionRequest(
+            model,
+            asset,
+            asset.id,
+          );
+          return api.model.commitTransaction({
+            ...request,
+            base_revision: baseRevision ?? request.base_revision,
+          });
+        },
       );
       const revision = acknowledgedAuthoringSceneRevision(response);
       invalidateTextureResources(revision);
@@ -893,8 +906,20 @@ export function ObjectMagneticTexturePanel({
 
     setPending(true);
     try {
-      const response = await api.model.commitTransaction(
-        buildMagnetizationTransactionRequest(model, null, null),
+      const response = await runAuthoringMutationWithHistory(
+        { api, authoringHistory },
+        `Clear magnetic texture ${model.objectId}`,
+        async ({ baseRevision }) => {
+          const request = buildMagnetizationTransactionRequest(
+            model,
+            null,
+            null,
+          );
+          return api.model.commitTransaction({
+            ...request,
+            base_revision: baseRevision ?? request.base_revision,
+          });
+        },
       );
       const revision = acknowledgedAuthoringSceneRevision(response);
       invalidateTextureResources(revision);

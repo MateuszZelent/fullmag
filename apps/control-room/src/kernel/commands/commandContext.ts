@@ -10,6 +10,8 @@ export function createCommandContext(
   return {
     api: kernel.api,
     analysisFieldOverlay: kernel.analysisFieldOverlay,
+    authoringHistory: kernel.authoringHistory,
+    pendingForms: kernel.pendingForms,
     bus: kernel.bus,
     chartViewportHandoff: kernel.chartViewportHandoff,
     cameraRegistry: kernel.cameraRegistry,

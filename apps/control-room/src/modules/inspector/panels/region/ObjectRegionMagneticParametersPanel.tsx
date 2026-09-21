@@ -3,6 +3,10 @@
 import type { ChangeEvent } from "react";
 import { useMemo, useState } from "react";
 import type { MaterialParameterFieldListResource, SceneResource } from "@/kernel/api/apiTypes";
+import {
+  authoringWriteOptions,
+  runAuthoringMutationWithHistory,
+} from "@/kernel/authoring/authoringHistoryMutation";
 import { useKernel } from "@/kernel/KernelContext";
 import { Button } from "@/shared/ui/Button";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
@@ -134,7 +138,7 @@ function useObjectRegionMagneticParametersPanelView({
   feedback,
   materialFields,
 }: RegionSubPanelProps) {
-  const { api, resources } = useKernel();
+  const { api, authoringHistory, resources } = useKernel();
   const { data: sceneData } = useSceneResource();
   const [fieldPending, setFieldPending] = useState(false);
   const [fieldFeedback, setFieldFeedback] = useState<LocalFeedback>(null);
@@ -257,15 +261,27 @@ function useObjectRegionMagneticParametersPanelView({
         (field) =>
           field.region_id !== model.regionId || !isEditableMaterialField(field),
       );
-      const response = await api.model.patchObjectMaterialFields(
-        model.objectId,
-        [
-          ...retainedFields,
-          ...fieldDrafts.map((field) =>
-            materialFieldFromDraft(field, model, { meshPolicyLane: meshLane }),
-          ),
-        ],
-        { baseRevision: model.revision ?? undefined },
+      const fields = [
+        ...retainedFields,
+        ...fieldDrafts.map((field) =>
+          materialFieldFromDraft(field, model, { meshPolicyLane: meshLane }),
+        ),
+      ];
+      const response = await runAuthoringMutationWithHistory(
+        { api, authoringHistory },
+        `Update material fields ${model.regionId}`,
+        async ({ baseRevision }) => {
+          const options = authoringWriteOptions(
+            baseRevision ?? model.revision,
+          );
+          return options
+            ? api.model.patchObjectMaterialFields(
+                model.objectId,
+                fields,
+                options,
+              )
+            : api.model.patchObjectMaterialFields(model.objectId, fields);
+        },
       );
       publishRegionAuthoringScene(
         resources,

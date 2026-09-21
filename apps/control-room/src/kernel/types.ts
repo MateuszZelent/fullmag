@@ -16,6 +16,8 @@ import type { ResourceInvalidationController } from "./resources/ResourceInvalid
 import type { SelectionController } from "./selection/SelectionController";
 import type { DiagnosticRecorderController } from "./performance/diagnostic-recorder/DiagnosticRecorderController";
 import type { ObjectMoveToolController } from "./authoring/ObjectMoveToolController";
+import type { AuthoringHistoryController } from "./authoring/AuthoringHistoryController";
+import type { PendingFormRegistry } from "./authoring/PendingFormRegistry";
 import type { AnalysisFieldOverlayController } from "./visualization/AnalysisFieldOverlayController";
 import type { ChartViewportHandoffController } from "./visualization/ChartViewportHandoffController";
 import type { CameraRegistryController } from "./visualization/CameraRegistryController";
@@ -68,6 +70,8 @@ export interface ModuleManifest {
 export interface KernelApi {
   readonly api: ControlRoomApi;
   readonly analysisFieldOverlay: AnalysisFieldOverlayController;
+  readonly authoringHistory?: AuthoringHistoryController;
+  readonly pendingForms?: PendingFormRegistry;
   readonly bus: EventBus<KernelEventMap>;
   readonly chartViewportHandoff: ChartViewportHandoffController;
   readonly cameraRegistry: CameraRegistryController;
