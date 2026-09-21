@@ -6667,6 +6667,18 @@ fn write_antenna_stage_output_catalog(
     current_stage_artifact_dir: &Path,
     payload: &serde_json::Value,
 ) -> Result<()> {
+    write_antenna_stage_output_catalog_with_hook(
+        current_stage_artifact_dir,
+        payload,
+        None,
+    )
+}
+
+fn write_antenna_stage_output_catalog_with_hook(
+    current_stage_artifact_dir: &Path,
+    payload: &serde_json::Value,
+    before_rename: Option<&dyn Fn() -> Result<()>>,
+) -> Result<()> {
     fs::create_dir_all(current_stage_artifact_dir).with_context(|| {
         format!(
             "creating antenna stage artifact directory {}",
@@ -6700,6 +6712,9 @@ fn write_antenna_stage_output_catalog(
                 temporary.display()
             )
         })?;
+        if let Some(before_rename) = before_rename {
+            before_rename()?;
+        }
         fs::rename(&temporary, &path).with_context(|| {
             format!(
                 "publishing antenna stage output catalog {}",
@@ -12548,6 +12563,7 @@ mod tests {
         validate_periodic_remesh_candidate, wait_for_failed_preparation_close,
         wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
         write_antenna_stage_output_catalog_ready, write_antenna_stage_output_catalog_terminal,
+        write_antenna_stage_output_catalog_with_hook,
         write_sampling_resolution_stage_record, ActiveSequenceState, ContinuationStageSource,
         LiveProgressCadence, LoadedInitialMagnetizationState, RuntimeCommandPrecondition,
         SceneProblemPatch, StageProgressHeartbeat, WaitForSolveCommandAction,
@@ -17752,6 +17768,33 @@ mod tests {
             ready["outputs"][0]["manifest_ref"],
             "antenna/field_solutions/basis/afs-test/manifest.v1.json"
         );
+
+        let _ = fs::remove_dir_all(artifact_dir);
+    }
+
+    #[test]
+    fn antenna_stage_output_catalog_cleans_private_temp_on_pre_rename_cancel() {
+        let artifact_dir = temp_test_dir("antenna-stage-output-catalog-cancel");
+        let stage_dir = artifact_dir.join("stage");
+        let cancel = || -> Result<()> { Err(anyhow::anyhow!("interrupt_requested")) };
+
+        let error = write_antenna_stage_output_catalog_with_hook(
+            &stage_dir,
+            &serde_json::json!({
+                "schema_version": "stage_output_catalog.v1",
+                "status": "ready",
+                "outputs": []
+            }),
+            Some(&cancel),
+        )
+        .expect_err("pre-rename cancellation must reject publication");
+        assert!(error.to_string().contains("interrupt_requested"));
+        assert!(!antenna_stage_output_catalog_path(&stage_dir).exists());
+        let remaining = fs::read_dir(&stage_dir)
+            .expect("stage directory should remain readable")
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("stage directory entries should be readable");
+        assert!(remaining.is_empty(), "private temp files must be cleaned");
 
         let _ = fs::remove_dir_all(artifact_dir);
     }

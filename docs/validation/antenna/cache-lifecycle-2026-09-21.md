@@ -102,6 +102,9 @@ stage/output nadal pozostają otwarte.
 - dodano deterministyczną regresję dwóch workerów: bariera zatrzymuje oba
   zapisy tuż przed `rename()`, po czym jeden worker publikuje revisioned asset,
   a drugi weryfikuje identyczny manifest i zwraca `reused_existing=true`;
+- katalog `stage_output_catalog.v1` ma kontrolowany hook fault-injection po
+  zapisie pliku tymczasowego; regresja wymusza anulowanie przed rename i
+  sprawdza brak katalogu ready oraz cleanup wyłącznie prywatnego pliku;
 - nie uruchamiano kompilacji testów, natywnego FEM/CUDA ani browser smoke;
   zmiana nie jest kwalifikacją wykonania solvera.
 

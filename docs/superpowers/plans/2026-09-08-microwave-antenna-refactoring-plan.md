@@ -742,7 +742,8 @@ quantities i informację o reuse; read-model dostaje ścieżkę katalogu jako
 `outputs`, a identyczny katalog jest idempotentny — odmienna treść nie może
 go nadpisać. Zakres jest celowo ograniczony do antenowego synthetic stage;
 pełny resolver symbolicznego stage/output i wspólny katalog wszystkich stage
-pozostają otwarte.
+pozostają otwarte. Wewnętrzny hook fault-injection po zapisie pliku
+tymczasowego pozwala regresji sprawdzić cleanup przed rename.
 
 **Bramka:** `lifecycle` i `artifact`; testy fault injection obejmują przerwanie przed/po zapisie payloadu i przed publikacją manifestu. Commit: `fix: bind antenna stage lifecycle to actual execution`.
 
