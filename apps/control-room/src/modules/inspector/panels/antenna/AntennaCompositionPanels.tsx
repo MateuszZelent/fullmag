@@ -161,6 +161,14 @@ function numberValue(value: unknown, unit = ""): string {
     : `unavailable${unit ? ` ${unit}` : ""}`;
 }
 
+export function antennaWaveformBandwidthValue(value: unknown): string {
+  const declaration = recordValue(value);
+  if (!declaration) return "not declared";
+  return typeof declaration.f_max_hz === "number" && Number.isFinite(declaration.f_max_hz)
+    ? numberValue(declaration.f_max_hz, "Hz")
+    : "invalid declaration";
+}
+
 function targetValue(target: AntennaTarget): string {
   if (target.kind === "global") return "global";
   if (target.kind === "object") return `object:${target.object_id}`;
@@ -306,6 +314,7 @@ function driveDetails(
   if (!drive) {
     return { title: "Solved antenna drive", badge: "missing", rows: [{ label: "Status", value: "Solved drive is not present in SceneResource." }] };
   }
+  const driveRecord = recordValue(drive);
   return {
     title: drive.name,
     badge: "configured · result pending",
@@ -315,6 +324,7 @@ function driveDetails(
       { label: "Projection", value: drive.projection_ref, mono: true },
       { label: "Peak current", value: numberValue(drive.peak_current_a, "A") },
       { label: "Waveform", value: waveformValue(drive.waveform) },
+      { label: "Declared bandwidth", value: antennaWaveformBandwidthValue(driveRecord?.bandwidth_declaration) },
       { label: "Time origin", value: drive.time_origin },
       { label: "Activation", value: activationValue(drive.activation) },
       { label: "Publication", value: "Drive is configured but no qualified target projection is published." },

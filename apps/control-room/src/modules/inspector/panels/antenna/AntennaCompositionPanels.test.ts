@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import type { SceneResource } from "@/kernel/api/apiTypes";
 
-import { resolveAntennaRuntimeIds } from "./AntennaCompositionPanels";
+import {
+  antennaWaveformBandwidthValue,
+  resolveAntennaRuntimeIds,
+} from "./AntennaCompositionPanels";
 
 function sceneFixture(): SceneResource {
   return {
@@ -58,5 +61,20 @@ describe("resolveAntennaRuntimeIds", () => {
       solutionId: null,
       spectrumOutputId: null,
     });
+  });
+});
+
+describe("antennaWaveformBandwidthValue", () => {
+  it("renders a declared finite upper band", () => {
+    expect(antennaWaveformBandwidthValue({ f_max_hz: 6e9 })).toBe(
+      "6.0000e+9 Hz",
+    );
+  });
+
+  it("does not invent a band for an absent or invalid declaration", () => {
+    expect(antennaWaveformBandwidthValue(undefined)).toBe("not declared");
+    expect(antennaWaveformBandwidthValue({ f_max_hz: Number.NaN })).toBe(
+      "invalid declaration",
+    );
   });
 });

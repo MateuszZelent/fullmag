@@ -85,7 +85,17 @@ pełne ograniczenie wspólnego źródła `H_ant_basis`.
 
 ## Granice
 
-Pole nie jest jeszcze pokazane jako edytowalny parametr w zasobie OpenAPI ani
-Inspectorze Control Room. To pozostaje zadaniem T14; obecna zmiana zapewnia
-kanoniczny IR, planner provenance i ścieżkę Python DSL bez udawania, że
-próbkowanie samo wyznacza fizyczne pasmo.
+Pole nie jest jeszcze formalnie typowane w zasobie OpenAPI ani dostępne jako
+edytowalny parametr Inspectora. Dedykowany panel `SolvedAntennaDrive` pokazuje
+jednak read-only wartość deklaracji: skończone `f_max_hz`, `not declared` lub
+`invalid declaration`. Formatter nie wyprowadza pasma z czasu impulsu ani
+próbkowania. Typ OpenAPI, edycja i pełny browser smoke pozostają zadaniem
+T14/T15; obecna zmiana zapewnia kanoniczny IR, planner provenance i
+bezpieczną prezentację bez udawania fizycznego pasma.
+
+Weryfikacja panelu:
+
+- ukierunkowany Vitest `AntennaCompositionPanels.test.ts`: **5/5**;
+- ESLint dla zmienionych plików Inspectora: **OK**;
+- repozytoryjny typecheck zatrzymał się na istniejących błędach
+  `FieldMapModule.tsx:588-591`, niezwiązanych z tą zmianą.
