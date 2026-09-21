@@ -34,6 +34,16 @@ stage nie jest używany do udawania gotowego pola, gdy brakuje właściwego
 
 ## Weryfikacja wykonana
 
+- `pnpm exec vitest run
+  src/modules/inspector/panels/AntennaObjectPanel.dom.test.tsx
+  src/modules/inspector/panels/AntennaObjectPanelModel.test.ts`: **10/10**;
+  regresja obejmuje canonical `replaceFieldDrive`, legacy full-array
+  migration, `base_revision`, zachowanie fazy/offsetu oraz aktywny fokus i
+  niezależne kontrolki podczas oczekiwania na ACK;
+- ESLint panelu i nowego testu DOM: **OK**;
+- lokalny `pnpm exec react-doctor --verbose --scope changed`: **OK**, wynik
+  `91/100`, `No issues found`;
+- `git diff --check`: **OK**;
 - `pnpm --dir apps/control-room exec vitest run
   src/modules/inspector/panels/antenna/AntennaCompositionPanels.test.ts
   src/modules/inspector/panels/antenna/AntennaCompositionPanels.dom.test.tsx`:

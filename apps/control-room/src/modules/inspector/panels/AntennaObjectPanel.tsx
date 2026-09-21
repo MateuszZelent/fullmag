@@ -39,6 +39,12 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function sceneRevision(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
 function invalidateSceneResource(
   resources: ReturnType<typeof useKernel>["resources"],
   revision: number,
@@ -65,6 +71,9 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
     key: draftKey,
   });
   const [pending, setPending] = useState(false);
+  const baseRevision = sceneRevision(scene.data?.revision);
+  const canCommit =
+    scene.status === "ready" && baseRevision !== null && model.mode !== "missing";
   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
   const feedback =
     feedbackState.key === draftKey ? feedbackState.feedback : null;
@@ -81,9 +90,19 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
   }
 
   async function commitDraft(): Promise<void> {
+    if (!canCommit || baseRevision === null) {
+      setFeedback({
+        kind: "error",
+        message: "Scene revision is unavailable; refresh before saving.",
+      });
+      return;
+    }
     setPending(true);
     try {
-      const response = model.mode === "canonical" ? await saveCanonicalDrive() : await migrateLegacyDrive();
+      const response =
+        model.mode === "canonical"
+          ? await saveCanonicalDrive(baseRevision)
+          : await migrateLegacyDrive(baseRevision);
       invalidateSceneResource(resources, response.scene_revision);
       setFeedback({ kind: "success", message: model.mode === "legacy" ? "Legacy source migrated to a regional field drive." : "Antenna field drive committed." });
     } catch (error) {
@@ -93,17 +112,27 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
     }
   }
 
-  async function saveCanonicalDrive() {
+  async function saveCanonicalDrive(baseRevisionValue: number) {
     const patch = buildAntennaCanonicalFieldDrive(selection, scene.data, draft);
     if (patch.error || !patch.drive) throw new Error(patch.error ?? "Invalid antenna drive draft.");
     const drive = patch.drive as unknown as RegionalFieldDriveResource;
-    return api.model.replaceFieldDrive(drive.id, { base_revision: scene.data?.revision ?? null, drive });
+    return api.model.replaceFieldDrive(drive.id, {
+      base_revision: baseRevisionValue,
+      drive,
+    });
   }
 
-  async function migrateLegacyDrive() {
+  async function migrateLegacyDrive(baseRevisionValue: number) {
     const patch = buildAntennaLegacyMigrationPatch(selection, scene.data, draft);
     if (patch.error || !patch.drives || !patch.modules) throw new Error(patch.error ?? "Invalid legacy antenna migration.");
-    return api.model.commitTransaction({ kind: "merge_patch", merge_patch: { field_drives: { drives: patch.drives as JsonObject[] }, current_modules: { modules: patch.modules as JsonObject[] } } });
+    return api.model.commitTransaction({
+      base_revision: baseRevisionValue,
+      kind: "merge_patch",
+      merge_patch: {
+        field_drives: { drives: patch.drives as JsonObject[] },
+        current_modules: { modules: patch.modules as JsonObject[] },
+      },
+    });
   }
 
   return (
@@ -204,7 +233,7 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
         ) : null}
         <div className="fm-inspector-toolbar">
           <Button
-            disabled={pending || model.mode === "missing"}
+            disabled={!canCommit || pending}
             size="sm"
             type="button"
             variant="primary"

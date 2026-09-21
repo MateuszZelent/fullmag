@@ -849,6 +849,17 @@ W tej samej iteracji helpery runtime i formatter pasma zostały wydzielone z
 pliku komponentu do modułów modelu. React Doctor nie zgłasza już ostrzeżeń
 `only-export-components` dla tego obszaru.
 
+**Uzupełnienie implementacyjne 2026-09-21 (draft i rewizja):**
+`AntennaObjectPanel` odrzuca zapis, gdy zasób sceny nie jest `ready` albo nie
+udostępnia bezpiecznej rewizji całkowitej. Canonical `replaceFieldDrive` oraz
+legacy `merge_patch` migracji przekazują jawne `base_revision`; pełna tablica
+nie może już nadpisać nowszej sceny bez konfliktu. Test DOM 3/3 sprawdza
+canonical zapis, zachowanie `phase/offset` podczas edycji amplitudy, migrację
+legacy, zachowanie niezapisanego draftu przy niezależnej rewizji sceny oraz
+aktywny fokus i niezależne kontrolki w stanie pending. To naprawia
+kontrakt zapisu, ale nie zamyka jeszcze konfliktowego porównania server/draft
+ani całego T15.
+
 **Uzupełnienie implementacyjne 2026-09-21 (harness browser):** dodano
 `apps/control-room/scripts/smoke-antenna-authoring-ui.mjs` oraz helper i test
 kontraktu Node. Smoke ma jawnie ograniczony zakres pierwszej fazy T15:
