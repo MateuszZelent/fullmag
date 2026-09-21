@@ -910,19 +910,28 @@ pub(super) fn eigen_path_de_bv_analytic_csv_columns(
         };
     }
 
-    let geometry = de_bv_validation_geometry_for_sample(validation, sample.sample_index)
-        .or_else(|| de_bv_geometry_for_k(sample.k_vector, validation).ok())
-        .unwrap_or(mode.dominant_polarization.as_str());
-    let analytic_frequency_hz = kalinikos_slab_n0_frequency_hz(
-        vector_norm(sample.k_vector),
-        geometry,
-        vector_norm(plan.external_field.unwrap_or([0.0, 0.0, 0.0])),
-        validation.film_thickness_m,
-        plan.material.exchange_stiffness,
-        plan.material.saturation_magnetisation,
-        plan.gyromagnetic_ratio,
-    )
-    .ok();
+    let sin_squared_phi = de_bv_sin_squared_phi_for_k(sample.k_vector, validation).ok();
+    let geometry = sin_squared_phi.map(|value| {
+        if value <= 1.0e-12 {
+            "backward_volume"
+        } else if (value - 1.0).abs() <= 1.0e-12 {
+            "damon_eshbach"
+        } else {
+            "oblique"
+        }
+    });
+    let analytic_frequency_hz = sin_squared_phi.and_then(|sin_squared_phi| {
+        kalinikos_slab_n0_frequency_hz_for_angle(
+            vector_norm(sample.k_vector),
+            sin_squared_phi,
+            vector_norm(plan.external_field.unwrap_or([0.0, 0.0, 0.0])),
+            validation.film_thickness_m,
+            plan.material.exchange_stiffness,
+            plan.material.saturation_magnetisation,
+            plan.gyromagnetic_ratio,
+        )
+        .ok()
+    });
     let relative_error = analytic_frequency_hz
         .map(|analytic| (mode.frequency_real_hz - analytic).abs() / analytic.abs().max(1.0));
     EigenPathDeBvAnalyticCsvColumns {
@@ -932,7 +941,7 @@ pub(super) fn eigen_path_de_bv_analytic_csv_columns(
         relative_error: relative_error
             .map(|value| format!("{value:.16e}"))
             .unwrap_or_default(),
-        geometry: geometry.to_string(),
+        geometry: geometry.unwrap_or_default().to_string(),
     }
 }
 
@@ -1037,6 +1046,19 @@ pub(super) fn eigen_path_mode_json(
     });
     if let Some(weights) = mode.node_mass_weights.as_ref() {
         value["node_mass_weights"] = serde_json::json!(weights);
+    }
+    if let Ok(modal_source_mesh_topology) = plan.mesh.mixed_topology_fingerprint_v3() {
+        value["source_mesh_topology_sha256"] = serde_json::json!(modal_source_mesh_topology);
+    }
+    for key in [
+        "relax_to_eigen_handoff_sha256",
+        "relax_to_eigen_source_mesh_topology_sha256",
+    ] {
+        if let Some(value_from_diagnostics) =
+            solver_diagnostics.and_then(|diagnostics| diagnostics.get(key))
+        {
+            value[key] = value_from_diagnostics.clone();
+        }
     }
     value
 }
@@ -1295,6 +1317,12 @@ pub(super) fn eigen_path_solver_diagnostics(
         }
     }
     if let Some(object) = diagnostics.as_object_mut() {
+        if let Ok(modal_source_mesh_topology) = plan.mesh.mixed_topology_fingerprint_v3() {
+            object.insert(
+                "source_mesh_topology_sha256".to_string(),
+                serde_json::json!(modal_source_mesh_topology),
+            );
+        }
         if !production_modal_solver {
             if let Some(reason) = native_cpu_modal_window_rejection_reason {
                 object.insert(

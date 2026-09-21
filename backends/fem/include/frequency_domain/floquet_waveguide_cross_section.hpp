@@ -20,7 +20,13 @@ namespace fullmag::fem::frequency_domain {
  *
  *   P(k) = K_perp + k^2 M,
  *   A_phiq(k) = A_phiq_perp + i k A_phiq_axial,
- *   A_qphi(k) = A_phiq(k)^H.
+ *   A_qphi(k) = qphi_feedback_scale * A_phiq(k)^H.
+ *
+ * qphi_feedback_scale defaults to 1.0, preserving this module's original
+ * algebraic/test convention (it has no production caller today). A physical
+ * caller must set it to -mu0 to match the k=0 reference Schur convention
+ * (audit finding B1,
+ * docs/audits/2026-09-15-eigensolve-dispersion-correctness-audit.md).
  *
  * The axial source follows exp(-i k z): A_phiq_axial contains the explicit
  * minus sign for the -i k M_z source.  This module is deliberately bounded
@@ -52,6 +58,11 @@ struct FloquetWaveguideCrossSectionProblem {
 
     // Cross-section matrices are divided by this positive length.
     double normalization_length_m = 1.0;
+
+    // See the A_qphi(k) contract above. Defaults to 1.0 for backward
+    // compatibility with this module's existing (production-caller-free)
+    // convention; a physical caller must set this to -mu0.
+    double qphi_feedback_scale = 1.0;
 };
 
 struct FloquetWaveguideCrossSectionBlockResult {

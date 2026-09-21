@@ -266,7 +266,17 @@ FrequencyDomainStatus assemble_floquet_waveguide_cross_section_blocks(
                     const double ms = problem.saturation_magnetization_a_per_m != nullptr
                         ? problem.saturation_magnetization_a_per_m[global_node]
                         : problem.uniform_saturation_magnetization_a_per_m;
+                    // Transverse term integrates a constant gradient against
+                    // int(N_source) dA = area/3, for any vertex (audit finding H5:
+                    // this part was already correct).
                     const double source_weight = area * scale * ms / 3.0;
+                    // Axial (M_z) term is int(N_test * N_source) dA: the consistent
+                    // P1 triangle mass matrix, area/6 on the diagonal (local_test ==
+                    // local_source) and area/12 off-diagonal -- not area/3 uniformly
+                    // (audit finding H5,
+                    // docs/audits/2026-09-15-eigensolve-dispersion-correctness-audit.md).
+                    const double axial_weight = area * scale * ms *
+                        (local_test == local_source ? (1.0 / 6.0) : (1.0 / 12.0));
                     for (int component = 0; component < 2; ++component) {
                         const double *frame = problem.tangent_frames_xyz +
                             6u * global_node + 3u * component;
@@ -277,7 +287,7 @@ FrequencyDomainStatus assemble_floquet_waveguide_cross_section_blocks(
                         add_entry(out_result->a_phiq_perp_row_major, q_dof_count,
                                   potential_row, q_column, source_weight * transverse);
                         add_entry(out_result->a_phiq_axial_row_major, q_dof_count,
-                                  potential_row, q_column, source_weight * axial);
+                                  potential_row, q_column, axial_weight * axial);
                     }
                 }
             }
@@ -306,8 +316,11 @@ FrequencyDomainStatus assemble_floquet_waveguide_cross_section_blocks(
             add_entry(out_result->k_perp_row_major, scalar, node_b, node_b, 2.0 * edge_scale);
         }
 
-        // The magnetic row block is the Hermitian transpose of the source
-        // block.  The axial i*k term changes sign under conjugation.
+        // The magnetic row block is qphi_feedback_scale * Hermitian-transpose of
+        // the source block (default scale 1.0 keeps this module's existing
+        // algebraic/test convention; a physical caller sets scale = -mu0 to match
+        // the k=0 reference Schur convention -- audit finding B1). The axial i*k
+        // term changes sign under conjugation.
         for (std::uint64_t row = 0u; row < scalar; ++row) {
             for (std::uint64_t column = 0u; column < q_dof_count; ++column) {
                 const double perp = out_result->a_phiq_perp_row_major[
@@ -315,9 +328,11 @@ FrequencyDomainStatus assemble_floquet_waveguide_cross_section_blocks(
                 const double axial = out_result->a_phiq_axial_row_major[
                     static_cast<std::size_t>(row * q_dof_count + column)];
                 out_result->a_qphi_perp_row_major[
-                    static_cast<std::size_t>(column * scalar + row)] = perp;
+                    static_cast<std::size_t>(column * scalar + row)] =
+                    problem.qphi_feedback_scale * perp;
                 out_result->a_qphi_axial_row_major[
-                    static_cast<std::size_t>(column * scalar + row)] = -axial;
+                    static_cast<std::size_t>(column * scalar + row)] =
+                    problem.qphi_feedback_scale * -axial;
             }
         }
         if (!std::isfinite(out_result->cross_section_area_m2) ||

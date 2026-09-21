@@ -42,6 +42,13 @@ struct FloquetAirboxDynamicDemagKResult {
     FloquetPotentialReconstruction reconstruction{};
 };
 
+// The physical Schur contribution is Hermitian when the scalar block and
+// reciprocal magnetic coupling are assembled consistently.  Keep the
+// low-level dense oracle algebraically permissive for manufactured fixtures,
+// but fail closed at this physical MFEM bridge when the relative defect is
+// larger than round-off/assembly noise.
+inline constexpr double kFloquetAirboxHermitianRelativeTolerance = 1.0e-8;
+
 // The shared-domain Floquet bridge must receive the physical airbox boundary
 // contract explicitly. `unknown` is intentionally the zero value so a caller
 // that forgets to propagate the descriptor fails closed instead of silently

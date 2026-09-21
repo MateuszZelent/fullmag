@@ -5965,6 +5965,22 @@ def _render_stages(
             ) or study.magnetostatic_bc
             if magnetostatic_bc != "open":
                 call_parts.append(f"magnetostatic_bc={_py_repr(magnetostatic_bc)}")
+            if study.solver_policy is not None:
+                if study.solver_policy.residual_tolerance is not None:
+                    call_parts.append(
+                        "solver_rtol="
+                        f"{_py_number(study.solver_policy.residual_tolerance)}"
+                    )
+                if study.solver_policy.max_outer_iterations is not None:
+                    call_parts.append(
+                        "solver_max_outer_iterations="
+                        f"{study.solver_policy.max_outer_iterations}"
+                    )
+                if study.solver_policy.max_linear_iterations is not None:
+                    call_parts.append(
+                        "solver_max_linear_iterations="
+                        f"{study.solver_policy.max_linear_iterations}"
+                    )
             k_vector_raw = _override_string(stage_override, "eigen_k_vector", None)
             k_path_expr = _render_stage_k_path_expr(
                 _override_string(stage_override, "eigen_k_path", None)

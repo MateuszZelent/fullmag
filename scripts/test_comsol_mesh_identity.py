@@ -1,6 +1,10 @@
 import copy
 import pytest
-from comsol_mesh_identity import mesh_topology_fingerprint_v2, _ordered_bytes
+from comsol_mesh_identity import (
+    mesh_topology_fingerprint_v2,
+    mesh_topology_fingerprint_v3,
+    _ordered_bytes,
+)
 
 
 def fixture():
@@ -13,6 +17,84 @@ def fixture():
 
 def test_matches_frozen_rust_and_python_mesh_identity():
     assert mesh_topology_fingerprint_v2(fixture()) == "sha256:2071f6b9a2bf468fc82296f34744b07475315a5f0d26c5b06e52b54064f474e2"
+
+
+def test_v3_matches_frozen_rust_cross_language_fixture():
+    mesh = {
+        "nodes": [[0.0, -0.0, 1.0e-7], [1.0e-5, 3.0e-9, 1.0e20],
+                  [float.fromhex("0x1.5555555555555p-2"), 1.0, 2.0]]
+                 + [[float(index), 0.0, 0.0] for index in range(3, 23)],
+        "cells": {
+            "types": ["tet4", "prism6", "pyramid5", "hex8"],
+            "offsets": [0, 4, 10, 15, 23],
+            "nodes": list(range(23)),
+            "global_ordinals": [9, 8, 7, 6],
+            "mesh_parts": ["magnetic", "transition_air", "far_air", "magnetic"],
+        },
+        "element_markers": [1, 0, 0, 4],
+        "facets": {
+            "types": ["tri3", "quad4", "tri3"],
+            "roles": ["exterior", "material_interface", "periodic_seam"],
+            "offsets": [0, 3, 7, 10],
+            "nodes": list(range(10)),
+            "global_ordinals": [3, 2, 1],
+        },
+        "boundary_markers": [2, 3, 4],
+        "periodic_boundary_pairs": [
+            {
+                "pair_id": "",
+                "source_marker": None,
+                "destination_marker": "",
+                "marker_a": 2,
+                "marker_b": 3,
+                "translation": [1.0e-7, -0.0, 1.0e20],
+                "tolerance": 3.0e-9,
+                "axis_hint": "é",
+                "orientation": "prefix",
+                "pairing_policy": "prefix-long",
+            },
+            {
+                "pair_id": "é",
+                "source_marker": "a",
+                "destination_marker": "ab",
+                "marker_a": 4,
+                "marker_b": 5,
+                "translation": None,
+                "tolerance": None,
+                "axis_hint": "",
+                "orientation": None,
+                "pairing_policy": "",
+            },
+        ],
+        "periodic_node_pairs": [
+            {"pair_id": "", "node_a": 0, "node_b": 1},
+            {"pair_id": "é", "node_a": 2, "node_b": 3},
+        ],
+    }
+    assert mesh_topology_fingerprint_v3(mesh) == "sha256:5728d7f6f11efc6f3d4ce4c5b098e3ea76866fd49a31088cf6692652d22c0ff6"
+
+
+def test_v3_preserves_signed_zero_and_rejects_nonfinite_values():
+    mesh = fixture()
+    negative_zero = copy.deepcopy(mesh)
+    negative_zero["nodes"][0][1] = -0.0
+    baseline = mesh_topology_fingerprint_v3(negative_zero)
+    positive_zero = copy.deepcopy(negative_zero)
+    positive_zero["nodes"][0][1] = 0.0
+    assert mesh_topology_fingerprint_v3(positive_zero) != baseline
+    nonfinite = copy.deepcopy(mesh)
+    nonfinite["periodic_boundary_pairs"] = [
+        {"pair_id": "x", "marker_a": 1, "marker_b": 2, "tolerance": float("inf")}
+    ]
+    with pytest.raises(ValueError, match="finite"):
+        mesh_topology_fingerprint_v3(nonfinite)
+
+
+def test_v3_rejects_role_aliases_outside_the_rust_typed_contract():
+    mesh = fixture()
+    mesh["cells"]["mesh_parts"] = ["magnetic_object"]
+    with pytest.raises(ValueError, match="unsupported enum"):
+        mesh_topology_fingerprint_v3(mesh)
 
 
 def test_input_dictionary_order_does_not_change_typed_identity():

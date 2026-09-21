@@ -833,6 +833,19 @@ FrequencyDomainStatus assemble_floquet_airbox_dynamic_demag_k(
         if (status != FrequencyDomainStatus::ok) {
             out_result->real_split_row_major.clear();
         } else {
+            const double hermitian_scale = std::max(
+                out_result->diagnostics.max_abs_schur_entry,
+                std::numeric_limits<double>::min());
+            const double hermitian_relative_residual =
+                out_result->diagnostics.max_abs_hermitian_residual / hermitian_scale;
+            if (!std::isfinite(hermitian_relative_residual) ||
+                hermitian_relative_residual > kFloquetAirboxHermitianRelativeTolerance) {
+                out_result->diagnostics.potential_solve_certified = false;
+                return fail(
+                    out_result,
+                    "Floquet airbox dynamic demag-k Schur block is not Hermitian within the relative tolerance",
+                    FrequencyDomainStatus::operator_error);
+            }
             out_result->reconstruction.q_count = q;
             out_result->reconstruction.phi_count = reduced_phi;
             out_result->reconstruction.gauge_policy = problem.gauge_policy;

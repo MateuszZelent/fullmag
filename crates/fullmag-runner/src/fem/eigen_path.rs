@@ -51,6 +51,7 @@ pub(crate) mod test_support {
             sample_index,
             handoff_sha256,
             source_mesh_topology_sha256,
+            source_mesh_topology_sha256,
         );
     }
 
@@ -236,7 +237,8 @@ fn bind_eigen_path_handoff_diagnostics(
     diagnostics: &mut serde_json::Value,
     sample_index: usize,
     handoff_sha256: &str,
-    source_mesh_topology_sha256: &str,
+    handoff_source_mesh_topology_sha256: &str,
+    modal_source_mesh_topology_sha256: &str,
 ) {
     let bind = |value: &mut serde_json::Value| {
         if let Some(object) = value.as_object_mut() {
@@ -245,8 +247,12 @@ fn bind_eigen_path_handoff_diagnostics(
                 serde_json::json!(handoff_sha256),
             );
             object.insert(
+                "relax_to_eigen_source_mesh_topology_sha256".to_string(),
+                serde_json::json!(handoff_source_mesh_topology_sha256),
+            );
+            object.insert(
                 "source_mesh_topology_sha256".to_string(),
-                serde_json::json!(source_mesh_topology_sha256),
+                serde_json::json!(modal_source_mesh_topology_sha256),
             );
         }
     };
@@ -278,7 +284,9 @@ pub(crate) fn execute_fem_eigen_path(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
     source_relax_handoff: Option<&fem_eigen::AcceptedFemRelaxStageHandoff>,
+    progress: Option<&mut fem_eigen::FemEigenProgressCallback<'_>>,
 ) -> Result<ExecutedRun, RunError> {
+    reject_reference_solver_for_dispersion_validation(plan)?;
     let engine = match execution.lane() {
         FemEigenExecutionLane::Cpu => FemEngine::CpuNative,
         FemEigenExecutionLane::Gpu => FemEngine::NativeGpu,
@@ -303,7 +311,8 @@ pub(crate) fn execute_fem_eigen_path(
     use crate::types::AuxiliaryArtifact;
     use std::cell::RefCell;
 
-    struct KSolverAdapter<'a> {
+    struct KSolverAdapter<'a, 'p, 'c> {
+        progress: std::sync::Mutex<Option<&'p mut fem_eigen::FemEigenProgressCallback<'c>>>,
         execution: PlannedFemEigenExecution<'a>,
         engine: FemEngine,
         mode_artifacts: RefCell<Vec<AuxiliaryArtifact>>,
@@ -314,13 +323,26 @@ pub(crate) fn execute_fem_eigen_path(
             RefCell<Option<crate::eigen::K0KittelPeriodicAirboxDemagMetrics>>,
     }
 
-    impl SingleKSolver for KSolverAdapter<'_> {
+    impl SingleKSolver for KSolverAdapter<'_, '_, '_> {
         fn solve_single_k(
             &self,
             plan: &FemEigenPlanIR,
             outputs: &[OutputIR],
             sample: &KSampleDescriptor,
         ) -> Result<SingleKSolveResult, crate::types::RunError> {
+            {
+                let mut sink = self.progress.lock().map_err(|_| RunError {
+                    message: "eigen path progress callback lock poisoned".to_string(),
+                })?;
+                super::eigen_progress::emit_fem_eigen_progress(
+                    &mut *sink,
+                    fem_eigen::FemEigenProgress {
+                        phase: "preparing_k_path_sample",
+                        requested_modes: plan.count as usize,
+                        ..Default::default()
+                    },
+                )?;
+            }
             if k0_kittel_synthetic_demag_factor_enabled(plan) && plan.bias_field_samples.is_empty()
             {
                 return solve_k0_kittel_synthetic_demag_factor_single_k(plan, sample);
@@ -352,51 +374,67 @@ pub(crate) fn execute_fem_eigen_path(
                 None
             };
 
+            let progress_sink = &self.progress;
+            // Keep cancellation and native EPS/KSP telemetry connected for every
+            // path sample, including the first relax-stage continuation.
+            let mut forward = |event| match progress_sink.lock() {
+                Ok(mut sink) => sink
+                    .as_deref_mut()
+                    .map_or(crate::types::StepAction::Continue, |callback| {
+                        callback(event)
+                    }),
+                Err(_) => crate::types::StepAction::Stop,
+            };
             let executed = if self.execution.resolution().is_some() {
                 if let Some(handoff) = initial_stage_handoff {
-                    fem_eigen::execute_planned_fem_eigen_with_stage_handoff(
+                    fem_eigen::execute_planned_fem_eigen_with_progress_and_stage_handoff(
                         self.execution,
                         &point_plan,
                         outputs,
+                        &mut forward,
                         handoff,
                     )?
                 } else {
-                    fem_eigen::execute_planned_fem_eigen_with_handoff(
+                    fem_eigen::execute_planned_fem_eigen_with_handoff_and_progress(
                         self.execution,
                         &point_plan,
                         outputs,
                         existing_handoff.as_ref(),
+                        Some(&mut forward),
                     )?
                 }
             } else {
                 match self.engine {
                     FemEngine::CpuNative => {
                         if let Some(handoff) = initial_stage_handoff {
-                            fem_eigen::execute_cpu_fem_eigen_with_stage_handoff(
+                            fem_eigen::execute_cpu_fem_eigen_with_progress_and_stage_handoff(
                                 &point_plan,
                                 outputs,
+                                &mut forward,
                                 handoff,
                             )?
                         } else {
-                            fem_eigen::execute_cpu_fem_eigen_with_handoff(
+                            fem_eigen::execute_cpu_fem_eigen_with_handoff_and_progress(
                                 &point_plan,
                                 outputs,
                                 existing_handoff.as_ref(),
+                                Some(&mut forward),
                             )?
                         }
                     }
                     FemEngine::NativeGpu => {
                         if let Some(handoff) = initial_stage_handoff {
-                            fem_eigen::execute_gpu_fem_eigen_with_stage_handoff(
+                            fem_eigen::execute_gpu_fem_eigen_with_progress_and_stage_handoff(
                                 &point_plan,
                                 outputs,
+                                Some(&mut forward),
                                 handoff,
                             )?
                         } else {
                             fem_eigen::execute_gpu_fem_eigen_with_handoff(
                                 &point_plan,
                                 outputs,
-                                None,
+                                Some(&mut forward),
                                 existing_handoff.as_ref(),
                             )?
                         }
@@ -533,6 +571,12 @@ pub(crate) fn execute_fem_eigen_path(
                     sample.sample_index,
                     handoff.content_sha256(),
                     handoff.source_mesh_topology_sha256(),
+                    &point_plan
+                        .mesh
+                        .mixed_topology_fingerprint_v3()
+                        .map_err(|error| RunError {
+                            message: format!("modal source mesh identity is invalid: {error}"),
+                        })?,
                 );
             }
 
@@ -556,6 +600,7 @@ pub(crate) fn execute_fem_eigen_path(
         .any(|output| matches!(output, OutputIR::EigenMode { .. }));
     let wants_dispersion = eigen_path_wants_dispersion(outputs);
     let adapter = KSolverAdapter {
+        progress: std::sync::Mutex::new(progress),
         execution,
         engine,
         mode_artifacts: RefCell::new(Vec::new()),

@@ -53,17 +53,16 @@ KITTEL_RELATIVE_TOLERANCE = 1.0e-3
 # Gamma Kittel check has no such accumulation).
 KS_RELATIVE_TOLERANCE = 3.0e-3
 KS_FREQUENCY_CONTINUITY_TOLERANCE = 2.0 * KS_RELATIVE_TOLERANCE
-# Independently verified with the finite-Dirichlet-box demagnetizing-factor model
-# Nz = 1 - t/(t + 2*a) (t = film thickness, a = airbox half-height): for the C1
-# benchmark parameters, the modeled frequency shift between successive airbox sizes
-# is ~1.133e-3 (1um->2um) and ~5.675e-4 (2um->4um). The prior 5.0e-3 tolerance is
-# therefore looser than the smallest real, modeled convergence increment, so a solver
-# with literally no dependence on airbox height (or one whose dependence differs from
-# the modeled physics by an amount comparable to or larger than the true effect) would
-# still silently pass. 2.0e-4 sits comfortably below the smallest modeled increment
-# (~1/3 of 5.675e-4) while leaving headroom for real discretization noise on top of
-# the modeled airbox effect.
+# Mesh and requested-mode convergence compare like-for-like finite domains and can
+# use the strict 2e-4 threshold.  An airbox sweep is itself a convergence study
+# for the open-boundary approximation, but each height is a distinct finite
+# Dirichlet boundary-value problem and its spectrum is expected to move.  The
+# published COMSOL procedure already budgets 0.5% for that boundary sweep
+# (docs/guides/comsol-nonzero-k-dispersion-benchmark.md, original line 226).
+# Compare adjacent heights and require decreasing increments; this campaign
+# budget does not qualify the primary spectrum against the KS 3e-3 oracle.
 CONVERGENCE_RELATIVE_TOLERANCE = 2.0e-4
+AIRBOX_CONVERGENCE_RELATIVE_TOLERANCE = 5.0e-3
 MAX_IMAGINARY_TO_REAL_RATIO = 1.0e-6
 MAX_TANGENT_LEAKAGE = 1.0e-6
 MAX_EIGEN_RESIDUAL = 1.0e-6
@@ -278,6 +277,14 @@ def _validate_resolved_backend_plan(
     if plan.get("kind") != "fem_eigen":
         reasons.append(f"{label} backend_plan.kind is not fem_eigen")
         valid = False
+    if not _validate_explicit_eigen_solver_policy(
+        plan.get("solver_policy"),
+        parameters,
+        f"{label}.backend_plan.solver_policy",
+        reasons,
+        tolerance_field="residual_tolerance",
+    ):
+        valid = False
     canonical_material = parameters.get("material")
     canonical_bias = parameters.get("bias_H_A_per_m")
     if not isinstance(canonical_material, Mapping) or not isinstance(canonical_bias, list):
@@ -429,6 +436,52 @@ def _require_metadata_number(
     return True
 
 
+def _validate_explicit_eigen_solver_policy(
+    value: object,
+    parameters: Mapping[str, Any],
+    label: str,
+    reasons: list[str],
+    *,
+    tolerance_field: str = "relative_tolerance",
+) -> bool:
+    """Require authoring and resolved plans to carry the same EPS/KSP budget."""
+
+    search = parameters.get("eigen_search")
+    if not isinstance(search, Mapping):
+        reasons.append(f"canonical parameters lack eigen_search for {label}")
+        return False
+    expected = {
+        "relative_tolerance": search.get("relative_tolerance"),
+        "max_outer_iterations": search.get("max_outer_iterations"),
+        "max_linear_iterations": search.get("max_linear_iterations"),
+    }
+    if not isinstance(value, Mapping):
+        reasons.append(f"{label} must expose the explicit EPS/KSP policy")
+        return False
+    valid = _require_metadata_number(
+        value.get(tolerance_field),
+        expected["relative_tolerance"],
+        f"{label}.{tolerance_field}",
+        reasons,
+    )
+    for field in ("max_outer_iterations", "max_linear_iterations"):
+        actual = value.get(field)
+        wanted = expected[field]
+        if (
+            isinstance(actual, bool)
+            or not isinstance(actual, int)
+            or actual <= 0
+            or not isinstance(wanted, int)
+            or wanted <= 0
+            or actual != wanted
+        ):
+            reasons.append(
+                f"{label}.{field}={actual!r} does not match the explicit positive canonical limit {wanted!r}"
+            )
+            valid = False
+    return valid
+
+
 def _validate_benchmark_metadata(
     metadata: Mapping[str, Any],
     case: str,
@@ -521,6 +574,39 @@ def _validate_benchmark_metadata(
     elif _relative_error(float(film_size[-1]), float(thickness)) > 1.0e-12:
         reasons.append(f"{label}.geometry.film_size_m[2] does not match canonical film thickness")
         valid = False
+    if case in PATH_CASES:
+        expected_sampling = f"Gamma-X-M-Gamma, {EXPECTED_PATH_SAMPLE_COUNT} samples"
+        if eigensolve.get("k_sampling") != expected_sampling:
+            reasons.append(
+                f"{label}.eigensolve.k_sampling must declare the canonical {expected_sampling!r} path"
+            )
+            valid = False
+        canonical_periods = (
+            canonical_geometry.get("period_x_m"),
+            canonical_geometry.get("period_y_m"),
+        )
+        actual_period = geometry.get("lattice_period_m")
+        if not _finite(actual_period) or not all(_finite(value) for value in canonical_periods):
+            reasons.append(f"{label}.geometry.lattice_period_m must expose the canonical in-plane cell")
+            valid = False
+        elif any(
+            _relative_error(float(actual_period), float(value)) > 1.0e-12
+            for value in canonical_periods
+        ):
+            reasons.append(f"{label}.geometry.lattice_period_m does not match the canonical x/y periods")
+            valid = False
+        if isinstance(film_size, list) and len(film_size) == 3:
+            for actual, expected, name in zip(
+                film_size[:2], canonical_periods, ("x", "y")
+            ):
+                if not _require_metadata_number(
+                    actual,
+                    expected,
+                    f"{label}.geometry.film_size_m[{name}] (in-plane cell size)",
+                    reasons,
+                    tolerance=1.0e-12,
+                ):
+                    valid = False
     for actual_field, canonical_field in (
         ("Ms_A_per_m", "Ms_A_per_m"),
         ("Aex_J_per_m", "Aex_J_per_m"),
@@ -564,6 +650,13 @@ def _validate_benchmark_metadata(
         valid = False
     if eigensolve.get("alpha") != 0 or eigensolve.get("damping_policy") != "ignore":
         reasons.append(f"{label} does not prove the zero-damping eigen solve")
+        valid = False
+    if not _validate_explicit_eigen_solver_policy(
+        eigensolve.get("eigen_solver"),
+        parameters,
+        f"{label}.eigensolve.eigen_solver",
+        reasons,
+    ):
         valid = False
     if require_uniform_slab:
         hole_radius = geometry.get("hole_radius_m")
@@ -814,7 +907,7 @@ def _validate_exported_mode_fields(
     if certificate.get("status") != "pass":
         reasons.extend(f"modal field phase: {reason}" for reason in certificate.get("reasons", []))
         reasons.append("modal field phase certificate did not pass")
-    from comsol_mesh_identity import mesh_topology_fingerprint_v2
+    from comsol_mesh_identity import mesh_topology_fingerprint_v3
     mesh_signature = None
     try:
         metadata_path = _safe_relative_path(case_dir, "metadata.json", "modal field mesh metadata", reasons)
@@ -825,7 +918,8 @@ def _validate_exported_mode_fields(
         if "sha256:" + hashlib.sha256(metadata_bytes).hexdigest() != certified_hashes.get("metadata.json"):
             raise ValueError("metadata changed after field certification")
         field_metadata = json.loads(metadata_bytes)
-        mesh_signature = mesh_topology_fingerprint_v2(field_metadata["execution_plan"]["backend_plan"]["mesh"])
+        mesh = field_metadata["execution_plan"]["backend_plan"]["mesh"]
+        mesh_signature = mesh_topology_fingerprint_v3(mesh)
     except (OSError, ValueError, TypeError, KeyError, SystemExit) as error:
         reasons.append(f"modal field mesh identity could not be verified: {error}")
         certificate["status"] = "fail"
@@ -985,13 +1079,49 @@ def _validate_branches(
     if len(complete) < target:
         reasons.append(f"only {len(complete)} complete tracked branches are available; {target} are required")
     selected = complete[:target]
+    # Branch IDs are bookkeeping, not a physical mode label.  The analytic
+    # coverage check consumes selected[0], so accepting an arbitrary complete
+    # branch here could compare a higher mode to the n=0 oracle and leave a
+    # mislabeled fundamental branch undetected.  Bind the first selected branch
+    # to the lowest positive raw spectrum frequency at every sample before any
+    # analytic comparison is allowed.
+    fundamental_branch_check = "not_applicable"
+    if selected:
+        fundamental_branch_check = "pass"
+        first_branch = selected[0]
+        first_points = {
+            point.get("sample_index"): point
+            for point in first_branch.get("points", [])
+            if isinstance(point, Mapping) and isinstance(point.get("sample_index"), int)
+        }
+        for sample_index in sorted(expected_indices):
+            point = first_points.get(sample_index)
+            candidates = [
+                frequency
+                for (index, _raw), frequency in mode_map.items()
+                if index == sample_index and _finite_positive(frequency)
+            ]
+            observed = point.get("frequency_real_hz", point.get("frequency_hz")) if point else None
+            if point is None or not candidates or not _finite_positive(observed):
+                reasons.append(
+                    f"selected fundamental branch {first_branch.get('branch_id')} cannot be bound to a positive raw mode at sample {sample_index}"
+                )
+                fundamental_branch_check = "fail"
+                continue
+            expected = min(candidates)
+            if _relative_error(float(observed), expected) > 1.0e-9:
+                reasons.append(
+                    f"selected branch {first_branch.get('branch_id')} is not the lowest positive branch at sample {sample_index}"
+                )
+                fundamental_branch_check = "fail"
     return selected, _new_check(
-        "pass" if len(selected) == target and len(reasons) == initial_reason_count else "fail",
+        "pass" if len(selected) == target and fundamental_branch_check != "fail" and len(reasons) == initial_reason_count else "fail",
         branch_count=len(parsed),
         complete_branch_count=len(complete),
         target_band_count=target,
         sample_count=(1 if case == "c0" else EXPECTED_PATH_SAMPLE_COUNT),
         selected_branch_ids=[int(branch["branch_id"]) for branch in selected],
+        fundamental_branch_check=fundamental_branch_check,
     )
 
 
@@ -1129,6 +1259,124 @@ def _validate_dispersion_csv(
         unique_mode_count=len(seen_modes),
         tracked_pairs=len(observed_pairs),
         expected_tracked_pairs=len(expected_pairs),
+    )
+
+
+def _validate_primary_analytic_columns(
+    path: Path,
+    expected_path: Mapping[int, tuple[float, float, float]],
+    parameters: Mapping[str, Any],
+    reasons: list[str],
+) -> dict[str, Any]:
+    """Recompute every exported analytic CSV value from the native k row.
+
+    The analytic columns are postsolve annotations.  They must never be the
+    frequency source, but once present they are part of the auditable
+    comparison contract and cannot be accepted as merely non-empty strings.
+    This check covers every mode row in the primary C1 artifact, while the
+    fundamental-branch check below remains the qualification criterion.
+    """
+    before = len(reasons)
+    required = {
+        "sample_index",
+        "kx_rad_per_m",
+        "ky_rad_per_m",
+        "kz_rad_per_m",
+        "analytic_frequency_hz",
+        "relative_error",
+        "validation_geometry",
+    }
+    rows = 0
+    with path.open("r", encoding="utf-8-sig", newline="") as stream:
+        reader = csv.DictReader(stream)
+        fieldnames = set(reader.fieldnames or ())
+        missing = sorted(required - fieldnames)
+        frequency_key = (
+            "frequency_real_hz" if "frequency_real_hz" in fieldnames else "frequency_hz"
+        )
+        if frequency_key not in fieldnames:
+            missing.append("frequency_real_hz or frequency_hz")
+        if missing:
+            reasons.append(
+                "C1 dispersion.csv is missing postsolve analytic columns: "
+                + ", ".join(missing)
+            )
+            return _new_check("fail", rows=0, expected_rows=None)
+        for row_number, row in enumerate(reader, start=1):
+            rows += 1
+            try:
+                sample_index = int(row["sample_index"])
+                vector = tuple(
+                    float(row[name])
+                    for name in ("kx_rad_per_m", "ky_rad_per_m", "kz_rad_per_m")
+                )
+                observed_frequency = float(row[frequency_key])
+                analytic_frequency = float(row["analytic_frequency_hz"])
+                row_relative_error = float(row["relative_error"])
+            except (TypeError, ValueError, KeyError):
+                reasons.append(
+                    f"C1 dispersion.csv row {row_number} has invalid postsolve analytic values"
+                )
+                continue
+            if not all(
+                math.isfinite(value)
+                for value in (*vector, observed_frequency, analytic_frequency, row_relative_error)
+            ):
+                reasons.append(f"C1 dispersion.csv row {row_number} has non-finite analytic values")
+                continue
+            canonical_vector = expected_path.get(sample_index)
+            if canonical_vector is None:
+                reasons.append(
+                    f"C1 dispersion.csv row {row_number} references unknown canonical sample {sample_index}"
+                )
+                continue
+            if any(
+                abs(actual - wanted) > 1.0e-8 * max(1.0, abs(wanted))
+                for actual, wanted in zip(vector, canonical_vector)
+            ):
+                reasons.append(
+                    f"C1 dispersion.csv row {row_number} k-vector disagrees with canonical sample {sample_index}"
+                )
+            sin_squared_phi = _sin_squared_phi_from_k_vector(canonical_vector)
+            expected = (
+                _kalinikos_frequency_hz_general_phi(
+                    _vector_norm(canonical_vector), sin_squared_phi, parameters
+                )
+                if sin_squared_phi is not None
+                else None
+            )
+            if not _finite_positive(expected):
+                reasons.append(
+                    f"C1 dispersion.csv row {row_number} has no finite analytic reference"
+                )
+                continue
+            expected = float(expected)
+            if _relative_error(analytic_frequency, expected) > 1.0e-12:
+                reasons.append(
+                    f"C1 dispersion.csv row {row_number} analytic_frequency_hz does not match the postsolve oracle"
+                )
+            expected_relative_error = _relative_error(observed_frequency, expected)
+            if abs(row_relative_error - expected_relative_error) > 1.0e-12:
+                reasons.append(
+                    f"C1 dispersion.csv row {row_number} relative_error is not bound to its numeric frequency"
+                )
+            sin_squared_phi = float(sin_squared_phi)
+            expected_geometry = (
+                "backward_volume"
+                if sin_squared_phi <= 1.0e-12
+                else "damon_eshbach"
+                if abs(sin_squared_phi - 1.0) <= 1.0e-12
+                else "oblique"
+            )
+            if row.get("validation_geometry", "").strip() != expected_geometry:
+                reasons.append(
+                    f"C1 dispersion.csv row {row_number} validation_geometry is {row.get('validation_geometry')!r}, expected {expected_geometry!r}"
+                )
+    return _new_check(
+        "pass" if len(reasons) == before and rows > 0 else "fail",
+        rows=rows,
+        expected_rows=len(expected_path) * EXPECTED_TARGET_BANDS,
+        analytic_model="kalinikos_slab_n0",
     )
 
 def _validate_numeric_source(
@@ -1747,6 +1995,26 @@ def _validate_ks(
     if not isinstance(samples, list):
         reasons.append("Kalinikos–Slavin evidence has no samples array")
         return _new_check("fail")
+    control = _nested(parameters, "analytic_controls", "kalinikos_slab_n0")
+    control_k = control.get("control_k_rad_per_m") if isinstance(control, Mapping) else None
+    control_vectors = {
+        "backward_volume": control.get("backward_volume_k_vector_rad_per_m") if isinstance(control, Mapping) else None,
+        "damon_eshbach": control.get("damon_eshbach_k_vector_rad_per_m") if isinstance(control, Mapping) else None,
+    }
+    required_geometries = control.get("required_geometries") if isinstance(control, Mapping) else None
+    if (
+        not _finite_positive(control_k)
+        or not isinstance(required_geometries, list)
+        or set(required_geometries) != {"backward_volume", "damon_eshbach"}
+        or any(
+            not isinstance(vector, list)
+            or len(vector) != 3
+            or not all(_finite(value) for value in vector)
+            for vector in control_vectors.values()
+        )
+    ):
+        reasons.append("Kalinikos–Slavin evidence requires canonical BV/DE control vectors in parameters.analytic_controls")
+        return _new_check("fail")
     geometries: set[str] = set()
     errors: list[float] = []
     profiles: list[dict[str, Any]] = []
@@ -1796,6 +2064,14 @@ def _validate_ks(
             reasons.append(f"Kalinikos–Slavin sample {index} requires finite nonnegative k_rad_per_m")
         elif _relative_error(k_actual, float(declared_k)) > 1.0e-8:
             reasons.append(f"Kalinikos–Slavin sample {index} declares k inconsistent with the numeric spectrum")
+        expected_vector = control_vectors[geometry]
+        if any(
+            abs(float(actual) - float(expected)) > 1.0e-8 * max(1.0, abs(float(expected)))
+            for actual, expected in zip(vector, expected_vector)
+        ) or _relative_error(k_actual, float(control_k)) > 1.0e-8:
+            reasons.append(
+                f"Kalinikos–Slavin {geometry} sample {index} does not use the canonical auxiliary control k-vector"
+            )
         scale = max(1.0, k_actual)
         if abs(vector[2]) > 1.0e-8 * scale:
             reasons.append(f"Kalinikos–Slavin sample {index} is not an in-plane wavevector")
@@ -2108,7 +2384,11 @@ def _validate_convergence_pair(
         fine, fine_k = _bundle_observation(right, sample, band, f"convergence.{key}.fine", reasons)
         if coarse is None or fine is None or coarse_k is None or fine_k is None:
             continue
-        if primary_bundle is not None:
+        # A mesh or mode-count comparison must stay on the same finite-domain
+        # problem as primary.  An airbox comparison intentionally changes the
+        # Dirichlet boundary-value problem, so comparing it to primary would
+        # reject the physical boundary shift that the sweep is meant to measure.
+        if primary_bundle is not None and key != "airbox":
             primary, primary_k = _bundle_observation(
                 primary_bundle,
                 sample,
@@ -2138,8 +2418,9 @@ def _validate_convergence_pair(
         error = _relative_error(coarse, fine)
         errors.append(error)
         changes[f"{sample}:{band}"] = error
-        if error > CONVERGENCE_RELATIVE_TOLERANCE:
-            reasons.append(f"convergence.{key} comparison {index} change {error:.6g} exceeds {CONVERGENCE_RELATIVE_TOLERANCE:.6g}")
+        tolerance = AIRBOX_CONVERGENCE_RELATIVE_TOLERANCE if key == "airbox" else CONVERGENCE_RELATIVE_TOLERANCE
+        if error > tolerance:
+            reasons.append(f"convergence.{key} comparison {index} change {error:.6g} exceeds {tolerance:.6g}")
     missing = sorted(expected_pairs - observed_pairs)
     if missing:
         reasons.append(f"convergence.{key} is missing {len(missing)} required sample/band comparisons")
@@ -2150,7 +2431,8 @@ def _validate_convergence_pair(
         comparison_count=len(comparisons),
         expected_comparison_count=len(expected_pairs),
         max_relative_change=maximum if math.isfinite(maximum) else None,
-        tolerance=CONVERGENCE_RELATIVE_TOLERANCE,
+        tolerance=(AIRBOX_CONVERGENCE_RELATIVE_TOLERANCE if key == "airbox" else CONVERGENCE_RELATIVE_TOLERANCE),
+        comparison_reference=("adjacent_airbox_boundary_sweep" if key == "airbox" else "primary_same_physics"),
     )
 
 
@@ -2325,6 +2607,14 @@ def validate_case(
             selected_branches,
             reasons,
         )
+    analytic_columns_check = _new_check("not_applicable")
+    if case == "c1" and Path("eigen/dispersion.csv") in artifacts and parameters:
+        analytic_columns_check = _validate_primary_analytic_columns(
+            case_dir / "eigen/dispersion.csv",
+            expected_path,
+            parameters,
+            reasons,
+        )
     source_check = _new_check("missing")
     if manifest and diagnostics:
         source_check = _validate_numeric_source(manifest, diagnostics, case, reasons)
@@ -2390,6 +2680,7 @@ def validate_case(
             "spectrum_samples": _new_check("pass" if len(sample_map) == (1 if case == "c0" else EXPECTED_PATH_SAMPLE_COUNT) else "fail", sample_count=len(sample_map)),
             "tracked_branches": branch_check,
             "dispersion_csv": csv_check,
+            "postsolve_analytic_columns": analytic_columns_check,
             "kittel": kittel_check,
             "kalinikos_slab_n0": ks_check,
             "dispersion_analytic_coverage": dispersion_analytic_check,

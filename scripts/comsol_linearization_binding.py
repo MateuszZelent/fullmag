@@ -1,8 +1,9 @@
 """Cross-check actual magnetic m0 and content identities used by a mode.
 
 This primitive complements (not replaces) equilibrium acceptance validation.
-The caller supplies the independently checked full-mesh signature and magnetic
-node support. No initial magnetization from the plan is substituted.
+The caller supplies the independently checked equilibrium signature and the
+modal source signature separately. No initial magnetization from the plan is
+substituted.
 """
 import hashlib
 import math
@@ -10,7 +11,16 @@ from collections.abc import Mapping
 from verify_fem_frequency_domain_eigen_artifacts import equilibrium_artifact_v7_digest, serde_json_compact_bytes
 
 
-def validate_linearization_binding(equilibrium, state, mode, magnetic_nodes, *, node_count, mesh_signature):
+def validate_linearization_binding(
+    equilibrium,
+    state,
+    mode,
+    magnetic_nodes,
+    *,
+    node_count,
+    mesh_signature,
+    modal_mesh_signature=None,
+):
     if not all(isinstance(value, Mapping) for value in (equilibrium, state, mode)):
         raise ValueError("equilibrium, state and mode must be objects")
     if equilibrium.get("schema_version") != "equilibrium_artifact.v7" or equilibrium.get("accepted_for_linearization") is not True:
@@ -33,7 +43,13 @@ def validate_linearization_binding(equilibrium, state, mode, magnetic_nodes, *, 
         raise ValueError("linearization state ID mismatch")
     if not isinstance(mesh_signature, str) or not mesh_signature:
         raise ValueError("independently checked mesh signature is required")
-    if equilibrium.get("mesh_signature") != mesh_signature or state.get("mesh_signature") != mesh_signature or mode.get("source_mesh_topology_sha256") != mesh_signature:
+    if modal_mesh_signature is None:
+        modal_mesh_signature = mesh_signature
+    if (
+        equilibrium.get("mesh_signature") != mesh_signature
+        or state.get("mesh_signature") != mesh_signature
+        or mode.get("source_mesh_topology_sha256") != modal_mesh_signature
+    ):
         raise ValueError("mesh signature mismatch")
     for key in ("material_signature", "physics_signature", "boundary_signature", "static_demag_signature"):
         if not isinstance(equilibrium.get(key), str) or not equilibrium[key] or state.get(key) != equilibrium[key]:

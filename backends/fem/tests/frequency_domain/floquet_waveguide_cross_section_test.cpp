@@ -65,10 +65,13 @@ void assembles_p1_blocks_and_per_length_diagnostics()
                     (2.0 + std::sqrt(5.0) + 1.0) / 2.0) < 1.0e-12);
     assert(std::abs(result.mass_row_major[0] - 1.0 / 12.0) < 1.0e-12);
     assert(std::abs(result.mass_row_major[1] - 1.0 / 24.0) < 1.0e-12);
-    // q=(node 0, e2) receives -Ms * integral(N_0) / length = -1/3.
-    assert(std::abs(result.a_phiq_axial_row_major[1] + 1.0 / 3.0) < 1.0e-12);
-    // A_qphi axial is the negative transpose because of Hermitian conjugation.
-    assert(std::abs(result.a_qphi_axial_row_major[3] - 1.0 / 3.0) < 1.0e-12);
+    // q=(node 0, e2) receives -Ms * mass_matrix(N_0,N_0) / length = -1/6
+    // (consistent P1 mass matrix diagonal entry area/6, not area/3 -- audit
+    // finding H5).
+    assert(std::abs(result.a_phiq_axial_row_major[1] + 1.0 / 6.0) < 1.0e-12);
+    // A_qphi axial is qphi_feedback_scale (default 1.0) times the negative
+    // transpose because of Hermitian conjugation.
+    assert(std::abs(result.a_qphi_axial_row_major[3] - 1.0 / 6.0) < 1.0e-12);
     for (std::size_t index = 0; index < result.k_perp_row_major.size(); ++index) {
         assert(std::isfinite(result.k_perp_row_major[index]));
         assert(std::isfinite(result.mass_row_major[index]));

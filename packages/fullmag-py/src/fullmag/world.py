@@ -123,6 +123,7 @@ from fullmag.model.study import (
     MeasurementAxis,
     MinorLoop,
     PiecewiseFieldSchedule,
+    FemEigenSolverPolicy,
     FrequencyResponseSolverPolicy,
     GammaResponseAnalysis,
     RelaxStop,
@@ -2776,6 +2777,7 @@ class EigenmodesStageSpec:
     bias_field_sweep: BiasFieldSweep | None = None
     bc: str | dict[str, object] = "free"
     magnetostatic_bc: str = "open"
+    solver_policy: FemEigenSolverPolicy | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -3205,7 +3207,15 @@ def eigenmodes_stage(
     bias_field_sweep: BiasFieldSweep | None = None,
     bc: str | dict[str, object] = "free",
     magnetostatic_bc: str = "open",
+    solver_rtol: float | None = None,
+    solver_max_outer_iterations: int | None = None,
+    solver_max_linear_iterations: int | None = None,
 ) -> EigenmodesStageSpec:
+    solver_policy = _fem_eigen_solver_policy(
+        solver_rtol=solver_rtol,
+        solver_max_outer_iterations=solver_max_outer_iterations,
+        solver_max_linear_iterations=solver_max_linear_iterations,
+    )
     return EigenmodesStageSpec(
         count=count,
         target=target,
@@ -3223,6 +3233,7 @@ def eigenmodes_stage(
         bias_field_sweep=bias_field_sweep,
         bc=bc,
         magnetostatic_bc=magnetostatic_bc,
+        solver_policy=solver_policy,
     )
 
 
@@ -3303,6 +3314,25 @@ def _frequency_response_solver_policy(
         rtol=solver_rtol,
         max_iterations=solver_max_iterations,
         restart_iterations=solver_restart_iterations,
+    )
+
+
+def _fem_eigen_solver_policy(
+    *,
+    solver_rtol: float | None,
+    solver_max_outer_iterations: int | None,
+    solver_max_linear_iterations: int | None,
+) -> FemEigenSolverPolicy | None:
+    if (
+        solver_rtol is None
+        and solver_max_outer_iterations is None
+        and solver_max_linear_iterations is None
+    ):
+        return None
+    return FemEigenSolverPolicy(
+        residual_tolerance=solver_rtol,
+        max_outer_iterations=solver_max_outer_iterations,
+        max_linear_iterations=solver_max_linear_iterations,
     )
 
 
@@ -3409,6 +3439,7 @@ def _capture_stage(stage_spec: object) -> CapturedStage:
                 eigen_bias_field_sweep=stage_spec.bias_field_sweep,
                 eigen_spin_wave_bc=stage_spec.bc,
                 eigen_magnetostatic_bc=stage_spec.magnetostatic_bc,
+                eigen_solver_policy=stage_spec.solver_policy,
             ),
             entrypoint_kind="flat_eigenmodes",
             default_until_seconds=None,
@@ -4521,6 +4552,9 @@ class StudyStagesBuilder:
         bias_field_sweep: BiasFieldSweep | None = None,
         bc: str | dict[str, object] = "free",
         magnetostatic_bc: str = "open",
+        solver_rtol: float | None = None,
+        solver_max_outer_iterations: int | None = None,
+        solver_max_linear_iterations: int | None = None,
     ) -> "StudyStagesBuilder":
         return self.add_stage(
             eigenmodes_stage(
@@ -4540,6 +4574,9 @@ class StudyStagesBuilder:
                 bias_field_sweep=bias_field_sweep,
                 bc=bc,
                 magnetostatic_bc=magnetostatic_bc,
+                solver_rtol=solver_rtol,
+                solver_max_outer_iterations=solver_max_outer_iterations,
+                solver_max_linear_iterations=solver_max_linear_iterations,
             )
         )
 
@@ -8802,6 +8839,7 @@ def _build_problem(
     eigen_bias_field_sweep: BiasFieldSweep | None = None,
     eigen_spin_wave_bc: str | dict[str, object] = "free",
     eigen_magnetostatic_bc: str = "open",
+    eigen_solver_policy: FemEigenSolverPolicy | None = None,
     frequency_frequencies_hz: Sequence[float] = (1.0e9,),
     frequency_excitation_field_au_per_m: tuple[float, float, float] = (0.0, 0.0, 1.0),
     frequency_excitation_phase_rad: float = 0.0,
@@ -9023,6 +9061,7 @@ def _build_problem(
             k_sampling=eigen_k_sampling,
             k_vector=eigen_k_vector,
             bias_field_sweep=eigen_bias_field_sweep,
+            solver_policy=eigen_solver_policy,
             dynamics=dynamics,
         )
     elif study_kind == "frequency_response":

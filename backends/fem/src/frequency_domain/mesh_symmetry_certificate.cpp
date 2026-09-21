@@ -1855,7 +1855,13 @@ FrequencyDomainStatus verify_mesh_symmetry_certificate_v6_preimage(
         return FrequencyDomainStatus::validation_error;
     };
     try {
-        constexpr std::uint64_t kMaximumCanonicalPreimageBytes = 16ull * 1024ull * 1024ull;
+        // The v6 preimage contains four complete node/relation views.  A
+        // production airbox mesh can therefore exceed the old 16 MiB guard
+        // even when every count and pointer is valid.  Keep a finite
+        // fail-closed bound, but size it for the largest managed FEM payload
+        // rather than rejecting an otherwise valid certificate before hashing.
+        constexpr std::uint64_t kMaximumCanonicalPreimageBytes =
+            256ull * 1024ull * 1024ull;
         if (preimage == nullptr || preimage_len == 0u) {
             return reject_preimage("canonical_preimage_missing");
         }

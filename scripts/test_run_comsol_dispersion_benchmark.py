@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import ntpath
 from pathlib import Path
 import sqlite3
+import subprocess
 from types import SimpleNamespace
 import sys
 import tempfile
@@ -52,7 +54,11 @@ class ComsolDispersionBenchmarkTests(unittest.TestCase):
             root = Path(directory)
             context = self.fake_context(root)
             command = benchmark._compose_command(context, root / "output", benchmark.CASES)
-            self.assertEqual(command[:4], ["docker", "compose", "--profile", "fem-modal-cpu"])
+            self.assertEqual(command[:2], ["docker", "compose"])
+            self.assertEqual(command[2], "-f")
+            self.assertEqual(command[4], "-f")
+            profile_index = command.index("--profile")
+            self.assertEqual(command[profile_index : profile_index + 2], ["--profile", "fem-modal-cpu"])
             self.assertIn("--no-deps", command)
             self.assertIn("--pull", command)
             self.assertIn("never", command)
@@ -65,6 +71,28 @@ class ComsolDispersionBenchmarkTests(unittest.TestCase):
             self.assertIn(f"{context.source_tree}:/workspace/capsule:ro", command)
             self.assertIn(f"{context.runtime_root}:/workspace/.fullmag/local:ro", command)
             self.assertIn(f"{root / 'output'}:/workspace/benchmark-output:rw", command)
+            identity = benchmark._container_identity(context, root / "output")
+            self.assertIn("--name", command)
+            self.assertEqual(command[command.index("--name") + 1], identity["name"])
+            labels = {
+                command[index + 1].split("=", 1)[0]: command[index + 1].split("=", 1)[1]
+                for index, token in enumerate(command[:-1])
+                if token == "--label"
+            }
+            self.assertEqual(labels, identity["labels"])
+            self.assertIn("timeout", command)
+            timeout_index = command.index("timeout")
+            self.assertEqual(
+                command[timeout_index : timeout_index + 6],
+                [
+                    "timeout",
+                    "--foreground",
+                    "--signal=TERM",
+                    "--kill-after=30s",
+                    "21600",
+                    "bash",
+                ],
+            )
             self.assertIn("--backend fem --mode strict --precision double", rendered)
             self.assertIn("FULLMAG_FEM_EXECUTION=cpu", rendered)
             self.assertIn("FULLMAG_FEM_MFEM_DEVICE=cpu", rendered)
@@ -126,6 +154,79 @@ class ComsolDispersionBenchmarkTests(unittest.TestCase):
             with self.assertRaises(benchmark.BenchmarkError):
                 benchmark._validate_case_artifacts(root / "c0", "c1")
 
+    def test_external_scientific_evidence_is_staged_and_hash_bound(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            case_dir = root / "output" / "c0"
+            case_dir.mkdir(parents=True)
+            source_case = root / "evidence" / "c0"
+            source_validation = source_case / "validation"
+            source_validation.mkdir(parents=True)
+            bindings = {
+                "metadata_sha256": "a" * 64,
+                "spectrum_v2_sha256": "b" * 64,
+                "branches_v2_sha256": "c" * 64,
+                "dispersion_csv_sha256": "d" * 64,
+                "manifest_sha256": "e" * 64,
+                "solver_diagnostics_sha256": "f" * 64,
+            }
+            evidence = {
+                "schema_version": benchmark.EVIDENCE_SCHEMA,
+                "case_id": "c0",
+                "numeric_run": {
+                    "frequency_source": "native_solver_attested",
+                    "analytic_solver_used_for_frequencies": False,
+                    "dynamic_demag_operator_source": None,
+                },
+                "artifact_bindings": bindings,
+                "analytic_controls": {"kittel": {"status": "pass"}},
+                "convergence": {
+                    "mesh": {"status": "pass"},
+                    "airbox": {"status": "not_applicable"},
+                    "mode_count": {"status": "pass"},
+                },
+            }
+            (source_validation / "scientific_gate.v1.json").write_text(
+                json.dumps(evidence), encoding="utf-8"
+            )
+            comparison = source_case / "validation" / "comparison" / "mesh.json"
+            comparison.parent.mkdir(parents=True)
+            comparison.write_text("{}", encoding="utf-8")
+            staged = benchmark._stage_external_scientific_evidence(
+                case_dir, "c0", root / "evidence", bindings
+            )
+            self.assertEqual(staged["case_id"], "c0")
+            self.assertEqual(staged["evidence_provenance"]["copied_file_count"], 1)
+            self.assertEqual(
+                (case_dir / "validation" / "comparison" / "mesh.json").read_text(), "{}"
+            )
+
+    def test_external_scientific_evidence_rejects_stale_primary_binding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            case_dir = root / "output" / "c0"
+            case_dir.mkdir(parents=True)
+            source_case = root / "evidence" / "c0" / "validation"
+            source_case.mkdir(parents=True)
+            evidence = {
+                "schema_version": benchmark.EVIDENCE_SCHEMA,
+                "case_id": "c0",
+                "numeric_run": {},
+                "artifact_bindings": {"metadata_sha256": "0" * 64},
+                "analytic_controls": {},
+                "convergence": {},
+            }
+            (source_case / "scientific_gate.v1.json").write_text(
+                json.dumps(evidence), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(benchmark.BenchmarkError, "binding"):
+                benchmark._stage_external_scientific_evidence(
+                    case_dir,
+                    "c0",
+                    root / "evidence",
+                    {"metadata_sha256": "1" * 64},
+                )
+
     def test_new_output_is_inside_storage_and_existing_output_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -135,6 +236,150 @@ class ComsolDispersionBenchmarkTests(unittest.TestCase):
             candidate.mkdir(parents=True)
             with self.assertRaises(benchmark.BenchmarkError):
                 benchmark._new_output_dir(context, str(candidate))
+
+    def _owned_container_payload(self, context, output_dir, *, running=True, labels=None):
+        identity = benchmark._container_identity(context, output_dir)
+        mounts = [
+            {
+                "Source": mount["source"],
+                "Destination": mount["destination"],
+                "RW": not mount["read_only"],
+            }
+            for mount in benchmark._expected_container_mounts(context, output_dir)
+        ]
+        return {
+            "Id": "a" * 64,
+            "Name": "/" + identity["name"],
+            "Image": benchmark.EXPECTED_IMAGE_DIGEST,
+            "Config": {
+                "Image": benchmark.EXPECTED_IMAGE_DIGEST,
+                "Labels": dict(labels or identity["labels"]),
+            },
+            "Mounts": mounts,
+            "State": {"Running": running, "Status": "running" if running else "exited"},
+        }
+
+    def test_windows_mount_projection_preserves_forward_slashes(self):
+        expected = r"C:\git\fullmag\storage\runs\benchmark"
+        projected = "/host_mnt/c/git/fullmag/storage/runs/benchmark"
+        with patch.object(benchmark.os, "name", "nt"), patch.object(
+            benchmark.os, "path", ntpath
+        ):
+            # This is the Windows behavior that caused the regression: the
+            # real ntpath.normcase() turns the canonical slash form back into
+            # backslashes, so the helper must apply case folding separately.
+            self.assertEqual(ntpath.normcase("C:/git/fullmag/storage/runs/benchmark"), expected.lower())
+            self.assertEqual(
+                benchmark._normalized_mount_source(expected),
+                "c:/git/fullmag/storage/runs/benchmark",
+            )
+            self.assertTrue(benchmark._mount_source_matches(projected, expected))
+            self.assertTrue(benchmark._mount_source_matches(expected, expected))
+
+    def test_cleanup_requires_exact_identity_and_removes_only_owned_container(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            context = self.fake_context(root)
+            output_dir = root / "output"
+            output_dir.mkdir()
+            payload = self._owned_container_payload(context, output_dir, running=True)
+            calls = []
+            inspect_count = 0
+
+            def docker_run(argv, **kwargs):
+                nonlocal inspect_count
+                calls.append(argv)
+                if argv[:4] == ["docker", "container", "inspect", argv[3]]:
+                    inspect_count += 1
+                    if inspect_count == 1:
+                        current = payload
+                    elif inspect_count == 2:
+                        current = {**payload, "State": {"Running": False, "Status": "exited"}}
+                    else:
+                        return SimpleNamespace(returncode=1, stdout="", stderr="No such container")
+                    return SimpleNamespace(returncode=0, stdout=json.dumps([current]), stderr="")
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            result = benchmark._cleanup_benchmark_container(context, output_dir, run=docker_run)
+            self.assertEqual(result["status"], "removed")
+            self.assertIn(["docker", "container", "stop", "--time", "10", "a" * 64], calls)
+            self.assertIn(["docker", "container", "rm", "a" * 64], calls)
+
+    def test_cleanup_blocks_on_foreign_labels_without_stop_or_remove(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            context = self.fake_context(root)
+            output_dir = root / "output"
+            output_dir.mkdir()
+            identity = benchmark._container_identity(context, output_dir)
+            foreign = dict(identity["labels"])
+            foreign[benchmark.CONTAINER_LABEL_JOB] = "foreign"
+            payload = self._owned_container_payload(context, output_dir, labels=foreign)
+            calls = []
+
+            def docker_run(argv, **kwargs):
+                calls.append(argv)
+                return SimpleNamespace(returncode=0, stdout=json.dumps([payload]), stderr="")
+
+            result = benchmark._cleanup_benchmark_container(context, output_dir, run=docker_run)
+            self.assertEqual(result["status"], "blocked")
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][:4], ["docker", "container", "inspect", identity["name"]])
+
+    def test_execute_timeout_writes_terminal_result_after_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            context = self.fake_context(root)
+            output_dir = root / "output"
+            timeout = subprocess.TimeoutExpired(["docker", "compose"], timeout=3)
+            with patch.object(benchmark.subprocess, "run", side_effect=timeout), patch.object(
+                benchmark,
+                "_cleanup_benchmark_container",
+                return_value={"status": "removed", "verified": True},
+            ):
+                result_code = benchmark._execute(
+                    context,
+                    output_dir,
+                    ("c1",),
+                    ["docker", "compose"],
+                    timeout_seconds=30.0,
+                )
+            self.assertEqual(result_code, 1)
+            result = json.loads((output_dir / "run-result.json").read_text(encoding="utf-8"))
+            self.assertEqual(result["status"], "failed")
+            self.assertTrue(result["timed_out"])
+            self.assertFalse(result["container_timed_out"])
+            self.assertEqual(result["cleanup"]["status"], "removed")
+            request = json.loads((output_dir / "run-request.json").read_text(encoding="utf-8"))
+            self.assertEqual(request["lifecycle"]["container_timeout_seconds"], 30)
+            self.assertEqual(request["lifecycle"]["host_timeout_seconds"], 120)
+
+    def test_execute_start_errors_and_interrupts_still_write_terminal_receipt(self):
+        for raised in (OSError("docker unavailable"), KeyboardInterrupt()):
+            with self.subTest(exception=type(raised).__name__), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                context = self.fake_context(root)
+                output_dir = root / "output"
+                with patch.object(benchmark.subprocess, "run", side_effect=raised), patch.object(
+                    benchmark,
+                    "_cleanup_benchmark_container",
+                    return_value={"status": "blocked", "reason": "test"},
+                ):
+                    result_code = benchmark._execute(
+                        context,
+                        output_dir,
+                        ("c1",),
+                        ["docker", "compose"],
+                        timeout_seconds=30.0,
+                    )
+                self.assertEqual(result_code, 1)
+                result = json.loads((output_dir / "run-result.json").read_text(encoding="utf-8"))
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(result["cleanup"]["status"], "blocked")
+                if isinstance(raised, KeyboardInterrupt):
+                    self.assertTrue(result["interrupted"])
+                else:
+                    self.assertIn("could not start", result["execution_error"])
 
     def test_dry_run_does_not_contact_docker(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -185,6 +430,10 @@ class ComsolDispersionBenchmarkTests(unittest.TestCase):
                     "qualification": "NOT VERIFIED",
                     "reasons": ["missing scientific evidence bundle"],
                 },
+            ), patch.object(
+                benchmark,
+                "_write_scientific_evidence",
+                return_value=None,
             ):
                 result_code = benchmark._execute(
                     context,

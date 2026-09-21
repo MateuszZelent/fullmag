@@ -11487,6 +11487,30 @@ fn fem_eigen_allows_k0_kittel_synthetic_demag_factor_floquet_path() {
         }
         other => panic!("expected FEM eigen plan, got {other:?}"),
     }
+
+    let mut mixed = ir;
+    mixed.problem_meta.runtime_metadata.insert(
+        "dispersion_validation".to_string(),
+        serde_json::json!({
+            "kind": "thin_film_de_bv_low_k",
+            "analytic_model": "kalinikos_slab_n0",
+            "film_thickness_m": 10.0e-9,
+            "equilibrium_magnetization": [1.0, 0.0, 0.0],
+            "film_normal": [0.0, 0.0, 1.0],
+            "max_k_rad_per_m": 1.0e7,
+            "max_relative_error": 0.10,
+            "frequency_window_hz": {"min": 0.0, "max": 15.0e9},
+            "scenarios": [
+                {"geometry": "backward_volume", "branch_id": "branch_0", "sample_indices": [0, 1]},
+                {"geometry": "damon_eshbach", "branch_id": "branch_0", "sample_indices": [0, 1]}
+            ]
+        }),
+    );
+    let err = plan(&mixed)
+        .expect_err("synthetic K0 demag and dispersion validation must not share one plan");
+    assert!(err.reasons.iter().any(|reason| {
+        reason.contains("dispersion_validation cannot be combined")
+    }));
 }
 
 fn k0_periodic_airbox_fem_eigen_ir() -> ProblemIR {

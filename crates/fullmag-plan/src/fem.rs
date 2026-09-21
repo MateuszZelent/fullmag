@@ -5147,6 +5147,14 @@ pub(crate) fn plan_fem_eigen(
     {
         errors.extend(bias_field_sweep_kittel_mapping_errors(sweep, validation));
     }
+    if dispersion_validation.is_some()
+        && allows_k0_kittel_synthetic_demag_factor(&k0_kittel_validation, &k_sampling)
+    {
+        errors.push(
+            "eigenmodes.dispersion_validation cannot be combined with the synthetic K0 demag-factor solver; dispersion validation requires a numeric FEM solve and postsolve analytic comparison"
+                .to_string(),
+        );
+    }
     let floquet_airbox_dynamic_demag_cpu_path = floquet_airbox_dynamic_demag_cpu_plan_supported(
         problem,
         operator,

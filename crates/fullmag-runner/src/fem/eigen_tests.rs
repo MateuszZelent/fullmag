@@ -1387,7 +1387,7 @@ fn accepted_relax_stage_handoff_binds_summary_and_mode_provenance() {
         provenance: ExecutionProvenance::default(),
     };
 
-    bind_stage_continuation_artifacts(&mut run, &handoff)
+    bind_stage_continuation_artifacts(&mut run, &plan, &handoff)
         .expect("accepted handoff should bind artifacts");
     let summary: serde_json::Value =
         serde_json::from_slice(&run.auxiliary_artifacts[0].bytes).unwrap();
@@ -1412,10 +1412,18 @@ fn accepted_relax_stage_handoff_binds_summary_and_mode_provenance() {
     );
     assert_eq!(
         mode["source_mesh_topology_sha256"],
+        plan.mesh.mixed_topology_fingerprint_v3().unwrap()
+    );
+    assert_eq!(
+        mode["relax_to_eigen_source_mesh_topology_sha256"],
         handoff.source_mesh_topology_sha256
     );
     assert_eq!(
         summary["solver_diagnostics"]["source_mesh_topology_sha256"],
+        plan.mesh.mixed_topology_fingerprint_v3().unwrap()
+    );
+    assert_eq!(
+        summary["solver_diagnostics"]["relax_to_eigen_source_mesh_topology_sha256"],
         handoff.source_mesh_topology_sha256
     );
     assert_eq!(
@@ -1424,6 +1432,10 @@ fn accepted_relax_stage_handoff_binds_summary_and_mode_provenance() {
     );
     assert_eq!(
         summary["modes"][0]["source_mesh_topology_sha256"],
+        plan.mesh.mixed_topology_fingerprint_v3().unwrap()
+    );
+    assert_eq!(
+        summary["modes"][0]["relax_to_eigen_source_mesh_topology_sha256"],
         handoff.source_mesh_topology_sha256
     );
     assert_eq!(
@@ -1432,6 +1444,10 @@ fn accepted_relax_stage_handoff_binds_summary_and_mode_provenance() {
     );
     assert_eq!(
         solver["source_mesh_topology_sha256"],
+        plan.mesh.mixed_topology_fingerprint_v3().unwrap()
+    );
+    assert_eq!(
+        solver["relax_to_eigen_source_mesh_topology_sha256"],
         handoff.source_mesh_topology_sha256
     );
     assert_eq!(
@@ -1440,6 +1456,10 @@ fn accepted_relax_stage_handoff_binds_summary_and_mode_provenance() {
     );
     assert_eq!(
         spectrum_v3["samples"][0]["modes"][0]["source_mesh_topology_sha256"],
+        plan.mesh.mixed_topology_fingerprint_v3().unwrap()
+    );
+    assert_eq!(
+        spectrum_v3["samples"][0]["modes"][0]["relax_to_eigen_source_mesh_topology_sha256"],
         handoff.source_mesh_topology_sha256
     );
     assert_eq!(
@@ -1468,7 +1488,8 @@ fn accepted_relax_handoff_round_trips_through_summary_provenance() {
     )
     .expect("accepted linearization should produce a handoff");
     let diagnostics = serde_json::json!({
-        "source_mesh_topology_sha256": expected.source_mesh_topology_sha256(),
+        "source_mesh_topology_sha256": plan.mesh.mixed_topology_fingerprint_v3().unwrap(),
+        "relax_to_eigen_source_mesh_topology_sha256": expected.source_mesh_topology_sha256(),
         "relax_to_eigen_handoff_sha256": expected.content_sha256(),
         "equilibrium_artifact_sha256": expected.equilibrium_artifact_sha256,
         "linearization_state_sha256": expected.linearization_state_sha256,
@@ -4314,7 +4335,7 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
         "equilibrium_artifact_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "linearization_state_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         "relax_to_eigen_handoff_sha256": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-        "source_mesh_topology_sha256": plan.mesh.topology_fingerprint_v6(),
+        "source_mesh_topology_sha256": plan.mesh.mixed_topology_fingerprint_v3().unwrap(),
         "periodic_mesh_certificate_sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     });
     let mut legacy_mode = serde_json::json!({
@@ -4397,7 +4418,7 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
     );
     assert_eq!(
         spectrum_v2["candidate_identity"]["topology_fingerprint"],
-        plan.mesh.topology_fingerprint_v6()
+        plan.mesh.mixed_topology_fingerprint_v3().unwrap()
     );
     let spectrum_v3 = artifacts
         .iter()
@@ -4461,7 +4482,7 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
         nested["source_mesh_identity"],
         serde_json::json!({
             "mesh_id": plan.mesh_name,
-            "topology_fingerprint": plan.mesh.topology_fingerprint_v6(),
+            "topology_fingerprint": plan.mesh.mixed_topology_fingerprint_v3().unwrap(),
             "indexing": "full_domain_node_order",
             "node_count": plan.mesh.nodes.len(),
         })
@@ -5498,9 +5519,14 @@ fn native_floquet_sparse_diagnostics_keep_schur_and_nonzero_k_identity() {
         "demag_kind": "floquet_airbox", "accepted_mode_count": 8,
     });
     super::eigen_native_result::merge_poisson_airbox_modal_result_diagnostics(
-        &mut diagnostics, &result.to_string(),
-    ).unwrap();
-    assert_eq!(diagnostics["resolved_solver_family"], "floquet_poisson_airbox_schur");
+        &mut diagnostics,
+        &result.to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        diagnostics["resolved_solver_family"],
+        "floquet_poisson_airbox_schur"
+    );
     assert_eq!(diagnostics["algebraic_form"], "schur_reduced_descriptor");
     assert_eq!(diagnostics["demag_kind"], "floquet_airbox");
     assert_eq!(diagnostics["accepted_mode_count"], 8);
@@ -5712,19 +5738,23 @@ fn native_shared_domain_modes_require_phi_and_block_residuals() {
         "solver_adapter": "floquet_airbox_cpu_schur_slepc", "modes": [mode],
     });
     let modes = native_modal_modes_from_result_json(
-        &plan, &full_result.to_string(), None, Some(&phase_context),
-    ).expect("native sparse Floquet adapter must parse the physical shared-domain q/phi payload");
+        &plan,
+        &full_result.to_string(),
+        None,
+        Some(&phase_context),
+    )
+    .expect("native sparse Floquet adapter must parse the physical shared-domain q/phi payload");
     assert_eq!(modes[0].vector, phased.vector);
     assert_eq!(modes[0].phi_vector, phased.phi_vector);
     let residuals = super::eigen_native_artifacts::native_modal_block_residuals(
-        &modes[0], Some("floquet_airbox_cpu_schur_slepc"));
+        &modes[0],
+        Some("floquet_airbox_cpu_schur_slepc"),
+    );
     assert_eq!(residuals["scope"], "reduced_original_blocks_only");
     assert!(residuals["eps_full"].is_null());
     assert_eq!(residuals["certified"], false);
     assert_eq!(residuals["full_descriptor_certified"], false);
     assert_eq!(residuals["reduced_pencil_certified"], true);
-
-
 }
 
 #[test]
@@ -5751,6 +5781,47 @@ fn shared_domain_modal_scope_allows_normalized_texture_inside_the_unit_cell() {
     equilibrium[1] = [0.0, 1.0, 0.0];
     validate_shared_domain_modal_scope(&plan, &topology, &equilibrium, &observables)
         .expect("normalized texture inside one unit cell must remain in production scope");
+}
+
+#[test]
+fn shared_domain_full2x2_guard_rejects_tangent_frame_reference_axis_jump() {
+    let mut plan = bounded_k0_execution_plan();
+    add_x_floquet_pair_to_plan(&mut plan);
+    let topology = MeshTopology::from_ir(&plan.mesh).expect("periodic FEM mesh is valid");
+    let (pair_id, node_a, node_b) = topology
+        .periodic_node_pairs
+        .first()
+        .expect("fixture must contain a Floquet pair")
+        .clone();
+    assert!(topology.magnetic_node_volumes[node_a as usize] > 0.0);
+    assert!(topology.magnetic_node_volumes[node_b as usize] > 0.0);
+
+    // Keep the equilibrium seam below the 1e-8 m0 tolerance while placing the
+    // two otherwise nearly equal vectors on opposite sides of the
+    // tangent_bases() |m_z|=0.9 reference-axis branch.  A scalar phase cannot
+    // transport the resulting frames, so the shared-domain payload must fail
+    // closed until the native 2x2 transport is implemented.
+    let z_a = 0.9 - 1.0e-10;
+    let z_b = 0.9 + 1.0e-10;
+    let mut equilibrium = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+    equilibrium[node_a as usize] = [(1.0 - z_a * z_a).sqrt(), 0.0, z_a];
+    equilibrium[node_b as usize] = [(1.0 - z_b * z_b).sqrt(), 0.0, z_b];
+    let seam = (equilibrium[node_a as usize][0] - equilibrium[node_b as usize][0])
+        .hypot(equilibrium[node_a as usize][2] - equilibrium[node_b as usize][2]);
+    assert!(
+        seam < 1.0e-8,
+        "fixture seam must pass the m0 periodic tolerance"
+    );
+
+    let error = validate_shared_domain_tangent_frame_transport(&plan, &topology, &equilibrium)
+        .expect_err(
+            "non-identity tangent frames must be rejected before native shared-domain assembly",
+        );
+    assert!(error
+        .message
+        .contains("requires full phase*(T_dst^T T_src) support"));
+    let pair_message = format!("pair_id='{pair_id}'");
+    assert!(error.message.contains(pair_message.as_str()));
 }
 
 #[test]
@@ -7899,4 +7970,41 @@ fn sparse_shared_domain_mass_preserves_dense_reference_and_full_node_weights() {
     for (a, b) in weights.iter().zip(&sparse.node_diagonal_weights) {
         assert!((a - b).abs() <= a.abs() * 1e-13);
     }
+}
+
+#[test]
+fn eigen_path_forwards_stop_before_single_k_execution() {
+    let mut plan = minimal_native_modal_plan();
+    plan.k_sampling = Some(KSamplingIR::Path {
+        points: vec![
+            fullmag_ir::KPointIR {
+                label: Some("Gamma".into()),
+                k_vector: [0.0; 3],
+            },
+            fullmag_ir::KPointIR {
+                label: Some("X".into()),
+                k_vector: [1.0, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![1],
+        closed: false,
+    });
+    let mut phases = Vec::new();
+    let mut callback = |event: FemEigenProgress| {
+        phases.push(event.phase);
+        StepAction::Stop
+    };
+    let error = crate::dispatch::execute_fem_eigen_with_progress(
+        PlannedFemEigenExecution::legacy(FemEigenExecutionLane::Cpu),
+        &plan,
+        &[],
+        &mut callback,
+    )
+    .expect_err("path must honour Stop before entering the native solver");
+    assert!(
+        error.message.contains("interrupted by runtime control"),
+        "{}",
+        error.message
+    );
+    assert_eq!(phases, vec!["preparing_k_path_sample"]);
 }

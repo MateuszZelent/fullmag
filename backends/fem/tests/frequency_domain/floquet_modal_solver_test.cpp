@@ -295,8 +295,16 @@ double complex_norm_for_test(const std::vector<std::complex<double>> &vector)
 void executes_native_sparse_matshell_above_dense_bound()
 {
     constexpr std::size_t q_dimension = 514u;
-    constexpr double expected_frequency_hz = 1000.0;
-    constexpr double target_frequency_hz = 1100.0;
+    // Keep the synthetic fixture above the shared numerical-zero policy
+    // (1e5 rad/s, approximately 15.9 kHz).  The production dispersion
+    // window is in the GHz range; using 1 kHz here made a valid positive mode
+    // look like a numerical zero and caused the contract to reject it.
+    constexpr double expected_frequency_hz = 1.0e6;
+    // Keep the shift off the exact synthetic eigenvalue.  STSINVERT factors
+    // (A - sigma B), which is singular when sigma equals the fixture's mode;
+    // 100 Hz remains closer to row 0 than the 400 Hz row spacing and therefore
+    // keeps mode selection deterministic while exercising the shifted solve.
+    constexpr double target_frequency_hz = 1.0001e6;
     const double expected_omega = fd::omega_rad_s_from_frequency_hz(expected_frequency_hz);
     const std::complex<double> q_phi_coupling(0.25, 0.0);
     const std::complex<double> phi_q_coupling(0.25, 0.0);
@@ -374,10 +382,12 @@ void executes_native_sparse_matshell_above_dense_bound()
     check(result.ksp_type != nullptr &&
               std::strcmp(result.ksp_type, "gmres") == 0 &&
               result.pc_type != nullptr &&
-              std::strcmp(result.pc_type, "jacobi") == 0,
-          "native Floquet result exposes the shifted GMRES policy");
+              std::strcmp(result.pc_type, "lu") == 0 &&
+              result.factorization_package != nullptr &&
+              std::strcmp(result.factorization_package, "petsc_default_lu") == 0,
+          "native Floquet result exposes the shifted GMRES/LU policy");
 #if FULLMAG_FEM_WITH_SLEPC
-    check(result.ok, "native Floquet MatShell regression solves with SLEPc");
+    check(result.ok, result.unsupported_reason);
     check(result.accepted_mode_count == 1,
           "native Floquet MatShell regression accepts one requested mode");
     check(result.solver_adapter != nullptr &&

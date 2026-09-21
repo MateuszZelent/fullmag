@@ -1,3 +1,4 @@
+use super::eigen_constants::GAMMA_K_TOLERANCE_RAD_PER_M;
 use super::eigen_reduction::is_gamma_k_sampling;
 use crate::native_fem;
 use crate::types::RunError;
@@ -220,10 +221,7 @@ pub(super) fn native_cpu_modal_window_has_periodic_k0_runner_operator_path(
         plan.target,
         fullmag_ir::EigenTargetIR::FrequencyWindow { .. }
     ) && matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
-        && matches!(
-            plan.damping_policy,
-            EigenDampingPolicyIR::Ignore
-        )
+        && matches!(plan.damping_policy, EigenDampingPolicyIR::Ignore)
         && !plan.enable_demag
         && !plan.operator.include_demag
         && matches!(plan.spin_wave_bc.kind(), SpinWaveBoundaryKindIR::Periodic)
@@ -246,7 +244,7 @@ pub(super) fn k_sampling_is_single_k0(k_sampling: Option<&KSamplingIR>) -> bool 
     };
     k_vector
         .iter()
-        .all(|component| component.is_finite() && component.abs() <= 1.0e-12)
+        .all(|component| component.is_finite() && component.abs() <= GAMMA_K_TOLERANCE_RAD_PER_M)
 }
 
 pub(super) fn resolved_demag_realization(

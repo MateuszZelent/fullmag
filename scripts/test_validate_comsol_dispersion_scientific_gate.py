@@ -81,7 +81,7 @@ def _native_metadata(case, mesh_id, airbox_m, requested_modes):
         "types": ["tet4"] * len(tet4_connectivity),
         "offsets": list(range(0, 4 * len(tet4_connectivity) + 1, 4)),
         "nodes": [node for cell in tet4_connectivity for node in cell],
-        "global_ordinals": list(range(len(tet4_connectivity))), "mesh_parts": ["magnetic_object"] * len(tet4_connectivity),
+        "global_ordinals": list(range(len(tet4_connectivity))), "mesh_parts": ["magnetic"] * len(tet4_connectivity),
     }
     demag = case != "c0"
     plan = {
@@ -114,6 +114,11 @@ def _native_metadata(case, mesh_id, airbox_m, requested_modes):
         "enable_demag": demag, "enable_exchange": True,
         "equilibrium_magnetization": [[1.0, 0.0, 0.0] for _ in nodes],
         "damping_policy": "ignore", "count": requested_modes,
+        "solver_policy": {
+            "residual_tolerance": guide["eigensolve"]["eigen_solver"]["relative_tolerance"],
+            "max_outer_iterations": guide["eigensolve"]["eigen_solver"]["max_outer_iterations"],
+            "max_linear_iterations": guide["eigensolve"]["eigen_solver"]["max_linear_iterations"],
+        },
         "spin_wave_bc": {"kind": "floquet" if demag else "periodic", "pair_ids": ["x_faces", "y_faces"]},
         "demag_realization": "poisson_dirichlet" if demag else None,
         "air_box_config": {"factor": 1.0 + 2.0 * airbox_m / 1e-8,
@@ -130,8 +135,8 @@ def _write_mode_fields(root, samples):
     """Synthetic native-layout Bloch fields, not a FEM eigenmode calculation."""
     metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
     nodes = metadata["execution_plan"]["backend_plan"]["mesh"]["nodes"]
-    from comsol_mesh_identity import mesh_topology_fingerprint_v2
-    mesh_signature = mesh_topology_fingerprint_v2(metadata["execution_plan"]["backend_plan"]["mesh"])
+    from comsol_mesh_identity import mesh_topology_fingerprint_v3
+    mesh_signature = mesh_topology_fingerprint_v3(metadata["execution_plan"]["backend_plan"]["mesh"])
     for sample in samples:
         index = sample["sample_index"]
         if index not in (0, 10, 20, 40, 50, 60):
@@ -194,7 +199,12 @@ def _attach_ks_equilibrium(root):
     _write_json(manifest_path, manifest)
     mode_path = root / "eigen/modes/sample_0000/mode_0000.json"
     mode = json.loads(mode_path.read_text())
-    mode.update(equilibrium_artifact_sha256=digest, linearization_state_sha256=state_digest, source_mesh_topology_sha256=signature)
+    from comsol_mesh_identity import mesh_topology_fingerprint_v3
+    mode.update(
+        equilibrium_artifact_sha256=digest,
+        linearization_state_sha256=state_digest,
+        source_mesh_topology_sha256=mesh_topology_fingerprint_v3(plan["mesh"]),
+    )
     _write_json(mode_path, mode)
 
 
@@ -365,8 +375,16 @@ def _make_case(root: Path, case: str = "c1") -> Path:
         elif index == 0:
             frequencies = [parameters["controls_finite_dirichlet_box"]["with_demag_gamma_hz"] + band * 1.0e8 for band in range(gate.EXPECTED_TARGET_BANDS)]
         else:
+            # The path includes the oblique X→M and M→Γ segments.  Build the
+            # fixture from the same arbitrary-angle n=0 oracle that the gate
+            # recomputes from each exported k-vector; using kx/BV here would
+            # make the fixture fail for the right physical reason.
+            sin_squared_phi = gate._sin_squared_phi_from_k_vector(k)
+            analytic_frequency = gate._kalinikos_frequency_hz_general_phi(
+                math.sqrt(k[0] * k[0] + k[1] * k[1]), sin_squared_phi, parameters
+            )
             frequencies = [
-                (gate._kalinikos_frequency_hz(abs(k[0]), "backward_volume", parameters) or 10.0e9) + band * 1.0e8
+                (analytic_frequency or 10.0e9) + band * 1.0e8
                 for band in range(gate.EXPECTED_TARGET_BANDS)
             ]
         modes = [
@@ -399,10 +417,37 @@ def _make_case(root: Path, case: str = "c1") -> Path:
     dispersion = case_dir / "eigen/dispersion.csv"
     dispersion.parent.mkdir(parents=True, exist_ok=True)
     with dispersion.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=["sample_index", "kx_rad_per_m", "ky_rad_per_m", "kz_rad_per_m", "frequency_hz", "raw_mode_index", "branch_id"])
+        writer = csv.DictWriter(
+            stream,
+            fieldnames=[
+                "sample_index", "kx_rad_per_m", "ky_rad_per_m", "kz_rad_per_m",
+                "frequency_hz", "raw_mode_index", "branch_id",
+                "analytic_frequency_hz", "relative_error", "validation_geometry",
+            ],
+        )
         writer.writeheader()
         for sample in samples:
             for mode in sample["modes"]:
+                vector = tuple(float(value) for value in sample["k_vector"])
+                sin_squared_phi = gate._sin_squared_phi_from_k_vector(vector)
+                analytic_frequency = (
+                    gate._kalinikos_frequency_hz_general_phi(
+                        math.sqrt(vector[0] * vector[0] + vector[1] * vector[1]),
+                        sin_squared_phi,
+                        parameters,
+                    )
+                    if case == "c1" and sin_squared_phi is not None
+                    else None
+                )
+                geometry = (
+                    "backward_volume"
+                    if sin_squared_phi is not None and sin_squared_phi <= 1.0e-12
+                    else "damon_eshbach"
+                    if sin_squared_phi is not None and abs(sin_squared_phi - 1.0) <= 1.0e-12
+                    else "oblique"
+                    if case == "c1"
+                    else ""
+                )
                 writer.writerow({
                     "sample_index": sample["sample_index"],
                     "kx_rad_per_m": sample["k_vector"][0],
@@ -411,6 +456,9 @@ def _make_case(root: Path, case: str = "c1") -> Path:
                     "frequency_hz": mode["frequency_real_hz"],
                     "raw_mode_index": mode["raw_mode_index"],
                     "branch_id": mode["raw_mode_index"],
+                    "analytic_frequency_hz": analytic_frequency if analytic_frequency is not None else "",
+                    "relative_error": gate._relative_error(mode["frequency_real_hz"], analytic_frequency) if analytic_frequency is not None else "",
+                    "validation_geometry": geometry,
                 })
     _write_json(case_dir / "frequency_domain/manifest.v1.json", {
         "schema_version": "frequency_domain_manifest.v1",
@@ -450,7 +498,7 @@ def _make_case(root: Path, case: str = "c1") -> Path:
             _attach_ks_equilibrium(case_dir / f"validation/ks/{direction}")
         ks_bv = _bundle_descriptor(case_dir, "validation/ks/bv")
         ks_de = _bundle_descriptor(case_dir, "validation/ks/de")
-    for name, mesh_id, airbox, scale, modes in (("mesh_coarse", "mesh-L1", 2.0e-6, 1.0, 24), ("mesh_medium", "mesh-L2", 2.0e-6, 1.001, 24), ("mesh_fine", "mesh-L3", 2.0e-6, 1.00125, 24), ("airbox_coarse", "mesh-L1", 2.0e-6, 1.0, 24), ("airbox_medium", "mesh-L1", 4.0e-6, 1.001, 24), ("airbox_fine", "mesh-L1", 8.0e-6, 1.00125, 24), ("modes_24", "mesh-L1", 2.0e-6, 1.0, 24), ("modes_48", "mesh-L1", 2.0e-6, 1.001, 48)):
+    for name, mesh_id, airbox, scale, modes in (("mesh_coarse", "mesh-L1", 2.0e-6, 1.0, 24), ("mesh_medium", "mesh-L2", 2.0e-6, 1.00005, 24), ("mesh_fine", "mesh-L3", 2.0e-6, 1.0001, 24), ("airbox_coarse", "mesh-L1", 2.0e-6, 1.0, 24), ("airbox_medium", "mesh-L1", 4.0e-6, 1.00005, 24), ("airbox_fine", "mesh-L1", 8.0e-6, 1.0001, 24), ("modes_24", "mesh-L1", 2.0e-6, 1.0, 24), ("modes_48", "mesh-L1", 2.0e-6, 1.00005, 48)):
         scaled_samples, scaled_branches = _scaled_payload(samples, branches, scale)
         convergence_runs[name] = _write_bundle(case_dir, f"validation/convergence/{name}", scaled_samples, scaled_branches, mesh_id=mesh_id, airbox_m=airbox, requested_modes=modes)
     evidence = _evidence(case_dir, case, base_bindings, ks_bv=ks_bv, ks_de=ks_de, convergence_runs=convergence_runs)
@@ -460,6 +508,117 @@ def _make_case(root: Path, case: str = "c1") -> Path:
 
 
 class ScientificGateTests(unittest.TestCase):
+    def test_metadata_requires_explicit_eigen_solver_iteration_policy(self):
+        parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+        metadata = _native_metadata("c1", "mesh-L1", 2.0e-6, 24)
+        metadata["problem_meta"]["runtime_metadata"]["comsol_nonzero_k_dispersion"]["eigensolve"]["eigen_solver"]["max_outer_iterations"] = 0
+        reasons = []
+        valid = gate._validate_benchmark_metadata(
+            metadata,
+            "c1",
+            parameters,
+            "primary",
+            reasons,
+            require_uniform_slab=True,
+        )
+        self.assertFalse(valid)
+        self.assertTrue(any("max_outer_iterations" in reason for reason in reasons), reasons)
+
+    def test_resolved_backend_policy_cannot_fall_back_to_petcs_defaults(self):
+        parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+        metadata = _native_metadata("c1", "mesh-L1", 2.0e-6, 24)
+        metadata["execution_plan"]["backend_plan"]["solver_policy"]["max_linear_iterations"] = 0
+        reasons = []
+        valid = gate._validate_benchmark_metadata(
+            metadata,
+            "c1",
+            parameters,
+            "primary",
+            reasons,
+            require_uniform_slab=True,
+        )
+        self.assertFalse(valid)
+        self.assertTrue(any("backend_plan.solver_policy.max_linear_iterations" in reason for reason in reasons), reasons)
+
+    def test_canonical_path_requires_an_explicit_pure_de_auxiliary_control(self):
+        parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+        control = parameters["analytic_controls"]["kalinikos_slab_n0"]
+        self.assertEqual(control["damon_eshbach_k_vector_rad_per_m"], [0.0, 1.0e7, 0.0])
+        rows = _canonical_path()
+        sin_squared = []
+        for row in rows:
+            kx, ky = float(row["kx_rad_per_m"]), float(row["ky_rad_per_m"])
+            norm_squared = kx * kx + ky * ky
+            sin_squared.append(0.0 if norm_squared == 0.0 else ky * ky / norm_squared)
+        self.assertEqual(len(rows), gate.EXPECTED_PATH_SAMPLE_COUNT)
+        self.assertEqual(max(sin_squared), 0.5)
+        self.assertFalse(any(abs(value - 1.0) < 1.0e-12 for value in sin_squared))
+
+    def test_selected_fundamental_branch_must_be_lowest_positive_mode(self):
+        modes = {(sample, raw): 1.0e9 + raw * 1.0e8 for sample in range(61) for raw in range(8)}
+        branches = []
+        for branch_id in range(8):
+            raw = 1 if branch_id == 0 else 0 if branch_id == 1 else branch_id
+            branches.append({
+                "branch_id": branch_id,
+                "points": [
+                    {
+                        "sample_index": sample,
+                        "raw_mode_index": raw,
+                        "frequency_real_hz": modes[(sample, raw)],
+                        "frequency_imag_hz": 0.0,
+                    }
+                    for sample in range(61)
+                ],
+            })
+        reasons = []
+        selected, check = gate._validate_branches({"branches": branches}, "c1", modes, reasons)
+        self.assertEqual(len(selected), 8)
+        self.assertEqual(check["status"], "fail")
+        self.assertTrue(any("lowest positive branch" in reason for reason in reasons), reasons)
+
+    def test_airbox_boundary_sweep_is_not_compared_to_primary_same_physics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            evidence_path = case_dir / gate.EVIDENCE_RELATIVE_PATH
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            # Make the expected finite-boundary trend visible while keeping
+            # adjacent increments decreasing: 2->4 um = 0.06%, 4->8 um =
+            # 0.02%.  The 8 um result is 0.08% from primary, which is a
+            # legitimate boundary shift but would fail the old 2e-4 check.
+            for root_name, scale in (("medium", 1.0006), ("fine", 1.0008)):
+                descriptor = evidence["convergence"]["airbox"]["runs"][root_name]
+                root = case_dir / descriptor["root"]
+                spectrum_path = root / "eigen/spectrum.v2.json"
+                branches_path = root / "eigen/branches.v2.json"
+                spectrum = json.loads(spectrum_path.read_text(encoding="utf-8"))
+                branches = json.loads(branches_path.read_text(encoding="utf-8"))
+                for sample in spectrum["samples"]:
+                    for mode in sample["modes"]:
+                        mode["frequency_real_hz"] *= scale
+                        _native_mode_diagnostics(mode)
+                for branch in branches["branches"]:
+                    for point in branch["points"]:
+                        point["frequency_real_hz"] *= scale
+                _write_json(spectrum_path, spectrum)
+                _write_json(branches_path, branches)
+                evidence["convergence"]["airbox"]["runs"][root_name] = _bundle_descriptor(
+                    case_dir, descriptor["root"]
+                )
+            _write_json(evidence_path, evidence)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+        self.assertEqual(report["status"], "qualified", report["reasons"][:12])
+        airbox_check = report["checks"]["airbox_convergence"]
+        self.assertTrue(airbox_check["adjacent_comparisons"])
+        self.assertTrue(all(
+            item["comparison_reference"] == "adjacent_airbox_boundary_sweep"
+            for item in airbox_check["adjacent_comparisons"]
+        ))
+        self.assertTrue(all(
+            item["tolerance"] == gate.AIRBOX_CONVERGENCE_RELATIVE_TOLERANCE
+            for item in airbox_check["adjacent_comparisons"]
+        ))
+
     def test_nonzero_k_oracle_does_not_apply_scalar_finite_airbox_correction(self):
         parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
         narrow = copy.deepcopy(parameters)
@@ -695,7 +854,7 @@ class ScientificGateTests(unittest.TestCase):
             evidence = json.loads(path.read_text(encoding="utf-8"))
             samples = json.loads((case_dir / "eigen/spectrum.v2.json").read_text(encoding="utf-8"))["samples"]
             branches = json.loads((case_dir / "eigen/branches.v2.json").read_text(encoding="utf-8"))["branches"]
-            samples, branches = _scaled_payload(samples, branches, 1.004)
+            samples, branches = _scaled_payload(samples, branches, 1.00019)
             evidence["convergence"]["mesh"]["runs"]["fine"] = _write_bundle(
                 case_dir, "validation/convergence/mesh_fine", samples, branches,
                 mesh_id="mesh-L3", airbox_m=2e-6, requested_modes=24,

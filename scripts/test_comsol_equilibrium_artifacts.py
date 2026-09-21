@@ -40,9 +40,10 @@ def test_full_sample_loader_validates_acceptance_and_actual_state(tmp_path, defe
     from test_equilibrium_payload_validation import _fresh_artifact, _refresh_digest
     from verify_fem_frequency_domain_eigen_artifacts import serde_json_compact_bytes
     from test_comsol_mesh_identity import fixture as mesh_fixture
-    from comsol_mesh_identity import mesh_topology_fingerprint_v2
+    from comsol_mesh_identity import mesh_topology_fingerprint_v2, mesh_topology_fingerprint_v3
     mesh = mesh_fixture()
     signature = mesh_topology_fingerprint_v2(mesh)
+    modal_signature = mesh_topology_fingerprint_v3(mesh)
     eq = _fresh_artifact(tmp_path / "reference")
     eq["external_field_a_per_m"] = [79577.47154594767, 0., 0.]
     if defect == "field":
@@ -66,7 +67,7 @@ def test_full_sample_loader_validates_acceptance_and_actual_state(tmp_path, defe
                  source_equilibrium_id=eq["equilibrium_id"],source_equilibrium_artifact=digest,m0=eq["m0"])
     state_digest="sha256:"+hashlib.sha256(serde_json_compact_bytes(state)).hexdigest()
     state.update(content_sha256=state_digest,linearization_state_id="LinearizationState.v6:"+state_digest.removeprefix("sha256:"))
-    mode={"equilibrium_artifact_sha256":digest,"linearization_state_sha256":state_digest,"source_mesh_topology_sha256":signature}
+    mode={"equilibrium_artifact_sha256":digest,"linearization_state_sha256":state_digest,"source_mesh_topology_sha256":modal_signature}
     declared=manifest(7)
     for relative, value in zip(sample_state_paths(declared,7), (eq,state)):
         path=tmp_path/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps(value))

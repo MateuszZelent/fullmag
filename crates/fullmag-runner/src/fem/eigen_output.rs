@@ -423,7 +423,14 @@ fn modal_publication_contract(
         });
     }
 
-    let topology_fingerprint = plan.mesh.topology_fingerprint_v6();
+    let topology_fingerprint = plan
+        .mesh
+        .mixed_topology_fingerprint_v3()
+        .map_err(|error| RunError {
+            message: format!(
+                "production modal publication requires a finite v3 source mesh identity: {error}"
+            ),
+        })?;
     if production_k0
         && source_topology
             .as_deref()
@@ -882,6 +889,12 @@ pub(super) fn write_eigen_v2_bundle(
     sample_index: usize,
 ) -> Result<(), RunError> {
     let publication_contract = modal_publication_contract(plan, summary_payload)?;
+    let modal_source_topology_fingerprint = plan
+        .mesh
+        .mixed_topology_fingerprint_v3()
+        .map_err(|error| RunError {
+            message: format!("modal field source mesh identity is invalid: {error}"),
+        })?;
     let modes = summary_payload
         .get("modes")
         .and_then(|value| value.as_array())
@@ -1226,7 +1239,7 @@ pub(super) fn write_eigen_v2_bundle(
             "damping_policy": legacy_mode["damping_policy"],
             "source_mesh_identity": {
                 "mesh_id": plan.mesh_name,
-                "topology_fingerprint": plan.mesh.topology_fingerprint_v6(),
+                "topology_fingerprint": modal_source_topology_fingerprint,
                 "indexing": "full_domain_node_order",
                 "node_count": source_node_count,
             },
@@ -1276,6 +1289,7 @@ pub(super) fn write_eigen_v2_bundle(
                 "linearization_state_sha256",
                 "periodic_mesh_certificate_sha256",
                 "relax_to_eigen_handoff_sha256",
+                "relax_to_eigen_source_mesh_topology_sha256",
                 "source_mesh_topology_sha256",
             ] {
                 if legacy_mode.get(key).is_some() {
@@ -1564,6 +1578,7 @@ pub(super) fn write_eigen_v2_bundle(
             "linearization_state_sha256",
             "periodic_mesh_certificate_sha256",
             "relax_to_eigen_handoff_sha256",
+            "relax_to_eigen_source_mesh_topology_sha256",
             "source_mesh_topology_sha256",
             "boundary_gauge",
             "spectral",

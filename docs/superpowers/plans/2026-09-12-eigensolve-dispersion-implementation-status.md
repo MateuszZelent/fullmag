@@ -1,5 +1,154 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Synchronizacja źródeł — 2026-09-21
+
+Worktree `C:\\git\\fullmag\\worktrees\\eigensolve-dispersion-plan-20260912`
+został zsynchronizowany z najnowszym `origin/master` przez merge commit
+`46603f506127cdde514f4408b294ba62553d8d7a`; drugim rodzicem jest
+`15af8b95e40a85d34403b8cc6f9b9c589bc7adc6`. Przywrócono lokalne poprawki
+audytu z zachowanego stasha bez konfliktów. Włączone są aktualizacje mastera
+dotyczące persystencji projektu, runtime verification, obserwowalności runnera
+i UI; zachowano jednocześnie kontrakty SLEPc/Floquet, fail-closed telemetrykę,
+stabilne P00, rozdzielenie solve od analityki oraz bramkę naukową dyspersji.
+
+Po synchronizacji przeszły: parsowanie 23 zmienionych skryptów Python,
+6 kontroli kontraktów Floquet/SLEPc oraz 15 testów orkiestratora benchmarku;
+pełna bateria walidatora naukowego dała 49/49. To są dowody źródłowe, nie
+dowód wykonania natywnego FEM. `cargo fmt --check` dla całego checkoutu nie
+jest zielony z powodu formatowania odziedziczonego z aktualizacji mastera;
+nie zmieniono go automatycznie, aby nie rozszerzać zakresu synchronizacji.
+
+Stan fizyczny pozostaje `NOT VERIFIED`: nie ma nowego managed runtime receipt
+dla tego HEAD, pełnej ścieżki C1/A1 (61 próbek, 8 gałęzi), zbieżności siatki/
+airboxu/liczby modów ani browser proof. Nie uruchamiano ciężkiego buildu przy
+ograniczonej przestrzeni runnera.
+
+## Audyt i korekta stanu — 2026-09-19
+
+Bieżące ustalenia: [audyt implementacji i frontendu](../../audits/2026-09-19-dispersion-implementation-audit.md).
+Dwa kontenery C1 z 2026-09-18 pozostały aktywne mimo limitów czasu klienta
+(3600/21600 s). Po potwierdzeniu pełnych ID i mountów zatrzymano wyłącznie
+te dwa procesy. Oddzielne pliki `audit-recovery-20260919.json` zachowują dowód
+interwencji; historyczne wyniki nie zostały przepisane.
+
+Heartbeat oraz przyrost `idle` nie dowodzą konwergencji, zakończenia punktu k
+ani wejścia w konkretny podetap solvera. Poprzednie komentarze sugerujące
+postęp na tej podstawie należy skorygować. Nie ma zatwierdzonych artefaktów
+C1 z tych przebiegów. C0 bez demagu nie potwierdza C1 Gamma z demagiem.
+
+Potwierdzono także utratę callbacku postępu i Stop/Pause przy przejściu przez
+orchestrator ścieżki k. Trwa naprawa propagacji callbacku i kontroli czasu
+życia kontenera oraz równoległy audyt fizyki, walidacji i frontendu.
+Ponowienie pełnych 61 punktów wymaga najpierw rozpoznania pojedynczego solve.
+Profil weryfikacyjny ewentualnego buildu: `fem-cpu-slepc-runtime-v1`, bez
+kompilacji testów jednostkowych. Źródła, build, runtime i fizyka mają oddzielne
+statusy; cały nonzero-k pozostaje `NOT VERIFIED` do uzyskania dowodów.
+
+
+## Najnowszy checkpoint solvera — 2026-09-18
+
+Managed job `f60da21a0f444e62bdd4ddee12577bd9` zbudował runtime i zaliczył
+kontrakt SLEPc 8/8. Po normalizacji operatora pierwszy kanoniczny C0 wykonał
+się poprawnie: powstał jeden punkt `k=0`, częstotliwość
+`2.800264212915114 GHz`, względny residual `3.01e-27`, a błąd względem
+Kittela wyniósł `1.36e-15`. C0 nie jest jeszcze kwalifikacją naukową, bo
+brakuje kampanii zbieżności siatki/liczby modów; jego status bramki to
+`NOT VERIFIED`. Wygenerowany wykres znajduje się w artefaktach runu jako
+`c0/eigen/plots/dispersion-c0.png`.
+
+W bieżącym worktree poprawiono solver w
+`backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp`: obie strony
+realnej rotacji są teraz skalowane wspólnym czynnikiem wyprowadzonym z normy
+operatora i targetu, a shift `MAT_SHIFT_NONZERO` pozostaje względny po tej
+normalizacji. W wyniku zapisuje się `operator_normalization_scale`; dla
+każdego podokna telemetria zapisuje też przyczynę odrzucenia, liczby
+kandydatów dodatnich/w-oknie, zakres częstotliwości i maksymalny residual
+kandydata. Nie zmienia to wartości własnych uogólnionego problemu.
+
+Próba C1 na tym runtime wygenerowała poprawną siatkę (615242 tetraedry,
+108749 węzłów), ale zatrzymała się przed modalnym solve na ochronie certyfikatu:
+`canonical_preimage_length_overflow` przy starym limicie 16 MiB. Limit został
+podniesiony do 256 MiB z zachowaniem skończonego fail-closed boundu w
+`backends/fem/src/frequency_domain/mesh_symmetry_certificate.cpp`. Nowy
+managed job `bd32ae0aa45e437580393aebba4d20a1`, profil
+`fem-cpu-slepc-modal-v1`, source digest
+`7fa23ebf9cdbf2e850201b2a4571c4c7909c19a304ce4587d63e70b635e5abce`, jest
+terminalnie `succeeded`; kontrakt ma 8/8 testów, CPU/double/SLEPc i
+`fallback_used=false`. C1 należy teraz ponowić na tym dokładnie attested
+runtime, sprawdzić pełne artefakty Floqueta/demagu i dopiero uruchomić A1; do
+czasu tych dowodów runtime non-zero-k, pełna fizyka dyspersji i bramka naukowa
+pozostają `NOT VERIFIED`.
+
+Ponowienie C1 na `bd32ae0aa45e437580393aebba4d20a1` uruchomiono z `--cases c1`
+i limitem 3600 s. Certyfikat siatki przeszedł (615322 tetraedrów, 108788
+węzłów), relaksacja zakończyła się po 3 krokach, a natywny proces modalny
+pracował do wygaśnięcia limitu. Run zakończył się `status=failed`,
+`timed_out=true`, bez `dispersion.csv`, widma, tabeli gałęzi i bez uruchomienia
+bramki naukowej. Jest to blokada wydajnościowa pełnego C1, nie dowód błędu
+fizycznego ani sukcesu runtime; diagnostyczny log zachowano w artefakcie
+`comsol-dispersion/00db21eae1644871b14c71db18f23f3d/c1/runtime.log`.
+
+Na żądanie operatora przeprowadzono ograniczone sprzątanie storage. Z katalogu
+terminalnie nieudanego joba `9da3622cca884500a49f1295081e4d6a` usunięto tylko
+podkatalog `execution` (0,276 GiB, bez aktywnego procesu, kontenera, mountu
+ani dowiązania). Artefakty, receipt, manifest, logi i dowód błędu pozostały w
+tym runie; aktywny job `bd32…` i jego dane nie były modyfikowane.
+
+## Bieżący stan weryfikacyjny — 2026-09-18
+
+Ten wpis jest aktualnym punktem odniesienia; dalsze sekcje dokumentu zachowują
+historię wcześniejszych checkoutów, commitów i jobów. Bieżący worktree to
+`C:\\git\\fullmag\\worktrees\\eigensolve-dispersion-plan-20260912`, branch
+`codex/eigensolve-dispersion-plan-20260912`, HEAD
+`a7723cf0b3dd179f32da5294dbda8dcd685b6e14`, z niezacommitowanymi zmianami
+źródłowymi kilku etapów pracy. Nie należy interpretować historycznych wpisów
+o czystym worktree ani dawnych jobach jako dowodu obecnego stanu.
+
+| Wymaganie | Źródło | Wykonanie | Walidacja fizyczna |
+|---|---|---|---|
+| Analityka po rzeczywistym solve | Guard wykonania odrzuca syntetyczny K0 przy `dispersion_validation`; KS jest postsolve | C0 z f60 ma rzeczywisty solve i Kittel: `2.800264212915114 GHz`, rel. błąd `1.36e-15` | C0 punktowo potwierdzony; pełna bramka `NOT VERIFIED` |
+| Stabilne P00 i ciągłość częstości | Rust/Python: Taylor + `expm1`; ciągłość częstotliwości w walidatorze | Kontrole Pythonowe przechodzą | Native FEM `NOT VERIFIED` |
+| Zakres C1 | Planner nie ma sztywnych limitów `3e6`/`5 GHz`; C1 ma 61 próbek i zakres do X | Certyfikat i relaksacja przeszły na `bd32…`, ale pełny modal solve przekroczył limit 3600 s i nie zapisał artefaktów | Artefakty C1 `NOT VERIFIED`; potrzebny dłuższy przebieg lub odrębny, jawnie diagnostyczny punktowy probe |
+| Bramka naukowa | Orchestrator wywołuje fail-closed gate; gate wymaga 61 próbek, 8 gałęzi, Kittel/KS i zbieżności | C0 ma poprawny artefakt, lecz tylko 1 próbkę; C1/A1 i zbieżność są otwarte | `NOT VERIFIED` |
+| Polityka solvera i telemetria | Jawny PETSc/SLEPc policy; dodatni amount shiftu faktoryzacji jest względny względem norm operatorów, a KSP zgłasza niepowodzenie | Managed job `f60da21a0f444e62bdd4ddee12577bd9` zakończył się `succeeded` na PETSc 3.24.6/SLEPc 3.24.3; build i kontrakt `slepc-modal` mają exit 0, a CTest raportuje 8/8 testów | Runtime modalny C1/A1 i fizyka pełnej dyspersji `NOT VERIFIED` |
+
+Wybrany zestaw lekkich kontroli źródłowych daje **128 passed, 54 subtests
+passed**. `rustfmt --check` dla zmienionych plików Rust i `git diff --check`
+przechodzą. Poprzedni poprawiony przebieg C0 (`0a7ebc1c59a8415b9072447ae99e9202`)
+doszedł do produkcyjnego solvera, lecz zakończył się zerowym pivotem PETSc i
+został zatrzymany po wzroście pamięci; nie powstał ważny punkt częstotliwości.
+Wprowadzono teraz względny dodatni shift tylko dla faktoryzacji LU, jawne
+`KSPSetErrorIfNotConverged` oraz telemetrię polityki shiftu. Job
+`9da3622cca884500a49f1295081e4d6a` zakończył kompilację błędem, ponieważ
+PETSc 3.24.6 nie definiuje `MAT_SHIFT_POSITIVE`; poprawiono to na
+`MAT_SHIFT_NONZERO` z jawnym dodatnim amountem względem norm operatora. Job
+`134a6139c0354eeab81132a0bc193fd9` również nie utworzył kontenera workera;
+zamknięto go jako `blocked`, zachowując dowód braku `coordinator.json` i logów.
+Managed job `f60da21a0f444e62bdd4ddee12577bd9` użył profilu
+`fem-cpu-slepc-modal-v1`, snapshotu `0737933f537f48e28568d97e5bb34197` i
+źródłowego digestu `4a8ea1cd8e32f8b9cdd13642695624fdfca4e7ff278a2c78eeca04cf7fe23077`.
+Receipt koordynatora jest terminalnie `succeeded`, obraz ma digest
+`sha256:e5f70bd632011f9a0d8163430dab81bc6f248e07e4af086dfdf77bcd087471d7`, a
+kontrakt zawiera osiem zaliczonych testów Floquet/modalnych. C0 ma już wynik
+solvera i wykres, ale nie zamyka C1/A1 ani zbieżności. Stare logi
+`CTest/Temporary` i poprzednie przebiegi nie są dowodem dla tego joba.
+
+Kontrola dokumentacji z 2026-09-17 usunęła sprzeczne deklaracje „nie
+zaimplementowano” z kontraktów `0600`, `0700`, `0710`, `0828` i `0831`.
+Dokumenty rozróżniają teraz source-visible CPU Floquet/airbox bridge od
+managed-runtime i physics qualification; capability error pozostaje wymagany
+dla bieżącego niezweryfikowanego snapshotu. Walidatory map źródłowych, walidator
+podziału produktów oraz 32 testy kontraktu dokumentacji przechodzą; poprawiono
+też dwie stare asercje fixture'ów runtime, a wybrany zestaw kontraktów daje
+**79 passed**. Nowego snapshotu nie wysyłano, ponieważ storage runnera ma
+około **0,74 GB** wolnego miejsca.
+
+W tej samej kontroli zamknięto M6 na granicy fizycznego bridge'a: niehermitowski
+Schur dynamicznego demagu z względnym residualem powyżej `1e-8` jest odrzucany
+przed przekazaniem do modalnego operatora. Niski oracle algebraiczny pozostaje
+dopuszczający fixture'y manufakturowane. Źródłowy test kontraktowy tej
+osłony przechodzi (`2 passed`); nie jest to jeszcze dowód managed runtime.
+
 
 ## Aktualizacja stanu źródeł i runtime — 2026-09-16
 
@@ -939,3 +1088,73 @@ do uruchomienia C0. Po jego zakończeniu pozostają: ponowny C0 po korekcie
 `RELAX_DT_S=5e-15`, następnie C1 i A1, niepuste artefakty solvera, bramka
 61 próbek/8 gałęzi, zgodność Kittel/KS oraz zbieżność siatki, airboxa i liczby
 modów.
+
+### Aktualizacja 2026-09-16 — rozdzielenie C0, C1-Γ i pełnej dyspersji
+
+Ten wpis zastępuje wcześniejsze statusy odnoszące się do starszych SHA i
+starszych jobów. Bieżący checkout to worktree
+`C:\git\fullmag\worktrees\eigensolve-dispersion-plan-20260912`, gałąź
+`codex/eigensolve-dispersion-plan-20260912`, HEAD
+`a7723cf0b3dd179f32da5294dbda8dcd685b6e14`. Worktree zawiera również
+niezależne, niezatwierdzone zmiany innych etapów; nie są one dowodem ani
+przedmiotem tego checkpointu.
+
+| Warstwa | Stan bieżący | Dowód i ograniczenie |
+|---|---|---|
+| Rozdzielenie analityki od solve | **ZAIMPLEMENTOWANE ŹRÓDŁOWO** | `eigen_path.rs` uruchamia natywny solve dla `dispersion_validation`; analityczna częstość jest dopisywana po solve. Jawny syntetyczny K0 jest odrzucony, gdy żądany jest benchmark dyspersji. |
+| P00 i ciągłość $k\to0$ | **ZAIMPLEMENTOWANE ŹRÓDŁOWO** | Python i Rust używają stabilnego rozwinięcia dla małego $|k|t$ oraz `expm1`; istnieją testy ciągłości referencji. |
+| Zakres C1 | **ZAIMPLEMENTOWANE ŹRÓDŁOWO** | Planner nie narzuca już `3e6` ani `5e9`; zakres benchmarku C1 może jawnie użyć `pi/(200e-9)` i `15e9`. |
+| Analityka po dowolnym kącie | **ZAIMPLEMENTOWANE ŹRÓDŁOWO** | CSV przechowuje `analytic_frequency_hz`, `relative_error` i `validation_geometry` dla BV, DE oraz odcinków ukośnych; bramka przelicza je z eksportowanego wektora `k`. |
+| Bramka naukowa | **ZAIMPLEMENTOWANE ŹRÓDŁOWO; NIEZWERYFIKOWANA RUNTIME** | Gate wymaga 61 próbek, 8 gałęzi, Kittel/KS, pól, residuali i zbieżności; porównanie fundamentalnej gałęzi C1 obejmuje wszystkie próbki. Fixture testowy został dostosowany do ścieżki kątowej. |
+| C0 bez demagu | **WYKONANE DIAGNOSTYCZNIE** | Natywny wynik `2.8002642129151187 GHz` zgadza się z kontrolą Kittela bez demagu do około `3e-15` względnie. To nie jest dowód operatora dynamicznego demagu. |
+| C1, Γ z demagiem | **WYKONANE DIAGNOSTYCZNIE; NIEZAKWALIFIKOWANE** | Preview z 391 węzłami, jedną warstwą po grubości i około `1 µm` airboxa dał `8.9065823815 GHz`, residual `1.05e-15`; analityka otwartego filmu daje `9.3098137114 GHz`. Różnica `−4.331%` jest obciążona skończonym airboxem i coarse siatką. |
+| C1, $k\ne0$ | **BLOKADA W STARYM BINARIUM** | Próba X zakończyła się jawnym `production_cpu_modal_nonzero_k_floquet_operator_missing`; trzeba zbudować świeży managed obraz z aktualnych źródeł. |
+| Kwalifikacja fizyczna / release | **NOT VERIFIED** | Nie ma jeszcze świeżego, pełnego C0/C1/A1 z aktualnym binarium, zbieżnością i pustą listą powodów bramki. |
+
+#### Interpretacja obecnego wykresu
+
+Wykres z preview miesza trzy różne modele. `2.800264 GHz` należy do C0 bez
+dynamicznego demagu. `9.309814 GHz` to otwarty-filmowy limit analityczny C1 w
+$\Gamma$. `8.906582 GHz` to natywny C1 z periodycznym, skończonym airboxem na
+siatce diagnostycznej. Zgodność C0 sprawdza jednostki, znak i skalę operatora
+bez demagu; nie sprawdza jeszcze jądra dynamicznej demagnetyzacji, wpływu
+airboxa, rozdzielczości po grubości ani operatora Floqueta dla $k\ne0$.
+Obecny obraz należy traktować jako diagnostyczny, a nie jako wykres
+„analityka kontra numeryka” dla jednego i tego samego problemu.
+
+Odwrócenie liczby `8.906582 GHz` przez skalarne równanie Kittela daje
+$N_z\approx0.906821$. W modelu kontrolnym
+$N_z=1-t/(t+2d)$ odpowiada to $d\approx48.7\,\mathrm{nm}$, a $d=50\,\mathrm{nm}$
+daje $8.916623\,\mathrm{GHz}$. Kanoniczne C1 ma $d=2\,\mu\mathrm{m}$,
+$N_z\approx0.997506$ i przewidywane $9.299250\,\mathrm{GHz}$ dla skończonego
+airboxa. Stary preview należy zatem traktować jako artefakt o nieustalonej
+geometrii normalnej lub zbyt grubej dyskretyzacji, mimo małego residualu.
+Pierwszy krok diagnostyki C1 to porównanie rzeczywistych `DomainFrameIR`
+`mesh_bounds` z deklarowanym paddingiem; dopiero potem rozdzielamy błąd
+airboxa od błędu liczby warstw i assemblacji demagu.
+
+#### Następne kroki
+
+1. Zbudować świeży managed runtime z bieżącego checkoutu i ponowić C0 jako
+   kontrolę regresji.
+2. Uruchomić C1 w $\Gamma$ na co najmniej trzech siatkach, trzech airboxach
+   i z kontrolą liczby warstw po grubości; dopiero ich granica może być
+   porównana z otwartym-filmowym KS.
+3. Uruchomić kilka punktów $k\ne0$ na aktualnym operatorze Floqueta i zapisać
+   pełne CSV z rozróżnieniem BV/DE/oblique.
+4. Dopiero po uzyskaniu niepustych artefaktów i przejściu gate oznaczyć B4–B6
+   jako zweryfikowane fizycznie.
+
+#### Kontynuacja po kontroli runnera — 2026-09-17
+
+Ponowne sprawdzenie nie uruchomiło nowego buildu: `runner-container-status` i
+`runner-doctor` nie uzyskały odpowiedzi od koordynatora Docker Desktop, a
+`C:\git\fullmag\storage` znajduje się na dysku z zerową ilością wolnego
+miejsca. Job `0524d64f5e07432387b09a356da5ba89` pozostaje `queued` i nie jest
+dowodem dla bieżącego snapshotu. Nie wykonano prune ani usuwania artefaktów.
+
+Pakiet lekkich kontroli kontraktowych dla adaptera SLEPc, bridge'a Floquet i
+orchestratora przeszedł **15 testów**. Pełny test fixture'a bramki naukowej
+nie mógł zapisać dużych danych C1/A1 i zakończył się błędem systemowym
+`[Errno 28] No space left on device`; nie jest to wynik fizyki ani regresja
+walidatora. T4–T7, natywny solve, punkty DE i wykres pozostają `NOT VERIFIED`.

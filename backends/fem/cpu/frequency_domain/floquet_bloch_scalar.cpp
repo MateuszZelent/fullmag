@@ -9,100 +9,6 @@
 
 namespace fullmag::fem::frequency_domain {
 
-namespace {
-
-class TangentSourceCoefficient final : public mfem::VectorCoefficient {
-public:
-    TangentSourceCoefficient(
-        mfem::FiniteElementSpace &space,
-        const TangentFrameNode *frames,
-        double saturation_magnetization,
-        const double *saturation_magnetization_field,
-        std::uint64_t saturation_magnetization_field_count,
-        const std::uint8_t *magnetic_element_mask,
-        std::uint64_t magnetic_element_mask_count)
-        : mfem::VectorCoefficient(3)
-        , space_(space)
-        , frames_(frames)
-        , saturation_magnetization_(saturation_magnetization)
-        , saturation_magnetization_field_(saturation_magnetization_field)
-        , saturation_magnetization_field_count_(saturation_magnetization_field_count)
-        , magnetic_element_mask_(magnetic_element_mask)
-        , magnetic_element_mask_count_(magnetic_element_mask_count)
-    {
-    }
-
-    void SetTangent(const mfem::Vector *tangent) { tangent_ = tangent; }
-
-    void Eval(mfem::Vector &value, mfem::ElementTransformation &transform,
-              const mfem::IntegrationPoint &integration_point) override
-    {
-        value.SetSize(3);
-        value = 0.0;
-        if (magnetic_element_mask_ != nullptr) {
-            const int element = transform.ElementNo;
-            if (element < 0 ||
-                static_cast<std::uint64_t>(element) >= magnetic_element_mask_count_ ||
-                magnetic_element_mask_[static_cast<std::size_t>(element)] == 0u) {
-                return;
-            }
-        }
-        mfem::Array<int> dofs;
-        space_.GetElementDofs(transform.ElementNo, dofs);
-        mfem::Vector shape(dofs.Size());
-        space_.GetFE(transform.ElementNo)->CalcShape(integration_point, shape);
-        for (int local = 0; local < dofs.Size(); ++local) {
-            const int dof = dofs[local] >= 0 ? dofs[local] : -1 - dofs[local];
-            const double sign = dofs[local] >= 0 ? 1.0 : -1.0;
-            if (saturation_magnetization_field_ != nullptr &&
-                (dof < 0 || static_cast<std::uint64_t>(dof) >=
-                    saturation_magnetization_field_count_)) {
-                value = 0.0;
-                return;
-            }
-            const double q1 = (*tangent_)[2 * dof];
-            const double q2 = (*tangent_)[2 * dof + 1];
-            const double saturation_magnetization = saturation_magnetization_field_ != nullptr
-                ? saturation_magnetization_field_[static_cast<std::size_t>(dof)]
-                : saturation_magnetization_;
-            for (int axis = 0; axis < 3; ++axis) {
-                value[axis] += sign * shape[local] * saturation_magnetization *
-                    (q1 * frames_[dof].e1[axis] + q2 * frames_[dof].e2[axis]);
-            }
-        }
-    }
-
-private:
-    mfem::FiniteElementSpace &space_;
-    const TangentFrameNode *frames_;
-    double saturation_magnetization_;
-    const double *saturation_magnetization_field_;
-    std::uint64_t saturation_magnetization_field_count_;
-    const std::uint8_t *magnetic_element_mask_;
-    std::uint64_t magnetic_element_mask_count_;
-    const mfem::Vector *tangent_ = nullptr;
-};
-
-class TangentSourceWavevectorCoefficient final : public mfem::Coefficient {
-public:
-    TangentSourceWavevectorCoefficient(TangentSourceCoefficient &source, const mfem::Vector &k)
-        : source_(source), k_(k) {}
-
-    double Eval(mfem::ElementTransformation &transform,
-                const mfem::IntegrationPoint &integration_point) override
-    {
-        mfem::Vector source_value;
-        source_.Eval(source_value, transform, integration_point);
-        return k_ * source_value;
-    }
-
-private:
-    TangentSourceCoefficient &source_;
-    const mfem::Vector &k_;
-};
-
-} // namespace
-
 FrequencyDomainStatus assemble_floquet_bloch_scalar_operator(
     const FloquetBlochScalarAssemblyRequest &request,
     FloquetBlochScalarAssemblyResult *out_result) noexcept
@@ -409,10 +315,18 @@ FrequencyDomainStatus assemble_floquet_bloch_scalar_tangent_source(
             }
         }
     }
-    mfem::Vector k(3);
+    double k[3] = {};
     for (int axis = 0; axis < 3; ++axis) {
         k[axis] = request.k_rad_per_m[static_cast<std::size_t>(axis)];
         if (!std::isfinite(k[axis])) { return FrequencyDomainStatus::validation_error; }
+    }
+    for (int dof = 0; dof < dof_count; ++dof) {
+        for (int component = 0; component < 3; ++component) {
+            if (!std::isfinite(request.tangent_frames[dof].e1[component]) ||
+                !std::isfinite(request.tangent_frames[dof].e2[component])) {
+                return FrequencyDomainStatus::validation_error;
+            }
+        }
     }
     try {
         const std::uint64_t output_node_count = request.magnetic_reduced_node != nullptr
@@ -425,48 +339,101 @@ FrequencyDomainStatus assemble_floquet_bloch_scalar_tangent_source(
         const int output_width = static_cast<int>(2u * output_node_count);
         auto real = std::make_unique<mfem::SparseMatrix>(dof_count, output_width);
         auto imaginary = std::make_unique<mfem::SparseMatrix>(dof_count, output_width);
-        mfem::Vector tangent(2 * dof_count);
-        TangentSourceCoefficient source(*request.scalar_space, request.tangent_frames,
-                                        request.saturation_magnetization_a_per_m,
-                                        request.saturation_magnetization_field,
-                                        request.saturation_magnetization_field_count,
-                                        request.magnetic_element_mask,
-                                        request.magnetic_element_mask_count);
-        TangentSourceWavevectorCoefficient k_source(source, k);
         const bool shifted_envelope =
             request.representation == FloquetBlochScalarRepresentation::shifted_envelope;
-        for (int column = 0; column < output_width; ++column) {
-            tangent = 0.0;
-            const int tangent_component = column & 1;
-            if (request.magnetic_reduced_node == nullptr) {
-                const int dof = column / 2;
-                tangent[2 * dof + tangent_component] = 1.0;
-            } else {
-                const std::uint32_t reduced = static_cast<std::uint32_t>(column / 2);
-                const std::uint32_t inactive = std::numeric_limits<std::uint32_t>::max();
-                for (int dof = 0; dof < dof_count; ++dof) {
-                    if (request.magnetic_reduced_node[static_cast<std::size_t>(dof)] ==
-                        reduced) {
-                        tangent[2 * dof + tangent_component] = 1.0;
-                    } else if (request.magnetic_reduced_node[
-                                   static_cast<std::size_t>(dof)] == inactive) {
-                        tangent[2 * dof + tangent_component] = 0.0;
-                    }
+        const std::uint32_t inactive = std::numeric_limits<std::uint32_t>::max();
+        mfem::Mesh *mesh = request.scalar_space->GetMesh();
+        // Assemble the element-local bilinear action directly.  The previous
+        // implementation assembled one global LinearForm per tangent column;
+        // that made O(N_tangent) global passes over the mesh and hid the
+        // actual source stencil.  These entries are exactly the two MFEM
+        // forms used by the old path, with the tangent basis and Ms factor
+        // expanded in the trial shape function.
+        for (int element = 0; element < element_count; ++element) {
+            if (request.magnetic_element_mask != nullptr &&
+                request.magnetic_element_mask[static_cast<std::size_t>(element)] == 0u) {
+                continue;
+            }
+            mfem::Array<int> dofs;
+            request.scalar_space->GetElementDofs(element, dofs);
+            const mfem::FiniteElement *finite_element =
+                request.scalar_space->GetFE(element);
+            mfem::ElementTransformation *transformation =
+                mesh->GetElementTransformation(element);
+            const mfem::IntegrationRule &rule = mfem::IntRules.Get(
+                finite_element->GetGeomType(), 2 * finite_element->GetOrder());
+            mfem::Vector shape(dofs.Size());
+            mfem::DenseMatrix physical_dshape(dofs.Size(), 3);
+            for (int point_index = 0; point_index < rule.GetNPoints(); ++point_index) {
+                const mfem::IntegrationPoint &point = rule.IntPoint(point_index);
+                transformation->SetIntPoint(&point);
+                finite_element->CalcShape(point, shape);
+                finite_element->CalcPhysDShape(*transformation, physical_dshape);
+                const double weight = transformation->Weight() * point.weight;
+                if (!std::isfinite(weight)) {
+                    return FrequencyDomainStatus::operator_error;
                 }
-            }
-            source.SetTangent(&tangent);
-            mfem::LinearForm real_form(request.scalar_space);
-            real_form.AddDomainIntegrator(new mfem::DomainLFGradIntegrator(source));
-            real_form.Assemble();
-            mfem::LinearForm imaginary_form(request.scalar_space);
-            if (shifted_envelope) {
-                imaginary_form.AddDomainIntegrator(new mfem::DomainLFIntegrator(k_source));
-                imaginary_form.Assemble();
-            }
-            for (int row = 0; row < dof_count; ++row) {
-                real->Add(row, column, real_form[row]);
-                if (shifted_envelope) {
-                    imaginary->Add(row, column, imaginary_form[row]);
+                for (int local_test = 0; local_test < dofs.Size(); ++local_test) {
+                    const int test_node = dofs[local_test] >= 0
+                        ? dofs[local_test] : -1 - dofs[local_test];
+                    const double test_sign = dofs[local_test] >= 0 ? 1.0 : -1.0;
+                    if (test_node < 0 || test_node >= dof_count) {
+                        return FrequencyDomainStatus::operator_error;
+                    }
+                    for (int local_trial = 0; local_trial < dofs.Size(); ++local_trial) {
+                        const int trial_node = dofs[local_trial] >= 0
+                            ? dofs[local_trial] : -1 - dofs[local_trial];
+                        const double trial_sign = dofs[local_trial] >= 0 ? 1.0 : -1.0;
+                        if (trial_node < 0 || trial_node >= dof_count) {
+                            return FrequencyDomainStatus::operator_error;
+                        }
+                        const std::uint32_t output_node =
+                            request.magnetic_reduced_node == nullptr
+                                ? static_cast<std::uint32_t>(trial_node)
+                                : request.magnetic_reduced_node[
+                                      static_cast<std::size_t>(trial_node)];
+                        if (output_node == inactive) {
+                            continue;
+                        }
+                        if (output_node >= output_node_count) {
+                            return FrequencyDomainStatus::operator_error;
+                        }
+                        const double saturation_magnetization =
+                            request.saturation_magnetization_field != nullptr
+                                ? request.saturation_magnetization_field[
+                                      static_cast<std::size_t>(trial_node)]
+                                : request.saturation_magnetization_a_per_m;
+                        if (!std::isfinite(saturation_magnetization) ||
+                            !std::isfinite(shape[local_test]) ||
+                            !std::isfinite(shape[local_trial])) {
+                            return FrequencyDomainStatus::operator_error;
+                        }
+                        for (std::uint32_t component = 0; component < 2u; ++component) {
+                            const double *frame = component == 0u
+                                ? request.tangent_frames[trial_node].e1
+                                : request.tangent_frames[trial_node].e2;
+                            double gradient_dot_frame = 0.0;
+                            double wavevector_dot_frame = 0.0;
+                            for (int axis = 0; axis < 3; ++axis) {
+                                gradient_dot_frame +=
+                                    physical_dshape(local_test, axis) * frame[axis];
+                                wavevector_dot_frame += k[axis] * frame[axis];
+                            }
+                            const double prefactor = weight * test_sign * trial_sign *
+                                saturation_magnetization * shape[local_trial];
+                            const int column = static_cast<int>(2u * output_node + component);
+                            real->Add(
+                                test_node,
+                                column,
+                                prefactor * gradient_dot_frame);
+                            if (shifted_envelope) {
+                                imaginary->Add(
+                                    test_node,
+                                    column,
+                                    prefactor * shape[local_test] * wavevector_dot_frame);
+                            }
+                        }
+                    }
                 }
             }
         }

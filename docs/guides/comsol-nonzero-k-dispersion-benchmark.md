@@ -197,6 +197,13 @@ do kontroli jednorodnego modu w Γ i zbieżności wysokości airboxa. Nie wolno
 zastępować nią jądra dla `k != 0`, ponieważ stały skalar nie jest dokładną
 funkcją Greena skończonego airboxa.
 
+Ścieżka Γ–X–M–Γ nie zawiera czystego punktu Damon–Eshbach: na tej ścieżce
+`sin²(phi)` osiąga najwyżej `1/2`. Dlatego bramka C1 wymaga dodatkowego,
+niezależnego kontrolnego przebiegu slabowego dla `k=(0,10^7,0) rad/m` (DE)
+oraz `k=(10^7,0,0) rad/m` (BV), zgodnie z blokiem
+`analytic_controls.kalinikos_slab_n0` w `parameters.json`. Kontrola DE nie może
+być zastąpiona dowolnym punktem ścieżki ani jedynie kolumną analityczną w CSV.
+
 ## 7. Siatka i rozwiązanie własne
 
 Zbuduj trzy siatki; dla pierwszego uruchomienia wystarczy L1, przed całym sweepem wykonaj kontrole C0/C1.
@@ -209,7 +216,7 @@ Zbuduj trzy siatki; dla pierwszego uruchomienia wystarczy L1, przed całym sweep
 
 Użyj swept mesh przez film, a jeśli wymagane są tetraedry — podziel zgodnie i zachowaj powyższe ograniczenia. Zapisz typy elementów. Pole magnetyzacji i potencjał: **liniowe funkcje kształtu**, również w mm/mmf; nie pozostawiaj automatycznego wyższego rzędu. W powietrzu do 20 nm od filmu rozmiar ≤5 nm dla L1 (odpowiednio 10/2.5 nm dla L0/L2), dalej wzrost ≤1.3 i maksimum 100 nm. Można podzielić powietrze na warstwy geometryczne, bez zmiany materiału/warunków wewnętrznych. Rzeczywista siatka i liczba DOF są częścią eksportu; podane limity nie wyznaczają unikatowej triangulacji.
 
-Eigenfrequency: jednostka wyświetlania GHz, complex arithmetic, bezpośredni solver liniowy PARDISO, względna tolerancja eigensolvera 1e-8, szukaj wokół **1 GHz**, początkowo **24 wartości własne**. Zwiększ do 48 w kontroli. Jeśli wersja oferuje wybór algorytmu, użyj ARPACK ze shift-invert i zapisz rzeczywistą konfigurację. Nie używaj sztucznego dodatniego damping do usuwania błędu osobliwej macierzy.
+Eigenfrequency: jednostka wyświetlania GHz, complex arithmetic, bezpośredni solver liniowy PARDISO, względna tolerancja eigensolvera 1e-8, jawny limit **64 iteracji zewnętrznych EPS** i **128 iteracji wewnętrznych KSP**, szukaj wokół **1 GHz**, początkowo **24 wartości własne**. Limity EPS/KSP dotyczą iteracji rozwiązania własnego i liniowego; nie są limitem montażu siatki, montażu operatora ani faktoryzacji. Osiągnięcie limitu oznacza niezakwalifikowaną próbę i wymaga diagnozy iteracji, bez rozluźniania tolerancji. Zwiększ do 48 w kontroli. Jeśli wersja oferuje wybór algorytmu, użyj ARPACK ze shift-invert i zapisz rzeczywistą konfigurację. Nie używaj sztucznego dodatniego damping do usuwania błędu osobliwej macierzy.
 
 Celem porównania jest **pierwszych 8 dodatnich fizycznych gałęzi**. Wyeksportuj jednak wszystkie znalezione wartości, w tym ujemne i podejrzane. Jeżeli nie znaleziono 8 fizycznych modów, zwiększ liczbę do 48/96 i dodaj szukanie wokół 5, 15 oraz 30 GHz; zachowaj rozdzielone wyniki każdego wyszukiwania. Sprawdź, że podstawowy zestaw najniższych 8 nie zmienia się przy zwiększeniu liczby. Bliskie częstotliwości nie wystarczają do kasowania duplikatów: degeneracja może mieć kilka niezależnych wektorów. Ten protokół nie certyfikuje kompletności widma ani pełnej przerwy pasmowej.
 
@@ -223,7 +230,7 @@ Parametric Sweep na `jpath=range(0,1,60)`, k_sign=1; jeden i ten sam sol_eq. Γ:
 - Przy alpha=0 raportuj `abs(Im(f))/max(abs(Re(f)),1[Hz])`; >1e-6 to sygnał do diagnozy, nie automatyczne wycięcie urojeń.
 - Sprawdź pary brzegowe pełnych dm i dphi: błąd względny fazy <1e-6. Sam zgodny wykres kolorów nie wystarcza. Wyeksportuj wartości po obu stronach.
 - Dla A1 wykonaj k_sign=−1 przynajmniej dla j=10,30,50; symetria modelu bez DMI/asymetrii powierzchni przewiduje zgodność zestawów częstotliwości ±k po odpowiednim dopasowaniu modów. Nie wymuszaj identycznych wektorów zespolonych.
-- Zbieżność: L1→L2 i d_air=2→4 µm na j=0,10,20,30,40,50,60: każda z pierwszych 8 dopasowanych gałęzi zmienia się <0.5%. Jeżeli nie, dodaj L3 (1.25 nm/8 warstw) lub 8 µm powietrza. Sprawdź także reprezentatywne punkty unikniętego przecięcia/przerwy znalezione podczas sweepu. Dla nowej siatki/pudełka ponownie wyznacz równowagę.
+- Zbieżność siatki L1→L2 (przy tym samym airboxie) i zbieżność granicy d_air=2→4→8 µm na j=0,10,20,30,40,50,60 są osobnymi kontrolami. Dla siatki oraz liczby modów obowiązuje ścisła tolerancja numeryczna; dla sweepu wysokości airboxa procedura przyjmuje wcześniej ustalony budżet względnej zmiany <0.5% dla każdej z pierwszych 8 dopasowanych gałęzi. Jest to budżet kampanii aproksymacji granicy otwartej, a nie tolerancja porównania primary z analityką KS. Oceń trend przyrostów 2→4 i 4→8; nie porównuj bezpośrednio wariantu z innym airboxem do wyniku primary tak, jakby były tym samym problemem. Jeżeli trend nie maleje, dodaj L3 (1.25 nm/8 warstw) lub większy airbox. Sprawdź także reprezentatywne punkty unikniętego przecięcia/przerwy znalezione podczas sweepu. Dla nowej siatki/pudełka ponownie wyznacz równowagę.
 
 Kontrole te są kryteriami przyjęcia danych, a nie obietnicą osiągalnego błędu. Docelowe porównanie Fullmag–COMSOL powinno najpierw używać identycznego skończonego airboxa i stanu równowagi, dopiero później porównywać granice zbieżności.
 

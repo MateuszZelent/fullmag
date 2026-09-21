@@ -71,9 +71,12 @@ scalar tangent reduction only for identity-frame pairs, and supports
 nonzero-k `Full2x2` tangent blocks by reducing each complex stiffness and mass
 contribution with the selected Bloch phase and the local tangent-frame
 transport matrix `T_node^T T_root`. This implements the reference/MVP CPU
-`phase*(T_dst^T T_src)` modal transport for `Full2x2`; it does not implement
-dynamic Floquet demagnetization or a production selected-spectrum/GPU modal
-Floquet eigensolver.
+`phase*(T_dst^T T_src)` modal transport for `Full2x2`. The current source also
+contains a CPU shared-domain Floquet/airbox demagnetization assembly boundary,
+but that bridge is not yet a managed or physics-qualified selected-spectrum
+lane. It must remain explicitly labelled source-visible and cannot be promoted
+to a production Floquet eigensolver or GPU capability without runtime,
+residual, and convergence evidence.
 
 FEM driven frequency response is narrower still: the native production CPU lane
 supports gamma/free response and k=0 static-periodic magnetic response without
@@ -93,9 +96,14 @@ static-periodic lanes require complete periodic pair metadata for requested
 response, frequency-response demag, DMI on GPU, and GPU periodic demag remain
 gated.
 
-Dynamic demagnetization for nonzero-k Floquet FEM is not implemented. Requests
-with `include_demag=true` and `spin_wave_bc.kind='floquet'` must fail with a
-capability error.
+Dynamic demagnetization for nonzero-k Floquet FEM is source-visible through the
+CPU shared-domain `floquet_airbox` assembly boundary, but it is not yet
+managed-runtime or physics-qualified. An explicitly planned CPU request may
+reach this source path when its mesh, airbox, phase, and provider metadata pass
+the execution guards; the resulting run remains unqualified until a managed
+receipt and the residual/convergence evidence are present. Other lanes and
+incomplete combinations with `include_demag=true` and
+`spin_wave_bc.kind='floquet'` must fail closed with a capability diagnostic.
 
 The canonical magnetostatic boundary request for that future path is
 `magnetostatic_bc="floquet_airbox"`. This value means the shared-domain airbox
@@ -200,3 +208,15 @@ For `k = pi / L` and `delta_r = [L, 0, 0]`, the Floquet phase is:
 ```text
 exp(-i pi) = -1
 ```
+
+
+### Numerical Gamma classification in the FEM runner
+
+The FEM planner and runner classify a finite wavevector as numerical Gamma when
+all Cartesian components satisfy `abs(k_i) <= 1e-12 rad/m`. This is a routing
+threshold, not an eigensolver residual or a field-phase validation tolerance.
+The runner uses `GAMMA_K_TOLERANCE_RAD_PER_M` consistently in capability checks,
+path routing and the real/complex reduction decision. Original sampled k values
+remain in the output provenance. Non-finite components are never accepted as
+Gamma. At this threshold, any physical comparison still uses the declared SI
+wavevector and the independently validated boundary conditions.

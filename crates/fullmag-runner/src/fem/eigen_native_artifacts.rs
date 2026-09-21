@@ -163,6 +163,12 @@ pub(super) fn native_modal_artifacts(
     let mu0_t_m_per_a = MU0;
     let mut auxiliary_artifacts = Vec::new();
     let mut solver_diagnostics = solver_diagnostics;
+    let modal_source_mesh_topology = plan
+        .mesh
+        .mixed_topology_fingerprint_v3()
+        .map_err(|error| RunError {
+            message: format!("modal source mesh identity is invalid: {error}"),
+        })?;
     if let Some(object) = solver_diagnostics.as_object_mut() {
         // The native diagnostics payload reports candidate/accepted counts,
         // while artifacts-v2 needs the exact number of modes that survived
@@ -224,7 +230,7 @@ pub(super) fn native_modal_artifacts(
     if let Some(object) = solver_diagnostics.as_object_mut() {
         object.insert(
             "source_mesh_topology_sha256".to_string(),
-            serde_json::json!(plan.mesh.topology_fingerprint_v6()),
+            serde_json::json!(modal_source_mesh_topology.clone()),
         );
     }
     let sample_diagnostics = solver_diagnostics.clone();
@@ -240,11 +246,9 @@ pub(super) fn native_modal_artifacts(
         }
     }
     // The top-level diagnostics are also the source of the per-sample
-    // provenance records consumed by artifacts-v2 validators.  Keep those
-    // records synchronized with the exact v6 state files written for this
-    // sample; otherwise a single-sample production run can expose the native
-    // pre-handoff digest while its published sidecar carries the accepted
-    // linearization digest.
+    // provenance records consumed by artifacts-v2 validators.  Keep the
+    // modal source identity at v3 in those records, while carrying the
+    // accepted relax-to-eigen source identity separately at v6.
     if let Some(state) = linearization_state {
         if let Some(samples) = solver_diagnostics
             .get_mut("sample_solver_diagnostics")
@@ -262,6 +266,10 @@ pub(super) fn native_modal_artifacts(
                     .get_mut("diagnostics")
                     .and_then(serde_json::Value::as_object_mut)
                 {
+                    nested.insert(
+                        "source_mesh_topology_sha256".to_string(),
+                        serde_json::json!(modal_source_mesh_topology.clone()),
+                    );
                     nested.insert(
                         "equilibrium_artifact_sha256".to_string(),
                         serde_json::json!(state.equilibrium_artifact_digest),
@@ -296,11 +304,15 @@ pub(super) fn native_modal_artifacts(
                     .and_then(serde_json::Value::as_object_mut)
                 {
                     nested.insert(
+                        "source_mesh_topology_sha256".to_string(),
+                        serde_json::json!(modal_source_mesh_topology.clone()),
+                    );
+                    nested.insert(
                         "relax_to_eigen_handoff_sha256".to_string(),
                         serde_json::json!(handoff.content_sha256()),
                     );
                     nested.insert(
-                        "source_mesh_topology_sha256".to_string(),
+                        "relax_to_eigen_source_mesh_topology_sha256".to_string(),
                         serde_json::json!(handoff.source_mesh_topology_sha256()),
                     );
                 }
@@ -488,7 +500,9 @@ pub(super) fn native_modal_artifacts(
     let mode_linearization_state = mode_provenance_value("linearization_state_sha256");
     let mode_periodic_certificate = mode_provenance_value("periodic_mesh_certificate_sha256");
     let mode_relax_to_eigen_handoff = mode_provenance_value("relax_to_eigen_handoff_sha256");
-    let mode_source_mesh_topology = mode_provenance_value("source_mesh_topology_sha256");
+    let mode_relax_to_eigen_source_mesh_topology =
+        mode_provenance_value("relax_to_eigen_source_mesh_topology_sha256");
+    let mode_source_mesh_topology = serde_json::json!(modal_source_mesh_topology.clone());
     let mode_assembly_kind = mode_provenance_value("assembly_kind");
 
     for (mode_index, mode) in modes.iter().enumerate() {
@@ -597,6 +611,8 @@ pub(super) fn native_modal_artifacts(
             "linearization_state_sha256": mode_linearization_state.clone(),
             "periodic_mesh_certificate_sha256": mode_periodic_certificate.clone(),
             "relax_to_eigen_handoff_sha256": mode_relax_to_eigen_handoff.clone(),
+            "relax_to_eigen_source_mesh_topology_sha256":
+                mode_relax_to_eigen_source_mesh_topology.clone(),
             "source_mesh_topology_sha256": mode_source_mesh_topology.clone(),
             "component_participation": component_participation.clone(),
         });
@@ -659,7 +675,9 @@ pub(super) fn native_modal_artifacts(
                 "linearization_state_sha256": mode_linearization_state,
                 "periodic_mesh_certificate_sha256": mode_periodic_certificate,
                 "relax_to_eigen_handoff_sha256": mode_relax_to_eigen_handoff,
-                "source_mesh_topology_sha256": mode_source_mesh_topology,
+                "relax_to_eigen_source_mesh_topology_sha256":
+                    mode_relax_to_eigen_source_mesh_topology,
+                "source_mesh_topology_sha256": mode_source_mesh_topology.clone(),
                 "node_mass_weights": node_mass_weights,
                 "real": real,
                 "imag": imag,

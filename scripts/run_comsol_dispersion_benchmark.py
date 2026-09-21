@@ -19,10 +19,12 @@ import argparse
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import shlex
+import shutil
 import sqlite3
 import stat
 import subprocess
@@ -60,11 +62,20 @@ RECEIPT_SCHEMA = "fullmag.local-runner.build-receipt.v1"
 CONTRACT_SCHEMA = "fullmag.fem.cpu.slepc_modal_contract_result.v1"
 RUN_REQUEST_SCHEMA = "fullmag.comsol-dispersion-benchmark.request.v1"
 RUN_RESULT_SCHEMA = "fullmag.comsol-dispersion-benchmark.result.v1"
+DEFAULT_TIMEOUT_SECONDS = 6 * 60 * 60
+CONTAINER_TIMEOUT_GRACE_SECONDS = 30
+HOST_COMPOSE_GRACE_SECONDS = 60
+DOCKER_LIFECYCLE_TIMEOUT_SECONDS = 30
+CONTAINER_LABEL_COMPONENT = "com.fullmag.component"
+CONTAINER_LABEL_JOB = "com.fullmag.job-id"
+CONTAINER_LABEL_RUN = "com.fullmag.run-id"
+CONTAINER_COMPONENT = "dispersion-benchmark"
 JOB_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 SHA256_RE = re.compile(r"[a-f0-9]{64}\Z")
 CAPTURE_ID_RE = re.compile(r"[a-f0-9]{32}\Z")
 COMMIT_RE = re.compile(r"[a-f0-9]{40}(?:[a-f0-9]{24})?\Z")
 IMAGE_RE = re.compile(r"sha256:[a-f0-9]{64}\Z")
+CONTAINER_ID_RE = re.compile(r"[a-f0-9]{64}\Z")
 CASES = ("c0", "c1", "a1")
 DEFAULT_CASES = CASES
 PUBLIC_MODEL_FILES = (
@@ -108,6 +119,8 @@ REQUIRED_CASE_ARTIFACTS = (
 # plane artifacts.  Keep a bounded, explicit budget rather than applying the
 # generic 16 MiB JSON limit and rejecting a valid native result.
 MAX_EIGEN_SUMMARY_BYTES = 256 * 1024 * 1024
+MAX_EXTERNAL_EVIDENCE_FILES = 4096
+MAX_EXTERNAL_EVIDENCE_BYTES = 512 * 1024 * 1024
 
 
 class BenchmarkError(RuntimeError):
@@ -625,11 +638,269 @@ def _shell_case_command(cases: Sequence[str]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _container_identity(context: BuildContext, output_dir: Path) -> dict[str, Any]:
+    """Return the immutable identity used for one Compose benchmark container.
+
+    The output directory is allocated before Compose is invoked and is rejected
+    when it already exists. Hashing its absolute path therefore gives this run
+    a collision-resistant, Docker-safe identity without putting host paths into
+    labels or names.
+    """
+
+    job_id = context.job.get("job_id")
+    if not isinstance(job_id, str) or not JOB_ID_RE.fullmatch(job_id):
+        raise BenchmarkError("benchmark container identity has an invalid job id")
+    output_path = os.path.abspath(str(output_dir))
+    run_id = hashlib.sha256(
+        f"{job_id}\0{output_path}".encode("utf-8", errors="strict")
+    ).hexdigest()[:32]
+    return {
+        "name": f"fullmag-dispersion-{run_id}",
+        "labels": {
+            CONTAINER_LABEL_COMPONENT: CONTAINER_COMPONENT,
+            CONTAINER_LABEL_JOB: job_id,
+            CONTAINER_LABEL_RUN: run_id,
+        },
+        "run_id": run_id,
+    }
+
+
+def _expected_container_mounts(
+    context: BuildContext, output_dir: Path
+) -> tuple[dict[str, Any], ...]:
+    return (
+        {
+            "source": os.path.abspath(str(context.source_tree)),
+            "destination": "/workspace/capsule",
+            "read_only": True,
+        },
+        {
+            "source": os.path.abspath(str(context.runtime_root)),
+            "destination": "/workspace/.fullmag/local",
+            "read_only": True,
+        },
+        {
+            "source": os.path.abspath(str(output_dir)),
+            "destination": "/workspace/benchmark-output",
+            "read_only": False,
+        },
+    )
+
+
+def _normalized_mount_source(value: object) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    normalized = value.replace("\\", "/").rstrip("/")
+    # Keep the separator representation canonical after Windows path
+    # normalization.  ntpath.normcase() lowercases and changes `/` back to
+    # `\\`, which would make the `/host_mnt/<drive>/...` projection below
+    # impossible to recognize.
+    return normalized.casefold() if os.name == "nt" else normalized
+
+
+def _mount_source_matches(actual: object, expected: str) -> bool:
+    actual_normalized = _normalized_mount_source(actual)
+    expected_normalized = _normalized_mount_source(expected)
+    if actual_normalized is None or expected_normalized is None:
+        return False
+    if actual_normalized == expected_normalized:
+        return True
+    # Docker Desktop may expose a Windows bind source through its Linux VM.
+    # Accept only the canonical /host_mnt/<drive>/ projection of the exact
+    # expected host path; all other representations remain blocked.
+    if os.name == "nt" and len(expected_normalized) >= 3 and expected_normalized[1:3] == ":/":
+        drive = expected_normalized[0].lower()
+        projected = f"/host_mnt/{drive}{expected_normalized[2:]}"
+        return actual_normalized == projected
+    return False
+
+
+def _inspect_benchmark_container(
+    identity: Mapping[str, Any],
+    expected_mounts: Sequence[Mapping[str, Any]],
+    *,
+    run: Any = subprocess.run,
+) -> dict[str, Any]:
+    """Inspect one exact container and fail closed on identity uncertainty."""
+
+    name = identity.get("name")
+    labels = identity.get("labels")
+    if (
+        not isinstance(name, str)
+        or not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,127}", name)
+        or not isinstance(labels, Mapping)
+    ):
+        return {"status": "blocked", "reason": "invalid benchmark container identity"}
+    try:
+        completed = run(
+            ["docker", "container", "inspect", name],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=DOCKER_LIFECYCLE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"status": "blocked", "reason": "container inspect timed out"}
+    except OSError as error:
+        return {"status": "blocked", "reason": f"container inspect failed: {error}"}
+    if completed.returncode != 0:
+        diagnostic = str(getattr(completed, "stderr", "") or "").lower()
+        if "no such object" in diagnostic or "no such container" in diagnostic:
+            return {"status": "absent", "verified": True}
+        return {
+            "status": "blocked",
+            "reason": "container inspect returned a non-terminal Docker error",
+        }
+    try:
+        payload = json.loads(completed.stdout)
+    except (TypeError, ValueError):
+        return {"status": "blocked", "reason": "container inspect returned invalid JSON"}
+    if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], Mapping):
+        return {"status": "blocked", "reason": "container inspect returned an ambiguous object"}
+    inspected = payload[0]
+    container_id = inspected.get("Id")
+    if not isinstance(container_id, str) or not CONTAINER_ID_RE.fullmatch(container_id):
+        return {"status": "blocked", "reason": "container inspect did not return a full ID"}
+    if inspected.get("Name") != f"/{name}":
+        return {"status": "blocked", "reason": "container name identity mismatch"}
+    config = inspected.get("Config")
+    actual_labels = config.get("Labels") if isinstance(config, Mapping) else None
+    if not isinstance(actual_labels, Mapping) or any(
+        actual_labels.get(key) != value for key, value in labels.items()
+    ):
+        return {"status": "blocked", "reason": "container labels identity mismatch"}
+    image = inspected.get("Image")
+    configured_image = config.get("Image") if isinstance(config, Mapping) else None
+    if EXPECTED_IMAGE_DIGEST not in {image, configured_image}:
+        return {"status": "blocked", "reason": "container image identity mismatch"}
+    mounts = inspected.get("Mounts")
+    if not isinstance(mounts, list) or len(mounts) != len(expected_mounts):
+        return {"status": "blocked", "reason": "container mount set is not exact"}
+    actual_by_destination: dict[str, Mapping[str, Any]] = {}
+    for mount in mounts:
+        if not isinstance(mount, Mapping):
+            return {"status": "blocked", "reason": "container mount entry is invalid"}
+        destination = mount.get("Destination")
+        if not isinstance(destination, str) or destination in actual_by_destination:
+            return {"status": "blocked", "reason": "container mount destinations are ambiguous"}
+        actual_by_destination[destination] = mount
+    for expected in expected_mounts:
+        destination = expected.get("destination")
+        actual = actual_by_destination.get(destination)
+        if actual is None:
+            return {"status": "blocked", "reason": f"container mount is missing: {destination}"}
+        if not _mount_source_matches(actual.get("Source"), str(expected.get("source"))):
+            return {"status": "blocked", "reason": f"container mount source mismatch: {destination}"}
+        if actual.get("RW") != (not bool(expected.get("read_only"))):
+            return {"status": "blocked", "reason": f"container mount mode mismatch: {destination}"}
+    return {"status": "owned", "container_id": container_id, "inspect": dict(inspected)}
+
+
+def _cleanup_benchmark_container(
+    context: BuildContext,
+    output_dir: Path,
+    *,
+    run: Any = subprocess.run,
+) -> dict[str, Any]:
+    """Stop and remove only a fully attested container for this run."""
+
+    identity = _container_identity(context, output_dir)
+    expected_mounts = _expected_container_mounts(context, output_dir)
+    inspected = _inspect_benchmark_container(identity, expected_mounts, run=run)
+    if inspected.get("status") == "absent":
+        return {"status": "verified_absent", "container_name": identity["name"]}
+    if inspected.get("status") != "owned":
+        return {
+            "status": "blocked",
+            "container_name": identity["name"],
+            "reason": inspected.get("reason", "container ownership could not be verified"),
+        }
+    container_id = inspected["container_id"]
+    current = inspected["inspect"]
+    state = current.get("State") if isinstance(current, Mapping) else None
+    if not isinstance(state, Mapping):
+        return {"status": "blocked", "container_name": identity["name"], "reason": "container state is missing"}
+    try:
+        if state.get("Running") is True:
+            stopped = run(
+                ["docker", "container", "stop", "--time", "10", container_id],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=DOCKER_LIFECYCLE_TIMEOUT_SECONDS,
+            )
+            if stopped.returncode != 0:
+                return {
+                    "status": "blocked",
+                    "container_name": identity["name"],
+                    "container_id": container_id,
+                    "reason": "owned container stop failed",
+                }
+            inspected = _inspect_benchmark_container(identity, expected_mounts, run=run)
+            if inspected.get("status") != "owned":
+                return {
+                    "status": "blocked",
+                    "container_name": identity["name"],
+                    "container_id": container_id,
+                    "reason": "container identity could not be reverified after stop",
+                }
+            state = inspected["inspect"].get("State", {})
+            if not isinstance(state, Mapping) or state.get("Running") is not False:
+                return {
+                    "status": "blocked",
+                    "container_name": identity["name"],
+                    "container_id": container_id,
+                    "reason": "owned container did not reach exited state",
+                }
+        removed = run(
+            ["docker", "container", "rm", container_id],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=DOCKER_LIFECYCLE_TIMEOUT_SECONDS,
+        )
+        if removed.returncode != 0:
+            final = _inspect_benchmark_container(identity, expected_mounts, run=run)
+            if final.get("status") == "absent":
+                return {"status": "verified_absent", "container_name": identity["name"]}
+            return {
+                "status": "blocked",
+                "container_name": identity["name"],
+                "container_id": container_id,
+                "reason": "owned container removal failed",
+            }
+    except (subprocess.TimeoutExpired, OSError) as error:
+        return {
+            "status": "blocked",
+            "container_name": identity["name"],
+            "container_id": container_id,
+            "reason": f"container cleanup failed: {error}",
+        }
+    final = _inspect_benchmark_container(identity, expected_mounts, run=run)
+    if final.get("status") != "absent":
+        return {
+            "status": "blocked",
+            "container_name": identity["name"],
+            "container_id": container_id,
+            "reason": "container removal was not verified",
+        }
+    return {
+        "status": "removed",
+        "verified": True,
+        "container_name": identity["name"],
+        "container_id": container_id,
+    }
+
+
 def _compose_command(
     context: BuildContext,
     output_dir: Path,
     cases: Sequence[str],
+    *,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> list[str]:
+    if not math.isfinite(timeout_seconds) or not 1 <= timeout_seconds <= 7 * 24 * 60 * 60:
+        raise BenchmarkError("benchmark timeout must be between 1 and 604800 seconds")
     # The modal benchmark is a closed, file-backed computation.  It does not
     # need service-to-service networking, and creating Compose's project
     # bridge is fragile on long-lived Docker Desktop hosts whose address pool
@@ -690,7 +961,27 @@ def _compose_command(
         ("FULLMAG_REPO_ROOT", "/workspace/capsule"),
     ):
         command.extend(("-e", f"{key}={value}"))
-    command.extend(("fem-modal-cpu", "bash", "-lc", _shell_case_command(cases)))
+    identity = _container_identity(context, output_dir)
+    command.extend(("--name", identity["name"]))
+    for key, value in sorted(identity["labels"].items()):
+        command.extend(("--label", f"{key}={value}"))
+    # The inner watchdog owns the solver deadline.  The host watchdog below is
+    # only a second fence for a wedged Docker/Compose client and includes enough
+    # grace for TERM, container exit and Compose's --rm bookkeeping.
+    container_timeout = str(math.ceil(timeout_seconds))
+    command.extend(
+        (
+            "fem-modal-cpu",
+            "timeout",
+            "--foreground",
+            "--signal=TERM",
+            f"--kill-after={CONTAINER_TIMEOUT_GRACE_SECONDS}s",
+            container_timeout,
+            "bash",
+            "-lc",
+            _shell_case_command(cases),
+        )
+    )
     # The image is supplied through the host environment as well as -e: the
     # former selects the Compose service image, while the latter records the
     # requested runtime setting inside the container.
@@ -758,12 +1049,96 @@ def _write_new_json(path: Path, value: Mapping[str, Any]) -> None:
         raise BenchmarkError(f"refusing to replace existing benchmark receipt: {path}") from error
 
 
+def _stage_external_scientific_evidence(
+    case_dir: Path,
+    case: str,
+    evidence_root: Path,
+    artifact_bindings: Mapping[str, str],
+) -> dict[str, Any]:
+    """Stage an operator-supplied evidence bundle without weakening binding.
+
+    The source layout is ``<evidence-root>/<case>/validation/scientific_gate.v1.json``
+    plus the comparison artifacts referenced by relative paths in that JSON.
+    Files are copied into the new run at the same relative paths, so the
+    existing scientific validator can hash-bind every comparison artifact to
+    the staged bundle.  Primary numeric artifacts are never overwritten.
+    """
+    root = _regular_dir(evidence_root, "scientific evidence root")
+    source_case = _regular_dir(root / case, f"scientific evidence case {case}")
+    source_evidence_path = source_case / EVIDENCE_RELATIVE_PATH
+    supplied = _json_file(
+        source_evidence_path,
+        f"external {case} scientific evidence",
+        max_bytes=16 * 1024 * 1024,
+    )
+    if supplied.get("schema_version") != EVIDENCE_SCHEMA:
+        raise BenchmarkError(f"external {case} evidence has an unsupported schema_version")
+    if supplied.get("case_id") != case:
+        raise BenchmarkError(f"external {case} evidence case_id does not match its directory")
+    supplied_bindings = supplied.get("artifact_bindings")
+    if not isinstance(supplied_bindings, Mapping):
+        raise BenchmarkError(f"external {case} evidence is missing artifact_bindings")
+    for key, expected in artifact_bindings.items():
+        if supplied_bindings.get(key) != expected:
+            raise BenchmarkError(
+                f"external {case} evidence binding does not match the current {key} artifact"
+            )
+    if not isinstance(supplied.get("analytic_controls"), Mapping):
+        raise BenchmarkError(f"external {case} evidence is missing analytic_controls")
+    if not isinstance(supplied.get("convergence"), Mapping):
+        raise BenchmarkError(f"external {case} evidence is missing convergence controls")
+
+    copied_files = 0
+    copied_bytes = 0
+    for source in source_case.rglob("*"):
+        if _is_reparse(source):
+            raise BenchmarkError(f"external {case} evidence contains a reparse point: {source}")
+        if not source.is_file():
+            continue
+        relative = source.relative_to(source_case)
+        if relative.as_posix() == EVIDENCE_RELATIVE_PATH.as_posix():
+            continue
+        size = source.stat().st_size
+        copied_files += 1
+        copied_bytes += size
+        if copied_files > MAX_EXTERNAL_EVIDENCE_FILES:
+            raise BenchmarkError(f"external {case} evidence contains too many files")
+        if copied_bytes > MAX_EXTERNAL_EVIDENCE_BYTES:
+            raise BenchmarkError(f"external {case} evidence is oversized")
+        destination = _contained_path(
+            case_dir,
+            relative.as_posix(),
+            f"external {case} evidence destination",
+        )
+        if destination.exists() or _is_reparse(destination):
+            raise BenchmarkError(
+                f"external {case} evidence would overwrite an existing primary artifact: {relative.as_posix()}"
+            )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+
+    result = dict(supplied)
+    result["artifact_bindings"] = dict(artifact_bindings)
+    result["evidence_provenance"] = {
+        "source": "operator_supplied",
+        "source_sha256": _sha256_file(source_evidence_path),
+        "staged_relative_root": "case_output_root",
+        "copied_file_count": copied_files,
+        "copied_byte_count": copied_bytes,
+    }
+    return result
+
+
 def _run_request(
     context: BuildContext,
     output_dir: Path,
     cases: Sequence[str],
     command: Sequence[str],
+    scientific_evidence_root: Path | None = None,
+    *,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
+    identity = _container_identity(context, output_dir)
     script_path = Path(context.source_tree) / "scripts" / "run_comsol_dispersion_benchmark.py"
     return {
         "schema": RUN_REQUEST_SCHEMA,
@@ -798,6 +1173,18 @@ def _run_request(
             "schema": SCIENTIFIC_GATE_SCHEMA,
             "evidence_relative_path": "validation/scientific_gate.v1.json",
             "missing_evidence_policy": "NOT VERIFIED",
+            "external_bundle": scientific_evidence_root is not None,
+        },
+        "lifecycle": {
+            "container_name": identity["name"],
+            "container_labels": dict(identity["labels"]),
+            "container_timeout_seconds": math.ceil(timeout_seconds),
+            "host_timeout_seconds": math.ceil(
+                timeout_seconds
+                + CONTAINER_TIMEOUT_GRACE_SECONDS
+                + HOST_COMPOSE_GRACE_SECONDS
+            ),
+            "cleanup_policy": "exact-id-after-identity-and-mount-attestation",
         },
         "output_dir": str(output_dir),
         "orchestrator_sha256": _sha256_file(Path(__file__).resolve()),
@@ -862,6 +1249,7 @@ def _write_scientific_evidence(
     case_dir: Path,
     case: str,
     artifact_result: Mapping[str, Any],
+    scientific_evidence_root: Path | None = None,
 ) -> None:
     """Bind the primary numeric artifacts without inventing missing science.
 
@@ -941,6 +1329,18 @@ def _write_scientific_evidence(
             "mode_count": {"status": "pending", "reason": pending_reason},
         },
     }
+    if scientific_evidence_root is not None:
+        external = _stage_external_scientific_evidence(
+            case_dir,
+            case,
+            scientific_evidence_root,
+            artifact_bindings,
+        )
+        # The external package supplies only independently produced controls
+        # and comparison runs.  Keep the current run's numeric identity as the
+        # binding authority, after the strict equality checks above.
+        evidence.update(external)
+        evidence["artifact_bindings"] = artifact_bindings
     _write_new_json(case_dir / EVIDENCE_RELATIVE_PATH, evidence)
 
 
@@ -951,13 +1351,29 @@ def _execute(
     command: Sequence[str],
     *,
     timeout_seconds: float,
+    scientific_evidence_root: Path | None = None,
 ) -> int:
-    request = _run_request(context, output_dir, cases, command)
+    request = _run_request(
+        context,
+        output_dir,
+        cases,
+        command,
+        scientific_evidence_root,
+        timeout_seconds=timeout_seconds,
+    )
     _write_new_json(output_dir / "run-request.json", request)
     compose_log = output_dir / "compose.log"
     started = time.time()
     return_code: int | None = None
     timed_out = False
+    interrupted = False
+    execution_error: str | None = None
+    container_timed_out = False
+    host_timeout_seconds = (
+        math.ceil(timeout_seconds)
+        + CONTAINER_TIMEOUT_GRACE_SECONDS
+        + HOST_COMPOSE_GRACE_SECONDS
+    )
     try:
         with compose_log.open("x", encoding="utf-8", newline="") as stream:
             process = subprocess.run(
@@ -968,24 +1384,47 @@ def _execute(
                 stdout=stream,
                 stderr=subprocess.STDOUT,
                 check=False,
-                timeout=timeout_seconds,
+                timeout=host_timeout_seconds,
                 text=True,
             )
             return_code = process.returncode
+            container_timed_out = return_code == 124
     except subprocess.TimeoutExpired:
         timed_out = True
+        execution_error = "host Compose watchdog expired after the container deadline and grace period"
+    except KeyboardInterrupt:
+        interrupted = True
+        execution_error = "benchmark interrupted by operator"
     except OSError as error:
-        raise BenchmarkError("managed Compose benchmark could not start") from error
+        execution_error = f"managed Compose benchmark could not start: {error}"
+
+    cleanup: dict[str, Any] = {"status": "not_requested"}
+    needs_cleanup = (
+        timed_out
+        or interrupted
+        or execution_error is not None
+        or (return_code is not None and return_code != 0)
+    )
+    if needs_cleanup:
+        try:
+            cleanup = _cleanup_benchmark_container(context, output_dir)
+        except (BenchmarkError, OSError, ValueError, TypeError, KeyboardInterrupt) as error:
+            cleanup = {"status": "blocked", "reason": f"container cleanup could not be attempted: {error}"}
 
     case_results: list[dict[str, Any]] = []
     scientific_case_results: dict[str, dict[str, Any]] = {}
     scientific_gate: dict[str, Any] | None = None
     artifact_error: str | None = None
-    if return_code == 0 and not timed_out:
+    if return_code == 0 and not timed_out and not interrupted and execution_error is None:
         try:
             for case in cases:
                 artifact_result = _validate_case_artifacts(output_dir / case, case)
-                _write_scientific_evidence(output_dir / case, case, artifact_result)
+                _write_scientific_evidence(
+                    output_dir / case,
+                    case,
+                    artifact_result,
+                    scientific_evidence_root,
+                )
                 scientific_result = validate_scientific_case(
                     output_dir / case,
                     case,
@@ -1010,7 +1449,14 @@ def _execute(
             scientific_gate = validate_requested_cases(scientific_case_results, cases)
         except (BenchmarkError, OSError, UnicodeError, ValueError) as error:
             artifact_error = str(error)
-    if return_code == 0 and not timed_out and artifact_error is None:
+    if (
+        return_code == 0
+        and not timed_out
+        and not interrupted
+        and execution_error is None
+        and artifact_error is None
+        and cleanup.get("status") != "blocked"
+    ):
         status = (
             "completed_qualified"
             if scientific_gate is not None and scientific_gate.get("status") == "qualified"
@@ -1032,6 +1478,10 @@ def _execute(
         "finished_at_unix": time.time(),
         "return_code": return_code,
         "timed_out": timed_out,
+        "container_timed_out": container_timed_out,
+        "interrupted": interrupted,
+        "execution_error": execution_error,
+        "cleanup": cleanup,
         "compose_log": "compose.log",
         "cases": case_results,
         "requested_cases": list(cases),
@@ -1098,8 +1548,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--timeout-seconds",
         type=float,
-        default=6 * 60 * 60,
-        help="wall-clock limit for the Compose run (default: 21600)",
+        default=DEFAULT_TIMEOUT_SECONDS,
+        help="wall-clock limit enforced inside the container (default: 21600)",
+    )
+    parser.add_argument(
+        "--scientific-evidence-root",
+        type=Path,
+        help=(
+            "optional operator-supplied evidence root with "
+            "<case>/validation/scientific_gate.v1.json and its comparison artifacts; "
+            "without it the gate remains NOT VERIFIED"
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -1123,7 +1582,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir = Path(args.output_dir) if args.output_dir else Path(
                 layout["storage_root"]
             ) / "runs" / layout["worktree_id"] / args.job_id / "comsol-dispersion" / "<new-run>"
-            command = _compose_command(context, output_dir, args.cases)
+            command = _compose_command(
+                context,
+                output_dir,
+                args.cases,
+                timeout_seconds=args.timeout_seconds,
+            )
             print(
                 json.dumps(
                     {
@@ -1136,6 +1600,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "compose_command": command,
                         "source_tree": str(context.source_tree),
                         "runtime_root": str(context.runtime_root),
+                        "scientific_evidence_root": (
+                            str(args.scientific_evidence_root)
+                            if args.scientific_evidence_root is not None
+                            else None
+                        ),
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -1150,13 +1619,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             _inspect_image(EXPECTED_IMAGE_DIGEST)
             output_dir = _new_output_dir(context, args.output_dir)
             output_dir.mkdir(parents=True, exist_ok=False)
-            command = _compose_command(context, output_dir, args.cases)
+            command = _compose_command(
+                context,
+                output_dir,
+                args.cases,
+                timeout_seconds=args.timeout_seconds,
+            )
             return _execute(
                 context,
                 output_dir,
                 args.cases,
                 command,
                 timeout_seconds=args.timeout_seconds,
+                scientific_evidence_root=args.scientific_evidence_root,
             )
     except (BenchmarkError, fullmag_storage.StorageError, OSError, ValueError, sqlite3.Error) as error:
         print(f"comsol-dispersion-benchmark: {error}", file=sys.stderr)

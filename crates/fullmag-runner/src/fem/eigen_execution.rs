@@ -39,9 +39,8 @@ use super::eigen_output::{
 use super::eigen_policy::{
     native_modal_damping_policy, native_modal_equilibrium_source_kind,
     native_modal_frequency_max_hz, native_modal_frequency_min_hz, native_modal_k_vector,
-    native_modal_solver_policy,
-    native_modal_spin_wave_bc_kind, native_modal_target_frequency_hz, native_modal_target_kind,
-    resolved_demag_realization, shared_domain_k0_modal_requested,
+    native_modal_solver_policy, native_modal_spin_wave_bc_kind, native_modal_target_frequency_hz,
+    native_modal_target_kind, resolved_demag_realization, shared_domain_k0_modal_requested,
 };
 use super::eigen_progress::{emit_fem_eigen_progress, FemEigenProgress, FemEigenProgressCallback};
 use super::eigen_projection::{
@@ -445,6 +444,16 @@ pub(crate) fn execute_planned_fem_eigen_with_handoff(
     outputs: &[OutputIR],
     handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_planned_fem_eigen_with_handoff_and_progress(execution, plan, outputs, handoff, None)
+}
+
+pub(crate) fn execute_planned_fem_eigen_with_handoff_and_progress(
+    execution: PlannedFemEigenExecution<'_>,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
+) -> Result<ExecutedRun, RunError> {
     validate_planned_execution(execution, plan)?;
     if bias_field_sweep_requested(plan) {
         if handoff.is_some() {
@@ -452,14 +461,14 @@ pub(crate) fn execute_planned_fem_eigen_with_handoff(
                 message: "planned_fem_eigen_sweep_does_not_accept_path_handoff".to_string(),
             });
         }
-        return execute_planned_bias_field_sweep(execution, plan, outputs, None);
+        return execute_planned_bias_field_sweep(execution, plan, outputs, progress);
     }
     execute_fem_eigen_inner(
         plan,
         outputs,
         execution.lane() == FemEigenExecutionLane::Gpu,
         true,
-        None,
+        progress,
         0,
         None,
         handoff,
@@ -521,7 +530,7 @@ pub(crate) fn execute_planned_fem_eigen_with_progress_and_stage_handoff(
         Some(handoff),
         Some(execution),
     )?;
-    bind_stage_continuation_artifacts(&mut run, handoff)?;
+    bind_stage_continuation_artifacts(&mut run, &prepared, handoff)?;
     Ok(run)
 }
 
@@ -549,7 +558,7 @@ pub(crate) fn execute_planned_fem_eigen_with_stage_handoff(
         Some(handoff),
         Some(execution),
     )?;
-    bind_stage_continuation_artifacts(&mut run, handoff)?;
+    bind_stage_continuation_artifacts(&mut run, &prepared, handoff)?;
     Ok(run)
 }
 
@@ -565,6 +574,15 @@ pub(crate) fn execute_cpu_fem_eigen_with_handoff(
     outputs: &[OutputIR],
     handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_cpu_fem_eigen_with_handoff_and_progress(plan, outputs, handoff, None)
+}
+
+pub(crate) fn execute_cpu_fem_eigen_with_handoff_and_progress(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
+) -> Result<ExecutedRun, RunError> {
     if shared_domain_k0_modal_requested(plan)
         && !native_shared_domain_magnetic_assembly_available(plan)
     {
@@ -576,14 +594,14 @@ pub(crate) fn execute_cpu_fem_eigen_with_handoff(
         return Err(error);
     }
     if bias_field_sweep_requested(plan) {
-        return execute_bias_field_sweep(plan, outputs, false, None);
+        return execute_bias_field_sweep(plan, outputs, false, progress);
     }
     execute_fem_eigen_inner(
         plan,
         outputs,
         false,
         native_cpu_modal_window_enabled(plan),
-        None,
+        progress,
         0,
         None,
         handoff,
@@ -646,7 +664,7 @@ pub(crate) fn execute_cpu_fem_eigen_with_progress_and_stage_handoff(
         Some(handoff),
         None,
     )?;
-    bind_stage_continuation_artifacts(&mut run, handoff)?;
+    bind_stage_continuation_artifacts(&mut run, &prepared, handoff)?;
     Ok(run)
 }
 
@@ -671,7 +689,7 @@ pub(crate) fn execute_cpu_fem_eigen_with_stage_handoff(
         Some(handoff),
         None,
     )?;
-    bind_stage_continuation_artifacts(&mut run, handoff)?;
+    bind_stage_continuation_artifacts(&mut run, &prepared, handoff)?;
     Ok(run)
 }
 
@@ -711,7 +729,7 @@ pub(crate) fn execute_gpu_fem_eigen_with_handoff(
         return execute_bias_field_sweep(plan, outputs, true, progress);
     }
     if native_gpu_k0_kittel_modal_supported(plan) {
-        return execute_native_gpu_k0_kittel_modal(plan, outputs, handoff);
+        return execute_native_gpu_k0_kittel_modal(plan, outputs, progress, handoff);
     }
 
     if native_gpu_shared_domain_modal_supported(plan) {
@@ -800,7 +818,7 @@ pub(crate) fn execute_gpu_fem_eigen_with_progress_and_stage_handoff(
         Some(handoff),
         None,
     )?;
-    bind_stage_continuation_artifacts(&mut run, handoff)?;
+    bind_stage_continuation_artifacts(&mut run, &prepared, handoff)?;
     Ok(run)
 }
 
@@ -815,10 +833,23 @@ pub(crate) fn execute_gpu_fem_eigen_with_stage_handoff(
 fn execute_native_gpu_k0_kittel_modal(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
+    mut progress: Option<&mut FemEigenProgressCallback<'_>>,
     expected_handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
 ) -> Result<ExecutedRun, RunError> {
     validate_eigen_equilibrium_certificate(plan, expected_handoff, None)?;
     let initial_magnetization = plan.equilibrium_magnetization.clone();
+    let requested_modes = plan.count as usize;
+    emit_native_gpu_k0_kittel_progress(
+        &mut progress,
+        "materializing_equilibrium",
+        1,
+        5.0,
+        0,
+        0,
+        requested_modes,
+        requested_modes,
+        0,
+    )?;
     let (problem, equilibrium, relaxation_steps, observables, _source_artifact) =
         materialize_equilibrium(plan, &initial_magnetization, None)?;
     let reduction = build_reduction_map(
@@ -841,6 +872,18 @@ fn execute_native_gpu_k0_kittel_modal(
 
     let bases = tangent_bases(&equilibrium);
     let active_nodes = reduction.active_nodes.len();
+    let effective_dof = active_nodes.saturating_mul(2);
+    emit_native_gpu_k0_kittel_progress(
+        &mut progress,
+        "assembling_operator",
+        2,
+        20.0,
+        active_nodes,
+        effective_dof,
+        requested_modes,
+        requested_modes,
+        0,
+    )?;
     let (stiffness_field, mass) = assemble_full_2x2_operator_real(
         plan,
         &problem.topology,
@@ -849,6 +892,17 @@ fn execute_native_gpu_k0_kittel_modal(
         &equilibrium,
         &bases,
     );
+    emit_native_gpu_k0_kittel_progress(
+        &mut progress,
+        "solving_dense",
+        3,
+        35.0,
+        active_nodes,
+        stiffness_field.nrows(),
+        requested_modes,
+        requested_modes,
+        0,
+    )?;
     let gpu_result = native_fem::gpu_eigen_dense_solve(
         stiffness_field.as_slice(),
         mass.as_slice(),
@@ -858,6 +912,17 @@ fn execute_native_gpu_k0_kittel_modal(
     .map_err(|message| RunError {
         message: format!("FEM GPU K0 Kittel modal dense solve failed: {message}"),
     })?;
+    emit_native_gpu_k0_kittel_progress(
+        &mut progress,
+        "writing_artifacts",
+        4,
+        90.0,
+        active_nodes,
+        stiffness_field.nrows(),
+        requested_modes,
+        gpu_result.eigenvalues.len(),
+        0,
+    )?;
     let field_eigenvalue = select_k0_kittel_gpu_field_eigenvalue(plan, &gpu_result.eigenvalues)?;
     let omega_rad_s = plan.gyromagnetic_ratio * field_eigenvalue;
     let frequency_hz = omega_rad_s / std::f64::consts::TAU;
@@ -937,6 +1002,18 @@ fn execute_native_gpu_k0_kittel_modal(
         ..StepStats::default()
     };
 
+    emit_native_gpu_k0_kittel_progress(
+        &mut progress,
+        "completed",
+        5,
+        100.0,
+        active_nodes,
+        tangent_dof,
+        requested_modes,
+        modes.len(),
+        modes.len(),
+    )?;
+
     Ok(ExecutedRun {
         result: RunResult {
             status: RunStatus::Completed,
@@ -954,6 +1031,35 @@ fn execute_native_gpu_k0_kittel_modal(
         auxiliary_artifacts,
         provenance: native_gpu_k0_kittel_execution_provenance(plan),
     })
+}
+
+fn emit_native_gpu_k0_kittel_progress(
+    progress: &mut Option<&mut FemEigenProgressCallback<'_>>,
+    phase: &'static str,
+    phase_index: u32,
+    percent: f64,
+    active_nodes: usize,
+    effective_dof: usize,
+    requested_modes: usize,
+    candidate_modes: usize,
+    computed_modes: usize,
+) -> Result<(), RunError> {
+    emit_fem_eigen_progress(
+        progress,
+        FemEigenProgress {
+            phase,
+            phase_index,
+            phase_count: 5,
+            percent,
+            solver_kind: NATIVE_GPU_K0_KITTEL_SOLVER_KIND,
+            active_nodes,
+            effective_dof,
+            requested_modes,
+            candidate_modes,
+            computed_modes,
+            ..Default::default()
+        },
+    )
 }
 
 fn select_k0_kittel_gpu_field_eigenvalue(
@@ -1947,4 +2053,73 @@ pub(super) fn execute_fem_eigen_inner(
         auxiliary_artifacts,
         provenance: execution_provenance(plan, try_gpu),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{emit_native_gpu_k0_kittel_progress, FemEigenProgress, FemEigenProgressCallback};
+    use crate::types::StepAction;
+
+    #[test]
+    fn native_gpu_k0_kittel_progress_reports_boundaries_and_propagates_interrupt() {
+        let mut boundaries = Vec::new();
+        let mut callback = |event: FemEigenProgress| {
+            boundaries.push((event.phase, event.phase_index, event.percent));
+            if event.phase == "solving_dense" {
+                StepAction::Stop
+            } else {
+                StepAction::Continue
+            }
+        };
+        let mut progress = Some(&mut callback as &mut FemEigenProgressCallback<'_>);
+
+        emit_native_gpu_k0_kittel_progress(
+            &mut progress,
+            "materializing_equilibrium",
+            1,
+            5.0,
+            0,
+            0,
+            1,
+            1,
+            0,
+        )
+        .expect("materialization boundary should continue");
+        emit_native_gpu_k0_kittel_progress(
+            &mut progress,
+            "assembling_operator",
+            2,
+            20.0,
+            4,
+            8,
+            1,
+            1,
+            0,
+        )
+        .expect("assembly boundary should continue");
+        let error = emit_native_gpu_k0_kittel_progress(
+            &mut progress,
+            "solving_dense",
+            3,
+            35.0,
+            4,
+            8,
+            1,
+            1,
+            0,
+        )
+        .expect_err("runtime stop should be propagated at the solve boundary");
+
+        assert_eq!(
+            boundaries,
+            vec![
+                ("materializing_equilibrium", 1, 5.0),
+                ("assembling_operator", 2, 20.0),
+                ("solving_dense", 3, 35.0),
+            ]
+        );
+        assert!(error
+            .message
+            .contains("FEM eigen solve was interrupted by runtime control"));
+    }
 }

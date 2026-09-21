@@ -1,3 +1,5 @@
+/// Numerical Gamma routing threshold in SI, matching the FEM planner.
+pub(super) const GAMMA_K_TOLERANCE_RAD_PER_M: f64 = 1.0e-12;
 pub(super) const FLOQUET_DYNAMIC_DEMAG_UNSUPPORTED: &str = "dynamic demag for Floquet periodic FEM requires the validated native CPU Poisson-airbox provider (full_2x2, nonzero-k, shared-domain airbox); unsupported combinations must disable demag or use a qualified reference lane.";
 pub(super) const NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND: &str =
     "slepc_multi_shift_invert_production_cpu_dense";

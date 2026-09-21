@@ -31,6 +31,31 @@ def test_air_extension_is_excluded_from_magnetic_state_comparison():
     assert result["magnetic_m0"] == [[1.,0.,0.]]
 
 
+def test_modal_source_can_use_the_mixed_mesh_v3_identity_separately():
+    eq,state,mode=fixture()
+    mode["source_mesh_topology_sha256"] = "modal-v3"
+    result=validate_linearization_binding(
+        eq,
+        state,
+        mode,
+        [0],
+        node_count=2,
+        mesh_signature="mesh",
+        modal_mesh_signature="modal-v3",
+    )
+    assert result["magnetic_m0"] == [[1.,0.,0.]]
+    with pytest.raises(ValueError, match="mesh signature mismatch"):
+        validate_linearization_binding(
+            eq,
+            state,
+            mode,
+            [0],
+            node_count=2,
+            mesh_signature="mesh",
+            modal_mesh_signature="other",
+        )
+
+
 @pytest.mark.parametrize("defect",["m0_rehashed", "stale_state", "wrong_mesh", "wrong_source", "missing_m0"])
 def test_inconsistent_actual_state_is_rejected(defect):
     eq,state,mode=fixture()

@@ -32,6 +32,9 @@ from tests.standard_problems.mumag.comsol_nonzero_k_dispersion.config import (
     COMSOL_A_FIELD_A_M,
     CONTROL_LABELS,
     C0_MODE_COUNT,
+    EIGEN_SOLVER_MAX_LINEAR_ITERATIONS,
+    EIGEN_SOLVER_MAX_OUTER_ITERATIONS,
+    EIGEN_SOLVER_RTOL,
     FREQUENCY_WINDOW_HZ,
     GAMMA_M_PER_A_S,
     HOLE_RADIUS_M,
@@ -141,6 +144,9 @@ def test_configuration_matches_the_published_comsol_parameter_sheet() -> None:
     assert search["initial_shift_hz"] == INITIAL_SHIFT_HZ
     assert search["initial_requested_modes"] == MODE_COUNT
     assert search["target_positive_physical_bands"] == TARGET_BANDS
+    assert search["relative_tolerance"] == EIGEN_SOLVER_RTOL
+    assert search["max_outer_iterations"] == EIGEN_SOLVER_MAX_OUTER_ITERATIONS
+    assert search["max_linear_iterations"] == EIGEN_SOLVER_MAX_LINEAR_ITERATIONS
 
     assert parameters["qualification"] == "NOT VERIFIED"
     assert parameters["controls_finite_dirichlet_box"]["Nz_uniform_gamma"] == pytest.approx(
@@ -166,6 +172,11 @@ def _assert_common_pipeline(
         "cpu_threads": None,
         "execution_mode": "strict",
         "execution_precision": "double",
+    }
+    assert eigen_ir["problem_meta"]["runtime_metadata"]["modal_solver_policy"] == {
+        "residual_tolerance": EIGEN_SOLVER_RTOL,
+        "max_outer_iterations": EIGEN_SOLVER_MAX_OUTER_ITERATIONS,
+        "max_linear_iterations": EIGEN_SOLVER_MAX_LINEAR_ITERATIONS,
     }
 
     relax = relax_ir["study"]
@@ -220,6 +231,11 @@ def _assert_common_pipeline(
     assert metadata["equilibrium"]["reuse_for_all_k"] is True
     assert metadata["eigensolve"]["initial_shift_hz"] == 1.0e9
     assert "public DSL has no shift parameter" in metadata["eigensolve"]["initial_shift_status"]
+    assert metadata["eigensolve"]["eigen_solver"] == {
+        "relative_tolerance": EIGEN_SOLVER_RTOL,
+        "max_outer_iterations": EIGEN_SOLVER_MAX_OUTER_ITERATIONS,
+        "max_linear_iterations": EIGEN_SOLVER_MAX_LINEAR_ITERATIONS,
+    }
 
 
 def test_c0_is_the_gamma_exchange_only_control() -> None:

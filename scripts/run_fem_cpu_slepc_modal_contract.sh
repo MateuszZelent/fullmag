@@ -233,6 +233,12 @@ if [[ -z "$runtime_fem_lib" ]]; then
 fi
 
 export FULLMAG_REPO_ROOT="$repo_root"
+# This is the CPU/SLEPc qualification lane.  The image may contain CUDA
+# headers and libraries so that the shared native target can be configured,
+# but a host without a CUDA device must never enter the GPU-only contract
+# cases.  Keep the lane selection explicit and leave GPU qualification to the
+# device-backed profile.
+export FULLMAG_SKIP_GPU_TESTS=1
 # libCEED in the managed image has a CUDA-driver dependency even for this
 # CPU/SLEPc contract.  Use the image's compatibility driver at runtime; this
 # keeps the CPU lane explicit while avoiding a host-driver fallback.

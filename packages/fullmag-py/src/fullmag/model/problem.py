@@ -2690,6 +2690,8 @@ class Problem:
         effective_asset_cache = asset_cache if asset_cache is not None else self.geometry_asset_cache
         runtime_metadata = dict(self.runtime_metadata)
         runtime_metadata["runtime_selection"] = runtime.to_runtime_metadata()
+        if isinstance(self.study, Eigenmodes) and self.study.solver_policy is not None:
+            runtime_metadata["modal_solver_policy"] = self.study.solver_policy.to_ir()
         effective_study_pipeline = _normalize_study_pipeline_value(study_pipeline)
         if effective_study_pipeline is None:
             effective_study_pipeline = _normalize_study_pipeline_value(

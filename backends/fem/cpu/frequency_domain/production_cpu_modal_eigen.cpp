@@ -1056,7 +1056,13 @@ std::string production_window_diagnostics_json(
             format_double(ksp_final_residual) +
             ",\"factorization_package\":\"" +
             std::string(policy.factorization_package) +
-            "\",\"nullspace_policy\":\"" +
+            "\",\"factorization_shift_policy\":\"" +
+            std::string(policy.factorization_shift_policy) +
+            "\",\"factorization_shift_amount\":" +
+            format_double(policy.factorization_shift_amount) +
+            ",\"operator_normalization_scale\":" +
+            format_double(policy.operator_normalization_scale) +
+            ",\"nullspace_policy\":\"" +
             std::string(policy.nullspace_policy) +
             "\",";
     }
@@ -1112,6 +1118,21 @@ std::string production_window_diagnostics_json(
             std::to_string(solve.result.linear_iterations_total) +
             ",\"candidate_modes\":" +
             std::to_string(solve.result.converged_eigenpair_count) +
+            ",\"unsupported_reason\":\"" +
+            std::string(solve.result.unsupported_reason) +
+            "\",\"positive_frequency_candidates\":" +
+            std::to_string(solve.result.positive_frequency_candidate_count) +
+            ",\"frequency_window_candidates\":" +
+            std::to_string(solve.result.frequency_window_candidate_count) +
+            ",\"residual_rejections\":" +
+            std::to_string(solve.result.residual_rejection_count) +
+            ",\"non_real_rotated_eigenvalues\":" +
+            std::to_string(solve.result.non_real_rotated_eigenvalue_count) +
+            ",\"candidate_relative_residual_max\":" +
+            format_double(solve.result.max_candidate_relative_residual) +
+            ",\"candidate_frequency_hz\":[" +
+            format_double(solve.result.min_candidate_frequency_hz) + "," +
+            format_double(solve.result.max_candidate_frequency_hz) + "]" +
             ",\"accepted_modes\":" +
             std::to_string(solve.result.accepted_mode_count) +
             ",\"residual_max\":" +
@@ -2084,7 +2105,13 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
         format_double(slepc_result.ksp_final_residual) +
         ",\"factorization_package\":\"" +
         std::string(slepc_result.factorization_package) +
-        "\",\"nullspace_policy\":\"" +
+        "\",\"factorization_shift_policy\":\"" +
+        std::string(slepc_result.factorization_shift_policy) +
+        "\",\"factorization_shift_amount\":" +
+        format_double(slepc_result.factorization_shift_amount) +
+        ",\"operator_normalization_scale\":" +
+        format_double(slepc_result.operator_normalization_scale) +
+        ",\"nullspace_policy\":\"" +
         std::string(slepc_result.nullspace_policy) +
         "\",\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, exp_i_omega_t), exclude_zero_frequency)\","
         "\"zero_frequency_mode_policy\":\"exclude_zero_frequency\","
@@ -2258,7 +2285,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         std::to_string(sparse_modal_tangent_dof_count(request)) +
         ",\"mfem_operator_payload\":\"" +
         std::string(kSparsePayload) + "\","
-        "\"algebraic_form\":\"gyrotropic_generalized_sparse_csr\","
+        "\"algebraic_form\":\"real_frequency_rotated_gyrotropic_sparse_csr\","
         "\"resolved_solver_family\":\"" +
         std::string(selection.family) +
         "\",\"solver_selection_reason\":\"" +
@@ -2313,7 +2340,13 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         format_double(slepc_result.ksp_final_residual) +
         ",\"factorization_package\":\"" +
         std::string(slepc_result.factorization_package) +
-        "\",\"nullspace_policy\":\"" +
+        "\",\"factorization_shift_policy\":\"" +
+        std::string(slepc_result.factorization_shift_policy) +
+        "\",\"factorization_shift_amount\":" +
+        format_double(slepc_result.factorization_shift_amount) +
+        ",\"operator_normalization_scale\":" +
+        format_double(slepc_result.operator_normalization_scale) +
+        ",\"nullspace_policy\":\"" +
         std::string(slepc_result.nullspace_policy) +
         "\",\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, exp_i_omega_t), exclude_zero_frequency)\","
         "\"zero_frequency_mode_policy\":\"exclude_zero_frequency\","
@@ -2591,7 +2624,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         ",\"mfem_operator_payload\":\"" +
         std::string(kSparsePayload) +
         "\","
-        "\"algebraic_form\":\"gyrotropic_generalized_sparse_csr\","
+        "\"algebraic_form\":\"real_frequency_rotated_gyrotropic_sparse_csr\","
         "\"resolved_solver_family\":\"" +
         std::string(selection.family) +
         "\",\"solver_selection_reason\":\"" +
@@ -2823,6 +2856,8 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
             std::string(adapter.pc_type) +
             "\",\"factorization_package\":\"" +
             std::string(adapter.factorization_package) +
+            "\",\"factorization_shift_policy\":\"" +
+            std::string(adapter.factorization_shift_policy) +
             "\",\"nullspace_policy\":\"" +
             std::string(adapter.nullspace_policy) +
             "\",\"linear_tolerance_policy\":\"" +

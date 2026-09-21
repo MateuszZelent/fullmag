@@ -20,6 +20,7 @@ struct SLEPcModalEigenAdapterStatus {
     const char *ksp_type = "";
     const char *pc_type = "";
     const char *factorization_package = "";
+    const char *factorization_shift_policy = "";
     const char *nullspace_policy = "";
     const char *linear_tolerance_policy = "";
     const char *algebraic_form = "";
@@ -78,7 +79,9 @@ struct SLEPcTinyGyrotropicModalEigenResult {
     const char *which_eigenpairs = "target_magnitude";
     const char *ksp_type = "preonly";
     const char *pc_type = "lu";
-    const char *factorization_package = "petsc_lu";
+    const char *factorization_package = "petsc_lu_shift_nonzero";
+    const char *factorization_shift_policy =
+        "positive_relative_operator_norm_amount";
     const char *poisson_ksp_type = "";
     const char *poisson_pc_type = "";
     const char *poisson_factorization_package = "";
@@ -86,6 +89,10 @@ struct SLEPcTinyGyrotropicModalEigenResult {
     const char *nullspace_policy = "none";
     const char *unsupported_reason = "";
     int converged_eigenpair_count = 0;
+    int positive_frequency_candidate_count = 0;
+    int frequency_window_candidate_count = 0;
+    int residual_rejection_count = 0;
+    int non_real_rotated_eigenvalue_count = 0;
     int accepted_mode_count = 0;
     int selected_eigenpair_index = -1;
     int outer_iterations = 0;
@@ -98,6 +105,11 @@ struct SLEPcTinyGyrotropicModalEigenResult {
     double poisson_ksp_rtol = 0.0;
     double poisson_ksp_atol = 0.0;
     double ksp_final_residual = 0.0;
+    double factorization_shift_amount = 0.0;
+    double operator_normalization_scale = 1.0;
+    double max_candidate_relative_residual = 0.0;
+    double min_candidate_frequency_hz = 0.0;
+    double max_candidate_frequency_hz = 0.0;
     double lambda_real = 0.0;
     double lambda_imag = 0.0;
     double frequency_hz = 0.0;

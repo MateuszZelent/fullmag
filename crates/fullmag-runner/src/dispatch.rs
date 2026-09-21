@@ -2683,7 +2683,7 @@ pub(crate) fn execute_fem_eigen(
     } {
         executed
     } else if matches!(plan.k_sampling, Some(fullmag_ir::KSamplingIR::Path { .. })) {
-        crate::fem::execute_fem_eigen_path(execution, plan, outputs, None)?
+        crate::fem::execute_fem_eigen_path(execution, plan, outputs, None, None)?
     } else if execution.resolution().is_some() {
         fem_eigen::execute_planned_fem_eigen(execution, plan, outputs)?
     } else {
@@ -2719,7 +2719,7 @@ pub(crate) fn execute_fem_eigen_with_progress(
     } {
         executed
     } else if matches!(plan.k_sampling, Some(fullmag_ir::KSamplingIR::Path { .. })) {
-        crate::fem::execute_fem_eigen_path(execution, plan, outputs, None)?
+        crate::fem::execute_fem_eigen_path(execution, plan, outputs, None, Some(progress))?
     } else if execution.resolution().is_some() {
         fem_eigen::execute_planned_fem_eigen_with_progress(execution, plan, outputs, progress)?
     } else {
@@ -2749,6 +2749,7 @@ pub(crate) fn execute_fem_eigen_with_progress_and_stage_handoff(
             plan,
             outputs,
             Some(handoff),
+            Some(progress),
         )?;
         execution.bind_execution_provenance(&mut executed.provenance);
         return Ok(executed);
@@ -3697,6 +3698,10 @@ mod tests {
             "sha256:topology"
         );
         assert_eq!(
+            diagnostics["relax_to_eigen_source_mesh_topology_sha256"],
+            "sha256:topology"
+        );
+        assert_eq!(
             diagnostics["sample_solver_diagnostics"][0]["diagnostics"]
                 ["relax_to_eigen_handoff_sha256"],
             "sha256:handoff"
@@ -3704,6 +3709,11 @@ mod tests {
         assert_eq!(
             diagnostics["sample_solver_diagnostics"][0]["diagnostics"]
                 ["source_mesh_topology_sha256"],
+            "sha256:topology"
+        );
+        assert_eq!(
+            diagnostics["sample_solver_diagnostics"][0]["diagnostics"]
+                ["relax_to_eigen_source_mesh_topology_sha256"],
             "sha256:topology"
         );
         assert!(diagnostics["sample_solver_diagnostics"][1]["diagnostics"]

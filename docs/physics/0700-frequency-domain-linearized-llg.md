@@ -99,9 +99,12 @@ m_anim(r,t) = m0(r) + scale * Re[delta_m(r) exp(i (omega t + phi0))]
 - Floquet/Bloch periodic studies use the phase convention owned by
   `docs/physics/0710-periodic-and-floquet-boundary-conditions.md`, including
   the `exp_minus_i_k_dot_delta_r` sign convention.
-- Nonzero-k Floquet dynamic demagnetization remains unsupported until Fullmag
-  implements and validates a mathematically consistent dynamic demag-k
-  operator.
+- Nonzero-k Floquet dynamic demagnetization has a source-visible CPU
+  shared-domain `floquet_airbox` assembly boundary, but remains unsupported as
+  a qualified production result until the complete complex operator is
+  executed and passes residual, managed-runtime, and convergence gates. The
+  current unqualified snapshot must fail closed rather than substitute a K0 or
+  isolated operator.
 - A modal `KSamplingIR::Path` is orchestrated as repeated single-k modal solves
   plus branch tracking. Each sample must use the most specific legal modal
   entrypoint for that sample: gamma-equivalent free-boundary `Full2x2`
@@ -358,9 +361,14 @@ must not be rerouted through dense validation or CPU response.
 
 Dynamic demagnetization at `k = 0` can be included by the current native FEM CPU
 driven-response operator through a matrix-free backend demag-tangent provider.
-Nonzero-k dynamic demagnetization for Floquet FEM is not implemented. Requests
-with nonzero-k Floquet and demag enabled must fail with a capability error until
-a mathematically valid dynamic demag-k operator exists.
+Nonzero-k dynamic demagnetization for the modal Floquet FEM CPU path is
+source-visible through the shared-domain `floquet_airbox` bridge, but it is not
+yet qualified for production results. An explicitly planned CPU request may
+reach that source path; without managed execution, residual evidence, and
+mesh/airbox/mode-count convergence its result remains unqualified. The driven
+response product and incomplete or unsupported combinations with nonzero-k
+Floquet demag must fail with an explicit capability error rather than falling
+back to a K0 or isolated operator.
 
 The public `magnetostatic_bc` value for the future nonzero-k FEM path is
 `floquet_airbox`. It is distinct from `periodic_airbox_k0`:
@@ -372,10 +380,12 @@ The public `magnetostatic_bc` value for the future nonzero-k FEM path is
   potential `delta_phi` on the selected in-plane periodic cuts.
 
 `floquet_airbox` is therefore a physics model request, not a backend hint. Until
-the coupled demag-k operator is implemented and validated, a request with
-`magnetostatic_bc="floquet_airbox"` must preserve the requested intent in IR and
-provenance, then fail explicitly with a capability error. It must not be
-rewritten to `periodic_airbox_k0`, `open`, dense validation fallback, or a CPU
+the source-visible coupled demag-k bridge has passed managed execution and
+validation, a request with `magnetostatic_bc="floquet_airbox"` must preserve
+the requested intent in IR and provenance. If its exact CPU modal path is
+available, it may be attempted and must remain marked unqualified; otherwise
+it must fail explicitly with a capability error. It must not be rewritten to
+`periodic_airbox_k0`, `open`, dense validation fallback, or an unrelated CPU
 Poisson solve.
 
 The dynamic scalar potential sign convention is:
@@ -452,17 +462,19 @@ The minimal validation set for this contract is:
 - production-facing spin-wave dispersion validation must include narrow,
   physically typical one-dimensional sweeps rather than only broad or
   all-direction k-space scans: Damon-Eshbach geometry with in-plane `k`
-  perpendicular to the equilibrium magnetization, backward-volume geometry with
-  in-plane `k` parallel to the equilibrium magnetization, `|k| <= 2e6..3e6
-  rad/m` (`2..3 1/um`), and requested modal/frequency windows no wider than the
-  relevant low-GHz band such as `0..5 GHz`; those sweeps must be compared with
-  the applicable analytic dispersion for the documented material, film
-  thickness, bias field, demag model, and boundary assumptions,
+  perpendicular to the equilibrium magnetization and backward-volume geometry
+  with in-plane `k` parallel to the equilibrium magnetization. The sweep
+  extent and modal/frequency window are validation parameters, not universal
+  limits: the historical low-k preset uses `|k| <= 3e6 rad/m` and `0..5 GHz`,
+  while the C1 cell uses `|k| = pi/a` and a window covering its higher
+  frequencies. Every chosen range must be compared with the applicable
+  analytic dispersion for the documented material, film thickness, bias field,
+  demag model, and boundary assumptions,
 - default regression tests should therefore parameterize the DE and BV
-  geometries separately and sample only the narrow low-k interval needed for the
-  analytic comparison; exhaustive all-direction k-space maps are optional stress
-  or exploration tests, not the normal publication acceptance route,
+  geometries and their validity ranges separately; exhaustive all-direction
+  k-space maps are optional stress or exploration tests, not the normal
+  publication acceptance route,
 - explicit capability error for nonzero-k Floquet demag that distinguishes
   "missing `magnetostatic_bc=floquet_airbox`" from "`floquet_airbox` requested
-  but demag-k operator not implemented",
+  but the source-visible demag-k lane is not yet qualified",
 - V2 artifacts containing `path_s`, `k`, `branch_id`, and residual diagnostics.

@@ -708,7 +708,11 @@ pub(super) fn execute_native_modal_window(
         if let Some(object) = potential_provenance.as_object_mut() {
             object.insert(
                 "source_mesh_topology_sha256".to_string(),
-                serde_json::json!(plan.mesh.topology_fingerprint_v6()),
+                serde_json::json!(plan.mesh.mixed_topology_fingerprint_v3().map_err(|error| {
+                    RunError {
+                        message: format!("modal source mesh identity is invalid: {error}"),
+                    }
+                })?),
             );
         }
         for raw_mode_index in requested_mode_indices(outputs) {
@@ -842,7 +846,7 @@ pub(super) fn execute_native_modal_window(
     // otherwise the physical periodic-airbox validator would interpret the
     // zero step count as an unproven equilibrium source.
     if let Some(handoff) = source_relax_handoff {
-        bind_stage_continuation_artifacts(&mut run, handoff)?;
+        bind_stage_continuation_artifacts(&mut run, plan, handoff)?;
     }
     Ok(run)
 }

@@ -52,6 +52,12 @@ FREQUENCY_WINDOW_HZ = (1.0e6, 30.0e9)
 # gate while matching the guide's 1e-7 relaxation tolerance.
 DEMAG_SOLVER_RTOL = 1.0e-7
 DEMAG_SOLVER_MAX_ITERATIONS = 1000
+EIGEN_SOLVER_RTOL = 1.0e-8
+# Keep the PETSc/SLEPc budgets explicit in the benchmark contract.  These
+# match the native sparse modal adapter defaults; zero would delegate to
+# PETSc/SLEPc defaults and make a run's stopping budget non-reproducible.
+EIGEN_SOLVER_MAX_OUTER_ITERATIONS = 64
+EIGEN_SOLVER_MAX_LINEAR_ITERATIONS = 128
 
 AIRBOX_HMAX_M = 100.0e-9
 AIRBOX_GROWTH_RATE = 1.3
@@ -64,6 +70,13 @@ THIN_FILM_ORDER = 1
 K_SIGN = 1.0
 KPATH_SAMPLES_PER_SEGMENT = (20, 20, 20)
 CONTROL_LABELS = ("Gamma", "X", "M", "Gamma")
+# The canonical Gamma-X-M-Gamma path intentionally exercises BV and oblique
+# propagation but contains no pure Damon-Eshbach point.  Keep one explicit
+# auxiliary slab control so the DE dynamic-demag orientation is reproducible
+# and cannot be silently replaced by an arbitrary k from an evidence bundle.
+ANALYTIC_CONTROL_K_RAD_PER_M = 1.0e7
+ANALYTIC_CONTROL_BV_K_VECTOR = (ANALYTIC_CONTROL_K_RAD_PER_M, 0.0, 0.0)
+ANALYTIC_CONTROL_DE_K_VECTOR = (0.0, ANALYTIC_CONTROL_K_RAD_PER_M, 0.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,6 +285,19 @@ def guide_metadata(case: BenchmarkCase) -> dict[str, object]:
             "demag_solver": {
                 "relative_tolerance": DEMAG_SOLVER_RTOL,
                 "max_iterations": DEMAG_SOLVER_MAX_ITERATIONS,
+            },
+            "eigen_solver": {
+                "relative_tolerance": EIGEN_SOLVER_RTOL,
+                "max_outer_iterations": EIGEN_SOLVER_MAX_OUTER_ITERATIONS,
+                "max_linear_iterations": EIGEN_SOLVER_MAX_LINEAR_ITERATIONS,
+            },
+        },
+        "analytic_controls": {
+            "kalinikos_slab_n0": {
+                "control_k_rad_per_m": ANALYTIC_CONTROL_K_RAD_PER_M,
+                "backward_volume_k_vector_rad_per_m": list(ANALYTIC_CONTROL_BV_K_VECTOR),
+                "damon_eshbach_k_vector_rad_per_m": list(ANALYTIC_CONTROL_DE_K_VECTOR),
+                "required_geometries": ["backward_volume", "damon_eshbach"],
             },
         },
         "outputs": {

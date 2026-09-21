@@ -146,4 +146,26 @@ mod tests {
             Some(expected)
         );
     }
+
+    #[test]
+    fn thin_film_p00_is_continuous_at_gamma() {
+        let reference = thin_film_p00(0.0);
+        assert_eq!(reference, 0.0);
+        for kd in [1.0e-18, 1.0e-12, 1.0e-9, 1.0e-6, 9.999e-5, 1.0e-4] {
+            let value = thin_film_p00(kd);
+            assert!(value.is_finite() && value >= 0.0);
+            assert!(
+                (value - reference).abs() < 1.0e-4,
+                "P00 must approach the Kittel limit at kd={kd}: {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn thin_film_p00_matches_expm1_branch_away_from_gamma() {
+        for kd in [1.0e-3, 0.01, 0.15707963267948966, 1.0] {
+            let expected = 1.0 + (-kd).exp_m1() / kd;
+            assert!((thin_film_p00(kd) - expected).abs() < 1.0e-15);
+        }
+    }
 }

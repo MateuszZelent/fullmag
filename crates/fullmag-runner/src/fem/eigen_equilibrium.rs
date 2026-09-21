@@ -107,6 +107,7 @@ pub(super) fn prepare_single_k_stage_continuation(
 
 pub(super) fn bind_stage_continuation_artifacts(
     run: &mut ExecutedRun,
+    plan: &FemEigenPlanIR,
     handoff: &AcceptedFemRelaxStageHandoff,
 ) -> Result<(), RunError> {
     if run.initial_magnetization != handoff.equilibrium_magnetization
@@ -122,6 +123,13 @@ pub(super) fn bind_stage_continuation_artifacts(
         "content_sha256": handoff.content_sha256,
         "equilibrium_content_sha256": handoff.equilibrium_content_sha256,
     });
+    let modal_source_mesh_topology = plan
+        .mesh
+        .mixed_topology_fingerprint_v3()
+        .map_err(|error| RunError {
+            message: format!("modal source mesh identity is invalid: {error}"),
+        })?;
+    let handoff_source_mesh_topology = handoff.source_mesh_topology_sha256.clone();
     let mut bound_summary = false;
     for artifact in &mut run.auxiliary_artifacts {
         let is_summary = artifact.relative_path == "eigen/metadata/eigen_summary.json";
@@ -174,8 +182,12 @@ pub(super) fn bind_stage_continuation_artifacts(
                     serde_json::json!(handoff.content_sha256),
                 );
                 diagnostics.insert(
+                    "relax_to_eigen_source_mesh_topology_sha256".to_string(),
+                    serde_json::json!(handoff_source_mesh_topology.clone()),
+                );
+                diagnostics.insert(
                     "source_mesh_topology_sha256".to_string(),
-                    serde_json::json!(handoff.source_mesh_topology_sha256),
+                    serde_json::json!(modal_source_mesh_topology.clone()),
                 );
                 diagnostics.insert(
                     "relax_to_eigen_handoff".to_string(),
@@ -192,8 +204,12 @@ pub(super) fn bind_stage_continuation_artifacts(
                                 serde_json::json!(handoff.content_sha256),
                             );
                             mode.insert(
+                                "relax_to_eigen_source_mesh_topology_sha256".to_string(),
+                                serde_json::json!(handoff_source_mesh_topology.clone()),
+                            );
+                            mode.insert(
                                 "source_mesh_topology_sha256".to_string(),
-                                serde_json::json!(handoff.source_mesh_topology_sha256),
+                                serde_json::json!(modal_source_mesh_topology.clone()),
                             );
                         }
                     }
@@ -209,8 +225,12 @@ pub(super) fn bind_stage_continuation_artifacts(
                     serde_json::json!(handoff.equilibrium_content_sha256),
                 );
                 object.insert(
+                    "relax_to_eigen_source_mesh_topology_sha256".to_string(),
+                    serde_json::json!(handoff_source_mesh_topology.clone()),
+                );
+                object.insert(
                     "source_mesh_topology_sha256".to_string(),
-                    serde_json::json!(handoff.source_mesh_topology_sha256),
+                    serde_json::json!(modal_source_mesh_topology.clone()),
                 );
             } else if is_solver_diagnostics {
                 object.insert(
@@ -218,8 +238,12 @@ pub(super) fn bind_stage_continuation_artifacts(
                     serde_json::json!(handoff.content_sha256),
                 );
                 object.insert(
+                    "relax_to_eigen_source_mesh_topology_sha256".to_string(),
+                    serde_json::json!(handoff_source_mesh_topology.clone()),
+                );
+                object.insert(
                     "source_mesh_topology_sha256".to_string(),
-                    serde_json::json!(handoff.source_mesh_topology_sha256),
+                    serde_json::json!(modal_source_mesh_topology.clone()),
                 );
                 if let Some(samples) = object
                     .get_mut("sample_solver_diagnostics")
@@ -235,8 +259,12 @@ pub(super) fn bind_stage_continuation_artifacts(
                                 serde_json::json!(handoff.content_sha256),
                             );
                             diagnostics.insert(
+                                "relax_to_eigen_source_mesh_topology_sha256".to_string(),
+                                serde_json::json!(handoff_source_mesh_topology.clone()),
+                            );
+                            diagnostics.insert(
                                 "source_mesh_topology_sha256".to_string(),
-                                serde_json::json!(handoff.source_mesh_topology_sha256),
+                                serde_json::json!(modal_source_mesh_topology.clone()),
                             );
                         }
                     }
@@ -260,8 +288,12 @@ pub(super) fn bind_stage_continuation_artifacts(
                                     serde_json::json!(handoff.content_sha256),
                                 );
                                 mode.insert(
+                                    "relax_to_eigen_source_mesh_topology_sha256".to_string(),
+                                    serde_json::json!(handoff_source_mesh_topology.clone()),
+                                );
+                                mode.insert(
                                     "source_mesh_topology_sha256".to_string(),
-                                    serde_json::json!(handoff.source_mesh_topology_sha256),
+                                    serde_json::json!(modal_source_mesh_topology.clone()),
                                 );
                             }
                         }

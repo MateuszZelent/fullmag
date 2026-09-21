@@ -7,7 +7,7 @@ from collections.abc import Mapping
 
 import verify_fem_frequency_domain_eigen_artifacts as verifier
 from comsol_linearization_binding import validate_linearization_binding
-from comsol_mesh_identity import mesh_topology_fingerprint_v2
+from comsol_mesh_identity import mesh_topology_fingerprint_v2, mesh_topology_fingerprint_v3
 from comsol_magnetic_support import magnetic_element_indices, tet4_cells
 
 
@@ -95,7 +95,15 @@ def read_sample_equilibrium(root, manifest, metadata, mode, sample_index, *, mes
     cells = tet4_cells(mesh)
     elements = magnetic_element_indices(mesh, plan.get("mesh_parts"))
     nodes = sorted({node for element in elements for node in cells[element]})
-    result = validate_linearization_binding(equilibrium, state, mode, nodes, node_count=len(mesh["nodes"]), mesh_signature=computed_signature)
+    result = validate_linearization_binding(
+        equilibrium,
+        state,
+        mode,
+        nodes,
+        node_count=len(mesh["nodes"]),
+        mesh_signature=computed_signature,
+        modal_mesh_signature=mesh_topology_fingerprint_v3(mesh),
+    )
     result["file_hashes"] = hashes
     result["sample_index"] = sample_index
     return result

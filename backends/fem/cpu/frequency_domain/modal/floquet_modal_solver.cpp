@@ -486,6 +486,59 @@ bool create_real_split_matrix(
     return true;
 }
 
+// The shifted operator is a real-frequency rotation of the magnetic block
+// minus sigma times the gyrotropic block. Keep this sparse matrix separate
+// from the MatShell used for the exact Schur action: it is the preconditioner
+// only, while the shell still performs the scalar-field feedback solve.
+bool create_native_floquet_shifted_preconditioner(
+    Mat rotated_a_qq,
+    Mat gyrotropic,
+    PetscScalar shift,
+    Mat *out_matrix)
+{
+    if (rotated_a_qq == nullptr || gyrotropic == nullptr || out_matrix == nullptr) {
+        return false;
+    }
+    *out_matrix = nullptr;
+    if (MatDuplicate(rotated_a_qq, MAT_COPY_VALUES, out_matrix) != 0 ||
+        MatAXPY(
+            *out_matrix,
+            static_cast<PetscScalar>(-shift),
+            gyrotropic,
+            DIFFERENT_NONZERO_PATTERN) != 0 ||
+        // The real-frequency rotation can leave a zero diagonal in the
+        // magnetic block.  PETSc's sparse LU requires every row to have a
+        // diagonal slot, even when its value is zero.  Insert zero-valued
+        // structural entries without changing the preconditioner values.
+        MatSetOption(*out_matrix, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_FALSE) != 0 ||
+        MatSetOption(*out_matrix, MAT_IGNORE_ZERO_ENTRIES, PETSC_FALSE) != 0) {
+        if (*out_matrix != nullptr) {
+            MatDestroy(out_matrix);
+        }
+        return false;
+    }
+    PetscInt row_begin = 0;
+    PetscInt row_end = 0;
+    if (MatGetOwnershipRange(*out_matrix, &row_begin, &row_end) != 0) {
+        MatDestroy(out_matrix);
+        return false;
+    }
+    for (PetscInt row = row_begin; row < row_end; ++row) {
+        if (MatSetValue(*out_matrix, row, row, static_cast<PetscScalar>(0.0), ADD_VALUES) != 0) {
+            MatDestroy(out_matrix);
+            return false;
+        }
+    }
+    if (MatAssemblyBegin(*out_matrix, MAT_FINAL_ASSEMBLY) != 0 ||
+        MatAssemblyEnd(*out_matrix, MAT_FINAL_ASSEMBLY) != 0) {
+        if (*out_matrix != nullptr) {
+            MatDestroy(out_matrix);
+        }
+        return false;
+    }
+    return true;
+}
+
 PetscErrorCode native_floquet_matmult(Mat matrix, Vec x, Vec y)
 {
     void *raw_context = nullptr;
@@ -899,8 +952,8 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
     result.spectral_transform = "shift_invert";
     result.which_eigenpairs = "target_magnitude";
     result.ksp_type = "gmres";
-    result.pc_type = "jacobi";
-    result.factorization_package = "none";
+    result.pc_type = "lu";
+    result.factorization_package = "petsc_default_lu";
     result.poisson_ksp_type = "preonly";
     result.poisson_pc_type = "lu";
     result.poisson_factorization_package = "petsc_default_lu";
@@ -948,6 +1001,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
         2u * operator_view.phi_dof_count);
     Mat shell = nullptr;
     Mat gyrotropic = nullptr;
+    Mat shifted_preconditioner = nullptr;
     EPS eps = nullptr;
     Vec xr = nullptr;
     Vec xi = nullptr;
@@ -966,6 +1020,9 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
         }
         if (gyrotropic != nullptr) {
             MatDestroy(&gyrotropic);
+        }
+        if (shifted_preconditioner != nullptr) {
+            MatDestroy(&shifted_preconditioner);
         }
         destroy_native_floquet_context(&context);
     };
@@ -1083,6 +1140,9 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
         spectral_request.residual_tolerance > 0.0
             ? spectral_request.residual_tolerance
             : 1.0e-10);
+    const PetscReal target_shift = static_cast<PetscReal>(
+        omega_rad_s_from_frequency_hz(
+            std::max(0.0, spectral_request.target_frequency_hz)));
     const PetscReal shifted_ksp_tolerance = std::max(
         static_cast<PetscReal>(1.0e-13),
         std::min(static_cast<PetscReal>(1.0e-8),
@@ -1092,10 +1152,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
         : PETSC_DEFAULT;
     if (EPSSetDimensions(eps, nev, PETSC_DEFAULT, PETSC_DEFAULT) != 0 ||
         EPSSetWhichEigenpairs(eps, EPS_TARGET_MAGNITUDE) != 0 ||
-        EPSSetTarget(
-            eps,
-            static_cast<PetscScalar>(omega_rad_s_from_frequency_hz(
-                std::max(0.0, spectral_request.target_frequency_hz)))) != 0 ||
+        EPSSetTarget(eps, static_cast<PetscScalar>(target_shift)) != 0 ||
         EPSSetTrueResidual(eps, PETSC_TRUE) != 0 ||
         EPSSetTolerances(eps, eigen_tolerance, max_outer) != 0 ||
         EPSGetST(eps, &spectral_transform) != 0 ||
@@ -1105,30 +1162,24 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
         // the explicit rotated magnetic block below is only its safe
         // preconditioner and must not become the eigensolver operator.
         STSetMatMode(spectral_transform, ST_MATMODE_SHELL) != 0 ||
-        STSetShift(
-            spectral_transform,
-            static_cast<PetscScalar>(omega_rad_s_from_frequency_hz(
-                std::max(0.0, spectral_request.target_frequency_hz)))) != 0 ||
-        // context.rotated_a_qq is the real-split of -i*phase_sign*A_qq.  A_qq
-        // is the Hermitian magnetic-Hessian block and therefore has a REAL
-        // diagonal; rotating it by -i maps that real diagonal into the
-        // off-diagonal 2x2 slots of the real-split layout and leaves the
-        // matrix's own main diagonal IDENTICALLY ZERO (see create_real_split_
-        // matrix: for a diagonal entry, rotation_sign != 0 gives block_real =
-        // sign*Im(value) = 0).  PCJACOBI would then silently substitute 1.0
-        // for every zero diagonal entry, degenerating to the identity.
-        // context.a_qq (the UNROTATED real-split of A_qq, already built above
-        // and already live for the MatShell action) has exactly the diagonal
-        // Jacobi needs: Re(A_qq_jj) in both real/imag block positions.  The
-        // -sigma*B contribution to the shifted operator's diagonal is zero
-        // regardless (B_qq is real skew-symmetric/anti-Hermitian and so has a
-        // zero diagonal itself), so context.a_qq's diagonal is a faithful
-        // approximation of the full shifted operator's diagonal.
-        STSetPreconditionerMat(spectral_transform, context.a_qq) != 0 ||
+        STSetShift(spectral_transform, static_cast<PetscScalar>(target_shift)) != 0 ||
+        !create_native_floquet_shifted_preconditioner(
+            context.rotated_a_qq,
+            gyrotropic,
+            static_cast<PetscScalar>(target_shift),
+            &shifted_preconditioner) ||
+        // The explicit magnetic shifted pencil keeps the matrix-free Schur
+        // action as the operator while giving GMRES a factored, nonzero
+        // shifted block. A Jacobi diagonal is invalid here because the
+        // real-frequency rotation puts the magnetic and gyrotropic terms in
+        // off-diagonal real-split slots.
+        STSetPreconditionerMat(spectral_transform, shifted_preconditioner) != 0 ||
         STGetKSP(spectral_transform, &shifted_ksp) != 0 ||
         KSPSetType(shifted_ksp, KSPGMRES) != 0 ||
         KSPGetPC(shifted_ksp, &shifted_pc) != 0 ||
-        PCSetType(shifted_pc, PCJACOBI) != 0 ||
+        PCSetType(shifted_pc, PCLU) != 0 ||
+        PCFactorReorderForNonzeroDiagonal(shifted_pc, 1.0e-12) != 0 ||
+        PCFactorSetShiftType(shifted_pc, MAT_SHIFT_NONE) != 0 ||
         KSPSetTolerances(
             shifted_ksp,
             shifted_ksp_tolerance,

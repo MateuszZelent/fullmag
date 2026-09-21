@@ -1,6 +1,7 @@
 //! Private FEM eigen-path guards helpers.
 
 use super::*;
+use crate::fem::eigen_constants::GAMMA_K_TOLERANCE_RAD_PER_M;
 
 pub(super) fn gpu_modal_dispersion_path_unavailable_error(plan: &FemEigenPlanIR) -> RunError {
     if plan.operator.include_demag || plan.enable_demag {
@@ -30,10 +31,9 @@ pub(super) fn gpu_modal_k0_kittel_path_supported(plan: &FemEigenPlanIR) -> bool 
     };
     let gamma_only_path = !points.is_empty()
         && points.iter().all(|point| {
-            point
-                .k_vector
-                .iter()
-                .all(|component| component.is_finite() && component.abs() <= 1.0e-12)
+            point.k_vector.iter().all(|component| {
+                component.is_finite() && component.abs() <= GAMMA_K_TOLERANCE_RAD_PER_M
+            })
         });
     if !gamma_only_path {
         return false;
@@ -77,10 +77,9 @@ pub(super) fn periodic_airbox_k0_physical_plan(plan: &FemEigenPlanIR) -> bool {
         };
         !points.is_empty()
             && points.iter().all(|point| {
-                point
-                    .k_vector
-                    .iter()
-                    .all(|component| component.is_finite() && component.abs() <= 1.0e-12)
+                point.k_vector.iter().all(|component| {
+                    component.is_finite() && component.abs() <= GAMMA_K_TOLERANCE_RAD_PER_M
+                })
             })
     });
 
@@ -104,7 +103,7 @@ fn normalize_gamma_floquet_point_to_periodic_k0(
     let gamma = sample
         .k_vector
         .iter()
-        .all(|component| component.is_finite() && component.abs() <= 1.0e-12);
+        .all(|component| component.is_finite() && component.abs() <= GAMMA_K_TOLERANCE_RAD_PER_M);
     if !gamma
         || !crate::fem::eigen_capability::native_cpu_modal_window_has_floquet_dynamic_demag_path(
             source_plan,
@@ -226,6 +225,22 @@ pub(super) fn k0_kittel_synthetic_demag_factor_enabled(plan: &FemEigenPlanIR) ->
             })
 }
 
+/// Keep the production dispersion path numeric even when a plan was built
+/// directly instead of going through the planner.  The planner rejects this
+/// combination already, but the runner must defend the same invariant at the
+/// execution boundary because callers can construct `FemEigenPlanIR`
+/// programmatically or replay an older plan artifact.
+pub(super) fn reject_reference_solver_for_dispersion_validation(
+    plan: &FemEigenPlanIR,
+) -> Result<(), RunError> {
+    if plan.dispersion_validation.is_some() && k0_kittel_synthetic_demag_factor_enabled(plan) {
+        return Err(RunError {
+            message: "dispersion_validation_requires_numeric_fem_solve: analytic_or_synthetic_reference_solver_cannot_provide_dispersion_frequencies".to_string(),
+        });
+    }
+    Ok(())
+}
+
 pub(super) fn solve_k0_kittel_synthetic_demag_factor_single_k(
     plan: &FemEigenPlanIR,
     sample: &crate::eigen::KSampleDescriptor,
@@ -304,6 +319,44 @@ pub(super) fn solve_k0_kittel_synthetic_demag_factor_single_k(
     })
 }
 
+fn validate_kalinikos_parameters(
+    k_norm: f64,
+    film_thickness_m: f64,
+    exchange_stiffness_j_per_m: f64,
+    saturation_magnetisation_a_per_m: f64,
+    gamma0_rad_s_per_a_m: f64,
+) -> Result<(), RunError> {
+    if !(k_norm.is_finite() && k_norm >= 0.0) {
+        return Err(RunError {
+            message: "Kalinikos n=0 reference requires finite non-negative |k|".to_string(),
+        });
+    }
+    if !(film_thickness_m.is_finite() && film_thickness_m > 0.0) {
+        return Err(RunError {
+            message: "Kalinikos n=0 reference requires finite positive film thickness".to_string(),
+        });
+    }
+    if !(exchange_stiffness_j_per_m.is_finite() && exchange_stiffness_j_per_m >= 0.0) {
+        return Err(RunError {
+            message: "Kalinikos n=0 reference requires finite non-negative exchange stiffness"
+                .to_string(),
+        });
+    }
+    if !(saturation_magnetisation_a_per_m.is_finite() && saturation_magnetisation_a_per_m > 0.0) {
+        return Err(RunError {
+            message: "Kalinikos n=0 reference requires finite positive saturation magnetisation"
+                .to_string(),
+        });
+    }
+    if !(gamma0_rad_s_per_a_m.is_finite() && gamma0_rad_s_per_a_m > 0.0) {
+        return Err(RunError {
+            message: "Kalinikos n=0 reference requires finite positive gyromagnetic ratio"
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
 pub(super) fn kalinikos_slab_n0_frequency_hz(
     k_norm: f64,
     geometry: &str,
@@ -313,6 +366,13 @@ pub(super) fn kalinikos_slab_n0_frequency_hz(
     saturation_magnetisation_a_per_m: f64,
     gamma0_rad_s_per_a_m: f64,
 ) -> Result<f64, RunError> {
+    validate_kalinikos_parameters(
+        k_norm,
+        film_thickness_m,
+        exchange_stiffness_j_per_m,
+        saturation_magnetisation_a_per_m,
+        gamma0_rad_s_per_a_m,
+    )?;
     if !(bias_field_a_per_m.is_finite() && bias_field_a_per_m > 0.0) {
         return Err(RunError {
             message: "DE/BV analytic reference requires a nonzero finite bias field".to_string(),
@@ -346,13 +406,67 @@ pub(super) fn kalinikos_slab_n0_frequency_hz(
     Ok(gamma0_rad_s_per_a_m * (factor_a * factor_b).sqrt() / std::f64::consts::TAU)
 }
 
-pub(super) fn de_bv_geometry_for_k(
+/// Evaluate the homogeneous-film n=0 Kalinikos--Slavin branch for an
+/// arbitrary in-plane propagation angle.  `sin_squared_phi` is the squared
+/// sine of the angle between k and the equilibrium magnetisation.  Keeping
+/// this beside the BV/DE special cases prevents oblique points on a Gamma-X-
+/// M-Gamma path from losing their postsolve reference value.
+pub(super) fn kalinikos_slab_n0_frequency_hz_for_angle(
+    k_norm: f64,
+    sin_squared_phi: f64,
+    bias_field_a_per_m: f64,
+    film_thickness_m: f64,
+    exchange_stiffness_j_per_m: f64,
+    saturation_magnetisation_a_per_m: f64,
+    gamma0_rad_s_per_a_m: f64,
+) -> Result<f64, RunError> {
+    if !(k_norm.is_finite()
+        && k_norm >= 0.0
+        && sin_squared_phi.is_finite()
+        && (0.0..=1.0).contains(&sin_squared_phi))
+    {
+        return Err(RunError {
+            message:
+                "Kalinikos n=0 arbitrary-angle reference requires finite k and sin²(phi) in [0, 1]"
+                    .to_string(),
+        });
+    }
+    validate_kalinikos_parameters(
+        k_norm,
+        film_thickness_m,
+        exchange_stiffness_j_per_m,
+        saturation_magnetisation_a_per_m,
+        gamma0_rad_s_per_a_m,
+    )?;
+    if !(bias_field_a_per_m.is_finite() && bias_field_a_per_m > 0.0) {
+        return Err(RunError {
+            message: "Kalinikos n=0 arbitrary-angle reference requires a nonzero finite bias field"
+                .to_string(),
+        });
+    }
+    let exchange_field = 2.0 * exchange_stiffness_j_per_m * k_norm * k_norm
+        / (crate::MU0 * saturation_magnetisation_a_per_m);
+    let kd = k_norm * film_thickness_m;
+    let p_factor = crate::fem::eigen_math::thin_film_p00(kd);
+    let common = bias_field_a_per_m + exchange_field;
+    let factor_a = common + saturation_magnetisation_a_per_m * (1.0 - p_factor);
+    let factor_b = common + saturation_magnetisation_a_per_m * p_factor * sin_squared_phi;
+    if !(factor_a.is_finite() && factor_a > 0.0 && factor_b.is_finite() && factor_b > 0.0) {
+        return Err(RunError {
+            message: "Kalinikos n=0 arbitrary-angle factors must be finite and positive"
+                .to_string(),
+        });
+    }
+    Ok(gamma0_rad_s_per_a_m * (factor_a * factor_b).sqrt() / std::f64::consts::TAU)
+}
+
+pub(super) fn de_bv_sin_squared_phi_for_k(
     k_vector: [f64; 3],
     validation: &fullmag_ir::FemEigenDispersionValidationIR,
-) -> Result<&'static str, RunError> {
+) -> Result<f64, RunError> {
     let k_norm = vector_norm(k_vector);
     if k_norm == 0.0 {
-        return Ok("backward_volume");
+        return Ok(0.0);
     }
     let k = unit_vector(k_vector).ok_or_else(|| RunError {
         message: "DE/BV analytic reference requires finite nonzero k".to_string(),
@@ -369,10 +483,17 @@ pub(super) fn de_bv_geometry_for_k(
             message: "DE/BV analytic reference requires in-plane k vectors".to_string(),
         });
     }
-    let projection = vector_dot(k, m0).abs();
-    if (projection - 1.0).abs() <= 1.0e-6 {
+    Ok((1.0 - vector_dot(k, m0).powi(2)).clamp(0.0, 1.0))
+}
+
+pub(super) fn de_bv_geometry_for_k(
+    k_vector: [f64; 3],
+    validation: &fullmag_ir::FemEigenDispersionValidationIR,
+) -> Result<&'static str, RunError> {
+    let sin_squared_phi = de_bv_sin_squared_phi_for_k(k_vector, validation)?;
+    if sin_squared_phi <= 1.0e-12 {
         Ok("backward_volume")
-    } else if projection <= 1.0e-6 {
+    } else if (sin_squared_phi - 1.0).abs() <= 1.0e-12 {
         Ok("damon_eshbach")
     } else {
         Err(RunError {

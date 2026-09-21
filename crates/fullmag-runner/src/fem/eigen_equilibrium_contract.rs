@@ -935,7 +935,8 @@ pub(crate) fn accepted_relax_to_eigen_handoff_from_run(
         |field: &str| diagnostics.get(field).and_then(serde_json::Value::as_str);
     if source_topology != handoff.source_mesh_topology_sha256()
         || declared_content != handoff.content_sha256()
-        || diagnostic_string("source_mesh_topology_sha256") != Some(source_topology.as_str())
+        || diagnostic_string("relax_to_eigen_source_mesh_topology_sha256")
+            != Some(source_topology.as_str())
         || diagnostic_string("relax_to_eigen_handoff_sha256") != Some(declared_content.as_str())
         || diagnostic_string("equilibrium_artifact_sha256") != Some(equilibrium_artifact.as_str())
         || diagnostic_string("linearization_state_sha256") != Some(linearization_state.as_str())

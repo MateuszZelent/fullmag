@@ -1,8 +1,9 @@
+use super::eigen_constants::GAMMA_K_TOLERANCE_RAD_PER_M;
 use super::eigen_constants::SHARED_DOMAIN_K0_RUNTIME_UNAVAILABLE_REASON;
 use super::eigen_policy::{
     k_sampling_is_single_k0, native_cpu_modal_window_has_bloch_floquet_payload_path,
-    native_cpu_modal_window_has_periodic_k0_runner_operator_path,
-    native_modal_target_frequency_hz, shared_domain_k0_modal_requested,
+    native_cpu_modal_window_has_periodic_k0_runner_operator_path, native_modal_target_frequency_hz,
+    shared_domain_k0_modal_requested,
 };
 use super::eigen_reduction::{is_gamma_k_sampling, k_sampling_contains_nonzero};
 use super::eigen_shared_domain::native_shared_domain_magnetic_assembly_available;
@@ -93,16 +94,21 @@ pub(crate) fn native_cpu_modal_window_has_floquet_dynamic_demag_path(
     match plan.k_sampling.as_ref() {
         Some(fullmag_ir::KSamplingIR::Single { k_vector }) => {
             k_vector.iter().all(|value| value.is_finite())
-                && k_vector.iter().any(|value| value.abs() > 1.0e-12)
+                && k_vector
+                    .iter()
+                    .any(|value| value.abs() > GAMMA_K_TOLERANCE_RAD_PER_M)
         }
         Some(fullmag_ir::KSamplingIR::Path { points, .. }) => {
             !points.is_empty()
                 && points
                     .iter()
                     .all(|point| point.k_vector.iter().all(|value| value.is_finite()))
-                && points
-                    .iter()
-                    .any(|point| point.k_vector.iter().any(|value| value.abs() > 1.0e-12))
+                && points.iter().any(|point| {
+                    point
+                        .k_vector
+                        .iter()
+                        .any(|value| value.abs() > GAMMA_K_TOLERANCE_RAD_PER_M)
+                })
         }
         None => false,
     }

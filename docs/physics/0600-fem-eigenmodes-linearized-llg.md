@@ -159,17 +159,25 @@ The narrow native CPU bridge may consume a caller-supplied dense
   DOF ordering, phase convention `exp(i omega t)`, and periodic-pair map.
 
 This is an explicit operator-input contract for native numerical validation.
-It is not a periodic-Poisson implementation, does not construct
-`K_demag(k)` from mesh/airbox data, and does not make dynamic demag-k publicly
-available through Python, `ProblemIR`, planner, API, or the control room.
-Sparse/matrix-free and assembled MFEM dynamic-demag-k operators remain
-deferred until a native periodic magnetostatic realization can provide the
-same operator with solver telemetry and analytical validation.
+It remains separate from the production shared-domain path. The current
+sources also contain a native CPU shared-domain Floquet/airbox assembly for
+constructing `K_demag(k)` from mesh and airbox data, together with the
+real-frequency rotated SLEPc pencil. That implementation is selected only by
+the strict planner prerequisites and is still distinct from a qualified
+runtime result. Python and `ProblemIR` may express
+`magnetostatic_bc="floquet_airbox"`, while unsupported combinations fail in
+planning rather than silently falling back; the current snapshot has no
+managed or physical qualification for this lane.
+
+Sparse/matrix-free and assembled MFEM dynamic-demag-k operators are therefore
+source-visible but not promoted. Promotion still requires solver telemetry,
+residual checks, analytical controls, and managed convergence evidence.
 
 Validation for this bridge requires a zero-matrix equivalence check, a nonzero
 matrix frequency-shift check against the same dense block-real oracle, shape
-and finite-value rejection tests, and retained explicit capability rejection
-for public nonzero-k Floquet demag requests.
+and finite-value rejection tests, and an explicit planner/runtime gate for
+requests whose shared-domain Floquet implementation lacks the required
+managed evidence.
 
 ## Poisson-airbox `k=0` modal eigensolve implementation
 
@@ -411,6 +419,14 @@ skończone dodatnie maksimum wektora falowego oraz skończone, uporządkowane
 okno częstotliwości z nieujemnym minimum. Oba parametry przechodzą bez
 zmiany do `runtime_metadata.dispersion_validation` i planu FEM.
 
+To rozróżnienie jest istotne dla benchmarku C1: jego zakres nie mieści się w
+historycznym presecie. Dla filmu o okresie $a=200\,\mathrm{nm}$ używa się
+`max_k_rad_per_m=pi/(200e-9)` oraz okna obejmującego co najmniej
+$0$--$15\,\mathrm{GHz}$;
+wartości te muszą być jawnie podane w konfiguracji benchmarku. C0 z wyłączonym
+dynamicznym demagiem jest osobnym testem kontrolnym i nie dowodzi zgodności
+operatora demagnetyzacji dla C1.
+
 Porównanie KS n=0 dotyczy jednorodnej warstwy, równowagi w płaszczyźnie,
 modu podstawowego o prawie jednorodnym profilu po grubości oraz odpowiedniej
 orientacji BV lub DE. Walidator wymaga dodatniej zgodności kierunku pola z
@@ -431,6 +447,28 @@ a nie utożsamiać z otwartą przestrzenią. Dla C1 grubość wynosi 10 nm,
 maksimum na odcinku Gamma-X wynosi pi/(200 nm), a okno musi obejmować
 częstość Kittela około 9.31 GHz. Odcinki ukośne wymagają osobnego modelu
 kątowego; nie wolno oznaczać ich jako BV albo DE.
+
+Dlatego trzy liczby widoczne na wykresach nie są zamienne: kontrola C0 bez
+demagu ma około $2.800264\,\mathrm{GHz}$, analityczna granica otwartego filmu
+C1 w punkcie $\Gamma$ ma około $9.309814\,\mathrm{GHz}$, a wstępny natywny
+solve C1 z periodycznym airboxem dał $8.906582\,\mathrm{GHz}$. Ta ostatnia
+wartość pochodzi z diagnostycznej siatki 391-węzłowej z jednym elementem po
+grubości i około $1\,\mu\mathrm{m}$ powietrza; jej residual był mały, ale
+nie przeszła certyfikacji okna/zbieżności. Różnica nie jest dowodem błędu
+analityki ani solvera, dopóki nie zostanie powtórzona kampania zbieżności
+siatki, liczbą warstw i airboxem. Jako diagnostyczna wskazówka, przeliczenie tej jednej liczby na skalarnego
+Kittela daje efektywny $N_z\approx0.9068$. Dla modelu
+$N_z=1-t/(t+2d)$ oznacza to efektywną odległość granicy Dirichleta
+$d\approx48.7\,\mathrm{nm}$ od każdej powierzchni filmu; bezpośrednio dla
+$d=50\,\mathrm{nm}$ model daje około $8.916623\,\mathrm{GHz}$. Jest to
+zgodne ze skalą starego wyniku i nie jest zgodne z deklarowanym w C1
+$d=2\,\mu\mathrm{m}$, dla którego oczekujemy $N_z\approx0.997506$ i
+$9.299250\,\mathrm{GHz}$. Wniosek z preview jest więc węższy: artefakt miał
+efektywną geometrię lub dyskretyzację normalną odpowiadającą znacznie
+mniejszemu airboxowi (ewentualnie jego bounds nie były tymi z konfiguracji),
+albo nie rozwiązywał poprawnie profilu po grubości. Residual nie wykrywa takiej
+niespójności fizycznej; trzeba odczytać rzeczywiste bounds z `DomainFrameIR` i
+wykonać sweep paddingu oraz liczby warstw.
 
 Współczynnik P00 jest obliczany stabilnie: dla małego bezwymiarowego argumentu
 `x=|k|*t` używane jest rozwinięcie `x/2-x^2/6+x^3/24-x^4/120+x^5/720`,
