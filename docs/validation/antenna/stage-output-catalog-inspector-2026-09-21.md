@@ -141,3 +141,76 @@ i obecnie ma status **not run — storage/environment blocker**. Nadal trzeba
 wykonać go przeciwko działającej usłudze, dodać Relax/Run, export/reload,
 waveform/reuse, stale/geometry oraz osobny lifecycle field-map, a następnie
 połączyć stage z natywnym polem FDM/FEM zgodnie z T16.
+
+## Aktualizacja runtime i browser smoke — 2026-09-21
+
+### Naprawa awarii transakcji authoringu
+
+Pierwsze uruchomienie smoke ujawniło rzeczywistą awarię po stronie API:
+`POST /v2/sessions/current/model/transactions` kończył proces workera Tokio
+`STATUS_STACK_OVERFLOW` jeszcze przed wejściem do logiki wariantu transakcji.
+Przyczyną nie był payload anteny, lecz ogromny `async fn` z jednym dopasowaniem
+wszystkich wariantów `AuthoringTransactionRequest`; Windowsowy worker musiał
+zbudować zbyt duży typ przyszłości. Zachowano publiczny extractor JSON i
+rozbito dispatcher na synchroniczne dopasowanie oraz osobno boksowane futures
+dla poszczególnych wariantów. Dzięki temu nie zmieniono kontraktu API ani
+semantyki commitów, a zmniejszono rozmiar przyszłości konstruowanej przez
+runtime.
+
+Dowód minimalny po restarcie przez zarządzany `just control-room-v2` (stable
+toolchain, storage na `D:\git\fullmag\storage`):
+
+- utworzenie sesji zwróciło `201 Created`;
+- pusty `merge_patch` zwrócił `200 OK`, `transaction_kind=merge_patch` oraz
+  `scene_revision=1`;
+- `/healthz` zwrócił `200 OK` po transakcji, bez ponownego stack overflow.
+
+### Wynik pierwszej fazy browser smoke
+
+Uruchomiono:
+
+```text
+CONTROL_ROOM_API_BASE=http://127.0.0.1:8081
+CONTROL_ROOM_URL=http://127.0.0.1:3107/workspace
+pnpm --dir apps/control-room smoke:antenna-authoring-ui
+```
+
+Smoke zakończył się powodzeniem dla ograniczonego kontraktu authoringu:
+
+- utworzono obiekt przewodnika, port, stage solve i output;
+- Explorer oraz dedykowane Inspectory rozwiązały stabilne identyfikatory;
+- katalog stage/output i metadane `H_ant_basis` osiągnęły stan `ready`;
+- canvas WebGL był widoczny, drawing buffer niezerowy, a kontekst nie był
+  utracony;
+- manifest podał `scene_revision=1` oraz wszystkie rozstrzygnięte ID.
+
+Świadectwa zapisano w:
+
+```text
+D:\git\fullmag\worktrees\microwave-antenna-latest-20260909\.fullmag\test-results\antenna-authoring\fdm-authoring-inspector.png
+D:\git\fullmag\worktrees\microwave-antenna-latest-20260909\.fullmag\test-results\antenna-authoring\fdm-authoring-inspector.manifest.json
+```
+
+Fixture zasobów ustawia jawne nagłówki CORS dla
+`x-api-contract-version` i `etag`. Smoke toleruje wyłącznie znane anulowane
+żądania GET wywołane przez kontrolowaną invalidację (`shared-domain/manifest`,
+`stages/execution`, `fdm-region-memberships`, `domain/topology`) i zapisuje je
+w `expected_request_failures`; każda inna awaria żądania powoduje niepowodzenie
+testu.
+
+Ten wynik jest dowodem stabilności transakcji, authoringu, control-plane
+metadata i cyklu życia WebGL. Nie jest dowodem natywnego solve FEM/FDM,
+projekcji pola na komórki, Relax/LLG, FFT, export/reload, reuse ani stale
+invalidation. Te bramki pozostają otwarte w T15/T16 i muszą być wykonane na
+rzeczywistych artefaktach, z kontenerowym runtime dla ścieżek FEM/MFEM/CUDA.
+
+### Pozostałe ograniczenia w tej iteracji
+
+- Nie kompilowano testów jednostkowych Rust zgodnie z bieżącą blokadą sesji.
+- Typecheck Control Room nadal raportuje wyłącznie istniejące błędy
+  nullability w `src/modules/field-map/FieldMapModule.tsx:588-591`; zmienione
+  pliki antenowe nie dodały nowych błędów.
+- Testy Vitest authoringu i kompozycji anteny przechodzą: **55/55** w trzech
+  celowanych plikach (`geometryLifecycleCommandContributions`, model i DOM
+  kompozycji). ESLint zmienionych plików przechodzi z jednym wcześniejszym
+  ostrzeżeniem `sceneFieldDrives` w istniejącym kodzie.

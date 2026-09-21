@@ -944,10 +944,37 @@ kontraktu Node. Smoke ma jawnie ograniczony zakres pierwszej fazy T15:
 z kontrolowanymi odpowiedziami zasobów pola/katalogu. Nie jest jeszcze pełnym
 `smoke-antenna-workflow.mjs`: nie wykonuje native solve, Relax/LLG,
 export/reload, waveform/reuse, stale ani lifecycle field-map. Próba wykonania
-21.09.2026 ma status **not run**: API nie nasłuchiwało, a launcher
-`just control-room-v2` został zatrzymany przez storage guard na realnych
-`node_modules`; ich migracja wymaga osobnej, jawnej decyzji i nie została
-wykonana.
+21.09.2026 ma status **zaliczona dla pierwszej fazy authoring/WebGL** po
+przeniesieniu frontendowych artefaktów do zarządzanego storage. Zakres i
+ograniczenia tego smoke pozostają takie same: nie wykonuje on native solve,
+Relax/LLG, export/reload, waveform/reuse, stale ani lifecycle field-map.
+
+**Uzupełnienie implementacyjne 2026-09-21 (dispatcher transakcji i dowód
+runtime):** pierwsze uruchomienie ujawniło `STATUS_STACK_OVERFLOW` w workerze
+Tokio przy `POST /v2/sessions/current/model/transactions`. Źródłem był zbyt
+duży typ przyszłości generowany przez jeden asynchroniczny match wszystkich
+wariantów `AuthoringTransactionRequest`, a nie niepoprawna scena anteny.
+Handler zachowuje extractor JSON i publiczny kontrakt, lecz używa
+synchronicznego dispatchera z osobno boksowanym future dla każdego wariantu.
+Po restarcie przez zarządzany `just control-room-v2` utworzenie sesji zwróciło
+`201`, pusty `merge_patch` zwrócił `200` z `scene_revision=1`, a `/healthz`
+pozostał zdrowy. Jest to naprawa runtime control-plane, nie kwalifikacja
+fizycznego pola.
+
+Pierwsza faza browser smoke zakończyła się wynikiem **pass**: conductor,
+port, stage/output, katalog thin metadata i WebGL spełniły kontrakt, a manifest
+zawiera rozstrzygnięte ID oraz `scene_revision`. Fixture jawnie eksponuje
+`x-api-contract-version` i `etag`; cztery znane anulowane żądania GET są
+rejestrowane osobno, a wszystkie inne błędy żądań kończą test negatywnie.
+Wynik zapisano w `.fullmag/test-results/antenna-authoring/` jako screenshot i
+manifest. T15 pozostaje częściowo otwarte: pełny workflow z natywnym solve,
+Relax/LLG, FFT, export/reload, reuse i stale musi zostać wykonany przed
+odhaczeniem bramki browser.
+
+Weryfikacja tej iteracji: celowane Vitest **55/55**, ESLint zmienionych plików
+bez nowych błędów, `git diff --check` **OK**. Typecheck nadal ma trzy znane
+błędy nullability w `FieldMapModule.tsx:588-591`; testów jednostkowych Rust nie
+kompilowano, a kwalifikacji FEM/FDM GPU nie przeprowadzono.
 
 **Pliki:** istniejące AntennaObjectPanel/Model/test, geometry command i test, Explorer/ribbon; nowe panele w `apps/control-room/src/modules/inspector/panels/antenna/`: `AntennaConductorPanel.tsx`, `AntennaPortPanel.tsx`, `AntennaSolutionPanel.tsx`, `AntennaProjectionPanel.tsx`, `SolvedAntennaDrivePanel.tsx`, `AntennaSpectrumPanel.tsx`.
 
