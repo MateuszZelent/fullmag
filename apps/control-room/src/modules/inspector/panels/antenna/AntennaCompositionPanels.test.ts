@@ -21,13 +21,13 @@ function sceneFixture(): SceneResource {
       {
         id: "spectrum-1",
         output_id: "spectrum-output",
-        solution_ref: { output_id: "h-ant-output" },
+        solution_ref: { output_id: "h-ant-output", stage_id: "solve-1" },
       },
     ],
     antenna_target_projections: [
       {
         id: "projection-1",
-        solution: { output_id: "h-ant-output" },
+        solution: { output_id: "h-ant-output", stage_id: "solve-1" },
       },
     ],
     solved_antenna_drives: [
@@ -41,6 +41,7 @@ describe("resolveAntennaRuntimeIds", () => {
     expect(resolveAntennaRuntimeIds("solution", "solve-1", sceneFixture())).toEqual({
       solutionId: "h-ant-output",
       spectrumOutputId: null,
+      stageId: "solve-1",
     });
   });
 
@@ -49,10 +50,12 @@ describe("resolveAntennaRuntimeIds", () => {
     expect(resolveAntennaRuntimeIds("spectrum", "spectrum-1", scene)).toEqual({
       solutionId: "h-ant-output",
       spectrumOutputId: "spectrum-output",
+      stageId: "solve-1",
     });
     expect(resolveAntennaRuntimeIds("drive", "drive-1", scene)).toEqual({
       solutionId: "h-ant-output",
       spectrumOutputId: null,
+      stageId: "solve-1",
     });
   });
 
@@ -60,6 +63,7 @@ describe("resolveAntennaRuntimeIds", () => {
     expect(resolveAntennaRuntimeIds("solution", "missing", sceneFixture())).toEqual({
       solutionId: null,
       spectrumOutputId: null,
+      stageId: null,
     });
   });
 });

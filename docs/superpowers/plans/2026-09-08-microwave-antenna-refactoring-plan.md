@@ -835,6 +835,16 @@ walidacja konfliktu i pełny browser smoke nadal należą do T14/T15.
 
 **Stan 2026-09-11:** dedykowane węzły Explorer i routing Inspectora są już podłączone, a `AntennaCompositionPanel` rozwiązuje authored stage/request do właściwych `output_id` i korzysta z typowanych hooków wyników anteny. Węzły `solution` i `spectrum` pokazują stan zasobu (`loading/ready/stale/error/missing`) oraz metadane manifestu; `projection` i `drive` pokazują dostępność opublikowanej bazy pola. Dodano test resolvera identyfikatorów oraz DOM regresję gotowego wyniku. Commit `d48f32cd9` dodaje dekodowanie czterech payloadów `float64_le`, bounded heatmapę `|H(k_u,k_v)|²` z peak/k-grid oraz testy gotowego i błędnego transportu; `cae985d3b` zachowuje kody `missing_payload`/`unsupported_topology` jako jawny błąd Inspectora zamiast maskowania ich jako brak zasobu. Nadal brakuje pełnego browser smoke `create → solve → inspect → stale` i diagnostyki React dla całego workflow.
 
+**Uzupełnienie implementacyjne 2026-09-21:** `AntennaCompositionPanel` korzysta
+z typowanego `useAntennaStageOutputCatalogResource`. Resolver przekazuje teraz
+`stageId` dla węzłów `solution`, `projection`, `drive` i `spectrum`, a Inspector
+pokazuje osobno stan katalogu (`ready/loading/stale/error/missing`), status i
+rewizję stage, opublikowane output IDs, quantities, digest oraz diagnostykę.
+Pozostaje to cienkimi metadanymi control plane; payloady pola i FFT nie są
+ładowane przez ten panel. Dodano regresję modelu i DOM dla gotowego katalogu.
+Pełny browser smoke, diagnostyka React oraz kwalifikacja runtime nadal pozostają
+otwarte.
+
 **Pliki:** istniejące AntennaObjectPanel/Model/test, geometry command i test, Explorer/ribbon; nowe panele w `apps/control-room/src/modules/inspector/panels/antenna/`: `AntennaConductorPanel.tsx`, `AntennaPortPanel.tsx`, `AntennaSolutionPanel.tsx`, `AntennaProjectionPanel.tsx`, `SolvedAntennaDrivePanel.tsx`, `AntennaSpectrumPanel.tsx`.
 
 - [ ] Rozdzielić etykiety „Pole regionalne” i „Antena przewodnikowa”. Stary regional panel pozostaje edytorem regional drive; nie używać go jako fallback dla brakującej konfiguracji solved source.

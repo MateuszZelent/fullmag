@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { SceneResource } from "@/kernel/api/apiTypes";
 import {
   useAntennaFieldSolutionResource,
+  useAntennaStageOutputCatalogResource,
   useAntennaSourceSpectrumResource,
 } from "@/kernel/resources/antennaResources";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
@@ -55,10 +56,14 @@ type AntennaFieldSolutionResult = ReturnType<
 type AntennaSourceSpectrumResult = ReturnType<
   typeof useAntennaSourceSpectrumResource
 >;
+type AntennaStageOutputCatalogResult = ReturnType<
+  typeof useAntennaStageOutputCatalogResource
+>;
 
 interface AntennaRuntimeIds {
   solutionId: string | null;
   spectrumOutputId: string | null;
+  stageId: string | null;
 }
 
 function selectedObjectId(selection: InspectorPanelProps["selection"]): string | null {
@@ -96,7 +101,7 @@ export function resolveAntennaRuntimeIds(
   scene: SceneResource | null,
 ): AntennaRuntimeIds {
   if (!kind || !resourceId || !scene) {
-    return { solutionId: null, spectrumOutputId: null };
+    return { solutionId: null, spectrumOutputId: null, stageId: null };
   }
 
   switch (kind) {
@@ -107,6 +112,7 @@ export function resolveAntennaRuntimeIds(
       return {
         solutionId: fieldSolutionOutputId(stage),
         spectrumOutputId: null,
+        stageId: stage?.id ?? null,
       };
     }
     case "projection": {
@@ -116,6 +122,7 @@ export function resolveAntennaRuntimeIds(
       return {
         solutionId: projection?.solution.output_id ?? null,
         spectrumOutputId: null,
+        stageId: projection?.solution.stage_id ?? null,
       };
     }
     case "drive": {
@@ -128,6 +135,7 @@ export function resolveAntennaRuntimeIds(
       return {
         solutionId: projection?.solution.output_id ?? null,
         spectrumOutputId: null,
+        stageId: projection?.solution.stage_id ?? null,
       };
     }
     case "spectrum": {
@@ -137,11 +145,12 @@ export function resolveAntennaRuntimeIds(
       return {
         solutionId: request?.solution_ref.output_id ?? null,
         spectrumOutputId: request?.output_id ?? null,
+        stageId: request?.solution_ref.stage_id ?? null,
       };
     }
     case "conductor":
     case "port":
-      return { solutionId: null, spectrumOutputId: null };
+      return { solutionId: null, spectrumOutputId: null, stageId: null };
   }
 }
 
@@ -485,15 +494,58 @@ function sourceSpectrumRuntimeRows(
   return rows;
 }
 
+function stageOutputCatalogRuntimeRows(
+  stageId: string | null,
+  result: AntennaStageOutputCatalogResult,
+): DetailRow[] {
+  const status = runtimeStatus(stageId, result);
+  const data = result.data;
+  const rows: DetailRow[] = [{ label: "Stage catalog result", value: status }];
+  if (result.error) {
+    rows.push({ label: "Stage catalog error", value: result.error.message });
+  }
+  if (!data) return rows;
+  rows.push(
+    { label: "Stage status", value: data.status },
+    { label: "Stage revision", value: String(data.stage_revision) },
+    {
+      label: "Stage outputs",
+      value: data.outputs.map((output) => output.output_id).join(", ") || "none",
+    },
+    {
+      label: "Stage quantities",
+      value:
+        data.outputs
+          .flatMap((output) => output.quantity_ids)
+          .join(", ") || "none",
+    },
+    { label: "Catalog digest", value: data.content_digest, mono: true },
+  );
+  if (data.diagnostic) {
+    rows.push({ label: "Stage diagnostic", value: data.diagnostic });
+  }
+  return rows;
+}
+
 function enrichRuntimeModel(
   model: DetailModel,
   kind: AntennaCompositionKind,
   ids: AntennaRuntimeIds,
   fieldSolution: AntennaFieldSolutionResult,
+  stageOutputCatalog: AntennaStageOutputCatalogResult,
   sourceSpectrum: AntennaSourceSpectrumResult,
 ): DetailModel {
   const fieldStatus = runtimeStatus(ids.solutionId, fieldSolution);
   const rows = [...model.rows];
+
+  if (
+    kind === "solution" ||
+    kind === "projection" ||
+    kind === "drive" ||
+    kind === "spectrum"
+  ) {
+    rows.push(...stageOutputCatalogRuntimeRows(ids.stageId, stageOutputCatalog));
+  }
 
   if (kind === "solution") {
     rows.push(...fieldSolutionRuntimeRows(ids.solutionId, fieldSolution));
@@ -543,11 +595,19 @@ export function AntennaCompositionPanel({
   const sourceSpectrum = useAntennaSourceSpectrumResource(ids.spectrumOutputId, {
     enabled: kind === "spectrum",
   });
+  const stageOutputCatalog = useAntennaStageOutputCatalogResource(ids.stageId, {
+    enabled:
+      kind === "solution" ||
+      kind === "projection" ||
+      kind === "drive" ||
+      kind === "spectrum",
+  });
   const model = enrichRuntimeModel(
     detailModel(kind, objectId, resourceId, scene.data),
     kind,
     ids,
     fieldSolution,
+    stageOutputCatalog,
     sourceSpectrum,
   );
 

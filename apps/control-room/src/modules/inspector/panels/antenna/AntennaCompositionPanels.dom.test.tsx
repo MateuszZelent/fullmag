@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
   AntennaFieldSolutionResource,
+  AntennaStageOutputCatalogResource,
   AntennaSourceSpectrumResource,
   SceneResource,
 } from "@/kernel/api/apiTypes";
@@ -29,6 +30,13 @@ const mocks = vi.hoisted(() => ({
     revision: null as string | null,
     status: "idle" as "idle" | "loading" | "ready" | "stale" | "error",
   },
+  stageOutputCatalog: {
+    data: null as AntennaStageOutputCatalogResource | null,
+    error: null as Error | null,
+    refetch: vi.fn(),
+    revision: null as string | null,
+    status: "idle" as "idle" | "loading" | "ready" | "stale" | "error",
+  },
   scene: {
     data: null as SceneResource | null,
     error: null as Error | null,
@@ -44,6 +52,7 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
 
 vi.mock("@/kernel/resources/antennaResources", () => ({
   useAntennaFieldSolutionResource: () => mocks.fieldSolution,
+  useAntennaStageOutputCatalogResource: () => mocks.stageOutputCatalog,
   useAntennaSourceSpectrumResource: () => mocks.sourceSpectrum,
 }));
 
@@ -54,6 +63,8 @@ afterEach(() => {
   mocks.fieldSolution.status = "idle";
   mocks.sourceSpectrum.data = null;
   mocks.sourceSpectrum.status = "idle";
+  mocks.stageOutputCatalog.data = null;
+  mocks.stageOutputCatalog.status = "idle";
   mocks.scene.data = null;
 });
 
@@ -62,6 +73,8 @@ describe("AntennaCompositionPanel runtime results", () => {
     mocks.scene.data = sceneFixture();
     mocks.fieldSolution.status = "ready";
     mocks.fieldSolution.data = fieldSolutionFixture();
+    mocks.stageOutputCatalog.status = "ready";
+    mocks.stageOutputCatalog.data = stageOutputCatalogFixture();
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     const root = createRoot(container as unknown as Element);
@@ -74,6 +87,8 @@ describe("AntennaCompositionPanel runtime results", () => {
       expect(container.textContent).toContain("Published solutionsolution-1");
       expect(container.textContent).toContain("Runtime resultready");
       expect(container.textContent).toContain("Field signaturesha256:field");
+      expect(container.textContent).toContain("Stage catalog resultready");
+      expect(container.textContent).toContain("Stage quantitiesH_ant_basis");
       expect(findGroupBadge(container, "ready")).toBeDefined();
     } finally {
       await act(async () => root.unmount());
@@ -140,6 +155,38 @@ function fieldSolutionFixture(): AntennaFieldSolutionResource {
     stage_id: "solve-1",
     status: "ready",
     target_projection_signature: null,
+  };
+}
+
+function stageOutputCatalogFixture(): AntennaStageOutputCatalogResource {
+  return {
+    content_digest: "sha256:catalog",
+    diagnostic: null,
+    outputs: [
+      {
+        kind: "field_solution",
+        manifest_ref: "manifest.json",
+        output_id: "solution-1",
+        quantity_ids: ["H_ant_basis"],
+        reused_existing: false,
+        solution_ref: {
+          asset_id: "asset-1",
+          content_digest: "sha256:solution",
+          output_id: "solution-1",
+          stage_id: "solve-1",
+        },
+      },
+    ],
+    port_mode_id: "port-1",
+    resource_id: "antenna/stage-output-catalog/solve-1",
+    schema_version: "antenna_stage_output_catalog.v1",
+    session_epoch: "epoch-1",
+    session_id: "session-1",
+    solution_id: "solution-1",
+    stage_id: "solve-1",
+    stage_kind: "antenna_field_solve",
+    stage_revision: 3,
+    status: "ready",
   };
 }
 
