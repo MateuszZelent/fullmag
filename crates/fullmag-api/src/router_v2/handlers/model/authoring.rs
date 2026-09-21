@@ -1,6 +1,10 @@
 //! Authoring resource endpoints.
 
-use std::sync::Arc;
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+};
 
 use axum::extract::{Path, State};
 use axum::Json;
@@ -3027,11 +3031,18 @@ pub async fn commit_authoring_transaction(
     State(state): State<Arc<AppState>>,
     Json(req): Json<AuthoringTransactionRequest>,
 ) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
-    let (transaction_kind, committed) = match req {
+    dispatch_authoring_transaction(state, req).await
+}
+
+fn dispatch_authoring_transaction(
+    state: Arc<AppState>,
+    req: AuthoringTransactionRequest,
+) -> Pin<Box<dyn Future<Output = Result<Json<AuthoringTransactionResponse>, ApiError>> + Send>> {
+    match req {
         AuthoringTransactionRequest::ReplaceScene {
             base_revision,
             scene,
-        } => {
+        } => Box::pin(async move {
             let mut scene_document: SceneDocument =
                 serde_json::from_value(scene).map_err(|error| {
                     ApiError::bad_request(format!("invalid scene document payload: {error}"))
@@ -3041,28 +3052,26 @@ pub async fn commit_authoring_transaction(
                 check_base_scene_revision(&current_scene, base_revision)?;
                 scene_document.revision = current_scene.revision;
             }
-            let committed =
-                crate::commit_current_live_scene_document(&state, scene_document).await?;
-            ("replace_scene", committed)
-        }
+            let committed = crate::commit_current_live_scene_document(&state, scene_document).await?;
+            authoring_transaction_response("replace_scene", committed)
+        }),
         AuthoringTransactionRequest::MergePatch {
             base_revision,
             merge_patch,
-        } => {
+        } => Box::pin(async move {
             let current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
             check_base_scene_revision(&current_scene, base_revision)?;
             let patched_scene = apply_scene_merge_patch(&current_scene, &merge_patch)?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, patched_scene).await?;
-            ("merge_patch", committed)
-        }
+            let committed = crate::commit_current_live_scene_document(&state, patched_scene).await?;
+            authoring_transaction_response("merge_patch", committed)
+        }),
         AuthoringTransactionRequest::PatchMagnetization {
             base_revision,
             object_id,
             region_id,
             asset,
             magnetization_ref,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
             apply_patch_magnetization_transaction(
                 &mut current_scene,
@@ -3072,16 +3081,15 @@ pub async fn commit_authoring_transaction(
                 asset,
                 magnetization_ref,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
-            ("patch_magnetization", committed)
-        }
+            let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+            authoring_transaction_response("patch_magnetization", committed)
+        }),
         AuthoringTransactionRequest::PatchObjectGeometry {
             object_id,
             base_revision,
             geometry,
             transform,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
             apply_object_geometry_patch(
                 &mut current_scene,
@@ -3090,10 +3098,9 @@ pub async fn commit_authoring_transaction(
                 geometry,
                 transform,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
-            ("patch_object_geometry", committed)
-        }
+            let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+            authoring_transaction_response("patch_object_geometry", committed)
+        }),
         AuthoringTransactionRequest::CreateObject {
             base_revision,
             object_id,
@@ -3107,7 +3114,7 @@ pub async fn commit_authoring_transaction(
             magnetization_asset,
             universe,
             study_universe_mesh,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
             apply_create_object_transaction(
                 &mut current_scene,
@@ -3124,17 +3131,16 @@ pub async fn commit_authoring_transaction(
                 universe,
                 study_universe_mesh,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
-            ("create_object", committed)
-        }
+            let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+            authoring_transaction_response("create_object", committed)
+        }),
         AuthoringTransactionRequest::CreateMaterial {
             base_revision,
             material_id,
             name,
             properties,
             references,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
             apply_create_material_transaction(
                 &mut current_scene,
@@ -3144,15 +3150,14 @@ pub async fn commit_authoring_transaction(
                 properties,
                 references,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
-            ("create_material", committed)
-        }
+            let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+            authoring_transaction_response("create_material", committed)
+        }),
         AuthoringTransactionRequest::PatchMaterial {
             base_revision,
             material_id,
             patch,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
             apply_patch_material_transaction(
                 &mut current_scene,
@@ -3160,46 +3165,42 @@ pub async fn commit_authoring_transaction(
                 &material_id,
                 patch,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
-            ("patch_material", committed)
-        }
+            let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+            authoring_transaction_response("patch_material", committed)
+        }),
         AuthoringTransactionRequest::DeleteMaterial {
             base_revision,
             material_id,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
             apply_delete_material_transaction(&mut current_scene, base_revision, &material_id)?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
-            ("delete_material", committed)
-        }
+            let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+            authoring_transaction_response("delete_material", committed)
+        }),
         AuthoringTransactionRequest::DeleteObject {
             base_revision,
             object_id,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
             apply_delete_object_transaction(&mut current_scene, base_revision, &object_id)?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
-            ("delete_object", committed)
-        }
+            let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+            authoring_transaction_response("delete_object", committed)
+        }),
         AuthoringTransactionRequest::RenameObject {
             base_revision,
             object_id,
             name,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
             apply_rename_object_transaction(&mut current_scene, base_revision, &object_id, name)?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
-            ("rename_object", committed)
-        }
+            let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+            authoring_transaction_response("rename_object", committed)
+        }),
         AuthoringTransactionRequest::CommitObjectTransform {
             base_revision,
             object_id,
             transform,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
             apply_commit_object_transform_transaction(
                 &mut current_scene,
@@ -3207,15 +3208,14 @@ pub async fn commit_authoring_transaction(
                 &object_id,
                 transform,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
-            ("commit_object_transform", committed)
-        }
+            let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+            authoring_transaction_response("commit_object_transform", committed)
+        }),
         AuthoringTransactionRequest::PatchUniverse {
             base_revision,
             universe,
             sync_study_universe_mesh,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
             apply_patch_universe_transaction(
                 &mut current_scene,
@@ -3223,15 +3223,14 @@ pub async fn commit_authoring_transaction(
                 universe,
                 sync_study_universe_mesh,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
-            ("patch_universe", committed)
-        }
+            let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+            authoring_transaction_response("patch_universe", committed)
+        }),
         AuthoringTransactionRequest::CreateObjectRegion {
             base_revision,
             object_id,
             region,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
             apply_create_object_region_transaction(
                 &mut current_scene,
@@ -3239,16 +3238,15 @@ pub async fn commit_authoring_transaction(
                 &object_id,
                 region,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
-            ("create_object_region", committed)
-        }
+            let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+            authoring_transaction_response("create_object_region", committed)
+        }),
         AuthoringTransactionRequest::PatchObjectRegion {
             base_revision,
             object_id,
             region_id,
             patch,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
             apply_patch_object_region_transaction(
                 &mut current_scene,
@@ -3257,15 +3255,14 @@ pub async fn commit_authoring_transaction(
                 &region_id,
                 patch,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
-            ("patch_object_region", committed)
-        }
+            let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+            authoring_transaction_response("patch_object_region", committed)
+        }),
         AuthoringTransactionRequest::PatchObjectMaterialFields {
             base_revision,
             object_id,
             fields,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
             apply_patch_object_material_fields_transaction(
                 &mut current_scene,
@@ -3273,15 +3270,14 @@ pub async fn commit_authoring_transaction(
                 &object_id,
                 fields,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
-            ("patch_object_material_fields", committed)
-        }
+            let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+            authoring_transaction_response("patch_object_material_fields", committed)
+        }),
         AuthoringTransactionRequest::DeleteObjectRegion {
             base_revision,
             object_id,
             region_id,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
             apply_delete_object_region_transaction(
                 &mut current_scene,
@@ -3289,15 +3285,14 @@ pub async fn commit_authoring_transaction(
                 &object_id,
                 &region_id,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
-            ("delete_object_region", committed)
-        }
+            let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+            authoring_transaction_response("delete_object_region", committed)
+        }),
         AuthoringTransactionRequest::ReorderObjectRegions {
             base_revision,
             object_id,
             region_ids,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
             apply_reorder_object_regions_transaction(
                 &mut current_scene,
@@ -3305,25 +3300,23 @@ pub async fn commit_authoring_transaction(
                 &object_id,
                 region_ids,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
-            ("reorder_object_regions", committed)
-        }
+            let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+            authoring_transaction_response("reorder_object_regions", committed)
+        }),
         AuthoringTransactionRequest::CreateCoupling {
             base_revision,
             coupling,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
             apply_create_coupling_transaction(&mut current_scene, base_revision, coupling)?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
-            ("create_coupling", committed)
-        }
+            let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+            authoring_transaction_response("create_coupling", committed)
+        }),
         AuthoringTransactionRequest::PatchCoupling {
             base_revision,
             coupling_id,
             patch,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
             apply_patch_coupling_transaction(
                 &mut current_scene,
@@ -3331,31 +3324,19 @@ pub async fn commit_authoring_transaction(
                 &coupling_id,
                 patch,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
-            ("patch_coupling", committed)
-        }
+            let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+            authoring_transaction_response("patch_coupling", committed)
+        }),
         AuthoringTransactionRequest::DeleteCoupling {
             base_revision,
             coupling_id,
-        } => {
+        } => Box::pin(async move {
             let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
             apply_delete_coupling_transaction(&mut current_scene, base_revision, &coupling_id)?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
-            ("delete_coupling", committed)
-        }
-    };
-
-    let committed_scene = serde_json::to_value(&committed).map_err(|error| {
-        ApiError::internal(format!("failed to serialize scene document: {error}"))
-    })?;
-
-    Ok(Json(AuthoringTransactionResponse {
-        transaction_kind: transaction_kind.to_string(),
-        scene_revision: committed.revision,
-        committed_scene,
-    }))
+            let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+            authoring_transaction_response("delete_coupling", committed)
+        }),
+    }
 }
 
 fn authoring_transaction_response(
