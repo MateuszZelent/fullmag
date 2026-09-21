@@ -1,6 +1,7 @@
 import { act } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import {
   installSimulationPreparationTestDom,
   TestElement,
@@ -15,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   commitTransaction: vi.fn(),
   invalidate: vi.fn(),
   replaceFieldDrive: vi.fn(),
+  refetch: vi.fn(),
   sceneResource: {
     data: {
       field_drives: {
@@ -60,7 +62,7 @@ vi.mock("@/kernel/KernelContext", () => ({
 }));
 
 vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
-  useSceneResource: () => mocks.sceneResource,
+  useSceneResource: () => ({ ...mocks.sceneResource, refetch: mocks.refetch }),
 }));
 
 const selection: Selection = {
@@ -84,6 +86,7 @@ describe("AntennaObjectPanel authoring stability", () => {
     mocks.commitTransaction.mockReset();
     mocks.invalidate.mockReset();
     mocks.replaceFieldDrive.mockReset();
+    mocks.refetch.mockReset();
     mocks.sceneResource.data = {
       field_drives: {
         drives: [
@@ -270,6 +273,77 @@ describe("AntennaObjectPanel authoring stability", () => {
           object_id: "antenna",
         },
       });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("requires refetch and rebase before retrying a same-field revision conflict", async () => {
+    mocks.replaceFieldDrive
+      .mockRejectedValueOnce(
+        new ControlRoomApiError("scene changed", 409, "request-antenna", "revision_conflict"),
+      )
+      .mockResolvedValueOnce({ scene_revision: 14 });
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<AntennaObjectPanel selection={selection} />));
+      await act(async () => changeInput(container, "Amplitude", "0.002"));
+      await act(async () => findButton(container, "Save field drive").click());
+
+      expect(container.textContent).toContain("Revision conflict");
+      expect(findButton(container, "Refetch Scene").disabled).toBe(false);
+      expect(findButton(container, "Rebase Draft").disabled).toBe(true);
+      expect(findButton(container, "Retry Save").disabled).toBe(true);
+
+      await act(async () => findButton(container, "Refetch Scene").click());
+      expect(mocks.refetch).toHaveBeenCalledOnce();
+      mocks.sceneResource.status = "loading";
+      await act(async () => root.render(<AntennaObjectPanel selection={selection} />));
+      expect(findButton(container, "Rebase Draft").disabled).toBe(true);
+
+      mocks.sceneResource.data = {
+        field_drives: {
+          drives: [
+            {
+              amplitude_B_T: 0.001,
+              direction: [0, 1, 0],
+              id: "antenna-drive",
+              kind: "regional",
+              spatial_profile: { kind: "geometry_mask", object_id: "antenna" },
+              waveform: {
+                frequency_hz: 1e9,
+                kind: "sinusoidal",
+                offset: 0.2,
+                phase_rad: 0.7,
+              },
+            },
+          ],
+        },
+        revision: 13,
+      };
+      mocks.sceneResource.revision = 13;
+      mocks.sceneResource.status = "ready";
+      await act(async () => root.render(<AntennaObjectPanel selection={selection} />));
+      expect(container.textContent).toContain("Server amplitude");
+      expect(container.textContent).toContain("0.002");
+      expect(container.textContent).toContain("0.001");
+      expect(findButton(container, "Rebase Draft").disabled).toBe(false);
+
+      await act(async () => findButton(container, "Rebase Draft").click());
+      expect(findButton(container, "Retry Save").disabled).toBe(false);
+      await act(async () => findButton(container, "Retry Save").click());
+      expect(mocks.replaceFieldDrive).toHaveBeenLastCalledWith(
+        "antenna-drive",
+        expect.objectContaining({
+          base_revision: 13,
+          drive: expect.objectContaining({ amplitude_B_T: 0.002 }),
+        }),
+      );
     } finally {
       await act(async () => root.unmount());
       dom.restore();

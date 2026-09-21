@@ -853,12 +853,13 @@ pliku komponentu do modułów modelu. React Doctor nie zgłasza już ostrzeżeń
 `AntennaObjectPanel` odrzuca zapis, gdy zasób sceny nie jest `ready` albo nie
 udostępnia bezpiecznej rewizji całkowitej. Canonical `replaceFieldDrive` oraz
 legacy `merge_patch` migracji przekazują jawne `base_revision`; pełna tablica
-nie może już nadpisać nowszej sceny bez konfliktu. Test DOM 3/3 sprawdza
+nie może już nadpisać nowszej sceny bez konfliktu. Test DOM 5/5 sprawdza
 canonical zapis, zachowanie `phase/offset` podczas edycji amplitudy, migrację
 legacy, zachowanie niezapisanego draftu przy niezależnej rewizji sceny oraz
-aktywny fokus i niezależne kontrolki w stanie pending. To naprawia
-kontrakt zapisu, ale nie zamyka jeszcze konfliktowego porównania server/draft
-ani całego T15.
+aktywny fokus i niezależne kontrolki w stanie pending. Dodany workflow 409
+`Refetch Scene → Rebase Draft → Retry Save` pokazuje porównanie server/draft,
+zachowuje lokalny draft do jawnego rebase i ponawia zapis z nową rewizją.
+Łącznie testy modelu/DOM przechodzą 11/11; nie zamyka to pozostałego T15.
 
 Komenda `Add Microstrip Antenna` również pobiera rewizję z tego samego
 `SceneResource` odpowiedzi `scene()` i przekazuje ją w `merge_patch`. Brak

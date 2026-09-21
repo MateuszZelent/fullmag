@@ -15,6 +15,7 @@ import {
   buildAntennaCanonicalFieldDrive,
   buildAntennaLegacyMigrationPatch,
   antennaObjectDraftKey,
+  isAntennaObjectRevisionConflict,
   resolveAntennaObjectDraft,
   resolveAntennaObjectPanelModel,
   type AntennaObjectDraft,
@@ -33,6 +34,19 @@ interface DraftState {
 interface FeedbackState {
   feedback: Feedback | null;
   key: string;
+}
+
+type RevisionConflictPhase =
+  | "conflict"
+  | "refresh-error"
+  | "refreshing"
+  | "rebased"
+  | "refetched";
+
+interface RevisionConflictState {
+  baseRevision: number;
+  key: string;
+  phase: RevisionConflictPhase;
 }
 
 function errorMessage(error: unknown): string {
@@ -71,12 +85,29 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
     key: draftKey,
   });
   const [pending, setPending] = useState(false);
+  const [revisionConflictState, setRevisionConflictState] =
+    useState<RevisionConflictState | null>(null);
   const baseRevision = sceneRevision(scene.data?.revision);
   const canCommit =
     scene.status === "ready" && baseRevision !== null && model.mode !== "missing";
   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
   const feedback =
     feedbackState.key === draftKey ? feedbackState.feedback : null;
+  const revisionConflict =
+    revisionConflictState?.key === draftKey ? revisionConflictState : null;
+  const conflictBaseRevision = revisionConflict?.baseRevision ?? null;
+  const conflictPhase = revisionConflict?.phase ?? null;
+  const conflictViewPhase =
+    revisionConflict && conflictPhase === "refreshing"
+      ? scene.status === "error"
+        ? "refresh-error"
+        : scene.status === "ready" &&
+            baseRevision !== null &&
+            conflictBaseRevision !== null &&
+            baseRevision !== conflictBaseRevision
+          ? "refetched"
+          : "refreshing"
+      : conflictPhase;
 
   function updateDraft(patch: Partial<AntennaObjectDraft>): void {
     setDraftState((current) => ({
@@ -97,6 +128,13 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
       });
       return;
     }
+    if (revisionConflict && revisionConflict.phase !== "rebased") {
+      setFeedback({
+        kind: "error",
+        message: "Refetch and rebase the server change before saving again.",
+      });
+      return;
+    }
     setPending(true);
     try {
       const response =
@@ -104,12 +142,47 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
           ? await saveCanonicalDrive(baseRevision)
           : await migrateLegacyDrive(baseRevision);
       invalidateSceneResource(resources, response.scene_revision);
+      setRevisionConflictState(null);
       setFeedback({ kind: "success", message: model.mode === "legacy" ? "Legacy source migrated to a regional field drive." : "Antenna field drive committed." });
     } catch (error) {
-      setFeedback({ kind: "error", message: errorMessage(error) });
+      if (isAntennaObjectRevisionConflict(error) && baseRevision !== null) {
+        setRevisionConflictState({
+          baseRevision,
+          key: draftKey,
+          phase: "conflict",
+        });
+        setFeedback({
+          kind: "error",
+          message: "The antenna field drive changed on the server. Refetch and compare before retrying.",
+        });
+      } else {
+        setFeedback({ kind: "error", message: errorMessage(error) });
+      }
     } finally {
       setPending(false);
     }
+  }
+
+  function refetchAfterRevisionConflict(): void {
+    if (!revisionConflict) return;
+    setRevisionConflictState({
+      ...revisionConflict,
+      phase: "refreshing",
+    });
+    setFeedback({ kind: "error", message: "Refetching the canonical scene…" });
+    scene.refetch();
+  }
+
+  function rebaseAfterRevisionConflict(): void {
+    if (!revisionConflict || conflictViewPhase !== "refetched") return;
+    setRevisionConflictState({
+      ...revisionConflict,
+      phase: "rebased",
+    });
+    setFeedback({
+      kind: "error",
+      message: "Draft rebased onto the latest server revision. Review and retry Save.",
+    });
   }
 
   async function saveCanonicalDrive(baseRevisionValue: number) {
@@ -231,9 +304,59 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
         {feedback ? (
           <FeedbackBanner kind={feedback.kind} message={feedback.message} />
         ) : null}
+        {revisionConflict ? (
+          <InspectorGroup
+            title="Revision conflict"
+            badge={conflictViewPhase ?? undefined}
+          >
+            <FieldRow
+              label="Conflict base revision"
+              value={String(revisionConflict.baseRevision)}
+            />
+            <FieldRow
+              label="Server revision"
+              value={baseRevision === null ? "unavailable" : String(baseRevision)}
+            />
+            <FieldRow label="Draft amplitude" value={draft.amplitudeB} unit="T" />
+            <FieldRow label="Server amplitude" value={baseDraft.amplitudeB} unit="T" />
+            <FieldRow label="Draft direction" value={draft.direction} />
+            <FieldRow label="Server direction" value={baseDraft.direction} />
+            <FieldRow label="Draft waveform" value={draft.waveformKind} />
+            <FieldRow label="Server waveform" value={baseDraft.waveformKind} />
+            <div className="fm-inspector-toolbar">
+              <Button
+                disabled={pending || conflictViewPhase === "refreshing"}
+                size="sm"
+                type="button"
+                variant="ghost"
+                onClick={refetchAfterRevisionConflict}
+              >
+                Refetch Scene
+              </Button>
+              <Button
+                disabled={pending || conflictViewPhase !== "refetched"}
+                size="sm"
+                type="button"
+                variant="ghost"
+                onClick={rebaseAfterRevisionConflict}
+              >
+                Rebase Draft
+              </Button>
+              <Button
+                disabled={pending || conflictViewPhase !== "rebased"}
+                size="sm"
+                type="button"
+                variant="primary"
+                onClick={() => void commitDraft()}
+              >
+                Retry Save
+              </Button>
+            </div>
+          </InspectorGroup>
+        ) : null}
         <div className="fm-inspector-toolbar">
           <Button
-            disabled={!canCommit || pending}
+            disabled={!canCommit || pending || revisionConflict !== null}
             size="sm"
             type="button"
             variant="primary"

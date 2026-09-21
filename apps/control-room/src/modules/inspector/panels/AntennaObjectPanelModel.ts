@@ -34,6 +34,16 @@ export interface AntennaFieldDrivePatchResult {
   error: string | null;
 }
 
+export function isAntennaObjectRevisionConflict(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: unknown; status?: unknown };
+  return (
+    candidate.status === 409 &&
+    (candidate.code === "revision_conflict" ||
+      candidate.code === "scene_revision_conflict")
+  );
+}
+
 type JsonRecord = Record<string, unknown>;
 
 function asRecord(value: unknown): JsonRecord | null {

@@ -40,6 +40,9 @@ stage nie jest używany do udawania gotowego pola, gdy brakuje właściwego
   regresja obejmuje canonical `replaceFieldDrive`, legacy full-array
   migration, `base_revision`, zachowanie fazy/offsetu oraz aktywny fokus i
   niezależne kontrolki podczas oczekiwania na ACK;
+- po dodaniu workflow konfliktu ten sam zestaw przechodzi jako **11/11**;
+  test 409 wymusza `Refetch Scene → Rebase Draft → Retry Save`, pokazuje
+  wartości draft/server i zachowuje lokalny draft do jawnej decyzji użytkownika;
 - `pnpm exec vitest run
   src/kernel/authoring/geometryLifecycleCommandContributions.test.ts`:
   **42/42**; komenda `Add Microstrip Antenna` przekazuje `base_revision`,
