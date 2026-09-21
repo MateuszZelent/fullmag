@@ -832,6 +832,23 @@ Ta poprawka nie odhacza T13: pozostaje dowód wartości artefaktów względem
 niezależnego wzorca, RHS/LLG dla wszystkich integratorów i waveformów,
 kwalifikacja GPU oraz osobna ścieżka T16 dla projekcji FDM i parity CPU/GPU.
 
+**Uzupełnienie implementacyjne 2026-09-21 (native CPU carrier dla legacy źródeł):**
+audyt wykazał, że `current_modules` wymuszały wybór CPU, ale nie były obecne w
+`pack_native_regional_field_drives`; native RHS mógł więc pomijać pole widoczne
+w preview. Adapter korzysta teraz z istniejącego `PREPROJECTED_NODAL`: legacy
+`mqs_2p5d_az` jest wyliczane hostowo z `compute_per_unit_antenna_fields` i
+skalowane przez `current_a`, a `antenna_zeeman_masks` przekazują już rozwiązany
+`field_xyz`. Oba profile są w A/m, mają absolutny zegar legacy i przekazują
+waveform do native ewaluacji na każdym podetapie RK. Dzięki temu ten sam
+`h_drive_xyz` zasila native `H_eff`, energię i hostowy snapshot `H_ant`.
+
+Nie promowano tej capability do GPU: selekcja `current_modules` nadal kończy
+się na natywnym CPU, a GPU pozostaje fail-closed. Jest to zgodność runtime dla
+legacy/maski; nie zastępuje docelowego pełnego 3D solve przewodnika. Zarządzany
+`just windows-build backend=fem device=cpu frontend=dev` przeszedł w trybie
+`fem-cpu` po zmianie. T13 nadal wymaga numerycznej bramki RHS/energy/torque,
+wszystkich integratorów i waveformów oraz osobnej kwalifikacji GPU.
+
 ## T14. Domknąć OpenAPI, zasoby i realtime
 
 Uzupełnienie implementacyjne 2026-09-21: `SolvedAntennaDriveResource` ma

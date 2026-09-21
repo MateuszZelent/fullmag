@@ -1205,6 +1205,160 @@ fn pack_native_sot_envelope(
 }
 
 #[cfg(feature = "fem-gpu")]
+fn append_native_preprojected_drive_descriptor(
+    descriptors: &mut Vec<ffi::fullmag_fem_regional_field_drive_desc>,
+    point_storage: &mut Vec<Vec<ffi::fullmag_fem_time_point>>,
+    basis_storage: &mut Vec<Vec<f64>>,
+    id: &str,
+    waveform: &fullmag_ir::TimeDependenceIR,
+    time_origin: fullmag_ir::FieldTimeOriginIR,
+    values: Vec<f64>,
+    expected_value_count: usize,
+) -> Result<(), RunError> {
+    if values.len() != expected_value_count {
+        return Err(RunError {
+            message: format!(
+                "preprojected antenna drive '{}' has {} values; expected {}",
+                id,
+                values.len(),
+                expected_value_count
+            ),
+        });
+    }
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(RunError {
+            message: format!(
+                "preprojected antenna drive '{}' contains a non-finite value",
+                id
+            ),
+        });
+    }
+
+    let mut parameters = ffi::fullmag_fem_time_dependence_parameters {
+        sinusoidal: ffi::fullmag_fem_sinusoidal_time_desc {
+            frequency_hz: 0.0,
+            phase_rad: 0.0,
+            offset: 0.0,
+        },
+    };
+    let points = match waveform {
+        fullmag_ir::TimeDependenceIR::Constant => Vec::new(),
+        fullmag_ir::TimeDependenceIR::Sinusoidal {
+            frequency_hz,
+            phase_rad,
+            offset,
+        } => {
+            parameters.sinusoidal = ffi::fullmag_fem_sinusoidal_time_desc {
+                frequency_hz: *frequency_hz,
+                phase_rad: *phase_rad,
+                offset: *offset,
+            };
+            Vec::new()
+        }
+        fullmag_ir::TimeDependenceIR::Pulse { t_on, t_off } => {
+            parameters.pulse = ffi::fullmag_fem_pulse_time_desc {
+                t_on_s: *t_on,
+                t_off_s: *t_off,
+            };
+            Vec::new()
+        }
+        fullmag_ir::TimeDependenceIR::PiecewiseLinear { points } => points
+            .iter()
+            .map(|point| ffi::fullmag_fem_time_point {
+                time_s: point[0],
+                value: point[1],
+            })
+            .collect(),
+        fullmag_ir::TimeDependenceIR::SincPulse {
+            cutoff_hz,
+            t0,
+            amplitude,
+        } => {
+            parameters.sinc_pulse = ffi::fullmag_fem_sinc_pulse_time_desc {
+                cutoff_hz: *cutoff_hz,
+                t0_s: *t0,
+                amplitude: *amplitude,
+            };
+            Vec::new()
+        }
+    };
+    let waveform_kind = match waveform {
+        fullmag_ir::TimeDependenceIR::Constant => {
+            ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_CONSTANT as u32
+        }
+        fullmag_ir::TimeDependenceIR::Sinusoidal { .. } => {
+            ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_SINUSOIDAL as u32
+        }
+        fullmag_ir::TimeDependenceIR::Pulse { .. } => {
+            ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_PULSE as u32
+        }
+        fullmag_ir::TimeDependenceIR::PiecewiseLinear { .. } => {
+            ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_PIECEWISE_LINEAR as u32
+        }
+        fullmag_ir::TimeDependenceIR::SincPulse { .. } => {
+            ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_SINC_PULSE as u32
+        }
+    };
+    let digest = Sha256::digest(id.as_bytes());
+    let stable_id_hash = u64::from_le_bytes(digest[..8].try_into().expect("SHA-256 prefix"));
+    basis_storage.push(values);
+    point_storage.push(points);
+    let basis = basis_storage.last().expect("pushed preprojected basis");
+    let points = point_storage.last().expect("pushed waveform points");
+    descriptors.push(ffi::fullmag_fem_regional_field_drive_desc {
+        abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
+        struct_size: std::mem::size_of::<ffi::fullmag_fem_regional_field_drive_desc>() as u32,
+        stable_id_hash,
+        target: ffi::fullmag_fem_field_target_desc {
+            abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_field_target_desc>() as u32,
+            kind: 0,
+            element_markers: std::ptr::null(),
+            element_marker_count: 0,
+        },
+        spatial_profile: ffi::fullmag_fem_spatial_profile_desc {
+            abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_spatial_profile_desc>() as u32,
+            kind: 4,
+            sinc_axis: [0.0; 3],
+            sinc_period_m: 0.0,
+            sinc_center_m: 0.0,
+            sinc_width_m: 0.0,
+            sinc_window: 0,
+            geometry_mask: std::ptr::null(),
+            gaussian_center_x_m: 0.0,
+            gaussian_center_y_m: 0.0,
+            gaussian_carrier_origin_x_m: 0.0,
+            gaussian_sigma_x_m: 0.0,
+            gaussian_sigma_y_m: 0.0,
+            gaussian_wavelength_m: 0.0,
+            gaussian_carrier_phase_rad: 0.0,
+            preprojected_h_xyz_a_per_m: basis.as_ptr(),
+            preprojected_h_value_count: basis.len() as u64,
+        },
+        amplitude_b_t: 0.0,
+        direction: [0.0; 3],
+        waveform: ffi::fullmag_fem_time_dependence_desc {
+            abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_time_dependence_desc>() as u32,
+            kind: waveform_kind,
+            parameters,
+            points: optional_slice_ptr(points),
+            point_count: points.len() as u64,
+        },
+        time_origin: match time_origin {
+            fullmag_ir::FieldTimeOriginIR::StageLocal => {
+                ffi::fullmag_fem_time_origin::FULLMAG_FEM_TIME_STAGE_LOCAL as u32
+            }
+            fullmag_ir::FieldTimeOriginIR::Absolute => {
+                ffi::fullmag_fem_time_origin::FULLMAG_FEM_TIME_ABSOLUTE as u32
+            }
+        },
+    });
+    Ok(())
+}
+
+#[cfg(feature = "fem-gpu")]
 fn pack_native_regional_field_drives(
     plan: &fullmag_ir::FemPlanIR,
 ) -> Result<
@@ -1232,7 +1386,7 @@ fn pack_native_regional_field_drives(
             )
         })
         .collect::<Vec<_>>();
-    let basis_storage = active_solved_bases
+    let mut basis_storage = active_solved_bases
         .iter()
         .map(|basis| {
             basis
@@ -1606,6 +1760,69 @@ fn pack_native_regional_field_drives(
                 FieldTimeOriginIR::Absolute => 1,
             },
         });
+    }
+
+    // Legacy antenna sources already have the same immutable nodal field
+    // semantics as a resolved basis: the geometry is evaluated on the host
+    // once, while only the authored scalar waveform is evaluated by native
+    // FEM at each RK stage.  Keep this compatibility lane CPU-only through
+    // runtime selection; native GPU still rejects current_modules.
+    let legacy_per_unit_fields = crate::antenna_fields::compute_per_unit_antenna_fields(plan)?;
+    for (module, per_unit_field) in plan.current_modules.iter().zip(legacy_per_unit_fields) {
+        let fullmag_ir::CurrentModuleIR::AntennaFieldSource {
+            name,
+            model: fullmag_ir::AntennaFieldSourceModelIR::Mqs2p5dAz,
+            drive: Some(drive),
+            ..
+        } = module
+        else {
+            continue;
+        };
+        let values = per_unit_field
+            .into_iter()
+            .flat_map(|value| {
+                [
+                    value[0] * drive.current_a,
+                    value[1] * drive.current_a,
+                    value[2] * drive.current_a,
+                ]
+            })
+            .collect();
+        let waveform = drive
+            .waveform
+            .clone()
+            .unwrap_or(fullmag_ir::TimeDependenceIR::Constant);
+        append_native_preprojected_drive_descriptor(
+            &mut descriptors,
+            &mut point_storage,
+            &mut basis_storage,
+            &format!("legacy_mqs2p5d:{name}"),
+            &waveform,
+            fullmag_ir::FieldTimeOriginIR::Absolute,
+            values,
+            plan.mesh.nodes.len() * 3,
+        )?;
+    }
+    for mask in &plan.antenna_zeeman_masks {
+        let waveform = mask
+            .waveform
+            .clone()
+            .unwrap_or(fullmag_ir::TimeDependenceIR::Constant);
+        let values = mask
+            .field_xyz
+            .iter()
+            .flat_map(|value| value.iter().copied())
+            .collect();
+        append_native_preprojected_drive_descriptor(
+            &mut descriptors,
+            &mut point_storage,
+            &mut basis_storage,
+            &format!("prescribed_zeeman_mask:{}", mask.source),
+            &waveform,
+            fullmag_ir::FieldTimeOriginIR::Absolute,
+            values,
+            plan.mesh.nodes.len() * 3,
+        )?;
     }
     Ok((
         descriptors,

@@ -259,6 +259,22 @@ fn fdm_multilayer_quantity_is_active(plan: &FdmMultilayerPlanIR, id: QuantityId)
     }
 }
 
+fn fem_plan_has_antenna_field(plan: &FemPlanIR) -> bool {
+    !plan.antenna_zeeman_masks.is_empty()
+        || !plan.solved_antenna_drive_bases.is_empty()
+        || plan.current_modules.iter().any(|module| {
+            matches!(
+                module,
+                fullmag_ir::CurrentModuleIR::AntennaFieldSource {
+                    model: fullmag_ir::AntennaFieldSourceModelIR::Mqs2p5dAz,
+                    antenna: Some(_),
+                    drive: Some(_),
+                    ..
+                }
+            )
+        })
+}
+
 fn fem_quantity_is_active(engine: FemEngine, plan: &FemPlanIR, id: QuantityId) -> bool {
     let engine_exposes = match engine {
         // The CPU reference FEM observables already carry the resolved
@@ -266,9 +282,7 @@ fn fem_quantity_is_active(engine: FemEngine, plan: &FemPlanIR, id: QuantityId) -
         // Keep the GPU lane fail-closed until its device snapshot contract is
         // qualified; the interactive GPU path must not inherit this preview
         // capability by accident.
-        FemEngine::CpuNative if id == QuantityId::HAnt => {
-            !plan.antenna_zeeman_masks.is_empty() || !plan.solved_antenna_drive_bases.is_empty()
-        }
+        FemEngine::CpuNative if id == QuantityId::HAnt => fem_plan_has_antenna_field(plan),
         FemEngine::CpuNative | FemEngine::NativeGpu => {
             crate::native_fem::can_materialize_preview_quantity(plan, id)
         }
@@ -284,9 +298,7 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         QuantityId::HDemag => plan.enable_demag,
         QuantityId::DemagPhi => plan.enable_demag,
         QuantityId::HExt => has_nonzero_external_field(plan.external_field),
-        QuantityId::HAnt => {
-            !plan.antenna_zeeman_masks.is_empty() || !plan.solved_antenna_drive_bases.is_empty()
-        }
+        QuantityId::HAnt => fem_plan_has_antenna_field(plan),
         QuantityId::HDrive => plan.field_drives.iter().any(|drive| drive.enabled),
         QuantityId::HAni => material_has_uniaxial_anisotropy(&plan.material),
         QuantityId::HAniCubic => material_has_cubic_anisotropy(&plan.material),

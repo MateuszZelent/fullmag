@@ -226,8 +226,9 @@ wolno było ogłaszać tej quantity jako gotowej w ścieżce snapshot/artifact.
 ### Kontrakt i ścieżka obliczenia
 
 - Aktywność `H_ant` dla FEM CPU wynika wyłącznie z rozstrzygniętego planu:
-  `antenna_zeeman_masks` albo `solved_antenna_drive_bases`. Bez jednej z tych
-  struktur capability pozostaje pusta.
+  `antenna_zeeman_masks`, `solved_antenna_drive_bases` albo kompletnego
+  legacy `mqs_2p5d_az` (`antenna` + `drive`). Bez jednego z tych źródeł
+  capability pozostaje pusta.
 - `H_ant` jest udostępnione w katalogu **preview**, ale nie w katalogu
   **snapshot quantities**. FEM native GPU pozostaje fail-closed, ponieważ
   jego obecny kontrakt urządzenia nie udostępnia obserwabli antenowej.
@@ -276,8 +277,8 @@ preview i termem Zeemana.
 ### Zakres materializacji
 
 - `FemCpuNative` klasyfikuje `H_ant` jako `Derived`; aktywność pozostaje
-  filtrowana przez rozstrzygnięty plan i wymaga `antenna_zeeman_masks` albo
-  `solved_antenna_drive_bases`.
+  filtrowana przez rozstrzygnięty plan i wymaga resolved maski, solved basis
+  albo kompletnego legacy `mqs_2p5d_az`.
 - Dla CPU helper wywołuje
   `compute_antenna_field_at_time(plan, physical_time)` i tworzy pełny wektor
   w kolejności węzłów `plan.mesh.nodes`. Nie używa pola z `t=0`, nie wykonuje
@@ -318,3 +319,42 @@ Ta zmiana zamyka implementacyjnie hostowy zapis `H_ant` dla FEM CPU, ale nie
 odhacza T13. Brakuje nadal dowodu numerycznego na RHS/energię/torque, wszystkich
 integratorów i waveformów, a także kwalifikacji natywnego ABI GPU. T16 pozostaje
 otwarte dla projekcji FDM, uploadu CUDA i parity CPU/GPU.
+
+## Aktualizacja: legacy `current_modules` w natywnym FEM CPU — 2026-09-21
+
+Audyt ścieżki wykonawczej wykazał, że selekcja runtime kierowała legacy
+`AntennaFieldSource` do CPU, ale pakowanie native przekazywało wyłącznie
+`field_drives` i `solved_antenna_drive_bases`. W efekcie referencyjny FEM oraz
+hostowy preview mogły zawierać `H_ant`, podczas gdy natywny RHS go pomijał.
+Naprawiono tę niespójność bez dodawania drugiego solvera pola:
+
+- legacy `mqs_2p5d_az` jest obliczany hostowo przez istniejące
+  `compute_per_unit_antenna_fields`, skalowany przez `current_a` dokładnie raz i
+  pakowany jako pełnodomenowy `PREPROJECTED_NODAL` profil w jednostkach A/m;
+- resolved `prescribed_zeeman_mask` korzysta z tego samego carrier-a, z już
+  materializowanym `field_xyz` w A/m; amplituda nie jest ponownie mnożona przez
+  `mu0`;
+- dla obu źródeł native dostaje waveform `constant`, `sinusoidal`, `pulse`,
+  `piecewise_linear` albo `sinc_pulse`; legacy zegar pozostaje absolutny, więc
+  zachowuje semantykę referencyjnego `dynamic_antenna_drive_terms`;
+- istniejący native `project_regional_field_drive_bases` przyjmuje profil
+  preprojektowany, a `materialize_regional_field_drive` wyznacza tylko skalarne
+  $f(t)$ przy każdym rzeczywistym podetapie RK. Ten sam `h_drive_xyz` trafia do
+  `H_eff` i energii Zeemana;
+- nie rozszerzono capability GPU: obecna selekcja nadal wymusza CPU dla
+  `current_modules`, a GPU pozostaje fail-closed. Legacy model nadal ma status
+  kompatybilnościowy i nie jest dowodem pełnego trójwymiarowego solve przewodnika.
+
+### Weryfikacja tej iteracji
+
+- Zarządzana recepta `just windows-build backend=fem device=cpu frontend=dev`
+  zakończyła kompilację `fullmag-runner`, CLI, API i `fullmag-py-core` w trybie
+  `fem-cpu` po poprawce adaptera. Build wykonał ścieżkę kontenerową; nie użyto
+  hostowego `cargo` jako dowodu FEM.
+- `git diff --check`: **OK**. Testów jednostkowych Rust nie kompilowano zgodnie
+  z blokadą sesji. Nie wykonano jeszcze end-to-end porównania RHS/energii z
+  niezależnym oraklem ani kwalifikacji GPU.
+
+Ta zmiana usuwa konkretny błąd „preview pokazuje pole, native LLG go nie używa”
+dla CPU. Nie zamyka T13: pozostają bramki trajektorii wszystkich integratorów i
+waveformów, snapshot-vs-RHS parity, niezależny wzorzec fizyczny oraz GPU/T16.
