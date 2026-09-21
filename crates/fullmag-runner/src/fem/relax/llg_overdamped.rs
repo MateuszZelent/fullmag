@@ -591,7 +591,13 @@ pub(crate) fn execute_llg_overdamped(
             .map(|schedule| schedule.name.clone())
             .collect::<Vec<_>>();
         for name in due_field_names {
-            let metrics = if artifacts.is_streaming() {
+            let metrics = if engine == FemEngine::CpuNative
+                && super::snapshots::is_antenna_field_snapshot(&name)
+            {
+                artifacts.record_field_snapshot(super::snapshots::build_antenna_field_snapshot(
+                    plan, &name, stats.step, stats.time, stats.dt,
+                )?)?
+            } else if artifacts.is_streaming() {
                 let snapshot =
                     backend.begin_field_snapshot(&name, stats.step, stats.time, stats.dt)?;
                 artifacts.record_native_fem_field_snapshot(snapshot)?

@@ -146,10 +146,11 @@ pub fn default_capability_matrix() -> CapabilityMatrix {
         m.set(FemCpuNative, id, Derived);
     }
     for id in [
-        HAnt, HMel, HAniCubic, HDmiBulk, HOe, HTherm, MatMs, MatAex, MatAlpha, MatDind, MatDbulk,
+        HMel, HAniCubic, HDmiBulk, HOe, HTherm, MatMs, MatAex, MatAlpha, MatDind, MatDbulk,
     ] {
         m.set(FemCpuNative, id, Planned);
     }
+    m.set(FemCpuNative, HAnt, Derived);
     for id in [HDmiRotated, ERotatedDmi, EdenRotatedDmi] {
         m.set(FemCpuNative, id, Planned);
     }

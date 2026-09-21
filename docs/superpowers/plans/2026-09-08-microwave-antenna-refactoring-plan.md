@@ -802,9 +802,33 @@ niezatwierdzonych zmianach i worktree zmienił się w trakcie; traktujemy to jak
 brak receiptu, nie jako błąd kompilacji. `rustfmt --check` i `git diff --check`
 przeszły. Testów jednostkowych Rust nie uruchamiano zgodnie z blokadą sesji.
 
-Pozostają otwarte: natywny snapshot/artifact `H_ant`, FEM GPU, pełna trajektoria
+Pozostaje otwarta kwalifikacja snapshot/artifact `H_ant` (hostowa ścieżka CPU
+jest zaimplementowana, natywny ABI/GPU nadal nie), FEM GPU, pełna trajektoria
 LLG dla wszystkich integratorów i waveformów oraz osobne T16 dla projekcji FDM,
 uploadu CUDA i parity CPU/GPU.
+
+**Uzupełnienie implementacyjne 2026-09-21 (hostowy artifact `H_ant` FEM CPU):**
+uzupełniono ścieżkę outputów native FEM CPU. `H_ant` pozostaje quantity
+pochodną (`Derived`) i jest reklamowane tylko wtedy, gdy aktywny plan ma
+`antenna_zeeman_masks` lub `solved_antenna_drive_bases`. Początkowy,
+accepted-step, terminalny i końcowy zaplanowany output buduje hostowy
+`FieldSnapshot` przez `compute_antenna_field_at_time(plan, stats.time)` w
+pełnym porządku `plan.mesh.nodes`; do artefaktu trafiają rzeczywisty czas,
+krok, `solver_dt` i rewizja. Streaming korzysta z istniejącego
+`ArtifactPipeline`. Snapshoty `H_ant.x/y/z` zachowują istniejący payload
+trójskładowy z wybraną składową i zerami w pozostałych osiach. Ścieżka GPU
+pozostaje fail-closed z powodu braku `H_ant` w natywnym ABI obserwabli.
+
+**Dowód builda 2026-09-21:** zarządzana recepta
+`just windows-build backend=fem device=cpu frontend=dev` skompilowała
+`fullmag-runner`, CLI, API i `fullmag-py-core`. Guard tożsamości odrzucił
+końcowy receipt dla niezatwierdzonego worktree; dlatego nie jest to jeszcze
+bramka runtime. `git diff --check` oraz formatowanie nowych fragmentów
+przeszły. Testów Rust nie kompilowano zgodnie z blokadą sesji.
+
+Ta poprawka nie odhacza T13: pozostaje dowód wartości artefaktów względem
+niezależnego wzorca, RHS/LLG dla wszystkich integratorów i waveformów,
+kwalifikacja GPU oraz osobna ścieżka T16 dla projekcji FDM i parity CPU/GPU.
 
 ## T14. Domknąć OpenAPI, zasoby i realtime
 

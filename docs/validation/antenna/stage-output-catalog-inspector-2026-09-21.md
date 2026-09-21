@@ -263,3 +263,57 @@ dalszej kwalifikacji, ale status
 T13 pozostaje otwarty do czasu testów rzeczywistego RHS/LLG, wszystkich
 integratorów i snapshotów. T16 nadal nie jest zamknięte: projekcja do FDM,
 upload CUDA oraz parity CPU/GPU wymagają osobnych dowodów.
+
+## Aktualizacja: artefaktowy `H_ant` w natywnym FEM CPU — 2026-09-21
+
+Uzupełniono następną, węższą lukę kontraktu: zaplanowany output `H_ant` może
+być teraz zapisany jako zwykły `FieldSnapshot` na ścieżce **native FEM CPU**,
+mimo że natywny ABI obserwabli urządzenia nie ma jeszcze `H_ant`. To nie jest
+zmiana ABI ani obejście ścieżki GPU. Jest to jawna realizacja hostowa dla
+quantity pochodnej, zgodna z tym samym resolved `FemPlanIR`, który steruje
+preview i termem Zeemana.
+
+### Zakres materializacji
+
+- `FemCpuNative` klasyfikuje `H_ant` jako `Derived`; aktywność pozostaje
+  filtrowana przez rozstrzygnięty plan i wymaga `antenna_zeeman_masks` albo
+  `solved_antenna_drive_bases`.
+- Dla CPU helper wywołuje
+  `compute_antenna_field_at_time(plan, physical_time)` i tworzy pełny wektor
+  w kolejności węzłów `plan.mesh.nodes`. Nie używa pola z `t=0`, nie wykonuje
+  drugiej konwersji przez `mu0` i nie kopiuje nieistniejącego obserwabla z
+  urządzenia.
+- Snapshoty komponentowe `H_ant.x`, `H_ant.y` i `H_ant.z` przechodzą przez
+  ten sam helper; zachowują kontrakt trójskładowego payloadu z wybraną
+  składową i zerami w dwóch pozostałych osiach, zamiast trafiać do ABI jako
+  nieznana nazwa obserwabli.
+- Ta ścieżka obejmuje początkowy snapshot, każdy zaplanowany accepted-step,
+  snapshot terminalny oraz końcowy output harmonogramu. Do obliczenia trafia
+  rzeczywisty czas `stats.time`, a `step`, `solver_dt` i rewizja są zapisywane
+  razem z artefaktem.
+- W trybie streaming snapshot trafia do istniejącego `ArtifactPipeline` jako
+  hostowy `FieldSnapshot` i jest zapisywany przez tę samą warstwę JSON/Zarr co
+  inne pola. W trybie nie-streaming pozostaje w lokalnym wyniku runu.
+- `FemNativeGpu` nadal nie reklamuje `H_ant` w snapshotach i nie wchodzi do
+  helpera hostowego. Brak kwalifikowanego device ABI pozostaje błędem
+  capability, a nie cichym fallbackiem.
+
+### Weryfikacja tej iteracji
+
+- Zarządzany build Windows przez
+  `just windows-build backend=fem device=cpu frontend=dev` skompilował
+  zmienione crate'y bez błędów. Końcowy receipt został odrzucony przez guard
+  tożsamości niezatwierdzonego worktree; jest to brak receiptu runtime, nie
+  błąd kompilacji.
+- `git diff --check`: **OK**. Formatowanie nowych fragmentów oraz sześciu
+  plików pomocniczych sprawdzono przez `rustfmt --edition 2021 --check`;
+  `dispatch.rs` zachowuje istniejące dwa fragmenty formatowania bazowego,
+  których nie zmieniano mechanicznie.
+- Testów jednostkowych Rust nie kompilowano zgodnie z blokadą sesji. Nie
+  wykonano jeszcze rzeczywistego eksportu Zarr/JSON, pełnej trajektorii LLG,
+  kwalifikacji GPU ani porównania wartości `H_ant` z niezależnym wzorcem.
+
+Ta zmiana zamyka implementacyjnie hostowy zapis `H_ant` dla FEM CPU, ale nie
+odhacza T13. Brakuje nadal dowodu numerycznego na RHS/energię/torque, wszystkich
+integratorów i waveformów, a także kwalifikacji natywnego ABI GPU. T16 pozostaje
+otwarte dla projekcji FDM, uploadu CUDA i parity CPU/GPU.

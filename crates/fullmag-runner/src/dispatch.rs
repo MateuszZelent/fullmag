@@ -3218,6 +3218,8 @@ fn native_fem_requires_initial_snapshot(
 #[cfg(feature = "fem-gpu")]
 fn record_native_fem_initial_field_snapshots(
     backend: &mut NativeFemBackend,
+    engine: FemEngine,
+    plan: &FemPlanIR,
     artifacts: &mut ArtifactRecorder,
     field_schedules: &mut [OutputSchedule],
     node_count: usize,
@@ -3232,7 +3234,19 @@ fn record_native_fem_initial_field_snapshots(
     names.sort();
     names.dedup();
     for name in names {
-        if artifacts.is_streaming() {
+        if engine == FemEngine::CpuNative
+            && crate::fem::relax::snapshots::is_antenna_field_snapshot(&name)
+        {
+            artifacts.record_field_snapshot(
+                crate::fem::relax::snapshots::build_antenna_field_snapshot(
+                    plan,
+                    &name,
+                    current_stats.step,
+                    current_stats.time,
+                    current_stats.dt,
+                )?,
+            )?;
+        } else if artifacts.is_streaming() {
             let snapshot = backend.begin_field_snapshot(
                 &name,
                 current_stats.step,
@@ -3505,6 +3519,8 @@ fn execute_native_fem(
     if needs_initial_snapshot && current_stats.step == 0 {
         record_native_fem_initial_field_snapshots(
             &mut backend,
+            engine,
+            plan,
             &mut artifacts,
             &mut field_schedules,
             node_count,

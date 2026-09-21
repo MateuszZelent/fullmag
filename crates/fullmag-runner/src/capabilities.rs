@@ -894,6 +894,7 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
                 QuantityId::HEx,
                 QuantityId::HDemag,
                 QuantityId::HExt,
+                QuantityId::HAnt,
                 QuantityId::HEff,
                 QuantityId::HAni,
                 QuantityId::HDmi,
