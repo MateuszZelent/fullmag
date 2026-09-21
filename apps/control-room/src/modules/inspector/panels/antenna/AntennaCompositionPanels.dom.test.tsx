@@ -101,6 +101,36 @@ describe("AntennaCompositionPanel runtime results", () => {
     }
   });
 
+  it("shows missing solve and target references for an incomplete projection", async () => {
+    mocks.scene.data = {
+      antenna_target_projections: [{
+        id: "projection-1",
+        output_id: "missing-output",
+        solution: { output_id: "missing-output", stage_id: "missing-stage" },
+        target: { kind: "object", object_id: "missing-object" },
+      }],
+      antenna_field_solve_stages: [],
+      objects: [],
+    } as unknown as SceneResource;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(
+          <AntennaCompositionPanel kind="projection" selection={projectionSelection()} />,
+        ),
+      );
+      expect(container.textContent).toContain("Validation");
+      expect(container.textContent).toContain("missing solve stage");
+      expect(container.textContent).toContain("missing target object");
+      expect(findGroupBadge(container, "invalid · result pending")).toBeDefined();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("shows concrete port validation diagnostics", async () => {
     mocks.scene.data = {
       antenna_port_modes: [{
@@ -341,6 +371,25 @@ function portSelection(): Selection {
       visualizationTargetId: "object:antenna-1",
       antennaResourceId: "invalid-port",
       antennaResourceKind: "port",
+    },
+  } as Selection;
+}
+
+function projectionSelection(): Selection {
+  return {
+    kind: "object.antenna.projection",
+    label: "Projection projection-1",
+    moduleSource: "explorer",
+    nodeId: "object:antenna-1:antenna:projection:projection-1",
+    objectId: "antenna-1",
+    ref: {
+      kind: "object.antenna.projection",
+      nodeId: "object:antenna-1:antenna:projection:projection-1",
+      objectId: "antenna-1",
+      type: "scene-object",
+      visualizationTargetId: "object:antenna-1",
+      antennaResourceId: "projection-1",
+      antennaResourceKind: "projection",
     },
   } as Selection;
 }

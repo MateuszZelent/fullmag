@@ -905,6 +905,16 @@ pozostaje `configured · result pending`. Test DOM tego panelu przechodzi 4/4,
 ESLint i React Doctor pozostają zielone. To nadal wyłącznie kontrakt i
 diagnostyka metadanych UI — nie kwalifikacja solve, Relax/LLG ani GPU.
 
+**Uzupełnienie implementacyjne 2026-09-21 (walidacja projection):**
+Inspector `projection` sprawdza teraz referencję do stage i outputu oraz
+wymaga, aby wskazany output publikował `H_ant_basis`. Dla targetów typu
+`object` i `region` sprawdzana jest również obecność obiektu, a dostępny
+region jest rozpoznawany po `region_id` lub kanonicznej nazwie. Braki są
+pokazywane w wierszu `Validation`, a badge przyjmuje stan
+`invalid · result pending`; global target nie wymaga listy obiektów. Testy
+modelu i DOM kompozycji przechodzą 10/10. To walidacja referencji authoringu,
+nie dowód projekcji numerycznej ani kwalifikacja runtime.
+
 **Uzupełnienie implementacyjne 2026-09-21 (harness browser):** dodano
 `apps/control-room/scripts/smoke-antenna-authoring-ui.mjs` oraz helper i test
 kontraktu Node. Smoke ma jawnie ograniczony zakres pierwszej fazy T15:

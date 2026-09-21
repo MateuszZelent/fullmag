@@ -248,6 +248,56 @@ function solutionDetails(
   };
 }
 
+function antennaProjectionValidationMessages(
+  projection: AntennaProjection,
+  scene: SceneResource | null,
+): string[] {
+  const messages: string[] = [];
+  const stages = scene?.antenna_field_solve_stages;
+  if (stages) {
+    const stage = stages.find(
+      (candidate) => candidate.id === projection.solution.stage_id,
+    );
+    if (!stage) {
+      messages.push(`missing solve stage '${projection.solution.stage_id}'`);
+    } else {
+      const output = stage.outputs.find(
+        (candidate) => candidate.id === projection.solution.output_id,
+      );
+      if (!output) {
+        messages.push(`missing solve output '${projection.solution.output_id}'`);
+      } else if (output.quantity !== "H_ant_basis") {
+        messages.push(
+          `solve output '${projection.solution.output_id}' must publish H_ant_basis`,
+        );
+      }
+    }
+  }
+
+  if (projection.target.kind === "global") return messages;
+  const objects = scene?.objects;
+  if (!objects) return messages;
+  const object = objects.find(
+    (candidate) => candidate.id === projection.target.object_id,
+  );
+  if (!object) {
+    messages.push(`missing target object '${projection.target.object_id}'`);
+    return messages;
+  }
+  if (projection.target.kind !== "region" || !object.regions) return messages;
+  const hasRegion = object.regions.some(
+    (candidate) =>
+      candidate.region_id === projection.target.region_id ||
+      candidate.name === projection.target.region_id,
+  );
+  if (!hasRegion) {
+    messages.push(
+      `missing target region '${projection.target.object_id}/${projection.target.region_id}'`,
+    );
+  }
+  return messages;
+}
+
 function projectionDetails(
   resourceId: string | null,
   scene: SceneResource | null,
@@ -258,10 +308,12 @@ function projectionDetails(
   if (!projection) {
     return { title: "Antenna target projection", badge: "missing", rows: [{ label: "Status", value: "Projection is not present in SceneResource." }] };
   }
+  const validationMessages = antennaProjectionValidationMessages(projection, scene);
   return {
     title: `Antenna projection ${projection.id}`,
-    badge: "configured · result pending",
+    badge: validationMessages.length > 0 ? "invalid · result pending" : "configured · result pending",
     rows: [
+      { label: "Validation", value: validationMessages.join("; ") || "ready" },
       { label: "ID", value: projection.id, mono: true },
       { label: "Output", value: projection.output_id, mono: true },
       { label: "Solve stage", value: projection.solution.stage_id, mono: true },

@@ -55,7 +55,7 @@ stage nie jest używany do udawania gotowego pola, gdy brakuje właściwego
 - `pnpm --dir apps/control-room exec vitest run
   src/modules/inspector/panels/antenna/AntennaCompositionPanels.test.ts
   src/modules/inspector/panels/antenna/AntennaCompositionPanels.dom.test.tsx`:
-  **7/7**; regresja obejmuje także dedykowany conductor Inspector i jego
+  **10/10**; regresja obejmuje także dedykowany conductor Inspector i jego
   odczyt kanonicznego `geometry.geometry_kind` (`Box`), zamiast fałszywego
   `unavailable` z nieistniejącego pola `geometry.kind`;
 - `pnpm --dir apps/control-room exec vitest run`: **6567/6572** testów
@@ -111,6 +111,11 @@ stage nie jest używany do udawania gotowego pola, gdy brakuje właściwego
   stage przechodzi razem z pozostałymi trzema scenariuszami kompozycji (4/4 w
   pliku DOM); jest to walidacja metadanych authoringu, nie dowód wykonania
   solve.
+- Inspector `projection` wykonuje analogiczną walidację referencji: stage,
+  output `H_ant_basis` oraz target object/region. Brakujące odwołania albo
+  output o innej quantity są pokazywane w `Validation` i ustawiają badge
+  `invalid · result pending`; global target pozostaje poprawny bez zależności
+  od listy obiektów. Testy modelu i DOM kompozycji przechodzą teraz 10/10.
 - nie uruchamiano kompilacji testów Rust, browser smoke ani dowodu
   kwalifikacji FEM/FDM GPU.
 
