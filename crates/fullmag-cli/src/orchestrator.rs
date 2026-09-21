@@ -6651,6 +6651,137 @@ fn write_synthetic_stage_record(
     Ok(())
 }
 
+const ANTENNA_STAGE_OUTPUT_CATALOG_NAME: &str = "stage_output_catalog.v1.json";
+
+fn antenna_stage_output_catalog_path(current_stage_artifact_dir: &Path) -> PathBuf {
+    current_stage_artifact_dir.join(ANTENNA_STAGE_OUTPUT_CATALOG_NAME)
+}
+
+fn relative_artifact_ref(artifact_dir: &Path, path: &Path) -> String {
+    path.strip_prefix(artifact_dir)
+        .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/"))
+}
+
+fn write_antenna_stage_output_catalog(
+    current_stage_artifact_dir: &Path,
+    payload: &serde_json::Value,
+) -> Result<()> {
+    fs::create_dir_all(current_stage_artifact_dir).with_context(|| {
+        format!(
+            "creating antenna stage artifact directory {}",
+            current_stage_artifact_dir.display()
+        )
+    })?;
+    let path = antenna_stage_output_catalog_path(current_stage_artifact_dir);
+    let bytes = serde_json::to_vec_pretty(payload)
+        .context("serializing antenna stage output catalog")?;
+    if path.exists() {
+        let existing = fs::read(&path).with_context(|| {
+            format!("reading existing antenna stage output catalog {}", path.display())
+        })?;
+        if existing == bytes {
+            return Ok(());
+        }
+        bail!(
+            "antenna stage output catalog already exists with different content: {}",
+            path.display()
+        );
+    }
+
+    let temporary = current_stage_artifact_dir.join(format!(
+        ".{ANTENNA_STAGE_OUTPUT_CATALOG_NAME}.tmp-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let write_result = (|| -> Result<()> {
+        fs::write(&temporary, &bytes).with_context(|| {
+            format!(
+                "writing temporary antenna stage output catalog {}",
+                temporary.display()
+            )
+        })?;
+        fs::rename(&temporary, &path).with_context(|| {
+            format!(
+                "publishing antenna stage output catalog {}",
+                path.display()
+            )
+        })?;
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temporary);
+        if path.exists() && fs::read(&path).ok().as_deref() == Some(bytes.as_slice()) {
+            return Ok(());
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn write_antenna_stage_output_catalog_ready(
+    current_stage_artifact_dir: &Path,
+    artifact_dir: &Path,
+    stage_id: &str,
+    port_mode_id: &str,
+    reference: &fullmag_ir::AntennaFieldSolutionRefIR,
+    manifest_path: &Path,
+    quantity_ids: &[String],
+    reused_existing: bool,
+) -> Result<()> {
+    write_antenna_stage_output_catalog(
+        current_stage_artifact_dir,
+        &serde_json::json!({
+            "schema_version": "stage_output_catalog.v1",
+            "stage_id": stage_id,
+            "stage_kind": "antenna_field_solve",
+            "port_mode_id": port_mode_id,
+            "status": "ready",
+            "outputs": [{
+                "kind": "antenna_field_solution",
+                "output_id": reference.output_id,
+                "solution_ref": reference,
+                "manifest_ref": relative_artifact_ref(artifact_dir, manifest_path),
+                "quantity_ids": quantity_ids,
+                "reused_existing": reused_existing,
+            }],
+        }),
+    )
+}
+
+fn write_antenna_stage_output_catalog_terminal(
+    current_stage_artifact_dir: &Path,
+    stage_id: &str,
+    solution_id: &str,
+    port_mode_id: &str,
+    status: &str,
+    diagnostic: &str,
+) -> Result<()> {
+    write_antenna_stage_output_catalog(
+        current_stage_artifact_dir,
+        &serde_json::json!({
+            "schema_version": "stage_output_catalog.v1",
+            "stage_id": stage_id,
+            "stage_kind": "antenna_field_solve",
+            "solution_id": solution_id,
+            "port_mode_id": port_mode_id,
+            "status": status,
+            "outputs": [],
+            "diagnostic": diagnostic,
+        }),
+    )
+}
+
+fn synthetic_stage_artifact_ref(
+    action: &ResolvedScriptStageAction,
+    current_stage_artifact_dir: &Path,
+) -> PathBuf {
+    if matches!(action, ResolvedScriptStageAction::AntennaFieldSolve { .. }) {
+        antenna_stage_output_catalog_path(current_stage_artifact_dir)
+    } else {
+        current_stage_artifact_dir.to_path_buf()
+    }
+}
+
 fn write_sampling_resolution_stage_record(
     current_stage_artifact_dir: &Path,
     sampling_resolution: Option<&serde_json::Value>,
@@ -6696,6 +6827,7 @@ fn record_cancelled_antenna_stage(
         fullmag_runner::AntennaFieldStageStatus::Cancelled,
         Some(diagnostic.to_string()),
     )?;
+    let solution_id = lifecycle.solution_id.clone();
     write_synthetic_stage_record(
         current_stage_artifact_dir,
         serde_json::json!({
@@ -6704,6 +6836,14 @@ fn record_cancelled_antenna_stage(
             "port_mode_id": port_mode_id,
             "stage_state": lifecycle,
         }),
+    )?;
+    write_antenna_stage_output_catalog_terminal(
+        current_stage_artifact_dir,
+        stage_id,
+        &solution_id,
+        port_mode_id,
+        "cancelled",
+        diagnostic,
     )?;
     Ok(())
 }
@@ -6799,6 +6939,17 @@ fn execute_synthetic_stage_with_interrupt(
                 )?;
                 lifecycle.signatures = Some(cached.signatures.clone());
                 lifecycle.transition(fullmag_runner::AntennaFieldStageStatus::Ready, None)?;
+                let quantity_ids = vec!["H_ant_basis".to_string()];
+                write_antenna_stage_output_catalog_ready(
+                    current_stage_artifact_dir,
+                    artifact_dir,
+                    stage_id,
+                    port_mode_id,
+                    &cached.reference,
+                    &cached.manifest_path,
+                    &quantity_ids,
+                    true,
+                )?;
                 write_synthetic_stage_record(
                     current_stage_artifact_dir,
                     serde_json::json!({
@@ -6928,6 +7079,21 @@ fn execute_synthetic_stage_with_interrupt(
             };
             lifecycle.signatures = Some(published.signatures.clone());
             lifecycle.transition(fullmag_runner::AntennaFieldStageStatus::Ready, None)?;
+            let quantity_ids = result
+                .quantities
+                .iter()
+                .map(|quantity| quantity.quantity_id.clone())
+                .collect::<Vec<_>>();
+            write_antenna_stage_output_catalog_ready(
+                current_stage_artifact_dir,
+                artifact_dir,
+                stage_id,
+                port_mode_id,
+                &published.reference,
+                &published.manifest_path,
+                &quantity_ids,
+                published.reused_existing,
+            )?;
             write_synthetic_stage_record(
                 current_stage_artifact_dir,
                 serde_json::json!({
@@ -6939,11 +7105,7 @@ fn execute_synthetic_stage_with_interrupt(
                     "content_digest": published.reference.content_digest,
                     "manifest_path": published.manifest_path.display().to_string(),
                     "reused_existing": published.reused_existing,
-                    "quantity_ids": result
-                        .quantities
-                        .iter()
-                        .map(|quantity| quantity.quantity_id.as_str())
-                        .collect::<Vec<_>>(),
+                    "quantity_ids": quantity_ids,
                     "transport_provenance": result.transport_provenance,
                     "stage_state": lifecycle,
                 }),
@@ -9458,6 +9620,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
         if let Some(action) = synthetic_action {
             let synthetic_interrupt_signal = display_selection_handle.running_interrupt_signal();
+            let synthetic_artifact_ref =
+                synthetic_stage_artifact_ref(&action, &current_stage_artifact_dir);
             let synthetic_outcome = match execute_synthetic_stage_with_interrupt(
                 &action,
                 &artifact_dir,
@@ -9531,7 +9695,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 start_solver_command_id.as_deref(),
                                 Some(stage_started_at_unix_ms),
                                 Some(terminal_at_unix_ms),
-                                Some(current_stage_artifact_dir.display().to_string()),
+                                Some(synthetic_artifact_ref.display().to_string()),
                                 Some(&cancelled_completion),
                                 stage.incoming_transition.as_ref(),
                             );
@@ -9613,7 +9777,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     start_solver_command_id.as_deref(),
                     Some(stage_started_at_unix_ms),
                     Some(synthetic_completed_at_unix_ms),
-                    Some(current_stage_artifact_dir.display().to_string()),
+                    Some(synthetic_artifact_ref.display().to_string()),
                     None,
                     stage.incoming_transition.as_ref(),
                 );
@@ -12352,6 +12516,7 @@ mod tests {
         attach_initial_magnetization_state_override_metadata,
         attach_region_realization_revisions,
         attach_stage_fem_mesh_identity,
+        antenna_stage_output_catalog_path,
         classify_wait_for_solve_command,
         continuation_source_from_backend_plan,
         cumulative_rhs_evals,
@@ -12382,6 +12547,7 @@ mod tests {
         step_update_has_frequency_response_progress, user_cancelled_stage_completion,
         validate_periodic_remesh_candidate, wait_for_failed_preparation_close,
         wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
+        write_antenna_stage_output_catalog_ready, write_antenna_stage_output_catalog_terminal,
         write_sampling_resolution_stage_record, ActiveSequenceState, ContinuationStageSource,
         LiveProgressCadence, LoadedInitialMagnetizationState, RuntimeCommandPrecondition,
         SceneProblemPatch, StageProgressHeartbeat, WaitForSolveCommandAction,
@@ -17510,6 +17676,84 @@ mod tests {
         assert_eq!(record["schema_version"], "sampling_stage_record.v1");
         assert_eq!(record["sampling_resolution"], resolution);
         let _ = fs::remove_dir_all(stage_dir);
+    }
+
+    #[test]
+    fn antenna_stage_output_catalog_is_idempotent_and_fail_closed() {
+        let artifact_dir = temp_test_dir("antenna-stage-output-catalog");
+        let cancelled_stage_dir = artifact_dir.join("cancelled");
+
+        write_antenna_stage_output_catalog_terminal(
+            &cancelled_stage_dir,
+            "solve_antenna",
+            "basis",
+            "port_1",
+            "cancelled",
+            "interrupt_requested",
+        )
+        .expect("cancelled antenna catalog should write");
+        let cancelled_path = antenna_stage_output_catalog_path(&cancelled_stage_dir);
+        let cancelled: serde_json::Value = serde_json::from_slice(
+            &fs::read(&cancelled_path).expect("cancelled antenna catalog should exist"),
+        )
+        .expect("cancelled antenna catalog should be JSON");
+        assert_eq!(cancelled["schema_version"], "stage_output_catalog.v1");
+        assert_eq!(cancelled["status"], "cancelled");
+        assert!(cancelled["outputs"].as_array().is_some_and(Vec::is_empty));
+
+        write_antenna_stage_output_catalog_terminal(
+            &cancelled_stage_dir,
+            "solve_antenna",
+            "basis",
+            "port_1",
+            "cancelled",
+            "interrupt_requested",
+        )
+        .expect("identical catalogue bytes should be idempotent");
+        assert!(write_antenna_stage_output_catalog_terminal(
+            &cancelled_stage_dir,
+            "solve_antenna",
+            "basis",
+            "port_1",
+            "failed",
+            "different terminal state",
+        )
+        .is_err());
+
+        let ready_stage_dir = artifact_dir.join("ready");
+        let reference = fullmag_ir::AntennaFieldSolutionRefIR {
+            stage_id: "solve_antenna".into(),
+            output_id: "basis".into(),
+            asset_id: "afs-test".into(),
+            content_digest: "sha256:test".into(),
+        };
+        let manifest_path = artifact_dir.join(
+            "antenna/field_solutions/basis/afs-test/manifest.v1.json",
+        );
+        write_antenna_stage_output_catalog_ready(
+            &ready_stage_dir,
+            &artifact_dir,
+            "solve_antenna",
+            "port_1",
+            &reference,
+            &manifest_path,
+            &["H_ant_basis".into()],
+            false,
+        )
+        .expect("ready antenna catalog should write");
+        let ready: serde_json::Value = serde_json::from_slice(
+            &fs::read(antenna_stage_output_catalog_path(&ready_stage_dir))
+                .expect("ready antenna catalog should exist"),
+        )
+        .expect("ready antenna catalog should be JSON");
+        assert_eq!(ready["status"], "ready");
+        assert_eq!(ready["outputs"][0]["solution_ref"], serde_json::json!(reference));
+        assert_eq!(
+            ready["outputs"][0]["manifest_ref"],
+            "antenna/field_solutions/basis/afs-test/manifest.v1.json"
+        );
+
+        let _ = fs::remove_dir_all(artifact_dir);
     }
 
     #[test]

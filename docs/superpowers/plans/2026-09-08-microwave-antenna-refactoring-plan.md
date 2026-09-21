@@ -733,6 +733,17 @@ publisher sprawdza ten sam sygnał bezpośrednio przed `rename()` i usuwa
 wyłącznie własny staging przy odrzuceniu. Pozostaje runtime/fault-injection
 dowodzący całego batcha oraz niepreemptive granica samego `rename()`.
 
+Uzupełnienie implementacyjne 2026-09-21 (stage/output catalog): antenowy
+`synthetic` field solve zapisuje atomowo `stage_output_catalog.v1.json` po
+zweryfikowanej publikacji. Katalog ma jedną wersjonowaną referencję
+`stage_id → output_id → asset_id/content_digest`, względny `manifest_ref`,
+quantities i informację o reuse; read-model dostaje ścieżkę katalogu jako
+`artifact_ref`. Anulowanie zapisuje terminalny `cancelled` z pustym
+`outputs`, a identyczny katalog jest idempotentny — odmienna treść nie może
+go nadpisać. Zakres jest celowo ograniczony do antenowego synthetic stage;
+pełny resolver symbolicznego stage/output i wspólny katalog wszystkich stage
+pozostają otwarte.
+
 **Bramka:** `lifecycle` i `artifact`; testy fault injection obejmują przerwanie przed/po zapisie payloadu i przed publikacją manifestu. Commit: `fix: bind antenna stage lifecycle to actual execution`.
 
 ## T13. Domknąć i zakwalifikować FEM LLG

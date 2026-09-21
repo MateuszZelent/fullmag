@@ -67,11 +67,33 @@ interaktywna wraca do `awaiting_command`. Pojedynczy FFI solve nadal nie jest
 preemptive, a pełny fault-injection zapisu i runtime qualification pozostają
 osobnymi bramkami.
 
+## Katalog stage/output
+
+Ścieżka antenowego `synthetic` stage zapisuje teraz atomowo
+`stage_output_catalog.v1.json` w swoim katalogu stage. Rekord `ready` zawiera
+`stage_id`, `port_mode_id`, referencję `AntennaFieldSolutionRefIR` z
+`output_id`/`asset_id`/`content_digest`, względną ścieżkę manifestu, listę
+materializowanych quantities oraz `reused_existing`. Katalog jest tworzony
+dopiero po ponownym otwarciu opublikowanego assetu przez publishera; zapis do
+pliku tymczasowego i pojedynczy rename nie może ujawnić częściowego JSON.
+
+Anulowanie zapisuje ten sam schemat ze stanem `cancelled`, pustą listą
+`outputs` i diagnostyką. Identyczne bajty są bezpiecznie reużywane, natomiast
+próba nadpisania katalogu inną treścią kończy się błędem. Read-model stage
+otrzymuje referencję do katalogu jako dodatkowy `artifact_ref`, więc następny
+etap nie musi wyszukiwać wyniku po nazwie pliku.
+
+Zakres tej zmiany obejmuje antenowy `synthetic` field solve; pełny resolver
+symbolicznego `stage/output` oraz wspólny katalog dla wszystkich rodzajów
+stage/output nadal pozostają otwarte.
+
 ## Weryfikacja wykonana 2026-09-21
 
 - parser-formatowanie Rust (`rustfmt --edition 2021 --config skip_children=true
   --emit stdout`) dla `antenna_stage.rs`, `lib.rs` i `orchestrator.rs`: exit
   code 0;
+- ten sam parser dla rozszerzonego `orchestrator.rs` po dodaniu katalogu
+  `stage_output_catalog.v1` oraz `git diff --check`: exit code 0;
 - `git diff --check`: exit code 0;
 - odczyt callerów potwierdził, że CLI używa nowego inspectora, a kompatybilny
   `load_cached_antenna_field_solution` zachowuje dotychczasowe `Option` dla
