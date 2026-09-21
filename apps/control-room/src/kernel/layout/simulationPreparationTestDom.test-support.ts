@@ -205,6 +205,7 @@ export class TestElement extends TestNode {
   };
   readonly tagName: string;
   private controlValue = "";
+  inputMode = "";
 
   get value(): string {
     return this.controlValue;
@@ -334,10 +335,13 @@ export class TestElement extends TestNode {
 
   removeAttribute(name: string): void {
     this.attributes.delete(name);
+    if (name.toLowerCase() === "inputmode") this.inputMode = "";
   }
 
   setAttribute(name: string, value: string): void {
-    this.attributes.set(name, String(value));
+    const normalizedValue = String(value);
+    this.attributes.set(name, normalizedValue);
+    if (name.toLowerCase() === "inputmode") this.inputMode = normalizedValue;
   }
 }
 
