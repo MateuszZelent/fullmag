@@ -1050,14 +1050,39 @@ fn build_inspection(
 
 /// Extract a `.fms` archive into a `SessionStore`.
 pub fn unpack_fms<R: Read + Seek>(reader: R, store: &SessionStore) -> Result<FmsSessionManifest> {
+    unpack_fms_inner(reader, store, true)
+}
+
+/// Extract an archive for a read-only visualization import.
+///
+/// The archive is still fully preflighted: paths, ZIP limits, document
+/// digests, and typed checkpoint payloads are validated before anything is
+/// written. A read-only import may retain the two known opaque project
+/// documents, but missing payloads and unknown references remain fail-closed.
+pub fn unpack_fms_for_visualization<R: Read + Seek>(
+    reader: R,
+    store: &SessionStore,
+) -> Result<FmsSessionManifest> {
+    unpack_fms_inner(reader, store, false)
+}
+
+fn unpack_fms_inner<R: Read + Seek>(
+    reader: R,
+    store: &SessionStore,
+    require_complete_reachability: bool,
+) -> Result<FmsSessionManifest> {
     let preflight = preflight_fms(reader, &[])?;
 
-    if matches!(
-        preflight.session.profile,
-        SaveProfile::Solved | SaveProfile::Resume | SaveProfile::Archive
-    ) && !preflight.reachability.complete
-    {
-        preflight.reachability.require_complete()?;
+    if require_complete_reachability {
+        if matches!(
+            preflight.session.profile,
+            SaveProfile::Solved | SaveProfile::Resume | SaveProfile::Archive
+        ) && !preflight.reachability.complete
+        {
+            preflight.reachability.require_complete()?;
+        }
+    } else {
+        preflight.reachability.require_visualization_safe()?;
     }
 
     let _lease = store.write_transaction()?;

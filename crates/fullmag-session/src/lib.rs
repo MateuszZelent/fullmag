@@ -37,7 +37,8 @@ pub use durability::{
     PublicationUncertain,
 };
 pub use fms::{
-    inspect_fms, pack_fms, pack_fms_file, preflight_fms, unpack_fms, FmsPreflight, PackOptions,
+    inspect_fms, pack_fms, pack_fms_file, preflight_fms, unpack_fms, unpack_fms_for_visualization,
+    FmsPreflight, PackOptions,
 };
 pub use store::{GcPlan, SessionStore};
 pub use types::*;
