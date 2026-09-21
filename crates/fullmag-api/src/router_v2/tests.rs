@@ -27279,7 +27279,12 @@ async fn solved_session_export_restores_frequency_artifacts_after_source_history
         .unwrap();
     assert_eq!(inspect_response.status(), StatusCode::OK);
     let inspection = body_json(inspect_response).await;
-    assert_eq!(inspection["inspection"]["warnings"], serde_json::json!([]));
+    assert_eq!(
+        inspection["inspection"]["warnings"],
+        serde_json::json!([
+            "archive project document `project/current_live_snapshot.json` has untyped object references; conservative retention required"
+        ])
+    );
 
     fs::remove_dir_all(&source_artifact_dir)
         .expect("simulated local-live history should be removable after save");
@@ -27780,6 +27785,11 @@ async fn legacy_checkpoint_fails_closed_for_active_coupled_m3_session() {
         .await
         .unwrap();
     assert_eq!(create.status(), StatusCode::OK);
+    let create_json = body_json(create).await;
+    let checkpoint_id = create_json["checkpoint"]["checkpoint_id"]
+        .as_str()
+        .expect("checkpoint id should be present")
+        .to_string();
     state
         .current_live_state
         .write()
@@ -27793,7 +27803,9 @@ async fn legacy_checkpoint_fails_closed_for_active_coupled_m3_session() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v2/sessions/current/persistence/checkpoints/cp-000042/restore")
+                .uri(format!(
+                    "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}/restore"
+                ))
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::json!({}).to_string()))
                 .unwrap(),
