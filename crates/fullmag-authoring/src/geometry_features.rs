@@ -90,7 +90,7 @@ pub fn build_geometry_feature_sequence(
         object_id: object_id.to_string(),
         kind: "transform".to_string(),
         parameters: transform_parameters,
-        input_feature_ids: terminal.into_iter().collect(),
+        input_feature_ids: vec![terminal],
     });
     result.terminal_feature_id = Some(transform_id);
     result
