@@ -30,7 +30,8 @@ const mocks = vi.hoisted(() => ({
   collection: { monitors: [] as unknown[], scene_revision: 7 },
 }));
 
-vi.mock("@/kernel/KernelContext", () => ({
+vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/kernel/KernelContext")>()),
   useKernel: () => ({
     api: { model: { planarMonitors: { create: mocks.create } } },
     layout: {

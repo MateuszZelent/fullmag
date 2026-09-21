@@ -26,7 +26,8 @@ const mocks = vi.hoisted(() => ({
   publishCommittedScene: vi.fn(),
 }));
 
-vi.mock("@/kernel/KernelContext", () => ({
+vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/kernel/KernelContext")>()),
   useKernel: () => ({
     api: { model: { commitTransaction: mocks.commitTransaction } },
     resources: { invalidate: mocks.invalidate },
