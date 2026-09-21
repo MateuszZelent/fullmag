@@ -4,14 +4,16 @@
 
 Worktree `C:\\git\\fullmag\\worktrees\\eigensolve-dispersion-plan-20260912`
 został zsynchronizowany z najnowszym `origin/master` przez merge commit
-`46603f506127cdde514f4408b294ba62553d8d7a`; drugim rodzicem jest
-`15af8b95e40a85d34403b8cc6f9b9c589bc7adc6`. Przywrócono lokalne poprawki
+`60302922e`; drugim rodzicem jest
+`93f11dbc564c00b725d174ccb2fd0ff9a96493c9`. Przywrócono lokalne poprawki
 audytu z zachowanego stasha bez konfliktów. Włączone są aktualizacje mastera
 dotyczące persystencji projektu, runtime verification, obserwowalności runnera
-i UI; zachowano jednocześnie kontrakty SLEPc/Floquet, fail-closed telemetrykę,
-stabilne P00, rozdzielenie solve od analityki oraz bramkę naukową dyspersji.
+i UI oraz wersjonowanego AST parametrów; zachowano jednocześnie kontrakty
+SLEPc/Floquet, fail-closed telemetrykę, stabilne P00, rozdzielenie solve od
+analityki oraz bramkę naukową dyspersji.
 
-Po synchronizacji przeszły: parsowanie 23 zmienionych skryptów Python,
+Na snapshotcie przed ostatnim commitem mastera przeszły: parsowanie 23
+zmienionych skryptów Python,
 6 kontroli kontraktów Floquet/SLEPc oraz 15 testów orkiestratora benchmarku;
 pełna bateria walidatora naukowego dała 49/49. To są dowody źródłowe, nie
 dowód wykonania natywnego FEM. `cargo fmt --check` dla całego checkoutu nie
@@ -31,8 +33,8 @@ mutacji (`ae6c690ec`), a test checkpointu korzysta z identyfikatora wygenerowane
 przez endpoint zamiast z nieaktualnego identyfikatora stałego (`613ca6a0b`).
 Oczekiwanie testu inspekcji archiwum uwzględnia konserwatywne ostrzeżenie dla
 `project/current_live_snapshot.json` bez typowanych referencji, wprowadzone w
-najnowszym `masterze`. Bieżący HEAD to `613ca6a0bc4246e53de86563da5aaef0b053d236`;
-te poprawki oczekują na nowe uruchomienie CI. Nie zmienia to granicy naukowej:
+najnowszym `masterze`. Bieżący HEAD po scaleniu to `60302922e`;
+nowe CI musi jeszcze potwierdzić ten snapshot. Nie zmienia to granicy naukowej:
 brakuje świeżego managed receipt FEM, niepustego solve dla `k≠0` i kwalifikacji
 pełnej relacji dyspersji.
 
