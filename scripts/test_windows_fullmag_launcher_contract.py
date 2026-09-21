@@ -735,6 +735,14 @@ def test_api_fallback_keeps_its_own_port(public_url_probe):
     assert result.stdout.strip() == "http://localhost:8081"
 
 
+def test_windows_internal_api_target_uses_ipv4_loopback_by_default() -> None:
+    source = CONTROL_ROOM.read_text(encoding="utf-8")
+
+    assert 'const DEFAULT_API_HOST: &str = "127.0.0.1";' in source
+    assert 'format!("http://{}:{}", api_host(), api_port())' in source
+    assert '"FULLMAG_API_HOST"' in source
+
+
 def test_listener_state_is_separate_from_public_url(public_url_probe, tmp_path):
     (tmp_path / "control-room-url.txt").write_text("http://localhost:3101")
     listen_file = tmp_path / "control-room-listen-port.txt"
