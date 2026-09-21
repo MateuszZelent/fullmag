@@ -12,25 +12,29 @@ vi.mock("../InspectorTabState", () => ({
   useInspectorActiveTab: () => "policy",
 }));
 
-vi.mock("@/kernel/KernelContext", () => ({
-  useKernel: () => ({
-    api: {
-      meshing: {
-        replaceObjectPolicy: vi.fn(),
-        replaceUniversePolicy: vi.fn(),
+vi.mock("@/kernel/KernelContext", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/kernel/KernelContext")>();
+  return {
+    ...actual,
+    useKernel: () => ({
+      api: {
+        meshing: {
+          replaceObjectPolicy: vi.fn(),
+          replaceUniversePolicy: vi.fn(),
+        },
       },
-    },
-    commands: {
-      execute: vi.fn(),
-    },
-    bus: {
-      emit: vi.fn(),
-    },
-    resources: {
-      invalidate: vi.fn(),
-    },
-  }),
-}));
+      commands: {
+        execute: vi.fn(),
+      },
+      bus: {
+        emit: vi.fn(),
+      },
+      resources: {
+        invalidate: vi.fn(),
+      },
+    }),
+  };
+});
 
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   shouldLoadRuntimeMeshBuild: () => true,
