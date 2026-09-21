@@ -40,6 +40,11 @@ stage nie jest używany do udawania gotowego pola, gdy brakuje właściwego
   regresja obejmuje canonical `replaceFieldDrive`, legacy full-array
   migration, `base_revision`, zachowanie fazy/offsetu oraz aktywny fokus i
   niezależne kontrolki podczas oczekiwania na ACK;
+- `pnpm exec vitest run
+  src/kernel/authoring/geometryLifecycleCommandContributions.test.ts`:
+  **42/42**; komenda `Add Microstrip Antenna` przekazuje `base_revision`,
+  odrzuca scenę bez rewizji i przy dwóch równoległych zapisach kończy się
+  jednym sukcesem oraz jawnym konfliktem 409 zamiast cichego nadpisania;
 - ESLint panelu i nowego testu DOM: **OK**;
 - lokalny `pnpm exec react-doctor --verbose --scope changed`: **OK**, wynik
   `91/100`, `No issues found`;

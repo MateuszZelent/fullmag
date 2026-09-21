@@ -713,6 +713,7 @@ describe("geometry lifecycle command contributions", () => {
       merge_patch?: Record<string, unknown>;
     } | undefined;
     expect(request).toMatchObject({
+      base_revision: 20,
       kind: "merge_patch",
       merge_patch: {
         antenna_field_solve_stages: [{
@@ -757,6 +758,69 @@ describe("geometry lifecycle command contributions", () => {
     });
     expect(resources.getRevision(MODEL_SCENE_PATH)).toBe(22);
     now.mockRestore();
+  });
+
+  it("turns concurrent antenna adds into a revision conflict instead of a silent overwrite", async () => {
+    const registry = registryWithLifecycleCommands();
+    const now = vi.spyOn(Date, "now").mockReturnValue(12345);
+    const scene = vi.fn(async () => ({
+      current_modules: { modules: [] },
+      field_drives: { drives: [] },
+      current_transports: [],
+      objects: [],
+      revision: 20,
+    }));
+    let committed = false;
+    const requests: Array<{ base_revision?: number | null }> = [];
+    const commitTransaction = vi.fn(async (request: { base_revision?: number | null }) => {
+      requests.push(request);
+      if (request.base_revision !== 20) {
+        throw new Error("missing expected scene revision");
+      }
+      if (committed) {
+        throw new ControlRoomApiError(
+          "scene changed",
+          409,
+          "request-antenna-2",
+          "revision_conflict",
+        );
+      }
+      committed = true;
+      return {
+        committed_scene: { revision: 21 },
+        scene_revision: 21,
+        transaction_kind: "merge_patch",
+      };
+    });
+    const run = () =>
+      registry.execute("geometry.add-microstrip-antenna", {
+        api: { model: { commitTransaction, scene } } as never,
+        source: "test",
+      });
+
+    const [first, second] = await Promise.all([run(), run()]);
+
+    expect([first.status, second.status].sort()).toEqual(["completed", "failed"]);
+    expect(requests).toHaveLength(2);
+    expect(requests.every((request) => request.base_revision === 20)).toBe(true);
+    now.mockRestore();
+  });
+
+  it("fails closed when the fetched antenna scene has no canonical revision", async () => {
+    const registry = registryWithLifecycleCommands();
+    const scene = vi.fn(async () => ({ objects: [] }));
+    const commitTransaction = vi.fn();
+
+    await expect(
+      registry.execute("geometry.add-microstrip-antenna", {
+        api: { model: { commitTransaction, scene } } as never,
+        source: "test",
+      }),
+    ).resolves.toEqual({
+      message: "The canonical scene revision is unavailable. Refetch the scene before adding an antenna.",
+      status: "failed",
+    });
+    expect(commitTransaction).not.toHaveBeenCalled();
   });
 
   it("keeps the primitive draft selected when create-object commit fails", async () => {

@@ -60,7 +60,14 @@ function resourceData(context: CommandContext, resourceKey: string): unknown {
 
 function sceneBaseRevision(context: CommandContext): number | null {
   const revision = asRecord(resourceData(context, MODEL_SCENE_PATH))?.revision;
-  return typeof revision === "number" && Number.isFinite(revision)
+  return typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0
+    ? revision
+    : null;
+}
+
+function sceneDocumentRevision(scene: unknown): number | null {
+  const revision = asRecord(scene)?.revision;
+  return typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0
     ? revision
     : null;
 }
@@ -1094,8 +1101,16 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
       }
 
       const scene = await context.api.model.scene();
+      const baseRevision = sceneDocumentRevision(scene);
+      if (baseRevision === null) {
+        return {
+          message: "The canonical scene revision is unavailable. Refetch the scene before adding an antenna.",
+          status: "failed",
+        };
+      }
       const objectId = draftObjectId("antenna");
       const response = await context.api.model.commitTransaction({
+        base_revision: baseRevision,
         kind: "merge_patch",
         merge_patch: {
           antenna_field_solve_stages: [

@@ -860,6 +860,12 @@ aktywny fokus i niezależne kontrolki w stanie pending. To naprawia
 kontrakt zapisu, ale nie zamyka jeszcze konfliktowego porównania server/draft
 ani całego T15.
 
+Komenda `Add Microstrip Antenna` również pobiera rewizję z tego samego
+`SceneResource` odpowiedzi `scene()` i przekazuje ją w `merge_patch`. Brak
+rewizji kończy się jawnie `failed`, a równoległe komendy podlegają serwerowemu
+409 zamiast bezwarunkowego nadpisania. Test authoringu 42/42 obejmuje oba
+przypadki.
+
 **Uzupełnienie implementacyjne 2026-09-21 (harness browser):** dodano
 `apps/control-room/scripts/smoke-antenna-authoring-ui.mjs` oraz helper i test
 kontraktu Node. Smoke ma jawnie ograniczony zakres pierwszej fazy T15:
