@@ -4,6 +4,7 @@ from .antenna import (
     AntennaFieldSolveStage,
     AntennaFieldSolutionRef,
     AntennaStageOutputRef,
+    AntennaWaveformBandwidthDeclaration,
     AntennaFieldSource,
     AntennaNamedOutput,
     AntennaPortBranch,

@@ -4605,6 +4605,7 @@ mod tests {
                     phase_rad: 0.0,
                     offset: 0.0,
                 },
+                bandwidth_declaration: None,
                 time_origin: FieldTimeOriginIR::StageLocal,
                 activation: DriveActivationIR::StageIds {
                     stage_ids: vec!["ringdown".into()],
@@ -4641,6 +4642,7 @@ mod tests {
                 port_mode_id: "common".into(),
                 peak_current_a: 1.0,
                 waveform: TimeDependenceIR::Constant,
+                bandwidth_declaration: None,
                 time_origin: FieldTimeOriginIR::StageLocal,
                 activation: DriveActivationIR::AllTimeEvolution {},
             },

@@ -101,6 +101,21 @@ def test_solved_drive_serializes_waveform_without_copying_field_basis() -> None:
     assert "current_density" not in payload
 
 
+def test_solved_drive_serializes_explicit_sampled_bandwidth_declaration() -> None:
+    drive = fullmag.SolvedAntennaDrive(
+        id="drive_1",
+        name="piecewise drive",
+        projection_ref="antenna_1_to_magnet_1",
+        port_mode_id="cpw_common",
+        peak_current_a=1.0,
+        waveform=fullmag.PiecewiseLinear([(0.0, 0.0), (1.0e-9, 1.0)]),
+        bandwidth_declaration=fullmag.AntennaWaveformBandwidthDeclaration(6.0e9),
+    )
+
+    payload = drive.to_ir()
+    assert payload["bandwidth_declaration"] == {"f_max_hz": 6.0e9}
+
+
 def test_field_solve_projection_and_spectrum_are_typed_thin_references() -> None:
     target = fullmag.FieldTarget.object("magnet_1")
     stage = fullmag.AntennaFieldSolveStage(

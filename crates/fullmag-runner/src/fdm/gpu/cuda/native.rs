@@ -4358,6 +4358,7 @@ mod tests {
                     phase_rad: 0.125,
                     offset: 0.25,
                 },
+                bandwidth_declaration: None,
                 time_origin: fullmag_ir::FieldTimeOriginIR::StageLocal,
                 activation: fullmag_ir::DriveActivationIR::AllTimeEvolution {},
             },

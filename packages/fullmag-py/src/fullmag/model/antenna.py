@@ -197,6 +197,23 @@ class AntennaStageOutputRef:
 
 
 @dataclass(frozen=True, slots=True)
+class AntennaWaveformBandwidthDeclaration:
+    """Authored physical upper band for a sampled/piecewise drive [Hz]."""
+
+    f_max_hz: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "f_max_hz",
+            require_non_negative(self.f_max_hz, "antenna_waveform_bandwidth.f_max_hz"),
+        )
+
+    def to_ir(self) -> dict[str, float]:
+        return {"f_max_hz": self.f_max_hz}
+
+
+@dataclass(frozen=True, slots=True)
 class SolvedAntennaDrive:
     id: str
     name: str
@@ -204,6 +221,7 @@ class SolvedAntennaDrive:
     port_mode_id: str
     peak_current_a: float
     waveform: TimeDependence
+    bandwidth_declaration: AntennaWaveformBandwidthDeclaration | None = None
     time_origin: str = "stage_local"
     activation: DriveActivation | None = None
 
@@ -221,6 +239,12 @@ class SolvedAntennaDrive:
         )
         if not hasattr(self.waveform, "to_ir"):
             raise TypeError("waveform must be a Fullmag time-dependence object")
+        if self.bandwidth_declaration is not None and not isinstance(
+            self.bandwidth_declaration, AntennaWaveformBandwidthDeclaration
+        ):
+            raise TypeError(
+                "bandwidth_declaration must be an AntennaWaveformBandwidthDeclaration"
+            )
         origin = require_non_empty(self.time_origin, "solved_antenna_drive.time_origin").lower()
         if origin not in FIELD_TIME_ORIGINS:
             raise ValueError(f"time_origin must be one of {sorted(FIELD_TIME_ORIGINS)}")
@@ -231,7 +255,7 @@ class SolvedAntennaDrive:
         object.__setattr__(self, "activation", resolved_activation)
 
     def to_ir(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "id": self.id,
             "name": self.name,
             "projection_ref": self.projection_ref,
@@ -241,6 +265,9 @@ class SolvedAntennaDrive:
             "time_origin": self.time_origin,
             "activation": self.activation.to_ir(),
         }
+        if self.bandwidth_declaration is not None:
+            payload["bandwidth_declaration"] = self.bandwidth_declaration.to_ir()
+        return payload
 
 
 @dataclass(frozen=True, slots=True)

@@ -1215,6 +1215,7 @@ mod adaptive_batch_tests {
                     t_on: 12.0,
                     t_off: 13.0,
                 },
+                bandwidth_declaration: None,
                 time_origin: FieldTimeOriginIR::Absolute,
                 activation: fullmag_ir::DriveActivationIR::AllTimeEvolution {},
             },

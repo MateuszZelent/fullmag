@@ -3,9 +3,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    ChargeTransportDefinitionIR, CurrentModuleIR, CurrentTransportModelIR, DriveActivationIR,
-    FieldTargetIR, FieldTimeOriginIR, PhysicsObjectTypeIR, ProblemIR, ProblemIRV04, StudyKindIR,
-    TimeDependenceIR, TransportCouplingIR,
+    AntennaWaveformBandwidthDeclarationIR, ChargeTransportDefinitionIR, CurrentModuleIR,
+    CurrentTransportModelIR, DriveActivationIR, FieldTargetIR, FieldTimeOriginIR,
+    PhysicsObjectTypeIR, ProblemIR, ProblemIRV04, StudyKindIR, TimeDependenceIR,
+    TransportCouplingIR,
 };
 
 pub const ANTENNA_NORMALIZATION_CURRENT_A: f64 = 1.0;
@@ -438,6 +439,10 @@ pub struct SolvedAntennaDriveIR {
     pub port_mode_id: String,
     pub peak_current_a: f64,
     pub waveform: TimeDependenceIR,
+    /// Optional authored physical band for piecewise/sampled waveforms.
+    /// This is never inferred from sample spacing or pulse duration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bandwidth_declaration: Option<AntennaWaveformBandwidthDeclarationIR>,
     pub time_origin: FieldTimeOriginIR,
     pub activation: DriveActivationIR,
 }
@@ -750,6 +755,22 @@ fn validate_solved_antenna_drive(
         &drive.waveform,
         errors,
     );
+
+    if let Some(declaration) = &drive.bandwidth_declaration {
+        if !declaration.is_valid() {
+            errors.push(format!(
+                "{prefix}.bandwidth_declaration.f_max_hz must be finite and >= 0"
+            ));
+        }
+        if !matches!(
+            &drive.waveform,
+            TimeDependenceIR::Pulse { .. } | TimeDependenceIR::PiecewiseLinear { .. }
+        ) {
+            errors.push(format!(
+                "{prefix}.bandwidth_declaration is only valid for pulse or piecewise_linear waveforms"
+            ));
+        }
+    }
 
     if let DriveActivationIR::StageIds { stage_ids } = &drive.activation {
         if stage_ids.is_empty() {
@@ -1383,6 +1404,7 @@ mod tests {
             port_mode_id: "port_1".to_string(),
             peak_current_a: 1.0,
             waveform,
+            bandwidth_declaration: None,
             time_origin: FieldTimeOriginIR::StageLocal,
             activation,
         }
@@ -1450,6 +1472,57 @@ mod tests {
             .iter()
             .any(|error| error
                 .contains("dynamic waveform is invalid in a minimizer/relaxation study")));
+    }
+
+    #[test]
+    fn solved_drive_validation_rejects_invalid_bandwidth_declaration() {
+        let stage = solved_stage();
+        let mut drive = solved_drive(
+            TimeDependenceIR::PiecewiseLinear {
+                points: vec![[0.0, 0.0], [1.0e-9, 1.0]],
+            },
+            DriveActivationIR::AllTimeEvolution {},
+        );
+        drive.bandwidth_declaration = Some(AntennaWaveformBandwidthDeclarationIR {
+            f_max_hz: f64::NAN,
+        });
+        let mut errors = Vec::new();
+        validate_solved_antenna_drive(
+            "solved_antenna_drives[0]",
+            &drive,
+            &BTreeSet::from(["projection_1"]),
+            &BTreeSet::from(["port_1"]),
+            Some(&stage),
+            &BTreeSet::from(["run".to_string()]),
+            StudyKindIR::TimeEvolution,
+            &mut errors,
+        );
+        assert!(errors.iter().any(|error| {
+            error.contains("bandwidth_declaration.f_max_hz must be finite and >= 0")
+        }));
+
+        drive.waveform = TimeDependenceIR::Sinusoidal {
+            frequency_hz: 1.0e9,
+            phase_rad: 0.0,
+            offset: 0.0,
+        };
+        drive.bandwidth_declaration = Some(AntennaWaveformBandwidthDeclarationIR {
+            f_max_hz: 2.0e9,
+        });
+        errors.clear();
+        validate_solved_antenna_drive(
+            "solved_antenna_drives[0]",
+            &drive,
+            &BTreeSet::from(["projection_1"]),
+            &BTreeSet::from(["port_1"]),
+            Some(&stage),
+            &BTreeSet::from(["run".to_string()]),
+            StudyKindIR::TimeEvolution,
+            &mut errors,
+        );
+        assert!(errors.iter().any(|error| {
+            error.contains("bandwidth_declaration is only valid for pulse or piecewise_linear")
+        }));
     }
 
     #[test]

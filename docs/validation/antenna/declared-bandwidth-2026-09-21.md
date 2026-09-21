@@ -1,0 +1,77 @@
+# Deklarowane pasmo waveformu anteny — walidacja 2026-09-21
+
+## Zakres
+
+Domknięto lukę T11 dotyczącą sygnału próbkowanego lub piecewise-linear,
+którego idealne widmo nie ma skończonego ograniczenia wynikającego z samego
+czasu trwania albo odstępu próbek. Statyczna baza pola anteny pozostaje
+niezależna od waveformu; deklaracja służy wyłącznie do diagnostyki ważności
+przybliżenia separowalnego pola.
+
+## Kontrakt
+
+W `SolvedAntennaDriveIR` dodano opcjonalne:
+
+```json
+{
+  "bandwidth_declaration": {
+    "f_max_hz": 6000000000.0
+  }
+}
+```
+
+Kontrakt jest oznaczony w provenance jako
+`antenna_waveform_bandwidth_declaration.v1`. `f_max_hz` musi być skończone i
+nieujemne. Pole jest dozwolone dla `Pulse` i `PiecewiseLinear`; dla sinusoidy,
+sinc oraz stałego sygnału obowiązują ich własne, analityczne źródła pasma.
+Brak deklaracji pozostawia stan `validity_bandwidth_unknown`.
+
+W Python DSL odpowiednikiem jest:
+
+```python
+fm.SolvedAntennaDrive(
+    id="drive_1",
+    name="piecewise drive",
+    projection_ref="projection_1",
+    port_mode_id="port_1",
+    peak_current_a=1.0,
+    waveform=fm.PiecewiseLinear([(0.0, 0.0), (1e-9, 1.0)]),
+    bandwidth_declaration=fm.AntennaWaveformBandwidthDeclaration(6e9),
+)
+```
+
+Klasyfikator nie używa `1 / duration`, odstępu węzłów ani częstotliwości
+Nyquista jako fizycznego `f_max`. Nieważna deklaracja jest jawnie zgłaszana
+jako `invalid_declared_bandwidth_hz`, a walidacja IR zwraca błąd ścieżki pola.
+
+## Ślad implementacyjny
+
+- `crates/fullmag-ir/src/field_drive_validation.rs` — typ deklaracji, wersja
+  kontraktu i klasyfikator z rozróżnieniem `source=declared`;
+- `crates/fullmag-ir/src/antenna.rs` — walidacja zakresu i zgodności z
+  waveformem;
+- `crates/fullmag-plan/src/antenna_validity.rs` — odświeżanie noty przy każdej
+  zmianie waveformu oraz obliczenia `eta_wave`/`eta_skin`;
+- `packages/fullmag-py/src/fullmag/model/antenna.py` — publiczny konstruktor
+  DSL i serializacja do IR;
+- `docs/superpowers/plans/2026-09-08-microwave-antenna-refactoring-plan.md` —
+  odhaczenie punktu T11 i ograniczenie zakresu T14.
+
+Deklaracja nie jest częścią immutable manifestu `H_ant_basis`; zmiana pasma
+odświeża diagnostykę planu, ale nie unieważnia statycznej bazy prąd/pole.
+
+## Weryfikacja
+
+- parser `rustfmt` z `skip_children=true` dla wszystkich zmienionych plików
+  Rust: **OK**;
+- parser AST Python dla DSL i regresji: **OK**;
+- `git diff --check`: **OK**;
+- pełne testy Rust oraz kontenerowy runtime nie zostały uruchomione w tej
+  sesji zgodnie z obowiązującą blokadą kompilacji testów jednostkowych.
+
+## Granice
+
+Pole nie jest jeszcze pokazane jako edytowalny parametr w zasobie OpenAPI ani
+Inspectorze Control Room. To pozostaje zadaniem T14; obecna zmiana zapewnia
+kanoniczny IR, planner provenance i ścieżkę Python DSL bez udawania, że
+próbkowanie samo wyznacza fizyczne pasmo.

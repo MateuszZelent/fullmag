@@ -87,7 +87,10 @@ fn antenna_validity_note(
     drive: &SolvedAntennaDriveIR,
     metrics: Option<ConductorMetrics>,
 ) -> String {
-    let bandwidth = fullmag_ir::classify_antenna_waveform_bandwidth(&drive.waveform);
+    let bandwidth = fullmag_ir::classify_antenna_waveform_bandwidth_with_declaration(
+        &drive.waveform,
+        drive.bandwidth_declaration.as_ref(),
+    );
     let AntennaWaveformBandwidthIR::Known {
         f_max_hz,
         source,
@@ -155,14 +158,31 @@ fn antenna_validity_note(
 }
 
 fn antenna_waveform_bandwidth_note(drive: &SolvedAntennaDriveIR) -> String {
-    match fullmag_ir::classify_antenna_waveform_bandwidth(&drive.waveform) {
+    match fullmag_ir::classify_antenna_waveform_bandwidth_with_declaration(
+        &drive.waveform,
+        drive.bandwidth_declaration.as_ref(),
+    ) {
         AntennaWaveformBandwidthIR::Known {
             f_max_hz, source, ..
-        } => format!(
-            "{ANTENNA_WAVEFORM_BANDWIDTH_SCHEMA_VERSION} drive_id={} status=known f_max_hz={f_max_hz:.17e} source={}",
-            drive.id,
-            source.as_str()
-        ),
+        } => {
+            let declaration_schema = if matches!(
+                source,
+                fullmag_ir::AntennaWaveformBandwidthSourceIR::Declared
+            ) {
+                format!(
+                    " declaration_schema={}",
+                    fullmag_ir::ANTENNA_WAVEFORM_BANDWIDTH_DECLARATION_SCHEMA_VERSION
+                )
+            } else {
+                String::new()
+            };
+            format!(
+                "{ANTENNA_WAVEFORM_BANDWIDTH_SCHEMA_VERSION} drive_id={} status=known f_max_hz={f_max_hz:.17e} source={}{}",
+                drive.id,
+                source.as_str(),
+                declaration_schema
+            )
+        }
         AntennaWaveformBandwidthIR::Unknown { reason, .. } => format!(
             "{ANTENNA_WAVEFORM_BANDWIDTH_SCHEMA_VERSION} drive_id={} status=unknown reason={reason}",
             drive.id
@@ -185,6 +205,7 @@ mod tests {
             port_mode_id: "port".to_string(),
             peak_current_a: 1.0,
             waveform,
+            bandwidth_declaration: None,
             time_origin: FieldTimeOriginIR::StageLocal,
             activation: DriveActivationIR::AllTimeEvolution {},
         }
@@ -268,5 +289,22 @@ mod tests {
         assert!(note.contains("status=unknown"));
         assert!(note.contains("validity_bandwidth_unknown"));
         assert!(!note.contains("f_max_hz="));
+    }
+
+    #[test]
+    fn declared_piecewise_band_refreshes_validity_diagnostic() {
+        let mut drive = drive(
+            "rf",
+            TimeDependenceIR::PiecewiseLinear {
+                points: vec![[0.0, 0.0], [1.0e-9, 1.0]],
+            },
+        );
+        drive.bandwidth_declaration = Some(fullmag_ir::AntennaWaveformBandwidthDeclarationIR {
+            f_max_hz: 4.0e9,
+        });
+        let note = antenna_waveform_bandwidth_note(&drive);
+        assert!(note.contains("status=known"));
+        assert!(note.contains("source=declared"));
+        assert!(note.contains("f_max_hz=4.00000000000000000e9"));
     }
 }

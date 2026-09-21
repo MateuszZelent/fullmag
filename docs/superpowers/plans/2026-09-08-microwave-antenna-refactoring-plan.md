@@ -580,7 +580,7 @@ wall-time/peak-memory oraz kontenerowego benchmarku direct RT0.
 - [ ] Blokować targety dla ograniczenia pamięci i granic anulowania. Licznik globalny obejmuje wszystkie bloki, porty i retries; nie resetować budżetu dla każdego bloku, aby obchodzić limit.
 - [ ] Nie zmniejszać automatycznie gęstości próbkowania. Użytkownik może jawnie zmienić target/rozdzielczość lub zatwierdzić większy budżet obliczeń w konfiguracji badania; proweniencja zapisuje decyzję.
 - [x] Dodać diagnostykę `eta_wave`/`eta_skin` z 0950 dla stałej, sinusoidy i sinc/cutoff, z jawnym źródłem `f_max`; dla nieznanego pasma zwracać `validity_bandwidth_unknown`.
-- [ ] Dodać osobny, jawny kontrakt deklarowanego pasma dla sampled waveform; nie uznawać samego czasu próbkowania za fizyczny `f_max`.
+- [x] Dodać osobny, jawny kontrakt deklarowanego pasma dla sampled waveform; nie uznawać samego czasu próbkowania za fizyczny `f_max`.
 - [ ] Prostokątny pulse i skok nie mają skończonego idealnego pasma. Nie wyznaczać `f_max` wyłącznie jako odwrotności długości impulsu. Wymagać opisania bandwidth/rise-time lub zwrócić brak oceny.
 - [x] Ostrzeżenia przeliczać przy zmianie waveform, ale nie stawiać przez to bazy jako stale. Planner publikuje osobną notę dla każdego `SolvedAntennaDriveIR`.
 - [ ] Dla wielu aktywnych portów agregować wspólne ograniczenie pasma i wspólne źródło pola; obecna diagnostyka pozostaje per-drive.
@@ -612,6 +612,20 @@ solvera ani kwalifikacja GPU. Szczegóły i ślad weryfikacyjny zapisano w
 Noty są dołączane także do `AntennaFieldSolvePlanIR`, więc samodzielne
 obliczenie bazy anteny zachowuje te same parametry proweniencji co późniejszy
 Relax/Run.
+
+Uzupełnienie implementacyjne 2026-09-21 (deklarowane pasmo): IR publikuje
+`AntennaWaveformBandwidthDeclarationIR` jako opcjonalne pole
+`SolvedAntennaDriveIR.bandwidth_declaration`, a Python DSL udostępnia
+`AntennaWaveformBandwidthDeclaration(f_max_hz=...)`. Dla `Pulse` i
+`PiecewiseLinear` klasyfikator pozostaje `validity_bandwidth_unknown`, dopóki
+autor nie poda skończonego, nieujemnego `f_max_hz`; sama długość impulsu,
+odstęp węzłów, czas próbkowania ani częstotliwość Nyquista nie są używane jako
+fizyczne pasmo. Zgodna nota provenance ma
+`source=declared` oraz
+`declaration_schema=antenna_waveform_bandwidth_declaration.v1`. Deklaracja jest
+opcjonalna, kompatybilna ze starym JSON przez `serde(default)`, i nie zmienia
+niezmiennej sygnatury statycznej bazy pola. Ekspozycja tego pola w zasobie
+OpenAPI/Inspectorze pozostaje elementem T14.
 
 Kontrakt arytmetyczny testu:
 

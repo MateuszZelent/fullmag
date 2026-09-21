@@ -6261,6 +6261,7 @@ mod tests {
                     phase_rad: 0.3,
                     offset: 0.1,
                 },
+                bandwidth_declaration: None,
                 time_origin: fullmag_ir::FieldTimeOriginIR::StageLocal,
                 activation: fullmag_ir::DriveActivationIR::StageIds {
                     stage_ids: vec!["run".into()],

@@ -10,6 +10,26 @@ use serde::{Deserialize, Serialize};
 /// Schema for the bandwidth classification carried in plan provenance.
 pub const ANTENNA_WAVEFORM_BANDWIDTH_SCHEMA_VERSION: &str = "antenna_waveform_bandwidth.v1";
 
+/// Schema for an authored finite band attached to a non-bandlimited waveform.
+///
+/// The value is an explicit physical assumption.  It must not be inferred
+/// from the sample period, knot spacing, pulse duration, or Nyquist frequency.
+pub const ANTENNA_WAVEFORM_BANDWIDTH_DECLARATION_SCHEMA_VERSION: &str =
+    "antenna_waveform_bandwidth_declaration.v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaWaveformBandwidthDeclarationIR {
+    /// Declared upper frequency of the physical waveform content [Hz].
+    pub f_max_hz: f64,
+}
+
+impl AntennaWaveformBandwidthDeclarationIR {
+    pub fn is_valid(&self) -> bool {
+        self.f_max_hz.is_finite() && self.f_max_hz >= 0.0
+    }
+}
+
 /// Diagnostic reason used when a waveform does not provide a finite band.
 pub const ANTENNA_VALIDITY_BANDWIDTH_UNKNOWN: &str = "validity_bandwidth_unknown";
 
@@ -20,6 +40,7 @@ pub enum AntennaWaveformBandwidthSourceIR {
     Constant,
     Sinusoidal,
     SincCutoff,
+    Declared,
 }
 
 impl AntennaWaveformBandwidthSourceIR {
@@ -29,12 +50,13 @@ impl AntennaWaveformBandwidthSourceIR {
             Self::Constant => "constant",
             Self::Sinusoidal => "sinusoidal",
             Self::SincCutoff => "sinc_cutoff",
+            Self::Declared => "declared",
         }
     }
 }
 
 /// Versioned classification of the frequency band available for separability
-/// diagnostics.  Unknown is intentional: a pulse or arbitrary sampled drive
+/// diagnostics. Unknown is intentional: a pulse or arbitrary sampled drive
 /// must not be assigned `1 / duration` as if it were a physical cutoff.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -90,9 +112,21 @@ fn unknown(reason: &str) -> AntennaWaveformBandwidthIR {
 /// `Constant` is a DC drive (`f_max = 0`).  A sinusoid and a normalized sinc
 /// have an authored finite frequency parameter.  Rectangular pulses and
 /// piecewise-linear waveforms do not: their ideal spectra are not bounded by
-/// duration or knot spacing, so the result remains explicitly unknown.
+/// duration or knot spacing, so the result remains unknown unless the author
+/// supplies an explicit physical band declaration.
 pub fn classify_antenna_waveform_bandwidth(
     waveform: &TimeDependenceIR,
+) -> AntennaWaveformBandwidthIR {
+    classify_antenna_waveform_bandwidth_with_declaration(waveform, None)
+}
+
+/// Classify a waveform while honoring an explicit authored band for a
+/// piecewise/sampled signal.  The declaration is intentionally ignored for
+/// analytic waveforms with a canonical band, and invalid declarations remain
+/// unknown instead of being silently accepted.
+pub fn classify_antenna_waveform_bandwidth_with_declaration(
+    waveform: &TimeDependenceIR,
+    declaration: Option<&AntennaWaveformBandwidthDeclarationIR>,
 ) -> AntennaWaveformBandwidthIR {
     match waveform {
         TimeDependenceIR::Constant => known(0.0, AntennaWaveformBandwidthSourceIR::Constant),
@@ -110,9 +144,18 @@ pub fn classify_antenna_waveform_bandwidth(
                 unknown("invalid_cutoff_hz")
             }
         }
-        TimeDependenceIR::Pulse { .. } | TimeDependenceIR::PiecewiseLinear { .. } => {
-            unknown(ANTENNA_VALIDITY_BANDWIDTH_UNKNOWN)
-        }
+        TimeDependenceIR::Pulse { .. } | TimeDependenceIR::PiecewiseLinear { .. } => declaration
+            .map(|declaration| {
+                if declaration.is_valid() {
+                    known(
+                        declaration.f_max_hz,
+                        AntennaWaveformBandwidthSourceIR::Declared,
+                    )
+                } else {
+                    unknown("invalid_declared_bandwidth_hz")
+                }
+            })
+            .unwrap_or_else(|| unknown(ANTENNA_VALIDITY_BANDWIDTH_UNKNOWN)),
     }
 }
 
@@ -191,6 +234,35 @@ mod tests {
                     if reason == ANTENNA_VALIDITY_BANDWIDTH_UNKNOWN
             ));
         }
+    }
+
+    #[test]
+    fn piecewise_waveform_uses_only_explicit_declared_band() {
+        let waveform = TimeDependenceIR::PiecewiseLinear {
+            points: vec![[0.0, 0.0], [1.0e-9, 1.0]],
+        };
+        let declaration = AntennaWaveformBandwidthDeclarationIR { f_max_hz: 6.0e9 };
+        assert!(matches!(
+            classify_antenna_waveform_bandwidth_with_declaration(&waveform, Some(&declaration)),
+            AntennaWaveformBandwidthIR::Known {
+                f_max_hz,
+                source: AntennaWaveformBandwidthSourceIR::Declared,
+                ..
+            } if (f_max_hz - 6.0e9).abs() < f64::EPSILON
+        ));
+    }
+
+    #[test]
+    fn invalid_declared_band_does_not_fall_back_to_sample_period() {
+        let waveform = TimeDependenceIR::PiecewiseLinear {
+            points: vec![[0.0, 0.0], [1.0e-9, 1.0]],
+        };
+        let declaration = AntennaWaveformBandwidthDeclarationIR { f_max_hz: f64::NAN };
+        assert!(matches!(
+            classify_antenna_waveform_bandwidth_with_declaration(&waveform, Some(&declaration)),
+            AntennaWaveformBandwidthIR::Unknown { reason, .. }
+                if reason == "invalid_declared_bandwidth_hz"
+        ));
     }
 
     #[test]
