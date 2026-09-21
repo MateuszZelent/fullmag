@@ -179,6 +179,43 @@ function portDetails(
   };
 }
 
+function antennaStageValidationMessages(
+  stage: AntennaSolveStage,
+  scene: SceneResource | null,
+): string[] {
+  const messages: string[] = [];
+  if (scene?.current_transports) {
+    const hasTransport = scene.current_transports.some(
+      (candidate) => recordValue(candidate)?.name === stage.current_transport_id,
+    );
+    if (!hasTransport) {
+      messages.push(`missing current transport '${stage.current_transport_id}'`);
+    }
+  }
+  if (scene?.antenna_port_modes) {
+    const portModesById = new Map(
+      scene.antenna_port_modes.map((candidate) => [candidate.id, candidate]),
+    );
+    for (const portId of stage.port_mode_ids) {
+      const port = portModesById.get(portId);
+      if (!port) {
+        messages.push(`missing port mode '${portId}'`);
+        continue;
+      }
+      if (
+        port.source_object_id !== stage.source_object_id ||
+        port.current_transport_id !== stage.current_transport_id
+      ) {
+        messages.push(`port mode '${portId}' is bound to a different source or transport`);
+      }
+    }
+  }
+  if (!stage.outputs.some((output) => output.quantity === "H_ant_basis")) {
+    messages.push("stage must publish one H_ant_basis output");
+  }
+  return messages;
+}
+
 function solutionDetails(
   objectId: string | null,
   resourceId: string | null,
@@ -190,10 +227,12 @@ function solutionDetails(
   if (!stage) {
     return { title: "Antenna field solve", badge: "missing", rows: [{ label: "Status", value: "Solve stage is not present in SceneResource." }] };
   }
+  const validationMessages = antennaStageValidationMessages(stage, scene);
   return {
     title: `Antenna field solve ${stage.id}`,
-    badge: "configured · result pending",
+    badge: validationMessages.length > 0 ? "invalid · result pending" : "configured · result pending",
     rows: [
+      { label: "Validation", value: validationMessages.join("; ") || "ready" },
       { label: "ID", value: stage.id, mono: true },
       { label: "Current transport", value: stage.current_transport_id, mono: true },
       { label: "Port modes", value: stage.port_mode_ids.join(", ") || "none" },

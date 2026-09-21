@@ -69,6 +69,38 @@ afterEach(() => {
 });
 
 describe("AntennaCompositionPanel runtime results", () => {
+  it("shows missing transport and port references for an incomplete solve stage", async () => {
+    mocks.scene.data = {
+      antenna_field_solve_stages: [{
+        id: "solve-1",
+        source_object_id: "antenna-1",
+        current_transport_id: "missing-current",
+        port_mode_ids: ["missing-port"],
+        outputs: [{ id: "solution-1", quantity: "H_ant_basis" }],
+        field_sampling_domain: { kind: "global" },
+        target_refs: [],
+      }],
+      current_transports: [],
+      antenna_port_modes: [],
+    } as unknown as SceneResource;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(
+          <AntennaCompositionPanel kind="solution" selection={solutionSelection()} />,
+        ),
+      );
+      expect(container.textContent).toContain("Validation");
+      expect(container.textContent).toContain("missing current transport");
+      expect(container.textContent).toContain("missing port mode");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("shows concrete port validation diagnostics", async () => {
     mocks.scene.data = {
       antenna_port_modes: [{

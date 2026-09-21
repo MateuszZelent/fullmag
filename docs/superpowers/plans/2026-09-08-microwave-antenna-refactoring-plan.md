@@ -894,6 +894,17 @@ oba przypadki. Dedykowany port Inspector pokazuje tę samą walidację w wierszu
 `apps/control-room/src/modules/antenna/antennaPortValidation.ts`. Jest to
 diagnostyka authoringu, nie wynik runtime solve.
 
+**Uzupełnienie implementacyjne 2026-09-21 (walidacja stage solution):**
+dedykowany Inspector stage `solution` nie pokazuje już ogólnego
+`configured · result pending`, gdy jego referencje są niekompletne. Przed
+publikacją pola sprawdza obecność `current_transport_id`, każdego
+`port_mode_id`, zgodność źródła/transportu portu oraz wymagane wyjście
+`H_ant_basis`. Konkretne braki trafiają do wiersza `Validation`, a badge ma
+stan `invalid · result pending`; poprawny, ale jeszcze niewykonany stage
+pozostaje `configured · result pending`. Test DOM tego panelu przechodzi 4/4,
+ESLint i React Doctor pozostają zielone. To nadal wyłącznie kontrakt i
+diagnostyka metadanych UI — nie kwalifikacja solve, Relax/LLG ani GPU.
+
 **Uzupełnienie implementacyjne 2026-09-21 (harness browser):** dodano
 `apps/control-room/scripts/smoke-antenna-authoring-ui.mjs` oraz helper i test
 kontraktu Node. Smoke ma jawnie ograniczony zakres pierwszej fazy T15:

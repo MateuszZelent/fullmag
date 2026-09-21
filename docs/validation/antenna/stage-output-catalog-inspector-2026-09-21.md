@@ -103,6 +103,14 @@ stage nie jest używany do udawania gotowego pola, gdy brakuje właściwego
   branches`; reguły są współdzielone przez Explorer i Inspector w helperze
   `src/modules/antenna/antennaPortValidation.ts`, aby badge i diagnostyka nie
   rozjechały się semantycznie.
+- Inspector stage `solution` pokazuje teraz konkretną walidację referencji przed
+  publikacją wyniku: brak `current_transport_id`, brak `port_mode_id` oraz
+  powiązanie portu z innym źródłem/transportem są wyświetlane w wierszu
+  `Validation`, a badge zmienia się na `invalid · result pending`. Brak
+  `H_ant_basis` jest również jawnie zgłaszany. Regresja DOM dla niekompletnego
+  stage przechodzi razem z pozostałymi trzema scenariuszami kompozycji (4/4 w
+  pliku DOM); jest to walidacja metadanych authoringu, nie dowód wykonania
+  solve.
 - nie uruchamiano kompilacji testów Rust, browser smoke ani dowodu
   kwalifikacji FEM/FDM GPU.
 
