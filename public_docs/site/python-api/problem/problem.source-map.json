@@ -338,6 +338,16 @@
         "problem_ir": "canonical magnetization constraints"
       },
       {
+        "python": "Problem.parameters",
+        "type": "ParameterLibrary | None",
+        "default": "None",
+        "si_unit": "mixed",
+        "validation": "optional versioned SI-normalized authoring parameters; references and dimensions resolve at construction; solver values remain resolved SI quantities",
+        "meaning": "optional versioned SI-normalized authoring parameters; references and dimensions resolve at construction; solver values remain resolved SI quantities",
+        "backend_support": "optional versioned SI-normalized authoring parameters; references and dimensions resolve at construction; solver values remain resolved SI quantities",
+        "problem_ir": "parameters"
+      },
+      {
         "python": "Problem.pbc",
         "type": "FdmPbc | tuple[bool,bool,bool] | None",
         "default": "None",
