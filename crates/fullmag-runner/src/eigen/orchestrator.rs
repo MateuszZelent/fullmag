@@ -93,6 +93,7 @@ pub fn run_path_or_single<S: SingleKSolver>(
         include_demag: plan.operator.include_demag,
         dispersion_validation: plan.dispersion_validation.clone(),
         k0_kittel_validation: plan.k0_kittel_validation.clone(),
+        solver_policy: plan.solver_policy.clone(),
         dispersion_analytic_reference: plan.dispersion_validation.as_ref().map(|_| {
             DispersionAnalyticReferenceContext {
                 external_field: plan.external_field.unwrap_or([0.0, 0.0, 0.0]),

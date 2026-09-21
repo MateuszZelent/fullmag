@@ -604,6 +604,7 @@ pub(crate) fn k0_kittel_validation_auxiliary_artifacts_from_bias_field_sweep(
         include_demag: true,
         dispersion_validation: None,
         k0_kittel_validation: Some(validation.clone()),
+        solver_policy: None,
         dispersion_analytic_reference: None,
         k0_kittel_periodic_airbox_demag: Some(metrics),
     };

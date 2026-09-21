@@ -7176,6 +7176,7 @@ mod tests {
             include_demag: true,
             dispersion_validation: None,
             k0_kittel_validation: plan.k0_kittel_validation.clone(),
+            solver_policy: None,
             dispersion_analytic_reference: None,
             k0_kittel_periodic_airbox_demag: Some(
                 crate::eigen::K0KittelPeriodicAirboxDemagMetrics {

@@ -482,6 +482,7 @@ pub struct PathSolveResult {
     pub include_demag: bool,
     pub dispersion_validation: Option<FemEigenDispersionValidationIR>,
     pub k0_kittel_validation: Option<FemEigenK0KittelValidationIR>,
+    pub solver_policy: Option<fullmag_ir::FemEigenSolverPolicyIR>,
     pub dispersion_analytic_reference: Option<DispersionAnalyticReferenceContext>,
     pub k0_kittel_periodic_airbox_demag: Option<K0KittelPeriodicAirboxDemagMetrics>,
 }

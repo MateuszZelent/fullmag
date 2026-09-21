@@ -5801,8 +5801,8 @@ fn shared_domain_full2x2_guard_rejects_tangent_frame_reference_axis_jump() {
     // tangent_bases() |m_z|=0.9 reference-axis branch.  A scalar phase cannot
     // transport the resulting frames, so the shared-domain payload must fail
     // closed until the native 2x2 transport is implemented.
-    let z_a = 0.9 - 1.0e-10;
-    let z_b = 0.9 + 1.0e-10;
+    let z_a: f64 = 0.9 - 1.0e-10;
+    let z_b: f64 = 0.9 + 1.0e-10;
     let mut equilibrium = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
     equilibrium[node_a as usize] = [(1.0 - z_a * z_a).sqrt(), 0.0, z_a];
     equilibrium[node_b as usize] = [(1.0 - z_b * z_b).sqrt(), 0.0, z_b];
