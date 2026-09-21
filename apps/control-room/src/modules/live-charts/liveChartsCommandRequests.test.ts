@@ -48,4 +48,23 @@ describe("liveChartsCommandRequests", () => {
     await expect(pending).resolves.toBe("completed");
     unsubscribe();
   });
+
+  it("assigns a distinct request id to consecutive exports of the same format", async () => {
+    const unsubscribe = liveChartsCommandRequests.subscribe(() => undefined);
+    const first = liveChartsCommandRequests.request({ kind: "export", format: "csv" });
+    const firstAction = liveChartsCommandRequests.getSnapshot();
+    expect(firstAction).toMatchObject({ kind: "export", format: "csv", requestId: expect.any(String) });
+    liveChartsCommandRequests.complete();
+    await expect(first).resolves.toBe("completed");
+
+    const second = liveChartsCommandRequests.request({ kind: "export", format: "csv" });
+    const secondAction = liveChartsCommandRequests.getSnapshot();
+    expect(secondAction).toMatchObject({ kind: "export", format: "csv", requestId: expect.any(String) });
+    expect(secondAction?.kind === "export" && firstAction?.kind === "export"
+      ? secondAction.requestId
+      : null).not.toBe(firstAction?.kind === "export" ? firstAction.requestId : null);
+    liveChartsCommandRequests.complete();
+    await expect(second).resolves.toBe("completed");
+    unsubscribe();
+  });
 });

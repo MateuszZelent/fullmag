@@ -1126,11 +1126,11 @@ void native_multilayer_v2_rhs_includes_dmi() {
         effective_field_source.find("h_rotated_dmi_x") != std::string::npos &&
             effective_field_source.find("h_rotated_dmi_y") != std::string::npos &&
             effective_field_source.find("h_rotated_dmi_z") != std::string::npos &&
-            effective_field_source.find("h_dmi_x[idx]) +\n                static_cast<double>(h_rotated_dmi_x[idx])") !=
+            effective_field_source.find("h_rotated_dmi_x != nullptr") !=
                 std::string::npos &&
-            effective_field_source.find("h_dmi_y[idx]) +\n                static_cast<double>(h_rotated_dmi_y[idx])") !=
+            effective_field_source.find("h_rotated_dmi_y != nullptr") !=
                 std::string::npos &&
-            effective_field_source.find("h_dmi_z[idx]) +\n                static_cast<double>(h_rotated_dmi_z[idx])") !=
+            effective_field_source.find("h_rotated_dmi_z != nullptr") !=
                 std::string::npos &&
             effective_field_source.find("layer.h_rotated_dmi.x") != std::string::npos &&
             effective_field_source.find("layer.h_rotated_dmi.y") != std::string::npos &&

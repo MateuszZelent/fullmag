@@ -153,7 +153,66 @@ Wrapper można ominąć surowym poleceniem, dlatego kwalifikacja musi obejmować
 rzeczywisty command, inventory przed/po, manifest i ścieżki. Nie deklaruje się
 „całkowitego zakazu zapisu” wyłącznie na podstawie dokumentacji.
 
+### Dokument CAE a infrastruktura hosta
+
+Dokument CAE i hostowa infrastruktura mają różne tożsamości oraz cykle życia:
+
+| Pojęcie | Właściciel i znaczenie | Czego nie zastępuje |
+|---|---|---|
+| `ProjectId` | Logiczny, użytkownikowy dokument CAE: authoring, studies, definicje i jawne referencje artefaktów. | Worktree, build profile i ścieżki hosta. |
+| `.fms` / ProjectRepository | Przenośny zapis dokumentu, wersji schema, manifestów i danych objętych formatem. | Aktualnego runtime'u, cache i `target/`. |
+| `worktree_id` | Tożsamość checkoutu źródeł i jego commit/dirty state. | Tożsamości dokumentu CAE. |
+| `FULLMAG_PROJECT_STORAGE_ROOT` | Hostowa granica buildów, runtime staging, logów, run artifacts, cache i locków. | `ProjectId` oraz przenośnego dokumentu. |
+
+`ProjectId` może być wykonywany z wielu worktree, profili i hostów. Run lub
+artifact może wiązać dokument przez `ProjectId`, snapshot/plan digest, source
+SHA i profile provenance, lecz `.fms` nie może przechowywać hostowej ścieżki
+storage jako swojej tożsamości. Eksport dokumentu nie kopiuje `target/`,
+mutable cache ani niezweryfikowanego runtime'u; brak infrastruktury po imporcie
+jest jawną niedostępnością, a nie zgodą na zapis do repozytorium lub `TEMP`.
+
+Otwarcie dokumentu oraz restore runtime'u są osobnymi operacjami zgodnie z
+ADR 0025. Resolver storage pozostaje granicą wykonawczą buildów i uruchomień,
+nie magazynem semantyki CAE.
+
 ## Konsekwencje
+
+### Rozszerzenie 2026-09-11: właściwości zamiast jednego filesystemu
+
+#### Korekta architektury lokalnego koordynatora
+
+Użytkownik zatwierdził jeden stały kontener `Fullmag_build_runner`, zamiast
+stałego procesu Windows. Windows przygotowuje kapsułę i zgłasza ją do API.
+Wyłącznie koordynator ma socket Docker Engine; kontenery buildów działają
+obok niego i nie otrzymują socketu, tokenu API, `.env` ani checkoutu hosta.
+API z bearer tokenem jest publikowane wyłącznie na `127.0.0.1:8765`.
+Dostęp do socketu jest szerokim uprawnieniem operatorowym, nie sandboxem
+dla kodu z PR. Niezaufane zewnętrzne PR nie są automatycznie wykonywane.
+
+Kolejka ma jednego właściciela: kontener. Klient Windows nie zapisuje SQLite
+po skonfigurowaniu tej trasy. Nie polegamy na współdzieleniu blokad Win32 i
+Linux przez bind NTFS; bezpośrednie hostowe ciężkie buildy tej wersji
+launchera są wtedy odrzucane. Stare, niezmigrowane procesy wymagają sprawdzenia
+przed startem. Istniejący aktywny kontener Fullmaga nie jest zatrzymywany.
+
+Stan implementacji i dowody pozostają w checkpointcie runnera. Sam obraz,
+uruchomiony serwer lub sonda storage nie oznaczają ukończenia builda ani
+kwalifikacji FEM. Brak case sensitivity jest wynikiem diagnostycznym, nie
+udowodnionym ogólnym wymaganiem Fullmaga. Historyczne raporty sond nie są
+przepisywane na PASS. Zmiana nie upoważnia do globalnego prune ani kasowania
+cudzych cache. Retencja wymaga jawnego zakresu zasobów i kontroli użycia.
+
+Użytkownik zatwierdził rozdzielenie historycznej trasy `linux-ext4-loop-v1`
+od nowej bramki `capabilities-v1`. Ext4 nie jest wymaganiem FEM. Nowy profil
+ma oceniać rzeczywiste właściwości storage osobno dla źródeł, artefaktów i
+buildów, zachowując containment, tożsamość mountu, lease i provenance.
+Nie ustanawia nowego rootu ani zgody na migrację danych.
+
+Implementacja i kryteria dopuszczenia są opisane w
+[kontrakcie bramki](../guides/storage-capability-gate.md). Sonda właściwości
+nie zastępuje kwalifikacji managed FEM; dotychczasowe recepty Linux zachowują
+guard ext4 do jawnej migracji. Wynik `passed` sondy nie uprawnia do publikacji
+kwalifikowanego runtime’u ani zmiany etykiety CI.
 
 - Nowe artefakty mają jedną, przewidywalną granicę i identyfikowalny właściciel.
 - Zgodne buildy korzystają z cache bez tworzenia płaskiego katalogu dla każdego

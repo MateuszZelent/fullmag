@@ -3,9 +3,10 @@ import { describe, expect, it } from "vitest";
 
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 
+import { buildVertexScalarColors } from "./viewport3dFieldMapping";
+
 import {
   applyVertexScalarColorBuffer,
-  applyVertexScalarColors,
   canApplyVertexScalarColorBuffer,
   canApplyVertexScalarColors,
 } from "./viewport3dGeometryColors";
@@ -28,12 +29,15 @@ describe("viewport3dGeometryColors", () => {
     const geometry = new BufferGeometry();
 
     expect(
-      applyVertexScalarColors(
+      applyVertexScalarColorBuffer(
         geometry,
-        vectorField([
-          0, 0, 0,
-          1, 0, 0,
-        ]),
+        buildVertexScalarColors(
+          vectorField([
+            0, 0, 0,
+            1, 0, 0,
+          ]),
+          2,
+        ),
         2,
       ),
     ).toBe(true);
@@ -46,12 +50,15 @@ describe("viewport3dGeometryColors", () => {
     );
 
     expect(
-      applyVertexScalarColors(
+      applyVertexScalarColorBuffer(
         geometry,
-        vectorField([
-          1, 0, 0,
-          0, 0, 0,
-        ]),
+        buildVertexScalarColors(
+          vectorField([
+            1, 0, 0,
+            0, 0, 0,
+          ]),
+          2,
+        ),
         2,
       ),
     ).toBe(true);
@@ -68,7 +75,11 @@ describe("viewport3dGeometryColors", () => {
   it("preserves the existing color buffer when colorBuffer is null (compatible topology)", () => {
     const geometry = new BufferGeometry();
     // Populate a valid color buffer first.
-    applyVertexScalarColors(geometry, vectorField([1, 0, 0, 0, 1, 0]), 2);
+    applyVertexScalarColorBuffer(
+      geometry,
+      buildVertexScalarColors(vectorField([1, 0, 0, 0, 1, 0]), 2),
+      2,
+    );
     const attrBefore = geometry.getAttribute("color") as BufferAttribute;
     const dataBefore = Float32Array.from(attrBefore.array as Float32Array);
 
@@ -86,13 +97,21 @@ describe("viewport3dGeometryColors", () => {
     const geometry = new BufferGeometry();
 
     // First apply colors for a 2-vertex topology with a 2-point field.
-    applyVertexScalarColors(geometry, vectorField([1, 0, 0, 0, 1, 0]), 2);
+    applyVertexScalarColorBuffer(
+      geometry,
+      buildVertexScalarColors(vectorField([1, 0, 0, 0, 1, 0]), 2),
+      2,
+    );
     expect(geometry.hasAttribute("color")).toBe(true);
 
     // Field now has MORE points than the topology vertex count → stale, remove.
-    expect(applyVertexScalarColors(geometry, vectorField([1, 0, 0, 0, 1, 0]), 1)).toBe(
-      false,
-    );
+    expect(
+      applyVertexScalarColorBuffer(
+        geometry,
+        buildVertexScalarColors(vectorField([1, 0, 0, 0, 1, 0]), 1),
+        1,
+      ),
+    ).toBe(false);
     expect(geometry.hasAttribute("color")).toBe(false);
     expect(canApplyVertexScalarColors(vectorField([1, 0, 0, 0, 1, 0]), 1)).toBe(false);
   });
@@ -101,7 +120,11 @@ describe("viewport3dGeometryColors", () => {
     const geometry = new BufferGeometry();
 
     expect(
-      applyVertexScalarColors(geometry, vectorField([1, 0, 0]), 2),
+      applyVertexScalarColorBuffer(
+        geometry,
+        buildVertexScalarColors(vectorField([1, 0, 0]), 2),
+        2,
+      ),
     ).toBe(true);
     expect(geometry.hasAttribute("color")).toBe(true);
     expect(canApplyVertexScalarColors(vectorField([1, 0, 0]), 2)).toBe(true);

@@ -37,6 +37,8 @@ export function EChartsCanvasSurface({
   onClick,
   onDataZoom,
   onDoubleClick,
+  onRendererReady,
+  onRendererError,
   presentation,
   ownerStatus,
   diagnostics,
@@ -58,6 +60,8 @@ export function EChartsCanvasSurface({
   onClick?: (event: unknown) => void;
   onDataZoom?: (event: unknown) => void;
   onDoubleClick?: (event: unknown) => void;
+  onRendererReady?: () => void;
+  onRendererError?: () => void;
   presentation?: ChartDataPresentationState;
   ownerStatus?: string;
 }) {
@@ -67,7 +71,7 @@ export function EChartsCanvasSurface({
   const previousInitialRangeRef = useRef(initialRange);
   const ownerRef = useRef<ChartRendererOwner | null>(null);
   const tokensRef = useRef<FullmagChartTokens | null>(null);
-  const callbacksRef = useRef({ diagnostics, onClick, onDataZoom, onDoubleClick });
+  const callbacksRef = useRef({ diagnostics, onClick, onDataZoom, onDoubleClick, onRendererReady, onRendererError });
   const [rendererStatus, setRendererStatus] = useReducer(
     (_: "loading" | "ready" | "error", next: "loading" | "ready" | "error") =>
       next,
@@ -81,8 +85,8 @@ export function EChartsCanvasSurface({
     initialRangeRef.current = initialRange;
   }, [initialRange]);
   useEffect(() => {
-    callbacksRef.current = { diagnostics, onClick, onDataZoom, onDoubleClick };
-  }, [diagnostics, onClick, onDataZoom, onDoubleClick]);
+    callbacksRef.current = { diagnostics, onClick, onDataZoom, onDoubleClick, onRendererReady, onRendererError };
+  }, [diagnostics, onClick, onDataZoom, onDoubleClick, onRendererReady, onRendererError]);
 
   useEffect(() => {
     const element = elementRef.current;
@@ -122,6 +126,7 @@ export function EChartsCanvasSurface({
         if (initialRangeRef.current) owner.setRange(initialRangeRef.current.fromValue, initialRangeRef.current.toValue);
         callbacksRef.current.diagnostics?.modelUpdated?.(modelRef.current);
         callbacksRef.current.diagnostics?.setOption?.();
+        callbacksRef.current.onRendererReady?.();
 
         // Track theme changes via MutationObserver on <html data-theme>
         const htmlElement = element.ownerDocument?.documentElement;
@@ -158,7 +163,10 @@ export function EChartsCanvasSurface({
         };
       })
       .catch(() => {
-        if (!cancelled) setRendererStatus("error");
+        if (!cancelled) {
+          setRendererStatus("error");
+          callbacksRef.current.onRendererError?.();
+        }
       });
 
     return () => {

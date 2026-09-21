@@ -24,13 +24,15 @@
 //! ```
 
 use std::collections::{HashMap, HashSet};
+use std::fs::{self, File};
 use std::io::{Cursor, Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 
+use crate::reachability::{self, ReachabilityMode, ReachabilityReport};
 use crate::store::SessionStore;
 use crate::types::*;
 
@@ -49,6 +51,10 @@ pub struct FmsPreflight {
     pub workspace: FmsWorkspaceManifest,
     pub export_profile: FmsExportProfile,
     pub inspection: SessionInspection,
+    /// The same typed object graph used by export and GC.  A report with
+    /// `complete == false` is inspectable but cannot be published as a
+    /// solved/resumable session.
+    pub reachability: ReachabilityReport,
     pub documents: HashMap<String, Vec<u8>>,
 }
 
@@ -135,6 +141,7 @@ pub fn pack_fms<W: Write + Seek>(
     documents: &HashMap<String, Vec<u8>>,
     opts: &PackOptions,
 ) -> Result<()> {
+    let _lease = store.write_transaction()?;
     validate_pack_input(workspace, documents)?;
     let canonical_root = canonical_store_root(store.root())?;
     let run_entries = plan_run_entries(store.root(), &canonical_root, session, export_profile)?;
@@ -189,7 +196,64 @@ pub fn pack_fms<W: Write + Seek>(
     Ok(())
 }
 
+/// Pack directly to a file through a unique sibling staging file.
+///
+/// Validation and graph traversal happen before the destination is replaced;
+/// a failed export therefore cannot truncate a previously published archive.
+/// The staged file is synced before the final same-directory rename.
+pub fn pack_fms_file(
+    path: &Path,
+    store: &SessionStore,
+    session: &FmsSessionManifest,
+    workspace: &FmsWorkspaceManifest,
+    export_profile: &FmsExportProfile,
+    documents: &HashMap<String, Vec<u8>>,
+    opts: &PackOptions,
+) -> Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    crate::repository_path::reject_link(parent)?;
+    crate::repository_path::reject_link(path)?;
+    if !parent.exists() {
+        bail!("FMS output parent does not exist: {}", parent.display())
+    }
+    crate::writer::require_local_filesystem(parent)?;
+
+    let temporary = parent.join(format!(".{}.fms.part", uuid::Uuid::new_v4()));
+    let result = (|| -> Result<()> {
+        let mut file = File::create_new(&temporary)
+            .with_context(|| format!("creating staged FMS export {}", temporary.display()))?;
+        pack_fms(
+            &mut file,
+            store,
+            session,
+            workspace,
+            export_profile,
+            documents,
+            opts,
+        )?;
+        file.sync_all().context("syncing staged FMS export")?;
+        drop(file);
+        crate::repository_path::reject_link(path)?;
+        fs::rename(&temporary, path)
+            .with_context(|| format!("publishing FMS export {}", path.display()))?;
+        crate::durability::sync_directory(parent).map_err(|error| {
+            anyhow::Error::new(crate::durability::PublicationUncertain::new(
+                path.to_path_buf(),
+                error,
+            ))
+        })
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
 fn canonical_store_root(store_root: &Path) -> Result<PathBuf> {
+    crate::repository_path::reject_link(store_root)?;
     let metadata = std::fs::symlink_metadata(store_root)
         .with_context(|| format!("reading session store metadata {}", store_root.display()))?;
     if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
@@ -207,22 +271,31 @@ fn plan_cas_entries(
     canonical_root: &Path,
     run_entries: &[PackEntry],
 ) -> Result<Vec<PackEntry>> {
-    let mut entries = Vec::new();
-    let mut hashes = HashSet::new();
-    for entry in run_entries
-        .iter()
-        .filter(|entry| entry.archive_path.ends_with("/checkpoint.json"))
-    {
-        let checkpoint: FmsCheckpoint = serde_json::from_slice(&entry.data)
-            .with_context(|| format!("parsing packaged checkpoint {}", entry.archive_path))?;
-        hashes.extend(
-            checkpoint
-                .field_refs
-                .into_iter()
-                .map(|field_ref| field_ref.tensor_descriptor_ref),
-        );
+    let mut documents = HashMap::new();
+    for entry in run_entries {
+        documents.insert(entry.archive_path.clone(), entry.data.clone());
     }
-    for hash in hashes {
+
+    // The graph walker needs the exact CAS bytes to validate descriptor
+    // digests and follow descriptor -> chunk edges.  Include the source CAS
+    // namespace in the in-memory view, then emit only the selected roots.
+    let objects = store_root.join("objects/sha256");
+    if objects.exists() {
+        for entry in std::fs::read_dir(&objects)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let relative = format!("objects/sha256/{name}");
+            documents.insert(
+                relative,
+                read_store_file(store_root, canonical_root, &entry.path())?,
+            );
+        }
+    }
+    let report = reachability::walk_archive_documents(&documents, ReachabilityMode::Export)?;
+    report.require_complete()?;
+
+    let mut entries = Vec::new();
+    for hash in report.object_refs {
         let archive_path = format!("objects/sha256/{hash}");
         validate_portable_namespace_path(&archive_path)?;
         let source = store_root.join(&archive_path);
@@ -449,6 +522,7 @@ fn validate_store_source(
             anyhow::bail!("unsafe store source: {}", source.display());
         };
         current.push(component);
+        crate::repository_path::reject_link(&current)?;
         let metadata = std::fs::symlink_metadata(&current)
             .with_context(|| format!("reading store source metadata {}", current.display()))?;
         if metadata.file_type().is_symlink() {
@@ -664,12 +738,14 @@ pub fn preflight_fms<R: Read + Seek>(
         }
     }
 
-    let inspection = build_inspection(&session, &documents, scan.total_compressed);
+    let reachability = reachability::walk_archive_documents(&documents, ReachabilityMode::Restore)?;
+    let inspection = build_inspection(&session, &documents, scan.total_compressed, &reachability);
     Ok(FmsPreflight {
         session,
         workspace,
         export_profile,
         inspection,
+        reachability,
         documents,
     })
 }
@@ -842,12 +918,16 @@ fn build_inspection(
     session: &FmsSessionManifest,
     documents: &HashMap<String, Vec<u8>>,
     total_compressed: u64,
+    reachability: &ReachabilityReport,
 ) -> SessionInspection {
     let entry_names = documents.keys().cloned().collect::<HashSet<_>>();
     let mut warnings = Vec::new();
+    warnings.extend(reachability.warnings.iter().cloned());
 
     // Try to find the latest checkpoint.
     let mut latest_cp: Option<CheckpointSummary> = None;
+    let mut latest_checkpoint_ref: Option<String> = None;
+    let mut latest_checkpoint_order: Option<(u64, chrono::DateTime<chrono::Utc>, String)> = None;
     for run_ref in &session.run_refs {
         let parts: Vec<&str> = run_ref.split('/').collect();
         if parts.len() < 2 || parts[0] != "runs" || parts[1].is_empty() {
@@ -898,10 +978,13 @@ fn build_inspection(
                         time_s: cp.time_s,
                         study_kind: cp.compatibility.study_kind.unwrap_or_default(),
                     };
-                    if latest_cp
+                    let candidate_order = (cp.step, cp.created_at, summary.checkpoint_id.clone());
+                    if latest_checkpoint_order
                         .as_ref()
-                        .map_or(true, |prev| summary.step > prev.step)
+                        .map_or(true, |previous| candidate_order > previous.clone())
                     {
+                        latest_checkpoint_order = Some(candidate_order);
+                        latest_checkpoint_ref = Some(name.clone());
                         latest_cp = Some(summary);
                     }
                 }
@@ -912,15 +995,42 @@ fn build_inspection(
         }
     }
 
+    let latest_status = latest_checkpoint_ref
+        .as_deref()
+        .and_then(|reference| reachability.checkpoint_status.get(reference));
+    let has_primary_payload = latest_status.is_some_and(|status| status.primary);
+    let has_restart_payload = latest_status.is_some_and(|status| status.restart);
     let restore_class = if latest_cp.is_some()
         && matches!(session.profile, SaveProfile::Resume | SaveProfile::Archive)
+        && reachability.complete
+        && has_primary_payload
+        && has_restart_payload
     {
         RestoreClass::LogicalResume // actual exact_resume needs runtime check
-    } else if matches!(session.profile, SaveProfile::Solved) {
+    } else if has_primary_payload
+        && matches!(
+            session.profile,
+            SaveProfile::Solved | SaveProfile::Resume | SaveProfile::Archive
+        )
+    {
         RestoreClass::InitialConditionImport
     } else {
         RestoreClass::ConfigOnly
     };
+    if matches!(
+        session.profile,
+        SaveProfile::Solved | SaveProfile::Resume | SaveProfile::Archive
+    ) && latest_cp.is_some()
+        && !has_primary_payload
+    {
+        warnings.push("checkpoint has no material primary field payload".into());
+    }
+    if matches!(session.profile, SaveProfile::Resume | SaveProfile::Archive)
+        && latest_cp.is_some()
+        && !has_restart_payload
+    {
+        warnings.push("resume profile has no complete restart payload; downgraded".into());
+    }
 
     SessionInspection {
         format_version: session.format.clone(),
@@ -942,12 +1052,34 @@ fn build_inspection(
 pub fn unpack_fms<R: Read + Seek>(reader: R, store: &SessionStore) -> Result<FmsSessionManifest> {
     let preflight = preflight_fms(reader, &[])?;
 
+    if matches!(
+        preflight.session.profile,
+        SaveProfile::Solved | SaveProfile::Resume | SaveProfile::Archive
+    ) && !preflight.reachability.complete
+    {
+        preflight.reachability.require_complete()?;
+    }
+
+    let _lease = store.write_transaction()?;
+    ensure_unpack_destination_pristine(store.root())?;
+
     // Preflight has already checked all paths, limits, and content digests.
+    // Materialize immutable CAS objects first, ordinary documents second, and
+    // checkpoint markers last.  A marker is the publication boundary and must
+    // never become visible before its common state and payloads exist.
     for (name, data) in &preflight.documents {
         if name.starts_with("objects/sha256/") {
             store.cas().put(&data)?;
-        } else {
-            store.write_document(name, data)?;
+        }
+    }
+    for (name, data) in &preflight.documents {
+        if !name.starts_with("objects/sha256/") && !name.ends_with("/checkpoint.json") {
+            store.write_import_document(name, data)?;
+        }
+    }
+    for (name, data) in &preflight.documents {
+        if name.ends_with("/checkpoint.json") {
+            store.write_import_document(name, data)?;
         }
     }
 
@@ -955,6 +1087,50 @@ pub fn unpack_fms<R: Read + Seek>(reader: R, store: &SessionStore) -> Result<Fms
     store.commit_session(&preflight.session)?;
 
     Ok(preflight.session)
+}
+
+fn ensure_unpack_destination_pristine(root: &Path) -> Result<()> {
+    let allowed_files = ["WRITER.lock", "WRITER.owner.json", "LOCK"];
+    let allowed_directories = ["manifests", "runs", "recovery", "temp", "objects"];
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        crate::repository_path::reject_link(&entry.path())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if entry.file_type()?.is_file() {
+            if !allowed_files.contains(&name.as_str()) {
+                bail!("import requires an isolated empty staging store; existing file `{name}`")
+            }
+            continue;
+        }
+        if !entry.file_type()?.is_dir() || !allowed_directories.contains(&name.as_str()) {
+            bail!("import requires an isolated empty staging store; existing root `{name}`")
+        }
+        if name == "objects" {
+            for object_entry in fs::read_dir(entry.path())? {
+                let object_entry = object_entry?;
+                crate::repository_path::reject_link(&object_entry.path())?;
+                let object_name = object_entry.file_name().to_string_lossy().into_owned();
+                if object_name != "sha256" && object_name != "pins" {
+                    bail!(
+                        "import requires an isolated empty staging store; unknown objects root `{object_name}`"
+                    )
+                }
+                if object_entry.file_type()?.is_dir()
+                    && fs::read_dir(object_entry.path())?
+                        .next()
+                        .transpose()?
+                        .is_some()
+                {
+                    bail!(
+                        "import requires an isolated empty staging store; objects/{object_name} is not empty"
+                    )
+                }
+            }
+        } else if fs::read_dir(entry.path())?.next().transpose()?.is_some() {
+            bail!("import requires an isolated empty staging store; existing data under `{name}`")
+        }
+    }
+    Ok(())
 }
 
 fn document_json<T: serde::de::DeserializeOwned>(
@@ -1075,6 +1251,25 @@ mod tests {
 
     fn test_session() -> FmsSessionManifest {
         FmsSessionManifest::new("s-001", "Test", SaveProfile::Compact)
+    }
+
+    fn test_run(run_id: &str) -> FmsRunManifest {
+        let now = chrono::Utc::now();
+        FmsRunManifest {
+            run_id: run_id.into(),
+            status: RunStatus::Completed,
+            study_kind: "time_evolution".into(),
+            backend: "cpu".into(),
+            precision: "f64".into(),
+            started_at: now,
+            finished_at: Some(now),
+            total_steps: 0,
+            total_time_s: 0.0,
+            plan_ref: None,
+            live_state_ref: None,
+            latest_checkpoint_ref: None,
+            artifact_index_ref: None,
+        }
     }
 
     fn test_workspace(script: &[u8]) -> FmsWorkspaceManifest {
@@ -1209,7 +1404,10 @@ mod tests {
             .run_refs
             .push("runs/run-001/run_manifest.json".to_string());
         store
-            .write_document("runs/run-001/run_manifest.json", b"{}")
+            .write_import_document(
+                "runs/run-001/run_manifest.json",
+                &serde_json::to_vec(&test_run("run-001")).unwrap(),
+            )
             .unwrap();
         let artifacts = store.root().join("runs/run-001/artifacts");
         std::fs::create_dir_all(&artifacts).unwrap();
@@ -1236,7 +1434,10 @@ mod tests {
             .run_refs
             .push("runs/run-001/run_manifest.json".to_string());
         store
-            .write_document("runs/run-001/run_manifest.json", b"{}")
+            .write_import_document(
+                "runs/run-001/run_manifest.json",
+                &serde_json::to_vec(&test_run("run-001")).unwrap(),
+            )
             .unwrap();
         let outside = directory.path().join("outside-file");
         std::fs::write(&outside, b"secret").unwrap();
@@ -1279,7 +1480,10 @@ mod tests {
             .run_refs
             .push("runs/run-001/run_manifest.json".to_string());
         store
-            .write_document("runs/run-001/run_manifest.json", b"{}")
+            .write_import_document(
+                "runs/run-001/run_manifest.json",
+                &serde_json::to_vec(&test_run("run-001")).unwrap(),
+            )
             .unwrap();
         let artifacts = store.root().join("runs/run-001/artifacts");
         std::fs::create_dir_all(&artifacts).unwrap();
@@ -1332,26 +1536,48 @@ mod tests {
             .run_refs
             .push("runs/run-001/run_manifest.json".to_string());
         store
-            .write_document("runs/run-001/run_manifest.json", b"{}")
+            .write_import_document(
+                "runs/run-001/run_manifest.json",
+                &serde_json::to_vec(&test_run("run-001")).unwrap(),
+            )
             .unwrap();
-        let hash = store.cas().put(b"original CAS bytes").unwrap();
+        let payload_hash = store.cas().put(&[0u8; 8]).unwrap();
+        let mut descriptor = TensorDescriptor::new_f64("m", vec![1], vec!["node".into()]);
+        descriptor.chunks.push(TensorChunk {
+            object_ref: payload_hash.clone(),
+            offset: 0,
+            length: 8,
+            sha256: Some(payload_hash),
+        });
+        let descriptor_hash = store.cas().put_json(&descriptor).unwrap();
         let mut checkpoint = FmsCheckpoint::new("run-001", 0, 0.0, 1e-12);
         checkpoint.field_refs.push(FieldRef {
             name: "m".to_string(),
             role: FieldRole::Primary,
-            tensor_descriptor_ref: hash.clone(),
+            tensor_descriptor_ref: descriptor_hash.clone(),
         });
+        let common_state = CommonSolverState {
+            step: checkpoint.step,
+            time_s: checkpoint.time_s,
+            dt: checkpoint.dt,
+            energies: SolverEnergies::default(),
+            magnetization_ref: None,
+        };
         store
-            .write_document(
-                "runs/run-001/checkpoints/cp-000000/checkpoint.json",
-                &serde_json::to_vec(&checkpoint).unwrap(),
+            .write_import_document(
+                &checkpoint.common_state_ref,
+                &serde_json::to_vec(&common_state).unwrap(),
             )
             .unwrap();
-        std::fs::write(
-            store.root().join("objects/sha256").join(hash),
-            b"tampered CAS bytes",
-        )
-        .unwrap();
+        let checkpoint_path = format!(
+            "runs/run-001/checkpoints/{}/checkpoint.json",
+            checkpoint.checkpoint_id
+        );
+        store
+            .write_import_document(&checkpoint_path, &serde_json::to_vec(&checkpoint).unwrap())
+            .unwrap();
+        let descriptor_path = store.root().join("objects/sha256").join(descriptor_hash);
+        std::fs::write(descriptor_path, b"tampered CAS bytes").unwrap();
 
         assert_pack_rejected_without_output(
             &store,
@@ -1444,6 +1670,68 @@ mod tests {
         let error = preflight_fms(Cursor::new(archive), &[]).unwrap_err();
 
         assert!(error.to_string().contains("project/main.py"));
+    }
+
+    #[test]
+    fn manifest_content_ids_are_rejected_before_import_writes() {
+        // ZIP entry names are all valid; the attack is inside session.json.
+        for id in [
+            "../escape",
+            "/absolute",
+            "C:drive",
+            "a\\b",
+            "NUL",
+            "CON.json",
+        ] {
+            let script = b"print('unchanged')";
+            let mut session = test_session();
+            session.session_id = id.into();
+            let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+            let options =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            write_json(&mut writer, "manifest/session.json", &session, options).unwrap();
+            write_json(
+                &mut writer,
+                "manifest/workspace.json",
+                &test_workspace(script),
+                options,
+            )
+            .unwrap();
+            write_json(
+                &mut writer,
+                "manifest/export_profile.json",
+                &FmsExportProfile::for_profile(SaveProfile::Compact),
+                options,
+            )
+            .unwrap();
+            writer.start_file("project/main.py", options).unwrap();
+            writer.write_all(script).unwrap();
+            let archive = writer.finish().unwrap().into_inner();
+            assert!(preflight_fms(Cursor::new(&archive), &[]).is_err(), "{id}");
+
+            let directory = tempfile::tempdir().unwrap();
+            let sentinel = directory.path().join("sentinel");
+            fs::write(&sentinel, b"preserve outside staging").unwrap();
+            let store = SessionStore::open(directory.path().join("store")).unwrap();
+            let owner_before = fs::read(store.root().join("WRITER.owner.json")).unwrap();
+            assert!(unpack_fms(Cursor::new(archive), &store).is_err(), "{id}");
+            assert_eq!(fs::read(sentinel).unwrap(), b"preserve outside staging");
+            assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
+            assert_eq!(
+                fs::read(store.root().join("WRITER.owner.json")).unwrap(),
+                owner_before,
+                "invalid archive must be rejected before acquiring a writer"
+            );
+            assert!(store.current_session().unwrap().is_none());
+            assert!(store.cas().list().unwrap().is_empty());
+            assert!(store.read_document("project/main.py").unwrap().is_none());
+            assert_eq!(
+                fs::read_dir(store.root().join("manifests"))
+                    .unwrap()
+                    .count(),
+                0
+            );
+        }
     }
 
     #[test]
@@ -1891,7 +2179,6 @@ mod tests {
         session
             .run_refs
             .push("runs/run-001/run_manifest.json".to_string());
-        store.commit_session(&session).unwrap();
         store
             .commit_run(&FmsRunManifest {
                 run_id: "run-001".to_string(),
@@ -1909,6 +2196,7 @@ mod tests {
                 artifact_index_ref: None,
             })
             .unwrap();
+        store.commit_session(&session).unwrap();
         let script = b"# fullmag script".to_vec();
         let workspace = FmsWorkspaceManifest {
             workspace_id: "local-live".into(),

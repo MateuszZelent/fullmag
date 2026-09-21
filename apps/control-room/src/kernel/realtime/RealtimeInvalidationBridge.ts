@@ -459,6 +459,15 @@ export class RealtimeInvalidationBridge {
     return { ...this.fieldInvalidationTelemetry };
   }
 
+  /**
+   * Reconnect is a transport boundary.  HTTP remains authoritative, so force
+   * the session status/current resources to refetch even when the socket did
+   * not deliver a hello or replay marker after the handshake.
+   */
+  handleReconnect(): void {
+    this.invalidateSessionScope(`realtime:reconnect:${Date.now()}`);
+  }
+
   handleEvent(event: unknown): boolean {
     const sessionHandled = this.handleSessionEnvelope(event);
 

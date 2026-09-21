@@ -97,6 +97,12 @@ bool context_build_workspace_dependency_identity_v1(
         append_double(material, ctx.A);
         append_double(material, ctx.alpha);
         append_double(material, ctx.gamma);
+        append_u32(material, ctx.has_interfacial_dmi ? 1U : 0U);
+        append_double(material, ctx.D_interfacial);
+        append_u32(material, ctx.has_rotated_interfacial_dmi ? 1U : 0U);
+        append_double(material, ctx.D_rotated_interfacial);
+        append_u32(material, ctx.has_bulk_dmi ? 1U : 0U);
+        append_double(material, ctx.D_bulk);
         append_u32_array(
             material, plan.region_mask, plan.region_mask_len);
         append_double_array(

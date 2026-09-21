@@ -289,6 +289,80 @@ describe("physics interaction catalog", () => {
     }
   });
 
+  it("requires global Exchange for nonzero rotated DMI on open-boundary scenes", () => {
+    const scene = {
+      objects: [],
+      study: { exchange_enabled: false },
+    } as unknown as SceneResource;
+    const draft = {
+      enabled: true,
+      id: "rotated_interfacial_dmi" as const,
+      present: true,
+      values: { d: "0.003" },
+    };
+
+    expect(buildStudyInteractionPatchFromDraft(draft, scene)).toEqual({
+      error:
+        "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition",
+    });
+    expect(
+      buildStudyInteractionPatchFromDraft(
+        { enabled: true, id: "rotated_interfacial_dmi", present: true, values: { d: "0" } },
+        scene,
+      ),
+    ).toEqual({ patch: { study: { rotated_interfacial_dmi: 0 } } });
+  });
+
+  it("does not allow disabling Exchange while rotated DMI remains active", () => {
+    const scene = {
+      objects: [],
+      study: { exchange_enabled: true, rotated_interfacial_dmi: -0.003 },
+    } as unknown as SceneResource;
+
+    expect(
+      buildStudyInteractionPatchFromDraft(
+        { enabled: false, id: "exchange", present: true, values: {} },
+        scene,
+      ),
+    ).toEqual({
+      error:
+        "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition",
+    });
+  });
+
+  it("treats a string or zero rotated-DMI value as present for DMI conflicts", () => {
+    const zeroScene = {
+      objects: [],
+      study: { exchange_enabled: false, rotated_interfacial_dmi: "0" },
+    } as unknown as SceneResource;
+    expect(
+      buildObjectInteractionPatchFromDraft(
+        {
+          enabled: true,
+          id: "interfacial_dmi",
+          present: true,
+          values: { dind: "0.003" },
+        },
+        zeroScene,
+      ),
+    ).toEqual({
+      error:
+        "Object-scoped interfacial_dmi conflicts with active study-level rotated interfacial DMI. " +
+        "Disable or remove the study-level term before applying the object-scoped DMI.",
+    });
+    expect(
+      buildStudyInteractionPatchFromDraft(
+        {
+          enabled: true,
+          id: "rotated_interfacial_dmi",
+          present: true,
+          values: { d: "0" },
+        },
+        zeroScene,
+      ),
+    ).toEqual({ patch: { study: { rotated_interfacial_dmi: 0 } } });
+  });
+
   it("ignores active DMI entries on auxiliary scene objects", () => {
     for (const kind of ["interfacial_dmi", "bulk_dmi"] as const) {
       const scene = {

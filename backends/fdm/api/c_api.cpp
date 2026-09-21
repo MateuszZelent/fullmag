@@ -979,8 +979,9 @@ uint64_t fullmag_fdm_capability_bits_v1(void) {
 
 /* ── Create ── */
 
-fullmag_fdm_backend *fullmag_fdm_backend_create(
-    const fullmag_fdm_plan_desc *plan)
+static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
+    const fullmag_fdm_plan_desc *plan,
+    bool reserve_rotated_dmi)
 {
 #if FULLMAG_HAS_CUDA
     if (!plan) return nullptr;
@@ -1483,7 +1484,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
         }
     }
 
-    if (!context_preflight_single_grid_workspace(*ctx, *plan)) {
+    if (!context_preflight_single_grid_workspace(*ctx, *plan, reserve_rotated_dmi)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
 
@@ -1695,8 +1696,15 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     return reinterpret_cast<fullmag_fdm_backend *>(ctx);
 #else
     (void)plan;
+    (void)reserve_rotated_dmi;
     return nullptr;
 #endif
+}
+
+fullmag_fdm_backend *fullmag_fdm_backend_create(
+    const fullmag_fdm_plan_desc *plan)
+{
+    return fullmag_fdm_backend_create_impl(plan, false);
 }
 
 int fullmag_fdm_backend_create_time_policy_v2_checked(
@@ -1712,7 +1720,9 @@ int fullmag_fdm_backend_create_time_policy_v2_checked(
     std::unique_ptr<fullmag_fdm_plan_ingestion_v2> ingestion(raw_ingestion);
 #if FULLMAG_HAS_CUDA
     plan = &plan_ingestion_descriptor(*ingestion);
-    fullmag_fdm_backend *handle = fullmag_fdm_backend_create(&plan->base);
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create_impl(
+        &plan->base,
+        plan->has_rotated_interfacial_dmi != 0);
     if (!handle) return FULLMAG_FDM_ERR_CUDA;
     *out_handle = handle;
     auto *ctx = reinterpret_cast<Context *>(handle);
@@ -1721,6 +1731,9 @@ int fullmag_fdm_backend_create_time_policy_v2_checked(
     ctx->has_rotated_interfacial_dmi = plan->has_rotated_interfacial_dmi != 0;
     ctx->D_rotated_interfacial = plan->dmi_D_rotated_interfacial;
     if (ctx->has_rotated_interfacial_dmi) {
+        if (!context_ensure_rotated_dmi_workspace(*ctx)) {
+            return FULLMAG_FDM_OK;
+        }
         // The legacy constructor has already populated the observable cache
         // from the base descriptor, which cannot carry rDMI. Invalidate that
         // snapshot before recomputing with the v2 extension enabled.
@@ -1729,6 +1742,12 @@ int fullmag_fdm_backend_create_time_policy_v2_checked(
             return FULLMAG_FDM_OK;
         }
         fullmag_fdm_commit_operator_residency(*ctx);
+    }
+    // The legacy constructor cannot see the v2 rotated-DMI extension.  Rebuild
+    // the dependency identity after importing it so checkpoint/workspace
+    // compatibility is keyed by the complete material interaction state.
+    if (!context_build_workspace_dependency_identity_v1(*ctx, plan->base)) {
+        return FULLMAG_FDM_OK;
     }
 
     const auto &policy = plan->time_policy;
@@ -1923,6 +1942,13 @@ int fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
         return FULLMAG_FDM_ERR_INVALID;
     }
     if (descriptor->has_rotated_interfacial_dmi != 0 &&
+        (ctx->has_interfacial_dmi || ctx->has_bulk_dmi))
+    {
+        ctx->last_error =
+            "rotated_interfacial_dmi_v1_conflicts_with_conventional_dmi";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (descriptor->has_rotated_interfacial_dmi != 0 &&
         descriptor->dmi_D_rotated_interfacial != 0.0 &&
         !ctx->enable_exchange)
     {
@@ -1945,6 +1971,12 @@ int fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
     ctx->has_rotated_interfacial_dmi =
         descriptor->has_rotated_interfacial_dmi != 0;
     ctx->D_rotated_interfacial = descriptor->dmi_D_rotated_interfacial;
+    if (ctx->has_rotated_interfacial_dmi &&
+        !context_ensure_rotated_dmi_workspace(*ctx)) {
+        ctx->has_rotated_interfacial_dmi = snapshot.has_rotated_interfacial_dmi;
+        ctx->D_rotated_interfacial = snapshot.D_rotated_interfacial;
+        return FULLMAG_FDM_ERR_CUDA;
+    }
     context_invalidate_observables(*ctx);
     bool refreshed = refresh_multilayer_transaction_observables(*ctx, true);
     if (refreshed && inject_refresh_failure) {
@@ -1958,6 +1990,13 @@ int fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
         }
         return FULLMAG_FDM_ERR_CUDA;
     }
+    // The setter is a pre-step configuration boundary.  Keep the receipt's
+    // DMI requirement synchronized with the post-mutation Hamiltonian rather
+    // than retaining a stale bit from an earlier enable operation.
+    const bool dmi_required = ctx->has_interfacial_dmi ||
+        ctx->has_rotated_interfacial_dmi || ctx->has_bulk_dmi;
+    fullmag_fdm_set_operator_device_requirement(
+        *ctx->execution_receipt, FULLMAG_FDM_OPERATOR_DMI, dmi_required);
     fullmag_fdm_commit_operator_residency(*ctx);
     return FULLMAG_FDM_OK;
 #else

@@ -1446,6 +1446,7 @@ export default function Viewport3DModule({
       : null,
     resourceCounts,
     selection,
+    tracker,
   });
   const solverStatus = useSolverStatusResource({ enabled: true });
   const runtimeFrozenSpins = solverStatus.data?.frozen_spins ?? null;

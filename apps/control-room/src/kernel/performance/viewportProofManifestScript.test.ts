@@ -202,8 +202,12 @@ describe("viewport proof manifest", () => {
     const outside = await mkdtemp(join(tmpdir(), "fullmag-viewport-proof-outside-"));
     roots.push(outside);
     await writeFile(join(outside, "outside.png"), "proof-image");
-    await mkdir(join(root, "linked"));
-    await symlink(join(outside, "outside.png"), join(root, "linked", "outside.png"));
+    if (process.platform === "win32") {
+      await symlink(outside, join(root, "linked"), "junction");
+    } else {
+      await mkdir(join(root, "linked"));
+      await symlink(join(outside, "outside.png"), join(root, "linked", "outside.png"));
+    }
     const manifest = qualificationManifest();
     manifest.artifacts[0].path = "linked/outside.png";
 

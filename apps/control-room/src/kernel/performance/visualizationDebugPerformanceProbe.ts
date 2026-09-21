@@ -18,10 +18,12 @@ export interface VisualizationDebugPerformanceCounters {
   materialsDisposed?: number;
   publishes: number;
   resourceCounts?: VisualizationDebugResourceCounts;
+  retentionRejections?: Record<string, number>;
   scans: number;
   topologyBuilds?: number;
   topologyUploads?: number;
   typedArrayCopiedBytes?: number;
+  uploadTicketsAborted?: number;
   viewportFrameReasonsDropped?: number;
   viewportFrameReasonsOverflowed?: boolean;
   viewportFrameReasons?: Record<string, number>;
@@ -70,9 +72,21 @@ export interface VisualizationDebugResourceCounts {
   workers: number;
 }
 
+export interface Viewport3DLiveRefreshRevisions {
+  displayed: string | null;
+  prepared: string | null;
+  received: string | null;
+  requested: string | null;
+}
+
+export interface Viewport3DLiveRefreshProbe {
+  revisions: Viewport3DLiveRefreshRevisions;
+}
+
 declare global {
   interface Window {
     __FULLMAG_VISUALIZATION_DEBUG_PERFORMANCE__?: VisualizationDebugPerformanceCounters;
+    __FULLMAG_VIEWPORT_3D_LIVE_REFRESH__?: Viewport3DLiveRefreshProbe;
   }
 }
 
@@ -93,6 +107,23 @@ export function recordVisualizationDebugPerformanceMetric(
   const counters = readCounters();
   if (!counters || !Number.isFinite(delta) || delta <= 0) return;
   counters[metric] = (counters[metric] ?? 0) + delta;
+}
+
+export function recordVisualizationDebugRetentionRejection(
+  reason: string,
+): void {
+  const counters = readCounters();
+  if (!counters || typeof reason !== "string" || reason.length === 0) return;
+  counters.retentionRejections ??= {};
+  counters.retentionRejections[reason] =
+    (counters.retentionRejections[reason] ?? 0) + 1;
+}
+
+export function publishViewport3DLiveRefreshRevisions(
+  revisions: Viewport3DLiveRefreshRevisions,
+): void {
+  if (typeof window === "undefined") return;
+  window.__FULLMAG_VIEWPORT_3D_LIVE_REFRESH__ = { revisions: { ...revisions } };
 }
 
 export function recordVisualizationDebugResourceCounts(

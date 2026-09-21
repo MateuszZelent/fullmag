@@ -31,9 +31,17 @@ Each solver family needs:
 
 | Role | Backend | Authority |
 |---|---|---|
-| Reference | Rust CPU reference | trusted physics oracle |
-| Production CPU/HPC | Rust production FDM | authoritative CPU production path |
-| Production GPU | native CUDA FDM | authoritative GPU production path |
+| Current CPU/reference execution | Rust CPU reference (`FdmEngine::CpuReference`) | current legal CPU route and trusted physics oracle |
+| Production CPU/HPC target | compiled native FDM CPU under `backends/fdm` | strategic target; not exposed as a separate current `FdmEngine` and not promoted by directory name |
+| Production GPU | native CUDA FDM (`FdmEngine::CudaFdm`) | authoritative GPU production path |
+
+ADR 0032 is the scoped authority for the current FDM CPU dispatch. Until a
+separate native CPU engine has its own ABI, planner capability, requested /
+resolved / executed provenance, parity evidence and workload-scoped
+qualification, `CpuReference` remains the current CPU execution route. A
+forced GPU request must fail when `CudaFdm` is unavailable; it must not fall
+back to `CpuReference`. `auto` may resolve only through the existing legal
+selection policy and must retain the requested value and any fallback reason.
 
 ### 11.2 FEM
 
@@ -276,6 +284,14 @@ host-side diagnostic command. Do not silently promote the diagnostic path into
 the build path.
 
 ### Canonical build entrypoints
+
+For a host enrolled with `Fullmag_build_runner`, full builds of master and
+worktrees use the single queue (`local-build-runner` skill). This takes precedence
+over the direct heavy-build entrypoints below. Select the source checkout and
+configured profile explicitly; a missing client/profile or unhealthy coordinator
+is a blocker, not an implicit host/CPU fallback. Run and scientific qualification
+recipes remain separate and must not be relabeled as build jobs.
+
 - `just build fullmag`
 - `just build fem-gpu-runtime-host`
 - `just package fullmag`

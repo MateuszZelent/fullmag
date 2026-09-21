@@ -107,6 +107,9 @@ describe("confirmed-empty New Problem entry wiring", () => {
     try {
       await settle();
       expect(mounted.container.textContent).toContain("Create a simulation");
+      expect(findButton(mounted.body, "New project").disabled).toBe(true);
+      expect(findButton(mounted.body, "Open project").disabled).toBe(true);
+      expect(findButton(mounted.body, "Save project").disabled).toBe(true);
       expect(mounted.body.textContent).toContain("File");
       expect(findDialogs(mounted.body)).toHaveLength(0);
 

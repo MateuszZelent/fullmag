@@ -27,7 +27,7 @@ describe("mesh build history model", () => {
           quality_data_artifact: { path: "/tmp/q.fmmq" },
         },
       ]),
-    ).toEqual([
+    ).toMatchObject([
       {
         avgQuality: null,
         boundaryFaceCount: null,
@@ -63,6 +63,27 @@ describe("mesh build history model", () => {
         sicnP05: 0.5,
       },
     ]);
+    const entries = normalizeMeshBuildHistory([
+      {
+        build_id: "build-a",
+        canonical_policy_snapshot: { shared_domain: { hmax: 1e-6 } },
+        mesh_name: "shared-domain",
+        node_count: 10,
+        element_count: 20,
+      },
+      {
+        build_id: "build-b",
+        canonical_policy_snapshot: { shared_domain: { hmax: 5e-7 } },
+        mesh_name: "shared-domain",
+        node_count: 14,
+        element_count: 31,
+      },
+    ]);
+    expect(entries.map((entry) => entry.id)).toEqual(["build-a", "build-b"]);
+    expect(entries[1].restorable).toBe(true);
+    expect(entries[1].canonicalPolicySnapshot).toEqual({
+      shared_domain: { hmax: 5e-7 },
+    });
   });
 
   it("compares the latest build side-by-side with the previous build", () => {
@@ -178,5 +199,31 @@ describe("mesh build history model", () => {
         beforeIndex: 0,
       }),
     ).toBeNull();
+  });
+
+  it("keeps a selected pair addressable by stable build ids after append", () => {
+    const entries = normalizeMeshBuildHistory([
+      { build_id: "build-a", mesh_name: "mesh-a", node_count: 10, element_count: 20 },
+      { build_id: "build-b", mesh_name: "mesh-b", node_count: 14, element_count: 28 },
+    ]);
+    const selection = { beforeId: "build-a", afterId: "build-b" };
+    const appended = normalizeMeshBuildHistory([
+      { build_id: "build-a", mesh_name: "mesh-a", node_count: 10, element_count: 20 },
+      { build_id: "build-b", mesh_name: "mesh-b", node_count: 14, element_count: 28 },
+      { build_id: "build-c", mesh_name: "mesh-c", node_count: 21, element_count: 39 },
+    ]);
+    const comparison = meshBuildHistoryComparisonForSelection(appended, selection);
+    expect(comparison).not.toBeNull();
+    expect(comparison).toMatchObject({ beforeIndex: 0, afterIndex: 1 });
+    expect(comparison?.rows[0]).toMatchObject({ id: "nodes", before: 10, after: 14 });
+    expect(entries[0].id).toBe("build-a");
+  });
+
+  it("normalizes backend duration_ms to seconds", () => {
+    const [entry] = normalizeMeshBuildHistory([
+      { build_id: "build-duration", duration_ms: 2_750 },
+    ]);
+
+    expect(entry.durationSeconds).toBe(2.75);
   });
 });

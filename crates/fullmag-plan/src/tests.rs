@@ -7278,6 +7278,33 @@ fn rotated_interfacial_dmi_allows_zero_resolved_aex_on_fully_periodic_grid() {
 }
 
 #[test]
+fn rotated_interfacial_dmi_allows_zero_resolved_aex_with_open_film_surfaces() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fdm;
+    ir.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+        axes: [
+            fullmag_ir::AxisBoundary::Periodic,
+            fullmag_ir::AxisBoundary::Periodic,
+            fullmag_ir::AxisBoundary::Open,
+        ],
+        demag: fullmag_ir::FdmDemagPeriodicityIR::Open,
+        image_counts: None,
+    });
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+    ir.materials[0].exchange_stiffness = 0.0;
+
+    let planned =
+        plan(&ir).expect("zero in-plane Aex is legal when only the film surfaces are open");
+    let BackendPlanIR::Fdm(fdm) = planned.backend_plan else {
+        panic!("expected a single-grid FDM plan");
+    };
+    assert_eq!(fdm.rotated_interfacial_dmi, Some(3.0e-3));
+}
+
+#[test]
 fn multilayer_rotated_interfacial_dmi_rejects_zero_resolved_aex_on_open_boundary() {
     let mut ir = stacked_two_body_multilayer_problem();
     ir.energy_terms = vec![
@@ -7407,6 +7434,30 @@ fn rotated_interfacial_dmi_rejects_mixed_dmi_energy_channels() {
             .iter()
             .any(|reason| reason.contains("cannot be combined")));
     }
+}
+
+#[test]
+fn fem_rotated_interfacial_dmi_ignores_unreferenced_material_dmi() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    attach_unit_fem_domain_mesh(&mut ir);
+    ir.energy_terms = vec![
+        EnergyTermIR::Exchange,
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+    ];
+    let mut unused_material = ir.materials[0].clone();
+    unused_material.name = "unused".to_string();
+    unused_material.interfacial_dmi = Some(1.0e-3);
+    ir.materials.push(unused_material);
+
+    let planned = plan(&ir).expect(
+        "an unreferenced conventional material DMI must not conflict with active FEM rotated DMI",
+    );
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    assert_eq!(fem.rotated_interfacial_dmi, Some(3.0e-3));
+    assert_eq!(fem.interfacial_dmi, None);
 }
 
 #[test]

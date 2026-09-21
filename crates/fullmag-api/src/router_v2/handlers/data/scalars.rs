@@ -125,7 +125,7 @@ pub async fn get_scalars(
                     "e_ext" => r.e_ext,
                     "e_ani" => r.e_ani,
                     "e_dmi" => r.e_dmi,
-                    "e_rotated_dmi" => r.e_rotated_dmi,
+                    "e_rotated_dmi" => r.e_rotated_dmi.unwrap_or(0.0),
                     "e_total" => r.e_total,
                     "max_dm_dt" => r.max_dm_dt,
                     "max_h_eff" => r.max_h_eff,

@@ -1,6 +1,7 @@
 "use client";
 
 import { useKernel } from "@/kernel/KernelContext";
+import { createCommandContext } from "@/kernel/commands/commandContext";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import {
   selectionSnapshotEquals,
@@ -28,6 +29,15 @@ export default function InspectorModule() {
     });
   };
 
+  const handleToggleVisibility = () => {
+    void kernel.commands.execute(
+      "panels:inspector:toggle",
+      createCommandContext("inspector", kernel, {
+        sourceDetail: "inspector-header",
+      }),
+    );
+  };
+
   return (
     <WorkspaceRenderProfiler id="InspectorModule">
       <InspectorEditSessionProvider>
@@ -48,6 +58,7 @@ export default function InspectorModule() {
               descriptor={descriptor}
               onFocus={handleFocus}
               onSelectBreadcrumb={(next) => kernel.selection.set(next, "inspector")}
+              onToggleVisibility={handleToggleVisibility}
             >
               {Panel ? (
                 <Panel selection={guardedSelection} />

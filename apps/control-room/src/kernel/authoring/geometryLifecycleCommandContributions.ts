@@ -1,3 +1,4 @@
+import { ControlRoomApiError } from "../api/ControlRoomApi";
 import {
   MESHING_BUILDS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
@@ -20,8 +21,8 @@ import {
   MODEL_SCENE_PATH,
 } from "../api/apiPaths";
 import type { JsonObject, JsonValue, MeshCapabilitiesResource } from "../api/apiTypes";
-import type { CommandDetailResource } from "../api/apiTypes";
-import type { CommandContext, CommandContribution } from "../commands/commandTypes";
+import type { CommandDetailResource, StructuredCommandRequest } from "../api/apiTypes";
+import type { CommandContext, CommandContribution, CommandResult } from "../commands/commandTypes";
 import type { Selection } from "../selection/selectionTypes";
 import {
   meshEditorCapabilityBlocks,
@@ -36,9 +37,9 @@ import {
   awaitMeshCommandTerminal,
   createObjectTransaction,
   deleteObjectTransaction,
-  submitObjectMeshBuild,
 } from "./geometryLifecycleCommands";
 import { invalidateAuthoringMutationDependents } from "./authoringMutationInvalidation";
+import { awaitMeshBuildConfirmation, type MeshBuildConfirmCommandId } from "./meshBuildConfirmation";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 
 type JsonRecord = Record<string, unknown>;
@@ -222,6 +223,7 @@ function isObjectMeshBuildRunning(
   context: CommandContext,
   objectId: string,
 ): boolean {
+  if (context.api && meshBuildOperations.has(context.api.commands)) return false;
   const activeBuild = resourceData(context, MESHING_BUILDS_CURRENT_PATH);
   const runningStatuses = new Set(["building", "pending", "queued", "running"]);
 
@@ -255,6 +257,7 @@ function isObjectMeshBuildRunning(
 }
 
 function isSharedDomainMeshBuildRunning(context: CommandContext): boolean {
+  if (context.api && meshBuildOperations.has(context.api.commands)) return false;
   const activeBuild = resourceData(context, MESHING_BUILDS_CURRENT_PATH);
   const runningStatuses = new Set(["building", "pending", "queued", "running"]);
 
@@ -400,24 +403,18 @@ function currentMeshRevision(context: CommandContext): number | null {
     : null;
 }
 
-function authoritativeMeshCommandRevision(
-  detail: CommandDetailResource,
-): number {
-  const meshRevision = detail.resource_invalidations?.find((entry) => {
+function authoritativeMeshCommandRevision(detail: CommandDetailResource): number {
+  return detail.resource_invalidations!.find((entry) => {
     const key = entry.resource_key;
-    return (
-      key === "meshing/shared-domain/manifest" ||
-      key === "data/domain/topology" ||
-      (key.startsWith("meshing/objects/") && key.endsWith("/topology"))
-    );
-  })?.revision;
-  if (meshRevision !== undefined) return meshRevision;
+    return key === "meshing/shared-domain/manifest" || key === "data/domain/topology" ||
+      (key.startsWith("meshing/objects/") && key.endsWith("/topology"));
+  })!.revision;
+}
 
-  return (
-    detail.resource_invalidations?.find(
-      (entry) => entry.resource_key === "meshing/builds/current",
-    )?.revision ?? detail.seq
-  );
+function invalidateMeshBuildStatus(context: CommandContext, revision: string | number): void {
+  context.resources?.invalidate(MESHING_BUILDS_PATH, revision);
+  context.resources?.invalidate(MESHING_BUILDS_CURRENT_PATH, revision);
+  context.resources?.invalidate(MODEL_READINESS_PATH, revision);
 }
 
 function focusMeshJobs(context: CommandContext): void {
@@ -433,6 +430,7 @@ function emitMeshBuildSubmitted(
   context: CommandContext,
   payload: {
     commandId: string;
+    requestId?: string;
     objectId?: string;
     reason: string;
     targetKind: "object_mesh" | "study_domain";
@@ -440,6 +438,334 @@ function emitMeshBuildSubmitted(
 ): void {
   context.bus?.emit("mesh:build-submitted", payload);
   focusMeshJobs(context);
+}
+
+type MeshBuildRequest = Extract<StructuredCommandRequest, { kind: "mesh_build" }>;
+type FdmGridRefreshRequest = Extract<StructuredCommandRequest, { kind: "fdm_grid_refresh" }>;
+type ObservableMeshCommandKind = "mesh_build" | "fdm_grid_refresh";
+type MeshCommandApi = NonNullable<CommandContext["api"]>["commands"];
+interface MeshBuildOperation {
+  announced: boolean;
+  baseMeshRevision: number | null;
+  commandId?: string;
+  commandKind: ObservableMeshCommandKind;
+  key: string;
+  objectId?: string;
+  observationPaused: boolean;
+  promise?: Promise<CommandResult>;
+  reason: string;
+  requestId?: string;
+  submitted: boolean;
+}
+
+// Per-client submission locks retain only identities and live promises, never resource snapshots.
+const meshBuildOperations = new WeakMap<MeshCommandApi, MeshBuildOperation>();
+
+function meshCommandKindMatches(actual: string, expected: ObservableMeshCommandKind): boolean {
+  return actual === expected || (expected === "mesh_build" && actual === "remesh");
+}
+
+async function reconcileMeshSubmission(
+  api: MeshCommandApi,
+  operation: MeshBuildOperation,
+): Promise<string | undefined> {
+  const queue = await api.list();
+  const candidates = queue.commands.filter((entry) =>
+    meshCommandKindMatches(entry.kind, operation.commandKind),
+  )
+    .sort((left, right) => right.seq - left.seq).slice(0, 8);
+  for (const entry of candidates) {
+    const detail = await api.detail(entry.command_id);
+    if (detail.command_id === entry.command_id && detail.client_intent_id === operation.requestId) {
+      return detail.command_id;
+    }
+  }
+  return undefined;
+}
+
+async function observeMeshBuildOperation(
+  context: CommandContext,
+  operation: MeshBuildOperation,
+): Promise<CommandResult> {
+  const api = context.api!.commands;
+  if (!operation.commandId) {
+    try {
+      operation.commandId = await reconcileMeshSubmission(api, operation);
+    } catch {
+      const result: CommandResult = {
+        message: "Mesh submission acknowledgement was lost. Reconnect to check the existing intent; no duplicate build was submitted.",
+        observation: "disconnected", status: "pending",
+      };
+      context.bus?.emit("mesh:build-observed", { ...result, requestId: operation.requestId });
+      return result;
+    }
+    if (!operation.commandId) {
+      const result: CommandResult = {
+        message: "Mesh submission is unconfirmed. Check the command history before retrying; no duplicate build was submitted.",
+        observation: "publication-unconfirmed", status: "pending",
+      };
+      context.bus?.emit("mesh:build-observed", { ...result, requestId: operation.requestId });
+      return result;
+    }
+  }
+
+  const commandId = operation.commandId;
+  const objectId = operation.objectId;
+  if (!operation.announced) {
+    invalidateMeshBuildStatus(context, commandId);
+    emitMeshBuildSubmitted(context, {
+      commandId, objectId, requestId: operation.requestId,
+      reason: operation.reason,
+      targetKind: objectId ? "object_mesh" : "study_domain",
+    });
+    operation.announced = true;
+  }
+  const terminal = await awaitMeshCommandTerminal(api, commandId, { baseMeshRevision: operation.baseMeshRevision });
+  let meshRevision: number | undefined;
+  if (terminal.status === "completed") {
+    meshRevision = authoritativeMeshCommandRevision(terminal.detail);
+    if (objectId) invalidateObjectMeshResources(context, objectId, meshRevision);
+    else invalidateSharedDomainMeshResources(context, meshRevision);
+  } else if (terminal.detail) {
+    invalidateMeshBuildStatus(context, terminal.detail.seq);
+  }
+  const result: CommandResult = {
+    commandId,
+    ...(terminal.message ? { message: terminal.message } : {}),
+    ...(terminal.status === "pending" ? { observation: terminal.observation } : {}),
+    status: terminal.status,
+  };
+  context.bus?.emit("mesh:build-observed", { ...result, meshRevision, requestId: operation.requestId });
+  return result;
+}
+
+function trackMeshBuildOperation(
+  context: CommandContext,
+  operation: MeshBuildOperation,
+  work: () => Promise<CommandResult>,
+): Promise<CommandResult> {
+  const api = context.api!.commands;
+  operation.promise = work().catch((error: unknown): CommandResult => {
+    if (!operation.submitted) {
+      meshBuildOperations.delete(api);
+      throw error;
+    }
+    const result: CommandResult = {
+      commandId: operation.commandId,
+      message: error instanceof Error ? error.message : "Mesh observation was interrupted.",
+      observation: "disconnected", status: "pending",
+    };
+    context.bus?.emit("mesh:build-observed", { ...result, requestId: operation.requestId });
+    return result;
+  }).then((result) => {
+    operation.observationPaused = result.status === "pending";
+    if (result.status !== "pending") meshBuildOperations.delete(api);
+    return result;
+  }).finally(() => { operation.promise = undefined; });
+  return operation.promise;
+}
+
+/** Resume only the retained command identity or client intent; never confirm or submit another build. */
+export function resumeMeshBuildObservation(context: CommandContext): Promise<CommandResult> {
+  const operation = context.api ? meshBuildOperations.get(context.api.commands) : undefined;
+  if (!operation) return Promise.resolve({ message: "No mesh command observation is available to resume.", status: "cancelled" });
+  return operation.promise ?? trackMeshBuildOperation(context, operation, () => observeMeshBuildOperation(context, operation));
+}
+
+function requestMeshObservation(context: CommandContext, operation: MeshBuildOperation): void {
+  context.bus?.emit("mesh:build-observation-requested", {
+    commandId: operation.commandId!,
+    requestId: operation.requestId!,
+    objectId: operation.objectId,
+    targetKind: operation.objectId ? "object_mesh" : "study_domain",
+  });
+}
+
+/** Rehydrate a mesh observation from its authoritative command resource after reload. */
+export async function restoreMeshBuildObservation(
+  context: CommandContext,
+  commandId: string,
+): Promise<CommandResult> {
+  const api = context.api?.commands;
+  if (!api) return { message: "Control-room API is unavailable.", status: "cancelled" };
+  const resumeExisting = (operation: MeshBuildOperation): Promise<CommandResult> => {
+    if (operation.commandId !== commandId) return Promise.resolve({
+      message: "Another mesh command observation is active. Resolve it before opening this command.",
+      status: "failed",
+    });
+    requestMeshObservation(context, operation);
+    return resumeMeshBuildObservation(context);
+  };
+  const existing = meshBuildOperations.get(api);
+  if (existing) return resumeExisting(existing);
+  let detail: CommandDetailResource;
+  try {
+    detail = await api.detail(commandId);
+  } catch {
+    return { commandId, message: "Mesh command details are unavailable. Reconnect and observe this command again.",
+      observation: "disconnected", status: "pending" };
+  }
+  const commandKind = detail.kind === "fdm_grid_refresh" ? "fdm_grid_refresh" : "mesh_build";
+  const validTarget = commandKind === "fdm_grid_refresh" || Boolean(detail.mesh_target);
+  if (
+    detail.command_id !== commandId ||
+    !meshCommandKindMatches(detail.kind, commandKind) ||
+    !validTarget
+  ) {
+    return { commandId, message: "The requested resource does not identify a mesh build with a target.", status: "failed" };
+  }
+  const concurrent = meshBuildOperations.get(api);
+  if (concurrent) return resumeExisting(concurrent);
+  const operation: MeshBuildOperation = {
+    announced: true,
+    baseMeshRevision: null,
+    commandId,
+    commandKind,
+    key: "restored:" + commandId,
+    objectId: detail.mesh_target?.kind === "object_mesh" ? detail.mesh_target.object_id : undefined,
+    observationPaused: true,
+    reason: detail.mesh_reason ?? detail.reason ?? "mesh-observation",
+    requestId: detail.client_intent_id ?? "mesh-observe:" + commandId,
+    submitted: true,
+  };
+  meshBuildOperations.set(api, operation);
+  requestMeshObservation(context, operation);
+  return resumeMeshBuildObservation(context);
+}
+
+function meshSubmissionRejection(
+  context: CommandContext,
+  operation: MeshBuildOperation,
+  error: unknown,
+): CommandResult | null {
+  if (!(error instanceof ControlRoomApiError) || error.status < 400 || error.status >= 500 || error.status === 408) {
+    return null;
+  }
+  const result: CommandResult = { message: error.message, status: "failed" };
+  context.bus?.emit("mesh:build-observed", { ...result, requestId: operation.requestId });
+  return result;
+}
+function runMeshBuildOperation(
+  context: CommandContext,
+  registryCommandId: MeshBuildConfirmCommandId,
+  request: MeshBuildRequest,
+): Promise<CommandResult> {
+  const api = context.api!.commands;
+  const status = asRecord(resourceData(context, SESSION_STATUS_RESOURCE_KEY));
+  const sceneRevision = asRecord(status?.resources)?.scene_revision ?? sceneBaseRevision(context);
+  const key = JSON.stringify({ scene_revision: sceneRevision, mesh_options: request.mesh_options ?? null, mesh_target: request.mesh_target });
+  const previous = meshBuildOperations.get(api);
+  if (previous) {
+    if (previous.key === key && !previous.observationPaused && previous.promise) return previous.promise;
+    return Promise.resolve({
+      commandId: previous.commandId,
+      message: "An existing mesh build remains active. Observe it before starting another build or configuration.",
+      observation: "waiting", status: "pending",
+    });
+  }
+  const operation: MeshBuildOperation = {
+    announced: false, baseMeshRevision: currentMeshRevision(context), key,
+    commandKind: "mesh_build",
+    objectId: request.mesh_target?.kind === "object_mesh" ? request.mesh_target.object_id : undefined,
+    observationPaused: false, reason: request.mesh_reason ?? "mesh-build", submitted: false,
+  };
+  meshBuildOperations.set(api, operation);
+  return trackMeshBuildOperation(context, operation, async () => {
+    const confirmation = await awaitMeshBuildConfirmation(context, registryCommandId, {
+      ...asRecord(context.input), ...request,
+    });
+    operation.requestId = confirmation.requestId;
+    if (!confirmation.confirmed) return { status: "cancelled" };
+    operation.baseMeshRevision = confirmation.precondition?.mesh_revision ?? operation.baseMeshRevision;
+    operation.submitted = true;
+    try {
+      const response = await api.submit({
+        ...request,
+        client_intent_id: operation.requestId,
+        ...(confirmation.precondition ? { precondition: confirmation.precondition } : {}),
+      });
+      if (!response.accepted) {
+        const result: CommandResult = {
+          commandId: response.command_id,
+          message: response.error ?? "Mesh build rejected.", status: "failed",
+        };
+        context.bus?.emit("mesh:build-observed", { ...result, requestId: operation.requestId });
+        return result;
+      }
+      operation.commandId = response.command_id;
+    } catch (error) {
+      const rejection = meshSubmissionRejection(context, operation, error);
+      if (rejection) return rejection;
+      // A lost POST response cannot prove rejection. Reconcile by intent before any further action.
+    }
+    return observeMeshBuildOperation(context, operation);
+  });
+}
+
+let fdmGridRefreshSequence = 0;
+
+/** Submit and observe one atomic FDM grid refresh through its terminal command resource. */
+export function runFdmGridRefreshOperation(
+  context: CommandContext,
+  request: FdmGridRefreshRequest,
+): Promise<CommandResult> {
+  const api = context.api?.commands;
+  if (!api) {
+    return Promise.resolve({
+      message: "Control-room API is unavailable.",
+      status: "cancelled",
+    });
+  }
+  const key = JSON.stringify({
+    kind: request.kind,
+    precondition: request.precondition ?? null,
+    reason: request.reason ?? null,
+  });
+  const previous = meshBuildOperations.get(api);
+  if (previous) {
+    if (previous.key === key && !previous.observationPaused && previous.promise) {
+      return previous.promise;
+    }
+    return Promise.resolve({
+      commandId: previous.commandId,
+      message: "An existing mesh operation remains active. Observe it before starting another grid refresh.",
+      observation: "waiting",
+      status: "pending",
+    });
+  }
+
+  const requestId = `fdm-grid-refresh-${Date.now()}-${++fdmGridRefreshSequence}`;
+  const operation: MeshBuildOperation = {
+    announced: false,
+    baseMeshRevision: currentMeshRevision(context),
+    commandKind: "fdm_grid_refresh",
+    key,
+    observationPaused: false,
+    reason: request.reason ?? "fdm-grid-refresh",
+    requestId,
+    submitted: true,
+  };
+  meshBuildOperations.set(api, operation);
+  return trackMeshBuildOperation(context, operation, async () => {
+    try {
+      const response = await api.submit({ ...request, client_intent_id: requestId });
+      if (!response.accepted) {
+        const result: CommandResult = {
+          commandId: response.command_id,
+          message: response.error ?? "FDM grid refresh was rejected.",
+          status: "failed",
+        };
+        context.bus?.emit("mesh:build-observed", { ...result, requestId });
+        return result;
+      }
+      operation.commandId = response.command_id;
+    } catch (error) {
+      const rejection = meshSubmissionRejection(context, operation, error);
+      if (rejection) return rejection;
+      // Reconcile a possibly accepted command by client intent before allowing a retry.
+    }
+    return observeMeshBuildOperation(context, operation);
+  });
 }
 
 function jsonValue(value: unknown): JsonValue | undefined {
@@ -847,35 +1173,11 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
         return { message: "Control-room API is unavailable.", status: "failed" };
       }
 
-      const response = await submitObjectMeshBuild(
-        context.api,
-        objectId,
-        "selected-object",
-      );
-      if (!response.accepted) {
-        return { message: response.error ?? "Mesh build rejected.", status: "failed" };
-      }
-      const commandId = response.command_id;
-      invalidateObjectMeshResources(context, objectId, commandId);
-      emitMeshBuildSubmitted(context, {
-        commandId,
-        objectId,
-        reason: "selected-object",
-        targetKind: "object_mesh",
+      return runMeshBuildOperation(context, "mesh.build-selected", {
+        kind: "mesh_build",
+        mesh_reason: "selected-object",
+        mesh_target: { kind: "object_mesh", object_id: objectId },
       });
-      const terminal = await awaitMeshCommandTerminal(
-        context.api.commands,
-        commandId,
-        { baseMeshRevision: currentMeshRevision(context) },
-      );
-      invalidateObjectMeshResources(
-        context,
-        objectId,
-        authoritativeMeshCommandRevision(terminal.detail),
-      );
-      return terminal.status === "completed"
-        ? { status: "completed" }
-        : { message: terminal.message, status: terminal.status };
     },
   },
   {
@@ -894,33 +1196,11 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
       if (!context.api) {
         return { message: "Control-room API is unavailable.", status: "failed" };
       }
-      const response = await context.api.commands.submit({
+      return runMeshBuildOperation(context, "mesh.build-shared-domain", {
         kind: "mesh_build",
         mesh_reason: "shared-domain",
         mesh_target: { kind: "study_domain" },
       });
-      if (response.accepted) {
-        const commandId = response.command_id;
-        invalidateSharedDomainMeshResources(context, commandId);
-        emitMeshBuildSubmitted(context, {
-          commandId,
-          reason: "shared-domain",
-          targetKind: "study_domain",
-        });
-        const terminal = await awaitMeshCommandTerminal(
-          context.api.commands,
-          commandId,
-          { baseMeshRevision: currentMeshRevision(context) },
-        );
-        invalidateSharedDomainMeshResources(
-          context,
-          authoritativeMeshCommandRevision(terminal.detail),
-        );
-        return terminal.status === "completed"
-          ? { status: "completed" }
-          : { message: terminal.message, status: terminal.status };
-      }
-      return { message: response.error ?? "Mesh build rejected.", status: "failed" };
     },
   },
   {
@@ -956,29 +1236,12 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
           status: "failed",
         };
       }
-      const response = await context.api.commands.submit({
+      return runMeshBuildOperation(context, "mesh.refine-worst-quality-element", {
         kind: "mesh_build",
         mesh_options: meshOptions,
         mesh_reason: "quality_threshold_refinement",
         mesh_target: { kind: "study_domain" },
       });
-      if (response.accepted) {
-        const commandId = response.command_id;
-        invalidateSharedDomainMeshResources(context, commandId);
-        const terminal = await awaitMeshCommandTerminal(
-          context.api.commands,
-          commandId,
-          { baseMeshRevision: currentMeshRevision(context) },
-        );
-        invalidateSharedDomainMeshResources(
-          context,
-          authoritativeMeshCommandRevision(terminal.detail),
-        );
-        return terminal.status === "completed"
-          ? { status: "completed" }
-          : { message: terminal.message, status: terminal.status };
-      }
-      return { message: response.error ?? "Mesh refinement rejected.", status: "failed" };
     },
   },
   meshNavigationCommand(

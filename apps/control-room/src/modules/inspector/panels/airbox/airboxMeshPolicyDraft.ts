@@ -17,6 +17,10 @@ export interface AirboxMeshPolicyDraft {
   airboxHmax: string;
   airboxHmin: string;
   configText: string;
+  /** Last JSON projection shared by the structured and advanced editors. */
+  syncedConfigText?: string;
+  /** True after either editor has committed a validated JSON projection. */
+  configSynchronized?: boolean;
   curvatureFactor: string;
   narrowRegionResolution: string;
   paddingX: string;
@@ -59,6 +63,7 @@ export function draftFromUniverseMeshPolicyResource(
     airboxHmax: readNumberText(config.airbox_hmax),
     airboxHmin: readNumberText(config.airbox_hmin),
     configText: formatUniverseMeshPolicyConfig(resource.config),
+    syncedConfigText: formatUniverseMeshPolicyConfig(resource.config),
     curvatureFactor: readNumberText(config.curvature_factor),
     narrowRegionResolution: readNumberText(config.narrow_region_resolution),
     paddingX: readVec3Component(config.padding, 0),
@@ -97,7 +102,84 @@ export function airboxMeshPolicyDraftDirty(
   );
 }
 
+export function airboxMeshPolicyJsonError(configText: string): string | null {
+  const parsed = parseConfig(configText);
+  return parsed.ok ? null : parsed.error;
+}
+
+function synchronizeAirboxMeshPolicyJson(draft: AirboxMeshPolicyDraft): AirboxMeshPolicyDraft {
+  if (draft.syncedConfigText === undefined || draft.configText === draft.syncedConfigText) return draft;
+  const previous = parseConfig(draft.syncedConfigText);
+  const next = parseConfig(draft.configText);
+  if (!previous.ok || !next.ok) return draft;
+  const project = (config: JsonObject) => draftFromUniverseMeshPolicyResource({ config, revision: 0 });
+  const previousFields = project(previous.value);
+  const nextFields = project(next.value);
+  const changes: Partial<AirboxMeshPolicyDraft> = {};
+  for (const key of Object.keys(nextFields) as (keyof AirboxMeshPolicyDraft)[]) {
+    if (["configText", "syncedConfigText", "configSynchronized", "authoredConfigPresent"].includes(key)) continue;
+    if (!Object.is(previousFields[key], nextFields[key])) {
+      Object.assign(changes, { [key]: nextFields[key] });
+    }
+  }
+  return { ...draft, ...changes, syncedConfigText: draft.configText, configSynchronized: true };
+}
+
+export function updateAirboxMeshPolicyDraft(
+  draft: AirboxMeshPolicyDraft,
+  patch: Partial<AirboxMeshPolicyDraft>,
+  options: { lane?: AirboxMeshPolicyLane } = {},
+): AirboxMeshPolicyDraft {
+  const next = { ...synchronizeAirboxMeshPolicyJson(draft), ...patch };
+  if (Object.keys(patch).length === 1 && patch.configText !== undefined) {
+    return synchronizeAirboxMeshPolicyJson(next);
+  }
+  // Presets may update JSON and structured controls together as one transaction.
+  const formDraft = { ...next, syncedConfigText: next.configText, configSynchronized: false };
+  const result = buildAirboxMeshPolicyFormRequest(formDraft, options);
+  if ("error" in result || !result.request?.config) return formDraft;
+  const previous = buildAirboxMeshPolicyFormRequest(draft, options);
+  const parsed = parseConfig(draft.configText);
+  let config = result.request.config;
+  if (patch.configText === undefined && parsed.ok && "request" in previous && previous.request?.config) {
+    config = { ...parsed.value };
+    const before = previous.request.config;
+    const after = result.request.config;
+    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      if (JSON.stringify(before[key]) === JSON.stringify(after[key])) continue;
+      if (Object.hasOwn(after, key)) config[key] = after[key]!;
+      else delete config[key];
+    }
+  }
+  const configText = formatUniverseMeshPolicyConfig(config);
+  return { ...formDraft, configText, syncedConfigText: configText, configSynchronized: true };
+}
+
 export function buildAirboxMeshPolicyReplaceRequest(
+  draft: AirboxMeshPolicyDraft,
+  options: { lane?: AirboxMeshPolicyLane } = {},
+): ReturnType<typeof buildAirboxMeshPolicyFormRequest> {
+  const synchronized = synchronizeAirboxMeshPolicyJson(draft);
+  const result = buildAirboxMeshPolicyFormRequest(synchronized, options);
+  if (!synchronized.configSynchronized || "error" in result || !result.request) return result;
+
+  const parsed = parseConfig(synchronized.configText);
+  if (!parsed.ok) return { error: parsed.error };
+  const config = { ...parsed.value };
+  if (options.lane !== "fdm" && config.airbox_grading !== undefined && !AIRBOX_GRADING_MODES.includes(config.airbox_grading as AirboxGradingMode)) {
+    return { error: "Airbox grading must be auto, geometric, or linear." };
+  }
+  for (const key of ["padding", "size", "center"]) {
+    const value = config[key];
+    if (value !== undefined && value !== null && (!Array.isArray(value) || value.length !== 3 || value.some((component) => typeof component !== "number" || !Number.isFinite(component)))) {
+      return { error: key + " must contain three finite SI values." };
+    }
+  }
+  if (options.lane === "fdm") for (const key of FEM_ONLY_POLICY_KEYS) delete config[key];
+  return { request: { config } };
+}
+
+function buildAirboxMeshPolicyFormRequest(
   draft: AirboxMeshPolicyDraft,
   options: { lane?: AirboxMeshPolicyLane } = {},
 ):
@@ -258,9 +340,9 @@ function readNumberText(value: unknown): string {
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (!trimmed) return "";
-    return Number.isFinite(Number(trimmed)) ? trimmed : "";
+    return trimmed;
   }
-  return "";
+  return value == null ? "" : JSON.stringify(value);
 }
 
 function readStringText(value: unknown): string {
@@ -303,6 +385,7 @@ function draftRecordsEqual(
 ): boolean {
   const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
   for (const key of keys) {
+    if (key === "syncedConfigText" || key === "configSynchronized") continue;
     if (key === "configText") {
       if (!jsonTextEquivalent(left[key], right[key])) return false;
     } else if (!draftValueEquivalent(left[key], right[key])) {

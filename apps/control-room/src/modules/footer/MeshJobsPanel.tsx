@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react";
 
+import { createCommandContext } from "@/kernel/commands/commandContext";
+import { restoreMeshBuildObservation } from "@/kernel/authoring/geometryLifecycleCommandContributions";
+import { Button } from "@/shared/ui/Button";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   useMeshBuildCurrent,
@@ -53,6 +56,9 @@ export function MeshJobsPanel() {
   return (
     <MeshJobsPanelView
       activeStatus={activeBuild.status}
+      onObserve={activeBuild.data?.provenance?.command_id ? () => {
+        void restoreMeshBuildObservation(createCommandContext("inspector", kernel), activeBuild.data!.provenance!.command_id!);
+      } : undefined}
       historyCount={historyCount}
       model={model}
     />
@@ -61,10 +67,12 @@ export function MeshJobsPanel() {
 
 export function MeshJobsPanelView({
   activeStatus,
+  onObserve,
   historyCount,
   model,
 }: {
   activeStatus: string;
+  onObserve?: () => void;
   historyCount: number;
   model: MeshJobsModel;
 }) {
@@ -77,6 +85,7 @@ export function MeshJobsPanelView({
             {activeStatus}
           </span>
         </div>
+        {onObserve ? <Button size="sm" variant="secondary" onClick={onObserve}>Observe current build</Button> : null}
         <output className="fm-footer__empty">
           {model.activeTitle}
         </output>

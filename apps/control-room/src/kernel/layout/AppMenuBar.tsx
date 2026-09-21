@@ -31,6 +31,7 @@ import {
   DialogTitle,
 } from "@/shared/ui/Dialog";
 import { ThemeSwitcher } from "@/shared/ui/ThemeSwitcher";
+import { ProjectDocumentStatus } from "../persistence/ProjectDocumentStatus";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -477,6 +478,7 @@ function NoSessionAppMenuBar({
         ))}
       </div>
       <div className="fm-header__actions">
+        <ProjectDocumentStatus />
         <ThemeSwitcher theme={theme} onThemeChange={setTheme} />
       </div>
       <NewProblemDialog
@@ -767,6 +769,7 @@ function SessionAppMenuBar() {
       <div className="fm-header__separator" />
 
       <div className="fm-header__actions">
+        <ProjectDocumentStatus />
         <ThemeSwitcher theme={theme} onThemeChange={setTheme} />
       </div>
     </header>

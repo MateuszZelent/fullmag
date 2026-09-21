@@ -1,5 +1,8 @@
+import type { MutableRefObject } from "react";
+
 import type {
   ChartRenderModel,
+  ChartRendererOwner,
   ChartRenderResultCoordinate,
   ChartRenderResultSelectionRef,
 } from "./chartRenderer";
@@ -11,6 +14,52 @@ import {
 } from "./chartScalePolicy";
 
 export type ChartExportFormat = "csv" | "tsv";
+export type ChartExportRequestFormat = ChartExportFormat | "png";
+
+/** A command identity that remains unique when two consecutive commands share a format. */
+export interface ChartExportRequest {
+  format: ChartExportRequestFormat;
+  requestId: string;
+}
+
+export function exportChartData(model: ChartRenderModel, format: ChartExportFormat): boolean {
+  try {
+    const dataDownloaded = downloadChartBlob({
+      content: serializeChartData(model, format),
+      filename: safeChartExportFilename(model, format),
+      mimeType: format === "csv" ? "text/csv;charset=utf-8" : "text/tab-separated-values;charset=utf-8",
+    });
+    if (!dataDownloaded) return false;
+    return downloadChartBlob({
+      content: JSON.stringify(chartExportProvenance(model), null, 2),
+      filename: safeChartExportFilename(model, ".provenance.json"),
+      mimeType: "application/json",
+    });
+  } catch {
+    return false;
+  }
+}
+
+export function exportChartPng(
+  model: ChartRenderModel,
+  rendererRef: MutableRefObject<ChartRendererOwner | null>,
+): boolean {
+  try {
+    const dataUrl = rendererRef.current?.exportPng();
+    if (!dataUrl) return false;
+    const anchor = document.createElement("a");
+    anchor.download = safeChartExportFilename(model, "png");
+    anchor.href = dataUrl;
+    anchor.click();
+    return downloadChartBlob({
+      content: JSON.stringify(chartExportProvenance(model), null, 2),
+      filename: safeChartExportFilename(model, ".provenance.json"),
+      mimeType: "application/json",
+    });
+  } catch {
+    return false;
+  }
+}
 
 export interface ChartExportProvenance {
   artifactPath: string | null;
@@ -229,14 +278,23 @@ export function downloadChartBlob({
   content: BlobPart;
   filename: string;
   mimeType: string;
-}): void {
-  const url = URL.createObjectURL(new Blob([content], { type: mimeType }));
-  const anchor = document.createElement("a");
-  anchor.download = filename;
-  anchor.href = url;
-  anchor.click();
-  // Revoke after current event loop to ensure download started
-  queueMicrotask(() => URL.revokeObjectURL(url));
+}): boolean {
+  let url: string | null = null;
+  try {
+    url = URL.createObjectURL(new Blob([content], { type: mimeType }));
+    const anchor = document.createElement("a");
+    anchor.download = filename;
+    anchor.href = url;
+    anchor.click();
+    // Revoke after current event loop to ensure download started.
+    queueMicrotask(() => {
+      if (url) URL.revokeObjectURL(url);
+    });
+    return true;
+  } catch {
+    if (url) URL.revokeObjectURL(url);
+    return false;
+  }
 }
 
 function roundTripNumber(value: number): string {

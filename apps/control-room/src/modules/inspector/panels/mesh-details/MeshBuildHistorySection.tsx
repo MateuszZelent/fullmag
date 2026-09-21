@@ -1,4 +1,7 @@
-import type { normalizeMeshBuildHistory } from "@/shared/domain/mesh/meshBuildHistory";
+import type {
+  MeshBuildHistoryEntry,
+  normalizeMeshBuildHistory,
+} from "@/shared/domain/mesh/meshBuildHistory";
 
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { formatCount } from "../MeshResourceView";
@@ -6,8 +9,10 @@ import { MeshBuildHistoryView } from "../MeshBuildHistoryView";
 
 export function MeshBuildHistorySection({
   entries,
+  onRestore,
 }: {
   entries: ReturnType<typeof normalizeMeshBuildHistory>;
+  onRestore?: (entry: MeshBuildHistoryEntry) => void;
 }) {
   return (
     <InspectorGroup
@@ -16,7 +21,7 @@ export function MeshBuildHistorySection({
       collapsible
       defaultOpen={entries.length > 0}
     >
-      <MeshBuildHistoryView entries={entries} />
+      <MeshBuildHistoryView entries={entries} onRestore={onRestore} />
     </InspectorGroup>
   );
 }

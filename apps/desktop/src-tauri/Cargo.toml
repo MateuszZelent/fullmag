@@ -8,12 +8,17 @@ publish = false
 tauri-build.workspace = true
 
 [dependencies]
+base64 = "0.22"
+fullmag-application = { path = "../../../crates/fullmag-application" }
 serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true
 tauri-plugin-dialog.workspace = true
 tauri-plugin-shell.workspace = true
 url = "2"
+
+[dev-dependencies]
+tempfile = "3"
 
 [[bin]]
 name = "fullmag-ui"

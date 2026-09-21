@@ -42,6 +42,11 @@ rather than silently substituting a host build.
 
 ### Why the current managed receipt mentions ext4
 
+Aktualizacja 2026-09-11: zatwierdzono osobną
+[bramkę właściwości storage](storage-capability-gate.md) dla nowej trasy
+Docker Desktop. Dostępna sonda sprawdza rzeczywiste operacje zamiast nazwy
+filesystemu; jej PASS nie jest jeszcze kwalifikacją managed FEM.
+
 `ext4` is not a meshing, FEM, or numerical-accuracy requirement. It is the
 storage policy of the current Linux managed-receipt exporter. The helper
 `scripts/lib/managed_fem_runtime_storage.sh` checks all of the following before

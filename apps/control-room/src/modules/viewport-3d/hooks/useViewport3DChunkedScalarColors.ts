@@ -276,6 +276,30 @@ export function chunkedScalarColorStateIsCompatible(
   );
 }
 
+/**
+ * Globalny klucz budowy kolorów skalarnych.
+ *
+ * LR-06: `shouldStartChunkedScalarColorBuild` przy niepustym kluczu porównuje
+ * wyłącznie klucze i ignoruje obiekt pola, więc klucz musi nieść tożsamość
+ * próbki. Bez tego nowa rewizja o niezmienionym trybie i zakresie nie startuje
+ * budowy i widok pokazuje nieaktualne kolory.
+ *
+ * Klucz prezentacyjny (`combinedDisplayModesKey`) celowo pozostaje bez
+ * tożsamości próbki, żeby nowa rewizja nie usuwała poprzedniego obrazu.
+ */
+export function buildViewport3DChunkedGlobalBuildKey({
+  fieldIdentity,
+  modesKey,
+  partModesKey,
+}: {
+  fieldIdentity: string;
+  modesKey: string;
+  partModesKey: string;
+}): string {
+  const base = partModesKey ? `${modesKey}||${partModesKey}` : modesKey;
+  return `${base}||field=${fieldIdentity}`;
+}
+
 export function shouldStartChunkedScalarColorBuild({
   builtBuildKey,
   builtFieldVector,
@@ -684,7 +708,6 @@ export function useViewport3DChunkedScalarColors({
       topology,
     ],
   );
-  const combinedModesKey = partModesKey ? `${modesKey}||${partModesKey}` : modesKey;
   const combinedDisplayModesKey = requestedPartDisplayModesKey
     ? `${displayModesKey}||${requestedPartDisplayModesKey}`
     : displayModesKey;
@@ -711,6 +734,13 @@ export function useViewport3DChunkedScalarColors({
   const needsChunking = primaryNeedsChunking || partBuildSpecs.length > 0;
   const buildIdentityFieldVector =
     fieldVector ?? partBuildSpecs[0]?.fieldVector ?? null;
+  const combinedModesKey = buildViewport3DChunkedGlobalBuildKey({
+    fieldIdentity: buildIdentityFieldVector
+      ? `${chunkedFieldVectorObjectId(buildIdentityFieldVector)}:${buildIdentityFieldVector.pointCount}`
+      : "none",
+    modesKey,
+    partModesKey,
+  });
   const eligibleForChunkedBuild =
     enabled &&
     ((Boolean(fieldVector) &&

@@ -127,6 +127,12 @@ describe("PhysicsInteractionPanelModel", () => {
     expect(
       draftFromStudyScene("rotated_interfacial_dmi", scene),
     ).toMatchObject({ enabled: false, present: false });
+    expect(
+      draftFromStudyScene("rotated_interfacial_dmi", {
+        ...scene,
+        study: { ...scene.study, rotated_interfacial_dmi: "0" },
+      } as unknown as SceneResource),
+    ).toMatchObject({ enabled: true, present: true, values: { d: "0" } });
   });
 
   it("rejects deferred backend terms before hitting the API", () => {

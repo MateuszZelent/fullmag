@@ -7,6 +7,7 @@ import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry"
 import {
   recordVisualizationDebugPerformanceMetric,
   recordVisualizationDebugResourceCounts,
+  recordVisualizationDebugRetentionRejection,
   recordVisualizationDebugViewportFrame,
 } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 import {
@@ -34,6 +35,7 @@ import {
   createDiagnosticRecordFromViewport3DGpuUploadDiagnostic,
   subscribeViewport3DGpuUploadDiagnostics,
 } from "./build-engine/gpu/viewport3dGpuUploadDiagnostics";
+import type { Viewport3DFieldIdentityMismatchReason } from "./viewport3dResources";
 
 export type Viewport3DResourceKind =
   | "geometry"
@@ -58,6 +60,7 @@ export interface Viewport3DResourceCounts {
   workerRuntimeWorkers?: number;
   contextLosses: number;
   contextRestores: number;
+  retentionRejections?: number;
 }
 
 export interface Viewport3DDiagnosticsInput {
@@ -94,6 +97,10 @@ export interface Viewport3DDiagnosticsInput {
   targetDiagnostics?: readonly Viewport3DTargetDiagnosticSummary[];
   topologyRevision: string | number | null;
   tracker: Viewport3DResourceCounts;
+  requestedRevision?: string | number | null;
+  receivedRevision?: string | number | null;
+  preparedRevision?: string | number | null;
+  displayedRevision?: string | number | null;
 }
 
 export interface Viewport3DPipelineDiagnosticSummary {
@@ -134,6 +141,15 @@ export type Viewport3DDirtyReasonCounts = Partial<
   Record<Viewport3DDirtyReason, number>
 >;
 
+export type Viewport3DRetentionRejectionReason =
+  | Viewport3DFieldIdentityMismatchReason
+  | "geometry"
+  | "retention-key";
+
+export type Viewport3DRetentionRejectionCounts = Partial<
+  Record<Viewport3DRetentionRejectionReason, number>
+>;
+
 const EMPTY_COUNTS: Viewport3DResourceCounts = {
   contextLosses: 0,
   contextRestores: 0,
@@ -145,6 +161,7 @@ const EMPTY_COUNTS: Viewport3DResourceCounts = {
   glyphCacheRetainedBytes: 0,
   materials: 0,
   renderTargets: 0,
+  retentionRejections: 0,
   textures: 0,
   workers: 0,
   workerRuntimeJobs: 0,
@@ -157,6 +174,10 @@ export class Viewport3DResourceTracker {
   private readonly disposables = new Map<object, () => void>();
   private readonly ledgerEntries = new Map<object, Viewport3DResourceLedgerEntry>();
   private readonly listeners = new Set<TrackerListener>();
+  private readonly retentionRejectionCounts = new Map<
+    Viewport3DRetentionRejectionReason,
+    number
+  >();
   private counts: Viewport3DResourceCounts = { ...EMPTY_COUNTS };
   private resourceSequence = 0;
 
@@ -268,6 +289,28 @@ export class Viewport3DResourceTracker {
     return counts;
   }
 
+  recordRetentionRejection(reason: Viewport3DRetentionRejectionReason): void {
+    this.retentionRejectionCounts.set(
+      reason,
+      (this.retentionRejectionCounts.get(reason) ?? 0) + 1,
+    );
+    this.counts = {
+      ...this.counts,
+      retentionRejections: (this.counts.retentionRejections ?? 0) + 1,
+    };
+    recordVisualizationDebugRetentionRejection(reason);
+  }
+
+  getRetentionRejectionCounts(): Viewport3DRetentionRejectionCounts {
+    return Object.fromEntries(this.retentionRejectionCounts);
+  }
+
+  consumeRetentionRejectionCounts(): Viewport3DRetentionRejectionCounts {
+    const counts = Object.fromEntries(this.retentionRejectionCounts);
+    this.retentionRejectionCounts.clear();
+    return counts;
+  }
+
   track<TResource extends DisposableResource>(
     kind: Viewport3DResourceKind,
     resource: TResource,
@@ -355,11 +398,13 @@ export class Viewport3DResourceTracker {
       dispose();
     }
     this.ledgerEntries.clear();
+    this.retentionRejectionCounts.clear();
     this.counts = {
       ...this.counts,
       geometries: 0,
       materials: 0,
       renderTargets: 0,
+      retentionRejections: 0,
       textures: 0,
       workers: 0,
     };
@@ -444,6 +489,7 @@ export function buildViewport3DDiagnostics(
     `top:${input.topologyRevision ?? "none"}`,
     `field:${input.fieldPayloadRevision ?? input.fieldRevision ?? "none"}`,
     ...formatFieldSyncDiagnostic(input),
+    ...formatFieldRevisionSyncDiagnostic(input),
     ...formatAirboxFieldVectorPartStates(input.airboxFieldVectorPartStates),
     ...(input.surfaceColorStatus
       ? [`surface:${input.surfaceColorStatus}`]
@@ -470,6 +516,9 @@ export function buildViewport3DDiagnostics(
     `glyph-cache:${input.tracker.glyphCacheEntries ?? 0}/${formatBytes(input.tracker.glyphCacheBytes ?? 0)}/${formatBytes(input.tracker.glyphCacheRetainedBytes ?? 0)}`,
     `worker-runtime:${input.tracker.workerRuntimeWorkers ?? 0}/${input.tracker.workerRuntimeTimers ?? 0}/${input.tracker.workerRuntimeJobs ?? 0}`,
     `frames:${input.tracker.frames}`,
+    ...((input.tracker.retentionRejections ?? 0) > 0
+      ? [`retention-rejections:${input.tracker.retentionRejections}`]
+      : []),
   ].join(" ");
 }
 
@@ -505,6 +554,24 @@ function formatFieldSyncDiagnostic(
   return [
     `field syncing r${input.fieldPayloadRevision} -> r${input.fieldRequestedRevision}`,
   ];
+}
+
+function formatFieldRevisionSyncDiagnostic(
+  input: Viewport3DDiagnosticsInput,
+): string[] {
+  if (
+    input.requestedRevision === undefined &&
+    input.receivedRevision === undefined &&
+    input.preparedRevision === undefined &&
+    input.displayedRevision === undefined
+  ) {
+    return [];
+  }
+  const req = input.requestedRevision ?? "none";
+  const rec = input.receivedRevision ?? "none";
+  const prep = input.preparedRevision ?? "none";
+  const disp = input.displayedRevision ?? "none";
+  return [`revs:req=${req}/rec=${rec}/prep=${prep}/disp=${disp}`];
 }
 
 function formatBuildFallbackDiagnostics(

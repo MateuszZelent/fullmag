@@ -475,6 +475,14 @@ pub(super) struct InteractiveRuntimeHost {
     multilayer_idle_snapshot: bool,
 }
 
+pub(super) struct PreparedInteractiveBase {
+    base_problem: ProblemIR,
+    runtime: Option<fullmag_runner::InteractiveRuntime>,
+    runtime_capable: bool,
+    dynamic_idle_preview_supported: bool,
+    multilayer_idle_snapshot: bool,
+}
+
 impl InteractiveRuntimeHost {
     pub(super) fn new(
         control: CurrentLiveDisplaySelectionHandle,
@@ -612,6 +620,50 @@ impl InteractiveRuntimeHost {
     pub(super) fn replace_base_problem(&mut self, base_problem: ProblemIR) {
         self.base_problem = base_problem;
         self.runtime = None;
+    }
+
+    /// Build the replacement privately. Failure must leave the retained runtime intact.
+    pub(super) fn prepare_base_problem(
+        base_problem: ProblemIR,
+        plan: &ExecutionPlanIR,
+    ) -> Result<PreparedInteractiveBase> {
+        let backend_plan = &plan.backend_plan;
+        let resolver = fullmag_runner::ObservationProviderResolver::from_backend_plan(backend_plan);
+        let runtime_capable = resolver.retains_idle_runtime();
+        let runtime = if runtime_capable {
+            Some(fullmag_runner::create_planned_interactive_runtime(
+                &base_problem,
+                plan,
+                None,
+            )?)
+        } else {
+            None
+        };
+        Ok(PreparedInteractiveBase {
+            dynamic_idle_preview_supported: supports_dynamic_idle_preview(
+                &base_problem,
+                backend_plan,
+            ),
+            multilayer_idle_snapshot: resolver.uses_deterministic_reconstruction(),
+            runtime_capable,
+            runtime,
+            base_problem,
+        })
+    }
+
+    pub(super) fn commit_base_problem(&mut self, candidate: PreparedInteractiveBase) {
+        self.base_problem = candidate.base_problem;
+        self.runtime = candidate.runtime;
+        self.runtime_capable = candidate.runtime_capable;
+        self.dynamic_idle_preview_supported = candidate.dynamic_idle_preview_supported;
+        self.multilayer_idle_snapshot = candidate.multilayer_idle_snapshot;
+        let mut preview = self
+            .preview_source
+            .lock()
+            .expect("preview source mutex poisoned");
+        preview.continuation_magnetization = None;
+        preview.status = InteractivePreviewStatus::AwaitingCommand;
+        preview.generation = preview.generation.saturating_add(1);
     }
 
     pub(super) fn handle_display_sync(
@@ -1145,6 +1197,7 @@ fn apply_step_stats_to_idle_live_state(
     state.live_state.latest_step.e_ext = step_stats.e_ext;
     state.live_state.latest_step.e_ani = step_stats.e_ani;
     state.live_state.latest_step.e_dmi = step_stats.e_dmi;
+    state.live_state.latest_step.e_rotated_dmi = step_stats.e_rotated_dmi;
     state.live_state.latest_step.e_total = step_stats.e_total;
     state.live_state.latest_step.max_dm_dt = step_stats.max_dm_dt;
     state.live_state.latest_step.max_h_eff = step_stats.max_h_eff;
@@ -1246,6 +1299,7 @@ mod tests {
                 final_e_ext: None,
                 final_e_ani: None,
                 final_e_dmi: None,
+                final_e_rotated_dmi: None,
                 final_e_total: None,
                 artifact_dir: "/tmp/artifacts".to_string(),
             },

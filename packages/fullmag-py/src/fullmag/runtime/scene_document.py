@@ -1111,6 +1111,31 @@ def _validate_dmi_scope_exclusivity(
         )
 
 
+def _validate_rotated_dmi_exchange_requirement(
+    rotated_interfacial_dmi: object,
+    exchange_enabled: object,
+) -> None:
+    """Reject a nonzero open-boundary rotated DMI term without study Exchange.
+
+    SceneDocument does not yet carry an explicit PBC declaration, therefore a
+    missing/false study switch is treated as an open-boundary authoring state.
+    The planner remains responsible for the fully-periodic exception once it
+    is represented in ProblemIR.
+    """
+    d = _number_or_none(rotated_interfacial_dmi)
+    if d is None or d == 0.0:
+        return
+    disabled = exchange_enabled is False or (
+        isinstance(exchange_enabled, str)
+        and exchange_enabled.strip().lower() == "false"
+    )
+    if disabled:
+        raise ValueError(
+            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange "
+            "for the coupled natural boundary condition"
+        )
+
+
 def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]:
     geometries = builder.get("geometries") or []
     objects: list[dict[str, Any]] = []
@@ -1211,6 +1236,10 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
     _validate_dmi_scope_exclusivity(
         objects,
         builder.get("rotated_interfacial_dmi"),
+    )
+    _validate_rotated_dmi_exchange_requirement(
+        builder.get("rotated_interfacial_dmi"),
+        builder.get("exchange_enabled", True),
     )
 
     raw_current_modules = builder.get("current_modules") or []
@@ -1323,6 +1352,14 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         if isinstance(raw_study, Mapping)
         else None,
         materials=materials,
+    )
+    _validate_rotated_dmi_exchange_requirement(
+        raw_study.get("rotated_interfacial_dmi")
+        if isinstance(raw_study, Mapping)
+        else None,
+        raw_study.get("exchange_enabled", True)
+        if isinstance(raw_study, Mapping)
+        else True,
     )
     magnetization_assets = {
         str(asset.get("id", "")): dict(asset)

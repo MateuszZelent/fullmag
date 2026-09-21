@@ -26,6 +26,8 @@ interface RealtimeClientOptions {
   bridge: RealtimeBridge;
   createSocket?: (url: string, protocol: string) => RealtimeWebSocketLike;
   diagnostics?: RequestDiagnosticsController;
+  /** Called after an already-established socket connects again. */
+  onReconnected?: () => void;
   onStatusChange?: (status: RealtimeConnectionStatus) => void;
   scheduleReconnect?: (callback: () => void, delayMs: number) => () => void;
   url: string;
@@ -36,6 +38,7 @@ export type RealtimeConnectionStatus =
 
 export class RealtimeClient {
   private closedByClient = false;
+  private hasConnected = false;
   private lastSeenSeq: number | null = null;
   private reconnectCancel: (() => void) | null = null;
   private socket: RealtimeWebSocketLike | null = null;
@@ -53,7 +56,12 @@ export class RealtimeClient {
     }
   };
   private readonly handleOpen = () => {
+    const reconnected = this.hasConnected;
+    this.hasConnected = true;
     this.notifyStatus("connected");
+    if (reconnected) {
+      this.options.onReconnected?.();
+    }
   };
   private readonly handleMessage = (event: MessageEventLike) => {
     const byteLength = byteLengthFromText(event.data);
@@ -135,6 +143,7 @@ export class RealtimeClient {
 
   close(): void {
     this.closedByClient = true;
+    this.hasConnected = false;
     this.reconnectCancel?.();
     this.reconnectCancel = null;
     if (!this.socket) {

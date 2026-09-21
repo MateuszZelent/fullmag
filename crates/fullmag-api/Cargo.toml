@@ -27,6 +27,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 fullmag-authoring = { path = "../fullmag-authoring" }
+fullmag-application = { path = "../fullmag-application" }
 fullmag-ir = { path = "../fullmag-ir" }
 fullmag-plan = { path = "../fullmag-plan" }
 fullmag-quantities = { path = "../fullmag-quantities" }

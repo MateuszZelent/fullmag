@@ -18,9 +18,9 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 resolver="${repo_root}/scripts/fullmag_storage.py"
 python_cmd=""
-if command -v python3 >/dev/null 2>&1; then
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; assert sys.version_info.major == 3' >/dev/null 2>&1; then
   python_cmd="$(command -v python3)"
-elif command -v python >/dev/null 2>&1; then
+elif command -v python >/dev/null 2>&1 && python -c 'import sys; assert sys.version_info.major == 3' >/dev/null 2>&1; then
   python_cmd="$(command -v python)"
 else
   echo "[fullmag just] Python is required for the storage resolver" >&2
@@ -55,6 +55,74 @@ if [[ "${recipe}" == *"fullmag_storage.py"* &&
 fi
 case "${recipe}" in
   *"just --list"*|*"just --list --"*) exec bash -euo pipefail -c "${recipe}" ;;
+esac
+
+# Read-only capability matrix validation has no mutable project path. Keep it
+# outside compatibility-link preparation, just like the fixed Rust routes.
+case "${recipe}" in
+  *"scripts/validate_mixed_p1_capability_contract.py"*|*"scripts.test_validate_mixed_p1_capability_contract"*)
+    exec bash -euo pipefail -c "${recipe}"
+    ;;
+esac
+
+# Runner actions own their storage preflight and per-job/per-worktree locks.
+# Holding the generic worktree lock while `wait` polls would prevent the
+# coordinator from executing that same worktree's queued job.
+case "${recipe}" in
+  *"test_local_runner_"*|*"scripts/tests/local_runner"*|*"test_storage_capabilities.py"*)
+    "${python_cmd}" "${resolver}" resolve --repo-root "${repo_root}" >/dev/null
+    export PYTHONDONTWRITEBYTECODE=1
+    exec bash -euo pipefail -c "${recipe}"
+    ;;
+  *"scripts/local_runner/Dockerfile.coordinator"*|*"scripts/local_runner/Dockerfile.build"*)
+    "${python_cmd}" "${resolver}" resolve --repo-root "${repo_root}" >/dev/null
+    exec bash -euo pipefail -c "${recipe}"
+    ;;
+  *"scripts/local_runner_cli.py"*)
+    FULLMAG_STORAGE_PYTHON="${python_cmd}" exec bash -euo pipefail -c "${recipe}"
+    ;;
+esac
+
+# These plain-Rust package routes have fixed commands and own their resolver
+# paths/lock inside the dedicated helper. Do not run the generic compatibility-
+# link or heavy-build wrapper for them.
+case "${recipe}" in
+  *"scripts/verify_project_entrypoint_runtime.py"*)
+    exec "${python_cmd}" "${script_dir}/verify_project_entrypoint_runtime.py" --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_project_python_runtime.py"*)
+    exec "${python_cmd}" "${script_dir}/verify_project_python_runtime.py" --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_project_api_runtime.py"*)
+    if [[ "${recipe}" == *"--include-websocket"* ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_project_api_runtime.py" --include-websocket --repo-root "${repo_root}"
+    fi
+    exec "${python_cmd}" "${script_dir}/verify_project_api_runtime.py" --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_project_active_run_runtime.py"*)
+    exec "${python_cmd}" "${script_dir}/verify_project_active_run_runtime.py" --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route project-application-check"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route project-application-check --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route project-application-test"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route project-application-test --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route project-entrypoint-check"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route project-entrypoint-check --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route fem-capability-contract"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route fem-capability-contract --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--repo-root"*)
+    if [[ "${recipe}" == *"prepare-links"* || "${recipe}" == *"fullmag_storage.py"* || "${recipe}" == *"cargo test"* ]]; then
+      echo "[fullmag just] invalid session persistence recipe body" >&2
+      exit 2
+    fi
+    # Do not evaluate the recipe text here: a composite recipe must never be
+    # able to smuggle a second command around the generic storage guard.
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --repo-root "${repo_root}"
+    ;;
 esac
 
 # The Windows PowerShell launchers select their own storage profile and hold
@@ -94,5 +162,11 @@ esac
 # boundary: the runner resolves the same environment and holds the per-
 # worktree OS lock until every nested bash/docker/cargo command has finished.
 # Its owner token is inherited by nested `just` calls, which are reentrant.
+shell_cmd="$(command -v bash)"
+if is_windows_shell; then
+  # Native Python resolves an unqualified `bash` independently of Git Bash
+  # and can select the Windows WSL launcher. Preserve this exact shell.
+  shell_cmd="$(cygpath -w "${shell_cmd}")"
+fi
 exec "${python_cmd}" "${resolver}" run --repo-root "${repo_root}" -- \
-  bash -euo pipefail -c "${recipe}"
+  "${shell_cmd}" -euo pipefail -c "${recipe}"

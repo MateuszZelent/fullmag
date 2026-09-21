@@ -1973,7 +1973,7 @@ mod tests {
         merge_pending_publish_payload, merge_preview_field_payloads,
         publish_idle_liveness_heartbeat, publish_pending_scalar_rows,
         replace_cached_preview_fields, reset_fem_mesh_payload_clone_count,
-        scalar_candidate_from_workspace_state, table_autosave_sample_due,
+        scalar_candidate_from_workspace_state, scalar_row_from_stats, table_autosave_sample_due,
         upsert_cached_preview_field, CurrentLivePublisher, CurrentLiveScalarRow,
         CurrentLiveSnapshotPayload, LivePublishSink, LiveTelemetryPublishGate, LocalLiveWorkspace,
         LocalLiveWorkspaceState, PendingScalarRows, ScalarSequenceKey,
@@ -2019,6 +2019,18 @@ mod tests {
         assert!(heartbeat.latest_fields.is_none());
         assert!(heartbeat.preview_fields.is_none());
         assert!(heartbeat.fem_mesh.is_none());
+    }
+
+    #[test]
+    fn scalar_row_transport_preserves_rotated_dmi_energy() {
+        let mut stats = fullmag_runner::StepStats::default();
+        stats.e_dmi = -2.0e-19;
+        stats.e_rotated_dmi = 1.5e-19;
+
+        let row = scalar_row_from_stats(&stats);
+
+        assert_eq!(row.e_dmi, -2.0e-19);
+        assert_eq!(row.e_rotated_dmi, 1.5e-19);
     }
 
     #[test]
@@ -2647,6 +2659,7 @@ mod tests {
                     final_e_ext: None,
                     final_e_ani: None,
                     final_e_dmi: None,
+                    final_e_rotated_dmi: None,
                     final_e_total: None,
                     artifact_dir: String::new(),
                 },
@@ -4690,6 +4703,7 @@ mod tests {
             e_ext: 0.0,
             e_ani: 0.0,
             e_dmi: 0.0,
+            e_rotated_dmi: 0.0,
             e_total: step as f64,
             max_dm_dt: 0.0,
             max_h_eff: 0.0,
@@ -5015,6 +5029,7 @@ mod tests {
             final_e_ext: None,
             final_e_ani: None,
             final_e_dmi: None,
+            final_e_rotated_dmi: None,
             final_e_total: None,
             artifact_dir: String::new(),
         });
@@ -5612,6 +5627,7 @@ pub(crate) fn bootstrap_live_state(status: &str) -> LiveStateManifest {
             e_ext: 0.0,
             e_ani: 0.0,
             e_dmi: 0.0,
+            e_rotated_dmi: 0.0,
             e_total: 0.0,
             max_dm_dt: 0.0,
             max_h_eff: 0.0,
@@ -5672,6 +5688,7 @@ fn scalar_row_from_stats_with_active_runtime(
         e_ext: stats.e_ext,
         e_ani: stats.e_ani,
         e_dmi: stats.e_dmi,
+        e_rotated_dmi: stats.e_rotated_dmi,
         e_total: stats.e_total,
         max_dm_dt: stats.max_dm_dt,
         max_h_eff: stats.max_h_eff,
@@ -6497,6 +6514,7 @@ pub(crate) fn merge_detailed_mesh_workspace(
         .expect("planned mesh workspace should be an object");
     for key in [
         "active_build",
+        "command_outcomes",
         "effective_airbox_target",
         "effective_per_object_targets",
         "last_build_summary",

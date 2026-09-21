@@ -101,6 +101,33 @@ algorytmicznego; `ExactResume` wymaga pełnego checkpointu wszystkich nośników
 waliduje integralność i buduje kandydacki runtime, a następnie wykonuje dokładnie
 jeden atomowy swap. Porażka pozostawia aktywną sesję bez zmian.
 
+### D-07a. `OpenDocument` nie jest `RestoreRuntime`
+
+Otwarcie dokumentu CAE jest operacją authoringową. `OpenDocument` odczytuje i
+waliduje manifest, schema, definicje, studies oraz zachowane nieznane pola i
+asset references. Może otworzyć niekompletny draft bez GPU, meshera i solwera.
+Nie wykonuje kodu skryptu, nie uruchamia `PreparationPlan`, nie buduje mesha,
+nie wywołuje `Compute` i nie zmienia `LiveRuntime` bieżącej sesji.
+
+`OpenDocument` może utworzyć nowy kontekst dokumentu albo read-only projection
+do istniejącej sesji, ale nie nadaje dokumentowi prawa do publikowania wyniku.
+Hostowe ścieżki build storage, cache i runtime nie są częścią tożsamości
+otwieranego dokumentu.
+
+### D-07b. Jawny `RestoreRuntime`
+
+Odtworzenie runtime'u jest odrębną, jawnie żądaną operacją. Wymaga wybranego
+checkpointu, klasy restore i zgodności wszystkich primary carriers, integratora,
+RNG, domeny, planu, ABI, precision oraz engine/runtime identity. Operacja buduje
+kandydacki `LiveRuntime` poza aktywnym runtime'em i wykonuje jeden atomowy swap
+tylko po pełnej walidacji. Brak wymaganej części daje typed error i nie zmienia
+aktywnego runtime'u.
+
+`LogicalResume` tworzy nową gałąź z jawną utratą stanu algorytmicznego; nie jest
+ukrytym `ExactResume`. `ExactResume` jest dostępny wyłącznie dla checkpointu,
+który przechowuje wymagany stan kontynuacji i pasuje do bieżącego kontraktu.
+`OpenDocument` nie może samoczynnie awansować do żadnej z tych klas.
+
 ### D-08. Fail-closed zamiast rekonstrukcji
 
 Brak primary carriera daje `unsupported_missing_primary_state` z listą braków,
@@ -143,6 +170,8 @@ pola jako nowego.
   drugi codec.
 - Availability zależy od katalogu, fizyki, planu, lane'u i primary carriers,
   nie od materialization/cache.
+- Otwarcie dokumentu, przygotowanie obliczenia i restore runtime'u są osobnymi
+  use case'ami oraz osobnymi punktami provenance.
 - Source presence, executability, validation i production qualification są
   raportowane osobno. Task 0 nie promuje żadnej capability.
 
@@ -170,7 +199,9 @@ autosave descriptors, zasoby HTTP v2 i transakcyjne `.fms`. Stare komendy są
 aliasami wyłącznie do czasu migracji wszystkich klientów; kryterium usunięcia
 to brak konsumentów oraz przejście contract guards. Rollback implementacji nie
 może przywrócić eager terminal-all-fields jako kontraktu ani historycznego
-swapu `LiveRuntime`.
+swapu `LiveRuntime`. Reader `OpenDocument` może zostać wdrożony przed writerem
+i przed `RestoreRuntime`; rollback nie może zamienić otwarcia dokumentu w
+niejawny restore ani uruchomić solvera.
 
 ## Testy i walidacja
 

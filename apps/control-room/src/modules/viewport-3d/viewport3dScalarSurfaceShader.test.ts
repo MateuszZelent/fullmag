@@ -1,10 +1,8 @@
 import { readFileSync } from "node:fs";
-import { BufferGeometry } from "three";
 import { describe, expect, it } from "vitest";
 
 import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
 import {
-  applyScalarShaderColorBuffer,
   canApplyScalarShaderColorBuffer,
   createScalarSurfaceShaderMaterial,
   scalarSurfaceShaderVariantKey,
@@ -55,60 +53,19 @@ function complexBuffer(): ScalarColorBuffer {
 }
 
 describe("viewport3dScalarSurfaceShader", () => {
-  it("applies scalar-value attributes for GPU palette coloring", () => {
-    const geometry = new BufferGeometry();
-    const buffer = scalarBuffer([0, 1, 2]);
-
-    expect(canApplyScalarShaderColorBuffer(buffer, 3)).toBe(true);
-    expect(applyScalarShaderColorBuffer(geometry, buffer, 3)).toBe(true);
+  it("validates whether scalar shader color buffer can be applied", () => {
+    expect(canApplyScalarShaderColorBuffer(scalarBuffer([0, 1, 2]), 3)).toBe(true);
     expect(
-      Array.from(
-        geometry.getAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE).array,
+      canApplyScalarShaderColorBuffer(
+        orientationBuffer([
+          1, 0, 0,
+          0, 0, 1,
+        ]),
+        2,
       ),
-    ).toEqual([0, 1, 2]);
-  });
-
-  it("applies vector-value attributes for GPU orientation coloring", () => {
-    const geometry = new BufferGeometry();
-    const buffer = orientationBuffer([
-      1, 0, 0,
-      0, 0, 1,
-    ]);
-
-    expect(canApplyScalarShaderColorBuffer(buffer, 2)).toBe(true);
-    expect(applyScalarShaderColorBuffer(geometry, buffer, 2)).toBe(true);
-    expect(
-      Array.from(
-        geometry.getAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE).array,
-      ),
-    ).toEqual([
-      1, 0, 0,
-      0, 0, 1,
-    ]);
-  });
-
-  it("applies complex-value attributes for shader-side mode phase projection", () => {
-    const geometry = new BufferGeometry();
-    const buffer = complexBuffer();
-
-    expect(canApplyScalarShaderColorBuffer(buffer, 2)).toBe(true);
-    expect(applyScalarShaderColorBuffer(geometry, buffer, 2)).toBe(true);
-    expect(
-      Array.from(
-        geometry.getAttribute(VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE).array,
-      ),
-    ).toEqual([
-      1, 0, 0,
-      0, 1, 0,
-    ]);
-    expect(
-      Array.from(
-        geometry.getAttribute(VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE).array,
-      ),
-    ).toEqual([
-      0, 1, 0,
-      0, 0, 1,
-    ]);
+    ).toBe(true);
+    expect(canApplyScalarShaderColorBuffer(complexBuffer(), 2)).toBe(true);
+    expect(canApplyScalarShaderColorBuffer(null, 3)).toBe(false);
   });
 
   it("creates a shader material with scalar range and palette uniforms", () => {
@@ -167,6 +124,9 @@ describe("viewport3dScalarSurfaceShader", () => {
     expect(material.uniforms.fmColorModeId.value).toBe(2);
     expect(material.vertexShader).toContain(
       VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE,
+    );
+    expect(material.vertexShader).toContain(
+      VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE,
     );
     expect(material.vertexShader).toContain("scalarFromVector");
     material.dispose();

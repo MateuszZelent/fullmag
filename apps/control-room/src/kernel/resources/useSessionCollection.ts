@@ -17,6 +17,18 @@ export function resolveSessionCollectionState(
   return collection.sessions.length > 0 ? "ready" : "no-session";
 }
 
+/**
+ * Keep a confirmed collection authoritative while a later refresh is failing.
+ * The resource retains its last data on refresh errors; dropping the shell in
+ * that state would turn a transport interruption into a destructive UI reset.
+ */
+export function resolveSessionCollectionResourceState(
+  resource: Pick<ResourceResult<SessionListResource>, "data" | "status">,
+): SessionCollectionState {
+  if (resource.data) return resolveSessionCollectionState(resource.data);
+  return resource.status === "error" ? "error" : "loading";
+}
+
 export function useSessionCollection(): {
   readonly resource: ResourceResult<SessionListResource>;
   readonly state: SessionCollectionState;
@@ -31,12 +43,7 @@ export function useSessionCollection(): {
     resolveRevision: () => null,
     resourceKey: SESSIONS_PATH,
   });
-  const state =
-    resource.status === "error"
-      ? "error"
-      : resource.data
-        ? resolveSessionCollectionState(resource.data)
-        : "loading";
+  const state = resolveSessionCollectionResourceState(resource);
 
   return { resource, state };
 }

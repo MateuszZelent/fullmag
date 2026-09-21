@@ -254,7 +254,14 @@ jobs:
       - name: Install Python package
         run: |
           python -m pip install 'pytest>=9,<10'
-          python -m pip install -e 'packages/fullmag-py[meshing]'
+          python -m pip install -e 'packages/fullmag-py[meshing,figures]'
+
+      - name: Run Göbel 2019 bimeron reproducibility contracts
+        run: >-
+          python -m pytest -q
+          tests/standard_problems/bimeron/goebel_2019/test_verify.py
+          tests/standard_problems/bimeron/goebel_2019/test_contract.py
+          scripts/test_render_goebel_2019_bimeron_figure.py
 
       - name: Run Python API tests
         run: python -m unittest discover -s packages/fullmag-py/tests -p 'test_api.py' -v

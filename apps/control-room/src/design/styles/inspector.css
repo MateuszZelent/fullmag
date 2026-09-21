@@ -685,6 +685,21 @@
   gap: var(--fm-space-1);
 }
 
+.fm-inspector__header-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--fm-space-1);
+}
+
+.fm-inspector__panel-toggle {
+  color: var(--fm-text-muted);
+}
+
+.fm-inspector__panel-toggle:hover {
+  color: var(--fm-text-primary);
+}
+
 .fm-inspector__options-button {
   flex: 0 0 auto;
   opacity: 0.5;

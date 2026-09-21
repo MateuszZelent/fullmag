@@ -2105,6 +2105,33 @@ pub(crate) fn validate_dmi_energy_terms(problem: &ProblemIR, errors: &mut Vec<St
             _ => {}
         }
     }
+    // Material-derived DMI is part of the same executable Hamiltonian as
+    // explicit energy terms. Count only materials referenced by a magnet:
+    // dormant material records must not change the semantics of the active
+    // Hamiltonian or make an otherwise valid rotated-DMI plan fail closed.
+    let referenced_materials = problem
+        .magnets
+        .iter()
+        .map(|magnet| magnet.material.as_str())
+        .collect::<BTreeSet<_>>();
+    for material in &problem.materials {
+        if !referenced_materials.contains(material.name.as_str()) {
+            continue;
+        }
+        if material.interfacial_dmi.is_some()
+            || material.bulk_dmi.is_some()
+            || material
+                .dind_field
+                .as_ref()
+                .is_some_and(|values| !values.is_empty())
+            || material
+                .dbulk_field
+                .as_ref()
+                .is_some_and(|values| !values.is_empty())
+        {
+            conventional_dmi_count += 1;
+        }
+    }
     if rotated_interfacial_dmi_count > 1 {
         errors.push("at most one rotated_interfacial_dmi energy term is supported".to_string());
     }

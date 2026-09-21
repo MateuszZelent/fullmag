@@ -34,6 +34,15 @@ void check_error_contains(fullmag_fdm_backend *handle, const char *needle) {
     check(std::strstr(message, needle) != nullptr, message);
 }
 
+fullmag_fdm_execution_receipt_v2 execution_receipt(fullmag_fdm_backend *handle) {
+    fullmag_fdm_execution_receipt_v2 receipt{};
+    receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2;
+    receipt.struct_size = sizeof(receipt);
+    check(fullmag_fdm_backend_execution_receipt_v2(handle, &receipt) == FULLMAG_FDM_OK,
+          "execution receipt query failed");
+    return receipt;
+}
+
 void check_close(double actual, double expected, double tolerance, const char *msg) {
     if (std::fabs(actual - expected) > tolerance) {
         std::fprintf(stderr, "FAIL: %s (actual=%g expected=%g)\n", msg, actual, expected);
@@ -269,6 +278,11 @@ void rotated_dmi_setter_rolls_back_failed_refresh() {
             }
             check(changed, "rollback fixture did not exercise a nontrivial field mutation");
             if (mutation == 2) {
+                const auto receipt = execution_receipt(handle);
+                check((receipt.required_operator_mask & FULLMAG_FDM_OPERATOR_DMI) == 0,
+                      "disabling rotated DMI must remove the stale DMI receipt requirement");
+                check((receipt.executed_unknown_operator_mask & FULLMAG_FDM_OPERATOR_DMI) == 0,
+                      "disabling rotated DMI must not leave an unknown executed operator");
                 for (uint32_t layer = 0; layer < 2; ++layer) {
                     double rotated[9]{};
                     check(fullmag_fdm_backend_copy_layer_field_f64(

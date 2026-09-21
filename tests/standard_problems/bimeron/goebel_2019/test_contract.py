@@ -55,6 +55,33 @@ def test_common_parameters_match_goebel_2019_supplement_table_i() -> None:
     assert values["LLG_HOLD_TIME"] == 1e-10
 
 
+def test_device_selection_keeps_fdm_gpu_default_and_rejects_fem_gpu(
+    monkeypatch,
+) -> None:
+    from tests.standard_problems.bimeron.goebel_2019.common import (
+        requested_device,
+        requested_fem_device,
+    )
+
+    monkeypatch.delenv("FULLMAG_GOEBEL_DEVICE", raising=False)
+    assert requested_device() == "gpu"
+    assert requested_fem_device() == "cpu"
+
+    monkeypatch.setenv("FULLMAG_GOEBEL_DEVICE", "cpu")
+    assert requested_device() == "cpu"
+    assert requested_fem_device() == "cpu"
+
+    monkeypatch.setenv("FULLMAG_GOEBEL_DEVICE", "gpu")
+    try:
+        requested_fem_device()
+    except ValueError as exc:
+        message = str(exc)
+        assert "mixed-topology rotated-DMI" in message
+        assert "without a CPU fallback" in message
+    else:
+        raise AssertionError("FEM GPU must be rejected before domain-mesh build")
+
+
 def test_fdm_scenario_is_strict_fp64_periodic_x_with_relax_and_hold() -> None:
     module = _module("scenario_fdm.py")
     source = ast.unparse(module)
@@ -73,6 +100,7 @@ def test_fdm_scenario_is_strict_fp64_periodic_x_with_relax_and_hold() -> None:
     assert "dt=LLG_DT" in source
     assert "vorticity=-1" in source
     assert "max_physical_time_s=RELAX_TIME" in source
+    assert "relax_alpha=ALPHA" in source
     assert len(_calls(module, "add_run")) == 1
     assert "until=HOLD_TIME" in source
     assert len(_calls(module, "add_save_state")) == 2
@@ -83,6 +111,7 @@ def test_fem_scenario_preserves_one_exact_prism_layer_and_open_boundary() -> Non
     source = ast.unparse(module)
     assert "study.engine('fem')" in source
     assert "study.device(REQUESTED_DEVICE, precision='double')" in source
+    assert "requested_fem_device()" in source
     assert "study.mode('strict')" in source
     assert "study.pbc(" not in source
     assert "film.Aex = AEX" in source
@@ -99,6 +128,7 @@ def test_fem_scenario_preserves_one_exact_prism_layer_and_open_boundary() -> Non
     assert "dt=LLG_DT" in source
     assert "vorticity=-1" in source
     assert "max_physical_time_s=RELAX_TIME" in source
+    assert "relax_alpha=ALPHA" in source
     assert len(_calls(module, "add_run")) == 1
     assert "until=HOLD_TIME" in source
     assert len(_calls(module, "add_save_state")) == 2
@@ -116,3 +146,22 @@ def test_thresholds_are_source_frozen() -> None:
         "fem_cpu_gpu_fp64_residual_rtol": 5e-11,
         "fp32_field_rtol": 3e-5,
     }
+
+
+def test_source_physics_rejects_extra_uniaxial_and_cubic_channels() -> None:
+    from tests.standard_problems.bimeron.goebel_2019.verify import (
+        _goebel_material_has_only_expected_physics,
+    )
+
+    material = {
+        "name": "Py",
+        "saturation_magnetisation": 0.58e6,
+        "exchange_stiffness": 15e-12,
+        "damping": 0.3,
+        "uniaxial_anisotropy_ku1": 0.8e6,
+        "anisotropy_axis": [1.0, 0.0, 0.0],
+    }
+    assert _goebel_material_has_only_expected_physics(material)
+    for extra_key in ("uniaxial_anisotropy_ku2", "cubic_anisotropy_kc1"):
+        with_extra = {**material, extra_key: 1.0}
+        assert not _goebel_material_has_only_expected_physics(with_extra)

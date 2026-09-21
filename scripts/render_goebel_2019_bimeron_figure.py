@@ -14,8 +14,32 @@ from PIL import Image, ImageDraw, ImageFont
 
 STATE_PATHS = (
     ("Initial state", "stages/stage_00_flat_relax/m_initial.json"),
-    ("Relaxed · 20 ps", "stages/stage_00_flat_relax/m_final.json"),
-    ("Held · 120 ps", "stages/stage_02_flat_run/m_final.json"),
+    ("Relaxed", "stages/stage_00_flat_relax/m_final.json"),
+    ("Held", "stages/stage_02_flat_run/m_final.json"),
+)
+VERIFICATION_SCHEMA_VERSION = "goebel-bimeron-verification.v1"
+VERIFICATION_CHECK_NAMES = frozenset(
+    {
+        "strict_fp64_cuda",
+        "no_fallback",
+        "device_receipt_validated",
+        "source_geometry",
+        "source_physics",
+        "hold_starts_from_relaxed_state",
+        "hold_provenance_matches_relax",
+        "energy_decreased",
+        "initial_charge",
+        "relaxed_charge",
+        "held_charge",
+        "charge_sign_preserved",
+        "two_relaxed_cores",
+        "two_held_cores",
+        "background_preserved",
+        "cores_resolved",
+        "cores_inside_central_80_percent",
+        "relax_duration",
+        "hold_duration",
+    }
 )
 
 COLOR_STOPS = np.asarray(
@@ -39,6 +63,12 @@ def _font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFon
 
 def _load_state(path: Path) -> dict[str, object]:
     payload = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        time_s = float(payload["time"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"state time is missing or not numeric in {path}") from exc
+    if not math.isfinite(time_s) or time_s < 0.0:
+        raise ValueError(f"state time must be finite and non-negative in {path}")
     layout = payload["layout"]
     nx, ny, nz = (int(value) for value in layout["grid_cells"])
     if nz != 1:
@@ -49,6 +79,7 @@ def _load_state(path: Path) -> dict[str, object]:
     cell = np.asarray(layout["cell_size"], dtype=np.float64)
     origin = np.asarray(layout["origin_m"], dtype=np.float64)
     return {
+        "time_s": time_s,
         "m": values.reshape(ny, nx, 3),
         "extent_nm": np.array(
             [origin[0], origin[0] + nx * cell[0], origin[1], origin[1] + ny * cell[1]]
@@ -56,6 +87,36 @@ def _load_state(path: Path) -> dict[str, object]:
         * 1.0e9,
         "cell_nm": cell[:2] * 1.0e9,
     }
+
+
+def _format_time_ps(time_s: float) -> str:
+    if not math.isfinite(time_s) or time_s < 0.0:
+        raise ValueError("figure time must be finite and non-negative")
+    return f"{time_s * 1.0e12:.6g}"
+
+
+def _state_titles(states: list[dict[str, object]]) -> tuple[str, ...]:
+    if len(states) != len(STATE_PATHS):
+        raise ValueError("figure requires initial, relaxed, and held states")
+    try:
+        return tuple(
+            f"{label} · {_format_time_ps(float(state['time_s']))} ps"
+            for (label, _), state in zip(STATE_PATHS, states)
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("figure state time is missing or not numeric") from exc
+
+
+def _stage_duration_ps(initial_state: dict[str, object], final_state: dict[str, object]) -> str:
+    try:
+        initial_time_s = float(initial_state["time_s"])
+        final_time_s = float(final_state["time_s"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("figure state time is missing or not numeric") from exc
+    duration_s = final_time_s - initial_time_s
+    if not math.isfinite(duration_s) or duration_s < 0.0:
+        raise ValueError("figure stage duration must be finite and non-negative")
+    return _format_time_ps(duration_s)
 
 
 def _core_indices(magnetization: np.ndarray) -> tuple[tuple[int, int], tuple[int, int]]:
@@ -165,21 +226,40 @@ def _draw_colorbar(canvas: Image.Image, draw: ImageDraw.ImageDraw) -> None:
     draw.text((2895, 920), "m_z", font=_font(21), fill="#334155")
 
 
+def _validate_verification_report(report: object) -> dict[str, object]:
+    if not isinstance(report, dict):
+        raise ValueError("verification report must be a JSON object")
+    if report.get("schema_version") != VERIFICATION_SCHEMA_VERSION:
+        raise ValueError("verification report schema is unsupported")
+    checks = report.get("checks")
+    if not isinstance(checks, dict) or set(checks) != VERIFICATION_CHECK_NAMES:
+        raise ValueError("verification report check set is incomplete or unexpected")
+    if report.get("check_count") != len(VERIFICATION_CHECK_NAMES):
+        raise ValueError("verification report check count is invalid")
+    if any(value is not True for value in checks.values()):
+        raise ValueError("verification report contains a failed verification gate")
+    return report
+
+
 def render_figure(bundle: Path, verification_report: Path, output: Path) -> None:
-    report = json.loads(verification_report.read_text(encoding="utf-8"))
+    report = _validate_verification_report(
+        json.loads(verification_report.read_text(encoding="utf-8"))
+    )
     if report.get("status") != "passed":
         raise ValueError("figure generation requires a passed verification report")
     expected_hashes = report.get("verified_state_sha256")
     if not isinstance(expected_hashes, dict):
         raise ValueError("verification report does not bind the rendered state files")
     hash_keys = ("initial", "relaxed", "held")
-    states = []
-    for (title, relative), hash_key in zip(STATE_PATHS, hash_keys):
+    loaded_states = []
+    for (_, relative), hash_key in zip(STATE_PATHS, hash_keys):
         state_path = bundle / relative
         actual_hash = hashlib.sha256(state_path.read_bytes()).hexdigest()
         if expected_hashes.get(hash_key) != actual_hash:
             raise ValueError(f"verification report state hash mismatch for {relative}")
-        states.append((title, _load_state(state_path)))
+        loaded_states.append(_load_state(state_path))
+    titles = _state_titles(loaded_states)
+    states = list(zip(titles, loaded_states))
 
     canvas = Image.new("RGB", (3000, 1700), "#f8fafc")
     draw = ImageDraw.Draw(canvas, "RGBA")
@@ -224,7 +304,7 @@ def render_figure(bundle: Path, verification_report: Path, output: Path) -> None
 
     draw.text(
         (105, 1632),
-        "500 × 40 × 0.5 nm³ · D = 3 mJ m⁻² · 20 ps relaxation + 100 ps zero-current hold · color: m_z · arrows: in-plane m",
+        f"500 × 40 × 0.5 nm³ · D = 3 mJ m⁻² · {_stage_duration_ps(loaded_states[0], loaded_states[1])} ps relaxation + {_stage_duration_ps(loaded_states[1], loaded_states[2])} ps zero-current hold · color: m_z · arrows: in-plane m",
         font=_font(21),
         fill="#475569",
     )

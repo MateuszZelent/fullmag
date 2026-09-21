@@ -30,6 +30,8 @@ export interface ScalarTableChartInput {
   tableId?: string;
   xAxisId?: string;
   yAxisIds?: readonly string[];
+  /** Split-pane consumers can display every unit family on its own physical axis. */
+  unitLayout?: "dual-axis" | "split-panes";
 }
 
 const DEFAULT_X_AXIS_COLUMN_ID = "step";
@@ -41,9 +43,10 @@ export function buildScalarTableSeries({
   tableId = "default",
   xAxisId = DEFAULT_X_AXIS_COLUMN_ID,
   yAxisIds,
+  unitLayout = "dual-axis",
 }: ScalarTableChartInput): ChartSeries[] {
   const columnIds = table.columns.map((column) => column.column_id);
-  const resolvedXAxisId = resolveXAxisId(columnIds, xAxisId);
+  const resolvedXAxisId = resolveScalarTableXAxisId(columnIds, xAxisId);
   const xColumnIndex = columnIds.indexOf(resolvedXAxisId);
   const xColumn = table.columns[xColumnIndex];
   const yAxisIdSet = new Set(
@@ -54,7 +57,9 @@ export function buildScalarTableSeries({
     yAxisIdSet.has(column.column_id),
   );
   const allowedColumnIds = new Set(
-    groupSeriesByUnit(yColumns).flatMap((group) => group.columnIds),
+    unitLayout === "split-panes"
+      ? yColumns.map((column) => column.column_id)
+      : groupSeriesByUnit(yColumns).flatMap((group) => group.columnIds),
   );
   const source: AnalysisChartResourceRef = {
     kind: "data.table.rows",
@@ -134,7 +139,7 @@ function tableValueAt(
     : table.rows?.[rowIndex]?.[columnIndex];
 }
 
-function resolveXAxisId(columnIds: readonly string[], xAxisId: string): string {
+export function resolveScalarTableXAxisId(columnIds: readonly string[], xAxisId: string): string {
   return columnIds.includes(xAxisId)
     ? xAxisId
     : columnIds.includes(DEFAULT_X_AXIS_COLUMN_ID)

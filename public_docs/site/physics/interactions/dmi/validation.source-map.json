@@ -2,7 +2,7 @@
   "document": {"reviewed_revision": "e46c18b1f3415b8c38a2d8c8bf4afa1a439cbdcf", "path": "public_docs/site/physics/interactions/dmi/validation.md", "title": "DMI validation", "interaction": "Dzyaloshinskii-Moriya interaction validation"},
   "backend_matrix": [
     {"solver": "FDM", "device": "CPU", "status": "partial", "reason": "Analytic and stencil tests exist; refreshed full qualification is not claimed."},
-    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "The stored rotated-DMI Göbel FP64 report predates the current 18-gate verifier and is NOT VERIFIED until a fresh run; other DMI variants and FP32 retain lane-specific gates."},
+    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "The stored rotated-DMI Göbel FP64 report predates the current 19-gate verifier and is NOT VERIFIED until a fresh run; other DMI variants and FP32 retain lane-specific gates."},
     {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "Weak-residual and energy tests exist; complete cross-solver qualification is open."},
     {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "Device contracts exist; mixed-element runtime parity remains open."}
   ],

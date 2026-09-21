@@ -1,9 +1,4 @@
-import {
-  BufferAttribute,
-  BufferGeometry,
-  ShaderMaterial,
-  type Side,
-} from "three";
+import { ShaderMaterial, type Side } from "three";
 
 import {
   floquetPhaseAdapter,
@@ -51,77 +46,6 @@ export function canApplyScalarShaderColorBuffer(
       Number.isFinite(buffer.range.min) &&
       Number.isFinite(buffer.range.max),
   );
-}
-
-export function applyScalarShaderColorBuffer(
-  geometry: BufferGeometry,
-  buffer: ScalarColorBuffer | null | undefined,
-  vertexCount: number,
-): boolean {
-  const scalarValues = buffer?.scalarValues;
-  const vectorValues = buffer?.vectorValues;
-  const hasScalarValues = Boolean(
-    scalarValues && scalarValues.length === vertexCount,
-  );
-  const hasVectorValues = Boolean(
-    vectorValues && vectorValues.length === vertexCount * 3,
-  );
-  const hasComplexValues = canApplyComplexShaderColorBuffer(buffer, vertexCount);
-
-  if (!hasScalarValues && !hasVectorValues && !hasComplexValues) {
-    deleteShaderAttributes(geometry);
-    return false;
-  }
-
-  if (hasScalarValues && scalarValues) {
-    setFloatAttribute(
-      geometry,
-      VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE,
-      scalarValues,
-      1,
-      vertexCount,
-    );
-  } else if (geometry.hasAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE)) {
-    geometry.deleteAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE);
-  }
-
-  if (hasVectorValues && vectorValues) {
-    setFloatAttribute(
-      geometry,
-      VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE,
-      vectorValues,
-      3,
-      vertexCount,
-    );
-  } else if (geometry.hasAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE)) {
-    geometry.deleteAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE);
-  }
-
-  if (hasComplexValues && buffer?.complexRealValues && buffer.complexImagValues) {
-    setFloatAttribute(
-      geometry,
-      VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE,
-      buffer.complexRealValues,
-      3,
-      vertexCount,
-    );
-    setFloatAttribute(
-      geometry,
-      VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE,
-      buffer.complexImagValues,
-      3,
-      vertexCount,
-    );
-  } else {
-    if (geometry.hasAttribute(VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE)) {
-      geometry.deleteAttribute(VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE);
-    }
-    if (geometry.hasAttribute(VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE)) {
-      geometry.deleteAttribute(VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE);
-    }
-  }
-
-  return true;
 }
 
 export function createScalarSurfaceShaderMaterial(
@@ -302,43 +226,6 @@ function resolveSurfaceVertexShader(
   return orientationMode
     ? ORIENTATION_SURFACE_VERTEX_SHADER
     : SCALAR_SURFACE_VERTEX_SHADER;
-}
-
-function setFloatAttribute(
-  geometry: BufferGeometry,
-  name: string,
-  values: Float32Array,
-  itemSize: number,
-  vertexCount: number,
-): void {
-  const existing = geometry.getAttribute(name);
-  if (
-    existing instanceof BufferAttribute &&
-    existing.itemSize === itemSize &&
-    existing.count === vertexCount &&
-    existing.array instanceof Float32Array
-  ) {
-    (existing.array as Float32Array).set(values);
-    existing.needsUpdate = true;
-    return;
-  }
-
-  geometry.setAttribute(name, new BufferAttribute(values, itemSize));
-}
-
-function deleteShaderAttributes(geometry: BufferGeometry): void {
-  if (geometry.hasAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE)) {
-    geometry.deleteAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE);
-  }
-  if (geometry.hasAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE)) {
-    geometry.deleteAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE);
-  }
-  if (geometry.hasAttribute(VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE)) {
-    geometry.deleteAttribute(VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE);
-  }
-  if (geometry.hasAttribute(VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE)) {
-    geometry.deleteAttribute(VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE);
-  }
 }
 
 function shaderColorModeId(mode: string | null | undefined): number {

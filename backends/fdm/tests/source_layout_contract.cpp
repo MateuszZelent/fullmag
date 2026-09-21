@@ -156,6 +156,34 @@ void streams_have_runtime_owner() {
         "gpu/cuda/runtime/context.cu must not own compute stream handoff");
 }
 
+void rotated_dmi_workspace_failure_is_transactional() {
+    const std::filesystem::path root = fdm_source_root();
+    const std::string context = read_file(root / "gpu/cuda/runtime/context.cu");
+    check(
+        context.find("static bool free_tracked_vector_field(Context &ctx, DeviceVectorField &field)") !=
+            std::string::npos,
+        "rotated-DMI workspace failures must release tracked vector fields");
+    check(
+        context.find("if (context_gpu_workspace_cuda_free(ctx, pointer) == cudaSuccess)") !=
+            std::string::npos,
+        "tracked rotated-DMI frees must retain pointers when cudaFree fails");
+    check(
+        context.find("free_tracked_vector_field(ctx, ctx.h_rotated_dmi)") != std::string::npos,
+        "single-grid rotated-DMI workspace failure must clean up every allocation");
+    check(
+        context.find("free_tracked_vector_field(ctx, layer.h_rotated_dmi)") != std::string::npos,
+        "multilayer rotated-DMI workspace failure must clean up every allocation");
+    check(
+        context.find("reset_rotated_dmi_workspace_extension_baseline(ctx)") != std::string::npos,
+        "rotated-DMI workspace retry must reset the extension accounting baseline");
+    check(
+        context.find("free_vector_field(layer.h_rotated_dmi)") == std::string::npos,
+        "multilayer rotated-DMI teardown must use tracked frees");
+    check(
+        context.find("free_vector_field(ctx.h_rotated_dmi)") == std::string::npos,
+        "single-grid rotated-DMI teardown must use tracked frees");
+}
+
 void cmake_uses_gpu_runtime_owner_paths() {
     const std::filesystem::path root = fdm_source_root();
     const std::string cmake = read_file(root / "CMakeLists.txt");
@@ -250,6 +278,7 @@ int main() {
     expected_owner_paths_exist();
     telemetry_has_runtime_owner();
     streams_have_runtime_owner();
+    rotated_dmi_workspace_failure_is_transactional();
     cmake_uses_gpu_runtime_owner_paths();
     old_flat_sources_are_gone();
     std::printf("native FDM source layout contract: PASS\n");

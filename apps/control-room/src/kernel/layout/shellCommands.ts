@@ -1,6 +1,7 @@
 import { requestThemeToggle } from "@/design/theme/themeEvents";
 
 import type { CommandContribution } from "../commands/commandTypes";
+import { pickProjectArchive } from "../persistence/ProjectDocumentController";
 
 function disabledPlaceholder(
   id: string,
@@ -22,6 +23,14 @@ function disabledPlaceholder(
       status: "failed",
     }),
   };
+}
+
+function projectDocumentUnavailableReason(
+  context: Parameters<NonNullable<CommandContribution["isEnabled"]>>[0],
+): string | null {
+  return context.projectDocument
+    ? null
+    : "Project document lifecycle is unavailable in this shell.";
 }
 
 export const SHELL_COMMANDS: CommandContribution[] = [
@@ -124,7 +133,130 @@ export const SHELL_COMMANDS: CommandContribution[] = [
       return { status: "completed" };
     },
   },
-  disabledPlaceholder("workspace.save-sync", "Save / Sync", "File", "Ctrl+S"),
+  {
+    id: "workspace.new-project",
+    title: "New Project",
+    group: "workspace-document",
+    category: "File",
+    scope: "global",
+    shortcut: "Ctrl+Shift+N",
+    isEnabled: (context) => projectDocumentUnavailableReason(context) === null,
+    disabledReason: projectDocumentUnavailableReason,
+    run: async (context) => {
+      if (!context.projectDocument) {
+        return {
+          message: projectDocumentUnavailableReason(context) ?? "Project document lifecycle is unavailable.",
+          status: "failed",
+        };
+      }
+      const input = context.input as { name?: string } | null | undefined;
+      const promptedName =
+        input?.name ??
+        (typeof window === "undefined" || typeof window.prompt !== "function"
+          ? "Untitled project"
+          : window.prompt("Project name", "Untitled project"));
+      if (promptedName === null) {
+        return { message: "Project creation cancelled.", status: "cancelled" };
+      }
+      const resource = await context.projectDocument.create(promptedName);
+      return {
+        message: `Created project ${resource.name}.`,
+        status: "completed",
+      };
+    },
+  },
+  {
+    id: "workspace.open-project",
+    title: "Open Project",
+    group: "workspace-document",
+    category: "File",
+    scope: "global",
+    shortcut: "Ctrl+O",
+    isEnabled: (context) => projectDocumentUnavailableReason(context) === null,
+    disabledReason: projectDocumentUnavailableReason,
+    run: async (context) => {
+      if (!context.projectDocument) {
+        return {
+          message: projectDocumentUnavailableReason(context) ?? "Project document lifecycle is unavailable.",
+          status: "failed",
+        };
+      }
+      const input = context.input as
+        | { bytes: Uint8Array; fileName: string; hostPath?: string }
+        | null
+        | undefined;
+      const source = input ?? (await pickProjectArchive());
+      if (!source) {
+        return { message: "No project file selected.", status: "cancelled" };
+      }
+      const resource = await context.projectDocument.open(source);
+      return {
+        message: `Opened project ${resource.name}.`,
+        status: "completed",
+      };
+    },
+  },
+  {
+    id: "workspace.save-project",
+    title: "Save Project",
+    group: "workspace-document",
+    category: "File",
+    scope: "global",
+    shortcut: "Ctrl+S",
+    isEnabled: (context) => Boolean(context.projectDocument?.canSave()),
+    disabledReason: (context) => {
+      if (!context.projectDocument) return projectDocumentUnavailableReason(context);
+      if (context.projectDocument.canSave()) return null;
+      return "Open a writable project before saving.";
+    },
+    run: async (context) => {
+      if (!context.projectDocument) {
+        return {
+          message: projectDocumentUnavailableReason(context) ?? "Project document lifecycle is unavailable.",
+          status: "failed",
+        };
+      }
+      await context.projectDocument.save();
+      return {
+        message:
+          typeof window !== "undefined" &&
+          typeof window.__TAURI__?.core?.invoke === "function"
+            ? "Project saved to the host filesystem."
+            : "Project archive downloaded.",
+        status: "completed",
+      };
+    },
+  },
+  {
+    id: "workspace.close-project",
+    title: "Close Project",
+    group: "workspace-document",
+    category: "File",
+    scope: "global",
+    shortcut: "Ctrl+W",
+    isEnabled: (context) => {
+      const state = context.projectDocument?.getSnapshot().state;
+      return state === "ready" || state === "error";
+    },
+    disabledReason: (context) =>
+      context.projectDocument?.getSnapshot().state === "ready" ||
+      context.projectDocument?.getSnapshot().state === "error"
+        ? null
+        : "No project document is open.",
+    run: (context) => {
+      if (!context.projectDocument) {
+        return {
+          message: projectDocumentUnavailableReason(context) ?? "Project document lifecycle is unavailable.",
+          status: "failed",
+        };
+      }
+      const input = context.input as { discardChanges?: boolean } | null | undefined;
+      const closed = context.projectDocument.close(input?.discardChanges ?? false);
+      return closed
+        ? { message: "Project closed.", status: "completed" }
+        : { message: "Project close cancelled.", status: "cancelled" };
+    },
+  },
   {
     id: "workspace.export-python",
     title: "Export Python DSL",

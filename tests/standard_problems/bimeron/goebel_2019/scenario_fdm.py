@@ -59,6 +59,7 @@ relax = study.stages.add_relax(
     dt=LLG_DT,
     max_steps=RELAX_MAX_STEPS,
     max_physical_time_s=RELAX_TIME,
+    relax_alpha=ALPHA,
     tolT=1e-6,
 )
 relax.autosave(

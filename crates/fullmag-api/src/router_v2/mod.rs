@@ -1035,6 +1035,14 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             post(handlers::persistence::import_asset),
         )
         .route(
+            "/v2/persistence/projects",
+            post(handlers::persistence::projects::create),
+        )
+        .route(
+            "/v2/persistence/projects/open",
+            post(handlers::persistence::projects::open),
+        )
+        .route(
             "/v2/sessions/current/persistence/recovery",
             get(handlers::persistence::list_recovery).delete(handlers::persistence::clear_recovery),
         )

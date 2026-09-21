@@ -78,7 +78,14 @@ esac
 if ! is_windows_shell && [[ "${FULLMAG_WINDOWS_CONTAINER_MANAGED:-0}" == "1" ]]; then
   container_target="${FULLMAG_CARGO_TARGET_DIR:-}"
   case "${container_target}" in
-    /workspace/.fullmag-build/cargo-targets/*) ;;
+    /workspace/.fullmag-build/cargo-targets/*)
+      case "${container_target}" in
+        /workspace/.fullmag-build/cargo-targets/|*//*|*/../*|*/./*|*/..|*/.)
+          echo "[fullmag make] Windows FEM container target is outside /workspace/.fullmag-build/cargo-targets: ${container_target}" >&2
+          exit 2
+          ;;
+      esac
+      ;;
     *)
       echo "[fullmag make] Windows FEM container target is missing or outside /workspace/.fullmag-build/cargo-targets: ${container_target}" >&2
       exit 2

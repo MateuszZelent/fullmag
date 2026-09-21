@@ -525,4 +525,54 @@ describe("viewport3dDiagnostics", () => {
       }),
     ]);
   });
+
+  it("tracks and consumes retention rejection reasons (LR-14)", () => {
+    const tracker = new Viewport3DResourceTracker();
+
+    tracker.recordRetentionRejection("snapshot");
+    tracker.recordRetentionRejection("geometry");
+    tracker.recordRetentionRejection("geometry");
+    tracker.recordRetentionRejection("generation");
+
+    expect(tracker.getSnapshot().retentionRejections).toBe(4);
+    expect(tracker.getRetentionRejectionCounts()).toEqual({
+      generation: 1,
+      geometry: 2,
+      snapshot: 1,
+    });
+
+    expect(tracker.consumeRetentionRejectionCounts()).toEqual({
+      generation: 1,
+      geometry: 2,
+      snapshot: 1,
+    });
+    expect(tracker.consumeRetentionRejectionCounts()).toEqual({});
+    expect(tracker.getSnapshot().retentionRejections).toBe(4);
+
+    tracker.disposeAll();
+    expect(tracker.getSnapshot().retentionRejections).toBe(0);
+  });
+
+  it("formats revision quad and retention rejection counts in diagnostics summary (LR-14)", () => {
+    const tracker = new Viewport3DResourceTracker();
+    tracker.recordRetentionRejection("retention-key");
+    tracker.recordRetentionRejection("stage");
+
+    const summary = buildViewport3DDiagnostics({
+      airboxPartCount: 0,
+      cache: { byteLength: 0, entryCount: 0 },
+      displayedRevision: "rev-3",
+      fieldRevision: "rev-1",
+      objectCount: 1,
+      preparedRevision: "rev-2",
+      quantityId: "m",
+      receivedRevision: "rev-1",
+      requestedRevision: "rev-4",
+      topologyRevision: 1,
+      tracker: tracker.getSnapshot(),
+    });
+
+    expect(summary).toContain("revs:req=rev-4/rec=rev-1/prep=rev-2/disp=rev-3");
+    expect(summary).toContain("retention-rejections:2");
+  });
 });

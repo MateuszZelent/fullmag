@@ -72,6 +72,62 @@ describe("generated OpenAPI v2 transport", () => {
     expect(document.components.schemas.SessionSummaryResource).toBeDefined();
   });
 
+  it("promotes runtime-free project document endpoints through the facade", () => {
+    expect(apiPaths.PERSISTENCE_PROJECTS_PATH).toBe(
+      "/v2/persistence/projects",
+    );
+    expect(apiPaths.PERSISTENCE_PROJECT_OPEN_PATH).toBe(
+      "/v2/persistence/projects/open",
+    );
+
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            project_id: "project-test",
+            name: "Test",
+            schema_version: "fullmag.project.v1",
+            revision: 0,
+            persisted_revision: null,
+            dirty: true,
+            mode: { kind: "read_write" },
+            source_hash: null,
+            migration: {
+              source_schema: "fullmag.project.v1",
+              target_schema: "fullmag.project.v1",
+              migrated: false,
+              can_write: true,
+              warnings: [],
+              preserved_paths: [],
+            },
+            archive_base64: "UEs=",
+            durability: "memory_only",
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        ),
+    });
+
+    expect(api.persistence).toHaveProperty("projects");
+    expect(Object.keys(api.persistence.projects)).toEqual(
+      expect.arrayContaining(["create", "open"]),
+    );
+
+    const document = JSON.parse(
+      readFileSync(new URL("./generated/openapi-v2.json", import.meta.url), "utf8"),
+    );
+    expect(
+      document.paths["/v2/persistence/projects"].post.responses["201"].content[
+        "application/json"
+      ].schema.$ref,
+    ).toBe("#/components/schemas/ProjectDocumentResource");
+    expect(
+      document.paths["/v2/persistence/projects/open"].post.requestBody.content[
+        "application/json"
+      ].schema.$ref,
+    ).toBe("#/components/schemas/ProjectArchiveRequest");
+  });
+
   it("publishes immutable planar sample tokens and separated stale revisions", () => {
     const document = JSON.parse(
       readFileSync(new URL("./generated/openapi-v2.json", import.meta.url), "utf8"),

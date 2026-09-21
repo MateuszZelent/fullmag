@@ -5057,9 +5057,9 @@ describe("ribbon structure", () => {
 
     expect(importAction).toMatchObject({
       disabled: false,
-      label: "Import State",
+      label: "Restore Runtime State",
     });
-    expect(importCommand?.shortcut).toBe("Ctrl+O");
+    expect(importCommand?.shortcut).toBe("Ctrl+Shift+O");
   });
 
   it("exposes object draft commit from the Geometry lifecycle group", () => {
