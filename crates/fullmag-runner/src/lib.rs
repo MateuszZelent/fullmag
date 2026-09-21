@@ -4248,6 +4248,26 @@ pub struct AntennaFieldSolveResult {
 pub fn execute_antenna_field_solve_plan(
     plan: &fullmag_ir::AntennaFieldSolvePlanIR,
 ) -> Result<AntennaFieldSolveResult, RunError> {
+    execute_antenna_field_solve_plan_with_interrupt(plan, None)
+}
+
+/// Execute the static antenna solve while observing an optional interrupt
+/// signal between charge, RT0/Oersted, and artifact-materialization blocks.
+/// The native solve itself remains non-preemptive; cancellation is reported
+/// before a ready result can be returned to the publisher.
+#[cfg(feature = "fem-gpu")]
+pub fn execute_antenna_field_solve_plan_interruptible(
+    plan: &fullmag_ir::AntennaFieldSolvePlanIR,
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<AntennaFieldSolveResult, RunError> {
+    execute_antenna_field_solve_plan_with_interrupt(plan, interrupt_requested)
+}
+
+#[cfg(feature = "fem-gpu")]
+fn execute_antenna_field_solve_plan_with_interrupt(
+    plan: &fullmag_ir::AntennaFieldSolvePlanIR,
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<AntennaFieldSolveResult, RunError> {
     if plan.schema_version != fullmag_ir::ANTENNA_FIELD_SOLVE_PLAN_SCHEMA_VERSION {
         return Err(RunError {
             message: format!(
@@ -4280,12 +4300,21 @@ pub fn execute_antenna_field_solve_plan(
         });
     }
 
-    let bundle =
-        crate::native_fem::execute_native_fem_antenna_field_solve_plan(plan)?.ok_or_else(|| {
-            RunError {
-                message: "antenna field-solve plan produced no charge/Oersted result".into(),
-            }
-        })?;
+    let bundle = crate::native_fem::execute_native_fem_antenna_field_solve_plan_interruptible(
+        plan,
+        interrupt_requested,
+    )?
+    .ok_or_else(|| RunError {
+        message: "antenna field-solve plan produced no charge/Oersted result".into(),
+    })?;
+    if interrupt_requested.is_some_and(|signal| {
+        signal.load(std::sync::atomic::Ordering::Acquire)
+    }) {
+        return Err(RunError {
+            message: "antenna field solve cancelled before result materialization: interrupt_requested"
+                .into(),
+        });
+    }
     let manifest_path = format!(
         "antenna/field_solutions/{}/manifest.v1.json",
         plan.solution_id
@@ -4370,6 +4399,17 @@ pub fn execute_antenna_field_solve_plan(
 #[cfg(not(feature = "fem-gpu"))]
 pub fn execute_antenna_field_solve_plan(
     _plan: &fullmag_ir::AntennaFieldSolvePlanIR,
+) -> Result<AntennaFieldSolveResult, RunError> {
+    Err(RunError {
+        message: "antenna field precomputation requires a runner built with the managed native FEM feature"
+            .into(),
+    })
+}
+
+#[cfg(not(feature = "fem-gpu"))]
+pub fn execute_antenna_field_solve_plan_interruptible(
+    _plan: &fullmag_ir::AntennaFieldSolvePlanIR,
+    _interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<AntennaFieldSolveResult, RunError> {
     Err(RunError {
         message: "antenna field precomputation requires a runner built with the managed native FEM feature"

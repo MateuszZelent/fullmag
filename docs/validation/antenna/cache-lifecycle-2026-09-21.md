@@ -42,6 +42,21 @@ Stary asset pozostaje w swoim katalogu revisioned i można go ponownie otworzyć
 przez jego dawną referencję. Nowy solve publikuje osobny katalog po digest,
 więc zmiana geometrii lub materiału nie mutuje wyniku wcześniejszego runu.
 
+## Granice anulowania native solve
+
+`fullmag_runner::execute_antenna_field_solve_plan_interruptible` przyjmuje
+`AtomicBool` i sprawdza go na granicach `before_preflight`,
+`after_preflight`, `before/after_charge_transport`, `before/after_rt0_oersted`
+oraz `before_artifact_materialization`. Pojedynczy FFI solve pozostaje
+niepreemptive; przerwanie zgłoszone na granicy zwraca `RunError` przed
+przekazaniem wyniku do publishera, więc ta ścieżka nie może opublikować
+`ready` po zaakceptowanym anulowaniu.
+
+To jest kontrakt runnera, nie pełne zachowanie sesji: `orchestrator.rs` musi
+jeszcze przekazać sygnał z `CurrentLiveDisplaySelectionHandle`, zapisać
+`StageStopReason::UserCancelled` i przejść do właściwego stanu
+`cancelled`/`awaiting_command`.
+
 ## Weryfikacja wykonana 2026-09-21
 
 - parser-formatowanie Rust (`rustfmt --edition 2021 --config skip_children=true
@@ -60,8 +75,7 @@ więc zmiana geometrii lub materiału nie mutuje wyniku wcześniejszego runu.
 
 ## Pozostaje otwarte
 
-- cancellation token podczas długiego native solve i fault injection przed/po
-  zapisie payloadu;
+- przekazanie tokena z CLI do runnera oraz zapis stage stop reason po anulowaniu;
 - fault injection przerwania całego batcha przed/po zapisie payloadu albo
   manifestu;
 - pełny resolver stage/output oraz rejestracja w standardowym artifact catalog.

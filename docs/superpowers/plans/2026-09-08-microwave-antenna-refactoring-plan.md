@@ -721,6 +721,15 @@ wymusza dwóch rzeczywistych workerów barierą tuż przed `rename()` i sprawdza
 zamyka jeszcze cancellation tokena native solve ani fault injection całego
 batcha.
 
+Uzupełnienie implementacyjne 2026-09-21 (granice anulowania native solve):
+`fullmag_runner::execute_antenna_field_solve_plan_interruptible` przyjmuje
+`AtomicBool` i sprawdza go przed/po preflight, charge transport, RT0/Oersted
+oraz przed materializacją artefaktu. Pojedyncze wywołanie FFI pozostaje
+niepreemptive, ale zaakceptowane anulowanie na granicy zwraca błąd przed
+przekazaniem wyniku do publishera. Przekazanie sygnału przez
+`orchestrator.rs`, zapis `StageStopReason::UserCancelled` i stan
+`cancelled/awaiting_command` pozostają kolejnym krokiem T12.
+
 **Bramka:** `lifecycle` i `artifact`; testy fault injection obejmują przerwanie przed/po zapisie payloadu i przed publikacją manifestu. Commit: `fix: bind antenna stage lifecycle to actual execution`.
 
 ## T13. Domknąć i zakwalifikować FEM LLG

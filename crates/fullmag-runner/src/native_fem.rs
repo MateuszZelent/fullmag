@@ -34,7 +34,8 @@ pub(crate) use availability::{
 };
 #[cfg(feature = "fem-gpu")]
 pub(crate) use charge_transport::{
-    execute_native_fem_antenna_field_solve_plan, execute_native_fem_charge_transport_plans,
+    execute_native_fem_antenna_field_solve_plan_interruptible,
+    execute_native_fem_charge_transport_plans,
 };
 #[allow(unused_imports)]
 pub(crate) use eigen::{gpu_eigen_dense_solve, GpuEigenResult};

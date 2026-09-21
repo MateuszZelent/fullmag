@@ -9,6 +9,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::ffi::{CStr, CString};
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::steady_transport::{
     solve_native_fem_steady_transport_rt0, NativeFemSteadyTransportBundle,
@@ -63,11 +64,13 @@ pub(crate) fn execute_native_fem_charge_transport_plans(
         plan.oersted_realization,
         &plan.mesh.nodes,
         None,
+        None,
     )
 }
 
-pub(crate) fn execute_native_fem_antenna_field_solve_plan(
+pub(crate) fn execute_native_fem_antenna_field_solve_plan_interruptible(
     plan: &AntennaFieldSolvePlanIR,
+    interrupt_requested: Option<&AtomicBool>,
 ) -> Result<Option<NativeFemSteadyTransportBundle>, RunError> {
     execute_native_fem_charge_transport(
         &plan.conductor.mesh,
@@ -75,7 +78,22 @@ pub(crate) fn execute_native_fem_antenna_field_solve_plan(
         Some(plan.conductor.oersted_realization),
         &plan.field_sampling.positions_xyz_m,
         Some(plan),
+        interrupt_requested,
     )
+}
+
+fn ensure_antenna_not_cancelled(
+    interrupt_requested: Option<&AtomicBool>,
+    boundary: &str,
+) -> Result<(), RunError> {
+    if interrupt_requested.is_some_and(|signal| signal.load(Ordering::Acquire)) {
+        return Err(RunError {
+            message: format!(
+                "antenna field solve cancelled at {boundary}: interrupt_requested"
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn resolve_antenna_sample_topology(
@@ -103,6 +121,7 @@ fn execute_native_fem_charge_transport(
     oersted_realization: Option<OerstedRealization>,
     field_sample_positions_xyz_m: &[[f64; 3]],
     antenna_plan: Option<&AntennaFieldSolvePlanIR>,
+    interrupt_requested: Option<&AtomicBool>,
 ) -> Result<Option<NativeFemSteadyTransportBundle>, RunError> {
     if charge_transport_plans.is_empty() {
         return Ok(None);
@@ -117,6 +136,7 @@ fn execute_native_fem_charge_transport(
             message: "FEM charge/Oersted execution requires finite field-sampling positions".into(),
         });
     }
+    ensure_antenna_not_cancelled(interrupt_requested, "before_preflight")?;
     let antenna_sample_tet4_cells = match antenna_plan {
         Some(plan) => Some(resolve_antenna_sample_topology(&plan.field_sampling.cells)?),
         None => None,
@@ -139,6 +159,7 @@ fn execute_native_fem_charge_transport(
             oersted_evaluation_count,
         )?;
     }
+    ensure_antenna_not_cancelled(interrupt_requested, "after_preflight")?;
     let mut records = Vec::with_capacity(prepared.len());
     let mut snapshots = Vec::new();
     let mut provenance = Vec::with_capacity(prepared.len());
@@ -146,7 +167,9 @@ fn execute_native_fem_charge_transport(
     let mut antenna_artifacts = Vec::new();
 
     for prepared in prepared {
+        ensure_antenna_not_cancelled(interrupt_requested, "before_charge_transport")?;
         let result = solve_native_fem_charge_transport(&prepared.request)?;
+        ensure_antenna_not_cancelled(interrupt_requested, "after_charge_transport")?;
         let mut module_provenance = prepared.provenance;
         let mut rt0_record = None;
         let mut oersted_record = None;
@@ -158,6 +181,7 @@ fn execute_native_fem_charge_transport(
                 }
                 NativeFemSteadyTransportOerstedMethod::FemVectorPotential => Some(&[][..]),
             };
+            ensure_antenna_not_cancelled(interrupt_requested, "before_rt0_oersted")?;
             // This calls only the RT0/Oersted ABI. The historical request
             // prefix contains spin slots, but no spin equation is executed.
             let rt0 = solve_native_fem_steady_transport_rt0(
@@ -166,6 +190,7 @@ fn execute_native_fem_charge_transport(
                 method,
                 targets,
             )?;
+            ensure_antenna_not_cancelled(interrupt_requested, "after_rt0_oersted")?;
             module_provenance.conservative_current_view_identity_digest =
                 Some(rt0.view_identity_digest.clone());
             module_provenance.conservative_current_balance_certificate_digest =
@@ -338,6 +363,8 @@ fn execute_native_fem_charge_transport(
         }));
         provenance.push(module_provenance);
     }
+
+    ensure_antenna_not_cancelled(interrupt_requested, "before_artifact_materialization")?;
 
     let bytes = serde_json::to_vec_pretty(&serde_json::json!({
         "schema": "fullmag.fem.charge_transport.v1",
@@ -1086,6 +1113,21 @@ mod tests {
             resolve_antenna_sample_topology(&cells).expect("empty legacy topology is readable"),
             None
         );
+    }
+
+    #[test]
+    fn antenna_cancel_boundary_is_stable_and_non_destructive() {
+        let signal = AtomicBool::new(true);
+        let error = ensure_antenna_not_cancelled(Some(&signal), "after_rt0_oersted")
+            .expect_err("requested cancellation must stop before publication");
+        assert_eq!(
+            error.message,
+            "antenna field solve cancelled at after_rt0_oersted: interrupt_requested"
+        );
+
+        signal.store(false, Ordering::Release);
+        ensure_antenna_not_cancelled(Some(&signal), "before_artifact_materialization")
+            .expect("cleared cancellation must leave the boundary usable");
     }
 
     #[test]
