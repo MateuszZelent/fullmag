@@ -302,9 +302,10 @@ preview i termem Zeemana.
 
 - Zarządzany build Windows przez
   `just windows-build backend=fem device=cpu frontend=dev` skompilował
-  zmienione crate'y bez błędów. Końcowy receipt został odrzucony przez guard
-  tożsamości niezatwierdzonego worktree; jest to brak receiptu runtime, nie
-  błąd kompilacji.
+  zmienione crate'y bez błędów. Pierwsza próba na dirty worktree nie dostała
+  końcowego receiptu przez guard tożsamości; po commicie `c38e14692` ten sam
+  build z clean HEAD zakończył się komunikatem `Build mode: fem-cpu`,
+  `Windows FEM cpu container build is ready` i kodem sukcesu.
 - `git diff --check`: **OK**. Formatowanie nowych fragmentów oraz sześciu
   plików pomocniczych sprawdzono przez `rustfmt --edition 2021 --check`;
   `dispatch.rs` zachowuje istniejące dwa fragmenty formatowania bazowego,

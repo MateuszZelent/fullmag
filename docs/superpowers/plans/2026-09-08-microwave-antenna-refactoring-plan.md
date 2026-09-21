@@ -822,9 +822,11 @@ pozostaje fail-closed z powodu braku `H_ant` w natywnym ABI obserwabli.
 **Dowód builda 2026-09-21:** zarządzana recepta
 `just windows-build backend=fem device=cpu frontend=dev` skompilowała
 `fullmag-runner`, CLI, API i `fullmag-py-core`. Guard tożsamości odrzucił
-końcowy receipt dla niezatwierdzonego worktree; dlatego nie jest to jeszcze
-bramka runtime. `git diff --check` oraz formatowanie nowych fragmentów
-przeszły. Testów Rust nie kompilowano zgodnie z blokadą sesji.
+końcowy receipt pierwszej próby dla niezatwierdzonego worktree. Po commicie
+`c38e14692` powtórzony build z clean HEAD zakończył się `Build mode: fem-cpu`,
+`Windows FEM cpu container build is ready` i kodem sukcesu. `git diff --check`
+oraz formatowanie nowych fragmentów przeszły. Testów Rust nie kompilowano
+zgodnie z blokadą sesji.
 
 Ta poprawka nie odhacza T13: pozostaje dowód wartości artefaktów względem
 niezależnego wzorca, RHS/LLG dla wszystkich integratorów i waveformów,
