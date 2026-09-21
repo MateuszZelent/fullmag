@@ -529,8 +529,9 @@ Mapowanie: `slepc_modal_eigen.hpp::SLEPcTinyGyrotropicModalEigenResult`,
 `production_cpu_modal_eigen.cpp::solve_sparse_production_modal_payload`
 w `backends/fem/cpu/frequency_domain/` oraz
 `crates/fullmag-runner/src/fem/eigen_native_window.rs::execute_native_modal_window`.
-Regresja natywna została dodana; jej kompilacja nie została wykonana w tym
-review z powodu obowiązującego ograniczenia użytkownika.
+Kontrakt parsera i przekazywania limitu przechodzi w CI; nie jest to jednak
+dowód wykonania pełnego managed MFEM/SLEPc dla bieżącego C1/A1. Taki dowód
+wymaga osobnego receiptu runtime oraz artefaktów z poprawnym niezerowym `k`.
 
 ## Current limitations
 

@@ -1,5 +1,30 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Aktualny stan po naprawach audytu — 2026-09-21
+
+Zweryfikowany bieżący snapshot to HEAD `deb993e27877b0428a7b2a4ea920d716af7e54d8`
+na branchu `codex/eigensolve-dispersion-plan-20260912`; worktree jest czysty,
+a branch jest wypchnięty do origin. Snapshot zawiera merge z
+`origin/master` (`93f11dbc564c00b725d174ccb2fd0ff9a96493c9`) oraz późniejsze
+poprawki kontraktów i testów.
+
+Pięć problemów z audytu ma następujący status źródłowy:
+
+| Problem | Stan źródła | Dowód lub ograniczenie |
+|---|---|---|
+| Analityka zastępowała FEM | naprawione | `dispersion_validation` odrzuca syntetyczny solver; `execute_fem_eigen_path` wykonuje native solve, a wartości KS/DE/BV są dopisywane po solve do CSV. |
+| Niestabilne `P00` przy $k\to0$ | naprawione | Python i Rust używają wspólnego rozwinięcia Taylor/expm1; regresje sprawdzają ciągłość częstości, nie tylko współczynnika. |
+| Sztywne limity `3e6` i `5 GHz` | naprawione | Są wyłącznie wartościami presetu; planner waliduje skończone parametry przekazane w `runtime_metadata`, a fixture C1 podaje własny zakres. |
+| Brak wykonywalnej bramki naukowej | naprawione źródłowo | Benchmark wywołuje fail-closed validator wymagający 61 próbek, 8 pasm, Kittel/KS, finite rows i trzech kampanii zbieżności; bez bundle porównawczego wynik pozostaje `NOT VERIFIED`. |
+| Niespójna dokumentacja/checkpoint i telemetryka | naprawione w bieżącym opisie | Dokument rozdziela implementację źródłową, wykonanie managed i kwalifikację fizyczną; początkowy progress nie publikuje stałego `300`, a limit trafia z callbacku EPS. |
+
+Kontrole źródłowe CI dla tego snapshotu: Rust, Python, API, generated API,
+FDM i Control Room zakończyły się sukcesem. Browser smoke przeszedł bazowy
+fixture i negative control, ale test mutacji Inspectora zatrzymał się na braku
+`model:object:film`; jest to osobny regres UI. Managed FEM pozostaje w kolejce,
+więc bieżący snapshot nadal nie ma nowego runtime receipt ani zaakceptowanej
+dyspersji `k≠0`.
+
 ## Synchronizacja źródeł — 2026-09-21
 
 Worktree `C:\\git\\fullmag\\worktrees\\eigensolve-dispersion-plan-20260912`
@@ -33,8 +58,8 @@ mutacji (`ae6c690ec`), a test checkpointu korzysta z identyfikatora wygenerowane
 przez endpoint zamiast z nieaktualnego identyfikatora stałego (`613ca6a0b`).
 Oczekiwanie testu inspekcji archiwum uwzględnia konserwatywne ostrzeżenie dla
 `project/current_live_snapshot.json` bez typowanych referencji, wprowadzone w
-najnowszym `masterze`. Bieżący HEAD po scaleniu to `60302922e`;
-nowe CI musi jeszcze potwierdzić ten snapshot. Nie zmienia to granicy naukowej:
+najnowszym `masterze`. Bieżący HEAD po naprawach testowych to `deb993e27`;
+source/contract CI potwierdziło ten snapshot. Nie zmienia to granicy naukowej:
 brakuje świeżego managed receipt FEM, niepustego solve dla `k≠0` i kwalifikacji
 pełnej relacji dyspersji.
 
