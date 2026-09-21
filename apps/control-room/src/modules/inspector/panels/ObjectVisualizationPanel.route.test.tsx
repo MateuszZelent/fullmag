@@ -18,31 +18,35 @@ function resourceCall(name: string, enabled: boolean): void {
   testState.resourceCalls.push({ enabled, name });
 }
 
-vi.mock("@/kernel/KernelContext", () => ({
-  useKernel: () => ({
-    resources: {
-      getRevision: () => null,
-      subscribe: () => () => undefined,
-    },
-    visualizationSync: {
-      queuePatch: testState.queuePatch,
-      getSnapshot: () => ({
-        inflightTargetIds: [],
-        pendingTargetIds: [],
-        version: 0,
-      }),
-      subscribe: () => () => undefined,
-    },
-    realtimeConnection: {
-      getSnapshot: () => ({ disrupted: false, status: "connected" }),
-      subscribe: () => () => undefined,
-    },
-    visualizationDebug: {
-      getSnapshots: () => [],
-      subscribe: () => () => undefined,
-    },
-  }),
-}));
+vi.mock("@/kernel/KernelContext", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/kernel/KernelContext")>();
+  return {
+    ...actual,
+    useKernel: () => ({
+      resources: {
+        getRevision: () => null,
+        subscribe: () => () => undefined,
+      },
+      visualizationSync: {
+        queuePatch: testState.queuePatch,
+        getSnapshot: () => ({
+          inflightTargetIds: [],
+          pendingTargetIds: [],
+          version: 0,
+        }),
+        subscribe: () => () => undefined,
+      },
+      realtimeConnection: {
+        getSnapshot: () => ({ disrupted: false, status: "connected" }),
+        subscribe: () => () => undefined,
+      },
+      visualizationDebug: {
+        getSnapshots: () => [],
+        subscribe: () => () => undefined,
+      },
+    }),
+  };
+});
 
 vi.mock("@/kernel/resources/useSessionStatus", () => ({
   SESSION_STATUS_RESOURCE_KEY: "session:status",
