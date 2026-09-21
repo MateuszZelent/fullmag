@@ -42,7 +42,7 @@ Skończone pasmo jest obecnie klasyfikowane przez istniejący kontrakt
 | `Constant` | 0 | `constant` |
 | `Sinusoidal` | `frequency_hz` | `sinusoidal` |
 | `SincPulse` | `cutoff_hz` | `sinc_cutoff` |
-| `Pulse`, `PiecewiseLinear` | nieznane | `validity_bandwidth_unknown` |
+| `Pulse`, `PiecewiseLinear` | `bandwidth_declaration.f_max_hz` albo nieznane | `declared` albo `validity_bandwidth_unknown` |
 
 Dla znanego pasma planner oblicza wielkości z 0950:
 
@@ -65,6 +65,19 @@ nie są cicho zamieniane na `ok`. Nota pozostaje `status=unknown` z odpowiednio
 `antenna_geometry_invalid`. Dla impulsu nie stosuje się przybliżenia
 `f_max=1/duration`.
 
+`Pulse` i `PiecewiseLinear` mogą otrzymać skończone pasmo przez opcjonalne
+`SolvedAntennaDriveIR.bandwidth_declaration` /
+`AntennaWaveformBandwidthDeclaration(f_max_hz=...)`. Deklaracja musi być
+skończona i nieujemna; dla pozostałych waveformów jest odrzucana jako
+niezgodna. Jeżeli deklaracji nie ma, planner zachowuje `status=unknown`.
+
+Dla wielu napędów potencjalnie aktywnych w jednym `StudyIR` planner publikuje
+równoległą notę `antenna_waveform_bandwidth_aggregate.v1`. Agregat używa
+konserwatywnie `max(f_max_hz)` dla wspólnego źródła `H_ant_basis`; obecność
+choć jednego nieznanego napędu daje `status=unknown` zamiast liczby z czasu
+próbkowania. Lista drive’ów i portów pozostaje w provenance, a zmiana
+waveformu nie unieważnia statycznej bazy pola.
+
 ## Przykładowy zapis provenance
 
 ```text
@@ -83,12 +96,12 @@ baza pola nie jest przez to oznaczana jako stale.
 - `git diff --check`: exit code 0;
 - inspekcja definicji IR potwierdziła pola geometrii, referencję projekcji i
   referencję etapu użyte w resolverze;
+- osobne noty deklarowanego pasma i agregatu są dołączane zarówno do
+  `ExecutionPlanIR`, jak i do `AntennaFieldSolvePlanIR`;
 - nie uruchamiano kompilacji testów jednostkowych, natywnego FEM/CUDA ani
   browser smoke; w tej sesji nie jest to dowód kwalifikacji wykonania.
 
 ## Pozostaje otwarte
 
-- jawny kontrakt deklarowanego pasma dla sampled waveform;
-- agregacja wspólnego ograniczenia dla wielu aktywnych portów;
 - pomiar kosztu, pamięci, anulowania i wall-time z T11;
 - walidacja numeryczna solvera, projekcji, LLG oraz GPU.
