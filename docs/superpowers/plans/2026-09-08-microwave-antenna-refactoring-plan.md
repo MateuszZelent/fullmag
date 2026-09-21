@@ -709,6 +709,13 @@ niepełny manifest lub zmiana bajtów podczas odczytu nadal kończy się błęde
 stary immutable asset nie jest usuwany ani nadpisywany. Szczegóły zapisano w
 `docs/validation/antenna/cache-lifecycle-2026-09-21.md`.
 
+Uzupełnienie implementacyjne 2026-09-21 (wyścig publikacji): po przegranym
+`rename` do revisioned assetu publisher sprawdza, czy inny worker opublikował
+już kompletny manifest. Identyczne bajty są zwracane jako
+`reused_existing=true`, a różna treść daje jawny konflikt immutable rewizji;
+żadna ścieżka nie nadpisuje ani nie scala istniejącego katalogu. Nadal brakuje
+kontrolowanego fault-injection z rzeczywistym dwuwątkowym wyścigiem.
+
 **Bramka:** `lifecycle` i `artifact`; testy fault injection obejmują przerwanie przed/po zapisie payloadu i przed publikacją manifestu. Commit: `fix: bind antenna stage lifecycle to actual execution`.
 
 ## T13. Domknąć i zakwalifikować FEM LLG

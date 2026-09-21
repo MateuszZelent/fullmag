@@ -59,5 +59,12 @@ więc zmiana geometrii lub materiału nie mutuje wyniku wcześniejszego runu.
 
 - cancellation token podczas długiego native solve i fault injection przed/po
   zapisie payloadu;
-- deduplikacja równoległych solve’ów tej samej sygnatury;
+- kontrolowany fault-injection z dwoma rzeczywistymi workerami.
 - pełny resolver stage/output oraz rejestracja w standardowym artifact catalog.
+
+Ścieżka publikacji obsługuje już samo okno wyścigu po `exists()` i przed
+`rename()`: worker przegrywający ponownie ładuje zwycięski revisioned asset,
+weryfikuje manifest, payloady i digest, a identyczny wynik zwraca jako
+`reused_existing=true`. Różna treść daje konflikt immutable rewizji; nie ma
+nadpisania ani częściowego merge. Rzeczywisty fault-injection wielowątkowy
+pozostaje osobnym testem.

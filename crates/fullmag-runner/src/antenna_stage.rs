@@ -648,6 +648,27 @@ pub fn publish_antenna_field_solution_atomically(
     }
     if let Err(error) = fs::rename(&temporary, &final_dir) {
         let _ = fs::remove_dir_all(&temporary);
+        // Two workers may have passed the initial `final_dir.exists()` check.
+        // If another worker won the rename race, verify its complete immutable
+        // bytes and reuse it; never replace or merge the existing asset.
+        if final_dir.exists() {
+            if let Ok(existing) = load_published_antenna_field_solution(output_root, &reference) {
+                if existing.manifest_bytes == expected_manifest {
+                    return Ok(PublishedAntennaFieldSolution {
+                        reference,
+                        manifest_path: final_dir.join(SOLUTION_MANIFEST_NAME),
+                        signatures,
+                        reused_existing: true,
+                    });
+                }
+                return Err(RunError {
+                    message: format!(
+                        "immutable antenna solution revision '{}' won a concurrent publication with different content",
+                        asset_id
+                    ),
+                });
+            }
+        }
         return Err(RunError {
             message: format!(
                 "atomically publish antenna solution '{}': {error}",
