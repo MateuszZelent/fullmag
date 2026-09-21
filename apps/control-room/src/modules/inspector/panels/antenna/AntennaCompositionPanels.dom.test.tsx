@@ -131,6 +131,42 @@ describe("AntennaCompositionPanel runtime results", () => {
     }
   });
 
+  it("shows missing port, projection, and activation references for a drive", async () => {
+    mocks.scene.data = {
+      solved_antenna_drives: [{
+        id: "drive-1",
+        name: "RF drive",
+        peak_current_a: 1,
+        port_mode_id: "missing-port",
+        projection_ref: "missing-projection",
+        time_origin: "stage_local",
+        waveform: { kind: "constant" },
+        activation: { kind: "stage_ids", stage_ids: ["missing-stage"] },
+      }],
+      antenna_port_modes: [],
+      antenna_target_projections: [],
+      antenna_field_solve_stages: [],
+    } as unknown as SceneResource;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(
+          <AntennaCompositionPanel kind="drive" selection={driveSelection()} />,
+        ),
+      );
+      expect(container.textContent).toContain("Validation");
+      expect(container.textContent).toContain("missing port mode");
+      expect(container.textContent).toContain("missing projection");
+      expect(container.textContent).toContain("missing activation stage");
+      expect(findGroupBadge(container, "invalid · result pending")).toBeDefined();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("shows concrete port validation diagnostics", async () => {
     mocks.scene.data = {
       antenna_port_modes: [{
@@ -390,6 +426,25 @@ function projectionSelection(): Selection {
       visualizationTargetId: "object:antenna-1",
       antennaResourceId: "projection-1",
       antennaResourceKind: "projection",
+    },
+  } as Selection;
+}
+
+function driveSelection(): Selection {
+  return {
+    kind: "object.antenna.drive",
+    label: "Drive drive-1",
+    moduleSource: "explorer",
+    nodeId: "object:antenna-1:antenna:drive:drive-1",
+    objectId: "antenna-1",
+    ref: {
+      kind: "object.antenna.drive",
+      nodeId: "object:antenna-1:antenna:drive:drive-1",
+      objectId: "antenna-1",
+      type: "scene-object",
+      visualizationTargetId: "object:antenna-1",
+      antennaResourceId: "drive-1",
+      antennaResourceKind: "drive",
     },
   } as Selection;
 }

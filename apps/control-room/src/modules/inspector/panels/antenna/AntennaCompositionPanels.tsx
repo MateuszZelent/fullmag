@@ -325,6 +325,44 @@ function projectionDetails(
   };
 }
 
+function antennaDriveValidationMessages(
+  drive: AntennaDrive,
+  scene: SceneResource | null,
+): string[] {
+  const messages: string[] = [];
+  if (scene?.antenna_port_modes) {
+    const hasPort = scene.antenna_port_modes.some(
+      (candidate) => candidate.id === drive.port_mode_id,
+    );
+    if (!hasPort) {
+      messages.push(`missing port mode '${drive.port_mode_id}'`);
+    }
+  }
+  if (scene?.antenna_target_projections) {
+    const projection = scene.antenna_target_projections.find(
+      (candidate) => candidate.id === drive.projection_ref,
+    );
+    if (!projection) {
+      messages.push(`missing projection '${drive.projection_ref}'`);
+    } else {
+      for (const message of antennaProjectionValidationMessages(projection, scene)) {
+        messages.push(`projection '${projection.id}': ${message}`);
+      }
+    }
+  }
+  if (drive.activation.kind === "stage_ids" && scene?.antenna_field_solve_stages) {
+    const stageIds = new Set(
+      scene.antenna_field_solve_stages.map((candidate) => candidate.id),
+    );
+    for (const stageId of drive.activation.stage_ids) {
+      if (!stageIds.has(stageId)) {
+        messages.push(`missing activation stage '${stageId}'`);
+      }
+    }
+  }
+  return messages;
+}
+
 function driveDetails(
   resourceId: string | null,
   scene: SceneResource | null,
@@ -335,10 +373,12 @@ function driveDetails(
   if (!drive) {
     return { title: "Solved antenna drive", badge: "missing", rows: [{ label: "Status", value: "Solved drive is not present in SceneResource." }] };
   }
+  const validationMessages = antennaDriveValidationMessages(drive, scene);
   return {
     title: drive.name,
-    badge: "configured · result pending",
+    badge: validationMessages.length > 0 ? "invalid · result pending" : "configured · result pending",
     rows: [
+      { label: "Validation", value: validationMessages.join("; ") || "ready" },
       { label: "ID", value: drive.id, mono: true },
       { label: "Port mode", value: drive.port_mode_id, mono: true },
       { label: "Projection", value: drive.projection_ref, mono: true },

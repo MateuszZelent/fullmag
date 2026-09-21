@@ -915,6 +915,16 @@ pokazywane w wierszu `Validation`, a badge przyjmuje stan
 modelu i DOM kompozycji przechodzą 10/10. To walidacja referencji authoringu,
 nie dowód projekcji numerycznej ani kwalifikacja runtime.
 
+**Uzupełnienie implementacyjne 2026-09-21 (walidacja solved drive):**
+Inspector `drive` sprawdza teraz `port_mode_id`, `projection_ref` oraz każdy
+stage wskazany przez `activation.kind=stage_ids`. Gdy projekcja istnieje,
+przenosi także jej błędy referencji do diagnostyki drive. Wiersz `Validation`
+i badge `invalid · result pending` odróżniają brak konfiguracji od samego
+oczekiwania na wynik; nie zmieniono oceny waveformu, amplitudy ani czasu.
+Łączne testy modelu/DOM kompozycji przechodzą 11/11 (DOM 6/6), ESLint i
+React Doctor pozostają zielone. Nadal nie jest to dowód aktywacji w LLG ani
+kwalifikacja runtime.
+
 **Uzupełnienie implementacyjne 2026-09-21 (harness browser):** dodano
 `apps/control-room/scripts/smoke-antenna-authoring-ui.mjs` oraz helper i test
 kontraktu Node. Smoke ma jawnie ograniczony zakres pierwszej fazy T15:

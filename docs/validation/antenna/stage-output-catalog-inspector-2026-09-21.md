@@ -115,7 +115,12 @@ stage nie jest używany do udawania gotowego pola, gdy brakuje właściwego
   output `H_ant_basis` oraz target object/region. Brakujące odwołania albo
   output o innej quantity są pokazywane w `Validation` i ustawiają badge
   `invalid · result pending`; global target pozostaje poprawny bez zależności
-  od listy obiektów. Testy modelu i DOM kompozycji przechodzą teraz 10/10.
+  od listy obiektów.
+- Inspector `drive` sprawdza referencję portu, projekcji i każdego stage'a z
+  `activation.stage_ids`; gdy projekcja istnieje, pokazuje też jej błędy
+  referencji. Braki trafiają do `Validation` i ustawiają
+  `invalid · result pending`, zamiast pozostawiać pozorną gotowość. Testy
+  modelu i DOM kompozycji przechodzą teraz 11/11 (DOM 6/6).
 - nie uruchamiano kompilacji testów Rust, browser smoke ani dowodu
   kwalifikacji FEM/FDM GPU.
 
