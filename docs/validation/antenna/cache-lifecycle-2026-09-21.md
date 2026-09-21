@@ -52,6 +52,9 @@ więc zmiana geometrii lub materiału nie mutuje wyniku wcześniejszego runu.
   `load_cached_antenna_field_solution` zachowuje dotychczasowe `Option` dla
   pozostałych konsumentów;
 - dodano regresję lifecycle dla przejścia `Missing → Stale → Queued`;
+- dodano deterministyczną regresję dwóch workerów: bariera zatrzymuje oba
+  zapisy tuż przed `rename()`, po czym jeden worker publikuje revisioned asset,
+  a drugi weryfikuje identyczny manifest i zwraca `reused_existing=true`;
 - nie uruchamiano kompilacji testów, natywnego FEM/CUDA ani browser smoke;
   zmiana nie jest kwalifikacją wykonania solvera.
 
@@ -59,12 +62,14 @@ więc zmiana geometrii lub materiału nie mutuje wyniku wcześniejszego runu.
 
 - cancellation token podczas długiego native solve i fault injection przed/po
   zapisie payloadu;
-- kontrolowany fault-injection z dwoma rzeczywistymi workerami.
+- fault injection przerwania całego batcha przed/po zapisie payloadu albo
+  manifestu;
 - pełny resolver stage/output oraz rejestracja w standardowym artifact catalog.
 
 Ścieżka publikacji obsługuje już samo okno wyścigu po `exists()` i przed
 `rename()`: worker przegrywający ponownie ładuje zwycięski revisioned asset,
 weryfikuje manifest, payloady i digest, a identyczny wynik zwraca jako
 `reused_existing=true`. Różna treść daje konflikt immutable rewizji; nie ma
-nadpisania ani częściowego merge. Rzeczywisty fault-injection wielowątkowy
-pozostaje osobnym testem.
+nadpisania ani częściowego merge. Regresja wielowątkowa wymusza oba workery w
+kontrolowanym punkcie przed `rename()`; nadal osobno pozostaje fault injection
+przerwania zapisu oraz cancellation token native solve.

@@ -560,6 +560,14 @@ pub fn publish_antenna_field_solution_atomically(
     output_root: &Path,
     result: &AntennaFieldSolveResult,
 ) -> Result<PublishedAntennaFieldSolution, RunError> {
+    publish_antenna_field_solution_atomically_with_hook(output_root, result, None)
+}
+
+fn publish_antenna_field_solution_atomically_with_hook(
+    output_root: &Path,
+    result: &AntennaFieldSolveResult,
+    before_rename: Option<&dyn Fn()>,
+) -> Result<PublishedAntennaFieldSolution, RunError> {
     let (asset_id, signatures) = manifest_metadata(result)?;
     if result.field_solution.content_digest.is_empty() {
         return Err(RunError {
@@ -645,6 +653,9 @@ pub fn publish_antenna_field_solution_atomically(
     if let Err(error) = write_solution_directory(&temporary, &artifacts) {
         let _ = fs::remove_dir_all(&temporary);
         return Err(error);
+    }
+    if let Some(before_rename) = before_rename {
+        before_rename();
     }
     if let Err(error) = fs::rename(&temporary, &final_dir) {
         let _ = fs::remove_dir_all(&temporary);
@@ -795,6 +806,8 @@ mod tests {
     use crate::antenna_field_solution::{
         build_antenna_field_solution_artifacts, AntennaFieldBasisInput, AntennaFieldSolutionInput,
     };
+    use std::sync::{Arc, Barrier};
+    use std::thread;
 
     fn field_solve_result(solution_id: &str, h_x: f64) -> AntennaFieldSolveResult {
         field_solve_result_with_asset(solution_id, h_x, "afs-fixture")
@@ -998,6 +1011,67 @@ mod tests {
         let second = publish_antenna_field_solution_atomically(&root, &result).unwrap();
         assert!(second.reused_existing);
         assert_eq!(first.reference, second.reference);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_identical_publication_deduplicates_after_rename_race() {
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-antenna-publish-race-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let result = field_solve_result("solution", 2.0);
+        let barrier = Arc::new(Barrier::new(2));
+
+        let workers = (0..2)
+            .map(|_| {
+                let root = root.clone();
+                let result = result.clone();
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    let before_rename = || {
+                        barrier.wait();
+                    };
+                    publish_antenna_field_solution_atomically_with_hook(
+                        &root,
+                        &result,
+                        Some(&before_rename),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let outcomes = workers
+            .into_iter()
+            .map(|worker| worker.join().expect("publication worker must not panic"))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(outcomes.len(), 2);
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| !outcome.reused_existing)
+                .count(),
+            1
+        );
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| outcome.reused_existing)
+                .count(),
+            1
+        );
+        let expected_manifest = result
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path.ends_with("manifest.v1.json"))
+            .expect("fixture must contain a manifest")
+            .bytes
+            .clone();
+        let published = load_published_antenna_field_solution(&root, &outcomes[0].reference)
+            .expect("winner and deduplicated loser must expose one verified asset");
+        assert_eq!(published.payloads.len(), 5);
+        assert_eq!(published.manifest_bytes, expected_manifest);
         fs::remove_dir_all(&root).unwrap();
     }
 

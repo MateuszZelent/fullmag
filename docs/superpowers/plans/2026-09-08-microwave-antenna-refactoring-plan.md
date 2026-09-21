@@ -714,7 +714,12 @@ Uzupełnienie implementacyjne 2026-09-21 (wyścig publikacji): po przegranym
 już kompletny manifest. Identyczne bajty są zwracane jako
 `reused_existing=true`, a różna treść daje jawny konflikt immutable rewizji;
 żadna ścieżka nie nadpisuje ani nie scala istniejącego katalogu. Nadal brakuje
-kontrolowanego fault-injection z rzeczywistym dwuwątkowym wyścigiem.
+kontrolowanego fault-injection przerwania zapisu payloadu/manifestu. Dodana
+regresja `concurrent_identical_publication_deduplicates_after_rename_race`
+wymusza dwóch rzeczywistych workerów barierą tuż przed `rename()` i sprawdza,
+że dokładnie jeden publikuje, a drugi reużywa zweryfikowany asset. To nie
+zamyka jeszcze cancellation tokena native solve ani fault injection całego
+batcha.
 
 **Bramka:** `lifecycle` i `artifact`; testy fault injection obejmują przerwanie przed/po zapisie payloadu i przed publikacją manifestu. Commit: `fix: bind antenna stage lifecycle to actual execution`.
 
