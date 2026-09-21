@@ -86,6 +86,8 @@ pub(crate) fn execute_direct_minimizer(
                         let request = display_selection.preview_request();
                         preview_handoff.request_preview(
                             backend,
+                            engine,
+                            plan,
                             &request,
                             node_count,
                             current_stats.step,
@@ -296,6 +298,8 @@ pub(crate) fn execute_direct_minimizer(
                 let request = selection.preview_request();
                 preview_handoff.request_preview(
                     backend,
+                    engine,
+                    plan,
                     &request,
                     node_count,
                     current_stats.step,

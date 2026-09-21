@@ -14,6 +14,7 @@ use crate::native_fem::{
     NativeFemBackend, NativeFemEnergyDensitySnapshot, NativeFemFieldSnapshot,
     NativeFemPreviewSnapshot,
 };
+use crate::preview::{build_mesh_preview_field_with_active_mask, mesh_quantity_active_mask};
 use crate::quantities::{active_fem_preview_quantities, field_materialization_quantity_ids};
 use crate::solver_profile::{current_thread_cpu_time_ns, elapsed_current_thread_cpu_ns};
 use crate::types::{
@@ -904,6 +905,47 @@ pub(crate) struct TerminalFemPreviewPublication {
 }
 
 impl FemPreviewHandoff {
+    fn publish_direct_antenna_preview(
+        &mut self,
+        request: &LivePreviewRequest,
+        plan: &FemPlanIR,
+        source_step: u64,
+        source_time: f64,
+        destination: PreviewDestination,
+    ) {
+        let result = build_fem_antenna_preview_field(request, plan, source_step, source_time);
+        match result {
+            Ok(field) => {
+                self.materialization_states.insert(
+                    field.quantity.clone(),
+                    LiveFieldMaterializationStatus {
+                        quantity: field.quantity.clone(),
+                        source_step,
+                        request_revision: request.revision,
+                        state: LiveFieldMaterializationState::Complete,
+                        error: None,
+                    },
+                );
+                match destination {
+                    PreviewDestination::Active => self.active_ready = Some(field),
+                    PreviewDestination::Cache => self.cached_ready.push(field),
+                }
+            }
+            Err(error) => {
+                self.materialization_states.insert(
+                    request.quantity.clone(),
+                    LiveFieldMaterializationStatus {
+                        quantity: request.quantity.clone(),
+                        source_step,
+                        request_revision: request.revision,
+                        state: LiveFieldMaterializationState::Error,
+                        error: Some(error.message),
+                    },
+                );
+            }
+        }
+    }
+
     fn harvest_completed(&mut self) -> Result<(), RunError> {
         let query_started = std::time::Instant::now();
         let completion = self.pending.try_take_completed();
@@ -1088,6 +1130,8 @@ impl FemPreviewHandoff {
     pub(crate) fn request_preview(
         &mut self,
         _backend: &NativeFemBackend,
+        engine: FemEngine,
+        plan: &FemPlanIR,
         request: &LivePreviewRequest,
         node_count: usize,
         source_step: u64,
@@ -1095,6 +1139,19 @@ impl FemPreviewHandoff {
         solver_dt: f64,
     ) -> Result<Option<LivePreviewField>, RunError> {
         self.harvest_completed()?;
+        if engine == FemEngine::CpuNative
+            && active_fem_preview_quantities(engine, plan, &[request.quantity.as_str()])
+                .contains(&"H_ant")
+        {
+            self.publish_direct_antenna_preview(
+                request,
+                plan,
+                source_step,
+                source_time,
+                PreviewDestination::Active,
+            );
+            return Ok(self.active_ready.take());
+        }
         self.submit_request(
             request,
             node_count,
@@ -1208,14 +1265,22 @@ impl FemPreviewHandoff {
         let materialization_quantities = field_materialization_quantity_ids();
         let quantities = active_fem_preview_quantities(engine, plan, &materialization_quantities);
         let base_request = display_selection.preview_request();
-        let requests = quantities
-            .into_iter()
-            .map(|quantity| {
-                let mut request = base_request.clone();
-                request.quantity = quantity.to_string();
-                request
-            })
-            .collect();
+        let mut requests = VecDeque::new();
+        for quantity in quantities {
+            let mut request = base_request.clone();
+            request.quantity = quantity.to_string();
+            if engine == FemEngine::CpuNative && quantity == "H_ant" {
+                self.publish_direct_antenna_preview(
+                    &request,
+                    plan,
+                    source_step,
+                    source_time,
+                    PreviewDestination::Cache,
+                );
+            } else {
+                requests.push_back(request);
+            }
+        }
         self.start_cache_cycle(requests, source_step);
         self.submit_next_cached(backend, node_count, source_step, source_time, solver_dt)?;
         if self.cached_ready.is_empty() {
@@ -1518,14 +1583,22 @@ impl FemPreviewHandoff {
             quantity_ids.sort_unstable();
             quantity_ids.dedup();
             let base_request = display_selection.preview_request();
-            let requests = active_fem_preview_quantities(engine, plan, &quantity_ids)
-                .into_iter()
-                .map(|quantity| {
-                    let mut request = base_request.clone();
-                    request.quantity = quantity.to_string();
-                    request
-                })
-                .collect();
+            let mut requests = VecDeque::new();
+            for quantity in active_fem_preview_quantities(engine, plan, &quantity_ids) {
+                let mut request = base_request.clone();
+                request.quantity = quantity.to_string();
+                if engine == FemEngine::CpuNative && quantity == "H_ant" {
+                    self.publish_direct_antenna_preview(
+                        &request,
+                        plan,
+                        source_step,
+                        source_time,
+                        PreviewDestination::Cache,
+                    );
+                } else {
+                    requests.push_back(request);
+                }
+            }
             self.start_cache_cycle(requests, source_step);
 
             if let Ok(ready) = self.request_magnetization(node_count, source_step) {
@@ -1615,6 +1688,27 @@ pub(crate) fn build_fem_live_preview_field(
     backend.copy_live_preview_field(request, node_count)
 }
 
+fn build_fem_antenna_preview_field(
+    request: &LivePreviewRequest,
+    plan: &FemPlanIR,
+    source_step: u64,
+    source_time: f64,
+) -> Result<LivePreviewField, RunError> {
+    let started = std::time::Instant::now();
+    let antenna_field = crate::antenna_fields::compute_antenna_field_at_time(plan, source_time)?;
+    let mut field = build_mesh_preview_field_with_active_mask(
+        request,
+        &antenna_field,
+        mesh_quantity_active_mask("H_ant", &plan.mesh),
+    );
+    field.source_step = source_step;
+    field.source_time_seconds = Some(source_time);
+    field.source_revision = request.revision;
+    field.materialized_at_unix_ms = unix_time_ms();
+    field.materialization_wall_time_ns = elapsed_ns(started);
+    Ok(field)
+}
+
 /// Build cached preview fields for all non-active FEM quantities.
 ///
 /// This mirrors the cached-preview logic in `CudaInteractiveFdmPreviewRuntime`
@@ -1637,7 +1731,12 @@ pub(crate) fn build_fem_cached_preview_fields(
     for quantity in quantities {
         let mut req = base_request.clone();
         req.quantity = quantity.to_string();
-        match build_fem_live_preview_field(backend, &req, node_count) {
+        let field = if engine == FemEngine::CpuNative && quantity == "H_ant" {
+            build_fem_antenna_preview_field(&req, plan, 0, plan.time_stage.start_time_s)
+        } else {
+            build_fem_live_preview_field(backend, &req, node_count)
+        };
+        match field {
             Ok(field) => cached.push(field),
             Err(_) => { /* quantity not computed yet - skip */ }
         }

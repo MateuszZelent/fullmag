@@ -265,6 +265,8 @@ pub(crate) fn execute_llg_overdamped(
                         let request = display_selection.preview_request();
                         preview_handoff.request_preview(
                             backend,
+                            engine,
+                            plan,
                             &request,
                             node_count,
                             current_stats.step,
@@ -468,6 +470,8 @@ pub(crate) fn execute_llg_overdamped(
                 let request = selection.preview_request();
                 preview_handoff.request_preview(
                     backend,
+                    engine,
+                    plan,
                     &request,
                     node_count,
                     current_stats.step,

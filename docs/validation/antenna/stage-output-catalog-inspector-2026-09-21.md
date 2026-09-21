@@ -214,3 +214,52 @@ rzeczywistych artefaktach, z kontenerowym runtime dla ścieżek FEM/MFEM/CUDA.
   celowanych plikach (`geometryLifecycleCommandContributions`, model i DOM
   kompozycji). ESLint zmienionych plików przechodzi z jednym wcześniejszym
   ostrzeżeniem `sceneFieldDrives` w istniejącym kodzie.
+
+## Aktualizacja: `H_ant` w FEM CPU preview — 2026-09-21
+
+W tej iteracji domknięto brakującą materializację bezpośredniego pola anteny
+na ścieżce **FEM native CPU preview**. Nie jest to jeszcze publikacja pola z
+pełnego natywnego snapshotu ani kwalifikacja całego LLG. Rozdzielenie jest
+celowe: ABI natywnego FEM snapshotu nie ma obserwabli `H_ant`, dlatego nie
+wolno było ogłaszać tej quantity jako gotowej w ścieżce snapshot/artifact.
+
+### Kontrakt i ścieżka obliczenia
+
+- Aktywność `H_ant` dla FEM CPU wynika wyłącznie z rozstrzygniętego planu:
+  `antenna_zeeman_masks` albo `solved_antenna_drive_bases`. Bez jednej z tych
+  struktur capability pozostaje pusta.
+- `H_ant` jest udostępnione w katalogu **preview**, ale nie w katalogu
+  **snapshot quantities**. FEM native GPU pozostaje fail-closed, ponieważ
+  jego obecny kontrakt urządzenia nie udostępnia obserwabli antenowej.
+- Dla aktywnego, cache'owanego i terminalnego preview ścieżka CPU wywołuje
+  `compute_antenna_field_at_time(plan, source_time)`, następnie buduje
+  `LivePreviewField` przez wspólny mesh preview builder i nakłada magnetyczną
+  maskę aktywną dla `H_ant`. W metadanych pozostają chwila źródłowa, krok,
+  rewizja żądania oraz czas materializacji.
+- Pole jest obliczane do obserwacji z rozstrzygniętego planu i nie dodaje
+  osobnego termu do RHS ani nie zmienia relaksacji. `source_time` pochodzi z
+  kontekstu wykonania preview; cache terminalny zachowuje czas startu etapu
+  zgodnie z istniejącą polityką cache.
+- Pozostałe quantity nadal przechodzą przez istniejący natywny worker preview;
+  zmiana nie obchodzi ABI dla demag, exchange, energii ani magnetyzacji.
+
+### Weryfikacja
+
+- `rustfmt --edition 2021 --check` dla pięciu zmienionych plików Rust: **OK**.
+- `git diff --check`: **OK**.
+- Zarządzany build Windows, uruchomiony przez
+  `just windows-build backend=fem device=cpu frontend=dev`, skompilował bez
+  błędów `fullmag-runner`, `fullmag-cli`, `fullmag-api` oraz `fullmag-py-core`
+  w obrazie FEM CPU. Końcowy receipt nie został przyjęty, ponieważ guard
+  tożsamości źródeł wykrył zmieniony, niezatwierdzony worktree podczas
+  wielominutowego builda; nie jest to błąd kompilacji i nie zastępuje pełnej
+  bramki runtime.
+- Testów jednostkowych Rust nie kompilowano zgodnie z blokadą sesji. Nie
+  wykonano też kwalifikacji FEM GPU, natywnego snapshotu `H_ant`, pełnej
+  trajektorii LLG, FFT ani eksportu artefaktów pola.
+
+Ta zmiana daje bezpośredni runtime preview `H_ant` dla FEM CPU, gotowy do
+dalszej kwalifikacji, ale status
+T13 pozostaje otwarty do czasu testów rzeczywistego RHS/LLG, wszystkich
+integratorów i snapshotów. T16 nadal nie jest zamknięte: projekcja do FDM,
+upload CUDA oraz parity CPU/GPU wymagają osobnych dowodów.

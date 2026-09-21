@@ -261,6 +261,14 @@ fn fdm_multilayer_quantity_is_active(plan: &FdmMultilayerPlanIR, id: QuantityId)
 
 fn fem_quantity_is_active(engine: FemEngine, plan: &FemPlanIR, id: QuantityId) -> bool {
     let engine_exposes = match engine {
+        // The CPU reference FEM observables already carry the resolved
+        // antenna field, while the native GPU ABI has no H_ant observable.
+        // Keep the GPU lane fail-closed until its device snapshot contract is
+        // qualified; the interactive GPU path must not inherit this preview
+        // capability by accident.
+        FemEngine::CpuNative if id == QuantityId::HAnt => {
+            !plan.antenna_zeeman_masks.is_empty() || !plan.solved_antenna_drive_bases.is_empty()
+        }
         FemEngine::CpuNative | FemEngine::NativeGpu => {
             crate::native_fem::can_materialize_preview_quantity(plan, id)
         }
@@ -772,6 +780,28 @@ mod tests {
             active_fem_preview_quantities(FemEngine::CpuNative, &plan, &quantities),
             vec!["m", "H_ex", "H_demag", "H_ext", "torque", "H_ani", "H_eff"]
         );
+    }
+
+    #[test]
+    fn fem_cpu_preview_exposes_resolved_antenna_field_only_when_configured() {
+        let mut plan = fem_plan();
+        assert!(active_fem_preview_quantities(FemEngine::CpuNative, &plan, &["H_ant"],).is_empty());
+
+        plan.antenna_zeeman_masks = vec![fullmag_ir::ResolvedAntennaZeemanMaskIR {
+            source: "antenna_1".into(),
+            object: "magnet_1".into(),
+            amplitude_b_t: 1.0e-3,
+            direction: [0.0, 1.0, 0.0],
+            spatial_profile: None,
+            waveform: None,
+            field_xyz: vec![[0.0, 1.0, 0.0]; plan.initial_magnetization.len()],
+        }];
+
+        assert_eq!(
+            active_fem_preview_quantities(FemEngine::CpuNative, &plan, &["H_ant"]),
+            vec!["H_ant"]
+        );
+        assert!(active_fem_preview_quantities(FemEngine::NativeGpu, &plan, &["H_ant"]).is_empty());
     }
 
     #[test]

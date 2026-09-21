@@ -778,6 +778,34 @@ rzeczywistego czasu etapu integratora (`solved_antenna_basis_uses_peak_current_s
 oraz że `AllTimeEvolution` nie jest aktywne podczas relaksacji. Są to dowody
 ścieżki FDM CPU/reference; nie zastępują pełnej bramki FEM LLG z tabeli powyżej.
 
+**Uzupełnienie implementacyjne 2026-09-21 (FEM CPU `H_ant` preview):**
+uzupełniono capability i materializację bezpośredniego pola anteny dla
+`FemEngine::CpuNative`. Jeżeli rozstrzygnięty `FemPlanIR` zawiera
+`antenna_zeeman_masks` lub `solved_antenna_drive_bases`, aktywny preview,
+cache preview i terminalny cache wywołują
+`compute_antenna_field_at_time(plan, source_time)` i budują wspólny
+`LivePreviewField` z maską magnetyczną `H_ant`. Pole jest obserwablą preview,
+nie dodatkowym termem RHS; czas i rewizja źródłowa są zapisane w metadanych
+materializacji.
+
+Nie dodano `H_ant` do natywnego katalogu snapshotów, ponieważ obecny ABI
+`NativeFemPreviewObservable` nie ma tej obserwabli. FEM GPU pozostaje
+fail-closed i nie dziedziczy capability CPU. Dzięki temu UI nie obiecuje
+wyniku, którego backend nie potrafi jeszcze odtworzyć z urządzenia ani zapisać
+w artefakcie. Ta zmiana domyka jedynie warstwę podglądu CPU; nie odhacza T13.
+
+**Dowód builda 2026-09-21:** zarządzana recepta
+`just windows-build backend=fem device=cpu frontend=dev` zakończyła kompilację
+`fullmag-runner`, CLI, API i `fullmag-py-core` bez błędów. Końcowy receipt został
+odrzucony przez guard tożsamości źródeł, bo build rozpoczął się na
+niezatwierdzonych zmianach i worktree zmienił się w trakcie; traktujemy to jako
+brak receiptu, nie jako błąd kompilacji. `rustfmt --check` i `git diff --check`
+przeszły. Testów jednostkowych Rust nie uruchamiano zgodnie z blokadą sesji.
+
+Pozostają otwarte: natywny snapshot/artifact `H_ant`, FEM GPU, pełna trajektoria
+LLG dla wszystkich integratorów i waveformów oraz osobne T16 dla projekcji FDM,
+uploadu CUDA i parity CPU/GPU.
+
 ## T14. Domknąć OpenAPI, zasoby i realtime
 
 Uzupełnienie implementacyjne 2026-09-21: `SolvedAntennaDriveResource` ma
