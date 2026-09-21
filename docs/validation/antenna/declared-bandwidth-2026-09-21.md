@@ -60,6 +60,20 @@ jako `invalid_declared_bandwidth_hz`, a walidacja IR zwraca błąd ścieżki pol
 Deklaracja nie jest częścią immutable manifestu `H_ant_basis`; zmiana pasma
 odświeża diagnostykę planu, ale nie unieważnia statycznej bazy prąd/pole.
 
+## Agregacja wielu portów
+
+Planner publikuje dodatkowo `antenna_waveform_bandwidth_aggregate.v1`. Nota
+obejmuje drive’y potencjalnie aktywne dla danego `StudyIR`, wypisuje ich ID oraz
+porty i używa konserwatywnego:
+
+$$f_{max,aggregate}=\max_i f_{max,i}.$$
+
+`AllTimeEvolution` jest filtrowane według rodzaju study. `StageIds` pozostaje
+potencjalnie aktywne, ponieważ singularny `ProblemIR` nie ma jeszcze
+konkretnego stage boundary. Jeśli jeden z portów ma nieznane pasmo, agregat
+jest `status=unknown`; nie jest emitowana częściowa liczba, która sugerowałaby
+pełne ograniczenie wspólnego źródła `H_ant_basis`.
+
 ## Weryfikacja
 
 - parser `rustfmt` z `skip_children=true` dla wszystkich zmienionych plików

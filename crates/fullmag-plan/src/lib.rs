@@ -47,7 +47,8 @@ pub mod boundary_geometry;
 pub use antenna_composition::{bind_antenna_field_solve, bind_antenna_field_solve_v03};
 pub use antenna_projection::resolve_fem_antenna_projection_mask;
 pub use antenna_validity::{
-    antenna_validity_notes, antenna_waveform_bandwidth_notes, classify_antenna_waveform_bandwidth,
+    antenna_validity_notes, antenna_waveform_bandwidth_aggregate_note,
+    antenna_waveform_bandwidth_notes, classify_antenna_waveform_bandwidth,
 };
 pub use error::PlanError;
 pub use fdm::{
@@ -219,6 +220,10 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
         .provenance
         .notes
         .extend(antenna_waveform_bandwidth_notes(problem));
+    execution_plan
+        .provenance
+        .notes
+        .push(antenna_waveform_bandwidth_aggregate_note(problem));
     execution_plan
         .provenance
         .notes

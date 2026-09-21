@@ -583,7 +583,7 @@ wall-time/peak-memory oraz kontenerowego benchmarku direct RT0.
 - [x] Dodać osobny, jawny kontrakt deklarowanego pasma dla sampled waveform; nie uznawać samego czasu próbkowania za fizyczny `f_max`.
 - [ ] Prostokątny pulse i skok nie mają skończonego idealnego pasma. Nie wyznaczać `f_max` wyłącznie jako odwrotności długości impulsu. Wymagać opisania bandwidth/rise-time lub zwrócić brak oceny.
 - [x] Ostrzeżenia przeliczać przy zmianie waveform, ale nie stawiać przez to bazy jako stale. Planner publikuje osobną notę dla każdego `SolvedAntennaDriveIR`.
-- [ ] Dla wielu aktywnych portów agregować wspólne ograniczenie pasma i wspólne źródło pola; obecna diagnostyka pozostaje per-drive.
+- [x] Dla wielu aktywnych portów agregować wspólne ograniczenie pasma i wspólne źródło pola; obecna diagnostyka pozostaje per-drive.
 - [ ] Zapisać measured wall time, peak memory, pairs, refined pairs, error i cancellation latency. Dopiero jeśli direct solver nie spełnia potrzeb, zaprojektować oddzielnie kwalifikowany fast operator; samo zwiększenie limitu nie jest optymalizacją.
 
 Uzupełnienie implementacyjne 2026-09-12: `fullmag-ir` publikuje wersjonowany
@@ -626,6 +626,17 @@ fizyczne pasmo. Zgodna nota provenance ma
 opcjonalna, kompatybilna ze starym JSON przez `serde(default)`, i nie zmienia
 niezmiennej sygnatury statycznej bazy pola. Ekspozycja tego pola w zasobie
 OpenAPI/Inspectorze pozostaje elementem T14.
+
+Uzupełnienie implementacyjne 2026-09-21 (agregat wielu portów): planner
+publikuje dodatkową notę `antenna_waveform_bandwidth_aggregate.v1` dla
+wspólnego źródła `H_ant_basis`. Dla drive’ów potencjalnie aktywnych w danym
+`StudyIR` agreguje konserwatywnie `max(f_max_hz)` i zapisuje listę drive’ów oraz
+portów. `AllTimeEvolution` jest filtrowane przez rodzaj study, natomiast
+`StageIds` pozostaje potencjalnie aktywne, bo pojedynczy `ProblemIR` nie zna
+jeszcze konkretnego stage boundary. Jeśli choć jeden taki drive ma nieznane
+pasmo, agregat ma `status=unknown` i wymienia jego ID; nie jest tworzona
+fałszywa liczba z czasu próbkowania. Nota trafia zarówno do zwykłego planu
+wykonania, jak i do samodzielnego `AntennaFieldSolvePlanIR`.
 
 Kontrakt arytmetyczny testu:
 

@@ -380,6 +380,9 @@ pub(crate) fn plan_antenna_field_solve_v03(
         ),
     ];
     provenance_notes.extend(crate::antenna_validity::antenna_waveform_bandwidth_notes(problem));
+    provenance_notes.push(
+        crate::antenna_validity::antenna_waveform_bandwidth_aggregate_note(problem),
+    );
     provenance_notes.extend(crate::antenna_validity::antenna_validity_notes(problem));
 
     Ok(AntennaFieldSolvePlanIR {
