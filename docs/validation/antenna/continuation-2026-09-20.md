@@ -1,17 +1,38 @@
 # Anteny mikrofalowe — stan i przekazanie do dalszej pracy
 
-Data: 2026-09-20. Status całości: **częściowa implementacja, odbiór produkcyjny otwarty**.
+Data bazowego przekazania: 2026-09-20; aktualizacja: 2026-09-21. Status całości:
+**częściowa implementacja, odbiór produkcyjny otwarty**.
 
 ## 1. Punkt wznowienia i zakres tego dokumentu
 
 - Worktree: `D:/git/fullmag/worktrees/microwave-antenna-latest-20260909`.
-- Rewizja kodu: `d95ddb72a193ef6bcd06a5624f144e6c2f8c5cf8`.
+- Rewizja kodu przy ostatniej aktualizacji: `eb2559d2aeec364bd6f23a2cf6825cf1e0cdf6b2`.
 - Przed aktualizacją dokumentacji lokalną zmianą był `justfile`; należy zachować ją i ustalić jej właściciela przed integracją.
 - Duże dane, buildy i wyniki: `D:/git/fullmag/storage`, z osobnym podkatalogiem zadania. Ścieżki linuksowe wewnątrz kontenera nie są Windowsowym rootem storage.
 - W tej aktualizacji sprawdzono dokumenty, historię Git, obecność wskazanych symboli i recepty. Nie uruchamiano ponownie solverów ani przeglądarkowego odbioru modułu. Poniższe pozytywne wyniki są historycznymi zapisami z 9–12 września.
 - Nie pobierano zdalnego mastera. Aktualność integracji należy ustalić przed kolejną zmianą kodu.
 
 To wewnętrzny dokument wykonawczy. Właścicielem równań, jednostek, założeń i publicznej semantyki pozostaje [notatka 0950](../../physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md). Nie ustanawia się tutaj nowych modeli fizycznych ani API.
+
+### Aktualizacja wykonawcza 2026-09-21
+
+Po audycie natywnego RHS zapisano dwa commity:
+
+- `38febcef2` dodaje do natywnego FEM CPU pełnodomenowy carrier
+  `PREPROJECTED_NODAL` dla legacy `mqs_2p5d_az` oraz resolved
+  `antenna_zeeman_masks`; geometrię pola wylicza hostowy
+  `compute_per_unit_antenna_fields`, skala `current_a` jest stosowana raz,
+  a native ocenia tylko waveform na każdym rzeczywistym podetapie RK;
+- `eb2559d2a` ujednolica opis capability `H_ant` w planie. Katalog quantity
+  reklamuje `H_ant` dla CPU także przy kompletnym legacy źródle (`antenna` i
+  `drive`), natomiast GPU nadal pozostaje fail-closed.
+
+Zarządzany `just windows-build backend=fem device=cpu frontend=dev` przeszedł
+po zmianie kodu w trybie `fem-cpu` i skompilował `fullmag-runner`, CLI, API oraz
+`fullmag-py-core`. To jest dowód kompilacji kontenerowej, nie odbiór
+numeryczny: nie uruchamiano testów jednostkowych Rust, pełnej trajektorii LLG,
+niezależnego orakla RHS/energii/torque ani kwalifikacji GPU. T13 pozostaje
+otwarte.
 
 Kolejność lektury: ten dokument → [plan T00–T18](../../superpowers/plans/2026-09-08-microwave-antenna-refactoring-plan.md) → [audyt F01–F13](../../audits/2026-09-08-microwave-antenna-worktree-audit.md) → [punkt bazowy integracji](integration-baseline.md) → [ADR 0017](../../adr/0017-staged-antenna-field-basis-workflow.md) i notatka 0950.
 
@@ -32,7 +53,7 @@ Historyczne opisy backendów w source-map 0950 są bardziej zachowawcze i częś
 | Widmo T10 | Preflight, konwencje fazy/normalizacji, okna i zapis realizacji; zapisano 18/18 testów | Zweryfikowana równowaga dla transverse, cache analizy, dalsza kwalifikacja próbkowania |
 | Budżet T11 | `antenna_direct_oersted_budget.v1`, kontrola par i częściowa agregacja; wersjonowane pasmo waveformów | Agregacja bloków/retries, pamięć, anulowanie, diagnostyka ważności i benchmark |
 | Artefakty T12 | Atomowa publikacja widma, kontrola konfliktów; cache-hit bez fikcyjnego solve | Anulowanie batcha, fault injection, równoległe solve i pełny resolver stage/output |
-| FEM T13 | Kontenerowy kontrakt solved-antenna → regional-Zeeman, FFI i materializacja bazy | Pełne trajektorie LLG, wszystkie wspierane RK, przebiegi i snapshoty |
+| FEM T13 | Kontenerowy kontrakt solved-antenna → regional-Zeeman, FFI, materializacja bazy oraz CPU carrier dla legacy/maski | Pełne trajektorie LLG, wszystkie wspierane RK, przebiegi i snapshoty |
 | API T14 | Typowane zasoby, ETag/304, binarne payloady widma, rozróżnienie missing/unsupported | Generated OpenAPI, aktualność zależności, reconnect i pełny E2E |
 | UI T15 | Węzły Explorer, routing Inspectorów, metadane i heatmapa widma | Cały workflow w przeglądarce, stabilność edycji, Object/Airbox i eksport |
 | FDM T16 | CPU/reference ma test czasu waveformu, skali prądu i braku domyślnego RF w Relax | Publiczny CLI, rzeczywiste centra komórek, CUDA i osobne dowody GPU |
@@ -44,7 +65,7 @@ Test samego FFT pola anteny nie dowodzi amplitudy wzbudzonych fal spinowych. Wid
 
 | Realizacja | Co wiadomo | Status pełnego workflow |
 |---|---|---|
-| FEM CPU | Istnieją części solve, projekcji i konsumpcji; historycznie zaliczony kontrakt natywny | Rozwojowa, bez pełnego odbioru LLG i zbieżności |
+| FEM CPU | Istnieją części solve, projekcji i konsumpcji; native RHS obejmuje teraz preprojected legacy/maski, a `H_ant` ma hostowy preview/artifact | Rozwojowa, bez pełnego odbioru LLG i zbieżności |
 | FEM GPU | Wspólne pakowanie nie stanowi dowodu wykonania na GPU | Niezakwalifikowana; nie promować obsługi bez pomiaru urządzenia |
 | FDM CPU | Referencyjne testy bazy i waveformu | Publiczny workflow i projekcja na siatkę wymagają domknięcia |
 | FDM GPU | Brak udokumentowanej pełnej kwalifikacji antenowej CUDA | Niezakwalifikowana; wymuszony GPU wymaga jawnego odrzucenia do czasu wsparcia |
