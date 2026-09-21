@@ -781,7 +781,8 @@ oraz że `AllTimeEvolution` nie jest aktywne podczas relaksacji. Są to dowody
 **Uzupełnienie implementacyjne 2026-09-21 (FEM CPU `H_ant` preview):**
 uzupełniono capability i materializację bezpośredniego pola anteny dla
 `FemEngine::CpuNative`. Jeżeli rozstrzygnięty `FemPlanIR` zawiera
-`antenna_zeeman_masks` lub `solved_antenna_drive_bases`, aktywny preview,
+`antenna_zeeman_masks`, `solved_antenna_drive_bases` lub kompletny legacy
+`mqs_2p5d_az` (`antenna` + `drive`), aktywny preview,
 cache preview i terminalny cache wywołują
 `compute_antenna_field_at_time(plan, source_time)` i budują wspólny
 `LivePreviewField` z maską magnetyczną `H_ant`. Pole jest obserwablą preview,
@@ -810,7 +811,8 @@ uploadu CUDA i parity CPU/GPU.
 **Uzupełnienie implementacyjne 2026-09-21 (hostowy artifact `H_ant` FEM CPU):**
 uzupełniono ścieżkę outputów native FEM CPU. `H_ant` pozostaje quantity
 pochodną (`Derived`) i jest reklamowane tylko wtedy, gdy aktywny plan ma
-`antenna_zeeman_masks` lub `solved_antenna_drive_bases`. Początkowy,
+`antenna_zeeman_masks`, `solved_antenna_drive_bases` lub kompletny legacy
+`mqs_2p5d_az` (`antenna` + `drive`). Początkowy,
 accepted-step, terminalny i końcowy zaplanowany output buduje hostowy
 `FieldSnapshot` przez `compute_antenna_field_at_time(plan, stats.time)` w
 pełnym porządku `plan.mesh.nodes`; do artefaktu trafiają rzeczywisty czas,
