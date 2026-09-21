@@ -43,6 +43,8 @@ stage nie jest używany do udawania gotowego pola, gdy brakuje właściwego
   `src/modules/viewport-3d/viewport3dRenderModel.test.ts` oraz
   `src/modules/viewport-3d/hooks/useViewport3DSceneModel.test.ts`;
 - ESLint trzech zmienionych plików: **OK**;
+- lokalny `pnpm exec react-doctor --verbose --scope changed`: **OK**, wynik
+  `91/100`, **No issues found** po wydzieleniu helperów z pliku komponentu;
 - `git diff --check`: **OK**;
 - typecheck Control Room zatrzymuje się na trzech znanych błędach nullability
   w `src/modules/field-map/FieldMapModule.tsx:588-591`; w zmienionych plikach

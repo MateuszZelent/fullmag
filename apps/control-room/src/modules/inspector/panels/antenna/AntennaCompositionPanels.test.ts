@@ -2,10 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { SceneResource } from "@/kernel/api/apiTypes";
 
-import {
-  antennaWaveformBandwidthValue,
-  resolveAntennaRuntimeIds,
-} from "./AntennaCompositionPanels";
+import { antennaWaveformBandwidthValue } from "./AntennaCompositionModel";
+import { resolveAntennaRuntimeIds } from "./AntennaCompositionRuntime";
 
 function sceneFixture(): SceneResource {
   return {

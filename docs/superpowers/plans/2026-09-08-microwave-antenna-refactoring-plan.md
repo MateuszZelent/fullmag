@@ -845,6 +845,10 @@ Pozostaje to cienkimi metadanymi control plane; payloady pola i FFT nie są
 Pełny browser smoke, diagnostyka React oraz kwalifikacja runtime nadal pozostają
 otwarte.
 
+W tej samej iteracji helpery runtime i formatter pasma zostały wydzielone z
+pliku komponentu do modułów modelu. React Doctor nie zgłasza już ostrzeżeń
+`only-export-components` dla tego obszaru.
+
 **Pliki:** istniejące AntennaObjectPanel/Model/test, geometry command i test, Explorer/ribbon; nowe panele w `apps/control-room/src/modules/inspector/panels/antenna/`: `AntennaConductorPanel.tsx`, `AntennaPortPanel.tsx`, `AntennaSolutionPanel.tsx`, `AntennaProjectionPanel.tsx`, `SolvedAntennaDrivePanel.tsx`, `AntennaSpectrumPanel.tsx`.
 
 - [ ] Rozdzielić etykiety „Pole regionalne” i „Antena przewodnikowa”. Stary regional panel pozostaje edytorem regional drive; nie używać go jako fallback dla brakującej konfiguracji solved source.

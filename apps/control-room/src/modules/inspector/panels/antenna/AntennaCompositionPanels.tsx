@@ -13,14 +13,12 @@ import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { AntennaSourceSpectrumPayloadView } from "./AntennaSourceSpectrumPayloadView";
-
-export type AntennaCompositionKind =
-  | "conductor"
-  | "port"
-  | "solution"
-  | "projection"
-  | "drive"
-  | "spectrum";
+import { antennaWaveformBandwidthValue } from "./AntennaCompositionModel";
+import {
+  resolveAntennaRuntimeIds,
+  type AntennaCompositionKind,
+  type AntennaRuntimeIds,
+} from "./AntennaCompositionRuntime";
 
 type AntennaTarget = NonNullable<
   SceneResource["antenna_target_projections"]
@@ -60,12 +58,6 @@ type AntennaStageOutputCatalogResult = ReturnType<
   typeof useAntennaStageOutputCatalogResource
 >;
 
-interface AntennaRuntimeIds {
-  solutionId: string | null;
-  spectrumOutputId: string | null;
-  stageId: string | null;
-}
-
 function selectedObjectId(selection: InspectorPanelProps["selection"]): string | null {
   return selection.ref?.type === "scene-object"
     ? selection.ref.objectId
@@ -88,72 +80,6 @@ function selectedResourceKind(
     : null;
 }
 
-function fieldSolutionOutputId(stage: AntennaSolveStage | undefined): string | null {
-  return (
-    stage?.outputs.find((output) => output.quantity === "H_ant_basis")?.id ??
-    null
-  );
-}
-
-export function resolveAntennaRuntimeIds(
-  kind: AntennaCompositionKind | null,
-  resourceId: string | null,
-  scene: SceneResource | null,
-): AntennaRuntimeIds {
-  if (!kind || !resourceId || !scene) {
-    return { solutionId: null, spectrumOutputId: null, stageId: null };
-  }
-
-  switch (kind) {
-    case "solution": {
-      const stage = scene.antenna_field_solve_stages?.find(
-        (candidate) => candidate.id === resourceId,
-      ) as AntennaSolveStage | undefined;
-      return {
-        solutionId: fieldSolutionOutputId(stage),
-        spectrumOutputId: null,
-        stageId: stage?.id ?? null,
-      };
-    }
-    case "projection": {
-      const projection = scene.antenna_target_projections?.find(
-        (candidate) => candidate.id === resourceId,
-      ) as AntennaProjection | undefined;
-      return {
-        solutionId: projection?.solution.output_id ?? null,
-        spectrumOutputId: null,
-        stageId: projection?.solution.stage_id ?? null,
-      };
-    }
-    case "drive": {
-      const drive = scene.solved_antenna_drives?.find(
-        (candidate) => candidate.id === resourceId,
-      ) as AntennaDrive | undefined;
-      const projection = scene.antenna_target_projections?.find(
-        (candidate) => candidate.id === drive?.projection_ref,
-      ) as AntennaProjection | undefined;
-      return {
-        solutionId: projection?.solution.output_id ?? null,
-        spectrumOutputId: null,
-        stageId: projection?.solution.stage_id ?? null,
-      };
-    }
-    case "spectrum": {
-      const request = scene.antenna_spectrum_requests?.find(
-        (candidate) => candidate.id === resourceId,
-      ) as AntennaSpectrumRequest | undefined;
-      return {
-        solutionId: request?.solution_ref.output_id ?? null,
-        spectrumOutputId: request?.output_id ?? null,
-        stageId: request?.solution_ref.stage_id ?? null,
-      };
-    }
-    case "conductor":
-    case "port":
-      return { solutionId: null, spectrumOutputId: null, stageId: null };
-  }
-}
-
 function recordValue(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -168,14 +94,6 @@ function numberValue(value: unknown, unit = ""): string {
   return typeof value === "number" && Number.isFinite(value)
     ? `${value.toExponential(4)}${unit ? ` ${unit}` : ""}`
     : `unavailable${unit ? ` ${unit}` : ""}`;
-}
-
-export function antennaWaveformBandwidthValue(value: unknown): string {
-  const declaration = recordValue(value);
-  if (!declaration) return "not declared";
-  return typeof declaration.f_max_hz === "number" && Number.isFinite(declaration.f_max_hz)
-    ? numberValue(declaration.f_max_hz, "Hz")
-    : "invalid declaration";
 }
 
 function targetValue(target: AntennaTarget): string {
