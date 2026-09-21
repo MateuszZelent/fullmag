@@ -291,7 +291,7 @@ export class TestElement extends TestNode {
   }
 
   getAttribute(name: string): string | null {
-    return this.attributes.get(name) ?? null;
+    return this.attributes.get(normalizeAttributeName(name)) ?? null;
   }
 
   getAttributeNames(): string[] {
@@ -313,7 +313,7 @@ export class TestElement extends TestNode {
   }
 
   hasAttribute(name: string): boolean {
-    return this.attributes.has(name);
+    return this.attributes.has(normalizeAttributeName(name));
   }
 
   matches(selector: string): boolean {
@@ -334,15 +334,21 @@ export class TestElement extends TestNode {
   }
 
   removeAttribute(name: string): void {
-    this.attributes.delete(name);
-    if (name.toLowerCase() === "inputmode") this.inputMode = "";
+    const normalizedName = normalizeAttributeName(name);
+    this.attributes.delete(normalizedName);
+    if (normalizedName === "inputmode") this.inputMode = "";
   }
 
   setAttribute(name: string, value: string): void {
+    const normalizedName = normalizeAttributeName(name);
     const normalizedValue = String(value);
-    this.attributes.set(name, normalizedValue);
-    if (name.toLowerCase() === "inputmode") this.inputMode = normalizedValue;
+    this.attributes.set(normalizedName, normalizedValue);
+    if (normalizedName === "inputmode") this.inputMode = normalizedValue;
   }
+}
+
+function normalizeAttributeName(name: string): string {
+  return name.toLowerCase();
 }
 
 const VOID_HTML_ELEMENTS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
