@@ -1,5 +1,25 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## DE-SMOKE — kontrola wierszy wynikowych, 2026-09-22
+
+Dodano `validate_de_smoke_rows.validate_rows` i włączono ją do wykonania
+obu wariantów DE-SMOKE. Wymaga pełnych dwóch/pięciu próbek, zgodności
+sample_index z wektorem k, nieujemnych całkowitych ID, unikalnych modów
+oraz gałęzi w próbce, skończonych częstości w zamrożonym oknie 8.5–12 GHz
+i residual_norm w zakresie 0–1e-8. Brak danych nie jest zamieniany na zero.
+Nawet exit 0 procesu nie daje completed_unqualified, gdy kontrola zawiedzie.
+
+Łącznie 28 testów Python i cztery podtesty klienta/kontroli wierszy przeszły.
+Wynik tej warstwy jest wyłącznie preflight: zawsze zachowuje qualification
+NOT VERIFIED i wylicza brakujące wymagania. Nie zastępuje residualu
+oryginalnego pencila, natywnego pochodzenia, pól/fazy, identyfikacji n0,
+porównania analitycznego ani zbieżności. Pełna bramka T6 nadal otwarta;
+nie zmieniono kryteriów C1.
+
+Log joba `6b2de4a74bf64669ae0e92610b1bb078` potwierdził przejście do
+native-build i kompilowanie zależności Rust. Poprzednia obserwacja samego
+Pythona opisuje wcześniejszy etap. Nie ma jeszcze terminalnego wyniku.
+
 ## T4 — wzorzec demagu i stan workera, 2026-09-22
 
 Niezależny wzorzec potencjału 1D oraz jego wyprowadzenie zapisano w commicie

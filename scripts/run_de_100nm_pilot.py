@@ -16,6 +16,7 @@ import sys
 import time
 
 import run_comsol_dispersion_benchmark as managed
+from validate_de_smoke_rows import validate_rows
 
 MODEL = "examples/fem_de_film_100nm_numeric_pilot.py"
 PILOTS = {
@@ -91,6 +92,9 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
             # This reuses the artifact contract only, not C1 scientific parameters.
             artifacts = managed._validate_case_artifacts(output / pilot, "c1")
             artifacts["case"] = pilot
+            if PILOTS[pilot][1] is not None:
+                artifacts["row_preflight"] = validate_rows(
+                    output / pilot / "eigen/dispersion.csv", PILOTS[pilot][1])
             result.update(status="completed_unqualified", artifacts=artifacts)
     except subprocess.TimeoutExpired:
         result["error"] = "host Compose watchdog expired after the container deadline and grace period"
