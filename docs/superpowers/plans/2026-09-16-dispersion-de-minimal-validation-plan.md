@@ -258,3 +258,52 @@ Wolne miejsce wynosi około 16,7 GB. Próba uruchomienia Windowsowej usługi
 sesji. Job pozostaje zachowany do wznowienia po przywróceniu Docker Desktop;
 nie użyto ręcznego Dockera ani CPU fallbacku. Managed compile, receipt, pilot
 DE, punkty FEM i wykres są nadal `NOT VERIFIED`.
+
+
+## T4 — niezależny wzorzec potencjału 1D, 2026-09-22
+
+Dodano `scripts/de_film_demag_reference.py::film_response`, pomocniczy wzorzec
+P1 dla jednorodnych po grubości amplitud magnetyzacji. Nie jest to solver
+modów Fullmag, wynik SLEPc ani dowód odbioru T4. Nie zmienia Python DSL/IR
+ani wsparcia FDM CPU/GPU lub FEM CPU/GPU. Jedynym zastosowaniem jest
+niezależne porównanie potencjału i pola z natywnym operatorem FEM CPU.
+
+Punktem wyjścia są równania potencjału i energii z
+`docs/physics/0800-fem-static-pbc-demag.md` oraz słaba postać
+`eq-0828-full-bloch-weak` w
+`docs/physics/0828-fem-frequency-domain-floquet-demag.md`.
+Po wydzieleniu czynnika $\exp(-\mathrm{i}ky)$ otrzymujemy:
+
+$$
+\int (v'^*\phi'+k^2v^*\phi)\,dz
+=\int_{-t/2}^{t/2}(\mathrm{i}k v^*M_y+v'^*M_z)\,dz,
+\qquad H_y=\mathrm{i}k\phi,\quad H_z=-\phi'.
+$$
+
+Tutaj $z,t,d$ są w metrach, $k$ w rad/m, $M_y,M_z,H_y,H_z$ w A/m,
+a $\phi$ w A; $d$ oznacza padding po każdej stronie. Końce domeny
+$z=\pm(t/2+d)$ mają potencjał zero. W solverze użyto $s=z/t$ i
+$p=\phi/t$, aby uniknąć mieszania skali nanometrów ze współczynnikami
+macierzy. Interfejsy filmu są dokładnymi węzłami; P1 używa dokładnej
+lokalnej macierzy masy i sztywności oraz źródła powierzchniowego ze słabej
+postaci. Rozwiązanie trójdiagonalne nie korzysta ze wzoru częstości.
+
+Raportowana energia na jednostkę powierzchni to kwadratowa forma
+$\mu_0\int(|\phi'|^2+k^2|\phi|^2)dz/2$ w J/m². Jest porównywana z
+$-\mu_0\operatorname{Re}\int_{film}\mathbf M^*\cdot\mathbf H\,dz/2$.
+To konwencja normy amplitud zespolonych, nie średnia czasowa pola rzeczywistego
+(ta wymaga dodatkowego czynnika 1/2).
+
+Sześć lekkich testów Pythona przeszło: dokładny czynnik Gamma
+$N_z=2d/(2d+t)$, brak pola dla jednorodnego $M_y$ w Gamma, znak odpowiedzi,
+zgodność obu energii, faza i sprzężenie zespolone przy zmianie znaku k,
+zbieżność do otwartego czynnika $N_z=(1-e^{-|k|t})/(|k|t)$ oraz odrzucanie
+niepoprawnych danych. Ostatnia kontrola dotyczy jednorodnego wymuszenia,
+nie dokładności jednomodowego przybliżenia widma.
+
+Dla t=10 nm, d=2 µm i Mz=1 A/m otrzymano średnie Hz=-0.997506234414 A/m
+w Gamma oraz -0.990059656628 A/m dla ky=2e6 rad/m (12 warstw filmu,
+256 elementów na każdy obszar powietrza). Residuale algebraiczne obu
+rozwiązań były poniżej 2e-15. Te liczby są wyłącznie referencją 1D.
+Nadal trzeba wyeksportować i porównać pola natywnego operatora, kontrolować
+jego siatkę i wykonać T5–T7; nie policzono nowych częstości Fullmag.
