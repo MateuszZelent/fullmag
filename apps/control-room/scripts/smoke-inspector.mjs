@@ -9,6 +9,7 @@ const outputDir = resolve(
 const INSPECTOR_REQUEST_QUIET_MS = 500;
 const INSPECTOR_REQUEST_TIMEOUT_MS = 5_000;
 const INSPECTOR_MAX_REQUESTS_PER_PATH = 8;
+const INSPECTOR_SCENE_TRACE_LIMIT = 20;
 const INSPECTOR_REQUEST_LIMITS = new Map([
   [
     "GET /v2/sessions/current/model/regions",
@@ -1430,7 +1431,12 @@ async function expandInspectorNode(page, nodeId) {
       })),
     );
     throw new Error(
-      `Explorer node ${nodeId} did not become visible. Tree snapshot: ${JSON.stringify(treeState)}. ${error}`,
+      `Explorer node ${nodeId} did not become visible. Tree snapshot: ${JSON.stringify(treeState)}. ` +
+        `Fixture diagnostics: ${JSON.stringify({
+          requestBudgetViolation: fixture.requestBudgetViolation,
+          requestCounts: Object.fromEntries(fixture.requestCounts),
+          sceneResponseTrace: fixture.sceneResponseTrace,
+        })}. ${error}`,
     );
   }
   if ((await node.getAttribute("aria-expanded")) !== "false") return;
@@ -1445,6 +1451,33 @@ async function expandInspectorNode(page, nodeId) {
     nodeId,
     { timeout: 60_000 },
   );
+}
+
+function recordInspectorSceneResponse(fixture, { count, limit, status }) {
+  const scene = fixture.scene;
+  const objectIds = Array.isArray(scene?.objects)
+    ? scene.objects
+      .map((object) => (
+        object && typeof object === "object" && typeof object.id === "string"
+          ? object.id
+          : null
+      ))
+      .filter((objectId) => objectId !== null)
+      .slice(0, 32)
+    : [];
+  fixture.sceneResponseTrace.push({
+    count,
+    limit,
+    objectIds,
+    revision: scene?.revision ?? fixture.revision ?? null,
+    status,
+  });
+  if (fixture.sceneResponseTrace.length > INSPECTOR_SCENE_TRACE_LIMIT) {
+    fixture.sceneResponseTrace.splice(
+      0,
+      fixture.sceneResponseTrace.length - INSPECTOR_SCENE_TRACE_LIMIT,
+    );
+  }
 }
 
 async function assertHealthyViewportCanvas(page, label) {
@@ -1575,6 +1608,7 @@ function createInspectorFixture() {
     visualizationMutationBodies: [],
     requestCounts: new Map(),
     requestBudgetViolation: null,
+    sceneResponseTrace: [],
     analysisProduct: "driven_response",
     unknownMutationPaths: [],
     unknownGetPaths: [],
@@ -1694,6 +1728,13 @@ async function installInspectorFixtureApi(page, fixture) {
         limit: requestLimit,
         recent: fixture.requests.slice(-20),
       };
+      if (path === "/v2/sessions/current/model/scene" && request.method() === "GET") {
+        recordInspectorSceneResponse(fixture, {
+          count: requestCount,
+          limit: requestLimit,
+          status: 508,
+        });
+      }
       return fulfillJson(
         route,
         { error: { code: "inspector_fixture_request_budget_exceeded" } },
@@ -1860,7 +1901,14 @@ async function installInspectorFixtureApi(page, fixture) {
         target_id: url.searchParams.get("target_id") ?? "object:film",
       });
     }
-    if (path === "/v2/sessions/current/model/scene") return fulfillJson(route, fixture.scene);
+    if (path === "/v2/sessions/current/model/scene" && request.method() === "GET") {
+      recordInspectorSceneResponse(fixture, {
+        count: requestCount,
+        limit: requestLimit,
+        status: 200,
+      });
+      return fulfillJson(route, fixture.scene);
+    }
     if (path === "/v2/sessions/current/model/readiness") return fulfillJson(route, {
       blockers: [],
       capabilities: {
