@@ -5,6 +5,12 @@
 
 #include <petscksp.h>
 #include <slepceps.h>
+#if PETSC_VERSION_LT(3, 13, 0)
+// PETSc 3.12 keeps PetscObjectGetId() in its private compatibility header,
+// although the symbol is still exported by the runtime.  Declare that stable
+// C entry point locally instead of including PETSc internals in this backend.
+extern "C" PetscErrorCode PetscObjectGetId(PetscObject, PetscObjectId *);
+#endif
 #if !PETSC_VERSION_LT(3, 16, 0)
 #include <petscdevice.h>
 #endif
@@ -56,6 +62,35 @@ namespace fullmag::fem::frequency_domain {
 namespace {
 
 using Complex = std::complex<double>;
+
+#if PETSC_VERSION_LT(3, 13, 0)
+PetscErrorCode set_mat_shell_vec_type_compat(Mat, VecType)
+{
+    // MatShellSetVecType() was introduced in PETSc 3.13.  The old managed
+    // runtime cannot safely promise CUDA-vector creation for MATSHELL, so the
+    // GPU modal lane must fail closed rather than silently use host vectors.
+    return PETSC_ERR_SUP;
+}
+#else
+PetscErrorCode set_mat_shell_vec_type_compat(Mat matrix, VecType type)
+{
+    return MatShellSetVecType(matrix, type);
+}
+#endif
+
+#if defined(SLEPC_VERSION_MAJOR) && \
+    (SLEPC_VERSION_MAJOR > 3 || \
+     (SLEPC_VERSION_MAJOR == 3 && SLEPC_VERSION_MINOR >= 15))
+PetscErrorCode set_st_preconditioner_mat_compat(ST st, Mat matrix)
+{
+    return STSetPreconditionerMat(st, matrix);
+}
+#else
+PetscErrorCode set_st_preconditioner_mat_compat(ST st, Mat matrix)
+{
+    return STPrecondSetMatForPC(st, matrix);
+}
+#endif
 
 void destroy_cached_gpu_context() noexcept;
 
@@ -1812,7 +1847,7 @@ bool create_materialized_shifted_operator_cuda(
             dimension,
             &context,
             &shifted_shell) == PETSC_SUCCESS &&
-        MatShellSetVecType(shifted_shell, VECCUDA) == PETSC_SUCCESS &&
+        set_mat_shell_vec_type_compat(shifted_shell, VECCUDA) == PETSC_SUCCESS &&
         MatShellSetOperation(
             shifted_shell,
             MATOP_MULT,
@@ -1889,7 +1924,7 @@ bool create_gpu_solver_state(
             dimension,
             &persistent->split,
             &state.shell) == PETSC_SUCCESS &&
-        MatShellSetVecType(state.shell, VECCUDA) == PETSC_SUCCESS &&
+        set_mat_shell_vec_type_compat(state.shell, VECCUDA) == PETSC_SUCCESS &&
         MatShellSetOperation(
             state.shell,
             MATOP_MULT,
@@ -1955,7 +1990,7 @@ bool create_gpu_solver_state(
             problem.validation_only_adapter ? STSHIFT : STSINVERT) == PETSC_SUCCESS &&
         STSetShift(state.st, target_eigenvalue) == PETSC_SUCCESS &&
         (problem.validation_only_adapter ||
-         STSetPreconditionerMat(state.st, state.preconditioner) == PETSC_SUCCESS) &&
+         set_st_preconditioner_mat_compat(state.st, state.preconditioner) == PETSC_SUCCESS) &&
         STGetKSP(state.st, &state.st_ksp) == PETSC_SUCCESS &&
         KSPSetType(
             state.st_ksp,

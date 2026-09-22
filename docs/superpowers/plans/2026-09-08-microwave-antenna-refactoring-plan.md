@@ -862,6 +862,44 @@ i build root
 Jest to dowód kompilacji i tożsamości czystego źródła, nie dowód numerycznej
 zgodności LLG; testów jednostkowych Rust nadal nie kompilowano.
 
+**Kwalifikacja native FEM LLG CPU FP64 2026-09-21:** recepta
+`just verify-fem-llg-time-domain-qualification` przeszła w obrazie
+`fullmag/fem-gpu:local`, z executable ustawionym jawnie na lane `cpu`.
+Build i wykonanie zakończyły się kodem 0, a końcowy walidator zgłosił
+`FEM LLG time-domain CPU FP64 qualification artifact PASS`. Artefakt
+`.fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64/qualification.json`
+ma `status: pass`, `device: cpu`, `precision: fp64`, integrator `rk45` oraz
+polityki kroku `adaptive` i `fixed`; source snapshot ma digest
+`8bc150aef9007662d1ff29103f9896feb760ceff51b38f3b6d35bb398670fb21`.
+Wynik obejmuje macrospin dla `alpha={0.1,1,10}`, kontrolę trybu wymiany,
+odrzucone próby adaptive, bilans energii oraz `relax_to_run` z dokładnym
+handoffem stanu, zerowym błędem replay i świeżymi polami endpointu.
+
+Przed kwalifikacją dodano wyłącznie adaptery zgodności dla obrazu z PETSc
+3.12.4/SLEPc 3.12.2: GMRES zachowuje domyślną tolerancję w starszej wersji,
+a API macierzy preconditionera jest wybierane przez wersję biblioteki.
+Brakujące w publicznym nagłówku PETSc
+3.12 `PetscObjectGetId` ma lokalną deklarację eksportowanego symbolu.
+`MatShellSetVecType` (dostępne od PETSc 3.13) dla starego obrazu kończy
+GPU modalny jawnie `PETSC_ERR_SUP`; nie jest to cichy fallback do wektorów
+hostowych. Obejście pozwoliło zbudować wspólny target bez zmiany kontraktu
+CPU, lecz nie stanowi dowodu wykonania GPU.
+
+**Kontrola wariantu bez SLEPc 2026-09-22:** recepta
+`just verify-fem-mixed-p1-local-interactions-native-contract` została uruchomiona w tym
+samym obrazie z `FULLMAG_FEM_WITH_SLEPC=OFF`. Zarządzany build ponownie
+zbudował `fullmag_fem`, `fem_mixed_p1_contract` i `fem_mesh_contract`, a
+kontrakty uruchomiono bez błędu widocznego w logu. Odczyt narzędzia nie
+zachował kodu zakończenia recepty; pełny PASS wykonania pozostaje
+niepotwierdzony. Jest to
+potwierdzenie, że adapter CPU jest bezpiecznie odizolowany od konfiguracji
+bez SLEPc; nie jest to kwalifikacja modalnego GPU ani antenowego RHS.
+
+Ta bramka zamyka bazową kwalifikację czasowego LLG CPU FP64, ale nie odhacza
+T13. Nadal brakuje antenowego RHS z niezależnym oraclem, wszystkich
+wspieranych explicit RK i waveformów anteny, snapshotu `H_ant`/energii/
+torque z rzeczywistego czasu oraz kwalifikacji FEM GPU i T16.
+
 ## T14. Domknąć OpenAPI, zasoby i realtime
 
 Uzupełnienie implementacyjne 2026-09-21: `SolvedAntennaDriveResource` ma

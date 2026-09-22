@@ -1,6 +1,6 @@
 # Anteny mikrofalowe — stan i przekazanie do dalszej pracy
 
-Data bazowego przekazania: 2026-09-20; aktualizacja: 2026-09-21. Status całości:
+Data bazowego przekazania: 2026-09-20; aktualizacja: 2026-09-22. Status całości:
 **częściowa implementacja, odbiór produkcyjny otwarty**.
 
 ## 1. Punkt wznowienia i zakres tego dokumentu
@@ -10,7 +10,7 @@ Data bazowego przekazania: 2026-09-20; aktualizacja: 2026-09-21. Status całośc
   kod anteny: `38febcef2`.
 - Przed aktualizacją dokumentacji lokalną zmianą był `justfile`; należy zachować ją i ustalić jej właściciela przed integracją.
 - Duże dane, buildy i wyniki: `D:/git/fullmag/storage`, z osobnym podkatalogiem zadania. Ścieżki linuksowe wewnątrz kontenera nie są Windowsowym rootem storage.
-- W tej aktualizacji sprawdzono dokumenty, historię Git, obecność wskazanych symboli i recepty. Nie uruchamiano ponownie solverów ani przeglądarkowego odbioru modułu. Poniższe pozytywne wyniki są historycznymi zapisami z 9–12 września.
+- W tej aktualizacji sprawdzono dokumenty, historię Git, obecność wskazanych symboli i recepty oraz wykonano kontenerową kwalifikację bazowego FEM LLG CPU FP64. Pozostałe pozytywne wyniki są historycznymi zapisami z 9–12 września; nowy wynik jest opisany osobno niżej.
 - Nie pobierano zdalnego mastera. Aktualność integracji należy ustalić przed kolejną zmianą kodu.
 
 To wewnętrzny dokument wykonawczy. Właścicielem równań, jednostek, założeń i publicznej semantyki pozostaje [notatka 0950](../../physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md). Nie ustanawia się tutaj nowych modeli fizycznych ani API.
@@ -40,6 +40,44 @@ czystym HEAD `780680003b6b21e706dfcbd49959009c10493664`; zakończył się kodem 
 `Build mode: fem-cpu` i komunikatem `Windows FEM cpu container build is ready`.
 Artefakty runtime pozostały pod `D:/git/fullmag/storage`; nie utworzono
 nowych wyników na `C:`.
+
+### Kwalifikacja bazowego FEM LLG CPU FP64 — 2026-09-21
+
+Recepta `just verify-fem-llg-time-domain-qualification` została wykonana
+w obrazie managed `fullmag/fem-gpu:local`, z lane `cpu`, i zakończyła się
+kodem 0. CMake zbudował target `fem_llg_time_domain_qualification`, executable
+wykonał wszystkie przypadki, a `validate_fem_llg_time_domain_qualification.py`
+potwierdził artefakt `status: pass`.
+
+Raport lokalny:
+`.fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64/qualification.json`.
+Jego tożsamość to `device=cpu`, `precision=fp64`, `integrator=rk45`, polityki
+`adaptive` i `fixed`, source snapshot
+`8bc150aef9007662d1ff29103f9896feb760ceff51b38f3b6d35bb398670fb21`.
+Wynik obejmuje trzy wartości `alpha` macrospinu, tryb wymiany, fast-mode z
+odrzuconymi próbami adaptive, bilans energii oraz `relax_to_run` z dokładnym
+handoffem i replayem stanu.
+
+Obraz zawiera PETSc 3.12.4/SLEPc 3.12.2. Dodano wersjonowane adaptery dla
+ST oraz lokalną deklarację eksportowanego
+`PetscObjectGetId`; GMRES zachowuje domyślną tolerancję w starszym PETSc.
+`MatShellSetVecType`, dostępne od PETSc 3.13, kończy na starszej wersji
+stary GPU modalny lane jawnie `PETSC_ERR_SUP`. Dzięki temu wspólny target
+buduje się bez udawania kwalifikacji GPU.
+
+Kontrola wariantu bez SLEPc z 2026-09-22 użyła recepty
+`just verify-fem-mixed-p1-local-interactions-native-contract` z
+`FULLMAG_FEM_WITH_SLEPC=OFF`. W zarządzanym obrazie ponownie zbudowano
+`fullmag_fem`, `fem_mixed_p1_contract` i `fem_mesh_contract`, po czym
+uruchomiono kontrakty bez błędu widocznego w logu. Kod zakończenia recepty
+nie został zachowany przez odczyt narzędzia, więc pełny PASS wykonania
+pozostaje niepotwierdzony. Ten
+wynik potwierdza guard kompilacyjny adaptera w konfiguracji bez SLEPc; nie
+rozszerza zakresu odbioru o modalne GPU ani antenowy RHS.
+
+To jest bazowa bramka czasowego LLG CPU FP64, a nie odbiór modułu antenowego.
+T13 pozostaje otwarte dla antenowego RHS/oracla, wszystkich wspieranych RK i
+waveformów, snapshotów `H_ant`/energii/torque oraz wykonania GPU.
 
 Kolejność lektury: ten dokument → [plan T00–T18](../../superpowers/plans/2026-09-08-microwave-antenna-refactoring-plan.md) → [audyt F01–F13](../../audits/2026-09-08-microwave-antenna-worktree-audit.md) → [punkt bazowy integracji](integration-baseline.md) → [ADR 0017](../../adr/0017-staged-antenna-field-basis-workflow.md) i notatka 0950.
 

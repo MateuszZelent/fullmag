@@ -7,13 +7,13 @@
       "solver": "FEM",
       "device": "CPU",
       "status": "development_executable",
-      "reason": "Stan 2026-09-20: czesciowa implementacja i historyczny kontrakt Zeemana/FFI; pelne bramki T05/T06/T13 i odbior T18 pozostaja otwarte."
+      "reason": "Stan 2026-09-21: kontrakt Zeemana/FFI i bazowa kwalifikacja native FEM LLG CPU FP64 sa zaliczone; antenowy RHS, wszystkie RK/waveformy, snapshot H_ant i odbior T13/T18 pozostaja otwarte."
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "planned_not_qualified",
-      "reason": "Stan 2026-09-20: brak pelnego dowodu antenowej trajektorii na FEM GPU; wymagane T16 i T18."
+      "reason": "Stan 2026-09-21: wspolny target kompiluje sie po adapterach PETSc/SLEPc, ale brak dowodu wykonania antenowej trajektorii na FEM GPU; wymagane T13/T16/T18."
     },
     {
       "solver": "FDM",
@@ -138,6 +138,36 @@
       "path": "backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp",
       "symbol": "project_regional_field_drive_bases",
       "responsibility": "Kotwica planowanych zadan T00/T13"
+    },
+    {
+      "id": "source18",
+      "path": "backends/fem/tests/llg_time_domain_qualification.cpp",
+      "symbol": "main",
+      "responsibility": "Natywny artefakt kwalifikacji FEM LLG CPU/GPU oraz kontrole relax-to-run"
+    },
+    {
+      "id": "source19",
+      "path": "scripts/validate_fem_llg_time_domain_qualification.py",
+      "symbol": "validate",
+      "responsibility": "Walidacja naukowa JSON kwalifikacji FEM LLG"
+    },
+    {
+      "id": "source20",
+      "path": "justfile",
+      "symbol": "verify-fem-llg-time-domain-qualification",
+      "responsibility": "Zarządzana recepta kwalifikacji kontenerowej"
+    },
+    {
+      "id": "source21",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
+      "symbol": "configure_production_refinement_ksp",
+      "responsibility": "Adapter zgodności PETSc/SLEPc używany przez obraz managed"
+    },
+    {
+      "id": "source22",
+      "path": "backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp",
+      "symbol": "create_gpu_solver_state",
+      "responsibility": "Granica fail-closed zgodności modalnego GPU z PETSc 3.12"
     }
   ],
   "public_api": {
