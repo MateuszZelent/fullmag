@@ -1,5 +1,26 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## DE-SMOKE — konfiguracja 10 nm i kontrola DSL, 2026-09-22
+
+Dodano `examples/fem_de_smoke_numeric.py`: komórka 40×40×10 nm,
+2 µm powietrza z każdej strony, pełny demag Floquet, CPU/double,
+Ms=800 kA/m, A=13 pJ/m, B=0.1 T w x, k w y. Domyślnie dwa
+punkty (Γ, 2e6 rad/m); `FULLMAG_DE_SMOKE_SAMPLING=five` wybiera
+0/1/2/3/5e6 rad/m. Okno 8.5–12 GHz, cztery mody, eksport pól we
+wszystkich próbkach. Wymagane trzy warstwy są intencją siatkowania;
+osiągnięta siatka nadal wymaga osobnego sprawdzenia runtime.
+
+Trzy lekkie testy publicznego DSL→IR przeszły: oba zestawy próbek oraz
+odrzucenie błędnego wyboru. Sprawdzają rzeczywistą geometrię, materiał,
+oddziaływania, periodyczność, fazę, demag, okno i wyjścia. Nie kompilowano
+testów natywnych. Konfiguracja nie dziedziczy ustawień pilota 100 nm ani A1.
+
+Job `6b2de4a74bf64669ae0e92610b1bb078` nadal ma status `running`.
+Nowy plik nie znajduje się w jego wcześniejszej kapsule źródeł: przed
+wykonaniem trzeba zapewnić zgodną, weryfikowaną ścieżkę modelu i runtime.
+Nie podmieniono plików kapsuły. T4–T7 i punkty numeryczne pozostają
+NOT VERIFIED; dodanie konfiguracji nie jest wykonaniem dyspersji.
+
 ## Zabezpieczenie wykonania pilota DE — 2026-09-22
 
 Job `6b2de4a74bf64669ae0e92610b1bb078` został potwierdzony przez API jako
