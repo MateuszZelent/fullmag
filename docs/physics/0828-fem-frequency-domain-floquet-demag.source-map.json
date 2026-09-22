@@ -634,6 +634,34 @@
       "symbol": "tet4_n0_projection",
       "responsibility": "Compute the constant transverse nodal-envelope projection in the magnetic consistent Tet4 mass metric.",
       "evidence_status": "source_visible"
+    },
+    {
+      "id": "source-native-residual-artifacts",
+      "path": "crates/fullmag-runner/src/fem/eigen_native_artifacts.rs",
+      "symbol": "native_modal_artifacts",
+      "responsibility": "Export distinct native absolute and relative residuals.",
+      "evidence_status": "source contract; runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-path-residual-data",
+      "path": "crates/fullmag-runner/src/eigen/types.rs",
+      "symbol": "SingleKModeResult",
+      "responsibility": "Carry per-mode diagnostics without inferring unavailable relative residuals.",
+      "evidence_status": "source contract; runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-path-residual-summary",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/modal_manifest.rs",
+      "symbol": "summarize_mode",
+      "responsibility": "Preserve the residual semantics in path summaries; runtime verification required.",
+      "evidence_status": "source contract; runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-de-row-preflight",
+      "path": "scripts/validate_de_smoke_rows.py",
+      "symbol": "validate_rows",
+      "responsibility": "Check absolute CSV residual finiteness only; no relative or scientific qualification.",
+      "evidence_status": "source contract; runtime NOT VERIFIED"
     }
   ],
   "public_api": {

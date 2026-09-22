@@ -226,6 +226,26 @@ The reduced or preconditioned residual is diagnostic only. A reported mode
 needs the full residual, phase and frame seam errors, scalar-potential
 continuity, gauge policy and normalization.
 
+#### Kontrakt transportu residuali w artefaktach
+
+Natywny producent `eigen_native_artifacts.rs::native_modal_artifacts`
+rozróżnia `residual_absolute_l2` oraz `residual_relative_l2`. Historyczna
+kolumna CSV `residual_norm` przenosi wartość **bezwzględną**. Jej skala
+zależy od normalizacji operatora i wektora; nie wolno porównywać jej z
+bezwymiarowym progiem względnym 1e-8. Definicję względnego residualu
+należy zachować z jego natywnego producenta, wraz z informacją o tym,
+czy dotyczy oryginalnego, czy zredukowanego układu.
+
+`SingleKModeResult` i `modal_manifest::summarize_mode` muszą zachowywać
+obie wielkości oddzielnie. Brak względnego residualu oznacza brak dowodu,
+nie wartość zero ani kopię residualu bezwzględnego. Konsument starszego
+artefaktu bez tego pola pozostawia odbiór względnego residualu jako
+NOT VERIFIED. Kontrola w `scripts/validate_de_smoke_rows.py::validate_rows`
+sprawdza jedynie skończoność i nieujemność kolumny bezwzględnej; sama
+nie kwalifikuje żadnego modu. Ten kontrakt nie zmienia fizyki, DSL/IR ani
+zakresu dostępnych realizacji CPU/GPU. Naprawa źródłowa transportu i jej
+wykonanie w runtime wymagają oddzielnych dowodów.
+
 (symbols-and-si-units)=
 ### 2.4 Symbols and SI units
 
@@ -632,6 +652,13 @@ visibility into runtime or physical qualification.
 
 | Natywny modalny sparse Floquet | FEM CPU | backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp + solve_floquet_shared_domain_sparse_modal_spectrum | MatShell Schura, SLEPc i diagnostyka obu układów KSP | Test kontraktu źródłowego; kompilacja testów nieuruchomiona | implemented in source; managed execution and physics NOT VERIFIED |
 
+
+| Kontrakt | Realizacja | Plik i symbol | Odpowiedzialność | Dowód | Status |
+|---|---|---|---|---|---|
+| Residuale natywne | FEM CPU/GPU | crates/fullmag-runner/src/fem/eigen_native_artifacts.rs + native_modal_artifacts | source-native-residual-artifacts: oddzielny eksport abs/relative | kontrola źródła producenta | runtime NOT VERIFIED |
+| Transport residuali ścieżki | FEM CPU/GPU | crates/fullmag-runner/src/eigen/types.rs + SingleKModeResult | source-path-residual-data: brak względnego nie jest zerem | regresje transportu | runtime NOT VERIFIED |
+| Podsumowanie residuali | FEM CPU/GPU | crates/fullmag-runner/src/eigen/artifacts/modal_manifest.rs + summarize_mode | source-path-residual-summary: zachowanie odrębnych wartości | regresje eksportu | runtime NOT VERIFIED |
+| Kontrola CSV DE-SMOKE | FEM CPU postprocessing | scripts/validate_de_smoke_rows.py + validate_rows | source-de-row-preflight: skończony, nieujemny residual bezwzględny | test_validate_de_smoke_rows.py | źródłowe testy przeszły; bez kwalifikacji naukowej |
 
 ## Bramka zbieżności benchmarku — korekta audytu 2026-09-14
 
