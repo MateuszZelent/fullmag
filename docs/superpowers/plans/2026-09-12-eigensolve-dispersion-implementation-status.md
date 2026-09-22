@@ -1,5 +1,23 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Korekta semantyki residualu — 2026-09-22
+
+Śledzenie producenta wykazało, że `eigen_native_artifacts.rs` zapisuje
+`residual_norm` jako residual bezwzględny, osobno od `residual_relative_l2`.
+Dlatego kontrola CSV DE-SMOKE nie może stosować do residual_norm progu
+względnego 1e-8. Usunięto ten błędny warunek; wymagana jest nadal wartość
+skończona i nieujemna. Raport nazywa maksimum jawnie
+`max_absolute_residual_norm`. Odbiór względnego residualu oryginalnego
+pencila pozostaje wymagany osobno. 29 testów i cztery podtesty przeszły.
+
+Wykryto także wcześniejszy błąd eksportu ścieżki k: `eigen_path.rs` nie
+przekazuje osobnego residual_relative_l2 do SingleKModeResult, a
+`modal_manifest::summarize_mode` i producent mode_bundle przypisują do
+pola względnego wartość bezwzględną. Naprawa Rust jest w toku; obecny build
+nie będzie jej zawierał. Wyników tych pól nie wolno uznać za kwalifikację
+bez kontroli oryginalnych natywnych diagnostyk. Ten wpis koryguje wcześniejszą
+deklarację progu na kolumnę CSV, nie zmienia naukowego progu T3/T5.
+
 ## DE-SMOKE — wersjonowany model jako wejście runtime, 2026-09-22
 
 Klient pilota przyjmuje opcjonalne `--model-ref <pełny SHA>` wyłącznie dla
