@@ -186,6 +186,24 @@
       "path": "scripts/antenna_macrospin_oracle.py",
       "symbol": "compare_collinear_trajectory",
       "responsibility": "Porównanie zapisanych próbek m(t) z niezależnym wzorcem i kontrolą zegara"
+    },
+    {
+      "id": "source26",
+      "path": "backends/fem/tests/llg_time_domain_qualification.cpp",
+      "symbol": "main",
+      "responsibility": "Natywne wykonanie macierzy 20 trajektorii CPU przez preprojected ABI"
+    },
+    {
+      "id": "source27",
+      "path": "scripts/validate_fem_antenna_trajectories.py",
+      "symbol": "validate",
+      "responsibility": "Niezależna walidacja próbek i kompletności macierzy integratorów oraz przebiegów"
+    },
+    {
+      "id": "source28",
+      "path": "justfile",
+      "symbol": "verify-fem-antenna-cpu-trajectories",
+      "responsibility": "Kontenerowe wykonanie bramki antenowej CPU z tożsamością źródeł"
     }
   ],
   "public_api": {

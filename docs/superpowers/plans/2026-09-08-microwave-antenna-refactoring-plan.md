@@ -936,6 +936,37 @@ maksymalny błąd wyniósł 8.006e-16 dla alpha=10. Nie wykonano nowego runu.
 To niezależna kontrola istniejących endpointów pola stałego; nie dowodzi
 antenowego wzbudzenia, poprawności wszystkich podkroków ani macierzy RK.
 
+**Natywna macierz antenowa CPU 2026-09-22:**
+`just verify-fem-antenna-cpu-trajectories` zakończyła się kodem 0.
+Istniejący program `fem_llg_time_domain_qualification` otrzymał tryb
+`antenna-cpu`: przekazuje pole preprojected przez publiczne ABI, wykonuje
+rzeczywisty LLG CPU FP64 i zapisuje 21 próbek na przypadek. Sprawdzono
+Heun, RK4, RK23/BS oraz RK45/DP54, każdy dla constant, sinusoidal
+(1 GHz, faza 0.7, offset 0.2), pulse, piecewise-linear i sinc_pulse.
+Łącznie 20 przypadków, 40000 kroków i 420 próbek; krok stały 0.5 ps,
+czas 1 ns, alpha=0.1, baza osi z 1e6 H/A, prąd 0.02 A, bias 10000 A/m.
+Wyłączono exchange i demag; sprawdzano jednorodność magnetyzacji węzłów.
+
+Artefakt `.fullmag/reports/fem-antenna-trajectories/qualification.json`
+zapisano jako `recorded_unvalidated`; dopiero niezależny
+`scripts/validate_fem_antenna_trajectories.py::validate` potwierdził PASS.
+Source snapshot: `06056fe3da8e43902d22de1795f3c7ce6065b1a96fcb111985602d34615488ba`.
+Porównanie tożsamości źródeł przed i po wykonaniu przeszło.
+Maksymalny błąd wektora: 2.733153319e-6 dla przebiegów ciągłych (próg 5e-6),
+9.492702013e-4 dla prostokąta (budżet 4.378217822e-3, dwa przyrosty fazy
+od zboczy proporcjonalne do dt). Nie jest to dowód zbieżności obsługi zdarzeń.
+Po wykonaniu zaostrzono walidator o dokładne parametry wszystkich przebiegów
+i ponownie sprawdzono ten sam artefakt. Odrzucono siedem mutacji: brak
+przypadku, duplikat, inną fazę, inne urządzenie, błędny wektor, inny prąd
+i cofnięty czas. Ten późniejszy walidator nie należy do powyższego snapshotu.
+
+Zakres dowodu: natywne pobranie pola antenowego przez ABI i stałokrokowa
+trajektoria CPU. Prąd jest mnożony przez bazę w fixture przed ABI, więc nie
+kwalifikuje to mnożenia w runnerze ani solve/projection. Zegar ma początek 0.
+Pozostają retry/adaptive, niezerowy początek etapu, frozen spins/maski,
+pełne składniki energii i torque, snapshot H_ant, pipeline relaksacji,
+mixed mesh/PBC, zbieżność czasowa oraz GPU. T13 pozostaje otwarte.
+
 ## T14. Domknąć OpenAPI, zasoby i realtime
 
 Uzupełnienie implementacyjne 2026-09-21: `SolvedAntennaDriveResource` ma

@@ -1296,13 +1296,130 @@ void write_partial_artifact(
          << "}\n";
 }
 
+void write_antenna_cpu_trajectories(const std::filesystem::path &output)
+{
+    const auto digest = qualification_source_snapshot_sha256();
+    std::filesystem::create_directories(output.parent_path());
+    std::ofstream file(output);
+    require(static_cast<bool>(file), "open antenna trajectory output");
+    file << std::setprecision(17)
+         << "{\"schema_version\":\"fem_antenna_trajectory.v1\","
+         << "\"status\":\"recorded_unvalidated\",\"backend\":\"fem\","
+         << "\"device\":\"cpu\",\"precision\":\"fp64\","
+         << "\"source_snapshot_sha256\":\"" << digest << "\",\"cases\":[\n";
+    const std::array<std::pair<fullmag_fem_integrator, const char *>, 4> integrators{{
+        {FULLMAG_FEM_INTEGRATOR_HEUN, "heun"},
+        {FULLMAG_FEM_INTEGRATOR_RK4, "rk4"},
+        {FULLMAG_FEM_INTEGRATOR_RK23_BS, "rk23"},
+        {FULLMAG_FEM_INTEGRATOR_RK45_DP54, "rk45"},
+    }};
+    const std::array<const char *, 5> waveforms{{
+        "{\"kind\":\"constant\"}",
+        "{\"kind\":\"sinusoidal\",\"frequency_hz\":1e9,\"phase_rad\":0.7,\"offset\":0.2}",
+        "{\"kind\":\"pulse\",\"t_on\":2.5e-10,\"t_off\":7.5e-10}",
+        "{\"kind\":\"piecewise_linear\",\"points\":[[0,0.2],[4e-10,1],[7e-10,-0.5],[1e-9,0.1]]}",
+        "{\"kind\":\"sinc_pulse\",\"cutoff_hz\":2e9,\"t0\":5e-10,\"amplitude\":0.8}",
+    }};
+    const std::array<fullmag_fem_time_point, 4> points{{
+        {0.0, 0.2}, {4e-10, 1.0}, {7e-10, -0.5}, {1e-9, 0.1},
+    }};
+    constexpr double dt = 5e-13;
+    constexpr size_t steps = 2000;
+    bool first_case = true;
+    for (const auto &[integrator, name] : integrators) {
+        for (size_t wave = 0; wave < waveforms.size(); ++wave) {
+            auto initial = uniform_magnetization(0.6, 0.0, 0.8);
+            // The runner normally scales H/A by current before ABI transfer.
+            // This fixture isolates native preprojected-field consumption.
+            auto basis = uniform_magnetization(0.0, 0.0, 1e6 * 0.02);
+            fullmag_fem_regional_field_drive_desc drive{};
+            drive.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+            drive.struct_size = sizeof(drive);
+            drive.stable_id_hash = 1;
+            drive.target.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+            drive.target.struct_size = sizeof(drive.target);
+            drive.target.kind = FULLMAG_FEM_FIELD_TARGET_GLOBAL;
+            drive.spatial_profile.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+            drive.spatial_profile.struct_size = sizeof(drive.spatial_profile);
+            drive.spatial_profile.kind = FULLMAG_FEM_SPATIAL_PROFILE_PREPROJECTED_NODAL;
+            drive.spatial_profile.preprojected_h_xyz_a_per_m = basis.data();
+            drive.spatial_profile.preprojected_h_value_count = basis.size();
+            drive.time_origin = FULLMAG_FEM_TIME_ABSOLUTE;
+            drive.waveform.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+            drive.waveform.struct_size = sizeof(drive.waveform);
+            switch (wave) {
+            case 0: drive.waveform.kind = FULLMAG_FEM_TIME_CONSTANT; break;
+            case 1:
+                drive.waveform.kind = FULLMAG_FEM_TIME_SINUSOIDAL;
+                drive.waveform.parameters.sinusoidal = {1e9, 0.7, 0.2};
+                break;
+            case 2:
+                drive.waveform.kind = FULLMAG_FEM_TIME_PULSE;
+                drive.waveform.parameters.pulse = {2.5e-10, 7.5e-10};
+                break;
+            case 3:
+                drive.waveform.kind = FULLMAG_FEM_TIME_PIECEWISE_LINEAR;
+                drive.waveform.points = points.data();
+                drive.waveform.point_count = points.size();
+                break;
+            case 4:
+                drive.waveform.kind = FULLMAG_FEM_TIME_SINC_PULSE;
+                drive.waveform.parameters.sinc_pulse = {2e9, 5e-10, 0.8};
+                break;
+            }
+            auto plan = base_plan(initial, 0.1, integrator, dt);
+            plan.enable_exchange = 0;
+            plan.material.exchange_stiffness = 0.0;
+            plan.external_field_am[2] = 1e4;
+            plan.regional_field_drives = &drive;
+            plan.regional_field_drive_count = 1;
+            auto *backend = fullmag_fem_backend_create(&plan);
+            require(backend != nullptr, "create antenna CPU backend");
+            require_requested_execution_lane(backend);
+            if (!first_case) file << ",\n";
+            first_case = false;
+            file << "{\"integrator\":\"" << name << "\",\"waveform\":" << waveforms[wave]
+                 << ",\"dt_s\":" << dt << ",\"timestep_policy\":\"fixed\","
+                 << "\"initial_m\":[0.6,0,0.8],\"alpha\":0.1,\"gamma_mu0\":221100,"
+                 << "\"basis_hz_per_a\":1e6,\"peak_current_a\":0.02,\"bias_hz_a_per_m\":1e4,"
+                 << "\"start_time_s\":0,\"stage_start_time_s\":0,\"time_origin\":\"absolute\","
+                 << "\"samples\":[{\"time_s\":0,\"m\":[0.6,0,0.8]}";
+            double previous_time = 0.0;
+            for (size_t step = 1; step <= steps; ++step) {
+                fullmag_fem_step_stats stats{};
+                require(fullmag_fem_backend_step(backend, dt, &stats) == FULLMAG_FEM_OK,
+                    std::string("antenna CPU step: ") + last_error(backend));
+                require(stats.time_seconds > previous_time &&
+                    std::abs(stats.dt_seconds - dt) <= 1e-12 * dt,
+                    "antenna fixed step did not advance by requested dt");
+                previous_time = stats.time_seconds;
+                if (step % 100 == 0) {
+                    const auto m = first_node_m(backend);
+                    file << ",{\"time_s\":" << stats.time_seconds
+                         << ",\"m\":[" << m[0] << ',' << m[1] << ',' << m[2] << "]}";
+                }
+            }
+            fullmag_fem_backend_destroy(backend);
+            file << "]}";
+        }
+    }
+    file << "]}\n";
+    file.close();
+    require(static_cast<bool>(file), "write antenna trajectory output");
+    std::puts("FEM antenna CPU trajectories recorded; independent validation required");
+}
+
 } // namespace
 
 int main(int argc, char **argv)
 {
     require(
         argc == 2 || argc == 3,
-        "usage: fem_llg_time_domain_qualification OUTPUT_JSON [cpu|gpu]");
+        "usage: fem_llg_time_domain_qualification OUTPUT_JSON [cpu|gpu|antenna-cpu]");
+    if (argc == 3 && std::string(argv[2]) == "antenna-cpu") {
+        write_antenna_cpu_trajectories(argv[1]);
+        return 0;
+    }
     if (argc == 3) {
         const std::string lane = argv[2];
         require(lane == "cpu" || lane == "gpu", "qualification lane must be cpu or gpu");
