@@ -900,6 +900,25 @@ T13. Nadal brakuje antenowego RHS z niezależnym oraclem, wszystkich
 wspieranych explicit RK i waveformów anteny, snapshotu `H_ant`/energii/
 torque z rzeczywistego czasu oraz kwalifikacji FEM GPU i T16.
 
+**Wzorzec trajektorii 2026-09-22:**
+`scripts/antenna_macrospin_oracle.py::macrospin_from_field_impulse` oblicza
+niezależny wzorzec macrospinu dla pola wzdłuż osi z, z tłumieniem Gilberta
+i podpisaną całką pola H po czasie (A s/m). Funkcja
+`waveform_integral` obsługuje constant, sinusoidal (phase/offset), pulse,
+piecewise-linear z przedłużeniem wartości brzegowych oraz sinc_pulse.
+Pierwsze cztery mają całki analityczne; sinc ma niezależną, ograniczoną
+kwadraturę Simpsona z kontrolą zbieżności i limitem 128 okresów w przedziale.
+Wzorzec korzysta wyłącznie z biblioteki standardowej Python i nie wykonuje
+solverów produkcyjnych. Jego konsument musi uwzględnić amplitudę prądu,
+bazę H/A i bias oraz przesunąć zegar dla `stage_local`.
+
+Wykonano `python -B -m unittest discover -s scripts -p test_antenna_macrospin_oracle.py`:
+7 testów, PASS. Sprawdzono znak precesji, skalę gamma, tłumienie, składanie
+i odwracanie impulsów, stany przy biegunie, całki przebiegów, fazę/offset,
+zegar nanosekundowy i odrzucanie niepoprawnych danych. Nie kompilowano testów
+natywnych. Następny krok: podłączyć wzorzec do rzeczywistych trajektorii
+FEM dla macierzy integratorów i przebiegów; sama kontrola wzorca nie zamyka T13.
+
 ## T14. Domknąć OpenAPI, zasoby i realtime
 
 Uzupełnienie implementacyjne 2026-09-21: `SolvedAntennaDriveResource` ma

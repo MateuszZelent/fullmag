@@ -168,6 +168,18 @@
       "path": "backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp",
       "symbol": "create_gpu_solver_state",
       "responsibility": "Granica fail-closed zgodności modalnego GPU z PETSc 3.12"
+    },
+    {
+      "id": "source23",
+      "path": "scripts/antenna_macrospin_oracle.py",
+      "symbol": "macrospin_from_field_impulse",
+      "responsibility": "Niezależny wzorzec trajektorii macrospinu z całki pola antenowego"
+    },
+    {
+      "id": "source24",
+      "path": "scripts/antenna_macrospin_oracle.py",
+      "symbol": "waveform_integral",
+      "responsibility": "Niezależne całki pięciu wspieranych przebiegów do bramki T13"
     }
   ],
   "public_api": {
