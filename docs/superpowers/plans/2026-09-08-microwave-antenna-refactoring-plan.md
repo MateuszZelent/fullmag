@@ -991,6 +991,35 @@ prób adaptive/retry, pipeline z rzeczywistą relaksacją/solve, GPU ani
 pozostałych warunków T13. Poprzedni raport v1 został zastąpiony raportem v2
 w tym samym lokalnym katalogu; opis v1 powyżej jest zapisem historycznym.
 
+**Adaptacyjne próby antenowe CPU 2026-09-22:** rozszerzona recepta
+`just verify-fem-antenna-cpu-trajectories` zakończyła się kodem 0 dla
+90 przypadków/1890 próbek. Schemat `fem_antenna_trajectory.v3` zachowuje
+60 przypadków stałokrokowych i dodaje 30 adaptacyjnych: RK23/BS i RK45/DP54,
+pięć przebiegów, trzy warianty zegara. Heun i RK4 nie mają pary osadzonej
+i nie otrzymały sztucznej etykiety adaptive.
+
+Konfiguracja adaptive: atol=2e-10, rtol=0, dt_min=1e-20 s,
+dt_max=5e-11 s, safety=0.9, growth_limit=2, shrink_limit=0.2,
+max_reject=80. Po początku etapu żądany pierwszy krok wynosi 50 ps.
+Następne żądania korzystają z natywnego dt_suggested; każdy krok jest
+ograniczony najbliższą chwilą zapisu. Porównanie obejmuje rzeczywiście
+zaakceptowane próbki co 50 ps, z kontrolą postępu i limitu liczby kroków.
+
+Source snapshot: `3a3db3c51f82dc114e040c7b9ee31911bfc47b596415cceab7126fd64928f3ce`;
+tożsamość źródeł przed/po wykonaniu zgodna. RK23: 44712 zaakceptowanych
+kroków, 126 odrzuconych prób, maksymalny błąd 6.219e-10. RK45: 2625
+zaakceptowanych kroków, 108 odrzuconych prób, maksymalny błąd 1.491e-8.
+Liczniki dotyczą części z aktywną anteną, bez bias-only warmup. Każdy
+przypadek adaptive zawierał co najmniej jedną odrzuconą próbę. Dla wszystkich
+przebiegów adaptive, również pulse, zastosowano próg wektora 5e-6.
+Walidator wymaga dowodu retry dla obu integratorów; raport z wyzerowanymi
+licznikami odrzuceń został odrzucony. Bieżący lokalny raport v3 zastępuje v2.
+
+Jest to dowód trajektorii z retry i obu zegarów przez natywne CPU ABI dla
+opisanych warunków. Nie jest to pełny test zbieżności, izolowany dowód
+niezmienności każdego bufora po odrzuceniu ani kwalifikacja runnerowego
+solve/relax/run, GPU, energii/torque i snapshotów H_ant. T13 pozostaje otwarte.
+
 ## T14. Domknąć OpenAPI, zasoby i realtime
 
 Uzupełnienie implementacyjne 2026-09-21: `SolvedAntennaDriveResource` ma

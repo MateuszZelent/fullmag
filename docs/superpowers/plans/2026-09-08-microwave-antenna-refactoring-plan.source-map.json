@@ -191,7 +191,7 @@
       "id": "source26",
       "path": "backends/fem/tests/llg_time_domain_qualification.cpp",
       "symbol": "main",
-      "responsibility": "Natywne wykonanie macierzy 60 trajektorii CPU przez preprojected ABI z przejściem etapu i dwoma zegarami"
+      "responsibility": "Natywne wykonanie macierzy 90 trajektorii CPU przez preprojected ABI, z dwoma zegarami, adaptacją i odrzuceniami prób"
     },
     {
       "id": "source27",
