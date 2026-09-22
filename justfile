@@ -103,6 +103,10 @@ run-comsol-dispersion-benchmark job_id cases="c0,c1,a1" timeout_seconds="21600":
 run-de-100nm-pilot job_id:
     {{storage_python}} "{{repo_root}}/scripts/run_de_100nm_pilot.py" --repo-root "{{repo_root}}" --job-id {{quote(job_id)}}
 
+# Frozen 10 nm DE control; sampling is two or five (validated by the client).
+run-de-smoke job_id sampling="two":
+    {{storage_python}} "{{repo_root}}/scripts/run_de_100nm_pilot.py" --repo-root "{{repo_root}}" --job-id {{quote(job_id)}} --pilot {{quote("de-smoke-" + sampling)}}
+
 runner-configure-build profile image_id:
     {{storage_python}} scripts/local_runner_cli.py configure-build --profile {{quote(profile)}} --image-id {{quote(image_id)}}
 

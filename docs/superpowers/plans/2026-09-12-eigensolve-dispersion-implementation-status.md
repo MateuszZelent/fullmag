@@ -1,5 +1,25 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## DE-SMOKE — ścieżka uruchomienia, 2026-09-22
+
+Model zapisano i wysłano w `50f62bd4d039b1e6a5dac1e9be04ef23a593a5bf`.
+Dodano receptę `just run-de-smoke <job-id> two` (lub `five`) korzystającą
+z istniejącego klienta pilota. Wybór modelu ma zamkniętą listę, jawny eksport
+ustawienia próbek, oddzielny katalog i wersjonowany receipt DE-SMOKE.
+Sprawdzanie manifestu i hasha modelu w niemodyfikowanej kapsule pozostaje
+obowiązkowe; brak modelu odrzuca uruchomienie. Nie osłabiono bramki C1.
+
+Dwanaście testów Python oraz cztery podtesty przeszły, w tym odrzucenie
+podmienionego modelu, niedozwolonego wyboru i zapis statusu niezakwalifikowanego.
+`just --show run-de-smoke` i kontrola diff przeszły. To dowody klienta,
+nie wykonania modelu. Aktualny build nie zawiera jeszcze nowego pliku.
+
+API nadal raportuje job `6b2de4a74bf64669ae0e92610b1bb078` jako running;
+niezależny odczyt jego dokładnego kontenera potwierdził Running=true,
+OOMKilled=false. Lista procesów pokazała python3 oraz docker-init, bez
+procesu kompilatora w chwili odczytu. Pusty log nie pozwala określić
+postępu kompilacji. Nie uruchomiono duplikatu ani nie przerwano zadania.
+
 ## DE-SMOKE — konfiguracja 10 nm i kontrola DSL, 2026-09-22
 
 Dodano `examples/fem_de_smoke_numeric.py`: komórka 40×40×10 nm,
