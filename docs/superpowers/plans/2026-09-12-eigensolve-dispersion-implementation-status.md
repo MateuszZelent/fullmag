@@ -1,5 +1,27 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## T4 — wzorzec demagu i stan workera, 2026-09-22
+
+Niezależny wzorzec potencjału 1D oraz jego wyprowadzenie zapisano w commicie
+`833dc2e635571b2eb1f5faeb45b89ad13d1b2a19`. Wzorzec rozwiązuje słabą
+postać Poissona dla pełnego czynnika exp(-iky), z dokładnymi interfejsami
+filmu i zerowym potencjałem na końcach airboxu. Nie oblicza częstości modów.
+
+Dodatkowy przegląd wykrył zbyt dużą domyślną tolerancję bezwzględną asercji
+energii; przy energii rzędu 1e-14 J/m² mogła maskować niezgodność.
+Test wymaga teraz względnej zgodności 1e-9 z abs=0. Dodano kontrolę
+skalowania amplitudy/energii, hermitowskości i dodatniości uśrednionej
+macierzy oraz zbieżności drugiej składowej do granicy otwartego filmu.
+Łącznie dziewięć testów Python przeszło. Natywne porównanie T4 pozostaje
+niewykonane; nie należy utożsamiać wzorca z wynikiem produkcyjnego FEM.
+
+Job `6b2de4a74bf64669ae0e92610b1bb078` nadal działa. Odczyt dokładnego
+kontenera pokazał python3, około 63 MiB RAM i 12% CPU, bez procesu
+kompilatora. W chwili próbki wchan procesu wskazywał p9_client_rpc.
+To dowód oczekiwania na udostępniony system plików, nie dowód konkretnego
+procentu materializacji ani zakleszczenia. API logów nadal zwracało pusty
+tekst; zadania nie anulowano ani nie zastąpiono duplikatem.
+
 ## DE-SMOKE — ścieżka uruchomienia, 2026-09-22
 
 Model zapisano i wysłano w `50f62bd4d039b1e6a5dac1e9be04ef23a593a5bf`.
