@@ -1,5 +1,31 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Odbiór wygenerowanego API i diagnostyki UI — 2026-09-22
+
+Pakiet transportu residuali zapisano i wysłano jako
+602dd629394fcefbc7351d563d91bfb2920af417. Diagnostykę timeoutu Inspectora
+(requestCounts, przekroczenie budżetu, ostatnie 20 odpowiedzi sceny)
+zapisano i wysłano jako 3ba4125787cacbb4c27ff648b5b06b6ee1b5b1ce.
+Nie zwiększano limitów fixture'a. node --check i diff przeszły.
+Lokalny React Doctor --scope changed --base 602dd629394fcefbc7351d563d91bfb2920af417
+zakończył się bez zgłoszeń; browser smoke pozostaje otwarty.
+
+Job CI 106639461082 w runie 35694883187, dla dokładnie commita 3ba412578,
+wykonał generator API i ujawnił wyłącznie oczekiwany diff nullable/optional
+residual_relative_l2 w widmie v3. Zaimportowano dokładny diff z logu
+generatora, po git apply --check; nie przepisywano schematu ręcznie.
+Zweryfikowano zgodność wygenerowanych blobów Git z nagłówkami diffu CI:
+openapi-v2-types.ts = 2d1e3b8828adcd4d79d0afe73b71a5df972f614f,
+openapi-v2.json = 0f6dae86508ee201ba2e3affc93da70ba253a6b2.
+Parser JSON potwierdził opcjonalność oraz number|null. Generator klienta
+nie wygenerował różnic. Kolejny gate deterministyczności pozostaje do odbioru.
+
+Managed build 6b2de4a74bf64669ae0e92610b1bb078 nadal running; nie ma jeszcze
+nowego punktu DE. Kontrola źródeł potwierdziła, że sparse parser rozdziela
+fizyczne q/phi od legacy pełnego certyfikatu, więc sam reduced-only status
+nie blokuje eksportu. Pełna mapa redukcji potrzebna do niezależnej kontroli
+pola nadal wymaga sprawdzenia w artefaktach; hash mapy nie zastępuje jej treści.
+
 ## Residuale — zakończony pakiet źródłowy transportu, 2026-09-22
 
 SingleKModeResult otrzymał osobne Option<f64> dla residualu względnego.

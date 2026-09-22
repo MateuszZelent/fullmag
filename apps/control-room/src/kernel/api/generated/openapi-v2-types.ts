@@ -6690,8 +6690,11 @@ export interface components {
             mode_id: string;
             /** Format: int64 */
             raw_mode_index: number;
-            /** Format: double */
-            residual_relative_l2: number;
+            /**
+             * Format: double
+             * @description Missing solver evidence remains unavailable, never an inferred zero.
+             */
+            residual_relative_l2?: number | null;
         };
         FrequencyDomainSpectrumV3SamplePayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             modes: components["schemas"]["FrequencyDomainSpectrumV3ModePayload"][];
