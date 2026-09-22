@@ -1,5 +1,27 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Odblokowanie profilu runtime-only — 2026-09-22
+
+Runner odrzucał zgłoszenie HTTP 400, ponieważ konfiguracja operatora nie
+zawierała `fem-cpu-slepc-runtime-v1`. Health błędnie raportował wszystkie
+profile katalogu zamiast aktywnej listy operatora. Naprawiono ten odczyt
+w `container_main.py`; 22 testy Pythona przeszły. Poprawka źródłowa health
+nie jest jeszcze wdrożona w obrazie koordynatora.
+
+Oficjalny klient włączył profil; koordynator został odtworzony na tym samym
+obrazie po kontrolowanej pauzie pustej kolejki, następnie wznowiony.
+API przyjęło job `6b2de4a74bf64669ae0e92610b1bb078`, profil runtime-only,
+commit `0669d76c2306a31dfe162c2f3ae5af4cb458b552`, source digest
+`80d37a70ea788833a1813471f0c4dca0bea9f07b34e23b3c7d1b47dadf19cd41`.
+Zgłoszenie nie kompiluje testów jednostkowych. Przyjęcie joba nie dowodzi
+sukcesu buildu ani fizyki; kolejnym krokiem jest receipt i diagnostyka DE.
+
+Starszy job `0c899a2c5dde45cdbc8e9605f2c57aa1` przeszedł aktualny dry-run
+walidatora receiptu i hashy. Jego 61 plików natywnego frequency-domain
+jest zgodnych z bieżącymi źródłami po normalizacji końców linii, ale pięć
+plików runnera FEM się różni; nie jest dowodem wykonania aktualnego brancha.
+
+
 ## Aktualny stan po naprawach audytu — 2026-09-21
 
 Zweryfikowany bieżący snapshot to HEAD `deb993e27877b0428a7b2a4ea920d716af7e54d8`

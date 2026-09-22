@@ -329,7 +329,7 @@ class Application:
             'legacy_jobs': snapshot['legacy_jobs'],
             'stop_requested': snapshot['stop_requested'],
             'storage_free_bytes': free_bytes,
-            'allowed_profiles': list(PROFILES.keys()),
+            'allowed_profiles': sorted(self.allowed_profiles),
             'qualification': 'NOT VERIFIED',
         }
 

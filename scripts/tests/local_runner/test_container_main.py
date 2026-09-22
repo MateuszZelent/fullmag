@@ -51,6 +51,12 @@ class LiveThread:
 
 
 class ContainerMainTests(unittest.TestCase):
+    def test_health_reports_only_operator_enabled_profiles(self):
+        app = self.app()
+        app.allowed_profiles = frozenset({"fem-cpu-release"})
+        self.assertEqual(["fem-cpu-release"], app.health()["allowed_profiles"])
+        self.assertNotIn("fem-cpu-slepc-runtime-v1", app.health()["allowed_profiles"])
+
     def test_run_preserves_service_terminal_result(self):
         app = self.app()
         app.layout = {}
