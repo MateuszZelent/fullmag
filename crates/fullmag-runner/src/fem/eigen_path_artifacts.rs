@@ -156,6 +156,173 @@ pub(super) fn validate_eigen_path_selected_mode_artifacts(
 mod output_publication_tests {
     use super::*;
 
+    fn residual_transport_test_plan() -> FemEigenPlanIR {
+        let mesh = fullmag_ir::MeshIR {
+            mesh_name: "residual-transport-test".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
+            element_markers: vec![1],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: std::collections::HashMap::new(),
+        };
+        FemEigenPlanIR {
+            mesh_name: mesh.mesh_name.clone(),
+            mesh_source: None,
+            mesh,
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            mesh_build_report: None,
+            domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
+            domain_frame: None,
+            fe_order: 1,
+            hmax: 1.0,
+            equilibrium_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            material: fullmag_ir::MaterialIR {
+                name: "Permalloy".to_string(),
+                saturation_magnetisation: 800e3,
+                exchange_stiffness: 13e-12,
+                damping: 0.01,
+                uniaxial_anisotropy: None,
+                uniaxial_anisotropy_k2: None,
+                anisotropy_axis: None,
+                cubic_anisotropy_kc1: None,
+                cubic_anisotropy_kc2: None,
+                cubic_anisotropy_kc3: None,
+                cubic_anisotropy_axis1: None,
+                cubic_anisotropy_axis2: None,
+                ms_field: None,
+                a_field: None,
+                alpha_field: None,
+                ku_field: None,
+                ku2_field: None,
+                kc1_field: None,
+                kc2_field: None,
+                kc3_field: None,
+                dind_field: None,
+                dbulk_field: None,
+                interfacial_dmi: None,
+                bulk_dmi: None,
+            },
+            operator: fullmag_ir::EigenOperatorConfigIR {
+                kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                include_demag: false,
+            },
+            count: 1,
+            target: fullmag_ir::EigenTargetIR::Lowest,
+            equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+            k_sampling: None,
+            bias_field_samples: Vec::new(),
+            normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
+            damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
+            enable_exchange: true,
+            enable_demag: false,
+            interfacial_dmi: None,
+            dmi_interface_normal: None,
+            bulk_dmi: None,
+            external_field: None,
+            gyromagnetic_ratio: 2.211e5,
+            precision: fullmag_ir::ExecutionPrecision::Double,
+            exchange_bc: fullmag_ir::ExchangeBoundaryCondition::Neumann,
+            spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            demag_realization: None,
+            air_box_config: None,
+            mode_tracking: None,
+            dispersion_validation: None,
+            k0_kittel_validation: None,
+            solver_policy: None,
+        }
+    }
+
+    fn residual_transport_test_mode(
+        residual_relative_l2: Option<f64>,
+    ) -> crate::eigen::SingleKModeResult {
+        crate::eigen::SingleKModeResult {
+            raw_mode_index: 0,
+            branch_id: Some(0),
+            frequency_real_hz: 1.0e9,
+            frequency_imag_hz: 0.0,
+            angular_frequency_rad_per_s: std::f64::consts::TAU * 1.0e9,
+            eigenvalue_real: 0.0,
+            eigenvalue_imag: std::f64::consts::TAU * 1.0e9,
+            norm: 1.0,
+            mass_norm: Some(1.0),
+            max_amplitude: 1.0,
+            residual_relative_l2,
+            residual_norm: Some(1.0e-9),
+            residual_linf: Some(1.0e-10),
+            tangent_leakage_mean_abs: Some(0.0),
+            tangent_leakage_max_abs: Some(0.0),
+            tangent_leakage_weighted_relative_l2: Some(0.0),
+            dominant_polarization: "linear".to_string(),
+            reduced_vector: None,
+            lifted_real: None,
+            lifted_imag: None,
+            amplitude: None,
+            phase: None,
+            node_mass_weights: None,
+            component_participation:
+                crate::eigen::ModalParticipationObservable::unavailable_without_context("cpu"),
+        }
+    }
+
+    #[test]
+    fn eigen_path_v2_and_v3_keep_relative_residual_separate_and_nullable() {
+        let plan = residual_transport_test_plan();
+        let sample = KSampleDescriptor {
+            sample_index: 0,
+            label: Some("G".to_string()),
+            segment_index: Some(0),
+            path_s: 0.0,
+            t_in_segment: 0.0,
+            k_vector: [0.0, 0.0, 0.0],
+        };
+        let mode = residual_transport_test_mode(Some(2.5e-10));
+        let v2 = eigen_path_mode_json(
+            &plan,
+            &sample,
+            &mode,
+            crate::eigen::EigenSolverModel::ReferenceScalarTangent,
+            None,
+        );
+        let v3 = eigen_path_mode_v3_json(
+            &plan,
+            &sample,
+            &mode,
+            crate::eigen::EigenSolverModel::ReferenceScalarTangent,
+            None,
+        );
+        for value in [&v2, &v3] {
+            assert_eq!(value["residual_absolute_l2"], 1.0e-9);
+            assert_eq!(value["residual_relative_l2"], 2.5e-10);
+        }
+
+        let missing = residual_transport_test_mode(None);
+        let missing_v2 = eigen_path_mode_json(
+            &plan,
+            &sample,
+            &missing,
+            crate::eigen::EigenSolverModel::ReferenceScalarTangent,
+            None,
+        );
+        let missing_v3 = eigen_path_mode_v3_json(
+            &plan,
+            &sample,
+            &missing,
+            crate::eigen::EigenSolverModel::ReferenceScalarTangent,
+            None,
+        );
+        assert!(missing_v2["residual_relative_l2"].is_null());
+        assert!(missing_v3["residual_relative_l2"].is_null());
+    }
+
     #[test]
     fn eigen_path_retains_only_sample_candidates_before_tracking() {
         let mut sample = KSampleDescriptor {
@@ -970,6 +1137,9 @@ pub(super) fn eigen_path_mode_json(
     solver_diagnostics: Option<&serde_json::Value>,
 ) -> serde_json::Value {
     let residual_absolute_l2 = finite_or_default(mode.residual_norm, 0.0);
+    let residual_relative_l2 = mode
+        .residual_relative_l2
+        .filter(|value| value.is_finite() && *value >= 0.0);
     let residual_linf = finite_or_default(mode.residual_linf, residual_absolute_l2);
     let tangent_leakage_mean_abs = finite_or_default(mode.tangent_leakage_mean_abs, 0.0);
     let tangent_leakage_max_abs =
@@ -1017,7 +1187,7 @@ pub(super) fn eigen_path_mode_json(
         "max_amplitude": mode.max_amplitude,
         "residual_norm": residual_absolute_l2,
         "residual_absolute_l2": residual_absolute_l2,
-        "residual_relative_l2": residual_absolute_l2,
+        "residual_relative_l2": residual_relative_l2,
         "residual_linf": residual_linf,
         "mass_norm": mass_norm,
         "tangent_leakage_mean_abs": tangent_leakage_mean_abs,
@@ -1299,7 +1469,7 @@ pub(super) fn eigen_path_solver_diagnostics(
         "mode_count": public_mode_count,
         "requested_mode_count": plan.count,
         "normalization": format!("{:?}", plan.normalization).to_lowercase(),
-        "residual_definition": "residual_absolute_l2 is the solver-reported modal residual norm; residual_relative_l2 currently follows the reference residual until the production modal backend emits a separate relative norm",
+        "residual_definition": "residual_absolute_l2 is the solver-reported modal residual norm; residual_relative_l2 is the solver-reported relative L2 residual and is null when unavailable",
         "tangent_leakage_definition": "abs(m0 dot delta_m) over reconstructed real and imaginary mode vectors",
         "constants": {
             "gamma_rad_s_T": gamma0_rad_s_per_a_m / crate::MU0,

@@ -2233,7 +2233,7 @@ fn spectrum_v3_item(run_id: &str, dataset_id: &str, sample_id: &str, source_revi
     AnalysisResultSpectralItemSummary {
         item_id: item_id.clone(), item_kind: AnalysisResultItemKind::EigenMode, sample_id: sample_id.to_string(), display_index: Some(mode.raw_mode_index), frequency_hz: Some(mode.frequency_hz), wavevector_kf: None, branch_id: mode.branch_id.map(|branch| branch.to_string()),
         status: status_facets("ready", "published", if field_ready { "ready" } else { "spectrum_only" }, "unvalidated", (!field_ready).then_some("field_payload_not_published"), None),
-        quality: AnalysisResultQualitySummary { residual_relative_l2: Some(mode.residual_relative_l2), tracking_score: None, qualification: "unvalidated".to_string() },
+        quality: AnalysisResultQualitySummary { residual_relative_l2: mode.residual_relative_l2, tracking_score: None, qualification: "unvalidated".to_string() },
         field_ref: field_ready.then(|| AnalysisResultFieldRef { field_id: mode.mode_field_id.unwrap_or_default(), field_revision: source_revision.to_string(), resource_key: mode.mode_field_resource_key.unwrap_or_default(), status: "ready".to_string(), quantity_id: Some("m".to_string()), representation: Some("complex-vector-xyz".to_string()), mesh_ref }),
         detail_resource: item_path(run_id, dataset_id, sample_id, &item_id), source_revision: source_revision.to_string(), relations: Vec::new(),
     }

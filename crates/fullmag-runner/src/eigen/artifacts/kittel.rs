@@ -29,7 +29,7 @@ struct K0KittelSelectedPoint {
     selected_mode_index: usize,
     eigenvalue_real: f64,
     eigenvalue_imag: f64,
-    mode_residual_relative: f64,
+    mode_residual_relative: Option<f64>,
     uniformity_score: f64,
     branch_overlap_previous: f64,
     max_m0_dot_delta_m_abs: f64,
@@ -487,9 +487,10 @@ pub(crate) fn k0_kittel_validation_auxiliary_artifacts_from_bias_field_sweep(
                 norm: finite_json_f64(mode_json, &["norm"]).unwrap_or(1.0),
                 mass_norm: finite_json_f64(mode_json, &["mass_norm"]),
                 max_amplitude: finite_json_f64(mode_json, &["max_amplitude"]).unwrap_or(0.0),
+                residual_relative_l2: finite_json_f64(mode_json, &["residual_relative_l2"]),
                 residual_norm: finite_json_f64(
                     mode_json,
-                    &["residual_relative_l2", "residual_norm"],
+                    &["residual_absolute_l2", "residual_norm"],
                 ),
                 residual_linf: finite_json_f64(mode_json, &["residual_linf"]),
                 tangent_leakage_mean_abs: finite_json_f64(mode_json, &["tangent_leakage_mean_abs"]),
@@ -984,7 +985,9 @@ fn k0_kittel_branch_candidate(
             selected_mode_index: branch_point.raw_mode_index,
             eigenvalue_real: mode.eigenvalue_real,
             eigenvalue_imag: mode.eigenvalue_imag,
-            mode_residual_relative: finite_non_negative_or_default(mode.residual_norm, 0.0),
+            mode_residual_relative: mode
+                .residual_relative_l2
+                .filter(|value| value.is_finite() && *value >= 0.0),
             uniformity_score,
             branch_overlap_previous: unit_interval_or_default(branch_point.overlap_prev, 1.0),
             max_m0_dot_delta_m_abs: finite_non_negative_or_default(
@@ -1235,8 +1238,12 @@ mode_residual_relative,uniformity_score,branch_overlap_previous,\
 max_m0_dot_delta_m_abs,max_periodic_seam_mismatch\n",
     );
     for point in &branch.points {
+        let mode_residual_relative = point
+            .mode_residual_relative
+            .map(|value| format!("{value:.17e}"))
+            .unwrap_or_default();
         csv.push_str(&format!(
-            "{},{},{},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e}\n",
+            "{},{},{},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{},{:.17e},{:.17e},{},{:.17e},{:.17e},{:.17e},{:.17e}\n",
             case_id,
             demag_kind,
             point.field_index,
@@ -1248,7 +1255,7 @@ max_m0_dot_delta_m_abs,max_periodic_seam_mismatch\n",
             point.selected_mode_index,
             point.eigenvalue_real,
             point.eigenvalue_imag,
-            point.mode_residual_relative,
+            mode_residual_relative,
             point.uniformity_score,
             point.branch_overlap_previous,
             point.max_m0_dot_delta_m_abs,
@@ -1427,7 +1434,8 @@ pub(crate) fn k0_kittel_validation_auxiliary_artifacts(
         .points
         .iter()
         .map(|point| point.mode_residual_relative)
-        .fold(0.0, f64::max);
+        .collect::<Option<Vec<_>>>()
+        .and_then(|values| values.into_iter().reduce(f64::max));
     let demag = if let Some(metrics) = periodic_airbox_metrics.as_ref() {
         serde_json::json!({
             "kind": k0_kittel_validation_demag_kind(validation),

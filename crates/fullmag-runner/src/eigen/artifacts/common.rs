@@ -842,6 +842,7 @@ pub(super) fn result_source_revision(result: &PathSolveResult) -> String {
                 "angular_frequency_rad_per_s": mode.angular_frequency_rad_per_s,
                 "eigenvalue_real": mode.eigenvalue_real,
                 "eigenvalue_imag": mode.eigenvalue_imag,
+                "residual_relative_l2": mode.residual_relative_l2,
                 "residual_norm": mode.residual_norm,
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),

@@ -1,5 +1,45 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Residuale — zakończony pakiet źródłowy transportu, 2026-09-22
+
+SingleKModeResult otrzymał osobne Option<f64> dla residualu względnego.
+Parser natywnej ścieżki przenosi tę wartość bez aliasowania residual_norm.
+Manifesty, mode bundle, widma v2/v3, field sweep i podsumowanie Kittela
+korzystają z właściwej wielkości. Kittel raportuje null, jeśli choć jeden
+wybrany punkt nie ma tej diagnostyki; CSV pozostawia wtedy puste pole.
+Fingerprint wyników uwzględnia teraz także residual względny.
+
+Przegląd objął producenta natywnego, parser, konsumentów oraz wszystkie
+konstruktory SingleKModeResult. Dodane regresje obejmują różne wartości
+residualu absolutnego/względnego i brak wartości. Kontrole formatowania
+zmienionych plików runnera oraz diff przeszły. Regresje Rust są przygotowane,
+lecz NIEURUCHOMIONE ze względu na zakaz kompilowania testów. Nie jest to
+odbiór runtime ani zakończenie S07: generacja OpenAPI/klienta, kompilacja
+aktualnego źródła i dowody numeryczne nadal pozostają otwarte.
+
+Odczyt procesów aktywnego kontenera joba 6b2de4a74bf64669ae0e92610b1bb078
+potwierdził cargo i rustc, a log wskazał kompilację fullmag-runner. Job
+nadal running. Nie zastępowano go nowym buildem ani nie zmieniano kapsuły.
+
+## Residuale — kontrakt API v3, 2026-09-22
+
+W bieżącym worktree payload widma v3 przechowuje residual względny jako
+Option<f64>. Walidator dopuszcza brak dowodu, odrzuca natomiast ujemne
+oraz nieskończone/NaN wartości obecne. Indeks wyników zachowuje None;
+brak residualu nie staje się zerem. Dodano dwie regresje Rust obejmujące
+brak pola, null, zachowanie liczby i odrzucanie niepoprawnych wartości.
+Nie kompilowano ani nie uruchamiano testów Rust z powodu obowiązującego
+zakazu. rustfmt --check dla frequency_domain.rs i git diff --check przeszły.
+Kontrola formatowania results.rs wykazała rozległe istniejące różnice;
+nie wykonano niezwiązanego formatowania całego pliku.
+
+Zmiana pozostaje WIP razem z transportem residualu z natywnego solvera.
+Regeneracja OpenAPI i typów klienta oraz weryfikacja kompilacji są nadal
+otwarte; nie edytowano plików generowanych ręcznie. Job
+6b2de4a74bf64669ae0e92610b1bb078 przy ostatnim odczycie nadal miał stan
+running i exit_code=null. Nie obejmuje niniejszych zmian API/Rust.
+Nie przybył zaakceptowany punkt nonzero-k ani dowód kwalifikacji fizycznej.
+
 ## Korekta semantyki residualu — 2026-09-22
 
 Śledzenie producenta wykazało, że `eigen_native_artifacts.rs` zapisuje

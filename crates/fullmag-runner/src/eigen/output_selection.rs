@@ -656,6 +656,7 @@ mod tests {
             norm: 1.0,
             mass_norm: Some(1.0),
             max_amplitude: 1.0,
+            residual_relative_l2: Some(0.0),
             residual_norm: Some(0.0),
             residual_linf: Some(0.0),
             tangent_leakage_mean_abs: None,

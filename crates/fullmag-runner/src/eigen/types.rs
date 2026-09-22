@@ -404,6 +404,10 @@ pub struct SingleKModeResult {
     pub norm: f64,
     pub mass_norm: Option<f64>,
     pub max_amplitude: f64,
+    /// Solver-reported relative L2 residual. This is separate from
+    /// `residual_norm`, which is the absolute L2 norm, and remains `None`
+    /// when the backend did not provide a relative residual.
+    pub residual_relative_l2: Option<f64>,
     pub residual_norm: Option<f64>,
     pub residual_linf: Option<f64>,
     pub tangent_leakage_mean_abs: Option<f64>,

@@ -537,6 +537,7 @@ pub(crate) fn execute_fem_eigen_path(
                     norm: mode_json["norm"].as_f64().unwrap_or(0.0),
                     mass_norm: mode_json["mass_norm"].as_f64(),
                     max_amplitude: mode_json["max_amplitude"].as_f64().unwrap_or(0.0),
+                    residual_relative_l2: mode_json["residual_relative_l2"].as_f64(),
                     residual_norm: mode_json["residual_norm"].as_f64(),
                     residual_linf: mode_json["residual_linf"].as_f64(),
                     tangent_leakage_mean_abs: mode_json["tangent_leakage_mean_abs"].as_f64(),

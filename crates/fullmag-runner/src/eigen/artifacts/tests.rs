@@ -63,6 +63,7 @@ fn sample_result_with_solver_model(solver_model: EigenSolverModel) -> PathSolveR
                 norm: 1.0,
                 mass_norm: Some(7.25),
                 max_amplitude: 1.0,
+                residual_relative_l2: Some(2.5e-10),
                 residual_norm: Some(1.25e-9),
                 residual_linf: Some(2.5e-10),
                 tangent_leakage_mean_abs: Some(3.0e-12),
@@ -273,6 +274,14 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
             spectrum["samples"][0]["modes"][0]["mode_field_resource_key"],
             "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0"
         );
+    assert_eq!(
+        spectrum["samples"][0]["modes"][0]["residual_absolute_l2"],
+        1.25e-9
+    );
+    assert_eq!(
+        spectrum["samples"][0]["modes"][0]["residual_relative_l2"],
+        2.5e-10
+    );
     assert!(spectrum["samples"][0]["modes"][0]
         .get("component_participation")
         .is_none());
@@ -369,6 +378,8 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
     assert_eq!(mode["raw_mode_index"], 0);
     assert_eq!(mode["frequency_hz"], 1.0e9);
     assert_eq!(mode["frequency_real_hz"], 1.0e9);
+    assert_eq!(mode["residual_absolute_l2"], 1.25e-9);
+    assert_eq!(mode["residual_relative_l2"], 2.5e-10);
     assert_eq!(
         mode["mode_field_id"],
         "analysis:eigen:sample-0000:mode-0000"
@@ -506,6 +517,32 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
         family_manifest["capabilities"]["modal_artifact_available"],
         true
     );
+}
+
+#[test]
+fn eigen_artifact_writer_keeps_missing_relative_residual_unavailable() {
+    let temp = TempDirGuard::new("eigen-artifacts-missing-relative-residual");
+    let mut result = sample_result();
+    result.samples[0].modes[0].residual_relative_l2 = None;
+
+    write_mode_bundle(&temp.path, &result).expect("mode bundle should write");
+    write_frequency_domain_eigen_manifest(&temp.path, &result)
+        .expect("frequency-domain eigen manifest should write");
+
+    let eigen_dir = temp.path.join("eigen");
+    let spectrum: Value = serde_json::from_slice(
+        &std::fs::read(eigen_dir.join("spectrum.v2.json"))
+            .expect("spectrum.v2.json should be written"),
+    )
+    .expect("spectrum.v2.json should be valid JSON");
+    assert!(spectrum["samples"][0]["modes"][0]["residual_relative_l2"].is_null());
+
+    let mode: Value = serde_json::from_slice(
+        &std::fs::read(eigen_dir.join("modes/sample_0000_mode_0000.json"))
+            .expect("flat mode artifact should be written"),
+    )
+    .expect("flat mode artifact should be valid JSON");
+    assert!(mode["residual_relative_l2"].is_null());
 }
 
 #[test]
@@ -952,6 +989,40 @@ fn eigen_artifacts_write_k0_kittel_summary_and_points() {
     assert_eq!(kittel_fit["source"]["artifact"], "eigen/spectrum.v2.json");
     assert_eq!(kittel_fit["model"], "macrospin_larmor");
     assert_eq!(kittel_fit["complete"], false);
+}
+
+#[test]
+fn k0_kittel_relative_residual_is_null_when_any_point_is_missing() {
+    let mut result = sample_result_with_k0_kittel_sweep();
+    result.samples[1].modes[0].residual_relative_l2 = None;
+
+    let artifacts = k0_kittel_validation_auxiliary_artifacts(&result)
+        .expect("Kittel artifacts should preserve unavailable residual metadata");
+    let summary = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "validation/kittel_k0_pbc/summary.v1.json")
+        .expect("Kittel summary should be present");
+    let summary: Value = serde_json::from_slice(&summary.bytes).expect("summary should be JSON");
+    assert!(summary["solver"]["max_eigen_residual_relative"].is_null());
+
+    let points = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "validation/kittel_k0_pbc/points.v1.csv")
+        .expect("Kittel points should be present");
+    let rows = String::from_utf8(points.bytes.clone()).expect("points should be UTF-8");
+    let header = rows
+        .lines()
+        .next()
+        .expect("points header should be present");
+    let residual_column = header
+        .split(',')
+        .position(|column| column == "mode_residual_relative")
+        .expect("relative residual column should be present");
+    let missing_row = rows
+        .lines()
+        .find(|row| row.split(',').nth(2) == Some("1"))
+        .expect("field index 1 row should be present");
+    assert_eq!(missing_row.split(',').nth(residual_column), Some(""));
 }
 
 #[test]

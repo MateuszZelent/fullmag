@@ -294,6 +294,7 @@ pub(super) fn solve_k0_kittel_synthetic_demag_factor_single_k(
             norm: 1.0,
             mass_norm: Some(1.0),
             max_amplitude: 1.0,
+            residual_relative_l2: None,
             residual_norm: Some(0.0),
             residual_linf: Some(0.0),
             tangent_leakage_mean_abs: Some(0.0),

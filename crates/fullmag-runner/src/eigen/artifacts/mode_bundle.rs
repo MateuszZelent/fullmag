@@ -48,7 +48,7 @@ struct ModeArtifact {
     #[serde(skip_serializing_if = "Option::is_none")]
     residual_norm: Option<f64>,
     residual_absolute_l2: f64,
-    residual_relative_l2: f64,
+    residual_relative_l2: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     residual_linf: Option<f64>,
     mass_norm: f64,
@@ -234,7 +234,9 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 sample.sample.sample_index, mode.raw_mode_index
             );
             let residual_absolute_l2 = finite_or_default(mode.residual_norm, 0.0);
-            let residual_relative_l2 = residual_absolute_l2;
+            let residual_relative_l2 = mode
+                .residual_relative_l2
+                .filter(|value| value.is_finite() && *value >= 0.0);
             let residual_linf = finite_or_default(mode.residual_linf, residual_absolute_l2);
             let tangent_leakage_mean_abs = finite_or_default(mode.tangent_leakage_mean_abs, 0.0);
             let tangent_leakage_max_abs =
