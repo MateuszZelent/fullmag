@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -31,8 +32,8 @@ def validate_model(context):
     return digest
 
 
-def compose_command(context, output):
-    command = managed._compose_command(context, output, ("c1",))
+def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS):
+    command = managed._compose_command(context, output, ("c1",), timeout_seconds=timeout_seconds)
     command[-1] = "\n".join([
         "set -euo pipefail",
         "cd /workspace/capsule",
@@ -47,8 +48,8 @@ def compose_command(context, output):
     return command
 
 
-def execute(context, output, command, model_sha):
-    request = managed._run_request(context, output, (), command)
+def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS):
+    request = managed._run_request(context, output, (), command, timeout_seconds=timeout_seconds)
     request.update(schema="fullmag.de100-pilot.request.v1", operation="de100-numerical-pilot",
                    public_model=MODEL, cases=["de100"], model_sha256=model_sha,
                    orchestrator_sha256=managed._sha256_file(Path(__file__).resolve()))
@@ -58,13 +59,16 @@ def execute(context, output, command, model_sha):
     result = {"schema": "fullmag.de100-pilot.result.v1", "status": "failed",
               "qualification": "NOT VERIFIED", "started_at_unix": time.time(),
               "job": request["job"], "source": request["source"], "runtime": request["runtime"],
-              "model_sha256": model_sha, "return_code": None, "artifacts": None}
+              "model_sha256": model_sha, "return_code": None, "artifacts": None,
+              "container_cleanup": {"status": "not_requested"}}
     try:
         with (output / "compose.log").open("x", encoding="utf-8") as log:
             completed = subprocess.run(command, cwd=context.layout["repo_root"],
                                        env=managed._compose_environment(context.layout),
                                        stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                                       check=False)
+                                       check=False, timeout=math.ceil(timeout_seconds)
+                                       + managed.CONTAINER_TIMEOUT_GRACE_SECONDS
+                                       + managed.HOST_COMPOSE_GRACE_SECONDS)
         result["return_code"] = completed.returncode
         if completed.returncode == 0:
             # C1 artifact requirements include complex modes and full potential.
@@ -72,9 +76,18 @@ def execute(context, output, command, model_sha):
             artifacts = managed._validate_case_artifacts(output / "de100", "c1")
             artifacts["case"] = "de100"
             result.update(status="completed_unqualified", artifacts=artifacts)
+    except subprocess.TimeoutExpired:
+        result["error"] = "host Compose watchdog expired after the container deadline and grace period"
+    except KeyboardInterrupt:
+        result["error"] = "pilot interrupted by operator"
     except (OSError, ValueError, managed.BenchmarkError) as error:
         result["error"] = str(error)
     finally:
+        if result["return_code"] != 0:
+            try:
+                result["container_cleanup"] = managed._cleanup_benchmark_container(context, output)
+            except (managed.BenchmarkError, OSError, ValueError, TypeError, KeyboardInterrupt) as error:
+                result["container_cleanup"] = {"status": "blocked", "reason": str(error)}
         result["finished_at_unix"] = time.time()
         managed._write_new_json(output / "run-result.json", result)
     print(json.dumps({"output_dir": str(output), **result}, indent=2))

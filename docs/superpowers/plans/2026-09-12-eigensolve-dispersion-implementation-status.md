@@ -1,5 +1,21 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Zabezpieczenie wykonania pilota DE — 2026-09-22
+
+Job `6b2de4a74bf64669ae0e92610b1bb078` został potwierdzony przez API jako
+`running`. Nie ma jeszcze terminalnego receiptu ani nowego wyniku fizycznego.
+
+W `run_de_100nm_pilot.py` dodano hostowy watchdog zgodny z limitem kontenera
+oraz wspólny, kontrolujący tożsamość kontenera cleanup po błędzie, timeout
+lub przerwaniu. Receipt zachowuje końcowy błąd i wynik cleanupu. Naprawiono
+fixture identyfikacji kontenera; sześć testów Pythona przeszło, w tym timeout
+i KeyboardInterrupt. To testy lifecycle, bez wykonania FEM/Dockera.
+
+Istniejący pilot 100 nm / dziewięć punktów nie jest zamrożonym DE-SMOKE
+10 nm / pięć punktów z planu 2026-09-16. Nadal trzeba przygotować i wykonać
+właściwy mały przypadek oraz kwalifikację T4–T7; wyników nie wolno mieszać.
+
+
 ## Odblokowanie profilu runtime-only — 2026-09-22
 
 Runner odrzucał zgłoszenie HTTP 400, ponieważ konfiguracja operatora nie

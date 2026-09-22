@@ -52,6 +52,7 @@ class PilotTests(unittest.TestCase):
             with patch.object(pilot.managed, "_run_request", return_value=request), \
                  patch.object(pilot.managed, "_compose_environment", return_value={}), \
                  patch.object(pilot.subprocess, "run", return_value=SimpleNamespace(returncode=7)), \
+                 patch.object(pilot.managed, "_cleanup_benchmark_container", return_value={"status": "absent"}), \
                  patch("builtins.print"):
                 self.assertEqual(pilot.execute(context, root, ["docker"], "abc"), 1)
             result = json.loads((root / "run-result.json").read_text())
@@ -59,8 +60,27 @@ class PilotTests(unittest.TestCase):
             self.assertEqual(result["status"], "failed")
             self.assertEqual(result["qualification"], "NOT VERIFIED")
 
+    def test_timeout_and_interrupt_cleanup_and_record_failure(self):
+        for failure in (pilot.subprocess.TimeoutExpired("docker", 3), KeyboardInterrupt()):
+            with self.subTest(failure=type(failure).__name__), TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                context = SimpleNamespace(layout={"repo_root": str(root)})
+                request = {"source": {}, "job": {}, "runtime": {}}
+                with patch.object(pilot.managed, "_run_request", return_value=request), \
+                     patch.object(pilot.managed, "_compose_environment", return_value={}), \
+                     patch.object(pilot.subprocess, "run", side_effect=failure) as run, \
+                     patch.object(pilot.managed, "_cleanup_benchmark_container", return_value={"status": "stopped"}) as cleanup, \
+                     patch("builtins.print"):
+                    self.assertEqual(pilot.execute(context, root, ["docker"], "abc", timeout_seconds=3), 1)
+                cleanup.assert_called_once_with(context, root)
+                self.assertEqual(run.call_args.kwargs["timeout"], 3 + pilot.managed.CONTAINER_TIMEOUT_GRACE_SECONDS + pilot.managed.HOST_COMPOSE_GRACE_SECONDS)
+                result = json.loads((root / "run-result.json").read_text())
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(result["container_cleanup"]["status"], "stopped")
+                self.assertIn("error", result)
+
     def test_command_selects_numerical_pilot_without_case_override(self):
-        context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"))
+        context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"), job={"job_id": "a" * 32})
         command = pilot.compose_command(context, Path("/outputs"))
         shell = command[-1]
         self.assertIn("/workspace/capsule/" + pilot.MODEL, shell)
