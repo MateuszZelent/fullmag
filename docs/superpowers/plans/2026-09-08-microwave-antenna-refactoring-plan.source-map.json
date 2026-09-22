@@ -180,6 +180,12 @@
       "path": "scripts/antenna_macrospin_oracle.py",
       "symbol": "waveform_integral",
       "responsibility": "Niezależne całki pięciu wspieranych przebiegów do bramki T13"
+    },
+    {
+      "id": "source25",
+      "path": "scripts/antenna_macrospin_oracle.py",
+      "symbol": "compare_collinear_trajectory",
+      "responsibility": "Porównanie zapisanych próbek m(t) z niezależnym wzorcem i kontrolą zegara"
     }
   ],
   "public_api": {

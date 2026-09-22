@@ -125,3 +125,54 @@ def waveform_integral(waveform: dict, start_s: float, end_s: float) -> float:
             previous = current
         raise ValueError("sinc oracle quadrature did not converge")
     raise ValueError(f"unsupported waveform: {kind!r}")
+
+
+def compare_collinear_trajectory(
+    samples: Sequence[dict], *, initial_m: Sequence[float], alpha: float,
+    waveform: dict, basis_hz_per_a: float, peak_current_a: float,
+    bias_hz_a_per_m: float, start_time_s: float, stage_start_time_s: float,
+    time_origin: str, vector_tolerance: float, gamma_mu0: float = 2.211e5,
+) -> dict:
+    """Compare recorded time_s/m samples without trusting reported errors.
+
+    The fixture must have only uniform collinear Zeeman fields, no exchange,
+    demag, anisotropy or direct torques. This function checks the numerical
+    samples; backend identity and actual execution require separate evidence.
+    """
+    if not samples:
+        raise ValueError("trajectory must contain samples")
+    start = _finite(start_time_s, "start_time_s")
+    stage = _finite(stage_start_time_s, "stage_start_time_s")
+    if start < stage or stage < 0:
+        raise ValueError("start time must be at or after a non-negative stage start")
+    if time_origin not in ("absolute", "stage_local"):
+        raise ValueError("unsupported time_origin")
+    origin = stage if time_origin == "stage_local" else 0.0
+    amplitude = _finite(basis_hz_per_a, "basis_hz_per_a") * _finite(peak_current_a, "peak_current_a")
+    bias = _finite(bias_hz_a_per_m, "bias_hz_a_per_m")
+    tolerance = _finite(vector_tolerance, "vector_tolerance")
+    if tolerance <= 0:
+        raise ValueError("vector_tolerance must be positive")
+    previous = None
+    maximum_error = 0.0
+    maximum_norm_defect = 0.0
+    for index, sample in enumerate(samples):
+        time = _finite(sample["time_s"], "time_s")
+        if time < start or (previous is not None and time <= previous):
+            raise ValueError("sample times must increase strictly from start_time_s")
+        measured = sample["m"]
+        if len(measured) != 3:
+            raise ValueError("sample m must have three components")
+        measured = tuple(_finite(v, "sample m") for v in measured)
+        impulse = bias * (time - start) + amplitude * waveform_integral(waveform, start - origin, time - origin)
+        expected = macrospin_from_field_impulse(initial_m, impulse, alpha, gamma_mu0)
+        error = math.dist(measured, expected)
+        if error > tolerance:
+            raise ValueError(f"sample {index} at {time} s: vector error {error} exceeds {tolerance}")
+        maximum_error = max(maximum_error, error)
+        maximum_norm_defect = max(maximum_norm_defect, abs(math.hypot(*measured) - 1))
+        previous = time
+    if previous <= start:
+        raise ValueError("trajectory must advance beyond start_time_s")
+    return {"sample_count": len(samples), "max_vector_error": maximum_error,
+            "max_norm_defect": maximum_norm_defect, "final_time_s": previous}

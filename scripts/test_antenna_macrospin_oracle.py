@@ -3,7 +3,7 @@
 import math
 import unittest
 
-from antenna_macrospin_oracle import macrospin_from_field_impulse, waveform_integral
+from antenna_macrospin_oracle import compare_collinear_trajectory, macrospin_from_field_impulse, waveform_integral
 
 
 class AntennaMacrospinOracleTests(unittest.TestCase):
@@ -68,6 +68,37 @@ class AntennaMacrospinOracleTests(unittest.TestCase):
         for wave in [{'kind': 'unknown'}, {'kind': 'sinusoidal', 'frequency_hz': 0}, {'kind': 'piecewise_linear', 'points': [(1, 1), (1, 2)]}]:
             with self.assertRaises(ValueError):
                 waveform_integral(wave, 0, 1)
+
+    def test_trajectory_rejects_phase_units_and_stale_time(self):
+        args = dict(initial_m=(1, 0, 0), alpha=0, waveform={'kind': 'constant'},
+                    basis_hz_per_a=1e6, peak_current_a=0.02, bias_hz_a_per_m=1e4,
+                    start_time_s=0, stage_start_time_s=0, time_origin='absolute',
+                    vector_tolerance=1e-10)
+        time = math.pi / (2 * 2.211e5 * 3e4)
+        samples = [{'time_s': 0, 'm': [1, 0, 0]}, {'time_s': time, 'm': [0, 1, 0]}]
+        self.assertEqual(compare_collinear_trajectory(samples, **args)['sample_count'], 2)
+        for changed in [dict(peak_current_a=0.01), dict(basis_hz_per_a=1e6 * 1.2566370614359173e-6)]:
+            with self.assertRaises(ValueError):
+                compare_collinear_trajectory(samples, **(args | changed))
+        for bad in [[], samples[:1], samples[::-1], samples + samples[-1:],
+                    [{'time_s': time, 'm': [0, -1, 0]}],
+                    [{'time_s': time, 'm': [float('nan'), 1, 0]}]]:
+            with self.assertRaises(ValueError):
+                compare_collinear_trajectory(bad, **args)
+
+    def test_trajectory_respects_stage_origin(self):
+        stage = 0.25e-9
+        args = dict(initial_m=(1, 0, 0), alpha=0,
+                    waveform={'kind': 'sinusoidal', 'frequency_hz': 1e9},
+                    basis_hz_per_a=1e6, peak_current_a=0.01, bias_hz_a_per_m=0,
+                    start_time_s=stage, stage_start_time_s=stage,
+                    time_origin='stage_local', vector_tolerance=1e-10)
+        # Integral sin(omega*t) from 0 to T/2 equals 2/omega.
+        phi = 2.211e5 * 1e4 / (math.pi * 1e9)
+        sample = [{'time_s': stage + 0.5e-9, 'm': [math.cos(phi), math.sin(phi), 0]}]
+        compare_collinear_trajectory(sample, **args)
+        with self.assertRaises(ValueError):
+            compare_collinear_trajectory(sample, **(args | {'time_origin': 'absolute'}))
 
 
 if __name__ == '__main__':

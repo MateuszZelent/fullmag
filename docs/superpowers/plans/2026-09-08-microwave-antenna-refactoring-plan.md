@@ -919,6 +919,23 @@ zegar nanosekundowy i odrzucanie niepoprawnych danych. Nie kompilowano testów
 natywnych. Następny krok: podłączyć wzorzec do rzeczywistych trajektorii
 FEM dla macierzy integratorów i przebiegów; sama kontrola wzorca nie zamyka T13.
 
+**Porównanie próbek 2026-09-22:**
+`scripts/antenna_macrospin_oracle.py::compare_collinear_trajectory` porównuje
+zapisane `time_s` i `m` ze wzorcem, mnożąc bazę H/A przez prąd w A,
+dodając bias w A/m i respektując zegar `stage_local` albo `absolute`.
+Nie ufa błędom zapisanym przez producenta artefaktu. Odrzuca puste serie,
+brak postępu czasu, powtórzone/cofające się czasy, NaN i przekroczenie
+jawnej tolerancji wektora. Zakres obejmuje jednorodny macrospin z polami
+Zeemana wzdłuż osi z; pochodzenie danych i backend wymagają osobnych dowodów.
+
+9 kontroli Python przeszło, w tym celowo błędna amplituda, dodatkowe mu0,
+znak precesji i zegar. Porównano także trzy końcowe próbki istniejącego
+artefaktu CPU FP64/RK45 opisanego powyżej (ten sam source snapshot):
+przy polu bias 800000 A/m, początkowym m=(0.6,0,0.8) i czasie 2 ps
+maksymalny błąd wyniósł 8.006e-16 dla alpha=10. Nie wykonano nowego runu.
+To niezależna kontrola istniejących endpointów pola stałego; nie dowodzi
+antenowego wzbudzenia, poprawności wszystkich podkroków ani macierzy RK.
+
 ## T14. Domknąć OpenAPI, zasoby i realtime
 
 Uzupełnienie implementacyjne 2026-09-21: `SolvedAntennaDriveResource` ma
