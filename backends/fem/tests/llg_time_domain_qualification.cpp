@@ -1296,6 +1296,33 @@ void write_partial_artifact(
          << "}\n";
 }
 
+void write_antenna_endpoint(
+    std::ofstream &file, fullmag_fem_backend *backend,
+    const fullmag_fem_step_stats &stats)
+{
+    const auto m = first_node_m(backend);
+    // Copy the accepted effective field before H_drive materialization.
+    // Do not call snapshot_stats: a refresh could hide a stale step cache.
+    const auto effective = copy_field(backend, FULLMAG_FEM_OBSERVABLE_H_EFF, "antenna H_eff");
+    const auto torque = copy_field(backend, FULLMAG_FEM_OBSERVABLE_TORQUE, "antenna torque");
+    const auto drive = copy_field(backend, FULLMAG_FEM_OBSERVABLE_H_DRIVE, "antenna H_drive");
+    for (size_t i = 3; i < kFieldLength; ++i) {
+        require(std::abs(effective[i] - effective[i % 3]) < 1e-8 &&
+            std::abs(drive[i] - drive[i % 3]) < 1e-8 &&
+            std::abs(torque[i] - torque[i % 3]) < 1e-12,
+            "antenna endpoint fields lost nodewise uniformity");
+    }
+    file << ",{\"time_s\":" << stats.time_seconds
+         << ",\"m\":[" << m[0] << ',' << m[1] << ',' << m[2] << ']'
+         << ",\"h_eff_a_per_m\":[" << effective[0] << ',' << effective[1] << ',' << effective[2] << ']'
+         << ",\"h_drive_a_per_m\":[" << drive[0] << ',' << drive[1] << ',' << drive[2] << ']'
+         << ",\"torque_t\":[" << torque[0] << ',' << torque[1] << ',' << torque[2] << ']'
+         << ",\"drive_energy_j\":" << stats.drive_energy_joules
+         << ",\"external_energy_j\":" << stats.external_energy_joules
+         << ",\"total_energy_j\":" << stats.total_energy_joules
+         << ",\"max_torque_a_per_m\":" << stats.max_torque_Apm << '}';
+}
+
 void write_antenna_cpu_trajectories(const std::filesystem::path &output)
 {
     const auto digest = qualification_source_snapshot_sha256();
@@ -1303,7 +1330,7 @@ void write_antenna_cpu_trajectories(const std::filesystem::path &output)
     std::ofstream file(output);
     require(static_cast<bool>(file), "open antenna trajectory output");
     file << std::setprecision(17)
-         << "{\"schema_version\":\"fem_antenna_trajectory.v3\","
+         << "{\"schema_version\":\"fem_antenna_trajectory.v4\","
          << "\"status\":\"recorded_unvalidated\",\"backend\":\"fem\","
          << "\"device\":\"cpu\",\"precision\":\"fp64\","
          << "\"source_snapshot_sha256\":\"" << digest << "\",\"cases\":[\n";
@@ -1431,6 +1458,7 @@ void write_antenna_cpu_trajectories(const std::filesystem::path &output)
                 double requested_dt = 5e-11;
                 for (size_t sample = 1; sample <= 20; ++sample) {
                     const double target = start_time + sample * 5e-11;
+                    fullmag_fem_step_stats endpoint{};
                     while (previous_time < target) {
                         fullmag_fem_step_stats stats{};
                         require(fullmag_fem_backend_step(backend,
@@ -1442,12 +1470,11 @@ void write_antenna_cpu_trajectories(const std::filesystem::path &output)
                             "antenna adaptive clock/suggestion invalid");
                         previous_time = stats.time_seconds;
                         requested_dt = stats.dt_suggested;
+                        endpoint = stats;
                         rejected_attempts += stats.rejected_attempts;
                         require(++accepted_steps < 200000, "antenna adaptive step budget exceeded");
                     }
-                    const auto m = first_node_m(backend);
-                    file << ",{\"time_s\":" << previous_time
-                         << ",\"m\":[" << m[0] << ',' << m[1] << ',' << m[2] << "]}";
+                    write_antenna_endpoint(file, backend, endpoint);
                 }
             } else {
             for (size_t step = 1; step <= steps; ++step) {
@@ -1461,9 +1488,7 @@ void write_antenna_cpu_trajectories(const std::filesystem::path &output)
                 ++accepted_steps;
                 rejected_attempts += stats.rejected_attempts;
                 if (step % 100 == 0) {
-                    const auto m = first_node_m(backend);
-                    file << ",{\"time_s\":" << stats.time_seconds
-                         << ",\"m\":[" << m[0] << ',' << m[1] << ',' << m[2] << "]}";
+                    write_antenna_endpoint(file, backend, stats);
                 }
             }
             }

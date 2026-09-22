@@ -5,6 +5,32 @@ Data bazowego przekazania: 2026-09-20; aktualizacja: 2026-09-22. Status całośc
 
 ## 1. Punkt wznowienia i zakres tego dokumentu
 
+### Najnowszy checkpoint — kwalifikacja antenowego CPU, 2026-09-22
+
+Ten checkpoint aktualizuje historyczny opis poniżej. Ostatni commit przed
+rozszerzeniem obserwabli: `0a631d305b61fd426c9381063268faaac9f117b2`.
+Recepta `just verify-fem-antenna-cpu-trajectories` przeszła z kodem 0:
+90 przypadków, 1890 próbek magnetyzacji, 1800 punktów kontroli `H_eff`,
+`H_drive`, torque i energii. Macierz obejmuje Heun/RK4/RK23/RK45,
+pięć przebiegów, zegar absolutny i lokalny etapu oraz adaptive/retry
+dla RK23/RK45. Niezależny walidator odrzucił siedem mutacji obserwabli
+podstawionych z poprzedniej chwili.
+
+Raport: `.fullmag/reports/fem-antenna-trajectories/qualification.json`,
+schemat `fem_antenna_trajectory.v4`, source snapshot
+`14355474149aba5b74c56fd75a5e8c8e020cd1fdd65f5998dc8e152af3f5052b`.
+Tożsamość źródeł przed/po wykonaniu zgodna. Szczegółowe warunki, progi,
+kotwice źródeł i ograniczenia dowodu zawiera T13 w planie T00–T18.
+
+Następna praca: kwalifikacja publicznego solve/projection → runner → LLG
+i artefaktów `H_ant`, pipeline z relaksacją, niejednorodnych domen oraz
+pełnych oddziaływań. Osobno pozostają GPU/T16 i odbiór całego modułu.
+Obecny `H_drive` jest sumą regionalnych pól; fixture z jedną anteną nie
+dowodzi separacji per źródło ani wizualizacji w airboxie. Zakaz kompilowania
+testów jednostkowych pozostaje w mocy; wykonano odrębną bramkę naukową.
+
+### Historyczny punkt przekazania
+
 - Worktree: `D:/git/fullmag/worktrees/microwave-antenna-latest-20260909`.
 - Rewizja worktree przy ostatniej aktualizacji: `780680003b6b21e706dfcbd49959009c10493664`;
   kod anteny: `38febcef2`.

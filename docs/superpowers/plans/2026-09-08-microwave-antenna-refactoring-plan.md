@@ -1020,6 +1020,41 @@ opisanych warunków. Nie jest to pełny test zbieżności, izolowany dowód
 niezmienności każdego bufora po odrzuceniu ani kwalifikacja runnerowego
 solve/relax/run, GPU, energii/torque i snapshotów H_ant. T13 pozostaje otwarte.
 
+**Pola, energia i torque w zaakceptowanej chwili CPU 2026-09-22:**
+`just verify-fem-antenna-cpu-trajectories` zakończyła się kodem 0 ze schematem
+`fem_antenna_trajectory.v4`. Zachowano 90 przypadków i 1890 próbek trajektorii;
+1800 próbek po krokach rozszerzono o `H_eff`, `H_drive`, wektor `torque`,
+energię napędu, energię zewnętrznego biasu, energię całkowitą i `max_torque_Apm`.
+Snapshot źródeł:
+`14355474149aba5b74c56fd75a5e8c8e020cd1fdd65f5998dc8e152af3f5052b`;
+porównanie źródeł przed/po wykonaniu przeszło. Raport v4 zastępuje lokalny v3.
+
+`backends/fem/tests/llg_time_domain_qualification.cpp::write_antenna_endpoint`
+kopiuje pola przez ABI i zapisuje statystyki zwrócone przez zaakceptowany krok.
+Nie wywołuje odświeżającego `snapshot_stats`; `H_eff` i torque są pobierane
+przed materializacją `H_drive`, aby nie maskować nieaktualnego cache.
+Sprawdzana jest również jednorodność pól i torque we wszystkich węzłach.
+`scripts/validate_fem_antenna_trajectories.py::validate_endpoint` niezależnie
+oblicza wartość waveformu w zapisanej chwili, sumę z biasem, energię Zeemana
+na objętości pojedynczego tetraedru oraz torque z zapisanej magnetyzacji.
+Obowiązują bezwzględne progi: pola i `max_torque_Apm` — $10^{-7}\,\mathrm{A/m}$,
+wektor torque — $10^{-12}\,\mathrm{T}$, energie — $10^{-30}\,\mathrm{J}$.
+Wektor natywnego torque jest wielkością w teslach, bez mnożnika
+giromagnetycznego; nie jest bezpośrednio pochodną magnetyzacji.
+
+Odrzucono siedem niezależnych mutacji raportu: podstawienie każdej z tych
+siedmiu obserwabli z poprzedniej próbki sinusoidy `stage_local` w próbie
+adaptacyjnej. Nie kompilowano testów jednostkowych Rust. Zmiana rozszerza
+bramkę naukową, nie zmienia równań ani implementacji solvera.
+
+Zakres: jednorodny macrospin, jeden napęd preprojected, FEM CPU FP64.
+`H_drive` sumuje regionalne napędy; tutaj odpowiada jednej antenie. Nie jest
+to kwalifikacja natywnego `H_ant` per źródło, zapisu przez publiczny pipeline
+artefaktów ani airboxu. Całkowita energia fixture zawiera wyłącznie bias i
+napęd; pełne oddziaływania, niejednorodne siatki, solve/relax/run, mnożenie
+bazy przez prąd w runnerze oraz GPU nadal wymagają osobnych dowodów.
+T13 pozostaje otwarte.
+
 ## T14. Domknąć OpenAPI, zasoby i realtime
 
 Uzupełnienie implementacyjne 2026-09-21: `SolvedAntennaDriveResource` ma

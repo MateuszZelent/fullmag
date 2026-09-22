@@ -191,13 +191,13 @@
       "id": "source26",
       "path": "backends/fem/tests/llg_time_domain_qualification.cpp",
       "symbol": "main",
-      "responsibility": "Natywne wykonanie macierzy 90 trajektorii CPU przez preprojected ABI, z dwoma zegarami, adaptacją i odrzuceniami prób"
+      "responsibility": "Natywne wykonanie 90 trajektorii CPU przez preprojected ABI, z zegarami, adaptacją, odrzuceniami oraz polami, energią i torque zaakceptowanych kroków"
     },
     {
       "id": "source27",
       "path": "scripts/validate_fem_antenna_trajectories.py",
       "symbol": "validate",
-      "responsibility": "Niezależna walidacja próbek i kompletności macierzy integratorów oraz przebiegów"
+      "responsibility": "Niezależna walidacja trajektorii, pól, energii i torque oraz kompletności macierzy integratorów i przebiegów"
     },
     {
       "id": "source28",
