@@ -1,5 +1,37 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## DE-SMOKE — wersjonowany model jako wejście runtime, 2026-09-22
+
+Klient pilota przyjmuje opcjonalne `--model-ref <pełny SHA>` wyłącznie dla
+samodzielnego DE-SMOKE. Model odczytuje przez Git z tego commita, zapisuje
+osobno w nowym runie, montuje tylko do odczytu i sprawdza hash przed oraz po
+wykonaniu. Zmiana wejścia daje failed także po exit 0. Domyślnie nadal
+obowiązuje model zawarty w kapsule. Nie zmodyfikowano kapsuł ani ich manifestów.
+
+To rozdzielenie wejścia problemu od skompilowanego runtime: cały istniejący
+odbiór joba, binarium, obrazu, source digest i biblioteki Python pozostaje
+obowiązkowy. PYTHONPATH nadal wskazuje pakiet z kapsuły, nie bieżący checkout.
+Receipt zachowuje osobne `source`/`runtime` oraz `model_source` (commit,
+ścieżka, SHA-256). Nie wolno przedstawiać tego jako buildu nowego commita
+modelu. Stary pilot 100 nm importujący konfigurację repo nie dopuszcza tego
+wariantu. Zmiana nie dodaje nowej realizacji fizyki ani kontraktu DSL/IR.
+
+Recepta: `just run-de-smoke <job-id> two <pełny-SHA-modelu>`; `five` wybiera
+pięć próbek. Aktualny runtime-only build może po sukcesie obsłużyć nowy
+samodzielny model, bez powtórnego builda tylko dla skryptu. Samo zestawienie
+wejścia i runtime nie dowodzi poprawności wyników — obowiązują T4–T7.
+
+Dziewiętnaście testów Pythona i cztery podtesty klienta/wejścia przeszły.
+Sprawdzono przypięcie do commita, odrzucenie ruchomych refów, niezmienność
+mountów runtime/DSL, zakaz nadpisania wejścia i wykrycie mutacji po solve.
+
+Dry-run z rzeczywistym wcześniejszym ukończonym jobem
+`0c899a2c5dde45cdbc8e9605f2c57aa1` przeszedł weryfikację receiptu i hashy.
+Model pobrano z `b8cf20b76711887414d3084291b054da131ba124`, SHA-256
+`ea840ae7471d6234209791f58c39dc9ffc6824213184c518b776155b5fc139e8`.
+Nie uruchomiono solvera ani nie uznano starego joba za dowód aktualnego
+runtime. Bieżący job `6b2de4a74bf64669ae0e92610b1bb078` nadal kompiluje.
+
 ## DE-SMOKE — kontrola wierszy wynikowych, 2026-09-22
 
 Dodano `validate_de_smoke_rows.validate_rows` i włączono ją do wykonania

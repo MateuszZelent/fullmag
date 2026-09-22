@@ -17,6 +17,7 @@ import time
 
 import run_comsol_dispersion_benchmark as managed
 from validate_de_smoke_rows import validate_rows
+import de_smoke_model_input as model_input
 
 MODEL = "examples/fem_de_film_100nm_numeric_pilot.py"
 PILOTS = {
@@ -45,14 +46,20 @@ def validate_model(context, pilot="de100"):
     return digest
 
 
-def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100"):
+def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", external_model=False):
     model = pilot_model(pilot)
+    if external_model and pilot == "de100":
+        raise managed.BenchmarkError("standalone input is supported only for DE-SMOKE")
     command = managed._compose_command(context, output, ("c1",), timeout_seconds=timeout_seconds)
+    if external_model:
+        command[command.index("run")+1:command.index("run")+1] = [
+            "-v", f"{output / 'model-input.py'}:/workspace/benchmark-model.py:ro"]
     command[-1] = "\n".join([
         "set -euo pipefail",
         "cd /workspace/capsule",
         "runtime_bin=/workspace/.fullmag/local/bin/fullmag-bin",
-        "source_script=/workspace/capsule/" + model,
+        ("source_script=/workspace/benchmark-model.py" if external_model
+         else "source_script=/workspace/capsule/" + model),
         *(["export FULLMAG_DE_SMOKE_SAMPLING=" + PILOTS[pilot][1]] if PILOTS[pilot][1] else []),
         'test -x "$runtime_bin"',
         'test -f "$source_script"',
@@ -63,14 +70,16 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
     return command
 
 
-def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100"):
+def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None):
     model = pilot_model(pilot)
     schema_name = "de100-pilot" if pilot == "de100" else "de-smoke"
     request = managed._run_request(context, output, (), command, timeout_seconds=timeout_seconds)
     request.update(schema=f"fullmag.{schema_name}.request.v1", operation=pilot + "-numerical-pilot",
                    public_model=model, cases=[pilot], sampling=PILOTS[pilot][1], model_sha256=model_sha,
                    orchestrator_sha256=managed._sha256_file(Path(__file__).resolve()))
-    request["source"]["public_model_files"] = [model, *managed.PUBLIC_MODEL_FILES]
+    request["source"]["public_model_files"] = [*managed.PUBLIC_MODEL_FILES] if model_identity else [model, *managed.PUBLIC_MODEL_FILES]
+    if model_identity:
+        request["model_source"] = model_identity
     request["scientific_gate"] = {"qualification": "NOT VERIFIED", "reason": "postsolve comparison and convergence required"}
     managed._write_new_json(output / "run-request.json", request)
     result = {"schema": f"fullmag.{schema_name}.result.v1", "pilot": pilot, "status": "failed",
@@ -79,6 +88,8 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
               "model_sha256": model_sha, "return_code": None, "artifacts": None,
               "container_cleanup": {"status": "not_requested"}}
     try:
+        if model_identity:
+            model_input.verify_model(output, model_identity)
         with (output / "compose.log").open("x", encoding="utf-8") as log:
             completed = subprocess.run(command, cwd=context.layout["repo_root"],
                                        env=managed._compose_environment(context.layout),
@@ -103,6 +114,12 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
     except (OSError, ValueError, managed.BenchmarkError) as error:
         result["error"] = str(error)
     finally:
+        if model_identity:
+            result["model_source"] = model_identity
+            try:
+                model_input.verify_model(output, model_identity)
+            except (OSError, ValueError) as error:
+                result.update(status="failed", error=str(error))
         if result["return_code"] != 0:
             try:
                 result["container_cleanup"] = managed._cleanup_benchmark_container(context, output)
@@ -121,27 +138,36 @@ def main(argv=None):
     parser.add_argument("--output-dir")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--pilot", choices=tuple(PILOTS), default="de100")
+    parser.add_argument("--model-ref", help="full commit of standalone DE-SMOKE input; runtime remains build-bound")
     args = parser.parse_args(argv)
     try:
         layout = managed.fullmag_storage.resolve_layout(args.repo_root, "windows-native")
+        input_data = None
+        input_identity = None
+        if args.model_ref:
+            if args.pilot == "de100":
+                raise ValueError("--model-ref requires a DE-SMOKE pilot")
+            input_data, input_identity = model_input.load_model(Path(layout["repo_root"]), args.model_ref)
         if not args.dry_run:
             managed.fullmag_storage.initialize(layout)
         if args.dry_run:
             context = managed._validate_build_context(layout, managed._read_job(layout, args.job_id))
-            model_sha = validate_model(context, args.pilot)
+            model_sha = input_identity["sha256"] if input_identity else validate_model(context, args.pilot)
             output = Path(layout["storage_root"]) / "runs" / layout["worktree_id"] / args.job_id / (args.pilot + "-preview")
             print(json.dumps({"status": "dry_run", "qualification": "NOT VERIFIED",
-                              "model_sha256": model_sha,
-                              "command": compose_command(context, output, pilot=args.pilot)}, indent=2))
+                              "model_sha256": model_sha, "model_source": input_identity,
+                              "command": compose_command(context, output, pilot=args.pilot, external_model=input_identity is not None)}, indent=2))
             return 0
         with managed.fullmag_storage.build_lock(layout):
             context = managed._validate_build_context(layout, managed._read_job(layout, args.job_id))
-            model_sha = validate_model(context, args.pilot)
+            model_sha = input_identity["sha256"] if input_identity else validate_model(context, args.pilot)
             managed._inspect_image(managed.EXPECTED_IMAGE_DIGEST)
             output = managed._new_output_dir(context, args.output_dir)
             output.mkdir(parents=True, exist_ok=False)
-            return execute(context, output, compose_command(context, output, pilot=args.pilot), model_sha, pilot=args.pilot)
-    except (managed.BenchmarkError, managed.fullmag_storage.StorageError, OSError, ValueError, sqlite3.Error) as error:
+            if input_data is not None:
+                model_input.stage_model(output, input_data)
+            return execute(context, output, compose_command(context, output, pilot=args.pilot, external_model=input_identity is not None), model_sha, pilot=args.pilot, model_identity=input_identity)
+    except (managed.BenchmarkError, managed.fullmag_storage.StorageError, OSError, ValueError, sqlite3.Error, subprocess.SubprocessError, SyntaxError) as error:
         print(f"de100-pilot: {error}", file=sys.stderr)
         return 2
 
