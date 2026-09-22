@@ -967,6 +967,30 @@ Pozostają retry/adaptive, niezerowy początek etapu, frozen spins/maski,
 pełne składniki energii i torque, snapshot H_ant, pipeline relaksacji,
 mixed mesh/PBC, zbieżność czasowa oraz GPU. T13 pozostaje otwarte.
 
+**Zegary i przejście etapu CPU 2026-09-22:** ta sama recepta została
+rozszerzona i ponownie zakończyła się kodem 0. Artefakt ma teraz schemat
+`fem_antenna_trajectory.v2` oraz 60 przypadków/1260 próbek: poprzednie
+20 kombinacji dla trzech wariantów zegara. Dwa nowe warianty wykonują
+500 rzeczywistych kroków bias-only (0.25 ns), wywołują publiczne
+`fullmag_fem_backend_begin_stage` i
+`fullmag_fem_backend_reconfigure_regional_field_drives`, a następnie
+kontynuują na tym samym backendzie z `absolute` albo `stage_local`.
+Stan początkowy drugiego etapu jest sprawdzany względem rozwiązania
+bias-only, a jego trajektoria względem całki odpowiedniego przebiegu.
+
+Snapshot: `6584d4ec648835d8baec7a63c9c0eb4521c78150ec56f7bb369525087f04693b`;
+kontrola źródeł przed/po wykonaniu przeszła. Maksymalne błędy wektora
+dla nowych zegarów wyniosły 2.708e-6 (przebiegi ciągłe), 9.493e-4
+(prostokąt absolute) i 6.035e-4 (prostokąt stage_local), w niezmienionych
+budżetach. Celowa podmiana trajektorii sinusoidy lokalnej na absolutną
+została odrzucona: błąd 0.01242 przy pierwszej próbce po granicy etapu.
+Nie kompilowano unit testów Rust; wykonano naukowy program kwalifikacyjny.
+Ten wynik kwalifikuje zegary i przełączenie napędu na natywnym CPU przy
+stałym kroku, także dla integratorów używających FSAL. Nie zamyka jeszcze
+prób adaptive/retry, pipeline z rzeczywistą relaksacją/solve, GPU ani
+pozostałych warunków T13. Poprzedni raport v1 został zastąpiony raportem v2
+w tym samym lokalnym katalogu; opis v1 powyżej jest zapisem historycznym.
+
 ## T14. Domknąć OpenAPI, zasoby i realtime
 
 Uzupełnienie implementacyjne 2026-09-21: `SolvedAntennaDriveResource` ma

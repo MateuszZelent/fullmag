@@ -1303,7 +1303,7 @@ void write_antenna_cpu_trajectories(const std::filesystem::path &output)
     std::ofstream file(output);
     require(static_cast<bool>(file), "open antenna trajectory output");
     file << std::setprecision(17)
-         << "{\"schema_version\":\"fem_antenna_trajectory.v1\","
+         << "{\"schema_version\":\"fem_antenna_trajectory.v2\","
          << "\"status\":\"recorded_unvalidated\",\"backend\":\"fem\","
          << "\"device\":\"cpu\",\"precision\":\"fp64\","
          << "\"source_snapshot_sha256\":\"" << digest << "\",\"cases\":[\n";
@@ -1326,6 +1326,8 @@ void write_antenna_cpu_trajectories(const std::filesystem::path &output)
     constexpr double dt = 5e-13;
     constexpr size_t steps = 2000;
     bool first_case = true;
+    const std::array<const char *, 3> clocks{{"zero_absolute", "shifted_absolute", "shifted_local"}};
+    for (size_t clock = 0; clock < clocks.size(); ++clock) {
     for (const auto &[integrator, name] : integrators) {
         for (size_t wave = 0; wave < waveforms.size(); ++wave) {
             auto initial = uniform_magnetization(0.6, 0.0, 0.8);
@@ -1344,7 +1346,7 @@ void write_antenna_cpu_trajectories(const std::filesystem::path &output)
             drive.spatial_profile.kind = FULLMAG_FEM_SPATIAL_PROFILE_PREPROJECTED_NODAL;
             drive.spatial_profile.preprojected_h_xyz_a_per_m = basis.data();
             drive.spatial_profile.preprojected_h_value_count = basis.size();
-            drive.time_origin = FULLMAG_FEM_TIME_ABSOLUTE;
+            drive.time_origin = clock == 2 ? FULLMAG_FEM_TIME_STAGE_LOCAL : FULLMAG_FEM_TIME_ABSOLUTE;
             drive.waveform.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
             drive.waveform.struct_size = sizeof(drive.waveform);
             switch (wave) {
@@ -1371,20 +1373,40 @@ void write_antenna_cpu_trajectories(const std::filesystem::path &output)
             plan.enable_exchange = 0;
             plan.material.exchange_stiffness = 0.0;
             plan.external_field_am[2] = 1e4;
-            plan.regional_field_drives = &drive;
-            plan.regional_field_drive_count = 1;
+            plan.regional_field_drives = clock == 0 ? &drive : nullptr;
+            plan.regional_field_drive_count = clock == 0 ? 1 : 0;
             auto *backend = fullmag_fem_backend_create(&plan);
             require(backend != nullptr, "create antenna CPU backend");
             require_requested_execution_lane(backend);
+            double start_time = 0.0;
+            if (clock != 0) {
+                // Advance the actual solver clock under bias only, then start
+                // the antenna stage on that same backend (including FSAL).
+                for (size_t step = 0; step < 500; ++step) {
+                    fullmag_fem_step_stats stats{};
+                    require(fullmag_fem_backend_step(backend, dt, &stats) == FULLMAG_FEM_OK,
+                        std::string("antenna warmup: ") + last_error(backend));
+                    start_time = stats.time_seconds;
+                }
+                require(fullmag_fem_backend_begin_stage(backend, start_time) == FULLMAG_FEM_OK,
+                    std::string("antenna begin stage: ") + last_error(backend));
+                require(fullmag_fem_backend_reconfigure_regional_field_drives(
+                    backend, &drive, 1, start_time) == FULLMAG_FEM_OK,
+                    std::string("antenna drive handoff: ") + last_error(backend));
+            }
+            const auto stage_initial = first_node_m(backend);
             if (!first_case) file << ",\n";
             first_case = false;
-            file << "{\"integrator\":\"" << name << "\",\"waveform\":" << waveforms[wave]
+            file << "{\"clock_case\":\"" << clocks[clock] << "\",\"integrator\":\"" << name << "\",\"waveform\":" << waveforms[wave]
                  << ",\"dt_s\":" << dt << ",\"timestep_policy\":\"fixed\","
-                 << "\"initial_m\":[0.6,0,0.8],\"alpha\":0.1,\"gamma_mu0\":221100,"
+                 << "\"initial_m\":[" << stage_initial[0] << ',' << stage_initial[1] << ',' << stage_initial[2]
+                 << "],\"alpha\":0.1,\"gamma_mu0\":221100,"
                  << "\"basis_hz_per_a\":1e6,\"peak_current_a\":0.02,\"bias_hz_a_per_m\":1e4,"
-                 << "\"start_time_s\":0,\"stage_start_time_s\":0,\"time_origin\":\"absolute\","
-                 << "\"samples\":[{\"time_s\":0,\"m\":[0.6,0,0.8]}";
-            double previous_time = 0.0;
+                 << "\"start_time_s\":" << start_time << ",\"stage_start_time_s\":" << start_time
+                 << ",\"time_origin\":\"" << (clock == 2 ? "stage_local" : "absolute") << "\","
+                 << "\"samples\":[{\"time_s\":" << start_time << ",\"m\":["
+                 << stage_initial[0] << ',' << stage_initial[1] << ',' << stage_initial[2] << "]}";
+            double previous_time = start_time;
             for (size_t step = 1; step <= steps; ++step) {
                 fullmag_fem_step_stats stats{};
                 require(fullmag_fem_backend_step(backend, dt, &stats) == FULLMAG_FEM_OK,
@@ -1402,6 +1424,7 @@ void write_antenna_cpu_trajectories(const std::filesystem::path &output)
             fullmag_fem_backend_destroy(backend);
             file << "]}";
         }
+    }
     }
     file << "]}\n";
     file.close();
