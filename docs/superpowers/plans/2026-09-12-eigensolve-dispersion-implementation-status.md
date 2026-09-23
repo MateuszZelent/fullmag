@@ -39,8 +39,11 @@ Niezależna kontrola zapisanego -grad(phi) (4e4186f17) przeszła 10 testów,
 a pilot z integracją kontroli 12 testów. Poprawka budżetu GET fixture'a
 Inspectora (619d87247) przeszła 3 testy Node i kontrolę składni.
 Walidator pola sprawdza spójność zapisu, a nie poprawność operatora T4.
-Te poprawki są w PR #97. S04/S05/S12 oraz browser/WebGL pozostają
-NOT VERIFIED.
+Te poprawki są w PR #97. Dla commita
+6ca40dd6dc335f0534c129aaf912f9a15207766e kontrola
+generated-api-determinism i browser-fixture-smoke zakończyły się SUCCESS
+(run 35833576759). To dowód fixture'a przeglądarkowego, nie walidacja
+fizyki ani pełny odbiór WebGL. S04/S05/S12 pozostają NOT VERIFIED.
 
 
 ## Odbiór wygenerowanego API i diagnostyki UI — 2026-09-22
