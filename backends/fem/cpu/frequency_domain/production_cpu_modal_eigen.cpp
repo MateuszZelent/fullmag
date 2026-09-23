@@ -218,9 +218,15 @@ bool modal_request_has_bloch_floquet_tangent_operator_payload(
     const ModalEigenRequest &request) noexcept
 {
     const char *diagnostics = request.operator_request.operator_diagnostics_json;
-    return request.floquet_periodic_pair_count > 0 &&
-           diagnostics != nullptr &&
-           std::strstr(
+    if (request.floquet_periodic_pair_count == 0 || diagnostics == nullptr) {
+        return false;
+    }
+    if (request.floquet_shared_domain_operator != nullptr) {
+        return std::strstr(
+                   diagnostics,
+                   "\"payload_kind\":\"certified_shared_domain\"") != nullptr;
+    }
+    return std::strstr(
                diagnostics,
                "\"payload_kind\":\"bloch_floquet_tangent_operator\"") != nullptr;
 }

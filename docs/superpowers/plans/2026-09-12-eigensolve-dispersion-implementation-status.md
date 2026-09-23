@@ -2,6 +2,18 @@
 
 ## Managed DE-SMOKE: rzeczywiste próby — 2026-09-23
 
+Build 4cb9b9fdde1040f992e07eeb303cd2bc zakończył się sukcesem
+(exit 0, źródło bed041c897064d8487f02653358991c50b9dca55).
+Dry-run pilota potwierdził receipt, hash modelu i artefakty. Rzeczywista
+próba `de-smoke-k2` (run f7f70f4dce88491b8b14bc3fe2cc3bfa)
+zakończyła się jednak exit 1 z `production_cpu_modal_nonzero_k_floquet_operator_missing`.
+Diagnostyka natywna wykazała `modal_periodic_pair_contract_available=true`
+oraz `payload_kind=certified_shared_domain`, `assembly_owner=native_mfem`.
+Bramka C++ akceptowała tylko starsze `payload_kind=bloch_floquet_tangent_operator`;
+odrzucała więc przed solve nowy operator współdzielonej domeny. Poprawka
+rozpoznawania obu jawnych kontraktów jest w kodzie, ale wymaga nowego managed
+buildu i ponownego runu. Wynik numeryczny k≠0 nadal **NOT VERIFIED**.
+
 Build 6b2de4a74bf64669ae0e92610b1bb078 zakończył się sukcesem
 (exit 0), lecz zawiera źródło 0669d76c2306a31dfe162c2f3ae5af4cb458b552,
 starsze od obecnego routingu nonzero-k. Receipt i hash zweryfikowano.
@@ -22,13 +34,13 @@ Próba celu nearest została poprawnie odrzucona przez planner, ponieważ
 obecna trasa dynamicznego demagu Floqueta wymaga frequency_window.
 Eksperymentalny commit 3833babcd wycofano przez 84321fd80.
 
-Nowy managed build 4cb9b9fdde1040f992e07eeb303cd2bc zgłoszono z czystego
-commita bed041c897064d8487f02653358991c50b9dca55, profil
-fem-cpu-slepc-runtime-v1 (bez kompilacji testów jednostkowych).
-Stan przy zleceniu: queued. Przed runem trzeba odebrać receipt i binaria.
+Build 4cb9b9fdde1040f992e07eeb303cd2bc używał profilu
+fem-cpu-slepc-runtime-v1 bez kompilacji testów jednostkowych. Sam sukces
+buildu nie dowodzi wykonania nowej trasy modalnej.
 
-Kolejność: (1) uruchomić de-smoke-k2 na nowym runtime i sprawdzić
-niepuste wyniki, residual, pola, siatkę i operator; (2) naprawić
+Kolejność: (1) zbudować poprawioną bramkę C++ w managed runtime, powtórzyć
+de-smoke-k2 i sprawdzić niepuste wyniki, residual, pola, siatkę i operator;
+(2) naprawić
 kontrakt domyślnej residual_tolerance PA-E2; (3) rozwiązać brak
 certyfikacji kompletnych pustych subokien bez osłabiania bramki;
 (4) uruchomić dwa i pięć punktów, porównać T4 z referencją 1D
