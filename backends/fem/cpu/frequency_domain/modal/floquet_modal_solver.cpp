@@ -68,10 +68,17 @@ bool floquet_k_payload_is_consistent(const ModalEigenRequest &request) noexcept
 bool has_floquet_payload_marker(const ModalEigenRequest &request) noexcept
 {
     const char *diagnostics = request.operator_request.operator_diagnostics_json;
-    return diagnostics != nullptr &&
-        std::strstr(
-            diagnostics,
-            "\"payload_kind\":\"bloch_floquet_tangent_operator\"") != nullptr;
+    if (diagnostics == nullptr) {
+        return false;
+    }
+    if (request.floquet_shared_domain_operator != nullptr) {
+        return std::strstr(
+                   diagnostics,
+                   "\"payload_kind\":\"certified_shared_domain\"") != nullptr;
+    }
+    return std::strstr(
+               diagnostics,
+               "\"payload_kind\":\"bloch_floquet_tangent_operator\"") != nullptr;
 }
 
 SLEPcTinyGyrotropicModalEigenResult validation_failure(const char *reason) noexcept

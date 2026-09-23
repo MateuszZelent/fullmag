@@ -292,6 +292,51 @@ double complex_norm_for_test(const std::vector<std::complex<double>> &vector)
     return std::sqrt(static_cast<double>(sum));
 }
 
+void admits_certified_shared_domain_sparse_operator()
+{
+    const auto a_qq = diagonal_complex_csr(2u, {2.0, 3.0});
+    const auto b_qq = diagonal_complex_csr(2u, {1.0, 1.0});
+    const auto p = diagonal_complex_csr(1u, {1.0});
+    const auto a_qphi = q_to_phi_complex_csr(2u, 0.25);
+    const auto a_phiq = phi_to_q_complex_csr(2u, 0.25);
+    fd::FloquetSharedDomainSparseModalOperator operator_view{};
+    operator_view.a_qq = &a_qq;
+    operator_view.b_qq = &b_qq;
+    operator_view.p = &p;
+    operator_view.a_qphi = &a_qphi;
+    operator_view.a_phiq = &a_phiq;
+    operator_view.q_complex_dof_count = 2u;
+    operator_view.phi_dof_count = 1u;
+
+    fd::ModalEigenRequest request = valid_request();
+    request.operator_request.operator_diagnostics_json =
+        "{\"payload_kind\":\"certified_shared_domain\"}";
+    request.dynamic_demag_k_tangent_matrix_row_major = nullptr;
+    request.dynamic_demag_k_tangent_matrix_value_count = 0u;
+    request.floquet_shared_domain_operator = &operator_view;
+    auto spectral = sparse_spectral_request();
+    spectral.floquet_shared_domain_operator = &operator_view;
+
+    auto admission = fd::admit_floquet_modal_sparse_request(request, spectral);
+    check(admission.accepted,
+          "certified shared-domain Floquet operator reaches sparse SLEPc admission");
+    check(admission.dynamic_demag_k,
+          "shared-domain Floquet admission retains dynamic demag-k");
+
+    request.operator_request.operator_diagnostics_json =
+        "{\"payload_kind\":\"bloch_floquet_tangent_operator\"}";
+    admission = fd::admit_floquet_modal_sparse_request(request, spectral);
+    check(!admission.accepted,
+          "shared-domain owner rejects a mismatched dense operator marker");
+
+    request.operator_request.operator_diagnostics_json =
+        "{\"payload_kind\":\"certified_shared_domain\"}";
+    request.floquet_shared_domain_operator = nullptr;
+    admission = fd::admit_floquet_modal_sparse_request(request, spectral);
+    check(!admission.accepted,
+          "shared-domain marker without its operator payload is rejected");
+}
+
 void executes_native_sparse_matshell_above_dense_bound()
 {
     constexpr std::size_t q_dimension = 514u;
@@ -454,6 +499,7 @@ int main()
     rejects_conflicting_k_payloads();
     rejects_invalid_frequency_windows();
     admits_sparse_bloch_operator_without_demag();
+    admits_certified_shared_domain_sparse_operator();
     executes_native_sparse_matshell_above_dense_bound();
     return 0;
 }

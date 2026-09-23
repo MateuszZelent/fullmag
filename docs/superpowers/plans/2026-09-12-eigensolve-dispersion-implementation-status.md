@@ -2,6 +2,19 @@
 
 ## Managed DE-SMOKE: rzeczywiste próby — 2026-09-23
 
+Build 3eddf0c2cf014088a25cb7fa12c7a055 (źródło
+370004426ae4955bd9d8eb993a7eb299bdb6eacb) zakończył się `succeeded`,
+exit 0; receipt potwierdza profil runtime-only FEM CPU/SLEPc i 14 artefaktów.
+Dry-run pilota przeszedł. Rzeczywisty run k2
+`859e649542eb4994ba1d5b2b9d83ced3` przeszedł poprzednią bramkę C++
+i skierował `floquet_shared_domain_sparse_matshell` do solvera, lecz zakończył
+się exit 1 (`no accepted modes`). Diagnostyka obu podokien pokazała
+`outer_iterations=0` i przyczynę
+`floquet_modal_requires_bloch_floquet_operator_payload`: druga, niższa bramka
+SLEPc odrzucała nadal znacznik `certified_shared_domain`. Poprawka i regresja
+są w źródłach, lecz wymagają kolejnego managed buildu i runu. Żaden punkt
+dyspersji k≠0 nie jest jeszcze **VALIDATED**.
+
 Build 4cb9b9fdde1040f992e07eeb303cd2bc zakończył się sukcesem
 (exit 0, źródło bed041c897064d8487f02653358991c50b9dca55).
 Dry-run pilota potwierdził receipt, hash modelu i artefakty. Rzeczywista
