@@ -12,6 +12,12 @@ starsze od obecnego routingu nonzero-k. Receipt i hash zweryfikowano.
 | Dwa punkty, model 3599ee04f1b73c22a54fe9748346007a980f4c80 | Exit 1: frequency_window_local_coverage_not_certified przy Γ | Jawne solver_rtol=1e-8 odblokowało solve. Kandydat 9,299249697 GHz pozostaje tylko w diagnostyce; 10/50 subokien bez certyfikatu. |
 | Jedno k_y=2e6 rad/m, model bed041c897064d8487f02653358991c50b9dca55 | Exit 1: nonzero-k Floquet operator is not implemented yet | Stary binary nie ma obecnego kodu nonzero-k. |
 
+Dodatkowy błąd metodyczny: przy domyślnych 40 wątkach Gmsh powtarzane
+generacje miały 1975–1980 węzłów dla tej samej nominalnej geometrii.
+Od commita f1ce0f035 pilot wymusza FULLMAG_GMSH_THREADS=1. Należy
+potwierdzić w nowych artefaktach identyczny fingerprint siatki między
+punktami i powtórkami; samo ustawienie wątków jeszcze tego nie dowodzi.
+
 Próba celu nearest została poprawnie odrzucona przez planner, ponieważ
 obecna trasa dynamicznego demagu Floqueta wymaga frequency_window.
 Eksperymentalny commit 3833babcd wycofano przez 84321fd80.
