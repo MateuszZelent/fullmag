@@ -24,6 +24,7 @@ MODEL = "examples/fem_de_film_100nm_numeric_pilot.py"
 PILOTS = {
     "de100": (MODEL, None),
     "de-smoke-two": ("examples/fem_de_smoke_numeric.py", "two"),
+    "de-smoke-nearest-two": ("examples/fem_de_smoke_numeric.py", "two"),
     "de-smoke-five": ("examples/fem_de_smoke_numeric.py", "five"),
 }
 
@@ -62,6 +63,7 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
         ("source_script=/workspace/benchmark-model.py" if external_model
          else "source_script=/workspace/capsule/" + model),
         *(["export FULLMAG_DE_SMOKE_SAMPLING=" + PILOTS[pilot][1]] if PILOTS[pilot][1] else []),
+        *(["export FULLMAG_DE_SMOKE_TARGET=nearest"] if pilot == "de-smoke-nearest-two" else []),
         'test -x "$runtime_bin"',
         'test -f "$source_script"',
         "case_dir=/workspace/benchmark-output/" + pilot,

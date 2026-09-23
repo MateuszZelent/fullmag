@@ -13,6 +13,10 @@ SAMPLING = os.environ.get("FULLMAG_DE_SMOKE_SAMPLING", "two")
 if SAMPLING not in ("two", "five"):
     raise ValueError("FULLMAG_DE_SMOKE_SAMPLING must be 'two' or 'five'")
 KY = (0.0, 2e6) if SAMPLING == "two" else (0.0, 1e6, 2e6, 3e6, 5e6)
+TARGET = os.environ.get("FULLMAG_DE_SMOKE_TARGET", "window")
+if TARGET not in ("window", "nearest"):
+    raise ValueError("FULLMAG_DE_SMOKE_TARGET must be window or nearest")
+MODE_COUNT = 1 if TARGET == "nearest" else 4
 
 study = fm.study("de-smoke-10nm-numeric")
 study.engine("fem")
@@ -47,11 +51,12 @@ study.build_domain_mesh()
 study.save("spectrum")
 study.save("dispersion", include_branch_table=True)
 study.save("diagnostics")
-study.save("mode", field="mode", indices=(0, 1, 2, 3),
+study.save("mode", field="mode", indices=tuple(range(MODE_COUNT)),
            sample_indices=tuple(range(len(KY))))
 study.runtime_metadata("de_smoke", {
     "schema": "fullmag.de-smoke.v1",
     "sampling": SAMPLING,
+    "target": TARGET,
     "film_thickness_m": 10e-9,
     "cell_period_m": 40e-9,
     "air_padding_each_side_m": 2e-6,
@@ -63,8 +68,11 @@ study.runtime_metadata("de_smoke", {
 study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped",
                        dt=5e-15, relax_alpha=0.5, max_steps=50000, tolA=1.0)
 study.stages.add_eigenmodes(
-    count=4, target="frequency_window", frequency_min=8.5e9,
-    frequency_max=12e9, operator="full_2x2", include_demag=True,
+    count=MODE_COUNT,
+    **({"target": "nearest", "target_frequency": 9.5e9} if TARGET == "nearest"
+       else {"target": "frequency_window", "frequency_min": 8.5e9,
+             "frequency_max": 12e9}),
+    operator="full_2x2", include_demag=True,
     solver_rtol=1e-8,
     equilibrium_source="relax", normalization="unit_l2", damping_policy="ignore",
     k_sampling=fm.KPath(
