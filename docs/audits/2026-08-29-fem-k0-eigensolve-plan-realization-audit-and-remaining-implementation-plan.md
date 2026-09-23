@@ -2795,11 +2795,21 @@ kopii źródła, aby utrwalony cache CMake/Cargo nie pomijał zmienionych wejś�
 starszym mtime.
 
 Weryfikacja lokalna: `just runner-test` — 226 testów zaliczonych, 5
-pominiętych. Deploy tej dodatkowej poprawki pozostaje w toku: job #109 z innego
-worktree (`fem-cpu-slepc-runtime-v1`) nadal był aktywny podczas kontroli, więc
-nie restartowano koordynatora. Bieżący health API potwierdził żywego workera,
-przyjmowanie zadań i brak `last_error`, ale także siedem dozwolonych profili —
-w tym ponownie `fem-cpu-slepc-runtime-v1` — oraz aktywny job #109. Sandbox nie
-może odczytać konfiguracji kontekstu Docker Desktop; przed podmianą obrazu
-wymagane jest ponowne sprawdzenie terminalnego stanu joba i użycie dozwolonej
-ścieżki zarządzania Dockerem.
+pominiętych. Job #109 z innego worktree (`fem-cpu-slepc-runtime-v1`)
+zakończył się sukcesem, exit 0; receipt zawiera jeden zaliczony etap
+`native-build`, 14 artefaktów i nadal `qualification=NOT VERIFIED`. Dopiero po
+terminalnym wyniku oraz potwierdzeniu pustej kolejki wykonano graceful drain.
+
+W lokalnym build-config usunięto wyłącznie klucz
+`fem-cpu-slepc-runtime-v1`, po potwierdzeniu, że jego obraz, CPU i limit pamięci
+były identyczne z `fem-cpu-slepc-modal-v1`. Hostowa allow-lista została
+znormalizowana do sześciu kanonicznych profili. Zbudowano obraz koordynatora
+`sha256:e9f46ae4690d96dfcdfa915584265733b6d9930fdecf60b16b95f6bfb26101fc` i
+oficjalną procedurą wymieniono dokładny kontener `Fullmag_build_runner`.
+Zachowano port 8765, token oraz project storage; worker został wznowiony.
+
+Końcowy health API potwierdza `worker_alive=true`, `accepting_jobs=true`, stan
+koordynatora `idle`, pustą listę aktywnych i legacy jobs, brak `last_error` oraz
+allow-listę dokładnie sześciu profili. Profil runtime nie jest już dozwolony ani
+skonfigurowany. Nie zmieniono kodu FEM dla błędu E0308 joba #108; ten build
+pozostaje nieudany, a runtime/physics/Kittel nadal mają status **NOT VERIFIED**.
