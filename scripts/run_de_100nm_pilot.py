@@ -24,6 +24,7 @@ MODEL = "examples/fem_de_film_100nm_numeric_pilot.py"
 PILOTS = {
     "de100": (MODEL, None),
     "de-smoke-two": ("examples/fem_de_smoke_numeric.py", "two"),
+    "de-smoke-k2": ("examples/fem_de_smoke_numeric.py", "k2"),
     "de-smoke-five": ("examples/fem_de_smoke_numeric.py", "five"),
 }
 

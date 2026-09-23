@@ -193,5 +193,13 @@ class PilotTests(unittest.TestCase):
         self.assertNotIn("build", command)
 
 
+    def test_single_nonzero_k_pilot_is_separate_from_two_point_path(self):
+        context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
+                                  job={"job_id": "a" * 32})
+        single = pilot.compose_command(context, Path("/outputs"), pilot="de-smoke-k2", external_model=True)[-1]
+        self.assertIn("export FULLMAG_DE_SMOKE_SAMPLING=k2", single)
+        self.assertIn("case_dir=/workspace/benchmark-output/de-smoke-k2", single)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -10,9 +10,11 @@ import os
 import fullmag as fm
 
 SAMPLING = os.environ.get("FULLMAG_DE_SMOKE_SAMPLING", "two")
-if SAMPLING not in ("two", "five"):
-    raise ValueError("FULLMAG_DE_SMOKE_SAMPLING must be 'two' or 'five'")
-KY = (0.0, 2e6) if SAMPLING == "two" else (0.0, 1e6, 2e6, 3e6, 5e6)
+if SAMPLING not in ("two", "five", "k2"):
+    raise ValueError("FULLMAG_DE_SMOKE_SAMPLING must be two, five or k2")
+KY = ((2e6,) if SAMPLING == "k2" else
+      (0.0, 2e6) if SAMPLING == "two" else
+      (0.0, 1e6, 2e6, 3e6, 5e6))
 
 study = fm.study("de-smoke-10nm-numeric")
 study.engine("fem")
@@ -67,11 +69,12 @@ study.stages.add_eigenmodes(
     frequency_max=12e9, operator="full_2x2", include_demag=True,
     solver_rtol=1e-8,
     equilibrium_source="relax", normalization="unit_l2", damping_policy="ignore",
-    k_sampling=fm.KPath(
-        points=[fm.KPoint("Gamma" if ky == 0 else f"DE-{ky:g}", (0.0, ky, 0.0))
-                for ky in KY],
-        samples_per_segment=[1] * (len(KY) - 1),
-    ),
+    **({"k_vector": (0.0, 2e6, 0.0)} if SAMPLING == "k2" else
+       {"k_sampling": fm.KPath(
+           points=[fm.KPoint("Gamma" if ky == 0 else f"DE-{ky:g}", (0.0, ky, 0.0))
+                   for ky in KY],
+           samples_per_segment=[1] * (len(KY) - 1),
+       )}),
     bc=fm.FloquetBC(["x_faces", "y_faces"],
                     phase_convention="exp_minus_i_k_dot_delta_r"),
     magnetostatic_bc="floquet_airbox",

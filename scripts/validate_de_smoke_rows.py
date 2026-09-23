@@ -8,7 +8,7 @@ import csv
 import math
 from pathlib import Path
 
-SAMPLING = {"two": (0.0, 2e6), "five": (0.0, 1e6, 2e6, 3e6, 5e6)}
+SAMPLING = {"two": (0.0, 2e6), "five": (0.0, 1e6, 2e6, 3e6, 5e6), "k2": (2e6,)}
 
 
 def validate_rows(path: Path, sampling: str):

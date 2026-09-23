@@ -16,7 +16,7 @@ def rows(sampling):
             for i,k in enumerate(SAMPLING[sampling])]
 
 
-@pytest.mark.parametrize('sampling',['two','five'])
+@pytest.mark.parametrize('sampling',['k2','two','five'])
 def test_complete_rows_are_only_preflight_not_qualification(tmp_path,sampling):
     path=tmp_path/'dispersion.csv';write(path,rows(sampling))
     result=validate_rows(path,sampling)
