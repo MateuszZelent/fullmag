@@ -1,5 +1,42 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Managed DE-SMOKE: rzeczywiste próby — 2026-09-23
+
+Build 6b2de4a74bf64669ae0e92610b1bb078 zakończył się sukcesem
+(exit 0), lecz zawiera źródło 0669d76c2306a31dfe162c2f3ae5af4cb458b552,
+starsze od obecnego routingu nonzero-k. Receipt i hash zweryfikowano.
+
+| Próba | Wynik | Znaczenie |
+|---|---|---|
+| Dwa punkty, model b8cf20b | Exit 1: poisson_airbox_eigen_invalid_tolerance_or_frequency przy Γ | PA-E2 odrzuca zerową domyślną tolerancję. |
+| Dwa punkty, model 3599ee04f1b73c22a54fe9748346007a980f4c80 | Exit 1: frequency_window_local_coverage_not_certified przy Γ | Jawne solver_rtol=1e-8 odblokowało solve. Kandydat 9,299249697 GHz pozostaje tylko w diagnostyce; 10/50 subokien bez certyfikatu. |
+| Jedno k_y=2e6 rad/m, model bed041c897064d8487f02653358991c50b9dca55 | Exit 1: nonzero-k Floquet operator is not implemented yet | Stary binary nie ma obecnego kodu nonzero-k. |
+
+Próba celu nearest została poprawnie odrzucona przez planner, ponieważ
+obecna trasa dynamicznego demagu Floqueta wymaga frequency_window.
+Eksperymentalny commit 3833babcd wycofano przez 84321fd80.
+
+Nowy managed build 4cb9b9fdde1040f992e07eeb303cd2bc zgłoszono z czystego
+commita bed041c897064d8487f02653358991c50b9dca55, profil
+fem-cpu-slepc-runtime-v1 (bez kompilacji testów jednostkowych).
+Stan przy zleceniu: queued. Przed runem trzeba odebrać receipt i binaria.
+
+Kolejność: (1) uruchomić de-smoke-k2 na nowym runtime i sprawdzić
+niepuste wyniki, residual, pola, siatkę i operator; (2) naprawić
+kontrakt domyślnej residual_tolerance PA-E2; (3) rozwiązać brak
+certyfikacji kompletnych pustych subokien bez osłabiania bramki;
+(4) uruchomić dwa i pięć punktów, porównać T4 z referencją 1D
+i analityką, wykonać zbieżność siatki, airboxu i liczby modów;
+(5) sporządzić wykres i kwalifikację naukową.
+
+Niezależna kontrola zapisanego -grad(phi) (4e4186f17) przeszła 10 testów,
+a pilot z integracją kontroli 12 testów. Poprawka budżetu GET fixture'a
+Inspectora (619d87247) przeszła 3 testy Node i kontrolę składni.
+Walidator pola sprawdza spójność zapisu, a nie poprawność operatora T4.
+Te poprawki są w PR #97. S04/S05/S12 oraz browser/WebGL pozostają
+NOT VERIFIED.
+
+
 ## Odbiór wygenerowanego API i diagnostyki UI — 2026-09-22
 
 Pakiet transportu residuali zapisano i wysłano jako
