@@ -11,6 +11,8 @@ import unittest
 from unittest.mock import patch
 
 from local_runner import build_entrypoint as entrypoint
+from local_runner import build_executor as executor
+from local_runner import container_client
 
 
 class BuildEntryPointTests(unittest.TestCase):
@@ -117,6 +119,152 @@ class BuildEntryPointTests(unittest.TestCase):
             "--jobs",
             "2",
         ]
+
+    def test_worker_profiles_match_host_and_coordinator_catalogs(self) -> None:
+        worker_profiles = set(entrypoint.PROFILES)
+        self.assertEqual(worker_profiles, set(executor.PROFILES))
+        self.assertEqual(worker_profiles, set(container_client.SLEPC_MODAL_PROFILES))
+
+    def test_current_contract_profiles_select_fixed_cpu_and_gpu_scenarios(self) -> None:
+        cpu = entrypoint.profile_for("fem-cpu-current-contracts-v1")
+        gpu = entrypoint.profile_for("fem-gpu-current-contracts-v1")
+        self.assertEqual(cpu.lane, "fem-cpu")
+        self.assertEqual(cpu.contract_scenarios, (
+            "steady-transport", "steady-transport-rt0", "oersted-oet0",
+        ))
+        self.assertEqual(gpu.lane, "fem-gpu")
+        self.assertTrue(gpu.needs_cuda_toolchain)
+        self.assertEqual(gpu.contract_scenarios, ("gpu-current",))
+
+    def test_cpu_current_contracts_require_every_pass_receipt(self) -> None:
+        self.profile = "fem-cpu-current-contracts-v1"
+        context = self._write_context()
+        calls: list[list[str]] = []
+
+        def contract_stage(name, command, *, workspace, artifacts, environment):
+            scenario = command[-1]
+            calls.append(command)
+            self.assertEqual(
+                environment["FULLMAG_FEM_CPU_BUILD_ROOT"],
+                str(self.build / "current-contracts"),
+            )
+            self.assertEqual(
+                environment["FULLMAG_FEM_CPU_REPORT_ROOT"],
+                str(self.artifacts / "contracts"),
+            )
+            result_path = artifacts / "contracts" / scenario / "result.json"
+            result_path.parent.mkdir(parents=True)
+            result_path.write_text(json.dumps({
+                "schema": "fullmag.fem.cpu_only_contract_result.v1",
+                "scenario": scenario,
+                "status": "pass",
+            }), encoding="utf-8")
+            return {"name": name, "command": command, "exit_code": 0}
+
+        with patch.object(entrypoint, "preflight", return_value={
+            "bash": "/usr/bin/bash",
+        }), patch.object(entrypoint, "toolchain_versions", return_value={}), patch.object(
+            entrypoint, "run_stage", side_effect=contract_stage
+        ):
+            self.assertEqual(entrypoint.main(self._argv(context)), 0)
+        scenarios = ("steady-transport", "steady-transport-rt0", "oersted-oet0")
+        self.assertEqual(calls, [
+            ["/usr/bin/bash", "scripts/run_fem_cpu_only_contract.sh", scenario]
+            for scenario in scenarios
+        ])
+        receipt = json.loads((self.artifacts / "build-receipt.json").read_text())
+        self.assertEqual(receipt["contract_scenarios"], list(scenarios))
+        self.assertEqual(receipt["qualification"], "NOT VERIFIED")
+
+    def test_cpu_current_contract_zero_exit_without_receipts_is_failure(self) -> None:
+        self.profile = "fem-cpu-current-contracts-v1"
+        context = self._write_context()
+        with patch.object(entrypoint, "preflight", return_value={
+            "bash": "/usr/bin/bash",
+        }), patch.object(entrypoint, "toolchain_versions", return_value={}), patch.object(
+            entrypoint, "run_stage", return_value={"exit_code": 0}
+        ):
+            self.assertEqual(entrypoint.main(self._argv(context)), 2)
+        receipt = json.loads((self.artifacts / "build-receipt.json").read_text())
+        self.assertEqual(receipt["state"], "failed")
+        self.assertIn("missing contract receipt", receipt["error"])
+
+    def test_gpu_current_contracts_accept_only_a_passing_gpu_receipt(self) -> None:
+        self.profile = "fem-gpu-current-contracts-v1"
+        context = self._write_context()
+
+        def passing_contract(name, command, *, workspace, artifacts, environment):
+            self.assertEqual(command[-1], "gpu-current")
+            self.assertEqual(
+                environment["FULLMAG_CURRENT_GPU_BUILD_ROOT"],
+                str(self.build / "current-gpu-contracts"),
+            )
+            result_path = artifacts / "contracts" / "gpu-current" / "result.json"
+            result_path.parent.mkdir(parents=True)
+            result_path.write_text(json.dumps({
+                "schema": "fullmag.current.gpu_contract_result.v1",
+                "scenario": "gpu-current",
+                "status": "pass",
+            }), encoding="utf-8")
+            return {"name": name, "command": command, "exit_code": 0}
+
+        with patch.object(entrypoint, "preflight", return_value={
+            "bash": "/usr/bin/bash",
+            "cmake": "/usr/bin/cmake",
+            "nvcc": "/usr/local/cuda/bin/nvcc",
+        }), patch.object(entrypoint, "toolchain_versions", return_value={}), patch.object(
+            entrypoint, "run_stage", side_effect=passing_contract
+        ):
+            self.assertEqual(entrypoint.main(self._argv(context)), 0)
+        receipt = json.loads((self.artifacts / "build-receipt.json").read_text())
+        self.assertEqual(receipt["contract_scenarios"], ["gpu-current"])
+        self.assertEqual(receipt["lane"], "fem-gpu")
+
+    def test_materialization_refreshes_source_mtimes_for_persistent_build_caches(self) -> None:
+        old_ns = 1_600_000_000_000_000_000
+        cached_artifact_ns = old_ns + 10_000_000_000
+        source_file = self.source / "tree" / "README.txt"
+        nested = self.source / "tree" / "nested"
+        nested.mkdir()
+        nested_file = nested / "input.txt"
+        nested_file.write_bytes(b"new input with old timestamp\n")
+        entrypoint.os.utime(source_file, ns=(old_ns, old_ns))
+        entrypoint.os.utime(nested_file, ns=(old_ns, old_ns))
+        content = nested_file.read_bytes()
+        manifest = {**self.manifest, "files": [*self.manifest["files"], {
+            "path": "nested/input.txt", "type": "file", "mode": "100644",
+            "size": len(content), "sha256": hashlib.sha256(content).hexdigest(),
+        }]}
+
+        entrypoint.materialize_capsule(manifest, self.source, self.workspace)
+
+        for relative in ("README.txt", "nested/input.txt"):
+            with self.subTest(path=relative):
+                original = self.source / "tree" / relative
+                copied = self.workspace / relative
+                self.assertEqual(original.stat().st_mtime_ns, old_ns)
+                self.assertEqual(copied.read_bytes(), original.read_bytes())
+                self.assertGreater(copied.stat().st_mtime_ns, cached_artifact_ns)
+
+    def test_gpu_current_contract_skip_is_not_success(self) -> None:
+        self.profile = "fem-gpu-current-contracts-v1"
+        context = self._write_context()
+        with patch.object(entrypoint, "preflight", return_value={
+            "bash": "/usr/bin/bash",
+            "cmake": "/usr/bin/cmake",
+            "nvcc": "/usr/local/cuda/bin/nvcc",
+            "ctest": "/usr/bin/ctest",
+        }), patch.object(entrypoint, "toolchain_versions", return_value={}), patch.object(
+            entrypoint, "run_stage", return_value={"exit_code": 77}
+        ) as stage:
+            self.assertEqual(entrypoint.main(self._argv(context)), 2)
+        self.assertEqual(stage.call_args.args[1], [
+            "/usr/bin/bash", "scripts/run_current_gpu_contracts.sh", "gpu-current",
+        ])
+        receipt = json.loads((self.artifacts / "build-receipt.json").read_text())
+        self.assertEqual(receipt["state"], "failed")
+        self.assertEqual(receipt["lane"], "fem-gpu")
+        self.assertIn("exit=77", receipt["error"])
 
     def _write_outputs(self, marker: str = "fem-cpu") -> Path:
         output = self.workspace / ".fullmag" / "local"

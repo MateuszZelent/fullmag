@@ -2778,3 +2778,28 @@ przyjmuje zadania; build badanego SHA nie przeszedł kompilacji; runtime,
 walidacja fizyczna oraz zgodność Kittela pozostają **NOT VERIFIED**. Wcześniejszy
 blok `.fullmag` i brak świeżego 15-punktowego sweepu Kittela pozostają
 nierozwiązane; żadne dane z tego katalogu nie zostały usunięte ani przeniesione.
+
+### 17.55. Dodatkowa kontrola profili runnera
+
+Niezależny przegląd poprawki wykrył rozjazd istniejący poza dodanym profilem
+SLEPc: host i koordynator akceptowały `fem-cpu-current-contracts-v1` oraz
+`fem-gpu-current-contracts-v1`, ale zaufany worker nie miał dla nich definicji.
+Job mógł więc zostać przyjęty, a następnie odrzucony dopiero w kontenerze.
+
+Przywrócono oba wcześniej reklamowane profile. CPU wykonuje zamknięty zestaw
+trzech scenariuszy (steady transport, wariant RT0 i OE-T0); GPU wykonuje
+scenariusz `gpu-current`. Worker i host wymagają kompletnego zestawu raportów,
+zgodnych schematów i jawnego `status=pass`; kod SKIP 77 nie jest sukcesem.
+Dodano także test zgodności katalogów profili i odświeżanie czasu modyfikacji
+kopii źródła, aby utrwalony cache CMake/Cargo nie pomijał zmienionych wejść ze
+starszym mtime.
+
+Weryfikacja lokalna: `just runner-test` — 226 testów zaliczonych, 5
+pominiętych. Deploy tej dodatkowej poprawki pozostaje w toku: job #109 z innego
+worktree (`fem-cpu-slepc-runtime-v1`) nadal był aktywny podczas kontroli, więc
+nie restartowano koordynatora. Bieżący health API potwierdził żywego workera,
+przyjmowanie zadań i brak `last_error`, ale także siedem dozwolonych profili —
+w tym ponownie `fem-cpu-slepc-runtime-v1` — oraz aktywny job #109. Sandbox nie
+może odczytać konfiguracji kontekstu Docker Desktop; przed podmianą obrazu
+wymagane jest ponowne sprawdzenie terminalnego stanu joba i użycie dozwolonej
+ścieżki zarządzania Dockerem.

@@ -26,6 +26,20 @@ PROFILES = {
     'fem-gpu-current-contracts-v1': ('fem', 'gpu'),
     'fem-cpu-slepc-modal-v1': ('fem', 'cpu'),
 }
+CONTRACT_PROFILE_REQUIREMENTS = {
+    'fem-cpu-current-contracts-v1': {
+        'scenarios': (
+            ('steady-transport', 'fullmag.fem.cpu_only_contract_result.v1'),
+            ('steady-transport-rt0', 'fullmag.fem.cpu_only_contract_result.v1'),
+            ('oersted-oet0', 'fullmag.fem.cpu_only_contract_result.v1'),
+        ),
+    },
+    'fem-gpu-current-contracts-v1': {
+        'scenarios': (
+            ('gpu-current', 'fullmag.current.gpu_contract_result.v1'),
+        ),
+    },
+}
 TARGETS = {'source': '/source', 'workspace': '/workspace',
            'build': '/workspace/.fullmag-build', 'artifacts': '/artifacts',
            'trusted': '/runner', 'cargo': '/workspace/.fullmag-cargo',
@@ -190,12 +204,26 @@ def validate_build_receipt(artifacts, job, journal):
     entries = receipt.get('artifacts')
     if not isinstance(entries, list) or not entries:
         raise ValueError('Build receipt has no artifacts')
-    required = {'outputs/.fullmag/local/' + name for name in ('bin/fullmag-bin', 'bin/fullmag-api', '_fullmag_core.so', 'web/index.html', 'launcher-build-mode')}
-    if not required.issubset({entry.get('path') for entry in entries}):
-        raise ValueError('Required build outputs missing')
+    profile = job['profile']
+    profile_lane(profile)
+    entry_paths = {entry.get('path') for entry in entries}
+    contract = CONTRACT_PROFILE_REQUIREMENTS.get(profile)
+    if contract is None:
+        required = {'outputs/.fullmag/local/' + name for name in (
+            'bin/fullmag-bin', 'bin/fullmag-api', '_fullmag_core.so',
+            'web/index.html', 'launcher-build-mode',
+        )}
+        if not required.issubset(entry_paths):
+            raise ValueError('Required build outputs missing')
+        required_stages = ('native-build', 'frontend-dependencies', 'frontend-build')
+    else:
+        scenario_names = [scenario for scenario, _ in contract['scenarios']]
+        if receipt.get('contract_scenarios') != scenario_names:
+            raise ValueError('Build receipt contract scenario identity mismatch')
+        required_stages = tuple('contract-' + name for name in scenario_names)
     stages = receipt.get('stages', [])
     if any(not any(stage.get('name') == name and stage.get('exit_code') == 0 for stage in stages)
-           for name in ('native-build', 'frontend-dependencies', 'frontend-build')):
+           for name in required_stages):
         raise ValueError('Required build stages did not pass')
     seen = set()
     for entry in entries:
@@ -210,6 +238,20 @@ def validate_build_receipt(artifacts, job, journal):
             digest = hashlib.file_digest(stream, 'sha256').hexdigest()
         if digest != entry['sha256']:
             raise ValueError('Artifact hash mismatch')
+    if contract is not None:
+        for scenario, schema in contract['scenarios']:
+            relative = f'contracts/{scenario}/result.json'
+            if relative not in entry_paths:
+                raise ValueError('Missing contract receipt: ' + scenario)
+            result_path = validate_path(artifacts / relative, artifacts, 'contract receipt')
+            try:
+                result = json.loads(result_path.read_text(encoding='utf-8'))
+            except (OSError, UnicodeError, json.JSONDecodeError) as error:
+                raise ValueError('Invalid contract receipt: ' + scenario) from error
+            if (not isinstance(result, dict) or result.get('schema') != schema
+                    or result.get('scenario') != scenario
+                    or result.get('status') != 'pass'):
+                raise ValueError('Invalid or failing contract receipt: ' + scenario)
     return receipt
 
 

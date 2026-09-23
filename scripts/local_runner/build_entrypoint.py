@@ -71,6 +71,9 @@ class Profile:
     lane: str
     environment: Mapping[str, str]
     needs_cuda_toolchain: bool = False
+    contract_scenarios: tuple[str, ...] = ()
+    contract_script: str = "scripts/run_fem_cpu_only_contract.sh"
+    contract_schema: str = "fullmag.fem.cpu_only_contract_result.v1"
 
 
 PROFILES: dict[str, Profile] = {
@@ -129,6 +132,22 @@ PROFILES: dict[str, Profile] = {
         },
     ),
 }
+
+PROFILES["fem-cpu-current-contracts-v1"] = Profile(
+    name="fem-cpu-current-contracts-v1",
+    lane="fem-cpu",
+    environment=PROFILES["fem-cpu-release"].environment,
+    contract_scenarios=("steady-transport", "steady-transport-rt0", "oersted-oet0"),
+)
+PROFILES["fem-gpu-current-contracts-v1"] = Profile(
+    name="fem-gpu-current-contracts-v1",
+    lane="fem-gpu",
+    environment=PROFILES["fem-gpu-release"].environment,
+    needs_cuda_toolchain=True,
+    contract_scenarios=("gpu-current",),
+    contract_script="scripts/run_current_gpu_contracts.sh",
+    contract_schema="fullmag.current.gpu_contract_result.v1",
+)
 
 REQUIRED_OUTPUTS = (
     "bin/fullmag-bin",
@@ -343,13 +362,17 @@ def materialize_capsule(manifest: Mapping[str, Any], source: Path, workspace: Pa
             if child.is_symlink():
                 raise BuildEntryPointError(f"source capsule contains a symlink: {child}")
             if child.is_dir():
-                shutil.copytree(child, destination, copy_function=shutil.copy2)
+                # Reused Cargo/CMake artifacts may have mtimes newer than an
+                # older queued capsule. Preserve source bytes and modes, but
+                # refresh execution-copy mtimes so cached outputs cannot hide
+                # changed inputs.
+                shutil.copytree(child, destination, copy_function=shutil.copy)
                 # Only the private copy is writable. Never recurse into the
                 # persistent mountpoints or change the readonly capsule.
                 for current, _, _ in os.walk(destination, followlinks=False):
                     _private_directory(Path(current), 'materialized source directory')
             elif child.is_file():
-                shutil.copy2(child, destination)
+                shutil.copy(child, destination)
             else:
                 raise BuildEntryPointError(f"source capsule contains unsupported entry: {child}")
     except OSError as error:
@@ -497,6 +520,12 @@ def preflight(profile: Profile, *, release: bool = True) -> dict[str, str]:
     if profile.needs_cuda_toolchain:
         tools["cmake"] = _require_tool("cmake")
         tools["nvcc"] = _require_tool("nvcc")
+    if profile.contract_scenarios:
+        required_contract_tools = ["bash", "cmake"]
+        if profile.lane == "fem-cpu":
+            required_contract_tools.append("ctest")
+        for name in required_contract_tools:
+            tools[name] = _require_tool(name)
     return tools
 
 
@@ -872,7 +901,7 @@ def main(argv: list[str] | None = None) -> int:
         _workspace_is_empty(workspace)
         materialize_capsule(manifest, source, workspace)
         _regular_directory(build / "cargo-targets", "cargo target root", create=True)
-        tools = preflight(profile, release=True)
+        tools = preflight(profile, release=not bool(profile.contract_scenarios))
         environment = build_environment(
             profile,
             workspace=workspace,
@@ -886,27 +915,34 @@ def main(argv: list[str] | None = None) -> int:
             "resolved_commit": manifest["resolved_commit"],
             "file_count": len(manifest["files"]),
         }
-        # The first stage is the only native build entrypoint admitted here.
-        make = tools["make"]
-        stages = [
-            (
-                "native-build",
-                [make, "install-cli-dev"],
-            ),
-        ]
-        pnpm = _pnpm_command(tools)
-        stages.extend(
-            [
+        # Stage commands are selected by trusted profile data, never by job input.
+        if profile.contract_scenarios:
+            if profile.lane == "fem-cpu":
+                environment["FULLMAG_FEM_CPU_BUILD_ROOT"] = str(build / "current-contracts")
+                environment["FULLMAG_FEM_CPU_REPORT_ROOT"] = str(artifacts / "contracts")
+            else:
+                environment["FULLMAG_CURRENT_GPU_BUILD_ROOT"] = str(build / "current-gpu-contracts")
+                environment["FULLMAG_CURRENT_GPU_REPORT_ROOT"] = str(artifacts / "contracts")
+            stages = [
                 (
-                    "frontend-dependencies",
-                    [*pnpm, "install", "--dir", "apps/control-room", "--frozen-lockfile"],
-                ),
-                (
-                    "frontend-build",
-                    [make, "web-build-static"],
-                ),
+                    f"contract-{scenario}",
+                    [tools["bash"], profile.contract_script, scenario],
+                )
+                for scenario in profile.contract_scenarios
             ]
-        )
+        else:
+            make = tools["make"]
+            stages = [("native-build", [make, "install-cli-dev"])]
+            pnpm = _pnpm_command(tools)
+            stages.extend(
+                [
+                    (
+                        "frontend-dependencies",
+                        [*pnpm, "install", "--dir", "apps/control-room", "--frozen-lockfile"],
+                    ),
+                    ("frontend-build", [make, "web-build-static"]),
+                ]
+            )
         for name, command in stages:
             stage = run_stage(
                 name,
@@ -920,9 +956,24 @@ def main(argv: list[str] | None = None) -> int:
                 raise BuildEntryPointError(
                     f"managed stage failed: {name} (exit={stage['exit_code']})"
                 )
-        output = workspace / ".fullmag" / "local"
-        _validate_required_outputs(output, profile)
-        _copy_outputs(workspace, artifacts)
+        if profile.contract_scenarios:
+            for scenario in profile.contract_scenarios:
+                result_path = artifacts / "contracts" / scenario / "result.json"
+                if result_path.is_symlink() or not result_path.is_file():
+                    raise BuildEntryPointError(f"missing contract receipt: {scenario}")
+                result = json.loads(result_path.read_text(encoding="utf-8"))
+                if (
+                    not isinstance(result, dict)
+                    or result.get("schema") != profile.contract_schema
+                    or result.get("scenario") != scenario
+                    or result.get("status") != "pass"
+                ):
+                    raise BuildEntryPointError(f"invalid or failing contract receipt: {scenario}")
+            receipt["contract_scenarios"] = list(profile.contract_scenarios)
+        else:
+            output = workspace / ".fullmag" / "local"
+            _validate_required_outputs(output, profile)
+            _copy_outputs(workspace, artifacts)
         receipt["artifacts"] = artifact_records(artifacts)
         receipt["state"] = "succeeded"
         receipt["finished_at"] = _utc_now()

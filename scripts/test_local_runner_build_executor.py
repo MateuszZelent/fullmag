@@ -113,6 +113,75 @@ class BuildExecutorTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 executor.validate_build_receipt(root, job, {})
 
+    def test_current_contract_receipts_are_validated_by_scenario_and_schema(self):
+        import hashlib
+        import json
+        from local_runner.worker_entrypoint import canonical
+
+        profiles = {
+            'fem-cpu-current-contracts-v1': (
+                ('steady-transport', 'fullmag.fem.cpu_only_contract_result.v1'),
+                ('steady-transport-rt0', 'fullmag.fem.cpu_only_contract_result.v1'),
+                ('oersted-oet0', 'fullmag.fem.cpu_only_contract_result.v1'),
+            ),
+            'fem-gpu-current-contracts-v1': (
+                ('gpu-current', 'fullmag.current.gpu_contract_result.v1'),
+            ),
+        }
+        native = {'schema': 'fullmag.source-snapshot.v2', 'head_commit_full': 'a' * 40}
+        for profile, scenarios in profiles.items():
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                records = []
+                for scenario, schema in scenarios:
+                    relative = Path('contracts') / scenario / 'result.json'
+                    result_path = root / relative
+                    result_path.parent.mkdir(parents=True, exist_ok=True)
+                    result_path.write_text(json.dumps({
+                        'schema': schema, 'scenario': scenario, 'status': 'pass',
+                    }))
+                    payload = result_path.read_bytes()
+                    records.append({
+                        'path': relative.as_posix(), 'size': len(payload),
+                        'sha256': hashlib.sha256(payload).hexdigest(),
+                    })
+                job = {
+                    'job_id': 'b' * 32, 'source_digest': 'c' * 64,
+                    'profile': profile, 'payload': {'native_source_identity': native},
+                }
+                journal = {'image_digest': 'sha256:' + 'd' * 64}
+                receipt = {
+                    **job, 'schema': 'fullmag.local-runner.build-receipt.v1',
+                    'state': 'succeeded', 'qualification': 'NOT VERIFIED',
+                    'image_digest': journal['image_digest'],
+                    'native_source_identity': native,
+                    'native_source_identity_sha256': hashlib.sha256(canonical(native)).hexdigest(),
+                    'contract_scenarios': [scenario for scenario, _ in scenarios],
+                    'artifacts': records,
+                    'stages': [
+                        {'name': 'contract-' + scenario, 'exit_code': 0}
+                        for scenario, _ in scenarios
+                    ],
+                }
+                (root / 'build-receipt.json').write_text(json.dumps(receipt))
+
+                self.assertEqual(
+                    receipt,
+                    executor.validate_build_receipt(root, job, journal),
+                )
+
+                first_scenario, expected_schema = scenarios[0]
+                result_path = root / 'contracts' / first_scenario / 'result.json'
+                result_path.write_text(json.dumps({
+                    'schema': expected_schema, 'scenario': first_scenario, 'status': 'skip',
+                }))
+                refreshed = result_path.read_bytes()
+                receipt['artifacts'][0]['size'] = len(refreshed)
+                receipt['artifacts'][0]['sha256'] = hashlib.sha256(refreshed).hexdigest()
+                (root / 'build-receipt.json').write_text(json.dumps(receipt))
+                with self.assertRaisesRegex(ValueError, 'Invalid or failing contract receipt'):
+                    executor.validate_build_receipt(root, job, journal)
+
     def test_worker_isolation_is_attested(self):
         inspected = {'Image': 'image', 'Mounts': [], 'Config': {'User': '65532:65532'},
                      'HostConfig': {'Privileged': False, 'ReadonlyRootfs': True,
