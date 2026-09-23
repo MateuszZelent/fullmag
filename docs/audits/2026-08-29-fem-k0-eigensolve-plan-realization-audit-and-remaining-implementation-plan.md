@@ -2741,3 +2741,40 @@ nie miała innych oczekujących zadań. Zgodnie z decyzją użytkownika job nie
 zostanie anulowany. Pauza przyjmowania nowych zadań, zmiana konfiguracji i
 wymiana kontenera muszą poczekać na jego stan terminalny oraz ponowne
 potwierdzenie pustego slotu.
+
+### 17.54. Naprawa shared runner i wynik builda docelowego SHA
+
+Weryfikacja wykonana 2026-09-23 15:43 UTC.
+
+Po terminalnym sukcesie joba `2439cca257fb49ffb42bc8adba739623` (profil
+legacy, exit 0) naprawiono współdzielony runner. Commit `46a1d488c546ca8778fb8852b04ad7a0637da052`
+dodaje kanoniczny profil `fem-cpu-slepc-modal-v1` do wejścia builda oraz
+kontrolowaną migrację wyłącznie dokładnej historycznej allow-listy. Testy
+`just runner-test` zakończyły się wynikiem 223 passed, 5 skipped. Build nowego
+obrazu koordynatora zakończył się sukcesem (`sha256:905f59fac9fac20e390de6f85ca2ad493babc553c276f398099d9e326a7229eb`),
+a oficjalna procedura wymieniła wyłącznie kontener `Fullmag_build_runner`.
+Nowy health-check potwierdza `worker_alive=true`, `accepting_jobs=true`, brak
+aktywnych i legacy jobs oraz kanoniczną allow-listę sześciu profili. Zachowano
+port 8765, token i istniejący project storage. Profil
+`fem-cpu-slepc-runtime-v1` usunięto też z lokalnego build-config po weryfikacji
+zgodnych parametrów profilu modal i pustej kolejki.
+
+Następnie zgłoszono job `b0635ee724444977bae6402221f82990` (#108), profil
+`fem-cpu-slepc-modal-v1`, dla dokładnego commitu
+`999e6b287d95e9e5f85ddccbcb2c1d87ef7d1297`. Receipt wiąże go z czystym snapshotem
+źródła (`fec7fe2050c239ec518401eb2a7adff0efcede83cda7879619f41af42aaddda7`).
+Runner poprawnie zweryfikował kapsułę, utworzył izolowany worker i wykonał etap
+`native-build`; job zakończył się `failed`, exit code 2, nie z powodu runnera,
+lecz błędu kompilacji Rust E0308 w
+`crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs:345`. Wywołanie
+`validate_handoff_m0_norms` przekazuje `&topology.magnetic_node_volumes`
+(`&Vec<f64>`), podczas gdy funkcja oczekuje maski `&[bool]`. Inne wywołanie w
+tym samym pliku buduje tę maskę przez `volume > 0.0`. Pełny log i build receipt
+są zachowane pod `storage/runs/eigensolve-k0-finalization-db0fde795ab86411/b0635ee724444977bae6402221f82990/artifacts/`.
+Poprawki źródłowej FEM nie wprowadzono w ramach naprawy runnera.
+
+Rozdzielenie statusów pozostaje ważne: runner jest operacyjnie naprawiony i
+przyjmuje zadania; build badanego SHA nie przeszedł kompilacji; runtime,
+walidacja fizyczna oraz zgodność Kittela pozostają **NOT VERIFIED**. Wcześniejszy
+blok `.fullmag` i brak świeżego 15-punktowego sweepu Kittela pozostają
+nierozwiązane; żadne dane z tego katalogu nie zostały usunięte ani przeniesione.
