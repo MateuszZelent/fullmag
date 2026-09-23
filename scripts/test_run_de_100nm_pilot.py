@@ -198,6 +198,7 @@ class PilotTests(unittest.TestCase):
                                   job={"job_id": "a" * 32})
         single = pilot.compose_command(context, Path("/outputs"), pilot="de-smoke-k2", external_model=True)[-1]
         self.assertIn("export FULLMAG_DE_SMOKE_SAMPLING=k2", single)
+        self.assertIn("export FULLMAG_GMSH_THREADS=1", single)
         self.assertIn("case_dir=/workspace/benchmark-output/de-smoke-k2", single)
 
 

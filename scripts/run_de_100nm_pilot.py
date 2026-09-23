@@ -62,7 +62,8 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
         "runtime_bin=/workspace/.fullmag/local/bin/fullmag-bin",
         ("source_script=/workspace/benchmark-model.py" if external_model
          else "source_script=/workspace/capsule/" + model),
-        *(["export FULLMAG_DE_SMOKE_SAMPLING=" + PILOTS[pilot][1]] if PILOTS[pilot][1] else []),
+        *(["export FULLMAG_GMSH_THREADS=1",
+            "export FULLMAG_DE_SMOKE_SAMPLING=" + PILOTS[pilot][1]] if PILOTS[pilot][1] else []),
         'test -x "$runtime_bin"',
         'test -f "$source_script"',
         "case_dir=/workspace/benchmark-output/" + pilot,
