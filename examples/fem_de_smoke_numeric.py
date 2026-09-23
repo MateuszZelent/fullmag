@@ -65,6 +65,7 @@ study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped",
 study.stages.add_eigenmodes(
     count=4, target="frequency_window", frequency_min=8.5e9,
     frequency_max=12e9, operator="full_2x2", include_demag=True,
+    solver_rtol=1e-8,
     equilibrium_source="relax", normalization="unit_l2", damping_policy="ignore",
     k_sampling=fm.KPath(
         points=[fm.KPoint("Gamma" if ky == 0 else f"DE-{ky:g}", (0.0, ky, 0.0))
