@@ -1,5 +1,30 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Managed DE-SMOKE: diagnostyka faktoryzacji — 2026-09-23
+
+Build `9024007447fe4ec1b7fe9a4b1c76b61e` ze źródła
+`3273836fa8eac08db7f77da4f1758df659a17516` zakończył się sukcesem.
+Dry-run pilota przeszedł, a rzeczywisty run k2
+`7ee15b286a634d3a870c3eacb27cbab9` dotarł przez obie bramki payloadu
+do SLEPc. PETSc przerwał konfigurację shift-invert w LU preconditionera:
+`Zero pivot row 0 value 6.19523e-62 tolerance 2.22045e-14`.
+Oba podokna mają `outer_iterations=0` i brak zaakceptowanych modów.
+To nadal nie jest wynik numeryczny dyspersji.
+
+Hipoteza do sprawdzenia w nowym managed runtime: natywny operator jest
+wyrażony w jednostkach SI, lecz pencil i macierz preconditionera trafiały
+do SLEPc/PETSc bez normalizacji skali. Źródła mnożą teraz obie strony
+uogólnionego pencila, wraz ze sprzężeniem Schura, przez wspólny czynnik
+wyznaczony z normy bloków. Wartości własne pozostają bez zmian, a residual
+jest nadal sprawdzany na oryginalnych blokach fizycznych. Przesunięty blok
+preconditionera dostaje osobną normalizację przed LU. Obie skale są
+raportowane jako `operator_normalization_scale` i
+`preconditioner_normalization_scale`.
+To nie jest jeszcze potwierdzona naprawa; należy wykonać runtime k2,
+sprawdzić nową diagnostykę, częstość, residual oraz pole z demagiem.
+Jeżeli LU nadal zawiedzie, trzeba odróżnić osobliwość bloku od błędu
+skalowania na podstawie jego normy, pivota i struktury.
+
 ## Managed DE-SMOKE: rzeczywiste próby — 2026-09-23
 
 Build 3eddf0c2cf014088a25cb7fa12c7a055 (źródło

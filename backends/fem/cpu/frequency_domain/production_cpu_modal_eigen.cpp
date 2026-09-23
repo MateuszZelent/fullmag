@@ -1068,6 +1068,8 @@ std::string production_window_diagnostics_json(
             format_double(policy.factorization_shift_amount) +
             ",\"operator_normalization_scale\":" +
             format_double(policy.operator_normalization_scale) +
+            ",\"preconditioner_normalization_scale\":" +
+            format_double(policy.preconditioner_normalization_scale) +
             ",\"nullspace_policy\":\"" +
             std::string(policy.nullspace_policy) +
             "\",";
@@ -1124,6 +1126,10 @@ std::string production_window_diagnostics_json(
             std::to_string(solve.result.linear_iterations_total) +
             ",\"candidate_modes\":" +
             std::to_string(solve.result.converged_eigenpair_count) +
+            ",\"operator_normalization_scale\":" +
+            format_double(solve.result.operator_normalization_scale) +
+            ",\"preconditioner_normalization_scale\":" +
+            format_double(solve.result.preconditioner_normalization_scale) +
             ",\"unsupported_reason\":\"" +
             std::string(solve.result.unsupported_reason) +
             "\",\"positive_frequency_candidates\":" +
@@ -2117,6 +2123,8 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
         format_double(slepc_result.factorization_shift_amount) +
         ",\"operator_normalization_scale\":" +
         format_double(slepc_result.operator_normalization_scale) +
+        ",\"preconditioner_normalization_scale\":" +
+        format_double(slepc_result.preconditioner_normalization_scale) +
         ",\"nullspace_policy\":\"" +
         std::string(slepc_result.nullspace_policy) +
         "\",\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, exp_i_omega_t), exclude_zero_frequency)\","
@@ -2352,6 +2360,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         format_double(slepc_result.factorization_shift_amount) +
         ",\"operator_normalization_scale\":" +
         format_double(slepc_result.operator_normalization_scale) +
+        ",\"preconditioner_normalization_scale\":" +
+        format_double(slepc_result.preconditioner_normalization_scale) +
         ",\"nullspace_policy\":\"" +
         std::string(slepc_result.nullspace_policy) +
         "\",\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, exp_i_omega_t), exclude_zero_frequency)\","

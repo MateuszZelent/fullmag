@@ -489,6 +489,53 @@ void executes_native_sparse_matshell_above_dense_bound()
 #endif
 }
 
+void normalizes_si_scale_floquet_pencil()
+{
+#if FULLMAG_FEM_WITH_SLEPC
+    constexpr std::size_t q_dimension = 8u;
+    constexpr double coefficient_scale = 1.0e-60;
+    constexpr double frequency_hz = 1.0e6;
+    std::vector<std::complex<double>> a_diagonal(q_dimension);
+    std::vector<std::complex<double>> b_diagonal(
+        q_dimension, std::complex<double>(0.0, -coefficient_scale));
+    for (std::size_t row = 0u; row < q_dimension; ++row) {
+        a_diagonal[row] = coefficient_scale * fd::omega_rad_s_from_frequency_hz(
+            frequency_hz + 2.0e5 * static_cast<double>(row));
+    }
+    const auto a_qq = diagonal_complex_csr(q_dimension, a_diagonal);
+    const auto b_qq = diagonal_complex_csr(q_dimension, b_diagonal);
+    const auto p = diagonal_complex_csr(1u, {1.0});
+    const auto a_qphi = q_to_phi_complex_csr(q_dimension, 0.0);
+    const auto a_phiq = phi_to_q_complex_csr(q_dimension, 0.0);
+    fd::FloquetSharedDomainSparseModalOperator operator_view{};
+    operator_view.a_qq = &a_qq;
+    operator_view.b_qq = &b_qq;
+    operator_view.p = &p;
+    operator_view.a_qphi = &a_qphi;
+    operator_view.a_phiq = &a_phiq;
+    operator_view.q_complex_dof_count = q_dimension;
+    operator_view.phi_dof_count = 1u;
+
+    fd::SLEPcSparseGyrotropicModalEigenRequest request{};
+    request.tangent_dof_count = static_cast<int>(q_dimension);
+    request.requested_mode_count = 1;
+    request.target_frequency_hz = frequency_hz + 1.0e4;
+    request.residual_tolerance = 1.0e-8;
+    request.max_outer_iterations = 160;
+    request.max_linear_iterations = 96;
+    const auto result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+        operator_view, request);
+    check(result.operator_normalization_scale > 1.0e40,
+          "SI-scale generalized Floquet pencil is normalized before sparse LU");
+    check(std::isfinite(result.preconditioner_normalization_scale) &&
+              result.preconditioner_normalization_scale > 0.0,
+          "shifted preconditioner reports a finite positive normalization");
+    check(result.ok, result.unsupported_reason);
+    check(std::abs(result.frequency_hz - frequency_hz) < 1.0e-2,
+          "pencil scaling preserves the physical eigenfrequency");
+#endif
+}
+
 } // namespace
 
 int main()
@@ -501,5 +548,6 @@ int main()
     admits_sparse_bloch_operator_without_demag();
     admits_certified_shared_domain_sparse_operator();
     executes_native_sparse_matshell_above_dense_bound();
+    normalizes_si_scale_floquet_pencil();
     return 0;
 }

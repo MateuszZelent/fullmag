@@ -501,12 +501,15 @@ bool create_native_floquet_shifted_preconditioner(
     Mat rotated_a_qq,
     Mat gyrotropic,
     PetscScalar shift,
-    Mat *out_matrix)
+    Mat *out_matrix,
+    double *normalization_scale)
 {
-    if (rotated_a_qq == nullptr || gyrotropic == nullptr || out_matrix == nullptr) {
+    if (rotated_a_qq == nullptr || gyrotropic == nullptr || out_matrix == nullptr ||
+        normalization_scale == nullptr) {
         return false;
     }
     *out_matrix = nullptr;
+    *normalization_scale = 1.0;
     if (MatDuplicate(rotated_a_qq, MAT_COPY_VALUES, out_matrix) != 0 ||
         MatAXPY(
             *out_matrix,
@@ -543,6 +546,62 @@ bool create_native_floquet_shifted_preconditioner(
         }
         return false;
     }
+    PetscReal matrix_norm = 0.0;
+    if (MatNorm(*out_matrix, NORM_INFINITY, &matrix_norm) != 0 ||
+        !std::isfinite(static_cast<double>(matrix_norm)) || matrix_norm <= 0.0) {
+        MatDestroy(out_matrix);
+        return false;
+    }
+    const double scale = 1.0 / static_cast<double>(matrix_norm);
+    if (!std::isfinite(scale) || MatScale(*out_matrix, static_cast<PetscScalar>(scale)) != 0) {
+        MatDestroy(out_matrix);
+        return false;
+    }
+    // Scaling a right preconditioner by a nonzero scalar leaves the shifted
+    // eigensolver operator and its eigenfrequencies unchanged.  It prevents
+    // PETSc's absolute LU zero-pivot threshold from rejecting SI-sized FEM
+    // coefficients before GMRES can apply the actual Schur complement.
+    *normalization_scale = scale;
+    return true;
+}
+
+bool normalize_native_floquet_pencil(
+    NativeFloquetMatShellContext *context,
+    Mat gyrotropic,
+    PetscReal target_shift,
+    double *normalization_scale)
+{
+    if (context == nullptr || gyrotropic == nullptr || normalization_scale == nullptr ||
+        !std::isfinite(static_cast<double>(target_shift))) {
+        return false;
+    }
+    PetscReal magnetic_norm = 0.0;
+    PetscReal gyrotropic_norm = 0.0;
+    if (MatNorm(context->a_qq, NORM_INFINITY, &magnetic_norm) != 0 ||
+        MatNorm(gyrotropic, NORM_INFINITY, &gyrotropic_norm) != 0) {
+        return false;
+    }
+    const double scale_reference = std::max({
+        static_cast<double>(magnetic_norm),
+        static_cast<double>(gyrotropic_norm),
+        std::abs(static_cast<double>(target_shift)) *
+            static_cast<double>(gyrotropic_norm)});
+    if (!std::isfinite(scale_reference) || scale_reference <= 0.0) {
+        return false;
+    }
+    const double scale = 1.0 / scale_reference;
+    if (!std::isfinite(scale) ||
+        MatScale(context->a_qq, static_cast<PetscScalar>(scale)) != 0 ||
+        MatScale(context->rotated_a_qq, static_cast<PetscScalar>(scale)) != 0 ||
+        MatScale(context->a_qphi, static_cast<PetscScalar>(scale)) != 0 ||
+        MatScale(gyrotropic, static_cast<PetscScalar>(scale)) != 0) {
+        return false;
+    }
+    // The Schur action is A_qq - A_qphi P^-1 A_phiq. Scaling A_qq and
+    // A_qphi together with B_qq multiplies both sides of its generalized
+    // eigenproblem by the same factor. P and A_phiq remain in physical units
+    // for potential reconstruction and original-pencil residual checks.
+    *normalization_scale = scale;
     return true;
 }
 
@@ -961,6 +1020,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
     result.ksp_type = "gmres";
     result.pc_type = "lu";
     result.factorization_package = "petsc_default_lu";
+    result.factorization_shift_policy = "none";
     result.poisson_ksp_type = "preonly";
     result.poisson_pc_type = "lu";
     result.poisson_factorization_package = "petsc_default_lu";
@@ -1045,6 +1105,19 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
         !create_real_split_matrix(*operator_view.b_qq, &gyrotropic)) {
         result.status = "solve_error";
         result.unsupported_reason = "petsc_floquet_sparse_matrix_creation_failed";
+        destroy_all();
+        return result;
+    }
+    const PetscReal target_shift = static_cast<PetscReal>(
+        omega_rad_s_from_frequency_hz(
+            std::max(0.0, spectral_request.target_frequency_hz)));
+    if (!normalize_native_floquet_pencil(
+            &context,
+            gyrotropic,
+            target_shift,
+            &result.operator_normalization_scale)) {
+        result.status = "solve_error";
+        result.unsupported_reason = "floquet_operator_normalization_failed";
         destroy_all();
         return result;
     }
@@ -1147,9 +1220,6 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
         spectral_request.residual_tolerance > 0.0
             ? spectral_request.residual_tolerance
             : 1.0e-10);
-    const PetscReal target_shift = static_cast<PetscReal>(
-        omega_rad_s_from_frequency_hz(
-            std::max(0.0, spectral_request.target_frequency_hz)));
     const PetscReal shifted_ksp_tolerance = std::max(
         static_cast<PetscReal>(1.0e-13),
         std::min(static_cast<PetscReal>(1.0e-8),
@@ -1174,7 +1244,8 @@ solve_floquet_shared_domain_sparse_modal_spectrum(
             context.rotated_a_qq,
             gyrotropic,
             static_cast<PetscScalar>(target_shift),
-            &shifted_preconditioner) ||
+            &shifted_preconditioner,
+            &result.preconditioner_normalization_scale) ||
         // The explicit magnetic shifted pencil keeps the matrix-free Schur
         // action as the operator while giving GMRES a factored, nonzero
         // shifted block. A Jacobi diagonal is invalid here because the

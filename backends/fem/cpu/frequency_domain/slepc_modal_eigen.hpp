@@ -107,6 +107,7 @@ struct SLEPcTinyGyrotropicModalEigenResult {
     double ksp_final_residual = 0.0;
     double factorization_shift_amount = 0.0;
     double operator_normalization_scale = 1.0;
+    double preconditioner_normalization_scale = 1.0;
     double max_candidate_relative_residual = 0.0;
     double min_candidate_frequency_hz = 0.0;
     double max_candidate_frequency_hz = 0.0;
