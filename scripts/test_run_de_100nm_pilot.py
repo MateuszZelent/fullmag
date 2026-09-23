@@ -111,13 +111,13 @@ class PilotTests(unittest.TestCase):
                  patch.object(pilot.managed, "_compose_environment", return_value={}), \
                  patch.object(pilot.subprocess, "run", return_value=SimpleNamespace(returncode=0)), \
                  patch.object(pilot.managed, "_validate_case_artifacts", return_value={}) as validate, \
-                 patch.object(pilot, "validate_rows", return_value={"qualification": "NOT VERIFIED"}) as row_check, \
+                 patch.object(pilot, "validate_rows", return_value={"qualification": "NOT VERIFIED", "sample_count": 2}) as row_check, \
                  patch.object(pilot, "validate_smoke_potential_fields", return_value={"qualification": "NOT VERIFIED"}) as field_check, \
                  patch("builtins.print"):
                 self.assertEqual(pilot.execute(context, root, ["docker"], "abc", pilot="de-smoke-two"), 0)
             validate.assert_called_once_with(root / "de-smoke-two", "c1")
             row_check.assert_called_once_with(root / "de-smoke-two/eigen/dispersion.csv", "two")
-            field_check.assert_called_once_with(root / "de-smoke-two")
+            field_check.assert_called_once_with(root / "de-smoke-two", 2)
             request = json.loads((root / "run-request.json").read_text())
             result = json.loads((root / "run-result.json").read_text())
             self.assertEqual(request["schema"], "fullmag.de-smoke.request.v1")
@@ -154,15 +154,18 @@ class PilotTests(unittest.TestCase):
             with patch.object(pilot, "validate_physical_potential", return_value={
                 "status": "consistent", "reconstruction_agreement": True,
                 "qualification": "NOT VERIFIED"}) as validate:
-                result = pilot.validate_smoke_potential_fields(root)
+                result = pilot.validate_smoke_potential_fields(root, 2)
             self.assertEqual(validate.call_count, 2)
             self.assertEqual(result["mode_count"], 2)
             self.assertEqual(result["qualification"], "NOT VERIFIED")
+            (root / "eigen/mode_fields/sample_0001/mode_0000/vector.bin").unlink()
+            with self.assertRaisesRegex(pilot.managed.BenchmarkError, "cover samples"):
+                pilot.validate_smoke_potential_fields(root, 2)
             (mode / "physical_potential.v1.json").unlink()
             with patch.object(pilot, "validate_physical_potential", return_value={
                 "status": "consistent", "reconstruction_agreement": True}):
                 with self.assertRaises(pilot.managed.BenchmarkError):
-                    pilot.validate_smoke_potential_fields(root)
+                    pilot.validate_smoke_potential_fields(root, 2)
 
     def test_smoke_inconsistent_field_cannot_be_completed_after_exit_zero(self):
         with TemporaryDirectory() as tmp:
@@ -172,7 +175,7 @@ class PilotTests(unittest.TestCase):
                  patch.object(pilot.managed, "_compose_environment", return_value={}), \
                  patch.object(pilot.subprocess, "run", return_value=SimpleNamespace(returncode=0)), \
                  patch.object(pilot.managed, "_validate_case_artifacts", return_value={}), \
-                 patch.object(pilot, "validate_rows", return_value={}), \
+                 patch.object(pilot, "validate_rows", return_value={"sample_count": 2}), \
                  patch.object(pilot, "validate_smoke_potential_fields", side_effect=ValueError("gradient mismatch")), \
                  patch("builtins.print"):
                 self.assertEqual(pilot.execute(context, root, ["docker"], "abc", pilot="de-smoke-two"), 1)

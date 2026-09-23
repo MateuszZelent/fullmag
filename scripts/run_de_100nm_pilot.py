@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -73,11 +74,22 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
     return command
 
 
-def validate_smoke_potential_fields(case_dir):
+def validate_smoke_potential_fields(case_dir, expected_sample_count):
     """Check every published mode's potential gradient, without qualifying T4."""
     vectors = sorted(case_dir.glob("eigen/mode_fields/sample_*/mode_*/vector.bin"))
     if not vectors:
         raise managed.BenchmarkError("DE-SMOKE has no published mode fields")
+    if not isinstance(expected_sample_count, int) or expected_sample_count <= 0:
+        raise managed.BenchmarkError("DE-SMOKE has no expected samples")
+    samples = set()
+    for vector in vectors:
+        match = re.fullmatch(r"sample_([0-9]{4})", vector.parent.parent.name)
+        if match is None:
+            raise managed.BenchmarkError("DE-SMOKE mode field has invalid sample directory")
+        samples.add(int(match.group(1)))
+    if samples != set(range(expected_sample_count)):
+        raise managed.BenchmarkError(
+            f"DE-SMOKE mode fields cover samples {sorted(samples)}, expected {expected_sample_count}")
     metadata = case_dir / "metadata.json"
     managed._regular_file(metadata, "DE-SMOKE mesh metadata")
     reports = []
@@ -129,7 +141,8 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
             if PILOTS[pilot][1] is not None:
                 artifacts["row_preflight"] = validate_rows(
                     output / pilot / "eigen/dispersion.csv", PILOTS[pilot][1])
-                artifacts["potential_reconstruction"] = validate_smoke_potential_fields(output / pilot)
+                artifacts["potential_reconstruction"] = validate_smoke_potential_fields(
+                    output / pilot, artifacts["row_preflight"]["sample_count"])
             result.update(status="completed_unqualified", artifacts=artifacts)
     except subprocess.TimeoutExpired:
         result["error"] = "host Compose watchdog expired after the container deadline and grace period"
