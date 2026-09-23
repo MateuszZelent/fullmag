@@ -112,10 +112,12 @@ class PilotTests(unittest.TestCase):
                  patch.object(pilot.subprocess, "run", return_value=SimpleNamespace(returncode=0)), \
                  patch.object(pilot.managed, "_validate_case_artifacts", return_value={}) as validate, \
                  patch.object(pilot, "validate_rows", return_value={"qualification": "NOT VERIFIED"}) as row_check, \
+                 patch.object(pilot, "validate_smoke_potential_fields", return_value={"qualification": "NOT VERIFIED"}) as field_check, \
                  patch("builtins.print"):
                 self.assertEqual(pilot.execute(context, root, ["docker"], "abc", pilot="de-smoke-two"), 0)
             validate.assert_called_once_with(root / "de-smoke-two", "c1")
             row_check.assert_called_once_with(root / "de-smoke-two/eigen/dispersion.csv", "two")
+            field_check.assert_called_once_with(root / "de-smoke-two")
             request = json.loads((root / "run-request.json").read_text())
             result = json.loads((root / "run-result.json").read_text())
             self.assertEqual(request["schema"], "fullmag.de-smoke.request.v1")
@@ -139,6 +141,45 @@ class PilotTests(unittest.TestCase):
             self.assertEqual(result["status"], "failed")
             self.assertEqual(result["return_code"], 0)
             self.assertIn("missing DE-SMOKE samples", result["error"])
+
+    def test_potential_reconstruction_requires_every_published_mode(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "metadata.json").write_text("{}")
+            for index in range(2):
+                mode = root / f"eigen/mode_fields/sample_{index:04}/mode_0000"
+                mode.mkdir(parents=True)
+                (mode / "vector.bin").write_bytes(b"mode")
+                (mode / "physical_potential.v1.json").write_text("{}")
+            with patch.object(pilot, "validate_physical_potential", return_value={
+                "status": "consistent", "reconstruction_agreement": True,
+                "qualification": "NOT VERIFIED"}) as validate:
+                result = pilot.validate_smoke_potential_fields(root)
+            self.assertEqual(validate.call_count, 2)
+            self.assertEqual(result["mode_count"], 2)
+            self.assertEqual(result["qualification"], "NOT VERIFIED")
+            (mode / "physical_potential.v1.json").unlink()
+            with patch.object(pilot, "validate_physical_potential", return_value={
+                "status": "consistent", "reconstruction_agreement": True}):
+                with self.assertRaises(pilot.managed.BenchmarkError):
+                    pilot.validate_smoke_potential_fields(root)
+
+    def test_smoke_inconsistent_field_cannot_be_completed_after_exit_zero(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            context = SimpleNamespace(layout={"repo_root": str(root)})
+            with patch.object(pilot.managed, "_run_request", return_value={"source": {}, "job": {}, "runtime": {}}), \
+                 patch.object(pilot.managed, "_compose_environment", return_value={}), \
+                 patch.object(pilot.subprocess, "run", return_value=SimpleNamespace(returncode=0)), \
+                 patch.object(pilot.managed, "_validate_case_artifacts", return_value={}), \
+                 patch.object(pilot, "validate_rows", return_value={}), \
+                 patch.object(pilot, "validate_smoke_potential_fields", side_effect=ValueError("gradient mismatch")), \
+                 patch("builtins.print"):
+                self.assertEqual(pilot.execute(context, root, ["docker"], "abc", pilot="de-smoke-two"), 1)
+            result = json.loads((root / "run-result.json").read_text())
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["return_code"], 0)
+            self.assertIn("gradient mismatch", result["error"])
 
     def test_command_selects_numerical_pilot_without_case_override(self):
         context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"), job={"job_id": "a" * 32})

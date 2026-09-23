@@ -17,6 +17,7 @@ import time
 
 import run_comsol_dispersion_benchmark as managed
 from validate_de_smoke_rows import validate_rows
+from validate_de_physical_potential import validate_physical_potential
 import de_smoke_model_input as model_input
 
 MODEL = "examples/fem_de_film_100nm_numeric_pilot.py"
@@ -70,6 +71,26 @@ def compose_command(context, output, timeout_seconds=managed.DEFAULT_TIMEOUT_SEC
     return command
 
 
+def validate_smoke_potential_fields(case_dir):
+    """Check every published mode's potential gradient, without qualifying T4."""
+    vectors = sorted(case_dir.glob("eigen/mode_fields/sample_*/mode_*/vector.bin"))
+    if not vectors:
+        raise managed.BenchmarkError("DE-SMOKE has no published mode fields")
+    metadata = case_dir / "metadata.json"
+    managed._regular_file(metadata, "DE-SMOKE mesh metadata")
+    reports = []
+    for vector in vectors:
+        manifest = vector.parent / "physical_potential.v1.json"
+        managed._regular_file(manifest, "DE-SMOKE mode potential manifest")
+        report = validate_physical_potential(manifest, metadata)
+        if report.get("status") != "consistent" or report.get("reconstruction_agreement") is not True:
+            raise managed.BenchmarkError(
+                f"DE-SMOKE potential gradient mismatch: {manifest.relative_to(case_dir)}")
+        reports.append({"manifest": manifest.relative_to(case_dir).as_posix(), **report})
+    return {"qualification": "NOT VERIFIED", "scope": "stored_field_reconstruction_only",
+            "mode_count": len(reports), "modes": reports}
+
+
 def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT_TIMEOUT_SECONDS, *, pilot="de100", model_identity=None):
     model = pilot_model(pilot)
     schema_name = "de100-pilot" if pilot == "de100" else "de-smoke"
@@ -106,6 +127,7 @@ def execute(context, output, command, model_sha, timeout_seconds=managed.DEFAULT
             if PILOTS[pilot][1] is not None:
                 artifacts["row_preflight"] = validate_rows(
                     output / pilot / "eigen/dispersion.csv", PILOTS[pilot][1])
+                artifacts["potential_reconstruction"] = validate_smoke_potential_fields(output / pilot)
             result.update(status="completed_unqualified", artifacts=artifacts)
     except subprocess.TimeoutExpired:
         result["error"] = "host Compose watchdog expired after the container deadline and grace period"
