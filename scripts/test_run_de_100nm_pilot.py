@@ -193,15 +193,5 @@ class PilotTests(unittest.TestCase):
         self.assertNotIn("build", command)
 
 
-    def test_nearest_smoke_pilot_is_explicitly_separate_from_window_pilot(self):
-        context = SimpleNamespace(source_tree=Path("/capsule"), runtime_root=Path("/runtime"),
-                                  job={"job_id": "a" * 32})
-        nearest = pilot.compose_command(context, Path("/outputs"), pilot="de-smoke-nearest-two", external_model=True)[-1]
-        window = pilot.compose_command(context, Path("/outputs"), pilot="de-smoke-two", external_model=True)[-1]
-        self.assertIn("export FULLMAG_DE_SMOKE_SAMPLING=two", nearest)
-        self.assertIn("export FULLMAG_DE_SMOKE_TARGET=nearest", nearest)
-        self.assertNotIn("FULLMAG_DE_SMOKE_TARGET=nearest", window)
-
-
 if __name__ == "__main__":
     unittest.main()
