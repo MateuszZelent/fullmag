@@ -62,11 +62,15 @@ ALLOWED_PROFILES = (
 CPU_CONTRACT_PROFILES = (*ALLOWED_PROFILES, "fem-cpu-current-contracts-v1")
 CURRENT_CONTRACT_PROFILES = (*CPU_CONTRACT_PROFILES, "fem-gpu-current-contracts-v1")
 SLEPC_MODAL_PROFILES = (*CURRENT_CONTRACT_PROFILES, "fem-cpu-slepc-modal-v1")
+# Accept this exact historical persisted list so an explicit configuration
+# update can replace it with SLEPC_MODAL_PROFILES. It is not a submit profile.
+LEGACY_SLEPC_RUNTIME_PROFILES = (*SLEPC_MODAL_PROFILES, "fem-cpu-slepc-runtime-v1")
 _PROFILE_LISTS = (
     ALLOWED_PROFILES,
     CPU_CONTRACT_PROFILES,
     CURRENT_CONTRACT_PROFILES,
     SLEPC_MODAL_PROFILES,
+    LEGACY_SLEPC_RUNTIME_PROFILES,
 )
 
 

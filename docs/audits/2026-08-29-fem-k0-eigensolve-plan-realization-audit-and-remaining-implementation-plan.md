@@ -2647,3 +2647,97 @@ zmienić wyłącznie regułę `beta` na zależną od otwartej osi i wykonać kon
 `layers=1/4/8` oraz airbox `3/5/8`; dopiero zgodność po tych testach pozwoli
 nazwać problem błędem implementacji zamiast kontrolowanym przybliżeniem
 granicy.
+
+### 17.52. Reconciliacja diagnozy Kittela po fast-forward do master
+
+Worktree został zaktualizowany fast-forward z `e3241af9a` do bieżącego lokalnego
+`master`/`origin/master`, `93f11dbc564c00b725d174ccb2fd0ff9a96493c9`. Nie powstał
+merge-commit, a przed aktualizacją worktree był czysty i HEAD był przodkiem
+`master`.
+
+Historyczny wynik 3.56--3.90% deficytu nie opisuje już dokładnie aktualnego
+źródła. Receipt w sekcji 17.44 pochodzi z 2026-08-31 08:38 UTC, natomiast commit
+`e3241af9a` z 2026-09-01 zmienił wyznaczanie Robin reference extent. Różnica w
+starym kodzie była konkretna: po znalezieniu największego wymiaru otwartego
+przyjmował on maksimum z wymiarem wszystkich osi, przez co okresowe x/y ponownie
+wpływały na skalę granicy. Obecne `robin_reference_extent_m` w
+`crates/fullmag-runner/src/fem/eigen_shared_domain_geometry.rs` używa wyłącznie
+osi otwartych, jeśli taka istnieje; test
+`robin_reference_extent_ignores_periodic_cell_width` koduje ten kontrakt.
+
+Dla domyślnej geometrii fixture
+`examples/fem_eigen_k0_kittel_periodic_airbox.py` (160 x 80 x 10 nm, airbox
+factor 5, PBC w x/y) otwarta oś z ma 50 nm. Przy domyślnym współczynniku 2
+stary kod ustalał skalę z 160 nm i dawał beta 25e6 1/m; obecny wzór używa 50 nm
+i daje 80e6 1/m. To potwierdza źródłowo błąd strojenia sztucznej granicy przez
+rozmiar komórki okresowej. **Nie dowodzi jednak, o ile częstotliwość zmieniła
+się po poprawce**: nie istnieje w tym worktree świeży runtime sweep związany z
+HEAD `93f11dbc...`, a historyczne katalogi `C:\fullmag-cache` wskazane w
+starszych sekcjach nie są dostępne. Stare `M_eff=738461.538 A/m`, residuale i
+częstotliwości pozostają dowodem historycznym, nie aktualnym wynikiem mastera.
+
+Diagnoza rozdziela zatem trzy rzeczy:
+
+1. Dla starego snapshotu mocnym, źródłowo potwierdzonym błędem była zależność
+   Robin beta od szerokości okresowej komórki; parametry `Ms`, `gamma0`, `mu0`
+   i pole były zgodne z oracle, a małe residuale wykluczały niedokładne
+   rozwiązanie liniowe dla tamtego artefaktu (sekcja 17.51).
+2. Dla aktualnego źródła usunięto ten mechanizm, ale zmiana fizycznej
+   częstotliwości jest **NOT VERIFIED**, dopóki nie zostanie wykonany nowy
+   15-punktowy przebieg.
+3. Wpływ skończonego airboxu i rozdzielczości przez grubość nadal wymaga
+   osobnego rozdzielenia. Fixture udostępnia `FULLMAG_K0_KITTEL_LAYERS`, lecz
+   obecna recepta `verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-convergence-cpu`
+   go nie przekazuje i wykonuje wyłącznie sweep rozmiaru elementu oraz airboxu.
+
+Kolejność weryfikacji pozostaje: najpierw uruchomić test geometrii Robina na
+aktualnym źródle; następnie wykonać porównanie `layers=1/4/8` przy stałej
+geometrii i airboxie; potem `airbox factor=3/5/8` przy ustalonej zbieżnej
+siatce przez grubość; na końcu powtórzyć zestaw trzech siatek i trzech airboxów
+z niezmienionymi 15 polami, materiałem oraz `periodic_airbox_k0`. Zachować
+istniejące progi walidacji. Do czasu uzyskania receipts związanych z jednym
+source/runtime/input identity zgodność z Kittelem po poprawce pozostaje
+**NOT VERIFIED**.
+
+### 17.53. Preflight runtime po synchronizacji worktree
+
+Kontrola wykonana 2026-09-23.
+
+Resolver wskazuje project storage `C:\git\fullmag\storage` oraz
+worktree ID `eigensolve-k0-finalization-db0fde795ab86411`. Rekord worktree został
+zarejestrowany 2026-09-23 w
+`storage/index/eigensolve-k0-finalization-db0fde795ab86411.json`, z właścicielem
+`Mateusz / Codex`, bazowym HEAD `93f11dbc...` i stanem `active`. Kanoniczne
+katalogi `storage/runs/<worktree-id>` oraz
+`storage/runtimes/<worktree-id>/reports` nie zawierają obecnie wyniku Kittel.
+
+W checkoutcie istnieje natomiast rzeczywisty katalog
+`worktrees/eigensolve-k0-finalization/.fullmag` (nie link zgodności), z
+podkatalogami `cache`, `local`, `local-live`, `reports` i `runtimes`. Dokładne
+report roots używane przez recepty Kittel nie istnieją, ale katalog jest
+istniejącym, ignorowanym stanem historycznym. Nie wolno usuwać go ani zastępować
+linkiem automatycznie. Bieżąca recepta konwergencji wykonuje `rm -rf` pod tym
+`.fullmag`, a storage preflight wymaga sprawdzonego linku; dlatego recepty nie
+uruchomiono. Także bezpośredni `fullmag_storage.py run` odrzuca istniejący
+realny `.fullmag` w `validate_prepared_links_for_run`; nie ma obecnie gotowej
+resolverowej ścieżki, która bezpiecznie ominie ten warunek. Przed runtime trzeba
+dodać i zweryfikować taką trasę albo uzyskać zgodę na migrację dokładnego
+katalogu legacy. Do tego czasu cała zawartość `.fullmag` pozostaje nietknięta.
+
+Współdzielona konfiguracja zawiera obraz koordynatora `eed020...` i siedem
+profili, w tym nieobsługiwany już `fem-cpu-slepc-runtime-v1`; ten sam profil
+pozostaje w build-config obok jego następnika `fem-cpu-slepc-modal-v1` z tym
+samym image digest. Pierwszy odczyt hostowego CLI kończył się
+`Container profile allow-list mismatch`. Dodano i przetestowano migrację, która
+rozpoznaje wyłącznie tę dokładną historyczną listę, aby jawne
+`container-configure --enable-slepc-modal` mogło zapisać kanoniczną listę sześciu
+profili bez zmiany portu ani tokenu. Konfiguracja współdzielona nie została
+jeszcze zmieniona.
+
+Autoryzowany odczyt health z 2026-09-23 14:16 UTC potwierdził działający
+koordynator, `worker_alive=true`, `accepting_jobs=true` i jeden aktywny job
+`2439cca257fb49ffb42bc8adba739623` o profilu `fem-cpu-slepc-runtime-v1`; kolejka
+nie miała innych oczekujących zadań. Zgodnie z decyzją użytkownika job nie
+zostanie anulowany. Pauza przyjmowania nowych zadań, zmiana konfiguracji i
+wymiana kontenera muszą poczekać na jego stan terminalny oraz ponowne
+potwierdzenie pustego slotu.

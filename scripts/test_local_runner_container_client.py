@@ -569,11 +569,47 @@ class ContainerClientTests(unittest.TestCase):
         self.assertEqual(8765, reconfigured["port"])
         self.assertEqual(list(container_client.SLEPC_MODAL_PROFILES), reconfigured["allowed_profiles"])
 
+    def test_configure_migrates_exact_legacy_runtime_profile_list(self):
+        initial = container_client.configure(self.layout, image_id=IMAGE, owner="alice", port=8765)
+        public_path = self.storage / "index" / "local-runner-container.json"
+        secret_path = self.storage / "index" / "local-runner-container-secret.json"
+        public = json.loads(public_path.read_text(encoding="utf-8"))
+        secret = json.loads(secret_path.read_text(encoding="utf-8"))
+        legacy_profiles = [
+            *container_client.SLEPC_MODAL_PROFILES,
+            "fem-cpu-slepc-runtime-v1",
+        ]
+        public["allowed_profiles"] = legacy_profiles
+        secret["allowed_profiles"] = legacy_profiles
+        public_path.write_text(json.dumps(public), encoding="utf-8")
+        secret_path.write_text(json.dumps(secret), encoding="utf-8")
+
+        migrated = container_client.configure(
+            self.layout,
+            image_id=IMAGE,
+            owner="alice",
+            enable_slepc_modal=True,
+        )
+
+        self.assertEqual(initial["port"], migrated["port"])
+        self.assertEqual(list(container_client.SLEPC_MODAL_PROFILES), migrated["allowed_profiles"])
+        self.assertEqual(
+            list(container_client.SLEPC_MODAL_PROFILES),
+            json.loads(public_path.read_text(encoding="utf-8"))["allowed_profiles"],
+        )
+        migrated_secret = json.loads(secret_path.read_text(encoding="utf-8"))
+        self.assertEqual(list(container_client.SLEPC_MODAL_PROFILES), migrated_secret["allowed_profiles"])
+        self.assertEqual(secret["token"], migrated_secret["token"])
+
     def test_known_profile_list_accepts_tuples_and_profile_lists(self):
         self.assertTrue(container_client._known_profile_list(list(container_client.ALLOWED_PROFILES)))
         self.assertTrue(container_client._known_profile_list(tuple(container_client.ALLOWED_PROFILES)))
         self.assertTrue(container_client._known_profile_list(list(container_client.SLEPC_MODAL_PROFILES)))
         self.assertTrue(container_client._known_profile_list(tuple(container_client.SLEPC_MODAL_PROFILES)))
+        legacy_profiles = [*container_client.SLEPC_MODAL_PROFILES, "fem-cpu-slepc-runtime-v1"]
+        self.assertTrue(container_client._known_profile_list(legacy_profiles))
+        unsupported_profiles = [*container_client.SLEPC_MODAL_PROFILES, "fem-cpu-slepc-runtime-v2"]
+        self.assertFalse(container_client._known_profile_list(unsupported_profiles))
         self.assertFalse(container_client._known_profile_list([]))
         self.assertFalse(container_client._known_profile_list(None))
         self.assertFalse(container_client._known_profile_list(["unknown"]))

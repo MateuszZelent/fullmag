@@ -158,6 +158,45 @@ class BuildEntryPointTests(unittest.TestCase):
         fdm = entrypoint.profile_for("fdm-cpu-release")
         self.assertEqual(fdm.environment["FULLMAG_BUILD_CPU_ONLY"], "1")
 
+    def test_slepc_modal_profile_is_accepted_and_forces_cpu_mfem_slepc(self) -> None:
+        profile_name = "fem-cpu-slepc-modal-v1"
+        profile = entrypoint.profile_for(profile_name)
+        self.assertEqual(profile.lane, "fem-cpu")
+        self.assertEqual(profile.environment["FULLMAG_FORCE_LOCAL_FEM_CPU"], "1")
+        self.assertEqual(profile.environment["FULLMAG_FORCE_LOCAL_FEM_GPU"], "0")
+        self.assertEqual(profile.environment["FULLMAG_USE_MFEM_STACK"], "ON")
+        self.assertEqual(profile.environment["FULLMAG_FEM_WITH_SLEPC"], "ON")
+        self.assertEqual(entrypoint.EXPECTED_BUILD_MARKER[profile_name], "fem-cpu")
+        environment = entrypoint.build_environment(
+            profile,
+            workspace=self.workspace,
+            build=self.build,
+            jobs=2,
+            native_identity=self._identity(),
+        )
+        self.assertEqual(environment["FULLMAG_USE_MFEM_STACK"], "ON")
+        self.assertEqual(environment["FULLMAG_FEM_WITH_SLEPC"], "ON")
+        self.assertEqual(environment["FULLMAG_BUILD_CPU_ONLY"], "0")
+        self.assertEqual(environment["FULLMAG_FORCE_LOCAL_FEM_CPU"], "1")
+        self.assertEqual(environment["FULLMAG_FORCE_LOCAL_FEM_GPU"], "0")
+        self.assertEqual(environment["FULLMAG_FEM_REQUIRE_GPU"], "0")
+        self.assertEqual(environment["FULLMAG_FEM_REQUIRE_CEED"], "0")
+        self.assertEqual(environment["FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT"], "1")
+        output = self._write_outputs(marker="fem-cpu")
+        entrypoint._validate_required_outputs(output, profile)
+        args = entrypoint._parse_args(
+            [
+                "--job-id", self.job_id,
+                "--source-digest", self.source_digest,
+                "--profile", profile_name,
+                "--source", str(self.source),
+                "--workspace", str(self.workspace),
+                "--build", str(self.build),
+                "--artifacts", str(self.artifacts),
+            ]
+        )
+        self.assertEqual(args.profile, profile_name)
+
     def test_preflight_requires_an_installed_nightly_toolchain(self) -> None:
         with patch.object(
             entrypoint.shutil,

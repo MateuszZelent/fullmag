@@ -88,6 +88,20 @@ PROFILES: dict[str, Profile] = {
             "FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT": "1",
         },
     ),
+    "fem-cpu-slepc-modal-v1": Profile(
+        name="fem-cpu-slepc-modal-v1",
+        lane="fem-cpu",
+        environment={
+            "FULLMAG_BUILD_CPU_ONLY": "0",
+            "FULLMAG_FORCE_LOCAL_FEM_CPU": "1",
+            "FULLMAG_FORCE_LOCAL_FEM_GPU": "0",
+            "FULLMAG_FEM_REQUIRE_GPU": "0",
+            "FULLMAG_FEM_REQUIRE_CEED": "0",
+            "FULLMAG_USE_MFEM_STACK": "ON",
+            "FULLMAG_FEM_WITH_SLEPC": "ON",
+            "FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT": "1",
+        },
+    ),
     "fem-gpu-release": Profile(
         name="fem-gpu-release",
         lane="fem-gpu",
@@ -125,6 +139,7 @@ REQUIRED_OUTPUTS = (
 )
 EXPECTED_BUILD_MARKER = {
     "fem-cpu-release": "fem-cpu",
+    "fem-cpu-slepc-modal-v1": "fem-cpu",
     "fem-gpu-release": "cuda-fem-gpu",
     "fdm-cpu-release": "cpu",
 }
