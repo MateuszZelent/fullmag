@@ -84,9 +84,9 @@
     "@radix-ui/react-tabs": "^1.1.13",
     "@radix-ui/react-toast": "^1.2.19",
     "@radix-ui/react-tooltip": "^1.2.8",
-    "@react-three/drei": "^10.7.7",
-    "@react-three/fiber": "^9.5.0",
-    "@react-three/postprocessing": "^3.0.4",
+    "@react-three/drei": "^10.7.8",
+    "@react-three/fiber": "^9.7.0",
+    "@react-three/postprocessing": "^3.1.1",
     "@tanstack/react-virtual": "^3.14.6",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -100,7 +100,7 @@
     "react-resizable-panels": "^4.7.6",
     "recharts": "^3.8.1",
     "tailwind-merge": "^3.5.0",
-    "three": "^0.183.2"
+    "three": "^0.186.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.51.1",
@@ -110,7 +110,7 @@
     "@types/node": "24.13.3",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
-    "@types/three": "^0.183.1",
+    "@types/three": "^0.186.0",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.11",
     "openapi-typescript": "^7.13.0",
