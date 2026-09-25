@@ -32,6 +32,8 @@ Pierwszy README nie podawał wysokości airboxu ani wersji programu. Późniejsz
 
 Nadal brak dokładnego identyfikatora siatki/liczby DOF i eksportu siatki, wersji dodatku Micromagnetics i hashu `.jar`, pliku `.mph`, logu zbieżności relaksacji/eigensolvera, residuali, części urojonych częstotliwości, pól stanu równowagi i zespolonych pól modów/potencjałów oraz kontroli ±k i sweepów zbieżności. C0/C1 są jedynie przybliżonymi liczbami w opisie; brak ich surowych tabel. Pochodzenia CSV jako bezpośredniego eksportu COMSOL nadal nie można niezależnie potwierdzić z pakietu.
 
+**Różnica do rozstrzygnięcia przed A1:** opis COMSOL podaje pierwszy odcinek relaksacji 5 ns i linearyzację na jego końcowym stanie. Obecny `config.py` Fullmag ma `RELAX_DT_S=5e-15` oraz `RELAX_MAX_STEPS=50_000`, czyli maksymalnie 0.25 ns czasu integracji przy pełnym limicie kroków. To nie jest automatycznie błąd fizyczny, jeśli stan osiąga równowagę wcześniej, lecz bez rzeczywistego certyfikatu momentu obrotowego, normy i stabilności stanu nie wolno uznać obu punktów linearyzacji za zgodne. Przed A1 należy uruchomić relaksację do spełnienia warunku równowagi, zwiększając budżet czasu/kroków według wyników, a następnie zachować pole `m0` i identyfikator tej samej siatki dla wszystkich `k`.
+
 ## Kolejność odtworzenia
 
 1. Potwierdzić provenance i rzeczywiste ustawienia modelu COMSOL. Zachować dostarczone pliki oraz hashe jako niezmienną próbkę; jeżeli dostępne, dołączyć `.mph`, logi i eksporty według rozdziału 9 protokołu.
