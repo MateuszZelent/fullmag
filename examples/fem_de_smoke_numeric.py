@@ -1,6 +1,8 @@
 """DE-SMOKE numerical FEM fixture from the 2026-09-16 validation plan.
 
-Default: Gamma and ky=2e6 rad/m. FULLMAG_DE_SMOKE_SAMPLING=five selects
+Default: Gamma and ky=2e6 rad/m. FULLMAG_DE_SMOKE_SAMPLING=k2 requests only the
+lowest target mode at ky=2e6 rad/m so the first nonzero-k solve does not ask
+each shift for a full four-mode bundle. FULLMAG_DE_SMOKE_SAMPLING=five selects
 all five prescribed points. References are evaluated after the native solve;
 this fixture does not select an analytic solver or claim qualification.
 """
@@ -15,13 +17,15 @@ if SAMPLING not in ("two", "five", "k2"):
 KY = ((2e6,) if SAMPLING == "k2" else
       (0.0, 2e6) if SAMPLING == "two" else
       (0.0, 1e6, 2e6, 3e6, 5e6))
+REQUESTED_MODE_COUNT = 1 if SAMPLING == "k2" else 4
 RELAX_DT_S = 5e-15
 RELAX_MAX_STEPS = 50000
 RELAX_MAX_TIME_S = RELAX_DT_S * RELAX_MAX_STEPS
 # The 500-iteration k2 trial produced frequency candidates but failed the
 # independent magnetic residual gate (2.17e-7 > 1e-8). Use a bounded 2000
-# iterations to test iterative convergence; thresholds and physical acceptance
-# criteria remain unchanged.
+# iterations to test iterative convergence. The physical acceptance threshold
+# remains 1e-8; the native EPS absolute prefilter is set more strictly because
+# its globally normalized residual is not the per-mode original-block metric.
 EIGEN_SOLVER_RTOL = 1e-8
 EIGEN_SOLVER_MAX_OUTER_ITERATIONS = 2000
 MS_A_PER_M = 800000.0
@@ -71,7 +75,7 @@ study.save("diagnostics")
 # at finalization even when relaxation converges before this limit.
 study.save("H_demag", every=RELAX_MAX_TIME_S)
 study.save("demag_phi", every=RELAX_MAX_TIME_S)
-study.save("mode", field="mode", indices=(0, 1, 2, 3),
+study.save("mode", field="mode", indices=tuple(range(REQUESTED_MODE_COUNT)),
            sample_indices=tuple(range(len(KY))))
 study.runtime_metadata("de_smoke", {
     "schema": "fullmag.de-smoke.v1",
@@ -87,6 +91,7 @@ study.runtime_metadata("de_smoke", {
     "outer_boundary_kind": "poisson_dirichlet",
     "outer_boundary_potential_a": 0.0,
     "ky_rad_per_m": list(KY),
+    "requested_mode_count": REQUESTED_MODE_COUNT,
     "orientation": "M0=x,k=y,normal=z",
     "eigen_solver_rtol": EIGEN_SOLVER_RTOL,
     "eigen_solver_max_outer_iterations": EIGEN_SOLVER_MAX_OUTER_ITERATIONS,
@@ -97,7 +102,7 @@ study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped",
                        dt=RELAX_DT_S, relax_alpha=0.5,
                        max_steps=RELAX_MAX_STEPS, tolA=1.0)
 study.stages.add_eigenmodes(
-    count=4, target="frequency_window", frequency_min=8.5e9,
+    count=REQUESTED_MODE_COUNT, target="frequency_window", frequency_min=8.5e9,
     frequency_max=12e9, operator="full_2x2", include_demag=True,
     solver_rtol=EIGEN_SOLVER_RTOL,
     solver_max_outer_iterations=EIGEN_SOLVER_MAX_OUTER_ITERATIONS,
