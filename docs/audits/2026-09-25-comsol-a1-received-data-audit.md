@@ -1,0 +1,51 @@
+# Odbiór danych COMSOL A1 — 2026-09-25
+
+Status: **referencja częstotliwości do porównania wstępnego**, nie pełny pakiet kwalifikacji naukowej. Pięć plików pochodzi z przekazanego przez użytkownika katalogu `docs/plans/active/eignensolve_non_k0/` w głównym checkoutcie, a szósty to następny załącznik tekstowy. Skopiowano je bez modyfikacji do katalogu o tej samej ścieżce w worktree zadania. Nie uruchomiono na ich podstawie solvera Fullmag ani nie uznano zgodności numerycznej.
+
+Lokalny `.gitattributes` wyłącza normalizację końców linii dla całego katalogu danych. Sprawdzono, że staged blob CSV jest bajtowo identyczny z przekazanym plikiem; bez tej reguły ustawienie hosta `core.autocrlf=true` zmieniałoby SHA-256 przy zapisie w Git.
+
+## Inwentarz i integralność
+
+| Plik | Rola | SHA-256 |
+|---|---|---|
+| `COMSOL_A1_dispersion.csv` | 61 próbek × 24 częstotliwości | `2da7b9a41fab68a6a33eff2ccfd5d8c3583eed14a2f0c29f918ad833adb0d5da` |
+| `README_COMSOL_A1_dispersion.txt` | opis parametrów i kolumn | `23502886ffd3e25a6bb6f5fa2cb5fab445c708e24ccadc3550392959b059e519` |
+| `COMSOL_A1_band_structure.png` | obraz punktów | `a7d35b0a8e36192e8863ab10dde670f715d9c1f29d2e7d75d3641fe2d57a6607` |
+| `COMSOL_A1_band_structure.pdf` | ten sam typ wizualizacji | `4a10eb999076fda2a02e5de4f05c006f2b29659832b4a0947bc4b4d55cb69f84` |
+| `comsol-przepis-dyspersja-permalloy (1).pdf` | wcześniejszy protokół `comsol-py-antidot-square-v1` | `f5300ff9a835cef3f582bcfaa36f68819cfcb86b320da95fc508e8360f2558d1` |
+| `COMSOL_A1_model_details_user.txt` | późniejszy opis zadeklarowanej konfiguracji COMSOL; kopia załącznika użytkownika | `b5d3f395ffe9319b71d083fe4190405c7d13f18715852a4db78cd590ecd07bbd` |
+
+## Sprawdzenie zawartości
+
+- Nagłówek CSV: `jpath,kx_rad_per_um,ky_rad_per_um,frequency_order,frequency_GHz`.
+- 1464 wiersze; dokładnie 24 pozycje 1–24 dla każdego `jpath=0…60`, lokalnie posortowane po częstotliwości.
+- Punkty ścieżki odpowiadają Γ–X–M–Γ dla `a=200 nm`, z maksymalnym odchyleniem współrzędnych od wzoru poniżej `4.5e-10 rad/µm` (zaokrąglenie eksportu). Widma Γ w wierszach `j=0` i `j=60` są identyczne w zapisanej precyzji.
+- Zakres częstotliwości: `9.273700…20.840000 GHz`; pierwsza pozycja Γ: `9.413600 GHz`, X: `9.273700 GHz`, M: `11.133000 GHz`.
+- `frequency_order` jest indeksem sortowania lokalnego, **nie** śledzoną gałęzią. Wykres punktowy jest właściwy; łączenie pozycji liniami może fałszywie interpretować przecięcia.
+- Sześć miejsc dziesiętnych w GHz daje rozdzielczość zapisu 1 kHz, lecz nie spełnia przewidzianego w protokole eksportu minimum 15 cyfr znaczących. Nie podano części urojonej ani surowych wartości własnych.
+
+## Zgodność zamierzonego problemu z Fullmag
+
+README deklaruje A1: komórka `200×200×10 nm`, centralny otwór `r=50 nm`, `Ms=800 kA/m`, `Aex=13 pJ/m`, `gamma=2.211e5 m/(A s)`, `Bbias=0.1 T` w kierunku `+x`, `alpha_eig=0`. To odpowiada nominalnym parametrom `tests/standard_problems/mumag/comsol_nonzero_k_dispersion/config.py` i geometrii `problem.py`. Dane **nie** dotyczą jednorodnego pilota `DE-SMOKE`, w którym nie ma otworu i użyto innego okresu/grubości; punktów tego pilota nie należy nakładać na A1 jako tego samego zadania.
+
+Pierwszy README nie podawał wysokości airboxu ani wersji programu. Późniejszy `COMSOL_A1_model_details_user.txt` deklaruje **COMSOL 6.1**, airbox `d_air=2 µm` na stronę, zera potencjału na jego górze i dole, siatkę o docelowych rozmiarach około 5 nm w magnetyku i bliskim powietrzu, trzy warstwy przez film, wzrost ≤1.3 i maksimum około 100 nm w dalszym powietrzu. Deklaruje również Micromagnetics Time/Frequency Domain, dwa jawne Weak Form PDE, BDF/PARDISO dla relaksacji, 24 wartości własne wokół około 1 GHz przy względnej tolerancji `1e-8` oraz kontrolne C0 ≈2.8003 GHz i C1 ≈9.2992 GHz. Dla A1 podaje relaksowany, niejednorodny stan równowagi, bez jego eksportu. Opis ten jest deklaracją konfiguracji, **nie** surowym logiem ani automatycznie zweryfikowaną metryką solvera.
+
+Nadal brak dokładnego identyfikatora siatki/liczby DOF i eksportu siatki, wersji dodatku Micromagnetics i hashu `.jar`, pliku `.mph`, logu zbieżności relaksacji/eigensolvera, residuali, części urojonych częstotliwości, pól stanu równowagi i zespolonych pól modów/potencjałów oraz kontroli ±k i sweepów zbieżności. C0/C1 są jedynie przybliżonymi liczbami w opisie; brak ich surowych tabel. Pochodzenia CSV jako bezpośredniego eksportu COMSOL nadal nie można niezależnie potwierdzić z pakietu.
+
+## Kolejność odtworzenia
+
+1. Potwierdzić provenance i rzeczywiste ustawienia modelu COMSOL. Zachować dostarczone pliki oraz hashe jako niezmienną próbkę; jeżeli dostępne, dołączyć `.mph`, logi i eksporty według rozdziału 9 protokołu.
+2. Dokończyć managed FEM CPU/SLEPc i zaakceptowany pojedynczy punkt jednorodnego C1/DE z dynamicznym demagiem. Obecny diagnostyczny punkt dense-oracle nie jest wynikiem produkcyjnym.
+3. Uruchomić C0 w Γ i C1 w Γ dla kontroli jednostek, demagu oraz airboxu. Następnie A1 w Γ, X i M, ze stanem równowagi A1 wyznaczonym raz i użytym dla wszystkich `k`.
+4. Po poprawnych residualach i metadanych rozszerzyć A1 do 61 punktów / 24 żądanych modów. Dopasować widma przy tych samych `jpath` i `k` jako **nieuporządkowane zbiory modów**, bez nazywania `frequency_order` numerem gałęzi. Raportować błędy absolutne i względne, brakujące/nadmiarowe mody i status jakości każdego punktu.
+5. Wykonać osobne kontrole zbieżności siatki, airboxu i liczby modów oraz kontrolę pól zespolonych, gdy dane referencyjne będą dostępne. Do tego czasu porównanie z CSV jest wstępne, a bramka publikacyjna pozostaje `NOT VERIFIED`.
+
+## Aktualny stan wykonania
+
+Managed build #142 (`65636004e798435ca763c3821088d0cf`) był w stanie `running` przy odbiorze plików. Żaden punkt Fullmag A1 z dostarczonej geometrii nie został jeszcze obliczony i porównany z tym CSV.
+
+Przygotowano `scripts/compare_comsol_a1_frequency_reference.py`. Wczytuje pełne 61×24 CSV, sprawdza kanoniczne współrzędne k i powtórzone Γ, a wynik Fullmag dopuszcza wyłącznie z ukończonego managed runu A1 o zgodnym hashu `eigen/dispersion.csv` oraz nominalnej geometrii i materiale. Dla dostępnych punktów k porównuje lokalne widma przez monotoniczne dopasowanie częstotliwości, zapisuje JSON i opcjonalny wykres punktowy. Raport ma status `frequency_only_unqualified`; nie potwierdza tożsamości modów ani zgodności fizycznej. Weryfikacja źródłowa: pięć interpretowanych testów PASS oraz odczyt rzeczywistego eksportu 61×24 PASS. Użycie po powstaniu managed wyniku A1:
+
+```text
+python scripts/compare_comsol_a1_frequency_reference.py --reference docs/plans/active/eignensolve_non_k0/COMSOL_A1_dispersion.csv --case-dir <managed-run>/a1 --output <comparison-dir>/frequency-only.json --plot <comparison-dir>/frequency-only.png
+```
