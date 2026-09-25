@@ -50,7 +50,7 @@ def test_comparison_matches_local_spectrum_without_claiming_branches(tmp_path: P
     assert report["samples"][0]["sample_index"] == 20
     assert report["samples"][0]["matches"][0]["raw_mode_index"] == 3
     assert report["samples"][0]["matches"][0]["comsol_frequency_hz"] == 9e9
-    assert report["samples"][0]["missing_comsol_modes"] == 22
+    assert report["samples"][0]["uncompared_reference_modes"] == 22
 
 
 def test_reference_rejects_duplicate_or_missing_modes(tmp_path: Path) -> None:
@@ -69,6 +69,20 @@ def test_comparison_rejects_wrong_wave_vector(tmp_path: Path) -> None:
     write_numeric(numeric, kx_offset=1e5)
     with pytest.raises(ValueError, match="wave vector"):
         compare_frequencies(read_reference(reference), numeric)
+
+
+def test_missing_low_mode_cannot_be_hidden_by_subset_assignment(tmp_path: Path) -> None:
+    reference = tmp_path / "reference.csv"
+    numeric = tmp_path / "numeric.csv"
+    write_reference(reference)
+    write_numeric(numeric)
+    rows = numeric.read_text(encoding="utf-8").splitlines()
+    rows[1] = rows[1].replace(",10000000000.0,", ",11000000000.0,")
+    rows[2] = rows[2].replace(",9000000000.0,", ",10000000000.0,")
+    numeric.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    sample = compare_frequencies(read_reference(reference), numeric)["samples"][0]
+    assert [item["comsol_frequency_order"] for item in sample["matches"]] == [1, 2]
+    assert sample["matches"][0]["difference_hz"] == 1e9
 
 
 def test_managed_binding_rejects_tampered_numeric_csv(tmp_path: Path) -> None:

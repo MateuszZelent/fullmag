@@ -130,49 +130,20 @@ def _read_numeric(path: Path, reference: dict[int, list[float]]) -> dict[int, li
     return result
 
 
-def _match_ordered(numeric: list[dict[str, Any]], reference: list[float]) -> list[tuple[int, int]]:
-    """Minimum relative-log-error monotone subset assignment at one k."""
-    count = len(numeric)
-    if count > len(reference):
-        raise ValueError("Fullmag has more modes than the COMSOL reference at one k")
-    cost = [[math.inf] * (len(reference) + 1) for _ in range(count + 1)]
-    choice = [[False] * (len(reference) + 1) for _ in range(count + 1)]
-    for j in range(len(reference) + 1):
-        cost[0][j] = 0.0
-    for i in range(1, count + 1):
-        for j in range(1, len(reference) + 1):
-            skip = cost[i][j - 1]
-            match = cost[i - 1][j - 1] + abs(math.log(numeric[i - 1]["frequency_hz"] / reference[j - 1]))
-            if match < skip:
-                cost[i][j] = match
-                choice[i][j] = True
-            else:
-                cost[i][j] = skip
-    pairs: list[tuple[int, int]] = []
-    i, j = count, len(reference)
-    while i:
-        if not j:
-            raise ValueError("mode assignment failed")
-        if choice[i][j]:
-            pairs.append((i - 1, j - 1))
-            i -= 1
-        j -= 1
-    return list(reversed(pairs))
-
-
 def compare_frequencies(reference: dict[int, list[float]], numeric_path: Path) -> dict[str, Any]:
     """Create a provisional, frequency-only comparison for available samples."""
     numeric = _read_numeric(numeric_path, reference)
     samples: list[dict[str, Any]] = []
     for sample in sorted(numeric):
         modes = sorted(numeric[sample], key=lambda mode: mode["frequency_hz"])
+        if len(modes) > REFERENCE_MODES:
+            raise ValueError("Fullmag has more modes than the COMSOL reference at one k")
         matches = []
-        for index, reference_index in _match_ordered(modes, reference[sample]):
-            mode = modes[index]
-            f_ref = reference[sample][reference_index]
+        for rank, mode in enumerate(modes):
+            f_ref = reference[sample][rank]
             matches.append({
                 **mode,
-                "comsol_frequency_order": reference_index + 1,
+                "comsol_frequency_order": rank + 1,
                 "comsol_frequency_hz": f_ref,
                 "difference_hz": mode["frequency_hz"] - f_ref,
                 "relative_difference": (mode["frequency_hz"] - f_ref) / f_ref,
@@ -181,15 +152,17 @@ def compare_frequencies(reference: dict[int, list[float]], numeric_path: Path) -
             "sample_index": sample,
             "k_vector_rad_per_m": [*_k(sample), 0.0],
             "matches": matches,
-            "missing_comsol_modes": REFERENCE_MODES - len(modes),
+            "uncompared_reference_modes": REFERENCE_MODES - len(modes),
+            "low_mode_completeness": "unverified",
         })
     return {
         "schema_version": "fullmag.comsol-a1-frequency-comparison.v1",
         "status": "frequency_only_unqualified",
+        "comparison_policy": "local_ascending_frequency_rank_no_gap_filling",
         "limitations": [
-            "COMSOL provenance, mesh, airbox, equilibrium, imaginary frequencies and complex mode fields are unavailable",
+            "independent COMSOL provenance and resolved mesh/airbox/equilibrium evidence, imaginary frequencies and complex mode fields are unavailable",
             "frequency_order is local sorting, not a tracked physical band",
-            "subset matching is an optimal frequency assignment, not mode identity proof",
+            "frequency rank comparison does not prove spectral completeness or mode identity",
         ],
         "sample_count": len(samples),
         "samples": samples,
