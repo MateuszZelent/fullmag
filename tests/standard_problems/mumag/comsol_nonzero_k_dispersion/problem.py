@@ -29,8 +29,10 @@ from tests.standard_problems.mumag.comsol_nonzero_k_dispersion.config import (
     EIGEN_SOLVER_MAX_LINEAR_ITERATIONS,
     EIGEN_SOLVER_MAX_OUTER_ITERATIONS,
     EIGEN_SOLVER_RTOL,
+    FILM_THICKNESS_M,
     FREQUENCY_WINDOW_HZ,
     GAMMA_M_PER_A_S,
+    HOLE_RADIUS_M,
     INTERFACE_HMAX_M,
     INTERFACE_THICKNESS_M,
     INTERFACE_TRANSITION_DISTANCE_M,
@@ -81,13 +83,13 @@ study.pbc(
 study.objects.mesh.defaults(periodic_pair_ids=["x_faces", "y_faces"])
 
 film = fm.Box(
-    size=(A_LAT_M, A_LAT_M, 10.0e-9),
+    size=(A_LAT_M, A_LAT_M, FILM_THICKNESS_M),
     name="full_film",
 )
 if CASE.has_hole:
     hole = fm.Cylinder(
-        radius=50.0e-9,
-        height=10.0e-9,
+        radius=HOLE_RADIUS_M,
+        height=FILM_THICKNESS_M,
         name="air_hole",
     )
     magnetic_shape = film - hole
