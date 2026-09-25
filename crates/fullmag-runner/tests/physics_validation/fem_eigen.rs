@@ -58,6 +58,8 @@ fn fem_eigen_smoke_completes_without_errors() {
         OutputIR::EigenMode {
             field: "mode".to_string(),
             indices: vec![0u32],
+            branches: vec![],
+            sample_selector: None,
         },
     ];
 
@@ -224,6 +226,8 @@ fn fem_eigen_modes_are_non_trivial() {
         OutputIR::EigenMode {
             field: "mode".to_string(),
             indices: vec![0u32, 1u32],
+            branches: vec![],
+            sample_selector: None,
         },
     ];
 
@@ -1668,6 +1672,7 @@ fn fem_eigen_single_k_dispersion_request_writes_v2_dispersion_artifact() {
             },
             OutputIR::DispersionCurve {
                 name: "dispersion".to_string(),
+                include_branch_table: true,
             },
         ],
     )

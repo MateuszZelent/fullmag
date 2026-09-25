@@ -232,24 +232,21 @@ class ProcessResourceTracker:
 
 
 def _probe_docker_root(storage_path: Path) -> tuple[str, str, str | None]:
-    """Find actual docker storage or backing root path on Linux or Windows."""
+    """Measure daemon storage only when explicitly mounted in this namespace."""
     try:
-        from local_runner.coordinator import docker
-        out = docker(["info", "--format", "{{.DockerRootDir}}"]).strip()
-        if out and os.path.exists(out):
-            return out, f"Docker backing storage ({out})", "ext4"
+        if Path('/var/run/docker.sock').exists():
+            from local_runner.unix_docker import docker
+        else:
+            from local_runner.coordinator import docker
+        info = json.loads(docker(["info"]))
+        out = info.get('DockerRootDir')
+        # A daemon path is not automatically a path in the coordinator's
+        # filesystem. Ordinary Docker Desktop folders can be unrelated to its
+        # backing disk; only an explicit mount is eligible for measurement.
+        if isinstance(out, str) and os.path.ismount(out):
+            return out, f"Docker storage mount ({out})", None
     except Exception:
         pass
-
-    candidates = [
-        ("/var/lib/docker", "Docker backing storage (/var/lib/docker)", "ext4"),
-        ("/run/desktop/mnt/host", "Docker Desktop host mount", "overlay"),
-        (os.path.join(os.environ.get("ProgramData", "C:\\ProgramData"), "DockerDesktop"), "Docker Desktop data root", "NTFS"),
-        (str(storage_path.anchor if hasattr(storage_path, "anchor") and storage_path.anchor else "/"), "Host backing filesystem", "local"),
-    ]
-    for path_str, name, fs in candidates:
-        if os.path.exists(path_str):
-            return path_str, name, fs
     return str(storage_path), "Docker backing storage", None
 
 
@@ -267,6 +264,7 @@ class ObservabilityHub:
         self._plans: dict[str, dict[str, Any]] = {}
         self._resources_cache: dict[str, Any] | None = None
         self._resources_cache_time: float = 0.0
+        self._resources_cache_queue = None
         self._init_default_events()
         self._init_metrics_history()
 
@@ -424,7 +422,11 @@ class ObservabilityHub:
             try:
                 data = json.loads(policy_path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
-                    return {**_DEFAULT_POLICY, **data}
+                    policy = {**_DEFAULT_POLICY, **data}
+                    policy['mode'] = 'preview'
+                    policy['mode_supported'] = ['preview']
+                    policy['automatic_mode_available'] = False
+                    return policy
             except Exception:
                 pass
         return dict(_DEFAULT_POLICY)
@@ -605,7 +607,7 @@ class ObservabilityHub:
                 "id": "docker-backing-vhdx",
                 "name": docker_name,
                 "mount_point": docker_path,
-                "filesystem": docker_fs or "ext4",
+                "filesystem": docker_fs,
                 "total_bytes": d_total,
                 "used_bytes": d_used,
                 "free_bytes": d_free,
@@ -621,7 +623,8 @@ class ObservabilityHub:
     def get_storage_resources(self, queue=None) -> dict[str, Any]:
         """Aggregate categorized storage inventory with protection rationales."""
         now = time.time()
-        if self._resources_cache and (now - self._resources_cache_time < 10.0) and queue is None:
+        if (self._resources_cache and now - self._resources_cache_time < 10.0
+                and self._resources_cache_queue is queue):
             return self._resources_cache
 
         pinned = self.get_pinned()
@@ -1001,6 +1004,7 @@ class ObservabilityHub:
         }
         self._resources_cache = result
         self._resources_cache_time = now
+        self._resources_cache_queue = queue
         return result
 
     # -------------------------------------------------------------------------
@@ -1110,7 +1114,7 @@ class ObservabilityHub:
                                 accounted_identities.add(ident)
 
             volumes = self.get_storage_volumes()
-            free_before = volumes[0]["free_bytes"] if volumes and volumes[0]["free_bytes"] is not None else 0
+            free_before = volumes[0].get("free_bytes") if volumes else None
             estimated_reclaim = sum(c["size_bytes"] for c in candidates)
 
             plan_record = {
@@ -1124,7 +1128,7 @@ class ObservabilityHub:
                 "retained": retained,
                 "estimated_reclaimed_bytes": estimated_reclaim,
                 "disk_free_before_bytes": free_before,
-                "disk_free_after_estimated_bytes": free_before + estimated_reclaim,
+                "disk_free_after_estimated_bytes": free_before + estimated_reclaim if free_before is not None else None,
                 "raw_engine_plan": raw_plan,
             }
             self._plans[plan_id] = plan_record
@@ -1280,11 +1284,16 @@ def build_job_timeline(job: Mapping[str, Any], storage_root: Path | str) -> list
             "frontend-build": 4,
         }
         for st_info in receipt_data["stages"]:
+            if not isinstance(st_info, dict):
+                continue
             s_name = st_info.get("name")
             if s_name in stage_map:
                 idx = stage_map[s_name]
                 s_code = st_info.get("exit_code")
-                stages[idx]["status"] = "succeeded" if s_code == 0 else "failed"
+                stages[idx]["status"] = (
+                    "succeeded" if s_code == 0 else
+                    "failed" if isinstance(s_code, int) else "pending"
+                )
                 stages[idx]["started_at"] = st_info.get("started_at")
                 stages[idx]["exit_code"] = s_code
                 dur_ms = st_info.get("duration_ms")
@@ -1292,15 +1301,20 @@ def build_job_timeline(job: Mapping[str, Any], storage_root: Path | str) -> list
                     stages[idx]["duration_seconds"] = round(dur_ms / 1000.0, 2)
 
         # Stage 5: receipt-verification
-        if receipt_data.get("state") == "succeeded" and all(s.get("exit_code") == 0 for s in receipt_data["stages"]):
+        # A worker receipt is an input to coordinator verification, not proof
+        # that artifact hashes were accepted or the queue has completed.
+        if state == "succeeded":
             stages[5]["status"] = "succeeded"
             stages[5]["started_at"] = receipt_data.get("finished_at")
+        elif state in ("running", "cancel_requested"):
+            stages[5]["status"] = "running"
         else:
-            stages[5]["status"] = "failed" if state == "failed" else "cancelled"
+            stages[5]["status"] = state if state in ("failed", "cancelled") else "pending"
 
         # Stage 6: result
-        stages[6]["status"] = state if state in ("succeeded", "failed", "cancelled") else "succeeded"
-        stages[6]["exit_code"] = exit_code if exit_code is not None else (0 if stages[6]["status"] == "succeeded" else 1)
+        stages[6]["status"] = state if state in ("succeeded", "failed", "cancelled") else "pending"
+        if stages[6]["status"] != "pending":
+            stages[6]["exit_code"] = exit_code
         return stages
 
     # Case B: No complete build receipt yet (job is running or ended abnormally)
@@ -1325,12 +1339,12 @@ def build_job_timeline(job: Mapping[str, Any], storage_root: Path | str) -> list
     stage_ended = {}
     if worker_log_text:
         for _, prefix in stage_prefixes:
-            end_match = re.search(rf"\[fullmag runner\] stage {re.escape(prefix)} end exit_code=(\d+)", worker_log_text)
+            end_match = re.search(rf"\[fullmag runner\] stage {re.escape(prefix)} end exit_code=(-?\d+)", worker_log_text)
             if end_match:
                 code = int(end_match.group(1))
                 stage_ended[prefix] = code
 
-    if state == "running":
+    if state in ("running", "cancel_requested"):
         if started_at:
             stages[1]["status"] = "succeeded"
             if stage_ended:
@@ -1339,6 +1353,8 @@ def build_job_timeline(job: Mapping[str, Any], storage_root: Path | str) -> list
                         code = stage_ended[prefix]
                         stages[idx]["status"] = "succeeded" if code == 0 else "failed"
                         stages[idx]["exit_code"] = code
+                        if code != 0:
+                            break
                     else:
                         stages[idx]["status"] = "running"
                         break

@@ -29,6 +29,10 @@ jobs:
         run: python -m pip install -e packages/fullmag-py
 
       - name: Run Rust quantity, API and CLI contracts
+        env:
+          # The router contract serializes a full SceneDocument; keep the
+          # test worker stack large enough for its nested serde traversal.
+          RUST_MIN_STACK: 8388608
         run: ./scripts/ci/run_frontend3d_required_gate.sh rust-quantity-api-cli-contracts
 
   generated-api-determinism:

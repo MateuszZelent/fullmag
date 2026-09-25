@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useMemo, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import { decodeFieldVector } from "@/kernel/api/codecs";
@@ -331,32 +331,14 @@ function useFieldMapModuleController() {
       selectedFieldContext.stageId,
     ],
   );
-  const retainedPlanarFrameRef = useRef<{
-    identityKey: string;
-    model: NonNullable<typeof freshRenderModel>;
-  } | null>(null);
-  const retainedPlanarFrame = retainedPlanarFrameRef.current;
+  const deferredFreshRenderModel = useDeferredValue(freshRenderModel);
+  const deferredPlanarViewIdentityKey = useDeferredValue(planarViewIdentityKey);
   const renderModel =
     freshRenderModel ??
-    (retainedPlanarFrame &&
-    retainedPlanarFrame.identityKey === planarViewIdentityKey
-      ? retainedPlanarFrame.model
+    (deferredFreshRenderModel &&
+    deferredPlanarViewIdentityKey === planarViewIdentityKey
+      ? deferredFreshRenderModel
       : null);
-  useEffect(() => {
-    if (freshRenderModel) {
-      retainedPlanarFrameRef.current = {
-        identityKey: planarViewIdentityKey,
-        model: freshRenderModel,
-      };
-      return;
-    }
-    if (
-      retainedPlanarFrameRef.current &&
-      retainedPlanarFrameRef.current.identityKey !== planarViewIdentityKey
-    ) {
-      retainedPlanarFrameRef.current = null;
-    }
-  }, [freshRenderModel, planarViewIdentityKey]);
   const pinnedAxisState = useMemo(() => {
     if (!renderModel || !probe.data) return null;
     const axisFrame = {
@@ -456,7 +438,6 @@ function useFieldMapModuleController() {
     canonicalPlanar,
     canonicalSampleError,
     evidence,
-    frame,
     mask,
     meshOverlay,
     meta,
@@ -479,7 +460,6 @@ export default function FieldMapModule() {
     canonicalPlanar,
     canonicalSampleError,
     evidence,
-    frame,
     mask,
     meshOverlay,
     meta,

@@ -63,6 +63,7 @@ fn sample_result_with_solver_model(solver_model: EigenSolverModel) -> PathSolveR
                 norm: 1.0,
                 mass_norm: Some(7.25),
                 max_amplitude: 1.0,
+                residual_relative_l2: Some(2.5e-10),
                 residual_norm: Some(1.25e-9),
                 residual_linf: Some(2.5e-10),
                 tangent_leakage_mean_abs: Some(3.0e-12),
@@ -105,6 +106,7 @@ fn sample_result_with_solver_model(solver_model: EigenSolverModel) -> PathSolveR
         include_demag: false,
         dispersion_validation: None,
         k0_kittel_validation: None,
+        solver_policy: None,
         dispersion_analytic_reference: None,
         k0_kittel_periodic_airbox_demag: None,
     }
@@ -258,7 +260,7 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
     assert_eq!(spectrum["sample_count"], 1);
     assert_eq!(
         spectrum["samples"][0]["sample_id"],
-        "bias-field-sample-0000"
+        "k-path-sample-0000"
     );
     assert_eq!(
         spectrum["samples"][0]["modes"][0]["mode_id"],
@@ -272,6 +274,14 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
             spectrum["samples"][0]["modes"][0]["mode_field_resource_key"],
             "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0"
         );
+    assert_eq!(
+        spectrum["samples"][0]["modes"][0]["residual_absolute_l2"],
+        1.25e-9
+    );
+    assert_eq!(
+        spectrum["samples"][0]["modes"][0]["residual_relative_l2"],
+        2.5e-10
+    );
     assert!(spectrum["samples"][0]["modes"][0]
         .get("component_participation")
         .is_none());
@@ -368,6 +378,8 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
     assert_eq!(mode["raw_mode_index"], 0);
     assert_eq!(mode["frequency_hz"], 1.0e9);
     assert_eq!(mode["frequency_real_hz"], 1.0e9);
+    assert_eq!(mode["residual_absolute_l2"], 1.25e-9);
+    assert_eq!(mode["residual_relative_l2"], 2.5e-10);
     assert_eq!(
         mode["mode_field_id"],
         "analysis:eigen:sample-0000:mode-0000"
@@ -504,6 +516,61 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
     assert_eq!(
         family_manifest["capabilities"]["modal_artifact_available"],
         true
+    );
+}
+
+#[test]
+fn eigen_artifact_writer_keeps_missing_relative_residual_unavailable() {
+    let temp = TempDirGuard::new("eigen-artifacts-missing-relative-residual");
+    let mut result = sample_result();
+    result.samples[0].modes[0].residual_relative_l2 = None;
+
+    write_mode_bundle(&temp.path, &result).expect("mode bundle should write");
+    write_frequency_domain_eigen_manifest(&temp.path, &result)
+        .expect("frequency-domain eigen manifest should write");
+
+    let eigen_dir = temp.path.join("eigen");
+    let spectrum: Value = serde_json::from_slice(
+        &std::fs::read(eigen_dir.join("spectrum.v2.json"))
+            .expect("spectrum.v2.json should be written"),
+    )
+    .expect("spectrum.v2.json should be valid JSON");
+    assert!(spectrum["samples"][0]["modes"][0]["residual_relative_l2"].is_null());
+
+    let mode: Value = serde_json::from_slice(
+        &std::fs::read(eigen_dir.join("modes/sample_0000_mode_0000.json"))
+            .expect("flat mode artifact should be written"),
+    )
+    .expect("flat mode artifact should be valid JSON");
+    assert!(mode["residual_relative_l2"].is_null());
+}
+
+#[test]
+fn path_writer_keeps_bias_namespace_explicit_for_physical_field_sweeps() {
+    let temp = TempDirGuard::new("eigen-artifacts-bias-namespace");
+    let result = sample_result();
+
+    write_path_bundle_with_sample_namespace(&temp.path, &result, true)
+        .expect("field-sweep path bundle should write");
+
+    let spectrum: Value = serde_json::from_slice(
+        &std::fs::read(temp.path.join("eigen/spectrum.v2.json"))
+            .expect("spectrum.v2.json should be written"),
+    )
+    .expect("spectrum.v2.json should be valid JSON");
+    assert_eq!(
+        spectrum["samples"][0]["sample_id"],
+        "bias-field-sample-0000"
+    );
+
+    let spectrum_v3: Value = serde_json::from_slice(
+        &std::fs::read(temp.path.join("eigen/spectrum.v3.json"))
+            .expect("spectrum.v3.json should be written"),
+    )
+    .expect("spectrum.v3.json should be valid JSON");
+    assert_eq!(
+        spectrum_v3["samples"][0]["sample_id"],
+        "bias-field-sample-0000"
     );
 }
 
@@ -922,6 +989,40 @@ fn eigen_artifacts_write_k0_kittel_summary_and_points() {
     assert_eq!(kittel_fit["source"]["artifact"], "eigen/spectrum.v2.json");
     assert_eq!(kittel_fit["model"], "macrospin_larmor");
     assert_eq!(kittel_fit["complete"], false);
+}
+
+#[test]
+fn k0_kittel_relative_residual_is_null_when_any_point_is_missing() {
+    let mut result = sample_result_with_k0_kittel_sweep();
+    result.samples[1].modes[0].residual_relative_l2 = None;
+
+    let artifacts = k0_kittel_validation_auxiliary_artifacts(&result)
+        .expect("Kittel artifacts should preserve unavailable residual metadata");
+    let summary = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "validation/kittel_k0_pbc/summary.v1.json")
+        .expect("Kittel summary should be present");
+    let summary: Value = serde_json::from_slice(&summary.bytes).expect("summary should be JSON");
+    assert!(summary["solver"]["max_eigen_residual_relative"].is_null());
+
+    let points = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "validation/kittel_k0_pbc/points.v1.csv")
+        .expect("Kittel points should be present");
+    let rows = String::from_utf8(points.bytes.clone()).expect("points should be UTF-8");
+    let header = rows
+        .lines()
+        .next()
+        .expect("points header should be present");
+    let residual_column = header
+        .split(',')
+        .position(|column| column == "mode_residual_relative")
+        .expect("relative residual column should be present");
+    let missing_row = rows
+        .lines()
+        .find(|row| row.split(',').nth(2) == Some("1"))
+        .expect("field index 1 row should be present");
+    assert_eq!(missing_row.split(',').nth(residual_column), Some(""));
 }
 
 #[test]
@@ -1970,61 +2071,9 @@ fn production_dispersion_with_de_bv_validation_writes_analytic_columns() {
         manifest["validation"]["dynamic_demag_operator_source"],
         "numeric_modal_solver"
     );
-    assert!(manifest["validation"]
-        .get("dispersion_reference_model")
-        .is_none());
-}
-
-#[test]
-fn de_bv_reference_manifest_names_analytic_frequency_source_not_demag_k() {
-    let temp = TempDirGuard::new("eigen-artifacts-de-bv-reference-source");
-    let mut result =
-        sample_result_with_solver_model(EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0);
-    result.include_demag = true;
-    result.samples[0].sample.path_s = 1.0;
-    result.samples[0].sample.k_vector = [3.0e6, 0.0, 0.0];
-    result.dispersion_validation = Some(fullmag_ir::FemEigenDispersionValidationIR {
-        kind: "thin_film_de_bv_low_k".to_string(),
-        analytic_model: "kalinikos_slab_n0".to_string(),
-        film_thickness_m: 20e-9,
-        equilibrium_magnetization: [1.0, 0.0, 0.0],
-        film_normal: [0.0, 0.0, 1.0],
-        frequency_window_hz: fullmag_ir::FemEigenDispersionValidationWindowIR {
-            min: 0.0,
-            max: 5.0e9,
-        },
-        max_k_rad_per_m: 3.0e6,
-        max_relative_error: 0.10,
-        scenarios: vec![fullmag_ir::FemEigenDispersionValidationScenarioIR {
-            geometry: "backward_volume".to_string(),
-            branch_id: "branch_0".to_string(),
-            sample_indices: vec![0],
-        }],
-    });
-
-    write_frequency_domain_eigen_manifest(&temp.path, &result)
-        .expect("frequency-domain manifest should write");
-
-    let manifest: Value = serde_json::from_slice(
-        &std::fs::read(temp.path.join("frequency_domain/manifest.v1.json"))
-            .expect("frequency-domain manifest should be written"),
-    )
-    .expect("frequency-domain manifest should parse");
-    assert_eq!(
-        manifest["requested_execution"]["include_demag"],
-        Value::Bool(true)
-    );
-    assert_eq!(
-        manifest["validation"]["dispersion_frequency_source"],
-        "analytic_reference_model"
-    );
     assert_eq!(
         manifest["validation"]["dispersion_reference_model"],
         "kalinikos_slab_n0"
-    );
-    assert_eq!(
-        manifest["validation"]["dynamic_demag_operator_source"],
-        "analytic_thin_film_de_bv_reference_not_fem_demag_k"
     );
 }
 

@@ -30,10 +30,11 @@ use crate::{
 };
 
 use fullmag_session::{
-    capture_checkpoint, determine_restore_class, inspect_fms, pack_fms, preflight_fms, unpack_fms,
-    CaptureRequest, CheckpointCompatibility, CheckpointSnapshotProvider, FieldCapturePolicy,
-    FmsExportProfile, FmsPreflight, FmsRunManifest, FmsSessionManifest, FmsWorkspaceManifest,
-    PackOptions, SaveProfile, SessionInspection, SessionStore, SolverEnergies,
+    capture_checkpoint, determine_restore_class, inspect_fms, pack_fms, preflight_fms,
+    unpack_fms_for_visualization, CaptureRequest, CheckpointCompatibility,
+    CheckpointSnapshotProvider, FieldCapturePolicy, FmsExportProfile, FmsPreflight, FmsRunManifest,
+    FmsSessionManifest, FmsWorkspaceManifest, PackOptions, SaveProfile, SessionInspection,
+    SessionStore, SolverEnergies,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1424,6 +1425,7 @@ fn publish_imported_session(
     fms_bytes: &[u8],
     preflight: &FmsPreflight,
     persisted: &PersistedCurrentLiveSnapshot,
+    restore_mode: SessionRestoreMode,
     import_id: &str,
 ) -> Result<PathBuf, ApiError> {
     let imports = session_store_root(state).join("imports");
@@ -1435,8 +1437,17 @@ fn publish_imported_session(
     let result = (|| -> Result<(), ApiError> {
         let staging_store = SessionStore::open(&staging)
             .map_err(|error| ApiError::internal(format!("creating import staging: {error}")))?;
-        let imported_session = unpack_fms(Cursor::new(fms_bytes), &staging_store)
-            .map_err(|error| ApiError::bad_request(format!("invalid_fms_unpack: {error}")))?;
+        let imported_session = (match restore_mode {
+            SessionRestoreMode::VisualizationOnly | SessionRestoreMode::ReplaceProject => {
+                unpack_fms_for_visualization(Cursor::new(fms_bytes), &staging_store)
+            }
+            SessionRestoreMode::Resume => {
+                return Err(ApiError::conflict(
+                    "checkpoint_restore_unsupported: this runtime cannot restore an FMS checkpoint",
+                ));
+            }
+        })
+        .map_err(|error| ApiError::bad_request(format!("invalid_fms_unpack: {error}")))?;
         if imported_session.session_id != preflight.session.session_id {
             return Err(ApiError::bad_request(
                 "invalid_fms_unpack: session manifest changed during import",
@@ -1531,8 +1542,14 @@ pub(crate) async fn import_session_commit(
         run.artifact_dir = restored_artifact_dir;
     }
     let restored: SessionStateResponse = persisted.clone().into();
-    let published_root =
-        publish_imported_session(&state, &fms_bytes, &preflight, &persisted, &import_id)?;
+    let published_root = publish_imported_session(
+        &state,
+        &fms_bytes,
+        &preflight,
+        &persisted,
+        req.restore_mode,
+        &import_id,
+    )?;
     let published_store = SessionStore::open(&published_root)
         .map_err(|error| ApiError::internal(format!("opening published import: {error}")))?;
 

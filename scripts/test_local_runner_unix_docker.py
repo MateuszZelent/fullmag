@@ -1,5 +1,6 @@
 import unittest
 import struct
+from unittest.mock import patch
 from local_runner.unix_docker import create_payload, decode_logs
 from local_runner.container_main import desktop_daemon_root
 
@@ -52,7 +53,7 @@ class UnixDockerTests(unittest.TestCase):
             },
         }
 
-        with patch("local_runner.unix_docker.engine", return_value=json.dumps(fake_stats).encode()):
+        with patch("local_runner.unix_docker.engine", return_value=json.dumps(fake_stats).encode()) as mock_engine:
             result = docker(["stats", "--no-stream", "container-123"])
             self.assertIn("52428800B / 1073741824B", result)
             self.assertIn("40.0%", result)
@@ -61,6 +62,43 @@ class UnixDockerTests(unittest.TestCase):
             # Test argument position variation
             result_rev = docker(["stats", "container-123", "--no-stream"])
             self.assertEqual(result, result_rev)
+
+            # The format value is not a container ID, regardless of flag order.
+            result_with_format = docker([
+                "stats", "container-123", "--format", "{{.MemUsage}}", "--no-stream"
+            ])
+            self.assertEqual(result, result_with_format)
+            self.assertEqual(
+                "/containers/container-123/stats?stream=false",
+                mock_engine.call_args_list[-1][0][1],
+            )
+
+    def test_stats_operation_preserves_real_zero_counters(self):
+        import json
+        from unittest.mock import patch
+        from local_runner.unix_docker import docker
+
+        zero_stats = {
+            "memory_stats": {"usage": 0, "limit": 0},
+            "cpu_stats": {
+                "cpu_usage": {"total_usage": 100},
+                "system_cpu_usage": 1000,
+                "online_cpus": 2,
+            },
+            "precpu_stats": {
+                "cpu_usage": {"total_usage": 100},
+                "system_cpu_usage": 500,
+            },
+            "blkio_stats": {
+                "io_service_bytes_recursive": [
+                    {"op": "Read", "value": 0},
+                    {"op": "Write", "value": 0},
+                ]
+            },
+        }
+
+        with patch("local_runner.unix_docker.engine", return_value=json.dumps(zero_stats).encode()):
+            self.assertEqual("0B / 0B|0.0%|0B / 0B", docker(["stats", "container-zero"]))
 
     def test_stats_operation_with_null_and_empty_metrics(self):
         import json
@@ -74,7 +112,18 @@ class UnixDockerTests(unittest.TestCase):
         }
         with patch("local_runner.unix_docker.engine", return_value=json.dumps(empty_stats).encode()):
             result = docker(["stats", "--no-stream", "container-empty"])
-            self.assertEqual("0B / 0B|0.0%|0B / 0B", result)
+            self.assertEqual("N/A / N/A|N/A|N/A / N/A", result)
+
+    def test_stats_operation_rejects_unsupported_or_ambiguous_arguments(self):
+        from local_runner.unix_docker import docker
+
+        with patch("local_runner.unix_docker.engine", return_value=b"{}"):
+            with self.assertRaises(ValueError):
+                docker(["stats", "--format"])
+            with self.assertRaises(ValueError):
+                docker(["stats", "container-a", "--format", "{{.ID}}", "container-b"])
+            with self.assertRaises(ValueError):
+                docker(["stats", "--all", "container-a"])
 
 
 if __name__ == '__main__':

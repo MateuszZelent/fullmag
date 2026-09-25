@@ -36,7 +36,7 @@ pub(super) struct ModeSummaryArtifact {
     #[serde(skip_serializing_if = "Option::is_none")]
     residual_norm: Option<f64>,
     residual_absolute_l2: f64,
-    residual_relative_l2: f64,
+    residual_relative_l2: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     residual_linf: Option<f64>,
     mass_norm: f64,
@@ -139,7 +139,9 @@ pub(super) fn summarize_mode(
     let mode_field_id = eigen_mode_field_id(sample.sample.sample_index, mode.raw_mode_index);
     let mode_field_resource_key = eigen_mode_field_resource_key(&mode_field_id);
     let residual_absolute_l2 = finite_or_default(mode.residual_norm, 0.0);
-    let residual_relative_l2 = residual_absolute_l2;
+    let residual_relative_l2 = mode
+        .residual_relative_l2
+        .filter(|value| value.is_finite() && *value >= 0.0);
     let residual_linf = finite_or_default(mode.residual_linf, residual_absolute_l2);
     let tangent_leakage_mean_abs = finite_or_default(mode.tangent_leakage_mean_abs, 0.0);
     let tangent_leakage_max_abs = finite_or_default(mode.tangent_leakage_max_abs, 0.0);
@@ -420,29 +422,20 @@ fn write_eigen_solver_diagnostics_artifact(
 
 fn dispersion_frequency_source(result: &PathSolveResult) -> Option<&'static str> {
     result.dispersion_validation.as_ref()?;
-    if result.solver_model == EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0 {
-        Some("analytic_reference_model")
-    } else {
-        Some("numeric_modal_solver_with_analytic_comparison")
-    }
+    // The validation block declares an independent comparison oracle. It is
+    // evaluated after the native modal solve and must never select an analytic
+    // replacement for that solve.
+    Some("numeric_modal_solver_with_analytic_comparison")
 }
 
 fn dispersion_reference_model(result: &PathSolveResult) -> Option<&'static str> {
-    result.dispersion_validation.as_ref()?;
-    if result.solver_model == EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0 {
-        Some("kalinikos_slab_n0")
-    } else {
-        None
-    }
+    let validation = result.dispersion_validation.as_ref()?;
+    (validation.analytic_model == "kalinikos_slab_n0").then_some("kalinikos_slab_n0")
 }
 
 fn dispersion_dynamic_demag_operator_source(result: &PathSolveResult) -> Option<&'static str> {
     result.dispersion_validation.as_ref()?;
-    if result.solver_model == EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0 {
-        Some("analytic_thin_film_de_bv_reference_not_fem_demag_k")
-    } else {
-        Some("numeric_modal_solver")
-    }
+    Some("numeric_modal_solver")
 }
 
 pub fn write_frequency_domain_eigen_manifest(
@@ -677,13 +670,28 @@ fn eigen_mode_field_resources(result: &PathSolveResult) -> Vec<String> {
 }
 
 pub fn write_path_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::Result<()> {
+    write_path_bundle_with_sample_namespace(base_dir, result, false)
+}
+
+/// Write the path bundle while preserving the identity of the solved sample
+/// axis.  Bias-field samples use the legacy field-sweep namespace because the
+/// field-sweep readers already key on it; k-path samples use an explicit
+/// k-path namespace so a zero-k Gamma point cannot be mistaken for a field
+/// sample.  The explicit flag comes from the plan, where the runner can still
+/// distinguish a physical bias sweep from a k-path whose vectors happen to be
+/// zero.
+pub fn write_path_bundle_with_sample_namespace(
+    base_dir: &Path,
+    result: &PathSolveResult,
+    bias_field_sweep: bool,
+) -> std::io::Result<()> {
     let eigen_dir = base_dir.join("eigen");
     fs::create_dir_all(&eigen_dir)?;
     let samples: Vec<SampleArtifact> = result
         .samples
         .iter()
         .map(|sample| SampleArtifact {
-            sample_id: format!("bias-field-sample-{:04}", sample.sample.sample_index),
+            sample_id: path_sample_id(sample, bias_field_sweep),
             sample_index: sample.sample.sample_index,
             label: sample.sample.label.clone(),
             k_vector: sample.sample.k_vector,
@@ -725,10 +733,7 @@ pub fn write_path_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 })
                 .collect::<Vec<_>>();
             serde_json::json!({
-                "sample_id": format!(
-                    "bias-field-sample-{:04}",
-                    sample.sample.sample_index
-                ),
+                "sample_id": path_sample_id(sample, bias_field_sweep),
                 "sample_index": sample.sample.sample_index,
                 "label": sample.sample.label,
                 "k_vector": sample.sample.k_vector,
@@ -764,6 +769,17 @@ pub fn write_path_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
         serde_json::to_vec_pretty(&samples).unwrap(),
     )?;
     Ok(())
+}
+
+fn path_sample_id(sample: &SingleKSolveResult, bias_field_sweep: bool) -> String {
+    let prefix = if bias_field_sweep {
+        "bias-field-sample"
+    } else if sample.sample.segment_index.is_some() {
+        "k-path-sample"
+    } else {
+        "k-sample"
+    };
+    format!("{prefix}-{:04}", sample.sample.sample_index)
 }
 
 pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::Result<()> {
@@ -1025,12 +1041,8 @@ pub(super) fn kalinikos_slab_n0_frequency_hz(
 ) -> f64 {
     let exchange_field = 2.0 * exchange_stiffness_j_per_m * k_norm * k_norm
         / (crate::MU0 * saturation_magnetisation_a_per_m);
-    let p_factor = if k_norm == 0.0 {
-        0.0
-    } else {
-        let kd = k_norm * film_thickness_m;
-        1.0 - (1.0 - (-kd).exp()) / kd
-    };
+    let kd = k_norm * film_thickness_m;
+    let p_factor = crate::fem::eigen_math::thin_film_p00(kd);
     let common = bias_field_a_per_m + exchange_field;
     let (factor_a, factor_b) = match geometry {
         "damon_eshbach" => (

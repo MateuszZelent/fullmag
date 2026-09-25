@@ -2064,6 +2064,63 @@ class ProblemApiTests(unittest.TestCase):
             },
         )
 
+    def test_eigen_output_selectors_round_trip_through_script_builder(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("eigen_output_selectors")
+        study.engine("fem")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="film")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.01
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.save("spectrum", spectrum_scope="global")
+        study.save(
+            "mode",
+            field="mode_complex",
+            indices=[0, 2],
+            branches=[4],
+            sample_indices=[0, 2],
+            sample_labels=["Gamma", "X"],
+        )
+        study.save("dispersion", name="bands", include_branch_table=False)
+        study.save(
+            "diagnostics",
+            include_tracking=False,
+            include_overlaps=False,
+        )
+        study.stages.add_eigenmodes(count=5, include_demag=False)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            source = root / "eigen_output_selectors.py"
+            source.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(source, lightweight_assets=True)
+            original_ir = loaded.stages[0].problem.study.to_ir()
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = root / "eigen_output_selectors_rewritten.py"
+            rewritten.write_text(rendered, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(
+                rewritten,
+                lightweight_assets=True,
+            )
+
+        self.assertIn('study.save("mode", field="mode_complex"', rendered)
+        self.assertIn("branches=[4]", rendered)
+        self.assertIn("sample_indices=[0, 2]", rendered)
+        self.assertIn('sample_labels=["Gamma", "X"]', rendered)
+        self.assertIn(
+            'study.save("dispersion", name="bands", include_branch_table=False)',
+            rendered,
+        )
+        self.assertIn(
+            'study.save("diagnostics", include_tracking=False, include_overlaps=False)',
+            rendered,
+        )
+        self.assertEqual(reloaded.stages[0].problem.study.to_ir(), original_ir)
+
     def test_eigenmodes_rejects_frequency_response_outputs(self) -> None:
         with self.assertRaisesRegex(ValueError, "Eigenmodes outputs"):
             fm.Eigenmodes(outputs=[fm.SaveResponse("susceptibility_tensor")])
@@ -7292,17 +7349,44 @@ class ProblemApiTests(unittest.TestCase):
             {"backward_volume", "damon_eshbach"},
         )
 
-    def test_thin_film_de_bv_dispersion_validation_rejects_broad_k_range(self) -> None:
-        with self.assertRaisesRegex(ValueError, "max_k_rad_per_m"):
-            fm.ThinFilmDEBVDispersionValidation(
-                film_thickness_m=80e-9,
-                equilibrium_magnetization=(1.0, 0.0, 0.0),
-                scenarios=[
-                    fm.DispersionValidationScenario("bv", "branch_0", [0, 1, 2]),
-                    fm.DispersionValidationScenario("de", "branch_0", [0, 3, 4]),
-                ],
-                max_k_rad_per_m=4.0e6,
-            )
+    def test_numeric_de_bv_example_has_far_dirichlet_boundaries(self) -> None:
+        import math
+        example = Path(__file__).resolve().parents[3] / "examples/fem_eigenmodes_dispersion_de_bv_low_k.py"
+        loaded = fm.load_problem_from_script(example, lightweight_assets=True)
+        ir = loaded.problem.to_ir(requested_backend="fem", execution_mode="strict", execution_precision="double", include_geometry_assets=False)
+        metadata = ir["problem_meta"]["runtime_metadata"]
+        thickness = metadata["dispersion_validation"]["film_thickness_m"]
+        height = metadata["study_universe"]["size"][2]
+        padding = (height - thickness) / 2
+        self.assertAlmostEqual(padding, 2e-6, delta=1e-15)
+        # Independent uniform-slab Gamma boundary estimate, not a FEM run.
+        h = 0.05 / (4 * math.pi * 1e-7)
+        ms = 140e3
+        nz = 1 - thickness / height
+        boundary_error = 1 - math.sqrt((h + ms * nz) / (h + ms))
+        self.assertLess(boundary_error, 0.01)
+
+    def test_thin_film_de_bv_dispersion_validation_accepts_c1_range(self) -> None:
+        validation = fm.ThinFilmDEBVDispersionValidation(
+            film_thickness_m=10e-9,
+            equilibrium_magnetization=(1.0, 0.0, 0.0),
+            scenarios=[
+                fm.DispersionValidationScenario("bv", "branch_0", [0, 1, 2]),
+                fm.DispersionValidationScenario("de", "branch_0", [0, 3, 4]),
+            ],
+            max_k_rad_per_m=1.5707963267948966e7,
+            frequency_window_hz=(0.0, 15e9),
+        )
+        self.assertEqual(validation.to_ir()["frequency_window_hz"], {"min": 0.0, "max": 15e9})
+        self.assertEqual(validation.to_ir()["max_k_rad_per_m"], 1.5707963267948966e7)
+        for bounds in [(0.0, float("nan")), (0.0, float("inf")), (float("nan"), 15e9)]:
+            with self.assertRaisesRegex(ValueError, "finite"):
+                fm.ThinFilmDEBVDispersionValidation(
+                    film_thickness_m=10e-9,
+                    equilibrium_magnetization=(1.0, 0.0, 0.0),
+                    scenarios=validation.scenarios,
+                    frequency_window_hz=bounds,
+                )
 
     def test_study_k0_kittel_validation_lowers_to_runtime_metadata(self) -> None:
         script = """

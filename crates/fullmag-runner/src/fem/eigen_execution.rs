@@ -1,6 +1,6 @@
 use super::eigen_capability::{
-    native_cpu_modal_window_enabled, native_gpu_k0_kittel_modal_supported,
-    native_gpu_shared_domain_modal_supported,
+    native_cpu_modal_window_enabled, native_cpu_modal_window_has_floquet_dynamic_demag_path,
+    native_gpu_k0_kittel_modal_supported, native_gpu_shared_domain_modal_supported,
 };
 use super::eigen_certificate::{modal_participation_for_mode, modal_participation_mesh_context};
 use super::eigen_constants::{FLOQUET_DYNAMIC_DEMAG_UNSUPPORTED, NATIVE_GPU_K0_KITTEL_SOLVER_KIND};
@@ -39,8 +39,8 @@ use super::eigen_output::{
 use super::eigen_policy::{
     native_modal_damping_policy, native_modal_equilibrium_source_kind,
     native_modal_frequency_max_hz, native_modal_frequency_min_hz, native_modal_k_vector,
-    native_modal_spin_wave_bc_kind, native_modal_target_frequency_hz, native_modal_target_kind,
-    resolved_demag_realization, shared_domain_k0_modal_requested,
+    native_modal_solver_policy, native_modal_spin_wave_bc_kind, native_modal_target_frequency_hz,
+    native_modal_target_kind, resolved_demag_realization, shared_domain_k0_modal_requested,
 };
 use super::eigen_progress::{emit_fem_eigen_progress, FemEigenProgress, FemEigenProgressCallback};
 use super::eigen_projection::{
@@ -48,6 +48,7 @@ use super::eigen_projection::{
     project_complex_mode_to_tangent_basis, project_real_mode_to_tangent_basis, tangent_bases,
 };
 use super::eigen_reduction::build_reduction_map;
+use super::eigen_reduction::k_sampling_contains_nonzero;
 use super::eigen_shared_domain::{
     native_shared_domain_magnetic_assembly_available, native_shared_domain_magnetic_assembly_error,
     shared_domain_k0_runtime_unavailable_error, validate_eigen_equilibrium_certificate,
@@ -377,10 +378,28 @@ fn validate_planned_execution(
             message: "planned_fem_eigen_resolution_missing_at_execution".to_string(),
         });
     }
-    if !shared_domain_k0_modal_requested(plan) {
+    let bounded_k0 = shared_domain_k0_modal_requested(plan);
+    let bounded_floquet = native_cpu_modal_window_has_floquet_dynamic_demag_path(plan);
+    let dynamic_resolution_scope = execution.resolution().is_some_and(|resolution| {
+        resolution
+            .selection_reason
+            .starts_with("fem_eigen.floquet_airbox_dynamic_demag.")
+    });
+    let resolution_engine = execution
+        .resolution()
+        .map(|resolution| resolution.resolved_engine);
+    let scope_matches = match resolution_engine {
+        Some(fullmag_ir::FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc) => bounded_k0,
+        Some(fullmag_ir::FemEigenEngineIR::FloquetAirboxCpuSchurSlepc) => {
+            bounded_floquet || (bounded_k0 && dynamic_resolution_scope)
+        }
+        Some(fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov) => bounded_k0,
+        Some(fullmag_ir::FemEigenEngineIR::Auto) | None => false,
+    };
+    if !scope_matches {
         return Err(RunError {
             message: format!(
-                "planned_fem_eigen_engine_scope_mismatch: engine={} requires bounded periodic_airbox_k0",
+                "planned_fem_eigen_engine_scope_mismatch: engine={} does not match the bounded modal plan scope",
                 execution.engine_id()
             ),
         });
@@ -425,6 +444,16 @@ pub(crate) fn execute_planned_fem_eigen_with_handoff(
     outputs: &[OutputIR],
     handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_planned_fem_eigen_with_handoff_and_progress(execution, plan, outputs, handoff, None)
+}
+
+pub(crate) fn execute_planned_fem_eigen_with_handoff_and_progress(
+    execution: PlannedFemEigenExecution<'_>,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
+) -> Result<ExecutedRun, RunError> {
     validate_planned_execution(execution, plan)?;
     if bias_field_sweep_requested(plan) {
         if handoff.is_some() {
@@ -432,14 +461,14 @@ pub(crate) fn execute_planned_fem_eigen_with_handoff(
                 message: "planned_fem_eigen_sweep_does_not_accept_path_handoff".to_string(),
             });
         }
-        return execute_planned_bias_field_sweep(execution, plan, outputs, None);
+        return execute_planned_bias_field_sweep(execution, plan, outputs, progress);
     }
     execute_fem_eigen_inner(
         plan,
         outputs,
         execution.lane() == FemEigenExecutionLane::Gpu,
         true,
-        None,
+        progress,
         0,
         None,
         handoff,
@@ -501,7 +530,35 @@ pub(crate) fn execute_planned_fem_eigen_with_progress_and_stage_handoff(
         Some(handoff),
         Some(execution),
     )?;
-    bind_stage_continuation_artifacts(&mut run, handoff)?;
+    bind_stage_continuation_artifacts(&mut run, &prepared, handoff)?;
+    Ok(run)
+}
+
+pub(crate) fn execute_planned_fem_eigen_with_stage_handoff(
+    execution: PlannedFemEigenExecution<'_>,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    handoff: &AcceptedFemRelaxStageHandoff,
+) -> Result<ExecutedRun, RunError> {
+    if bias_field_sweep_requested(plan) {
+        validate_planned_execution(execution, plan)?;
+        return execute_planned_bias_field_sweep(execution, plan, outputs, None);
+    }
+    let prepared = prepare_single_k_stage_continuation(plan, handoff)?;
+    validate_planned_execution(execution, &prepared)?;
+    let mut run = execute_fem_eigen_inner(
+        &prepared,
+        outputs,
+        execution.lane() == FemEigenExecutionLane::Gpu,
+        true,
+        None,
+        0,
+        None,
+        None,
+        Some(handoff),
+        Some(execution),
+    )?;
+    bind_stage_continuation_artifacts(&mut run, &prepared, handoff)?;
     Ok(run)
 }
 
@@ -517,6 +574,15 @@ pub(crate) fn execute_cpu_fem_eigen_with_handoff(
     outputs: &[OutputIR],
     handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_cpu_fem_eigen_with_handoff_and_progress(plan, outputs, handoff, None)
+}
+
+pub(crate) fn execute_cpu_fem_eigen_with_handoff_and_progress(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
+) -> Result<ExecutedRun, RunError> {
     if shared_domain_k0_modal_requested(plan)
         && !native_shared_domain_magnetic_assembly_available(plan)
     {
@@ -528,14 +594,14 @@ pub(crate) fn execute_cpu_fem_eigen_with_handoff(
         return Err(error);
     }
     if bias_field_sweep_requested(plan) {
-        return execute_bias_field_sweep(plan, outputs, false, None);
+        return execute_bias_field_sweep(plan, outputs, false, progress);
     }
     execute_fem_eigen_inner(
         plan,
         outputs,
         false,
         native_cpu_modal_window_enabled(plan),
-        None,
+        progress,
         0,
         None,
         handoff,
@@ -598,7 +664,32 @@ pub(crate) fn execute_cpu_fem_eigen_with_progress_and_stage_handoff(
         Some(handoff),
         None,
     )?;
-    bind_stage_continuation_artifacts(&mut run, handoff)?;
+    bind_stage_continuation_artifacts(&mut run, &prepared, handoff)?;
+    Ok(run)
+}
+
+pub(crate) fn execute_cpu_fem_eigen_with_stage_handoff(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    handoff: &AcceptedFemRelaxStageHandoff,
+) -> Result<ExecutedRun, RunError> {
+    if bias_field_sweep_requested(plan) {
+        return execute_bias_field_sweep(plan, outputs, false, None);
+    }
+    let prepared = prepare_single_k_stage_continuation(plan, handoff)?;
+    let mut run = execute_fem_eigen_inner(
+        &prepared,
+        outputs,
+        false,
+        native_cpu_modal_window_enabled(&prepared),
+        None,
+        0,
+        None,
+        None,
+        Some(handoff),
+        None,
+    )?;
+    bind_stage_continuation_artifacts(&mut run, &prepared, handoff)?;
     Ok(run)
 }
 
@@ -638,7 +729,7 @@ pub(crate) fn execute_gpu_fem_eigen_with_handoff(
         return execute_bias_field_sweep(plan, outputs, true, progress);
     }
     if native_gpu_k0_kittel_modal_supported(plan) {
-        return execute_native_gpu_k0_kittel_modal(plan, outputs, handoff);
+        return execute_native_gpu_k0_kittel_modal(plan, outputs, progress, handoff);
     }
 
     if native_gpu_shared_domain_modal_supported(plan) {
@@ -653,6 +744,7 @@ pub(crate) fn execute_gpu_fem_eigen_with_handoff(
         });
     }
 
+    let solver_policy = native_modal_solver_policy(plan);
     let native_result = native_fem::solve_native_modal_eigen(native_fem::NativeModalEigenRequest {
         mesh_asset_id: &plan.mesh_name,
         equilibrium_source_kind: native_modal_equilibrium_source_kind(&plan.equilibrium),
@@ -671,9 +763,9 @@ pub(crate) fn execute_gpu_fem_eigen_with_handoff(
         target_frequency_hz: native_modal_target_frequency_hz(&plan.target),
         frequency_min_hz: native_modal_frequency_min_hz(&plan.target),
         frequency_max_hz: native_modal_frequency_max_hz(&plan.target),
-        residual_tolerance: 1.0e-8,
-        max_outer_iterations: 300,
-        max_linear_iterations: 1000,
+        residual_tolerance: solver_policy.residual_tolerance,
+        max_outer_iterations: solver_policy.max_outer_iterations,
+        max_linear_iterations: solver_policy.max_linear_iterations,
         output_directory: None,
         write_partial_artifacts: false,
         completeness_policy: 0,
@@ -687,6 +779,7 @@ pub(crate) fn execute_gpu_fem_eigen_with_handoff(
         mfem_sparse_operator_problem: None,
         poisson_airbox_block_problem: None,
         shared_domain_problem: None,
+        shared_domain_floquet_periodic_pairs: &[],
     })
     .map_err(|message| RunError { message })?;
 
@@ -725,17 +818,38 @@ pub(crate) fn execute_gpu_fem_eigen_with_progress_and_stage_handoff(
         Some(handoff),
         None,
     )?;
-    bind_stage_continuation_artifacts(&mut run, handoff)?;
+    bind_stage_continuation_artifacts(&mut run, &prepared, handoff)?;
     Ok(run)
+}
+
+pub(crate) fn execute_gpu_fem_eigen_with_stage_handoff(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    handoff: &AcceptedFemRelaxStageHandoff,
+) -> Result<ExecutedRun, RunError> {
+    execute_gpu_fem_eigen_with_progress_and_stage_handoff(plan, outputs, None, handoff)
 }
 
 fn execute_native_gpu_k0_kittel_modal(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
+    mut progress: Option<&mut FemEigenProgressCallback<'_>>,
     expected_handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
 ) -> Result<ExecutedRun, RunError> {
     validate_eigen_equilibrium_certificate(plan, expected_handoff, None)?;
     let initial_magnetization = plan.equilibrium_magnetization.clone();
+    let requested_modes = plan.count as usize;
+    emit_native_gpu_k0_kittel_progress(
+        &mut progress,
+        "materializing_equilibrium",
+        1,
+        5.0,
+        0,
+        0,
+        requested_modes,
+        requested_modes,
+        0,
+    )?;
     let (problem, equilibrium, relaxation_steps, observables, _source_artifact) =
         materialize_equilibrium(plan, &initial_magnetization, None)?;
     let reduction = build_reduction_map(
@@ -758,6 +872,18 @@ fn execute_native_gpu_k0_kittel_modal(
 
     let bases = tangent_bases(&equilibrium);
     let active_nodes = reduction.active_nodes.len();
+    let effective_dof = active_nodes.saturating_mul(2);
+    emit_native_gpu_k0_kittel_progress(
+        &mut progress,
+        "assembling_operator",
+        2,
+        20.0,
+        active_nodes,
+        effective_dof,
+        requested_modes,
+        requested_modes,
+        0,
+    )?;
     let (stiffness_field, mass) = assemble_full_2x2_operator_real(
         plan,
         &problem.topology,
@@ -766,6 +892,17 @@ fn execute_native_gpu_k0_kittel_modal(
         &equilibrium,
         &bases,
     );
+    emit_native_gpu_k0_kittel_progress(
+        &mut progress,
+        "solving_dense",
+        3,
+        35.0,
+        active_nodes,
+        stiffness_field.nrows(),
+        requested_modes,
+        requested_modes,
+        0,
+    )?;
     let gpu_result = native_fem::gpu_eigen_dense_solve(
         stiffness_field.as_slice(),
         mass.as_slice(),
@@ -775,6 +912,17 @@ fn execute_native_gpu_k0_kittel_modal(
     .map_err(|message| RunError {
         message: format!("FEM GPU K0 Kittel modal dense solve failed: {message}"),
     })?;
+    emit_native_gpu_k0_kittel_progress(
+        &mut progress,
+        "writing_artifacts",
+        4,
+        90.0,
+        active_nodes,
+        stiffness_field.nrows(),
+        requested_modes,
+        gpu_result.eigenvalues.len(),
+        0,
+    )?;
     let field_eigenvalue = select_k0_kittel_gpu_field_eigenvalue(plan, &gpu_result.eigenvalues)?;
     let omega_rad_s = plan.gyromagnetic_ratio * field_eigenvalue;
     let frequency_hz = omega_rad_s / std::f64::consts::TAU;
@@ -810,6 +958,12 @@ fn execute_native_gpu_k0_kittel_modal(
         vector: mode_vector,
         q_vector: Vec::new(),
         phi_vector: Vec::new(),
+        floquet_descriptor_certified: false,
+        floquet_geometric_bc_certified: false,
+        floquet_potential_representation: None,
+        floquet_magnetic_relative_residual: None,
+        floquet_potential_relative_residual: None,
+        floquet_potential_real_split: Vec::new(),
     }];
     let solver_diagnostics = native_gpu_k0_kittel_solver_diagnostics(
         plan,
@@ -848,6 +1002,18 @@ fn execute_native_gpu_k0_kittel_modal(
         ..StepStats::default()
     };
 
+    emit_native_gpu_k0_kittel_progress(
+        &mut progress,
+        "completed",
+        5,
+        100.0,
+        active_nodes,
+        tangent_dof,
+        requested_modes,
+        modes.len(),
+        modes.len(),
+    )?;
+
     Ok(ExecutedRun {
         result: RunResult {
             status: RunStatus::Completed,
@@ -865,6 +1031,35 @@ fn execute_native_gpu_k0_kittel_modal(
         auxiliary_artifacts,
         provenance: native_gpu_k0_kittel_execution_provenance(plan),
     })
+}
+
+fn emit_native_gpu_k0_kittel_progress(
+    progress: &mut Option<&mut FemEigenProgressCallback<'_>>,
+    phase: &'static str,
+    phase_index: u32,
+    percent: f64,
+    active_nodes: usize,
+    effective_dof: usize,
+    requested_modes: usize,
+    candidate_modes: usize,
+    computed_modes: usize,
+) -> Result<(), RunError> {
+    emit_fem_eigen_progress(
+        progress,
+        FemEigenProgress {
+            phase,
+            phase_index,
+            phase_count: 5,
+            percent,
+            solver_kind: NATIVE_GPU_K0_KITTEL_SOLVER_KIND,
+            active_nodes,
+            effective_dof,
+            requested_modes,
+            candidate_modes,
+            computed_modes,
+            ..Default::default()
+        },
+    )
 }
 
 fn select_k0_kittel_gpu_field_eigenvalue(
@@ -886,7 +1081,7 @@ fn select_k0_kittel_gpu_field_eigenvalue(
             let rhs = target_field
                 .map(|target| (*right - target).abs())
                 .unwrap_or(*right);
-            lhs.partial_cmp(&rhs).unwrap_or(std::cmp::Ordering::Equal)
+            lhs.total_cmp(&rhs)
         })
         .ok_or_else(|| RunError {
             message:
@@ -982,7 +1177,16 @@ pub(super) fn execute_fem_eigen_inner(
         }
         return Err(error);
     }
-    reject_unsupported_floquet_dynamic_demag(&plan.spin_wave_bc, plan.operator.include_demag)?;
+    let native_nonzero_k_shared_domain_provider_requested = use_native_modal_production
+        && !try_gpu
+        && plan.enable_demag
+        && plan.operator.include_demag
+        && matches!(plan.spin_wave_bc.kind(), SpinWaveBoundaryKindIR::Floquet)
+        && k_sampling_contains_nonzero(plan.k_sampling.as_ref())
+        && matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2);
+    if !native_nonzero_k_shared_domain_provider_requested {
+        reject_unsupported_floquet_dynamic_demag(&plan.spin_wave_bc, plan.operator.include_demag)?;
+    }
     let num_modes = plan.count as usize;
 
     emit_fem_eigen_progress(
@@ -1025,8 +1229,11 @@ pub(super) fn execute_fem_eigen_inner(
     let active_n = reduction.active_nodes.len();
     let is_full_2x2 = matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2);
     let effective_dof = if is_full_2x2 { 2 * active_n } else { active_n };
-    let use_sparse = effective_dof > SPARSE_EIGEN_THRESHOLD && !try_gpu && !complex_reduction;
-    if effective_dof > 3000 && !use_sparse {
+    let use_sparse = effective_dof > SPARSE_EIGEN_THRESHOLD
+        && !try_gpu
+        && !complex_reduction
+        && !use_native_modal_production;
+    if effective_dof > 3000 && !use_sparse && !use_native_modal_production {
         eprintln!(
             "warning: FEM eigen dense solver has {} effective DOF ({} active nodes, {}) — O(n³) scaling; \
              consider reducing mesh size or awaiting future sparse/Krylov eigensolver",
@@ -1049,7 +1256,7 @@ pub(super) fn execute_fem_eigen_inner(
     } else {
         solver_kind_label(plan)
     };
-    let dense_warning = (effective_dof > 3000 && !use_sparse)
+    let dense_warning = (effective_dof > 3000 && !use_sparse && !use_native_modal_production)
         .then_some("dense_o_n3_eigensolve_without_iteration_progress");
     emit_fem_eigen_progress(
         &mut progress,
@@ -1074,6 +1281,33 @@ pub(super) fn execute_fem_eigen_inner(
 
     let bases = tangent_bases(&equilibrium);
     let mut dense_orthogonality = None;
+
+    if native_nonzero_k_shared_domain_provider_requested {
+        // Native MFEM owns both the magnetic and magnetostatic sparse blocks.
+        // Do not materialize a dense runner K/M pair before crossing this boundary.
+        return execute_native_modal_window(
+            plan,
+            outputs,
+            initial_magnetization,
+            equilibrium,
+            observables,
+            relaxation_steps,
+            &problem,
+            source_artifact.as_ref(),
+            source_relax_handoff,
+            topology,
+            &reduction,
+            &bases,
+            None,
+            progress,
+            active_n,
+            effective_dof,
+            artifact_sample_index,
+            native_fem::NativeModalExecutionTarget::ProductionCpu,
+            planned_execution,
+            expected_handoff,
+        );
+    }
 
     let real_eigenpairs = if complex_reduction {
         Vec::new()
@@ -1342,6 +1576,9 @@ pub(super) fn execute_fem_eigen_inner(
                 progress,
                 active_n,
                 effective_dof,
+                artifact_sample_index,
+                planned_execution,
+                None,
             );
         }
         solve_complex_hermitian_eigenpairs(plan, stiffness, mass)?
@@ -1494,8 +1731,20 @@ pub(super) fn execute_fem_eigen_inner(
                 norm,
             )
         };
+        if !eigenvalue_real.is_finite() || eigenvalue_real < 0.0 {
+            // A negative or non-finite eigenvalue indicates a non-minimum
+            // equilibrium (an unstable/soft mode, or an unconverged
+            // relaxation), never a legitimate zero-frequency acoustic mode.
+            // `sort_and_truncate_{real,complex}_modes` in eigen_solve.rs
+            // already reject these before this loop runs; this guard is
+            // defense-in-depth so a fabricated 0 Hz mode can never be
+            // published even if that upstream invariant is ever violated
+            // (audit finding H7).
+            continue;
+        }
         let angular_frequency_real =
-            angular_frequency_from_eigenvalue(plan.gyromagnetic_ratio, eigenvalue_real);
+            angular_frequency_from_eigenvalue(plan.gyromagnetic_ratio, eigenvalue_real)
+                .expect("eigenvalue_real validated non-negative and finite above");
         let angular_frequency_imag = if eigenvalue_imag.abs() > 0.0 {
             angular_frequency_from_raw_eigenvalue(plan.gyromagnetic_ratio, eigenvalue_imag)
         } else {
@@ -1804,4 +2053,73 @@ pub(super) fn execute_fem_eigen_inner(
         auxiliary_artifacts,
         provenance: execution_provenance(plan, try_gpu),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{emit_native_gpu_k0_kittel_progress, FemEigenProgress, FemEigenProgressCallback};
+    use crate::types::StepAction;
+
+    #[test]
+    fn native_gpu_k0_kittel_progress_reports_boundaries_and_propagates_interrupt() {
+        let mut boundaries = Vec::new();
+        let mut callback = |event: FemEigenProgress| {
+            boundaries.push((event.phase, event.phase_index, event.percent));
+            if event.phase == "solving_dense" {
+                StepAction::Stop
+            } else {
+                StepAction::Continue
+            }
+        };
+        let mut progress = Some(&mut callback as &mut FemEigenProgressCallback<'_>);
+
+        emit_native_gpu_k0_kittel_progress(
+            &mut progress,
+            "materializing_equilibrium",
+            1,
+            5.0,
+            0,
+            0,
+            1,
+            1,
+            0,
+        )
+        .expect("materialization boundary should continue");
+        emit_native_gpu_k0_kittel_progress(
+            &mut progress,
+            "assembling_operator",
+            2,
+            20.0,
+            4,
+            8,
+            1,
+            1,
+            0,
+        )
+        .expect("assembly boundary should continue");
+        let error = emit_native_gpu_k0_kittel_progress(
+            &mut progress,
+            "solving_dense",
+            3,
+            35.0,
+            4,
+            8,
+            1,
+            1,
+            0,
+        )
+        .expect_err("runtime stop should be propagated at the solve boundary");
+
+        assert_eq!(
+            boundaries,
+            vec![
+                ("materializing_equilibrium", 1, 5.0),
+                ("assembling_operator", 2, 20.0),
+                ("solving_dense", 3, 35.0),
+            ]
+        );
+        assert!(error
+            .message
+            .contains("FEM eigen solve was interrupted by runtime control"));
+    }
 }

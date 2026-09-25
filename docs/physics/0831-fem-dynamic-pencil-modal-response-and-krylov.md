@@ -11,8 +11,9 @@
 - Related physics notes:
   - `0600-fem-eigenmodes-linearized-llg.md`
   - `0700-frequency-domain-linearized-llg.md`
-  - `0828-fem-frequency-domain-floquet-demag.md`
-  - `0830-fem-poisson-airbox-modal-eigen.md`
+- `0828-fem-frequency-domain-floquet-demag.md`
+- `0830-fem-poisson-airbox-modal-eigen.md`
+- `docs/adr/0031-fem-nonzero-k-dispersion-representations.md`
 - Related design and implementation status:
   - `docs/superpowers/specs/2026-07-10-fem-frequency-domain-masterplan-hardening-design.md`
   - `docs/plans/active/fd_sovler_masterplan/20_dynamic_solver_audit_revalidation_and_remediation.md`
@@ -163,6 +164,21 @@ algebraic realization of this complex contract, not another convention.
 | $\mathbf k$ | Bloch wave vector | $\mathrm{rad\,m^{-1}}$ |
 | $\Delta\mathbf r$ | periodic lattice translation | $\mathrm{m}$ |
 | $p=\exp(-\mathrm{i}\mathbf k\cdot\Delta\mathbf r)$ | Floquet phase | $1$ |
+| $\mathbf u_{n\mathbf k}$ | periodic envelope of a full Bloch mode | $1$ |
+| $C(\mathbf k)$ | complex constraint or prolongation map for full Bloch fields | $1$ |
+| $\widetilde{\mathbf M}_{n\mathbf k}$ | dynamic magnetization phasor in A/m | $\mathrm{A\,m^{-1}}$ |
+| $\widetilde\phi_{n\mathbf k}$ | full Bloch scalar-potential phasor | $\mathrm{A}$ |
+| $\widetilde{\mathbf h}_{d,n\mathbf k}$ | dynamic demagnetizing-field phasor | $\mathrm{A\,m^{-1}}$ |
+| $\nabla$, $\nabla_\perp$ | ordinary spatial and transverse gradients | $\mathrm{m^{-1}}$ |
+| $D_{\mathbf k}$ | shifted transverse envelope gradient | $\mathrm{m^{-1}}$ |
+| $D_{\mathbf k}=\nabla_\perp-\mathrm{i}k\hat{\mathbf z}$ | shifted gradient used only by the transverse waveguide envelope | $\mathrm{m^{-1}}$ |
+| $\hat{\mathbf z}$ | waveguide propagation direction | $1$ |
+| $k$ | signed scalar wave number along the waveguide axis | $\mathrm{rad\,m^{-1}}$ |
+| $\Omega$, $\Omega_m$, $\Omega_a$ | full cell, magnetic and air subdomains | $\mathrm{m^3}$ |
+| $v$ | scalar-potential test function | $1$ |
+| $\mathbf R$ | lattice translation of the periodic envelope | $\mathrm{m}$ |
+| $\mathrm dV$ | volume integration measure | $\mathrm{m^3}$ |
+| $\delta\mathbf M_\perp$, $\delta M_z$ | transverse and longitudinal components of the dynamic magnetization in a waveguide section | $\mathrm{A\,m^{-1}}$ |
 | $\beta$ | Robin boundary coefficient | $\mathrm{m^{-1}}$ |
 | $\operatorname{Re}$, $\exp$, $\mathrm{i}$, $\pi$, $(\cdot)^{\mathsf T}$, $(\cdot)^{\mathsf H}$, $\times$, $\cdot$ | real-part map, exponential, imaginary unit, circle constant, transpose, Hermitian transpose, cross product and contraction | $1$ |
 | $\lVert\cdot\rVert_2$, $|\cdot|$, $\max$ | norm, absolute-value and maximum operators | $1$ |
@@ -237,9 +253,12 @@ signs consistently. It is not a second implementation path.
 - The first Poisson-airbox modal qualification is P1, `k=0`, and an x/y
   periodic, open-z shared magnetic-plus-air domain. Fully 3D periodic `k=0`
   demag remains unavailable pending a macroscopic-field convention.
-- Nonzero-k demag and nonzero-k DMI remain unavailable until the full complex
-  FE constraint or equivalent `grad_k/div_k` operator is implemented and
-  validated.
+- Nonzero-k demag has a source-visible CPU shared-domain Floquet/airbox
+  implementation and an explicit `magnetostatic_bc="floquet_airbox"` request,
+  but it remains runtime- and physics-unqualified until the full complex FE
+  constraint, residual controls, managed execution, and convergence evidence
+  pass. Nonzero-k DMI remains unavailable until its corresponding FE operator
+  is implemented and validated.
 
 (discrete-realization)=
 ## 3. Discrete realization and numerical interpretation
@@ -376,7 +395,139 @@ Constraint construction operates on complete corner/edge equivalence classes
 and checks cycle consistency. A phase-only tangent constraint is invalid for
 varying frames.
 
-### 3.5 FEM CPU ownership
+(nonzero-k-representations)=
+### 3.5 Two nonzero-$k$ representations
+
+The modal product has two physically different realizations. The first is a
+three-dimensional periodic cell. The second is a two-dimensional transverse
+cross-section of a waveguide that is invariant along one axis. They share the
+phase convention, tangent LLG pencil, artifacts and provenance vocabulary, but
+they do not share the same differential operator.
+
+(full-bloch-operator-contract)=
+#### 3.5.1 Full Bloch field in a periodic 3D cell
+
+For a full 3D cell, the physical phasor is written with the canonical Fullmag
+sign as a periodic envelope times a Bloch phase:
+
+```{math}
+:label: eq-fem-full-bloch-ansatz
+\widetilde{\mathbf m}_{n\mathbf k}(\mathbf r)=\mathbf u_{n\mathbf k}(\mathbf r)
+\exp(-\mathrm{i}\mathbf k\cdot\mathbf r),
+\qquad
+\mathbf u_{n\mathbf k}(\mathbf r+\mathbf R)=\mathbf u_{n\mathbf k}(\mathbf r),
+\qquad
+\mathbf m_0(\mathbf r)\cdot\mathbf u_{n\mathbf k}(\mathbf r)=0.
+```
+
+The finite-element fields are the full complex phasors. Their element
+derivatives are ordinary spatial derivatives. The Bloch phase is imposed by
+the complex seam constraint $C(\mathbf k)$ on magnetic tangent coefficients and
+on the scalar-potential field. The constraint may be represented by a
+prolongation, a reduced basis or an equivalent matrix-free
+$C(\mathbf k)^\mathsf{H} A C(\mathbf k)$ action. It must transport the physical
+tangent frame, so for the interleaved local layout the per-node relation
+remains $q_{\mathrm{dst}}=p(T_{\mathrm{dst}}^\mathsf{T}Q T_{\mathrm{src}})q_{\mathrm{src}}$.
+
+The newly added native foundation names its map operations
+`FloquetTangentProlongation::initialize`, `prolong` and `restrict_adjoint`, and
+its MFEM wrapper operations `FloquetReducedMagneticOperator::Mult` and
+`MultTranspose`. These names identify a source boundary only: the code is
+uncompiled, unvalidated and not connected to the production solver ABI.
+
+Do not replace this formulation with a shifted derivative. Applying both
+ordinary derivatives on a phase-constrained full field and
+$\nabla-\mathrm{i}\mathbf k$ to the same field counts the wave vector twice.
+The scalar-potential block is part of the same phase-constrained airbox when
+dynamic demagnetization is enabled:
+
+```{math}
+:label: eq-fem-full-bloch-demag
+\widetilde{\mathbf M}_{n\mathbf k}=M_s\widetilde{\mathbf m}_{n\mathbf k},
+\qquad
+\nabla^2\widetilde\phi_{n\mathbf k}=\nabla\cdot\widetilde{\mathbf M}_{n\mathbf k}
+\ \text{in }\Omega_m,
+\qquad
+\nabla^2\widetilde\phi_{n\mathbf k}=0\ \text{in }\Omega_a,
+\qquad
+\widetilde{\mathbf h}_{d,n\mathbf k}=-\nabla\widetilde\phi_{n\mathbf k}.
+```
+
+The corresponding weak form uses the same ordinary gradient and complex
+sesquilinear pairing:
+
+```{math}
+:label: eq-fem-full-bloch-weak
+\int_{\Omega}\nabla v^\ast\cdot\nabla\widetilde\phi_{n\mathbf k}\,\mathrm dV
+=\int_{\Omega_m}\nabla v^\ast\cdot\widetilde{\mathbf M}_{n\mathbf k}\,\mathrm dV.
+```
+
+The airbox seam phase, magnetic seam phase and opposite-normal flux condition
+must be checked as one corner/edge cycle. A scalar gauge is added only when
+the assembled scalar operator has an actual constant nullspace; a nonzero
+Bloch phase usually removes that nullspace, while an open or Robin exterior
+may already be coercive. The original residual is evaluated after reconstructing
+the full magnetic and potential fields, not only in reduced coordinates.
+
+(waveguide-envelope-operator-contract)=
+#### 3.5.2 Transverse waveguide envelope
+
+The 2.5D representation applies only when geometry, materials, equilibrium and
+boundary data are translationally invariant along the selected propagation
+axis $\hat{\mathbf z}$. The unknown is a transverse envelope on a 2D section;
+there are no longitudinal seam pairs and no $C(\mathbf k)$ constraint. Define
+the shifted derivative only for this representation:
+
+```{math}
+:label: eq-fem-waveguide-envelope-demag
+D_{\mathbf k}=\nabla_\perp-\mathrm{i}k\hat{\mathbf z},
+\qquad
+\left(\nabla_\perp^2-k^2\right)\phi
+=\nabla_\perp\cdot\delta\mathbf M_\perp-\mathrm{i}k\delta M_z,
+\qquad
+\mathbf h_{d,\perp}=-\nabla_\perp\phi,
+\qquad
+h_{d,z}=\mathrm{i}k\phi.
+```
+
+Here $k$ is the signed scalar component along $\hat{\mathbf z}$ and the
+potential/fields are normalized per unit waveguide length. The $k\to0$ limit
+must be compared against a separately assembled 2D magnetostatic operator;
+it is not evidence that a 3D full-cell seam constraint can be removed. The
+waveguide path is the planned S09 realization and remains unvalidated.
+
+Never apply $D_{\mathbf k}$ to the full 3D phase-constrained fields. Conversely,
+do not invent longitudinal seam constraints for a translationally invariant
+cross-section. This separation follows the arbitrary-cross-section
+propagating-mode construction in TetraX while retaining Fullmag's own FEM and
+airbox contracts.
+
+#### 3.5.3 Modal consequences shared by both representations
+
+At each requested $\mathbf k$, the operator and constrained space are rebuilt
+or applied with that $\mathbf k$; a K0 operator is not silently reused. The
+selected mode carries a complex field, a declared normalization and the
+requested/resolved wave-vector sample. Branch tracking uses a mass-weighted
+complex overlap and the Hungarian assignment for isolated modes. At a crossing,
+principal angles of mass-weighted subspaces replace scalar overlap. A damped
+nonnormal pencil additionally requires left/right information for projection;
+Gilbert damping and its sign are reported through $\Gamma$ under the
+$\exp(+\mathrm{i}\omega t)$ convention. Every accepted mode recomputes the
+original full descriptor residual, including the potential and gauge blocks.
+
+The local Micromagnetics Module User's Guide describes the same workflow
+distinction: its `Frequency Domain` interface is a driven phasor solve and its
+`Eigenfrequency` interface returns natural modes. Its Floquet boundary example
+uses $\exp(-\mathrm{i}\mathbf k_F\cdot(\mathbf r_{dst}-\mathbf r_{src}))$ and
+the guide permits 1D, 2D and 3D periodic pairs (V.E.2--3, PDF 27--28,
+printed 22--23 of the repository copy). The dynamic demagnetization example
+feeds `Ms*dmX/Y/Z` into a second magnetic-fields interface and returns its
+field to the linearized LLG (VII.A.2, PDF 40--43, printed 35--38). These are
+workflow references, not proof of a native Fullmag or standard COMSOL LLG
+implementation. The guide's DMI boundary warning (PDF 25, printed 20) is
+retained as a reason to require Fullmag's own interface-variation tests.
+
+### 3.6 FEM CPU ownership
 
 Production numerical ownership remains under `backends/fem`. The CPU lane may
 realize the same pencil through dense validation, sparse direct diagnostics,
@@ -390,7 +541,7 @@ shared-domain assembly and Schur solver are source-visible through
 `solve_poisson_airbox_modal_eigen_cpu_schur`; managed qualification remains
 open and blocks production Poisson-airbox modal qualification.
 
-### 3.6 FEM GPU ownership and truthful lane names
+### 3.7 FEM GPU ownership and truthful lane names
 
 GPU status is split by actual residency and algorithm:
 
@@ -411,7 +562,7 @@ The old broad `gpu_device_resident_modal_eigensolver=true` claim is forbidden
 for the dense G5a validation adapter. Strict GPU requests never fall back
 silently to CPU.
 
-### 3.7 FDM and hybrid interpretation
+### 3.8 FDM and hybrid interpretation
 
 This contract does not introduce an FDM frequency-domain implementation.
 Future FDM and hybrid solvers must define their own numerical realization while
@@ -728,12 +879,14 @@ managed physics evidence.
 | Krylov policy validation/lowering | common | `packages/fullmag-py/src/fullmag/model/study.py` + `class FrequencyResponseSolverPolicy` | Validate method, preconditioner and iteration controls. | source tested |
 | Canonical harmonic action | common native | `backends/fem/include/frequency_domain/linearized_dynamic_pencil.hpp` + `apply_Aomega` | Apply $A_\omega=\mathrm{i}\omega B_\alpha-L$ to a state. | source visible; managed physics unvalidated |
 | Real-frequency rotation | FEM CPU/GPU algebra | `backends/fem/src/frequency_domain/real_frequency_rotated_pencil.cpp` + `assemble_real_frequency_rotated_pencil` | Assemble the real-split target on the physical frequency axis. | source tested; managed physics unvalidated |
+| Real-frequency SLEPc adapter | FEM CPU modal adapter | `backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp` + `solve_slepc_gyrotropic_modal_eigen_with_matrices` | Lift the real stiffness/gyrotropic pencil to $R(A)y=\omega R(\mathrm{i}G)y$, apply the signed shift on the physical frequency axis, and map the split vector back to the complex tangent mode. | source contract tested; managed runtime unvalidated |
+| Floquet tangent source assembly | FEM CPU Floquet source | `backends/fem/cpu/frequency_domain/floquet_bloch_scalar.cpp` + `assemble_floquet_bloch_scalar_tangent_source` | Assemble the magnetization-to-scalar-potential source element-locally, including the shifted-envelope $\mathrm{i}\mathbf{k}\cdot\mathbf{m}$ term and magnetic-element mask. This is a source assembly boundary, not a production nonzero-$k$ demag qualification. | source contract tested; managed assembly and physics unvalidated |
 | CPU Schur selected spectrum | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp` + `solve_poisson_airbox_modal_eigen_cpu_schur` | Solve and certify the source-visible descriptor reduction. | source tested; managed qualification absent |
 | GPU PETSc/SLEPc selected spectrum | FEM GPU | `backends/fem/include/frequency_domain/modal_gpu_krylov.hpp` + `solve_poisson_airbox_modal_eigen_gpu_petsc_slepc` | Declare the GPU modal adapter. | source tested; device qualification absent |
 | Modal payload ownership | common native | `crates/fullmag-runner/src/native_fem/frequency_domain.rs` + `validate_native_modal_request_payload_ownership` | Reject ambiguous or missing operator payload ownership. | source tested; runtime unvalidated |
 | Driven method fail-closed policy | common runner | `crates/fullmag-runner/src/frequency_response.rs` + `frequency_response_solver_method_rejection_reason` | Reject unavailable method/device combinations before fallback. | source tested |
 | Native CPU driven boundary | FEM CPU | `crates/fullmag-runner/src/frequency_response.rs` + `try_execute_fem_frequency_response_native_production_cpu` | Build the native CPU response request and preserve explicit failure. | source tested; managed physics unvalidated |
-| Floquet phase/frame checks | FEM response | `backends/fem/src/frequency_domain/driven_response_solver.cpp` + `validate_driven_response_floquet_phase_constraints` | Validate phase loops, tangent-frame matching and drive consistency. | source tested; nonzero-k demag unavailable |
+| Floquet phase/frame checks | FEM response | `backends/fem/src/frequency_domain/driven_response_solver.cpp` + `validate_driven_response_floquet_phase_constraints` | Validate phase loops, tangent-frame matching and drive consistency. | source tested; demag-k bridge source-visible, managed/physics unvalidated |
 | Contract regression | documentation | `scripts/test_frequency_domain_math_contract_docs.py` + `test_canonical_fem_dynamic_solver_contract_freezes_algebra_units_and_claims` | Freeze algebra, units, lane names and honest claim vocabulary. | source tested; not numerical evidence |
 
 (validation)=
@@ -772,18 +925,20 @@ container-backed `just` recipes; host-only checks cannot promote capability.
 - [ ] Fresh managed CPU runtime and physical qualification
 - [ ] Fresh managed GPU residency, parity, convergence and scaling qualification
 - [ ] Production Petrov-Galerkin or biorthogonal reduced response qualified
-- [ ] Nonzero-k dynamic demag and DMI implemented and qualified
+- [ ] Nonzero-k dynamic demag and DMI managed-runtime and physics-qualified
 
 (limitations)=
 ## 7. Known limits and deferred work
 
 This note is a contract and claim freeze, not solver promotion. The real-axis
-rotation, Poisson-airbox weak-form assembly, CPU Schur boundary, GPU adapter and
-public requests are source-visible, but current-snapshot managed qualification
-of finite descriptor handling, production reduced response, device-resident
-Krylov, general GPU modal eigensolve, damping/nonuniform textures and physical
-K0 demag remains absent. Nonzero-k dynamic demag, nonzero-k DMI and fully 3D
-periodic demag remain unavailable and fail closed.
+rotation, Poisson-airbox weak-form assembly, CPU Schur boundary, CPU
+Floquet/airbox dynamic-demag path, GPU adapter and public requests are
+source-visible, but current-snapshot managed qualification of finite descriptor
+handling, production reduced response, device-resident Krylov, general GPU
+modal eigensolve, damping/nonuniform textures and physical K0 demag remains
+absent. Nonzero-k dynamic demag is gated as unqualified, nonzero-k DMI remains
+unavailable, and fully 3D periodic demag remains unavailable; all unsupported
+combinations fail closed.
 
 The `target_frequency` plus `frequency_window` serialization loss documented
 in section 4.2 is an authoring/round-trip limitation. The policy vocabulary
@@ -841,5 +996,13 @@ visibility into runtime qualification.
 | Modal operator ownership | common native | `crates/fullmag-runner/src/native_fem/frequency_domain.rs` + `validate_native_modal_request_payload_ownership` | Reject an ambiguous or missing shared-domain operator payload. | focused Rust ownership tests | source tested; runtime unvalidated | [blob](https://github.com/MateuszZelent/fullmag/blob/70636fa61fcdf32b6f61b7544f347172ef36a219/crates/fullmag-runner/src/native_fem/frequency_domain.rs) |
 | Method/device rejection | common runner | `crates/fullmag-runner/src/frequency_response.rs` + `frequency_response_solver_method_rejection_reason` | Fail unsupported response methods before fallback. | policy rejection tests | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/70636fa61fcdf32b6f61b7544f347172ef36a219/crates/fullmag-runner/src/frequency_response.rs) |
 | Native CPU response boundary | FEM CPU | `crates/fullmag-runner/src/frequency_response.rs` + `try_execute_fem_frequency_response_native_production_cpu` | Build the native request and preserve native failure/provenance. | focused runner/native tests | source tested; managed physics unvalidated | [blob](https://github.com/MateuszZelent/fullmag/blob/70636fa61fcdf32b6f61b7544f347172ef36a219/crates/fullmag-runner/src/frequency_response.rs) |
-| {eq}`eq-fem-dynamic-floquet-constraint` validation | FEM response | `backends/fem/src/frequency_domain/driven_response_solver.cpp` + `validate_driven_response_floquet_phase_constraints` | Validate phase cycles, tangent-frame equality and drive consistency. | focused Floquet response tests | source tested; nonzero-k demag unavailable | [blob](https://github.com/MateuszZelent/fullmag/blob/70636fa61fcdf32b6f61b7544f347172ef36a219/backends/fem/src/frequency_domain/driven_response_solver.cpp) |
+| {eq}`eq-fem-dynamic-floquet-constraint` validation | FEM response | `backends/fem/src/frequency_domain/driven_response_solver.cpp` + `validate_driven_response_floquet_phase_constraints` | Validate phase cycles, tangent-frame equality and drive consistency. | focused Floquet response tests | source tested; demag-k bridge source-visible, managed/physics unvalidated | [blob](https://github.com/MateuszZelent/fullmag/blob/70636fa61fcdf32b6f61b7544f347172ef36a219/backends/fem/src/frequency_domain/driven_response_solver.cpp) |
 | Contract text regression | documentation | `scripts/test_frequency_domain_math_contract_docs.py` + `test_canonical_fem_dynamic_solver_contract_freezes_algebra_units_and_claims` | Freeze canonical algebra, units, lane names and claim status. | same symbol | source tested; not numerical evidence | [blob](https://github.com/MateuszZelent/fullmag/blob/70636fa61fcdf32b6f61b7544f347172ef36a219/scripts/test_frequency_domain_math_contract_docs.py) |
+| {eq}`eq-fem-full-bloch-ansatz`, {eq}`eq-fem-full-bloch-demag`, {eq}`eq-fem-full-bloch-weak` | FEM CPU/GPU planned | `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md` + `DOC-ANCHOR:full-bloch-operator-contract` | Freeze the 3D full Bloch field, ordinary-gradient demagnetization and weak-form boundary before production assembly. | S03/S04 and V0/V4 are pending | planned contract; no runtime evidence | repository note |
+| {eq}`eq-fem-waveguide-envelope-demag` | FEM CPU/GPU planned | `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md` + `DOC-ANCHOR:waveguide-envelope-operator-contract` | Freeze the separate 2.5D waveguide envelope and shifted-gradient demagnetization equations. | S09/V5 pending | planned contract; no runtime evidence | repository note |
+| Full Bloch tangent prolongation | FEM CPU planned | `backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp` + `class FloquetTangentProlongation` | Represent phase and tangent-frame transport for the interleaved local coefficients. | `fem_floquet_magnetic_operator_contract` source is present; compile/runtime unvalidated | source visible; uncompiled/unvalidated; not connected to solver ABI | repository source |
+| Reduced full Bloch operator | FEM CPU planned | `backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp` + `class FloquetReducedMagneticOperator` | Define the matrix-free $C(\mathbf k)^\mathsf{H}AC(\mathbf k)$ boundary. | same focused contract test; no managed FEM run | source visible; uncompiled/unvalidated; not connected to solver ABI | repository source |
+| Dynamic nonzero-k demagnetization oracle | FEM CPU source-visible | `backends/fem/include/frequency_domain/floquet_dynamic_demag_k.hpp` + `build_floquet_dynamic_demag_k_real_split` | Provide the bounded dense Schur oracle for complex nonzero-k dynamic demagnetization; mesh assembly and production qualification remain separate. | `fem_floquet_dynamic_demag_k_contract` source is present; managed compile/runtime unvalidated | source visible; managed/physics unvalidated | repository source |
+| MFEM Floquet airbox bridge | FEM CPU planned | `backends/fem/cpu/frequency_domain/floquet_airbox_operator.hpp` + `assemble_floquet_airbox_dynamic_demag_k` | Materialize bounded `C(k)^H P_full(k) C(k)` and `C(k)^H A_{phi q}` blocks, then delegate Schur elimination to the dynamic demag-k provider; production mesh assembly and capability promotion remain separate. | `fem_floquet_airbox_operator_contract` source is present; compile/runtime unvalidated | source visible; uncompiled/unvalidated | repository source |
+| Waveguide nonzero-k demagnetization oracle | FEM CPU planned | `backends/fem/include/frequency_domain/floquet_waveguide_demag_k.hpp` + `build_floquet_waveguide_demag_k_real_split` | Provide the bounded 2.5D modified-Helmholtz and Schur oracle; transverse MFEM assembly and open-boundary convergence remain separate. | `fem_floquet_waveguide_demag_k_contract` source is present; compile/runtime unvalidated | source visible; uncompiled/unvalidated | repository source |
+| Existing shared-domain Poisson owner | FEM CPU | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp` + `assemble_poisson_airbox_shared_domain` | Preserve the existing K0/shared-domain assembly boundary while nonzero-k demag remains gated. | existing source contract tests | source visible; nonzero-k physics unvalidated | repository source |

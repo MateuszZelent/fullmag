@@ -96,6 +96,49 @@ def decode_logs(content):
     return output.decode('utf-8', errors='replace')
 
 
+def _stats_container_id(argv):
+    """Parse the small, explicitly supported subset of ``docker stats``."""
+    container_id = None
+    index = 1
+    while index < len(argv):
+        option = argv[index]
+        if option in ('--no-stream', '--no-trunc'):
+            index += 1
+            continue
+        if option == '--format':
+            if index + 1 >= len(argv):
+                raise ValueError('Missing Docker stats format value')
+            index += 2
+            continue
+        if option.startswith('--format='):
+            if not option[len('--format='):]:
+                raise ValueError('Missing Docker stats format value')
+            index += 1
+            continue
+        if option.startswith('-'):
+            raise ValueError('Unsupported Docker stats option: ' + option)
+        if container_id is not None:
+            raise ValueError('Docker stats accepts one container ID')
+        container_id = option
+        index += 1
+    if not container_id:
+        raise ValueError('Missing Docker stats container ID')
+    return container_id
+
+
+def _numeric_value(mapping, key):
+    value = mapping.get(key) if isinstance(mapping, dict) else None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
+    return None
+
+
+def _format_counter(value, suffix='B'):
+    if isinstance(value, float):
+        return f'{value:g}{suffix}'
+    return f'{value}{suffix}'
+
+
 def docker(argv):
     if argv[:2] == ['image', 'inspect'] and len(argv) == 3:
         return '[' + engine('GET', '/images/' + quote(argv[2], safe='') + '/json').decode() + ']'
@@ -123,27 +166,56 @@ def docker(argv):
     if argv[0] == 'info':
         return engine('GET', '/info').decode()
     if argv[0] == 'stats':
-        container_id = next((arg for arg in reversed(argv[1:]) if not arg.startswith('-')), argv[-1])
+        container_id = _stats_container_id(argv)
         raw_stats = engine('GET', '/containers/' + quote(container_id, safe='') + '/stats?stream=false')
         stats = json.loads(raw_stats) if isinstance(raw_stats, (bytes, str)) else {}
         if not isinstance(stats, dict):
             stats = {}
         mem_stats = stats.get('memory_stats') or {}
-        mem_usage = mem_stats.get('usage') or 0
-        mem_limit = mem_stats.get('limit') or 0
+        mem_usage = _numeric_value(mem_stats, 'usage')
+        mem_limit = _numeric_value(mem_stats, 'limit')
         cpu_stats = stats.get('cpu_stats') or {}
         precpu_stats = stats.get('precpu_stats') or {}
         cpu_usage = cpu_stats.get('cpu_usage') or {}
         precpu_usage = precpu_stats.get('cpu_usage') or {}
-        cpu_delta = (cpu_usage.get('total_usage') or 0) - (precpu_usage.get('total_usage') or 0)
-        system_delta = (cpu_stats.get('system_cpu_usage') or 0) - (precpu_stats.get('system_cpu_usage') or 0)
-        online_cpus = cpu_stats.get('online_cpus') or len(cpu_usage.get('percpu_usage') or [1])
-        cpu_pct = 0.0
-        if system_delta > 0 and cpu_delta > 0:
+        cpu_total = _numeric_value(cpu_usage, 'total_usage')
+        precpu_total = _numeric_value(precpu_usage, 'total_usage')
+        system_total = _numeric_value(cpu_stats, 'system_cpu_usage')
+        presystem_total = _numeric_value(precpu_stats, 'system_cpu_usage')
+        cpu_delta = cpu_total - precpu_total if cpu_total is not None and precpu_total is not None else None
+        system_delta = system_total - presystem_total if system_total is not None and presystem_total is not None else None
+        online_cpus = _numeric_value(cpu_stats, 'online_cpus')
+        if online_cpus is None:
+            percpu_usage = cpu_usage.get('percpu_usage') if isinstance(cpu_usage, dict) else None
+            if isinstance(percpu_usage, list) and percpu_usage:
+                online_cpus = len(percpu_usage)
+        cpu_pct = None
+        if (system_delta is not None and cpu_delta is not None and online_cpus is not None
+                and system_delta > 0 and cpu_delta >= 0):
             cpu_pct = (cpu_delta / system_delta) * online_cpus * 100.0
         blkio_stats = stats.get('blkio_stats') or {}
-        bio_bytes = blkio_stats.get('io_service_bytes_recursive') or []
-        read_bytes = sum(item.get('value', 0) for item in bio_bytes if isinstance(item, dict) and item.get('op') == 'Read')
-        write_bytes = sum(item.get('value', 0) for item in bio_bytes if isinstance(item, dict) and item.get('op') == 'Write')
-        return f"{mem_usage}B / {mem_limit}B|{cpu_pct:.1f}%|{read_bytes}B / {write_bytes}B"
+        bio_bytes = blkio_stats.get('io_service_bytes_recursive') if isinstance(blkio_stats, dict) else None
+        read_bytes = None
+        write_bytes = None
+        if isinstance(bio_bytes, list):
+            read_bytes = sum(
+                value for item in bio_bytes
+                if isinstance(item, dict) and item.get('op') == 'Read'
+                for value in [_numeric_value(item, 'value')]
+                if value is not None
+            )
+            write_bytes = sum(
+                value for item in bio_bytes
+                if isinstance(item, dict) and item.get('op') == 'Write'
+                for value in [_numeric_value(item, 'value')]
+                if value is not None
+            )
+        memory_text = _format_counter(mem_usage) if mem_usage is not None else 'N/A'
+        limit_text = _format_counter(mem_limit) if mem_limit is not None else 'N/A'
+        cpu_text = f'{cpu_pct:.1f}%' if cpu_pct is not None else 'N/A'
+        if read_bytes is None or write_bytes is None:
+            io_text = 'N/A / N/A'
+        else:
+            io_text = f'{_format_counter(read_bytes)} / {_format_counter(write_bytes)}'
+        return f"{memory_text} / {limit_text}|{cpu_text}|{io_text}"
     raise ValueError('Docker operation not supported by container coordinator')

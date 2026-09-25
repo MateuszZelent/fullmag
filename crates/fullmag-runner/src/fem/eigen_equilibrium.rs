@@ -21,6 +21,18 @@ use fullmag_engine::MaterialParameters;
 use fullmag_engine::TimeIntegrator;
 use fullmag_engine::Vector3;
 
+// The relaxation producer and the modal consumer evaluate the same static
+// fields through different native code paths.  A pure absolute tolerance
+// rejects otherwise identical fields once the applied field is large, while a
+// pure relative tolerance is unsafe around a zero field.  Keep both terms
+// explicit so the handoff contract remains auditable in SI units.
+// The exchange field can be mathematically zero for a uniform equilibrium,
+// while the accepted and recomputed FEM vectors still differ by a few ulps
+// after projection through the shared mesh.  Keep this floor tiny relative to
+// physical fields (~1e5 A/m), but above that representation noise.
+const FIELD_HANDOFF_ABS_TOL_A_PER_M: f64 = 1.0e-7;
+const FIELD_HANDOFF_REL_TOL: f64 = 1.0e-12;
+
 fn max_vector_field_difference_on_magnetic_nodes(
     left: &[Vector3],
     right: &[Vector3],
@@ -40,6 +52,45 @@ fn max_vector_field_difference_on_magnetic_nodes(
         })
         .reduce(f64::max)
 }
+
+fn max_vector_field_amplitude(left: &[Vector3], right: &[Vector3]) -> Option<f64> {
+    if left.len() != right.len() {
+        return None;
+    }
+    Some(
+        left.iter()
+            .chain(right)
+            .flat_map(|field| field.iter().copied())
+            .map(f64::abs)
+            .fold(0.0, f64::max),
+    )
+}
+
+fn max_vector_field_amplitude_on_magnetic_nodes(
+    left: &[Vector3],
+    right: &[Vector3],
+    magnetic_node_volumes: &[f64],
+) -> Option<f64> {
+    if left.len() != right.len() || left.len() != magnetic_node_volumes.len() {
+        return None;
+    }
+    Some(
+        left.iter()
+            .zip(right)
+            .zip(magnetic_node_volumes)
+            .filter(|(_, volume)| **volume > 0.0)
+            .flat_map(|((left, right), _)| left.iter().chain(right).copied())
+            .map(f64::abs)
+            .fold(0.0, f64::max),
+    )
+}
+
+fn field_handoff_tolerance(scale_a_per_m: f64) -> Option<f64> {
+    if !scale_a_per_m.is_finite() {
+        return None;
+    }
+    Some(FIELD_HANDOFF_ABS_TOL_A_PER_M + FIELD_HANDOFF_REL_TOL * scale_a_per_m.max(1.0))
+}
 use fullmag_ir::EquilibriumSourceIR;
 use fullmag_ir::FemEigenPlanIR;
 
@@ -56,6 +107,7 @@ pub(super) fn prepare_single_k_stage_continuation(
 
 pub(super) fn bind_stage_continuation_artifacts(
     run: &mut ExecutedRun,
+    plan: &FemEigenPlanIR,
     handoff: &AcceptedFemRelaxStageHandoff,
 ) -> Result<(), RunError> {
     if run.initial_magnetization != handoff.equilibrium_magnetization
@@ -71,6 +123,13 @@ pub(super) fn bind_stage_continuation_artifacts(
         "content_sha256": handoff.content_sha256,
         "equilibrium_content_sha256": handoff.equilibrium_content_sha256,
     });
+    let modal_source_mesh_topology = plan
+        .mesh
+        .mixed_topology_fingerprint_v3()
+        .map_err(|error| RunError {
+            message: format!("modal source mesh identity is invalid: {error}"),
+        })?;
+    let handoff_source_mesh_topology = handoff.source_mesh_topology_sha256.clone();
     let mut bound_summary = false;
     for artifact in &mut run.auxiliary_artifacts {
         let is_summary = artifact.relative_path == "eigen/metadata/eigen_summary.json";
@@ -123,8 +182,12 @@ pub(super) fn bind_stage_continuation_artifacts(
                     serde_json::json!(handoff.content_sha256),
                 );
                 diagnostics.insert(
+                    "relax_to_eigen_source_mesh_topology_sha256".to_string(),
+                    serde_json::json!(handoff_source_mesh_topology.clone()),
+                );
+                diagnostics.insert(
                     "source_mesh_topology_sha256".to_string(),
-                    serde_json::json!(handoff.source_mesh_topology_sha256),
+                    serde_json::json!(modal_source_mesh_topology.clone()),
                 );
                 diagnostics.insert(
                     "relax_to_eigen_handoff".to_string(),
@@ -141,8 +204,12 @@ pub(super) fn bind_stage_continuation_artifacts(
                                 serde_json::json!(handoff.content_sha256),
                             );
                             mode.insert(
+                                "relax_to_eigen_source_mesh_topology_sha256".to_string(),
+                                serde_json::json!(handoff_source_mesh_topology.clone()),
+                            );
+                            mode.insert(
                                 "source_mesh_topology_sha256".to_string(),
-                                serde_json::json!(handoff.source_mesh_topology_sha256),
+                                serde_json::json!(modal_source_mesh_topology.clone()),
                             );
                         }
                     }
@@ -158,8 +225,12 @@ pub(super) fn bind_stage_continuation_artifacts(
                     serde_json::json!(handoff.equilibrium_content_sha256),
                 );
                 object.insert(
+                    "relax_to_eigen_source_mesh_topology_sha256".to_string(),
+                    serde_json::json!(handoff_source_mesh_topology.clone()),
+                );
+                object.insert(
                     "source_mesh_topology_sha256".to_string(),
-                    serde_json::json!(handoff.source_mesh_topology_sha256),
+                    serde_json::json!(modal_source_mesh_topology.clone()),
                 );
             } else if is_solver_diagnostics {
                 object.insert(
@@ -167,8 +238,12 @@ pub(super) fn bind_stage_continuation_artifacts(
                     serde_json::json!(handoff.content_sha256),
                 );
                 object.insert(
+                    "relax_to_eigen_source_mesh_topology_sha256".to_string(),
+                    serde_json::json!(handoff_source_mesh_topology.clone()),
+                );
+                object.insert(
                     "source_mesh_topology_sha256".to_string(),
-                    serde_json::json!(handoff.source_mesh_topology_sha256),
+                    serde_json::json!(modal_source_mesh_topology.clone()),
                 );
                 if let Some(samples) = object
                     .get_mut("sample_solver_diagnostics")
@@ -184,8 +259,12 @@ pub(super) fn bind_stage_continuation_artifacts(
                                 serde_json::json!(handoff.content_sha256),
                             );
                             diagnostics.insert(
+                                "relax_to_eigen_source_mesh_topology_sha256".to_string(),
+                                serde_json::json!(handoff_source_mesh_topology.clone()),
+                            );
+                            diagnostics.insert(
                                 "source_mesh_topology_sha256".to_string(),
-                                serde_json::json!(handoff.source_mesh_topology_sha256),
+                                serde_json::json!(modal_source_mesh_topology.clone()),
                             );
                         }
                     }
@@ -209,8 +288,12 @@ pub(super) fn bind_stage_continuation_artifacts(
                                     serde_json::json!(handoff.content_sha256),
                                 );
                                 mode.insert(
+                                    "relax_to_eigen_source_mesh_topology_sha256".to_string(),
+                                    serde_json::json!(handoff_source_mesh_topology.clone()),
+                                );
+                                mode.insert(
                                     "source_mesh_topology_sha256".to_string(),
-                                    serde_json::json!(handoff.source_mesh_topology_sha256),
+                                    serde_json::json!(modal_source_mesh_topology.clone()),
                                 );
                             }
                         }
@@ -378,10 +461,22 @@ pub(super) fn materialize_equilibrium(
                         ),
                     }
                 })?;
-                if !difference.is_finite() || difference > 1.0e-8 {
+                let scale = max_vector_field_amplitude(accepted, recomputed).ok_or_else(|| {
+                    RunError {
+                        message: format!(
+                            "relax_stage_handoff_{label}_recompute_mismatch: accepted and recomputed field shapes differ"
+                        ),
+                    }
+                })?;
+                let tolerance = field_handoff_tolerance(scale).ok_or_else(|| RunError {
+                    message: format!(
+                        "relax_stage_handoff_{label}_recompute_mismatch: accepted/recomputed field scale is not finite"
+                    ),
+                })?;
+                if !difference.is_finite() || difference > tolerance {
                     return Err(RunError {
                         message: format!(
-                            "relax_stage_handoff_{label}_recompute_mismatch: accepted/recomputed maximum difference {difference:.3e} exceeds 1.000e-8 A/m"
+                            "relax_stage_handoff_{label}_recompute_mismatch: accepted/recomputed maximum difference {difference:.3e} exceeds tolerance {tolerance:.3e} A/m (field scale {scale:.3e} A/m)"
                         ),
                     });
                 }
@@ -400,10 +495,21 @@ pub(super) fn materialize_equilibrium(
         .ok_or_else(|| RunError {
             message: "relax_stage_handoff_h_ext0_recompute_mismatch: accepted and recomputed field shapes differ or the mesh has no magnetic nodes".to_string(),
         })?;
-        if !h_ext_difference.is_finite() || h_ext_difference > 1.0e-8 {
+        let h_ext_scale = max_vector_field_amplitude_on_magnetic_nodes(
+            &handoff.certified_fields.h_ext_a_per_m,
+            &observables.external_field,
+            &magnetic_node_volumes,
+        )
+        .ok_or_else(|| RunError {
+            message: "relax_stage_handoff_h_ext0_recompute_mismatch: accepted and recomputed field shapes differ or the mesh has no magnetic nodes".to_string(),
+        })?;
+        let h_ext_tolerance = field_handoff_tolerance(h_ext_scale).ok_or_else(|| RunError {
+            message: "relax_stage_handoff_h_ext0_recompute_mismatch: accepted/recomputed field scale is not finite".to_string(),
+        })?;
+        if !h_ext_difference.is_finite() || h_ext_difference > h_ext_tolerance {
             return Err(RunError {
                 message: format!(
-                    "relax_stage_handoff_h_ext0_recompute_mismatch: accepted/recomputed maximum magnetic-node difference {h_ext_difference:.3e} exceeds 1.000e-8 A/m"
+                    "relax_stage_handoff_h_ext0_recompute_mismatch: accepted/recomputed maximum magnetic-node difference {h_ext_difference:.3e} exceeds tolerance {h_ext_tolerance:.3e} A/m (field scale {h_ext_scale:.3e} A/m)"
                 ),
             });
         }

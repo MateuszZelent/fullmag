@@ -23,6 +23,7 @@ import {
   frequencyResponseSeriesUnit,
   frequencyDomainChartRouteOverrideFromSelection,
   frequencyDomainChartRouteOverrideFromSubview,
+  frequencyDomainManifestSupportsChartRoute,
   frequencyDomainResultContextFromManifest,
   routeFrequencyDomainCalculationMode,
   type FrequencyDomainJsonArtifactLike,
@@ -554,6 +555,7 @@ describe("frequencyDomainChartModels", () => {
       branchId: "acoustic",
       calculationMode: "dispersion_modal",
       kind: "results.eigen.dispersion",
+      kPathCoordinateRadPerM: 2.5e7,
       modeIndex: 5,
       nodeId: "results:eigen:dispersion:sample:4:mode:5",
       resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
@@ -585,11 +587,55 @@ describe("frequencyDomainChartModels", () => {
       calculationMode: "dispersion_modal",
       fieldId: "analysis:eigen:sample-0002:mode-0000",
       kind: "results.eigen.mode",
+      kPathCoordinateRadPerM: 5.0e7,
       modeIndex: 0,
       nodeId: "results:eigen:dispersion:sample:2:mode:0",
       resourceRef: fieldVectorResourceKey("analysis:eigen:sample-0002:mode-0000"),
       sampleIndex: 2,
       type: "frequency-domain",
+    });
+  });
+
+  it("does not turn empty dispersion values into zero-valued physics or mode identities", () => {
+    const model = buildEigenDispersionChartModel(textResource([
+      "sample_index,raw_mode_index,path_s_rad_per_m,frequency_hz,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,residual_norm,line_width_hz",
+      "0,1,0,1e9,,,,,",
+      "1,,1,1e9,0,0,0,0,0",
+      "2,1.5,2,1e9,0,0,0,0,0",
+      "3,1,3,,0,0,0,0,0",
+    ].join("\n")));
+    expect(model.points).toHaveLength(1);
+    expect(model.droppedPointCount).toBe(3);
+    expect(model.points[0]).toMatchObject({ residualNorm: null, linewidthHz: null });
+    expect(model.points[0]?.wavevectorKf).toBeUndefined();
+  });
+
+  it.each([false, true])("preserves dispersion identity, revision and clicked k (field=%s)", (withField) => {
+    const model = buildEigenDispersionChartModel(textResource([
+      "sample_index,raw_mode_index,sample_id,mode_id,path_s_rad_per_m,frequency_hz,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,mode_field_id",
+      `4,7,k-path-sample-0004,sample-0004-mode-0007,2.5e7,1.2e9,-2e7,1e7,0,${withField ? "field-7" : ""}`,
+    ].join("\n")));
+    const selection = buildEigenDispersionPointSelectionRef(model.points[0]!, {
+      analysisRunId: "run-current",
+      artifactRevision: 0,
+      equilibriumId: "equilibrium-current",
+      representation: "complex-vector-xyz",
+      kContextKind: "k_path",
+      // A previous selection's vector must not replace the clicked sample.
+      wavevectorKf: [9, 9, 9],
+    });
+    expect(selection).toMatchObject({
+      kind: withField ? "results.eigen.mode" : "results.eigen.dispersion",
+      sampleId: "k-path-sample-0004",
+      modeId: "sample-0004-mode-0007",
+      sampleIndex: 4,
+      modeIndex: 7,
+      analysisRunId: "run-current",
+      artifactRevision: "0",
+      equilibriumId: "equilibrium-current",
+      representation: "complex-vector-xyz",
+      kContextKind: "k_path",
+      wavevectorKf: [-2e7, 1e7, 0],
     });
   });
 
@@ -1205,6 +1251,74 @@ describe("frequencyDomainChartModels", () => {
       }),
     );
     expect(route.supportingCharts).toContain("response-field-overlay");
+  });
+
+  it("requires the manifest calculation mode to match a requested modal route", () => {
+    const freeModesManifest = {
+      artifacts: { spectrum_v2_path: "eigen/spectrum.v2.json" },
+      requested_execution: { calculation_mode: "free_modes" },
+      stage_kind: "eigenmodes",
+    };
+
+    expect(
+      frequencyDomainManifestSupportsChartRoute(freeModesManifest, {
+        mode: "free_modes",
+        primaryChart: "modal-spectrum",
+      }),
+    ).toBe(true);
+    expect(
+      frequencyDomainManifestSupportsChartRoute(freeModesManifest, {
+        mode: "fmr_modal",
+        primaryChart: "modal-spectrum",
+      }),
+    ).toBe(false);
+  });
+
+  it("requires the manifest calculation mode to match a requested response route", () => {
+    const responseManifest = {
+      artifacts: { response_sweep_v2_path: "response/sweep.v2.json" },
+      requested_execution: { calculation_mode: "frequency_response" },
+      stage_kind: "frequency_response",
+    };
+
+    expect(
+      frequencyDomainManifestSupportsChartRoute(responseManifest, {
+        mode: "frequency_response",
+        primaryChart: "response-sweep",
+      }),
+    ).toBe(true);
+    expect(
+      frequencyDomainManifestSupportsChartRoute(responseManifest, {
+        mode: "fmr_response",
+        primaryChart: "response-sweep",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not infer modal-driven comparison from unrelated artifacts", () => {
+    const freeModesManifest = {
+      artifacts: {
+        response_sweep_v2_path: "response/sweep.v2.json",
+        spectrum_v2_path: "eigen/spectrum.v2.json",
+      },
+      equilibrium_identity: "eq-1",
+      geometry_identity: "geometry-1",
+      mesh_identity: "mesh-1",
+      requested_execution: {
+        boundary_context: "finite_open",
+        calculation_mode: "free_modes",
+      },
+      run_id: "run-1",
+      stage_id: "stage-1",
+      study_product: "modal_eigen",
+    };
+
+    expect(
+      frequencyDomainManifestSupportsChartRoute(freeModesManifest, {
+        mode: "fmr_modal_driven",
+        primaryChart: "comparison",
+      }),
+    ).toBe(false);
   });
 
   it("classifies driven response only from typed physical evidence", () => {

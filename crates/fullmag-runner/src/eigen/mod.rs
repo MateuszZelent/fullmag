@@ -2,6 +2,7 @@ pub mod artifacts;
 pub mod assembly_scalar;
 pub mod diagnostics;
 pub mod orchestrator;
+pub(crate) mod output_selection;
 pub mod path;
 pub mod response_block_real;
 pub mod tracking;
@@ -14,7 +15,8 @@ pub use artifacts::{
     solve_and_write_field_driven_response_sweep_bundle_with_interrupt, write_branch_bundle,
     write_fmr_analysis_artifacts, write_frequency_domain_eigen_manifest,
     write_frequency_domain_field_sweep_artifact, write_kittel_fit_artifact, write_mode_bundle,
-    write_path_bundle, write_response_sweep_artifact, write_response_sweep_bundle,
+    write_path_bundle, write_path_bundle_with_sample_namespace, write_response_sweep_artifact,
+    write_response_sweep_bundle,
     write_response_sweep_bundle_with_progress,
 };
 pub use artifacts::{

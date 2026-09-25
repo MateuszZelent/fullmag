@@ -19,10 +19,15 @@ pub(crate) use crate::fem::eigen_equilibrium_contract::{
 pub(crate) use crate::fem::eigen_execution::{
     execute_baseline_fem_eigen, execute_baseline_fem_eigen_with_progress, execute_cpu_fem_eigen,
     execute_cpu_fem_eigen_with_handoff, execute_cpu_fem_eigen_with_progress,
+    execute_cpu_fem_eigen_with_stage_handoff,
     execute_cpu_fem_eigen_with_progress_and_stage_handoff, execute_gpu_fem_eigen,
     execute_gpu_fem_eigen_with_handoff, execute_gpu_fem_eigen_with_progress_and_stage_handoff,
+    execute_gpu_fem_eigen_with_stage_handoff,
     execute_planned_fem_eigen, execute_planned_fem_eigen_with_handoff,
     execute_planned_fem_eigen_with_progress,
+    execute_planned_fem_eigen_with_handoff_and_progress,
+    execute_cpu_fem_eigen_with_handoff_and_progress,
+    execute_planned_fem_eigen_with_stage_handoff,
     execute_planned_fem_eigen_with_progress_and_stage_handoff,
     reject_unsupported_floquet_dynamic_demag,
 };

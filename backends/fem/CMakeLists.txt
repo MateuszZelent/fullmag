@@ -170,6 +170,12 @@ set(FEM_SOURCES
     cpu/mfem/runtime/step_metrics.cpp
     cpu/frequency_domain/dense_poisson_airbox_eigen_oracle.cpp
     cpu/frequency_domain/floquet_bloch_scalar.cpp
+    cpu/frequency_domain/floquet_airbox_operator.cpp
+    cpu/frequency_domain/floquet_dynamic_demag_k.cpp
+    cpu/frequency_domain/floquet_waveguide_demag_k.cpp
+    cpu/frequency_domain/floquet_waveguide_cross_section.cpp
+    cpu/frequency_domain/modal/floquet_modal_solver.cpp
+    cpu/frequency_domain/operators/floquet_magnetic_operator.cpp
     cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp
     cpu/frequency_domain/poisson_airbox_modal_eigen.cpp
     cpu/frequency_domain/poisson_airbox_schur_matshell.cpp
@@ -813,6 +819,49 @@ add_test(NAME fem_transfer_audit COMMAND fem_transfer_audit)
 function(add_fem_source_facade_contract target source)
     add_executable(${target} ${source})
     target_link_libraries(${target} PRIVATE fullmag_fem)
+    if(target STREQUAL fem_poisson_airbox_modal_eigen_slepc_contract AND FULLMAG_USE_MFEM_STACK AND FULLMAG_FEM_WITH_SLEPC)
+        # The modal contract performs a compile-time PetscReal precision
+        # assertion; expose both PETSc and MPI include contracts to that test
+        # target.  The PETSc imported target supplied by the managed stack
+        # does not always carry mpi.h's include directory transitively.
+        find_package(MPI REQUIRED COMPONENTS CXX)
+        target_link_libraries(${target} PRIVATE MPI::MPI_CXX)
+        # This target uses PETSc headers only for the compile-time PetscReal
+        # precision assertion.  Linking PETSC::petsc here would pull its
+        # optional libCEED/CUDA dependency into the CPU executable; the
+        # production fullmag_fem shared library already owns the PETSc/SLEPc
+        # runtime linkage.  Add the header contract explicitly instead.
+        if(PETSc_INCLUDE_DIRS)
+            target_include_directories(${target} PRIVATE ${PETSc_INCLUDE_DIRS})
+        elseif(PETSc_INCLUDE_DIR)
+            target_include_directories(${target} PRIVATE ${PETSc_INCLUDE_DIR})
+        endif()
+    endif()
+    if(FULLMAG_ENABLE_CUDA)
+        # The managed CPU image carries libCEED with CUDA-driver symbols.
+        # Every source-facade contract links fullmag_fem, whose CUDA-enabled
+        # shared library keeps those symbols in its dependency closure. Resolve
+        # them for every contract target, not only the modal target; otherwise
+        # the first target can link while the next contract fails with an
+        # unresolved cu* symbol. The contract launcher supplies the same
+        # compatibility directory at runtime. Linking the stub target would
+        # leave an unresolvable libcuda.so.1 SONAME in the CPU image, so prefer
+        # the compatibility driver path explicitly.
+        find_library(FULLMAG_CUDA_DRIVER_LIBRARY
+            NAMES cuda
+            HINTS
+                "${CMAKE_CUDA_COMPILER_TOOLKIT_ROOT}/compat"
+                "${CUDAToolkit_LIBRARY_ROOT}/../compat"
+                "${CMAKE_CUDA_COMPILER_TOOLKIT_ROOT}/targets/x86_64-linux/lib/stubs"
+        )
+        if(FULLMAG_CUDA_DRIVER_LIBRARY)
+            target_link_libraries(${target} PRIVATE ${FULLMAG_CUDA_DRIVER_LIBRARY})
+        else()
+            message(FATAL_ERROR
+                "CUDA-enabled FEM contract requires a CUDA driver/compatibility "
+                "library to resolve libCEED's driver symbols")
+        endif()
+    endif()
     target_include_directories(${target} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -990,8 +1039,32 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_FEM_WITH_SLEPC)
     )
 endif()
 add_fem_source_facade_contract(
+    fem_floquet_magnetic_operator_contract
+    tests/frequency_domain/floquet_magnetic_operator_test.cpp
+)
+add_fem_source_facade_contract(
     fem_floquet_bloch_scalar_contract
     tests/frequency_domain/floquet_bloch_scalar_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_floquet_airbox_operator_contract
+    tests/frequency_domain/floquet_airbox_operator_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_floquet_dynamic_demag_k_contract
+    tests/frequency_domain/floquet_dynamic_demag_k_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_floquet_waveguide_demag_k_contract
+    tests/frequency_domain/floquet_waveguide_demag_k_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_floquet_waveguide_cross_section_contract
+    tests/frequency_domain/floquet_waveguide_cross_section_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_floquet_modal_solver_contract
+    tests/frequency_domain/floquet_modal_solver_test.cpp
 )
 add_fem_source_facade_contract(
     fem_poisson_airbox_shared_domain_contract
@@ -1011,12 +1084,19 @@ endif()
 if(FULLMAG_USE_MFEM_STACK)
     if(TARGET MFEM::mfem)
         target_link_libraries(fem_floquet_bloch_scalar_contract PRIVATE MFEM::mfem)
+        target_link_libraries(fem_floquet_magnetic_operator_contract PRIVATE MFEM::mfem)
+        target_link_libraries(fem_floquet_airbox_operator_contract PRIVATE MFEM::mfem)
+        target_link_libraries(fem_floquet_modal_solver_contract PRIVATE MFEM::mfem)
     else()
         target_link_libraries(fem_floquet_bloch_scalar_contract PRIVATE mfem)
+        target_link_libraries(fem_floquet_magnetic_operator_contract PRIVATE mfem)
+        target_link_libraries(fem_floquet_airbox_operator_contract PRIVATE mfem)
+        target_link_libraries(fem_floquet_modal_solver_contract PRIVATE mfem)
     endif()
 endif()
 if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA)
     target_link_libraries(fem_floquet_bloch_scalar_contract PRIVATE CUDA::cudart)
+    target_link_libraries(fem_floquet_magnetic_operator_contract PRIVATE CUDA::cudart)
 endif()
 add_fem_source_facade_contract(
     fem_driven_response_contract

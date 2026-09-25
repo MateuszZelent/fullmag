@@ -7,12 +7,13 @@ use super::eigen_equilibrium_contract::AcceptedFemEigenEquilibriumHandoff;
 use super::eigen_native_result::NativeModalEigenpair;
 use super::eigen_output::{
     classify_polarization, damping_policy_label, demag_realization_label, dispersion_csv,
-    dispersion_v2_csv, equilibrium_source_json, json_artifact, k_vector_json, normalization_label,
+    dispersion_v2_csv, equilibrium_source_json, floquet_potential_payload_bytes,
+    floquet_potential_payload_path, json_artifact, k_vector_json, normalization_label,
     requested_mode_indices, solver_kind_label, spin_wave_bc_json, spin_wave_bc_label,
     write_eigen_v2_bundle,
 };
 use super::eigen_policy::resolved_demag_realization;
-use super::eigen_projection::project_complex_2x2_mode_to_tangent_basis;
+use super::eigen_projection::project_complex_2x2_mode_to_tangent_basis_with_periodic_map;
 use super::eigen_reduction::ReductionMap;
 use super::eigen_solve::mode_tangent_leakage;
 use super::eigen_types::SharedDomainLinearizationState;
@@ -26,6 +27,115 @@ use fullmag_ir::FemEigenPlanIR;
 use fullmag_ir::OutputIR;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+
+pub(super) fn native_modal_block_residuals(
+    mode: &NativeModalEigenpair,
+    solver_adapter: Option<&str>,
+) -> serde_json::Value {
+    let reduced_only = solver_adapter == Some("floquet_airbox_cpu_schur_slepc");
+    let reduced_ok = [
+        mode.block_residual_q,
+        mode.block_residual_phi,
+        mode.block_residual_gauge,
+        mode.residual_relative_l2,
+    ]
+    .iter()
+    .all(|value| value.is_finite() && (0.0..=1.0e-8).contains(value));
+    serde_json::json!({
+        "eps_q": mode.block_residual_q,
+        "eps_phi": mode.block_residual_phi,
+        "eps_gauge": mode.block_residual_gauge,
+        "eps_full": (!reduced_only).then_some(mode.residual_relative_l2),
+        "eps_reduced": reduced_only.then_some(mode.residual_relative_l2),
+        "scope": if reduced_only { "reduced_original_blocks_only" } else { "native_descriptor" },
+        "backend_reported_residual": mode.backend_reported_residual,
+        "certification_tolerance": 1.0e-8,
+        "certified": !reduced_only && reduced_ok,
+        "reduced_pencil_certified": reduced_only && reduced_ok,
+        "full_descriptor_certified": !reduced_only && reduced_ok,
+    })
+}
+
+fn floquet_certificate_summary(
+    mode: &NativeModalEigenpair,
+) -> Result<Option<serde_json::Value>, RunError> {
+    if !mode.floquet_descriptor_certified {
+        if mode.floquet_geometric_bc_certified
+            || mode.floquet_potential_representation.is_some()
+            || mode.floquet_magnetic_relative_residual.is_some()
+            || mode.floquet_potential_relative_residual.is_some()
+            || !mode.floquet_potential_real_split.is_empty()
+        {
+            return Err(RunError {
+                message:
+                    "non-certified native Floquet mode carries certificate metadata or potential payload"
+                        .to_string(),
+            });
+        }
+        return Ok(None);
+    }
+    if mode.floquet_geometric_bc_certified {
+        return Err(RunError {
+            message:
+                "native Floquet descriptor certificate cannot claim geometric BC certification"
+                    .to_string(),
+        });
+    }
+    if mode.floquet_potential_representation.as_deref()
+        != Some("doubled_real_split_complex_coefficients")
+    {
+        return Err(RunError {
+            message:
+                "native Floquet descriptor certificate has unsupported potential representation"
+                    .to_string(),
+        });
+    }
+    let magnetic_relative_residual = mode
+        .floquet_magnetic_relative_residual
+        .filter(|value| value.is_finite() && (0.0..=1.0e-8).contains(value))
+        .ok_or_else(|| RunError {
+            message: "native Floquet descriptor certificate has invalid magnetic relative residual"
+                .to_string(),
+        })?;
+    let potential_relative_residual = mode
+        .floquet_potential_relative_residual
+        .filter(|value| value.is_finite() && (0.0..=1.0e-8).contains(value))
+        .ok_or_else(|| RunError {
+            message:
+                "native Floquet descriptor certificate has invalid potential relative residual"
+                    .to_string(),
+        })?;
+    if mode.floquet_potential_real_split.is_empty()
+        || mode.floquet_potential_real_split.len() % 2 != 0
+        || mode
+            .floquet_potential_real_split
+            .iter()
+            .any(|value| !value.re.is_finite() || !value.im.is_finite())
+    {
+        return Err(RunError {
+            message:
+                "native Floquet descriptor certificate has an invalid doubled real-split potential payload"
+                    .to_string(),
+        });
+    }
+    Ok(Some(serde_json::json!({
+        "floquet_descriptor_certified": true,
+        "floquet_geometric_bc_certified": false,
+        "potential_representation": "doubled_real_split_complex_coefficients",
+        "magnetic_relative_residual": magnetic_relative_residual,
+        "potential_relative_residual": potential_relative_residual,
+        "potential_dof_count": mode.floquet_potential_real_split.len(),
+    })))
+}
+
+fn merge_object_fields(target: &mut serde_json::Value, fields: &serde_json::Value) {
+    let (Some(target), Some(fields)) = (target.as_object_mut(), fields.as_object()) else {
+        return;
+    };
+    for (key, value) in fields {
+        target.insert(key.clone(), value.clone());
+    }
+}
 
 pub(super) fn native_modal_artifacts(
     plan: &FemEigenPlanIR,
@@ -53,6 +163,12 @@ pub(super) fn native_modal_artifacts(
     let mu0_t_m_per_a = MU0;
     let mut auxiliary_artifacts = Vec::new();
     let mut solver_diagnostics = solver_diagnostics;
+    let modal_source_mesh_topology = plan
+        .mesh
+        .mixed_topology_fingerprint_v3()
+        .map_err(|error| RunError {
+            message: format!("modal source mesh identity is invalid: {error}"),
+        })?;
     if let Some(object) = solver_diagnostics.as_object_mut() {
         // The native diagnostics payload reports candidate/accepted counts,
         // while artifacts-v2 needs the exact number of modes that survived
@@ -95,7 +211,7 @@ pub(super) fn native_modal_artifacts(
                 serde_json::json!(handoff.content_sha256()),
             );
             object.insert(
-                "source_mesh_topology_sha256".to_string(),
+                "relax_to_eigen_source_mesh_topology_sha256".to_string(),
                 serde_json::json!(handoff.source_mesh_topology_sha256()),
             );
             object.insert(
@@ -104,29 +220,18 @@ pub(super) fn native_modal_artifacts(
             );
         }
     }
-    // A cached equilibrium is a valid source for the shared-domain modal
-    // solve, but it intentionally has no in-memory relax-to-eigen handoff.
-    // The publication contract still needs the topology identity that was
-    // validated at the native boundary.  Derive it from the exact mesh being
-    // published rather than leaving the field absent (or inventing a
-    // placeholder), so cache-backed production runs remain fail-closed on any
-    // later mesh drift.
+    // The modal payload is indexed in the exact mesh carried by this plan.
+    // Bind the public source identity to that mesh for every lane.  A
+    // relax-to-eigen handoff is retained as a separate provenance record: its
+    // source identity describes the accepted handoff, while this identity
+    // describes the mesh on which the published modal field is stored.  The
+    // distinction matters when a stage adapter rebuilds an equivalent plan
+    // before artifact publication.
     if let Some(object) = solver_diagnostics.as_object_mut() {
-        let production_k0_adapter = matches!(
-            object
-                .get("solver_adapter")
-                .and_then(serde_json::Value::as_str),
-            Some("k0_poisson_airbox_cpu_full_coupled_slepc")
-                | Some("k0_poisson_airbox_cpu_schur_slepc")
-                | Some("k0_poisson_airbox_gpu_petsc_slepc")
-                | Some("k0_poisson_airbox_gpu_modal_device_krylov")
+        object.insert(
+            "source_mesh_topology_sha256".to_string(),
+            serde_json::json!(modal_source_mesh_topology.clone()),
         );
-        if production_k0_adapter && !object.contains_key("source_mesh_topology_sha256") {
-            object.insert(
-                "source_mesh_topology_sha256".to_string(),
-                serde_json::json!(plan.mesh.topology_fingerprint_v6()),
-            );
-        }
     }
     let sample_diagnostics = solver_diagnostics.clone();
     if let Some(object) = solver_diagnostics.as_object_mut() {
@@ -141,11 +246,9 @@ pub(super) fn native_modal_artifacts(
         }
     }
     // The top-level diagnostics are also the source of the per-sample
-    // provenance records consumed by artifacts-v2 validators.  Keep those
-    // records synchronized with the exact v6 state files written for this
-    // sample; otherwise a single-sample production run can expose the native
-    // pre-handoff digest while its published sidecar carries the accepted
-    // linearization digest.
+    // provenance records consumed by artifacts-v2 validators.  Keep the
+    // modal source identity at v3 in those records, while carrying the
+    // accepted relax-to-eigen source identity separately at v6.
     if let Some(state) = linearization_state {
         if let Some(samples) = solver_diagnostics
             .get_mut("sample_solver_diagnostics")
@@ -163,6 +266,10 @@ pub(super) fn native_modal_artifacts(
                     .get_mut("diagnostics")
                     .and_then(serde_json::Value::as_object_mut)
                 {
+                    nested.insert(
+                        "source_mesh_topology_sha256".to_string(),
+                        serde_json::json!(modal_source_mesh_topology.clone()),
+                    );
                     nested.insert(
                         "equilibrium_artifact_sha256".to_string(),
                         serde_json::json!(state.equilibrium_artifact_digest),
@@ -197,11 +304,15 @@ pub(super) fn native_modal_artifacts(
                     .and_then(serde_json::Value::as_object_mut)
                 {
                     nested.insert(
+                        "source_mesh_topology_sha256".to_string(),
+                        serde_json::json!(modal_source_mesh_topology.clone()),
+                    );
+                    nested.insert(
                         "relax_to_eigen_handoff_sha256".to_string(),
                         serde_json::json!(handoff.content_sha256()),
                     );
                     nested.insert(
-                        "source_mesh_topology_sha256".to_string(),
+                        "relax_to_eigen_source_mesh_topology_sha256".to_string(),
                         serde_json::json!(handoff.source_mesh_topology_sha256()),
                     );
                 }
@@ -389,14 +500,18 @@ pub(super) fn native_modal_artifacts(
     let mode_linearization_state = mode_provenance_value("linearization_state_sha256");
     let mode_periodic_certificate = mode_provenance_value("periodic_mesh_certificate_sha256");
     let mode_relax_to_eigen_handoff = mode_provenance_value("relax_to_eigen_handoff_sha256");
-    let mode_source_mesh_topology = mode_provenance_value("source_mesh_topology_sha256");
+    let mode_relax_to_eigen_source_mesh_topology =
+        mode_provenance_value("relax_to_eigen_source_mesh_topology_sha256");
+    let mode_source_mesh_topology = serde_json::json!(modal_source_mesh_topology.clone());
     let mode_assembly_kind = mode_provenance_value("assembly_kind");
 
     for (mode_index, mode) in modes.iter().enumerate() {
         let (real, imag, amplitude, phase, max_amplitude) =
-            project_complex_2x2_mode_to_tangent_basis(
+            project_complex_2x2_mode_to_tangent_basis_with_periodic_map(
                 equilibrium.len(),
                 &reduction.active_nodes,
+                &reduction.node_map,
+                &reduction.node_phases,
                 &mode.vector,
                 bases,
             );
@@ -451,7 +566,8 @@ pub(super) fn native_modal_artifacts(
             .map(|value| value.im)
             .collect::<Vec<_>>();
         let has_native_q_phi_payload = !mode.q_vector.is_empty() || !mode.phi_vector.is_empty();
-        let mode_summary = serde_json::json!({
+        let floquet_certificate = floquet_certificate_summary(mode)?;
+        let mut mode_summary = serde_json::json!({
             "index": mode_index,
             "sample_index": sample_index,
             "cluster_id": mode.cluster_id,
@@ -474,15 +590,7 @@ pub(super) fn native_modal_artifacts(
             "residual_absolute_l2": mode.residual_absolute_l2,
             "residual_relative_l2": mode.residual_relative_l2,
             "residual_linf": mode.residual_linf,
-            "block_residuals": {
-                "eps_q": mode.block_residual_q,
-                "eps_phi": mode.block_residual_phi,
-                "eps_gauge": mode.block_residual_gauge,
-                "eps_full": mode.residual_relative_l2,
-                "backend_reported_residual": mode.backend_reported_residual,
-                "certification_tolerance": 1.0e-8,
-                "certified": mode.residual_relative_l2 <= 1.0e-8,
-            },
+            "block_residuals": native_modal_block_residuals(mode, solver_adapter_name),
             "mass_norm": mode.mass_norm,
             "q_dof_count": mode.q_vector.len(),
             "phi_dof_count": mode.phi_vector.len(),
@@ -503,13 +611,18 @@ pub(super) fn native_modal_artifacts(
             "linearization_state_sha256": mode_linearization_state.clone(),
             "periodic_mesh_certificate_sha256": mode_periodic_certificate.clone(),
             "relax_to_eigen_handoff_sha256": mode_relax_to_eigen_handoff.clone(),
+            "relax_to_eigen_source_mesh_topology_sha256":
+                mode_relax_to_eigen_source_mesh_topology.clone(),
             "source_mesh_topology_sha256": mode_source_mesh_topology.clone(),
             "component_participation": component_participation.clone(),
         });
+        if let Some(certificate) = floquet_certificate.as_ref() {
+            merge_object_fields(&mut mode_summary, certificate);
+        }
         modes_summary.push(mode_summary.clone());
 
         if requested_modes.contains(&(mode_index as u32)) {
-            let payload = serde_json::json!({
+            let mut payload = serde_json::json!({
                 "index": mode_index,
                 "sample_index": sample_index,
                 "frequency_hz": mode.frequency_hz,
@@ -530,15 +643,7 @@ pub(super) fn native_modal_artifacts(
                 "cluster_id": mode.cluster_id,
                 "cluster_size": cluster_sizes.get(&mode.cluster_id).copied().unwrap_or(1),
                 "multiplicity": cluster_sizes.get(&mode.cluster_id).copied().unwrap_or(1),
-                "block_residuals": {
-                    "eps_q": mode.block_residual_q,
-                    "eps_phi": mode.block_residual_phi,
-                    "eps_gauge": mode.block_residual_gauge,
-                    "eps_full": mode.residual_relative_l2,
-                    "backend_reported_residual": mode.backend_reported_residual,
-                    "certification_tolerance": 1.0e-8,
-                    "certified": mode.residual_relative_l2 <= 1.0e-8,
-                },
+                "block_residuals": native_modal_block_residuals(mode, solver_adapter_name),
                 "mass_norm": mode.mass_norm,
                 "q_dof_count": mode.q_vector.len(),
                 "phi_dof_count": mode.phi_vector.len(),
@@ -570,7 +675,9 @@ pub(super) fn native_modal_artifacts(
                 "linearization_state_sha256": mode_linearization_state,
                 "periodic_mesh_certificate_sha256": mode_periodic_certificate,
                 "relax_to_eigen_handoff_sha256": mode_relax_to_eigen_handoff,
-                "source_mesh_topology_sha256": mode_source_mesh_topology,
+                "relax_to_eigen_source_mesh_topology_sha256":
+                    mode_relax_to_eigen_source_mesh_topology,
+                "source_mesh_topology_sha256": mode_source_mesh_topology.clone(),
                 "node_mass_weights": node_mass_weights,
                 "real": real,
                 "imag": imag,
@@ -578,6 +685,15 @@ pub(super) fn native_modal_artifacts(
                 "phase": phase,
                 "component_participation": component_participation,
             });
+            if let Some(certificate) = floquet_certificate.as_ref() {
+                merge_object_fields(&mut payload, certificate);
+                let potential_bytes =
+                    floquet_potential_payload_bytes(&mode.floquet_potential_real_split)?;
+                auxiliary_artifacts.push(AuxiliaryArtifact {
+                    relative_path: floquet_potential_payload_path(sample_index, mode_index as u64),
+                    bytes: potential_bytes,
+                });
+            }
             auxiliary_artifacts.push(json_artifact(
                 format!("eigen/modes/mode_{mode_index:04}.json"),
                 &payload,

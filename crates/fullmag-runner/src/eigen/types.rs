@@ -359,7 +359,6 @@ fn tet4_volume(nodes: [[f64; 3]; 4]) -> f64 {
 pub enum EigenSolverModel {
     ReferenceScalarTangent,
     ReferenceFull2x2Tangent,
-    ReferenceThinFilmDeBvKalinikosN0,
     ReferenceK0KittelSyntheticDemagFactor,
     LinearizedLlgTangentPlane,
     ProductionCpuShiftInvert,
@@ -372,7 +371,6 @@ impl EigenSolverModel {
         match self {
             Self::ReferenceScalarTangent => "reference_scalar_tangent",
             Self::ReferenceFull2x2Tangent => "reference_full_2x2_tangent",
-            Self::ReferenceThinFilmDeBvKalinikosN0 => "reference_thin_film_de_bv_kalinikos_n0",
             Self::ReferenceK0KittelSyntheticDemagFactor => {
                 "reference_k0_kittel_synthetic_demag_factor"
             }
@@ -406,6 +404,10 @@ pub struct SingleKModeResult {
     pub norm: f64,
     pub mass_norm: Option<f64>,
     pub max_amplitude: f64,
+    /// Solver-reported relative L2 residual. This is separate from
+    /// `residual_norm`, which is the absolute L2 norm, and remains `None`
+    /// when the backend did not provide a relative residual.
+    pub residual_relative_l2: Option<f64>,
     pub residual_norm: Option<f64>,
     pub residual_linf: Option<f64>,
     pub tangent_leakage_mean_abs: Option<f64>,
@@ -484,6 +486,7 @@ pub struct PathSolveResult {
     pub include_demag: bool,
     pub dispersion_validation: Option<FemEigenDispersionValidationIR>,
     pub k0_kittel_validation: Option<FemEigenK0KittelValidationIR>,
+    pub solver_policy: Option<fullmag_ir::FemEigenSolverPolicyIR>,
     pub dispersion_analytic_reference: Option<DispersionAnalyticReferenceContext>,
     pub k0_kittel_periodic_airbox_demag: Option<K0KittelPeriodicAirboxDemagMetrics>,
 }

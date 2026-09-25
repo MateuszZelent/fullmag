@@ -21,14 +21,13 @@ import {
 } from "./viewport3dVectorColoring";
 
 /**
- * Expected contents of a `colors` buffer, given the colours in sRGB.
+ * Convert explicitly sRGB-authored orientation/fallback colours to the
+ * linear-sRGB values stored in `ScalarColorBuffer.colors`.
  *
- * `ScalarColorBuffer.colors` holds linear-sRGB, because three.js reads colour
- * attributes as working-space data (see viewport3dColorSpace.ts). The palette
- * and HSL helpers author in sRGB, so the expectations convert the same way the
- * production writer does, then round through Float32Array to match storage.
+ * Scalar palette helpers such as `magnitudeColorRgb()` already return
+ * linear-sRGB and must not be passed through this helper.
  */
-function linearColors(...srgb: number[]): number[] {
+function linearizeSrgbColors(...srgb: number[]): number[] {
   return Array.from(Float32Array.from(srgb.map(srgbToLinearChannel)));
 }
 
@@ -84,8 +83,67 @@ describe("viewport3dFieldMapping", () => {
 
     expect(result?.range).toEqual({ max: 1, min: 0 });
     expect(Array.from(result?.colors ?? [])).toEqual(
-      linearColors(...magnitudeColorRgb(0), ...magnitudeColorRgb(1)),
+      Array.from(Float32Array.from([
+        ...magnitudeColorRgb(0),
+        ...magnitudeColorRgb(1),
+      ])),
     );
+  });
+
+  it("stores scalar palette values directly and converts orientation sentinels once", () => {
+    const scalar = buildVertexScalarColors(
+      vectorField([
+        0, 0, 0,
+        1, 0, 0,
+      ]),
+      2,
+      undefined,
+      "magnitude",
+      "viridis",
+    );
+    expect(scalar).not.toBeNull();
+    if (!scalar) throw new Error("expected scalar color buffer");
+
+    // Viridis t=0 is already linear-sRGB. These values specifically reject
+    // applying the sRGB EOTF a second time in the field writer.
+    expect(scalar.colors[0]).toBeCloseTo(0.05780543, 7);
+    expect(scalar.colors[1]).toBeCloseTo(0.00030352699, 7);
+    expect(scalar.colors[2]).toBeCloseTo(0.08865558, 7);
+
+    const orientation = buildVertexScalarColors(
+      vectorField([
+        0, 0, 0,
+        1, 0, 0,
+      ]),
+      2,
+      undefined,
+      "orientation",
+    );
+    expect(orientation).not.toBeNull();
+    if (!orientation) throw new Error("expected orientation color buffer");
+
+    // A zero vector uses the neutral orientation sentinel authored as sRGB
+    // 0.6; the buffer stores its one-time EOTF result.
+    expect(orientation.colors[0]).toBeCloseTo(0.31854678, 7);
+    expect(orientation.colors[1]).toBeCloseTo(0.31854678, 7);
+    expect(orientation.colors[2]).toBeCloseTo(0.31854678, 7);
+
+    const sampled = buildSampledScalarColors(
+      vectorField([
+        0, 0, 0,
+        1, 0, 0,
+      ]),
+      Uint32Array.from([0, 99]),
+      "magnitude",
+    );
+    expect(sampled).not.toBeNull();
+    if (!sampled) throw new Error("expected sampled color buffer");
+
+    // Out-of-coverage samples use the neutral 0.5 sRGB sentinel, not a
+    // palette value and not a second conversion of an already-linear value.
+    expect(sampled.colors[3]).toBeCloseTo(0.21404114, 7);
+    expect(sampled.colors[4]).toBeCloseTo(0.21404114, 7);
+    expect(sampled.colors[5]).toBeCloseTo(0.21404114, 7);
   });
 
   it("applies the selected magnitude colormap palette to scalar colors", () => {
@@ -102,10 +160,10 @@ describe("viewport3dFieldMapping", () => {
 
     expect(normalizeViewport3DColorPalette("inferno")).toBe("inferno");
     expect(Array.from(result?.colors ?? [])).toEqual(
-      linearColors(
+      Array.from(Float32Array.from([
         ...magnitudeColorRgb(0, "inferno"),
         ...magnitudeColorRgb(1, "inferno"),
-      ),
+      ])),
     );
     expect(magnitudeColorRgb(0.5, "inferno")).not.toEqual(
       magnitudeColorRgb(0.5, "viridis"),
@@ -144,10 +202,10 @@ describe("viewport3dFieldMapping", () => {
     );
 
     expect(Array.from(result?.colors ?? [])).toEqual(
-      linearColors(
+      Array.from(Float32Array.from([
         ...magnitudeColorRgb(0, "coolwarm"),
         ...magnitudeColorRgb(1, "coolwarm"),
-      ),
+      ])),
     );
   });
 
@@ -258,7 +316,10 @@ describe("viewport3dFieldMapping", () => {
 
     expect(result?.range).toEqual({ max: 1, min: -1 });
     expect(Array.from(result?.colors ?? [])).toEqual(
-      linearColors(...magnitudeColorRgb(0), ...magnitudeColorRgb(1)),
+      Array.from(Float32Array.from([
+        ...magnitudeColorRgb(0),
+        ...magnitudeColorRgb(1),
+      ])),
     );
   });
 
@@ -276,10 +337,10 @@ describe("viewport3dFieldMapping", () => {
 
     expect(result?.range).toEqual({ max: 1, min: -1 });
     expect(Array.from(result?.colors ?? [])).toEqual(
-      linearColors(
+      Array.from(Float32Array.from([
         ...magnitudeColorRgb(0, "inferno"),
         ...magnitudeColorRgb(1, "inferno"),
-      ),
+      ])),
     );
   });
 
@@ -334,7 +395,10 @@ describe("viewport3dFieldMapping", () => {
 
     expect(result?.range).toEqual({ max: 1, min: -1 });
     expect(Array.from(result?.colors ?? [])).toEqual(
-      linearColors(...magnitudeColorRgb(0), ...magnitudeColorRgb(1)),
+      Array.from(Float32Array.from([
+        ...magnitudeColorRgb(0),
+        ...magnitudeColorRgb(1),
+      ])),
     );
   });
 
@@ -395,7 +459,7 @@ describe("viewport3dFieldMapping", () => {
     expect(result?.degradedFaceCount).toBe(1);
     expect(result?.missingNodeCount).toBe(1);
     expect(Array.from(result?.colors ?? [])).toEqual(
-      linearColors(0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5),
+      linearizeSrgbColors(0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5),
     );
   });
 
@@ -536,7 +600,7 @@ describe("viewport3dFieldMapping", () => {
 
     expect(result?.lowNormFaceCount).toBe(1);
     expect(Array.from(result?.colors ?? [])).toEqual(
-      linearColors(0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6),
+      linearizeSrgbColors(0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6),
     );
   });
 
@@ -580,7 +644,7 @@ describe("viewport3dFieldMapping", () => {
       0, 0, 0,
     ]);
     expect(Array.from(result?.colors ?? [])).toEqual(
-      linearColors(0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6),
+      linearizeSrgbColors(0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6),
     );
   });
 
@@ -603,7 +667,7 @@ describe("viewport3dFieldMapping", () => {
 
     expect(result?.lowNormFaceCount).toBe(1);
     expect(Array.from(result?.colors ?? [])).toEqual(
-      linearColors(0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6),
+      linearizeSrgbColors(0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6),
     );
   });
 
@@ -631,7 +695,7 @@ describe("viewport3dFieldMapping", () => {
     expect(result?.degradedFaceCount).toBe(1);
     expect(result?.missingNodeCount).toBe(1);
     expect(Array.from(result?.colors ?? [])).toEqual(
-      linearColors(0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5),
+      linearizeSrgbColors(0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5),
     );
   });
 
@@ -715,7 +779,7 @@ describe("viewport3dFieldMapping", () => {
     );
     expect(result).not.toBeNull();
     expect(Array.from(result?.colors ?? [])).toEqual(
-      linearColors(1, 0, 0, 0.5, 0.5, 0.5),
+      linearizeSrgbColors(1, 0, 0, 0.5, 0.5, 0.5),
     );
   });
 

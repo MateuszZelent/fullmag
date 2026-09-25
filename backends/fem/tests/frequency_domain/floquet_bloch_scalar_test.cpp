@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <vector>
 
 namespace fd = fullmag::fem::frequency_domain;
@@ -111,6 +112,68 @@ void floquet_bloch_scalar_nonzero_k_has_antisymmetric_imaginary_block()
     }
     check(imaginary_abs_sum > 0.0,
           "Floquet Bloch scalar imaginary block is nonzero for nonzero k");
+#endif
+}
+
+void floquet_bloch_scalar_full_field_uses_phase_constraint_only()
+{
+#if FULLMAG_HAS_MFEM_STACK
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
+        1,
+        1,
+        1,
+        mfem::Element::TETRAHEDRON,
+        1.0,
+        1.0,
+        1.0);
+    mfem::H1_FECollection collection(1, mesh.Dimension());
+    mfem::FiniteElementSpace scalar_space(&mesh, &collection);
+
+    fd::FloquetBlochScalarAssemblyRequest request{};
+    request.scalar_space = &scalar_space;
+    request.k_rad_per_m[0] = 3.0;
+    request.representation =
+        fd::FloquetBlochScalarRepresentation::full_field_phase_constrained;
+
+    fd::FloquetBlochScalarAssemblyResult result{};
+    check(
+        fd::assemble_floquet_bloch_scalar_operator(request, &result) ==
+            fd::FrequencyDomainStatus::ok,
+        "full-field Floquet scalar operator assembles at nonzero k");
+
+    const mfem::SparseMatrix &imaginary = result.operator_matrix->imag();
+    double imaginary_abs_sum = 0.0;
+    for (int row = 0; row < imaginary.Height(); ++row) {
+        for (int column = 0; column < imaginary.Width(); ++column) {
+            imaginary_abs_sum += std::abs(imaginary(row, column));
+        }
+    }
+    check(imaginary_abs_sum < 1.0e-12,
+          "full-field representation has no shifted-derivative imaginary block");
+
+    mfem::BilinearForm diffusion(&scalar_space);
+    diffusion.AddDomainIntegrator(new mfem::DiffusionIntegrator());
+    diffusion.Assemble();
+    diffusion.Finalize();
+    mfem::Vector input(2 * scalar_space.GetVSize());
+    input = 0.0;
+    for (int dof = 0; dof < scalar_space.GetVSize(); ++dof) {
+        input[dof] = static_cast<double>(dof + 1);
+    }
+    mfem::Vector actual(input.Size());
+    result.operator_matrix->Mult(input, actual);
+    mfem::Vector expected(scalar_space.GetVSize());
+    mfem::Vector real_input(scalar_space.GetVSize());
+    for (int dof = 0; dof < scalar_space.GetVSize(); ++dof) {
+        real_input[dof] = input[dof];
+    }
+    diffusion.SpMat().Mult(real_input, expected);
+    for (int dof = 0; dof < scalar_space.GetVSize(); ++dof) {
+        check(std::abs(actual[dof] - expected[dof]) < 1.0e-12,
+              "full-field representation keeps ordinary diffusion block");
+        check(std::abs(actual[scalar_space.GetVSize() + dof]) < 1.0e-12,
+              "full-field representation keeps imaginary action zero");
+    }
 #endif
 }
 
@@ -305,14 +368,99 @@ void floquet_bloch_scalar_tangent_source_matches_mfem_gradient_form_at_k0()
 #endif
 }
 
+void floquet_bloch_scalar_tangent_source_masks_air_and_reduces_magnetic_nodes()
+{
+#if FULLMAG_HAS_MFEM_STACK
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
+        1,
+        1,
+        1,
+        mfem::Element::TETRAHEDRON,
+        1.0,
+        1.0,
+        1.0);
+    mfem::H1_FECollection collection(1, mesh.Dimension());
+    mfem::FiniteElementSpace scalar_space(&mesh, &collection);
+    const int dof_count = scalar_space.GetVSize();
+    const int element_count = mesh.GetNE();
+    std::vector<fd::TangentFrameNode> frames(static_cast<std::size_t>(dof_count));
+    std::vector<double> nodal_ms(static_cast<std::size_t>(dof_count), 0.0);
+    nodal_ms[0] = 1.0;
+
+    std::vector<std::uint8_t> no_magnetic_elements(
+        static_cast<std::size_t>(element_count), 0u);
+    fd::FloquetBlochScalarTangentSourceRequest masked_request{};
+    masked_request.scalar_space = &scalar_space;
+    masked_request.tangent_frames = frames.data();
+    masked_request.tangent_frame_count = static_cast<std::uint64_t>(frames.size());
+    masked_request.saturation_magnetization_field = nodal_ms.data();
+    masked_request.saturation_magnetization_field_count =
+        static_cast<std::uint64_t>(nodal_ms.size());
+    masked_request.representation =
+        fd::FloquetBlochScalarRepresentation::full_field_phase_constrained;
+    masked_request.magnetic_element_mask = no_magnetic_elements.data();
+    masked_request.magnetic_element_mask_count =
+        static_cast<std::uint64_t>(no_magnetic_elements.size());
+    const std::uint32_t inactive = std::numeric_limits<std::uint32_t>::max();
+    std::vector<std::uint32_t> one_reduced_node(
+        static_cast<std::size_t>(dof_count), inactive);
+    one_reduced_node[0] = 0u;
+    masked_request.magnetic_reduced_node = one_reduced_node.data();
+    masked_request.magnetic_reduced_node_count = 1u;
+
+    fd::FloquetBlochScalarTangentSourceResult masked_result{};
+    check(
+        fd::assemble_floquet_bloch_scalar_tangent_source(
+            masked_request,
+            &masked_result) == fd::FrequencyDomainStatus::ok,
+        "masked Floquet tangent source assembles with reduced magnetic map");
+    check(masked_result.source_matrix->imag().Height() == dof_count &&
+              masked_result.source_matrix->imag().Width() == 2,
+          "reduced tangent source exposes two real-split q columns");
+    mfem::Vector reduced_input(4);
+    reduced_input = 0.0;
+    reduced_input[0] = 1.0;
+    mfem::Vector masked_output(2 * dof_count);
+    masked_result.source_matrix->Mult(reduced_input, masked_output);
+    for (int index = 0; index < masked_output.Size(); ++index) {
+        check(std::abs(masked_output[index]) < 1.0e-12,
+              "air-only element mask removes tangent source contribution");
+    }
+
+    std::vector<std::uint8_t> all_magnetic_elements(
+        static_cast<std::size_t>(element_count), 1u);
+    fd::FloquetBlochScalarTangentSourceRequest full_request = masked_request;
+    full_request.magnetic_element_mask = all_magnetic_elements.data();
+    std::vector<std::uint32_t> all_one_reduced(
+        static_cast<std::size_t>(dof_count), 0u);
+    full_request.magnetic_reduced_node = all_one_reduced.data();
+    fd::FloquetBlochScalarTangentSourceResult full_result{};
+    check(
+        fd::assemble_floquet_bloch_scalar_tangent_source(
+            full_request,
+            &full_result) == fd::FrequencyDomainStatus::ok,
+        "full magnetic tangent source assembles with one reduced class");
+    check(full_result.source_matrix->real().Width() == 2,
+          "magnetic node reduction collapses q columns to one class");
+    mfem::Vector full_output(2 * dof_count);
+    full_result.source_matrix->Mult(reduced_input, full_output);
+    for (int dof = 0; dof < dof_count; ++dof) {
+        check(std::abs(full_output[dof_count + dof]) < 1.0e-12,
+              "full-field reduced source keeps imaginary block zero");
+    }
+#endif
+}
+
 } // namespace
 
 int main()
 {
     floquet_bloch_scalar_k0_reproduces_real_diffusion();
     floquet_bloch_scalar_nonzero_k_has_antisymmetric_imaginary_block();
+    floquet_bloch_scalar_full_field_uses_phase_constraint_only();
     floquet_bloch_scalar_constraint_applies_negative_bloch_phase();
     floquet_bloch_scalar_constraint_reduces_the_full_operator();
     floquet_bloch_scalar_tangent_source_matches_mfem_gradient_form_at_k0();
+    floquet_bloch_scalar_tangent_source_masks_air_and_reduces_magnetic_nodes();
     return 0;
 }

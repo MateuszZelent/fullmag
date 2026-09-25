@@ -2022,10 +2022,16 @@ def low_k_de_bv_expected_frequency_hz(
         * k_norm
         / (MU0 * saturation_magnetisation)
     )
+    kd = k_norm * film_thickness
     p_factor = (
         0.0
-        if k_norm == 0.0
-        else 1.0 - (1.0 - math.exp(-k_norm * film_thickness)) / (k_norm * film_thickness)
+        if kd == 0.0
+        else (
+            kd
+            * (0.5 + kd * (-1.0 / 6.0 + kd * (1.0 / 24.0 + kd * (-1.0 / 120.0 + kd / 720.0))))
+            if abs(kd) < 1.0e-4
+            else 1.0 + math.expm1(-kd) / kd
+        )
     )
     common = h0 + exchange_field
     if geometry == "damon_eshbach":
@@ -3295,7 +3301,7 @@ def test_validator_rejects_reference_full_2x2_floquet_without_dispersion_path_me
     result = run_validator(tmp_path, "--require-reference-full-2x2-floquet")
 
     assert result.returncode != 0
-    assert "eigen/dispersion/path.json" in (result.stderr + result.stdout)
+    assert str(Path("eigen") / "dispersion" / "path.json") in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_reference_full_2x2_floquet_without_dispersion_capabilities(
@@ -4216,7 +4222,7 @@ def test_validator_rejects_production_modal_k_path_without_dispersion_path_metad
     result = run_validator(tmp_path, "--require-production-modal-k-path")
 
     assert result.returncode != 0
-    assert "eigen/dispersion/path.json" in (result.stderr + result.stdout)
+    assert str(Path("eigen") / "dispersion" / "path.json") in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_production_modal_k_path_with_non_eigen_stage_id(
@@ -5188,7 +5194,7 @@ def test_validator_rejects_reference_full_2x2_floquet_without_k_path(
     result = run_validator(tmp_path, "--require-reference-full-2x2-floquet")
 
     assert result.returncode != 0
-    assert "eigen/dispersion/path.json" in (result.stderr + result.stdout)
+    assert str(Path("eigen") / "dispersion" / "path.json") in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_flat_reference_full_2x2_floquet_dispersion(
@@ -6582,3 +6588,28 @@ def test_validator_rejects_typed_field_sweep_path_escape(tmp_path: Path) -> None
 
     assert result.returncode != 0
     assert "field_sweep.cross_artifact_refs[1].artifact" in (result.stderr + result.stdout)
+
+
+def test_validator_accepts_numeric_de_bv_comparison_and_rejects_fake_demag(tmp_path: Path) -> None:
+    k_vectors = ((0., 0., 0.), (1.5e6, 0., 0.), (3e6, 0., 0.),
+                 (0., 0., 0.), (0., 1.5e6, 0.), (0., 3e6, 0.))
+    frequencies = tuple(low_k_de_bv_expected_frequency_hz(k, "backward_volume" if i < 3 else "damon_eshbach") for i, k in enumerate(k_vectors))
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path, frequencies_hz=frequencies, k_vectors_rad_m=k_vectors)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    write_low_k_de_bv_dispersion_metadata(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["validation"].update({
+        "dispersion_frequency_source": "numeric_modal_solver_with_analytic_comparison",
+        "dispersion_reference_model": "kalinikos_slab_n0",
+        "dynamic_demag_operator_source": "numeric_modal_solver",
+    })
+    manifest_path.write_text(json.dumps(manifest))
+    result = run_validator(tmp_path, "--require-production-modal-k-path", "--require-low-k-de-bv-analytic-dispersion")
+    assert result.returncode == 0, result.stderr + result.stdout
+    manifest["validation"]["dynamic_demag_operator_source"] = "analytic_thin_film_de_bv_reference_not_fem_demag_k"
+    manifest_path.write_text(json.dumps(manifest))
+    result = run_validator(tmp_path, "--require-production-modal-k-path", "--require-low-k-de-bv-analytic-dispersion")
+    assert result.returncode != 0
+    assert "dynamic_demag_operator_source" in result.stderr + result.stdout

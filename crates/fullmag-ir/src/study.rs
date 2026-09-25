@@ -4,8 +4,8 @@ use crate::{
     BackendTarget, DiscretizationHintsIR, ExecutionPrecision, FrequencyExcitationIR,
     FrequencyResponseOutputIR, FrequencySweepIR, IntegratorChoice, KPointIR,
     MagnetostaticBoundaryConditionIR, MechanicsIR, ModeTrackingIR, RelaxationAlgorithmIR,
-    RelaxationControlIR, RequestedFemDemagIR, ResolvedFemDemagIR, SpinWaveBoundaryConditionIR,
-    TimeDependenceIR,
+    RelaxationControlIR, RequestedFemDemagIR, ResolvedFemDemagIR, SampleSelectorIR,
+    SpinWaveBoundaryConditionIR, TimeDependenceIR,
 };
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 
@@ -1406,6 +1406,60 @@ impl KSamplingIR {
                 .saturating_add(usize::from(!samples_per_segment.is_empty())),
         }
     }
+
+    pub fn validation_errors(&self, prefix: &str) -> Vec<String> {
+        let mut errors = Vec::new();
+        match self {
+            KSamplingIR::Single { k_vector } => {
+                if !k_vector.iter().all(|value| value.is_finite()) {
+                    errors.push(format!("{prefix}.k_vector must contain finite values"));
+                }
+            }
+            KSamplingIR::Path {
+                points,
+                samples_per_segment,
+                closed,
+            } => {
+                let path_prefix = format!("{prefix}.path");
+                if points.len() < 2 {
+                    errors.push(format!(
+                        "{path_prefix} requires at least two control points"
+                    ));
+                }
+                for point in points {
+                    if point
+                        .label
+                        .as_deref()
+                        .is_some_and(|label| label.trim().is_empty())
+                    {
+                        errors.push(format!("{path_prefix} point label must not be empty"));
+                    }
+                    if !point.k_vector.iter().all(|value| value.is_finite()) {
+                        errors.push(format!(
+                            "{path_prefix} point k_vector must contain finite values"
+                        ));
+                    }
+                }
+                let expected_segments = if *closed {
+                    points.len()
+                } else {
+                    points.len().saturating_sub(1)
+                };
+                if samples_per_segment.len() != expected_segments {
+                    errors.push(format!(
+                        "{path_prefix} expected {expected_segments} samples_per_segment entries, got {}",
+                        samples_per_segment.len()
+                    ));
+                }
+                if samples_per_segment.iter().any(|value| *value == 0) {
+                    errors.push(format!(
+                        "{path_prefix} samples_per_segment entries must be > 0"
+                    ));
+                }
+            }
+        }
+        errors
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1668,10 +1722,17 @@ pub enum OutputIR {
     },
     EigenMode {
         field: String,
+        #[serde(default)]
         indices: Vec<u32>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        branches: Vec<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sample_selector: Option<SampleSelectorIR>,
     },
     DispersionCurve {
         name: String,
+        #[serde(default = "default_include_branch_table")]
+        include_branch_table: bool,
     },
     FrequencyResponseOutput {
         observable: FrequencyResponseOutputIR,
@@ -1701,6 +1762,10 @@ pub enum OutputIR {
         #[serde(skip_serializing_if = "Option::is_none")]
         component: Option<String>,
     },
+}
+
+fn default_include_branch_table() -> bool {
+    true
 }
 
 impl OutputIR {

@@ -100,6 +100,26 @@ z lockfile i `make web-build-static`. Success wymaga exit 0, etapów zakończony
 poprawnie i hashy wymaganych binariów/core/web/markera. Nie publikuje automatycznie
 nowego `current` ani nie zalicza testów fizyki.
 
+Profil `fem-cpu-slepc-runtime-v1` jest osobną trasą dla produkcyjnej biblioteki
+FEM CPU z PETSc/SLEPc. Trusted entrypoint uruchamia w nim wyłącznie etap
+`make install-cli-dev`; nie dodaje instalacji frontendu, `CTest` ani celów
+jednostkowych/kontraktowych. Receipt musi zawierać `libfullmag_fem.so`,
+`source-identity.json`, marker `fem-cpu` oraz kontrakt
+`fullmag.fem.cpu.slepc_runtime_contract.v1` z `FULLMAG_FEM_WITH_SLEPC=ON`,
+urządzeniem CPU i precyzją double. Ten profil dostarcza artefakt runtime do
+diagnostyki lub dalszego uruchomienia; `run_comsol_dispersion_benchmark.py`
+akceptuje oba profile SLEPc, a źródło `fullmag-bin` i `libfullmag_fem` w trasie
+runtime-only jest powiązane hashami. Sam receipt pozostaje `NOT VERIFIED` i nie
+jest dowodem CTest ani kwalifikacji fizycznej.
+
+Ponieważ CUDA-enabled `libfullmag_fem` może zachować transitive
+`libcuda.so.1` także w CPU lane, trusted post-build probe dodaje wyłącznie
+image-owned `/usr/local/cuda/compat` do `LD_LIBRARY_PATH`, gdy zawiera
+loadable SONAME. Nie włącza to GPU ani nie zmienia resolved device; zapis
+`cuda_driver_compatibility_paths` w `runtime-attestation.json` dokumentuje
+ścieżkę loadera używaną tylko do tej attestacji. Usługa `fem-modal-cpu` ma
+ten sam jawny compatibility path, lecz nie żąda urządzenia Docker GPU.
+
 Przy mniej niż 8 GiB wolnego miejsca job pozostaje w kolejce. Nie jest to twarda
 kwota dyskowa: pojedynczy etap może zużyć więcej miejsca. `runner-retention-plan`
 jest **tylko podglądem**. Rozważa własne terminalne execution po 24 h dla sukcesu

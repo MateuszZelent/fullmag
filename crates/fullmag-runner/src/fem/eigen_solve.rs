@@ -791,37 +791,46 @@ pub(super) fn complex_mass_norm(mass: &[Vec<Complex64>], vector: &[Complex64]) -
 }
 
 fn sort_and_truncate_real_modes(plan: &FemEigenPlanIR, eigenpairs: &mut Vec<RealEigenpair>) {
+    // A negative (or non-finite) eigenvalue indicates a non-minimum
+    // equilibrium (an unstable/soft mode, or an unconverged relaxation), not
+    // a legitimate zero-frequency acoustic mode. Reject such eigenpairs
+    // before any target-specific sorting or window filtering runs, so a
+    // corrupted eigenpair can never be silently retained, sorted first by
+    // `Lowest`, or folded to 0 Hz by a frequency window (audit finding H7).
+    eigenpairs.retain(|pair| pair.eigenvalue_real.is_finite() && pair.eigenvalue_real >= 0.0);
     match &plan.target {
         fullmag_ir::EigenTargetIR::Lowest => eigenpairs.sort_by(|lhs, rhs| {
-            lhs.eigenvalue_real
-                .partial_cmp(&rhs.eigenvalue_real)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            lhs.eigenvalue_real.total_cmp(&rhs.eigenvalue_real)
         }),
         fullmag_ir::EigenTargetIR::Nearest { frequency_hz } => eigenpairs.sort_by(|lhs, rhs| {
-            let lhs_freq = frequency_from_eigenvalue(plan.gyromagnetic_ratio, lhs.eigenvalue_real);
-            let rhs_freq = frequency_from_eigenvalue(plan.gyromagnetic_ratio, rhs.eigenvalue_real);
+            let lhs_freq = frequency_from_eigenvalue(plan.gyromagnetic_ratio, lhs.eigenvalue_real)
+                .expect("eigenvalue_real already filtered non-negative and finite above");
+            let rhs_freq = frequency_from_eigenvalue(plan.gyromagnetic_ratio, rhs.eigenvalue_real)
+                .expect("eigenvalue_real already filtered non-negative and finite above");
             (lhs_freq - *frequency_hz)
                 .abs()
-                .partial_cmp(&(rhs_freq - *frequency_hz).abs())
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .total_cmp(&(rhs_freq - *frequency_hz).abs())
         }),
         fullmag_ir::EigenTargetIR::FrequencyWindow {
             frequency_min_hz,
             frequency_max_hz,
         } => {
             eigenpairs.retain(|pair| {
-                let frequency =
-                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, pair.eigenvalue_real);
+                let frequency = frequency_from_eigenvalue(
+                    plan.gyromagnetic_ratio,
+                    pair.eigenvalue_real,
+                )
+                .expect("eigenvalue_real already filtered non-negative and finite above");
                 frequency >= *frequency_min_hz && frequency <= *frequency_max_hz
             });
             eigenpairs.sort_by(|lhs, rhs| {
                 let lhs_freq =
-                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, lhs.eigenvalue_real);
+                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, lhs.eigenvalue_real)
+                        .expect("eigenvalue_real already filtered non-negative and finite above");
                 let rhs_freq =
-                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, rhs.eigenvalue_real);
-                lhs_freq
-                    .partial_cmp(&rhs_freq)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, rhs.eigenvalue_real)
+                        .expect("eigenvalue_real already filtered non-negative and finite above");
+                lhs_freq.total_cmp(&rhs_freq)
             });
         }
     }
@@ -830,37 +839,43 @@ fn sort_and_truncate_real_modes(plan: &FemEigenPlanIR, eigenpairs: &mut Vec<Real
 }
 
 fn sort_and_truncate_complex_modes(plan: &FemEigenPlanIR, eigenpairs: &mut Vec<ComplexEigenpair>) {
+    // See the identical guard in `sort_and_truncate_real_modes` above (audit
+    // finding H7): reject negative/non-finite eigenvalues before any
+    // target-specific sorting or window filtering runs.
+    eigenpairs.retain(|pair| pair.eigenvalue_real.is_finite() && pair.eigenvalue_real >= 0.0);
     match &plan.target {
         fullmag_ir::EigenTargetIR::Lowest => eigenpairs.sort_by(|lhs, rhs| {
-            lhs.eigenvalue_real
-                .partial_cmp(&rhs.eigenvalue_real)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            lhs.eigenvalue_real.total_cmp(&rhs.eigenvalue_real)
         }),
         fullmag_ir::EigenTargetIR::Nearest { frequency_hz } => eigenpairs.sort_by(|lhs, rhs| {
-            let lhs_freq = frequency_from_eigenvalue(plan.gyromagnetic_ratio, lhs.eigenvalue_real);
-            let rhs_freq = frequency_from_eigenvalue(plan.gyromagnetic_ratio, rhs.eigenvalue_real);
+            let lhs_freq = frequency_from_eigenvalue(plan.gyromagnetic_ratio, lhs.eigenvalue_real)
+                .expect("eigenvalue_real already filtered non-negative and finite above");
+            let rhs_freq = frequency_from_eigenvalue(plan.gyromagnetic_ratio, rhs.eigenvalue_real)
+                .expect("eigenvalue_real already filtered non-negative and finite above");
             (lhs_freq - *frequency_hz)
                 .abs()
-                .partial_cmp(&(rhs_freq - *frequency_hz).abs())
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .total_cmp(&(rhs_freq - *frequency_hz).abs())
         }),
         fullmag_ir::EigenTargetIR::FrequencyWindow {
             frequency_min_hz,
             frequency_max_hz,
         } => {
             eigenpairs.retain(|pair| {
-                let frequency =
-                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, pair.eigenvalue_real);
+                let frequency = frequency_from_eigenvalue(
+                    plan.gyromagnetic_ratio,
+                    pair.eigenvalue_real,
+                )
+                .expect("eigenvalue_real already filtered non-negative and finite above");
                 frequency >= *frequency_min_hz && frequency <= *frequency_max_hz
             });
             eigenpairs.sort_by(|lhs, rhs| {
                 let lhs_freq =
-                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, lhs.eigenvalue_real);
+                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, lhs.eigenvalue_real)
+                        .expect("eigenvalue_real already filtered non-negative and finite above");
                 let rhs_freq =
-                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, rhs.eigenvalue_real);
-                lhs_freq
-                    .partial_cmp(&rhs_freq)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                    frequency_from_eigenvalue(plan.gyromagnetic_ratio, rhs.eigenvalue_real)
+                        .expect("eigenvalue_real already filtered non-negative and finite above");
+                lhs_freq.total_cmp(&rhs_freq)
             });
         }
     }

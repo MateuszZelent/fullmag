@@ -12,7 +12,7 @@
 
 use crate::eigen::artifacts::{
     write_branch_bundle, write_frequency_domain_eigen_manifest, write_mode_bundle,
-    write_path_bundle,
+    write_path_bundle_with_sample_namespace,
 };
 use crate::eigen::path::expand_k_sampling;
 use crate::eigen::tracking::track_branches;
@@ -93,6 +93,7 @@ pub fn run_path_or_single<S: SingleKSolver>(
         include_demag: plan.operator.include_demag,
         dispersion_validation: plan.dispersion_validation.clone(),
         k0_kittel_validation: plan.k0_kittel_validation.clone(),
+        solver_policy: plan.solver_policy.clone(),
         dispersion_analytic_reference: plan.dispersion_validation.as_ref().map(|_| {
             DispersionAnalyticReferenceContext {
                 external_field: plan.external_field.unwrap_or([0.0, 0.0, 0.0]),
@@ -106,7 +107,12 @@ pub fn run_path_or_single<S: SingleKSolver>(
     track_branches(&mut result, mode_tracking);
 
     if let Some(output_dir) = output_dir {
-        write_path_bundle(output_dir, &result).map_err(|error| RunError {
+        write_path_bundle_with_sample_namespace(
+            output_dir,
+            &result,
+            !plan.bias_field_samples.is_empty(),
+        )
+        .map_err(|error| RunError {
             message: format!("failed to write path bundle: {error}"),
         })?;
         write_branch_bundle(output_dir, &result).map_err(|error| RunError {
@@ -178,6 +184,7 @@ mod tests {
                     norm: 1.0,
                     mass_norm: Some(1.0),
                     max_amplitude: 1.0,
+                    residual_relative_l2: Some(1.0e-8),
                     residual_norm: Some(1.0e-8),
                     residual_linf: Some(1.0e-9),
                     tangent_leakage_mean_abs: Some(1.0e-12),
@@ -289,6 +296,7 @@ mod tests {
             mode_tracking: None,
             dispersion_validation: None,
             k0_kittel_validation: None,
+            solver_policy: None,
         }
     }
 
@@ -359,6 +367,7 @@ mod tests {
                     norm: 1.0,
                     mass_norm: Some(1.0),
                     max_amplitude: 1.0,
+                    residual_relative_l2: Some(1.0e-8),
                     residual_norm: Some(1.0e-8),
                     residual_linf: Some(1.0e-9),
                     tangent_leakage_mean_abs: Some(1.0e-12),

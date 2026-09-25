@@ -39,7 +39,8 @@ const monitorFixture = {
   target: { kind: "magnetic_domain" },
 } as const;
 
-vi.mock("@/kernel/KernelContext", () => ({
+vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/kernel/KernelContext")>()),
   useKernel: () => ({
     api: { model: { planarMonitors: { duplicate: mocks.duplicate, patch: mocks.patch } } },
     commands: { execute: mocks.execute },

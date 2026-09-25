@@ -405,6 +405,9 @@ export interface EigenDispersionPoint {
   sampleLabel?: string | null;
   sampleIndex: number;
   validationGeometry: string | null;
+  sampleId?: string | null;
+  modeId?: string | null;
+  wavevectorKf?: readonly [number, number, number] | null;
 }
 
 export interface EigenBranchPoint {
@@ -688,7 +691,8 @@ export function frequencyDomainManifestSupportsChartRoute(
 ): boolean {
   const publishedRoute = routeFrequencyDomainCalculationMode(manifestPayload);
   if (requestedRoute.primaryChart !== "comparison") {
-    return requestedRoute.primaryChart === publishedRoute.primaryChart;
+    return requestedRoute.mode === publishedRoute.mode &&
+      requestedRoute.primaryChart === publishedRoute.primaryChart;
   }
 
   const manifest = record(manifestPayload);
@@ -700,6 +704,7 @@ export function frequencyDomainManifestSupportsChartRoute(
     stringValue(artifacts?.response_sweep_v1_path) != null;
 
   return (
+    publishedRoute.mode === requestedRoute.mode &&
     requestedRoute.mode === "fmr_modal_driven" &&
     hasModalArtifact &&
     hasDrivenArtifact &&
@@ -1016,8 +1021,24 @@ export function buildEigenDispersionPointSelectionRef(
   point: EigenDispersionPoint,
   context: FrequencyDomainSelectionContext = {},
 ): SelectionRef {
+  const identity = {
+    artifactRevision: context.artifactRevision == null
+      ? undefined
+      : String(context.artifactRevision),
+    equilibriumId: context.equilibriumId ?? undefined,
+    kContextKind: context.kContextKind ?? undefined,
+    kPathCoordinateRadPerM: point.pathS,
+    modeId: point.modeId ?? undefined,
+    representation: context.representation ?? undefined,
+    sampleId: point.sampleId ?? undefined,
+    source: context.source ?? undefined,
+    studyProduct: context.studyProduct ?? undefined,
+    // The clicked row wins over a previous selection's wavevector.
+    wavevectorKf: point.wavevectorKf ?? context.wavevectorKf ?? undefined,
+  };
   if (point.modeFieldId) {
     return cleanFrequencyDomainSelectionRef({
+      ...identity,
       analysisRunId: context.analysisRunId ?? undefined,
       analysisStageId: context.analysisStageId ?? undefined,
       artifactPath: context.artifactPath ?? undefined,
@@ -1035,6 +1056,7 @@ export function buildEigenDispersionPointSelectionRef(
     });
   }
   return cleanFrequencyDomainSelectionRef({
+    ...identity,
     analysisRunId: context.analysisRunId ?? undefined,
     analysisStageId: context.analysisStageId ?? undefined,
     artifactPath: context.artifactPath ?? undefined,
@@ -1781,6 +1803,11 @@ function dispersionPointIdentityKey(
   return `${sampleIndex}:${rawModeIndex}`;
 }
 
+// Blank optional CSV cells denote missing data, never numerical zero.
+function finiteCsvNumber(value: string | undefined): number | null {
+  return value == null || value.trim() === "" ? null : finiteNumber(value);
+}
+
 function parseDispersionCsv(csv: string): {
   droppedPointCount: number;
   points: EigenDispersionPoint[];
@@ -1797,34 +1824,50 @@ function parseDispersionCsv(csv: string): {
   for (const line of lines.slice(1)) {
     const columns = line.split(",").map((item) => item.trim());
     const row = Object.fromEntries(headers.map((header, index) => [header, columns[index]]));
-    const frequencyHz = finiteNumber(row.frequency_hz ?? row.frequencyHz);
-    const pathS = finiteNumber(
+    const frequencyHz = finiteCsvNumber(row.frequency_hz ?? row.frequencyHz);
+    const pathS = finiteCsvNumber(
       row.path_s_rad_per_m ?? row.path_s ?? row.pathS ?? row.k_path_s,
     );
-    if (frequencyHz == null || pathS == null) {
+    const sampleIndex = finiteCsvNumber(row.sample_index ?? row.sampleIndex);
+    const rawModeIndex = finiteCsvNumber(
+      row.raw_mode_index ?? row.mode_index ?? row.rawModeIndex ?? row.modeIndex,
+    );
+    if (frequencyHz == null || pathS == null || sampleIndex == null ||
+        rawModeIndex == null || !Number.isSafeInteger(sampleIndex) ||
+        !Number.isSafeInteger(rawModeIndex) || sampleIndex < 0 || rawModeIndex < 0) {
       droppedPointCount += 1;
       continue;
     }
+    const sampleId = stringValue(row.sample_id ?? row.sampleId);
+    const modeId = stringValue(row.mode_id ?? row.modeId);
+    const kx = finiteCsvNumber(row.kx_rad_per_m);
+    const ky = finiteCsvNumber(row.ky_rad_per_m);
+    const kz = finiteCsvNumber(row.kz_rad_per_m);
     points.push({
-      analyticFrequencyHz: finiteNumber(
+      ...(sampleId ? { sampleId } : {}),
+      ...(modeId ? { modeId } : {}),
+      ...(kx != null && ky != null && kz != null
+        ? { wavevectorKf: [kx, ky, kz] as const }
+        : {}),
+      analyticFrequencyHz: finiteCsvNumber(
         row.analytic_frequency_hz ?? row.analyticFrequencyHz,
       ),
       branchId: stringValue(row.branch_id ?? row.branchId),
       frequencyHz,
-      linewidthHz: finiteNumber(
+      linewidthHz: finiteCsvNumber(
         row.line_width_hz ?? row.linewidth_hz ?? row.linewidthHz,
       ),
       modeFieldId: stringValue(row.mode_field_id ?? row.modeFieldId),
       modeFieldResourceKey: stringValue(
         row.mode_field_resource_key ?? row.modeFieldResourceKey,
       ),
-      overlap: finiteNumber(row.overlap_score ?? row.overlapScore ?? row.overlap),
+      overlap: finiteCsvNumber(row.overlap_score ?? row.overlapScore ?? row.overlap),
       pathS,
-      rawModeIndex: finiteInteger(row.raw_mode_index ?? row.mode_index ?? row.rawModeIndex ?? row.modeIndex),
-      relativeError: finiteNumber(row.relative_error ?? row.relativeError),
-      residualNorm: finiteNumber(row.residual_norm ?? row.residualNorm),
+      rawModeIndex,
+      relativeError: finiteCsvNumber(row.relative_error ?? row.relativeError),
+      residualNorm: finiteCsvNumber(row.residual_norm ?? row.residualNorm),
       sampleLabel: stringValue(row.label ?? row.sample_label ?? row.sampleLabel),
-      sampleIndex: finiteInteger(row.sample_index ?? row.sampleIndex),
+      sampleIndex,
       validationGeometry: stringValue(
         row.validation_geometry ?? row.validationGeometry,
       ),

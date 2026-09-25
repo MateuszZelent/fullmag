@@ -3,6 +3,7 @@ use fullmag_ir::{
     EnergyTermIR, ExchangeBoundaryCondition, ExecutionPlanIR, ExecutionPrecision,
     FemEigenBiasFieldSamplePlanIR, FemEigenDispersionValidationIR, FemEigenEngineIR,
     FemEigenExecutionResolutionIR, FemEigenK0KittelValidationIR, FemEigenPlanIR,
+    FemEigenSolverPolicyIR,
     FemFrequencyDomainEquilibriumProvenanceIR, FemFrequencyResponsePlanIR, FemMagnetoelasticPlanIR,
     FemMechanicalModeIR, FemMechanicalPlanIR, FemPlanIR, GeometryEntryIR, MagnetostrictionLawIR,
     MechanicalLoadIR, OutputPlanIR, ProblemIR, ProvenancePlanIR, SeedPolicy, ThermalSeedConfig,
@@ -1246,6 +1247,63 @@ fn eigen_k0_kittel_validation(
     Ok(Some(validation))
 }
 
+fn eigen_solver_policy(
+    problem: &ProblemIR,
+) -> Result<Option<FemEigenSolverPolicyIR>, PlanError> {
+    let Some(value) = problem
+        .problem_meta
+        .runtime_metadata
+        .get("modal_solver_policy")
+    else {
+        return Ok(None);
+    };
+    let policy = serde_json::from_value::<FemEigenSolverPolicyIR>(value.clone()).map_err(|error| {
+        PlanError {
+            reasons: vec![format!(
+                "runtime_metadata.modal_solver_policy is invalid: {error}"
+            )],
+        }
+    })?;
+    let mut errors = Vec::new();
+    if let Some(tolerance) = policy.residual_tolerance {
+        if !tolerance.is_finite() || tolerance <= 0.0 {
+            errors.push(
+                "runtime_metadata.modal_solver_policy.residual_tolerance must be finite and > 0"
+                    .to_string(),
+            );
+        }
+    }
+    if policy.max_outer_iterations == Some(0) {
+        errors.push(
+            "runtime_metadata.modal_solver_policy.max_outer_iterations must be > 0 when supplied"
+                .to_string(),
+        );
+    }
+    if policy.max_outer_iterations.is_some_and(|value| value > i32::MAX as u32) {
+        errors.push(
+            "runtime_metadata.modal_solver_policy.max_outer_iterations must fit the native signed iteration limit"
+                .to_string(),
+        );
+    }
+    if policy.max_linear_iterations == Some(0) {
+        errors.push(
+            "runtime_metadata.modal_solver_policy.max_linear_iterations must be > 0 when supplied"
+                .to_string(),
+        );
+    }
+    if policy.max_linear_iterations.is_some_and(|value| value > i32::MAX as u32) {
+        errors.push(
+            "runtime_metadata.modal_solver_policy.max_linear_iterations must fit the native signed iteration limit"
+                .to_string(),
+        );
+    }
+    if errors.is_empty() {
+        Ok(Some(policy))
+    } else {
+        Err(PlanError { reasons: errors })
+    }
+}
+
 fn validate_eigen_k0_kittel_validation(
     validation: &FemEigenK0KittelValidationIR,
 ) -> Result<(), PlanError> {
@@ -1396,11 +1454,10 @@ fn validate_eigen_dispersion_validation(
         );
     }
     if !(validation.max_k_rad_per_m.is_finite()
-        && validation.max_k_rad_per_m > 0.0
-        && validation.max_k_rad_per_m <= 3.0e6)
+        && validation.max_k_rad_per_m > 0.0)
     {
         errors.push(
-            "runtime_metadata.dispersion_validation.max_k_rad_per_m must be in (0, 3e6]"
+            "runtime_metadata.dispersion_validation.max_k_rad_per_m must be finite and positive"
                 .to_string(),
         );
     }
@@ -1417,11 +1474,10 @@ fn validate_eigen_dispersion_validation(
     if !(window.min.is_finite()
         && window.max.is_finite()
         && window.min >= 0.0
-        && window.max > window.min
-        && window.max <= 5.0e9)
+        && window.max > window.min)
     {
         errors.push(
-            "runtime_metadata.dispersion_validation.frequency_window_hz must be finite, ordered, non-negative, and not exceed 5 GHz"
+            "runtime_metadata.dispersion_validation.frequency_window_hz must be finite, ordered, and non-negative"
                 .to_string(),
         );
     }
@@ -1490,15 +1546,6 @@ fn validate_eigen_dispersion_validation(
     }
 }
 
-fn allows_low_k_de_bv_analytic_reference(
-    validation: &Option<FemEigenDispersionValidationIR>,
-) -> bool {
-    validation.as_ref().is_some_and(|validation| {
-        validation.kind == "thin_film_de_bv_low_k"
-            && validation.analytic_model == "kalinikos_slab_n0"
-    })
-}
-
 fn k_sampling_is_gamma_only(k_sampling: &Option<fullmag_ir::KSamplingIR>) -> bool {
     k_sampling.as_ref().is_none_or(|sampling| match sampling {
         fullmag_ir::KSamplingIR::Single { k_vector } => k_vector
@@ -1527,6 +1574,57 @@ fn allows_k0_kittel_synthetic_demag_factor(
             && validation.model == "thin_film_in_plane"
             && k_sampling_is_gamma_only(k_sampling)
     })
+}
+
+/// Return whether the narrow, production-owned nonzero-k Floquet demag lane
+/// is explicitly requested by the problem.  The native runner owns a bounded
+/// Poisson-airbox Schur provider for this slice; all other combinations stay
+/// fail-closed until their operator and runtime contracts are qualified.
+fn floquet_airbox_dynamic_demag_cpu_plan_supported(
+    problem: &ProblemIR,
+    operator: &fullmag_ir::EigenOperatorConfigIR,
+    target: &fullmag_ir::EigenTargetIR,
+    damping_policy: fullmag_ir::EigenDampingPolicyIR,
+    spin_wave_bc: &fullmag_ir::SpinWaveBoundaryConditionIR,
+    magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR,
+    k_sampling: &Option<fullmag_ir::KSamplingIR>,
+    enable_demag: bool,
+    requested_demag_realization: fullmag_ir::RequestedFemDemagIR,
+) -> bool {
+    let nonzero_k = match k_sampling {
+        Some(fullmag_ir::KSamplingIR::Single { k_vector }) => {
+            k_vector.iter().all(|value| value.is_finite())
+                && k_vector.iter().any(|value| value.abs() > 1.0e-12)
+        }
+        Some(fullmag_ir::KSamplingIR::Path { points, .. }) => {
+            // The current single-k runner is invoked once per path sample.
+            // Gamma samples are normalized to the qualified periodic K0 lane
+            // by the path orchestrator; at least one nonzero point is still
+            // required so this predicate cannot open a K0-only path as the
+            // dynamic demag-k provider.
+            !points.is_empty()
+                && points
+                    .iter()
+                    .all(|point| point.k_vector.iter().all(|value| value.is_finite()))
+                && points
+                    .iter()
+                    .any(|point| point.k_vector.iter().any(|value| value.abs() > 1.0e-12))
+        }
+        None => false,
+    };
+
+    operator.include_demag
+        && enable_demag
+        && matches!(operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
+        && matches!(target, fullmag_ir::EigenTargetIR::FrequencyWindow { .. })
+        && matches!(damping_policy, fullmag_ir::EigenDampingPolicyIR::Ignore)
+        && spin_wave_bc.kind() == fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+        && magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox
+        && nonzero_k
+        && problem.backend_policy.execution_precision == ExecutionPrecision::Double
+        && problem.validation_profile.execution_mode == fullmag_ir::ExecutionMode::Strict
+        && !runtime_requests_cuda(problem)
+        && requested_demag_realization.requires_airbox()
 }
 
 fn vector_dot(lhs: [f64; 3], rhs: [f64; 3]) -> f64 {
@@ -4522,6 +4620,127 @@ fn resolve_k0_periodic_airbox_execution(
     })
 }
 
+fn resolve_floquet_airbox_dynamic_demag_execution(
+    problem: &ProblemIR,
+) -> Result<FemEigenExecutionResolutionIR, PlanError> {
+    const GPU_UNAVAILABLE_FALLBACK_REASON: &str = "gpu_modal_device_krylov_unavailable";
+    if problem.validation_profile.execution_mode != fullmag_ir::ExecutionMode::Strict {
+        return Err(PlanError {
+            reasons: vec![
+                "fem_eigen.floquet_airbox_dynamic_demag_requires_strict_execution_mode; fallback=none"
+                    .to_string(),
+            ],
+        });
+    }
+    if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
+        return Err(PlanError {
+            reasons: vec![
+                "fem_eigen.floquet_airbox_dynamic_demag_requires_double_precision; fallback=none"
+                    .to_string(),
+            ],
+        });
+    }
+
+    let requested_device = parse_fem_eigen_runtime_device(
+        problem
+            .problem_meta
+            .runtime_metadata
+            .get("runtime_selection")
+            .and_then(|value| value.get("device"))
+            .and_then(serde_json::Value::as_str),
+        "runtime_selection",
+    )?;
+    let runtime_device = parse_fem_eigen_runtime_device(
+        problem
+            .problem_meta
+            .runtime_metadata
+            .get("runtime_device_override")
+            .and_then(|value| value.get("device"))
+            .and_then(serde_json::Value::as_str),
+        "runtime_device_override",
+    )?;
+    let runtime_fallback_reason = problem
+        .problem_meta
+        .runtime_metadata
+        .get("runtime_device_override")
+        .and_then(|value| value.get("fallback_reason"))
+        .and_then(serde_json::Value::as_str);
+
+    let fallback_reason = match (requested_device, runtime_device, runtime_fallback_reason) {
+        (fullmag_ir::ExecutionDevice::Cpu, fullmag_ir::ExecutionDevice::Gpu, _) => {
+            return Err(PlanError {
+                reasons: vec![
+                    "fem_eigen.floquet_airbox_dynamic_demag_explicit_cpu_conflicts_with_gpu_override; fallback=none"
+                        .to_string(),
+                ],
+            });
+        }
+        (fullmag_ir::ExecutionDevice::Gpu, _, _) => {
+            return Err(PlanError {
+                reasons: vec![
+                    "fem_eigen.floquet_airbox_dynamic_demag_cpu_only_rejects_explicit_gpu; fallback=none"
+                        .to_string(),
+                ],
+            });
+        }
+        (fullmag_ir::ExecutionDevice::Auto, fullmag_ir::ExecutionDevice::Gpu, _) => {
+            return Err(PlanError {
+                reasons: vec![
+                    "fem_eigen.floquet_airbox_dynamic_demag_cpu_only_rejects_gpu_runtime; fallback=none"
+                        .to_string(),
+                ],
+            });
+        }
+        (fullmag_ir::ExecutionDevice::Cpu, _, Some(reason)) => {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "fem_eigen.floquet_airbox_dynamic_demag_explicit_cpu_rejects_fallback_reason: '{reason}'; fallback=none"
+                )],
+            });
+        }
+        (fullmag_ir::ExecutionDevice::Cpu, _, None) => None,
+        (fullmag_ir::ExecutionDevice::Auto, fullmag_ir::ExecutionDevice::Cpu, None) => None,
+        (fullmag_ir::ExecutionDevice::Auto, fullmag_ir::ExecutionDevice::Cpu, Some(reason))
+            if reason == GPU_UNAVAILABLE_FALLBACK_REASON =>
+        {
+            Some(GPU_UNAVAILABLE_FALLBACK_REASON.to_string())
+        }
+        (fullmag_ir::ExecutionDevice::Auto, _, Some(reason)) => {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "fem_eigen.floquet_airbox_dynamic_demag_unsupported_fallback_reason: '{reason}'; fallback=none"
+                )],
+            });
+        }
+        (fullmag_ir::ExecutionDevice::Auto, _, None) => None,
+    };
+
+    let selection_reason = match (requested_device, runtime_device, fallback_reason.is_some()) {
+        (fullmag_ir::ExecutionDevice::Cpu, _, _) => {
+            "fem_eigen.floquet_airbox_dynamic_demag.explicit_cpu"
+        }
+        (fullmag_ir::ExecutionDevice::Auto, fullmag_ir::ExecutionDevice::Cpu, true) => {
+            "fem_eigen.floquet_airbox_dynamic_demag.auto_gpu_unavailable_cpu_fallback"
+        }
+        (fullmag_ir::ExecutionDevice::Auto, fullmag_ir::ExecutionDevice::Cpu, false) => {
+            "fem_eigen.floquet_airbox_dynamic_demag.auto_runtime_cpu"
+        }
+        _ => "fem_eigen.floquet_airbox_dynamic_demag.auto_default_cpu",
+    };
+
+    Ok(FemEigenExecutionResolutionIR {
+        requested_device,
+        resolved_device: fullmag_ir::ExecutionDevice::Cpu,
+        requested_precision: problem.backend_policy.execution_precision,
+        resolved_precision: ExecutionPrecision::Double,
+        requested_engine: FemEigenEngineIR::Auto,
+        resolved_engine: FemEigenEngineIR::FloquetAirboxCpuSchurSlepc,
+        fallback_used: fallback_reason.is_some(),
+        fallback_reason,
+        selection_reason: selection_reason.to_string(),
+    })
+}
+
 /// Return whether a FEM eigen plan needs the bounded periodic-airbox K0
 /// execution contract even when the study-level magnetostatic boundary token
 /// remains `open`.
@@ -4916,23 +5135,56 @@ pub(crate) fn plan_fem_eigen(
             None
         }
     };
+    let solver_policy = match eigen_solver_policy(problem) {
+        Ok(policy) => policy,
+        Err(error) => {
+            errors.extend(error.reasons);
+            None
+        }
+    };
     if let (Some(sweep), Some(validation)) =
         (bias_field_sweep.as_ref(), k0_kittel_validation.as_ref())
     {
         errors.extend(bias_field_sweep_kittel_mapping_errors(sweep, validation));
     }
+    if dispersion_validation.is_some()
+        && allows_k0_kittel_synthetic_demag_factor(&k0_kittel_validation, &k_sampling)
+    {
+        errors.push(
+            "eigenmodes.dispersion_validation cannot be combined with the synthetic K0 demag-factor solver; dispersion validation requires a numeric FEM solve and postsolve analytic comparison"
+                .to_string(),
+        );
+    }
+    let floquet_airbox_dynamic_demag_cpu_path = floquet_airbox_dynamic_demag_cpu_plan_supported(
+        problem,
+        operator,
+        target,
+        *damping_policy,
+        spin_wave_bc,
+        *magnetostatic_bc,
+        k_sampling,
+        enable_demag,
+        requested_demag_realization,
+    );
     if operator.include_demag
         && matches!(
             spin_wave_bc.kind(),
             fullmag_ir::SpinWaveBoundaryKindIR::Floquet
         )
-        && !allows_low_k_de_bv_analytic_reference(&dispersion_validation)
         && !allows_k0_kittel_synthetic_demag_factor(&k0_kittel_validation, &k_sampling)
+        && !floquet_airbox_dynamic_demag_cpu_path
     {
-        errors.push(
-            "dynamic demag for Floquet periodic FEM is not implemented yet. Disable demag or use k=0/free boundary."
-                .to_string(),
-        );
+        if *magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox {
+            errors.push(
+                "magnetostatic_bc=floquet_airbox dynamic demag requires a strict double-precision CPU FEM plan with operator.kind='full_2x2', a nonzero-k Single/path sampling, and an airbox Poisson Demag realization"
+                    .to_string(),
+            );
+        } else {
+            errors.push(
+                "dynamic demag for Floquet periodic FEM requires magnetostatic_bc='floquet_airbox' and the validated CPU Poisson-airbox path; disable demag or provide a numeric supported lane"
+                    .to_string(),
+            );
+        }
     }
     match spin_wave_bc.kind() {
         fullmag_ir::SpinWaveBoundaryKindIR::Periodic => {
@@ -5243,6 +5495,8 @@ pub(crate) fn plan_fem_eigen(
         k0_kittel_validation.as_ref(),
     ) {
         Some(resolve_k0_periodic_airbox_execution(problem)?)
+    } else if floquet_airbox_dynamic_demag_cpu_path {
+        Some(resolve_floquet_airbox_dynamic_demag_execution(problem)?)
     } else {
         None
     };
@@ -5310,6 +5564,7 @@ pub(crate) fn plan_fem_eigen(
         mode_tracking: mode_tracking.clone(),
         dispersion_validation,
         k0_kittel_validation,
+        solver_policy,
     };
 
     let study_note = format!(
@@ -5335,7 +5590,7 @@ pub(crate) fn plan_fem_eigen(
         execution_resolution.as_ref().map_or_else(
             || "FEM eigen execution currently targets the transitional CPU FEM baseline; native MFEM/SLEPc integration remains future work".to_string(),
             |resolution| format!(
-                "FEM K0 periodic-airbox execution resolved: requested_device={:?}, resolved_device={:?}, requested_engine={:?}, resolved_engine={:?}, fallback_used={}, selection_reason={}",
+                "FEM eigen execution resolved: requested_device={:?}, resolved_device={:?}, requested_engine={:?}, resolved_engine={:?}, fallback_used={}, selection_reason={}",
                 resolution.requested_device,
                 resolution.resolved_device,
                 resolution.requested_engine,
@@ -5345,6 +5600,12 @@ pub(crate) fn plan_fem_eigen(
             ),
         ),
     ];
+    if floquet_airbox_dynamic_demag_cpu_path {
+        provenance_notes.push(
+            "FEM nonzero-k Floquet dynamic demag resolved to the bounded CPU Poisson-airbox Schur provider; GPU and non-airbox realizations remain fail-closed"
+                .to_string(),
+        );
+    }
     for field_plan in &material_field_plans {
         provenance_notes.extend(field_plan.warnings.iter().cloned());
     }

@@ -260,7 +260,10 @@ def validate_rendered_png(
         raise SystemExit(f"{path} is fully transparent")
 
     color_pixels = pixels[:, :, :3] if pixels.ndim == 3 else pixels
-    color_span = float(np.max(color_pixels) - np.min(color_pixels))
+    spatial_axes = (0, 1)
+    color_span = float(np.max(
+        np.max(color_pixels, axis=spatial_axes) - np.min(color_pixels, axis=spatial_axes)
+    ))
     if color_span < min_color_span:
         raise SystemExit(
             f"{path} appears blank: color span {color_span:.6g} < {min_color_span:.6g}"
@@ -307,6 +310,37 @@ def relative_error_values(rows: list[dict[str, str]]) -> list[float]:
     ]
 
 
+def dispersion_segments(rows: list[dict[str, str]]) -> list[tuple[str, list[dict[str, str]]]]:
+    """Connect only tracked branches at consecutive authored sample indices."""
+    branches: dict[str, list[dict[str, str]]] = {}
+    untracked = []
+    for row in rows:
+        if any(csv_float(row, key) is None for key in ("path_s_rad_per_m", "frequency_hz")):
+            raise ValueError("dispersion contains missing or non-finite coordinates")
+        branch = row.get("branch_id", "").strip()
+        if not branch:
+            untracked.append(("untracked", [row]))
+        else:
+            branches.setdefault(branch, []).append(row)
+    segments = []
+    for branch, values in branches.items():
+        values.sort(key=lambda row: int(row["sample_index"]))
+        segment = []
+        previous = None
+        for row in values:
+            sample = int(row["sample_index"])
+            if previous == sample:
+                raise ValueError(f"duplicate sample {sample} in branch {branch}")
+            if previous is not None and sample != previous + 1:
+                segments.append((branch, segment))
+                segment = []
+            segment.append(row)
+            previous = sample
+        if segment:
+            segments.append((branch, segment))
+    return segments + untracked
+
+
 def write_dispersion_png(root: Path, output_png: Path) -> None:
     dispersion_path = root / "eigen" / "dispersion.csv"
     if not dispersion_path.is_file():
@@ -314,93 +348,54 @@ def write_dispersion_png(root: Path, output_png: Path) -> None:
     rows = list(csv.DictReader(dispersion_path.read_text(encoding="utf-8").splitlines()))
     if not rows:
         raise SystemExit(f"{dispersion_path} does not contain any dispersion rows")
-
-    path_s = [float(row["path_s_rad_per_m"]) / 1.0e6 for row in rows]
-    frequencies_ghz = [float(row["frequency_hz"]) / 1.0e9 for row in rows]
-    labels = [row.get("label", "") for row in rows]
-    analytic_points = analytic_dispersion_points(rows)
-    relative_errors = relative_error_values(rows)
-
+    segments = dispersion_segments(rows)
     try:
         import matplotlib
-
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-    except Exception as exc:  # pragma: no cover - environment-specific dependency failure
+    except Exception as exc:  # pragma: no cover
         raise SystemExit(f"matplotlib is required to write {output_png}: {exc}") from exc
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(12, 7), dpi=150)
-    ax.plot(
-        path_s,
-        frequencies_ghz,
-        color="#2563eb",
-        linewidth=2.4,
-        marker="o",
-        markersize=7,
-        label="solver branch",
-    )
-    if analytic_points:
+    colors = {}
+    labelled = set()
+    for branch, segment in segments:
+        color_index = colors.setdefault(branch, len(colors))
+        label = f"branch {branch}" if branch != "untracked" else "untracked modes"
         ax.plot(
-            [point[0] for point in analytic_points],
-            [point[1] for point in analytic_points],
-            color="#dc2626",
-            linestyle="--",
-            linewidth=2.0,
-            marker="x",
-            markersize=7,
-            label="analytic reference",
+            [float(row["path_s_rad_per_m"]) / 1e6 for row in segment],
+            [float(row["frequency_hz"]) / 1e9 for row in segment],
+            color=f"C{color_index % 10}", linewidth=1.4, marker="o", markersize=2.5,
+            label=label if branch not in labelled else None,
         )
-    ax.fill_between(
-        path_s,
-        [min(frequencies_ghz) - 0.05] * len(path_s),
-        frequencies_ghz,
-        color="#bfdbfe",
-        alpha=0.35,
-    )
-    for x_value, frequency, label in zip(path_s, frequencies_ghz, labels):
+        labelled.add(branch)
+        analytic = analytic_dispersion_points(segment)
+        if analytic:
+            ax.plot([p[0] for p in analytic], [p[1] for p in analytic],
+                    color=f"C{color_index % 10}", linestyle="--", linewidth=1.0)
+    ticks = {}
+    for row in rows:
+        label = row.get("label", "").strip()
         if label:
-            ax.annotate(
-                label,
-                (x_value, frequency),
-                xytext=(0, 8),
-                textcoords="offset points",
-                ha="center",
-                va="bottom",
-                fontsize=11,
-                fontweight="bold",
-            )
-    ax.set_title(
-        (
-            "FEM modal DE/BV dispersion - analytic reference overlay"
-            if analytic_points
-            else "FEM modal k-path dispersion - reference Full2x2 Floquet artifact"
-        ),
-        fontsize=13,
-    )
+            ticks[float(row["path_s_rad_per_m"]) / 1e6] = label
+    if ticks:
+        positions = sorted(ticks)
+        ax.set_xticks(positions, [ticks[x] for x in positions])
+        for x in positions:
+            ax.axvline(x, color="#cbd5e1", linewidth=0.6, zorder=0)
+    ax.set_title("FEM modal dispersion", fontsize=13)
     ax.set_xlabel("k-path distance (10^6 rad/m)", fontsize=11)
     ax.set_ylabel("frequency (GHz)", fontsize=11)
-    if analytic_points:
-        ax.legend(loc="best", frameon=True)
-    ax.grid(True, which="major", color="#cbd5e1", linewidth=0.8, alpha=0.8)
-    ax.grid(True, which="minor", color="#e2e8f0", linewidth=0.5, alpha=0.7)
-    ax.minorticks_on()
-    y_margin = max((max(frequencies_ghz) - min(frequencies_ghz)) * 0.25, 0.03)
-    ax.set_ylim(min(frequencies_ghz) - y_margin, max(frequencies_ghz) + y_margin)
-    fig.text(
-        0.012,
-        0.02,
-        (
-            f"source: {dispersion_path} | samples={len(rows)} | "
-            + (
-                f"analytic overlay, max rel. error={max(relative_errors):.3e}"
-                if relative_errors
-                else "reference CPU, no demag, lowest branch"
-            )
-        ),
-        fontsize=8.5,
-        color="#475569",
-    )
+    if len(colors) <= 12:
+        ax.legend(loc="best", fontsize=8)
+    ax.grid(True, color="#cbd5e1", linewidth=0.6, alpha=0.7)
+    ax.margins(y=0.06)
+    samples = len({row.get("sample_index") for row in rows})
+    reference = " | dashed: analytic reference" if analytic_dispersion_points(rows) else ""
+    fig.text(0.012, 0.02,
+             f"source: {dispersion_path.name} | samples={samples} | modes={len(rows)}{reference}",
+             fontsize=8.5, color="#475569")
     fig.tight_layout(rect=(0, 0.03, 1, 1))
     fig.savefig(output_png)
     plt.close(fig)

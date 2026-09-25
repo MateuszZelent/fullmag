@@ -584,7 +584,12 @@ mod tests {
                 .abs()
                 < 1e-12
         );
-        assert_eq!(value["points"][0]["response_amplitude"][0], 1.0);
+        // Norms and complex work include rounded trigonometric coefficients.
+        // Keep serialization lossless; allow only floating-point roundoff here.
+        let amplitude = value["points"][0]["response_amplitude"][0]
+            .as_f64()
+            .expect("response amplitude should be numeric");
+        assert!((amplitude - 1.0).abs() <= 8.0 * f64::EPSILON);
         assert!(
             (value["points"][0]["response_phase"][0]
                 .as_f64()
@@ -597,7 +602,10 @@ mod tests {
             value["points"][0]["susceptibility_tensor"][0][0],
             serde_json::json!([0.0, -1.0])
         );
-        assert_eq!(value["points"][0]["absorbed_power_density"], 1.0);
+        let power = value["points"][0]["absorbed_power_density"]
+            .as_f64()
+            .expect("absorbed power should be numeric");
+        assert!((power - 1.0).abs() <= 8.0 * f64::EPSILON);
         assert_eq!(
             value["points"][0]["tangent_leakage"]["kind"],
             "not_evaluated_dense_validation",

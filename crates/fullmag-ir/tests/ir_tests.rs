@@ -5003,6 +5003,8 @@ fn eigenmodes_with_spectrum_and_mode_outputs_validate() {
                 OutputIR::EigenMode {
                     field: "mode".to_string(),
                     indices: vec![0, 1],
+                    branches: vec![],
+                    sample_selector: None,
                 },
             ],
         },
@@ -5209,6 +5211,7 @@ fn eigenmodes_closed_k_path_sample_count_and_segment_length_validate() {
                 },
                 OutputIR::DispersionCurve {
                     name: "dispersion".to_string(),
+                    include_branch_table: true,
                 },
             ],
         },
@@ -6171,7 +6174,7 @@ fn problem_ir_validation_bubbles_mesh_semantics_errors_with_prefix() {
 }
 
 #[test]
-fn eigenmodes_require_spectrum_or_mode_output() {
+fn eigenmodes_accept_dispersion_or_diagnostics_output_without_redundant_spectrum() {
     let mut ir = ProblemIR::bootstrap_example();
     let dynamics = ir.study.dynamics().clone();
     ir.study = StudyIR::Eigenmodes {
@@ -6194,17 +6197,189 @@ fn eigenmodes_require_spectrum_or_mode_output() {
             stage_autosave: None,
             outputs: vec![OutputIR::DispersionCurve {
                 name: "dispersion".to_string(),
+                include_branch_table: true,
             }],
         },
         mode_tracking: None,
     };
 
-    let errors = ir
-        .validate()
-        .expect_err("dispersion-only eigen study must fail validation");
+    ir.validate()
+        .expect("dispersion-only eigen study is a complete public output request");
+
+    if let StudyIR::Eigenmodes { sampling, .. } = &mut ir.study {
+        sampling.outputs = vec![OutputIR::EigenDiagnostics {
+            include_tracking: true,
+            include_residuals: true,
+            include_overlaps: true,
+            include_tangent_leakage: true,
+            include_orthogonality: true,
+        }];
+    } else {
+        unreachable!();
+    }
+    ir.validate()
+        .expect("diagnostics-only eigen study is a complete public output request");
+}
+
+#[test]
+fn eigen_output_selectors_round_trip_through_canonical_ir() {
+    let mode = OutputIR::EigenMode {
+        field: "mode".to_string(),
+        indices: vec![],
+        branches: vec![2, 0],
+        sample_selector: Some(SampleSelectorIR {
+            sample_indices: vec![3, 1],
+            sample_labels: vec!["X".to_string(), "M".to_string()],
+        }),
+    };
+    let dispersion = OutputIR::DispersionCurve {
+        name: "band".to_string(),
+        include_branch_table: false,
+    };
+
+    let encoded = serde_json::to_value((&mode, &dispersion)).expect("outputs serialize");
+    let decoded: (OutputIR, OutputIR) =
+        serde_json::from_value(encoded.clone()).expect("outputs deserialize");
+
+    assert_eq!(decoded, (mode, dispersion));
+    assert_eq!(
+        encoded,
+        serde_json::json!([
+            {
+                "kind": "eigen_mode",
+                "field": "mode",
+                "indices": [],
+                "branches": [2, 0],
+                "sample_selector": {
+                    "sample_indices": [3, 1],
+                    "sample_labels": ["X", "M"]
+                }
+            },
+            {
+                "kind": "dispersion_curve",
+                "name": "band",
+                "include_branch_table": false
+            }
+        ])
+    );
+
+    let legacy_mode: OutputIR = serde_json::from_value(serde_json::json!({
+        "kind": "eigen_mode",
+        "field": "mode",
+        "indices": [0]
+    }))
+    .expect("legacy mode output should deserialize");
+    assert_eq!(
+        legacy_mode,
+        OutputIR::EigenMode {
+            field: "mode".to_string(),
+            indices: vec![0],
+            branches: vec![],
+            sample_selector: None,
+        }
+    );
+    let legacy_dispersion: OutputIR = serde_json::from_value(serde_json::json!({
+        "kind": "dispersion_curve",
+        "name": "dispersion"
+    }))
+    .expect("legacy dispersion output should deserialize");
+    assert_eq!(
+        legacy_dispersion,
+        OutputIR::DispersionCurve {
+            name: "dispersion".to_string(),
+            include_branch_table: true,
+        }
+    );
+}
+
+#[test]
+fn eigen_mode_branch_only_output_is_valid_and_empty_selector_is_rejected() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let dynamics = ir.study.dynamics().clone();
+    ir.study = StudyIR::Eigenmodes {
+        dynamics,
+        operator: EigenOperatorConfigIR {
+            kind: EigenOperatorIR::Full2x2,
+            include_demag: false,
+        },
+        count: 2,
+        target: EigenTargetIR::Lowest,
+        equilibrium: EquilibriumSourceIR::Provided,
+        k_sampling: Some(KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        }),
+        bias_field_sweep: None,
+        normalization: EigenNormalizationIR::UnitL2,
+        damping_policy: EigenDampingPolicyIR::Ignore,
+        spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
+        sampling: SamplingIR {
+            table_autosave: None,
+            stage_autosave: None,
+            outputs: vec![OutputIR::EigenMode {
+                field: "mode".to_string(),
+                indices: vec![],
+                branches: vec![1],
+                sample_selector: None,
+            }],
+        },
+        mode_tracking: None,
+    };
+    assert!(ir.validate().is_ok());
+
+    let mut invalid = ir;
+    if let StudyIR::Eigenmodes { sampling, .. } = &mut invalid.study {
+        sampling.outputs[0] = OutputIR::EigenMode {
+            field: "mode".to_string(),
+            indices: vec![],
+            branches: vec![],
+            sample_selector: Some(SampleSelectorIR::default()),
+        };
+    }
+    let errors = invalid.validate().expect_err("empty selector must fail");
     assert!(errors.iter().any(|error| {
-        error.contains("eigenmodes study requires at least one eigen_spectrum or eigen_mode output")
+        error.contains("eigen_mode must contain at least one mode index")
+            && error.contains("or branch index")
     }));
+    assert!(errors.iter().any(
+        |error| error.contains("sample_selector must contain sample_indices or sample_labels")
+    ));
+}
+
+#[test]
+fn k_sampling_validation_is_shared_for_single_and_path_forms() {
+    let single = KSamplingIR::Single {
+        k_vector: [f64::NAN, 0.0, 0.0],
+    };
+    assert!(single
+        .validation_errors("study.k_sampling")
+        .iter()
+        .any(|error| error.contains("study.k_sampling.k_vector must contain finite values")));
+
+    let path = KSamplingIR::Path {
+        points: vec![
+            KPointIR {
+                label: Some("".to_string()),
+                k_vector: [f64::INFINITY, 0.0, 0.0],
+            },
+            KPointIR {
+                label: Some("X".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![0],
+        closed: false,
+    };
+    let errors = path.validation_errors("study.k_sampling");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("path point label must not be empty")));
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("path point k_vector must contain finite values")));
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("path samples_per_segment entries must be > 0")));
 }
 
 #[test]
@@ -8507,5 +8682,25 @@ fn fem_mesh_policy_canonical_bytes_and_digest_are_frozen() {
     assert_eq!(
         fingerprint,
         "sha256:05f950d4ecd8c74e363b1c0174e150107107f78b73dfb9be0fa9c082b104acdd"
+    );
+}
+
+#[test]
+fn sample_selector_rejects_labels_that_are_equal_after_trimming() {
+    let selector = SampleSelectorIR {
+        sample_indices: vec![4, 2],
+        sample_labels: vec!["Gamma".into(), " Gamma ".into()],
+    };
+    assert_eq!(
+        selector.validation_errors("selection"),
+        vec!["selection.sample_labels must be unique"]
+    );
+    let selector = SampleSelectorIR {
+        sample_indices: vec![4, 2, 4],
+        sample_labels: vec!["Gamma".into(), "X".into()],
+    };
+    assert_eq!(
+        selector.validation_errors("selection"),
+        vec!["selection.sample_indices must be unique"]
     );
 }

@@ -15759,6 +15759,7 @@ mod tests {
             mode_tracking: None,
             dispersion_validation: None,
             k0_kittel_validation: None,
+            solver_policy: None,
         };
         let backend = BackendPlanIR::FemEigen(target);
         let completion = stage_completion(fullmag_ir::StageStopReason::Torque);

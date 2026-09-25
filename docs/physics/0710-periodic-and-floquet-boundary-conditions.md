@@ -71,9 +71,12 @@ scalar tangent reduction only for identity-frame pairs, and supports
 nonzero-k `Full2x2` tangent blocks by reducing each complex stiffness and mass
 contribution with the selected Bloch phase and the local tangent-frame
 transport matrix `T_node^T T_root`. This implements the reference/MVP CPU
-`phase*(T_dst^T T_src)` modal transport for `Full2x2`; it does not implement
-dynamic Floquet demagnetization or a production selected-spectrum/GPU modal
-Floquet eigensolver.
+`phase*(T_dst^T T_src)` modal transport for `Full2x2`. The current source also
+contains a CPU shared-domain Floquet/airbox demagnetization assembly boundary,
+but that bridge is not yet a managed or physics-qualified selected-spectrum
+lane. It must remain explicitly labelled source-visible and cannot be promoted
+to a production Floquet eigensolver or GPU capability without runtime,
+residual, and convergence evidence.
 
 FEM driven frequency response is narrower still: the native production CPU lane
 supports gamma/free response and k=0 static-periodic magnetic response without
@@ -93,9 +96,14 @@ static-periodic lanes require complete periodic pair metadata for requested
 response, frequency-response demag, DMI on GPU, and GPU periodic demag remain
 gated.
 
-Dynamic demagnetization for nonzero-k Floquet FEM is not implemented. Requests
-with `include_demag=true` and `spin_wave_bc.kind='floquet'` must fail with a
-capability error.
+Dynamic demagnetization for nonzero-k Floquet FEM is source-visible through the
+CPU shared-domain `floquet_airbox` assembly boundary, but it is not yet
+managed-runtime or physics-qualified. An explicitly planned CPU request may
+reach this source path when its mesh, airbox, phase, and provider metadata pass
+the execution guards; the resulting run remains unqualified until a managed
+receipt and the residual/convergence evidence are present. Other lanes and
+incomplete combinations with `include_demag=true` and
+`spin_wave_bc.kind='floquet'` must fail closed with a capability diagnostic.
 
 The canonical magnetostatic boundary request for that future path is
 `magnetostatic_bc="floquet_airbox"`. This value means the shared-domain airbox
@@ -200,3 +208,119 @@ For `k = pi / L` and `delta_r = [L, 0, 0]`, the Floquet phase is:
 ```text
 exp(-i pi) = -1
 ```
+
+
+### Numerical Gamma classification in the FEM runner
+
+The FEM planner and runner classify a finite wavevector as numerical Gamma when
+all Cartesian components satisfy `abs(k_i) <= 1e-12 rad/m`. This is a routing
+threshold, not an eigensolver residual or a field-phase validation tolerance.
+The runner uses `GAMMA_K_TOLERANCE_RAD_PER_M` consistently in capability checks,
+path routing and the real/complex reduction decision. Original sampled k values
+remain in the output provenance. Non-finite components are never accepted as
+Gamma. At this threshold, any physical comparison still uses the declared SI
+wavevector and the independently validated boundary conditions.
+
+## Contract index for this page
+
+(problem-statement)=
+Periodic and Floquet conditions constrain paired source and destination traces.
+For a nonzero wave vector the phase belongs to the physical reconstructed
+perturbation and must be transported through the local tangent frames before a
+modal operator is assembled.
+
+(governing-equations)=
+```{math}
+:label: eq-0710-phase
+p(k)=\exp(-\mathrm{i}\,k\cdot\Delta\mathbf r).
+```
+
+```{math}
+:label: eq-0710-tangent-transport
+q_{\mathrm{dst}}=p(k)\,(T_{\mathrm{dst}}^\mathsf{T}T_{\mathrm{src}})q_{\mathrm{src}}.
+```
+
+```{math}
+:label: eq-0710-gamma-classification
+\max_i|k_i|\leq 10^{-12}\,\mathrm{rad\,m^{-1}}
+\quad\Longrightarrow\quad \text{numerical Gamma routing}.
+```
+
+(symbols-and-si-units)=
+| Token | Meaning | SI unit |
+|---|---|---|
+| $k$ | Bloch wave vector | $\mathrm{rad\,m^{-1}}$ |
+| $\Delta\mathbf r$ | source-to-destination translation | $\mathrm{m}$ |
+| $p$ | Floquet phase | $1$ |
+| $q$ | tangent coefficients | $1$ |
+| $T_{\mathrm{dst}}^\mathsf{T}T_{\mathrm{src}}$ | tangent transport | $1$ |
+
+(assumptions-and-validity)=
+Pair metadata must provide a unique source and destination map, a translation,
+and a compatible equilibrium seam. The phase is checked modulo $2\pi$ against
+the translation. Identity-frame transport is valid only when the certificate
+proves matching frames; otherwise the full transport matrix is required.
+
+(python-api)=
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `study.pbc(x, y, z)` | `tuple[bool, bool, bool]` | `(False, False, False)` | $1$ | boolean axes and matching pair metadata | periodic cell topology | FEM/FDM authoring; execution lane gated | `study.periodic_boundary_conditions.axes` |
+
+```python
+# %%
+import fullmag as fm
+
+study = fm.study("floquet_contract")
+study.engine("fem")
+study.pbc(x=True, y=True, z=False)
+study.stages.add_eigenmodes(count=4, include_demag=True)
+```
+
+(problem-ir)=
+The Python periodic declaration becomes axis metadata and pair identities in
+the ProblemIR. A Floquet eigen or response request adds the sampled $k$ vector
+and phase convention; the planner retains both the requested wave vector and
+the resolved Gamma/non-Gamma routing decision.
+
+(round-trip-and-failure-semantics)=
+Round-trip serialization preserves requested intent and resolved execution,
+including pair maps, translations, phase convention, and transport policy.
+Validation errors reject duplicate mappings, seam mismatches, inconsistent
+phase metadata, non-finite wave vectors, and missing operator enforcement.
+Unsupported combinations fail with a capability error rather than changing
+the request to open boundaries, K0 periodicity, or a CPU fallback.
+
+(discrete-realization)=
+FEM operators apply phase constraints to reconstructed tangent vectors and
+publish pair residuals and mesh fingerprints. FDM uses axis-wise periodic
+stencils and its own truncated-image demagnetization contract. These lanes
+share metadata semantics but not a discretization or qualification result.
+
+(implementation-mapping)=
+The source index below covers public boundary objects, phase serialization,
+k-path expansion, and the numerical Gamma threshold used by the FEM runner.
+
+(validation)=
+Acceptance requires phase round-trip tests, duplicate-node rejection,
+translation residuals, static-field and demag seam checks, and
+`Floquet(k=0) == Periodic`. Exchange-only reciprocal dispersion must satisfy
+`f(k)=f(-k)` before a nonreciprocal interaction is enabled.
+
+(limitations)=
+The current snapshot exposes the CPU shared-domain `floquet_airbox` boundary
+as source-visible but unqualified. GPU periodic demagnetization and full
+nonzero-k coupled response remain gated. A numerical Gamma classification is a
+routing policy and does not certify an open-boundary physical limit.
+
+(scientific-bibliography)=
+Kalinikos and Slavin, *Theory of dipole-exchange spin wave spectrum for
+ferromagnetic films*, J. Phys. C 19 (1986), DOI:10.1088/0022-3719/19/35/7013.
+
+(source-code-index)=
+| Path | Symbol | Responsibility |
+|---|---|---|
+| `packages/fullmag-py/src/fullmag/model/study.py` | `class PeriodicBC` | Validate explicit periodic pair identities. |
+| `packages/fullmag-py/src/fullmag/model/study.py` | `class FloquetBC` | Preserve the Floquet phase convention and pair identities. |
+| `crates/fullmag-ir/src/eigen_contract.rs` | `PhaseConventionIR` | Serialize the canonical phase convention. |
+| `crates/fullmag-runner/src/eigen/path.rs` | `expand_k_sampling` | Expand open and closed k paths deterministically. |
+| `crates/fullmag-runner/src/fem/eigen_constants.rs` | `GAMMA_K_TOLERANCE_RAD_PER_M` | Define the numerical Gamma routing threshold. |

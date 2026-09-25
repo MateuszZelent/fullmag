@@ -11182,15 +11182,18 @@
                 "type": "integer"
               },
               "residual_relative_l2": {
+                "description": "Missing solver evidence remains unavailable, never an inferred zero.",
                 "format": "double",
-                "type": "number"
+                "type": [
+                  "number",
+                  "null"
+                ]
               }
             },
             "required": [
               "mode_id",
               "raw_mode_index",
               "frequency_hz",
-              "residual_relative_l2",
               "component_participation"
             ],
             "type": "object"

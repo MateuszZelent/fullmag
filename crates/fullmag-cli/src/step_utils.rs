@@ -1769,7 +1769,11 @@ fn eigen_sampling_from(base: &fullmag_ir::SamplingIR, mode_count: u32) -> fullma
     outputs.retain(|output| {
         !matches!(
             output,
-            fullmag_ir::OutputIR::EigenMode { indices, .. } if indices.is_empty()
+            fullmag_ir::OutputIR::EigenMode {
+                indices,
+                branches,
+                ..
+            } if indices.is_empty() && branches.is_empty()
         )
     });
     if !outputs.iter().any(|output| {
@@ -4693,7 +4697,9 @@ pub(crate) fn build_interactive_command_stage(
             // Default relax_alpha = 1.0 for optimal overdamped convergence
             // (user can still override to any value via command.relax_alpha)
             if algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped {
-                let effective_alpha = command.relax_alpha.or_else(|| (!preserve_authored).then_some(1.0));
+                let effective_alpha = command
+                    .relax_alpha
+                    .or_else(|| (!preserve_authored).then_some(1.0));
                 if let Some(effective_alpha) = effective_alpha {
                     for mat in &mut ir.materials {
                         mat.damping = effective_alpha;
@@ -6915,8 +6921,12 @@ mod tests {
         ] {
             let mut base = sample_problem_ir_with_adaptive_relax_dt(4e-16);
             if let fullmag_ir::StudyIR::Relaxation {
-                algorithm: authored, dynamics, stop, ..
-            } = &mut base.study {
+                algorithm: authored,
+                dynamics,
+                stop,
+                ..
+            } = &mut base.study
+            {
                 *authored = algorithm;
                 if algorithm != fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped {
                     *dynamics = None;
@@ -6935,15 +6945,26 @@ mod tests {
             let stage = build_interactive_command_stage(&base, &command)
                 .expect("solve must retain the authored algorithm")
                 .unwrap();
-            assert_eq!(serde_json::to_value(&stage.ir.study).unwrap(), expected_study);
-            assert_eq!(serde_json::to_value(&stage.ir.materials).unwrap(), expected_materials);
+            assert_eq!(
+                serde_json::to_value(&stage.ir.study).unwrap(),
+                expected_study
+            );
+            assert_eq!(
+                serde_json::to_value(&stage.ir.materials).unwrap(),
+                expected_materials
+            );
 
             command.max_steps = Some(4321);
-            let overridden = build_interactive_command_stage(&base, &command).unwrap().unwrap();
+            let overridden = build_interactive_command_stage(&base, &command)
+                .unwrap()
+                .unwrap();
             if let fullmag_ir::StudyIR::Relaxation { stop, .. } = &mut base.study {
                 stop.max_steps = Some(4321);
             }
-            assert_eq!(serde_json::to_value(&overridden.ir.study).unwrap(), serde_json::to_value(&base.study).unwrap());
+            assert_eq!(
+                serde_json::to_value(&overridden.ir.study).unwrap(),
+                serde_json::to_value(&base.study).unwrap()
+            );
         }
     }
 
@@ -9090,6 +9111,8 @@ mod tests {
             fullmag_ir::OutputIR::EigenMode {
                 field: "mode".to_string(),
                 indices: vec![0, 1],
+                branches: vec![],
+                sample_selector: None,
             },
         ];
         target_ir.study = fullmag_ir::StudyIR::Eigenmodes {
@@ -9338,6 +9361,8 @@ mod tests {
                 fullmag_ir::OutputIR::EigenMode {
                     field: "mode".to_string(),
                     indices: vec![0, 1, 7],
+                    branches: vec![],
+                    sample_selector: None,
                 },
             ];
         }
@@ -9438,6 +9463,8 @@ mod tests {
             fullmag_ir::OutputIR::EigenMode {
                 field: "mode".to_string(),
                 indices: vec![0, 1, 7],
+                branches: vec![],
+                sample_selector: None,
             },
         ];
         base.study = fullmag_ir::StudyIR::TimeEvolution {

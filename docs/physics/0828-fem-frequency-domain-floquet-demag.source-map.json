@@ -1,0 +1,761 @@
+{
+  "document": {
+    "path": "docs/physics/0828-fem-frequency-domain-floquet-demag.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source_visible / unvalidated"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source_visible / unvalidated"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "This page owns the FEM scalar-potential realization; FDM requires a separate convolution-k owner."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "This page owns the FEM scalar-potential realization; FDM requires a separate convolution-k owner."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-0828-full-bloch-ansatz",
+      "symbols": [
+        "position",
+        "bloch_envelope",
+        "wave_vector",
+        "lattice_vector",
+        "magnetization",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-full-bloch-contract",
+        "source-floquet-native-prolongation"
+      ]
+    },
+    {
+      "id": "eq-0828-full-bloch-demag",
+      "symbols": [
+        "dynamic_magnetization",
+        "Ms",
+        "magnetization",
+        "gradient",
+        "bloch_potential",
+        "demag_field",
+        "domains"
+      ],
+      "sources": [
+        "source-full-bloch-contract",
+        "source-shared-domain",
+        "source-floquet-dynamic-demag-k"
+      ]
+    },
+    {
+      "id": "eq-0828-full-bloch-weak",
+      "symbols": [
+        "test_function",
+        "gradient",
+        "bloch_potential",
+        "dynamic_magnetization",
+        "domains",
+        "volume_measure",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-full-bloch-contract",
+        "source-shared-domain"
+      ]
+    },
+    {
+      "id": "eq-0828-full-bloch-constraint",
+      "symbols": [
+        "phase",
+        "wave_vector",
+        "translation",
+        "magnetization",
+        "bloch_potential",
+        "tangent_maps",
+        "q",
+        "periodic_transform",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-full-bloch-contract",
+        "source-floquet-validation"
+      ]
+    },
+    {
+      "id": "eq-0828-flux-condition",
+      "symbols": [
+        "bloch_potential",
+        "phase",
+        "normal_derivative",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-full-bloch-contract",
+        "source-floquet-validation"
+      ]
+    },
+    {
+      "id": "eq-0828-waveguide-envelope-demag",
+      "symbols": [
+        "shifted_gradient",
+        "wave_number",
+        "propagation_axis",
+        "potential",
+        "dynamic_magnetization_transverse",
+        "gradient",
+        "demag_field",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-waveguide-envelope-contract",
+        "source-tetrax-boundary",
+        "source-floquet-waveguide-demag-k"
+      ]
+    },
+    {
+      "id": "eq-0828-modal-pencil",
+      "symbols": [
+        "restoring_operators",
+        "q",
+        "mass_operators",
+        "lambda",
+        "omega",
+        "frequency",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-dynamic-pencil",
+        "source-full-bloch-contract"
+      ]
+    },
+    {
+      "id": "eq-0828-original-residual",
+      "symbols": [
+        "q",
+        "potential",
+        "restoring_operators",
+        "Aqphi",
+        "Aphiq",
+        "poisson",
+        "mass_operators",
+        "lambda",
+        "gauge",
+        "residuals",
+        "normalized_residuals",
+        "complex_operators"
+      ],
+      "sources": [
+        "source-cpu-schur",
+        "source-dynamic-pencil",
+        "source-floquet-descriptor-certification"
+      ]
+    },
+    {
+      "id": "eq-0828-n0-mass-envelope",
+      "symbols": [
+        "n0_volume",
+        "n0_mass",
+        "n0_delta",
+        "n0_envelope",
+        "n0_residual",
+        "n0_one",
+        "n0_ratios",
+        "position",
+        "wave_vector"
+      ],
+      "sources": [
+        "source-n0-projection-contract",
+        "source-n0-projection"
+      ]
+    },
+    {
+      "id": "eq-0828-n0-projection",
+      "symbols": [
+        "n0_volume",
+        "n0_mass",
+        "n0_delta",
+        "n0_envelope",
+        "n0_residual",
+        "n0_one",
+        "n0_ratios",
+        "position",
+        "wave_vector"
+      ],
+      "sources": [
+        "source-n0-projection-contract",
+        "source-n0-projection"
+      ]
+    },
+    {
+      "id": "eq-0828-n0-longitudinal",
+      "symbols": [
+        "n0_volume",
+        "n0_mass",
+        "n0_delta",
+        "n0_envelope",
+        "n0_residual",
+        "n0_one",
+        "n0_ratios",
+        "position",
+        "wave_vector"
+      ],
+      "sources": [
+        "source-n0-projection-contract",
+        "source-n0-projection"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "position",
+      "latex": "$\\mathbf r$",
+      "meaning": "spatial position",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "time",
+      "latex": "$t$",
+      "meaning": "time",
+      "si_unit": "$\\mathrm{s}$"
+    },
+    {
+      "id": "magnetization",
+      "latex": "$\\mathbf m$, $\\mathbf m_0$, $\\widetilde{\\mathbf m}_{n\\mathbf k}$",
+      "meaning": "normalized magnetization, accepted equilibrium and dynamic phasor",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "bloch_envelope",
+      "latex": "$\\mathbf u_{n\\mathbf k}$",
+      "meaning": "periodic Bloch envelope",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "Ms",
+      "latex": "$M_s$",
+      "meaning": "saturation magnetization",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "dynamic_magnetization",
+      "latex": "$\\widetilde{\\mathbf M}_{n\\mathbf k}$",
+      "meaning": "dynamic magnetization phasor",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "bloch_potential",
+      "latex": "$\\widetilde\\phi_{n\\mathbf k}$",
+      "meaning": "full Bloch scalar-potential phasor",
+      "si_unit": "$\\mathrm{A}$"
+    },
+    {
+      "id": "potential",
+      "latex": "$\\phi$",
+      "meaning": "transverse waveguide scalar-potential envelope",
+      "si_unit": "$\\mathrm{A}$"
+    },
+    {
+      "id": "demag_field",
+      "latex": "$\\widetilde{\\mathbf h}_{d,n\\mathbf k}$",
+      "meaning": "dynamic demagnetizing-field phasor",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "test_function",
+      "latex": "$v$",
+      "meaning": "scalar-potential test function",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "wave_vector",
+      "latex": "$\\mathbf k$",
+      "meaning": "Bloch wave vector",
+      "si_unit": "$\\mathrm{rad\\,m^{-1}}$"
+    },
+    {
+      "id": "wave_number",
+      "latex": "$k$",
+      "meaning": "signed wave number along the waveguide axis",
+      "si_unit": "$\\mathrm{rad\\,m^{-1}}$"
+    },
+    {
+      "id": "translation",
+      "latex": "$\\Delta\\mathbf r$",
+      "meaning": "paired-face translation",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "lattice_vector",
+      "latex": "$\\mathbf R$",
+      "meaning": "lattice translation",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "phase",
+      "latex": "$p=\\exp(-\\mathrm{i}\\mathbf k\\cdot\\Delta\\mathbf r)$",
+      "meaning": "Floquet phase",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "constraint_map",
+      "latex": "$C(\\mathbf k)$",
+      "meaning": "complex full-Bloch constraint or prolongation map",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "tangent_maps",
+      "latex": "$T$, $T_{\\mathrm{src}}$, $T_{\\mathrm{dst}}$",
+      "meaning": "tangent-frame maps",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "q",
+      "latex": "$q$, $q_{\\mathrm{src}}$, $q_{\\mathrm{dst}}$",
+      "meaning": "tangent-plane coefficients",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "periodic_transform",
+      "latex": "$Q$",
+      "meaning": "physical vector transformation across a pair",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gradient",
+      "latex": "$\\nabla$, $\\nabla_\\perp$",
+      "meaning": "ordinary and transverse spatial gradients",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "shifted_gradient",
+      "latex": "$D_{\\mathbf k}=\\nabla_\\perp-\\mathrm{i}k\\hat{\\mathbf z}$",
+      "meaning": "waveguide shifted gradient",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "propagation_axis",
+      "latex": "$\\hat{\\mathbf z}$",
+      "meaning": "propagation direction",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "dynamic_magnetization_transverse",
+      "latex": "$\\delta\\mathbf M_\\perp$, $\\delta M_z$",
+      "meaning": "transverse and longitudinal waveguide magnetization components",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "domains",
+      "latex": "$\\Omega$, $\\Omega_m$, $\\Omega_a$",
+      "meaning": "full cell, magnetic and air subdomains",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "volume_measure",
+      "latex": "$\\mathrm dV$",
+      "meaning": "volume measure",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "normal_derivative",
+      "latex": "$\\partial_n$",
+      "meaning": "outward normal derivative on a paired face",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "omega",
+      "latex": "$\\omega$, $\\omega_r$, $\\Gamma$",
+      "meaning": "complex angular frequency, oscillation and decay rates",
+      "si_unit": "$\\mathrm{rad\\,s^{-1}}$"
+    },
+    {
+      "id": "lambda",
+      "latex": "$\\lambda$",
+      "meaning": "generalized eigenvalue",
+      "si_unit": "$\\mathrm{s^{-1}}$"
+    },
+    {
+      "id": "frequency",
+      "latex": "$f$",
+      "meaning": "cyclic frequency",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "restoring_operators",
+      "latex": "$L$",
+      "meaning": "dynamic restoring operator",
+      "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"
+    },
+    {
+      "id": "mass_operators",
+      "latex": "$B_\\alpha$",
+      "meaning": "damped gyrotropic or mass operator",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "Aqphi",
+      "latex": "$A_{q\\phi}$",
+      "meaning": "potential-to-magnetic coupling block",
+      "si_unit": "$\\mathrm{m^3\\,A^{-1}\\,s^{-1}}$"
+    },
+    {
+      "id": "Aphiq",
+      "latex": "$A_{\\phi q}$",
+      "meaning": "magnetic-to-potential coupling block",
+      "si_unit": "$\\mathrm{A\\,m}$"
+    },
+    {
+      "id": "poisson",
+      "latex": "$P$",
+      "meaning": "scalar Poisson block",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "gauge",
+      "latex": "$c$, $\\eta$",
+      "meaning": "conditional gauge vector and multiplier",
+      "si_unit": "$\\mathrm{m^3}$, $\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "residuals",
+      "latex": "$r_q$, $r_\\phi$, $r_g$",
+      "meaning": "original magnetic, scalar and gauge residuals",
+      "si_unit": "$\\mathrm{m^3\\,s^{-1}}$, $\\mathrm{A\\,m}$, $\\mathrm{A\\,m^3}$"
+    },
+    {
+      "id": "normalized_residuals",
+      "latex": "$\\epsilon_q$, $\\epsilon_\\phi$, $\\epsilon_g$, $\\epsilon_{\\mathrm{full}}$",
+      "meaning": "normalized residuals",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "complex_operators",
+      "latex": "$\\operatorname{Re}$, $\\exp$, $\\mathrm{i}$, $\\pi$, $(\\cdot)^\\mathsf{T}$, $(\\cdot)^\\mathsf{H}$, $(\\cdot)^\\ast$, $\\cdot$, $\\max$",
+      "meaning": "real part, exponential, imaginary unit, circle constant, transpose, Hermitian transpose, conjugation, contraction and maximum",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "n0_volume",
+      "latex": "$V_e$",
+      "meaning": "objętość magnetycznego tetraedru",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "n0_mass",
+      "latex": "$M^e$, $M$",
+      "meaning": "elementowa i złożona masa zgodna",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "n0_delta",
+      "latex": "$\\delta_{ij}$",
+      "meaning": "delta Kroneckera",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "n0_envelope",
+      "latex": "$d_{i\\alpha}$, $u_{i\\alpha}$",
+      "meaning": "pole modalne i jego obwiednia węzłowa dla znormalizowanej magnetyzacji",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "n0_residual",
+      "latex": "$c_\\alpha$, $r_\\alpha$",
+      "meaning": "stała projekcja i reszta obwiedni",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "n0_one",
+      "latex": "$\\mathbf 1$",
+      "meaning": "wektor stałych wartości węzłowych",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "n0_ratios",
+      "latex": "$\\eta_0$, $\\eta_\\parallel$",
+      "meaning": "względne kwadraty norm",
+      "si_unit": "$1$"
+    }
+  ],
+  "sources": [
+    {
+      "id": "source-full-bloch-contract",
+      "path": "docs/physics/0828-fem-frequency-domain-floquet-demag.md",
+      "symbol": "DOC-ANCHOR:full-bloch-contract",
+      "responsibility": "Define the planned 3D full Bloch representation with ordinary gradients, complex constraints and dynamic demagnetization.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "source-waveguide-envelope-contract",
+      "path": "docs/physics/0828-fem-frequency-domain-floquet-demag.md",
+      "symbol": "DOC-ANCHOR:waveguide-envelope-contract",
+      "responsibility": "Define the planned 2.5D translationally invariant waveguide envelope representation.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "source-tetrax-boundary",
+      "path": "docs/physics/0828-fem-frequency-domain-floquet-demag.md",
+      "symbol": "DOC-ANCHOR:waveguide-envelope-contract",
+      "responsibility": "Bound the TetraX comparison to a presentation reference; no source-code claim is made.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "source-python-response-stage",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "frequency_response_stage",
+      "responsibility": "Capture the public stage-first driven-response request and boundary intent."
+    },
+    {
+      "id": "source-python-pbc",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Declare periodic cell axes and synchronize the default FEM mesh pair IDs before domain-mesh creation."
+    },
+    {
+      "id": "source-python-response",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class FrequencyResponse",
+      "responsibility": "Validate and lower response frequencies, k sampling and magnetostatic boundary."
+    },
+    {
+      "id": "source-phase-ir",
+      "path": "crates/fullmag-ir/src/eigen_contract.rs",
+      "symbol": "PhaseConventionIR",
+      "responsibility": "Preserve the canonical phase convention across the IR boundary."
+    },
+    {
+      "id": "source-path-sampling",
+      "path": "crates/fullmag-runner/src/eigen/path.rs",
+      "symbol": "expand_k_sampling",
+      "responsibility": "Expand declared k points and paths before execution."
+    },
+    {
+      "id": "source-floquet-validation",
+      "path": "backends/fem/src/frequency_domain/driven_response_solver.cpp",
+      "symbol": "validate_driven_response_floquet_phase_constraints",
+      "responsibility": "Validate phase cycles, tangent-frame matching and drive consistency."
+    },
+    {
+      "id": "source-shared-domain",
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp",
+      "symbol": "assemble_poisson_airbox_shared_domain",
+      "responsibility": "Own the existing shared-domain scalar assembly boundary; nonzero-k physics remains unvalidated."
+    },
+    {
+      "id": "source-floquet-native-prolongation",
+      "path": "backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp",
+      "symbol": "class FloquetTangentProlongation",
+      "responsibility": "Provide the foundational phase and tangent-frame map; source is uncompiled and disconnected from the solver ABI."
+    },
+    {
+      "id": "source-floquet-native-reduced-operator",
+      "path": "backends/fem/cpu/frequency_domain/operators/floquet_magnetic_operator.hpp",
+      "symbol": "class FloquetReducedMagneticOperator",
+      "responsibility": "Provide the foundational C^H A C operator boundary; source is uncompiled and disconnected from the solver ABI."
+    },
+    {
+      "id": "source-floquet-dynamic-demag-k",
+      "path": "backends/fem/include/frequency_domain/floquet_dynamic_demag_k.hpp",
+      "symbol": "build_floquet_dynamic_demag_k_real_split",
+      "responsibility": "Provide the bounded dense Schur oracle for complex nonzero-k dynamic demagnetization; mesh assembly and production qualification remain separate.",
+      "evidence_status": "source_visible / unvalidated"
+    },
+    {
+      "id": "source-floquet-waveguide-demag-k",
+      "path": "backends/fem/include/frequency_domain/floquet_waveguide_demag_k.hpp",
+      "symbol": "build_floquet_waveguide_demag_k_real_split",
+      "responsibility": "Provide the bounded 2.5D modified-Helmholtz and Schur oracle; transverse MFEM assembly and open-boundary convergence remain separate.",
+      "evidence_status": "source_visible / unvalidated"
+    },
+    {
+      "id": "source-dynamic-pencil",
+      "path": "backends/fem/include/frequency_domain/linearized_dynamic_pencil.hpp",
+      "symbol": "apply_Aomega",
+      "responsibility": "Own the shared harmonic pencil and eigenvalue convention."
+    },
+    {
+      "id": "source-cpu-schur",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp",
+      "symbol": "solve_poisson_airbox_modal_eigen_cpu_schur",
+      "responsibility": "Declare the CPU descriptor and original-residual boundary; runtime qualification is absent."
+    },
+    {
+      "id": "source-contract-regression",
+      "path": "scripts/test_frequency_domain_math_contract_docs.py",
+      "symbol": "test_dynamic_demag_and_response_observables_use_si_contract",
+      "responsibility": "Freeze the text-level SI and dynamic-demagnetization contract; this is not numerical evidence."
+    },
+    {
+      "id": "source-floquet-descriptor-certification",
+      "path": "backends/fem/cpu/frequency_domain/floquet_dynamic_demag_k.cpp",
+      "symbol": "certify_floquet_realified_mode",
+      "responsibility": "Reconstruct both realification sectors and check original reduced magnetic/potential equations; geometric BC and full V9 remain unverified."
+    },
+    {
+      "id": "source-sparse-modal-mass",
+      "path": "crates/fullmag-runner/src/fem/eigen_mass_metric.rs",
+      "symbol": "SharedDomainSparseMass",
+      "responsibility": "Consistent phase-reduced P1 modal normalization without dense storage; not solver assembly."
+    },
+    {
+      "id": "source-physical-modal-potential",
+      "path": "crates/fullmag-runner/src/fem/eigen_physical_potential.rs",
+      "symbol": "physical_potential_artifacts",
+      "responsibility": "Full physical potential and element-wise negative P1 gradient with the magnetic mode normalization."
+    },
+    {
+      "id": "source-native-sparse-floquet-modal",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "solve_floquet_shared_domain_sparse_modal_spectrum",
+      "responsibility": "Own the native CPU Floquet sparse modal solve and resolved KSP diagnostics; runtime and physical qualification remain unverified."
+    },
+    {
+      "id": "source-n0-projection-contract",
+      "path": "docs/physics/0828-fem-frequency-domain-floquet-demag.md",
+      "symbol": "DOC-ANCHOR:n0-field-projection-contract",
+      "responsibility": "Define magnetic Tet4 nodal-envelope projection without an implicit qualification threshold.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "source-n0-projection",
+      "path": "scripts/comsol_n0_projection.py",
+      "symbol": "tet4_n0_projection",
+      "responsibility": "Compute the constant transverse nodal-envelope projection in the magnetic consistent Tet4 mass metric.",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "source-native-residual-artifacts",
+      "path": "crates/fullmag-runner/src/fem/eigen_native_artifacts.rs",
+      "symbol": "native_modal_artifacts",
+      "responsibility": "Export distinct native absolute and relative residuals.",
+      "evidence_status": "source contract; runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-path-residual-data",
+      "path": "crates/fullmag-runner/src/eigen/types.rs",
+      "symbol": "SingleKModeResult",
+      "responsibility": "Carry per-mode diagnostics without inferring unavailable relative residuals.",
+      "evidence_status": "source contract; runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-path-residual-summary",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/modal_manifest.rs",
+      "symbol": "summarize_mode",
+      "responsibility": "Preserve the residual semantics in path summaries; runtime verification required.",
+      "evidence_status": "source contract; runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-de-row-preflight",
+      "path": "scripts/validate_de_smoke_rows.py",
+      "symbol": "validate_rows",
+      "responsibility": "Check absolute CSV residual finiteness only; no relative or scientific qualification.",
+      "evidence_status": "source contract; runtime NOT VERIFIED"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "add_frequency_response.frequencies_hz",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "$\\mathrm{Hz}$",
+        "validation": "Non-empty finite positive sequence; otherwise ValueError.",
+        "meaning": "Driven-frequency samples.",
+        "backend_support": "FEM CPU/GPU authoring; runtime gated",
+        "problem_ir": "study.frequencies_hz.values_hz."
+      },
+      {
+        "python": "add_frequency_response.excitation_field_au_per_m",
+        "type": "tuple[float, float, float]",
+        "default": "(0.0, 0.0, 1.0)",
+        "si_unit": "$\\mathrm{A\\,m^{-1}}$",
+        "validation": "Exactly three finite components; otherwise ValueError.",
+        "meaning": "Independent RF drive amplitude.",
+        "backend_support": "FEM CPU/GPU authoring; runtime gated",
+        "problem_ir": "study.excitation.field_au_per_m."
+      },
+      {
+        "python": "add_frequency_response.excitation_phase_rad",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "$\\mathrm{rad}$",
+        "validation": "Finite after conversion; non-finite values raise ValueError.",
+        "meaning": "Global RF-drive phase.",
+        "backend_support": "FEM CPU/GPU authoring; runtime gated",
+        "problem_ir": "study.excitation.phase_rad."
+      },
+      {
+        "python": "add_frequency_response.include_demag",
+        "type": "bool",
+        "default": "True",
+        "si_unit": "$1$",
+        "validation": "Boolean; unsupported physical combinations fail during planning.",
+        "meaning": "Include the dynamic-demagnetization derivative.",
+        "backend_support": "FEM CPU/GPU authoring; nonzero-k gated",
+        "problem_ir": "study.operator.include_demag."
+      },
+      {
+        "python": "add_frequency_response.k_sampling",
+        "type": "object",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "None, a 3-vector, KPoint or KPath; invalid input raises ValueError.",
+        "meaning": "One k point or declared k path.",
+        "backend_support": "FEM CPU/GPU authoring; nonzero-k demag gated",
+        "problem_ir": "study.k_sampling via coerce_k_sampling."
+      },
+      {
+        "python": "add_frequency_response.bc",
+        "type": "str or PeriodicBC or FloquetBC or dict",
+        "default": "free",
+        "si_unit": "$1$",
+        "validation": "Supported spin-wave boundary; pair objects require non-empty IDs.",
+        "meaning": "Dynamic magnetic seam or boundary condition.",
+        "backend_support": "FEM CPU/GPU authoring; runtime gated",
+        "problem_ir": "study.spin_wave_bc."
+      },
+      {
+        "python": "add_frequency_response.magnetostatic_bc",
+        "type": "str",
+        "default": "open",
+        "si_unit": "$1$",
+        "validation": "open, periodic_airbox_k0 or floquet_airbox; unsupported combinations fail closed.",
+        "meaning": "Dynamic scalar-potential boundary model.",
+        "backend_support": "FEM CPU/GPU authoring; nonzero-k gated",
+        "problem_ir": "study.magnetostatic_bc."
+      },
+      {
+        "python": "add_frequency_response.damping_policy",
+        "type": "str",
+        "default": "ignore",
+        "si_unit": "$1$",
+        "validation": "ignore or include; invalid values raise ValueError.",
+        "meaning": "Gilbert-damping participation in the pencil.",
+        "backend_support": "FEM CPU/GPU authoring; runtime gated",
+        "problem_ir": "study.damping_policy."
+      },
+      {
+        "python": "study.pbc(x, y, z, demag, images)",
+        "type": "bool axes plus optional image tuple",
+        "default": "all false, demag=open, images=None",
+        "si_unit": "$1$ and $1$",
+        "validation": "The selected axes must span matching periodic seams; `demag` is open, truncated_images or periodic_airbox_k0; invalid combinations raise ValueError.",
+        "meaning": "Declare cell topology and generate the default FEM pair IDs `x_faces`, `y_faces`, `z_faces` before `build_domain_mesh`.",
+        "backend_support": "FEM CPU/GPU authoring; Floquet dynamic demag remains gated",
+        "problem_ir": "study.periodic_boundary_conditions; study.default_mesh.periodic_pair_ids."
+      }
+    ]
+  }
+}

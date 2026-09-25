@@ -7,7 +7,37 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
     result: &crate::eigen::PathSolveResult,
     mode_artifacts: &[crate::types::AuxiliaryArtifact],
     plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
 ) -> serde_json::Value {
+    let wants_dispersion = eigen_path_wants_dispersion(outputs);
+    let wants_branches = outputs.iter().any(|output| {
+        matches!(
+            output,
+            OutputIR::DispersionCurve {
+                include_branch_table: true,
+                ..
+            }
+        )
+    });
+    let mut requested_outputs = Vec::new();
+    if outputs
+        .iter()
+        .any(|output| matches!(output, OutputIR::EigenSpectrum { .. }))
+    {
+        requested_outputs.push("spectrum");
+    }
+    if wants_branches {
+        requested_outputs.push("branches");
+    }
+    if wants_dispersion {
+        requested_outputs.push("dispersion");
+    }
+    if outputs
+        .iter()
+        .any(|output| matches!(output, OutputIR::EigenMode { .. }))
+    {
+        requested_outputs.push("mode_fields");
+    }
     let mode_metadata_paths = eigen_path_mode_metadata_paths(mode_artifacts);
     let equilibrium_artifact_v7_paths =
         eigen_path_state_metadata_paths(mode_artifacts, "equilibrium_artifact.v7.json");
@@ -229,11 +259,7 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
             "equilibrium_source": format!("{:?}", plan.equilibrium).to_lowercase(),
             // A multi-sample k=0 bias-field sweep is not a Bloch/Floquet path.
             "k_sampling": if calculation_mode == "dispersion_modal" { "path" } else { "single" },
-            "outputs": if calculation_mode == "dispersion_modal" {
-                serde_json::json!(["spectrum", "branches", "dispersion", "mode_fields"])
-            } else {
-                serde_json::json!(["spectrum", "mode_fields"])
-            },
+            "outputs": requested_outputs,
             "solver_method": requested_solver_method,
             "preconditioner": requested_preconditioner,
             "magnetostatic_bc": requested_magnetostatic_bc,
@@ -269,8 +295,8 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
         "artifacts": {
             "solver_diagnostics_path": "eigen/diagnostics/solver.v1.json",
             "spectrum_v2_path": "eigen/spectrum.v2.json",
-            "branches_v2_path": if calculation_mode == "dispersion_modal" { serde_json::json!("eigen/branches.v2.json") } else { serde_json::Value::Null },
-            "dispersion_csv_path": if calculation_mode == "dispersion_modal" { serde_json::json!("eigen/dispersion.csv") } else { serde_json::Value::Null },
+            "branches_v2_path": if wants_branches { serde_json::json!("eigen/branches.v2.json") } else { serde_json::Value::Null },
+            "dispersion_csv_path": if wants_dispersion { serde_json::json!("eigen/dispersion.csv") } else { serde_json::Value::Null },
             "eigen_diagnostics_v2_path": "eigen/diagnostics.v2.json",
             "response_sweep_v1_path": null,
             "response_sweep_v2_path": null,
@@ -288,8 +314,8 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
         },
         "resources": {
             "spectrum_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
-            "branches_resource_key": if calculation_mode == "dispersion_modal" { serde_json::json!("/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2") } else { serde_json::Value::Null },
-            "dispersion_resource_key": if calculation_mode == "dispersion_modal" { serde_json::json!("/v2/sessions/current/analysis/frequency-domain/eigen/dispersion") } else { serde_json::Value::Null },
+            "branches_resource_key": if wants_branches { serde_json::json!("/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2") } else { serde_json::Value::Null },
+            "dispersion_resource_key": if wants_dispersion { serde_json::json!("/v2/sessions/current/analysis/frequency-domain/eigen/dispersion") } else { serde_json::Value::Null },
             "diagnostics_resource_key": null,
             "eigen_diagnostics_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2",
             "response_sweep_resource_key": null,
@@ -631,14 +657,18 @@ pub(super) fn append_eigen_path_k0_kittel_validation_artifacts(
 pub(super) fn eigen_path_dispersion_frequency_source(
     result: &crate::eigen::PathSolveResult,
 ) -> serde_json::Value {
-    if result.dispersion_validation.is_none() {
+    let native_production = matches!(
+        result.solver_model,
+        crate::eigen::EigenSolverModel::ProductionCpuShiftInvert
+            | crate::eigen::EigenSolverModel::ProductionGpuDenseK0Macrospin
+            | crate::eigen::EigenSolverModel::ProductionGpuModalDeviceKrylov
+    );
+    if result.dispersion_validation.is_none() && !native_production {
         return serde_json::Value::Null;
     }
-    if result.solver_model == crate::eigen::EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0 {
-        serde_json::json!("analytic_reference_model")
-    } else {
-        serde_json::json!("numeric_modal_solver_with_analytic_comparison")
-    }
+    // Validation metadata is postsolve comparison intent. It must never select
+    // an analytic solver or change the native FEM execution path.
+    serde_json::json!("numeric_modal_solver_with_analytic_comparison")
 }
 
 pub(super) fn eigen_path_dispersion_reference_model(
@@ -647,24 +677,25 @@ pub(super) fn eigen_path_dispersion_reference_model(
     if result.dispersion_validation.is_none() {
         return serde_json::Value::Null;
     }
-    if result.solver_model == crate::eigen::EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0 {
-        serde_json::json!("kalinikos_slab_n0")
-    } else {
-        serde_json::Value::Null
-    }
+    result
+        .dispersion_validation
+        .as_ref()
+        .map(|validation| serde_json::json!(validation.analytic_model))
+        .unwrap_or(serde_json::Value::Null)
 }
 
 pub(super) fn eigen_path_dynamic_demag_operator_source(
     result: &crate::eigen::PathSolveResult,
 ) -> serde_json::Value {
-    if result.dispersion_validation.is_none() {
+    let native_production = matches!(
+        result.solver_model,
+        crate::eigen::EigenSolverModel::ProductionCpuShiftInvert
+            | crate::eigen::EigenSolverModel::ProductionGpuModalDeviceKrylov
+    );
+    if result.dispersion_validation.is_none() && !(result.include_demag && native_production) {
         return serde_json::Value::Null;
     }
-    if result.solver_model == crate::eigen::EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0 {
-        serde_json::json!("analytic_thin_film_de_bv_reference_not_fem_demag_k")
-    } else {
-        serde_json::json!("numeric_modal_solver")
-    }
+    serde_json::json!("numeric_modal_solver")
 }
 
 pub(super) fn eigen_path_capability(status: &str, reason: &str) -> serde_json::Value {

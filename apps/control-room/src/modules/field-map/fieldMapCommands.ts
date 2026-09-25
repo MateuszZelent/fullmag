@@ -346,6 +346,7 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
           status: "failed",
         };
       }
+      const monitorId = input.monitorId;
       let revision: number;
       if (id === "planar-monitor.delete") {
         const visualization = await context.api.visualization.state();
@@ -357,7 +358,7 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
               ? await context.api!.model.planarMonitors.list()
               : null;
             return context.api!.model.planarMonitors.remove(
-              input.monitorId!,
+              monitorId,
               {
                 expected_scene_revision:
                   baseRevision ?? collection!.scene_revision,
@@ -368,7 +369,7 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
         revision = response.scene_revision;
         if (
           visualization.planar?.source.kind === "monitor" &&
-          visualization.planar.source.monitor_id === input.monitorId
+          visualization.planar.source.monitor_id === monitorId
         ) {
           if (!queuePlanarSourceSelection(context, { kind: "default" }, visualization)) {
             return {
@@ -387,7 +388,7 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
               ? await context.api!.model.planarMonitors.list()
               : null;
             return context.api!.model.planarMonitors.duplicate(
-              input.monitorId!,
+              monitorId,
               {
                 expected_scene_revision:
                   baseRevision ?? collection!.scene_revision,
@@ -413,6 +414,7 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
             status: "completed",
           };
         }
+        const newName = input.newName;
         const response = await runAuthoringMutationWithHistory(
           context,
           "Rename planar monitor",
@@ -421,14 +423,14 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
               ? await context.api!.model.planarMonitors.list()
               : null;
             const current = await context.api!.model.planarMonitors.get(
-              input.monitorId!,
+              monitorId,
             );
             return context.api!.model.planarMonitors.patch(
-              input.monitorId!,
+              monitorId,
               {
                 expected_scene_revision:
                   baseRevision ?? collection!.scene_revision,
-                monitor: { ...current.monitor, name: input.newName!.trim() },
+                monitor: { ...current.monitor, name: newName.trim() },
               },
             );
           },

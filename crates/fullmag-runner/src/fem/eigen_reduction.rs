@@ -1,4 +1,4 @@
-use super::eigen_constants::TANGENT_FRAME_IDENTITY_TOLERANCE;
+use super::eigen_constants::{GAMMA_K_TOLERANCE_RAD_PER_M, TANGENT_FRAME_IDENTITY_TOLERANCE};
 use super::eigen_math::dot;
 use super::eigen_projection::tangent_bases;
 use crate::types::RunError;
@@ -83,22 +83,31 @@ pub(super) fn build_reduction_map(
 pub(super) fn is_gamma_k_sampling(k_sampling: Option<&KSamplingIR>) -> bool {
     match k_sampling {
         None => true,
-        Some(KSamplingIR::Single { k_vector }) => k_vector.iter().all(|value| *value == 0.0),
+        Some(KSamplingIR::Single { k_vector }) => k_vector
+            .iter()
+            .all(|value| value.is_finite() && value.abs() <= GAMMA_K_TOLERANCE_RAD_PER_M),
         Some(KSamplingIR::Path { points, .. }) => {
             !points.is_empty()
-                && points
-                    .iter()
-                    .all(|point| point.k_vector.iter().all(|value| *value == 0.0))
+                && points.iter().all(|point| {
+                    point.k_vector.iter().all(|value| {
+                        value.is_finite() && value.abs() <= GAMMA_K_TOLERANCE_RAD_PER_M
+                    })
+                })
         }
     }
 }
 
 pub(super) fn k_sampling_contains_nonzero(k_sampling: Option<&KSamplingIR>) -> bool {
     match k_sampling {
-        Some(KSamplingIR::Single { k_vector }) => k_vector.iter().any(|value| *value != 0.0),
-        Some(KSamplingIR::Path { points, .. }) => points
+        Some(KSamplingIR::Single { k_vector }) => k_vector
             .iter()
-            .any(|point| point.k_vector.iter().any(|value| *value != 0.0)),
+            .any(|value| !value.is_finite() || value.abs() > GAMMA_K_TOLERANCE_RAD_PER_M),
+        Some(KSamplingIR::Path { points, .. }) => points.iter().any(|point| {
+            point
+                .k_vector
+                .iter()
+                .any(|value| !value.is_finite() || value.abs() > GAMMA_K_TOLERANCE_RAD_PER_M)
+        }),
         None => false,
     }
 }
@@ -132,6 +141,48 @@ pub(super) fn validate_tangent_frame_transport_support(
         return Ok(());
     }
     if matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
+        return Ok(());
+    }
+    reject_nonidentity_tangent_frame_transport(topology, &selected_pairs, equilibrium)
+}
+
+/// Validate the transport used by the native shared-domain Full2x2 payload.
+///
+/// The shared-domain native constraint currently carries one scalar Bloch
+/// phase per tangent component.  That representation is valid only when the
+/// local tangent frames on every identified magnetic pair are identical.  The
+/// older reduced operator has its own guard above, but it deliberately skips
+/// Full2x2; keep this check explicit so that the native demag path cannot
+/// silently apply a scalar phase to non-identical local frames.
+pub(super) fn validate_shared_domain_tangent_frame_transport(
+    plan: &FemEigenPlanIR,
+    topology: &MeshTopology,
+    equilibrium: &[Vector3],
+) -> Result<(), RunError> {
+    if !matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
+        return Ok(());
+    }
+    let kind = plan.spin_wave_bc.kind();
+    if !matches!(
+        kind,
+        SpinWaveBoundaryKindIR::Periodic | SpinWaveBoundaryKindIR::Floquet
+    ) || topology.periodic_node_pairs.is_empty()
+    {
+        return Ok(());
+    }
+    let requested_pair_ids = plan.spin_wave_bc.boundary_pair_ids();
+    let selected_pairs = topology
+        .periodic_node_pairs
+        .iter()
+        .filter(|(pair_id, _, _)| {
+            requested_pair_ids.is_empty()
+                || requested_pair_ids
+                    .iter()
+                    .any(|requested| *requested == pair_id)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if selected_pairs.is_empty() {
         return Ok(());
     }
     reject_nonidentity_tangent_frame_transport(topology, &selected_pairs, equilibrium)
@@ -405,4 +456,31 @@ fn magnetic_boundary_nodes(topology: &MeshTopology) -> std::collections::HashSet
     (0..topology.n_nodes)
         .filter(|&i| topology.magnetic_node_volumes[i] > 0.0 && in_airbox_element.contains(&i))
         .collect()
+}
+
+#[cfg(test)]
+mod gamma_classification_tests {
+    use super::*;
+
+    #[test]
+    fn gamma_threshold_agrees_with_single_k_policy() {
+        for (component, gamma) in [
+            (0.0, true),
+            (5e-13, true),
+            (-1e-12, true),
+            (2e-12, false),
+            (f64::NAN, false),
+            (f64::INFINITY, false),
+        ] {
+            let sampling = KSamplingIR::Single {
+                k_vector: [component, 0.0, 0.0],
+            };
+            assert_eq!(is_gamma_k_sampling(Some(&sampling)), gamma);
+            assert_eq!(
+                super::super::eigen_policy::k_sampling_is_single_k0(Some(&sampling)),
+                gamma
+            );
+            assert_eq!(k_sampling_contains_nonzero(Some(&sampling)), !gamma);
+        }
+    }
 }

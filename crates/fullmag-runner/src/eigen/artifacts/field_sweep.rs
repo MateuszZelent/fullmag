@@ -135,6 +135,10 @@ pub fn build_frequency_domain_field_sweep_artifact(
                     .residual_norm
                     .map(|value| value.is_finite() && value >= 0.0)
                     .unwrap_or(true)
+                && mode
+                    .residual_relative_l2
+                    .map(|value| value.is_finite() && value >= 0.0)
+                    .unwrap_or(true)
         });
         if !mode_values_valid {
             status = ServerArtifactStatus::Corrupt;
@@ -171,7 +175,7 @@ pub fn build_frequency_domain_field_sweep_artifact(
                     mode_field_id: field_payload_valid.then_some(mode_field_id.clone()),
                     mode_field_resource_key: field_payload_valid
                         .then(|| eigen_mode_field_resource_key(&mode_field_id)),
-                    residual_relative_l2: mode.residual_norm,
+                    residual_relative_l2: mode.residual_relative_l2,
                     source_revision: result_source_revision(result),
                     field_status: if field_payload_valid {
                         "ready".to_string()

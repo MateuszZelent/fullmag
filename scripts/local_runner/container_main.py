@@ -64,6 +64,14 @@ def submission_manifest(source, expected_digest):
 
 class Application:
     def __init__(self, config):
+        profiles = config.get('allowed_profiles')
+        if (not isinstance(profiles, list) or not profiles
+                or any(not isinstance(profile, str) for profile in profiles)
+                or len(set(profiles)) != len(profiles)):
+            raise ValueError('Coordinator requires an explicit unique profile allow-list')
+        for profile in profiles:
+            profile_lane(profile)
+        self.allowed_profiles = frozenset(profiles)
         self.storage = Path('/storage')
         self.owner = config['operator']
         self.layout = {'storage_root': '/storage', 'container_coordinator': True,
@@ -81,6 +89,7 @@ class Application:
         self._worker_started_at = None
         self._worker_finished_at = None
         self._worker_samples_by_job = {}
+        self._worker_io_baselines = {}
 
     def _service_record(self):
         if not self.paths.state_path.exists():
@@ -180,6 +189,8 @@ class Application:
         if set(payload) != {'worktree_id', 'source_digest', 'profile', 'operation', 'request_key', 'payload'} or payload['operation'] != 'build':
             raise ValueError('Only catalogued build requests are accepted')
         profile_lane(payload['profile'])
+        if payload['profile'] not in self.allowed_profiles:
+            raise ValueError('Build profile is not enabled by the operator configuration')
         detail = payload['payload']
         if set(detail) != {'source_mode', 'capsule_relative', 'origin_repo', 'capture_id', 'native_source_identity'}:
             raise ValueError('Unknown source request fields')
@@ -318,13 +329,20 @@ class Application:
             'legacy_jobs': snapshot['legacy_jobs'],
             'stop_requested': snapshot['stop_requested'],
             'storage_free_bytes': free_bytes,
-            'allowed_profiles': list(PROFILES.keys()),
+            'allowed_profiles': sorted(self.allowed_profiles),
             'qualification': 'NOT VERIFIED',
         }
 
     def _inspect_worker_metrics(self, current_job=None):
         if not current_job:
-            return {'container_id': None, 'memory_mb': None, 'limit_mb': None, 'cpu_percent': None, 'io_mb_s': None}
+            return {
+                'container_id': None,
+                'container_verified': False,
+                'memory_mb': None,
+                'limit_mb': None,
+                'cpu_percent': None,
+                'io_mb_s': None,
+            }
         wt = current_job.get('worktree_id', '')
         job_id = current_job.get('job_id', '')
         journal_path = self.storage / 'runs' / wt / job_id / 'coordinator.json'
@@ -337,28 +355,43 @@ class Application:
                 pass
 
         if not container_id:
-            return {'container_id': None, 'memory_mb': None, 'limit_mb': None, 'cpu_percent': None, 'io_mb_s': None}
+            return {
+                'container_id': None,
+                'container_verified': False,
+                'memory_mb': None,
+                'limit_mb': None,
+                'cpu_percent': None,
+                'io_mb_s': None,
+            }
 
         mem_mb = None
         limit_mb = None
         cpu_pct = None
         io_rate = None
+        container_verified = False
+
+        def _parse_bytes(value):
+            value = value.strip().upper()
+            mult = 1
+            if value.endswith(('KIB', 'KB')):
+                mult = 1024
+            elif value.endswith(('MIB', 'MB')):
+                mult = 1024**2
+            elif value.endswith(('GIB', 'GB')):
+                mult = 1024**3
+            elif value.endswith('B'):
+                mult = 1
+            number = re.findall(r'[\d.]+', value)
+            return float(number[0]) * mult if number else None
+
         try:
             inspect_owned(docker, container_id, job_id)
+            container_verified = True
             stats_raw = docker(['stats', '--no-stream', '--no-trunc', '--format', '{{.MemUsage}}|{{.CPUPerc}}|{{.BlockIO}}', container_id])
             if stats_raw and '|' in stats_raw:
                 parts = stats_raw.strip().split('|')
                 if len(parts) >= 1 and '/' in parts[0]:
                     usage_part, limit_part = parts[0].split('/', 1)
-                    def _parse_bytes(s):
-                        s = s.strip().upper()
-                        mult = 1
-                        if s.endswith('KIB') or s.endswith('KB'): mult = 1024
-                        elif s.endswith('MIB') or s.endswith('MB'): mult = 1024**2
-                        elif s.endswith('GIB') or s.endswith('GB'): mult = 1024**3
-                        elif s.endswith('B'): mult = 1
-                        num = re.findall(r'[\d\.]+', s)
-                        return float(num[0]) * mult if num else None
                     u_b = _parse_bytes(usage_part)
                     l_b = _parse_bytes(limit_part)
                     if u_b is not None:
@@ -371,11 +404,30 @@ class Application:
                         cpu_pct = round(float(cpu_raw), 1)
                     except Exception:
                         pass
+                if len(parts) >= 3 and '/' in parts[2]:
+                    read_part, write_part = parts[2].split('/', 1)
+                    read_b = _parse_bytes(read_part)
+                    write_b = _parse_bytes(write_part)
+                    if read_b is not None and write_b is not None:
+                        now = time.monotonic()
+                        baselines = getattr(self, '_worker_io_baselines', None)
+                        if baselines is None:
+                            baselines = {}
+                            self._worker_io_baselines = baselines
+                        previous = baselines.get(container_id)
+                        baselines[container_id] = (now, read_b, write_b)
+                        if previous is not None:
+                            elapsed = now - previous[0]
+                            read_delta = read_b - previous[1]
+                            write_delta = write_b - previous[2]
+                            if elapsed > 0 and read_delta >= 0 and write_delta >= 0:
+                                io_rate = round((read_delta + write_delta) / (1024 * 1024) / elapsed, 2)
         except Exception:
             pass
 
         return {
             'container_id': container_id,
+            'container_verified': container_verified,
             'memory_mb': mem_mb,
             'limit_mb': limit_mb,
             'cpu_percent': cpu_pct,
@@ -427,6 +479,7 @@ class Application:
                 'memory_mb': worker_metrics['memory_mb'],
                 'limit_mb': worker_metrics['limit_mb'],
                 'cpu_percent': worker_metrics['cpu_percent'],
+                'io_mb_s': worker_metrics['io_mb_s'],
             },
             'storage': volumes[0] if volumes else {},
             'last_cleanup': {
@@ -615,11 +668,8 @@ class Application:
         }
 
     def job_events(self, job_id):
+        job = self.get(job_id)
         events = self.hub.get_events(limit=100, job_id=job_id)
-        try:
-            job = self.get(job_id)
-        except Exception:
-            return events
 
         wt = job.get('worktree_id', '')
         journal = {}
@@ -716,16 +766,21 @@ class Application:
         return events
 
     def job_metrics(self, job_id):
+        self.get(job_id)
         if not hasattr(self, '_worker_samples_by_job'):
             self._worker_samples_by_job = {}
         active = self.queue.active()
         current_job = active[0] if active else None
         if current_job and current_job.get('job_id') == job_id:
             wm = self._inspect_worker_metrics(current_job)
-            if wm.get('memory_mb') is not None or wm.get('cpu_percent') is not None:
+            if (wm.get('memory_mb') is not None or wm.get('cpu_percent') is not None
+                    or wm.get('io_mb_s') is not None):
                 samples = self._worker_samples_by_job.setdefault(job_id, [])
                 now_iso = datetime.now(timezone.utc).isoformat()
-                if not samples or samples[-1].get('ram_mb') != wm.get('memory_mb') or samples[-1].get('cpu_percent') != wm.get('cpu_percent'):
+                if (not samples
+                        or samples[-1].get('ram_mb') != wm.get('memory_mb')
+                        or samples[-1].get('cpu_percent') != wm.get('cpu_percent')
+                        or samples[-1].get('io_mb_s') != wm.get('io_mb_s')):
                     samples.append({
                         'timestamp': now_iso,
                         'scope': 'worker',
@@ -733,6 +788,7 @@ class Application:
                         'ram_mb': wm.get('memory_mb'),
                         'ram_limit_mb': wm.get('limit_mb'),
                         'cpu_percent': wm.get('cpu_percent'),
+                        'io_mb_s': wm.get('io_mb_s'),
                         'storage_growth_mb': None,
                     })
                     if len(samples) > 120:
@@ -802,6 +858,12 @@ class Application:
             w_limit = f"{wm['limit_mb']} MiB" if wm.get('limit_mb') is not None else "niedostępne"
             w_cpu = f"{wm['cpu_percent']:.1f}%" if wm.get('cpu_percent') is not None else "niedostępne"
             w_io = f"{wm['io_mb_s']:.2f} MB/s" if wm.get('io_mb_s') is not None else "niedostępne"
+            if not wm.get('container_verified'):
+                worker_status = 'unverified'
+            elif not health.get('worker_alive'):
+                worker_status = health.get('worker_state') or 'unavailable'
+            else:
+                worker_status = 'running'
             rows.append({
                 'id': worker_id,
                 'role': 'Kompilator (Build Worker)',
@@ -814,7 +876,7 @@ class Application:
                 'io': w_io,
                 'paths': f"{self.storage}/runs/{current_job['worktree_id']}/{current_job['job_id']}/execution",
                 'cmd': f"fullmag-build-worker --profile {current_job['profile']}",
-                'status': 'running',
+                'status': worker_status,
             })
         else:
             rows.append({
@@ -951,10 +1013,14 @@ class Application:
             if jid and current_job.get('operation') == 'build':
                 try:
                     wm = self._inspect_worker_metrics(current_job)
-                    if wm.get('memory_mb') is not None or wm.get('cpu_percent') is not None:
+                    if (wm.get('memory_mb') is not None or wm.get('cpu_percent') is not None
+                            or wm.get('io_mb_s') is not None):
                         samples = self._worker_samples_by_job.setdefault(jid, [])
                         now_iso = datetime.now(timezone.utc).isoformat()
-                        if not samples or samples[-1].get('ram_mb') != wm.get('memory_mb') or samples[-1].get('cpu_percent') != wm.get('cpu_percent'):
+                        if (not samples
+                                or samples[-1].get('ram_mb') != wm.get('memory_mb')
+                                or samples[-1].get('cpu_percent') != wm.get('cpu_percent')
+                                or samples[-1].get('io_mb_s') != wm.get('io_mb_s')):
                             samples.append({
                                 'timestamp': now_iso,
                                 'scope': 'worker',
@@ -962,6 +1028,7 @@ class Application:
                                 'ram_mb': wm.get('memory_mb'),
                                 'ram_limit_mb': wm.get('limit_mb'),
                                 'cpu_percent': wm.get('cpu_percent'),
+                                'io_mb_s': wm.get('io_mb_s'),
                                 'storage_growth_mb': None,
                             })
                             if len(samples) > 120:

@@ -22,6 +22,23 @@
 
 namespace fullmag::fem {
 
+namespace {
+
+// MFEM's iterative stopping test uses the preconditioned residual, while the
+// demag contract certifies the unpreconditioned ||A x - b|| / ||b|| norm.
+// Leave an explicit margin for that difference; the requested tolerance is
+// still the acceptance threshold below.
+constexpr double kCertificationSolverToleranceFactor = 0.1;
+
+double certification_solver_tolerance(double requested) noexcept
+{
+    return requested > 0.0
+        ? requested * kCertificationSolverToleranceFactor
+        : requested;
+}
+
+} // namespace
+
 bool demag_periodic_poisson_reduction_requested(const Context &ctx)
 {
     if (!ctx.demag.enabled ||
@@ -214,7 +231,8 @@ bool solve_demag_periodic_poisson_reduced(
         ctx.demag.solver.absolute_tolerance > 0.0
             ? ctx.demag.solver.absolute_tolerance
             : 0.0;
-    periodic_workspace->configure(rel_tol, abs_tol, max_iter);
+    periodic_workspace->configure(
+        certification_solver_tolerance(rel_tol), abs_tol, max_iter);
     ctx.poisson_demag.last_setup_wall_time_ns = 0;
     ctx.poisson_demag.last_solver_setup_reused = true;
     const bool used_cached_solution = periodic_workspace->x_p_contains_solution;

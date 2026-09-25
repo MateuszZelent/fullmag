@@ -126,6 +126,15 @@ payload żądanego eksportu jest błędem writera, nie zerowym wektorem zastępc
 referuje Cartesian complex payload; sam tangent-local vector bez rekonstrukcji
 `global_xyz` nie jest poprawnym `mode_field_id` do wizualizacji.
 
+W artefaktach modalnych namespace identyfikatora odzwierciedla rodzaj osi:
+`bias-field-sample-####` jest zarezerwowany dla planu z jawnym
+`bias_field_samples`, `k-path-sample-####` oznacza punkt rozwiniętej ścieżki
+`KSamplingIR::Path`, a `k-sample-####` pojedynczy wybór `KSamplingIR::Single`
+(także dla niezerowego k). Klient traktuje identyfikator jako nieprzezroczysty
+i korzysta z `k_vector`, `path_s` oraz `external_field_a_per_m` do prezentacji;
+punkt Γ na ścieżce nie może być utożsamiany z próbką sweepu pola wyłącznie na
+podstawie zerowego wektora k.
+
 Każdy zapisany mode field musi ponadto nieść niezmienną
 `source_mesh_identity`: niepusty `mesh_id`, pełny lowercase
 `topology_fingerprint=sha256:<64 hex>`, opcjonalne generation ID i revision,
@@ -851,11 +860,13 @@ the DE and BV paths when both scenarios need a `k=0` anchor, so each published
 CSV row has one unambiguous validation geometry.
 Writers must derive those analytic columns from the declared DE/BV validation
 intent and the run's material/bias/reference context, not from the solver-model
-name alone. A future production CPU/GPU modal solver that carries the same
-`thin_film_de_bv_low_k` validation intent must therefore publish the same
-analytic reference and relative-error columns; the current
-`reference_thin_film_de_bv_kalinikos_n0` adapter is only one producer of that
-contract.
+name alone. A production CPU/GPU modal solver that carries the same
+`thin_film_de_bv_low_k` validation intent therefore publishes the numeric
+branch together with the independent analytic reference and relative-error
+columns. The standalone
+`scripts/generate_comsol_analytic_reference.py` command is the explicit
+reference-solver route; validation metadata must never select that model in the
+FEM execution path.
 The shared artifact plotter
 `scripts/plot_fem_frequency_domain_eigen_artifacts.py --dispersion-png` must
 use the same columns when present: numerical solver points remain the primary
@@ -896,12 +907,14 @@ narrow one-dimensional film sweeps in the two standard geometries:
   magnetization;
 - backward-volume (BV): in-plane `k` parallel to the equilibrium magnetization.
 
-The default target range is `|k| <= 2e6..3e6 rad/m` (`2..3 1/um`) with a
-low-GHz modal/frequency window such as `0..5e9 Hz`. Accepted production bundles
-must record enough material, geometry, bias-field, demag-model, and boundary
-provenance for validators to compare the published branch against the applicable
-analytic DE/BV dispersion. Broader k-direction scans may be added as stress or
-coverage tests, but they are not the primary scientific acceptance path.
+The low-k preset uses `|k| <= 2e6..3e6 rad/m` (`2..3 1/um`) with a low-GHz
+modal/frequency window such as `0..5e9 Hz`. These values are a convenient
+default for the slab oracle, not a universal planner limit. Accepted bundles
+must record enough material, geometry, bias-field, demag-model, boundary, and
+model-applicability provenance for validators to compare the published branch
+against the applicable analytic DE/BV dispersion. Broader k-direction scans
+may be added as stress or coverage tests, but they are not the primary
+scientific acceptance path.
 Regression tests should follow the same shape: separate DE and BV fixtures,
 sample only the documented low-k range needed for the analytic comparison, and
 use a modal/frequency window no wider than the low-GHz acceptance band by
@@ -915,19 +928,21 @@ this acceptance shape. It requires
 `kind = "thin_film_de_bv_low_k"`,
 `analytic_model = "kalinikos_slab_n0"`, `film_thickness_m`,
 `equilibrium_magnetization`, `film_normal`, `frequency_window_hz`,
-`max_k_rad_per_m <= 3e6`, and scenario entries for both `damon_eshbach` and
-`backward_volume`. Each scenario names the `branch_id` and `sample_indices` to
-check; validators reject out-of-range k, out-of-plane k, wrong DE/BV
-orientation, windows above 5 GHz, missing scenarios, and branch frequencies
-whose relative error exceeds the declared tolerance.
+finite positive `max_k_rad_per_m`, and scenario entries for both
+`damon_eshbach` and `backward_volume`. Each scenario names the `branch_id` and
+`sample_indices` to check; validators reject out-of-range k, out-of-plane k,
+wrong DE/BV orientation, samples outside the declared frequency window,
+missing scenarios, material or bias configurations outside the slab model's
+applicability, and branch frequencies whose relative error exceeds the
+declared tolerance.
 Runtime-produced bundles obtain this validation block from authored
 `problem_meta.runtime_metadata.dispersion_validation`; Python scripts should set
 it with `study.dispersion_validation(fm.ThinFilmDEBVDispersionValidation(...))`
 or the equivalent flat `fm.dispersion_validation(...)` helper rather than
 hand-writing backend-plan metadata. The FEM eigen planner copies this payload
 into the typed `FemEigenDispersionValidationIR`
-`backend_plan.dispersion_validation` field, rejecting unsupported shape, broad
-k ranges, missing DE/BV scenarios, invalid vectors, or windows above 5 GHz at
+`backend_plan.dispersion_validation` field, rejecting unsupported shape,
+missing DE/BV scenarios, invalid vectors, or non-positive/non-finite ranges at
 planning time. Runtime modal k-path bundles must also mirror the same payload
 in `frequency_domain/manifest.v1.json.validation.dispersion_validation`, so API
 and Control Room consumers can inspect the declared DE/BV analytic acceptance
@@ -938,19 +953,17 @@ and checks that exact validation intent against the published branch data.
 The same `validation` object must also state where the published branch
 frequencies came from:
 
-- `dispersion_frequency_source = "analytic_reference_model"` for the current
-  CPU/reference `reference_thin_film_de_bv_kalinikos_n0` slice;
-- `dispersion_reference_model = "kalinikos_slab_n0"` for that analytic
-  reference slice;
-- `dynamic_demag_operator_source =
-  "analytic_thin_film_de_bv_reference_not_fem_demag_k"` for that slice, so
-  validators and Control Room do not mistake it for a numerical FEM
-  dynamic-demag-k operator;
-- future production CPU/GPU modal solvers that emit the same analytic columns
-  must use `dispersion_frequency_source =
-  "numeric_modal_solver_with_analytic_comparison"` and leave
-  `dispersion_reference_model` empty unless they are themselves an analytic
-  reference adapter.
+- `dispersion_frequency_source =
+  "numeric_modal_solver_with_analytic_comparison"` for a FEM branch that was
+  actually solved numerically;
+- `dispersion_reference_model = "kalinikos_slab_n0"` identifies the independent
+  comparison oracle and does not change the FEM solver selection;
+- `dynamic_demag_operator_source = "numeric_modal_solver"` is required for
+  nonzero-k demagnetizing runs, so validators and Control Room can distinguish
+  actual FEM dynamic demag from the separate reference CSV;
+- `analytic_reference_model` and
+  `analytic_thin_film_de_bv_reference_not_fem_demag_k` are legacy values and
+  must not be emitted by the current FEM runner.
 
 ## modes/sample_XXXX/mode_YYYY.json
 
@@ -1025,6 +1038,93 @@ validation and `float32` only when the run provenance explicitly records a
 qualified single-precision execution. The array must be compressed by the Zarr
 codec configured for the runtime. If a compatibility `vector.bin` file exists,
 it is a derived/export payload, not the authoritative production store.
+
+### Pełny potencjał modalny na wspólnej siatce
+
+Natywna ścieżka shared-domain publikuje dla wybranych modów plik
+`eigen/mode_fields/sample_XXXX/mode_YYYY/physical_potential.v1.json` oraz
+`potential_full.bin` i `demag_element_full.bin`. Jest to eksport po rekonstrukcji
+`phi_full = C_phi phi_reduced`, z fazami tych samych reprezentantów klas co w
+operatorze natywnym. Potencjał zachowuje wspólną normalizację i fazę modu
+magnetyzacji oraz konwencję czasową `exp(+i omega t)`.
+
+Potencjał ma układ `[source_mesh_node, real|imag]`, jednostkę A i dokładnie
+16 bajtów na węzeł. Pole `h = -grad(phi_full)` ma układ
+`[source_mesh_tet4_element, x|y|z, real|imag]`, jednostkę A/m i 48 bajtów na
+element. Oba pliki używają little-endian float64. Gradient P1 jest stały w
+elemencie; eksport nie uśrednia go pomiędzy elementami ani przez interfejs
+materiałowy. Manifest określa powiązanie z siatką źródłową, operatorem,
+warunkami fazowymi oraz SHA-256 dokładnych bajtów każdego pliku.
+
+Eksport pełnego pola umożliwia porównanie rozwiązań po interpolacji na wspólne
+punkty i uzgodnieniu fazy. Sam zapis plików nie jest dowodem poprawności
+warunków brzegowych, zbieżności siatki ani zgodności z COMSOL.
+
+### Certified Floquet modal potential sidecar
+
+A native nonzero-k Floquet mode may publish an algebraic descriptor
+certificate together with a selected-mode potential sidecar. The certificate
+is valid only when all of the following scalar fields are present:
+
+```json
+{
+  "floquet_descriptor_certified": true,
+  "floquet_geometric_bc_certified": false,
+  "potential_representation": "doubled_real_split_complex_coefficients",
+  "magnetic_relative_residual": 1.0e-10,
+  "potential_relative_residual": 2.0e-10,
+  "potential_dof_count": 2
+}
+```
+
+`potential_dof_count` is the number of complex coefficients in the native
+doubled real-split vector. It is therefore positive and even (`2*p` for a
+`p`-DOF scalar block); it is not a mesh-node count and does not describe a
+Cartesian field. The two residuals are finite, nonnegative algebraic
+descriptor residuals and must not exceed the native certification tolerance
+of `1e-8`.
+
+For a selected mode, the coefficient vector is persisted at
+`eigen/mode_fields/sample_XXXX/mode_YYYY/potential_real_split.bin`. The binary
+layout is little-endian `f64` pairs in coefficient order:
+
+```text
+[(real_0, imag_0), ..., (real_(N-1), imag_(N-1))]
+```
+
+where `N = potential_dof_count`. Its logical shape is `[N, 2]`, its byte
+length is `N * 16`, `potential_value_count = N * 2`, and metadata must publish
+`potential_payload_encoding = "f64_interleaved_real_imag"` together with
+`potential_binary_layout = "complex_f64_pairs_little_endian"`. The sidecar
+uses exactly the mode normalization and common phase applied to the magnetic
+(`q`) and Cartesian mode payloads; it must not be independently rescaled or
+phase-rotated. Its digest is
+`potential_payload_sha256 = "sha256:<64 lowercase hex>"` over the exact
+sidecar bytes.
+
+The sidecar is a descriptor coefficient payload only. It has no Cartesian
+mesh indexing, node map, geometric boundary certificate, or `mode_field_id`,
+and it must not be placed in `vector_xyz_complex` or used as a rendered mode
+field. `floquet_geometric_bc_certified` remains false even when both residuals
+pass; the certificate does not prove geometric Floquet seams, a full-mesh
+potential reconstruction, or V9 convergence.
+
+Certificate scalar fields may be retained for every certified mode, but the
+binary sidecar and its reference fields are emitted only for modes selected
+for payload export. A selected certified mode requires exactly one sidecar;
+an unselected certified mode has no sidecar reference. The reference path
+must match the `(sample_index, raw_mode_index)` identity, and the digest,
+encoding, layout and value count must match the validated bytes. A mode with
+`floquet_descriptor_certified = false` must not carry any certificate field or
+potential sidecar. Inline `potential_vector_real`/`potential_vector_imag`
+arrays are native input only and must never appear in canonical mode metadata.
+
+Writers and readers fail closed on a missing, duplicate, malformed, nonfinite,
+wrong-length or digest-mismatched sidecar; an unsupported representation,
+geometric-BC claim, inconsistent reference or non-certified payload is also a
+publication error. These checks preserve the distinction between an
+algebraically certified descriptor and an unqualified geometric/full-mesh
+result.
 
 `residual_norm` is the legacy alias for `residual_absolute_l2`. The dense
 oracle path must also emit:
@@ -2304,6 +2404,16 @@ Analyze UI must:
   in dispersion inspectors when present, including the analytic model, maximum
   accepted `k`, frequency window, and DE/BV scenario-to-branch mapping,
 - propagate click selection as `{ branchId, sampleIndex, rawModeIndex }`,
+- zachować kompletny skończony wektor z kolumn `kx_rad_per_m`,
+  `ky_rad_per_m`, `kz_rad_per_m` i współrzędną `path_s_rad_per_m` w wyborze
+  punktu dyspersji; wektor klikniętego wiersza ma pierwszeństwo przed
+  kontekstem poprzedniego wyboru,
+- zachować opcjonalne `sample_id` i `mode_id` jako nieprzezroczyste
+  identyfikatory oraz dostarczoną rewizję artefaktu, równowagę i reprezentację;
+  brak tych kolumn w starszym CSV nie upoważnia do wymyślania identyfikatorów,
+- puste opcjonalne komórki liczbowe CSV oznaczają brak danych, nie zero;
+  wiersze bez skończonej częstotliwości/współrzędnej ścieżki lub bez
+  nieujemnych bezpiecznych całkowitych indeksów sample/mode są odrzucane,
 - load mode artifacts by `sample_index` and `raw_mode_index`.
 
 ## API contract
@@ -2317,3 +2427,15 @@ The v2 API must expose:
 
 Missing optional artifacts should produce explicit `404` responses with
 diagnostic messages, not silent empty plots.
+
+
+### Zakres residualu natywnego sparse Floquet
+
+Adapter `floquet_airbox_cpu_schur_slepc` publikuje blokowe residuale oryginalnego
+zredukowanego pencil przed eliminacją Schura. Pole `block_residuals.scope`
+wynosi `reduced_original_blocks_only`, `eps_reduced` zawiera residual,
+a `eps_full` pozostaje null. `reduced_pencil_certified` wymaga skończonych,
+nieujemnych residuali q, phi, gauge i eigenpaira nie większych niż 1e-8.
+`certified` oraz `full_descriptor_certified` pozostają false, dopóki nie ma
+oddzielnego dowodu więzów i pełnej rekonstrukcji. Sam fizyczny eksport phi
+nie podnosi tej kwalifikacji.

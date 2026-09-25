@@ -174,7 +174,7 @@ from .structure import (
     RegionMaterialOverride,
     RegionTextureOverride,
 )
-from .study import Eigenmodes, FieldAutosave, FloquetBC, FrequencyResponse, FrequencyResponseSolverPolicy, GammaResponseAnalysis, PeriodicBC, RelaxStop, Relaxation, StageAutosave, TableAutosave, TimeEvolution, FieldOrientation, MeasurementAxis, HysteresisAngularVariant, HysteresisAngularFamily, SaturationProbe, HysteresisStorage, MinorLoop, FieldSegment, PiecewiseFieldSchedule, FieldWindow, AdaptiveRefinement, SettleStep, RelaxStep, MinimizeStep, DynamicsSettleStep, SettleBranch, SettlePipeline, SettleTree, Hysteresis
+from .study import Eigenmodes, FemEigenSolverPolicy, FieldAutosave, FloquetBC, FrequencyResponse, FrequencyResponseSolverPolicy, GammaResponseAnalysis, PeriodicBC, RelaxStop, Relaxation, StageAutosave, TableAutosave, TimeEvolution, FieldOrientation, MeasurementAxis, HysteresisAngularVariant, HysteresisAngularFamily, SaturationProbe, HysteresisStorage, MinorLoop, FieldSegment, PiecewiseFieldSchedule, FieldWindow, AdaptiveRefinement, SettleStep, RelaxStep, MinimizeStep, DynamicsSettleStep, SettleBranch, SettlePipeline, SettleTree, Hysteresis
 from .eigen import (
     BiasFieldSweep,
     DispersionValidationScenario,
@@ -346,6 +346,7 @@ __all__ = [
     "UniformFieldProfile",
     "FrequencyResponse",
     "FrequencyResponseSolverPolicy",
+    "FemEigenSolverPolicy",
     "FrozenSpins",
     "BiasFieldSweep",
     "DispersionValidationScenario",

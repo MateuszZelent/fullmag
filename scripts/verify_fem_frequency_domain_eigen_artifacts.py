@@ -245,23 +245,21 @@ def equilibrium_artifact_v7_digest(artifact: dict) -> str:
     return "sha256:" + hashlib.sha256(canonical_bytes).hexdigest()
 
 
-def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
-    declared_path = manifest.get("artifacts", {}).get(
-        "equilibrium_artifact_v7_path"
-    )
-    if declared_path is None:
-        return
-    relative_path, artifact_path = require_bundle_path(
-        root,
-        declared_path,
-        "manifest.artifacts.equilibrium_artifact_v7_path",
-    )
-    require_equal(
-        relative_path,
-        "eigen/metadata/equilibrium_artifact.v7.json",
-        "manifest.artifacts.equilibrium_artifact_v7_path",
-    )
-    artifact = load_json(artifact_path)
+def _require_non_negative_finite_number(value: object, name: str) -> float:
+    if isinstance(value, bool):
+        fail(f"{name} must be a finite number")
+    number = require_finite_number(value, name)
+    if number < 0.0:
+        fail(f"{name} must be non-negative")
+    return number
+
+
+def validate_equilibrium_artifact_v7_payload(
+    artifact: dict, expected_content_sha256: object
+) -> None:
+    """Validate an equilibrium v7 payload independently of its bundle path."""
+    if not isinstance(artifact, dict):
+        fail("equilibrium_artifact must be an object")
     schema_version = artifact.get("schema_version")
     if schema_version == "equilibrium_artifact.v6":
         fail(
@@ -273,8 +271,12 @@ def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
         "equilibrium_artifact.v7",
         "equilibrium_artifact.schema_version",
     )
-    require_equal(
+    accepted_for_linearization = require_boolean(
         artifact.get("accepted_for_linearization"),
+        "equilibrium_artifact.accepted_for_linearization",
+    )
+    require_equal(
+        accepted_for_linearization,
         True,
         "equilibrium_artifact.accepted_for_linearization",
     )
@@ -309,20 +311,24 @@ def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
         "completed",
         "equilibrium_artifact.acceptance_certificate.status",
     )
-    require_equal(
+    converged = require_boolean(
         certificate.get("converged"),
+        "equilibrium_artifact.acceptance_certificate.converged",
+    )
+    require_equal(
+        converged,
         True,
         "equilibrium_artifact.acceptance_certificate.converged",
     )
-    metric_value = require_finite_number(
+    metric_value = _require_non_negative_finite_number(
         certificate.get("metric_value"),
         "equilibrium_artifact.acceptance_certificate.metric_value",
     )
-    threshold = require_finite_number(
+    threshold = _require_non_negative_finite_number(
         certificate.get("threshold"),
         "equilibrium_artifact.acceptance_certificate.threshold",
     )
-    if threshold < 0.0 or metric_value > threshold:
+    if metric_value > threshold:
         fail(
             "equilibrium_artifact.acceptance_certificate.metric_value must "
             "satisfy its non-negative threshold"
@@ -340,42 +346,63 @@ def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
         artifact.get("content_sha256"),
         "equilibrium_artifact.content_sha256",
     )
+    expected_content_sha256 = require_sha256_token(
+        expected_content_sha256,
+        "expected_content_sha256",
+    )
     require_equal(
         content_sha256,
         equilibrium_artifact_v7_digest(artifact),
         "equilibrium_artifact.content_sha256",
     )
     require_equal(
+        content_sha256,
+        expected_content_sha256,
+        "expected_content_sha256",
+    )
+    require_equal(
         artifact.get("equilibrium_id"),
         "equilibrium_artifact.v7:" + content_sha256.removeprefix("sha256:"),
         "equilibrium_artifact.equilibrium_id",
-    )
-    manifest_digest = manifest.get("equilibrium_artifact_sha256")
-    require_equal(
-        manifest_digest,
-        content_sha256,
-        "manifest.equilibrium_artifact_sha256",
     )
     observables = artifact.get("observables")
     if not isinstance(observables, dict):
         fail("equilibrium_artifact.observables must be an object")
     for field_name in ["max_torque_Apm", "max_torque_T", "max_torque_relative"]:
-        require_finite_number(
+        _require_non_negative_finite_number(
             observables.get(field_name),
             f"equilibrium_artifact.observables.{field_name}",
         )
     integrity = artifact.get("representation_integrity")
     if not isinstance(integrity, dict):
         fail("equilibrium_artifact.representation_integrity must be an object")
-    m0_norm_tolerance = require_finite_number(
+    _require_non_negative_finite_number(
         integrity.get("m0_norm_tolerance"),
         "equilibrium_artifact.representation_integrity.m0_norm_tolerance",
     )
-    if m0_norm_tolerance < 0.0:
-        fail(
-            "equilibrium_artifact.representation_integrity.m0_norm_tolerance "
-            "must be non-negative"
-        )
+
+
+def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
+    declared_path = manifest.get("artifacts", {}).get(
+        "equilibrium_artifact_v7_path"
+    )
+    if declared_path is None:
+        return
+    relative_path, artifact_path = require_bundle_path(
+        root,
+        declared_path,
+        "manifest.artifacts.equilibrium_artifact_v7_path",
+    )
+    require_equal(
+        relative_path,
+        "eigen/metadata/equilibrium_artifact.v7.json",
+        "manifest.artifacts.equilibrium_artifact_v7_path",
+    )
+    artifact = load_json(artifact_path)
+    validate_equilibrium_artifact_v7_payload(
+        artifact,
+        manifest.get("equilibrium_artifact_sha256"),
+    )
 
 
 def validate_periodic_mesh_certificate(
@@ -3814,6 +3841,51 @@ def vector_dot(
     return sum(left * right for left, right in zip(lhs, rhs))
 
 
+def p00_demag_factor(k_norm: float, film_thickness_m: float) -> float:
+    """Stable slab P00; dimensionless argument k*t, with the Kittel limit."""
+    if not math.isfinite(k_norm) or k_norm < 0.0:
+        raise ValueError("k_norm must be finite and non-negative")
+    if not math.isfinite(film_thickness_m) or film_thickness_m <= 0.0:
+        raise ValueError("film_thickness_m must be finite and positive")
+    kd = k_norm * film_thickness_m
+    if not math.isfinite(kd):
+        raise ValueError("k*t must be finite")
+    if kd < 1.0e-4:
+        return kd * (0.5 + kd * (-1.0 / 6.0 + kd * (1.0 / 24.0 + kd * (-1.0 / 120.0 + kd / 720.0))))
+    return 1.0 + math.expm1(-kd) / kd
+
+
+def require_kalinikos_slab_n0_material_and_bias(
+    plan: dict, material: dict, magnetization_direction: tuple[float, float, float]
+) -> None:
+    """Reject physics omitted by the homogeneous, field-aligned slab oracle."""
+    bias_direction = unit_vector(require_vector3(plan.get("external_field"), "external_field"), "external_field")
+    if vector_dot(bias_direction, magnetization_direction) < 1.0 - 1.0e-6:
+        fail("Kalinikos n=0 requires bias aligned with equilibrium magnetization")
+    for field in ("interfacial_dmi", "bulk_dmi"):
+        value = plan.get(field)
+        if value is not None and require_finite_number(value, field) != 0.0:
+            fail(f"Kalinikos n=0 does not include {field}")
+    for field in ("uniaxial_anisotropy", "uniaxial_anisotropy_k2", "cubic_anisotropy_kc1", "cubic_anisotropy_kc2", "cubic_anisotropy_kc3"):
+        value = material.get(field)
+        if value is not None and require_finite_number(value, field) != 0.0:
+            fail(f"Kalinikos n=0 does not include {field}")
+    for field, scalar in (("ms_field", "saturation_magnetisation"), ("a_field", "exchange_stiffness")):
+        values = material.get(field)
+        if values is not None:
+            if not isinstance(values, list) or not values:
+                fail(f"Kalinikos n=0 requires a nonempty uniform {field}")
+            expected = require_finite_number(material.get(scalar), scalar)
+            for value in values:
+                if not math.isclose(require_finite_number(value, field), expected, rel_tol=1e-12, abs_tol=0.0):
+                    fail(f"Kalinikos n=0 requires uniform {field} matching {scalar}")
+    for field in ("ku_field", "ku2_field", "kc1_field", "kc2_field", "kc3_field", "dind_field", "dbulk_field"):
+        values = material.get(field)
+        if values is not None:
+            if not isinstance(values, list) or any(require_finite_number(value, field) != 0.0 for value in values):
+                fail(f"Kalinikos n=0 does not include {field}")
+
+
 def kalinikos_slab_n0_frequency_hz(
     *,
     k_norm: float,
@@ -3831,11 +3903,7 @@ def kalinikos_slab_n0_frequency_hz(
         * k_norm
         / (MU0 * saturation_magnetisation_a_per_m)
     )
-    if k_norm == 0.0:
-        p_factor = 0.0
-    else:
-        kd = k_norm * film_thickness_m
-        p_factor = 1.0 - (1.0 - math.exp(-kd)) / kd
+    p_factor = p00_demag_factor(k_norm, film_thickness_m)
     common = bias_field_a_per_m + exchange_field
     if geometry == "damon_eshbach":
         factor_a = common + saturation_magnetisation_a_per_m * (1.0 - p_factor)
@@ -3943,11 +4011,9 @@ def validate_low_k_de_bv_analytic_dispersion(
             "analytic_thin_film_de_bv_reference_not_fem_demag_k",
             "manifest.validation.dynamic_demag_operator_source",
         )
-    elif reference_model not in (None, ""):
-        fail(
-            "manifest.validation.dispersion_reference_model must be empty for "
-            "numeric modal solver DE/BV comparison artifacts"
-        )
+    else:
+        require_equal(reference_model, "kalinikos_slab_n0", "manifest.validation.dispersion_reference_model")
+        require_equal(dynamic_demag_source, "numeric_modal_solver", "manifest.validation.dynamic_demag_operator_source")
     require_equal(
         canonical_dispersion_validation(
             manifest_validation,
@@ -3973,14 +4039,12 @@ def validate_low_k_de_bv_analytic_dispersion(
         validation.get("frequency_window_hz"),
         "metadata.execution_plan.backend_plan.dispersion_validation.frequency_window_hz",
     )
-    if frequency_window_hz[1] > 5.0e9:
-        fail("DE/BV low-k analytic dispersion frequency window must not exceed 5 GHz")
     max_k = require_finite_number(
         validation.get("max_k_rad_per_m"),
         "metadata.execution_plan.backend_plan.dispersion_validation.max_k_rad_per_m",
     )
-    if max_k <= 0.0 or max_k > 3.0e6:
-        fail("DE/BV low-k analytic dispersion max_k_rad_per_m must be in (0, 3e6]")
+    if max_k <= 0.0:
+        fail("DE/BV low-k analytic dispersion max_k_rad_per_m must be positive")
     film_thickness = require_finite_number(
         validation.get("film_thickness_m"),
         "metadata.execution_plan.backend_plan.dispersion_validation.film_thickness_m",
@@ -4042,6 +4106,7 @@ def validate_low_k_de_bv_analytic_dispersion(
     )
     if abs(vector_dot(magnetization_direction, film_normal)) > 1.0e-6:
         fail("DE/BV low-k analytic dispersion requires in-plane equilibrium magnetization")
+    require_kalinikos_slab_n0_material_and_bias(plan, material, magnetization_direction)
 
     scenarios = require_object_list(
         validation.get("scenarios"),
@@ -4077,6 +4142,7 @@ def validate_low_k_de_bv_analytic_dispersion(
             fail(f"DE/BV scenario {geometry} requires at least three samples")
         branch_errors: list[float] = []
         nonzero_samples = 0
+        frequency_points: list[tuple[float, float, float, int]] = []
         for sample_index in sample_indices:
             if sample_index not in known_samples:
                 fail(f"DE/BV scenario {geometry} references unknown sample_index {sample_index}")
@@ -4130,6 +4196,7 @@ def validate_low_k_de_bv_analytic_dispersion(
             )
             relative_error = abs(frequency_hz - expected_hz) / max(abs(expected_hz), 1.0)
             branch_errors.append(relative_error)
+            frequency_points.append((k_norm, frequency_hz, expected_hz, sample_index))
             row = dispersion_rows_by_mode.get(mode_key)
             if row is None:
                 fail(
@@ -4174,6 +4241,19 @@ def validate_low_k_de_bv_analytic_dispersion(
             )
         if nonzero_samples < 2:
             fail(f"DE/BV scenario {geometry} requires at least two nonzero k samples")
+        frequency_points.sort(key=lambda point: (point[0], point[3]))
+        for left, right in zip(frequency_points, frequency_points[1:]):
+            expected_delta = right[2] - left[2]
+            observed_delta = right[1] - left[1]
+            continuity_error = abs(observed_delta - expected_delta) / max(
+                abs(left[2]), abs(right[2]), 1.0
+            )
+            if continuity_error > max_relative_error:
+                fail(
+                    f"DE/BV low-k frequency continuity error is too large for {geometry} "
+                    f"between sample_index {left[3]} and {right[3]}: "
+                    f"got {continuity_error:.6g}, expected <= {max_relative_error:.6g}"
+                )
         branch_error = max(branch_errors)
         if branch_error > max_relative_error:
             fail(
@@ -4808,8 +4888,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help=(
             "require realistic thin-film low-k Damon-Eshbach and "
-            "backward-volume dispersion scenarios with |k| <= 3e6 rad/m, "
-            "frequency window <= 5 GHz, and Kalinikos n=0 analytic agreement"
+            "backward-volume dispersion scenarios within the homogeneous thin-film "
+            "Kalinikos n=0 model applicability, with analytic agreement"
         ),
     )
     return parser.parse_args(argv)

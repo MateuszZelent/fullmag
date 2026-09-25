@@ -5,7 +5,9 @@
 #include "frequency_domain/mesh_symmetry_certificate.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <complex>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -171,6 +173,23 @@ double matrix_value(const fd::PoissonAirboxSharedDomainCsrMatrix &matrix,
         }
     }
     return 0.0;
+}
+
+std::complex<double> complex_matrix_value(
+    const fd::PoissonAirboxSharedDomainComplexCsrMatrix &matrix,
+    std::uint64_t row,
+    std::uint64_t column)
+{
+    check(row < matrix.row_count && column < matrix.column_count,
+          "complex matrix lookup is in range");
+    for (std::uint32_t entry = matrix.row_offsets[static_cast<std::size_t>(row)];
+         entry < matrix.row_offsets[static_cast<std::size_t>(row + 1u)];
+         ++entry) {
+        if (matrix.column_indices[entry] == column) {
+            return matrix.values[entry];
+        }
+    }
+    return std::complex<double>(0.0, 0.0);
 }
 
 double max_matrix_difference(const fd::PoissonAirboxSharedDomainCsrMatrix &left,
@@ -2330,6 +2349,108 @@ int main()
             missing_linearization_digest,
             &rejected_result) == fd::FrequencyDomainStatus::validation_error,
         "shared-domain payload rejects a missing LinearizationState.v6 identity");
+
+    // Floquet sparse-lane regression (B1): A_qphi(k) must equal
+    // -mu0 * A_phiq(k)^H, matching the k=0 lane's reciprocal sign so the
+    // demag Schur complement D(k) = -A_qphi(k) P(k)^-1 A_phiq(k) remains a
+    // positive-semidefinite representation of the magnetostatic self-energy.
+    // The film_air fixture's mesh already carries the x/y/z periodic node
+    // pairs the v6 certificate binds, so it can be driven through the
+    // Floquet payload path with an explicit k vector.
+    fd::FrequencyDomainFloquetPeriodicPair floquet_reciprocity_pairs[3]{};
+    {
+        const char *floquet_pair_ids[3] = {
+            "x_periodic_pair_0", "y_periodic_pair_0", "z_periodic_pair_0"};
+        const std::uint64_t floquet_pair_node_b[3] = {1u, 2u, 3u};
+        const double floquet_pair_translations[3][3] = {
+            {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}};
+        for (std::size_t index = 0u; index < 3u; ++index) {
+            floquet_reciprocity_pairs[index].pair_id = floquet_pair_ids[index];
+            floquet_reciprocity_pairs[index].node_a = 0u;
+            floquet_reciprocity_pairs[index].node_b = floquet_pair_node_b[index];
+            floquet_reciprocity_pairs[index].has_translation = true;
+            for (std::size_t axis = 0u; axis < 3u; ++axis) {
+                floquet_reciprocity_pairs[index].translation_m[axis] =
+                    floquet_pair_translations[index][axis];
+            }
+        }
+    }
+    const std::array<double, 3> floquet_reciprocity_k{{0.5, 0.0, 0.0}};
+    fd::PoissonAirboxSharedDomainAssemblyResult floquet_reciprocity_result{};
+    check(
+        fd::assemble_poisson_airbox_shared_domain_payload(
+            film_air_payload,
+            &floquet_reciprocity_result,
+            floquet_reciprocity_pairs,
+            3u,
+            &floquet_reciprocity_k,
+            nullptr,
+            false) == fd::FrequencyDomainStatus::ok,
+        floquet_reciprocity_result.error_message);
+    check(floquet_reciprocity_result.floquet_sparse_operator_ready,
+          "Floquet sparse reciprocity fixture must publish the sparse operator");
+    check(floquet_reciprocity_result.floquet_a_qphi.values.size() > 0u &&
+              floquet_reciprocity_result.floquet_a_phiq.values.size() > 0u,
+          "Floquet sparse reciprocity fixture must exercise nonzero demag blocks");
+    // Matches request.mu0_T_m_A as hard-coded by
+    // assemble_poisson_airbox_shared_domain_payload for the Floquet lane.
+    const double floquet_vacuum_permeability = 1.25663706212e-6;
+    double floquet_reciprocal_sign_error = 0.0;
+    double floquet_reciprocal_scale = 0.0;
+    for (std::uint64_t q = 0; q < floquet_reciprocity_result.floquet_a_qphi.row_count; ++q) {
+        for (std::uint64_t phi = 0;
+             phi < floquet_reciprocity_result.floquet_a_qphi.column_count;
+             ++phi) {
+            const std::complex<double> feedback = complex_matrix_value(
+                floquet_reciprocity_result.floquet_a_qphi, q, phi);
+            const std::complex<double> source = complex_matrix_value(
+                floquet_reciprocity_result.floquet_a_phiq, phi, q);
+            const std::complex<double> residual =
+                feedback + floquet_vacuum_permeability * std::conj(source);
+            floquet_reciprocal_sign_error =
+                std::max(floquet_reciprocal_sign_error, std::abs(residual));
+            floquet_reciprocal_scale = std::max(
+                floquet_reciprocal_scale,
+                std::max(
+                    std::abs(feedback),
+                    floquet_vacuum_permeability * std::abs(source)));
+        }
+    }
+    check(floquet_reciprocal_scale > 0.0,
+          "Floquet sparse reciprocity check must exercise nonzero feedback/source entries");
+    check(
+        floquet_reciprocal_sign_error <= 1.0e-9 * std::max(1.0, floquet_reciprocal_scale),
+        "Floquet demag feedback A_qphi(k) must be -mu0 times the conjugate transpose "
+        "of A_phiq(k) so the Schur Hessian is positive");
+
+    // pure_neumann gauge policy regression (M2): P_red(k) is exactly
+    // singular at k=0 and only lifted to invertibility by the periodic
+    // phase factor at order |k|*L, so a k too close to zero must be
+    // rejected fail-closed rather than silently factorized with a fixed
+    // absolute pivot tolerance.
+    FullmagFemModalSharedDomainPayload floquet_pure_neumann_payload = film_air_payload;
+    floquet_pure_neumann_payload.boundary_kind = "pure_neumann";
+    // pure_neumann forbids Robin data in both the k=0 and Floquet block
+    // assemblers, independent of the small-k gauge check under test here.
+    floquet_pure_neumann_payload.robin_beta = 0.0;
+    const std::array<double, 3> floquet_tiny_k{{1.0e-6, 0.0, 0.0}};
+    fd::PoissonAirboxSharedDomainAssemblyResult floquet_pure_neumann_result{};
+    check(
+        fd::assemble_poisson_airbox_shared_domain_payload(
+            floquet_pure_neumann_payload,
+            &floquet_pure_neumann_result,
+            floquet_reciprocity_pairs,
+            3u,
+            &floquet_tiny_k,
+            nullptr,
+            false) == fd::FrequencyDomainStatus::validation_error,
+        "pure_neumann Floquet gauge must be rejected fail-closed when k*L is below "
+        "the safe threshold");
+    check(
+        std::strstr(
+            floquet_pure_neumann_result.error_message,
+            "pure_neumann Floquet gauge is ill-conditioned") != nullptr,
+        "pure_neumann small-k rejection must use the documented stable reason");
 #endif
     return 0;
 }

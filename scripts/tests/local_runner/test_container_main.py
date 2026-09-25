@@ -51,6 +51,12 @@ class LiveThread:
 
 
 class ContainerMainTests(unittest.TestCase):
+    def test_health_reports_only_operator_enabled_profiles(self):
+        app = self.app()
+        app.allowed_profiles = frozenset({"fem-cpu-release"})
+        self.assertEqual(["fem-cpu-release"], app.health()["allowed_profiles"])
+        self.assertNotIn("fem-cpu-slepc-runtime-v1", app.health()["allowed_profiles"])
+
     def test_run_preserves_service_terminal_result(self):
         app = self.app()
         app.layout = {}
@@ -67,6 +73,11 @@ class ContainerMainTests(unittest.TestCase):
         app = container_main.Application.__new__(container_main.Application)
         app.storage = self.root
         app.owner = "alice"
+        app.allowed_profiles = frozenset((
+            "fem-cpu-release",
+            "fem-gpu-release",
+            "fdm-cpu-release",
+        ))
         app.paths = ServicePaths.from_storage(self.root)
         app.queue = queue or FakeQueue()
         from local_runner.observability import ObservabilityHub
@@ -79,7 +90,24 @@ class ContainerMainTests(unittest.TestCase):
         app._worker_started_at = None
         app._worker_finished_at = None
         app._worker_samples_by_job = {}
+        app._worker_io_baselines = {}
         return app
+
+    def test_unenabled_contract_profile_is_rejected_before_source_or_queue_access(self):
+        app = self.app()
+        app._worker_state = "running"
+        app._worker_thread = LiveThread()
+        payload = {
+            "worktree_id": "wt",
+            "source_digest": "a" * 64,
+            "profile": "fem-cpu-slepc-modal-v1",
+            "operation": "build",
+            "request_key": "request-unenabled",
+            "payload": {},
+        }
+        with patch.object(container_main, "capsule_path", side_effect=AssertionError("source must not be read")):
+            with self.assertRaisesRegex(ValueError, "not enabled by the operator configuration"):
+                app.submit(payload)
 
     def test_live_worker_accepts_a_build_submission_while_callback_blocks(self):
         queue = FakeQueue()
@@ -431,6 +459,64 @@ class ContainerMainTests(unittest.TestCase):
         self.assertEqual("—", worker_proc["io"])
         self.assertEqual("brak aktywnego kontenera", worker_proc["cmd"])
 
+    def test_processes_does_not_claim_unverified_worker_is_running(self):
+        active_job = {
+            "job_id": "job-unverified-123",
+            "owner": "alice",
+            "profile": "fem-cpu-release",
+            "worktree_id": "wt-test",
+            "state": "running",
+        }
+        app = self.app(FakeQueue(active=[active_job]))
+        app.health = lambda: {
+            "ok": True,
+            "worker_alive": True,
+            "worker_state": "running",
+            "worker_error": None,
+            "accepting_jobs": True,
+            "service_status": {"started_at": "2026-09-13T12:00:00Z"},
+        }
+
+        worker_proc = app.processes()[1]
+        self.assertEqual("unverified", worker_proc["status"])
+
+        run_dir = self.root / "runs" / "wt-test" / active_job["job_id"]
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "coordinator.json").write_text(
+            json.dumps({"container_id": "c" * 64}), encoding="utf-8"
+        )
+        with patch.object(container_main, "inspect_owned", side_effect=RuntimeError("unavailable")):
+            worker_proc = app.processes()[1]
+        self.assertEqual("unverified", worker_proc["status"])
+
+    def test_worker_stats_report_io_rate_only_after_cumulative_delta(self):
+        job = {
+            "job_id": "job-io-123",
+            "owner": "alice",
+            "profile": "fem-cpu-release",
+            "worktree_id": "wt-test",
+            "state": "running",
+        }
+        app = self.app(FakeQueue(active=[job]))
+        run_dir = self.root / "runs" / "wt-test" / "job-io-123"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "coordinator.json").write_text(
+            json.dumps({"container_id": "c" * 64}), encoding="utf-8"
+        )
+        stats = [
+            "104857600B / 1073741824B|25.0%|1048576B / 2097152B",
+            "104857600B / 1073741824B|25.0%|3145728B / 6291456B",
+        ]
+        with patch.object(container_main, "inspect_owned"), \
+                patch.object(container_main, "docker", side_effect=stats), \
+                patch.object(container_main.time, "monotonic", side_effect=[100.0, 102.0]):
+            first = app._inspect_worker_metrics(job)
+            second = app._inspect_worker_metrics(job)
+
+        self.assertTrue(first["container_verified"])
+        self.assertIsNone(first["io_mb_s"])
+        self.assertEqual(3.0, second["io_mb_s"])
+
     def test_job_events_historical_journal_and_memory_merging(self):
         job = {
             "job_id": "job-abc-123",
@@ -476,6 +562,10 @@ class ContainerMainTests(unittest.TestCase):
             "state": "succeeded",
         }
         app = self.app(FakeQueue(jobs=[job]))
+        with self.assertRaises(LookupError):
+            app.job_events("job-missing-404")
+        with self.assertRaises(LookupError):
+            app.job_metrics("job-missing-404")
         # Inactive/completed job MUST return empty list, never coordinator process trends!
         metrics = app.job_metrics("job-inactive-999")
         self.assertEqual([], metrics)

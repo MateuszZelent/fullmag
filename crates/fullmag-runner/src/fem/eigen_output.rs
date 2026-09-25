@@ -19,7 +19,9 @@ use fullmag_ir::KSamplingIR;
 use fullmag_ir::OutputIR;
 use fullmag_ir::SpinWaveBoundaryConditionIR;
 use fullmag_ir::SpinWaveBoundaryKindIR;
+use num_complex::Complex64;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 pub(super) fn requested_mode_indices(outputs: &[OutputIR]) -> std::collections::BTreeSet<u32> {
@@ -82,6 +84,18 @@ pub(super) fn mode_field_resource_key(sample_index: usize, raw_mode_index: u64) 
     )
 }
 
+fn modal_sample_id(plan: &FemEigenPlanIR, sample_index: usize) -> String {
+    let prefix = if !plan.bias_field_samples.is_empty() {
+        "bias-field-sample"
+    } else {
+        match plan.k_sampling {
+            Some(KSamplingIR::Path { .. }) => "k-path-sample",
+            Some(KSamplingIR::Single { .. }) | None => "k-sample",
+        }
+    };
+    format!("{prefix}-{sample_index:04}")
+}
+
 fn mode_meta_resource_key(sample_index: usize, raw_mode_index: u64) -> String {
     format!(
         "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/{sample_index}/{raw_mode_index}/meta"
@@ -94,6 +108,40 @@ pub(super) fn mode_metadata_path(sample_index: usize, raw_mode_index: u64) -> St
 
 fn mode_payload_path(sample_index: usize, raw_mode_index: u64) -> String {
     format!("eigen/mode_fields/sample_{sample_index:04}/mode_{raw_mode_index:04}/vector.bin")
+}
+
+pub(super) fn floquet_potential_payload_path(sample_index: usize, raw_mode_index: u64) -> String {
+    format!(
+        "eigen/mode_fields/sample_{sample_index:04}/mode_{raw_mode_index:04}/potential_real_split.bin"
+    )
+}
+
+/// Serialize the native Floquet potential descriptor in its published
+/// doubled real-split complex coefficient layout.  Each coefficient is one
+/// little-endian `(real, imag)` pair; this is a coefficient payload rather
+/// than a Cartesian mesh field.
+pub(super) fn floquet_potential_payload_bytes(values: &[Complex64]) -> Result<Vec<u8>, RunError> {
+    if values.is_empty() || values.len() % 2 != 0 {
+        return Err(RunError {
+            message: format!(
+                "native Floquet potential payload requires a non-empty even coefficient count, got {}",
+                values.len()
+            ),
+        });
+    }
+    let mut bytes = Vec::with_capacity(values.len() * 2 * std::mem::size_of::<f64>());
+    for (index, value) in values.iter().enumerate() {
+        if !value.re.is_finite() || !value.im.is_finite() {
+            return Err(RunError {
+                message: format!(
+                    "native Floquet potential payload contains a non-finite coefficient at index {index}"
+                ),
+            });
+        }
+        bytes.extend_from_slice(&value.re.to_le_bytes());
+        bytes.extend_from_slice(&value.im.to_le_bytes());
+    }
+    Ok(bytes)
 }
 
 fn mode_zarr_store_path() -> &'static str {
@@ -375,7 +423,14 @@ fn modal_publication_contract(
         });
     }
 
-    let topology_fingerprint = plan.mesh.topology_fingerprint_v6();
+    let topology_fingerprint = plan
+        .mesh
+        .mixed_topology_fingerprint_v3()
+        .map_err(|error| RunError {
+            message: format!(
+                "production modal publication requires a finite v3 source mesh identity: {error}"
+            ),
+        })?;
     if production_k0
         && source_topology
             .as_deref()
@@ -440,6 +495,392 @@ fn insert_modal_publication_contract(target: &mut serde_json::Value, contract: &
     }
 }
 
+const FLOQUET_CERTIFICATE_KEYS: [&str; 13] = [
+    "floquet_descriptor_certified",
+    "floquet_geometric_bc_certified",
+    "potential_representation",
+    "magnetic_relative_residual",
+    "potential_relative_residual",
+    "potential_dof_count",
+    "potential_payload_path",
+    "potential_payload_sha256",
+    "potential_payload_encoding",
+    "potential_binary_layout",
+    "potential_value_count",
+    "potential_vector_real",
+    "potential_vector_imag",
+];
+
+const FLOQUET_REFERENCE_KEYS: [&str; 5] = [
+    "potential_payload_path",
+    "potential_payload_sha256",
+    "potential_payload_encoding",
+    "potential_binary_layout",
+    "potential_value_count",
+];
+
+#[derive(Clone, Debug)]
+struct FloquetModeMetadata {
+    potential_representation: String,
+    magnetic_relative_residual: f64,
+    potential_relative_residual: f64,
+    potential_dof_count: usize,
+}
+
+#[derive(Clone, Debug)]
+struct FloquetPotentialPublication {
+    metadata: FloquetModeMetadata,
+    payload_path: String,
+    payload_sha256: String,
+    payload_value_count: usize,
+}
+
+fn floquet_mode_metadata_json(metadata: &FloquetModeMetadata) -> serde_json::Value {
+    serde_json::json!({
+        "floquet_descriptor_certified": true,
+        "floquet_geometric_bc_certified": false,
+        "potential_representation": metadata.potential_representation.clone(),
+        "magnetic_relative_residual": metadata.magnetic_relative_residual,
+        "potential_relative_residual": metadata.potential_relative_residual,
+        "potential_dof_count": metadata.potential_dof_count,
+    })
+}
+
+fn floquet_publication_json(publication: &FloquetPotentialPublication) -> serde_json::Value {
+    let mut fields = floquet_mode_metadata_json(&publication.metadata);
+    let object = fields
+        .as_object_mut()
+        .expect("Floquet metadata must remain an object");
+    object.insert(
+        "potential_payload_path".to_string(),
+        serde_json::json!(publication.payload_path.clone()),
+    );
+    object.insert(
+        "potential_payload_sha256".to_string(),
+        serde_json::json!(publication.payload_sha256.clone()),
+    );
+    object.insert(
+        "potential_payload_encoding".to_string(),
+        serde_json::json!("f64_interleaved_real_imag"),
+    );
+    object.insert(
+        "potential_binary_layout".to_string(),
+        serde_json::json!("complex_f64_pairs_little_endian"),
+    );
+    object.insert(
+        "potential_value_count".to_string(),
+        serde_json::json!(publication.payload_value_count),
+    );
+    fields
+}
+
+fn insert_floquet_fields(
+    target: &mut serde_json::Map<String, serde_json::Value>,
+    fields: &serde_json::Value,
+) {
+    let Some(fields) = fields.as_object() else {
+        return;
+    };
+    for (key, value) in fields {
+        target.insert(key.clone(), value.clone());
+    }
+}
+
+fn remove_floquet_reference_fields(target: &mut serde_json::Map<String, serde_json::Value>) {
+    for key in FLOQUET_REFERENCE_KEYS {
+        target.remove(key);
+    }
+}
+
+fn parse_floquet_mode_metadata(
+    mode: &serde_json::Value,
+) -> Result<Option<FloquetModeMetadata>, RunError> {
+    let has_any = FLOQUET_CERTIFICATE_KEYS
+        .iter()
+        .any(|key| mode.get(*key).is_some());
+    if !has_any {
+        return Ok(None);
+    }
+    let descriptor_certified = mode
+        .get("floquet_descriptor_certified")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| RunError {
+            message:
+                "Floquet modal artifact certificate requires boolean floquet_descriptor_certified"
+                    .to_string(),
+        })?;
+    if !descriptor_certified {
+        if FLOQUET_CERTIFICATE_KEYS[1..]
+            .iter()
+            .any(|key| mode.get(*key).is_some())
+        {
+            return Err(RunError {
+                message: "non-certified Floquet modal artifact carries certificate metadata"
+                    .to_string(),
+            });
+        }
+        return Ok(None);
+    }
+    let geometric_bc_certified = mode
+        .get("floquet_geometric_bc_certified")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| RunError {
+            message:
+                "Floquet modal artifact certificate requires boolean floquet_geometric_bc_certified"
+                    .to_string(),
+        })?;
+    if geometric_bc_certified {
+        return Err(RunError {
+            message: "Floquet modal artifact cannot claim geometric BC certification".to_string(),
+        });
+    }
+    if mode.get("potential_vector_real").is_some() || mode.get("potential_vector_imag").is_some() {
+        return Err(RunError {
+            message:
+                "Floquet modal artifact must persist potential coefficients in binary, not inline arrays"
+                    .to_string(),
+        });
+    }
+    let potential_representation = mode
+        .get("potential_representation")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| *value == "doubled_real_split_complex_coefficients")
+        .map(str::to_owned)
+        .ok_or_else(|| RunError {
+            message: "Floquet modal artifact certificate has unsupported potential representation"
+                .to_string(),
+        })?;
+    let required_residual = |key: &str| -> Result<f64, RunError> {
+        let value = mode
+            .get(key)
+            .and_then(serde_json::Value::as_f64)
+            .filter(|value| value.is_finite() && (0.0..=1.0e-8).contains(value))
+            .ok_or_else(|| RunError {
+                message: format!(
+                    "Floquet modal artifact certificate field '{key}' must be finite and in [0, 1e-8]"
+                ),
+            })?;
+        Ok(value)
+    };
+    let magnetic_relative_residual = required_residual("magnetic_relative_residual")?;
+    let potential_relative_residual = required_residual("potential_relative_residual")?;
+    let potential_dof_count = mode
+        .get("potential_dof_count")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value > 0 && *value % 2 == 0)
+        .ok_or_else(|| RunError {
+            message:
+                "Floquet modal artifact certificate requires a positive even potential_dof_count"
+                    .to_string(),
+        })?;
+
+    let has_references = FLOQUET_REFERENCE_KEYS
+        .iter()
+        .any(|key| mode.get(*key).is_some());
+    if has_references {
+        let path = mode
+            .get("potential_payload_path")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty());
+        let digest = mode
+            .get("potential_payload_sha256")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| value.starts_with("sha256:"));
+        let encoding = mode
+            .get("potential_payload_encoding")
+            .and_then(serde_json::Value::as_str);
+        let layout = mode
+            .get("potential_binary_layout")
+            .and_then(serde_json::Value::as_str);
+        let value_count = mode
+            .get("potential_value_count")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok());
+        if path.is_none()
+            || digest.is_none()
+            || encoding != Some("f64_interleaved_real_imag")
+            || layout != Some("complex_f64_pairs_little_endian")
+            || value_count != Some(potential_dof_count.saturating_mul(2))
+        {
+            return Err(RunError {
+                message:
+                    "Floquet modal artifact has an incomplete or inconsistent potential payload reference"
+                        .to_string(),
+            });
+        }
+    }
+
+    Ok(Some(FloquetModeMetadata {
+        potential_representation,
+        magnetic_relative_residual,
+        potential_relative_residual,
+        potential_dof_count,
+    }))
+}
+
+fn validate_floquet_potential_payload(
+    bytes: &[u8],
+    expected_dof_count: usize,
+    context: &str,
+) -> Result<(String, usize), RunError> {
+    let expected_bytes = expected_dof_count
+        .checked_mul(2 * std::mem::size_of::<f64>())
+        .ok_or_else(|| RunError {
+            message: format!("{context}: Floquet potential payload size overflows usize"),
+        })?;
+    if bytes.len() != expected_bytes {
+        return Err(RunError {
+            message: format!(
+                "{context}: Floquet potential payload length {} does not match {} coefficients",
+                bytes.len(),
+                expected_dof_count
+            ),
+        });
+    }
+    for (index, pair) in bytes.chunks_exact(16).enumerate() {
+        let real = f64::from_le_bytes(pair[0..8].try_into().expect("8-byte real component"));
+        let imag = f64::from_le_bytes(pair[8..16].try_into().expect("8-byte imag component"));
+        if !real.is_finite() || !imag.is_finite() {
+            return Err(RunError {
+                message: format!(
+                    "{context}: Floquet potential payload contains a non-finite coefficient at index {index}"
+                ),
+            });
+        }
+    }
+    Ok((
+        format!("sha256:{:x}", Sha256::digest(bytes)),
+        expected_dof_count * 2,
+    ))
+}
+
+fn collect_floquet_potential_publications(
+    modes: &[serde_json::Value],
+    requested_modes: &std::collections::BTreeSet<u32>,
+    auxiliary_artifacts: &[AuxiliaryArtifact],
+    sample_index: usize,
+) -> Result<
+    (
+        BTreeMap<u64, FloquetModeMetadata>,
+        BTreeMap<u64, FloquetPotentialPublication>,
+    ),
+    RunError,
+> {
+    let mut metadata_by_mode = BTreeMap::new();
+    let mut publications = BTreeMap::new();
+    for mode in modes {
+        let raw_mode_index = mode
+            .get("index")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let metadata = parse_floquet_mode_metadata(mode)?;
+        let payload_path = floquet_potential_payload_path(sample_index, raw_mode_index);
+        let payload_artifacts = auxiliary_artifacts
+            .iter()
+            .filter(|artifact| artifact.relative_path == payload_path)
+            .collect::<Vec<_>>();
+        let mode_declares_references = FLOQUET_REFERENCE_KEYS
+            .iter()
+            .any(|key| mode.get(*key).is_some());
+        if payload_artifacts.len() > 1 {
+            return Err(RunError {
+                message: format!(
+                    "Floquet mode {raw_mode_index} has duplicate potential payload artifacts"
+                ),
+            });
+        }
+        let selected = u32::try_from(raw_mode_index)
+            .ok()
+            .is_some_and(|index| requested_modes.contains(&index));
+        match metadata {
+            None => {
+                if !payload_artifacts.is_empty() {
+                    return Err(RunError {
+                        message: format!(
+                            "non-certified Floquet mode {raw_mode_index} has a potential payload artifact"
+                        ),
+                    });
+                }
+            }
+            Some(metadata) => {
+                metadata_by_mode.insert(raw_mode_index, metadata.clone());
+                if mode_declares_references && payload_artifacts.is_empty() {
+                    return Err(RunError {
+                        message: format!(
+                            "Floquet mode {raw_mode_index} declares a potential payload reference but the artifact is missing"
+                        ),
+                    });
+                }
+                if let Some(artifact) = payload_artifacts.first() {
+                    if !selected {
+                        return Err(RunError {
+                            message: format!(
+                                "unrequested Floquet mode {raw_mode_index} has a persisted potential payload"
+                            ),
+                        });
+                    }
+                    let (payload_sha256, payload_value_count) = validate_floquet_potential_payload(
+                        &artifact.bytes,
+                        metadata.potential_dof_count,
+                        &format!("Floquet mode {raw_mode_index}"),
+                    )?;
+                    if let Some(declared_path) = mode
+                        .get("potential_payload_path")
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        if declared_path != payload_path {
+                            return Err(RunError {
+                                message: format!(
+                                    "Floquet mode {raw_mode_index} potential payload reference path does not match the sample/mode identity"
+                                ),
+                            });
+                        }
+                    }
+                    if let Some(declared_sha256) = mode
+                        .get("potential_payload_sha256")
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        if declared_sha256 != payload_sha256 {
+                            return Err(RunError {
+                                message: format!(
+                                    "Floquet mode {raw_mode_index} potential payload digest does not match the persisted bytes"
+                                ),
+                            });
+                        }
+                    }
+                    if let Some(declared_value_count) = mode
+                        .get("potential_value_count")
+                        .and_then(serde_json::Value::as_u64)
+                    {
+                        if usize::try_from(declared_value_count).ok() != Some(payload_value_count) {
+                            return Err(RunError {
+                                message: format!(
+                                    "Floquet mode {raw_mode_index} potential payload value count does not match the persisted bytes"
+                                ),
+                            });
+                        }
+                    }
+                    let publication = FloquetPotentialPublication {
+                        metadata,
+                        payload_path,
+                        payload_sha256,
+                        payload_value_count,
+                    };
+                    publications.insert(raw_mode_index, publication);
+                } else if selected {
+                    return Err(RunError {
+                        message: format!(
+                            "requested certified Floquet mode {raw_mode_index} has no persisted potential payload"
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    Ok((metadata_by_mode, publications))
+}
+
 pub(super) fn write_eigen_v2_bundle(
     plan: &FemEigenPlanIR,
     summary_payload: &serde_json::Value,
@@ -448,11 +889,23 @@ pub(super) fn write_eigen_v2_bundle(
     sample_index: usize,
 ) -> Result<(), RunError> {
     let publication_contract = modal_publication_contract(plan, summary_payload)?;
+    let modal_source_topology_fingerprint = plan
+        .mesh
+        .mixed_topology_fingerprint_v3()
+        .map_err(|error| RunError {
+            message: format!("modal field source mesh identity is invalid: {error}"),
+        })?;
     let modes = summary_payload
         .get("modes")
         .and_then(|value| value.as_array())
         .cloned()
         .unwrap_or_default();
+    let (floquet_metadata_by_mode, floquet_publications) = collect_floquet_potential_publications(
+        &modes,
+        requested_modes,
+        auxiliary_artifacts,
+        sample_index,
+    )?;
     let k_vector = match plan.k_sampling.as_ref() {
         Some(KSamplingIR::Single { k_vector }) => *k_vector,
         Some(KSamplingIR::Path { .. }) | None => [0.0, 0.0, 0.0],
@@ -521,6 +974,7 @@ pub(super) fn write_eigen_v2_bundle(
             let mut mode = mode.clone();
             if let Some(object) = mode.as_object_mut() {
                 object.remove("component_participation");
+                remove_floquet_reference_fields(object);
                 object.insert(
                     "raw_mode_index".to_string(),
                     serde_json::json!(raw_mode_index),
@@ -536,6 +990,12 @@ pub(super) fn write_eigen_v2_bundle(
                         serde_json::json!(mode_field_resource_key(sample_index, raw_mode_index)),
                     );
                 }
+                if let Some(metadata) = floquet_metadata_by_mode.get(&raw_mode_index) {
+                    insert_floquet_fields(object, &floquet_mode_metadata_json(metadata));
+                }
+                if let Some(publication) = floquet_publications.get(&raw_mode_index) {
+                    insert_floquet_fields(object, &floquet_publication_json(publication));
+                }
             }
             mode
         })
@@ -546,6 +1006,7 @@ pub(super) fn write_eigen_v2_bundle(
         "sample_count": 1,
         "mode_count": spectrum_v2_modes.len(),
         "samples": [{
+            "sample_id": modal_sample_id(plan, sample_index),
             "sample_index": sample_index,
             "label": label,
             "k_vector": k_vector,
@@ -594,6 +1055,7 @@ pub(super) fn write_eigen_v2_bundle(
             let object = mode.as_object_mut().ok_or_else(|| RunError {
                 message: format!("mode {raw_mode_index} summary is not a JSON object"),
             })?;
+            remove_floquet_reference_fields(object);
             object.insert(
                 "mode_id".to_string(),
                 serde_json::json!(format!("sample-{sample_index:04}/mode-{raw_mode_index:04}")),
@@ -621,6 +1083,12 @@ pub(super) fn write_eigen_v2_bundle(
                     serde_json::json!(mode_field_resource_key(sample_index, raw_mode_index)),
                 );
             }
+            if let Some(metadata) = floquet_metadata_by_mode.get(&raw_mode_index) {
+                insert_floquet_fields(object, &floquet_mode_metadata_json(metadata));
+            }
+            if let Some(publication) = floquet_publications.get(&raw_mode_index) {
+                insert_floquet_fields(object, &floquet_publication_json(publication));
+            }
             Ok(mode)
         })
         .collect::<Result<Vec<_>, RunError>>()?;
@@ -630,7 +1098,7 @@ pub(super) fn write_eigen_v2_bundle(
         "sample_count": 1,
         "mode_count": spectrum_v3_modes.len(),
         "samples": [{
-            "sample_id": format!("bias-field-sample-{sample_index:04}"),
+            "sample_id": modal_sample_id(plan, sample_index),
             "sample_index": sample_index,
             "label": label,
             "k_vector": k_vector,
@@ -771,7 +1239,7 @@ pub(super) fn write_eigen_v2_bundle(
             "damping_policy": legacy_mode["damping_policy"],
             "source_mesh_identity": {
                 "mesh_id": plan.mesh_name,
-                "topology_fingerprint": plan.mesh.topology_fingerprint_v6(),
+                "topology_fingerprint": modal_source_topology_fingerprint,
                 "indexing": "full_domain_node_order",
                 "node_count": source_node_count,
             },
@@ -821,11 +1289,18 @@ pub(super) fn write_eigen_v2_bundle(
                 "linearization_state_sha256",
                 "periodic_mesh_certificate_sha256",
                 "relax_to_eigen_handoff_sha256",
+                "relax_to_eigen_source_mesh_topology_sha256",
                 "source_mesh_topology_sha256",
             ] {
                 if legacy_mode.get(key).is_some() {
                     object.insert(key.to_string(), legacy_mode[key].clone());
                 }
+            }
+            if let Some(metadata) = floquet_metadata_by_mode.get(&raw_mode_index) {
+                insert_floquet_fields(object, &floquet_mode_metadata_json(metadata));
+            }
+            if let Some(publication) = floquet_publications.get(&raw_mode_index) {
+                insert_floquet_fields(object, &floquet_publication_json(publication));
             }
             if let Some(block_residuals) = legacy_mode.get("block_residuals") {
                 object.insert("block_residuals".to_string(), block_residuals.clone());
@@ -1103,6 +1578,7 @@ pub(super) fn write_eigen_v2_bundle(
             "linearization_state_sha256",
             "periodic_mesh_certificate_sha256",
             "relax_to_eigen_handoff_sha256",
+            "relax_to_eigen_source_mesh_topology_sha256",
             "source_mesh_topology_sha256",
             "boundary_gauge",
             "spectral",
@@ -1705,5 +2181,105 @@ pub(super) fn classify_polarization(
         "op"
     } else {
         "ip"
+    }
+}
+
+#[cfg(test)]
+mod floquet_potential_tests {
+    use super::*;
+
+    #[test]
+    fn floquet_potential_publication_roundtrips_digest_and_shape() {
+        let values = [
+            Complex64::new(1.0, -2.0),
+            Complex64::new(3.0, -4.0),
+            Complex64::new(5.0, -6.0),
+            Complex64::new(7.0, -8.0),
+        ];
+        let bytes = floquet_potential_payload_bytes(&values)
+            .expect("even finite Floquet coefficients should serialize");
+        let mode = serde_json::json!({
+            "index": 2,
+            "floquet_descriptor_certified": true,
+            "floquet_geometric_bc_certified": false,
+            "potential_representation": "doubled_real_split_complex_coefficients",
+            "magnetic_relative_residual": 1.0e-10,
+            "potential_relative_residual": 2.0e-10,
+            "potential_dof_count": values.len(),
+        });
+        let path = floquet_potential_payload_path(3, 2);
+        let artifacts = vec![AuxiliaryArtifact {
+            relative_path: path.clone(),
+            bytes: bytes.clone(),
+        }];
+
+        let (metadata, publications) = collect_floquet_potential_publications(
+            &[mode],
+            &BTreeSet::from([2_u32]),
+            &artifacts,
+            3,
+        )
+        .expect("valid Floquet publication should be accepted");
+        assert_eq!(metadata[&2].potential_dof_count, values.len());
+        let publication = &publications[&2];
+        assert_eq!(publication.payload_path, path);
+        assert_eq!(publication.payload_value_count, values.len() * 2);
+        assert_eq!(
+            publication.payload_sha256,
+            format!("sha256:{:x}", Sha256::digest(&bytes))
+        );
+        assert_eq!(
+            floquet_publication_json(publication)["potential_binary_layout"],
+            "complex_f64_pairs_little_endian"
+        );
+    }
+
+    #[test]
+    fn floquet_potential_publication_rejects_noncertified_payload() {
+        let mode = serde_json::json!({
+            "index": 0,
+            "floquet_descriptor_certified": false,
+        });
+        let artifacts = vec![AuxiliaryArtifact {
+            relative_path: floquet_potential_payload_path(0, 0),
+            bytes: vec![0; 32],
+        }];
+
+        let error = collect_floquet_potential_publications(
+            &[mode],
+            &BTreeSet::from([0_u32]),
+            &artifacts,
+            0,
+        )
+        .expect_err("non-certified mode must not publish a potential payload");
+        assert!(error.message.contains("non-certified"));
+    }
+
+    #[test]
+    fn floquet_potential_publication_rejects_nonfinite_payload_bytes() {
+        let mode = serde_json::json!({
+            "index": 1,
+            "floquet_descriptor_certified": true,
+            "floquet_geometric_bc_certified": false,
+            "potential_representation": "doubled_real_split_complex_coefficients",
+            "magnetic_relative_residual": 1.0e-10,
+            "potential_relative_residual": 2.0e-10,
+            "potential_dof_count": 2,
+        });
+        let mut bytes = vec![0; 32];
+        bytes[0..8].copy_from_slice(&f64::NAN.to_le_bytes());
+        let artifacts = vec![AuxiliaryArtifact {
+            relative_path: floquet_potential_payload_path(0, 1),
+            bytes,
+        }];
+
+        let error = collect_floquet_potential_publications(
+            &[mode],
+            &BTreeSet::from([1_u32]),
+            &artifacts,
+            0,
+        )
+        .expect_err("non-finite coefficient must be rejected");
+        assert!(error.message.contains("non-finite"));
     }
 }

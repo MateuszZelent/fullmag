@@ -1,6 +1,12 @@
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 
+import {
+  createInspectorRequestBudgetState,
+  recordInspectorRequestBudget,
+  resetInspectorDocumentBudget,
+} from "./lib/inspector-request-budget.mjs";
+
 const workspaceUrl = process.env.CONTROL_ROOM_URL ?? "http://localhost:3100/workspace";
 const outputDir = resolve(
   process.cwd(),
@@ -9,6 +15,7 @@ const outputDir = resolve(
 const INSPECTOR_REQUEST_QUIET_MS = 500;
 const INSPECTOR_REQUEST_TIMEOUT_MS = 5_000;
 const INSPECTOR_MAX_REQUESTS_PER_PATH = 8;
+const INSPECTOR_SCENE_TRACE_LIMIT = 20;
 const INSPECTOR_REQUEST_LIMITS = new Map([
   [
     "GET /v2/sessions/current/model/regions",
@@ -95,6 +102,7 @@ await installInspectorFixtureApi(page, fixture);
 
 if (process.env.CONTROL_ROOM_INSPECTOR_MESH_ONLY === "1") {
   try {
+    resetInspectorDocumentBudget(fixture.requestBudget, "mesh-policy-workspace");
     const { qualifyMeshPolicyEditing } = await import("./lib/mesh-policy-browser.mjs");
     await qualifyMeshPolicyEditing({ page, fixture, outputDir, workspaceUrl, fulfillJson, fulfillTopology });
   } finally {
@@ -104,7 +112,10 @@ if (process.env.CONTROL_ROOM_INSPECTOR_MESH_ONLY === "1") {
 }
 
 try {
-  await page.goto(workspaceUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  await gotoInspectorDocument(page, fixture, workspaceUrl, {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  }, "initial-workspace");
   const inspector = page.locator(".fm-inspector");
   try {
     await inspector.waitFor({ state: "visible", timeout: 30_000 });
@@ -592,7 +603,10 @@ try {
 
   await qualifyVisualizationMutationStability(page, inspector, fixture);
 
-  await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
+  await reloadInspectorDocument(page, fixture, {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  }, "mesh-policy-reset");
   await inspector.waitFor({ state: "visible" });
   const objectNode = page
     .locator('[role="treeitem"]')
@@ -658,7 +672,7 @@ try {
   await waitForInspectorRequestQuiet(page, fixture);
   assert(
     fixture.requestBudgetViolation === null,
-    `Inspector request budget exceeded: ${JSON.stringify(fixture.requestBudgetViolation)}; counts: ${JSON.stringify(Object.fromEntries(fixture.requestCounts))}`,
+    `Inspector request budget exceeded: ${JSON.stringify(inspectorRequestBudgetDiagnostics(fixture))}`,
   );
   assert(
     fixture.unknownGetPaths.length === 0,
@@ -987,7 +1001,9 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
   fixture.revision = fixtureSnapshot.revision;
   fixture.scene = fixtureSnapshot.scene;
   fixture.visualization = fixtureSnapshot.visualization;
-  await page.reload({ waitUntil: "domcontentloaded" });
+  await reloadInspectorDocument(page, fixture, {
+    waitUntil: "domcontentloaded",
+  }, "texture-mutation-reset");
   await page.locator(".fm-inspector").waitFor({ state: "visible", timeout: 30_000 });
   const unexpectedResetErrors = consoleErrors.filter(
     (message) => !message.includes("the server responded with a status of 409 (Conflict)"),
@@ -1001,7 +1017,10 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
 
 async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
   fixture.physicsGuardEnabled = true;
-  await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
+  await reloadInspectorDocument(page, fixture, {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  }, "physics-guard-entry");
   await inspector.waitFor({ state: "visible", timeout: 30_000 });
 
   const objectDmiNodeId = "model:object:film:magnetic-parameters:interfacial_dmi";
@@ -1076,7 +1095,10 @@ async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
   objectDmi.enabled = false;
   fixture.scene.study.rotated_interfacial_dmi = -0.003;
 
-  await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
+  await reloadInspectorDocument(page, fixture, {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  }, "physics-guard-recovery");
   await inspector.waitFor({ state: "visible", timeout: 30_000 });
   await expandInspectorNode(page, "model:objects");
   await expandInspectorNode(page, "model:object:film");
@@ -1264,7 +1286,10 @@ async function qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles, f
 
 async function qualifyModalDispersionAndPostprocessing(page, inspector, screenshotFiles, fixture) {
   fixture.analysisProduct = "modal_eigen";
-  await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
+  await reloadInspectorDocument(page, fixture, {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  }, "modal-eigen");
   await inspector.waitFor({ state: "visible", timeout: 30_000 });
 
   const resultsTab = page
@@ -1310,7 +1335,10 @@ async function qualifyModalDispersionAndPostprocessing(page, inspector, screensh
   }
 
   fixture.analysisProduct = "driven_response";
-  await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
+  await reloadInspectorDocument(page, fixture, {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  }, "modal-driven-response");
   await inspector.waitFor({ state: "visible", timeout: 30_000 });
   const modelTab = page
     .locator(".fm-explorer .fm-tabs-trigger")
@@ -1430,7 +1458,8 @@ async function expandInspectorNode(page, nodeId) {
       })),
     );
     throw new Error(
-      `Explorer node ${nodeId} did not become visible. Tree snapshot: ${JSON.stringify(treeState)}. ${error}`,
+      `Explorer node ${nodeId} did not become visible. Tree snapshot: ${JSON.stringify(treeState)}. ` +
+        `Fixture diagnostics: ${JSON.stringify(inspectorRequestBudgetDiagnostics(fixture))}. ${error}`,
     );
   }
   if ((await node.getAttribute("aria-expanded")) !== "false") return;
@@ -1445,6 +1474,62 @@ async function expandInspectorNode(page, nodeId) {
     nodeId,
     { timeout: 60_000 },
   );
+}
+
+function recordInspectorSceneResponse(
+  fixture,
+  { count, cumulativeCount, documentId, limit, status },
+) {
+  const scene = fixture.scene;
+  const objectIds = Array.isArray(scene?.objects)
+    ? scene.objects
+      .map((object) => (
+        object && typeof object === "object" && typeof object.id === "string"
+          ? object.id
+          : null
+      ))
+      .filter((objectId) => objectId !== null)
+      .slice(0, 32)
+    : [];
+  fixture.sceneResponseTrace.push({
+    count,
+    cumulativeCount,
+    documentId,
+    limit,
+    objectIds,
+    revision: scene?.revision ?? fixture.revision ?? null,
+    status,
+  });
+  if (fixture.sceneResponseTrace.length > INSPECTOR_SCENE_TRACE_LIMIT) {
+    fixture.sceneResponseTrace.splice(
+      0,
+      fixture.sceneResponseTrace.length - INSPECTOR_SCENE_TRACE_LIMIT,
+    );
+  }
+}
+
+function inspectorRequestBudgetDiagnostics(fixture) {
+  return {
+    documentId: fixture.requestBudget.documentId,
+    documentLabel: fixture.requestBudget.documentLabel,
+    documentRequestCounts: Object.fromEntries(fixture.requestBudget.documentCounts),
+    requestBudgetViolation: fixture.requestBudgetViolation,
+    requestCounts: Object.fromEntries(fixture.requestCounts),
+    sceneResponseTrace: fixture.sceneResponseTrace,
+  };
+}
+
+// Only explicit page.goto/page.reload calls reset the document GET budget.
+// Same-document history/hash navigation cannot mask request growth. The
+// cumulative counters and mutation caps remain scenario-scoped.
+async function gotoInspectorDocument(page, fixture, url, options, label) {
+  resetInspectorDocumentBudget(fixture.requestBudget, label);
+  return page.goto(url, options);
+}
+
+async function reloadInspectorDocument(page, fixture, options, label) {
+  resetInspectorDocumentBudget(fixture.requestBudget, label);
+  return page.reload(options);
 }
 
 async function assertHealthyViewportCanvas(page, label) {
@@ -1546,6 +1631,7 @@ function createInspectorFixture() {
       size: [1e-6, 1e-6, 1e-6],
     },
   };
+  const requestBudget = createInspectorRequestBudgetState();
   return {
     manifest: {
       generation_id: "1",
@@ -1573,8 +1659,10 @@ function createInspectorFixture() {
     },
     requests: [],
     visualizationMutationBodies: [],
-    requestCounts: new Map(),
+    requestBudget,
+    requestCounts: requestBudget.cumulativeCounts,
     requestBudgetViolation: null,
+    sceneResponseTrace: [],
     analysisProduct: "driven_response",
     unknownMutationPaths: [],
     unknownGetPaths: [],
@@ -1682,18 +1770,34 @@ async function installInspectorFixtureApi(page, fixture) {
     const path = url.pathname;
     fixture.requests.push(`${request.method()} ${path}${url.search}`);
     const requestKey = `${request.method()} ${path}`;
-    const requestCount = (fixture.requestCounts.get(requestKey) ?? 0) + 1;
-    fixture.requestCounts.set(requestKey, requestCount);
     const requestLimit =
       INSPECTOR_REQUEST_LIMITS.get(requestKey) ??
       INSPECTOR_MAX_REQUESTS_PER_PATH;
-    if (requestCount > requestLimit) {
+    const budget = recordInspectorRequestBudget(fixture.requestBudget, {
+      method: request.method(),
+      requestKey,
+      requestLimit,
+    });
+    if (budget.exceeded) {
       fixture.requestBudgetViolation ??= {
-        count: requestCount,
+        count: budget.count,
+        cumulativeCount: budget.cumulativeCount,
+        documentId: budget.documentId,
+        documentLabel: fixture.requestBudget.documentLabel,
         key: requestKey,
         limit: requestLimit,
         recent: fixture.requests.slice(-20),
+        scope: budget.scope,
       };
+      if (path === "/v2/sessions/current/model/scene" && request.method() === "GET") {
+        recordInspectorSceneResponse(fixture, {
+          count: budget.count,
+          cumulativeCount: budget.cumulativeCount,
+          documentId: budget.documentId,
+          limit: requestLimit,
+          status: 508,
+        });
+      }
       return fulfillJson(
         route,
         { error: { code: "inspector_fixture_request_budget_exceeded" } },
@@ -1860,7 +1964,16 @@ async function installInspectorFixtureApi(page, fixture) {
         target_id: url.searchParams.get("target_id") ?? "object:film",
       });
     }
-    if (path === "/v2/sessions/current/model/scene") return fulfillJson(route, fixture.scene);
+    if (path === "/v2/sessions/current/model/scene" && request.method() === "GET") {
+      recordInspectorSceneResponse(fixture, {
+        count: budget.count,
+        cumulativeCount: budget.cumulativeCount,
+        documentId: budget.documentId,
+        limit: requestLimit,
+        status: 200,
+      });
+      return fulfillJson(route, fixture.scene);
+    }
     if (path === "/v2/sessions/current/model/readiness") return fulfillJson(route, {
       blockers: [],
       capabilities: {

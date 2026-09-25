@@ -19,6 +19,7 @@ use super::eigen_policy::{
     resolved_demag_realization,
 };
 use super::eigen_projection::tangent_bases;
+use super::eigen_reduction::validate_shared_domain_tangent_frame_transport;
 use super::eigen_reduction::ReductionMap;
 use super::eigen_shared_domain_geometry::{
     build_modal_certificate_map_binding, modal_shared_domain_equivalence_classes,
@@ -765,12 +766,6 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
             message: "shared-domain modal payload requires full2x2 dynamic demag".to_string(),
         });
     }
-    if plan.material.ms_field.is_some() {
-        return Err(RunError {
-            message: "shared-domain modal production scope currently requires uniform material Ms"
-                .to_string(),
-        });
-    }
     validate_shared_domain_modal_scope(plan, topology, equilibrium, observables)?;
     let has_magnetic_region = topology
         .magnetic_element_mask
@@ -860,6 +855,11 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
                 .to_string(),
         });
     }
+    validate_shared_domain_tangent_frame_transport(
+        plan,
+        topology,
+        &linearization_state.equilibrium_m0,
+    )?;
     let mesh_certificate_digest = linearization_state.periodic_mesh_certificate_digest.clone();
     let ms_values = plan.material.ms_field.clone().unwrap_or_default();
     if !ms_values.is_empty() && ms_values.len() != topology.n_nodes {
@@ -961,6 +961,8 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
             linearization_h_eff0_xyz.as_slice(),
             external_field_h_ext0_xyz.as_slice(),
             alpha_per_node.as_slice(),
+            ms_values.as_slice(),
+            plan.material.saturation_magnetisation,
         ),
     )?;
     let certificate_binding_v6 = build_owned_modal_certificate_v6_binding(

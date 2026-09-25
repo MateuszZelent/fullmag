@@ -16,6 +16,10 @@ fn default_max_branch_gap() -> u32 {
     1
 }
 
+fn default_include_branch_table() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PhaseConventionIR {
@@ -92,6 +96,41 @@ impl SampleSelectorIR {
     pub fn is_empty(&self) -> bool {
         self.sample_indices.is_empty() && self.sample_labels.is_empty()
     }
+
+    pub fn validation_errors(&self, path: &str) -> Vec<String> {
+        let mut errors = Vec::new();
+        if self.is_empty() {
+            errors.push(format!(
+                "{path} must contain sample_indices or sample_labels"
+            ));
+        }
+        let mut seen_indices = std::collections::BTreeSet::new();
+        if self
+            .sample_indices
+            .iter()
+            .any(|value| !seen_indices.insert(*value))
+        {
+            errors.push(format!("{path}.sample_indices must be unique"));
+        }
+        if self
+            .sample_labels
+            .iter()
+            .any(|label| label.trim().is_empty())
+        {
+            errors.push(format!(
+                "{path}.sample_labels must not contain empty labels"
+            ));
+        }
+        let mut seen_labels = std::collections::BTreeSet::new();
+        if self
+            .sample_labels
+            .iter()
+            .any(|value| !seen_labels.insert(value.trim()))
+        {
+            errors.push(format!("{path}.sample_labels must be unique"));
+        }
+        errors
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -103,7 +142,7 @@ pub struct EigenSpectrumOutputIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EigenModeOutputIR {
     pub field: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub indices: Vec<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub branches: Vec<u32>,
@@ -114,7 +153,7 @@ pub struct EigenModeOutputIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DispersionCurveOutputIR {
     pub name: String,
-    #[serde(default)]
+    #[serde(default = "default_include_branch_table")]
     pub include_branch_table: bool,
 }
 

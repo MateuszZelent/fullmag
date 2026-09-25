@@ -155,7 +155,17 @@ fn terminal_scheduled_field_actions(
 fn copy_native_equilibrium_evaluation(
     backend: &NativeFemBackend,
     node_count: usize,
+    demag_enabled: bool,
 ) -> Result<NativeEquilibriumEvaluation, RunError> {
+    let phi_a = if demag_enabled {
+        backend.copy_demag_phi(node_count)?
+    } else {
+        // Keep the certified equilibrium schema total when the requested
+        // physics excludes demagnetization.  A zero potential is the explicit
+        // representation of the disabled term; asking the backend for a
+        // demag observable here would be an invalid cross-module request.
+        vec![0.0; node_count]
+    };
     Ok(NativeEquilibriumEvaluation {
         magnetization: copy_native_fem_field_snapshot(backend, "m", node_count)?,
         fields: CertifiedFemEquilibriumFields::from_fields(
@@ -175,7 +185,7 @@ fn copy_native_equilibrium_evaluation(
                 fullmag_fem_sys::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EFF,
                 node_count,
             )?,
-            backend.copy_demag_phi(node_count)?,
+            phi_a,
         )?,
     })
 }
@@ -427,7 +437,8 @@ pub(crate) fn finalize_native_fem_relaxation(
     // Preserve the accepted endpoint evaluation before the mandatory fresh
     // snapshot. The post-refresh evaluation below is compared against this
     // value and bound into a linearization certificate.
-    let accepted_native_equilibrium = copy_native_equilibrium_evaluation(backend, node_count)?;
+    let accepted_native_equilibrium =
+        copy_native_equilibrium_evaluation(backend, node_count, plan.enable_demag)?;
 
     // Refresh device-resident component fields at the accepted final state
     // before any synchronous or asynchronous field snapshot selects H_eff.
@@ -608,7 +619,8 @@ pub(crate) fn finalize_native_fem_relaxation(
     }
 
     let copy_start = std::time::Instant::now();
-    let recomputed_native_equilibrium = copy_native_equilibrium_evaluation(backend, node_count)?;
+    let recomputed_native_equilibrium =
+        copy_native_equilibrium_evaluation(backend, node_count, plan.enable_demag)?;
     let recomputed_linearization_certificate = certify_native_linearization_recompute(
         plan,
         &accepted_native_equilibrium,

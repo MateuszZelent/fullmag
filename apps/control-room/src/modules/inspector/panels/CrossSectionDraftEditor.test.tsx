@@ -7,7 +7,8 @@ import type { CrossSectionDraft } from "@/kernel/workspace/crossSectionWorkspace
 
 import { CrossSectionDraftEditor } from "./CrossSectionDraftEditor";
 
-vi.mock("@/kernel/KernelContext", () => ({
+vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/kernel/KernelContext")>()),
   useKernel: () => ({
     api: {
       model: {

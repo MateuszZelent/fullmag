@@ -524,7 +524,11 @@ fn accepted_relax_stage_handoff_accepts_prism_source_and_checks_m0() {
     plan.equilibrium_magnetization[5] = [0.5, 0.0, 0.0];
     let error = relax_handoff_from_completion(&plan, &accepted_relax_completion())
         .expect_err("prism magnetic nodes must retain unit-norm validation");
-    assert!(error.message.contains("m0_norm_mismatch"), "{}", error.message);
+    assert!(
+        error.message.contains("m0_norm_mismatch"),
+        "{}",
+        error.message
+    );
 }
 
 #[test]
@@ -1383,7 +1387,7 @@ fn accepted_relax_stage_handoff_binds_summary_and_mode_provenance() {
         provenance: ExecutionProvenance::default(),
     };
 
-    bind_stage_continuation_artifacts(&mut run, &handoff)
+    bind_stage_continuation_artifacts(&mut run, &plan, &handoff)
         .expect("accepted handoff should bind artifacts");
     let summary: serde_json::Value =
         serde_json::from_slice(&run.auxiliary_artifacts[0].bytes).unwrap();
@@ -1408,10 +1412,18 @@ fn accepted_relax_stage_handoff_binds_summary_and_mode_provenance() {
     );
     assert_eq!(
         mode["source_mesh_topology_sha256"],
+        plan.mesh.mixed_topology_fingerprint_v3().unwrap()
+    );
+    assert_eq!(
+        mode["relax_to_eigen_source_mesh_topology_sha256"],
         handoff.source_mesh_topology_sha256
     );
     assert_eq!(
         summary["solver_diagnostics"]["source_mesh_topology_sha256"],
+        plan.mesh.mixed_topology_fingerprint_v3().unwrap()
+    );
+    assert_eq!(
+        summary["solver_diagnostics"]["relax_to_eigen_source_mesh_topology_sha256"],
         handoff.source_mesh_topology_sha256
     );
     assert_eq!(
@@ -1420,6 +1432,10 @@ fn accepted_relax_stage_handoff_binds_summary_and_mode_provenance() {
     );
     assert_eq!(
         summary["modes"][0]["source_mesh_topology_sha256"],
+        plan.mesh.mixed_topology_fingerprint_v3().unwrap()
+    );
+    assert_eq!(
+        summary["modes"][0]["relax_to_eigen_source_mesh_topology_sha256"],
         handoff.source_mesh_topology_sha256
     );
     assert_eq!(
@@ -1428,6 +1444,10 @@ fn accepted_relax_stage_handoff_binds_summary_and_mode_provenance() {
     );
     assert_eq!(
         solver["source_mesh_topology_sha256"],
+        plan.mesh.mixed_topology_fingerprint_v3().unwrap()
+    );
+    assert_eq!(
+        solver["relax_to_eigen_source_mesh_topology_sha256"],
         handoff.source_mesh_topology_sha256
     );
     assert_eq!(
@@ -1436,6 +1456,10 @@ fn accepted_relax_stage_handoff_binds_summary_and_mode_provenance() {
     );
     assert_eq!(
         spectrum_v3["samples"][0]["modes"][0]["source_mesh_topology_sha256"],
+        plan.mesh.mixed_topology_fingerprint_v3().unwrap()
+    );
+    assert_eq!(
+        spectrum_v3["samples"][0]["modes"][0]["relax_to_eigen_source_mesh_topology_sha256"],
         handoff.source_mesh_topology_sha256
     );
     assert_eq!(
@@ -1464,7 +1488,8 @@ fn accepted_relax_handoff_round_trips_through_summary_provenance() {
     )
     .expect("accepted linearization should produce a handoff");
     let diagnostics = serde_json::json!({
-        "source_mesh_topology_sha256": expected.source_mesh_topology_sha256(),
+        "source_mesh_topology_sha256": plan.mesh.mixed_topology_fingerprint_v3().unwrap(),
+        "relax_to_eigen_source_mesh_topology_sha256": expected.source_mesh_topology_sha256(),
         "relax_to_eigen_handoff_sha256": expected.content_sha256(),
         "equilibrium_artifact_sha256": expected.equilibrium_artifact_sha256,
         "linearization_state_sha256": expected.linearization_state_sha256,
@@ -3368,6 +3393,7 @@ fn minimal_native_modal_plan() -> FemEigenPlanIR {
         mode_tracking: None,
         dispersion_validation: None,
         k0_kittel_validation: None,
+        solver_policy: None,
     }
 }
 
@@ -3381,6 +3407,18 @@ fn bounded_k0_execution_plan() -> FemEigenPlanIR {
     plan.k_sampling = Some(fullmag_ir::KSamplingIR::Single {
         k_vector: [0.0, 0.0, 0.0],
     });
+    plan
+}
+
+fn bounded_floquet_dynamic_demag_execution_plan() -> FemEigenPlanIR {
+    let mut plan = bounded_k0_execution_plan();
+    plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+    plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+    plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+        frequency_min_hz: 1.0e8,
+        frequency_max_hz: 5.0e9,
+    };
+    add_x_floquet_pair_to_plan(&mut plan);
     plan
 }
 
@@ -3404,6 +3442,22 @@ fn exact_k0_resolution(
         fallback_used: false,
         fallback_reason: None,
         selection_reason: "test.exact_k0_resolution".to_string(),
+    }
+}
+
+fn exact_floquet_dynamic_demag_resolution(
+    requested_device: fullmag_ir::ExecutionDevice,
+) -> fullmag_ir::FemEigenExecutionResolutionIR {
+    fullmag_ir::FemEigenExecutionResolutionIR {
+        requested_device,
+        resolved_device: fullmag_ir::ExecutionDevice::Cpu,
+        requested_precision: fullmag_ir::ExecutionPrecision::Double,
+        resolved_precision: fullmag_ir::ExecutionPrecision::Double,
+        requested_engine: fullmag_ir::FemEigenEngineIR::Auto,
+        resolved_engine: fullmag_ir::FemEigenEngineIR::FloquetAirboxCpuSchurSlepc,
+        fallback_used: false,
+        fallback_reason: None,
+        selection_reason: "fem_eigen.floquet_airbox_dynamic_demag.explicit_cpu".to_string(),
     }
 }
 
@@ -3669,6 +3723,47 @@ fn planned_k0_gpu_resolution_resists_cpu_environment_and_dispatches_device_krylo
         Some(native_fem::NativeModalExecutionTarget::ProductionGpu)
     );
     assert_eq!(execution.engine_id(), "gpu_modal_device_krylov");
+}
+
+#[test]
+fn planned_floquet_dynamic_demag_cpu_resolution_dispatches_distinct_engine() {
+    let plan = bounded_floquet_dynamic_demag_execution_plan();
+    let resolution = exact_floquet_dynamic_demag_resolution(fullmag_ir::ExecutionDevice::Cpu);
+    let execution = resolve_fem_eigen_execution_resolution(&plan, Some(&resolution))
+        .expect("the materialized Floquet dynamic-demag resolution must validate")
+        .expect("bounded Floquet dynamic-demag plans must have an exact execution");
+
+    assert_eq!(execution.lane(), FemEigenExecutionLane::Cpu);
+    assert_eq!(
+        execution.native_target(),
+        Some(native_fem::NativeModalExecutionTarget::ProductionCpu)
+    );
+    assert_eq!(execution.engine_id(), "floquet_airbox_cpu_schur_slepc");
+}
+
+#[test]
+fn planned_floquet_dynamic_demag_rejects_gpu_resolution_without_fallback() {
+    let plan = bounded_floquet_dynamic_demag_execution_plan();
+    let mut resolution = exact_floquet_dynamic_demag_resolution(fullmag_ir::ExecutionDevice::Gpu);
+    resolution.resolved_device = fullmag_ir::ExecutionDevice::Gpu;
+    resolution.resolved_engine = fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov;
+    let error = resolve_fem_eigen_execution_resolution(&plan, Some(&resolution))
+        .expect_err("dynamic Floquet demag is CPU-only and must reject GPU resolution");
+    assert!(error
+        .message
+        .contains("resolved engine does not match the bounded modal plan scope"));
+}
+
+#[test]
+fn planned_k0_rejects_floquet_dynamic_demag_resolution_scope() {
+    let plan = bounded_k0_execution_plan();
+    let mut resolution = exact_floquet_dynamic_demag_resolution(fullmag_ir::ExecutionDevice::Cpu);
+    resolution.selection_reason = "test.floquet_dynamic_demag_resolution".to_string();
+    let error = resolve_fem_eigen_execution_resolution(&plan, Some(&resolution))
+        .expect_err("a plain K0 plan must not accept the Floquet dynamic-demag engine");
+    assert!(error
+        .message
+        .contains("resolved engine does not match the bounded modal plan scope"));
 }
 
 #[test]
@@ -4240,7 +4335,7 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
         "equilibrium_artifact_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "linearization_state_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         "relax_to_eigen_handoff_sha256": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-        "source_mesh_topology_sha256": plan.mesh.topology_fingerprint_v6(),
+        "source_mesh_topology_sha256": plan.mesh.mixed_topology_fingerprint_v3().unwrap(),
         "periodic_mesh_certificate_sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     });
     let mut legacy_mode = serde_json::json!({
@@ -4312,6 +4407,7 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
     assert!(spectrum_v2["samples"][0]["modes"][0]
         .get("component_participation")
         .is_none());
+    assert_eq!(spectrum_v2["samples"][0]["sample_id"], "k-sample-0000");
     assert_eq!(spectrum_v2["solve_succeeded"], true);
     assert_eq!(spectrum_v2["fields_available"], true);
     assert_eq!(spectrum_v2["spectrum_completeness"], "selected_only");
@@ -4322,7 +4418,7 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
     );
     assert_eq!(
         spectrum_v2["candidate_identity"]["topology_fingerprint"],
-        plan.mesh.topology_fingerprint_v6()
+        plan.mesh.mixed_topology_fingerprint_v3().unwrap()
     );
     let spectrum_v3 = artifacts
         .iter()
@@ -4334,6 +4430,7 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
         spectrum_v3["samples"][0]["modes"][0]["component_participation"]["status"],
         "unavailable"
     );
+    assert_eq!(spectrum_v3["samples"][0]["sample_id"], "k-sample-0000");
     let manifest = artifacts
         .iter()
         .find(|artifact| artifact.relative_path == "frequency_domain/manifest.v1.json")
@@ -4385,7 +4482,7 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
         nested["source_mesh_identity"],
         serde_json::json!({
             "mesh_id": plan.mesh_name,
-            "topology_fingerprint": plan.mesh.topology_fingerprint_v6(),
+            "topology_fingerprint": plan.mesh.mixed_topology_fingerprint_v3().unwrap(),
             "indexing": "full_domain_node_order",
             "node_count": plan.mesh.nodes.len(),
         })
@@ -4400,6 +4497,102 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
     assert_eq!(
         nested["payload_sha256"],
         format!("sha256:{:x}", Sha256::digest(&chunk.bytes))
+    );
+}
+
+#[test]
+fn native_eigen_v2_persists_certified_floquet_potential_binary_reference() {
+    let plan = minimal_native_modal_plan();
+    let values = [
+        Complex64::new(1.0, -2.0),
+        Complex64::new(3.0, -4.0),
+        Complex64::new(5.0, -6.0),
+        Complex64::new(7.0, -8.0),
+    ];
+    let potential_bytes = floquet_potential_payload_bytes(&values)
+        .expect("finite even Floquet coefficients should serialize");
+    let mode = serde_json::json!({
+        "index": 0,
+        "frequency_hz": 1.0e9,
+        "frequency_real_hz": 1.0e9,
+        "frequency_imag_hz": 0.0,
+        "angular_frequency_rad_per_s": std::f64::consts::TAU * 1.0e9,
+        "omega_rad_s": std::f64::consts::TAU * 1.0e9,
+        "eigenvalue_real": 0.0,
+        "eigenvalue_imag": std::f64::consts::TAU * 1.0e9,
+        "normalization": "unit_l2",
+        "damping_policy": "ignore",
+        "residual_norm": 1.0e-10,
+        "residual_absolute_l2": 1.0e-10,
+        "residual_relative_l2": 1.0e-10,
+        "residual_linf": 1.0e-10,
+        "mass_norm": 1.0,
+        "tangent_leakage_mean_abs": 0.0,
+        "tangent_leakage_max_abs": 0.0,
+        "tangent_leakage_weighted_relative_l2": 0.0,
+        "phasor_convention": "exp_plus_i_omega_t",
+        "eigenvalue_mapping": "lambda_imag_positive_frequency",
+        "gamma_rad_s_T": 1.0,
+        "gamma0_rad_s_per_A_m": 2.211e5,
+        "mu0_T_m_per_A": MU0,
+        "dominant_polarization": "uniform",
+        "k_vector": [0.0, 0.0, 0.0],
+        "real": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 0.0]],
+        "imag": [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 1.0]],
+        "amplitude": [1.0, 1.0, 1.0, 1.0],
+        "floquet_descriptor_certified": true,
+        "floquet_geometric_bc_certified": false,
+        "potential_representation": "doubled_real_split_complex_coefficients",
+        "magnetic_relative_residual": 1.0e-10,
+        "potential_relative_residual": 2.0e-10,
+        "potential_dof_count": values.len(),
+    });
+    let summary = serde_json::json!({
+        "solver_kind": "reference_modal_fixture",
+        "modes": [mode.clone()],
+    });
+    let potential_path = floquet_potential_payload_path(0, 0);
+    let mut artifacts = vec![
+        json_artifact("eigen/modes/mode_0000.json", &mode)
+            .expect("legacy mode artifact should serialize"),
+        AuxiliaryArtifact {
+            relative_path: potential_path.clone(),
+            bytes: potential_bytes.clone(),
+        },
+    ];
+
+    write_eigen_v2_bundle(&plan, &summary, &BTreeSet::from([0_u32]), &mut artifacts, 0)
+        .expect("certified Floquet potential should be published");
+
+    let spectrum = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "eigen/spectrum.v2.json")
+        .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+        .expect("spectrum.v2 should be emitted");
+    let spectrum_mode = &spectrum["samples"][0]["modes"][0];
+    assert_eq!(spectrum_mode["floquet_descriptor_certified"], true);
+    assert_eq!(spectrum_mode["potential_dof_count"], values.len());
+    assert_eq!(spectrum_mode["potential_payload_path"], potential_path);
+    assert_eq!(
+        spectrum_mode["potential_payload_sha256"],
+        format!("sha256:{:x}", Sha256::digest(&potential_bytes))
+    );
+    let nested = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "eigen/modes/sample_0000/mode_0000.json")
+        .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+        .expect("nested mode metadata should be emitted");
+    assert_eq!(nested["potential_payload_path"], potential_path);
+    assert_eq!(nested["potential_value_count"], values.len() * 2);
+    assert!(nested.get("potential_vector_real").is_none());
+    assert!(nested.get("potential_vector_imag").is_none());
+    assert_eq!(
+        artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == potential_path)
+            .expect("potential binary artifact should remain persisted")
+            .bytes,
+        potential_bytes
     );
 }
 
@@ -4693,7 +4886,7 @@ fn native_modal_magnetic_pencil_request_carries_payload_digest_and_canonical_gam
 
     let pencil = native_modal_magnetic_pencil_payload(&plan, &stiffness, &gyrotropic, &mass, &[]);
     let request =
-        native_modal_mfem_operator_problem(2, &stiffness, &gyrotropic, &mass, &pencil, &[]);
+        native_modal_mfem_operator_problem(2, &stiffness, &gyrotropic, &mass, None, &pencil, &[]);
 
     assert!(!pencil.dependency_digest.is_empty());
     assert_eq!(
@@ -5319,6 +5512,27 @@ fn native_poisson_airbox_top_level_accepted_mode_count_is_preserved() {
 }
 
 #[test]
+fn native_floquet_sparse_diagnostics_keep_schur_and_nonzero_k_identity() {
+    let mut diagnostics = serde_json::Map::new();
+    let result = serde_json::json!({
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "demag_kind": "floquet_airbox", "accepted_mode_count": 8,
+    });
+    super::eigen_native_result::merge_poisson_airbox_modal_result_diagnostics(
+        &mut diagnostics,
+        &result.to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        diagnostics["resolved_solver_family"],
+        "floquet_poisson_airbox_schur"
+    );
+    assert_eq!(diagnostics["algebraic_form"], "schur_reduced_descriptor");
+    assert_eq!(diagnostics["demag_kind"], "floquet_airbox");
+    assert_eq!(diagnostics["accepted_mode_count"], 8);
+}
+
+#[test]
 fn native_poisson_airbox_result_maps_to_k0_kittel_metrics() {
     let raw = serde_json::json!({
         "schema_version": "frequency_domain_modal_result.v1",
@@ -5491,6 +5705,7 @@ fn native_shared_domain_modes_require_phi_and_block_residuals() {
         active_nodes: &active_nodes,
         magnetic_classes: &magnetic_classes,
         magnetic_class_count: 2,
+        node_phases: None,
     };
     let error = native_poisson_airbox_mode_from_json(&plan, &mode, &mass, Some(&context))
         .expect_err("shared-domain mode must include certified block residuals");
@@ -5504,6 +5719,42 @@ fn native_shared_domain_modes_require_phi_and_block_residuals() {
     assert_eq!(accepted.block_residual_q, 3.0e-12);
     assert_eq!(accepted.block_residual_phi, 4.0e-12);
     assert_eq!(accepted.block_residual_gauge, 0.0);
+    let phases = [Complex64::new(1.0, 0.0), Complex64::new(0.0, -1.0)];
+    let phase_context = SharedDomainModeContext {
+        node_phases: Some(&phases),
+        ..context
+    };
+    let phased =
+        native_poisson_airbox_mode_from_json(&plan, &mode, &mass, Some(&phase_context)).unwrap();
+    assert_eq!(phased.q_vector, accepted.q_vector);
+    assert_eq!(phased.vector[0], accepted.vector[0]);
+    assert_eq!(phased.vector[1], phases[1] * accepted.vector[1]);
+    assert_eq!(phased.phi_vector, accepted.phi_vector);
+    mode["potential_representation"] = serde_json::json!("complex_coefficients");
+    mode["potential_dof_count"] = serde_json::json!(2);
+    mode["floquet_descriptor_certified"] = serde_json::json!(false);
+    mode["floquet_geometric_bc_certified"] = serde_json::json!(false);
+    let full_result = serde_json::json!({
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc", "modes": [mode],
+    });
+    let modes = native_modal_modes_from_result_json(
+        &plan,
+        &full_result.to_string(),
+        None,
+        Some(&phase_context),
+    )
+    .expect("native sparse Floquet adapter must parse the physical shared-domain q/phi payload");
+    assert_eq!(modes[0].vector, phased.vector);
+    assert_eq!(modes[0].phi_vector, phased.phi_vector);
+    let residuals = super::eigen_native_artifacts::native_modal_block_residuals(
+        &modes[0],
+        Some("floquet_airbox_cpu_schur_slepc"),
+    );
+    assert_eq!(residuals["scope"], "reduced_original_blocks_only");
+    assert!(residuals["eps_full"].is_null());
+    assert_eq!(residuals["certified"], false);
+    assert_eq!(residuals["full_descriptor_certified"], false);
+    assert_eq!(residuals["reduced_pencil_certified"], true);
 }
 
 #[test]
@@ -5530,6 +5781,47 @@ fn shared_domain_modal_scope_allows_normalized_texture_inside_the_unit_cell() {
     equilibrium[1] = [0.0, 1.0, 0.0];
     validate_shared_domain_modal_scope(&plan, &topology, &equilibrium, &observables)
         .expect("normalized texture inside one unit cell must remain in production scope");
+}
+
+#[test]
+fn shared_domain_full2x2_guard_rejects_tangent_frame_reference_axis_jump() {
+    let mut plan = bounded_k0_execution_plan();
+    add_x_floquet_pair_to_plan(&mut plan);
+    let topology = MeshTopology::from_ir(&plan.mesh).expect("periodic FEM mesh is valid");
+    let (pair_id, node_a, node_b) = topology
+        .periodic_node_pairs
+        .first()
+        .expect("fixture must contain a Floquet pair")
+        .clone();
+    assert!(topology.magnetic_node_volumes[node_a as usize] > 0.0);
+    assert!(topology.magnetic_node_volumes[node_b as usize] > 0.0);
+
+    // Keep the equilibrium seam below the 1e-8 m0 tolerance while placing the
+    // two otherwise nearly equal vectors on opposite sides of the
+    // tangent_bases() |m_z|=0.9 reference-axis branch.  A scalar phase cannot
+    // transport the resulting frames, so the shared-domain payload must fail
+    // closed until the native 2x2 transport is implemented.
+    let z_a: f64 = 0.9 - 1.0e-10;
+    let z_b: f64 = 0.9 + 1.0e-10;
+    let mut equilibrium = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+    equilibrium[node_a as usize] = [(1.0 - z_a * z_a).sqrt(), 0.0, z_a];
+    equilibrium[node_b as usize] = [(1.0 - z_b * z_b).sqrt(), 0.0, z_b];
+    let seam = (equilibrium[node_a as usize][0] - equilibrium[node_b as usize][0])
+        .hypot(equilibrium[node_a as usize][2] - equilibrium[node_b as usize][2]);
+    assert!(
+        seam < 1.0e-8,
+        "fixture seam must pass the m0 periodic tolerance"
+    );
+
+    let error = validate_shared_domain_tangent_frame_transport(&plan, &topology, &equilibrium)
+        .expect_err(
+            "non-identity tangent frames must be rejected before native shared-domain assembly",
+        );
+    assert!(error
+        .message
+        .contains("requires full phase*(T_dst^T T_src) support"));
+    let pair_message = format!("pair_id='{pair_id}'");
+    assert!(error.message.contains(pair_message.as_str()));
 }
 
 #[test]
@@ -5698,6 +5990,10 @@ fn shared_domain_builder_rejects_missing_accepted_linearization_state() {
         .set_tri3_facets(vec![[0, 1, 2], [3, 5, 4], [6, 7, 8], [9, 11, 10]]);
     plan.mesh.boundary_markers = vec![10, 11, 20, 21];
     plan.equilibrium_magnetization = vec![[1.0, 0.0, 0.0]; 12];
+    plan.material.ms_field = Some(vec![
+        760_000.0, 770_000.0, 780_000.0, 760_000.0, 770_000.0, 780_000.0, 800_000.0, 810_000.0,
+        820_000.0, 800_000.0, 810_000.0, 820_000.0,
+    ]);
     plan.mesh.periodic_node_pairs = vec![
         fullmag_ir::MeshPeriodicNodePairIR {
             pair_id: "magnetic".to_string(),
@@ -6796,6 +7092,91 @@ fn native_cpu_modal_window_accepts_nonzero_floquet_single_k_with_bloch_payload_p
 }
 
 #[test]
+fn native_cpu_modal_window_accepts_nonzero_floquet_airbox_demag_path() {
+    let mut plan = minimal_native_modal_plan();
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = true;
+    plan.enable_demag = true;
+    plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+    plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+    plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+        factor: 2.0,
+        grading: 1.2,
+        boundary_marker: 99,
+        bc_kind: Some("robin".to_string()),
+        robin_beta_mode: Some("dipole".to_string()),
+        robin_beta_factor: Some(2.0),
+        shape: Some("bbox".to_string()),
+        factor_source: Some("test".to_string()),
+        boundary_marker_source: Some("test".to_string()),
+    });
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    add_x_floquet_pair_to_plan(&mut plan);
+
+    assert!(
+        native_cpu_modal_window_enabled(&plan),
+        "nonzero-k Floquet Full2x2 airbox demag should enter the bounded native CPU provider path"
+    );
+    assert_eq!(native_cpu_modal_window_rejection_reason(&plan), None);
+
+    plan.k_sampling = Some(fullmag_ir::KSamplingIR::Path {
+        points: vec![
+            fullmag_ir::KPointIR {
+                label: Some("Γ".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            },
+            fullmag_ir::KPointIR {
+                label: Some("X".to_string()),
+                k_vector: [1.0e7, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![2],
+        closed: false,
+    });
+    assert!(
+        native_cpu_modal_window_enabled(&plan),
+        "a path containing Gamma and nonzero-k samples should keep the CPU provider lane"
+    );
+
+    let gamma_point = crate::eigen::KSampleDescriptor {
+        sample_index: 0,
+        label: Some("Γ".to_string()),
+        segment_index: Some(0),
+        path_s: 0.0,
+        t_in_segment: 0.0,
+        k_vector: [0.0, 0.0, 0.0],
+    };
+    let point_plan = super::eigen_path::test_support::eigen_path_single_k_point_plan(
+        &plan,
+        &gamma_point,
+        false,
+        None,
+    )
+    .expect("Gamma point should materialize as a periodic K0 execution plan");
+    assert_eq!(
+        point_plan.spin_wave_bc.kind(),
+        SpinWaveBoundaryKindIR::Periodic
+    );
+}
+
+#[test]
+fn native_cpu_modal_window_rejects_nonzero_floquet_demag_without_airbox_contract() {
+    let mut plan = minimal_native_modal_plan();
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = true;
+    plan.enable_demag = true;
+    plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    add_x_floquet_pair_to_plan(&mut plan);
+
+    assert!(!native_cpu_modal_window_enabled(&plan));
+    assert_eq!(
+        native_cpu_modal_window_rejection_reason(&plan),
+        Some("production_cpu_modal_dynamic_demag_k_operator_missing")
+    );
+}
+
+#[test]
 fn reference_modal_diagnostics_name_nonzero_k_production_cpu_rejection() {
     let mut plan = minimal_native_modal_plan();
     plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
@@ -6932,7 +7313,7 @@ fn runner_rejects_floquet_dynamic_demag_gate() {
         .expect_err("Floquet dynamic demag must be blocked before execution");
     assert!(err
         .message
-        .contains("dynamic demag for Floquet periodic FEM is not implemented yet"));
+        .contains("requires the validated native CPU Poisson-airbox provider"));
 }
 
 #[test]
@@ -7192,6 +7573,8 @@ fn cpu_full_2x2_frequency_window_uses_native_modal_artifact_path() {
             OutputIR::EigenMode {
                 field: "mode".to_string(),
                 indices: vec![0],
+                branches: vec![],
+                sample_selector: None,
             },
         ],
     )
@@ -7273,6 +7656,8 @@ fn cpu_full_2x2_nonzero_floquet_window_uses_native_bloch_payload_artifact_path()
             OutputIR::EigenMode {
                 field: "mode".to_string(),
                 indices: vec![0],
+                branches: vec![],
+                sample_selector: None,
             },
         ],
     )
@@ -7558,4 +7943,68 @@ fn equilibrium_artifact_v7_loader_rejects_arbitrary_declared_hash_and_id() {
         .expect_err("a self-consistent but arbitrary declared hash/id must fail closed");
     assert!(error.message.contains("content_sha256"));
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn sparse_shared_domain_mass_preserves_dense_reference_and_full_node_weights() {
+    use super::eigen_mass_metric::{ModalMassMetric, SharedDomainSparseMass};
+    let mut plan = minimal_native_modal_plan();
+    add_minimal_shared_domain_periodic_airbox(&mut plan);
+    let topology = MeshTopology::from_ir(&plan.mesh).unwrap();
+    let full_reduction = full_physical_magnetic_reduction_map(&topology);
+    let full = assemble_tangent_mass_matrix(&topology, &full_reduction);
+    let (dense, active, classes, count) =
+        reduced_shared_domain_tangent_mass(&topology, &full).unwrap();
+    let phases = vec![Complex64::new(1.0, 0.0); topology.n_nodes];
+    let sparse =
+        SharedDomainSparseMass::from_topology(&topology, &classes, count, &phases).unwrap();
+    let q: Vec<_> = (0..dense.nrows())
+        .map(|i| Complex64::new((i + 1) as f64, (i % 3) as f64))
+        .collect();
+    let expected = complex_block_mass_norm(&dense, &q);
+    let actual = sparse.quadratic_form(&q);
+    assert!((actual - expected).norm() <= expected.norm() * 1e-13);
+    assert_eq!(active, sparse.active_nodes);
+    let weights =
+        node_mass_weights_from_tangent_mass(&full, full_reduction.active_nodes.len()).unwrap();
+    for (a, b) in weights.iter().zip(&sparse.node_diagonal_weights) {
+        assert!((a - b).abs() <= a.abs() * 1e-13);
+    }
+}
+
+#[test]
+fn eigen_path_forwards_stop_before_single_k_execution() {
+    let mut plan = minimal_native_modal_plan();
+    plan.k_sampling = Some(KSamplingIR::Path {
+        points: vec![
+            fullmag_ir::KPointIR {
+                label: Some("Gamma".into()),
+                k_vector: [0.0; 3],
+            },
+            fullmag_ir::KPointIR {
+                label: Some("X".into()),
+                k_vector: [1.0, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![1],
+        closed: false,
+    });
+    let mut phases = Vec::new();
+    let mut callback = |event: FemEigenProgress| {
+        phases.push(event.phase);
+        StepAction::Stop
+    };
+    let error = crate::dispatch::execute_fem_eigen_with_progress(
+        PlannedFemEigenExecution::legacy(FemEigenExecutionLane::Cpu),
+        &plan,
+        &[],
+        &mut callback,
+    )
+    .expect_err("path must honour Stop before entering the native solver");
+    assert!(
+        error.message.contains("interrupted by runtime control"),
+        "{}",
+        error.message
+    );
+    assert_eq!(phases, vec!["preparing_k_path_sample"]);
 }

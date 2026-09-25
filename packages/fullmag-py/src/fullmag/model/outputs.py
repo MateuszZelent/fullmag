@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from numbers import Integral
 from typing import Sequence
 
 from fullmag._validation import (
@@ -50,6 +51,28 @@ _KNOWN_SCALARS = {
     "e_rotated_dmi",
     "e_total",
 }
+
+_U32_MAX = 0xFFFF_FFFF
+
+
+def _normalize_nonnegative_indices(
+    values: Sequence[int],
+    name: str,
+) -> tuple[int, ...]:
+    if isinstance(values, (str, bytes, bytearray)):
+        raise ValueError(f"{name} must contain integers only")
+    try:
+        raw_values = tuple(values)
+    except TypeError as exc:
+        raise ValueError(f"{name} must contain integers only") from exc
+    if any(isinstance(value, bool) or not isinstance(value, Integral) for value in raw_values):
+        raise ValueError(f"{name} must contain integers in the u32 range")
+    normalized = tuple(int(value) for value in raw_values)
+    if any(value < 0 for value in normalized):
+        raise ValueError(f"{name} must be >= 0")
+    if any(value > _U32_MAX for value in normalized):
+        raise ValueError(f"{name} must contain integers in the u32 range")
+    return normalized
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,15 +253,14 @@ class SaveMode:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "field", require_non_empty(self.field, "field"))
-        normalized = tuple(int(index) for index in self.indices)
-        if any(index < 0 for index in normalized):
-            raise ValueError("mode indices must be >= 0")
+        normalized = _normalize_nonnegative_indices(self.indices, "mode indices")
         if len(set(normalized)) != len(normalized):
             raise ValueError("mode indices must be unique")
         object.__setattr__(self, "indices", normalized)
-        normalized_branches = tuple(int(b) for b in self.branches)
-        if any(b < 0 for b in normalized_branches):
-            raise ValueError("branch indices must be >= 0")
+        normalized_branches = _normalize_nonnegative_indices(
+            self.branches,
+            "branch indices",
+        )
         if len(set(normalized_branches)) != len(normalized_branches):
             raise ValueError("branch indices must be unique")
         object.__setattr__(self, "branches", normalized_branches)
@@ -246,17 +268,28 @@ class SaveMode:
             raise ValueError(
                 "SaveMode requires at least one raw mode index or tracked branch index"
             )
-        normalized_si = tuple(int(i) for i in self.sample_indices)
-        if any(i < 0 for i in normalized_si):
-            raise ValueError("sample_indices must be >= 0")
+        normalized_si = _normalize_nonnegative_indices(
+            self.sample_indices,
+            "sample_indices",
+        )
+        if len(set(normalized_si)) != len(normalized_si):
+            raise ValueError("sample_indices must be unique")
         object.__setattr__(self, "sample_indices", normalized_si)
+        if isinstance(self.sample_labels, (str, bytes, bytearray)):
+            raise ValueError("sample_labels must be a sequence of strings")
+        try:
+            normalized_labels = tuple(
+                require_non_empty(label, "sample_labels entry")
+                for label in self.sample_labels
+            )
+        except (AttributeError, TypeError) as exc:
+            raise ValueError("sample_labels must be a sequence of strings") from exc
+        if len(set(normalized_labels)) != len(normalized_labels):
+            raise ValueError("sample_labels must be unique")
         object.__setattr__(
             self,
             "sample_labels",
-            tuple(
-                require_non_empty(label, "sample_labels entry")
-                for label in self.sample_labels
-            ),
+            normalized_labels,
         )
 
     def to_ir(self) -> dict[str, object]:
