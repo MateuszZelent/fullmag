@@ -187,6 +187,7 @@ def _assert_common_pipeline(
     }
     assert relax["dynamics"]["gyromagnetic_ratio"] == GAMMA_M_PER_A_S
     assert relax["dynamics"]["fixed_timestep"] == RELAX_DT_S
+    assert math.isclose(RELAX_MAX_STEPS * RELAX_DT_S, 5.0e-9)
 
     eigen = eigen_ir["study"]
     assert eigen["operator"] == {"kind": "full_2x2", "include_demag": case != "c0"}

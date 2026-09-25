@@ -39,7 +39,10 @@ EIGEN_ALPHA = 0.0
 # the strict FEM runtime for this mesh (dt_limit ~= 9.36e-15 s).
 RELAX_DT_S = 5.0e-15
 RELAX_TORQUE_TOLERANCE_A_PER_M = 1.0
-RELAX_MAX_STEPS = 50_000
+# The COMSOL A1 equilibrium is taken after a relaxation interval ending at
+# 5 ns.  This is a hard upper budget, not an equilibrium certificate: the
+# runtime may stop earlier only after its torque-convergence check succeeds.
+RELAX_MAX_STEPS = 1_000_000  # 5 ns at the explicit 5 fs step.
 
 MODE_COUNT = 24
 C0_MODE_COUNT = 1
