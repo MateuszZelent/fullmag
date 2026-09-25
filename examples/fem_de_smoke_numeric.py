@@ -18,11 +18,12 @@ KY = ((2e6,) if SAMPLING == "k2" else
 RELAX_DT_S = 5e-15
 RELAX_MAX_STEPS = 50000
 RELAX_MAX_TIME_S = RELAX_DT_S * RELAX_MAX_STEPS
-# The previous SLEPc default cap of 100 iterations did not converge. Give this
-# diagnostic solve a bounded 500 iterations; convergence and physical residual
-# acceptance criteria remain unchanged.
+# The 500-iteration k2 trial produced frequency candidates but failed the
+# independent magnetic residual gate (2.17e-7 > 1e-8). Use a bounded 2000
+# iterations to test iterative convergence; thresholds and physical acceptance
+# criteria remain unchanged.
 EIGEN_SOLVER_RTOL = 1e-8
-EIGEN_SOLVER_MAX_OUTER_ITERATIONS = 500
+EIGEN_SOLVER_MAX_OUTER_ITERATIONS = 2000
 MS_A_PER_M = 800000.0
 A_J_PER_M = 13e-12
 GAMMA0_M_PER_A_S = 2.211e5
