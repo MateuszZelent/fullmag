@@ -42,14 +42,15 @@ publicznej operacji.
 
 ## Granica frontendu v2
 
-W migracji Control Room faza cutover pozostaje w toku, a nie zaakceptowana do
-usunięcia legacy. Skrypty root kierują `web:dev`, `web:build` i `web:typecheck`
-do `apps/control-room`; `apps/web/dev-server.mjs` jest shimem uruchamiającym
-Control Room. Git raportuje 981 niezatwierdzonych usunięć pod
-`_to_delete_legacy_web`; są to istniejące dirty zmiany, nie zaakceptowany
-release. Dokumentacja nadal zawiera historyczne referencje do `apps/web`.
-Żadnego z tych plików nie zmieniono w ramach tego rejestru. Status legacy nie
-jest `removal-ready`, dopóki nie zostaną spełnione kryteria z
+Skrypty root kierują `web:dev`, `web:build` i `web:typecheck` do
+`apps/control-room`; `apps/web/dev-server.mjs` jest shimem uruchamiającym
+Control Room. Dnia 26.09.2026 użytkownik jawnie zaakceptował usunięcie 981
+śledzonych plików archiwalnej kopii `_to_delete_legacy_web`. Usunięcie nie
+zmienia kontraktów 15 operacji `OPEN` opisanych wyżej i nie stanowi samo w sobie
+kwalifikacji release. Historyczny wykaz plików pozostaje w inventory P0, a
+bieżący checkpoint cutover opisuje
+[`p8/01-retire-legacy-web-archive.md`](../p8/01-retire-legacy-web-archive.md).
+Pełne kryteria wydania nadal obowiązują zgodnie z
 [`21-cutover-acceptance.md`](../../../../../specs/frontend-v2/21-cutover-acceptance.md).
 
 ## Brama odbioru P3a-C
