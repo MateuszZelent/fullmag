@@ -201,7 +201,29 @@ Poniższe wyniki są późniejsze od audytu bazowego i nie zmieniają normatywne
 | P1 browser/UI | `smoke:inspector`, project lifecycle, mounted-workspace reconnect | Inspector toggle, New/Open/Save/Close, ten sam workspace/canvas po reconnect; browser smoke `passed` |
 | P2-C Python authoring | `final/p2/01-context-isolation.md`, `test_execution_context.py` oraz regresje ProblemIR/script builder/API | nesting/exception/async/thread/capture state i stale-handle fencing; slice `PASS`, P2 overall `IN PROGRESS` |
 | P2-A authoring identity | `final/p2/02-canonical-ir.md`, `model/canonical.py`, `model/parameters.py`, `Problem.parameters`, `test_parameter_ast.py`, generated-script round-trip | stabilne bajty/digest ProblemIR oraz SI-normalizowany AST parametrów podpięty do ProblemIR/flat/study facade, round-trip, cycle/dimension diagnostics i display metadata poza numerical hash; slice `PASS`, pełny P2-A `IN PROGRESS` |
+| P2-A Model/Component/PhysicsConfiguration | `final/p2/06-model-component-physics.md`, `model/authoring.py`, `crates/fullmag-authoring/src/authoring_model.rs`, `Problem.to_model_definition()`, `test_authoring_model_projection.py` | read-only typed projections Python/Rust, stable component IDs, physics configuration payload, Python/Rust wire decoders i canonical digest slice oraz numerical hash poza display metadata; **10 + 31 passed**, `cargo check --locked -p fullmag-authoring --lib` **PASS**, cross-language fixture/lowering i Rust/browser round-trip nadal `IN PROGRESS` |
 | P2-B feature sequence | `final/p2/03-geometry-feature-sequence.md`, `fullmag-authoring/src/geometry_features.rs` | stabilne ścieżki/ID, lineage wejść CSG i jawny transform; slice `IN PROGRESS`, selekcja/meshing nadal otwarte |
+| P3-A typed study contract + migration + catalog | `final/p3/01-study-contract.md`, `fullmag-authoring/src/study_contract.rs`, `fullmag-plan/src/study_lowering.rs`, `fullmag-plan/src/study_catalog.rs` | typed steps/ports/sources, separate model/solver/discretization/execution references, cycle/type validation, canonical digest, primitive/macro/group adapter, `Unsupported` preservation, immutable `study_problem_catalog.v1` i fail-closed lowering przez canonical planner; `cargo check --locked -p fullmag-authoring --lib` oraz `cargo check --locked -p fullmag-plan --lib` **PASS**; producerzy meshu i materializacja `RunSpecification` pozostają `NOT VERIFIED` |
+| P3-B RunSpecification + accepted intent + catalogs + durable lease + protocol identity | `final/p3/README.md`, `final/p3/02-worker-protocol.md`, `fullmag-application/src/run_spec.rs`, `fullmag-application/src/execution.rs`, `fullmag-application/src/coordinator.rs`, `fullmag-session/src/types.rs`, `store.rs`, `reachability.rs`, `fms.rs` | immutable snapshot/study/dependency/assets, trwały `run_intent.json`, monotoniczny `run_catalog.json`, restartowe `reconciling`, fenced `artifact_catalog.json`, Task/Attempt/Ownership fencing, `ResolvedTaskInput`, `resource_lease.v1` z globalnym admission, heartbeat sequence i explicit release, procesowy `worker_protocol.v1` z identity/sequence/dedup/conflict/terminal fencing, `WorkerCoordinator`, durable `retry_decision.v1` + `apply_retry_decision` oraz `coordinator_journal.v1`; `cargo check --locked -p fullmag-application --lib`, `-p fullmag-plan --lib`, `-p fullmag-session --lib` oraz właściwy `cargo check -p fullmag-api` **PASS**; durable transport/supervisor, dowód zatrzymania starego workera/zwolnienia VRAM, adapter starego wykonawcy i pełna publication pozostają `NOT VERIFIED` |
 | Pozostałe bramki | power-loss, pełna session-recovery, fizyczny Tauri, solver/science/release | `NOT VERIFIED`; nie wolno promować do wydania |
+
+Rewalidacja 21.09.2026 dopisała trwały `retry_decision.v1` oraz
+`coordinator_journal.v1` z replay, contiguous sequence i fencingiem claimu do
+slice'u P3-B. `SessionStore::apply_retry_decision` stosuje zapisany retry do
+durable snapshotu i odmawia przejścia przy aktywnym lease. Nadal
+`NOT VERIFIED` są rzeczywisty coordinator transport, supervisor, dowód
+zatrzymania workera i zwolnienia urządzenia.
+
+P3a-A ma dodatkowo source-level pilot context fencing dla GET/PUT/PATCH sceny,
+enqueue komendy obliczeniowej, binarnego odczytu FMRM, listy/pobrania/capture/restore
+checkpointu oraz polityki events;
+P3a-B ma frontendowe slice'y sesyjnej tożsamości cache/decode dla preview
+field-vector, planar field, pól modalnych, model/runtime/workspace, meshing,
+membership/domain, katalogów data-plane, analysis-result, analysis runtime,
+diagnostics/runtime explorer, spin-wave, Frozen Spins, preparation i
+mode-composition. Scheduler odrzuca spóźniony wynik binary decode po abort.
+Browser/runtime dowód pełnej migracji requestów, persistence/events, migracja
+operacji `OPEN` z macierzy P3a, pełna izolacja recovery snapshotów oraz managed
+endpoint inventory pozostają `NOT VERIFIED`.
 
 Szczegółowe ścieżki, hashe i granice dowodów pozostają w [statusie P0](p0/03-implementation-status.md) oraz [statusie P1](p1/README.md). Ten checkpoint nie zastępuje osobnych receipts dla czterech lane’ów FDM/FEM.

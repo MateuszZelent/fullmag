@@ -31,6 +31,13 @@ polityki mesha. Zmiana zajętej domeny podnosi osobno `topology`, `membership`,
 `topology`. Dzięki temu precondition dla starej maski lub materiału nie może
 pozostać pozornie aktualny po przesunięciu bryły.
 
+Po stronie Python `SelectionGeometry.contains()` oraz
+`evaluate_geometry_predicate()` udostępniają ten sam analityczny evaluator dla
+box/cylinder/sphere/ellipsoid, CSG i affine. Polityka inclusive/exclusive wraz
+z tolerancją jest jawna i zgodna z kontraktem Rust; `imported_solid` kończy się
+diagnostyką `selection_imported_solid_unqualified`, więc brak certyfikatu nie
+jest traktowany jako pusty albo poprawny wybór.
+
 ## Kryteria i dowody
 
 | Kryterium | Dowód | Wynik |
@@ -41,14 +48,16 @@ pozostać pozornie aktualny po przesunięciu bryły.
 | Błąd braku obiektu/pustego typu blokuje dalsze użycie | diagnostyki `GEOMETRY_OBJECT_NOT_FOUND` i `GEOMETRY_FEATURE_KIND_EMPTY` | sprawdzone przez kontrakt typów i test źródłowy |
 | Split/merge nie wybiera kandydata po cichu | `GeometrySelectionLineage` + `GEOMETRY_SELECTION_AMBIGUOUS` | sprawdzone przez kontrakt typów i test źródłowy |
 | Geometria i transformacja nie zostawiają starych masek | `classify_region_realization_impact` + testy niezależnych rewizji | biblioteka przechodzi `cargo check`; test Rust nie był uruchamiany |
+| Python evaluator geometrii zachowuje granice, CSG i affine | `test_selection_geometry.py`, `test_selection_contract.py` | **75 passed** |
 | Kod kompiluje się jako biblioteka authoringu | `cargo check --locked -p fullmag-authoring --lib` | PASS |
 | Formatowanie | `rustfmt --edition 2021 --check` | PASS po formatowaniu |
 
 ## Granica odbioru
 
-Wynik: **P2-B feature/lineage/invalidation slice IN PROGRESS**. Nie ma jeszcze
-certyfikatu topologii, ewaluatora selekcji po split/merge, repair command,
-ambiguous-selection resource ani integracji lineage z producerem mesha.
+Wynik: **P2-B feature/lineage/invalidation + Python analytic evaluator slice IN
+PROGRESS**. Nie ma jeszcze certyfikatu topologii, ewaluatora selekcji po
+split/merge po stronie producerów, repair command, ambiguous-selection
+resource ani integracji lineage z producerem mesha.
 `GeometryFeatureSequence` nie jest jeszcze osobnym endpointem OpenAPI; obecny
 przyrost przygotowuje wspólny kontrakt dla kolejnego adaptera bez udawania
 kwalifikacji meshingu.

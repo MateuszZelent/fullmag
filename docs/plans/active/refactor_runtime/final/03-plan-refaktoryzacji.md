@@ -100,7 +100,7 @@ Zależność: P2; identity plumbing można przygotować od P1. Właściciele: pl
 | Pakiet | Pliki/punkty wejścia | Zmiana | Odbiór |
 |---|---|---|---|
 | P3-A | `fullmag-authoring/src/builder.rs`, `fullmag-ir`, `fullmag-plan` | Typed steps/ports/config references; migracja primitive/macro/group; oddzielić study, solver preset i execution profile. | CAE-17/18/21/22/25; unsupported payload zachowany i blokowany, nie silently dropped. |
-| P3-B | `fullmag-application`, `fullmag-session` manifests; runner input boundary | Durable idempotent Submit, RunSpec, ResolvedTaskInput, minimalny run/artifact catalog i output publication. Wrapper starego wykonawcy z jawnym limitem współbieżności. | CAE-30/31/32/48; dwa runy i utrata ACK; powtórzenie payloadu nie tworzy nowych obliczeń. |
+| P3-B | `fullmag-application`, `fullmag-session` manifests; runner input boundary | Durable idempotent Submit, `RunSpec`, `StudyPlan v2` z przypiętym per-step `until_seconds`, typowany `study_execution_plan.v2` i `ResolvedTaskInput`, `study_output_manifest.v1`, CAS publication oraz completion barrier. Lowering blokuje TimeEvolution bez jawnego dodatniego czasu. Supervisor uruchamia accepted task w prywatnym katalogu attemptu z jawnym limitem współbieżności; żadnego skanowania katalogu wyników ani niejawnego fallbacku. Kontrakty: [ADR-0035](../../../../adr/0035-typed-study-artifact-manifest-and-worker-boundary.md) i [ADR-0036](../../../../adr/0036-study-step-runtime-horizon.md). | CAE-30/31/32/48; dwa runy i utrata ACK nie tworzą drugiego obliczenia; output manifest dokładnie zgadza się z portami/CAS/lineage; stary epoch, brak codec i TimeEvolution bez przypiętego horyzontu są odrzucane; downstream otrzymuje dokładne zaakceptowane bytes. |
 | P3a-A | `fullmag-api/src/router_v2`, application ports; wywołania w CLI/runner | Wewnętrzny immutable request context przechodzi przez wszystkie awaits. Pilotaż: definition read/edit, compute, binary field read, persistence i events. | Zmiana current podczas każdego opóźnienia nie zmienia celu; write do cudzego ProjectId odrzucony. |
 | P3a-B | OpenAPI generated files, `apiPaths.ts`, facade, resources/realtime, scripts | Migrować po rodzinach: model/persistence/workspace → simulation/commands → meshing → data/visualization → analysis/diagnostics. Context identity w cache i decode, regenerated contract. | CAE-42/43/44/61/70; coverage endpointów z inventory, tests + browser. |
 | P3a-C | Compatibility alias, generated client consumers, skrypty smoke i CLI | `current` wiązany raz przy przyjęciu. Publiczny pośredni session-ID adapter tylko dla wykazanego konsumenta, bez pełnej kopii API. | Każda legacy trasa ma owner, client list, write policy i removal gate; jedna kolejka i jeden writer. |
@@ -113,13 +113,36 @@ Rollback P3/P3a: alias deleguje do tego samego use case i zachowuje pinned conte
 
 Zależność: P3/P3a; współpraca z B-FEM/B-FDM.
 
+Granica geometrii: dopóki kanoniczny owner-frame lowering nie obsłuży obrotu i
+skali, adaptery Python oraz Rust muszą je odrzucać. Translacja pozostaje
+obsługiwana. Nie wolno po cichu pomijać transformacji podczas tworzenia
+`ProblemIR`.
+
 | Pakiet | Pliki/punkty wejścia | Zmiana | Odbiór |
 |---|---|---|---|
 | P4-A | `fullmag-plan`, `simulation_preparation.rs`, Python meshing/problem cache | PreparationPlan i typowani producenci Geometry/Display/Grid/Mesh/Space. Opakować istniejące realizatory. | CAE-13/14/15; FDM bez wymuszania FEM policy/Gmsh; lokalne błędy tasków. |
-| P4-B | Mesh certificates, `region_revisions.rs`, native mesh/space adapters | Producer/version fingerprints, quality/marker/cell/space validation i selective reuse. Osobny transfer stanu. | CAE-09/11/16/27/68; niezgodny marker/space blokuje publikację; mesh reuse nie implikuje operator reuse. |
+| P4-B | Mesh certificates, `region_revisions.rs`, native mesh/space adapters | Producer/version fingerprints, quality/marker/cell/space validation i selective reuse. FEM receipt wiąże osobnym wersjonowanym fingerprintem kanoniczny mesh, topologię MFEM, build report oraz per-domain quality; Jacobian pozostaje osobnym dowodem. Osobny transfer stanu. | CAE-09/11/16/27/68; niezgodny marker/space albo niespójny source evidence blokuje publikację; brak reportu/quality jest jawny i nie oznacza acceptance; mesh reuse nie implikuje operator reuse. |
 | P4-C | Mesh Inspector, Explorer badges, Operations/Problems, viewport adapters | Jawne Build Geometry/Grid/Mesh/Compute, kontekstowe availability i zachowanie ostatniego dobrego artefaktu. | Błąd meshu nie niszczy edytora; UI pokazuje revision i pochodzenie, bez procentu zmyślonego z etapów. |
 
 Brama P4: preparation receipt jest przypięty do runu/receptury i nie może pochodzić z innego draftu. Rollback pozostawia ostatni poprawny artefakt z jego tożsamością; nie promuje niezweryfikowanego kandydata.
+
+Granica integracji: przygotowanie aktywnej sesji Live jest związane z jej
+epoch, rewizją `SceneDocument` i aktywnym preparation ID. `ProjectRun` pozostaje
+runtime-free i przyjmuje immutable archive/RunIntent/study/catalog. Adapter
+Live nie może uzupełniać danych trwałego runu z bieżącego draftu. Publiczny
+kontrakt `POST /v2/sessions/current/simulation/preparation/materialization`
+przyjmuje wyłącznie `preparation_id` i `scene_revision`; backend wyprowadza
+requested execution i display projection z aktualnego, fenced kontekstu Live.
+Control Room udostępnia tę operację jako session-scoped `study.prepare-live`,
+wiąże ją z zasobem Preparation i invaliduje go identyfikatorem durable receipt.
+Endpoint publiczny i historyczny adapter wewnętrzny delegują do tego samego
+use case'u; żadna z tych ścieżek nie tworzy `ProjectRun`. Zarządzana bramka
+`just verify-api-preparation` wykonała **5 testów**, w tym żądanie przez router
+HTTP z publikacją receipt; `source_changed_during_run=false`. OpenAPI oraz
+generowane typy i klient Control Room zostały odświeżone, a typecheck i
+ukierunkowane testy UI przeszły. Browser, pełny Live runtime, automatyczny
+producer pipeline, FEM mesh/space i kwalifikacja fizyczna pozostają
+`NOT VERIFIED`.
 
 ## 9. Strumień B — modularizacja całego backendu
 

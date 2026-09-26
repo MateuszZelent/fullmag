@@ -1,21 +1,49 @@
 # Fullmag — finalny audyt i plan refaktoryzacji
 
-Data audytu: 20.09.2026. Rewalidacja checkpointu: 21.09.2026. Baza audytu: `14c8e73a6f3c55f4fc080835a6156f2a4db8f111`, lokalny `master`.
+Data audytu: 20.09.2026. Rewalidacja checkpointu: 23.09.2026. Baza audytu: `14c8e73a6f3c55f4fc080835a6156f2a4db8f111`, lokalny `master`.
 
 **Werdykt:** zachować projektowy kierunek CAE, ale wdrażać go po zabezpieczeniu persystencji, uzgodnieniu istniejących kontraktów i ustaleniu jednej tożsamości wykonania. Refaktoryzacja obejmuje authoring, Python/IR, planowanie, wykonanie, FDM/FEM CPU/GPU, storage, API, Control Room, desktop oraz kwalifikację. Nie oznacza przepisywania wszystkich solverów ani automatycznego rozszerzenia zakresu fizyki.
 
-Aktualny checkpoint implementacyjny na `masterze`: **P0 około 85%**, z minimalną bramką przejścia zaliczoną; **P1 około 98%**, z wykonanym A/B, zarządzanym runtime-free smoke CLI i Python bindingu dla wejścia Open D oraz rozszerzonym C (produkcyjny shell zachowuje workspace po pierwszym zamontowaniu, API ma bytes-only adapter projektu, UI ma New/Open/Save/Close projektu rozdzielone od Restore Runtime State, Tauri ma hostowy adapter trwałego Save z kontrolą rewizji, browserowy smoke potwierdził no-session shell, lifecycle projektu, aktywny canvas WebGL i zachowanie tego samego workspace/canvasu po reconnect, managed API smoke sprawdził ponowne otwarcie tych samych bytes po kontrolowanym restarcie procesu, reconnect transportowy wymusza ponowne pobranie autorytatywnego stanu HTTP, managed smoke potwierdził handshake i reconnect WebSocket na pustej sesji, a nowy managed active-run smoke potwierdził zachowanie tego samego session/run podczas pracy FDM CPU). **P2 jest rozpoczęte i ma około 50% zakresu: P2-A ma canonical bytes, wersjonowany AST parametrów SI podpięty do `ProblemIR` i flat/study generated-script round-trip, P2-B ma geometry feature sequence/lineage/transform/selective invalidation, P2-C ma context-bound Python DSL i owner fencing uchwytów, a P2-D ma revision-fenced semantic Undo/Redo przez `replace_scene`, wspólne menu/ribbon/shortcut, registry aktywnego formularza Inspectora, wrapper staged session hooków oraz revision-fenced immediate mutations dla głównych komend i paneli authoringu; pełny Model/Component/PhysicsConfiguration, browser/Rust round-trip, meshing, study/run materialization, pozostałe direct handlers, selection/focus, browserowy Apply → Undo → Redo i inne granice pozostają otwarte.** Są to wskaźniki zakresu planu, nie kwalifikacji produkcyjnej. Globalnie daje to około **21–22%** planu, zaokrąglane operacyjnie do **21%**.
+Aktualny checkpoint implementacyjny na `masterze`: **P0 około 85%**, **P1 około 98%**, **P2 około 59%**, **P3 około 58%**, **P3a około 90%**, **P4 około 50%**, **P5 około 5%**. P3 obejmuje typed `StudyPlan v2`, jawne `study_execution_plan.v2` z przypiętym per-step `until_seconds`, immutable `study_problem_catalog.v1` i lowering do canonical `fullmag-plan`, RunSpec, durable catalogs/leases, worker protocol, `WorkerCoordinator`, idempotentne zastosowanie retry, ograniczony one-shot worker dla FDM CPU oraz supervisor procesu z pojedynczym slotem, obserwacją exit, completion reconciliation i zwolnieniem dokładnego lease. P4 ma source-level `PreparationPlan`, pięciu producerów, certyfikaty quality/marker/space, selective reuse, jawny state transfer, materializację FDM z resolved `ExecutionPlanIR`, application `PreparationReceipt`, hashujący `PreparationBinding` w `ResolvedTaskInput`, wymaganie pełnego receiptu na granicy `WorkerCoordinator::prepare`, niezmienną publikację receiptu per run, provenance UI, revision-fenced akcje Geometry oraz status Mesh z tożsamością ostatniego poprawnego artefaktu i jego rewizjami. Nadal otwarte są automatyczny scheduler ready-task, pełne subprocess E2E, heartbeat/cancel/retry/orphan reconciliation, walidacja pełnej parzystości wszystkich pól authoringu, native FEM mesh/space, pozostałe endpointy P3a oraz pełna kwalifikacja backendów i release. Są to wskaźniki zakresu planu, nie kwalifikacji produkcyjnej. Globalnie daje to około **28%** planu.
 
 ## Dokumenty finalne
+
+W rewalidacji 21.09.2026 dodano także trwały, fenced journal
+`retry_decision.v1`; wcześniejsze sformułowanie o otwartej decyzji retry należy
+czytać jako brak zastosowania decyzji do durable snapshotu i brak automatycznej
+polityki supervisora.
+
+Najnowszy checkpoint P3a-A obejmuje także context-bound przyjęcie komendy
+obliczeniowej, binarny odczyt FMRM, listę/pobranie/capture/restore checkpointu i politykę events;
+przyrosty P3a-B opakowują cache/decode data preview, planar field, pola modalne,
+model/runtime/workspace, meshing, membership/domain, katalogi data-plane,
+analysis-result, analysis runtime, diagnostics/runtime explorer, spin-wave,
+Frozen Spins, preparation i mode-composition w `session_id + epoch`, a scheduler
+odrzuca spóźniony wynik decode po abort, a export/commit archiwum sesji rewalidują
+context przed transakcją/publikacją. Recovery list/clear również jest
+context-bound. `ResourceRuntimeStore` przekazuje `sessionScopeKey` do
+`ControlRoomApi`, więc deduplikacja materializacji pól i sprawdzenia świeżości
+meshu jest izolowana per sesja. Odczyty GET wizualizacji oraz istniejące mutacje
+PATCH/POST mają teraz backendowy transition fence, a hooki stanu, ACK i
+kontrolery mutacji przekazują `sessionScopeKey`; PUT display/state pozostają
+otwarte bez typed konsumenta. Status P3a wynosi obecnie **90%**.
+Source-level macierz rodzin jest w [`p3a/05-endpoint-coverage.md`](p3a/05-endpoint-coverage.md),
+a pełny inventory 300 operacji OpenAPI z ownerem/write policy i statusem
+context migration w [`p3a/06-endpoint-owner-policy.md`](p3a/06-endpoint-owner-policy.md).
+Migracja 18 operacji `OPEN`, legacy semantics recovery/persistence/events oraz
+browser/runtime nadal pozostają otwarte.
 
 1. [Finalny audyt](01-finalny-audyt.md) — ustalenia, rozstrzygnięcia Gemini/Claude, ryzyka i granice dowodów.
 2. [Architektura i kontrakty](02-architektura-i-kontrakty.md) — docelowi właściciele, tożsamości, transakcje i decyzje migracyjne.
 3. [Produkcyjny plan refaktoryzacji](03-plan-refaktoryzacji.md) — kolejność, pakiety pracy, zależności, bramki i rollback.
 4. [Kwalifikacja i scenariusze](04-kwalifikacja-i-scenariusze.md) — zachowane CAE-01–60, skorygowane CAE-61–70 i dodatkowe testy przekrojowe.
 5. [Dowody, źródła i uzgodnienie ADR](05-dowody-i-adr.md) — aktualne źródła, rozliczenie wszystkich dokumentów wejściowych i istniejących decyzji.
-6. [Checkpoint P2](p2/README.md) — wykonane slice'y izolacji kontekstu Python, kanonicznych bajtów IR oraz sekwencji cech geometrii.
-7. [Tabela statusu całego planu](06-status-realizacji.md) — procenty etapów, wykonane zakresy, dowody i blokery.
-8. [Semantic history P2-D](p2/05-semantic-history.md) — revision-fenced Undo/Redo i granice obecnego slice'u.
+6. [Checkpoint P2](p2/README.md) — wykonane slice'y izolacji kontekstu Python, kanonicznych bajtów IR, sekwencji cech geometrii i projekcji Model/Component/PhysicsConfiguration.
+7. [Checkpoint P3](p3/README.md) — typed studies, `study_execution_plan.v2` i lowering do `fullmag-plan`, RunSpecification, durable catalogs, leases, worker identity, retry decision, coordinator journal, przypięty horyzont TimeEvolution, one-shot worker oraz supervisor pojedynczego procesu z durable recovery; scheduler i pełne crash/orphan recovery pozostają otwarte.
+8. [Checkpoint P3a](p3a/README.md) — pilot immutable request context oraz kolejne przyrosty sesyjnej tożsamości klienta dla data-plane i resource hooks; pełny inventory endpointów jest w [macierzy owner/write policy](p3a/06-endpoint-owner-policy.md).
+9. [Checkpoint P4](p4/README.md) — `PreparationPlan`, typed producers, FDM materialization z resolved planu, adaptery grid/mesh, application receipt, `PreparationBinding` w wejściu `Prepare` i durable publikacja tożsamości per run.
+10. [Tabela statusu całego planu](06-status-realizacji.md) — procenty etapów, wykonane zakresy, dowody i blokery.
+11. [Semantic history P2-D](p2/05-semantic-history.md) — revision-fenced Undo/Redo i granice obecnego slice'u.
 
 ## Jak używać pakietu
 
@@ -25,7 +53,7 @@ Nowe kontrakty mają status **PROPOSED — finalna rekomendacja do wdrożenia**.
 
 Plan jest przeznaczony do produkcyjnego wdrożenia, ale **produkt nie został tu zakwalifikowany produkcyjnie**. Główne dokumenty są zapisem audytu statycznego i kontroli dokumentów z chwili powstania pakietu; późniejsze wykonanie P0/P1 jest rejestrowane osobno w podkatalogach [`p0`](p0/README.md) i [`p1`](p1/README.md). Nie należy przenosić ich receiptów na pełną kwalifikację wydania: nadal brakuje m.in. power-loss, pełnej rekonsyliacji runtime/session-recovery, ścieżek naukowych i release gate.
 
-Pierwszy krok realizacyjny był P0-A; bieżący checkpoint przeszedł minimalną bramkę P0 i rozszerzył P1-C o lokalny lifecycle dokumentu, browserowy wybór i pobieranie archiwum, hostowy adapter Tauri Save oraz ikonę komendową do chowania Inspektora przez `panelVisible.right`. Dodano też zarządzany smoke runtime-free API z kontrolowanym restartem procesu, zarządzane smoke CLI `fullmag project open` i Python `_fullmag_core.open_project_json`, managed handshake/reconnect WebSocket na pustej sesji, managed active-run reconnect z rzeczywistym FDM CPU oraz browserowy smoke zachowania tego samego workspace/canvasu po reconnect, wszystkie z przypiętą tożsamością źródła tam, gdzie dotyczy to managed runtime. W kolejnym kroku P2 dodano context-bound flat DSL z jawnym `fm.ExecutionContext`, owner fencing uchwytów, wspólne bajty/digest ProblemIR, wersjonowany AST parametrów SI, opisową sekwencję cech geometrii z lineage CSG, revision-fenced semantic Undo/Redo, rejestr aktywnego formularza Inspectora, wrapper staged sessions oraz helper revision-fenced immediate mutations; szczegóły są w [P2](p2/README.md). Pozostaje podpięcie parametrów do pełnego Model/Component/PhysicsConfiguration i roundtrip IR, ewaluacja selekcji/ambiguity, pozostałe bezpośrednie/multistep mutacje, selection/focus, fizyczny desktop smoke, runtime Tauri, pełna session-recovery, nauka i release gate. Dokumentacja nie upoważnia do przeskoczenia tych bramek.
+Pierwszy krok realizacyjny był P0-A; bieżący checkpoint przeszedł minimalną bramkę P0 i rozszerzył P1-C o lokalny lifecycle dokumentu, browserowy wybór i pobieranie archiwum, hostowy adapter Tauri Save oraz ikonę komendową do chowania Inspektora przez `panelVisible.right`. Dodano też zarządzany smoke runtime-free API z kontrolowanym restartem procesu, zarządzane smoke CLI `fullmag project open` i Python `_fullmag_core.open_project_json`, managed handshake/reconnect WebSocket na pustej sesji, managed active-run reconnect z rzeczywistym FDM CPU oraz browserowy smoke zachowania tego samego workspace/canvasu po reconnect, wszystkie z przypiętą tożsamością źródła tam, gdzie dotyczy to managed runtime. W kolejnym kroku P2 dodano context-bound flat DSL z jawnym `fm.ExecutionContext`, owner fencing uchwytów, wspólne bajty/digest ProblemIR, wersjonowany AST parametrów SI, opisową sekwencję cech geometrii z lineage CSG, niemutowalną projekcję Model/Component/PhysicsConfiguration, revision-fenced semantic Undo/Redo, rejestr aktywnego formularza Inspectora, wrapper staged sessions oraz helper revision-fenced immediate mutations; szczegóły są w [P2](p2/README.md). Pozostaje trwały Rust/browser roundtrip modelu, ewaluacja selekcji/ambiguity, pozostałe bezpośrednie/multistep mutacje, selection/focus, jawna materializacja study/run, fizyczny desktop smoke, runtime Tauri, pełna session-recovery, nauka i release gate. Dokumentacja nie upoważnia do przeskoczenia tych bramek.
 
 Lokalny probe aktywnego FDM wykazał dodatkowo zachowanie `session_id`/`run_id`
 i wzrost kroków po zerwaniu i reconnect WebSocket; jest to opisane w
