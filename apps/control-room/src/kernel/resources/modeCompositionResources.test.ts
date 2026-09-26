@@ -26,7 +26,9 @@ describe("mode composition resource", () => {
 
     expect(source).toContain("useResource({");
     expect(source).toContain("abortStaleInflight: true");
-    expect(source).toContain("client.getActiveModeComposition({ signal })");
+    expect(source).toContain(
+      "client.getActiveModeComposition({ sessionScopeKey, signal })",
+    );
     expect(source).not.toMatch(/\bfetch\s*\(/);
   });
 

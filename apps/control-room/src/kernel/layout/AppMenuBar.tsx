@@ -12,7 +12,11 @@ import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import { useRuntimeCommandControlResourceData } from "@/kernel/resources/studyRuntimeResources";
 import { readDetailedRuntimeState } from "@/kernel/runtime/runtimeStateDisplay";
-import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import {
+  useSessionResourceIdentity,
+  useSessionStatusSelector,
+} from "@/kernel/resources/useSessionStatus";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import { useSessionCollection } from "@/kernel/resources/useSessionCollection";
 import {
   EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
@@ -493,6 +497,8 @@ function NoSessionAppMenuBar({
 function SessionAppMenuBar() {
   const kernel = useKernel();
   const { theme, setTheme } = useTheme();
+  const sessionIdentity = useSessionResourceIdentity();
+  const sessionScopeKey = sessionRequestScopeKey(sessionIdentity);
   const hydrated = useSyncExternalStore(
     subscribeToHydration,
     clientHydratedSnapshot,
@@ -568,6 +574,7 @@ function SessionAppMenuBar() {
   };
   const commandContext = createCommandContext("menu", kernel, {
     resourceData: runtimeResourceData,
+    sessionScopeKey,
     sourceDetail: "app-menu",
   });
   const runCommand = (commandId: string, input?: unknown) => {

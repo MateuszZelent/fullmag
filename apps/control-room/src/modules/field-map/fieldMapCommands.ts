@@ -1,4 +1,5 @@
-import type { CommandContext, CommandContribution } from "@/kernel/commands/commandTypes";
+import type { CommandContext, CommandContribution, CommandResult } from "@/kernel/commands/commandTypes";
+import { assertCurrentSessionScope, obsoleteSessionResult } from "@/kernel/commands/commandSessionScope";
 import {
   MODEL_PLANAR_MONITORS_PATH,
   VISUALIZATION_STATE_PATH,
@@ -6,6 +7,7 @@ import {
 import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import type {
   PlanarFieldSource,
+  RequestOptions,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import { planarMonitorFramePreviewStore } from "@/kernel/workspace/planarMonitorFramePreview";
@@ -84,6 +86,12 @@ function visualizationStateFromContext(
     : null;
 }
 
+function sessionRequestOptions(
+  sessionScopeKey: string | null | undefined,
+): RequestOptions | undefined {
+  return sessionScopeKey ? { sessionScopeKey } : undefined;
+}
+
 type PlanarMonitorCreateCommandInput = {
   capability?: { enabled: boolean; reason: string };
   intent?: PlanarMonitorCreateIntent;
@@ -130,12 +138,15 @@ function planarMonitorCreateDisabledReason(context: CommandContext): string | nu
 
 async function createPlanarMonitorDraftFromCommand(
   context: CommandContext,
-): Promise<{ message?: string; status: "completed" | "failed" }> {
+  requestOptions: RequestOptions | undefined,
+): Promise<CommandResult> {
   const disabledReason = planarMonitorCreateDisabledReason(context);
   if (disabledReason || !context.api) {
     return { message: disabledReason ?? "Planar monitor creation is unavailable.", status: "failed" };
   }
-  const domain = await context.api.data.domain.meta();
+  const domain = await context.api.data.domain.meta(requestOptions);
+  const obsolete = obsoleteSessionResult(context);
+  if (obsolete) return obsolete;
   const { intent } = planarMonitorCreateInput(context);
   const draft = beginPlanarMonitorDraft(
     visualizationStateFromContext(context),
@@ -186,30 +197,38 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
     ? planarMonitorCreateDisabledReason
     : undefined,
   run: async (context) => {
+    // Opening an empty view is workspace navigation and needs no live session.
+    if (id === "field-map.open") {
+      context.layout?.setActiveViewportMainModule("field-map");
+      context.layout?.setFocusedSlot("viewport-main");
+      return { status: "completed" };
+    }
+    const obsolete = obsoleteSessionResult(context);
+    if (obsolete) return obsolete;
+    const sessionScopeKey = context.sessionScopeKey;
+    const requestOptions = sessionRequestOptions(sessionScopeKey);
     const input =
       context.input && typeof context.input === "object"
         ? (context.input as { monitorId?: unknown; newName?: unknown })
         : null;
     if (id === "planar-monitor.create") {
-      return createPlanarMonitorDraftFromCommand(context);
+      return createPlanarMonitorDraftFromCommand(context, requestOptions);
     }
-    if (id === "field-map.open" || id === "field-map.select-monitor") {
-      if (id === "field-map.select-monitor") {
-        if (typeof input?.monitorId !== "string") {
-          return {
-            message: "A planar monitor id is required.",
-            status: "failed",
-          };
-        }
-        if (!queuePlanarSourceSelection(context, {
-          kind: "monitor",
-          monitorId: input.monitorId,
-        })) {
-          return {
-            message: "Planar visualization state is unavailable.",
-            status: "failed",
-          };
-        }
+    if (id === "field-map.select-monitor") {
+      if (typeof input?.monitorId !== "string") {
+        return {
+          message: "A planar monitor id is required.",
+          status: "failed",
+        };
+      }
+      if (!queuePlanarSourceSelection(context, {
+        kind: "monitor",
+        monitorId: input.monitorId,
+      })) {
+        return {
+          message: "Planar visualization state is unavailable.",
+          status: "failed",
+        };
       }
       context.layout?.setActiveViewportMainModule("field-map");
       context.layout?.setFocusedSlot("viewport-main");
@@ -221,7 +240,9 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
           status: "failed",
         };
       }
-      const visualization = await context.api.visualization.state();
+      const visualization = await context.api.visualization.state(requestOptions);
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
       const planar = visualization.planar;
       if (!planar) {
         return {
@@ -246,7 +267,10 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
               : undefined,
           scope_kind: planar.view_scope.kind,
         },
+        requestOptions,
       );
+      const obsoleteAfterMeta = obsoleteSessionResult(context);
+      if (obsoleteAfterMeta) return obsoleteAfterMeta;
       planarMonitorFramePreviewStore.set({
         boundsUvM: meta.frame.bounds_uv_m as [number, number, number, number],
         monitorId: input.monitorId,
@@ -269,7 +293,9 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
       if (!context.api) {
         return { message: "Planar field API is unavailable.", status: "failed" };
       }
-      const visualization = await context.api.visualization.state();
+      const visualization = await context.api.visualization.state(requestOptions);
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
       const planar = visualization.planar;
       if (!planar) {
         return {
@@ -302,16 +328,20 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
           planar.quantity_id,
           source,
           query,
+          requestOptions,
         ),
         source.kind === "monitor"
-          ? context.api.model.planarMonitors.get(source.monitorId)
+          ? context.api.model.planarMonitors.get(source.monitorId, requestOptions)
           : Promise.resolve(null),
         context.api.data.fields.planar.renderPng(
           planar.quantity_id,
           source,
           query,
+          requestOptions,
         ),
       ]);
+      const obsoleteAfterExport = obsoleteSessionResult(context);
+      if (obsoleteAfterExport) return obsoleteAfterExport;
       if (png.status !== "ready") {
         return {
           message: "The planar PNG is not available for this revision.",
@@ -346,29 +376,36 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
           status: "failed",
         };
       }
+      const monitorId = input.monitorId;
       let revision: number;
       if (id === "planar-monitor.delete") {
-        const visualization = await context.api.visualization.state();
+        const visualization = await context.api.visualization.state(requestOptions);
+        const obsolete = obsoleteSessionResult(context);
+        if (obsolete) return obsolete;
         const response = await runAuthoringMutationWithHistory(
-          context,
+          { ...context, sessionScopeKey },
           "Delete planar monitor",
           async ({ baseRevision }) => {
             const collection = baseRevision === null
-              ? await context.api!.model.planarMonitors.list()
+              ? await context.api!.model.planarMonitors.list(requestOptions)
               : null;
+            assertCurrentSessionScope(context);
             return context.api!.model.planarMonitors.remove(
-              input.monitorId!,
+              monitorId,
               {
                 expected_scene_revision:
                   baseRevision ?? collection!.scene_revision,
               },
+              requestOptions,
             );
           },
         );
+        const obsoleteAfterWrite = obsoleteSessionResult(context);
+        if (obsoleteAfterWrite) return obsoleteAfterWrite;
         revision = response.scene_revision;
         if (
           visualization.planar?.source.kind === "monitor" &&
-          visualization.planar.source.monitor_id === input.monitorId
+          visualization.planar.source.monitor_id === monitorId
         ) {
           if (!queuePlanarSourceSelection(context, { kind: "default" }, visualization)) {
             return {
@@ -378,23 +415,29 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
           }
         }
       } else if (id === "planar-monitor.duplicate") {
-        const visualization = await context.api.visualization.state();
+        const visualization = await context.api.visualization.state(requestOptions);
+        const obsolete = obsoleteSessionResult(context);
+        if (obsolete) return obsolete;
         const response = await runAuthoringMutationWithHistory(
-          context,
+          { ...context, sessionScopeKey },
           "Duplicate planar monitor",
           async ({ baseRevision }) => {
             const collection = baseRevision === null
-              ? await context.api!.model.planarMonitors.list()
+              ? await context.api!.model.planarMonitors.list(requestOptions)
               : null;
+            assertCurrentSessionScope(context);
             return context.api!.model.planarMonitors.duplicate(
-              input.monitorId!,
+              monitorId,
               {
                 expected_scene_revision:
                   baseRevision ?? collection!.scene_revision,
               },
+              requestOptions,
             );
           },
         );
+        const obsoleteAfterWrite = obsoleteSessionResult(context);
+        if (obsoleteAfterWrite) return obsoleteAfterWrite;
         revision = response.scene_revision;
         if (!queuePlanarSourceSelection(context, {
           kind: "monitor",
@@ -413,26 +456,32 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
             status: "completed",
           };
         }
+        const newName = input.newName;
         const response = await runAuthoringMutationWithHistory(
-          context,
+          { ...context, sessionScopeKey },
           "Rename planar monitor",
           async ({ baseRevision }) => {
             const collection = baseRevision === null
-              ? await context.api!.model.planarMonitors.list()
+              ? await context.api!.model.planarMonitors.list(requestOptions)
               : null;
             const current = await context.api!.model.planarMonitors.get(
-              input.monitorId!,
+              monitorId,
+              requestOptions,
             );
+            assertCurrentSessionScope(context);
             return context.api!.model.planarMonitors.patch(
-              input.monitorId!,
+              monitorId,
               {
                 expected_scene_revision:
                   baseRevision ?? collection!.scene_revision,
-                monitor: { ...current.monitor, name: input.newName!.trim() },
+                monitor: { ...current.monitor, name: newName.trim() },
               },
+              requestOptions,
             );
           },
         );
+        const obsoleteAfterWrite = obsoleteSessionResult(context);
+        if (obsoleteAfterWrite) return obsoleteAfterWrite;
         revision = response.scene_revision;
       }
       context.resources?.invalidate(MODEL_PLANAR_MONITORS_PATH, revision);

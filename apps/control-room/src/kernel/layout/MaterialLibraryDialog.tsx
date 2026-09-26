@@ -10,11 +10,14 @@ import type {
   SceneResource,
 } from "@/kernel/api/apiTypes";
 import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
+import { authoringWriteOptions, runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   resolveMaterialResourceKey,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
+import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import {
   MATERIAL_LIBRARY_PRESETS,
   materialNameToId,
@@ -215,7 +218,8 @@ export function MaterialLibraryDialog({
   onOpenChange,
   open,
 }: MaterialLibraryDialogProps) {
-  const { api, resources } = useKernel();
+  const { api, authoringHistory, resources } = useKernel();
+  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const scene = useSceneResource({ enabled: open });
   const materials = useMemo(() => sceneMaterials(scene.data), [scene.data]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -254,25 +258,38 @@ export function MaterialLibraryDialog({
       return;
     }
 
+    const operationSessionScopeKey = sessionScopeKey;
     setPending(true);
     try {
-      const response = existingIds.has(materialId)
-        ? await api.model.patchMaterialAsset(materialId, result.patch, {
-            baseRevision: scene.data?.revision ?? undefined,
-          })
-        : await api.model.createMaterial(
-            materialId,
-            result.patch.name ?? draft.name,
-            {
-              Aex: result.patch.properties?.Aex ?? EMPTY_PROPERTIES.Aex,
-              Dbulk: result.patch.properties?.Dbulk ?? EMPTY_PROPERTIES.Dbulk,
-              Dind: result.patch.properties?.Dind ?? EMPTY_PROPERTIES.Dind,
-              Ms: result.patch.properties?.Ms ?? EMPTY_PROPERTIES.Ms,
-              alpha: result.patch.properties?.alpha ?? EMPTY_PROPERTIES.alpha,
-            },
-            result.patch.references ?? [],
-            { baseRevision: scene.data?.revision ?? undefined },
+      const response = await runAuthoringMutationWithHistory(
+        {
+          api,
+          authoringHistory,
+          sessionScopeKey: operationSessionScopeKey,
+        },
+        `Save material ${materialId}`,
+        async ({ baseRevision }) => {
+          const options = authoringWriteOptions(
+            baseRevision ?? scene.data?.revision ?? undefined,
+            operationSessionScopeKey,
           );
+          return existingIds.has(materialId)
+            ? api.model.patchMaterialAsset(materialId, result.patch, options)
+            : api.model.createMaterial(
+                materialId,
+                result.patch.name ?? draft.name,
+                {
+                  Aex: result.patch.properties?.Aex ?? EMPTY_PROPERTIES.Aex,
+                  Dbulk: result.patch.properties?.Dbulk ?? EMPTY_PROPERTIES.Dbulk,
+                  Dind: result.patch.properties?.Dind ?? EMPTY_PROPERTIES.Dind,
+                  Ms: result.patch.properties?.Ms ?? EMPTY_PROPERTIES.Ms,
+                  alpha: result.patch.properties?.alpha ?? EMPTY_PROPERTIES.alpha,
+                },
+                result.patch.references ?? [],
+                options,
+              );
+        },
+      );
       invalidateMaterialResources(response.scene_revision, materialId);
       setSelectedId(materialId);
       setFeedback({ kind: "success", message: "Material library saved." });
@@ -288,11 +305,25 @@ export function MaterialLibraryDialog({
 
   async function deleteSelected(): Promise<void> {
     if (!selectedMaterial) return;
+    const operationSessionScopeKey = sessionScopeKey;
     setPending(true);
     try {
-      const response = await api.model.deleteMaterial(selectedMaterial.id, {
-        baseRevision: scene.data?.revision ?? undefined,
-      });
+      const response = await runAuthoringMutationWithHistory(
+        {
+          api,
+          authoringHistory,
+          sessionScopeKey: operationSessionScopeKey,
+        },
+        `Delete material ${selectedMaterial.id}`,
+        async ({ baseRevision }) =>
+          api.model.deleteMaterial(
+            selectedMaterial.id,
+            authoringWriteOptions(
+              baseRevision ?? scene.data?.revision ?? undefined,
+              operationSessionScopeKey,
+            ),
+          ),
+      );
       invalidateMaterialResources(response.scene_revision, selectedMaterial.id);
       setSelectedId(null);
       setDraft(newMaterialDraft());

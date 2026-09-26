@@ -22,6 +22,7 @@ import {
   PERSISTENCE_IMPORTS_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
+  SIMULATION_PREPARATION_PATH,
   SIMULATION_RUN_CURRENT_PATH,
   SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
@@ -34,6 +35,7 @@ import { CommandRegistry } from "../commands/CommandRegistry";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import { LayoutController } from "../layout/LayoutController";
+import { AuthoringHistoryController } from "../authoring/AuthoringHistoryController";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { SelectionController } from "../selection/SelectionController";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
@@ -628,19 +630,34 @@ describe("study runtime command contributions", () => {
     const layout = new LayoutController(bus);
     const selection = new SelectionController(bus);
     layout.setActiveTab("home");
-    const scene = vi.fn(async () => ({
+    const before = {
       scene_revision: 3,
       study: { stages: [{ kind: "relax", stage_id: "relax-1" }] },
-    }));
+    };
+    const after = {
+      scene_revision: 5,
+      study: {
+        stages: [
+          { kind: "relax", stage_id: "relax-1" },
+          { kind: "hysteresis", stage_id: "hysteresis-2" },
+        ],
+      },
+    };
+    const scene = vi.fn()
+      .mockResolvedValueOnce(before)
+      .mockResolvedValueOnce(after);
     const commitTransaction = vi.fn(async () => ({ scene_revision: 5 }));
+    const api = { model: { scene, commitTransaction } };
+    const history = new AuthoringHistoryController(api as never, resources);
+    const sessionScopeKey = "session=A&epoch=A%401&request_scope_epoch=api%3A1";
 
     const result = await registry.execute("study.add-hysteresis-stage", {
-      api: {
-        model: { scene, commitTransaction },
-      } as never,
+      api: api as never,
+      authoringHistory: history,
       layout,
       resources,
       selection,
+      sessionScopeKey,
       source: "test",
     });
 
@@ -685,6 +702,51 @@ describe("study runtime command contributions", () => {
         type: "study-stage",
       },
     });
+    expect(scene).toHaveBeenCalledTimes(2);
+    expect(history.getSnapshot()).toMatchObject({
+      canUndo: true,
+      undoLabel: "Add Hysteresis Stage",
+    });
+    expect(scene).toHaveBeenNthCalledWith(1, { sessionScopeKey });
+    expect(scene).toHaveBeenNthCalledWith(2, { sessionScopeKey });
+    expect(commitTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({ base_revision: 3 }),
+      { sessionScopeKey },
+    );
+  });
+
+  it("does not publish a study-stage ACK after its session scope becomes obsolete", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const invalidate = vi.spyOn(resources, "invalidate");
+    const selection = selectionController();
+    let currentSession = true;
+    const scene = vi.fn(async () => ({
+      scene_revision: 3,
+      study: { stages: [] },
+    }));
+    const commitTransaction = vi.fn(async () => {
+      currentSession = false;
+      return { scene_revision: 4 };
+    });
+    const api = { model: { scene, commitTransaction } };
+    const history = new AuthoringHistoryController(api as never, resources);
+
+    const result = await registry.execute("study.add-hysteresis-stage", {
+      api: api as never,
+      authoringHistory: history,
+      resources,
+      selection,
+      isCurrentSessionScope: () => currentSession,
+      source: "test",
+    });
+
+    expect(result).toMatchObject({ status: "cancelled" });
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(selection.get()).toMatchObject({ kind: null, ref: null });
+    expect(scene).toHaveBeenCalledOnce();
+    expect(history.getSnapshot()).toMatchObject({ canUndo: false });
   });
 
   it("continues a completed hysteresis stage by adding an explicit next run stage", async () => {
@@ -693,7 +755,7 @@ describe("study runtime command contributions", () => {
     const resources = new ResourceInvalidationController(bus);
     const layout = new LayoutController(bus);
     const selection = new SelectionController(bus);
-    const scene = vi.fn(async () => ({
+    const before = {
       scene_revision: 8,
       study: {
         stages: [
@@ -703,13 +765,26 @@ describe("study runtime command contributions", () => {
           },
         ],
       },
-    }));
+    };
+    const after = {
+      scene_revision: 9,
+      study: {
+        stages: [
+          { kind: "hysteresis", stage_id: "hysteresis-1" },
+          { kind: "run", stage_id: "run-2" },
+        ],
+      },
+    };
+    const scene = vi.fn()
+      .mockResolvedValueOnce(before)
+      .mockResolvedValueOnce(after);
     const commitTransaction = vi.fn(async () => ({ scene_revision: 9 }));
+    const api = { model: { scene, commitTransaction } };
+    const history = new AuthoringHistoryController(api as never, resources);
 
     const result = await registry.execute("hysteresis.continue-to-next-stage", {
-      api: {
-        model: { scene, commitTransaction },
-      } as never,
+      api: api as never,
+      authoringHistory: history,
       layout,
       resources,
       selection,
@@ -740,6 +815,11 @@ describe("study runtime command contributions", () => {
       },
     });
     expect(layout.get().activeModuleTab).toBe("study");
+    expect(scene).toHaveBeenCalledTimes(2);
+    expect(history.getSnapshot()).toMatchObject({
+      canUndo: true,
+      undoLabel: "Continue after hysteresis stage hysteresis-1",
+    });
   });
 
   it("loads a hysteresis point in 3D by publishing an analysis chart point selection", async () => {
@@ -1078,6 +1158,7 @@ describe("study runtime command contributions", () => {
     const result = await registry.execute("hysteresis.bookmark-point", {
       api,
       resources,
+      sessionScopeKey: "session-a@1",
       source: "test",
     }, {
       point: hysteresisCommandPoint(),
@@ -1090,7 +1171,7 @@ describe("study runtime command contributions", () => {
     });
     expect(bookmarkPoint).toHaveBeenCalledWith("hysteresis-1", {
       point_id: 4,
-    });
+    }, { sessionScopeKey: "session-a@1" });
     expect(
       resources.getRevision(
         ANALYSIS_HYSTERESIS_BOOKMARKS_PATH.replace(
@@ -1125,6 +1206,33 @@ describe("study runtime command contributions", () => {
       message: "Control-room API is unavailable.",
       status: "failed",
     });
+  });
+
+  it("does not publish a late hysteresis bookmark into a newer session", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const resources = new ResourceInvalidationController(new EventBus<KernelEventMap>());
+    let completeBookmark!: (value: { revision: number }) => void;
+    const bookmarkPoint = vi.fn(() => new Promise<{ revision: number }>((resolve) => {
+      completeBookmark = resolve;
+    }));
+    let current = true;
+    const pending = registry.execute("hysteresis.bookmark-point", {
+      api: { analysis: { hysteresis: { bookmarkPoint } } } as never,
+      isCurrentSessionScope: () => current,
+      resources,
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
+      source: "test",
+    }, {
+      point: hysteresisCommandPoint(),
+      stageId: "hysteresis-1",
+    });
+
+    current = false;
+    completeBookmark({ revision: 42 });
+    expect(await pending).toMatchObject({ status: "cancelled" });
+    expect(resources.getRevision(ANALYSIS_HYSTERESIS_BOOKMARKS_PATH.replace(
+      "{stage_id}", "hysteresis-1",
+    ))).toBeNull();
   });
 
   it("clears a hysteresis snapshot explorer selection when returning that stage to live", async () => {
@@ -1272,7 +1380,7 @@ describe("study runtime command contributions", () => {
       mode: "apply",
       quantity_id: "m",
       target: { id: "body", kind: "object" },
-    });
+    }, undefined);
     expect(resources.getRevision(DATA_FIELDS_PATH)).toBe(11);
     expect(resources.getRevision(PERSISTENCE_FIELD_STATE_IMPORTS_PATH)).toBe(11);
   });
@@ -1315,7 +1423,7 @@ describe("study runtime command contributions", () => {
       mode: "apply",
       quantity_id: "m",
       target: { id: "body", kind: "object" },
-    });
+    }, undefined);
   });
 
   it("ignores legacy data-plane snapshot resource refs when applying an initial state", async () => {
@@ -1355,14 +1463,14 @@ describe("study runtime command contributions", () => {
       mode: "apply",
       quantity_id: "m",
       target: { id: "body", kind: "object" },
-    });
+    }, undefined);
   });
 
   it("removes the selected study stage from the authored pipeline", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
-    const scene = vi.fn(async () => ({
+    const before = {
       scene_revision: 3,
       study: {
         stages: [
@@ -1371,15 +1479,30 @@ describe("study runtime command contributions", () => {
           { kind: "hysteresis", stage_id: "hysteresis-3" },
         ],
       },
-    }));
+    };
+    const after = {
+      scene_revision: 6,
+      study: {
+        stages: [
+          { kind: "relax", stage_id: "relax-1" },
+          { kind: "hysteresis", stage_id: "hysteresis-3" },
+        ],
+      },
+    };
+    const scene = vi.fn()
+      .mockResolvedValueOnce(before)
+      .mockResolvedValueOnce(after);
     const commitTransaction = vi.fn(async () => ({ scene_revision: 6 }));
+    const api = { model: { scene, commitTransaction } };
+    const history = new AuthoringHistoryController(api as never, resources);
+    const selection = selectionController();
+    selection.set(studyStageSelection(1).get() as never, "explorer");
 
     const result = await registry.execute("study.remove-selected-stage", {
-      api: {
-        model: { scene, commitTransaction },
-      } as never,
+      api: api as never,
+      authoringHistory: history,
       resources,
-      selection: studyStageSelection(1) as never,
+      selection,
       source: "test",
     });
 
@@ -1398,10 +1521,16 @@ describe("study runtime command contributions", () => {
           ],
         },
       },
-    });
+    }, undefined);
     expect(resources.getRevision(MODEL_SCENE_PATH)).toBe(6);
     expect(resources.getRevision(MODEL_STUDY_PATH)).toBe(6);
     expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBe(6);
+    expect(selection.get()).toMatchObject({ kind: null, ref: null });
+    expect(scene).toHaveBeenCalledTimes(2);
+    expect(history.getSnapshot()).toMatchObject({
+      canUndo: true,
+      undoLabel: "Remove study stage run-2",
+    });
   });
 
   it("enables solver profiling through the runtime command queue and diagnostics resources", async () => {
@@ -1436,6 +1565,7 @@ describe("study runtime command contributions", () => {
         },
       }),
       resources,
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
       source: "test",
     });
 
@@ -1457,7 +1587,7 @@ describe("study runtime command contributions", () => {
       reason: "enable_solver_profile",
       requested_at_unix_ms: expect.any(Number),
       target: { kind: "study" },
-    });
+    }, { sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1" });
     expect(resources.getRevision(DIAGNOSTICS_SOLVER_PROFILE_PATH)).toBe(
       "cmd-profile-on",
     );
@@ -1684,6 +1814,246 @@ describe("study runtime command contributions", () => {
     expect(scalarWindowListener).not.toHaveBeenCalled();
   });
 
+  it("materializes the current Live preparation through the typed session-scoped API", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const resources = new ResourceInvalidationController(
+      new EventBus<KernelEventMap>(),
+    );
+    const scope = "session=A&epoch=A%401&request_scope_epoch=api%3A1";
+    const preparation = vi.fn(async () => ({
+      preparation_id: "prep-current",
+      status: "ready" as const,
+    }));
+    const scene = vi.fn(async () => ({ revision: 17 }));
+    const materializePreparation = vi.fn(async () => ({
+      disposition: "accepted" as const,
+      preparation_id: "prep-current",
+      scene_revision: 17,
+      run_id: "run-current",
+      plan_fingerprint: `sha256:${"a".repeat(64)}`,
+      receipt_sha256: `sha256:${"b".repeat(64)}`,
+    }));
+
+    const result = await registry.execute("study.prepare-live", {
+      api: {
+        model: { scene },
+        simulation: { preparation, materializePreparation },
+      } as never,
+      resourceData: {
+        ...runtimeResourceData(),
+        [SIMULATION_PREPARATION_PATH]: {
+          preparation_id: "prep-current",
+          status: "ready",
+        },
+      },
+      resources,
+      sessionScopeKey: scope,
+      source: "test",
+    });
+
+    expect(result).toMatchObject({ status: "completed" });
+    expect(preparation).toHaveBeenCalledWith({ sessionScopeKey: scope });
+    expect(scene).toHaveBeenCalledWith({ sessionScopeKey: scope });
+    expect(materializePreparation).toHaveBeenCalledWith(
+      { preparation_id: "prep-current", scene_revision: 17 },
+      { sessionScopeKey: scope },
+    );
+    expect(resources.getRevision(SIMULATION_PREPARATION_PATH)).toBe(
+      `sha256:${"b".repeat(64)}`,
+    );
+  });
+
+  it("materializes current FEM preparation before submitting Compute", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const order: string[] = [];
+    const scope = "session=A&epoch=A%401&request_scope_epoch=api%3A1";
+    const preparation = vi.fn(async () => {
+      order.push("preparation");
+      return { preparation_id: "prep-fem", status: "ready" as const };
+    });
+    const scene = vi.fn(async () => {
+      order.push("scene");
+      return { revision: 3 };
+    });
+    const sharedDomainManifest = vi.fn(async () => {
+      order.push("mesh-manifest");
+      return { source_scene_revision: 3 };
+    });
+    const materializePreparation = vi.fn(async () => {
+      order.push("materialize");
+      return {
+        disposition: "accepted" as const,
+        preparation_id: "prep-fem",
+        scene_revision: 3,
+        run_id: "run-fem",
+        plan_fingerprint: `sha256:${"a".repeat(64)}`,
+        receipt_sha256: `sha256:${"b".repeat(64)}`,
+      };
+    });
+    const submit = vi.fn(async () => {
+      order.push("compute");
+      return { accepted: true, command_id: "cmd-fem-solve" };
+    });
+
+    const result = await registry.execute("study.run", {
+      api: {
+        commands: { submit },
+        meshing: { sharedDomainManifest },
+        model: { scene },
+        simulation: { preparation, materializePreparation },
+      } as never,
+      resourceData: {
+        ...runtimeResourceData({
+          discretization: "fem",
+          explicitTopology: true,
+          meshRevision: 12,
+          meshSourceSceneRevision: 3,
+          sceneRevision: 3,
+        }),
+        [SIMULATION_PREPARATION_PATH]: {
+          preparation_id: "prep-fem",
+          status: "ready",
+        },
+      },
+      sessionScopeKey: scope,
+      source: "test",
+    });
+
+    expect(result).toMatchObject({ status: "completed" });
+    expect(order).toEqual([
+      "preparation",
+      "scene",
+      "mesh-manifest",
+      "materialize",
+      "compute",
+    ]);
+    expect(materializePreparation).toHaveBeenCalledWith(
+      { preparation_id: "prep-fem", scene_revision: 3 },
+      { sessionScopeKey: scope },
+    );
+  });
+
+  it("does not submit FEM Compute when the session changes during receipt materialization", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const resources = new ResourceInvalidationController(
+      new EventBus<KernelEventMap>(),
+    );
+    const scope = "session=A&epoch=A%401&request_scope_epoch=api%3A1";
+    const materializedReceipt = {
+      disposition: "accepted" as const,
+      preparation_id: "prep-fem",
+      scene_revision: 3,
+      run_id: "run-fem",
+      plan_fingerprint: `sha256:${"a".repeat(64)}`,
+      receipt_sha256: `sha256:${"b".repeat(64)}`,
+    };
+    let resolveMaterialization!: (value: typeof materializedReceipt) => void;
+    const materializePreparation = vi.fn(
+      () =>
+        new Promise<typeof materializedReceipt>((resolve) => {
+          resolveMaterialization = resolve;
+        }),
+    );
+    const submit = vi.fn(async () => ({
+      accepted: true,
+      command_id: "cmd-fem-solve",
+    }));
+    let current = true;
+    const pending = registry.execute("study.run", {
+      api: {
+        commands: { submit },
+        meshing: {
+          sharedDomainManifest: async () => ({ source_scene_revision: 3 }),
+        },
+        model: { scene: async () => ({ revision: 3 }) },
+        simulation: {
+          materializePreparation,
+          preparation: async () => ({
+            preparation_id: "prep-fem",
+            status: "ready" as const,
+          }),
+        },
+      } as never,
+      isCurrentSessionScope: () => current,
+      resourceData: {
+        ...runtimeResourceData({
+          discretization: "fem",
+          explicitTopology: true,
+          meshRevision: 12,
+          meshSourceSceneRevision: 3,
+          sceneRevision: 3,
+        }),
+        [SIMULATION_PREPARATION_PATH]: {
+          preparation_id: "prep-fem",
+          status: "ready",
+        },
+      },
+      resources,
+      sessionScopeKey: scope,
+      source: "test",
+    });
+
+    await vi.waitFor(() => expect(materializePreparation).toHaveBeenCalled());
+    current = false;
+    resolveMaterialization(materializedReceipt);
+
+    expect(await pending).toMatchObject({ status: "cancelled" });
+    expect(submit).not.toHaveBeenCalled();
+    expect(resources.getRevision(SIMULATION_PREPARATION_PATH)).toBeNull();
+  });
+
+  it("does not submit a runtime command after its precondition refresh changes session", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    let completeStatus!: (value: { runtime_state: string }) => void;
+    const status = vi.fn(() => new Promise<{ runtime_state: string }>((resolve) => {
+      completeStatus = resolve;
+    }));
+    const submit = vi.fn(async () => ({ accepted: true, command_id: "cmd-stale" }));
+    let current = true;
+    const pending = registry.execute("study.pause", {
+      api: { commands: { submit }, simulation: { solver: { status } } } as never,
+      isCurrentSessionScope: () => current,
+      resourceData: runtimeResourceData({ runtimeState: "running" }),
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
+      source: "test",
+    });
+
+    expect(status).toHaveBeenCalledWith({
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
+    });
+    current = false;
+    completeStatus({ runtime_state: "running" });
+    expect(await pending).toMatchObject({ status: "cancelled" });
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("does not invalidate runtime resources after a late command acknowledgement", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const resources = new ResourceInvalidationController(new EventBus<KernelEventMap>());
+    let completeSubmit!: (value: { accepted: boolean; command_id: string }) => void;
+    const submit = vi.fn(() => new Promise<{ accepted: boolean; command_id: string }>((resolve) => {
+      completeSubmit = resolve;
+    }));
+    let current = true;
+    const pending = registry.execute("study.run", {
+      api: { commands: { submit } } as never,
+      isCurrentSessionScope: () => current,
+      resourceData: runtimeResourceData(),
+      resources,
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
+      source: "test",
+    });
+
+    await vi.waitFor(() => expect(submit).toHaveBeenCalled());
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({ kind: "solve" }), {
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
+    });
+    current = false;
+    completeSubmit({ accepted: true, command_id: "cmd-stale" });
+    expect(await pending).toMatchObject({ status: "cancelled" });
+    expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBeNull();
+  });
+
   it("reports a clear disabled reason when the API facade is unavailable", () => {
     const registry = registryWithStudyRuntimeCommands();
     const context = { source: "test" as const };
@@ -1732,6 +2102,7 @@ describe("study runtime command contributions", () => {
         [SIMULATION_SOLVER_STATUS_PATH]: { runtime_state: "paused" },
       },
       resources,
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
       source: "test",
     });
 
@@ -1742,6 +2113,8 @@ describe("study runtime command contributions", () => {
     expect(create).toHaveBeenCalledWith({
       profile: "resume",
       reason: "user_requested",
+    }, {
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
     });
     expect(resources.getRevision(PERSISTENCE_CHECKPOINTS_PATH)).toBe("cp-000042");
     expect(resources.getRevision(SESSION_STATUS_RESOURCE_KEY)).toBe("cp-000042");
@@ -1807,6 +2180,7 @@ describe("study runtime command contributions", () => {
         },
       },
       resources,
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
       source: "test",
     });
 
@@ -1816,6 +2190,8 @@ describe("study runtime command contributions", () => {
     });
     expect(restore).toHaveBeenCalledWith("cp-000042", {
       reason: "user_requested",
+    }, {
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
     });
     expect(resources.getRevision(PERSISTENCE_CHECKPOINTS_PATH)).toBe(8);
     expect(resources.getRevision(SESSION_STATUS_RESOURCE_KEY)).toBe(8);
@@ -1847,6 +2223,7 @@ describe("study runtime command contributions", () => {
       } as never,
       layout,
       resources,
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
       source: "test",
     });
 
@@ -1871,8 +2248,46 @@ describe("study runtime command contributions", () => {
         version: 1,
         workspace_layout: null,
       },
+    }, {
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
     });
     expect(resources.getRevision(PERSISTENCE_EXPORTS_PATH)).toBe("session-1");
+  });
+
+  it("does not publish an export response into a newer session", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    let completeExport!: (value: {
+      fms_base64: string;
+      profile: string;
+      session_id: string;
+      size_bytes: number;
+    }) => void;
+    const create = vi.fn(() => new Promise<{
+      fms_base64: string;
+      profile: string;
+      session_id: string;
+      size_bytes: number;
+    }>((resolve) => { completeExport = resolve; }));
+    let current = true;
+    const pending = registry.execute("study.export-state", {
+      api: { persistence: { exports: { create } } } as never,
+      isCurrentSessionScope: () => current,
+      resources,
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
+      source: "test",
+    });
+
+    current = false;
+    completeExport({
+      fms_base64: "Zm1z",
+      profile: "resume",
+      session_id: "A",
+      size_bytes: 3,
+    });
+    expect(await pending).toMatchObject({ status: "cancelled" });
+    expect(resources.getRevision(PERSISTENCE_EXPORTS_PATH)).toBeNull();
   });
 
   it("submits VTK export through the runtime command facade", async () => {
@@ -1940,6 +2355,7 @@ describe("study runtime command contributions", () => {
       input: { fileName: "body-m.h5" },
       resources,
       selection: objectSelection("body") as never,
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
       source: "test",
     });
 
@@ -1952,8 +2368,12 @@ describe("study runtime command contributions", () => {
       format: "h5",
       quantity_id: "m",
       target: { id: "body", kind: "object" },
+    }, {
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
     });
-    expect(artifactBytes).toHaveBeenCalledWith("field-states/body-m.h5");
+    expect(artifactBytes).toHaveBeenCalledWith("field-states/body-m.h5", {
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
+    });
     expect(resources.getRevision(PERSISTENCE_FIELD_STATE_EXPORTS_PATH)).toBe(
       "field-states/body-m.h5",
     );
@@ -1996,6 +2416,7 @@ describe("study runtime command contributions", () => {
       input: { artifactRef: "field-states/body-m.field-state.json" },
       resources,
       selection: objectSelection("body") as never,
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
       source: "test",
     });
 
@@ -2008,18 +2429,57 @@ describe("study runtime command contributions", () => {
       format: "field_state_json",
       quantity_id: "m",
       target: { id: "body", kind: "object" },
+    }, {
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
     });
     expect(importFieldState).toHaveBeenCalledWith({
       artifact_ref: "field-states/body-m.field-state.json",
       mode: "apply",
       quantity_id: "m",
       target: { id: "body", kind: "object" },
+    }, {
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
     });
     expect(resources.getRevision(DATA_FIELDS_PATH)).toBe(9);
     expect(resources.getRevision(PERSISTENCE_FIELD_STATE_IMPORTS_PATH)).toBe(9);
     expect(
       resources.getRevision(PERSISTENCE_FIELD_STATE_IMPORT_INSPECTIONS_PATH),
     ).toBe(9);
+  });
+
+  it("cancels field-state import after inspection when the session changes", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    let completeInspection!: (value: {
+      compatibility: string;
+      warnings: string[];
+    }) => void;
+    const inspectImport = vi.fn(() => new Promise<{
+      compatibility: string;
+      warnings: string[];
+    }>((resolve) => { completeInspection = resolve; }));
+    const importFieldState = vi.fn();
+    let current = true;
+    const pending = registry.execute("study.load-field-state", {
+      api: {
+        persistence: {
+          fieldStates: { import: importFieldState, inspectImport },
+        },
+      } as never,
+      input: { artifactRef: "field-states/body-m.field-state.json" },
+      isCurrentSessionScope: () => current,
+      resources,
+      selection: objectSelection("body") as never,
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
+      source: "test",
+    });
+
+    current = false;
+    completeInspection({ compatibility: "compatible", warnings: [] });
+    expect(await pending).toMatchObject({ status: "cancelled" });
+    expect(importFieldState).not.toHaveBeenCalled();
+    expect(resources.getRevision(DATA_FIELDS_PATH)).toBeNull();
   });
 
   it("uploads a selected field-state file before loading it", async () => {
@@ -2073,6 +2533,7 @@ describe("study runtime command contributions", () => {
       },
       resources,
       selection: objectSelection("body") as never,
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
       source: "test",
     });
 
@@ -2084,18 +2545,24 @@ describe("study runtime command contributions", () => {
       content_base64: "aDVm",
       file_name: "body-m.h5",
       target_realization: "field_state",
+    }, {
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
     });
     expect(inspectImport).toHaveBeenCalledWith({
       artifact_ref: "imports/body-m.h5",
       format: "field_state_json",
       quantity_id: "m",
       target: { id: "body", kind: "object" },
+    }, {
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
     });
     expect(importFieldState).toHaveBeenCalledWith({
       artifact_ref: "imports/body-m.h5",
       mode: "apply",
       quantity_id: "m",
       target: { id: "body", kind: "object" },
+    }, {
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
     });
     expect(resources.getRevision(DATA_FIELDS_PATH)).toBe(10);
     expect(resources.getRevision(PERSISTENCE_FIELD_STATE_IMPORTS_PATH)).toBe(10);
@@ -2152,6 +2619,7 @@ describe("study runtime command contributions", () => {
       },
       resources,
       selection: airboxSelection() as never,
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
       source: "test",
     });
 
@@ -2164,14 +2632,93 @@ describe("study runtime command contributions", () => {
       format: "field_state_json",
       quantity_id: "H_eff",
       target: { id: "airbox", kind: "airbox" },
+    }, {
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
     });
     expect(importFieldState).toHaveBeenCalledWith({
       artifact_ref: "imports/airbox-h-eff.h5",
       mode: "attach",
       quantity_id: "H_eff",
       target: { id: "airbox", kind: "airbox" },
+    }, {
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
     });
     expect(resources.getRevision(PERSISTENCE_FIELD_STATE_IMPORTS_PATH)).toBe(7);
+  });
+
+  it("cancels an import before commit when its selected session became obsolete", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const commit = vi.fn();
+    const result = await registry.execute("study.import-state", {
+      api: { persistence: { imports: { commit } } } as never,
+      input: { fmsBase64: "Zm1z", restoreMode: "read_only" },
+      isCurrentSessionScope: () => false,
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
+      source: "test",
+    });
+
+    expect(result.status).toBe("cancelled");
+    expect(commit).not.toHaveBeenCalled();
+  });
+
+  it("does not publish an import ACK into a session that became obsolete while awaiting commit", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const layout = new LayoutController(bus);
+    const resources = new ResourceInvalidationController(bus);
+    let resolveCommit: ((value: unknown) => void) | undefined;
+    let isCurrent = true;
+    const commit = vi.fn(() => new Promise((resolve) => {
+      resolveCommit = resolve;
+    }));
+    const status = vi.fn(async () => ({
+      session: {
+        request_scope_epoch: "api:3",
+        session_epoch: "other@3",
+        session_id: "session-other",
+      },
+    }));
+    const importListener = vi.fn();
+    resources.subscribe(PERSISTENCE_IMPORTS_PATH, importListener);
+    const initialLayout = layout.get();
+    const operation = registry.execute("study.import-state", {
+      api: {
+        persistence: { imports: { commit } },
+        sessions: { current: { status } },
+      } as never,
+      input: { fmsBase64: "Zm1z", restoreMode: "resume" },
+      isCurrentSessionScope: () => isCurrent,
+      layout,
+      resources,
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
+      source: "test",
+    });
+
+    await Promise.resolve();
+    expect(commit).toHaveBeenCalledWith({
+      fms_base64: "Zm1z",
+      restore_mode: "resume",
+    }, {
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
+    });
+
+    isCurrent = false;
+    resolveCommit?.({
+      restore_class: "logical_resume",
+      session_id: "session-imported",
+      ui_state: {
+        kernel_layout: { activeModuleTab: "study" },
+        version: 1,
+        workspace_layout: null,
+      },
+      warnings: [],
+    });
+    const result = await operation;
+
+    expect(result.status).toBe("cancelled");
+    expect(layout.get()).toEqual(initialLayout);
+    expect(importListener).not.toHaveBeenCalled();
+    expect(resources.getRevision(PERSISTENCE_IMPORTS_PATH)).toBeNull();
   });
 
   it("imports state through the persistence facade and invalidates restored session resources", async () => {
@@ -2194,7 +2741,10 @@ describe("study runtime command contributions", () => {
         warnings: [],
       },
     }));
-    const commit = vi.fn(async () => ({
+    let isCurrent = true;
+    const commit = vi.fn(async () => {
+      isCurrent = false;
+      return {
       restore_class: "logical_resume",
       session_id: "session-imported",
       ui_state: {
@@ -2212,6 +2762,14 @@ describe("study runtime command contributions", () => {
         workspace_layout: null,
       },
       warnings: [],
+      };
+    });
+    const status = vi.fn(async () => ({
+      session: {
+        request_scope_epoch: "api:2",
+        session_epoch: "session-imported@2",
+        session_id: "session-imported",
+      },
     }));
     const fieldVectorKey = `${DATA_FIELD_VECTOR_PATH.replace(
       "{quantity_id}",
@@ -2225,6 +2783,7 @@ describe("study runtime command contributions", () => {
         persistence: {
           imports: { commit, inspect },
         },
+        sessions: { current: { status } },
       } as never,
       input: {
         fmsBase64: "Zm1z",
@@ -2232,6 +2791,8 @@ describe("study runtime command contributions", () => {
       },
       layout,
       resources,
+      isCurrentSessionScope: () => isCurrent,
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
       source: "test",
     });
 
@@ -2243,6 +2804,8 @@ describe("study runtime command contributions", () => {
     expect(commit).toHaveBeenCalledWith({
       fms_base64: "Zm1z",
       restore_mode: "resume",
+    }, {
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
     });
     expect(resources.getRevision(PERSISTENCE_IMPORTS_PATH)).toBe(
       "session-imported",

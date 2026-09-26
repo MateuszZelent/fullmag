@@ -1,13 +1,15 @@
 "use client";
 
 import type { ChangeEvent } from "react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { MaterialParameterFieldListResource, SceneResource } from "@/kernel/api/apiTypes";
 import {
   authoringWriteOptions,
   runAuthoringMutationWithHistory,
 } from "@/kernel/authoring/authoringHistoryMutation";
 import { useKernel } from "@/kernel/KernelContext";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
+import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
@@ -22,7 +24,10 @@ import {
   ObjectRegionInlineDiagnostics,
   type RegionSubPanelProps,
 } from "./shared";
-import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
+import {
+  SCENE_RESOURCE_KEY,
+  useSceneResource,
+} from "@/kernel/resources/geometryLifecycleResources";
 import {
   defaultMaterialOverrideUnit,
   defaultMaterialOverrideValue,
@@ -121,6 +126,7 @@ function useObjectRegionMagneticParametersPanelView({
   model,
   draft,
   pending,
+  sessionAvailable,
   draftDirty,
   buildRegion,
   regionMeshLifecycle,
@@ -138,9 +144,15 @@ function useObjectRegionMagneticParametersPanelView({
   feedback,
   materialFields,
 }: RegionSubPanelProps) {
-  const { api, authoringHistory, resources } = useKernel();
+  const { api, authoringHistory, commands, resources } = useKernel();
+  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const { data: sceneData } = useSceneResource();
-  const [fieldPending, setFieldPending] = useState(false);
+  const [pendingFieldOperation, setPendingFieldOperation] = useState<{
+    id: number;
+    sessionScopeKey: string;
+  } | null>(null);
+  const nextFieldOperationId = useRef(0);
+  const fieldPending = pendingFieldOperation?.sessionScopeKey === sessionScopeKey;
   const [fieldFeedback, setFieldFeedback] = useState<LocalFeedback>(null);
   const objectMaterialFields = useMemo(
     () => sceneObjectMaterialFields(sceneData, model.objectId),
@@ -255,7 +267,30 @@ function useObjectRegionMagneticParametersPanelView({
       return;
     }
 
-    setFieldPending(true);
+    const operationSessionScopeKey = sessionScopeKey;
+    if (!operationSessionScopeKey) {
+      setFieldFeedback({
+        kind: "error",
+        message: "Session identity is not ready. Try again after it loads.",
+      });
+      return;
+    }
+    const historyGeneration = authoringHistory?.getGeneration?.();
+    const historyContext = {
+      api,
+      authoringHistory,
+      resourceData: { [SCENE_RESOURCE_KEY]: sceneData },
+      sessionScopeKey: operationSessionScopeKey,
+      isCurrentSessionScope: () =>
+        commands.getSessionScopeKey() === operationSessionScopeKey &&
+        (historyGeneration === undefined ||
+          authoringHistory?.getGeneration?.() === historyGeneration),
+    };
+    const operationId = ++nextFieldOperationId.current;
+    setPendingFieldOperation({
+      id: operationId,
+      sessionScopeKey: operationSessionScopeKey,
+    });
     try {
       const retainedFields = objectMaterialFields.filter(
         (field) =>
@@ -268,31 +303,43 @@ function useObjectRegionMagneticParametersPanelView({
         ),
       ];
       const response = await runAuthoringMutationWithHistory(
-        { api, authoringHistory },
+        historyContext,
         `Update material fields ${model.regionId}`,
         async ({ baseRevision }) => {
+          const commitRevision = baseRevision ?? model.revision;
+          if (typeof commitRevision !== "number" || !Number.isFinite(commitRevision)) {
+            throw new Error(
+              "The canonical scene revision is unavailable. Refetch the scene before applying.",
+            );
+          }
           const options = authoringWriteOptions(
-            baseRevision ?? model.revision,
+            commitRevision,
+            operationSessionScopeKey,
           );
-          return options
-            ? api.model.patchObjectMaterialFields(
-                model.objectId,
-                fields,
-                options,
-              )
-            : api.model.patchObjectMaterialFields(model.objectId, fields);
+          if (!options?.sessionScopeKey || options.baseRevision === undefined) {
+            throw new Error(
+              "The session-scoped scene revision is unavailable. Refetch the scene before applying.",
+            );
+          }
+          return api.model.patchObjectMaterialFields(model.objectId, fields, options);
         },
       );
+      if (historyContext.isCurrentSessionScope() === false) return;
       publishRegionAuthoringScene(
         resources,
         response.committed_scene,
         response.scene_revision,
+        undefined,
+        operationSessionScopeKey,
       );
       setFieldFeedback({ kind: "success", message: "Material fields updated." });
     } catch (error) {
+      if (historyContext.isCurrentSessionScope() === false) return;
       setFieldFeedback({ kind: "error", message: errorMessage(error) });
     } finally {
-      setFieldPending(false);
+      setPendingFieldOperation((current) =>
+        current?.id === operationId ? null : current,
+      );
     }
   }
 
@@ -685,6 +732,7 @@ function useObjectRegionMagneticParametersPanelView({
 
       <ObjectRegionActionsSection
         pending={pending}
+        sessionAvailable={sessionAvailable}
         draftDirty={draftDirty}
         buildRegion={buildRegion}
         regionMeshLifecycle={regionMeshLifecycle}

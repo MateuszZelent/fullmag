@@ -37,11 +37,23 @@ describe("KernelProvider performance contracts", () => {
       "function RealtimeConnector({ kernel }: { kernel: KernelApi }) {\n  const startupVisible",
     );
     expect(kernelProviderSource).not.toContain("if (startupVisible) {\n      return;\n    }\n\n    if (typeof WebSocket");
-    expect(kernelProviderSource).not.toContain("useSessionStatus");
+    expect(kernelProviderSource).not.toContain("useSessionStatus(");
     expect(kernelProviderSource).not.toContain(
       "resolveSimulationStartupOverlayState",
     );
     expect(kernelProviderSource).not.toContain("startupState.isVisible");
+  });
+
+  it("rebinds realtime when the request scope incarnation changes", () => {
+    expect(kernelProviderSource).toContain(
+      "const sessionScopeKey = sessionRequestScopeKey(sessionIdentity);",
+    );
+    expect(kernelProviderSource).toContain(
+      "const expectedRequestScopeEpoch = sessionIdentity?.requestScopeEpoch ?? null;",
+    );
+    expect(kernelProviderSource).toContain(
+      "}, [kernel, sessionScopeKey, expectedRequestScopeEpoch]);",
+    );
   });
 
   it("exports fullmag performance measures into diagnostics", () => {

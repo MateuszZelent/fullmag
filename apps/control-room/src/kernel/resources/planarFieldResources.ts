@@ -35,7 +35,9 @@ import {
 import { useKernel } from "../KernelContext";
 
 import { ResourceCache } from "./ResourceCache";
+import { sessionScopedResourceKey } from "./sessionResourceIdentity";
 import { useResource } from "./useResource";
+import { useSessionResourceIdentity } from "./useSessionStatus";
 
 export type PlanarFieldMetaParseResult =
   | { ok: true; query: PlanarFieldQuery }
@@ -297,23 +299,29 @@ export function usePlanarFieldMetaResource(
   options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
+  const sessionIdentity = useSessionResourceIdentity();
   const stableQuery = useStablePlanarFieldQuery(query);
   const baseKey = planarFieldResourceKey(quantityId, source, stableQuery);
   const revision = useResourceRevision(baseKey);
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.data.fields.planar.meta(quantityId, source, stableQuery, { signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.data.fields.planar.meta(quantityId, source, stableQuery, { sessionScopeKey, signal }),
     [api, quantityId, source, stableQuery],
   );
   return useResource<PlanarFieldMetaResource | null>({
-    enabled: options.enabled,
+    enabled: options.enabled !== false && sessionIdentity !== null,
     load,
-    resourceKey: resolvePlanarFieldResourceKey(
-      quantityId,
-      source,
-      stableQuery,
-      revision,
-    ),
+    resourceKey: sessionIdentity
+      ? sessionScopedResourceKey(
+          sessionIdentity,
+          resolvePlanarFieldResourceKey(
+            quantityId,
+            source,
+            stableQuery,
+            revision,
+          ),
+        )
+      : resolvePlanarFieldResourceKey(quantityId, source, stableQuery, revision),
   });
 }
 
@@ -325,22 +333,27 @@ export function usePlanarFieldBinaryResource(
   options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
+  const sessionIdentity = useSessionResourceIdentity();
   const stableQuery = useStablePlanarFieldQuery(query);
   const path = binaryPaths[kind][source.kind];
   const baseKey = planarFieldResourceKey(quantityId, source, stableQuery, path);
   const revision = useResourceRevision(baseKey);
-  const resourceKey = resolvePlanarFieldResourceKey(
+  const unscopedResourceKey = resolvePlanarFieldResourceKey(
     quantityId,
     source,
     stableQuery,
     revision,
     path,
   );
+  const resourceKey = sessionIdentity
+    ? sessionScopedResourceKey(sessionIdentity, unscopedResourceKey)
+    : unscopedResourceKey;
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       loadCachedPlanarBinary(binaryCaches[kind], resourceKey, (etag) =>
         api.data.fields.planar[kind](quantityId, source, stableQuery, {
           etag,
+          sessionScopeKey,
           signal,
         }),
       ),
@@ -351,7 +364,7 @@ export function usePlanarFieldBinaryResource(
     [kind, resourceKey],
   );
   return useResource<ArrayBuffer | null>({
-    enabled: options.enabled,
+    enabled: options.enabled !== false && sessionIdentity !== null,
     load,
     resolveRevision,
     resourceKey,
@@ -365,22 +378,27 @@ export function usePlanarScalarResource(
   options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
+  const sessionIdentity = useSessionResourceIdentity();
   const stableQuery = useStablePlanarFieldQuery(query);
   const path = binaryPaths.scalar[source.kind];
   const baseKey = planarFieldResourceKey(quantityId, source, stableQuery, path);
   const revision = useResourceRevision(baseKey);
-  const resourceKey = resolvePlanarFieldResourceKey(
+  const unscopedResourceKey = resolvePlanarFieldResourceKey(
     quantityId,
     source,
     stableQuery,
     revision,
     path,
   );
+  const resourceKey = sessionIdentity
+    ? sessionScopedResourceKey(sessionIdentity, unscopedResourceKey)
+    : unscopedResourceKey;
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       loadCachedPlanarScalar(binaryCaches.scalar, resourceKey, (etag) =>
         api.data.fields.planar.scalar(quantityId, source, stableQuery, {
           etag,
+          sessionScopeKey,
           signal,
         }),
       ),
@@ -391,7 +409,7 @@ export function usePlanarScalarResource(
     [resourceKey],
   );
   return useResource<PlanarScalarResource | null>({
-    enabled: options.enabled,
+    enabled: options.enabled !== false && sessionIdentity !== null,
     load,
     resolveRevision,
     resourceKey,
@@ -465,6 +483,7 @@ export function usePlanarProbeResource(
   options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
+  const sessionIdentity = useSessionResourceIdentity();
   const stableQuery = useMemo<PlanarFieldProbeQuery>(
     () => ({
       sample_token: query.sample_token,
@@ -522,14 +541,17 @@ export function usePlanarProbeResource(
     snapshot_id: stableQuery.snapshot_id,
     stage_id: stableQuery.stage_id,
   };
-  const resourceKey = `${planarFieldResourceKey(quantityId, source, fieldQuery)}#probe=${stableQuery.u_m},${stableQuery.v_m}`;
+  const unscopedResourceKey = `${planarFieldResourceKey(quantityId, source, fieldQuery)}#probe=${stableQuery.u_m},${stableQuery.v_m}`;
+  const resourceKey = sessionIdentity
+    ? sessionScopedResourceKey(sessionIdentity, unscopedResourceKey)
+    : unscopedResourceKey;
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.data.fields.planar.probe(quantityId, source, stableQuery, { signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.data.fields.planar.probe(quantityId, source, stableQuery, { sessionScopeKey, signal }),
     [api, quantityId, source, stableQuery],
   );
   return useResource<PlanarFieldProbeResource | null>({
-    enabled: options.enabled,
+    enabled: options.enabled !== false && sessionIdentity !== null,
     load,
     resourceKey,
   });

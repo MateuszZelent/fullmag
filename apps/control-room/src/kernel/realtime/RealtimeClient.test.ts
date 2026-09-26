@@ -34,6 +34,81 @@ class FakeWebSocket implements RealtimeWebSocketLike {
 }
 
 describe("RealtimeClient", () => {
+  it("rejects a hello from another request scope before accepting events", () => {
+    const socket = new FakeWebSocket();
+    const handleEvent = vi.fn(() => true);
+    const onScopeMismatch = vi.fn();
+    const client = new RealtimeClient({
+      bridge: { handleEvent },
+      createSocket: () => socket,
+      expectedRequestScopeEpoch: "api-instance:2",
+      onScopeMismatch,
+      url: `ws://127.0.0.1:8765${SESSION_EVENTS_WS_PATH}`,
+    });
+
+    client.connect();
+    socket.emit("message", JSON.stringify({ type: "resource.batch_changed" }));
+    expect(handleEvent).not.toHaveBeenCalled();
+
+    socket.emit("message", JSON.stringify({
+      payload: { request_scope_epoch: "api-instance:1" },
+      type: "hello",
+    }));
+    expect(onScopeMismatch).toHaveBeenCalledTimes(1);
+    expect(socket.close).toHaveBeenCalledTimes(1);
+    expect(handleEvent).not.toHaveBeenCalled();
+  });
+
+  it("accepts events only after a hello with the expected request scope", () => {
+    const socket = new FakeWebSocket();
+    const handleEvent = vi.fn(() => true);
+    const client = new RealtimeClient({
+      bridge: { handleEvent },
+      createSocket: () => socket,
+      expectedRequestScopeEpoch: "api-instance:2",
+      url: `ws://127.0.0.1:8765${SESSION_EVENTS_WS_PATH}`,
+    });
+
+    client.connect();
+    socket.emit("message", JSON.stringify({
+      payload: { request_scope_epoch: "api-instance:2" },
+      type: "hello",
+    }));
+    socket.emit("message", JSON.stringify({ type: "resource.batch_changed" }));
+    expect(handleEvent).toHaveBeenCalledTimes(2);
+    client.close();
+  });
+
+  it("closes a scoped socket before forwarding a message from another session", () => {
+    const socket = new FakeWebSocket();
+    const handleEvent = vi.fn(() => true);
+    const onScopeMismatch = vi.fn();
+    const client = new RealtimeClient({
+      bridge: { handleEvent },
+      createSocket: () => socket,
+      expectedRequestScopeEpoch: "api-instance:2",
+      expectedSessionId: "session-b",
+      onScopeMismatch,
+      url: `ws://127.0.0.1:8765${SESSION_EVENTS_WS_PATH}`,
+    });
+
+    client.connect();
+    socket.emit("message", JSON.stringify({
+      payload: { request_scope_epoch: "api-instance:2" },
+      session_id: "session-b",
+      type: "hello",
+    }));
+    socket.emit("message", JSON.stringify({
+      payload: { changes: [] },
+      session_id: "session-a",
+      type: "resource.batch_changed",
+    }));
+
+    expect(handleEvent).toHaveBeenCalledTimes(1);
+    expect(onScopeMismatch).toHaveBeenCalledTimes(1);
+    expect(socket.close).toHaveBeenCalledTimes(1);
+  });
+
   it("connects to the v2 realtime endpoint and invalidates resources from events", () => {
     const bus = new EventBus<KernelEventMap>();
     const diagnostics = new RequestDiagnosticsController();

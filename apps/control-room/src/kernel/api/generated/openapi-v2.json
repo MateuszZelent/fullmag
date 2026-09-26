@@ -1,5 +1,18 @@
 {
   "components": {
+    "parameters": {
+      "FullmagSessionScope": {
+        "description": "Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409.",
+        "in": "header",
+        "name": "x-fullmag-session-scope",
+        "required": false,
+        "schema": {
+          "minLength": 1,
+          "pattern": "^session=[^&]+&epoch=[^&]+&request_scope_epoch=[^&]+$",
+          "type": "string"
+        }
+      }
+    },
     "schemas": {
       "AcceptedObservationFrameRef": {
         "properties": {
@@ -15188,6 +15201,64 @@
         ],
         "type": "object"
       },
+      "LivePreparationMaterializationRequest": {
+        "additionalProperties": false,
+        "description": "Typed request for preparing the immutable scene revision in the current\nLive session. Execution intent and display projection are captured by the\nserver from that same session snapshot.",
+        "properties": {
+          "preparation_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "preparation_id",
+          "scene_revision"
+        ],
+        "type": "object"
+      },
+      "LivePreparationMaterializationResource": {
+        "properties": {
+          "disposition": {
+            "$ref": "#/components/schemas/PreparationMaterializationDisposition"
+          },
+          "plan_fingerprint": {
+            "maxLength": 71,
+            "type": "string"
+          },
+          "preparation_id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "receipt_sha256": {
+            "maxLength": 71,
+            "type": "string"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "disposition",
+          "preparation_id",
+          "scene_revision",
+          "run_id",
+          "plan_fingerprint",
+          "receipt_sha256"
+        ],
+        "type": "object"
+      },
       "LivePublisherDiagnosticsResource": {
         "properties": {
           "coalesced_wake_count": {
@@ -22131,6 +22202,13 @@
         ],
         "type": "string"
       },
+      "PreparationMaterializationDisposition": {
+        "enum": [
+          "accepted",
+          "replayed"
+        ],
+        "type": "string"
+      },
       "PreparationProgressStage": {
         "properties": {
           "clock_adjustment": {
@@ -22203,6 +22281,39 @@
           "label",
           "detail",
           "status"
+        ],
+        "type": "object"
+      },
+      "PreparationReceiptResource": {
+        "description": "Identity-only view of the durable preparation receipt.  The complete\ncertificates stay in the session store; the browser receives enough\nprovenance to distinguish the accepted plan from an in-flight candidate.",
+        "properties": {
+          "payload_sha256": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "plan_fingerprint": {
+            "maxLength": 71,
+            "type": "string"
+          },
+          "preparation_id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "schema_version": {
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "preparation_id",
+          "run_id",
+          "plan_fingerprint",
+          "payload_sha256"
         ],
         "type": "object"
       },
@@ -22457,6 +22568,408 @@
           "can_write",
           "warnings",
           "preserved_paths"
+        ],
+        "type": "object"
+      },
+      "ProjectRunCatalogState": {
+        "enum": [
+          "pending_materialization",
+          "materialized"
+        ],
+        "type": "string"
+      },
+      "ProjectRunExecutionState": {
+        "enum": [
+          "pending_materialization",
+          "pending_preparation"
+        ],
+        "type": "string"
+      },
+      "ProjectRunListQuery": {
+        "properties": {
+          "cursor": {
+            "description": "Last RunId returned on the previous page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "description": "Page size, from 1 to 100; defaults to 50.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ProjectRunListResource": {
+        "properties": {
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectRunSummaryResource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "project_id",
+          "runs"
+        ],
+        "type": "object"
+      },
+      "ProjectRunMaterializationResource": {
+        "properties": {
+          "catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "execution_state": {
+            "$ref": "#/components/schemas/ProjectRunExecutionState",
+            "description": "Task identities are durable, but preparation and scheduling are pending."
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "task_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "run_id",
+          "catalog_revision",
+          "task_ids",
+          "execution_state"
+        ],
+        "type": "object"
+      },
+      "ProjectRunObservationState": {
+        "enum": [
+          "live",
+          "stale",
+          "disconnected",
+          "reconciling"
+        ],
+        "type": "string"
+      },
+      "ProjectRunRequestedExecutionResource": {
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "device": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "precision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "backend",
+          "device",
+          "precision",
+          "mode"
+        ],
+        "type": "object"
+      },
+      "ProjectRunResource": {
+        "properties": {
+          "catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "catalog_state": {
+            "$ref": "#/components/schemas/ProjectRunCatalogState"
+          },
+          "payload_fingerprint": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "requested_execution": {
+            "$ref": "#/components/schemas/ProjectRunRequestedExecutionResource"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectRunTaskResource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "project_id",
+          "run_id",
+          "payload_fingerprint",
+          "requested_execution",
+          "catalog_state",
+          "tasks"
+        ],
+        "type": "object"
+      },
+      "ProjectRunSubmitDisposition": {
+        "enum": [
+          "accepted",
+          "replayed"
+        ],
+        "type": "string"
+      },
+      "ProjectRunSubmitRequest": {
+        "additionalProperties": false,
+        "description": "Complete immutable submission inputs. The server parses the JSON objects\ninto their versioned application, authoring and planner contracts.",
+        "properties": {
+          "archive_base64": {
+            "description": "Exact base64-encoded portable project archive accepted for this run.",
+            "type": "string"
+          },
+          "asset_paths": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Explicit immutable asset ID to path inside `project/assets/`.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "run_intent": {
+            "additionalProperties": {},
+            "description": "Versioned `run_intent.v1` object; parsed and validated by the application contract.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "study_plan": {
+            "additionalProperties": {},
+            "description": "Versioned `study_plan.v2` object with typed steps, references and runner controls.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "study_problem_catalog": {
+            "additionalProperties": {},
+            "description": "Versioned `study_problem_catalog.v1` object bound to the exact study digest.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "archive_base64",
+          "run_intent",
+          "study_plan",
+          "study_problem_catalog",
+          "asset_paths"
+        ],
+        "type": "object"
+      },
+      "ProjectRunSubmitResource": {
+        "properties": {
+          "disposition": {
+            "$ref": "#/components/schemas/ProjectRunSubmitDisposition"
+          },
+          "execution_state": {
+            "$ref": "#/components/schemas/ProjectRunExecutionState",
+            "description": "Reflects whether the durable task catalog exists at response time."
+          },
+          "payload_fingerprint": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "disposition",
+          "execution_state",
+          "run_id",
+          "payload_fingerprint"
+        ],
+        "type": "object"
+      },
+      "ProjectRunSummaryResource": {
+        "properties": {
+          "accepted_at": {
+            "type": "string"
+          },
+          "catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "catalog_state": {
+            "$ref": "#/components/schemas/ProjectRunCatalogState"
+          },
+          "payload_fingerprint": {
+            "type": "string"
+          },
+          "requested_execution": {
+            "$ref": "#/components/schemas/ProjectRunRequestedExecutionResource"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "task_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run_id",
+          "accepted_at",
+          "payload_fingerprint",
+          "requested_execution",
+          "catalog_state",
+          "task_count"
+        ],
+        "type": "object"
+      },
+      "ProjectRunTaskLifecycle": {
+        "enum": [
+          "accepted",
+          "queued",
+          "preparing",
+          "running",
+          "stopping",
+          "succeeded",
+          "failed",
+          "cancelled",
+          "interrupted"
+        ],
+        "type": "string"
+      },
+      "ProjectRunTaskReadiness": {
+        "oneOf": [
+          {
+            "properties": {
+              "state": {
+                "enum": [
+                  "ready"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "blocked"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "state"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ProjectRunTaskResource": {
+        "properties": {
+          "artifact_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "attempt_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "input_fingerprint": {
+            "type": "string"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProjectRunTaskLifecycle"
+          },
+          "observation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectRunObservationState"
+              }
+            ]
+          },
+          "ownership_epoch": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "readiness": {
+            "$ref": "#/components/schemas/ProjectRunTaskReadiness"
+          },
+          "resolved_input_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resource_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "input_fingerprint",
+          "lifecycle",
+          "readiness",
+          "artifact_ids"
         ],
         "type": "object"
       },
@@ -23349,6 +23862,14 @@
       },
       "RegionPatchRequest": {
         "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "enabled": {
             "type": [
               "boolean",
@@ -26236,6 +26757,13 @@
             },
             "type": "array"
           },
+          "monitors": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "objects": {
             "items": {
               "$ref": "#/components/schemas/SceneObjectResource"
@@ -28641,8 +29169,12 @@
           "name": {
             "type": "string"
           },
+          "request_scope_epoch": {
+            "description": "API-instance and transition identity for current-session HTTP/cache ownership.",
+            "type": "string"
+          },
           "session_epoch": {
-            "description": "Immutable identity of the active session incarnation.",
+            "description": "Scientific session identity shared with observation frames.",
             "type": "string"
           },
           "session_id": {
@@ -28655,6 +29187,7 @@
         "required": [
           "session_id",
           "session_epoch",
+          "request_scope_epoch",
           "name",
           "created_at",
           "workspace_root"
@@ -28724,6 +29257,16 @@
           "preparation_id": {
             "maxLength": 128,
             "type": "string"
+          },
+          "receipt": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PreparationReceiptResource"
+              }
+            ]
           },
           "requested_execution": {
             "$ref": "#/components/schemas/PreparationExecutionSummary"
@@ -35667,6 +36210,39 @@
         ]
       }
     },
+    "/v2/persistence/imports/inspections": {
+      "post": {
+        "operationId": "persistence_post_persistence_imports_inspections",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionImportInspectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionImportInspectResponse"
+                }
+              }
+            },
+            "description": "Project archive import inspection"
+          },
+          "400": {
+            "description": "Invalid .fms payload"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
     "/v2/persistence/projects": {
       "post": {
         "operationId": "persistence_post_persistence_projects",
@@ -35726,6 +36302,216 @@
           },
           "400": {
             "description": "Invalid or unsupported project archive"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs",
+        "parameters": [
+          {
+            "description": "Pinned project identity",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size, from 1 to 100; defaults to 50.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Last RunId returned on the previous page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectRunListResource"
+                }
+              }
+            },
+            "description": "Page of durable runs for one project"
+          },
+          "400": {
+            "description": "Invalid page size or cursor"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      },
+      "post": {
+        "operationId": "persistence_post_persistence_projects_project_id_runs",
+        "parameters": [
+          {
+            "description": "Pinned project identity",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectRunSubmitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectRunSubmitResource"
+                }
+              }
+            },
+            "description": "Identical submit replayed"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectRunSubmitResource"
+                }
+              }
+            },
+            "description": "Durable run intent accepted"
+          },
+          "400": {
+            "description": "Invalid immutable submission inputs"
+          },
+          "409": {
+            "description": "Project identity or idempotency conflict"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id",
+        "parameters": [
+          {
+            "description": "Pinned project identity",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Accepted durable run identity",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectRunResource"
+                }
+              }
+            },
+            "description": "Durable run intent and task catalog snapshot"
+          },
+          "404": {
+            "description": "Accepted run intent is missing"
+          },
+          "409": {
+            "description": "Run belongs to another project"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/materialization": {
+      "post": {
+        "operationId": "persistence_post_persistence_projects_project_id_runs_run_id_materialization",
+        "parameters": [
+          {
+            "description": "Pinned project identity",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Accepted durable run identity",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectRunMaterializationResource"
+                }
+              }
+            },
+            "description": "Idempotent durable task catalog materialization"
+          },
+          "400": {
+            "description": "Immutable study cannot be materialized"
+          },
+          "404": {
+            "description": "Accepted run intent is missing"
+          },
+          "409": {
+            "description": "Run belongs to another project"
           }
         },
         "tags": [
@@ -35874,6 +36660,11 @@
     "/v2/sessions/current": {
       "get": {
         "operationId": "sessions_get_sessions_current",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Current session summary"
@@ -35901,6 +36692,11 @@
     "/v2/sessions/current/analysis/eigen/branches.v2": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_eigen_branches_v2",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Tracked eigen branches v2"
@@ -35917,6 +36713,11 @@
     "/v2/sessions/current/analysis/eigen/dispersion.csv": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_eigen_dispersion_csv",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Eigen dispersion CSV v2"
@@ -35955,6 +36756,9 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -35973,6 +36777,11 @@
     "/v2/sessions/current/analysis/eigen/spectrum.v2": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_eigen_spectrum_v2",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Eigen spectrum artifact v2"
@@ -35989,6 +36798,11 @@
     "/v2/sessions/current/analysis/eigenmodes/branches": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_eigenmodes_branches",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Tracked branches"
@@ -36005,6 +36819,11 @@
     "/v2/sessions/current/analysis/eigenmodes/dispersion": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_eigenmodes_dispersion",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Eigen dispersion data"
@@ -36043,6 +36862,9 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -36061,6 +36883,11 @@
     "/v2/sessions/current/analysis/eigenmodes/spectrum": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_eigenmodes_spectrum",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Eigen spectrum"
@@ -36134,6 +36961,9 @@
             "schema": {
               "$ref": "#/components/schemas/TopologicalChargeMethod"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -36156,6 +36986,11 @@
     "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_frequency_domain_eigen_branches_v2",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -36176,6 +37011,11 @@
     "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_frequency_domain_eigen_diagnostics_v2",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -36196,6 +37036,11 @@
     "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_frequency_domain_eigen_dispersion",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -36216,6 +37061,11 @@
     "/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_frequency_domain_eigen_field_sweep",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -36258,6 +37108,9 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -36302,6 +37155,9 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -36324,6 +37180,11 @@
     "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_frequency_domain_eigen_spectrum_v2",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -36344,6 +37205,11 @@
     "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v3": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_frequency_domain_eigen_spectrum_v3",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -36364,6 +37230,11 @@
     "/v2/sessions/current/analysis/frequency-domain/fmr/kittel-fit": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_frequency_domain_fmr_kittel_fit",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -36384,6 +37255,11 @@
     "/v2/sessions/current/analysis/frequency-domain/fmr/peaks": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_frequency_domain_fmr_peaks",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -36404,6 +37280,11 @@
     "/v2/sessions/current/analysis/frequency-domain/fmr/resonance-fits": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_frequency_domain_fmr_resonance_fits",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -36424,6 +37305,11 @@
     "/v2/sessions/current/analysis/frequency-domain/manifest.v1": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_frequency_domain_manifest_v1",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -36444,6 +37330,11 @@
     "/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_frequency_domain_response_cancel_requested_v1",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -36464,6 +37355,11 @@
     "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_frequency_domain_response_diagnostics_v1",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -36484,6 +37380,11 @@
     "/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_frequency_domain_response_diagnostics_solver_v1",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -36515,6 +37416,9 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -36548,6 +37452,9 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -36570,6 +37477,11 @@
     "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_frequency_domain_response_magnetic_sweep",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -36590,6 +37502,11 @@
     "/v2/sessions/current/analysis/frequency-domain/response/progress.v1": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_frequency_domain_response_progress_v1",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -36610,6 +37527,11 @@
     "/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_frequency_response_magnetic_sweep_v1",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Driven magnetic response sweep artifact v1"
@@ -36635,6 +37557,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -36678,6 +37603,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -36715,6 +37643,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -36749,6 +37680,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -36781,6 +37715,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -36825,6 +37762,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -36859,6 +37799,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -36893,6 +37836,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -36924,6 +37870,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -36958,6 +37907,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -36989,6 +37941,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -37023,6 +37978,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -37067,6 +38025,9 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -37111,6 +38072,9 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -37286,6 +38250,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -37324,6 +38291,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -37512,6 +38482,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -37692,6 +38665,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -37738,6 +38714,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -37926,6 +38905,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -38106,6 +39088,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -38152,6 +39137,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -38198,6 +39186,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -38378,6 +39369,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -38424,6 +39418,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -38604,6 +39601,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -38626,6 +39626,11 @@
     "/v2/sessions/current/analysis/spin-wave/dynamic-structure-factor.v1": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_spin_wave_dynamic_structure_factor_v1",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -38649,6 +39654,11 @@
     "/v2/sessions/current/analysis/spin-wave/gamma.v1": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_spin_wave_gamma_v1",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -38672,6 +39682,11 @@
     "/v2/sessions/current/data/artifacts": {
       "get": {
         "operationId": "data_get_sessions_current_data_artifacts",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -38710,6 +39725,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -38761,6 +39779,9 @@
                 "null"
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -38850,6 +39871,9 @@
                 "null"
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -38915,6 +39939,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -38943,6 +39970,11 @@
     "/v2/sessions/current/data/domain/fdm-multilayer-layout": {
       "get": {
         "operationId": "data_get_sessions_current_data_domain_fdm_multilayer_layout",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -38969,6 +40001,11 @@
     "/v2/sessions/current/data/domain/meta": {
       "get": {
         "operationId": "data_get_sessions_current_data_domain_meta",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -39018,6 +40055,9 @@
               "format": "double",
               "type": "number"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -39076,6 +40116,9 @@
                 "null"
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -39139,6 +40182,9 @@
                 "null"
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -39257,6 +40303,9 @@
                 "null"
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -39333,6 +40382,11 @@
     "/v2/sessions/current/data/fdm-region-memberships": {
       "get": {
         "operationId": "data_get_sessions_current_data_fdm_region_memberships",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -39362,6 +40416,11 @@
     "/v2/sessions/current/data/fields": {
       "get": {
         "operationId": "data_get_sessions_current_data_fields",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -39442,6 +40501,9 @@
                 "null"
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -39551,6 +40613,9 @@
                 "null"
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -39732,6 +40797,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -39940,6 +41008,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -40151,6 +41222,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -40366,6 +41440,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -40578,6 +41655,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -40783,6 +41863,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -40991,6 +42074,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -41207,6 +42293,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -41423,6 +42512,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -41639,6 +42731,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -41862,6 +42957,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -42082,6 +43180,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -42295,6 +43396,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -42511,6 +43615,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -42720,6 +43827,9 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -42887,6 +43997,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -43069,6 +44182,9 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -43181,6 +44297,9 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -43429,6 +44548,9 @@
             "schema": {
               "type": "boolean"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -43607,6 +44729,9 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -43744,6 +44869,9 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -43898,6 +45026,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -44042,6 +45173,9 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -44293,6 +45427,9 @@
             "schema": {
               "type": "boolean"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -44433,6 +45570,9 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -44631,6 +45771,9 @@
                 "null"
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -44824,6 +45967,9 @@
                 "null"
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -44966,6 +46112,11 @@
     "/v2/sessions/current/data/material-fields": {
       "get": {
         "operationId": "data_get_sessions_current_data_material_fields",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -44998,6 +46149,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -45041,6 +46195,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -45079,6 +46236,11 @@
     "/v2/sessions/current/data/mesh-region-memberships": {
       "get": {
         "operationId": "data_get_sessions_current_data_mesh_region_memberships",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -45112,6 +46274,11 @@
     "/v2/sessions/current/data/quantities": {
       "get": {
         "operationId": "data_get_sessions_current_data_quantities",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -45172,6 +46339,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -45194,6 +46364,11 @@
     "/v2/sessions/current/data/tables": {
       "get": {
         "operationId": "data_get_sessions_current_data_tables",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -45223,6 +46398,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -45257,6 +46435,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -45396,6 +46577,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -45532,6 +46716,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -45577,6 +46764,11 @@
     "/v2/sessions/current/diagnostics/engine-log": {
       "get": {
         "operationId": "diagnostics_get_sessions_current_diagnostics_engine_log",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -45623,6 +46815,11 @@
     "/v2/sessions/current/diagnostics/solver-profile": {
       "get": {
         "operationId": "diagnostics_get_sessions_current_diagnostics_solver_profile",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -45649,6 +46846,11 @@
     "/v2/sessions/current/events/communication-policy": {
       "get": {
         "operationId": "platform_get_sessions_current_events_communication_policy",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -45667,6 +46869,11 @@
       },
       "patch": {
         "operationId": "platform_patch_sessions_current_events_communication_policy",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -45732,6 +46939,11 @@
     "/v2/sessions/current/meshing/builds": {
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_builds",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -45758,6 +46970,11 @@
     "/v2/sessions/current/meshing/builds/current": {
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_builds_current",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -45784,6 +47001,11 @@
     "/v2/sessions/current/meshing/builds/latest-successful": {
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_builds_latest_successful",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -45810,6 +47032,11 @@
     "/v2/sessions/current/meshing/capabilities": {
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_capabilities",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -45833,6 +47060,11 @@
     "/v2/sessions/current/meshing/mesh/periodic_pairs.v1": {
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_mesh_periodic_pairs_v1",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -45886,6 +47118,9 @@
                 "null"
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -45931,6 +47166,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -45965,6 +47203,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -45999,6 +47240,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -46033,6 +47277,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -46067,6 +47314,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -46125,6 +47375,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -46197,6 +47450,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -46245,6 +47501,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -46313,6 +47572,9 @@
             "schema": {
               "type": "boolean"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -46453,6 +47715,9 @@
               "format": "double",
               "type": "number"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -46518,6 +47783,9 @@
             "schema": {
               "$ref": "#/components/schemas/CrossSectionQualityMetric"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -46555,6 +47823,11 @@
     "/v2/sessions/current/meshing/meshes/shared-domain/manifest": {
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_meshes_shared_domain_manifest",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -46584,6 +47857,11 @@
     "/v2/sessions/current/meshing/meshes/shared-domain/quality": {
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_meshes_shared_domain_quality",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -46607,6 +47885,11 @@
     "/v2/sessions/current/meshing/meshes/shared-domain/quality-gates": {
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_meshes_shared_domain_quality_gates",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -46642,6 +47925,9 @@
                 "null"
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -46669,6 +47955,11 @@
     "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields": {
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_meshes_shared_domain_realized_size_fields",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -46692,6 +47983,11 @@
     "/v2/sessions/current/meshing/meshes/shared-domain/report": {
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_meshes_shared_domain_report",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -46739,6 +48035,9 @@
                 "null"
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -46778,6 +48077,11 @@
     "/v2/sessions/current/meshing/meshes/universe/quality": {
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_meshes_universe_quality",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -46801,6 +48105,11 @@
     "/v2/sessions/current/meshing/meshes/universe/report": {
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_meshes_universe_report",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -46862,6 +48171,9 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -46912,6 +48224,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -46944,6 +48259,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -46991,6 +48309,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -47023,6 +48344,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -47061,6 +48385,11 @@
     "/v2/sessions/current/meshing/policies/shared-domain": {
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_policies_shared_domain",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -47082,6 +48411,11 @@
       },
       "put": {
         "operationId": "meshing_put_sessions_current_meshing_policies_shared_domain",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -47118,6 +48452,11 @@
     "/v2/sessions/current/meshing/policies/universe": {
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_policies_universe",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -47139,6 +48478,11 @@
       },
       "put": {
         "operationId": "meshing_put_sessions_current_meshing_policies_universe",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -47175,6 +48519,11 @@
     "/v2/sessions/current/meshing/semantics": {
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_semantics",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -47198,6 +48547,11 @@
     "/v2/sessions/current/meshing/summary": {
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_summary",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -47224,6 +48578,11 @@
     "/v2/sessions/current/model/couplings": {
       "get": {
         "operationId": "model_get_sessions_current_model_couplings",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -47245,6 +48604,11 @@
       },
       "post": {
         "operationId": "model_post_sessions_current_model_couplings",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -47290,6 +48654,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -47335,6 +48702,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -47376,6 +48746,11 @@
     "/v2/sessions/current/model/current-transports": {
       "get": {
         "operationId": "model_get_sessions_current_model_current_transports",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -47394,6 +48769,11 @@
       },
       "post": {
         "operationId": "model_post_sessions_current_model_current_transports",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -47435,6 +48815,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -47476,6 +48859,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -47507,6 +48893,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -47542,6 +48931,11 @@
     "/v2/sessions/current/model/field-drives": {
       "get": {
         "operationId": "model_get_sessions_current_model_field_drives",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -47563,6 +48957,11 @@
       },
       "post": {
         "operationId": "model_post_sessions_current_model_field_drives",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -47608,6 +49007,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -47653,6 +49055,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -47694,6 +49099,11 @@
     "/v2/sessions/current/model/frozen-spins": {
       "get": {
         "operationId": "model_get_sessions_current_model_frozen_spins",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -47712,6 +49122,11 @@
       },
       "post": {
         "operationId": "model_post_sessions_current_model_frozen_spins",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -47762,6 +49177,11 @@
     "/v2/sessions/current/model/frozen-spins/previews": {
       "post": {
         "operationId": "model_post_sessions_current_model_frozen_spins_previews",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -47820,6 +49240,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -47870,6 +49293,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -47940,6 +49366,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -48008,6 +49437,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -48046,6 +49478,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -48108,6 +49543,11 @@
     "/v2/sessions/current/model/geometry/capabilities": {
       "get": {
         "operationId": "model_get_sessions_current_model_geometry_capabilities",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -48131,6 +49571,11 @@
     "/v2/sessions/current/model/geometry/diagnostics": {
       "get": {
         "operationId": "model_get_sessions_current_model_geometry_diagnostics",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -48163,6 +49608,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -48188,6 +49636,11 @@
     "/v2/sessions/current/model/geometry/realizations": {
       "post": {
         "operationId": "model_post_sessions_current_model_geometry_realizations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -48224,6 +49677,11 @@
     "/v2/sessions/current/model/geometry/realizations/current": {
       "get": {
         "operationId": "model_get_sessions_current_model_geometry_realizations_current",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -48247,6 +49705,11 @@
     "/v2/sessions/current/model/geometry/validation": {
       "get": {
         "operationId": "model_get_sessions_current_model_geometry_validation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -48279,6 +49742,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -48311,6 +49777,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -48352,6 +49821,11 @@
     "/v2/sessions/current/model/material-fields": {
       "get": {
         "operationId": "model_get_sessions_current_model_material_fields",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -48384,6 +49858,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -48416,6 +49893,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -48451,6 +49931,11 @@
     "/v2/sessions/current/model/objects": {
       "post": {
         "operationId": "model_post_sessions_current_model_objects",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -48494,6 +49979,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -48524,6 +50012,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -48566,6 +50057,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -48623,6 +50117,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -48664,6 +50161,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -48711,6 +50211,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -48758,6 +50261,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -48814,6 +50320,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -48855,6 +50364,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -48911,6 +50423,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -48949,6 +50464,11 @@
     "/v2/sessions/current/model/oersted-fields": {
       "get": {
         "operationId": "model_get_sessions_current_model_oersted_fields",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -48967,6 +50487,11 @@
       },
       "post": {
         "operationId": "model_post_sessions_current_model_oersted_fields",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -49008,6 +50533,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -49049,6 +50577,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -49080,6 +50611,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -49116,6 +50650,11 @@
       "get": {
         "description": "This endpoint is intentionally thin: mesh topology, field samples and the\nconstitutive family records stay on their dedicated resources.  The graph\nis normalized once by `fullmag-authoring` so the planner and Control Room\nconsume the same stable module identity, scope and dependency semantics.",
         "operationId": "model_get_sessions_current_model_physics_graph",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -49143,6 +50682,11 @@
     "/v2/sessions/current/model/planar-monitors": {
       "get": {
         "operationId": "model_get_sessions_current_model_planar_monitors",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -49161,6 +50705,11 @@
       },
       "post": {
         "operationId": "model_post_sessions_current_model_planar_monitors",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -49205,6 +50754,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -49249,6 +50801,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -49280,6 +50835,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -49326,6 +50884,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -49364,6 +50925,11 @@
     "/v2/sessions/current/model/readiness": {
       "get": {
         "operationId": "model_get_sessions_current_model_readiness",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -49387,6 +50953,11 @@
     "/v2/sessions/current/model/realized-regions": {
       "get": {
         "operationId": "model_get_sessions_current_model_realized_regions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -49410,6 +50981,11 @@
     "/v2/sessions/current/model/region-diagnostics": {
       "get": {
         "operationId": "model_get_sessions_current_model_region_diagnostics",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -49433,6 +51009,11 @@
     "/v2/sessions/current/model/regions": {
       "get": {
         "operationId": "model_get_sessions_current_model_regions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -49465,6 +51046,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -49488,6 +51072,9 @@
           },
           "404": {
             "description": "No active workspace, scene document, or region"
+          },
+          "409": {
+            "description": "Base scene revision does not match current scene revision"
           }
         },
         "tags": [
@@ -49498,6 +51085,11 @@
     "/v2/sessions/current/model/scene": {
       "get": {
         "operationId": "model_get_sessions_current_model_scene",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -49519,6 +51111,11 @@
       },
       "patch": {
         "operationId": "model_patch_sessions_current_model_scene",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -49556,10 +51153,17 @@
       },
       "put": {
         "operationId": "model_put_sessions_current_model_scene",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
-              "schema": {}
+              "schema": {
+                "$ref": "#/components/schemas/SceneResource"
+              }
             }
           },
           "required": true
@@ -49593,6 +51197,11 @@
     "/v2/sessions/current/model/script": {
       "get": {
         "operationId": "model_get_sessions_current_model_script",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -49616,6 +51225,11 @@
     "/v2/sessions/current/model/spin-interfaces": {
       "get": {
         "operationId": "model_get_sessions_current_model_spin_interfaces",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -49636,6 +51250,11 @@
     "/v2/sessions/current/model/spin-torques": {
       "get": {
         "operationId": "model_get_sessions_current_model_spin_torques",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -49654,6 +51273,11 @@
       },
       "post": {
         "operationId": "model_post_sessions_current_model_spin_torques",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -49695,6 +51319,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -49736,6 +51363,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -49767,6 +51397,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -49802,6 +51435,11 @@
     "/v2/sessions/current/model/spin-transports": {
       "get": {
         "operationId": "model_get_sessions_current_model_spin_transports",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -49820,6 +51458,11 @@
       },
       "post": {
         "operationId": "model_post_sessions_current_model_spin_transports",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -49861,6 +51504,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -49902,6 +51548,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -49933,6 +51582,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -49968,6 +51620,11 @@
     "/v2/sessions/current/model/study": {
       "get": {
         "operationId": "model_get_sessions_current_model_study",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -49989,6 +51646,11 @@
       },
       "patch": {
         "operationId": "model_patch_sessions_current_model_study",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -50022,6 +51684,11 @@
     "/v2/sessions/current/model/syncs": {
       "post": {
         "operationId": "model_post_sessions_current_model_syncs",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -50055,6 +51722,11 @@
     "/v2/sessions/current/model/transactions": {
       "post": {
         "operationId": "model_post_sessions_current_model_transactions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -50094,6 +51766,11 @@
     "/v2/sessions/current/model/transport-validation": {
       "post": {
         "operationId": "model_post_sessions_current_model_transport_validation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -50127,6 +51804,11 @@
     "/v2/sessions/current/model/universe": {
       "get": {
         "operationId": "model_get_sessions_current_model_universe",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -50148,6 +51830,11 @@
       },
       "patch": {
         "operationId": "model_patch_sessions_current_model_universe",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -50187,6 +51874,11 @@
     "/v2/sessions/current/model/universe/fit": {
       "post": {
         "operationId": "model_post_sessions_current_model_universe_fit",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -50226,6 +51918,11 @@
     "/v2/sessions/current/persistence/assets/import": {
       "post": {
         "operationId": "persistence_post_sessions_current_persistence_assets_import",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -50259,6 +51956,11 @@
     "/v2/sessions/current/persistence/checkpoints": {
       "get": {
         "operationId": "persistence_get_sessions_current_persistence_checkpoints",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -50280,6 +51982,11 @@
       },
       "post": {
         "operationId": "persistence_post_sessions_current_persistence_checkpoints",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -50325,6 +52032,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -50359,6 +52069,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -50397,6 +52110,11 @@
     "/v2/sessions/current/persistence/exports": {
       "post": {
         "operationId": "persistence_post_sessions_current_persistence_exports",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -50430,6 +52148,11 @@
     "/v2/sessions/current/persistence/field-states/exports": {
       "post": {
         "operationId": "persistence_post_sessions_current_persistence_field_states_exports",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -50466,6 +52189,11 @@
     "/v2/sessions/current/persistence/field-states/imports": {
       "post": {
         "operationId": "persistence_post_sessions_current_persistence_field_states_imports",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -50502,6 +52230,11 @@
     "/v2/sessions/current/persistence/field-states/imports/inspections": {
       "post": {
         "operationId": "persistence_post_sessions_current_persistence_field_states_imports_inspections",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -50538,6 +52271,11 @@
     "/v2/sessions/current/persistence/imports": {
       "post": {
         "operationId": "persistence_post_sessions_current_persistence_imports",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -50568,42 +52306,14 @@
         ]
       }
     },
-    "/v2/sessions/current/persistence/imports/inspections": {
-      "post": {
-        "operationId": "persistence_post_sessions_current_persistence_imports_inspections",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SessionImportInspectRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SessionImportInspectResponse"
-                }
-              }
-            },
-            "description": "Session import inspection"
-          },
-          "400": {
-            "description": "Invalid .fms payload"
-          }
-        },
-        "tags": [
-          "persistence"
-        ]
-      }
-    },
     "/v2/sessions/current/persistence/recovery": {
       "delete": {
         "operationId": "persistence_delete_sessions_current_persistence_recovery",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -50622,6 +52332,11 @@
       },
       "get": {
         "operationId": "persistence_get_sessions_current_persistence_recovery",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -50642,6 +52357,11 @@
     "/v2/sessions/current/simulation/commands": {
       "get": {
         "operationId": "simulation_get_sessions_current_simulation_commands",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -50663,6 +52383,11 @@
       },
       "post": {
         "operationId": "simulation_post_sessions_current_simulation_commands",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -50705,6 +52430,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -50739,6 +52467,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "requestBody": {
@@ -50783,6 +52514,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -50808,6 +52542,11 @@
     "/v2/sessions/current/simulation/preparation": {
       "get": {
         "operationId": "simulation_get_sessions_current_simulation_preparation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -50835,9 +52574,69 @@
         ]
       }
     },
+    "/v2/sessions/current/simulation/preparation/materialization": {
+      "post": {
+        "operationId": "simulation_post_sessions_current_simulation_preparation_materialization",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LivePreparationMaterializationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LivePreparationMaterializationResource"
+                }
+              }
+            },
+            "description": "Preparation receipt accepted for the current Live run"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Current Live preparation or scene is not available"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "The session, preparation, or scene revision changed"
+          }
+        },
+        "tags": [
+          "simulation"
+        ]
+      }
+    },
     "/v2/sessions/current/simulation/runs/current": {
       "get": {
         "operationId": "simulation_get_sessions_current_simulation_runs_current",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -50870,6 +52669,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -50895,6 +52697,11 @@
     "/v2/sessions/current/simulation/solver/energies/current": {
       "get": {
         "operationId": "simulation_get_sessions_current_simulation_solver_energies_current",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -50931,6 +52738,9 @@
                 "null"
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -50956,6 +52766,11 @@
     "/v2/sessions/current/simulation/solver/status": {
       "get": {
         "operationId": "simulation_get_sessions_current_simulation_solver_status",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -50979,6 +52794,11 @@
     "/v2/sessions/current/simulation/stages/execution": {
       "get": {
         "operationId": "simulation_get_sessions_current_simulation_stages_execution",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -51084,6 +52904,9 @@
                 "null"
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -51118,6 +52941,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -51152,6 +52978,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -51186,6 +53015,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -51220,6 +53052,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -51254,6 +53089,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -51288,6 +53126,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
         "responses": {
@@ -51313,6 +53154,11 @@
     "/v2/sessions/current/status": {
       "get": {
         "operationId": "sessions_get_sessions_current_status",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -51336,6 +53182,11 @@
     "/v2/sessions/current/visualization/client-acks": {
       "get": {
         "operationId": "visualization_get_sessions_current_visualization_client_acks",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -51354,6 +53205,11 @@
       },
       "post": {
         "operationId": "visualization_post_sessions_current_visualization_client_acks",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -51387,6 +53243,11 @@
     "/v2/sessions/current/visualization/display": {
       "get": {
         "operationId": "visualization_get_sessions_current_visualization_display",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -51408,6 +53269,11 @@
       },
       "patch": {
         "operationId": "visualization_patch_sessions_current_visualization_display",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -51439,6 +53305,11 @@
       },
       "put": {
         "operationId": "visualization_put_sessions_current_visualization_display",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -51472,6 +53343,11 @@
     "/v2/sessions/current/visualization/mode-compositions/active": {
       "get": {
         "operationId": "visualization_get_sessions_current_visualization_mode_compositions_active",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -51490,6 +53366,11 @@
       },
       "patch": {
         "operationId": "visualization_patch_sessions_current_visualization_mode_compositions_active",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -51526,6 +53407,11 @@
     "/v2/sessions/current/visualization/state": {
       "get": {
         "operationId": "visualization_get_sessions_current_visualization_state",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -51547,6 +53433,11 @@
       },
       "patch": {
         "operationId": "visualization_patch_sessions_current_visualization_state",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -51578,6 +53469,11 @@
       },
       "put": {
         "operationId": "visualization_put_sessions_current_visualization_state",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -51611,6 +53507,11 @@
     "/v2/sessions/current/workspace/layout": {
       "get": {
         "operationId": "workspace_get_sessions_current_workspace_layout",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -51632,6 +53533,11 @@
       },
       "put": {
         "operationId": "workspace_put_sessions_current_workspace_layout",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -51665,6 +53571,11 @@
     "/v2/sessions/current/workspace/ribbon": {
       "get": {
         "operationId": "workspace_get_sessions_current_workspace_ribbon",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -51686,6 +53597,11 @@
       },
       "put": {
         "operationId": "workspace_put_sessions_current_workspace_ribbon",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -51719,6 +53635,11 @@
     "/v2/sessions/current/workspace/selection": {
       "get": {
         "operationId": "workspace_get_sessions_current_workspace_selection",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -51740,6 +53661,11 @@
       },
       "put": {
         "operationId": "workspace_put_sessions_current_workspace_selection",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -51773,6 +53699,11 @@
     "/v2/sessions/current/workspace/tree/active-node": {
       "get": {
         "operationId": "workspace_get_sessions_current_workspace_tree_active_node",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -51794,6 +53725,11 @@
       },
       "put": {
         "operationId": "workspace_put_sessions_current_workspace_tree_active_node",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {

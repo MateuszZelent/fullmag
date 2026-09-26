@@ -7,6 +7,7 @@ interface BinaryDecodeTask<TData> {
   decodeInline: (buffer: ArrayBuffer) => TData;
   kind: BinaryDecoderKind;
   path: string;
+  signal?: AbortSignal;
 }
 
 export interface BinaryDecodeDiagnosticEvent {
@@ -73,7 +74,9 @@ export function createBinaryDecodeScheduler(
     decodeInline,
     kind,
     path,
+    signal,
   }: BinaryDecodeTask<TData>) => {
+    throwIfAborted(signal);
     const queuedAtMs = now();
     const payloadBytes = buffer.byteLength;
     const client = getBinaryDecodeWorkerClient();
@@ -81,6 +84,7 @@ export function createBinaryDecodeScheduler(
     if (client) {
       try {
         const data = (await client.decode(kind, buffer)) as TData;
+        throwIfAborted(signal);
         recordDecodeDiagnostic(options, {
           durationMs: Math.max(0, now() - startedAtMs),
           errorName: null,
@@ -111,6 +115,7 @@ export function createBinaryDecodeScheduler(
 
     try {
       const data = decodeInline(buffer);
+      throwIfAborted(signal);
       recordDecodeDiagnostic(options, {
         durationMs: Math.max(0, now() - startedAtMs),
         errorName: null,
@@ -138,6 +143,11 @@ export function createBinaryDecodeScheduler(
       throw error;
     }
   };
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  throw new DOMException("Binary decode was aborted.", "AbortError");
 }
 
 export function disposeBinaryDecodeWorkerForTests(): void {

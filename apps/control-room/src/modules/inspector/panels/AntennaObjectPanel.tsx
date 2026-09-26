@@ -4,6 +4,8 @@ import { MODEL_READINESS_PATH, MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
 import type { JsonObject, RegionalFieldDriveResource } from "@/kernel/api/apiTypes";
 import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import { useKernel } from "@/kernel/KernelContext";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
+import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import { Button } from "@/shared/ui/Button";
 
@@ -49,6 +51,7 @@ function invalidateSceneResource(
 
 export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
   const { api, authoringHistory, resources } = useKernel();
+  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const scene = useSceneResource();
   const model = resolveAntennaObjectPanelModel(selection, scene.data);
   const baseDraft = useMemo(
@@ -84,7 +87,7 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
     setPending(true);
     try {
       const response = await runAuthoringMutationWithHistory(
-        { api, authoringHistory },
+        { api, authoringHistory, sessionScopeKey },
         model.mode === "canonical"
           ? `Update antenna drive ${model.objectId}`
           : `Migrate antenna drive ${model.objectId}`,
@@ -106,10 +109,14 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
     const patch = buildAntennaCanonicalFieldDrive(selection, scene.data, draft);
     if (patch.error || !patch.drive) throw new Error(patch.error ?? "Invalid antenna drive draft.");
     const drive = patch.drive as unknown as RegionalFieldDriveResource;
-    return api.model.replaceFieldDrive(drive.id, {
-      base_revision: capturedRevision ?? scene.data?.revision ?? null,
-      drive,
-    });
+    return api.model.replaceFieldDrive(
+      drive.id,
+      {
+        base_revision: capturedRevision ?? scene.data?.revision ?? null,
+        drive,
+      },
+      sessionScopeKey ? { sessionScopeKey } : undefined,
+    );
   }
 
   async function migrateLegacyDrive(capturedRevision?: number | null) {
@@ -122,7 +129,7 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
         field_drives: { drives: patch.drives as JsonObject[] },
         current_modules: { modules: patch.modules as JsonObject[] },
       },
-    });
+    }, sessionScopeKey ? { sessionScopeKey } : undefined);
   }
 
   return (

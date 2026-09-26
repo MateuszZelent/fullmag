@@ -48,7 +48,7 @@ import {
 } from "@/kernel/resources/ResourceRuntimeStore";
 import type { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { useResource } from "@/kernel/resources/useResource";
-import { sessionScopedResourceKey } from "@/kernel/resources/sessionResourceIdentity";
+import { sessionResourceIdentityKey, sessionScopedResourceKey } from "@/kernel/resources/sessionResourceIdentity";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 
 import {
@@ -96,9 +96,7 @@ function abortViewport3DInflightBinaryResources(): void {
 export function synchronizeViewport3DSessionIdentity(
   identity: ReturnType<typeof useSessionResourceIdentity>,
 ): boolean {
-  const identityKey = identity
-    ? `${identity.sessionId}\u0000${identity.sessionEpoch}`
-    : null;
+  const identityKey = identity ? sessionResourceIdentityKey(identity) : null;
   if (activeViewportSessionIdentityKey === identityKey) return false;
   viewport3DSessionIdentityGeneration += 1;
   abortViewport3DInflightBinaryResources();
@@ -1515,13 +1513,14 @@ export function useViewport3DFieldVectorRequest(
     ? sessionScopedResourceKey(sessionIdentity, unscopedRequestKey)
     : unscopedRequestKey;
   const load = useCallback(
-    async ({ signal }: { signal: AbortSignal }) => {
+    async ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => {
       const data = await loadCachedBinaryResource(
         fieldVectorCache,
         requestKey,
         (etag, requestSignal) =>
           api.data.fields.vector(quantityId, query, {
             etag,
+            sessionScopeKey,
             signal: requestSignal,
           }),
         {
@@ -1618,7 +1617,7 @@ export function useViewport3DAirboxFieldVectors(
     );
   }, [requests]);
   const load = useCallback(
-    async ({ signal }: { signal: AbortSignal }) => {
+    async ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => {
       const uniqueRequests = Array.from(
         new Map(
           Array.from(requests.values(), (request) => [request.key, request]),
@@ -1641,6 +1640,7 @@ export function useViewport3DAirboxFieldVectors(
             (etag, requestSignal) =>
               api.data.fields.vector(request.quantityId, request.query, {
                 etag,
+                sessionScopeKey,
                 signal: requestSignal,
               }),
             {
@@ -1895,7 +1895,7 @@ export function useViewport3DQuantityFieldVectors(
     );
   }, [requestKeys]);
   const load = useCallback(
-    async ({ signal }: { signal: AbortSignal }) => {
+    async ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => {
       const entries: Array<readonly [string, CachedFieldVectorEnvelope | null]> = [];
       const requestFailures: Viewport3DFieldVectorRequestFailure[] = [];
       let firstError: unknown = null;
@@ -1914,7 +1914,7 @@ export function useViewport3DQuantityFieldVectors(
               api.data.fields.vector(
                 request.quantityId,
                 request.query,
-                { etag, signal: requestSignal },
+                { etag, sessionScopeKey, signal: requestSignal },
               ),
             {
               onFreshAdoption: recordFieldVectorCacheAdoption,
@@ -2137,7 +2137,7 @@ export function useViewport3DPartFieldVectors(
     );
   }, [requestKeys]);
   const load = useCallback(
-    async ({ signal }: { signal: AbortSignal }) => {
+    async ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => {
       const entries: Array<readonly [string, CachedFieldVectorEnvelope | null]> = [];
       const requestFailures: Viewport3DFieldVectorRequestFailure[] = [];
       let firstError: unknown = null;
@@ -2156,7 +2156,7 @@ export function useViewport3DPartFieldVectors(
               api.data.fields.vector(
                 request.quantityId,
                 request.query,
-                { etag, signal: requestSignal },
+                { etag, sessionScopeKey, signal: requestSignal },
               ),
             {
               onFreshAdoption: recordFieldVectorCacheAdoption,

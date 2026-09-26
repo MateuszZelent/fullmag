@@ -378,6 +378,35 @@ describe("SimulationStartupOverlay", () => {
     expect(orderedLabels).toEqual([...orderedLabels].sort((left, right) => left - right));
   });
 
+  it("renders accepted preparation provenance without inventing it", () => {
+    const planFingerprint = `sha256:${"a".repeat(64)}`;
+    const model = resolveSimulationPreparationViewModel(
+      preparationResult(
+        preparationResource({
+          receipt: {
+            payload_sha256: "b".repeat(64),
+            plan_fingerprint: planFingerprint,
+            preparation_id: "prep-accepted",
+            run_id: "run-accepted",
+            schema_version: "preparation_receipt.v1",
+          },
+        }),
+      ),
+      statusResource({ solver: { state: "bootstrapping" } }),
+      18_700,
+    );
+    const html = renderToStaticMarkup(
+      <SimulationStartupOverlayView state={model} />,
+    );
+
+    expect(html).toContain('data-preparation-receipt="accepted"');
+    expect(html).toContain("prep-accepted");
+    expect(html).toContain("run-accepted");
+    expect(html).toContain("preparation_receipt.v1");
+    expect(html).toContain(planFingerprint);
+    expect(html).toContain("b".repeat(64));
+  });
+
   it("renders an active Gmsh attempt as indeterminate without a fabricated percent", () => {
     const resource = preparationResource();
     resource.stages = resource.stages.map((stage) =>

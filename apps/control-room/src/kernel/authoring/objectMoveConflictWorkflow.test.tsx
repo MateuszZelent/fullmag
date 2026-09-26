@@ -336,7 +336,7 @@ function scene(
 function sessionStatus(sessionId: string, sessionEpoch: string, revision: number) {
   return {
     resources: { scene_revision: revision },
-    session: { session_epoch: sessionEpoch, session_id: sessionId },
+    session: { session_epoch: sessionEpoch, session_id: sessionId, request_scope_epoch: `test-api:${sessionId}` },
   } as never;
 }
 

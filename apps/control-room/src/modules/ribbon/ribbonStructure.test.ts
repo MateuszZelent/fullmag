@@ -37,6 +37,7 @@ import {
   MODEL_SCENE_PATH,
   MODEL_READINESS_PATH,
   SIMULATION_COMMANDS_PATH,
+  SIMULATION_PREPARATION_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
   VISUALIZATION_STATE_PATH,
@@ -4364,6 +4365,53 @@ describe("ribbon structure", () => {
     });
   });
 
+  it("shows last-good mesh identity and source provenance in the mesh status menu", () => {
+    const visualization = new ObjectVisualizationController();
+    const content = buildRibbonTabContent("mesh", {
+      meshBuildLatest: {
+        revision: 12,
+        source_scene_revision: 9,
+        geometry_realization_revision: 11,
+        last_success: {
+          mesh_id: "mesh-12",
+          generation_id: "generation-12",
+        },
+      } as never,
+      meshSummary: { mesh_summary: { node_count: 4, element_count: 2 } } as never,
+      sessionStatus: femRibbonSessionStatus(),
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    });
+
+    const menu = content?.groups
+      .find((group) => group.id === "build")
+      ?.actions.find((action) => action.id === "mesh.build-selected")?.menu;
+    expect(menu).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "mesh-build-status:last-good",
+        label: "Last good artifact",
+        value: "mesh-12",
+        tone: "success",
+      }),
+      expect.objectContaining({
+        id: "mesh-build-status:source-scene",
+        value: "9",
+      }),
+      expect.objectContaining({
+        id: "mesh-build-status:geometry-realization",
+        value: "11",
+      }),
+    ]));
+  });
+
   it("prefers explicit supported mesh capability data over an unsupported top-level fallback", () => {
     const commands = createControlRoomCommandRegistry();
     const visualization = new ObjectVisualizationController();
@@ -4683,6 +4731,7 @@ describe("ribbon structure", () => {
         resourceData: {
           [MODEL_GEOMETRY_VALIDATION_PATH]: { diagnostics: [] },
           [MODEL_READINESS_PATH]: READY_MODEL_READINESS,
+          [SIMULATION_PREPARATION_PATH]: { preparation_id: "prep-1" },
           [SESSION_STATUS_RESOURCE_KEY]: {
             capabilities: {
               binary_fields: true,
@@ -4725,10 +4774,17 @@ describe("ribbon structure", () => {
     const computeAction = content?.groups
       .find((group) => group.id === "control")
       ?.actions.find((action) => action.id === "study.run");
+    const prepareAction = content?.groups
+      .find((group) => group.id === "control")
+      ?.actions.find((action) => action.id === "study.prepare-live");
 
     expect(computeFieldsAction).toMatchObject({
       disabled: false,
       label: "Compute Fields",
+    });
+    expect(prepareAction).toMatchObject({
+      disabled: false,
+      label: "Prepare",
     });
     expect(computeAction).toMatchObject({
       disabled: false,
@@ -5115,7 +5171,6 @@ describe("ribbon structure", () => {
       "builder-mode-camera",
       "builder-mode-manipulate",
       "builder-toggle-snap",
-      "builder-validate",
       "builder-show-universe",
     ]);
     const actions = ALL_TAB_CONTENT.geometry.groups.flatMap(
@@ -5146,6 +5201,15 @@ describe("ribbon structure", () => {
       ]),
     );
     const frameAllAction = actions.find((action) => action.id === "builder-frame-all");
+
+    expect(actions.find((action) => action.id === "builder-build-geometry")).toMatchObject({
+      id: "builder-build-geometry",
+      label: "Build Geometry",
+    });
+    expect(actions.find((action) => action.id === "builder-validate")).toMatchObject({
+      id: "builder-validate",
+      label: "Validate",
+    });
 
     expect(frameAllAction).toMatchObject({
       commandId: "viewport-3d.fit",

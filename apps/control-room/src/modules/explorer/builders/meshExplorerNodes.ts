@@ -70,11 +70,17 @@ function meshFreshnessBadge(freshness: MeshFreshnessState): string {
   return freshness;
 }
 
+function meshBuildPipelineBadge(mesh: ModelTreeSnapshot["mesh"]): string {
+  const revision = mesh?.meshRevision ?? mesh?.buildRevision ?? "none";
+  const sourceSceneRevision =
+    mesh?.manifestSourceSceneRevision ?? mesh?.latestBuildSourceSceneRevision;
+  return `rev ${revision} · scene ${sourceSceneRevision ?? "unknown"}`;
+}
+
 export function buildMeshPolicyNode(mesh: ModelTreeSnapshot["mesh"]): ExplorerNode {
   const status = meshRootStatus(mesh);
   const freshness = meshFreshnessState(mesh);
   const sharedDomainStatus = meshFreshnessStatus(freshness, status);
-  const revision = mesh?.meshRevision ?? mesh?.buildRevision ?? "none";
   const partCount = mesh?.partCount ?? 0;
   const objectSegmentCount = mesh?.objectSegmentCount ?? 0;
   const regionCount = mesh?.regionCount ?? 0;
@@ -111,7 +117,7 @@ export function buildMeshPolicyNode(mesh: ModelTreeSnapshot["mesh"]): ExplorerNo
         kind: "mesh.builds",
         label: "Build Pipeline",
         parentId: "model:mesh",
-        badge: `rev ${revision}`,
+        badge: meshBuildPipelineBadge(mesh),
         icon: "activity",
         status,
         contextCommands: ["mesh.build-shared-domain", "mesh.open-builds"],

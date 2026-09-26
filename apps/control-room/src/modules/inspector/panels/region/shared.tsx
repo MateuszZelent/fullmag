@@ -19,6 +19,7 @@ export interface RegionSubPanelProps {
   model: ObjectRegionPanelModel;
   draft: ObjectRegionDraft;
   pending: boolean;
+  sessionAvailable?: boolean;
   buildPending?: boolean;
   membership?: MeshRegionMembershipResource | null;
   draftDirty: boolean;
@@ -108,6 +109,7 @@ export function ObjectRegionMetadataSection({
 
 export function ObjectRegionActionsSection({
   pending,
+  sessionAvailable = true,
   buildPending = false,
   draftDirty,
   buildRegion,
@@ -123,6 +125,7 @@ export function ObjectRegionActionsSection({
   couplingDependencies,
 }: {
   pending: boolean;
+  sessionAvailable?: boolean;
   buildPending?: boolean;
   draftDirty: boolean;
   buildRegion: () => Promise<void>;
@@ -194,7 +197,7 @@ export function ObjectRegionActionsSection({
       )}
       <div className="fm-inspector-toolbar">
         <Button
-          disabled={pending || !canWriteRegion}
+          disabled={!sessionAvailable || pending || !canWriteRegion}
           size="sm"
           type="button"
           variant="primary"
@@ -205,7 +208,7 @@ export function ObjectRegionActionsSection({
         </Button>
         {meshLane === "fem" ? (
           <Button
-            disabled={pending || buildPending || !meshWritesAllowed || femMeshLifecycle?.status === "unsupported"}
+            disabled={!sessionAvailable || pending || buildPending || !meshWritesAllowed || femMeshLifecycle?.status === "unsupported"}
             size="sm"
             type="button"
             variant="primary"
@@ -224,7 +227,7 @@ export function ObjectRegionActionsSection({
           Revert
         </Button>
         <Button
-          disabled={pending || !canWriteRegion}
+          disabled={!sessionAvailable || pending || !canWriteRegion}
           size="sm"
           type="button"
           variant="ghost"
@@ -235,7 +238,7 @@ export function ObjectRegionActionsSection({
         </Button>
         <span className="fm-inspector-toolbar__spacer" />
         <Button
-          disabled={pending || !canWriteRegion || hasActiveCouplings}
+          disabled={!sessionAvailable || pending || !canWriteRegion || hasActiveCouplings}
           size="sm"
           type="button"
           variant="danger"

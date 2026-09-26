@@ -207,4 +207,34 @@ describe("MoveObjectGizmo", () => {
     expect(new Set(invalidate.mock.calls.map(([resourceKey]) => resourceKey)).size).toBe(7);
     expect(invalidate.mock.calls.every(([, revision]) => revision === 22)).toBe(true);
   });
+
+  it("pins the translation request and drops stale-session ACK invalidations", async () => {
+    let current = true;
+    const commitTransaction = vi.fn().mockImplementation(async () => {
+      current = false;
+      return { scene_revision: 22 };
+    });
+    const invalidate = vi.fn();
+
+    await commitObjectTranslation({
+      api: { model: { commitTransaction } } as never,
+      baseRevision: 21,
+      isCurrentSessionScope: () => current,
+      objectId: "magnet-z",
+      resources: { invalidate } as never,
+      sessionScopeKey: "session=A&epoch=1",
+      translation: [4e-9, 5e-9, 6e-9],
+    });
+
+    expect(commitTransaction).toHaveBeenCalledWith(
+      {
+        base_revision: 21,
+        kind: "commit_object_transform",
+        object_id: "magnet-z",
+        transform: { translation: [4e-9, 5e-9, 6e-9] },
+      },
+      { sessionScopeKey: "session=A&epoch=1" },
+    );
+    expect(invalidate).not.toHaveBeenCalled();
+  });
 });

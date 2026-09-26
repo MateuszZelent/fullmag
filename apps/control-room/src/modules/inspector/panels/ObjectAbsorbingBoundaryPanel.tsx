@@ -3,7 +3,10 @@
 import { useMemo, useState } from "react";
 
 import { SCENE_RESOURCE_KEY, useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
-import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
+import {
+  authoringWriteOptions,
+  runAuthoringMutationWithHistory,
+} from "@/kernel/authoring/authoringHistoryMutation";
 import { useKernel } from "@/kernel/KernelContext";
 import { Button } from "@/shared/ui/Button";
 
@@ -31,7 +34,7 @@ export function ObjectAbsorbingBoundaryPanel({
   objectId,
   baseRevision,
 }: ObjectAbsorbingBoundaryPanelProps) {
-  const { api, authoringHistory, resources } = useKernel();
+  const { api, authoringHistory, commands, resources } = useKernel();
   const scene = useSceneResource();
   const object = useMemo(
     () => scene.data?.objects?.find((candidate) => candidate.id === objectId) ?? null,
@@ -51,6 +54,22 @@ export function ObjectAbsorbingBoundaryPanel({
   const [feedback, setFeedback] = useState<Feedback>(null);
   const update = (patch: Partial<AbsorbingBoundaryDraft>) =>
     setDraftState({ key: baseKey, draft: { ...draft, ...patch } });
+
+  function createHistoryMutationContext() {
+    const sessionScopeKey = commands.getSessionScopeKey();
+    const historyGeneration = authoringHistory?.getGeneration?.();
+    return {
+      api,
+      authoringHistory,
+      resourceData: { [SCENE_RESOURCE_KEY]: scene.data },
+      sessionScopeKey: sessionScopeKey ?? null,
+      isCurrentSessionScope: () =>
+        commands.getSessionScopeKey() === sessionScopeKey &&
+        (historyGeneration === undefined ||
+          authoringHistory?.getGeneration?.() === historyGeneration),
+    };
+  }
+
   const toggleFace = (face: string) =>
     update({
       faces: draft.faces.includes(face)
@@ -64,24 +83,39 @@ export function ObjectAbsorbingBoundaryPanel({
       setFeedback({ kind: "error", message: result.error });
       return;
     }
+    const historyContext = createHistoryMutationContext();
+    if (!historyContext.sessionScopeKey) {
+      setFeedback({ kind: "error", message: "Session identity is not ready. Try again after it loads." });
+      return;
+    }
     setPending(true);
     try {
       const response = await runAuthoringMutationWithHistory(
-        { api, authoringHistory },
+        historyContext,
         `Update absorbing boundary ${objectId}`,
         async ({ baseRevision: capturedRevision }) => {
+          const commitRevision = capturedRevision ?? baseRevision;
+          if (typeof commitRevision !== "number" || !Number.isFinite(commitRevision)) {
+            throw new Error("The canonical scene revision is unavailable. Refetch the scene before applying.");
+          }
           const next = buildAbsorbingBoundaryPatch(
             draft,
-            capturedRevision ?? baseRevision,
+            commitRevision,
           );
           if ("error" in next) throw new Error(next.error);
-          return api.model.patchObject(objectId, next.patch);
+          return api.model.patchObject(
+            objectId,
+            next.patch,
+            authoringWriteOptions(commitRevision, historyContext.sessionScopeKey),
+          );
         },
       );
+      if (historyContext.isCurrentSessionScope() === false) return;
       const revision = typeof response.revision === "number" ? response.revision : (baseRevision ?? 0) + 1;
       resources.invalidate(SCENE_RESOURCE_KEY, revision);
       setFeedback({ kind: "success", message: "Absorbing boundary updated." });
     } catch (error) {
+      if (historyContext.isCurrentSessionScope() === false) return;
       setFeedback({
         kind: "error",
         message: error instanceof Error ? error.message : String(error),

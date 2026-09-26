@@ -34,7 +34,7 @@ import {
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import { useMeshHistogramBinElementsResource } from "@/kernel/resources/geometryLifecycleResources";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
-import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
+import { sessionResourceIdentityKey, type SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
 import { useFieldMetaResource } from "@/kernel/resources/studyRuntimeResources";
 import {
   frozenSpinsMaskIdFromResource,
@@ -1393,9 +1393,7 @@ export default function Viewport3DModule({
   });
   const { select, clear } = useSelectionActions(moduleId);
   const tracker = useViewport3DResourceTracker();
-  const sessionIdentityKey = sessionIdentity
-    ? `${sessionIdentity.sessionId}\u0000${sessionIdentity.sessionEpoch}`
-    : null;
+  const sessionIdentityKey = sessionIdentity ? sessionResourceIdentityKey(sessionIdentity) : null;
   const previousSessionIdentityKeyRef = useRef(sessionIdentityKey);
   useEffect(() => {
     if (previousSessionIdentityKeyRef.current === sessionIdentityKey) return;
@@ -2281,6 +2279,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       renderCommit: committedDataIdentity,
       revision,
       resourceKey,
+      sessionId: sessionIdentity?.sessionId ?? null,
       sessionEpoch: sessionIdentity?.sessionEpoch ?? null,
       status: "rendered",
       viewportId: slotId,
@@ -2349,6 +2348,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       error: visualizationError,
       resourceKey,
       revision,
+      sessionId: sessionIdentity?.sessionId ?? null,
       sessionEpoch: sessionIdentity?.sessionEpoch ?? null,
       status: visualizationError ? "failed" : changeKind === "data" ? "applied" : "rendered",
       viewportId: slotId,

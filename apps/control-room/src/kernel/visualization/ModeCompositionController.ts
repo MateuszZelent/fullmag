@@ -13,6 +13,7 @@ import type {
   ModeFieldRepresentation as GeneratedModeFieldRepresentation,
   ModeLayerAnimation as GeneratedModeLayerAnimation,
   ModeLayerAppearance as GeneratedModeLayerAppearance,
+  RequestOptions,
 } from "../api/apiTypes";
 
 export type EigenModeResourceRef = GeneratedEigenModeResourceRef;
@@ -38,10 +39,10 @@ export interface ModeCompositionPatchIntent {
 }
 
 export interface ModeCompositionMutationClient {
-  getActiveModeComposition(options?: { signal?: AbortSignal }): Promise<ModeCompositionResource>;
+  getActiveModeComposition(options?: RequestOptions): Promise<ModeCompositionResource>;
   patchActiveModeComposition(
     patch: ModeCompositionPatch,
-    options?: { signal?: AbortSignal },
+    options?: RequestOptions,
   ): Promise<ModeCompositionResource>;
 }
 
@@ -89,6 +90,7 @@ export class ModeCompositionController {
   private authoritative: ModeCompositionResource | null = null;
   private epoch = 0;
   private lastError: ModeCompositionMutationError | null = null;
+  private sessionScopeKey: string | null = null;
   private readonly listeners = new Set<ModeCompositionListener>();
   private mutationQueue: Promise<void> = Promise.resolve();
   private readonly pending: PendingMutation[] = [];
@@ -112,6 +114,10 @@ export class ModeCompositionController {
 
   /** Receives the revision-aware HTTP resource; realtime must only trigger its refetch. */
   acceptResource(resource: ModeCompositionResource | null): void {
+    if (resource === null && this.authoritative !== null) {
+      this.epoch += 1;
+      this.cancelPendingForLifecycleReset();
+    }
     const lifecycleChanged =
       resource !== null &&
       this.authoritative !== null &&
@@ -121,6 +127,17 @@ export class ModeCompositionController {
       this.cancelPendingForLifecycleReset();
     }
     this.authoritative = resource;
+    this.lastError = null;
+    this.publish();
+  }
+
+  /** Drops any authoritative payload when the owning session identity changes. */
+  resetForSession(sessionScopeKey: string | null): void {
+    if (this.sessionScopeKey === sessionScopeKey) return;
+    this.sessionScopeKey = sessionScopeKey;
+    this.epoch += 1;
+    this.cancelPendingForLifecycleReset();
+    this.authoritative = null;
     this.lastError = null;
     this.publish();
   }
@@ -221,7 +238,7 @@ export class ModeCompositionController {
     }
 
     try {
-      const response = await this.client.patchActiveModeComposition(
+      const response = await this.patchActiveModeComposition(
         patchFor(base, mutation.intent),
       );
       if (!this.isCurrent(mutation)) return;
@@ -238,7 +255,7 @@ export class ModeCompositionController {
 
   private async retryAfterRevisionConflict(mutation: PendingMutation): Promise<void> {
     try {
-      const refreshed = await this.client.getActiveModeComposition();
+      const refreshed = await this.getActiveModeComposition();
       if (!this.isCurrent(mutation)) return;
       this.acceptResource(refreshed);
       if (!this.isCurrent(mutation) || !retryPreconditionsHold(refreshed, mutation)) {
@@ -251,7 +268,7 @@ export class ModeCompositionController {
         );
         return;
       }
-      const response = await this.client.patchActiveModeComposition(
+      const response = await this.patchActiveModeComposition(
         patchFor(refreshed, mutation.intent),
       );
       if (!this.isCurrent(mutation)) return;
@@ -288,6 +305,28 @@ export class ModeCompositionController {
   private removePending(mutation: PendingMutation): void {
     const index = this.pending.indexOf(mutation);
     if (index >= 0) this.pending.splice(index, 1);
+  }
+
+  private getActiveModeComposition(): Promise<ModeCompositionResource> {
+    const options = this.requestOptions();
+    return options
+      ? this.client.getActiveModeComposition(options)
+      : this.client.getActiveModeComposition();
+  }
+
+  private patchActiveModeComposition(
+    patch: ModeCompositionPatch,
+  ): Promise<ModeCompositionResource> {
+    const options = this.requestOptions();
+    return options
+      ? this.client.patchActiveModeComposition(patch, options)
+      : this.client.patchActiveModeComposition(patch);
+  }
+
+  private requestOptions(): RequestOptions | undefined {
+    return this.sessionScopeKey === null
+      ? undefined
+      : { sessionScopeKey: this.sessionScopeKey };
   }
 
   private cancelPendingForLifecycleReset(): void {

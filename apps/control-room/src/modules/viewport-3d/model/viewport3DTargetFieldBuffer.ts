@@ -116,7 +116,8 @@ export function buildViewport3DTargetFieldBuffer({
   topologyRevision?: string | null;
 }): Viewport3DTargetFieldBuffer {
   const validSessionIdentity =
-    sessionIdentity?.sessionId?.trim() && sessionIdentity.sessionEpoch?.trim()
+    sessionIdentity?.sessionId?.trim() && sessionIdentity.sessionEpoch?.trim() &&
+      sessionIdentity.requestScopeEpoch?.trim()
       ? sessionIdentity
       : null;
   const component = resolveTargetFieldBufferComponent(fieldVector, query);
@@ -207,6 +208,7 @@ export function buildViewport3DTargetFieldBuffer({
       indexing,
       sessionEpoch: validSessionIdentity?.sessionEpoch ?? null,
       sessionId: validSessionIdentity?.sessionId ?? null,
+      requestScopeEpoch: validSessionIdentity?.requestScopeEpoch ?? null,
       topologyRevision,
     }),
     capability,
@@ -546,6 +548,7 @@ function buildViewport3DTargetFieldBufferId({
   indexing,
   sessionEpoch,
   sessionId,
+  requestScopeEpoch,
   topologyRevision,
 }: {
   component: Exclude<Viewport3DFieldComponentDemand, "none">;
@@ -559,11 +562,13 @@ function buildViewport3DTargetFieldBufferId({
   indexing: NonNullable<DecodedFieldVector["indexing"]>;
   sessionEpoch: string | null;
   sessionId: string | null;
+  requestScopeEpoch: string | null;
   topologyRevision: string | null;
 }): string {
   return [
     sessionId ?? "session:none",
     sessionEpoch ?? "epoch:none",
+    requestScopeEpoch ?? "request-epoch:none",
     resolveCanonicalQuantityId(quantityId),
     component,
     scopeKind,

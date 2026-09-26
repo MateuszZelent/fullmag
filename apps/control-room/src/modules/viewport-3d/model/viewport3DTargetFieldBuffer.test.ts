@@ -32,7 +32,7 @@ function buildViewport3DTargetFieldBuffer(
     sessionIdentity:
       "sessionIdentity" in options
         ? options.sessionIdentity
-        : { sessionEpoch: "test-session@1000", sessionId: "test-session" },
+        : { sessionEpoch: "test-session@1000", sessionId: "test-session", requestScopeEpoch: "test-api:1" },
     resourceKey:
       options.resourceKey ??
       serializeCanonicalFieldVectorResourceKey(
@@ -1020,11 +1020,11 @@ describe("viewport3DTargetFieldBuffer", () => {
     };
     const first = buildViewport3DTargetFieldBuffer({
       ...options,
-      sessionIdentity: { sessionEpoch: "epoch-1", sessionId: "session-1" },
+      sessionIdentity: { sessionEpoch: "epoch-1", sessionId: "session-1", requestScopeEpoch: "test-api:1" },
     });
     const second = buildViewport3DTargetFieldBuffer({
       ...options,
-      sessionIdentity: { sessionEpoch: "epoch-2", sessionId: "session-1" },
+      sessionIdentity: { sessionEpoch: "epoch-2", sessionId: "session-1", requestScopeEpoch: "test-api:2" },
     });
 
     expect(first.bufferId).not.toBe(second.bufferId);

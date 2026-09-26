@@ -9,7 +9,17 @@ import {
 import type { ResourceKey } from "./resourceTypes";
 
 interface LoadContext {
+  resourceKey: ResourceKey;
+  sessionScopeKey?: string;
   signal: AbortSignal;
+}
+
+function sessionScopeKeyFromResourceKey(resourceKey: ResourceKey): string | undefined {
+  const separatorIndex = resourceKey.indexOf("|");
+  if (!resourceKey.startsWith("session=") || separatorIndex <= 0) {
+    return undefined;
+  }
+  return resourceKey.slice(0, separatorIndex);
 }
 
 /**
@@ -352,6 +362,18 @@ export class ResourceRuntimeStore<TData = unknown> {
     this.notify(entry);
   }
 
+  updateDataMatching<TUpdateData = TData>(
+    predicate: (resourceKey: ResourceKey) => boolean,
+    data: TUpdateData,
+    revision: ResourceRevision,
+  ): void {
+    for (const resourceKey of this.entries.keys()) {
+      if (predicate(resourceKey)) {
+        this.updateData(resourceKey, data, revision);
+      }
+    }
+  }
+
   pauseLoad(resourceKey: ResourceKey): void {
     const entry = this.entries.get(resourceKey) as
       | ResourceRuntimeEntry<TData>
@@ -584,7 +606,11 @@ export class ResourceRuntimeStore<TData = unknown> {
       entry.deadlineTimer = deadlineTimer;
     }
 
-    const pending = load({ signal: controller.signal })
+    const pending = load({
+      resourceKey,
+      sessionScopeKey: sessionScopeKeyFromResourceKey(resourceKey),
+      signal: controller.signal,
+    })
       .then((data) => {
         if (entry.sequence !== sequence || controller.signal.aborted) {
           return entry.snapshot;

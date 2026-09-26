@@ -7,6 +7,9 @@ export function createCommandContext(
   kernel: KernelApi,
   patch: Partial<CommandContext> = {},
 ): CommandContext {
+  const sessionScopeKey = patch.sessionScopeKey === undefined
+    ? kernel.commands?.getSessionScopeKey?.()
+    : patch.sessionScopeKey;
   return {
     api: kernel.api,
     analysisFieldOverlay: kernel.analysisFieldOverlay,
@@ -22,6 +25,10 @@ export function createCommandContext(
     projectDocument: kernel.projectDocument,
     resourceData: patch.resourceData,
     resources: kernel.resources,
+    sessionScopeKey,
+    isCurrentSessionScope: patch.isCurrentSessionScope ?? (sessionScopeKey
+      ? () => kernel.commands?.getSessionScopeKey?.() === sessionScopeKey
+      : undefined),
     selection: kernel.selection,
     sourceDetail: patch.sourceDetail,
     visualization: kernel.visualization,

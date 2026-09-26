@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -143,6 +144,7 @@ vi.mock("@/kernel/resources/spinAuthoringResources", () => ({
 }));
 
 vi.mock("@/kernel/resources/useSessionStatus", () => ({
+  useSessionResourceIdentity: () => ({ requestScopeEpoch: "1", sessionEpoch: "1", sessionId: "test-session" }),
   useSessionStatusSelector: (selector: (value: unknown) => unknown) => selector({
     data: {
       capabilities: {
@@ -194,6 +196,22 @@ function expectedOpaqueTextareaContent(value: unknown): string {
 }
 
 describe("TransportAuthoringInspector", () => {
+  it("records create and replace writes through the shared authoring history boundary", () => {
+    const source = readFileSync(
+      new URL("./TransportAuthoringInspector.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("const commit = await runAuthoringMutationWithHistory(");
+    expect(source).toContain("captureAuthoringMutationFence(");
+    expect(source).toContain("validateTransport(request, { sessionScopeKey, signal: controller.signal })");
+    expect(source).toContain("request, requestOptions");
+    expect(source).toContain("mutationContext.isCurrentSessionScope?.() !== true");
+    expect(source).toContain("baseRevision ?? active.data!.scene_revision");
+    expect(source).toContain("api.model.replaceCurrentTransport");
+    expect(source).toContain("api.model.replaceSpinTransport");
+  });
+
   it("initializes a new current transport from the selected object scope", () => {
     const objectId = "free-layer";
     const html = renderToStaticMarkup(

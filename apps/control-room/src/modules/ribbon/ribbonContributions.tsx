@@ -378,10 +378,10 @@ const geometryTab: RibbonTabContent = {
       subtitle: "Build & validate",
       tone: "neutral",
       actions: [
-        { id: "builder-build-geometry", icon: icon(Hammer),      label: "Geometry Synced", disabled: true, iconColor: "text-emerald-400" },
+        { id: "builder-build-geometry", icon: icon(Hammer),      label: "Build Geometry", iconColor: "text-emerald-400" },
         { id: "geometry.commit-object-draft", icon: icon(Save),  label: "Apply Draft",                  iconColor: "text-emerald-400" },
         { id: "mesh.build-selected",    icon: icon(Grid3X3),     label: "Build Mesh",                   iconColor: "text-amber-400" },
-        { id: "builder-validate",       icon: icon(CheckCircle), label: "Validate",      disabled: true, iconColor: "text-emerald-400" },
+        { id: "builder-validate",       icon: icon(CheckCircle), label: "Validate",                   iconColor: "text-emerald-400" },
       ],
     },
     // ── Focus ────────────────────────────────────────────────────────────
@@ -643,6 +643,7 @@ const studyTab: RibbonTabContent = {
       actions: [
         { id: "study.compute-fields", icon: icon(Activity), label: "Compute Fields", iconColor: C.sapphire, tooltip: "Evaluate active fields for the current magnetization" },
         { id: "study.compute-energies", icon: icon(Sigma), label: "Compute Energies", iconColor: C.lavender, tooltip: "Evaluate current energies without changing magnetization" },
+        { id: "study.prepare-live", icon: icon(Layers3), label: "Prepare", iconColor: C.blue, tooltip: "Materialize the current Live scene preparation receipt without starting the solver" },
         { id: "study.run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, iconColor: C.green, tooltip: "Submit the study solve command" },
         { id: "study.pause", icon: icon(Pause,       { fill: "currentColor" }), label: "Pause",                  iconColor: C.yellow },
         { id: "study.resume",icon: icon(Play,        { fill: "currentColor" }), label: "Resume",                 iconColor: C.green },
@@ -1158,6 +1159,39 @@ function meshBuildStatus(context: RibbonBuildContext): {
   return { label: "not built", tone: "warning" };
 }
 
+function meshLastGoodProvenance(context: RibbonBuildContext): {
+  artifact: string;
+  sourceSceneRevision: string;
+  geometryRealizationRevision: string;
+} {
+  const lastSuccess = asRecord(context.meshBuildLatest?.last_success);
+  const artifact = [
+    lastSuccess?.mesh_id,
+    lastSuccess?.generation_id,
+    lastSuccess?.artifact,
+    lastSuccess?.build_id,
+  ].find((value) => typeof value === "string" && value.trim().length > 0);
+  const sourceSceneRevision =
+    context.meshBuildLatest?.source_scene_revision ??
+    lastSuccess?.source_scene_revision;
+  const geometryRealizationRevision =
+    context.meshBuildLatest?.geometry_realization_revision ??
+    lastSuccess?.geometry_realization_revision;
+
+  return {
+    artifact: typeof artifact === "string" ? artifact : "none",
+    sourceSceneRevision:
+      sourceSceneRevision === undefined || sourceSceneRevision === null
+        ? "unknown"
+        : String(sourceSceneRevision),
+    geometryRealizationRevision:
+      geometryRealizationRevision === undefined ||
+      geometryRealizationRevision === null
+        ? "unknown"
+        : String(geometryRealizationRevision),
+  };
+}
+
 function buildNonFemMeshTabContent(
   content: RibbonTabContent,
 ): RibbonTabContent {
@@ -1209,6 +1243,7 @@ function buildMeshTabContent(
   }
 
   const status = meshBuildStatus(context);
+  const lastGood = meshLastGoodProvenance(context);
   const summary = asRecord(context.meshSummary?.mesh_summary);
   const solverMesh = context.meshSemantics?.solver_mesh;
   const nodeCount = summary?.node_count;
@@ -1252,6 +1287,25 @@ function buildMeshTabContent(
                     id: "mesh-build-status:elements",
                     label: "Elements",
                     value: String(elementCount ?? "unknown"),
+                  },
+                  {
+                    type: "status",
+                    id: "mesh-build-status:last-good",
+                    label: "Last good artifact",
+                    value: lastGood.artifact,
+                    tone: lastGood.artifact === "none" ? "warning" : "success",
+                  },
+                  {
+                    type: "status",
+                    id: "mesh-build-status:source-scene",
+                    label: "Source scene revision",
+                    value: lastGood.sourceSceneRevision,
+                  },
+                  {
+                    type: "status",
+                    id: "mesh-build-status:geometry-realization",
+                    label: "Geometry realization",
+                    value: lastGood.geometryRealizationRevision,
                   },
                   separator("mesh-build-status:sep"),
                   {

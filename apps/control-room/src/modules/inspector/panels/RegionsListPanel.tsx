@@ -12,7 +12,11 @@ import {
   useModelRegionsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
-import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
+import {
+  useSessionResourceIdentity,
+  useSessionStatusSelector,
+} from "@/kernel/resources/useSessionStatus";
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 import { Button } from "@/shared/ui/Button";
 
@@ -83,6 +87,7 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
     resources,
     selection: selectionController,
   } = useKernel();
+  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const scene = useSceneResource();
   const regions = useModelRegionsResource();
   const regionDiagnostics = useModelRegionDiagnosticsResource();
@@ -192,7 +197,7 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
       }
       setDraft(defaultNewRegionDraft());
       setAdding(false);
-      const syncWarning = await syncAuthoringScriptBestEffort(api);
+      const syncWarning = await syncAuthoringScriptBestEffort(api, sessionScopeKey);
       setFeedback({
         kind: "success",
         message: syncWarning

@@ -1,27 +1,66 @@
 import type { SceneResource } from "../api/apiTypes";
 import { MODEL_SCENE_PATH } from "../api/apiPaths";
 import type { CommandContext } from "../commands/commandTypes";
+import { assertCurrentSessionScope } from "../commands/commandSessionScope";
+import type { AuthoringHistoryWorkspaceState } from "./AuthoringHistoryController";
 
 type AuthoringHistoryMutationContext = Pick<
   CommandContext,
-  "api" | "authoringHistory" | "resourceData"
->;
+  "api" | "authoringHistory" | "resourceData" | "selection"
+> & {
+  sessionScopeKey?: string | null;
+  isCurrentSessionScope?: () => boolean;
+};
+
+/**
+ * Capture the active session and history generation for an immediate authoring
+ * mutation. Callers must build the source context with createCommandContext so
+ * this fence can recheck the same session after each await.
+ */
+export function captureAuthoringMutationFence(
+  context: CommandContext,
+): CommandContext {
+  const sessionScopeKey = context.sessionScopeKey ?? null;
+  const historyGeneration = context.authoringHistory?.getGeneration?.();
+  return {
+    ...context,
+    sessionScopeKey,
+    isCurrentSessionScope: () =>
+      Boolean(sessionScopeKey) &&
+      context.isCurrentSessionScope?.() === true &&
+      (historyGeneration === undefined ||
+        context.authoringHistory?.getGeneration?.() === historyGeneration),
+  };
+}
 
 export interface AuthoringMutationPreparation {
   before: SceneResource | null;
+  beforeWorkspaceState?: AuthoringHistoryWorkspaceState | null;
   baseRevision: number | null;
+  historyGeneration?: number;
 }
 
 export type AuthoringMutationSceneResolver<T> = (
   result: T,
 ) => SceneResource | null | Promise<SceneResource | null>;
 
+export interface RunAuthoringMutationWithHistoryOptions {
+  /** Capture UI state changed by the mutation itself after its successful ACK. */
+  captureWorkspaceStateAfter?: boolean | ((result: unknown) => boolean);
+}
+
 export function authoringWriteOptions(
   baseRevision: number | null | undefined,
-): { baseRevision: number } | undefined {
-  return typeof baseRevision === "number" && Number.isFinite(baseRevision)
-    ? { baseRevision }
-    : undefined;
+  sessionScopeKey?: string | null,
+): { baseRevision?: number; sessionScopeKey?: string } | undefined {
+  const options: { baseRevision?: number; sessionScopeKey?: string } = {};
+  if (typeof baseRevision === "number" && Number.isFinite(baseRevision)) {
+    options.baseRevision = baseRevision;
+  }
+  if (sessionScopeKey) {
+    options.sessionScopeKey = sessionScopeKey;
+  }
+  return Object.keys(options).length > 0 ? options : undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -37,6 +76,16 @@ function sceneRevision(scene: SceneResource | null): number | null {
   return typeof revision === "number" && Number.isFinite(revision)
     ? revision
     : null;
+}
+
+export function captureAuthoringHistoryWorkspaceState(
+  context: AuthoringHistoryMutationContext,
+): AuthoringHistoryWorkspaceState | null {
+  if (!context.selection) return null;
+  const selection = context.selection?.get() ?? null;
+  return {
+    selection: selection ? structuredClone(selection) : null,
+  };
 }
 
 function sceneFromMutationResult(value: unknown): SceneResource | null {
@@ -66,7 +115,10 @@ export async function captureAuthoringHistoryScene(
   if (!context.authoringHistory || !context.api) return null;
 
   try {
-    const scene = await context.api.model.scene();
+    const options = context.sessionScopeKey
+      ? { sessionScopeKey: context.sessionScopeKey }
+      : undefined;
+    const scene = await context.api.model.scene(options);
     if (sceneRevision(scene) !== null) return scene;
   } catch {
     // Fall through to the last resource snapshot when the read is transient.
@@ -81,8 +133,71 @@ export async function captureAuthoringHistoryScene(
 export async function prepareAuthoringMutation(
   context: AuthoringHistoryMutationContext,
 ): Promise<AuthoringMutationPreparation> {
+  const historyGeneration = context.authoringHistory?.getGeneration?.();
   const before = await captureAuthoringHistoryScene(context);
-  return { before, baseRevision: sceneRevision(before) };
+  return {
+    before,
+    beforeWorkspaceState: captureAuthoringHistoryWorkspaceState(context),
+    baseRevision: sceneRevision(before),
+    historyGeneration,
+  };
+}
+
+/**
+ * Record the scene transition belonging to a prepared authoring mutation.
+ * Callers that own a multi-step mutation can use this after a successful
+ * commit or after a partial ACK so that an already-persisted change is never
+ * hidden from semantic history.
+ */
+export async function recordAuthoringMutationHistory(
+  context: AuthoringHistoryMutationContext,
+  label: string,
+  preparation: AuthoringMutationPreparation,
+  committedScene?: SceneResource | null,
+  workspaceStateAfter?: AuthoringHistoryWorkspaceState | null,
+): Promise<void> {
+  const history = context.authoringHistory;
+  if (!history || !preparation.before) return;
+  const isCurrentGeneration = () =>
+    context.isCurrentSessionScope?.() !== false &&
+    (preparation.historyGeneration === undefined ||
+      history.getGeneration?.() === preparation.historyGeneration);
+  if (!isCurrentGeneration()) return;
+
+  let after = committedScene ?? null;
+  if (sceneRevision(after) === null) {
+    after = await captureAuthoringHistoryScene(context);
+  }
+  if (!isCurrentGeneration()) return;
+
+  const beforeRevision = preparation.baseRevision;
+  const afterRevision = sceneRevision(after);
+  if (
+    !after ||
+    beforeRevision === null ||
+    afterRevision === null ||
+    afterRevision <= beforeRevision
+  ) {
+    return;
+  }
+
+  try {
+    const beforeWorkspaceState = preparation.beforeWorkspaceState;
+    const afterWorkspaceState = workspaceStateAfter === undefined
+      ? preparation.beforeWorkspaceState ?? null
+      : workspaceStateAfter;
+    history.record({
+      after,
+      ...(afterWorkspaceState ? { afterWorkspaceState } : {}),
+      before: preparation.before,
+      ...(beforeWorkspaceState ? { beforeWorkspaceState } : {}),
+      committedRevision: afterRevision,
+      label,
+    });
+  } catch {
+    // History is an observability layer; a valid authoring ACK must survive a
+    // malformed or unavailable local history snapshot.
+  }
 }
 
 /**
@@ -95,40 +210,28 @@ export async function runAuthoringMutationWithHistory<T>(
   label: string,
   mutation: (preparation: AuthoringMutationPreparation) => Promise<T>,
   resolveAfter?: AuthoringMutationSceneResolver<T>,
+  options: RunAuthoringMutationWithHistoryOptions = {},
 ): Promise<T> {
+  assertCurrentSessionScope(context);
   const preparation = await prepareAuthoringMutation(context);
+  assertCurrentSessionScope(context);
   const result = await mutation(preparation);
-  const history = context.authoringHistory;
-  if (!history || !preparation.before) return result;
-
-  let after = resolveAfter
+  if (context.isCurrentSessionScope?.() === false) return result;
+  const captureAfter = typeof options.captureWorkspaceStateAfter === "function"
+    ? options.captureWorkspaceStateAfter(result)
+    : options.captureWorkspaceStateAfter === true;
+  const workspaceStateAfter = captureAfter
+    ? captureAuthoringHistoryWorkspaceState(context)
+    : preparation.beforeWorkspaceState ?? null;
+  const after = resolveAfter
     ? await resolveAfter(result)
     : sceneFromMutationResult(result);
-  if (sceneRevision(after) === null) {
-    after = await captureAuthoringHistoryScene(context);
-  }
-
-  const beforeRevision = preparation.baseRevision;
-  const afterRevision = sceneRevision(after);
-  if (
-    !after ||
-    beforeRevision === null ||
-    afterRevision === null ||
-    afterRevision <= beforeRevision
-  ) {
-    return result;
-  }
-
-  try {
-    history.record({
-      after,
-      before: preparation.before,
-      committedRevision: afterRevision,
-      label,
-    });
-  } catch {
-    // History is an observability layer; a valid authoring ACK must survive a
-    // malformed or unavailable local history snapshot.
-  }
+  await recordAuthoringMutationHistory(
+    context,
+    label,
+    preparation,
+    after,
+    workspaceStateAfter,
+  );
   return result;
 }

@@ -21,6 +21,7 @@ import type {
 import { useKernel } from "../KernelContext";
 
 import { ResourceCache } from "./ResourceCache";
+import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
 import { useResource } from "./useResource";
 
 interface ResourceHookOptions {
@@ -114,23 +115,25 @@ export function useCrossSectionResource(
     () => resolveCrossSectionResourceKey(stableQuery, revision),
     [stableQuery, revision],
   );
+  const { resourceKey: scopedResourceKey, sessionIdentity } =
+    useSessionScopedResourceKey(resourceKey);
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      loadCachedBinaryResource(crossSectionCache, resourceKey, (etag) =>
-        api.meshing.sharedDomain.crossSection(stableQuery, { etag, signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      loadCachedBinaryResource(crossSectionCache, scopedResourceKey, (etag) =>
+        api.meshing.sharedDomain.crossSection(stableQuery, { etag, sessionScopeKey, signal }),
       ),
-    [api, resourceKey, stableQuery],
+    [api, scopedResourceKey, stableQuery],
   );
   const resolveRevision = useCallback(
-    () => crossSectionCache.peek(resourceKey)?.etag ?? null,
-    [resourceKey],
+    () => crossSectionCache.peek(scopedResourceKey)?.etag ?? null,
+    [scopedResourceKey],
   );
 
   return useResource<DecodedCrossSection | null>({
-    enabled: options.enabled,
+    enabled: options.enabled && sessionIdentity !== null,
     load,
     resolveRevision,
-    resourceKey,
+    resourceKey: scopedResourceKey,
   });
 }
 
@@ -148,26 +151,32 @@ export function useCrossSectionImageResource(
     () => resolveCrossSectionImageResourceKey(stableQuery, revision),
     [stableQuery, revision],
   );
+  const { resourceKey: scopedResourceKey, sessionIdentity } =
+    useSessionScopedResourceKey(resourceKey);
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      loadCachedBinaryResource(crossSectionImageCache, resourceKey, (etag) =>
-        api.meshing.sharedDomain.crossSectionImage(stableQuery, {
-          etag,
-          signal,
-        }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      loadCachedBinaryResource(
+        crossSectionImageCache,
+        scopedResourceKey,
+        (etag) =>
+          api.meshing.sharedDomain.crossSectionImage(stableQuery, {
+            etag,
+            sessionScopeKey,
+            signal,
+          }),
       ),
-    [api, resourceKey, stableQuery],
+    [api, scopedResourceKey, stableQuery],
   );
   const resolveRevision = useCallback(
-    () => crossSectionImageCache.peek(resourceKey)?.etag ?? null,
-    [resourceKey],
+    () => crossSectionImageCache.peek(scopedResourceKey)?.etag ?? null,
+    [scopedResourceKey],
   );
 
   return useResource<ArrayBuffer | null>({
-    enabled: options.enabled,
+    enabled: options.enabled && sessionIdentity !== null,
     load,
     resolveRevision,
-    resourceKey,
+    resourceKey: scopedResourceKey,
   });
 }
 
@@ -189,29 +198,32 @@ export function useCrossSectionQualityResource(
     () => resolveCrossSectionQualityResourceKey(stableQuery, revision),
     [stableQuery, revision],
   );
+  const { resourceKey: scopedResourceKey, sessionIdentity } =
+    useSessionScopedResourceKey(resourceKey);
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       loadCachedBinaryResource(
         crossSectionQualityCache,
-        resourceKey,
+        scopedResourceKey,
         (etag) =>
           api.meshing.sharedDomain.crossSectionQuality(stableQuery, {
             etag,
+            sessionScopeKey,
             signal,
           }),
       ),
-    [api, resourceKey, stableQuery],
+    [api, scopedResourceKey, stableQuery],
   );
   const resolveRevision = useCallback(
-    () => crossSectionQualityCache.peek(resourceKey)?.etag ?? null,
-    [resourceKey],
+    () => crossSectionQualityCache.peek(scopedResourceKey)?.etag ?? null,
+    [scopedResourceKey],
   );
 
   return useResource<DecodedCrossSectionQuality | null>({
-    enabled: options.enabled,
+    enabled: options.enabled && sessionIdentity !== null,
     load,
     resolveRevision,
-    resourceKey,
+    resourceKey: scopedResourceKey,
   });
 }
 

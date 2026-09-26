@@ -52,9 +52,12 @@ describe("PhysicsInteractionPanel lane contract", () => {
 
     expect(source).toContain("interactionMutationKey(");
     expect(source).toContain("mutations: Record<string");
-    expect(source).toContain("base_revision: resource.scene_revision");
+    expect(source).toContain("runAuthoringMutationWithHistory(");
     expect(source).toContain(
-      "base_revision: sceneBaseRevision",
+      "base_revision: baseRevision ?? resource.scene_revision",
+    );
+    expect(source).toContain(
+      "base_revision: baseRevision ?? sceneBaseRevision",
     );
     expect(source).toContain("resolveSceneResourceRevision(scene.data)");
     expect(source).toContain("scene.refetch()");

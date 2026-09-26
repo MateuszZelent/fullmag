@@ -1,11 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import { MODEL_PLANAR_MONITORS_PATH } from "@/kernel/api/apiPaths";
+import { createCommandContext } from "@/kernel/commands/commandContext";
 import { usePlanarMonitorsResource } from "@/kernel/resources/planarMonitorResources";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
+import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import {
   discardCrossSectionDraft,
@@ -29,11 +32,17 @@ export function CrossSectionDraftEditor({
   draft: CrossSectionDraft | null;
 }) {
   const kernel = useKernel();
+  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const monitors = usePlanarMonitorsResource();
   const visualizationState = useVisualizationStateResource();
   const [feedback, setFeedback] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
-  const [pending, setPending] = useState(false);
+  const [pendingOperation, setPendingOperation] = useState<{
+    id: number;
+    sessionScopeKey: string;
+  } | null>(null);
+  const nextPendingOperationId = useRef(0);
+  const pending = pendingOperation?.sessionScopeKey === sessionScopeKey;
 
   if (!draft) {
     return <MeshResourceEmpty label="No editable cross-section draft." />;
@@ -44,26 +53,53 @@ export function CrossSectionDraftEditor({
       setFeedback("Planar visualization state is unavailable.");
       return;
     }
-    setPending(true);
+    const operationSessionScopeKey = sessionScopeKey;
+    if (!operationSessionScopeKey) {
+      setFeedback("Session identity is not ready. Try again after it loads.");
+      return;
+    }
+    const historyGeneration = kernel.authoringHistory?.getGeneration?.();
+    const historyContext = createCommandContext("inspector", kernel, {
+      sessionScopeKey: operationSessionScopeKey,
+      isCurrentSessionScope: () =>
+        kernel.commands.getSessionScopeKey() === operationSessionScopeKey &&
+        (historyGeneration === undefined ||
+          kernel.authoringHistory?.getGeneration?.() === historyGeneration),
+      sourceDetail: "cross-section-draft",
+    });
+    const operationId = ++nextPendingOperationId.current;
+    setPendingOperation({ id: operationId, sessionScopeKey: operationSessionScopeKey });
     setFeedback(null);
     setConflict(false);
     try {
-      const domain = await kernel.api.data.domain.meta();
+      const domain = await kernel.api.data.domain.meta({
+        sessionScopeKey: operationSessionScopeKey,
+      });
+      if (historyContext.isCurrentSessionScope?.() === false) return;
       const created = await runAuthoringMutationWithHistory(
-        kernel,
+        historyContext,
         `Create planar monitor ${draft.name}`,
         async ({ baseRevision }) => {
+          const commitRevision = baseRevision ?? monitors.data?.scene_revision;
+          if (typeof commitRevision !== "number" || !Number.isFinite(commitRevision)) {
+            throw new Error(
+              "The canonical scene revision is unavailable. Refetch the scene before applying.",
+            );
+          }
           const request = planarMonitorCreateRequestFromDraft(
             draft,
-            baseRevision ?? monitors.data?.scene_revision ?? 0,
+            commitRevision,
             {
               max: domain.bounds.max as [number, number, number],
               min: domain.bounds.min as [number, number, number],
             },
           );
-          return kernel.api.model.planarMonitors.create(request);
+          return kernel.api.model.planarMonitors.create(request, {
+            sessionScopeKey: operationSessionScopeKey,
+          });
         },
       );
+      if (historyContext.isCurrentSessionScope?.() === false) return;
       const monitor = created.monitor;
       discardCrossSectionDraft();
       kernel.visualizationSync.queuePatch({
@@ -94,6 +130,7 @@ export function CrossSectionDraftEditor({
       kernel.layout.setFocusedSlot("viewport-main");
       kernel.layout.setPanelVisible("right", true);
     } catch (error) {
+      if (historyContext.isCurrentSessionScope?.() === false) return;
       const revisionConflict = isPlanarMonitorRevisionConflict(error);
       setConflict(revisionConflict);
       setFeedback(
@@ -104,7 +141,9 @@ export function CrossSectionDraftEditor({
           : "Planar monitor commit failed. Reload the scene and retry.",
       );
     } finally {
-      setPending(false);
+      setPendingOperation((current) =>
+        current?.id === operationId ? null : current,
+      );
     }
   };
 

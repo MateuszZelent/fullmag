@@ -199,6 +199,39 @@ export function SimulationStartupOverlayView({
             </dl>
           ) : null}
 
+          {state.preparation?.receipt ? (
+            <dl
+              aria-label="Accepted preparation provenance"
+              className="fm-simulation-startup__receipt"
+              data-preparation-receipt="accepted"
+            >
+              <div>
+                <dt>Accepted preparation</dt>
+                <dd>{state.preparation.receipt.preparation_id}</dd>
+              </div>
+              <div>
+                <dt>Live run</dt>
+                <dd>{state.preparation.receipt.run_id}</dd>
+              </div>
+              <div>
+                <dt>Receipt schema</dt>
+                <dd>{state.preparation.receipt.schema_version}</dd>
+              </div>
+              <div>
+                <dt>Plan digest</dt>
+                <dd title={state.preparation.receipt.plan_fingerprint}>
+                  {state.preparation.receipt.plan_fingerprint}
+                </dd>
+              </div>
+              <div>
+                <dt>Payload digest</dt>
+                <dd title={state.preparation.receipt.payload_sha256}>
+                  {state.preparation.receipt.payload_sha256}
+                </dd>
+              </div>
+            </dl>
+          ) : null}
+
           <div
             aria-live="polite"
             className="fm-visually-hidden"

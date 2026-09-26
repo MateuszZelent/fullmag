@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { CommandContext } from "../commands/commandTypes";
 import { PendingFormRegistry } from "../authoring/PendingFormRegistry";
+import { EMPTY_SELECTION, type Selection } from "../selection/selectionTypes";
+import type { AuthoringHistoryWorkspaceTransition } from "../authoring/AuthoringHistoryController";
 
 import { SHELL_COMMANDS } from "./shellCommands";
 
@@ -45,6 +47,61 @@ describe("SHELL_COMMANDS", () => {
 
     expect(result).toEqual({ status: "completed" });
     expect(togglePanel).toHaveBeenCalledWith("right");
+  });
+
+  it("restores authoring selection through the shared Undo command", async () => {
+    const nodeId = "model:object:magnet";
+    const previousSelection: Selection = {
+      kind: "object.root",
+      label: "magnet",
+      moduleSource: "geometry-authoring",
+      nodeId,
+      objectId: "magnet",
+      ref: {
+        kind: "object.root",
+        nodeId,
+        objectId: "magnet",
+        type: "scene-object",
+        visualizationTargetId: "object:magnet",
+      },
+    };
+    const transition: AuthoringHistoryWorkspaceTransition = {
+      expected: { selection: EMPTY_SELECTION },
+      restore: { selection: previousSelection },
+      scene: { objects: [{ object_id: "magnet" }] } as never,
+    };
+    const undo = vi.fn(async (
+      _scope: string | null | undefined,
+      onWorkspaceRestored: ((value: AuthoringHistoryWorkspaceTransition) => void) | undefined,
+    ) => {
+      onWorkspaceRestored?.(transition);
+      return { message: "Undid Delete magnet.", status: "completed" as const };
+    });
+    const selection = {
+      clear: vi.fn(),
+      get: () => EMPTY_SELECTION,
+      set: vi.fn(),
+    };
+    const setFocusedSlot = vi.fn();
+    const command = SHELL_COMMANDS.find((candidate) => candidate.id === "workspace.undo");
+
+    await expect(command?.run({
+      authoringHistory: { undo } as unknown as CommandContext["authoringHistory"],
+      layout: { get: () => ({ focusedSlot: "panel-right" }), setFocusedSlot } as never,
+      selection: selection as unknown as CommandContext["selection"],
+      sessionScopeKey: "session=test&epoch=1",
+      source: "shortcut",
+    })).resolves.toMatchObject({ status: "completed" });
+
+    expect(undo).toHaveBeenCalledWith("session=test&epoch=1", expect.any(Function));
+    expect(selection.set).toHaveBeenCalledWith({
+      kind: previousSelection.kind,
+      label: previousSelection.label,
+      nodeId: previousSelection.nodeId,
+      objectId: previousSelection.objectId,
+      ref: previousSelection.ref,
+    }, "authoring-history");
+    expect(setFocusedSlot).not.toHaveBeenCalled();
   });
 
   it("exports the canonical Python source through the model API", async () => {

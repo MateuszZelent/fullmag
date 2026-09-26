@@ -28,7 +28,11 @@ import {
 } from "../realtime/communicationPolicy";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { RealtimeConnectionController } from "../realtime/RealtimeConnectionController";
-import { sharedResourceRuntimeStore } from "../resources/ResourceRuntimeStore";
+import { sessionScopedResourceKey } from "../resources/sessionResourceIdentity";
+import {
+  resetSharedResourceRuntimeStoreForTests,
+  sharedResourceRuntimeStore,
+} from "../resources/ResourceRuntimeStore";
 import type { ResourceResult } from "../resources/resourceTypes";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 import type { KernelApi } from "../types";
@@ -111,6 +115,15 @@ vi.mock("@/shared/ui/Dialog", async () => {
   };
 });
 
+const SIMULATION_PREPARATION_TEST_RESOURCE_KEY = sessionScopedResourceKey(
+  {
+    requestScopeEpoch: "api-instance:preparation-test",
+    sessionEpoch: "session-preparation-test@1700000000000",
+    sessionId: "session-preparation-test",
+  },
+  SIMULATION_PREPARATION_PATH,
+);
+
 interface Deferred<TData> {
   readonly promise: Promise<TData>;
   readonly resolve: (value: TData) => void;
@@ -120,6 +133,7 @@ afterEach(() => {
   updateRealtimeCommunicationPolicy({});
   vi.useRealTimers();
   vi.restoreAllMocks();
+  resetSharedResourceRuntimeStoreForTests();
 });
 
 describe("mounted simulation preparation UI", () => {
@@ -814,7 +828,7 @@ describe("mounted simulation preparation UI", () => {
 
     await act(async () => {
       sharedResourceRuntimeStore.updateData(
-        SIMULATION_PREPARATION_PATH,
+        SIMULATION_PREPARATION_TEST_RESOURCE_KEY,
         failedPreparationFixture(),
         8,
       );
@@ -828,7 +842,7 @@ describe("mounted simulation preparation UI", () => {
 
     await act(async () => {
       sharedResourceRuntimeStore.updateData(
-        SIMULATION_PREPARATION_PATH,
+        SIMULATION_PREPARATION_TEST_RESOURCE_KEY,
         { ...preparationFixture(), revision: 9 },
         9,
       );
@@ -868,7 +882,7 @@ describe("mounted simulation preparation UI", () => {
 
     await act(async () => {
       sharedResourceRuntimeStore.updateData(
-        SIMULATION_PREPARATION_PATH,
+        SIMULATION_PREPARATION_TEST_RESOURCE_KEY,
         attemptPreparationFixture(8, "Attempt 2 — HXT — progress indeterminate", 20_000),
         8,
       );
@@ -885,7 +899,7 @@ describe("mounted simulation preparation UI", () => {
 
     await act(async () => {
       sharedResourceRuntimeStore.updateData(
-        SIMULATION_PREPARATION_PATH,
+        SIMULATION_PREPARATION_TEST_RESOURCE_KEY,
         attemptPreparationFixture(9, "Attempt 2 — HXT — progress indeterminate", 35_000),
         9,
       );
@@ -894,7 +908,7 @@ describe("mounted simulation preparation UI", () => {
 
     await act(async () => {
       sharedResourceRuntimeStore.updateData(
-        SIMULATION_PREPARATION_PATH,
+        SIMULATION_PREPARATION_TEST_RESOURCE_KEY,
         attemptPreparationFixture(
           10,
           "Attempt 3 — Frontal — progress indeterminate",
@@ -1045,7 +1059,12 @@ function statusFixture(
     resources: {
       simulation_preparation_revision: patch.preparationRevision ?? 7,
     },
-    session: { name: "permalloy-relaxation" },
+    session: {
+      name: "permalloy-relaxation",
+      session_id: "session-preparation-test",
+      session_epoch: "session-preparation-test@1700000000000",
+      request_scope_epoch: "api-instance:preparation-test",
+    },
     solver: { state: patch.solverState ?? "bootstrapping" },
   } as LiveStatusResource;
 }
@@ -1151,6 +1170,12 @@ async function settleLoads(): Promise<void> {
       await Promise.resolve();
     });
   }
+  await act(async () => {
+    // Status identity enables scoped hooks in a later React commit; advance the
+    // fake clock once so their zero-delay load runs at the browser timer floor.
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.resolve();
+  });
 }
 
 function hasClass(element: TestElement, className: string): boolean {

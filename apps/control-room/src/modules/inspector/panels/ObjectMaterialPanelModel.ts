@@ -31,9 +31,13 @@ interface MaterialCreateAssignApi {
       name: string,
       properties: MaterialPropertiesResource,
       references: [],
-      options: { baseRevision: number },
+      options: { baseRevision: number; sessionScopeKey?: string },
     ): Promise<AuthoringTransactionResponse>;
-    patchObject(objectId: string, patch: ObjectPatchRequest): Promise<SceneResource>;
+    patchObject(
+      objectId: string,
+      patch: ObjectPatchRequest,
+      options?: { sessionScopeKey?: string },
+    ): Promise<SceneResource>;
   };
 }
 
@@ -43,6 +47,7 @@ export class MaterialAssignmentAfterCreateError extends Error {
   readonly deferredAnisotropy: ValidatedCreateMaterialDraft["anisotropy"];
   readonly materialId: string;
   readonly objectId: string;
+  readonly sessionScopeKey: string | null;
 
   constructor(
     objectId: string,
@@ -50,6 +55,7 @@ export class MaterialAssignmentAfterCreateError extends Error {
     created: AuthoringTransactionResponse,
     deferredAnisotropy: ValidatedCreateMaterialDraft["anisotropy"],
     cause: unknown,
+    sessionScopeKey?: string | null,
   ) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = "MaterialAssignmentAfterCreateError";
@@ -58,13 +64,20 @@ export class MaterialAssignmentAfterCreateError extends Error {
     this.deferredAnisotropy = deferredAnisotropy;
     this.materialId = materialId;
     this.objectId = objectId;
+    this.sessionScopeKey = sessionScopeKey ?? null;
   }
 
   retry(api: MaterialCreateAssignApi, latestBaseRevision: number): Promise<SceneResource> {
-    return api.model.patchObject(this.objectId, {
+    const options = this.sessionScopeKey
+      ? { sessionScopeKey: this.sessionScopeKey }
+      : undefined;
+    const patch = {
       base_revision: latestBaseRevision,
       material_ref: this.materialId,
-    });
+    };
+    return options
+      ? api.model.patchObject(this.objectId, patch, options)
+      : api.model.patchObject(this.objectId, patch);
   }
 }
 
@@ -132,6 +145,7 @@ export async function createMaterialThenAssign(
   baseRevision: number,
   onMaterialCreated?: (created: AuthoringTransactionResponse) => void,
   shouldContinue?: () => boolean,
+  sessionScopeKey?: string | null,
 ): Promise<{
   assigned: SceneResource;
   created: AuthoringTransactionResponse;
@@ -146,7 +160,10 @@ export async function createMaterialThenAssign(
     name,
     properties,
     [],
-    { baseRevision },
+    {
+      baseRevision,
+      ...(sessionScopeKey ? { sessionScopeKey } : {}),
+    },
   );
   onMaterialCreated?.(created);
   if (shouldContinue && !shouldContinue()) {
@@ -156,13 +173,20 @@ export async function createMaterialThenAssign(
       created,
       anisotropy,
       new Error("Material assignment transaction scope is no longer active."),
+      sessionScopeKey,
     );
   }
   try {
-    const assigned = await api.model.patchObject(objectId, {
+    const patch = {
       base_revision: created.scene_revision,
       material_ref: materialId,
-    });
+    };
+    const assignmentOptions = sessionScopeKey
+      ? { sessionScopeKey }
+      : undefined;
+    const assigned = assignmentOptions
+      ? await api.model.patchObject(objectId, patch, assignmentOptions)
+      : await api.model.patchObject(objectId, patch);
     return { assigned, created, deferredAnisotropy: anisotropy, materialId };
   } catch (error) {
     throw new MaterialAssignmentAfterCreateError(
@@ -171,6 +195,7 @@ export async function createMaterialThenAssign(
       created,
       anisotropy,
       error,
+      sessionScopeKey,
     );
   }
 }

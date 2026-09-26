@@ -6,6 +6,7 @@ import { MODEL_FIELD_DRIVES_PATH } from "../api/apiPaths";
 import type { FieldDriveListResource } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 import { PHYSICS_GRAPH_RESOURCE_KEY } from "./physicsGraphResources";
+import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
 import { useResource } from "./useResource";
 
 export const MODEL_FIELD_DRIVES_RESOURCE_KEY = MODEL_FIELD_DRIVES_PATH;
@@ -25,15 +26,19 @@ export function useFieldDrivesResource(
   options: FieldDriveResourceOptions = {},
 ) {
   const { api } = useKernel();
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    MODEL_FIELD_DRIVES_RESOURCE_KEY,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) => api.model.fieldDrives({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.model.fieldDrives({ sessionScopeKey, signal }),
     [api],
   );
 
   return useResource<FieldDriveListResource>({
-    enabled: options.enabled,
+    enabled: options.enabled && sessionIdentity !== null,
     load,
     resolveRevision: (data) => data?.scene_revision ?? null,
-    resourceKey: MODEL_FIELD_DRIVES_RESOURCE_KEY,
+    resourceKey,
   });
 }

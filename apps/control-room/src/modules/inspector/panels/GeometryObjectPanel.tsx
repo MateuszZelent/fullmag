@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { SceneResource } from "@/kernel/api/apiTypes";
+import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
+import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import {
   acknowledgedAuthoringSceneRevision,
   invalidateAuthoringMutationDependents,
@@ -23,6 +25,7 @@ import {
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
@@ -56,6 +59,13 @@ interface FeedbackState {
   key: string;
 }
 
+interface PendingOperationState {
+  draftKey: string;
+  operationId: number;
+  pending: boolean;
+  sessionScopeKey: string | null;
+}
+
 type VectorDraftField = "rotation" | "scale" | "size" | "translation";
 type DraftField =
   | "archHeight"
@@ -84,13 +94,46 @@ function optionalRef(value: string): string | undefined {
   return trimmed && trimmed !== "unassigned" ? trimmed : undefined;
 }
 
+function sameDraftFields(
+  left: GeometryObjectDraft,
+  right: GeometryObjectDraft,
+  fields: readonly (keyof GeometryObjectDraft)[],
+): boolean {
+  return fields.every((field) => JSON.stringify(left[field]) === JSON.stringify(right[field]));
+}
+
+function sameDraftValues(left: GeometryObjectDraft, right: GeometryObjectDraft): boolean {
+  return sameDraftFields(left, right, [
+    "archHeight",
+    "geometryKind",
+    "height",
+    "length",
+    "material",
+    "name",
+    "radius",
+    "region",
+    "size",
+    "translation",
+    "width",
+    "z0",
+  ]);
+}
+
 function invalidateAuthoringResources(
   resources: ReturnType<typeof useKernel>["resources"],
   revision: number,
   committedScene?: SceneResource,
+  sessionScopeKey?: string | null,
 ): void {
   if (committedScene) {
-    publishCommittedSceneResource(resources, committedScene, revision, undefined, false);
+    publishCommittedSceneResource(
+      resources,
+      committedScene,
+      revision,
+      undefined,
+      false,
+      sessionScopeKey,
+    );
   }
   invalidateAuthoringMutationDependents(resources, "geometry", revision);
 }
@@ -99,6 +142,8 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
   const {
     api,
     authoringHistory,
+    commands,
+    layout,
     resources,
     selection: selectionController,
   } = useKernel();
@@ -119,12 +164,24 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     feedback: null,
     key: draftKey,
   });
-  const [pending, setPending] = useState(false);
+  const [pendingState, setPendingState] = useState<PendingOperationState>({
+    draftKey,
+    operationId: 0,
+    pending: false,
+    sessionScopeKey: commands.getSessionScopeKey() ?? null,
+  });
+  const pendingOperationId = useRef(0);
+  const currentSessionScopeKey = commands.getSessionScopeKey() ?? null;
+  const pending = pendingState.pending &&
+    pendingState.draftKey === draftKey &&
+    pendingState.sessionScopeKey === currentSessionScopeKey;
   const [revisionConflictPhase, setRevisionConflictPhase] = useState<
     "conflict" | "refresh-error" | "refreshing" | "rebased" | "refetched" | null
   >(null);
   const [conflictBaseRevision, setConflictBaseRevision] = useState<number | null>(null);
-  const [conflictOperation, setConflictOperation] = useState<"create" | "transform">("create");
+  const [conflictOperation, setConflictOperation] = useState<
+    "create" | "geometry" | "transform"
+  >("create");
   const [refreshSawLoading, setRefreshSawLoading] = useState(false);
   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
   const feedback =
@@ -134,6 +191,23 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     draft.objectId,
   );
   const primitiveDraft = useMemo(() => resolvePrimitiveDraft(draft), [draft]);
+
+  function createHistoryMutationContext() {
+    const sessionScopeKey = commands.getSessionScopeKey();
+    const historyGeneration = authoringHistory?.getGeneration?.();
+    return {
+      api,
+      authoringHistory,
+      layout,
+      resourceData: { [MODEL_SCENE_PATH]: scene.data },
+      selection: selectionController,
+      sessionScopeKey: sessionScopeKey ?? null,
+      isCurrentSessionScope: () =>
+        commands.getSessionScopeKey() === sessionScopeKey &&
+        (historyGeneration === undefined ||
+          authoringHistory?.getGeneration?.() === historyGeneration),
+    };
+  }
 
   useEffect(() => {
     if (draft.mode === "draft-new") {
@@ -210,6 +284,19 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     });
   }
 
+  function beginPendingOperation(): () => void {
+    const operationId = ++pendingOperationId.current;
+    const sessionScopeKey = commands.getSessionScopeKey() ?? null;
+    setPendingState({ draftKey, operationId, pending: true, sessionScopeKey });
+    return () => {
+      setPendingState((current) =>
+        current.operationId === operationId
+          ? { ...current, pending: false }
+          : current,
+      );
+    };
+  }
+
   function updateField(field: DraftField, value: string): void {
     updateDraft((current) => ({ ...current, [field]: value }));
   }
@@ -226,67 +313,83 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     });
   }
 
-  async function applyCreateDraft(): Promise<void> {
+  async function applyCreateDraft(): Promise<boolean> {
     if (draft.baseRevision === null) {
       setFeedback({ kind: "error", message: "The canonical scene revision is unavailable. Refetch the scene before applying." });
-      return;
+      return false;
     }
+    const baseRevision = draft.baseRevision;
     const geometry = buildGeometryDraftPatch(draft);
-    if (geometry.error || !geometry.geometry) {
+    const geometryPayload = geometry.geometry;
+    if (geometry.error || !geometryPayload) {
       setFeedback({ kind: "error", message: geometry.error ?? "Invalid geometry draft." });
-      return;
+      return false;
     }
     const transform = buildTransformDraftPatch(draft);
-    if (transform.error || !transform.transform) {
+    const transformPayload = transform.transform;
+    if (transform.error || !transformPayload) {
       setFeedback({ kind: "error", message: transform.error ?? "Invalid transform draft." });
-      return;
+      return false;
     }
 
-    setPending(true);
+    const finishPending = beginPendingOperation();
     setRevisionConflictPhase(null);
+    let isCurrentMutationContext: (() => boolean) | null = null;
     try {
       const objectId = createDraftObjectId(draft);
-      const response = await createObjectTransaction(api, {
-        base_revision: draft.baseRevision,
-        geometry: geometry.geometry,
-        material_ref: optionalRef(draft.material),
-        name: draft.name.trim() || objectId,
-        object_id: objectId,
-        region_name: optionalRef(draft.region),
-        transform: transform.transform,
-      });
-      if (scene.data) {
-        authoringHistory?.record({
-          after: response.committed_scene,
-          before: scene.data,
-          committedRevision: response.scene_revision,
-          label: `Create ${draft.name.trim() || objectId}`,
-        });
-      }
+      const historyContext = createHistoryMutationContext();
+      isCurrentMutationContext = historyContext.isCurrentSessionScope;
+      const requestOptions = historyContext.sessionScopeKey
+        ? { sessionScopeKey: historyContext.sessionScopeKey }
+        : undefined;
+      const response = await runAuthoringMutationWithHistory(
+        historyContext,
+        `Create ${draft.name.trim() || objectId}`,
+        async () => {
+          const created = await createObjectTransaction(api, {
+            base_revision: baseRevision,
+            geometry: geometryPayload,
+            material_ref: optionalRef(draft.material),
+            name: draft.name.trim() || objectId,
+            object_id: objectId,
+            region_name: optionalRef(draft.region),
+            transform: transformPayload,
+          }, requestOptions);
+          if (historyContext.isCurrentSessionScope() !== false) {
+            selectionController.set(
+              {
+                kind: "object.root",
+                label: draft.name.trim() || objectId,
+                nodeId: `model:object:${objectId}`,
+                objectId,
+                ref: {
+                  kind: "object.root",
+                  nodeId: `model:object:${objectId}`,
+                  objectId,
+                  type: "scene-object",
+                  visualizationTargetId: `object:${objectId}`,
+                },
+              },
+              "geometry-authoring",
+            );
+          }
+          return created;
+        },
+        undefined,
+        { captureWorkspaceStateAfter: true },
+      );
+      if (historyContext.isCurrentSessionScope() === false) return false;
       const revision = acknowledgedAuthoringSceneRevision(response);
       invalidateAuthoringResources(
         resources,
         revision,
         response.committed_scene,
-      );
-      selectionController.set(
-        {
-          kind: "object.root",
-          label: draft.name.trim() || objectId,
-          nodeId: `model:object:${objectId}`,
-          objectId,
-          ref: {
-            kind: "object.root",
-            nodeId: `model:object:${objectId}`,
-            objectId,
-            type: "scene-object",
-            visualizationTargetId: `object:${objectId}`,
-          },
-        },
-        "geometry-authoring",
+        historyContext.sessionScopeKey,
       );
       setFeedback({ kind: "success", message: "Object draft committed." });
+      return true;
     } catch (error) {
+      if (isCurrentMutationContext?.() === false) return false;
       if (isPrimitiveDraftRevisionConflict(error)) {
         setConflictOperation("create");
         setRevisionConflictPhase("conflict");
@@ -294,8 +397,9 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         setRefreshSawLoading(false);
       }
       setFeedback({ kind: "error", message: errorMessage(error) });
+      return false;
     } finally {
-      setPending(false);
+      finishPending();
     }
   }
 
@@ -314,75 +418,97 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     setFeedback({ kind: "error", message: "Draft rebased to the latest scene revision. Review and retry Apply." });
   }
 
-  async function applyGeometryPatch(): Promise<void> {
+  async function applyGeometryPatch(): Promise<boolean> {
     if (draft.baseRevision === null) {
       setFeedback({ kind: "error", message: "The canonical scene revision is unavailable. Refetch the scene before applying." });
-      return;
+      return false;
     }
+    const baseRevision = draft.baseRevision;
     const geometry = buildGeometryDraftPatch(draft);
-    if (geometry.error || !geometry.geometry) {
+    const geometryPayload = geometry.geometry;
+    if (geometry.error || !geometryPayload) {
       setFeedback({ kind: "error", message: geometry.error ?? "Invalid geometry draft." });
-      return;
+      return false;
     }
 
-    setPending(true);
+    const finishPending = beginPendingOperation();
+    let isCurrentMutationContext: (() => boolean) | null = null;
     try {
-      const response = await patchObjectGeometryTransaction(api, draft.objectId, {
-        base_revision: draft.baseRevision,
-        geometry: geometry.geometry,
-      });
-      if (scene.data) {
-        authoringHistory?.record({
-          after: response.committed_scene,
-          before: scene.data,
-          committedRevision: response.scene_revision,
-          label: `Edit geometry ${draft.name}`,
-        });
-      }
+      const historyContext = createHistoryMutationContext();
+      isCurrentMutationContext = historyContext.isCurrentSessionScope;
+      const requestOptions = historyContext.sessionScopeKey
+        ? { sessionScopeKey: historyContext.sessionScopeKey }
+        : undefined;
+      const response = await runAuthoringMutationWithHistory(
+        historyContext,
+        `Edit geometry ${draft.name}`,
+        () => patchObjectGeometryTransaction(api, draft.objectId, {
+          base_revision: baseRevision,
+          geometry: geometryPayload,
+        }, requestOptions),
+      );
+      if (historyContext.isCurrentSessionScope() === false) return false;
       invalidateAuthoringResources(
         resources,
         response.scene_revision,
         response.committed_scene,
+        historyContext.sessionScopeKey,
       );
       setFeedback({ kind: "success", message: "Geometry patch committed." });
+      return true;
     } catch (error) {
+      if (isCurrentMutationContext?.() === false) return false;
+      if (isPrimitiveDraftRevisionConflict(error)) {
+        setConflictOperation("geometry");
+        setRevisionConflictPhase("conflict");
+        setConflictBaseRevision(draft.baseRevision);
+        setRefreshSawLoading(false);
+      }
       setFeedback({ kind: "error", message: errorMessage(error) });
+      return false;
     } finally {
-      setPending(false);
+      finishPending();
     }
   }
 
-  async function applyTransformPatch(): Promise<void> {
+  async function applyTransformPatch(): Promise<boolean> {
     if (draft.baseRevision === null) {
       setFeedback({ kind: "error", message: "The canonical scene revision is unavailable. Refetch the scene before applying." });
-      return;
+      return false;
     }
+    const baseRevision = draft.baseRevision;
     const transform = buildTransformDraftPatch(draft);
-    if (transform.error || !transform.transform) {
+    const transformPayload = transform.transform;
+    if (transform.error || !transformPayload) {
       setFeedback({ kind: "error", message: transform.error ?? "Invalid transform draft." });
-      return;
+      return false;
     }
 
-    setPending(true);
+    const finishPending = beginPendingOperation();
+    let isCurrentMutationContext: (() => boolean) | null = null;
     try {
-      const translation = transform.transform.translation as [number, number, number];
-      const result = await commitObjectTranslation({
-        api,
-        baseRevision: draft.baseRevision,
-        objectId: draft.objectId,
-        resources,
-        translation,
-      });
-      if (scene.data && result.committedScene) {
-        authoringHistory?.record({
-          after: result.committedScene,
-          before: scene.data,
-          committedRevision: result.revision,
-          label: `Edit transform ${draft.name}`,
-        });
-      }
+      const translation = transformPayload.translation as [number, number, number];
+      const historyContext = createHistoryMutationContext();
+      isCurrentMutationContext = historyContext.isCurrentSessionScope;
+      await runAuthoringMutationWithHistory(
+        historyContext,
+        `Edit transform ${draft.name}`,
+        () => commitObjectTranslation({
+          api,
+          baseRevision,
+          objectId: draft.objectId,
+          resources,
+          sessionScopeKey: historyContext.sessionScopeKey ?? undefined,
+          isCurrentSessionScope: historyContext.isCurrentSessionScope,
+          translation,
+        }),
+        (mutationResult) => mutationResult.committedScene ?? null,
+      );
+      if (historyContext.isCurrentSessionScope() === false) return false;
       setFeedback({ kind: "success", message: "Transform committed." });
+      return true;
     } catch (error) {
+      if (isCurrentMutationContext?.() === false) return false;
       if (isPrimitiveDraftRevisionConflict(error)) {
         setConflictOperation("transform");
         setRevisionConflictPhase("conflict");
@@ -390,8 +516,9 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         setRefreshSawLoading(false);
       }
       setFeedback({ kind: "error", message: errorMessage(error) });
+      return false;
     } finally {
-      setPending(false);
+      finishPending();
     }
   }
 
@@ -399,6 +526,55 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     setDraftState({ draft: baseDraft, key: draftKey });
     setFeedback(null);
   }
+
+  const geometryDraftChanged = draft.mode === "committed" && !sameDraftFields(
+    draft,
+    baseDraft,
+    ["archHeight", "geometryKind", "height", "length", "radius", "size", "width", "z0"],
+  );
+  const transformDraftChanged = draft.mode === "committed" && !sameDraftFields(
+    draft,
+    baseDraft,
+    ["translation"],
+  );
+  const newObjectDraftChanged = draft.mode === "draft-new" && !sameDraftValues(draft, baseDraft);
+  const inspectorDirty = geometryDraftChanged || transformDraftChanged || newObjectDraftChanged;
+  const geometryPatch = buildGeometryDraftPatch(draft);
+  const transformPatch = buildTransformDraftPatch(draft);
+  const inspectorValid = !inspectorDirty || (
+    draft.baseRevision !== null &&
+    Object.keys(primitiveDraft.errors).length === 0 &&
+    (draft.mode !== "draft-new" || (geometryPatch.error === null && transformPatch.error === null)) &&
+    (!geometryDraftChanged || geometryPatch.error === null) &&
+    (!transformDraftChanged || transformPatch.error === null)
+  );
+  const inspectorApplyBlockReason = revisionConflictPhase !== null
+    ? "Resolve the scene revision conflict before applying this draft."
+    : geometryDraftChanged && transformDraftChanged
+      ? "Apply geometry and transform separately so each change has its own history entry."
+      : undefined;
+
+  async function applyRegisteredDraft(): Promise<boolean> {
+    if (draft.mode === "draft-new") return applyCreateDraft();
+    if (draft.mode !== "committed") return false;
+    if (geometryDraftChanged && !transformDraftChanged) return applyGeometryPatch();
+    if (transformDraftChanged && !geometryDraftChanged) return applyTransformPatch();
+    return false;
+  }
+
+  useRegisterInspectorEditSession(
+    draft.mode === "missing" ? null : "staged",
+    pending,
+    inspectorDirty,
+    inspectorValid,
+    undefined,
+    applyRegisteredDraft,
+    revertDraft,
+    {
+      applyBlockReason: inspectorApplyBlockReason,
+      historyMode: "mutation-owned",
+    },
+  );
 
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
@@ -433,7 +609,11 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         onRebaseAfterConflict={rebaseAfterConflict}
         onRefetchAfterConflict={refetchAfterConflict}
         onRetryAfterConflict={
-          conflictOperation === "transform" ? applyTransformPatch : applyCreateDraft
+          conflictOperation === "transform"
+            ? applyTransformPatch
+            : conflictOperation === "geometry"
+              ? applyGeometryPatch
+              : applyCreateDraft
         }
         revisionConflictPhase={revisionConflictPhase}
       />
@@ -662,12 +842,12 @@ function ActionsSection({
 }: {
   draft: GeometryObjectDraft;
   feedback: Feedback | null;
-  onApplyCreateDraft: () => Promise<void>;
-  onApplyGeometryPatch: () => Promise<void>;
-  onApplyTransformPatch: () => Promise<void>;
+  onApplyCreateDraft: () => Promise<boolean>;
+  onApplyGeometryPatch: () => Promise<boolean>;
+  onApplyTransformPatch: () => Promise<boolean>;
   onRebaseAfterConflict: () => void;
   onRefetchAfterConflict: () => void;
-  onRetryAfterConflict: () => Promise<void>;
+  onRetryAfterConflict: () => Promise<boolean>;
   onRevertDraft: () => void;
   pending: boolean;
   revisionConflictPhase: "conflict" | "refresh-error" | "refreshing" | "rebased" | "refetched" | null;
@@ -745,8 +925,8 @@ function CommittedObjectActions({
   pending,
 }: {
   draft: GeometryObjectDraft;
-  onApplyGeometryPatch: () => Promise<void>;
-  onApplyTransformPatch: () => Promise<void>;
+  onApplyGeometryPatch: () => Promise<boolean>;
+  onApplyTransformPatch: () => Promise<boolean>;
   onRevertDraft: () => void;
   pending: boolean;
 }) {

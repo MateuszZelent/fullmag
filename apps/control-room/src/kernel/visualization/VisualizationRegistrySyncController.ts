@@ -149,6 +149,8 @@ export class VisualizationRegistrySyncController {
   private inflightCameraInvalidationSuppressed = false;
   private remoteState: VisualizationStateResource | null = null;
   private rejectedPatch: VisualizationStatePatch | null = null;
+  private sessionScopeKey: string | null = null;
+  private sessionScopeGeneration = 0;
   private started = false;
   private readonly suppressedCameraInvalidationRevisions = new Set<string>();
   private snapshot: VisualizationRegistrySyncSnapshot = INITIAL_SNAPSHOT;
@@ -174,6 +176,29 @@ export class VisualizationRegistrySyncController {
     this.resources = resources ?? null;
     this.onAcknowledgedTargetPatches = onAcknowledgedTargetPatches ?? null;
     this.onRejectedTargetPatches = onRejectedTargetPatches ?? null;
+  }
+
+  /**
+   * Binds coalesced visualization writes to the current session resource
+   * identity. A scope change invalidates pending local state and makes any
+   * older response observationally inert.
+   */
+  setSessionScopeKey(sessionScopeKey: string | null): void {
+    if (this.sessionScopeKey === sessionScopeKey) return;
+    this.sessionScopeKey = sessionScopeKey;
+    this.sessionScopeGeneration += 1;
+    this.clearScheduledFlush();
+    this.flushPromise = null;
+    this.firstPendingAt = null;
+    this.inflightCameraInvalidationSuppressed = false;
+    this.remoteState = null;
+    this.rejectedPatch = null;
+    this.suppressedCameraInvalidationRevisions.clear();
+    this.snapshot = {
+      ...INITIAL_SNAPSHOT,
+      version: this.snapshot.version + 1,
+    };
+    this.notify();
   }
 
   applyOptimisticState(
@@ -247,6 +272,8 @@ export class VisualizationRegistrySyncController {
     const targetIds = this.snapshot.pendingTargetIds;
     const planarTargetIds = this.snapshot.pendingPlanarTargetIds;
     const transactionIds = this.snapshot.pendingTransactionIds;
+    const sessionScopeKey = this.sessionScopeKey;
+    const sessionScopeGeneration = this.sessionScopeGeneration;
     const requestPatch = rebaseVisualizationStatePatch(
       this.remoteState,
       patch,
@@ -298,21 +325,29 @@ export class VisualizationRegistrySyncController {
       this.notify();
     }
 
-    this.flushPromise = this.patchWithBoundedRetry(requestPatch)
+    this.flushPromise = this.patchWithBoundedRetry(
+      requestPatch,
+      sessionScopeKey,
+      sessionScopeGeneration,
+    )
       .then(({ requestId, state }) => {
+        if (sessionScopeGeneration !== this.sessionScopeGeneration) return;
         this.rejectedPatch = null;
         this.observeRemoteState(state);
         // Optimize: populate the local resource cache pessimistically with the fresh patched state
         // to avoid triggering a redundant GET /v2/sessions/current/visualization/state fetch.
+        const scopedResourceKey = scopedVisualizationStateResourceKey(
+          sessionScopeKey,
+        );
         sharedResourceRuntimeStore.updateData(
-          VISUALIZATION_STATE_PATH,
+          scopedResourceKey,
           state,
           state.revision,
         );
 
         if (renderAffectingPatch) {
           this.resources?.invalidate(
-            VISUALIZATION_STATE_PATH,
+            scopedResourceKey,
             state.revision,
           );
         } else {
@@ -337,6 +372,7 @@ export class VisualizationRegistrySyncController {
         this.onAcknowledgedTargetPatches?.(state, targetIds, transactionIds);
       })
       .catch((error: unknown) => {
+        if (sessionScopeGeneration !== this.sessionScopeGeneration) return;
         this.rejectedPatch = patch;
         const rejectedTargetIds = targetIds;
         const rejectedPlanarTargetIds = planarTargetIds;
@@ -372,6 +408,7 @@ export class VisualizationRegistrySyncController {
         }
       })
       .finally(() => {
+        if (sessionScopeGeneration !== this.sessionScopeGeneration) return;
         if (!renderAffectingPatch) {
           this.inflightCameraInvalidationSuppressed = false;
         }
@@ -384,11 +421,16 @@ export class VisualizationRegistrySyncController {
 
   private async patchWithBoundedRetry(
     patch: VisualizationStatePatch,
+    sessionScopeKey: string | null,
+    sessionScopeGeneration: number,
   ): Promise<{
     requestId: string | null;
     state: VisualizationStateResource;
   }> {
     for (let attempt = 1; attempt <= this.maxTransientAttempts; attempt += 1) {
+      if (sessionScopeGeneration !== this.sessionScopeGeneration) {
+        throw new Error("visualization session scope changed");
+      }
       this.snapshot = {
         ...this.snapshot,
         mutation: this.snapshot.mutation
@@ -401,11 +443,18 @@ export class VisualizationRegistrySyncController {
         version: this.snapshot.version + 1,
       };
       try {
+        const requestOptions =
+          sessionScopeKey === null ? undefined : { sessionScopeKey };
         if (this.api.patchWithResponseIdentity) {
-          const result = await this.api.patchWithResponseIdentity(patch);
+          const result = requestOptions
+            ? await this.api.patchWithResponseIdentity(patch, requestOptions)
+            : await this.api.patchWithResponseIdentity(patch);
           return { requestId: result.requestId, state: result.data };
         }
-        return { requestId: null, state: await this.api.patch(patch) };
+        const state = requestOptions
+          ? await this.api.patch(patch, requestOptions)
+          : await this.api.patch(patch);
+        return { requestId: null, state };
       } catch (error) {
         if (!isTransientVisualizationPatchError(error) || attempt >= this.maxTransientAttempts) {
           throw error;
@@ -703,6 +752,14 @@ export class VisualizationRegistrySyncController {
 
 function resourceRevisionKey(revision: ResourceRevision): string {
   return `${typeof revision}:${String(revision)}`;
+}
+
+function scopedVisualizationStateResourceKey(
+  sessionScopeKey: string | null,
+): string {
+  return sessionScopeKey
+    ? `${sessionScopeKey}|${VISUALIZATION_STATE_PATH}`
+    : VISUALIZATION_STATE_PATH;
 }
 
 function isTransientVisualizationPatchError(error: unknown): boolean {

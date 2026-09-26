@@ -5,7 +5,8 @@ import type { KernelEventMap } from "../events/eventTypes";
 
 import { CommandRegistry } from "./CommandRegistry";
 import { CommandDiagnosticsController } from "./CommandDiagnosticsController";
-import type { CommandContribution } from "./commandTypes";
+import type { CommandContext, CommandContribution } from "./commandTypes";
+import { SessionCommandCancelledError } from "./commandSessionScope";
 
 function command(id: string, extra?: Partial<CommandContribution>): CommandContribution {
   return {
@@ -33,6 +34,90 @@ function setupWithDiagnostics() {
 }
 
 describe("CommandRegistry", () => {
+  it("reports obsolete-session cancellation without relabeling it as a failure", async () => {
+    const { bus, registry } = setupWithBus();
+    const completed = vi.fn();
+    bus.on("command:completed", completed);
+    registry.register(command("cancel", {
+      run: () => { throw new SessionCommandCancelledError(); },
+    }));
+    expect((await registry.execute("cancel", { source: "test" })).status).toBe("cancelled");
+    expect(completed).toHaveBeenCalledWith({ commandId: "cancel", status: "cancelled" });
+  });
+
+  it("captures scope before submitted listeners can switch the session", async () => {
+    const { bus, registry } = setupWithBus();
+    let scope = "session=a&epoch=1";
+    let listener: (() => void) | undefined;
+    registry.attachSessionScopeSource({
+      getScopeKey: () => scope,
+      subscribe: (next) => { listener = next; return () => {}; },
+    });
+    bus.on("command:submitted", () => {
+      scope = "session=b&epoch=2";
+      listener?.();
+    });
+    registry.register(command("start", {
+      run: (context) => {
+        expect(context.sessionScopeKey).toBe("session=a&epoch=1");
+        expect(context.isCurrentSessionScope?.()).toBe(false);
+        return { status: "cancelled" };
+      },
+    }));
+    expect((await registry.execute("start", { source: "test" })).status).toBe("cancelled");
+  });
+
+  it("captures the current scope and permanently fences a pending command across A-B-A", async () => {
+    const registry = new CommandRegistry();
+    let scope = "session=a&epoch=1";
+    let listener: (() => void) | undefined;
+    const unsubscribe = vi.fn();
+    registry.attachSessionScopeSource({
+      getScopeKey: () => scope,
+      subscribe: (next) => { listener = next; return unsubscribe; },
+    });
+    let captured!: CommandContext;
+    let finish!: () => void;
+    registry.register(command("pending", {
+      run: async (context) => {
+        captured = context;
+        await new Promise<void>((resolve) => { finish = resolve; });
+        return { status: context.isCurrentSessionScope?.() ? "completed" : "cancelled" };
+      },
+    }));
+    const result = registry.execute("pending", { source: "test" });
+    expect(captured.sessionScopeKey).toBe(scope);
+    expect(captured.isCurrentSessionScope?.()).toBe(true);
+    scope = "session=b&epoch=2";
+    listener?.();
+    scope = "session=a&epoch=1";
+    listener?.();
+    expect(captured.isCurrentSessionScope?.()).toBe(false);
+    finish();
+    expect((await result).status).toBe("cancelled");
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it("keeps an explicitly stale scope and releases the observer after an error", async () => {
+    const registry = new CommandRegistry();
+    const unsubscribe = vi.fn();
+    registry.attachSessionScopeSource({
+      getScopeKey: () => "session=b&epoch=2",
+      subscribe: () => unsubscribe,
+    });
+    registry.register(command("stale", {
+      run: (context) => {
+        expect(context.sessionScopeKey).toBe("session=a&epoch=1");
+        expect(context.isCurrentSessionScope?.()).toBe(false);
+        throw new Error("stale");
+      },
+    }));
+    expect((await registry.execute("stale", {
+      source: "test", sessionScopeKey: "session=a&epoch=1",
+    })).status).toBe("failed");
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
   it("registers and lists commands", () => {
     const registry = new CommandRegistry();
     const contribution = command("workspace.reset-layout");

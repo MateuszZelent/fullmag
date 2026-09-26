@@ -882,6 +882,10 @@ export const SIMULATION_PREPARATION_PATH = openApiV2Path(
   "/v2/sessions/current/simulation/preparation",
 );
 
+export const SIMULATION_PREPARATION_MATERIALIZATION_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/preparation/materialization",
+);
+
 export const SIMULATION_COMMANDS_PATH = openApiV2Path(
   "/v2/sessions/current/simulation/commands",
 );
@@ -983,7 +987,7 @@ export const PERSISTENCE_IMPORTS_PATH = openApiV2Path(
 );
 
 export const PERSISTENCE_IMPORT_INSPECTIONS_PATH = openApiV2Path(
-  "/v2/sessions/current/persistence/imports/inspections",
+  "/v2/persistence/imports/inspections",
 );
 
 export const PERSISTENCE_ASSET_IMPORT_PATH = openApiV2Path(
@@ -996,6 +1000,18 @@ export const PERSISTENCE_PROJECTS_PATH = openApiV2Path(
 
 export const PERSISTENCE_PROJECT_OPEN_PATH = openApiV2Path(
   "/v2/persistence/projects/open",
+);
+
+export const PROJECT_RUN_SUBMIT_PATH = openApiV2Path(
+  "/v2/persistence/projects/{project_id}/runs",
+);
+
+export const PROJECT_RUN_MATERIALIZATION_PATH = openApiV2Path(
+  "/v2/persistence/projects/{project_id}/runs/{run_id}/materialization",
+);
+
+export const PROJECT_RUN_PATH = openApiV2Path(
+  "/v2/persistence/projects/{project_id}/runs/{run_id}",
 );
 
 export const PERSISTENCE_RECOVERY_PATH = openApiV2Path(

@@ -30,6 +30,7 @@ import {
 import { usePrimitiveDraftOverlay } from "./usePrimitiveDraftOverlay";
 
 const SESSION_IDENTITY = {
+  requestScopeEpoch: "test-api:5",
   sessionEpoch: "epoch-task-5",
   sessionId: "session-task-5",
 } as const;

@@ -18,8 +18,14 @@ import {
   MESHING_SUMMARY_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
+  MODEL_GEOMETRY_REALIZATION_CURRENT_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_READINESS_PATH,
+  MODEL_REALIZED_REGIONS_PATH,
+  MODEL_REGION_DIAGNOSTICS_PATH,
   MODEL_SCENE_PATH,
+  MODEL_UNIVERSE_PATH,
+  SIMULATION_PREPARATION_PATH,
 } from "../api/apiPaths";
 import type { CommandContext } from "../commands/commandTypes";
 import { CommandRegistry } from "../commands/CommandRegistry";
@@ -89,6 +95,150 @@ function sessionStatus(discretization: string) {
 }
 
 describe("geometry lifecycle command contributions", () => {
+  it("builds geometry only for the current scene revision and invalidates derived resources", async () => {
+    const registry = registryWithLifecycleCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const realize = vi.fn(async () => ({
+      backend_target: "fdm" as const,
+      realization_revision: 21,
+      source_scene_revision: 21,
+      status: "realized",
+    }));
+
+    expect(
+      registry.isEnabled("builder-build-geometry", {
+        source: "test",
+        api: { model: { geometry: { realize } } } as never,
+        resourceData: { [MODEL_SCENE_PATH]: { revision: 21 } },
+      }),
+    ).toBe(true);
+
+    const result = await registry.execute("builder-build-geometry", {
+      api: { model: { geometry: { realize } } } as never,
+      resourceData: { [MODEL_SCENE_PATH]: { revision: 21 } },
+      resources,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Geometry realization completed.",
+      status: "completed",
+    });
+    expect(realize).toHaveBeenCalledWith({});
+    for (const resourceKey of [
+      MODEL_GEOMETRY_REALIZATION_CURRENT_PATH,
+      MODEL_REALIZED_REGIONS_PATH,
+      MODEL_REGION_DIAGNOSTICS_PATH,
+      MODEL_UNIVERSE_PATH,
+      MODEL_READINESS_PATH,
+    ]) {
+      expect(resources.getRevision(resourceKey)).toBe(21);
+    }
+  });
+
+  it("fails closed when geometry realization responds for a stale scene", async () => {
+    const registry = registryWithLifecycleCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const realize = vi.fn(async () => ({
+      backend_target: "fem" as const,
+      realization_revision: 20,
+      source_scene_revision: 20,
+      status: "realized",
+    }));
+
+    const result = await registry.execute("builder-build-geometry", {
+      api: { model: { geometry: { realize } } } as never,
+      resourceData: { [MODEL_SCENE_PATH]: { revision: 21 } },
+      resources,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message:
+        "Geometry realization is stale: source scene revision 20 does not match current scene revision 21. Refetch the scene before using it.",
+      status: "failed",
+    });
+    expect(realize).toHaveBeenCalledWith({});
+    expect(resources.getRevision(MODEL_GEOMETRY_REALIZATION_CURRENT_PATH)).toBeNull();
+    expect(resources.getRevision(MODEL_REALIZED_REGIONS_PATH)).toBeNull();
+    expect(resources.getRevision(MODEL_REGION_DIAGNOSTICS_PATH)).toBeNull();
+    expect(resources.getRevision(MODEL_UNIVERSE_PATH)).toBeNull();
+    expect(resources.getRevision(MODEL_READINESS_PATH)).toBeNull();
+  });
+
+  it("disables geometry realization until the canonical scene revision is available", () => {
+    const registry = registryWithLifecycleCommands();
+    const realize = vi.fn();
+    const context = {
+      api: { model: { geometry: { realize } } } as never,
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("builder-build-geometry", context)).toBe(false);
+    expect(
+      registry.get("builder-build-geometry")?.disabledReason?.(context),
+    ).toBe(
+      "The canonical scene revision is unavailable. Refetch the scene before building geometry.",
+    );
+  });
+
+  it("validates only the current scene revision and refreshes validation resources", async () => {
+    const registry = registryWithLifecycleCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const validation = vi.fn(async () => ({
+      backend_target: "fdm" as const,
+      diagnostics: [],
+      dirty: false,
+      scene_revision: 21,
+      status: "valid",
+    }));
+
+    const result = await registry.execute("builder-validate", {
+      api: { model: { geometry: { validation } } } as never,
+      resourceData: { [MODEL_SCENE_PATH]: { revision: 21 } },
+      resources,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Geometry validation completed.",
+      status: "completed",
+    });
+    expect(validation).toHaveBeenCalledWith();
+    expect(resources.getRevision(MODEL_GEOMETRY_VALIDATION_PATH)).toBe(21);
+    expect(resources.getRevision(MODEL_GEOMETRY_DIAGNOSTICS_PATH)).toBe(21);
+    expect(resources.getRevision(MODEL_READINESS_PATH)).toBe(21);
+  });
+
+  it("does not publish a stale geometry validation response", async () => {
+    const registry = registryWithLifecycleCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const validation = vi.fn(async () => ({
+      backend_target: "fem" as const,
+      diagnostics: [],
+      dirty: true,
+      scene_revision: 20,
+      status: "blocked",
+    }));
+
+    const result = await registry.execute("builder-validate", {
+      api: { model: { geometry: { validation } } } as never,
+      resourceData: { [MODEL_SCENE_PATH]: { revision: 21 } },
+      resources,
+      source: "test",
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.message).toContain("Geometry validation is stale");
+    expect(resources.getRevision(MODEL_GEOMETRY_VALIDATION_PATH)).toBeNull();
+    expect(resources.getRevision(MODEL_GEOMETRY_DIAGNOSTICS_PATH)).toBeNull();
+    expect(resources.getRevision(MODEL_READINESS_PATH)).toBeNull();
+  });
+
   it("submits selected-object mesh builds through the command registry", async () => {
     const registry = registryWithLifecycleCommands();
     const bus = new EventBus<KernelEventMap>();
@@ -144,6 +294,7 @@ describe("geometry lifecycle command contributions", () => {
       mesh_target: { kind: "object_mesh", object_id: "box" },
     });
     expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBe(1);
+    expect(resources.getRevision(SIMULATION_PREPARATION_PATH)).toBe("mesh:1");
     expect(
       resources.getRevision(
         MESHING_OBJECT_TOPOLOGY_PATH.replace("{object_id}", "box"),
@@ -392,6 +543,7 @@ describe("geometry lifecycle command contributions", () => {
     expect(resources.getRevision(MESHING_SUMMARY_PATH)).toBe(3);
     expect(resources.getRevision(MESHING_SEMANTICS_PATH)).toBe(3);
     expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(3);
+    expect(resources.getRevision(SIMULATION_PREPARATION_PATH)).toBe("mesh:3");
     expect(resources.getRevision(MESHING_SHARED_DOMAIN_REPORT_PATH)).toBe(3);
     expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_PATH)).toBe(3);
     expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH)).toBe(3);
@@ -610,6 +762,60 @@ describe("geometry lifecycle command contributions", () => {
     expect(resources.getRevision(MODEL_GEOMETRY_DIAGNOSTICS_PATH)).toBe(15);
   });
 
+  it("keeps a newer selection out of geometry delete history while the ACK is pending", async () => {
+    const registry = registryWithLifecycleCommands();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const resources = new ResourceInvalidationController(new EventBus<KernelEventMap>());
+    selection.set({
+      kind: "object.root",
+      label: "Box",
+      nodeId: "model:object:box",
+      objectId: "box",
+      ref: null,
+    }, "test");
+    const before = {
+      objects: [{ object_id: "box" }, { object_id: "other" }],
+      revision: 14,
+    };
+    const after = {
+      objects: [{ object_id: "other" }],
+      revision: 15,
+    };
+    const record = vi.fn();
+    const commitTransaction = vi.fn(async () => {
+      selection.set({
+        kind: "object.root",
+        label: "Other",
+        nodeId: "model:object:other",
+        objectId: "other",
+        ref: null,
+      }, "explorer");
+      return {
+        committed_scene: after,
+        scene_revision: 15,
+        transaction_kind: "delete_object",
+      };
+    });
+
+    await registry.execute("geometry.delete-object", {
+      api: { model: { commitTransaction, scene: vi.fn(async () => before) } } as never,
+      authoringHistory: { record } as never,
+      resources,
+      selection,
+      source: "test",
+    });
+
+    expect(selection.get().objectId).toBe("other");
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({
+      afterWorkspaceState: expect.objectContaining({
+        selection: expect.objectContaining({ objectId: "box" }),
+      }),
+      beforeWorkspaceState: expect.objectContaining({
+        selection: expect.objectContaining({ objectId: "box" }),
+      }),
+    }));
+  });
+
   it("commits primitive drafts as create-object transactions and selects the committed object", async () => {
     const registry = registryWithLifecycleCommands();
     const bus = new EventBus<KernelEventMap>();
@@ -762,6 +968,50 @@ describe("geometry lifecycle command contributions", () => {
     });
     expect(resources.getRevision(MODEL_SCENE_PATH)).toBe(22);
     now.mockRestore();
+  });
+
+  it("does not submit an antenna transaction after the session changes during scene read", async () => {
+    const registry = registryWithLifecycleCommands();
+    const commitTransaction = vi.fn();
+    let current = true;
+    const result = await registry.execute("geometry.add-microstrip-antenna", {
+      source: "test",
+      isCurrentSessionScope: () => current,
+      api: { model: {
+        scene: vi.fn(async () => { current = false; return { objects: [], revision: 4 }; }),
+        commitTransaction,
+      } } as never,
+    });
+    expect(result.status).toBe("cancelled");
+    expect(commitTransaction).not.toHaveBeenCalled();
+  });
+
+  it("does not clear the new workspace selection after a late delete-object ACK", async () => {
+    const registry = registryWithLifecycleCommands();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    selection.set({
+      kind: "object.root",
+      label: "Box",
+      nodeId: "model:object:box",
+      objectId: "box",
+      ref: { kind: "object.root", nodeId: "model:object:box", objectId: "box", type: "scene-object", visualizationTargetId: "object:box" },
+    }, "test");
+    const clear = vi.spyOn(selection, "clear");
+    const invalidate = vi.fn();
+    let current = true;
+    const result = await registry.execute("geometry.delete-object", {
+      source: "test",
+      selection,
+      resources: { invalidate } as never,
+      isCurrentSessionScope: () => current,
+      api: { model: { commitTransaction: vi.fn(async () => {
+        current = false;
+        return { committed_scene: { revision: 5 }, scene_revision: 5, transaction_kind: "delete_object" };
+      }) } } as never,
+    });
+    expect(result.status).toBe("cancelled");
+    expect(clear).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
   });
 
   it("keeps the primitive draft selected when create-object commit fails", async () => {
@@ -939,6 +1189,69 @@ describe("geometry lifecycle command contributions", () => {
       resource_invalidations: [{ resource_key: "data/domain/topology", revision: 10 }] });
     expect(await first).toEqual({ commandId: "cmd-once", status: "completed" });
     expect(await second).toEqual(await first);
+  });
+
+  it("does not submit a mesh build confirmed after its session changes", async () => {
+    const bus = new EventBus<KernelEventMap>();
+    const requested = vi.fn();
+    bus.on("mesh:build-confirm-requested", requested);
+    const submit = vi.fn();
+    let current = true;
+    const command = GEOMETRY_LIFECYCLE_COMMANDS.find((entry) => entry.id === "mesh.build-shared-domain")!;
+    const pending = command.run({
+      api: { commands: { submit } } as never, bus, source: "test",
+      resourceData: sessionStatus("fem"), sessionScopeKey: "session=A&epoch=1",
+      isCurrentSessionScope: () => current,
+    });
+    await vi.waitFor(() => expect(requested).toHaveBeenCalledOnce());
+    current = false;
+    bus.emit("mesh:build-confirm-resolved", {
+      requestId: requested.mock.calls[0]![0].requestId, confirmed: true,
+    });
+    expect(await pending).toMatchObject({ status: "cancelled" });
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("isolates accepted mesh operations and publications after a session switch", async () => {
+    const bus = new EventBus<KernelEventMap>();
+    bus.on("mesh:build-confirm-requested", (request) => {
+      if (request.requestId) bus.emit("mesh:build-confirm-resolved", {
+        requestId: request.requestId, confirmed: true,
+      });
+    });
+    const observed = vi.fn();
+    bus.on("mesh:build-observed", observed);
+    const resources = new ResourceInvalidationController(bus);
+    let resolveOld!: (value: unknown) => void;
+    const submit = vi.fn((_request, options?: { sessionScopeKey?: string }) =>
+      options?.sessionScopeKey === "session=A&epoch=1"
+        ? new Promise((resolve) => { resolveOld = resolve; })
+        : Promise.resolve({ accepted: true, command_id: "cmd-B" }));
+    const detail = vi.fn(async (_id, options?: { sessionScopeKey?: string }) => ({
+      command_id: options?.sessionScopeKey === "session=B&epoch=2" ? "cmd-B" : "cmd-A",
+      status: "completed", seq: 11,
+      resource_invalidations: [{ resource_key: "data/domain/topology", revision: 11 }],
+    }));
+    const api = { commands: { submit, detail } } as never;
+    const command = GEOMETRY_LIFECYCLE_COMMANDS.find((entry) => entry.id === "mesh.build-shared-domain")!;
+    let currentA = true;
+    const old = command.run({ api, bus, resources, source: "test", resourceData: sessionStatus("fem"),
+      sessionScopeKey: "session=A&epoch=1", isCurrentSessionScope: () => currentA });
+    await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    currentA = false;
+    expect(await command.run({ api, bus, resources, source: "test", resourceData: sessionStatus("fem"),
+      sessionScopeKey: "session=B&epoch=2", isCurrentSessionScope: () => true }))
+      .toEqual({ commandId: "cmd-B", status: "completed" });
+    const revision = resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH);
+    resolveOld({ accepted: true, command_id: "cmd-A" });
+    expect(await old).toMatchObject({ status: "cancelled" });
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(revision);
+    expect(observed).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenNthCalledWith(1, expect.objectContaining({ kind: "mesh_build" }),
+      { sessionScopeKey: "session=A&epoch=1" });
+    expect(submit).toHaveBeenNthCalledWith(2, expect.objectContaining({ kind: "mesh_build" }),
+      { sessionScopeKey: "session=B&epoch=2" });
+    expect(detail).toHaveBeenCalledWith("cmd-B", { sessionScopeKey: "session=B&epoch=2" });
   });
 
   it("resumes a disconnected command without another confirmation or POST", async () => {

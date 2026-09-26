@@ -1,9 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 
 import type { SceneSpinTransport, TransportValidationRequest, TransportValidationResponse } from "@/kernel/api/apiTypes";
-import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
+import {
+  authoringWriteOptions,
+  captureAuthoringMutationFence,
+  runAuthoringMutationWithHistory,
+} from "@/kernel/authoring/authoringHistoryMutation";
+import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   SPIN_INTERFACES_RESOURCE_KEY,
@@ -12,7 +17,11 @@ import {
   useSpinInterfacesResource,
   useSpinTransportsResource,
 } from "@/kernel/resources/spinAuthoringResources";
-import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
+import {
+  useSessionResourceIdentity,
+  useSessionStatusSelector,
+} from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
@@ -154,7 +163,9 @@ function buildInterface(draft: InterfaceDraft): unknown {
 }
 
 export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) {
-  const { api, authoringHistory, resources } = useKernel();
+  const kernel = useKernel();
+  const { api, commands, resources } = kernel;
+  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const projected = useSpinInterfacesResource();
   const transports = useSpinTransportsResource();
   const interfaceRef = selection.ref?.type === "spin-interface" ? selection.ref : null;
@@ -182,12 +193,17 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
     ref,
   ]);
   const baseDraft = interfaceDraft(selected?.interface);
-  const draftKey = `${ownerId}:${selected?.interface_id ?? "new"}:${JSON.stringify(baseDraft)}`;
+  const draftKey = `${sessionScopeKey ?? "no-session"}:${ownerId}:${selected?.interface_id ?? "new"}:${JSON.stringify(baseDraft)}`;
   const [draftState, setDraftState] = useState({ key: draftKey, value: baseDraft });
   const draft = draftState.key === draftKey ? draftState.value : baseDraft;
-  const [pending, setPending] = useState(false);
+  const [pendingOperation, setPendingOperation] = useState<{
+    id: number;
+    sessionScopeKey: string;
+  } | null>(null);
+  const nextPendingOperationId = useRef(0);
+  const pending = pendingOperation?.sessionScopeKey === sessionScopeKey;
   const [feedback, setFeedback] = useState<{ kind: "error" | "success"; message: string } | null>(null);
-  const validationKey = `${draftKey}:${transports.data?.scene_revision ?? "none"}`;
+  const validationKey = `${sessionScopeKey ?? "no-session"}:${draftKey}:${transports.data?.scene_revision ?? "none"}`;
   const [validationState, setValidationState] = useState<{ key: string; response: TransportValidationResponse | null }>({ key: "", response: null });
   const validation = validationState.key === validationKey ? validationState.response : null;
   const readOnly = selected ? !selected.known : false;
@@ -203,6 +219,8 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
   );
   const lockReason = readOnly
     ? "Unknown interface payloads are read-only."
+    : !sessionScopeKey
+      ? "Session identity is not ready."
     : !ownerId
       ? "Select the owning spin transport before applying."
       : transports.status !== "ready"
@@ -220,16 +238,40 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
     };
   };
 
+  const captureMutationContext = () => captureAuthoringMutationFence(
+    createCommandContext("inspector", kernel, { sessionScopeKey }),
+  );
+  const isCurrentSession = () => Boolean(
+    sessionScopeKey && commands?.getSessionScopeKey?.() === sessionScopeKey,
+  );
+
   useEffect(() => {
-    if (readOnly || !ownerId || transports.data?.scene_revision === undefined) return;
+    if (!sessionScopeKey || readOnly || !ownerId || transports.data?.scene_revision === undefined) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      try { void api.model.validateTransport(validationRequest(), { signal: controller.signal }).then((response) => setValidationState({ key: validationKey, response })).catch(() => setValidationState({ key: validationKey, response: null })); } catch { setValidationState({ key: validationKey, response: null }); }
+      try {
+        void api.model.validateTransport(validationRequest(), {
+          sessionScopeKey,
+          signal: controller.signal,
+        }).then((response) => {
+          if (!controller.signal.aborted && isCurrentSession()) {
+            setValidationState({ key: validationKey, response });
+          }
+        }).catch(() => {
+          if (!controller.signal.aborted && isCurrentSession()) {
+            setValidationState({ key: validationKey, response: null });
+          }
+        });
+      } catch {
+        if (!controller.signal.aborted && isCurrentSession()) {
+          setValidationState({ key: validationKey, response: null });
+        }
+      }
     }, 180);
     return () => { window.clearTimeout(timer); controller.abort(); };
   // Serialized draft is the validation dependency by design.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, draft, ownerId, readOnly, selected?.interface_id, transports.data?.scene_revision, validationKey]);
+  }, [api, commands, draft, ownerId, readOnly, selected?.interface_id, sessionScopeKey, transports.data?.scene_revision, validationKey]);
 
   function ownerWith(nextInterface: unknown | null): SceneSpinTransport {
     const owner = (transports.data?.items ?? []).find((item) => record(item)?.id === ownerId);
@@ -242,53 +284,79 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
     return { ...ownerRecord, interfaces } as SceneSpinTransport;
   }
 
-  async function validateOwner(resource: SceneSpinTransport, baseRevision?: number) {
+  async function validateOwner(resource: SceneSpinTransport, baseRevision: number | undefined, requestScopeKey: string) {
     const revision = baseRevision ?? transports.data?.scene_revision;
     if (revision === undefined) throw new Error("Scene revision is unavailable.");
-    const response = await api.model.validateTransport({ base_revision: revision, candidate: { kind: "spin_transport", operation: "replace", path_id: ownerId, resource }, validation_version: "transport-authoring-validation.v1" });
+    const response = await api.model.validateTransport({ base_revision: revision, candidate: { kind: "spin_transport", operation: "replace", path_id: ownerId, resource }, validation_version: "transport-authoring-validation.v1" }, { sessionScopeKey: requestScopeKey });
+    if (commands?.getSessionScopeKey?.() !== requestScopeKey) throw new Error("Session changed during validation.");
     if (!response.semantic.valid || !response.execution.authoring_allowed) throw new Error(response.semantic.issues[0]?.message ?? response.execution.reason ?? "Owner update is not authoring-ready.");
   }
 
   async function run(action: "save" | "delete"): Promise<boolean> {
-    setPending(true);
+    if (!sessionScopeKey) return false;
+    const mutationContext = captureMutationContext();
+    const operationId = ++nextPendingOperationId.current;
+    setPendingOperation({ id: operationId, sessionScopeKey });
     setFeedback(null);
     try {
       if (!capability?.authoring_allowed) throw new Error(capability?.reason ?? "Authoring capability is unavailable.");
       const nextInterface = action === "delete" ? null : buildInterface(draft);
       if (nextInterface) {
-        const checked = await api.model.validateTransport(validationRequest());
+        const checked = await api.model.validateTransport(validationRequest(), { sessionScopeKey });
+        if (mutationContext.isCurrentSessionScope?.() !== true) return false;
         setValidationState({ key: validationKey, response: checked });
         if (!checked.semantic.valid || !checked.execution.authoring_allowed) throw new Error(checked.semantic.issues[0]?.message ?? checked.execution.reason ?? "Interface is not authoring-ready.");
       } else if (validation?.execution.authoring_allowed !== true) throw new Error("Latest clone-only validation does not permit mutation.");
       const resource = ownerWith(nextInterface);
       const commit = action === "delete"
         ? await runAuthoringMutationWithHistory(
-            { api, authoringHistory },
+            mutationContext,
             `Delete spin interface ${selected?.interface_id ?? "new"}`,
             async ({ baseRevision }) => {
               const revision = baseRevision ?? transports.data!.scene_revision;
-              await validateOwner(resource, revision);
+              await validateOwner(resource, revision, mutationContext.sessionScopeKey!);
+              if (mutationContext.isCurrentSessionScope?.() !== true) {
+                throw new Error("Authoring mutation belongs to an obsolete session.");
+              }
+              const requestOptions = authoringWriteOptions(null, mutationContext.sessionScopeKey);
+              if (!requestOptions?.sessionScopeKey) throw new Error("Session identity is not ready.");
               return api.model.replaceSpinTransport(ownerId, {
                 base_revision: revision,
                 resource,
-              });
+              }, requestOptions);
             },
           )
-        : await (async () => {
-            await validateOwner(resource);
-            return api.model.replaceSpinTransport(ownerId, {
-              base_revision: transports.data!.scene_revision,
-              resource,
-            });
-          })();
+        : await runAuthoringMutationWithHistory(
+            mutationContext,
+            `${selected ? "Replace" : "Create"} spin interface ${selected?.interface_id ?? "new"}`,
+            async ({ baseRevision }) => {
+              const revision = baseRevision ?? transports.data!.scene_revision;
+              await validateOwner(resource, revision, mutationContext.sessionScopeKey!);
+              if (mutationContext.isCurrentSessionScope?.() !== true) {
+                throw new Error("Authoring mutation belongs to an obsolete session.");
+              }
+              const requestOptions = authoringWriteOptions(null, mutationContext.sessionScopeKey);
+              if (!requestOptions?.sessionScopeKey) throw new Error("Session identity is not ready.");
+              return api.model.replaceSpinTransport(ownerId, {
+                base_revision: revision,
+                resource,
+              }, requestOptions);
+            },
+          );
+      if (mutationContext.isCurrentSessionScope?.() !== true) return false;
       invalidateSpinAuthoringResources(resources, commit, [
         SPIN_TRANSPORTS_RESOURCE_KEY,
         SPIN_INTERFACES_RESOURCE_KEY,
       ]);
       setFeedback({ kind: "success", message: action === "delete" ? "Interface deleted through its owning spin transport." : "Interface committed through its owning spin transport." });
       return true;
-    } catch (error) { setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) }); return false; }
-    finally { setPending(false); }
+    } catch (error) {
+      if (mutationContext.isCurrentSessionScope?.() !== true) return false;
+      setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) });
+      return false;
+    } finally {
+      setPendingOperation((current) => current?.id === operationId ? null : current);
+    }
   }
 
   function resetDraft(): void {
@@ -304,6 +372,7 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
     lockReason,
     () => run("save"),
     resetDraft,
+    { historyMode: "mutation-owned" },
   );
 
   const patch = (value: Partial<InterfaceDraft>) => setDraftState({ key: draftKey, value: { ...draft, ...value } });
@@ -334,8 +403,8 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
     {readOnly && selected ? <><FeedbackBanner kind="warning" message="Unknown interface payload is preserved losslessly and read-only." /><FormField label="Opaque payload" type="textarea" rows={20} readOnly value={JSON.stringify(selected.interface, null, 2)} /></> : <InterfaceFields draft={draft} patch={patch} />}
     {!readOnly ? <div className="fm-help-text"><div>Owner: {ownerId || "not selected"}</div><div>Qualification: {validation?.execution.qualification ?? capability?.status ?? "checking"}</div><div>{validation?.execution.reason ?? capability?.reason ?? "Capability unavailable."}</div></div> : null}
     {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
-    {!readOnly ? <Button disabled={pending || !ownerId || !capability?.authoring_allowed || validation?.semantic.valid !== true || validation.execution.authoring_allowed !== true} onClick={() => void run("save")}>{pending ? "Committing…" : selected ? "Replace" : "Create"}</Button> : null}
-    {selected && !readOnly ? <Button variant="danger" disabled={pending || !capability?.authoring_allowed || validation?.execution.authoring_allowed !== true} onClick={() => void run("delete")}>Delete</Button> : null}
+    {!readOnly ? <Button disabled={pending || !sessionScopeKey || !ownerId || !capability?.authoring_allowed || validation?.semantic.valid !== true || validation.execution.authoring_allowed !== true} onClick={() => void run("save")}>{pending ? "Committing…" : selected ? "Replace" : "Create"}</Button> : null}
+    {selected && !readOnly ? <Button variant="danger" disabled={pending || !sessionScopeKey || !capability?.authoring_allowed || validation?.execution.authoring_allowed !== true} onClick={() => void run("delete")}>Delete</Button> : null}
   </InspectorGroup></div>} />;
 }
 

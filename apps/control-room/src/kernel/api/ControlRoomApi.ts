@@ -183,6 +183,9 @@ import {
   PERSISTENCE_IMPORTS_PATH,
   PERSISTENCE_PROJECT_OPEN_PATH,
   PERSISTENCE_PROJECTS_PATH,
+  PROJECT_RUN_SUBMIT_PATH,
+  PROJECT_RUN_MATERIALIZATION_PATH,
+  PROJECT_RUN_PATH,
   PLATFORM_CAPABILITIES_PATH,
   PLATFORM_HEALTH_PATH,
   SESSIONS_PATH,
@@ -192,6 +195,7 @@ import {
   SIMULATION_COMMAND_FAILURE_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
+  SIMULATION_PREPARATION_MATERIALIZATION_PATH,
   SIMULATION_PREPARATION_PATH,
   SIMULATION_RUN_CURRENT_PATH,
   SIMULATION_RUN_PATH,
@@ -207,6 +211,7 @@ import {
   SIMULATION_STAGE_HYSTERESIS_SETTLE_PIPELINE_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
   VISUALIZATION_CLIENT_ACKS_PATH,
+  VISUALIZATION_DISPLAY_PATH,
   VISUALIZATION_MODE_COMPOSITION_ACTIVE_PATH,
   VISUALIZATION_STATE_PATH,
 } from "./apiPaths";
@@ -439,6 +444,14 @@ import type {
   ProjectArchiveRequest,
   ProjectCreateRequest,
   ProjectDocumentResource,
+  ProjectRunSubmitRequest,
+  ProjectRunSubmitResource,
+  ProjectRunMaterializationResource,
+  ProjectRunResource,
+  ProjectRunListQuery,
+  ProjectRunListResource,
+  LivePreparationMaterializationRequest,
+  LivePreparationMaterializationResource,
   SolverEnergyCurrentResource,
   SolverEnergyHistoryResource,
   SolverProfileResource,
@@ -453,6 +466,7 @@ import type {
   VisualizationClientAckEntry,
   VisualizationClientAckRequest,
   VisualizationClientAckResource,
+  DisplaySelection,
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "./apiTypes";
@@ -701,6 +715,12 @@ const FIELD_MATERIALIZATION_TIMEOUT_MS = 5_000;
 const FIELD_MATERIALIZATION_RETRY_MS = 250;
 const FIELD_MATERIALIZATION_REQUEST_KEY = "current-field-cache";
 
+function sessionScopeHeaders(options: RequestOptions): Record<string, string> {
+  return options.sessionScopeKey
+    ? { "x-fullmag-session-scope": options.sessionScopeKey }
+    : {};
+}
+
 function baseRevisionPayload(options?: AuthoringWriteOptions): { base_revision?: number } {
   return options?.baseRevision === undefined
     ? {}
@@ -772,7 +792,7 @@ export class ControlRoomApi {
   private readonly requestIdFactory: () => string;
   private readonly transport: OpenApiV2Transport;
   private readonly fieldMaterializationRequests = new Map<string, Promise<void>>();
-  private meshFreshnessRequest: Promise<boolean> | null = null;
+  private readonly meshFreshnessRequests = new Map<string, Promise<boolean>>();
 
   readonly sessions = {
     list: (options?: RequestOptions) =>
@@ -2443,11 +2463,11 @@ export class ControlRoomApi {
     patchRegion: (
       regionId: string,
       patch: RegionPatchRequest,
-      options?: RequestOptions,
+      options?: AuthoringWriteOptions,
     ) =>
       this.patchJson<SceneResource, RegionPatchRequest>(
         MODEL_REGION_PATH,
-        patch,
+        { ...baseRevisionPayload(options), ...patch },
         options,
         { path: { region_id: regionId } },
       ),
@@ -2585,6 +2605,22 @@ export class ControlRoomApi {
         >(PERSISTENCE_IMPORT_INSPECTIONS_PATH, request, options),
     },
     projects: {
+      listRuns: (
+        projectId: string,
+        query: ProjectRunListQuery = {},
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<ProjectRunListResource>(
+          PROJECT_RUN_SUBMIT_PATH,
+          options,
+          { path: { project_id: projectId }, query },
+        ),
+      getRun: (projectId: string, runId: string, options?: RequestOptions) =>
+        this.requestJson<ProjectRunResource>(
+          PROJECT_RUN_PATH,
+          options,
+          { path: { project_id: projectId, run_id: runId } },
+        ),
       create: (request: ProjectCreateRequest, options?: RequestOptions) =>
         this.postJson<ProjectDocumentResource, ProjectCreateRequest>(
           PERSISTENCE_PROJECTS_PATH,
@@ -2596,6 +2632,28 @@ export class ControlRoomApi {
           PERSISTENCE_PROJECT_OPEN_PATH,
           request,
           options,
+        ),
+      submitRun: (
+        projectId: string,
+        request: ProjectRunSubmitRequest,
+        options?: RequestOptions,
+      ) =>
+        this.postJson<ProjectRunSubmitResource, ProjectRunSubmitRequest>(
+          PROJECT_RUN_SUBMIT_PATH,
+          request,
+          options,
+          { path: { project_id: projectId } },
+        ),
+      materializeRun: (
+        projectId: string,
+        runId: string,
+        options?: RequestOptions,
+      ) =>
+        this.postJson<ProjectRunMaterializationResource, undefined>(
+          PROJECT_RUN_MATERIALIZATION_PATH,
+          undefined,
+          options,
+          { path: { project_id: projectId, run_id: runId } },
         ),
     },
   };
@@ -2609,6 +2667,18 @@ export class ControlRoomApi {
     preparation: (options?: RequestOptions) =>
       this.requestJson<SimulationPreparationResource>(
         SIMULATION_PREPARATION_PATH,
+        options,
+      ),
+    materializePreparation: (
+      request: LivePreparationMaterializationRequest,
+      options?: RequestOptions,
+    ) =>
+      this.postJson<
+        LivePreparationMaterializationResource,
+        LivePreparationMaterializationRequest
+      >(
+        SIMULATION_PREPARATION_MATERIALIZATION_PATH,
+        request,
         options,
       ),
     objects: {
@@ -2703,6 +2773,14 @@ export class ControlRoomApi {
   };
 
   readonly visualization = {
+    display: (options?: RequestOptions) =>
+      this.requestJson<DisplaySelection>(VISUALIZATION_DISPLAY_PATH, options),
+    replaceDisplay: (display: DisplaySelection, options?: RequestOptions) =>
+      this.putJson<DisplaySelection, DisplaySelection>(
+        VISUALIZATION_DISPLAY_PATH,
+        display,
+        options,
+      ),
     ack: (ack: VisualizationClientAckRequest, options?: RequestOptions) =>
       this.postJson<VisualizationClientAckEntry, VisualizationClientAckRequest>(
         VISUALIZATION_CLIENT_ACKS_PATH,
@@ -2746,6 +2824,15 @@ export class ControlRoomApi {
         VISUALIZATION_STATE_PATH,
         options,
       ),
+    replaceState: (
+      replacement: VisualizationStateResource,
+      options?: RequestOptions,
+    ) =>
+      this.putJson<VisualizationStateResource, VisualizationStateResource>(
+        VISUALIZATION_STATE_PATH,
+        replacement,
+        options,
+      ),
   };
 
   constructor({
@@ -2766,7 +2853,8 @@ export class ControlRoomApi {
     this.requestIdFactory = requestIdFactory;
     this.transport = createOpenApiV2Transport({
       baseUrl: this.baseUrl,
-      fetch: (input) => this.executeOpenApiFetch(input, undefined),
+      fetch: (input: Request, init?: RequestInit) =>
+        this.executeOpenApiFetch(input, init),
     });
   }
 
@@ -2781,6 +2869,7 @@ export class ControlRoomApi {
   ): Promise<T> {
     const result = await this.transport.GET(path as never, {
       cache: "no-store",
+      headers: sessionScopeHeaders(options),
       params,
       signal: options.signal,
     } as never);
@@ -2794,6 +2883,7 @@ export class ControlRoomApi {
   ): Promise<T | null> {
     const result = await this.transport.GET(path as never, {
       cache: "no-store",
+      headers: sessionScopeHeaders(options),
       params,
       signal: options.signal,
     } as never);
@@ -2812,6 +2902,7 @@ export class ControlRoomApi {
   ): Promise<PendingJsonResourceResult<T>> {
     const result = await this.transport.GET(path as never, {
       cache: "no-store",
+      headers: sessionScopeHeaders(options),
       params,
       signal: options.signal,
     } as never);
@@ -2852,6 +2943,7 @@ export class ControlRoomApi {
     const result = await this.transport.POST(path as never, {
       body,
       cache: "no-store",
+      headers: sessionScopeHeaders(options),
       params,
       signal: options.signal,
     } as never);
@@ -2867,6 +2959,7 @@ export class ControlRoomApi {
     const result = await this.transport.PATCH(path as never, {
       body,
       cache: "no-store",
+      headers: sessionScopeHeaders(options),
       params,
       signal: options.signal,
     } as never);
@@ -2882,6 +2975,7 @@ export class ControlRoomApi {
     const result = await this.transport.PATCH(path as never, {
       body,
       cache: "no-store",
+      headers: sessionScopeHeaders(options),
       params,
       signal: options.signal,
     } as never);
@@ -2900,6 +2994,7 @@ export class ControlRoomApi {
     const result = await this.transport.PUT(path as never, {
       body,
       cache: "no-store",
+      headers: sessionScopeHeaders(options),
       params,
       signal: options.signal,
     } as never);
@@ -2913,6 +3008,7 @@ export class ControlRoomApi {
   ): Promise<TResponse> {
     const result = await this.transport.DELETE(path as never, {
       cache: "no-store",
+      headers: sessionScopeHeaders(options),
       params,
       signal: options.signal,
     } as never);
@@ -2928,6 +3024,7 @@ export class ControlRoomApi {
     const result = await this.transport.DELETE(path as never, {
       body,
       cache: "no-store",
+      headers: sessionScopeHeaders(options),
       params,
       signal: options.signal,
     } as never);
@@ -3338,7 +3435,7 @@ export class ControlRoomApi {
       return;
     }
     throwIfAborted(options.signal);
-    const key = FIELD_MATERIALIZATION_REQUEST_KEY;
+    const key = options.sessionScopeKey ?? FIELD_MATERIALIZATION_REQUEST_KEY;
     const existing = this.fieldMaterializationRequests.get(key);
     if (existing) {
       return existing;
@@ -3365,8 +3462,10 @@ export class ControlRoomApi {
 
   private async meshIsStale(options: RequestOptions = {}): Promise<boolean> {
     throwIfAborted(options.signal);
-    if (this.meshFreshnessRequest) {
-      const stale = await this.meshFreshnessRequest;
+    const key = options.sessionScopeKey ?? FIELD_MATERIALIZATION_REQUEST_KEY;
+    const existing = this.meshFreshnessRequests.get(key);
+    if (existing) {
+      const stale = await existing;
       throwIfAborted(options.signal);
       return stale;
     }
@@ -3374,7 +3473,9 @@ export class ControlRoomApi {
     const request = (async () => {
       try {
         // Do not bind the shared request to one component's abort signal.
-        return (await this.model.geometry.validation()).dirty;
+        return (await this.model.geometry.validation({
+          sessionScopeKey: options.sessionScopeKey,
+        })).dirty;
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") {
           throw error;
@@ -3383,10 +3484,12 @@ export class ControlRoomApi {
         return true;
       }
     })();
-    this.meshFreshnessRequest = request;
+    this.meshFreshnessRequests.set(key, request);
     void request
       .finally(() => {
-        if (this.meshFreshnessRequest === request) this.meshFreshnessRequest = null;
+        if (this.meshFreshnessRequests.get(key) === request) {
+          this.meshFreshnessRequests.delete(key);
+        }
       })
       .catch(() => undefined);
     const stale = await request;
@@ -3464,7 +3567,7 @@ export class ControlRoomApi {
     return measureControlRoomApiPerformance(
       measureBase,
       async () => {
-        const headers: Record<string, string> = {};
+        const headers: Record<string, string> = sessionScopeHeaders(options);
         if (options.etag) {
           headers["if-none-match"] = options.etag;
         }
@@ -3568,6 +3671,7 @@ export class ControlRoomApi {
                     decodeInline: decode,
                     kind: decoderKind,
                     path: requestState.lastRequestPath,
+                    signal: options.signal,
                   }),
           );
         } catch (error) {

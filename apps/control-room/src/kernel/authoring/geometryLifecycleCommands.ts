@@ -86,6 +86,7 @@ export const primitiveDraftOverlayStore = new PrimitiveDraftOverlayStore();
 export interface MeshCommandTerminalOptions {
   baseMeshRevision?: number | null;
   pollDelaysMs?: readonly number[];
+  requestOptions?: RequestOptions;
 }
 
 export type MeshCommandObservation =
@@ -169,7 +170,9 @@ export async function awaitMeshCommandTerminal(
 
     let detail: CommandDetailResource;
     try {
-      detail = await api.detail(commandId);
+      detail = options.requestOptions
+        ? await api.detail(commandId, options.requestOptions)
+        : await api.detail(commandId);
     } catch (error) {
       return {
         commandId,

@@ -7,6 +7,7 @@ import { useCallback, useMemo } from "react";
 import type { JsonObject, LiveStatusResource, MeshSharedDomainManifestResource } from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
+  MESH_CAPABILITIES_RESOURCE_KEY,
   useMeshBuildCurrent,
   useMeshBuildHistoryResource,
   useMeshBuildLatestSuccessful,
@@ -28,7 +29,10 @@ import {
   shouldLoadRuntimeMeshSummary,
 } from "@/kernel/resources/studyRuntimeResources";
 import { useKernel } from "@/kernel/KernelContext";
-import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import {
+  SESSION_STATUS_RESOURCE_KEY,
+  useSessionStatusSelector,
+} from "@/kernel/resources/useSessionStatus";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 import {
   normalizeMeshPipelineStatus,
@@ -102,6 +106,7 @@ export interface MeshDetailsModel {
   buildHistoryEntries: ReturnType<typeof normalizeMeshBuildHistory>;
   buildMode: unknown;
   buildStatus: string;
+  sharedDomainBuildDisabledReason: string | null;
   capabilitiesData: unknown;
   editorCapabilities: MeshEditorCapabilityModel;
   capabilitiesStatus: string;
@@ -435,10 +440,22 @@ export function useMeshDetailsModel(
   const buildContext = useMemo(
     () =>
       createCommandContext("inspector", kernel, {
+        resourceData: {
+          [SESSION_STATUS_RESOURCE_KEY]: runtimeStatus,
+          [MESH_CAPABILITIES_RESOURCE_KEY]: capabilities.data,
+        },
         sourceDetail: "mesh-details",
       }),
-    [kernel],
+    [capabilities.data, kernel, runtimeStatus],
   );
+  const sharedDomainBuildDisabledReason = useMemo(() => {
+    const commandId = "mesh.build-shared-domain";
+    if (kernel.commands.isEnabled(commandId, buildContext)) return null;
+    return (
+      kernel.commands.get(commandId)?.disabledReason?.(buildContext) ??
+      "Command is unavailable."
+    );
+  }, [buildContext, kernel.commands]);
   const selectWorstElement = useCallback(
     (element: MeshWorstElement) => {
       const nodeId = `model:mesh:quality:element:${element.elementIndex}`;
@@ -525,6 +542,7 @@ export function useMeshDetailsModel(
     buildHistoryEntries,
     buildMode: activeBuild.data?.shared_domain_build_report?.build_mode,
     buildStatus,
+    sharedDomainBuildDisabledReason,
     capabilitiesData: capabilities.data,
     editorCapabilities: resolveMeshEditorCapabilities(capabilities.data),
     capabilitiesStatus: capabilities.status,

@@ -10,6 +10,7 @@ export function MeshBuildPipelineSection({
   fallbacks,
   lastBuildError,
   latestSuccessAvailable,
+  sharedDomainBuildDisabledReason,
   onBuildSharedDomain,
   onOpenBuildDetails,
   sizeFieldKinds,
@@ -20,6 +21,7 @@ export function MeshBuildPipelineSection({
   fallbacks: readonly string[] | null | undefined;
   lastBuildError: unknown;
   latestSuccessAvailable: boolean;
+  sharedDomainBuildDisabledReason: string | null;
   onBuildSharedDomain: () => void;
   onOpenBuildDetails: () => void;
   sizeFieldKinds: readonly string[] | null | undefined;
@@ -61,6 +63,13 @@ export function MeshBuildPipelineSection({
           size="sm"
           type="button"
           variant="primary"
+          disabled={sharedDomainBuildDisabledReason !== null}
+          aria-label={
+            sharedDomainBuildDisabledReason === null
+              ? "Build Shared-Domain Mesh"
+              : `Build Shared-Domain Mesh: ${sharedDomainBuildDisabledReason}`
+          }
+          title={sharedDomainBuildDisabledReason ?? "Build Shared-Domain Mesh"}
           onClick={onBuildSharedDomain}
         >
           Build Shared-Domain Mesh

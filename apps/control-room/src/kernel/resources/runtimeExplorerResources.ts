@@ -16,6 +16,7 @@ import type {
 import { useKernel } from "../KernelContext";
 import type { RuntimeCommandDetailEntry } from "./runtimeExplorerTypes";
 
+import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
 import { useResource } from "./useResource";
 
 interface RuntimeExplorerResourceOptions {
@@ -64,22 +65,26 @@ export function useRuntimeCommandDetailsResource(
     [commandIds],
   );
   const identity = stableCommandIds.map(encodeURIComponent).join(",");
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    `${SIMULATION_COMMANDS_PATH}:details:${identity || "none"}`,
+  );
   const load = useCallback(
-    async ({ signal }: { signal: AbortSignal }) => {
+    async ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => {
       return loadRuntimeCommandDetailEntries(
         stableCommandIds,
-        (commandId) => api.commands.detail(commandId, { signal }),
+        (commandId) => api.commands.detail(commandId, { sessionScopeKey, signal }),
       );
     },
     [api, stableCommandIds],
   );
   return useResource<RuntimeCommandDetailEntry[]>({
-    enabled: enabled && stableCommandIds.length > 0,
+    enabled:
+      enabled && stableCommandIds.length > 0 && sessionIdentity !== null,
     load,
     resolveRevision: (details) => details
       .map((detail) => `${detail.commandId}:${detail.revision ?? detail.status}:${detail.error ?? ""}`)
       .join(","),
-    resourceKey: `${SIMULATION_COMMANDS_PATH}:details:${identity || "none"}`,
+    resourceKey,
   });
 }
 

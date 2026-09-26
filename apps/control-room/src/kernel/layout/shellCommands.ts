@@ -1,6 +1,7 @@
 import { requestThemeToggle } from "@/design/theme/themeEvents";
 
 import type { CommandContribution } from "../commands/commandTypes";
+import { applyAuthoringHistoryWorkspaceTransition } from "../authoring/authoringHistoryWorkspaceRestore";
 import { pickProjectArchive } from "../persistence/ProjectDocumentController";
 
 function disabledPlaceholder(
@@ -292,8 +293,11 @@ export const SHELL_COMMANDS: CommandContribution[] = [
           status: "failed",
         };
       }
-      await ctx.api.model.syncAuthoringScript({});
-      const script = await ctx.api.model.authoringScript();
+      const requestOptions = ctx.sessionScopeKey
+        ? { sessionScopeKey: ctx.sessionScopeKey }
+        : undefined;
+      await ctx.api.model.syncAuthoringScript({}, requestOptions);
+      const script = await ctx.api.model.authoringScript(requestOptions);
       if (typeof document !== "undefined") {
         const blob = new Blob([script.source], { type: "text/x-python;charset=utf-8" });
         const href = URL.createObjectURL(blob);
@@ -386,7 +390,10 @@ export const SHELL_COMMANDS: CommandContribution[] = [
           status: "failed",
         };
       }
-      return context.authoringHistory.undo();
+      return context.authoringHistory.undo(context.sessionScopeKey, (transition) => {
+        if (context.isCurrentSessionScope?.() === false) return;
+        applyAuthoringHistoryWorkspaceTransition(context, transition);
+      });
     },
   },
   {
@@ -412,7 +419,10 @@ export const SHELL_COMMANDS: CommandContribution[] = [
           status: "failed",
         };
       }
-      return context.authoringHistory.redo();
+      return context.authoringHistory.redo(context.sessionScopeKey, (transition) => {
+        if (context.isCurrentSessionScope?.() === false) return;
+        applyAuthoringHistoryWorkspaceTransition(context, transition);
+      });
     },
   },
   disabledPlaceholder("workspace.view-2d", "2D Slice Workspace", "View", "2"),

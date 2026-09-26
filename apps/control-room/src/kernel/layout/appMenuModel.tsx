@@ -12,6 +12,7 @@ import {
   HelpCircle,
   Info,
   LayoutDashboard,
+  Layers3,
   ListChecks,
   Pause,
   Play,
@@ -130,6 +131,7 @@ const MAIN_MENU_DEFINITIONS: AppMenuNode[] = [
     id: "simulation",
     label: "Simulation",
     children: [
+      { id: "study.prepare-live", label: "Prepare Live Study", icon: <Layers3 size={14} /> },
       { id: "study.run", label: "Compute Study", icon: <Play size={14} />, shortcut: "F5" },
       { id: "study.pause", label: "Pause", icon: <Pause size={14} /> },
       { id: "study.resume", label: "Resume", icon: <Play size={14} /> },

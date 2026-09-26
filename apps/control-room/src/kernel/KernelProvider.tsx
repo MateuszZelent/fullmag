@@ -25,6 +25,7 @@ import { MAGNETIZATION_TEXTURE_COMMANDS } from "./authoring/magnetization-textur
 import { REGION_COMMANDS } from "./authoring/regionCommandContributions";
 import { createCommandContext } from "./commands/commandContext";
 import { CommandRegistry } from "./commands/CommandRegistry";
+import { createCommandSessionScopeSource } from "./commands/commandSessionScopeSource";
 import {
   dispatchShortcutCommand,
 } from "./commands/commandShortcuts";
@@ -64,6 +65,8 @@ import {
   createViewport3DInactiveResourcePauseController,
 } from "./resources/inactiveViewportResourcePolicy";
 import { useRuntimeCommandControlResourceData } from "./resources/studyRuntimeResources";
+import { sessionRequestScopeKey } from "./resources/sessionResourceIdentity";
+import { useSessionResourceIdentity } from "./resources/useSessionStatus";
 import { STUDY_RUNTIME_COMMANDS } from "./runtime/studyRuntimeCommandContributions";
 import { SelectionController } from "./selection/SelectionController";
 import type { KernelApi } from "./types";
@@ -118,6 +121,7 @@ function createKernel(): KernelApi {
   });
   const projectDocument = new ProjectDocumentController(api);
   const commands = new CommandRegistry();
+  commands.attachSessionScopeSource(createCommandSessionScopeSource());
   commands.attach(bus);
   commands.attachDiagnostics(commandDiagnostics);
 
@@ -298,6 +302,10 @@ function DiagnosticRecorderConnector({ kernel }: { kernel: KernelApi }) {
 }
 
 function RealtimeConnector({ kernel }: { kernel: KernelApi }) {
+  const sessionIdentity = useSessionResourceIdentity();
+  const sessionScopeKey = sessionRequestScopeKey(sessionIdentity);
+  const expectedRequestScopeEpoch = sessionIdentity?.requestScopeEpoch ?? null;
+  const expectedSessionId = sessionIdentity?.sessionId ?? null;
   useEffect(() => {
     if (controlRoomRealtimeDisabledFromBrowser()) {
       return;
@@ -319,7 +327,12 @@ function RealtimeConnector({ kernel }: { kernel: KernelApi }) {
     const client = new RealtimeClient({
       bridge: kernel.realtime,
       diagnostics: kernel.diagnostics,
+      expectedRequestScopeEpoch,
+      expectedSessionId,
       onReconnected: () => {
+        kernel.realtime.handleReconnect();
+      },
+      onScopeMismatch: () => {
         kernel.realtime.handleReconnect();
       },
       onStatusChange: (status) => {
@@ -330,7 +343,7 @@ function RealtimeConnector({ kernel }: { kernel: KernelApi }) {
     });
     client.connect();
     return () => client.close();
-  }, [kernel]);
+  }, [kernel, sessionScopeKey, expectedRequestScopeEpoch, expectedSessionId]);
 
   return null;
 }
@@ -344,6 +357,8 @@ function controlRoomRealtimeDisabledFromBrowser(): boolean {
 
 function CommandShortcutConnector({ kernel }: { kernel: KernelApi }) {
   const startupVisible = useSimulationStartupOverlayVisibility();
+  const sessionIdentity = useSessionResourceIdentity();
+  const sessionScopeKey = sessionRequestScopeKey(sessionIdentity);
   const runtimeResourceData = useRuntimeCommandControlResourceData({
     enabled: !startupVisible,
   });
@@ -361,6 +376,7 @@ function CommandShortcutConnector({ kernel }: { kernel: KernelApi }) {
     function handleKeyDown(event: KeyboardEvent): void {
       const context = createCommandContext("shortcut", kernel, {
         resourceData: runtimeResourceDataRef.current,
+        sessionScopeKey,
         sourceDetail: "global",
       });
       dispatchShortcutCommand(kernel.commands, event, context);
@@ -368,7 +384,7 @@ function CommandShortcutConnector({ kernel }: { kernel: KernelApi }) {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [kernel, startupVisible]);
+  }, [kernel, sessionScopeKey, startupVisible]);
 
   return null;
 }

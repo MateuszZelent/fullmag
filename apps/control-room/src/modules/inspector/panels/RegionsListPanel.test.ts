@@ -39,6 +39,6 @@ describe("RegionsListPanel region creation wiring", () => {
     expect(selectRegionSource).toContain("selectionController.set");
     expect(createRegionSource).toContain("findRegionIdByName");
     expect(createRegionSource).toContain("selectRegion({");
-    expect(createRegionSource).toContain("syncAuthoringScriptBestEffort(api)");
+    expect(createRegionSource).toContain("syncAuthoringScriptBestEffort(api, sessionScopeKey)");
   });
 });

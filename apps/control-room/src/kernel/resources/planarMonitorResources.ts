@@ -10,6 +10,7 @@ import type { PlanarMonitorCollectionResource, PlanarMonitorResource } from "../
 import { useKernel } from "../KernelContext";
 
 import { useResource } from "./useResource";
+import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
 
 interface ResourceHookOptions {
   enabled?: boolean;
@@ -20,14 +21,17 @@ export function usePlanarMonitorsResource(
 ) {
   const { api } = useKernel();
   const revision = useResourceRevision(MODEL_PLANAR_MONITORS_PATH);
+  const { resourceKey: scopedResourceKey, sessionIdentity } =
+    useSessionScopedResourceKey(MODEL_PLANAR_MONITORS_PATH);
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) => api.model.planarMonitors.list({ signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.model.planarMonitors.list({ sessionScopeKey, signal }),
     [api],
   );
   return useResource<PlanarMonitorCollectionResource | null>({
-    enabled: options.enabled,
+    enabled: options.enabled !== false && sessionIdentity !== null,
     load,
-    resourceKey: `${MODEL_PLANAR_MONITORS_PATH}#revision=${String(revision ?? "none")}`,
+    resourceKey: `${scopedResourceKey}#revision=${String(revision ?? "none")}`,
   });
 }
 
@@ -41,15 +45,17 @@ export function usePlanarMonitorResource(
     encodeURIComponent(monitorId),
   );
   const revision = useResourceRevision(baseKey);
+  const { resourceKey: scopedResourceKey, sessionIdentity } =
+    useSessionScopedResourceKey(baseKey);
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.model.planarMonitors.get(monitorId, { signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.model.planarMonitors.get(monitorId, { sessionScopeKey, signal }),
     [api, monitorId],
   );
   return useResource<PlanarMonitorResource | null>({
-    enabled: options.enabled,
+    enabled: options.enabled !== false && sessionIdentity !== null,
     load,
-    resourceKey: `${baseKey}#revision=${String(revision ?? "none")}`,
+    resourceKey: `${scopedResourceKey}#revision=${String(revision ?? "none")}`,
   });
 }
 

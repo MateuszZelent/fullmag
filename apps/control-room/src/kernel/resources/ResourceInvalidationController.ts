@@ -20,7 +20,7 @@ export class ResourceInvalidationController {
     let revision = this.revisions.get(resourceKey) ?? null;
     let revisionOrder = this.revisionOrders.get(resourceKey) ?? -1;
     for (const [prefix, prefixRevision] of this.prefixRevisions) {
-      if (resourceKey !== prefix && resourceKey.startsWith(prefix)) {
+      if (resourceKeyMatchesPrefix(resourceKey, prefix)) {
         const prefixRevisionOrder =
           this.prefixRevisionOrders.get(prefix) ?? -1;
         const selected = selectRevision(
@@ -37,6 +37,19 @@ export class ResourceInvalidationController {
   }
 
   invalidate(resourceKey: ResourceKey, revision: ResourceRevision): void {
+    this.invalidateOne(resourceKey, revision);
+
+    for (const scopedResourceKey of this.listeners.keys()) {
+      if (isSessionScopedExactResourceKey(scopedResourceKey, resourceKey)) {
+        this.invalidateOne(scopedResourceKey, revision);
+      }
+    }
+  }
+
+  private invalidateOne(
+    resourceKey: ResourceKey,
+    revision: ResourceRevision,
+  ): void {
     const current = this.revisions.get(resourceKey);
     if (current === revision || isOlderNumericRevision(revision, current)) {
       return;
@@ -68,12 +81,9 @@ export class ResourceInvalidationController {
 
     let invalidated = 0;
     for (const resourceKey of this.listeners.keys()) {
-      if (
-        resourceKey !== resourcePrefix &&
-        resourceKey.startsWith(resourcePrefix)
-      ) {
+      if (resourceKeyMatchesPrefix(resourceKey, resourcePrefix)) {
         const current = this.revisions.get(resourceKey);
-        this.invalidate(resourceKey, revision);
+        this.invalidateOne(resourceKey, revision);
         if (this.revisions.get(resourceKey) !== current) invalidated += 1;
       }
     }
@@ -88,7 +98,7 @@ export class ResourceInvalidationController {
     for (const resourceKey of this.listeners.keys()) {
       if (predicate(resourceKey)) {
         const current = this.revisions.get(resourceKey);
-        this.invalidate(resourceKey, revision);
+        this.invalidateOne(resourceKey, revision);
         if (this.revisions.get(resourceKey) !== current) invalidated += 1;
       }
     }
@@ -117,6 +127,41 @@ export class ResourceInvalidationController {
     this.listeners.clear();
     this.sequence = 0;
   }
+}
+
+/**
+ * Session-scoped resource keys keep the current session identity ahead of the
+ * canonical v2 path (`session=...&epoch=...|/v2/sessions/current/...`).
+ * Realtime invalidation is intentionally emitted against the canonical path,
+ * so prefix invalidation must inspect the path suffix as well.
+ */
+function resourceKeyMatchesPrefix(
+  resourceKey: ResourceKey,
+  resourcePrefix: ResourceKey,
+): boolean {
+  if (resourceKey === resourcePrefix) return false;
+  if (resourceKey.startsWith(resourcePrefix)) return true;
+
+  const separator = resourceKey.indexOf("|");
+  if (separator <= 0) return false;
+  const identity = resourceKey.slice(0, separator);
+  if (!identity.startsWith("session=") || !identity.includes("&epoch=")) {
+    return false;
+  }
+  return resourceKey.slice(separator + 1).startsWith(resourcePrefix);
+}
+
+function isSessionScopedExactResourceKey(
+  resourceKey: ResourceKey,
+  canonicalResourceKey: ResourceKey,
+): boolean {
+  const separator = resourceKey.indexOf("|");
+  if (separator <= 0) return false;
+  const identity = resourceKey.slice(0, separator);
+  if (!identity.startsWith("session=") || !identity.includes("&epoch=")) {
+    return false;
+  }
+  return resourceKey.slice(separator + 1) === canonicalResourceKey;
 }
 
 function selectRevision(

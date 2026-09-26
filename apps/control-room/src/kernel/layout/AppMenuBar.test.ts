@@ -93,6 +93,16 @@ describe("app menu command model", () => {
     });
   });
 
+  it("exposes Live preparation as a distinct Simulation menu command", () => {
+    const simulationMenu = MAIN_MENUS.find((menu) => menu.id === "simulation");
+    expect(simulationMenu?.children).toContainEqual(
+      expect.objectContaining({
+        id: "study.prepare-live",
+        label: "Prepare Live Study",
+      }),
+    );
+  });
+
   it("exposes the solver profiler toggle from the Tools menu", () => {
     const toolsMenu = MAIN_MENUS.find((menu) => menu.id === "tools");
     const profilerItem = toolsMenu?.children?.find(

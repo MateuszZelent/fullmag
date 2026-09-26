@@ -189,4 +189,29 @@ describe("binaryDecodeScheduler", () => {
       }),
     ]);
   });
+
+  it("rejects a worker result when the owning resource was aborted", async () => {
+    vi.stubGlobal("Worker", FakeBinaryDecodeWorker);
+    const scheduler = createBinaryDecodeScheduler();
+    const controller = new AbortController();
+    const pending = scheduler({
+      buffer: new ArrayBuffer(8),
+      decodeInline: () => "inline",
+      kind: "field-vector",
+      path: "/v2/sessions/current/data/field-vector/m",
+      signal: controller.signal,
+    });
+    const worker = FakeBinaryDecodeWorker.instances[0];
+    controller.abort();
+    worker.emit(
+      "message",
+      messageEvent({
+        data: "stale" as unknown as BinaryDecodedPayload,
+        id: 1,
+        ok: true,
+      }),
+    );
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
 });

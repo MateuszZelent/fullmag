@@ -8,7 +8,9 @@ import {
   acknowledgedAuthoringSceneRevision,
   invalidateAuthoringMutationDependents,
 } from "@/kernel/authoring/authoringMutationInvalidation";
+import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import { useKernel } from "@/kernel/KernelContext";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import {
   resolveObjectInteractionResourceKey,
   resolveSceneResourceRevision,
@@ -20,7 +22,10 @@ import {
   useActiveLaneCapabilities,
   type ActiveLaneCapabilitySnapshot,
 } from "@/kernel/resources/useActiveLaneCapabilities";
-import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import {
+  useSessionResourceIdentity,
+  useSessionStatusSelector,
+} from "@/kernel/resources/useSessionStatus";
 import {
   interactionAvailabilityForDiscretization,
   interactionSpecsForDiscretization,
@@ -172,7 +177,8 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
   const objectId = selection.objectId;
   const selectedRegionId =
     selection.ref?.type === "scene-object" ? selection.ref.regionId ?? null : null;
-  const { api, resources } = useKernel();
+  const { api, authoringHistory, resources } = useKernel();
+  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const sessionDiscretization = useSessionStatusSelector(
     (status) => status.data?.domain.discretization ?? null,
   );
@@ -370,20 +376,26 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     dispatch({ type: "setMutation", key: mutationKey, pending: true });
     try {
       if (result.storage === "object_interaction") {
-        await commitObjectInteractionMutation({
-          interactionKind: objectInteractionKind,
-          objectId: objectId ?? "",
-          patch: () =>
-            api.model.patchObjectInteraction(
-              objectId ?? "",
-              objectInteractionKind,
-              {
-                ...result.patch,
-                base_revision: resource.scene_revision,
-              },
-            ),
-          resources,
-        });
+        await runAuthoringMutationWithHistory(
+          { api, authoringHistory, sessionScopeKey },
+          `${spec?.label ?? interactionId} interaction`,
+          async ({ baseRevision }) =>
+            commitObjectInteractionMutation({
+              interactionKind: objectInteractionKind,
+              objectId: objectId ?? "",
+              patch: () =>
+                api.model.patchObjectInteraction(
+                  objectId ?? "",
+                  objectInteractionKind,
+                  {
+                    ...result.patch,
+                    base_revision: baseRevision ?? resource.scene_revision,
+                  },
+                  sessionScopeKey ? { sessionScopeKey } : undefined,
+                ),
+              resources,
+            }),
+        );
       } else {
         const rawSceneBaseRevision = resolveSceneResourceRevision(scene.data);
         const sceneBaseRevision =
@@ -406,15 +418,25 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
           });
           return false;
         }
-        const response = await api.model.commitTransaction({
-          kind: "merge_patch",
-          base_revision: sceneBaseRevision,
-          merge_patch: result.patch,
-        });
-        invalidateAuthoringMutationDependents(
-          resources,
-          "interaction",
-          acknowledgedAuthoringSceneRevision(response),
+        await runAuthoringMutationWithHistory(
+          { api, authoringHistory, sessionScopeKey },
+          `${spec?.label ?? interactionId} interaction`,
+          async ({ baseRevision }) => {
+            const response = await api.model.commitTransaction(
+              {
+                kind: "merge_patch",
+                base_revision: baseRevision ?? sceneBaseRevision,
+                merge_patch: result.patch,
+              },
+              sessionScopeKey ? { sessionScopeKey } : undefined,
+            );
+            invalidateAuthoringMutationDependents(
+              resources,
+              "interaction",
+              acknowledgedAuthoringSceneRevision(response),
+            );
+            return response;
+          },
         );
       }
       dispatch({
@@ -451,7 +473,8 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     }
   }, [
     activeLaneOperation,
-    api.model,
+    api,
+    authoringHistory,
     dispatch,
     draft,
     interactionDiscretization,
@@ -463,6 +486,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     spec,
     mutationKey,
     resource.scene_revision,
+    sessionScopeKey,
   ]);
 
   if (interactionDiscretization === "unknown") {

@@ -12,6 +12,7 @@ import { resolveCanonicalQuantityId } from "../api/quantityIds";
 import { useKernel } from "../KernelContext";
 
 import { useResource } from "./useResource";
+import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
 import type { ResourceResult } from "./resourceTypes";
 
 const FIELD_AVAILABILITY_QUERY_ORDER = [
@@ -130,9 +131,11 @@ export function useFieldAvailabilityResource({
     () => resolveFieldAvailabilityResourceKey(resolvedQuantityId, query),
     [query, resolvedQuantityId],
   );
+  const { resourceKey: scopedResourceKey, sessionIdentity } =
+    useSessionScopedResourceKey(resourceKey);
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.data.fields.availability(resolvedQuantityId, query, { signal }),
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.data.fields.availability(resolvedQuantityId, query, { sessionScopeKey, signal }),
     [api, query, resolvedQuantityId],
   );
   const resolveRevision = useCallback(
@@ -142,10 +145,10 @@ export function useFieldAvailabilityResource({
   );
 
   return useResource<FieldAvailabilityResource | null>({
-    enabled,
+    enabled: enabled && sessionIdentity !== null,
     load,
     resolveRevision,
-    resourceKey,
+    resourceKey: scopedResourceKey,
   });
 }
 

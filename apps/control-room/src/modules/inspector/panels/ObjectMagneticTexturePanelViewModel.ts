@@ -2,7 +2,10 @@ import type { resolveObjectMagneticTexturePanelModel } from "./ObjectMagneticTex
 
 interface AuthoringScriptSyncApi {
   model: {
-    syncAuthoringScript: (request: Record<string, never>) => Promise<unknown>;
+    syncAuthoringScript: (
+      request: Record<string, never>,
+      options?: { sessionScopeKey?: string },
+    ) => Promise<unknown>;
   };
 }
 
@@ -12,9 +15,14 @@ function errorMessage(error: unknown): string {
 
 export async function syncAuthoringScriptBestEffort(
   api: AuthoringScriptSyncApi,
+  sessionScopeKey?: string | null,
 ): Promise<string | null> {
   try {
-    await api.model.syncAuthoringScript({});
+    if (sessionScopeKey) {
+      await api.model.syncAuthoringScript({}, { sessionScopeKey });
+    } else {
+      await api.model.syncAuthoringScript({});
+    }
     return null;
   } catch (error) {
     return errorMessage(error);

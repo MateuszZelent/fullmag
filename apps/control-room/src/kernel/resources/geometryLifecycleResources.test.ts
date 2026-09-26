@@ -76,6 +76,54 @@ import {
 } from "./geometryLifecycleResources";
 
 describe("geometry lifecycle resources", () => {
+  it("session-scopes model and geometry resource hooks", () => {
+    const source = readFileSync(
+      new URL("./geometryLifecycleResources.ts", import.meta.url),
+      "utf8",
+    );
+    const modelHooks = source.slice(
+      source.indexOf("export function useSceneResource"),
+      source.indexOf("export function useMeshBuildCurrent"),
+    );
+    const meshingHooks = source.slice(
+      source.indexOf("export function useMeshBuildCurrent"),
+      source.indexOf("export function useMeshRegionMembershipResource"),
+    );
+
+    expect(source).toContain(
+      'import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey"',
+    );
+    expect(modelHooks).toContain("useSessionScopedResourceKey");
+    expect(modelHooks).toContain(
+      "enabled: options.enabled !== false && sessionIdentity !== null",
+    );
+    expect(meshingHooks).toContain("useSessionScopedResourceKey");
+    expect(meshingHooks).toContain(
+      "enabled: options.enabled !== false && sessionIdentity !== null",
+    );
+  });
+
+  it("session-scopes membership descriptors and decoded binary caches", () => {
+    const source = readFileSync(
+      new URL("./geometryLifecycleResources.ts", import.meta.url),
+      "utf8",
+    );
+    const membershipHooks = source.slice(
+      source.indexOf("export function useMeshRegionMembershipResource"),
+      source.indexOf("export function resolveFdmRegionMembershipDescriptorResult"),
+    );
+    const binaryHook = source.slice(
+      source.indexOf("export function useFdmRegionMembershipBinaryResource"),
+      source.indexOf("export function resolveFdmRegionMembershipBinaryResult"),
+    );
+
+    expect(membershipHooks).toContain("useSessionScopedResourceKey");
+    expect(binaryHook).toContain("useSessionScopedResourceKey");
+    expect(binaryHook).toContain("sessionScopedResourceKey(sessionIdentity");
+    expect(binaryHook).toContain("fdmRegionMembershipBinaryCache.peek(resourceKey)");
+    expect(binaryHook).toContain("sessionIdentity !== null");
+  });
+
   it("does not request single-grid FDM membership while multilayer layout is active or unresolved", () => {
     expect(
       shouldLoadSingleGridFdmResources(true, "loading", null),
@@ -510,5 +558,83 @@ describe("geometry lifecycle resources", () => {
       revision: 4,
       status: "ready",
     });
+  });
+
+  it("does not seed unrelated session scene caches when the owner is unknown", () => {
+    const resources = new ResourceInvalidationController(
+      new EventBus<KernelEventMap>(),
+    );
+    const runtimeStore = new ResourceRuntimeStore();
+    const sessionAKey = `session=session-a&epoch=1|${MODEL_SCENE_PATH}`;
+    const sessionBKey = `session=session-b&epoch=2|${MODEL_SCENE_PATH}`;
+    const sessionAScene = { objects: [{ id: "a-old" }], revision: 4 };
+    const sessionBScene = { objects: [{ id: "b-old" }], revision: 4 };
+    runtimeStore.updateData(sessionAKey, sessionAScene, 4);
+    runtimeStore.updateData(sessionBKey, sessionBScene, 4);
+
+    const invalidations: string[] = [];
+    const unsubscribeA = resources.subscribe(sessionAKey, () => {
+      invalidations.push("a");
+    });
+    const unsubscribeB = resources.subscribe(sessionBKey, () => {
+      invalidations.push("b");
+    });
+
+    publishCommittedSceneResource(
+      resources,
+      { objects: [{ id: "canonical" }], revision: 5 },
+      5,
+      runtimeStore,
+    );
+
+    expect(runtimeStore.getSnapshot(MODEL_SCENE_PATH)).toMatchObject({
+      data: { objects: [{ id: "canonical" }], revision: 5 },
+      revision: 5,
+    });
+    expect(runtimeStore.getSnapshot(sessionAKey)).toMatchObject({
+      data: sessionAScene,
+      revision: 4,
+    });
+    expect(runtimeStore.getSnapshot(sessionBKey)).toMatchObject({
+      data: sessionBScene,
+      revision: 4,
+    });
+    expect(invalidations).toEqual(["a", "b"]);
+    expect(resources.getRevision(sessionAKey)).toBe(5);
+    expect(resources.getRevision(sessionBKey)).toBe(5);
+
+    publishCommittedSceneResource(
+      resources,
+      { objects: [{ id: "canonical-without-invalidation" }], revision: 6 },
+      6,
+      runtimeStore,
+      false,
+    );
+    expect(invalidations).toEqual(["a", "b"]);
+    expect(runtimeStore.getSnapshot(sessionAKey)).toMatchObject({
+      data: sessionAScene,
+      revision: 4,
+    });
+
+    publishCommittedSceneResource(
+      resources,
+      { objects: [{ id: "a-new" }], revision: 7 },
+      7,
+      runtimeStore,
+      true,
+      "session=session-a&epoch=1",
+    );
+    expect(runtimeStore.getSnapshot(sessionAKey)).toMatchObject({
+      data: { objects: [{ id: "a-new" }], revision: 7 },
+      revision: 7,
+    });
+    expect(runtimeStore.getSnapshot(sessionBKey)).toMatchObject({
+      data: sessionBScene,
+      revision: 4,
+    });
+    expect(invalidations).toEqual(["a", "b", "a"]);
+
+    unsubscribeA();
+    unsubscribeB();
   });
 });

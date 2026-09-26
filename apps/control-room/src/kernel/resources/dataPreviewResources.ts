@@ -16,7 +16,9 @@ import { normalizeQuantityIdOrDefault } from "@/kernel/api/quantityIds";
 import { useKernel } from "@/kernel/KernelContext";
 
 import { ResourceCache } from "./ResourceCache";
+import { sessionScopedResourceKey } from "./sessionResourceIdentity";
 import { useResource } from "./useResource";
+import { useSessionResourceIdentity } from "./useSessionStatus";
 
 interface DataPreviewFieldVectorRequest {
   component: string;
@@ -57,6 +59,7 @@ export function useDataPreviewFieldVector({
   view,
 }: DataPreviewFieldVectorRequest & { enabled: boolean }) {
   const { api, resources } = useKernel();
+  const sessionIdentity = useSessionResourceIdentity();
   const resolvedQuantityId = useMemo(
     () => normalizeQuantityIdOrDefault(quantityId),
     [quantityId],
@@ -71,7 +74,7 @@ export function useDataPreviewFieldVector({
     }),
     [component, maxSamples, phaseRad, view],
   );
-  const resourceKey = useMemo(
+  const unscopedResourceKey = useMemo(
     () =>
       resolveDataPreviewFieldVectorResourceKey({
         component,
@@ -82,10 +85,21 @@ export function useDataPreviewFieldVector({
       }),
     [component, maxSamples, phaseRad, resolvedQuantityId, view],
   );
+  const resourceKey = useMemo(
+    () =>
+      sessionIdentity
+        ? sessionScopedResourceKey(sessionIdentity, unscopedResourceKey)
+        : unscopedResourceKey,
+    [sessionIdentity, unscopedResourceKey],
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       loadCachedDataPreviewFieldVector(resourceKey, (etag) =>
-        api.data.fields.vector(resolvedQuantityId, query, { etag, signal }),
+        api.data.fields.vector(resolvedQuantityId, query, {
+          etag,
+          sessionScopeKey,
+          signal,
+        }),
       ),
     [api, query, resolvedQuantityId, resourceKey],
   );
@@ -96,7 +110,7 @@ export function useDataPreviewFieldVector({
 
   return {
     resource: useResource({
-      enabled,
+      enabled: enabled && sessionIdentity !== null,
       load,
       resolveRevision,
       resourceKey,

@@ -1,4 +1,5 @@
 export type Viewport3DRenderAdoptionKind = "surface" | "vector";
+type ViewportSessionIdentity = { requestScopeEpoch?: string; sessionEpoch: string; sessionId: string };
 
 export interface Viewport3DRenderAdoptionReceipt {
   adoptedAtMs: number;
@@ -9,6 +10,7 @@ export interface Viewport3DRenderAdoptionReceipt {
   itemCount?: number;
   kind: Viewport3DRenderAdoptionKind;
   resourceKey: string | null;
+  requestScopeEpoch?: string;
   sessionEpoch: string;
   sessionId: string;
   scalarBufferKey: string | null;
@@ -33,7 +35,7 @@ interface SurfaceAdoptionInput {
   fieldBufferId: string | null;
   ownerId?: string;
   resourceKey?: string | null;
-  sessionIdentity?: { sessionEpoch: string; sessionId: string } | null;
+  sessionIdentity?: ViewportSessionIdentity | null;
   scalarBufferKey: string;
   targetId?: string;
 }
@@ -45,7 +47,7 @@ interface VectorAdoptionInput {
   itemCount?: number;
   ownerId?: string;
   resourceKey?: string | null;
-  sessionIdentity?: { sessionEpoch: string; sessionId: string } | null;
+  sessionIdentity?: ViewportSessionIdentity | null;
   targetId?: string;
   vectorBuildKey: string;
 }
@@ -65,7 +67,7 @@ type AdoptionInput = Omit<
   Viewport3DRenderAdoptionReceipt,
   "adoptedAtMs" | "adoptionSequence" | "sessionEpoch" | "sessionId" | "targetId"
 > & {
-  sessionIdentity?: { sessionEpoch: string; sessionId: string } | null;
+  sessionIdentity?: ViewportSessionIdentity | null;
 };
 
 interface OwnedAdoption {
@@ -108,7 +110,7 @@ export interface Viewport3DRenderAdoptionRegistry {
   recordSurfaceAdoption(input: SurfaceAdoptionInput): Viewport3DRenderAdoptionResult;
   recordVectorAdoption(input: VectorAdoptionInput): Viewport3DRenderAdoptionResult;
   retainDemand(targetId: string): () => void;
-  setSessionIdentity(identity: { sessionEpoch: string; sessionId: string } | null): void;
+  setSessionIdentity(identity: ViewportSessionIdentity | null): void;
   setCarrierTargets(
     targetIdsByCarrierId: ReadonlyMap<string, readonly string[]>,
   ): void;
@@ -141,7 +143,7 @@ export function createViewport3DRenderAdoptionRegistry({
   let adoptionSequence = 0;
   let activeOwnerCount = 0;
   let rejectedAdoptionCount = 0;
-  let currentSessionIdentity: { sessionEpoch: string; sessionId: string } | null = null;
+  let currentSessionIdentity: ViewportSessionIdentity | null = null;
 
   const notify = (targetId: string) => {
     for (const listener of [...listeners]) listener(targetId);
@@ -255,7 +257,8 @@ export function createViewport3DRenderAdoptionRegistry({
       currentSessionIdentity &&
       (!responseSessionIdentity ||
         responseSessionIdentity.sessionId !== currentSessionIdentity.sessionId ||
-        responseSessionIdentity.sessionEpoch !== currentSessionIdentity.sessionEpoch)
+        responseSessionIdentity.sessionEpoch !== currentSessionIdentity.sessionEpoch ||
+        responseSessionIdentity.requestScopeEpoch !== currentSessionIdentity.requestScopeEpoch)
     ) {
       rejectedAdoptionCount += 1;
       return {
@@ -306,6 +309,7 @@ export function createViewport3DRenderAdoptionRegistry({
       ...receiptInput,
       adoptedAtMs: safeTimestamp(now()),
       adoptionSequence: ++adoptionSequence,
+      requestScopeEpoch: sessionIdentity.requestScopeEpoch,
       sessionEpoch: sessionIdentity.sessionEpoch,
       sessionId: sessionIdentity.sessionId,
     });
@@ -490,7 +494,8 @@ export function createViewport3DRenderAdoptionRegistry({
     setSessionIdentity(identity) {
       if (
         currentSessionIdentity?.sessionId === identity?.sessionId &&
-        currentSessionIdentity?.sessionEpoch === identity?.sessionEpoch
+        currentSessionIdentity?.sessionEpoch === identity?.sessionEpoch &&
+        currentSessionIdentity?.requestScopeEpoch === identity?.requestScopeEpoch
       ) {
         return;
       }
@@ -622,6 +627,7 @@ function receiptsEqual(
       left.itemCount === right.itemCount &&
       left.kind === right.kind &&
       left.resourceKey === right.resourceKey &&
+      left.requestScopeEpoch === right.requestScopeEpoch &&
       left.sessionEpoch === right.sessionEpoch &&
       left.sessionId === right.sessionId &&
       left.scalarBufferKey === right.scalarBufferKey &&

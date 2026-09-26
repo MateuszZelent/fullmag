@@ -490,6 +490,10 @@ export type SolverEnergyHistoryResource =
   components["schemas"]["SolverEnergyHistoryResource"];
 export type SimulationPreparationResource =
   components["schemas"]["SimulationPreparationResource"];
+export type LivePreparationMaterializationRequest =
+  components["schemas"]["LivePreparationMaterializationRequest"];
+export type LivePreparationMaterializationResource =
+  components["schemas"]["LivePreparationMaterializationResource"];
 export type SolverStatusResource = components["schemas"]["SolverStatusResource"];
 export type StageExecutionResource =
   components["schemas"]["StageExecutionResource"];
@@ -817,6 +821,15 @@ export type ProjectArchiveRequest =
   components["schemas"]["ProjectArchiveRequest"];
 export type ProjectDocumentResource =
   components["schemas"]["ProjectDocumentResource"];
+export type ProjectRunSubmitRequest =
+  components["schemas"]["ProjectRunSubmitRequest"];
+export type ProjectRunSubmitResource =
+  components["schemas"]["ProjectRunSubmitResource"];
+export type ProjectRunMaterializationResource =
+  components["schemas"]["ProjectRunMaterializationResource"];
+export type ProjectRunResource = components["schemas"]["ProjectRunResource"];
+export type ProjectRunListQuery = components["schemas"]["ProjectRunListQuery"];
+export type ProjectRunListResource = components["schemas"]["ProjectRunListResource"];
 type GeneratedStructuredCommandRequest =
   components["schemas"]["StructuredCommandRequest"];
 type RuntimeCommandIntent = components["schemas"]["RuntimeCommandIntent"];
@@ -841,6 +854,7 @@ export type UniversePatchRequest = components["schemas"]["UniversePatchRequest"]
 export type UniverseResource = components["schemas"]["UniverseResource"];
 export type VisualizationStatePatch =
   components["schemas"]["VisualizationStatePatch"];
+export type DisplaySelection = components["schemas"]["DisplaySelection"];
 export type VisualizationStateResource =
   components["schemas"]["VisualizationStateResource"];
 export type ModeCompositionDatasetPatch =
@@ -949,6 +963,12 @@ export type BinaryResourceResult<TData, TMetadata = unknown> =
     };
 
 export interface RequestOptions {
+  /**
+   * Canonical session=<encoded-id>&epoch=<encoded-epoch> identity used for
+   * coalescing and the x-fullmag-session-scope HTTP precondition header.
+   * It is never serialized into URLs.
+   */
+  sessionScopeKey?: string;
   signal?: AbortSignal;
 }
 

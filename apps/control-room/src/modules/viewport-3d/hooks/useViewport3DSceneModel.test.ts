@@ -123,6 +123,7 @@ function readFileSync(
 const sceneModelSourceUrl = new URL("./useViewport3DSceneModel.ts", import.meta.url);
 const planarPreviewSourceUrl = new URL("../../../kernel/workspace/planarMonitorFramePreview.ts", import.meta.url);
 const TEST_SESSION_IDENTITY = {
+  requestScopeEpoch: "test-api:1",
   sessionEpoch: "test-session@1000",
   sessionId: "test-session",
 } as const;

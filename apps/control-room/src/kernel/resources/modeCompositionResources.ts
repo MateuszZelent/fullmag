@@ -8,11 +8,17 @@ import {
 } from "react";
 
 import type {
+  RequestOptions,
+} from "../api/apiTypes";
+import type {
   ModeCompositionControllerSnapshot,
   ModeCompositionMutationClient,
   ModeCompositionResource,
 } from "../visualization/ModeCompositionController";
 import { useKernel } from "../KernelContext";
+import { useSessionResourceIdentity } from "./useSessionStatus";
+import { sessionRequestScopeKey } from "./sessionResourceIdentity";
+import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
 import { useResource } from "./useResource";
 import type { ResourceResult } from "./resourceTypes";
 import {
@@ -29,18 +35,26 @@ export function useModeCompositionActiveResource(
   client: Pick<ModeCompositionMutationClient, "getActiveModeComposition">,
   options: { enabled?: boolean } = {},
 ): ResourceResult<ModeCompositionResource> {
+  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+    MODE_COMPOSITION_ACTIVE_RESOURCE_KEY,
+  );
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      client.getActiveModeComposition({ signal }),
+    ({
+      sessionScopeKey,
+      signal,
+    }: {
+      sessionScopeKey?: string;
+      signal: AbortSignal;
+    }) => client.getActiveModeComposition({ sessionScopeKey, signal }),
     [client],
   );
 
   return useResource({
     abortStaleInflight: true,
-    enabled: options.enabled,
+    enabled: options.enabled && sessionIdentity !== null,
     load,
     resolveRevision: resolveModeCompositionRevision,
-    resourceKey: MODE_COMPOSITION_ACTIVE_RESOURCE_KEY,
+    resourceKey,
   });
 }
 
@@ -57,9 +71,11 @@ export function useModeCompositionControllerResource(
   readonly resource: ResourceResult<ModeCompositionResource>;
 } {
   const { api, modeComposition } = useKernel();
+  const sessionIdentity = useSessionResourceIdentity();
+  const sessionScopeKey = sessionRequestScopeKey(sessionIdentity);
   const client = useMemo(
     () => ({
-      getActiveModeComposition: (requestOptions?: { signal?: AbortSignal }) =>
+      getActiveModeComposition: (requestOptions?: RequestOptions) =>
         api.visualization.modeComposition.active(requestOptions),
     }),
     [api],
@@ -73,6 +89,10 @@ export function useModeCompositionControllerResource(
     () => modeComposition.getSnapshot(),
     () => modeComposition.getSnapshot(),
   );
+
+  useEffect(() => {
+    modeComposition.resetForSession(sessionScopeKey);
+  }, [modeComposition, sessionScopeKey]);
 
   useEffect(() => {
     if (resource.status === "ready" && resource.data) {

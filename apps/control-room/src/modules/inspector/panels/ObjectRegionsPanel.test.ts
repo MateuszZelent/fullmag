@@ -200,15 +200,21 @@ describe("ObjectRegionsPanel physical scalar inputs", () => {
     expect(deleteRegionStart).toBeGreaterThan(duplicateRegionStart);
     expect(subPropsStart).toBeGreaterThan(deleteRegionStart);
 
+    expect(source.slice(applyRegionStart, duplicateRegionStart)).toMatch(
+      /syncAuthoringScriptBestEffort\(\s*api,\s*operationSessionScopeKey,\s*\)/,
+    );
+    expect(source.slice(duplicateRegionStart, deleteRegionStart)).toMatch(
+      /syncAuthoringScriptBestEffort\(\s*api,\s*operationSessionScopeKey,\s*\)/,
+    );
+    expect(source.slice(deleteRegionStart, subPropsStart)).toMatch(
+      /syncAuthoringScriptBestEffort\(\s*api,\s*operationSessionScopeKey,\s*\)/,
+    );
     expect(source.slice(applyRegionStart, duplicateRegionStart)).toContain(
-      "syncAuthoringScriptBestEffort(api)",
+      "runAuthoringMutationWithHistory",
     );
-    expect(source.slice(duplicateRegionStart, deleteRegionStart)).toContain(
-      "syncAuthoringScriptBestEffort(api)",
-    );
-    expect(source.slice(deleteRegionStart, subPropsStart)).toContain(
-      "syncAuthoringScriptBestEffort(api)",
-    );
+    expect(source).toContain('{ historyMode: "mutation-owned" }');
+    expect(source).toContain("requireRegionBaseRevision(baseRevision)");
+    expect(source).not.toContain("return Date.now()");
   });
 
   it("keeps region mesh actions tied to realized lifecycle resources", () => {

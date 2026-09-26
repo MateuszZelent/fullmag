@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 
 import type {
   SceneCurrentTransport,
@@ -9,7 +9,12 @@ import type {
   TransportValidationRequest,
   TransportValidationResponse,
 } from "@/kernel/api/apiTypes";
-import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
+import {
+  authoringWriteOptions,
+  captureAuthoringMutationFence,
+  runAuthoringMutationWithHistory,
+} from "@/kernel/authoring/authoringHistoryMutation";
+import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   invalidateSpinAuthoringResources,
@@ -17,7 +22,11 @@ import {
   useCurrentTransportsResource,
   useSpinTransportsResource,
 } from "@/kernel/resources/spinAuthoringResources";
-import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
+import {
+  useSessionResourceIdentity,
+  useSessionStatusSelector,
+} from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 import { Switch } from "@/shared/ui/Switch";
 
@@ -88,7 +97,9 @@ export function TransportAuthoringInspector({
     sourceCutId?: string;
   } | null;
 }) {
-  const { api, authoringHistory, resources } = useKernel();
+  const kernel = useKernel();
+  const { api, commands, resources } = kernel;
+  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const current = useCurrentTransportsResource({ enabled: family === "current_transport" });
   const spin = useSpinTransportsResource({ enabled: family === "spin_transport" });
   const active = family === "current_transport" ? current : spin;
@@ -117,15 +128,20 @@ export function TransportAuthoringInspector({
         selected && known ? selected as Parameters<typeof spinTransportDraft>[0] : null,
         selected ? null : initialScope,
       );
-  const draftKey = `${family}:${resourceId ?? resourceIndex ?? localSelectionKey}:${JSON.stringify(baseDraft)}`;
+  const draftKey = `${sessionScopeKey ?? "no-session"}:${family}:${resourceId ?? resourceIndex ?? localSelectionKey}:${JSON.stringify(baseDraft)}`;
   const [draftState, setDraftState] = useState<{ draft: Draft; key: string }>({
     draft: baseDraft,
     key: draftKey,
   });
   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
   const [feedback, setFeedback] = useState<{ kind: "error" | "success"; message: string } | null>(null);
-  const [pending, setPending] = useState(false);
-  const validationKey = `${draftKey}:${active.data?.scene_revision ?? "none"}`;
+  const [pendingOperation, setPendingOperation] = useState<{
+    id: number;
+    sessionScopeKey: string;
+  } | null>(null);
+  const nextPendingOperationId = useRef(0);
+  const pending = pendingOperation?.sessionScopeKey === sessionScopeKey;
+  const validationKey = `${sessionScopeKey ?? "no-session"}:${draftKey}:${active.data?.scene_revision ?? "none"}`;
   const [validationState, setValidationState] = useState<{ error: string | null; key: string; response: TransportValidationResponse | null }>({ error: null, key: "", response: null });
   const validation = validationState.key === validationKey ? validationState.response : null;
   const validationError = validationState.key === validationKey ? validationState.error : null;
@@ -144,7 +160,9 @@ export function TransportAuthoringInspector({
   );
   const lockReason = !known
     ? "Unknown transport variants are read-only."
-    : active.status !== "ready"
+    : !sessionScopeKey
+      ? "Session identity is not ready."
+      : active.status !== "ready"
       ? "Transport resources are not ready."
       : !capability?.authoring_allowed
         ? capability?.reason ?? "Transport authoring capability is unavailable."
@@ -178,23 +196,34 @@ export function TransportAuthoringInspector({
         };
   }
 
+  const captureMutationContext = () => captureAuthoringMutationFence(
+    createCommandContext("inspector", kernel, { sessionScopeKey }),
+  );
+  const isCurrentSession = () => Boolean(
+    sessionScopeKey && commands?.getSessionScopeKey?.() === sessionScopeKey,
+  );
+
   useEffect(() => {
-    if (!known || active.data?.scene_revision === undefined) return;
+    if (!sessionScopeKey || !known || active.data?.scene_revision === undefined) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       try {
         const request = validationRequest();
-        void api.model.validateTransport(request, { signal: controller.signal })
+        void api.model.validateTransport(request, { sessionScopeKey, signal: controller.signal })
           .then((response) => {
-            setValidationState({ error: null, key: validationKey, response });
+            if (!controller.signal.aborted && isCurrentSession()) {
+              setValidationState({ error: null, key: validationKey, response });
+            }
           })
           .catch((error: unknown) => {
-            if (!controller.signal.aborted) {
+            if (!controller.signal.aborted && isCurrentSession()) {
               setValidationState({ error: error instanceof Error ? error.message : String(error), key: validationKey, response: null });
             }
           });
       } catch (error) {
-        setValidationState({ error: error instanceof Error ? error.message : String(error), key: validationKey, response: null });
+        if (!controller.signal.aborted && isCurrentSession()) {
+          setValidationState({ error: error instanceof Error ? error.message : String(error), key: validationKey, response: null });
+        }
       }
     }, 180);
     return () => {
@@ -203,7 +232,7 @@ export function TransportAuthoringInspector({
     };
   // The serialized draft deliberately makes every semantic edit trigger clone-only validation.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active.data?.scene_revision, api, draft, family, known, selectedId, validationKey]);
+  }, [active.data?.scene_revision, api, commands, draft, family, known, selectedId, sessionScopeKey, validationKey]);
 
   const patch = (value: Partial<Draft>) => setDraftState({
     draft: { ...draft, ...value } as Draft,
@@ -212,39 +241,54 @@ export function TransportAuthoringInspector({
 
   async function save(): Promise<boolean> {
     if (active.data?.scene_revision === undefined) return false;
-    setPending(true);
+    if (!sessionScopeKey) return false;
+    const mutationContext = captureMutationContext();
+    const operationId = ++nextPendingOperationId.current;
+    setPendingOperation({ id: operationId, sessionScopeKey });
     setFeedback(null);
     try {
       if (!capability?.authoring_allowed) {
         throw new Error(capability?.reason ?? "Transport authoring capability is unavailable.");
       }
-      const checked = await api.model.validateTransport(validationRequest());
+      const checked = await api.model.validateTransport(validationRequest(), { sessionScopeKey });
+      if (mutationContext.isCurrentSessionScope?.() !== true) return false;
       setValidationState({ error: null, key: validationKey, response: checked });
       if (!checked.semantic.valid || !checked.execution.authoring_allowed) {
         throw new Error(
           checked.semantic.issues[0]?.message ?? checked.execution.reason ?? "Transport candidate is not authoring-ready.",
         );
       }
-      let commit: { scene_revision: number };
-      if (family === "current_transport") {
-        const resource = buildCurrentTransport(draft as CurrentTransportDraft);
-        const request = { base_revision: active.data.scene_revision, resource };
-        if (selectedId) commit = await api.model.replaceCurrentTransport(selectedId, request);
-        else commit = await api.model.createCurrentTransport(request);
-      } else {
-        const resource = buildSpinTransport(draft as SpinTransportDraft);
-        const request = { base_revision: active.data.scene_revision, resource };
-        if (selectedId) commit = await api.model.replaceSpinTransport(selectedId, request);
-        else commit = await api.model.createSpinTransport(request);
-      }
+      const commit = await runAuthoringMutationWithHistory(
+        mutationContext,
+        `${selectedId ? "Replace" : "Create"} ${family}${selectedId ? ` ${selectedId}` : ""}`,
+        async ({ baseRevision }) => {
+          const committedRevision = baseRevision ?? active.data!.scene_revision;
+          const requestOptions = authoringWriteOptions(null, mutationContext.sessionScopeKey);
+          if (!requestOptions?.sessionScopeKey) throw new Error("Session identity is not ready.");
+          if (family === "current_transport") {
+            const resource = buildCurrentTransport(draft as CurrentTransportDraft);
+            const request = { base_revision: committedRevision, resource };
+            return selectedId
+              ? api.model.replaceCurrentTransport(selectedId, request, requestOptions)
+              : api.model.createCurrentTransport(request, requestOptions);
+          }
+          const resource = buildSpinTransport(draft as SpinTransportDraft);
+          const request = { base_revision: committedRevision, resource };
+          return selectedId
+            ? api.model.replaceSpinTransport(selectedId, request, requestOptions)
+            : api.model.createSpinTransport(request, requestOptions);
+        },
+      );
+      if (mutationContext.isCurrentSessionScope?.() !== true) return false;
       invalidateSpinAuthoringResources(resources, commit, transportMutationResourceKeys(family));
       setFeedback({ kind: "success", message: "Transport resource committed." });
       return true;
     } catch (error) {
+      if (mutationContext.isCurrentSessionScope?.() !== true) return false;
       setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) });
       return false;
     } finally {
-      setPending(false);
+      setPendingOperation((current) => current?.id === operationId ? null : current);
     }
   }
 
@@ -254,32 +298,38 @@ export function TransportAuthoringInspector({
   }
 
   async function remove(): Promise<void> {
-    if (!selectedId || active.data?.scene_revision === undefined) return;
-    setPending(true);
+    if (!selectedId || active.data?.scene_revision === undefined || !sessionScopeKey) return;
+    const mutationContext = captureMutationContext();
+    const operationId = ++nextPendingOperationId.current;
+    setPendingOperation({ id: operationId, sessionScopeKey });
     try {
       if (!capability?.authoring_allowed || validation?.semantic.valid !== true || validation.execution.authoring_allowed !== true) {
         throw new Error(capability?.reason ?? validation?.execution.reason ?? "Latest clone-only validation does not permit mutation.");
       }
       const commit = await runAuthoringMutationWithHistory(
-        { api, authoringHistory },
+        mutationContext,
         `Delete ${family} ${selectedId}`,
         async ({ baseRevision }) => {
           const request = {
             base_revision:
               baseRevision ?? active.data!.scene_revision,
           };
+          const requestOptions = authoringWriteOptions(null, mutationContext.sessionScopeKey);
+          if (!requestOptions?.sessionScopeKey) throw new Error("Session identity is not ready.");
           return family === "current_transport"
-            ? api.model.deleteCurrentTransport(selectedId, request)
-            : api.model.deleteSpinTransport(selectedId, request);
+            ? api.model.deleteCurrentTransport(selectedId, request, requestOptions)
+            : api.model.deleteSpinTransport(selectedId, request, requestOptions);
         },
       );
+      if (mutationContext.isCurrentSessionScope?.() !== true) return;
       invalidateSpinAuthoringResources(resources, commit, transportMutationResourceKeys(family));
       setLocalSelectionKey("");
       setFeedback({ kind: "success", message: "Transport resource deleted." });
     } catch (error) {
+      if (mutationContext.isCurrentSessionScope?.() !== true) return;
       setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) });
     } finally {
-      setPending(false);
+      setPendingOperation((current) => current?.id === operationId ? null : current);
     }
   }
 
@@ -291,6 +341,7 @@ export function TransportAuthoringInspector({
     lockReason,
     save,
     resetDraft,
+    { historyMode: "mutation-owned" },
   );
 
   return (

@@ -15,6 +15,7 @@ export function ObjectRegionGeometryPanel({
   model,
   draft,
   pending,
+  sessionAvailable,
   draftDirty,
   buildRegion,
   regionMeshLifecycle,
@@ -126,6 +127,7 @@ export function ObjectRegionGeometryPanel({
 
       <ObjectRegionActionsSection
         pending={pending}
+        sessionAvailable={sessionAvailable}
         draftDirty={draftDirty}
         buildRegion={buildRegion}
         regionMeshLifecycle={regionMeshLifecycle}

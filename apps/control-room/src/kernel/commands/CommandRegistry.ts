@@ -6,9 +6,15 @@ import type {
   CommandResult,
 } from "./commandTypes";
 import type { CommandDiagnosticsController } from "./CommandDiagnosticsController";
+import { SessionCommandCancelledError } from "./commandSessionScope";
 
 import type { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
+
+export interface CommandSessionScopeSource {
+  getScopeKey(): string | null;
+  subscribe(listener: () => void): () => void;
+}
 
 export class CommandRegistry {
   private readonly commands = new Map<CommandId, CommandContribution>();
@@ -16,6 +22,15 @@ export class CommandRegistry {
   private version = 0;
   private bus: EventBus<KernelEventMap> | null = null;
   private diagnostics: CommandDiagnosticsController | null = null;
+  private sessionScopeSource: CommandSessionScopeSource | null = null;
+
+  attachSessionScopeSource(source: CommandSessionScopeSource): void {
+    this.sessionScopeSource = source;
+  }
+
+  getSessionScopeKey(): string | null | undefined {
+    return this.sessionScopeSource?.getScopeKey();
+  }
 
   /** Attach bus for event emission. Called once during kernel init. */
   attach(bus: EventBus<KernelEventMap>): void {
@@ -123,16 +138,16 @@ export class CommandRegistry {
       };
     }
 
-    this.diagnostics?.record({
-      commandId: id,
-      source: commandContext.source,
-      sourceDetail: commandContext.sourceDetail,
-      status: "submitted",
-    });
-    this.bus?.emit("command:submitted", { commandId: id });
-
+    const sessionContext = this.captureSessionContext(commandContext);
     try {
-      const result = await cmd.run(commandContext);
+      this.diagnostics?.record({
+        commandId: id,
+        source: commandContext.source,
+        sourceDetail: commandContext.sourceDetail,
+        status: "submitted",
+      });
+      this.bus?.emit("command:submitted", { commandId: id });
+      const result = await cmd.run(sessionContext.context);
       this.diagnostics?.record({
         commandId: id,
         message: result.message,
@@ -147,22 +162,57 @@ export class CommandRegistry {
       this.notify();
       return result;
     } catch (error) {
+      const status = error instanceof SessionCommandCancelledError ? "cancelled" : "failed";
       const message =
         error instanceof Error ? error.message : "Unknown error";
       this.bus?.emit("command:completed", {
         commandId: id,
-        status: "failed",
+        status,
       });
       this.diagnostics?.record({
         commandId: id,
         message,
         source: commandContext.source,
         sourceDetail: commandContext.sourceDetail,
-        status: "failed",
+        status,
       });
       this.notify();
-      return { status: "failed", message };
+      return { status, message };
+    } finally {
+      sessionContext.release();
     }
+  }
+
+  private captureSessionContext(context: CommandContext): {
+    context: CommandContext;
+    release: () => void;
+  } {
+    const source = this.sessionScopeSource;
+    if (!source) return { context, release: () => {} };
+    const scopeKey = context.sessionScopeKey === undefined
+      ? source.getScopeKey()
+      : context.sessionScopeKey;
+    let current = scopeKey !== null && source.getScopeKey() === scopeKey;
+    const observe = () => {
+      // Once obsolete, a command stays obsolete even if A -> B -> A occurs.
+      current = current && source.getScopeKey() === scopeKey;
+    };
+    const unsubscribe = source.subscribe(observe);
+    observe();
+    return {
+      context: {
+        ...context,
+        sessionScopeKey: scopeKey,
+        isCurrentSessionScope: () => {
+          observe();
+          return current && (context.isCurrentSessionScope?.() ?? true);
+        },
+      },
+      release: () => {
+        current = false;
+        unsubscribe();
+      },
+    };
   }
 
   private notify(): void {

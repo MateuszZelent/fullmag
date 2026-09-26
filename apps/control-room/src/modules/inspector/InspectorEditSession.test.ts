@@ -51,6 +51,19 @@ describe("inspectorActionState", () => {
     expect(state.applyReason).toBe("Locked while the solver is running");
   });
 
+  it("can block one global Apply route while keeping Reset available", () => {
+    const state = inspectorActionState(
+      session({
+        applyBlockReason: "Apply geometry and transform separately",
+        dirty: true,
+      }),
+    );
+
+    expect(state.canApply).toBe(false);
+    expect(state.canReset).toBe(true);
+    expect(state.applyReason).toBe("Apply geometry and transform separately");
+  });
+
   it("guards selection only for an unapplied staged draft", () => {
     expect(shouldGuardInspectorSelection(session({ dirty: true, mode: "staged" }))).toBe(true);
     expect(shouldGuardInspectorSelection(session({ dirty: true, mode: "liveViewport" }))).toBe(false);

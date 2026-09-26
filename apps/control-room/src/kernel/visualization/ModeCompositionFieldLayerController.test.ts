@@ -160,6 +160,30 @@ describe("ModeCompositionFieldLayerController", () => {
     });
   });
 
+  it("does not reuse decoded mode fields after the session scope changes", async () => {
+    const controller = new ModeCompositionFieldLayerController();
+    const source = loaders();
+
+    await controller.activate(
+      composition(),
+      { "object:object-a": topology },
+      source,
+      "session-a\u0000epoch-1",
+    );
+    await controller.activate(
+      composition(),
+      { "object:object-a": topology },
+      source,
+      "session-b\u0000epoch-1",
+    );
+
+    expect(source.loadMetadata).toHaveBeenCalledTimes(2);
+    expect(source.loadBinary).toHaveBeenCalledTimes(2);
+    expect(controller.getSnapshot().get("object:object-a")).toMatchObject({
+      status: "ready",
+    });
+  });
+
   it("retains a ready field as degraded after a same-topology refresh failure", async () => {
     const controller = new ModeCompositionFieldLayerController();
     const source = loaders();

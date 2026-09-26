@@ -14,12 +14,14 @@ import {
 } from "react";
 
 import { KernelContext } from "@/kernel/KernelContext";
+import type { RequestOptions } from "@/kernel/api/apiTypes";
 
 import { applyInspectorSessionWithHistory } from "./InspectorHistoryBridge";
 
 export type InspectorEditMode = "staged" | "liveViewport" | "immediate";
 
 export interface InspectorEditSession {
+  applyBlockReason?: string;
   apply: () => Promise<boolean> | boolean;
   applying: boolean;
   dirty: boolean;
@@ -48,15 +50,16 @@ export function inspectorActionState(session: InspectorEditSession | null): Insp
   if (session.mode === "immediate") {
     return { applyReason: "Actions in this view run immediately", canApply: false, canReset: false };
   }
-  return {
-    applyReason: !session.dirty
-      ? "No unapplied changes"
-      : !session.valid
+  const applyReason = !session.dirty
+    ? "No unapplied changes"
+    : session.applying
+      ? "Applying changes"
+      : session.applyBlockReason ?? (!session.valid
         ? "Resolve validation errors before applying"
-        : session.applying
-          ? "Applying changes"
-          : null,
-    canApply: session.dirty && session.valid && !session.applying,
+        : null);
+  return {
+    applyReason,
+    canApply: session.dirty && session.valid && !session.applying && !session.applyBlockReason,
     canReset: session.dirty && !session.applying,
   };
 }
@@ -142,7 +145,13 @@ export function useRegisterInspectorEditSession(
   lockReason: string | undefined,
   apply: () => Promise<boolean> | boolean,
   reset: () => Promise<void> | void,
+  options: {
+    applyBlockReason?: string;
+    historyMode?: "bridge" | "mutation-owned";
+  } = {},
 ): void {
+  const historyMode = options.historyMode ?? "bridge";
+  const applyBlockReason = options.applyBlockReason;
   const store = useContext(InspectorEditSessionContext);
   const kernel = useContext(KernelContext);
   const applyRef = useRef(apply);
@@ -150,8 +159,9 @@ export function useRegisterInspectorEditSession(
   const sessionRef = useRef<InspectorEditSession | null>(
     mode
       ? {
-          apply: () => applyRef.current(),
-          applying,
+        apply: () => applyRef.current(),
+        applyBlockReason,
+        applying,
           dirty,
           lockReason,
           mode,
@@ -166,6 +176,7 @@ export function useRegisterInspectorEditSession(
     sessionRef.current = mode
       ? {
           apply: () => applyRef.current(),
+          applyBlockReason,
           applying,
           dirty,
           lockReason,
@@ -174,25 +185,51 @@ export function useRegisterInspectorEditSession(
           valid,
         }
       : null;
-  }, [apply, applying, dirty, lockReason, mode, reset, valid]);
+  }, [apply, applyBlockReason, applying, dirty, lockReason, mode, reset, valid]);
   const owner = useMemo(() => Symbol("inspector-edit-session"), []);
   const applyWithHistory = useCallback(
-    () =>
-      applyInspectorSessionWithHistory(
-        sessionRef.current,
+    async () => {
+      const sessionScopeKey = kernel?.commands.getSessionScopeKey?.() ?? null;
+      const historyGeneration = kernel?.authoringHistory?.getGeneration?.();
+      const isCurrentSession = () =>
+        (kernel?.commands.getSessionScopeKey?.() ?? null) === sessionScopeKey;
+      const isCurrentHistoryGeneration = () =>
+        (historyGeneration === undefined ||
+          kernel?.authoringHistory?.getGeneration?.() === historyGeneration);
+      const currentSession = sessionRef.current;
+      if (!currentSession || !isCurrentSession() || !isCurrentHistoryGeneration()) return false;
+
+      if (historyMode === "mutation-owned") {
+        const applied = (await currentSession.apply()) === true;
+        return applied && isCurrentSession() && isCurrentHistoryGeneration();
+      }
+
+      const requestOptions: RequestOptions | undefined = sessionScopeKey
+        ? { sessionScopeKey }
+        : undefined;
+      return applyInspectorSessionWithHistory(
+        currentSession,
         kernel
           ? {
               model: {
-                scene: () => kernel.api.model.scene(),
+                scene: (options) => kernel.api.model.scene(options),
               },
             }
           : null,
         kernel?.authoringHistory ?? null,
-      ),
-    [kernel],
+        "Inspector changes",
+        {
+          isCurrent: isCurrentSession,
+          isHistoryGenerationCurrent: isCurrentHistoryGeneration,
+          requestOptions,
+        },
+      );
+    },
+    [historyMode, kernel],
   );
   const facade = useMemo<InspectorEditSession>(() => ({
     apply: () => applyWithHistory(),
+    get applyBlockReason() { return sessionRef.current?.applyBlockReason; },
     get applying() { return sessionRef.current?.applying ?? false; },
     get dirty() { return sessionRef.current?.dirty ?? false; },
     get lockReason() { return sessionRef.current?.lockReason; },
@@ -210,5 +247,5 @@ export function useRegisterInspectorEditSession(
   useEffect(() => {
     if (!store) return;
     store.update(owner, sessionRef.current ? facade : null);
-  }, [applying, dirty, facade, lockReason, mode, owner, store, valid]);
+  }, [applying, applyBlockReason, dirty, facade, lockReason, mode, owner, store, valid]);
 }

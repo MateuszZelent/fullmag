@@ -7,6 +7,7 @@ import {
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MODEL_READINESS_PATH,
+  SIMULATION_PREPARATION_PATH,
 } from "@/kernel/api/apiPaths";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 
@@ -75,4 +76,20 @@ describe("authoring mutation readiness invalidation", () => {
     }
   });
 
+  it.each(["geometry", "material", "magnetization", "interaction"] as const)(
+    "invalidates the accepted preparation receipt after a %s mutation",
+    (kind) => {
+      expect(AUTHORING_MUTATION_DEPENDENTS[kind]).toContain(
+        SIMULATION_PREPARATION_PATH,
+      );
+      const invalidate = vi.fn();
+
+      invalidateAuthoringMutationDependents({ invalidate }, kind, 17);
+
+      expect(invalidate).toHaveBeenCalledWith(
+        SIMULATION_PREPARATION_PATH,
+        "scene:17",
+      );
+    },
+  );
 });

@@ -20,6 +20,7 @@ import {
   PERSISTENCE_IMPORTS_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
+  SIMULATION_PREPARATION_PATH,
   SIMULATION_RUN_CURRENT_PATH,
   SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
   SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
@@ -28,7 +29,11 @@ import {
   SIMULATION_STAGES_EXECUTION_PATH,
   VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
-import type { JsonObject, StructuredCommandRequest } from "../api/apiTypes";
+import type {
+  JsonObject,
+  RequestOptions,
+  StructuredCommandRequest,
+} from "../api/apiTypes";
 import type {
   CheckpointEntry,
   CheckpointListResource,
@@ -44,13 +49,19 @@ import type {
   RegionDiagnosticsResource,
   RuntimeCommandPrecondition,
   RuntimeCommandTarget,
+  SimulationPreparationResource,
   SolverProfileResource,
   SolverStatusResource,
   StageExecutionResource,
 } from "../api/apiTypes";
-import type { CommandContext } from "../commands/commandTypes";
+import type { CommandContext, CommandResult } from "../commands/commandTypes";
 import type { CommandActiveResource } from "../commands/commandTypes";
 import type { CommandContribution } from "../commands/commandTypes";
+import {
+  assertCurrentSessionScope,
+  obsoleteSessionResult,
+} from "../commands/commandSessionScope";
+import { runAuthoringMutationWithHistory } from "../authoring/authoringHistoryMutation";
 import {
   meshPipelineStatusIsActive,
   normalizeMeshPipelineStatus,
@@ -65,6 +76,10 @@ import {
 } from "../persistence/controlRoomUiState";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 import {
+  sessionRequestScopeKey,
+  sessionResourceIdentityFromStatus,
+} from "../resources/sessionResourceIdentity";
+import {
   resolveActiveLaneOperation,
   type ActiveLaneOperationId,
 } from "../resources/useActiveLaneCapabilities";
@@ -73,8 +88,20 @@ import {
   buildStudyRuntimeCommand,
   type SimpleStudyRuntimeCommandKind,
 } from "./studyRuntimeCommandAdapters";
+import {
+  materializeCurrentLivePreparation,
+  requiresSharedDomainMeshForLivePreparation,
+} from "./livePreparationMaterialization";
 
 type JsonRecord = Record<string, unknown>;
+
+function sessionRequestOptions(
+  context: CommandContext,
+): RequestOptions | undefined {
+  return context.sessionScopeKey
+    ? { sessionScopeKey: context.sessionScopeKey }
+    : undefined;
+}
 type SolverProfileCommandRequest = Extract<
   StructuredCommandRequest,
   { kind: "set_solver_profile" }
@@ -88,19 +115,19 @@ const SOLVER_PROFILE_DEFAULT_SAMPLE_INTERVAL_WALL_MS = 5_000;
 
 interface RuntimePreconditionRefreshApi {
   commands?: {
-    list?: () => Promise<CommandQueueStatusResource>;
+    list?: (options?: RequestOptions) => Promise<CommandQueueStatusResource>;
   };
   sessions?: {
     current?: {
-      status?: () => Promise<LiveStatusResource>;
+      status?: (options?: RequestOptions) => Promise<LiveStatusResource>;
     };
   };
   simulation?: {
     solver?: {
-      status?: () => Promise<SolverStatusResource>;
+      status?: (options?: RequestOptions) => Promise<SolverStatusResource>;
     };
     stages?: {
-      execution?: () => Promise<StageExecutionResource>;
+      execution?: (options?: RequestOptions) => Promise<StageExecutionResource>;
     };
   };
 }
@@ -244,6 +271,19 @@ const ACTIVE_RUNTIME_COMMAND_STATUSES = new Set([
 
 function disabledWithoutApi(context: CommandContext): string | null {
   return context.api ? null : "Control-room API is unavailable.";
+}
+
+function livePreparationDisabledReason(context: CommandContext): string | null {
+  const apiReason = disabledWithoutApi(context);
+  if (apiReason) return apiReason;
+  const preparation = resourceData<SimulationPreparationResource>(
+    context,
+    SIMULATION_PREPARATION_PATH,
+  );
+  if (!preparation) return "Simulation preparation is unavailable.";
+  return preparation.status === "ready"
+    ? null
+    : `Live preparation is not ready (status: ${preparation.status}).`;
 }
 
 function isApiAvailable(context: CommandContext): boolean {
@@ -1465,16 +1505,24 @@ async function submitRuntimeCommand(
   context: CommandContext,
   command: StructuredCommandRequest,
   successMessage: string,
-): Promise<{ message: string; status: "completed" | "failed" }> {
+): Promise<CommandResult> {
   if (!context.api) {
     return { message: "Control-room API is unavailable.", status: "failed" };
   }
 
+  assertCurrentSessionScope(context);
   const refreshedCommand = await refreshRuntimeCommandPrecondition(
     context,
     command,
   );
-  const response = await context.api.commands.submit(refreshedCommand);
+  const obsoleteAfterRefresh = obsoleteSessionResult(context);
+  if (obsoleteAfterRefresh) return obsoleteAfterRefresh;
+  const requestOptions = sessionRequestOptions(context);
+  const response = await (requestOptions
+    ? context.api.commands.submit(refreshedCommand, requestOptions)
+    : context.api.commands.submit(refreshedCommand));
+  const obsoleteAfterSubmit = obsoleteSessionResult(context);
+  if (obsoleteAfterSubmit) return obsoleteAfterSubmit;
   if (!response.accepted) {
     return {
       message: response.error ?? `${successMessage} rejected.`,
@@ -1499,17 +1547,18 @@ async function refreshRuntimeCommandPrecondition(
   if (!original || !context.api) return command;
 
   const api = context.api as RuntimePreconditionRefreshApi;
+  const requestOptions = sessionRequestOptions(context);
   const [solverResult, stageResult, queueResult, sessionStatusResult] =
     await Promise.allSettled([
-    api.simulation?.solver?.status?.(),
-    api.simulation?.stages?.execution?.(),
-    api.commands?.list?.(),
+    api.simulation?.solver?.status?.(requestOptions),
+    api.simulation?.stages?.execution?.(requestOptions),
+    api.commands?.list?.(requestOptions),
     original.region_topology_revision === undefined &&
     original.region_membership_revision === undefined &&
     original.region_coefficients_revision === undefined &&
     original.region_initial_state_revision === undefined
       ? undefined
-      : api.sessions?.current?.status?.(),
+      : api.sessions?.current?.status?.(requestOptions),
   ]);
   const precondition: RuntimeCommandPrecondition = { ...original };
 
@@ -1731,35 +1780,51 @@ function addStageCommand(
       if (!context.api) {
         return { message: "Control-room API is unavailable.", status: "failed" };
       }
+      const obsoleteBeforeWrite = obsoleteSessionResult(context);
+      if (obsoleteBeforeWrite) return obsoleteBeforeWrite;
 
-      const scene = await context.api.model.scene();
-      const baseRevision = sceneBaseRevision(scene);
-      if (baseRevision === null) {
-        return {
-          message: "Scene revision is unavailable; refresh the scene and retry.",
-          status: "failed",
-        };
-      }
-      const currentStages = studyStages(scene);
-      const addedStage = stageWithDefaultId(stage, currentStages.length);
-      const nextStages = [
-        ...currentStages,
-        addedStage,
-      ];
-      const response = await context.api.model.commitTransaction({
-        kind: "merge_patch",
-        base_revision: baseRevision,
-        merge_patch: {
-          study: {
-            stages: nextStages,
-          },
+      return runAuthoringMutationWithHistory<CommandResult>(
+        context,
+        title,
+        async (preparation) => {
+          const scene =
+            preparation.before ??
+            await context.api!.model.scene(sessionRequestOptions(context));
+          const obsoleteAfterScene = obsoleteSessionResult(context);
+          if (obsoleteAfterScene) return obsoleteAfterScene;
+          const baseRevision = preparation.baseRevision ?? sceneBaseRevision(scene);
+          if (baseRevision === null) {
+            return {
+              message: "Scene revision is unavailable; refresh the scene and retry.",
+              status: "failed",
+            };
+          }
+          const currentStages = studyStages(scene);
+          const addedStage = stageWithDefaultId(stage, currentStages.length);
+          const nextStages = [...currentStages, addedStage];
+          const response = await context.api!.model.commitTransaction(
+            {
+              kind: "merge_patch",
+              base_revision: baseRevision,
+              merge_patch: {
+                study: {
+                  stages: nextStages,
+                },
+              },
+            },
+            sessionRequestOptions(context),
+          );
+          const obsoleteAfterWrite = obsoleteSessionResult(context);
+          if (obsoleteAfterWrite) return obsoleteAfterWrite;
+          const revision = sceneRevision(response);
+          invalidateStudyAuthoringResources(context, revision);
+          selectAuthoredStage(context, addedStage, currentStages.length);
+
+          return { message: successMessage, status: "completed" };
         },
-      });
-      const revision = sceneRevision(response);
-      invalidateStudyAuthoringResources(context, revision);
-      selectAuthoredStage(context, addedStage, currentStages.length);
-
-      return { message: successMessage, status: "completed" };
+        undefined,
+        { captureWorkspaceStateAfter: true },
+      );
     },
   };
 }
@@ -1800,54 +1865,70 @@ function continueHysteresisToNextStageCommand(): CommandContribution {
           status: "failed",
         };
       }
+      const obsoleteBeforeWrite = obsoleteSessionResult(context);
+      if (obsoleteBeforeWrite) return obsoleteBeforeWrite;
 
-      const scene = await context.api.model.scene();
-      const baseRevision = sceneBaseRevision(scene);
-      if (baseRevision === null) {
-        return {
-          message: "Scene revision is unavailable; refresh the scene and retry.",
-          status: "failed",
-        };
-      }
-      const currentStages = studyStages(scene);
-      const sourceIndex = currentStages.findIndex(
-        (stage) => stage.stage_id === stageId,
-      );
-      if (sourceIndex < 0) {
-        return {
-          message: `Hysteresis stage ${stageId} is no longer present.`,
-          status: "failed",
-        };
-      }
-      if (stageKind(currentStages[sourceIndex]) !== "hysteresis") {
-        return {
-          message: "Selected stage is not a hysteresis stage.",
-          status: "failed",
-        };
-      }
+      return runAuthoringMutationWithHistory<CommandResult>(
+        context,
+        `Continue after hysteresis stage ${stageId}`,
+        async (preparation) => {
+          const scene =
+            preparation.before ??
+            await context.api!.model.scene(sessionRequestOptions(context));
+          const obsoleteAfterScene = obsoleteSessionResult(context);
+          if (obsoleteAfterScene) return obsoleteAfterScene;
+          const baseRevision = preparation.baseRevision ?? sceneBaseRevision(scene);
+          if (baseRevision === null) {
+            return {
+              message: "Scene revision is unavailable; refresh the scene and retry.",
+              status: "failed",
+            };
+          }
+          const currentStages = studyStages(scene);
+          const sourceIndex = currentStages.findIndex(
+            (stage) => stage.stage_id === stageId,
+          );
+          if (sourceIndex < 0) {
+            return {
+              message: `Hysteresis stage ${stageId} is no longer present.`,
+              status: "failed",
+            };
+          }
+          if (stageKind(currentStages[sourceIndex]) !== "hysteresis") {
+            return {
+              message: "Selected stage is not a hysteresis stage.",
+              status: "failed",
+            };
+          }
 
-      const addedStage = stageWithDefaultId(DEFAULT_RUN_STAGE, currentStages.length);
-      const nextStages = [
-        ...currentStages,
-        addedStage,
-      ];
-      const response = await context.api.model.commitTransaction({
-        kind: "merge_patch",
-        base_revision: baseRevision,
-        merge_patch: {
-          study: {
-            stages: nextStages,
-          },
+          const addedStage = stageWithDefaultId(DEFAULT_RUN_STAGE, currentStages.length);
+          const nextStages = [...currentStages, addedStage];
+          const response = await context.api!.model.commitTransaction(
+            {
+              kind: "merge_patch",
+              base_revision: baseRevision,
+              merge_patch: {
+                study: {
+                  stages: nextStages,
+                },
+              },
+            },
+            sessionRequestOptions(context),
+          );
+          const obsoleteAfterWrite = obsoleteSessionResult(context);
+          if (obsoleteAfterWrite) return obsoleteAfterWrite;
+          const revision = sceneRevision(response);
+          invalidateStudyAuthoringResources(context, revision);
+          selectAuthoredStage(context, addedStage, currentStages.length);
+
+          return {
+            message: `Continuation run stage added after ${stageId}.`,
+            status: "completed",
+          };
         },
-      });
-      const revision = sceneRevision(response);
-      invalidateStudyAuthoringResources(context, revision);
-      selectAuthoredStage(context, addedStage, currentStages.length);
-
-      return {
-        message: `Continuation run stage added after ${stageId}.`,
-        status: "completed",
-      };
+        undefined,
+        { captureWorkspaceStateAfter: true },
+      );
     },
   };
 }
@@ -1875,32 +1956,69 @@ function removeSelectedStageCommand(): CommandContribution {
       if (index === null) {
         return { message: "Select a study stage to remove it.", status: "failed" };
       }
+      const selectedId = selectedStageId(context);
+      const obsoleteBeforeWrite = obsoleteSessionResult(context);
+      if (obsoleteBeforeWrite) return obsoleteBeforeWrite;
+      let selectionClearedByMutation = false;
 
-      const scene = await context.api.model.scene();
-      const baseRevision = sceneBaseRevision(scene);
-      if (baseRevision === null) {
-        return {
-          message: "Scene revision is unavailable; refresh the scene and retry.",
-          status: "failed",
-        };
-      }
-      const stages = studyStages(scene);
-      if (!stages[index]) {
-        return { message: "Selected study stage is no longer present.", status: "failed" };
-      }
-      const nextStages = stages.filter((_, stageIndex) => stageIndex !== index);
-      const response = await context.api.model.commitTransaction({
-        kind: "merge_patch",
-        base_revision: baseRevision,
-        merge_patch: {
-          study: {
-            stages: nextStages,
-          },
+      return runAuthoringMutationWithHistory<CommandResult>(
+        context,
+        `Remove study stage ${selectedId ?? index + 1}`,
+        async (preparation) => {
+          const scene =
+            preparation.before ??
+            await context.api!.model.scene(sessionRequestOptions(context));
+          const obsoleteAfterScene = obsoleteSessionResult(context);
+          if (obsoleteAfterScene) return obsoleteAfterScene;
+          const baseRevision = preparation.baseRevision ?? sceneBaseRevision(scene);
+          if (baseRevision === null) {
+            return {
+              message: "Scene revision is unavailable; refresh the scene and retry.",
+              status: "failed",
+            };
+          }
+          const stages = studyStages(scene);
+          const targetIndex = selectedId
+            ? stages.findIndex((stage) => stage.stage_id === selectedId)
+            : index;
+          const removedStage = stages[targetIndex];
+          if (!removedStage) {
+            return { message: "Selected study stage is no longer present.", status: "failed" };
+          }
+          const removedId = typeof removedStage.stage_id === "string"
+            ? removedStage.stage_id
+            : null;
+          const nextStages = stages.filter((_, stageIndex) => stageIndex !== targetIndex);
+          const response = await context.api!.model.commitTransaction(
+            {
+              kind: "merge_patch",
+              base_revision: baseRevision,
+              merge_patch: {
+                study: {
+                  stages: nextStages,
+                },
+              },
+            },
+            sessionRequestOptions(context),
+          );
+          const obsoleteAfterWrite = obsoleteSessionResult(context);
+          if (obsoleteAfterWrite) return obsoleteAfterWrite;
+          const currentSelectionStillTargetsRemovedStage = removedId
+            ? selectedStageId(context) === removedId
+            : selectedStageIndex(context) === targetIndex;
+          if (currentSelectionStillTargetsRemovedStage) {
+            context.selection?.clear("ribbon");
+            selectionClearedByMutation = true;
+          }
+          const revision = sceneRevision(response);
+          invalidateStudyAuthoringResources(context, revision);
+          return { message: "Study stage removed.", status: "completed" };
         },
-      });
-      const revision = sceneRevision(response);
-      invalidateStudyAuthoringResources(context, revision);
-      return { message: "Study stage removed.", status: "completed" };
+        undefined,
+        {
+          captureWorkspaceStateAfter: () => selectionClearedByMutation,
+        },
+      );
     },
   };
 }
@@ -1921,12 +2039,31 @@ function runtimeCommand(
     disabledReason: (context) => runtimeCommandDisabledReason(context, kind),
     isActive: (context) => isRuntimeCommandActive(context, kind),
     activeResource: (context) => activeRuntimeCommandResource(context, kind),
-    run: (context) =>
-      submitRuntimeCommand(
+    run: async (context) => {
+      const status = resourceData<LiveStatusResource>(
+        context,
+        SESSION_STATUS_RESOURCE_KEY,
+      );
+      if (
+        status &&
+        requiresExplicitMesh(status) &&
+        (kind === "solve" ||
+          kind === "compute_fields" ||
+          kind === "compute_energies")
+      ) {
+        const preparation = await materializeCurrentLivePreparation(context, {
+          expectedSceneRevision: numericRevision(status?.resources.scene_revision),
+          requireCurrentSharedDomainMesh: true,
+        });
+        if (preparation.kind === "rejected") return preparation.result;
+      }
+
+      return submitRuntimeCommand(
         context,
         buildRuntimeCommandFromContext(context, kind),
         successMessage,
-      ),
+      );
+    },
   };
 }
 
@@ -2085,6 +2222,28 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
   continueHysteresisToNextStageCommand(),
   removeSelectedStageCommand(),
   {
+    id: "study.prepare-live",
+    title: "Prepare Live Study",
+    category: "Study",
+    group: "study-runtime",
+    scope: "runtime",
+    isEnabled: (context) => livePreparationDisabledReason(context) === null,
+    disabledReason: livePreparationDisabledReason,
+    run: async (context) => {
+      const outcome = await materializeCurrentLivePreparation(context, {
+        requireCurrentSharedDomainMesh: requiresSharedDomainMeshForLivePreparation(
+          context,
+        ),
+      });
+      if (outcome.kind === "rejected") return outcome.result;
+      const result = outcome.resource;
+      return {
+        message: `Live preparation accepted (${result.plan_fingerprint.slice(0, 12)}…).`,
+        status: "completed",
+      };
+    },
+  },
+  {
     id: "diagnostics.toggle-solver-profiler",
     title: "Solver Profiler",
     category: "Tools",
@@ -2099,7 +2258,13 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
       }
 
       const command = buildSolverProfileCommand(context);
-      const response = await context.api.commands.submit(command);
+      assertCurrentSessionScope(context);
+      const requestOptions = sessionRequestOptions(context);
+      const response = await (requestOptions
+        ? context.api.commands.submit(command, requestOptions)
+        : context.api.commands.submit(command));
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
       const enabled = command.profile.enabled === true;
       if (!response.accepted) {
         return {
@@ -2194,10 +2359,13 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
         return { message: "Control-room API is unavailable.", status: "failed" };
       }
 
+      assertCurrentSessionScope(context);
       const response = await context.api.persistence.checkpoints.create({
         profile: "resume",
         reason: "user_requested",
-      });
+      }, sessionRequestOptions(context));
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
       const revision = response.checkpoint.checkpoint_id;
       invalidateCheckpointResources(context, revision);
 
@@ -2225,10 +2393,14 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
         return { message: "No checkpoint is selected.", status: "failed" };
       }
 
+      assertCurrentSessionScope(context);
       const response = await context.api.persistence.checkpoints.restore(
         checkpoint.checkpoint_id,
         { reason: "user_requested" },
+        sessionRequestOptions(context),
       );
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
       const revision =
         response.field_revision ?? response.checkpoint.checkpoint_id;
       invalidateRestoredStateResources(context, revision);
@@ -2261,13 +2433,21 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
       const input = resolveFieldStateInput(context.input);
       const fileName =
         input?.fileName ?? input?.file_name ?? `${target.id}-m.h5`;
+      assertCurrentSessionScope(context);
       const response = await context.api.persistence.fieldStates.export({
         target,
         quantity_id: "m",
         format: input?.format ?? "h5",
         file_name: fileName,
-      });
-      const artifact = await context.api.data.artifacts.bytes(response.artifact_ref);
+      }, sessionRequestOptions(context));
+      const obsoleteAfterExport = obsoleteSessionResult(context);
+      if (obsoleteAfterExport) return obsoleteAfterExport;
+      const artifact = await context.api.data.artifacts.bytes(
+        response.artifact_ref,
+        sessionRequestOptions(context),
+      );
+      const obsoleteAfterArtifact = obsoleteSessionResult(context);
+      if (obsoleteAfterArtifact) return obsoleteAfterArtifact;
       if (artifact.status !== "ready" || !artifact.data) {
         return {
           message: "Field state was exported but the artifact download failed.",
@@ -2329,11 +2509,14 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
             status: "cancelled",
           };
         }
+        assertCurrentSessionScope(context);
         const asset = await context.api.persistence.assets.import({
           content_base64: uploaded.contentBase64,
           file_name: uploaded.fileName,
           target_realization: "field_state",
-        });
+        }, sessionRequestOptions(context));
+        const obsoleteAfterAsset = obsoleteSessionResult(context);
+        if (obsoleteAfterAsset) return obsoleteAfterAsset;
         artifactRef = asset.artifact_ref;
       }
       if (!artifactRef) {
@@ -2343,12 +2526,15 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
         };
       }
 
+      assertCurrentSessionScope(context);
       const inspection = await context.api.persistence.fieldStates.inspectImport({
         artifact_ref: artifactRef,
         target,
         quantity_id: quantityId,
         format: "field_state_json",
-      });
+      }, sessionRequestOptions(context));
+      const obsoleteAfterInspection = obsoleteSessionResult(context);
+      if (obsoleteAfterInspection) return obsoleteAfterInspection;
       if (inspection.compatibility !== "compatible") {
         return {
           message:
@@ -2362,7 +2548,9 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
         target,
         quantity_id: quantityId,
         mode,
-      });
+      }, sessionRequestOptions(context));
+      const obsoleteAfterImport = obsoleteSessionResult(context);
+      if (obsoleteAfterImport) return obsoleteAfterImport;
       invalidateRestoredStateResources(context, response.field_revision);
       context.resources?.invalidate(
         PERSISTENCE_FIELD_STATE_IMPORT_INSPECTIONS_PATH,
@@ -2392,10 +2580,13 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
         return { message: "Control-room API is unavailable.", status: "failed" };
       }
 
+      assertCurrentSessionScope(context);
       const response = await context.api.persistence.exports.create({
         profile: "resume",
         ui_state: exportControlRoomUiState(context),
-      });
+      }, sessionRequestOptions(context));
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
       context.resources?.invalidate(PERSISTENCE_EXPORTS_PATH, response.session_id);
       maybeDownloadFmsExport(
         `${response.session_id}-${response.profile}.fms`,
@@ -2428,10 +2619,37 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
         return { message: "No .fms file selected.", status: "cancelled" };
       }
 
+      assertCurrentSessionScope(context);
       const response = await context.api.persistence.imports.commit({
         fms_base64: fmsBase64,
         restore_mode: input?.restoreMode ?? "resume",
-      });
+      }, sessionRequestOptions(context));
+      let activeStatus: LiveStatusResource;
+      try {
+        activeStatus = await context.api.sessions.current.status();
+      } catch {
+        context.resources?.invalidate(SESSION_STATUS_RESOURCE_KEY, response.session_id);
+        return {
+          message: "Import committed, but the active session could not be verified. Refresh the workspace before continuing.",
+          status: "pending",
+        };
+      }
+      const activeIdentity = sessionResourceIdentityFromStatus(activeStatus);
+      if (activeIdentity?.sessionId !== response.session_id) {
+        context.resources?.invalidate(SESSION_STATUS_RESOURCE_KEY, response.session_id);
+        return {
+          message: "A different session became active before the import response could be applied.",
+          status: "cancelled",
+        };
+      }
+      const activeScopeKey = sessionRequestScopeKey(activeIdentity);
+      if (context.sessionScopeKey && activeScopeKey === context.sessionScopeKey) {
+        context.resources?.invalidate(SESSION_STATUS_RESOURCE_KEY, response.session_id);
+        return {
+          message: "Import committed, but the active session transition is not visible yet. Refresh the workspace before continuing.",
+          status: "pending",
+        };
+      }
       applyControlRoomUiState(context, response.ui_state);
       invalidateImportedSessionResources(context, response.session_id);
 
@@ -2644,10 +2862,14 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
           message: "Control-room API is unavailable.",
         };
       }
+      assertCurrentSessionScope(context);
       const response = await context.api.analysis.hysteresis.bookmarkPoint(
         input.stageId,
         hysteresisBookmarkPointRequest(input),
+        sessionRequestOptions(context),
       );
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
       invalidateHysteresisBookmarkResources(context, input.stageId, response.revision);
       return {
         status: "completed",
@@ -2692,7 +2914,13 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
         const stageId =
           commandInputStageId(context.input) ?? selectedStageId(context);
         if (stageId && context.api) {
-          const pointsResource = await context.api.analysis.hysteresis.points(stageId);
+          assertCurrentSessionScope(context);
+          const pointsResource = await context.api.analysis.hysteresis.points(
+            stageId,
+            sessionRequestOptions(context),
+          );
+          const obsolete = obsoleteSessionResult(context);
+          if (obsolete) return obsolete;
           input = {
             points: Array.isArray(pointsResource.points) ? pointsResource.points : [],
             stageId,
@@ -2708,6 +2936,7 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
           message: "No hysteresis points are available to export.",
         };
       }
+      assertCurrentSessionScope(context);
       const csv = hysteresisLoopCsv(input);
       maybeDownloadBinaryExport(
         `${input.stageId}-hysteresis-loop.csv`,
@@ -2741,6 +2970,8 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
         return { status: "failed", message: "Control-room API is unavailable." };
       }
       const target = await resolveObjectFieldStateTarget(context);
+      const obsoleteAfterTarget = obsoleteSessionResult(context);
+      if (obsoleteAfterTarget) return obsoleteAfterTarget;
       if (!target) {
         return {
           status: "failed",
@@ -2752,12 +2983,15 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
         input.snapshotArtifactRef?.trim() ||
         hysteresisSnapshotArtifactRefFromLegacyResource(input.snapshotResourceRef) ||
         `hysteresis_snapshots/${input.snapshotId}/m.json`;
+      assertCurrentSessionScope(context);
       const response = await context.api.persistence.fieldStates.import({
         artifact_ref: artifactRef,
         mode: "apply",
         quantity_id: "m",
         target,
-      });
+      }, sessionRequestOptions(context));
+      const obsoleteAfterImport = obsoleteSessionResult(context);
+      if (obsoleteAfterImport) return obsoleteAfterImport;
       invalidateRestoredStateResources(context, response.field_revision);
       context.resources?.invalidate(
         PERSISTENCE_FIELD_STATE_IMPORTS_PATH,

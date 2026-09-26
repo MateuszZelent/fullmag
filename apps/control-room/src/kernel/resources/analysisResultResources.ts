@@ -34,6 +34,7 @@ import type {
 } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 
+import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
 import { useResource } from "./useResource";
 
 interface AnalysisResultResourceOptions {
@@ -90,21 +91,24 @@ export function useAnalysisResultDatasetCatalogResource(
   const resourceKey = runId
     ? resultResourceKey(ANALYSIS_RESULT_DATASETS_PATH, { run_id: runId }, query)
     : `${ANALYSIS_RESULT_DATASETS_PATH}:none`;
+  const { resourceKey: scopedResourceKey, sessionIdentity } =
+    useSessionScopedResourceKey(resourceKey);
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       runId
         ? api.analysis.results
-            .datasets(runId, query, { signal })
+            .datasets(runId, query, { sessionScopeKey, signal })
             .catch(ignoreMissingResultResource<AnalysisResultDatasetCatalogResource>)
         : Promise.resolve(null),
     [api, query, runId],
   );
 
   return useResource<AnalysisResultDatasetCatalogResource | null>({
-    enabled: Boolean(runId) && options.enabled !== false,
+    enabled:
+      Boolean(runId) && options.enabled !== false && sessionIdentity !== null,
     load,
     resolveRevision: (data) => data?.revision ?? null,
-    resourceKey,
+    resourceKey: scopedResourceKey,
   });
 }
 
@@ -120,21 +124,26 @@ export function useAnalysisResultDatasetManifestResource(
         run_id: runId,
       })
     : `${ANALYSIS_RESULT_DATASET_PATH}:none`;
+  const { resourceKey: scopedResourceKey, sessionIdentity } =
+    useSessionScopedResourceKey(resourceKey);
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       runId && datasetId
         ? api.analysis.results
-            .dataset(runId, datasetId, { signal })
+            .dataset(runId, datasetId, { sessionScopeKey, signal })
             .catch(ignoreMissingResultResource<AnalysisResultDatasetManifestResource>)
         : Promise.resolve(null),
     [api, datasetId, runId],
   );
 
   return useResource<AnalysisResultDatasetManifestResource | null>({
-    enabled: Boolean(runId && datasetId) && options.enabled !== false,
+    enabled:
+      Boolean(runId && datasetId) &&
+      options.enabled !== false &&
+      sessionIdentity !== null,
     load,
     resolveRevision: (data) => data?.dataset_revision ?? null,
-    resourceKey,
+    resourceKey: scopedResourceKey,
   });
 }
 
@@ -154,21 +163,26 @@ export function useAnalysisResultAxisValuesResource(
         run_id: runId,
       }, query)
     : `${ANALYSIS_RESULT_AXIS_VALUES_PATH}:none`;
+  const { resourceKey: scopedResourceKey, sessionIdentity } =
+    useSessionScopedResourceKey(resourceKey);
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       runId && datasetId && axisId
         ? api.analysis.results
-            .axisValues(runId, datasetId, axisId, query, { signal })
+            .axisValues(runId, datasetId, axisId, query, { sessionScopeKey, signal })
             .catch(ignoreMissingResultResource<AnalysisResultAxisValuesResource>)
         : Promise.resolve(null),
     [api, axisId, datasetId, query, runId],
   );
 
   return useResource<AnalysisResultAxisValuesResource | null>({
-    enabled: Boolean(runId && datasetId && axisId) && options.enabled !== false,
+    enabled:
+      Boolean(runId && datasetId && axisId) &&
+      options.enabled !== false &&
+      sessionIdentity !== null,
     load,
     resolveRevision: (data) => data?.dataset_revision ?? null,
-    resourceKey,
+    resourceKey: scopedResourceKey,
   });
 }
 
@@ -258,21 +272,26 @@ export function useAnalysisResultItemResource(
         run_id: runId,
       })
     : `${ANALYSIS_RESULT_ITEMS_PATH}:none`;
+  const { resourceKey: scopedResourceKey, sessionIdentity } =
+    useSessionScopedResourceKey(resourceKey);
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       runId && datasetId && itemId
         ? api.analysis.results
-            .item(runId, datasetId, itemId, { signal })
+            .item(runId, datasetId, itemId, { sessionScopeKey, signal })
             .catch(ignoreMissingResultResource<AnalysisResultSpectralItemSummary>)
         : Promise.resolve(null),
     [api, datasetId, itemId, runId],
   );
 
   return useResource<AnalysisResultSpectralItemSummary | null>({
-    enabled: Boolean(runId && datasetId && itemId) && options.enabled !== false,
+    enabled:
+      Boolean(runId && datasetId && itemId) &&
+      options.enabled !== false &&
+      sessionIdentity !== null,
     load,
     resolveRevision: (data) => data?.source_revision ?? null,
-    resourceKey,
+    resourceKey: scopedResourceKey,
   });
 }
 
@@ -290,21 +309,26 @@ export function useAnalysisResultBranchResource(
         run_id: runId,
       })
     : `${ANALYSIS_RESULT_BRANCH_PATH}:none`;
+  const { resourceKey: scopedResourceKey, sessionIdentity } =
+    useSessionScopedResourceKey(resourceKey);
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       runId && datasetId && branchId
         ? api.analysis.results
-            .branch(runId, datasetId, branchId, { signal })
+            .branch(runId, datasetId, branchId, { sessionScopeKey, signal })
             .catch(ignoreMissingResultResource<AnalysisResultBranchResource>)
         : Promise.resolve(null),
     [api, branchId, datasetId, runId],
   );
 
   return useResource<AnalysisResultBranchResource | null>({
-    enabled: Boolean(runId && datasetId && branchId) && options.enabled !== false,
+    enabled:
+      Boolean(runId && datasetId && branchId) &&
+      options.enabled !== false &&
+      sessionIdentity !== null,
     load,
     resolveRevision: (data) => data?.dataset_revision ?? null,
-    resourceKey,
+    resourceKey: scopedResourceKey,
   });
 }
 
@@ -322,21 +346,26 @@ export function useAnalysisResultRelationResource(
         run_id: runId,
       })
     : `${ANALYSIS_RESULT_RELATION_PATH}:none`;
+  const { resourceKey: scopedResourceKey, sessionIdentity } =
+    useSessionScopedResourceKey(resourceKey);
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       runId && datasetId && relationId
         ? api.analysis.results
-            .relation(runId, datasetId, relationId, { signal })
+            .relation(runId, datasetId, relationId, { sessionScopeKey, signal })
             .catch(ignoreMissingResultResource<AnalysisResultRelationResource>)
         : Promise.resolve(null),
     [api, datasetId, relationId, runId],
   );
 
   return useResource<AnalysisResultRelationResource | null>({
-    enabled: Boolean(runId && datasetId && relationId) && options.enabled !== false,
+    enabled:
+      Boolean(runId && datasetId && relationId) &&
+      options.enabled !== false &&
+      sessionIdentity !== null,
     load,
     resolveRevision: (data) => data?.relation.source_revision ?? null,
-    resourceKey,
+    resourceKey: scopedResourceKey,
   });
 }
 
@@ -365,25 +394,27 @@ function usePagedAnalysisResultResource<
         run_id: runId,
       }, query)
     : `${template}:none`;
+  const { resourceKey: scopedResourceKey, sessionIdentity } =
+    useSessionScopedResourceKey(resourceKey);
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) => {
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => {
       if (!runId || !datasetId || (kind === "branchPoints" && !branchId)) {
         return Promise.resolve(null);
       }
       const request = kind === "items"
-        ? api.analysis.results.items(runId, datasetId, query, { signal })
+        ? api.analysis.results.items(runId, datasetId, query, { sessionScopeKey, signal })
         : kind === "samples"
-          ? api.analysis.results.samples(runId, datasetId, query, { signal })
+          ? api.analysis.results.samples(runId, datasetId, query, { sessionScopeKey, signal })
           : kind === "branches"
-            ? api.analysis.results.branches(runId, datasetId, query, { signal })
+            ? api.analysis.results.branches(runId, datasetId, query, { sessionScopeKey, signal })
             : kind === "relations"
-              ? api.analysis.results.relations(runId, datasetId, query, { signal })
+              ? api.analysis.results.relations(runId, datasetId, query, { sessionScopeKey, signal })
               : api.analysis.results.branchPoints(
                   runId,
                   datasetId,
                   branchId as string,
                   query,
-                  { signal },
+                  { sessionScopeKey, signal },
                 );
       return request.catch(
         ignoreMissingResultResource<
@@ -399,10 +430,13 @@ function usePagedAnalysisResultResource<
   );
 
   return useResource<TData | null>({
-    enabled: Boolean(runId && datasetId && (kind !== "branchPoints" || branchId)) && options.enabled !== false,
+    enabled:
+      Boolean(runId && datasetId && (kind !== "branchPoints" || branchId)) &&
+      options.enabled !== false &&
+      sessionIdentity !== null,
     load,
     resolveRevision: (data) => data?.dataset_revision ?? null,
-    resourceKey,
+    resourceKey: scopedResourceKey,
   });
 }
 
@@ -423,20 +457,25 @@ export function useAnalysisResultProjectionResource(
       : `${ANALYSIS_RESULT_PROJECTION_PATH}:none`,
     [datasetId, projectionId, runId],
   );
+  const { resourceKey: scopedResourceKey, sessionIdentity } =
+    useSessionScopedResourceKey(resourceKey);
   const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       runId && datasetId && projectionId
         ? api.analysis.results
-            .projection(runId, datasetId, projectionId, { signal })
+            .projection(runId, datasetId, projectionId, { sessionScopeKey, signal })
             .catch(ignoreMissingResultResource<AnalysisResultProjectionResource>)
         : Promise.resolve(null),
     [api, datasetId, projectionId, runId],
   );
 
   return useResource<AnalysisResultProjectionResource | null>({
-    enabled: Boolean(runId && datasetId && projectionId) && options.enabled !== false,
+    enabled:
+      Boolean(runId && datasetId && projectionId) &&
+      options.enabled !== false &&
+      sessionIdentity !== null,
     load,
     resolveRevision: (data) => data?.projection_revision ?? null,
-    resourceKey,
+    resourceKey: scopedResourceKey,
   });
 }

@@ -34,6 +34,7 @@ export function ObjectRegionMeshPanel({
   model,
   draft,
   pending,
+  sessionAvailable,
   buildPending,
   membership,
   draftDirty,
@@ -163,7 +164,8 @@ export function ObjectRegionMeshPanel({
         </InspectorGroup>
         <ObjectRegionActionsSection
           pending={pending}
-        buildPending={buildPending}
+          sessionAvailable={sessionAvailable}
+          buildPending={buildPending}
           draftDirty={draftDirty}
           buildRegion={buildRegion}
           regionMeshLifecycle={regionMeshLifecycle}
@@ -228,7 +230,8 @@ export function ObjectRegionMeshPanel({
 
       <ObjectRegionActionsSection
         pending={pending}
-          buildPending={buildPending}
+        sessionAvailable={sessionAvailable}
+        buildPending={buildPending}
         draftDirty={draftDirty}
         buildRegion={buildRegion}
         regionMeshLifecycle={regionMeshLifecycle}

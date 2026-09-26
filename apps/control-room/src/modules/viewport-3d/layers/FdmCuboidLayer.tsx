@@ -1244,6 +1244,8 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
         previousAdoption?.scalarBuffer !== surfaceColors ||
         previousAdoption?.sessionIdentity?.sessionEpoch !==
           sessionIdentity?.sessionEpoch ||
+        previousAdoption?.sessionIdentity?.requestScopeEpoch !==
+          sessionIdentity?.requestScopeEpoch ||
         previousAdoption?.sessionIdentity?.sessionId !== sessionIdentity?.sessionId;
       if (colorChanged || adoptionIdentityChanged) {
         recordSurfaceAdoption();

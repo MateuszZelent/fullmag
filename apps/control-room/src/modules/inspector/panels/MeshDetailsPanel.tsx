@@ -218,6 +218,7 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
           fallbacks={model.fallbacks}
           lastBuildError={model.lastBuildError}
           latestSuccessAvailable={model.latestSuccessAvailable}
+          sharedDomainBuildDisabledReason={model.sharedDomainBuildDisabledReason}
           sizeFieldKinds={model.sizeFieldKinds}
           onBuildSharedDomain={model.onBuildSharedDomain}
           onOpenBuildDetails={model.onOpenBuildDetails}
