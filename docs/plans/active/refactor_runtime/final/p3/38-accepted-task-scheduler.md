@@ -1,6 +1,6 @@
 # P3-B/P5-B — ograniczony scheduler accepted task
 
-Data checkpointu: 27.09.2026. Baza źródeł: `master@c540e1c434926d032d04afc7492baacddbe4fec4`; bieżący przyrost zostanie przypięty pełnym hashem commita po integracji.
+Data checkpointu: 27.09.2026. Commit implementacji: `master@4c26e584f40dcb8afcf2f2a65881e532898ffbea`.
 
 ## Zrealizowany kontrakt
 
