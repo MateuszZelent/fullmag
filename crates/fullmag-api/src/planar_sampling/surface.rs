@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::error::ApiError;
 use fullmag_ir::{PlanarReductionIR, SurfaceVisibilityPolicyIR};
 
-use super::frame::{cross, dot, ResolvedFrame};
+use super::frame::{ResolvedFrame, cross, dot};
 use super::provenance;
 use super::reduction::WeightedAccumulator;
 use super::{FemPlanarField, Occupancy, PlanarSampleResult, ResolvedPlanarSampleRequest};

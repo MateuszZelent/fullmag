@@ -17,6 +17,7 @@ from fullmag.runtime.scene_document import (
     build_scene_document_from_builder,
     builder_overrides_from_scene_document,
 )
+from fullmag.runtime.scene_document_ir import scene_document_to_problem_ir
 from fullmag.runtime.script_builder import (
     export_builder_draft,
     render_scene_document_as_script,
@@ -160,6 +161,17 @@ def build_parser() -> argparse.ArgumentParser:
     render_scene.add_argument("--scene-json", required=True, help="Path to SceneDocument JSON.")
     render_scene.add_argument("--output", required=True, help="Atomic output path for the Python script.")
 
+    export_scene_ir = subparsers.add_parser(
+        "export-scene-ir",
+        help="Lower a SceneDocument through the canonical Python DSL and print ProblemIR.",
+    )
+    export_scene_ir.add_argument("--scene-json", required=True, help="Path to SceneDocument JSON.")
+    export_scene_ir.add_argument("--backend", choices=[target.value for target in BackendTarget], required=True)
+    export_scene_ir.add_argument("--device", choices=["auto", "cpu", "gpu"], required=True)
+    export_scene_ir.add_argument("--precision", choices=[precision.value for precision in ExecutionPrecision], required=True)
+    export_scene_ir.add_argument("--mode", choices=[mode.value for mode in ExecutionMode], required=True)
+    export_scene_ir.add_argument("--asset-root", help="Project-owned root for resolving imported geometry sources.")
+
     read_state = subparsers.add_parser(
         "read-magnetization-state",
         help="Load a magnetization state file and print canonical JSON values.",
@@ -192,6 +204,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         source = script_path.read_text(encoding="utf-8")
         compile(source, str(script_path), "exec")
         print(json.dumps({"status": "ok", "script": str(script_path.resolve())}))
+        return 0
+
+    if args.command == "export-scene-ir":
+        emit_progress("Lowering SceneDocument through the canonical Python DSL")
+        scene_document = json.loads(Path(args.scene_json).read_text(encoding="utf-8"))
+        problem_ir = scene_document_to_problem_ir(
+            scene_document,
+            requested_backend=args.backend,
+            requested_device=args.device,
+            requested_precision=args.precision,
+            requested_mode=args.mode,
+            source_root=args.asset_root,
+        )
+        _write_json(problem_ir)
+        emit_progress("SceneDocument ProblemIR export completed")
         return 0
 
     if args.command in {"export-ir", "export-run-config"}:

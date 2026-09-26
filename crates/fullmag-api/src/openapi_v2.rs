@@ -209,8 +209,13 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::persistence::assets::import_asset,
         crate::router_v2::handlers::persistence::projects::create,
         crate::router_v2::handlers::persistence::projects::open,
+        crate::router_v2::handlers::persistence::projects::submit_run,
+        crate::router_v2::handlers::persistence::projects::list_runs,
+        crate::router_v2::handlers::persistence::projects::get_run,
+        crate::router_v2::handlers::persistence::projects::materialize_run,
         crate::router_v2::handlers::simulation::runtime::get_current_run,
         crate::router_v2::handlers::simulation::runtime::get_simulation_preparation,
+        crate::router_v2::handlers::simulation::runtime::materialize_live_preparation,
         crate::router_v2::handlers::simulation::runtime::get_run_by_id,
         crate::router_v2::handlers::simulation::runtime::get_stage_execution,
         crate::router_v2::handlers::simulation::runtime::get_hysteresis_plan,
@@ -288,7 +293,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::platform::system::get_gpu_telemetry,
         crate::router_v2::handlers::platform::system::get_solver_profile,
         crate::router_v2::handlers::persistence::session::export_session,
-        crate::router_v2::handlers::persistence::session::inspect_session,
+        crate::router_v2::handlers::persistence::session::inspect_project_archive,
         crate::router_v2::handlers::persistence::session::commit_session,
         crate::router_v2::handlers::persistence::session::list_checkpoints,
         crate::router_v2::handlers::persistence::session::get_checkpoint,
@@ -506,6 +511,21 @@ use utoipa::OpenApi;
         crate::schemas::projects::ProjectMigrationResource,
         crate::schemas::projects::ProjectArchiveDurability,
         crate::schemas::projects::ProjectDocumentResource,
+        crate::schemas::projects::ProjectRunSubmitRequest,
+        crate::schemas::projects::ProjectRunSubmitResource,
+        crate::schemas::projects::ProjectRunResource,
+        crate::schemas::projects::ProjectRunListQuery,
+        crate::schemas::projects::ProjectRunListResource,
+        crate::schemas::projects::ProjectRunSummaryResource,
+        crate::schemas::projects::ProjectRunRequestedExecutionResource,
+        crate::schemas::projects::ProjectRunCatalogState,
+        crate::schemas::projects::ProjectRunTaskResource,
+        crate::schemas::projects::ProjectRunTaskLifecycle,
+        crate::schemas::projects::ProjectRunTaskReadiness,
+        crate::schemas::projects::ProjectRunObservationState,
+        crate::schemas::projects::ProjectRunMaterializationResource,
+        crate::schemas::projects::ProjectRunSubmitDisposition,
+        crate::schemas::projects::ProjectRunExecutionState,
         crate::schemas::workspace::WorkspaceRibbonResource,
         crate::schemas::workspace::WorkspaceRibbonReplaceRequest,
         crate::schemas::workspace::WorkspaceStageLayout,
@@ -715,6 +735,9 @@ use utoipa::OpenApi;
         crate::schemas::runtime::CurrentRunResource,
         crate::schemas::runtime::ResolvedFallbackResource,
         crate::schemas::preparation::SimulationPreparationResource,
+        crate::schemas::preparation::LivePreparationMaterializationRequest,
+        crate::schemas::preparation::LivePreparationMaterializationResource,
+        crate::schemas::preparation::PreparationMaterializationDisposition,
         crate::schemas::preparation::PreparationStatus,
         crate::schemas::preparation::PreparationStageId,
         crate::schemas::preparation::PreparationStageStatus,
@@ -869,6 +892,7 @@ fn openapi_json_on_large_stack() -> Value {
     let mut doc = serde_json::to_value(ApiDoc::openapi()).expect("OpenAPI v2 should serialize");
     add_platform_document_paths(&mut doc);
     add_session_collection_paths(&mut doc);
+    add_session_scope_header_parameter(&mut doc);
     let build_identity = fullmag_build_info::identity();
     doc["x-fullmag-build-identity"] = json!({
         "built_at_utc": build_identity.built_at_utc,
@@ -974,6 +998,82 @@ fn add_session_collection_paths(doc: &mut Value) {
             }
         }),
     );
+}
+
+fn add_session_scope_header_parameter(doc: &mut Value) {
+    let parameter = json!({
+        "name": "x-fullmag-session-scope",
+        "in": "header",
+        "required": false,
+        "description": "Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409.",
+        "schema": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^session=[^&]+&epoch=[^&]+&request_scope_epoch=[^&]+$"
+        }
+    });
+
+    if let Some(parameters) = doc
+        .get_mut("components")
+        .and_then(Value::as_object_mut)
+        .map(|components| {
+            components
+                .entry("parameters".to_string())
+                .or_insert_with(|| json!({}))
+        })
+        .and_then(Value::as_object_mut)
+    {
+        parameters.insert("FullmagSessionScope".to_string(), parameter);
+    } else {
+        return;
+    }
+
+    let Some(paths) = doc.get_mut("paths").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for (path, path_item) in paths {
+        if !path.starts_with("/v2/sessions/current") {
+            continue;
+        }
+        let Some(path_item) = path_item.as_object_mut() else {
+            continue;
+        };
+        for method in ["get", "post", "put", "patch", "delete"] {
+            if !session_scope_header_applies(path, method) {
+                continue;
+            }
+            let Some(operation) = path_item.get_mut(method).and_then(Value::as_object_mut) else {
+                continue;
+            };
+            let parameters = operation
+                .entry("parameters".to_string())
+                .or_insert_with(|| json!([]));
+            let Some(parameters) = parameters.as_array_mut() else {
+                continue;
+            };
+            if !parameters
+                .iter()
+                .any(|candidate| candidate["$ref"] == "#/components/parameters/FullmagSessionScope")
+            {
+                parameters.push(json!({
+                    "$ref": "#/components/parameters/FullmagSessionScope"
+                }));
+            }
+        }
+    }
+}
+
+fn session_scope_header_applies(path: &str, method: &str) -> bool {
+    if path == "/v2/sessions/current/events/ws"
+        || path == "/v2/sessions/current/diagnostics/cpu"
+        || path == "/v2/sessions/current/diagnostics/gpu"
+    {
+        return false;
+    }
+
+    // The metadata PATCH is an explicitly unsupported no-op and has no
+    // current-session handler contract to protect.
+    !(path == "/v2/sessions/current" && method == "patch")
 }
 
 fn normalize_operation_ids(doc: &mut Value) {

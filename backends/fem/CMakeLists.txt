@@ -224,6 +224,7 @@ set(FEM_SOURCES
     src/context.cpp
     src/dmi_weak_residual.cpp
     src/error.cpp
+    src/mesh_space_preparation.cpp
 )
 
 if(FULLMAG_USE_MFEM_STACK)
@@ -412,6 +413,24 @@ set_target_properties(fullmag_fem PROPERTIES
 enable_testing()
 
 if(FULLMAG_USE_MFEM_STACK)
+    add_executable(
+        fem_mesh_space_preparation_contract
+        tests/mesh_space_preparation_contract.cpp
+    )
+    target_link_libraries(fem_mesh_space_preparation_contract PRIVATE fullmag_fem)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_mesh_space_preparation_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_mesh_space_preparation_contract PRIVATE mfem)
+    endif()
+    target_include_directories(fem_mesh_space_preparation_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(
+        NAME fem_mesh_space_preparation_contract
+        COMMAND fem_mesh_space_preparation_contract)
+
     add_executable(
         fem_oersted_direct_tetra_contract
         tests/oersted_direct_tetra_contract.cpp

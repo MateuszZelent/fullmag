@@ -1,6 +1,6 @@
 use fullmag_ir::{
-    AutosaveFormatIR, AutosaveLayoutIR, OutputIR, ProblemIR, SamplingPeriodPolicyIR,
-    StageAutosaveIR, StudyIR, TimeDependenceIR, AUTO_SINC_NYQUIST_GUARD_FACTOR,
+    AUTO_SINC_NYQUIST_GUARD_FACTOR, AutosaveFormatIR, AutosaveLayoutIR, OutputIR, ProblemIR,
+    SamplingPeriodPolicyIR, StageAutosaveIR, StudyIR, TimeDependenceIR,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

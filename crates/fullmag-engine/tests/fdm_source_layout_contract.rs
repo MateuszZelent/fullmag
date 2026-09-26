@@ -115,6 +115,78 @@ fn fdm_engine_cpu_execution_files_have_cpu_owner() {
 }
 
 #[test]
+fn fdm_engine_energy_calculations_have_a_dedicated_owner() {
+    let root = crate_root();
+    let energy_path = root.join("src/fdm/cpu/fields/energy.rs");
+    assert_exists(&energy_path);
+
+    let energy_rs = fs::read_to_string(energy_path).expect("read FDM energy owner");
+    let energy_methods = [
+        "pub fn total_energy_from_soa_ws(",
+        "pub fn total_energy_from_vectors_ws(",
+        "pub(crate) fn half_field_energy_from_soa(",
+        "pub(crate) fn full_field_energy_from_soa(",
+        "pub(crate) fn field_energy_from_soa(",
+        "pub fn exchange_energy_from_vectors(",
+        "pub(crate) fn exchange_energy_from_field(",
+        "pub fn exchange_energy_density_from_field(",
+        "pub(crate) fn demag_energy_from_fields(",
+        "pub fn demag_energy_density_from_fields(",
+        "pub(crate) fn external_energy_from_fields(",
+        "pub fn external_energy_density_from_fields(",
+        "pub fn anisotropy_energy_density_from_vectors(",
+        "fn field_dot_energy_density(",
+    ];
+    for symbol in energy_methods {
+        assert!(
+            energy_rs.contains(symbol),
+            "energy calculation owner is missing {symbol}"
+        );
+    }
+
+    let fields_rs =
+        fs::read_to_string(root.join("src/fdm/cpu/fields.rs")).expect("read FDM fields owner");
+    assert!(
+        fields_rs.contains("fields/energy.rs") && fields_rs.contains("mod energy;"),
+        "FDM fields owner must include its dedicated energy module"
+    );
+    for symbol in energy_methods {
+        assert!(
+            !fields_rs.contains(symbol),
+            "energy calculation {symbol} must be owned by fields/energy.rs"
+        );
+    }
+}
+
+#[test]
+fn fdm_engine_field_observables_have_a_dedicated_owner() {
+    let root = crate_root();
+    let observables_path = root.join("src/fdm/cpu/fields/observables.rs");
+    assert_exists(&observables_path);
+
+    let observables_rs = fs::read_to_string(observables_path).expect("read FDM observables owner");
+    let fields_rs =
+        fs::read_to_string(root.join("src/fdm/cpu/fields.rs")).expect("read FDM fields owner");
+    for symbol in [
+        "pub(crate) fn observe_vectors_ws_at_time(",
+        "pub(crate) fn observable_effective_field_from_vectors_ws_at_time(",
+    ] {
+        assert!(
+            observables_rs.contains(symbol),
+            "FDM observables owner is missing {symbol}"
+        );
+        assert!(
+            !fields_rs.contains(symbol),
+            "FDM observable {symbol} must be owned by fields/observables.rs"
+        );
+    }
+    assert!(
+        fields_rs.contains("fields/observables.rs") && fields_rs.contains("mod observables;"),
+        "FDM fields owner must include its dedicated observables module"
+    );
+}
+
+#[test]
 fn fdm_engine_root_does_not_keep_compatibility_shim_modules() {
     let root = crate_root();
     let lib_rs = fs::read_to_string(root.join("src/lib.rs")).expect("read src/lib.rs");

@@ -115,6 +115,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
                 .collect(),
             stages: builder.stages.clone(),
             study_pipeline: builder.study_pipeline.clone(),
+            table_autosave: builder.table_autosave.clone(),
             initial_state: builder.initial_state.clone(),
         },
         outputs: SceneOutputsState::default(),
@@ -238,6 +239,7 @@ pub fn scene_document_to_script_builder(
         domain_frame: None,
         stages: normalized_scene.study.stages.clone(),
         study_pipeline: normalized_scene.study.study_pipeline.clone(),
+        table_autosave: normalized_scene.study.table_autosave.clone(),
         initial_state: normalized_scene.study.initial_state.clone(),
         geometries,
         mesh_interfaces: normalized_scene
@@ -414,6 +416,9 @@ pub fn scene_document_to_script_builder_overrides(
         })).collect::<Vec<_>>(),
         "study_pipeline": builder.study_pipeline.as_ref().map(|document| {
             serde_json::to_value(document).unwrap_or(Value::Null)
+        }).unwrap_or(Value::Null),
+        "table_autosave": builder.table_autosave.as_ref().map(|table| {
+            serde_json::to_value(table).unwrap_or(Value::Null)
         }).unwrap_or(Value::Null),
         "initial_state": builder.initial_state.as_ref().map(|initial_state| serde_json::json!({
             "magnet_name": initial_state.magnet_name,
@@ -2116,6 +2121,21 @@ mod tests {
             entry
         );
     }
+
+    #[test]
+    fn scene_document_mesh_quality_defaults_match_python_mesh_options() {
+        let scene: SceneDocument = serde_json::from_value(serde_json::json!({
+            "version": "scene.v2"
+        }))
+        .expect("minimal scene should receive typed defaults");
+        let builder_mesh = ScriptBuilderMeshState::default();
+
+        assert!(scene.study.mesh_defaults.compute_quality);
+        assert!(scene.study.mesh_defaults.per_element_quality);
+        assert!(builder_mesh.compute_quality);
+        assert!(builder_mesh.per_element_quality);
+    }
+
     use crate::{
         MacroStageNode, PrimitiveStageNode, ScriptBuilderAdaptiveTimestepState,
         ScriptBuilderCurrentModuleState, ScriptBuilderDriveState, ScriptBuilderInitialState,
@@ -2299,6 +2319,7 @@ mod tests {
                     }),
                 ],
             }),
+            table_autosave: None,
             initial_state: Some(ScriptBuilderInitialState {
                 magnet_name: Some("flower".to_string()),
                 source_path: "/tmp/m0.ovf".to_string(),
@@ -2557,6 +2578,7 @@ mod tests {
         assert_eq!(round_trip.mesh, builder.mesh);
         assert_eq!(round_trip.universe, builder.universe);
         assert_eq!(round_trip.study_pipeline, builder.study_pipeline);
+        assert_eq!(round_trip.table_autosave, builder.table_autosave);
         assert_eq!(round_trip.mesh_interfaces, builder.mesh_interfaces);
         assert_eq!(round_trip.initial_state, builder.initial_state);
         assert_eq!(round_trip.current_modules, builder.current_modules);
@@ -2611,6 +2633,32 @@ mod tests {
                 .map(|document| document.version.as_str()),
             Some("study_pipeline.v1")
         );
+    }
+
+    #[test]
+    fn scene_document_preserves_table_autosave_through_builder_and_overrides() {
+        let expected: fullmag_ir::TableAutosaveIR = serde_json::from_value(serde_json::json!({
+            "kind": "table_autosave",
+            "table_id": "scene-table",
+            "every_steps": 3,
+            "quantities": ["step", "mx"],
+            "expressions": ["custom_quantity"]
+        }))
+        .expect("valid table autosave");
+        let mut scene = scene_document_from_script_builder(&sample_builder());
+        scene.study.table_autosave = Some(expected.clone());
+
+        let builder = scene_document_to_script_builder(&scene).expect("scene should validate");
+        let overrides = scene_document_to_script_builder_overrides(&scene)
+            .expect("scene overrides should serialize");
+        let round_trip = scene_document_from_script_builder(&builder);
+
+        assert_eq!(builder.table_autosave, Some(expected.clone()));
+        assert_eq!(
+            overrides["table_autosave"],
+            serde_json::to_value(&expected).unwrap()
+        );
+        assert_eq!(round_trip.study.table_autosave, Some(expected));
     }
 
     #[test]

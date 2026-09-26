@@ -12,9 +12,50 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 
 use crate::types::{
-    ArtifactIndex, BackendStatePayload, CommonSolverState, FieldRole, FmsCheckpoint,
-    FmsExportProfile, FmsRunManifest, FmsSessionManifest, FmsWorkspaceManifest, TensorDescriptor,
+    ArtifactIndex, BackendStatePayload, CommonSolverState, FieldRole, FmsArtifactCatalog,
+    FmsCheckpoint, FmsCoordinatorJournalDirection, FmsExportProfile, FmsPreparationReceipt,
+    FmsResourceLease, FmsRetryDecision, FmsRunCatalog, FmsRunIntent, FmsRunManifest,
+    FmsSessionManifest, FmsTaskAdmissionRecord, FmsTaskPreparationReceipt, FmsWorkspaceManifest,
+    TensorDescriptor,
 };
+
+/// The same claim-scoped continuity rules apply to stores and portable archives.
+pub(crate) fn validate_journal_streams(
+    entries: &[crate::types::FmsCoordinatorJournalEntry],
+) -> Result<()> {
+    let mut streams = HashMap::new();
+    for entry in entries {
+        entry.validate()?;
+        streams
+            .entry((
+                &entry.run_id,
+                &entry.task_id,
+                &entry.attempt_id,
+                entry.ownership_epoch,
+                entry.direction.as_str(),
+            ))
+            .or_insert_with(Vec::new)
+            .push(entry);
+    }
+    for entries in streams.values_mut() {
+        entries.sort_unstable_by_key(|entry| entry.sequence);
+        let token = &entries[0].lease_token;
+        let mut terminal = false;
+        for (index, entry) in entries.iter().enumerate() {
+            if entry.sequence != index as u64 + 1 {
+                bail!("coordinator journal sequence is not contiguous within task attempt");
+            }
+            if &entry.lease_token != token {
+                bail!("coordinator journal lease token changed within task attempt");
+            }
+            if terminal {
+                bail!("coordinator journal contains entries after terminal event");
+            }
+            terminal = entry.terminal;
+        }
+    }
+    Ok(())
+}
 
 /// The consumer of a reachability report.
 ///
@@ -434,6 +475,25 @@ impl StoreWalker {
             if run_path.exists() {
                 self.walk_run_file(&run_ref, &run_id)?;
             }
+            let intent_path = run_entry.path().join("run_intent.json");
+            if intent_path.exists() {
+                self.walk_run_intent_file(&intent_path, &run_id)?;
+            }
+            let catalog_path = run_entry.path().join("run_catalog.json");
+            if catalog_path.exists() {
+                self.walk_run_catalog_file(&catalog_path, &run_id)?;
+            }
+            let artifact_catalog_path = run_entry.path().join("artifact_catalog.json");
+            if artifact_catalog_path.exists() {
+                self.walk_artifact_catalog_file(&artifact_catalog_path, &run_id)?;
+            }
+            let preparation_receipt_path = run_entry.path().join("preparation_receipt.json");
+            if preparation_receipt_path.exists() {
+                self.walk_preparation_receipt_file(&preparation_receipt_path, &run_id)?;
+            }
+            self.walk_task_preparation_receipts(&run_entry.path(), &run_id)?;
+            self.walk_run_task_admissions(&run_entry.path(), &run_id)?;
+            self.walk_run_retry_decisions(&run_entry.path(), &run_id)?;
             let checkpoint_dir = run_entry.path().join("checkpoints");
             if checkpoint_dir.exists() {
                 if !checkpoint_dir.is_dir() {
@@ -464,6 +524,163 @@ impl StoreWalker {
                 }
             }
             self.walk_run_artifacts(&run_entry.path(), &run_id)?;
+            self.walk_run_resource_leases(&run_entry.path(), &run_id)?;
+            self.walk_run_coordinator_journal(&run_entry.path(), &run_id)?;
+            let inbox_root = crate::repository_path::checked_path(
+                &self.root,
+                &format!("runs/{run_id}/worker_inbox"),
+            )?;
+            if inbox_root.exists() {
+                for entry in read_directory(&inbox_root)? {
+                    if !entry.file_type()?.is_file() {
+                        bail!("unsafe worker inbox entry");
+                    }
+                    let relative = format!(
+                        "runs/{run_id}/worker_inbox/{}",
+                        entry.file_name().to_string_lossy()
+                    );
+                    let data = self.read_file(&entry.path(), &relative)?;
+                    let record: crate::FmsWorkerInboxRecord = parse_json(&data, &relative)?;
+                    if record.relative_path()? != relative {
+                        bail!("worker inbox path identity mismatch");
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn walk_run_resource_leases(&mut self, run_dir: &Path, run_id: &str) -> Result<()> {
+        let directory = run_dir.join("resource_leases");
+        if !directory.exists() {
+            return Ok(());
+        }
+        if !directory.is_dir() {
+            bail!(
+                "run resource_leases path is not a directory: {}",
+                directory.display()
+            )
+        }
+        for resource_entry in read_directory(&directory)? {
+            if resource_entry.file_type()?.is_symlink() || !resource_entry.file_type()?.is_dir() {
+                bail!(
+                    "unsafe resource lease root `{}`",
+                    resource_entry.path().display()
+                )
+            }
+            let resource_id = resource_entry.file_name().to_string_lossy().into_owned();
+            validate_component(&resource_id)
+                .with_context(|| format!("invalid resource lease resource `{resource_id}`"))?;
+            for lease_entry in read_directory(&resource_entry.path())? {
+                if lease_entry.file_type()?.is_symlink() || !lease_entry.file_type()?.is_file() {
+                    bail!(
+                        "unsafe resource lease entry `{}`",
+                        lease_entry.path().display()
+                    )
+                }
+                let file_name = lease_entry.file_name().to_string_lossy().into_owned();
+                let Some(lease_token) = file_name.strip_suffix(".json") else {
+                    bail!("resource lease entry must be JSON: `{file_name}`")
+                };
+                validate_component(lease_token)?;
+                let relative = format!("runs/{run_id}/resource_leases/{resource_id}/{file_name}");
+                let data = self.read_file(&lease_entry.path(), &relative)?;
+                let lease: FmsResourceLease = parse_json(&data, &relative)?;
+                lease.validate()?;
+                if lease.run_id != run_id
+                    || lease.resource_id != resource_id
+                    || lease.lease_token != lease_token
+                {
+                    bail!("resource lease `{relative}` contains mismatched path identity")
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn walk_run_retry_decisions(&mut self, run_dir: &Path, run_id: &str) -> Result<()> {
+        let directory = run_dir.join("retry_decisions");
+        if !directory.exists() {
+            return Ok(());
+        }
+        if !directory.is_dir() {
+            bail!(
+                "run retry_decisions path is not a directory: {}",
+                directory.display()
+            )
+        }
+        for entry in read_directory(&directory)? {
+            if entry.file_type()?.is_symlink() || !entry.file_type()?.is_file() {
+                bail!("unsafe retry decision entry `{}`", entry.path().display())
+            }
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            let Some(decision_id) = file_name.strip_suffix(".json") else {
+                bail!("retry decision entry must be JSON: `{file_name}`")
+            };
+            validate_component(decision_id)?;
+            let relative = format!("runs/{run_id}/retry_decisions/{file_name}");
+            let data = self.read_file(&entry.path(), &relative)?;
+            let decision: FmsRetryDecision = parse_json(&data, &relative)?;
+            decision.validate()?;
+            if decision.run_id != run_id || decision.decision_id != decision_id {
+                bail!("retry decision `{relative}` contains mismatched path identity")
+            }
+        }
+        Ok(())
+    }
+
+    fn walk_run_coordinator_journal(&mut self, run_dir: &Path, run_id: &str) -> Result<()> {
+        let root = run_dir.join("coordinator_journal");
+        if !root.exists() {
+            return Ok(());
+        }
+        if !root.is_dir() {
+            bail!(
+                "run coordinator_journal path is not a directory: {}",
+                root.display()
+            )
+        }
+        for direction in [
+            FmsCoordinatorJournalDirection::Command,
+            FmsCoordinatorJournalDirection::Event,
+        ] {
+            let directory = root.join(direction.as_str());
+            if !directory.exists() {
+                continue;
+            }
+            if !directory.is_dir() {
+                bail!("coordinator journal stream is not a directory")
+            }
+            let mut sequences = Vec::new();
+            for entry in read_directory(&directory)? {
+                if entry.file_type()?.is_symlink() || !entry.file_type()?.is_file() {
+                    bail!(
+                        "unsafe coordinator journal entry `{}`",
+                        entry.path().display()
+                    )
+                }
+                let file_name = entry.file_name().to_string_lossy().into_owned();
+                let Some(entry_id) = file_name.strip_suffix(".json") else {
+                    bail!("coordinator journal entry must be JSON: `{file_name}`")
+                };
+                validate_component(entry_id)?;
+                let relative = format!(
+                    "runs/{run_id}/coordinator_journal/{}/{file_name}",
+                    direction.as_str()
+                );
+                let data = self.read_file(&entry.path(), &relative)?;
+                let journal: crate::types::FmsCoordinatorJournalEntry =
+                    parse_json(&data, &relative)?;
+                journal.validate()?;
+                if journal.run_id != run_id
+                    || journal.direction != direction
+                    || journal.entry_id != entry_id
+                {
+                    bail!("coordinator journal `{relative}` contains mismatched path identity")
+                }
+                sequences.push(journal);
+            }
+            validate_journal_streams(&sequences)?;
         }
         Ok(())
     }
@@ -555,6 +772,195 @@ impl StoreWalker {
         }
         if let Some(reference) = run.artifact_index_ref.as_deref() {
             self.follow_reference(reference, relative, ReferenceKind::ArtifactIndex)?;
+        }
+        Ok(())
+    }
+
+    fn walk_run_intent_file(&mut self, path: &Path, expected_run_id: &str) -> Result<()> {
+        let relative = format!("runs/{expected_run_id}/run_intent.json");
+        let data = self.read_file(path, &relative)?;
+        let intent: FmsRunIntent = parse_json(&data, &relative)?;
+        intent.validate()?;
+        if intent.run_id != expected_run_id {
+            bail!(
+                "run intent `{relative}` contains mismatched run_id `{}`",
+                intent.run_id
+            )
+        }
+        if let Some(object_ref) = intent.definition_object_ref.as_deref() {
+            self.follow_store_object_ref(object_ref, &relative, "run definition")?;
+        }
+        if let Some(object_ref) = intent.study_object_ref.as_deref() {
+            self.follow_store_object_ref(object_ref, &relative, "run study")?;
+        }
+        if let Some(object_ref) = intent.study_catalog_object_ref.as_deref() {
+            self.follow_store_object_ref(object_ref, &relative, "run study catalog")?;
+        }
+        for object_ref in intent.asset_object_refs.values() {
+            self.follow_store_object_ref(object_ref, &relative, "run asset")?;
+        }
+        Ok(())
+    }
+
+    fn walk_run_catalog_file(&mut self, path: &Path, expected_run_id: &str) -> Result<()> {
+        let relative = format!("runs/{expected_run_id}/run_catalog.json");
+        let data = self.read_file(path, &relative)?;
+        let catalog: FmsRunCatalog = parse_json(&data, &relative)?;
+        catalog.validate()?;
+        if catalog.run_id != expected_run_id {
+            bail!(
+                "run catalog `{relative}` contains mismatched run_id `{}`",
+                catalog.run_id
+            )
+        }
+        Ok(())
+    }
+
+    fn walk_artifact_catalog_file(&mut self, path: &Path, expected_run_id: &str) -> Result<()> {
+        let relative = format!("runs/{expected_run_id}/artifact_catalog.json");
+        let data = self.read_file(path, &relative)?;
+        let catalog: FmsArtifactCatalog = parse_json(&data, &relative)?;
+        catalog.validate()?;
+        if catalog.run_id != expected_run_id {
+            bail!(
+                "artifact catalog `{relative}` contains mismatched run_id `{}`",
+                catalog.run_id
+            )
+        }
+        for entry in &catalog.entries {
+            if let Some(object_ref) = entry.object_ref.as_deref() {
+                self.follow_store_object_ref(object_ref, &relative, "artifact catalog")?;
+            }
+        }
+        Ok(())
+    }
+
+    fn walk_preparation_receipt_file(&mut self, path: &Path, expected_run_id: &str) -> Result<()> {
+        let relative = format!("runs/{expected_run_id}/preparation_receipt.json");
+        let data = self.read_file(path, &relative)?;
+        let receipt: FmsPreparationReceipt = parse_json(&data, &relative)?;
+        receipt.validate()?;
+        if receipt.run_id != expected_run_id {
+            bail!(
+                "preparation receipt `{relative}` contains mismatched run_id `{}`",
+                receipt.run_id
+            )
+        }
+        Ok(())
+    }
+
+    fn walk_task_preparation_receipts(
+        &mut self,
+        run_path: &Path,
+        expected_run_id: &str,
+    ) -> Result<()> {
+        let directory = run_path.join("task_preparation_receipts");
+        crate::repository_path::reject_link(&directory)?;
+        if !directory.exists() {
+            return Ok(());
+        }
+        let metadata = fs::symlink_metadata(&directory)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            bail!(
+                "unsafe task preparation receipt directory `{}`",
+                directory.display()
+            );
+        }
+        let entries = read_directory(&directory)?;
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let catalog_relative = format!("runs/{expected_run_id}/run_catalog.json");
+        let catalog_path = run_path.join("run_catalog.json");
+        let catalog_data = self.read_file(&catalog_path, &catalog_relative)?;
+        let catalog: FmsRunCatalog = parse_json(&catalog_data, &catalog_relative)?;
+        catalog.validate()?;
+        if catalog.run_id != expected_run_id {
+            bail!("task preparation receipt catalog identity does not match run path");
+        }
+        let intent_relative = format!("runs/{expected_run_id}/run_intent.json");
+        let intent_path = run_path.join("run_intent.json");
+        let intent_data = self.read_file(&intent_path, &intent_relative)?;
+        let intent: FmsRunIntent = parse_json(&intent_data, &intent_relative)?;
+        intent.validate()?;
+        for entry in entries {
+            crate::repository_path::reject_link(&entry.path())?;
+            if !entry.file_type()?.is_file() {
+                bail!("task preparation receipt entry must be a file");
+            }
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            let relative = format!("runs/{expected_run_id}/task_preparation_receipts/{file_name}");
+            let data = self.read_file(&entry.path(), &relative)?;
+            let receipt: FmsTaskPreparationReceipt = parse_json(&data, &relative)?;
+            if receipt.relative_path()? != relative {
+                bail!("task preparation receipt path identity mismatch");
+            }
+            receipt.validate_for_catalog(&catalog)?;
+            receipt.validate_for_run_intent(&intent)?;
+        }
+        Ok(())
+    }
+
+    fn walk_run_task_admissions(&mut self, run_path: &Path, expected_run_id: &str) -> Result<()> {
+        let root = run_path.join("task_admissions");
+        crate::repository_path::reject_link(&root)?;
+        if !root.exists() {
+            return Ok(());
+        }
+        let metadata = fs::symlink_metadata(&root)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            bail!("unsafe task admission directory `{}`", root.display());
+        }
+        let task_dirs = read_directory(&root)?;
+        if task_dirs.is_empty() {
+            return Ok(());
+        }
+        let catalog_relative = format!("runs/{expected_run_id}/run_catalog.json");
+        let catalog_path = run_path.join("run_catalog.json");
+        let catalog_data = self.read_file(&catalog_path, &catalog_relative)?;
+        let catalog: FmsRunCatalog = parse_json(&catalog_data, &catalog_relative)?;
+        catalog.validate()?;
+        if catalog.run_id != expected_run_id {
+            bail!("task admission catalog identity does not match run path");
+        }
+        for task_dir in task_dirs {
+            crate::repository_path::reject_link(&task_dir.path())?;
+            if !task_dir.file_type()?.is_dir() {
+                bail!("task admission task entry must be a directory");
+            }
+            let task_id = task_dir.file_name().to_string_lossy().into_owned();
+            validate_component(&task_id)?;
+            for entry in read_directory(&task_dir.path())? {
+                crate::repository_path::reject_link(&entry.path())?;
+                if !entry.file_type()?.is_file() {
+                    bail!("task admission record must be a regular file");
+                }
+                let file_name = entry.file_name().to_string_lossy().into_owned();
+                let Some(attempt_id) = file_name.strip_suffix(".json") else {
+                    bail!("task admission record must be JSON: `{file_name}`");
+                };
+                validate_component(attempt_id)?;
+                let relative = format!(
+                    "runs/{expected_run_id}/task_admissions/{task_id}/{file_name}"
+                );
+                let data = self.read_file(&entry.path(), &relative)?;
+                let record: FmsTaskAdmissionRecord = parse_json(&data, &relative)?;
+                record.validate()?;
+                if record.lease.run_id != expected_run_id
+                    || record.task.task_id != task_id
+                    || record.lease.attempt_id != attempt_id
+                {
+                    bail!("task admission identity does not match its path");
+                }
+                let current = catalog
+                    .tasks
+                    .iter()
+                    .find(|task| task.task_id == task_id)
+                    .context("task admission target is missing from the run catalog")?;
+                if current.input_fingerprint != record.task.input_fingerprint {
+                    bail!("task admission input fingerprint differs from the run catalog");
+                }
+            }
         }
         Ok(())
     }
@@ -910,6 +1316,28 @@ impl<'a> ArchiveWalker<'a> {
             }
         }
 
+        // Accepted runs may have a durable intent/catalog before a solver run
+        // manifest exists. Validate task receipts in that state as well so an
+        // unrooted archive document is never imported as an opaque control file.
+        let receipt_prefix = "runs/";
+        let receipt_marker = "/task_preparation_receipts/";
+        let receipt_runs = self
+            .documents
+            .keys()
+            .filter_map(|name| {
+                let rest = name.strip_prefix(receipt_prefix)?;
+                let (run_id, _) = rest.split_once(receipt_marker)?;
+                Some(run_id.to_string())
+            })
+            .collect::<HashSet<_>>();
+        for run_id in receipt_runs {
+            validate_component(&run_id)?;
+            let run_manifest_ref = format!("runs/{run_id}/run_manifest.json");
+            if !self.documents.contains_key(&run_manifest_ref) {
+                self.walk_task_preparation_receipts(&run_id)?;
+            }
+        }
+
         // Export planning may intentionally pass only the selected run
         // entries (without the top-level session manifest).  Checkpoints are
         // still roots in that view and must receive the same traversal.
@@ -1024,6 +1452,59 @@ impl<'a> ArchiveWalker<'a> {
         if let Some(reference) = run.artifact_index_ref.as_deref() {
             self.follow_reference(reference, run_ref, ReferenceKind::ArtifactIndex)?;
         }
+        let intent_ref = format!("runs/{expected_run_id}/run_intent.json");
+        if self.documents.contains_key(&intent_ref) {
+            self.walk_run_intent(&intent_ref, expected_run_id)?;
+        }
+        let catalog_ref = format!("runs/{expected_run_id}/run_catalog.json");
+        if self.documents.contains_key(&catalog_ref) {
+            self.walk_run_catalog(&catalog_ref, expected_run_id)?;
+        }
+        let artifact_catalog_ref = format!("runs/{expected_run_id}/artifact_catalog.json");
+        if self.documents.contains_key(&artifact_catalog_ref) {
+            self.walk_artifact_catalog(&artifact_catalog_ref, expected_run_id)?;
+        }
+        let preparation_receipt_ref = format!("runs/{expected_run_id}/preparation_receipt.json");
+        if self.documents.contains_key(&preparation_receipt_ref) {
+            self.walk_preparation_receipt(&preparation_receipt_ref, expected_run_id)?;
+        }
+        self.walk_task_preparation_receipts(expected_run_id)?;
+        self.walk_task_admissions(expected_run_id)?;
+        let lease_prefix = format!("runs/{expected_run_id}/resource_leases/");
+        let lease_names = self.documents.keys().cloned().collect::<Vec<_>>();
+        for name in lease_names {
+            if name.starts_with(&lease_prefix) && name.ends_with(".json") {
+                self.walk_resource_lease(&name, expected_run_id)?;
+            }
+        }
+        let retry_prefix = format!("runs/{expected_run_id}/retry_decisions/");
+        let retry_names = self.documents.keys().cloned().collect::<Vec<_>>();
+        for name in retry_names {
+            if name.starts_with(&retry_prefix) && name.ends_with(".json") {
+                self.walk_retry_decision(&name, expected_run_id)?;
+            }
+        }
+        let journal_prefix = format!("runs/{expected_run_id}/coordinator_journal/");
+        let journal_names = self.documents.keys().cloned().collect::<Vec<_>>();
+        let mut journal_entries = Vec::new();
+        for name in journal_names {
+            if name.starts_with(&journal_prefix) && name.ends_with(".json") {
+                journal_entries.push(self.walk_coordinator_journal(&name, expected_run_id)?);
+            }
+        }
+        validate_journal_streams(&journal_entries)?;
+        let inbox_prefix = format!("runs/{expected_run_id}/worker_inbox/");
+        for (name, data) in self
+            .documents
+            .iter()
+            .filter(|(name, _)| name.starts_with(&inbox_prefix))
+        {
+            let record: crate::FmsWorkerInboxRecord = parse_json(data, name)?;
+            if record.relative_path()? != *name {
+                bail!("worker inbox path identity mismatch");
+            }
+            self.report.file_refs.insert(name.clone());
+        }
         let prefix = format!("runs/{expected_run_id}/checkpoints/");
         let names = self.documents.keys().cloned().collect::<Vec<_>>();
         for name in names {
@@ -1036,6 +1517,307 @@ impl<'a> ArchiveWalker<'a> {
             }
         }
         Ok(())
+    }
+
+    fn walk_run_intent(&mut self, relative: &str, expected_run_id: &str) -> Result<()> {
+        let Some(data) = self.documents.get(relative) else {
+            return self.report.missing(format!(
+                "archive references missing run intent `{relative}`"
+            ));
+        };
+        let intent: FmsRunIntent = parse_json(data, relative)?;
+        intent.validate()?;
+        if intent.run_id != expected_run_id {
+            bail!(
+                "run intent `{relative}` contains mismatched run_id `{}`",
+                intent.run_id
+            )
+        }
+        if let Some(object_ref) = intent.definition_object_ref.as_deref() {
+            self.add_archive_payload(object_ref, relative, None)?;
+        }
+        if let Some(object_ref) = intent.study_object_ref.as_deref() {
+            self.add_archive_payload(object_ref, relative, None)?;
+        }
+        if let Some(object_ref) = intent.study_catalog_object_ref.as_deref() {
+            self.add_archive_payload(object_ref, relative, None)?;
+        }
+        for object_ref in intent.asset_object_refs.values() {
+            self.add_archive_payload(object_ref, relative, None)?;
+        }
+        self.report.file_refs.insert(relative.to_string());
+        Ok(())
+    }
+
+    fn walk_run_catalog(&mut self, relative: &str, expected_run_id: &str) -> Result<()> {
+        let Some(data) = self.documents.get(relative) else {
+            return self.report.missing(format!(
+                "archive references missing run catalog `{relative}`"
+            ));
+        };
+        let catalog: FmsRunCatalog = parse_json(data, relative)?;
+        catalog.validate()?;
+        if catalog.run_id != expected_run_id {
+            bail!(
+                "run catalog `{relative}` contains mismatched run_id `{}`",
+                catalog.run_id
+            )
+        }
+        self.report.file_refs.insert(relative.to_string());
+        Ok(())
+    }
+
+    fn walk_artifact_catalog(&mut self, relative: &str, expected_run_id: &str) -> Result<()> {
+        let Some(data) = self.documents.get(relative) else {
+            return self.report.missing(format!(
+                "archive references missing artifact catalog `{relative}`"
+            ));
+        };
+        let catalog: FmsArtifactCatalog = parse_json(data, relative)?;
+        catalog.validate()?;
+        if catalog.run_id != expected_run_id {
+            bail!(
+                "artifact catalog `{relative}` contains mismatched run_id `{}`",
+                catalog.run_id
+            )
+        }
+        for entry in &catalog.entries {
+            if let Some(object_ref) = entry.object_ref.as_deref() {
+                self.add_archive_payload(object_ref, relative, None)?;
+            }
+        }
+        self.report.file_refs.insert(relative.to_string());
+        Ok(())
+    }
+
+    fn walk_preparation_receipt(&mut self, relative: &str, expected_run_id: &str) -> Result<()> {
+        let Some(data) = self.documents.get(relative) else {
+            return self.report.missing(format!(
+                "archive references missing preparation receipt `{relative}`"
+            ));
+        };
+        let receipt: FmsPreparationReceipt = parse_json(data, relative)?;
+        receipt.validate()?;
+        if receipt.run_id != expected_run_id {
+            bail!(
+                "preparation receipt `{relative}` contains mismatched run_id `{}`",
+                receipt.run_id
+            )
+        }
+        self.report.file_refs.insert(relative.to_string());
+        Ok(())
+    }
+
+    fn walk_task_preparation_receipts(&mut self, expected_run_id: &str) -> Result<()> {
+        let prefix = format!("runs/{expected_run_id}/task_preparation_receipts/");
+        let mut names = self
+            .documents
+            .keys()
+            .filter(|name| name.starts_with(&prefix))
+            .cloned()
+            .collect::<Vec<_>>();
+        if names.is_empty() {
+            return Ok(());
+        }
+        names.sort();
+        let catalog_ref = format!("runs/{expected_run_id}/run_catalog.json");
+        let catalog_data = self.documents.get(&catalog_ref).with_context(|| {
+            format!("archive task preparation receipts require run catalog `{catalog_ref}`")
+        })?;
+        let catalog: FmsRunCatalog = parse_json(catalog_data, &catalog_ref)?;
+        catalog.validate()?;
+        if catalog.run_id != expected_run_id {
+            bail!("archive task preparation receipt catalog identity does not match run path");
+        }
+        let intent_ref = format!("runs/{expected_run_id}/run_intent.json");
+        let intent_data = self.documents.get(&intent_ref).with_context(|| {
+            format!("archive task preparation receipts require run intent `{intent_ref}`")
+        })?;
+        let intent: FmsRunIntent = parse_json(intent_data, &intent_ref)?;
+        intent.validate()?;
+        for relative in names {
+            let rest = relative
+                .strip_prefix(&prefix)
+                .context("invalid task preparation receipt archive path")?;
+            if rest.is_empty() || rest.contains('/') || !rest.ends_with(".json") {
+                bail!("invalid task preparation receipt archive path `{relative}`");
+            }
+            let data = self
+                .documents
+                .get(&relative)
+                .context("archive task preparation receipt disappeared")?;
+            let receipt: FmsTaskPreparationReceipt = parse_json(data, &relative)?;
+            if receipt.relative_path()? != relative {
+                bail!("task preparation receipt path identity mismatch");
+            }
+            receipt.validate_for_catalog(&catalog)?;
+            receipt.validate_for_run_intent(&intent)?;
+            self.report.file_refs.insert(relative);
+        }
+        Ok(())
+    }
+
+    fn walk_task_admissions(&mut self, expected_run_id: &str) -> Result<()> {
+        let prefix = format!("runs/{expected_run_id}/task_admissions/");
+        let mut names = self
+            .documents
+            .keys()
+            .filter(|name| name.starts_with(&prefix))
+            .cloned()
+            .collect::<Vec<_>>();
+        if names.is_empty() {
+            return Ok(());
+        }
+        names.sort();
+        let catalog_ref = format!("runs/{expected_run_id}/run_catalog.json");
+        let catalog_data = self.documents.get(&catalog_ref).with_context(|| {
+            format!("archive task admissions require run catalog `{catalog_ref}`")
+        })?;
+        let catalog: FmsRunCatalog = parse_json(catalog_data, &catalog_ref)?;
+        catalog.validate()?;
+        if catalog.run_id != expected_run_id {
+            bail!("archive task admission catalog identity does not match run path");
+        }
+        for relative in names {
+            let rest = relative
+                .strip_prefix(&prefix)
+                .context("invalid task admission archive path")?;
+            let Some((task_id, file_name)) = rest.split_once('/') else {
+                bail!("invalid task admission archive path `{relative}`");
+            };
+            let Some(attempt_id) = file_name.strip_suffix(".json") else {
+                bail!("task admission archive path must end in .json: `{relative}`");
+            };
+            if task_id.is_empty()
+                || task_id.contains('/')
+                || attempt_id.is_empty()
+                || attempt_id.contains('/')
+            {
+                bail!("invalid task admission archive path `{relative}`");
+            }
+            validate_component(task_id)?;
+            validate_component(attempt_id)?;
+            let data = self
+                .documents
+                .get(&relative)
+                .context("archive task admission disappeared")?;
+            let record: FmsTaskAdmissionRecord = parse_json(data, &relative)?;
+            record.validate()?;
+            if record.lease.run_id != expected_run_id
+                || record.task.task_id != task_id
+                || record.lease.attempt_id != attempt_id
+            {
+                bail!("task admission identity does not match archive path");
+            }
+            let current = catalog
+                .tasks
+                .iter()
+                .find(|task| task.task_id == task_id)
+                .context("archive task admission target is missing from the run catalog")?;
+            if current.input_fingerprint != record.task.input_fingerprint {
+                bail!("archive task admission input differs from the run catalog");
+            }
+            self.report.file_refs.insert(relative);
+        }
+        Ok(())
+    }
+
+    fn walk_resource_lease(&mut self, relative: &str, expected_run_id: &str) -> Result<()> {
+        let Some(data) = self.documents.get(relative) else {
+            return self.report.missing(format!(
+                "archive references missing resource lease `{relative}`"
+            ));
+        };
+        let rest = relative
+            .strip_prefix(&format!("runs/{expected_run_id}/resource_leases/"))
+            .ok_or_else(|| anyhow::anyhow!("invalid resource lease path `{relative}`"))?;
+        let Some((resource_id, token_file)) = rest.split_once('/') else {
+            bail!("invalid resource lease path `{relative}`")
+        };
+        let Some(lease_token) = token_file.strip_suffix(".json") else {
+            bail!("invalid resource lease path `{relative}`")
+        };
+        if resource_id.is_empty()
+            || resource_id.contains('/')
+            || lease_token.is_empty()
+            || lease_token.contains('/')
+        {
+            bail!("invalid resource lease path `{relative}`")
+        }
+        validate_component(resource_id)?;
+        validate_component(lease_token)?;
+        let lease: FmsResourceLease = parse_json(data, relative)?;
+        lease.validate()?;
+        if lease.run_id != expected_run_id
+            || lease.resource_id != resource_id
+            || lease.lease_token != lease_token
+        {
+            bail!("resource lease `{relative}` contains mismatched path identity")
+        }
+        self.report.file_refs.insert(relative.to_string());
+        Ok(())
+    }
+
+    fn walk_retry_decision(&mut self, relative: &str, expected_run_id: &str) -> Result<()> {
+        let Some(data) = self.documents.get(relative) else {
+            return self.report.missing(format!(
+                "archive references missing retry decision `{relative}`"
+            ));
+        };
+        let prefix = format!("runs/{expected_run_id}/retry_decisions/");
+        let Some(file_name) = relative.strip_prefix(&prefix) else {
+            bail!("invalid retry decision path `{relative}`")
+        };
+        let Some(decision_id) = file_name.strip_suffix(".json") else {
+            bail!("retry decision path must end in .json: `{relative}`")
+        };
+        if decision_id.is_empty() || decision_id.contains('/') {
+            bail!("invalid retry decision path `{relative}`")
+        }
+        validate_component(decision_id)?;
+        let decision: FmsRetryDecision = parse_json(data, relative)?;
+        decision.validate()?;
+        if decision.run_id != expected_run_id || decision.decision_id != decision_id {
+            bail!("retry decision `{relative}` contains mismatched path identity")
+        }
+        self.report.file_refs.insert(relative.to_string());
+        Ok(())
+    }
+
+    fn walk_coordinator_journal(
+        &mut self,
+        relative: &str,
+        expected_run_id: &str,
+    ) -> Result<crate::types::FmsCoordinatorJournalEntry> {
+        let Some(data) = self.documents.get(relative) else {
+            bail!("archive references missing coordinator journal entry `{relative}`");
+        };
+        let prefix = format!("runs/{expected_run_id}/coordinator_journal/");
+        let Some(rest) = relative.strip_prefix(&prefix) else {
+            bail!("invalid coordinator journal path `{relative}`")
+        };
+        let Some((direction, file_name)) = rest.split_once('/') else {
+            bail!("invalid coordinator journal path `{relative}`")
+        };
+        let direction = match direction {
+            "command" => FmsCoordinatorJournalDirection::Command,
+            "event" => FmsCoordinatorJournalDirection::Event,
+            _ => bail!("unknown coordinator journal direction `{direction}`"),
+        };
+        let Some(entry_id) = file_name.strip_suffix(".json") else {
+            bail!("coordinator journal path must end in .json: `{relative}`")
+        };
+        validate_component(entry_id)?;
+        let journal: crate::types::FmsCoordinatorJournalEntry = parse_json(data, relative)?;
+        journal.validate()?;
+        if journal.run_id != expected_run_id
+            || journal.direction != direction
+            || journal.entry_id != entry_id
+        {
+            bail!("coordinator journal `{relative}` contains mismatched path identity")
+        }
+        self.report.file_refs.insert(relative.to_string());
+        Ok(journal)
     }
 
     fn walk_checkpoint(

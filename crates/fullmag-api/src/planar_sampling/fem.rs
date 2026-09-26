@@ -2,8 +2,8 @@ use crate::error::ApiError;
 use fullmag_ir::{EmptyPolicyIR, PlanarOperatorIR, PlanarReductionIR};
 
 use super::fdm::finish_reduction;
-use super::frame::{cross, dot, ResolvedFrame};
-use super::geometry::{integrate_clipped_convex_element, projected_pixel_bounds, LinearVertex};
+use super::frame::{ResolvedFrame, cross, dot};
+use super::geometry::{LinearVertex, integrate_clipped_convex_element, projected_pixel_bounds};
 use super::provenance;
 use super::reduction::{AccumulatorReduction, WeightedAccumulator};
 use super::surface;

@@ -1,9 +1,9 @@
 use fullmag_ir::{
-    BackendPlanIR, BackendTarget, PhysicsGraphModuleProvenanceIR, PhysicsGraphModuleRealizationIR,
-    PhysicsGraphRealizationProvenanceIR, PhysicsGraphRealizationStateIR,
-    PhysicsGraphRuntimeProvenanceIR, PrescribedSotFormulaIR, PrescribedSotLegacyDriveIR,
-    PrescribedSotV1DriveIR, ProblemIR, SpinTorqueModuleIR, PHYSICS_GRAPH_REALIZATION_SCHEMA,
-    PHYSICS_GRAPH_RUNTIME_PROVENANCE_SCHEMA,
+    BackendPlanIR, BackendTarget, PHYSICS_GRAPH_REALIZATION_SCHEMA,
+    PHYSICS_GRAPH_RUNTIME_PROVENANCE_SCHEMA, PhysicsGraphModuleProvenanceIR,
+    PhysicsGraphModuleRealizationIR, PhysicsGraphRealizationProvenanceIR,
+    PhysicsGraphRealizationStateIR, PhysicsGraphRuntimeProvenanceIR, PrescribedSotFormulaIR,
+    PrescribedSotLegacyDriveIR, PrescribedSotV1DriveIR, ProblemIR, SpinTorqueModuleIR,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -1697,10 +1697,12 @@ mod tests {
             shifted_realization[0].state,
             PhysicsGraphRealizationStateIR::SemanticOnly
         );
-        assert!(shifted_realization[0]
-            .reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains("common-grid cell mask")));
+        assert!(
+            shifted_realization[0]
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("common-grid cell mask"))
+        );
 
         let aligned = multilayer_plan(vec![
             layer("identity", [0.0, 0.0, 0.0], Some(vec![true, false])),
@@ -1714,9 +1716,11 @@ mod tests {
             PhysicsGraphRealizationStateIR::Resolved
         );
         assert_eq!(aligned_realization[0].realized_cell_count, 2);
-        assert!(aligned_realization[0]
-            .realized_fdm_mask_digest
-            .as_deref()
-            .is_some_and(|digest| digest.starts_with("sha256:")));
+        assert!(
+            aligned_realization[0]
+                .realized_fdm_mask_digest
+                .as_deref()
+                .is_some_and(|digest| digest.starts_with("sha256:"))
+        );
     }
 }

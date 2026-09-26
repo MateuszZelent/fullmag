@@ -17,6 +17,17 @@
 //! ├─ runs/
 //! │  └─ <run_id>/
 //! │     ├─ run_manifest.json
+//! │     ├─ run_intent.json
+//! │     ├─ run_catalog.json
+//! │     ├─ artifact_catalog.json
+//! │     ├─ preparation_receipt.json
+//! │     ├─ task_preparation_receipts/
+//! │     │  └─ <task_id>.json
+//! │     ├─ task_admissions/
+//! │     │  └─ <task_id>/<attempt_id>.json
+//! │     ├─ resource_leases/
+//! │     ├─ retry_decisions/
+//! │     ├─ coordinator_journal/
 //! │     ├─ checkpoints/
 //! │     └─ artifacts/
 //! └─ objects/
@@ -333,6 +344,115 @@ fn plan_run_entries(
                 data,
             });
         }
+        let run_intent = run_dir.join("run_intent.json");
+        if let Some(data) = read_store_file_if_exists(store_root, canonical_root, &run_intent)? {
+            entries.push(PackEntry {
+                archive_path: format!("runs/{run_id}/run_intent.json"),
+                data,
+            });
+        }
+        let run_catalog = run_dir.join("run_catalog.json");
+        if let Some(data) = read_store_file_if_exists(store_root, canonical_root, &run_catalog)? {
+            entries.push(PackEntry {
+                archive_path: format!("runs/{run_id}/run_catalog.json"),
+                data,
+            });
+        }
+        let artifact_catalog = run_dir.join("artifact_catalog.json");
+        if let Some(data) =
+            read_store_file_if_exists(store_root, canonical_root, &artifact_catalog)?
+        {
+            entries.push(PackEntry {
+                archive_path: format!("runs/{run_id}/artifact_catalog.json"),
+                data,
+            });
+        }
+        let preparation_receipt = run_dir.join("preparation_receipt.json");
+        if let Some(data) =
+            read_store_file_if_exists(store_root, canonical_root, &preparation_receipt)?
+        {
+            entries.push(PackEntry {
+                archive_path: format!("runs/{run_id}/preparation_receipt.json"),
+                data,
+            });
+        }
+        let task_receipt_dir = run_dir.join("task_preparation_receipts");
+        if store_source_exists(&task_receipt_dir)? {
+            validate_store_source(store_root, canonical_root, &task_receipt_dir, true)?;
+            let mut receipt_files = Vec::new();
+            for entry in fs::read_dir(&task_receipt_dir)? {
+                let entry = entry?;
+                crate::repository_path::reject_link(&entry.path())?;
+                if !entry.file_type()?.is_file() {
+                    bail!("task preparation receipt entry must be a file");
+                }
+                receipt_files.push(entry);
+            }
+            if !receipt_files.is_empty() {
+                let catalog_path = run_dir.join("run_catalog.json");
+                let catalog_data =
+                    read_store_file_if_exists(store_root, canonical_root, &catalog_path)?
+                        .context("task preparation receipts require a durable run catalog")?;
+                let catalog: FmsRunCatalog = serde_json::from_slice(&catalog_data)
+                    .context("task preparation receipt run catalog is not typed")?;
+                catalog.validate()?;
+                if catalog.run_id != run_id {
+                    bail!("task preparation receipt catalog identity does not match run path");
+                }
+                let intent_path = run_dir.join("run_intent.json");
+                let intent_data =
+                    read_store_file_if_exists(store_root, canonical_root, &intent_path)?
+                        .context("task preparation receipts require an accepted run intent")?;
+                let intent: FmsRunIntent = serde_json::from_slice(&intent_data)
+                    .context("task preparation receipt run intent is not typed")?;
+                intent.validate()?;
+                for entry in receipt_files {
+                    let file_name = entry.file_name().to_string_lossy().into_owned();
+                    let archive_path =
+                        format!("runs/{run_id}/task_preparation_receipts/{file_name}");
+                    validate_portable_namespace_path(&archive_path)?;
+                    let data =
+                        read_store_file_if_exists(store_root, canonical_root, &entry.path())?
+                            .context("task preparation receipt disappeared during export")?;
+                    let receipt: FmsTaskPreparationReceipt = serde_json::from_slice(&data)
+                        .context("task preparation receipt is not typed")?;
+                    if receipt.relative_path()? != archive_path {
+                        bail!("task preparation receipt path identity mismatch");
+                    }
+                    receipt.validate_for_catalog(&catalog)?;
+                    receipt.validate_for_run_intent(&intent)?;
+                    entries.push(PackEntry { archive_path, data });
+                }
+            }
+        }
+        plan_resource_lease_entries(store_root, canonical_root, run_id, &mut entries)?;
+        plan_task_admission_entries(store_root, canonical_root, run_id, &mut entries)?;
+        plan_retry_decision_entries(store_root, canonical_root, run_id, &mut entries)?;
+        plan_coordinator_journal_entries(store_root, canonical_root, run_id, &mut entries)?;
+        let inbox_root = store_root.join("runs").join(run_id).join("worker_inbox");
+        if store_source_exists(&inbox_root)? {
+            for file in fs::read_dir(&inbox_root)? {
+                let file = file?;
+                crate::repository_path::reject_link(&file.path())?;
+                if !file.file_type()?.is_file() {
+                    bail!("worker inbox entry must be a file");
+                }
+                let archive_path = format!(
+                    "runs/{run_id}/worker_inbox/{}",
+                    file.file_name().to_string_lossy()
+                );
+                validate_portable_namespace_path(&archive_path)?;
+                if let Some(data) =
+                    read_store_file_if_exists(store_root, canonical_root, &file.path())?
+                {
+                    let record: crate::FmsWorkerInboxRecord = serde_json::from_slice(&data)?;
+                    if record.relative_path()? != archive_path {
+                        bail!("worker inbox path identity mismatch");
+                    }
+                    entries.push(PackEntry { archive_path, data });
+                }
+            }
+        }
         if profile.needs_checkpoints() {
             plan_checkpoint_entries(store_root, canonical_root, run_id, &mut entries)?;
         }
@@ -341,6 +461,202 @@ fn plan_run_entries(
         }
     }
     Ok(entries)
+}
+
+fn plan_resource_lease_entries(
+    store_root: &Path,
+    canonical_root: &Path,
+    run_id: &str,
+    entries: &mut Vec<PackEntry>,
+) -> Result<()> {
+    let root = store_root.join("runs").join(run_id).join("resource_leases");
+    if !store_source_exists(&root)? {
+        return Ok(());
+    }
+    if !root.is_dir() {
+        bail!(
+            "resource_leases path is not a directory: {}",
+            root.display()
+        );
+    }
+    for resource_entry in fs::read_dir(&root)? {
+        let resource_entry = resource_entry?;
+        crate::repository_path::reject_link(&resource_entry.path())?;
+        if !resource_entry.file_type()?.is_dir() {
+            bail!("resource lease resource entry is not a directory");
+        }
+        let resource_id = resource_entry.file_name().to_string_lossy().into_owned();
+        crate::repository_path::validate_store_id(&resource_id)?;
+        for lease_entry in fs::read_dir(resource_entry.path())? {
+            let lease_entry = lease_entry?;
+            crate::repository_path::reject_link(&lease_entry.path())?;
+            if !lease_entry.file_type()?.is_file() {
+                bail!("resource lease record is not a file");
+            }
+            let file_name = lease_entry.file_name().to_string_lossy().into_owned();
+            let Some(lease_token) = file_name.strip_suffix(".json") else {
+                bail!("resource lease record must be JSON: `{file_name}`");
+            };
+            crate::repository_path::validate_store_id(lease_token)?;
+            let archive_path = format!("runs/{run_id}/resource_leases/{resource_id}/{file_name}");
+            validate_portable_namespace_path(&archive_path)?;
+            if let Some(data) =
+                read_store_file_if_exists(store_root, canonical_root, &lease_entry.path())?
+            {
+                entries.push(PackEntry { archive_path, data });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn plan_retry_decision_entries(
+    store_root: &Path,
+    canonical_root: &Path,
+    run_id: &str,
+    entries: &mut Vec<PackEntry>,
+) -> Result<()> {
+    let root = store_root.join("runs").join(run_id).join("retry_decisions");
+    if !store_source_exists(&root)? {
+        return Ok(());
+    }
+    if !root.is_dir() {
+        bail!(
+            "retry_decisions path is not a directory: {}",
+            root.display()
+        );
+    }
+    for decision_entry in fs::read_dir(&root)? {
+        let decision_entry = decision_entry?;
+        crate::repository_path::reject_link(&decision_entry.path())?;
+        if !decision_entry.file_type()?.is_file() {
+            bail!("retry decision entry is not a file");
+        }
+        let file_name = decision_entry.file_name().to_string_lossy().into_owned();
+        let Some(decision_id) = file_name.strip_suffix(".json") else {
+            bail!("retry decision record must be JSON: `{file_name}`");
+        };
+        crate::repository_path::validate_store_id(decision_id)?;
+        let archive_path = format!("runs/{run_id}/retry_decisions/{file_name}");
+        validate_portable_namespace_path(&archive_path)?;
+        if let Some(data) =
+            read_store_file_if_exists(store_root, canonical_root, &decision_entry.path())?
+        {
+            entries.push(PackEntry { archive_path, data });
+        }
+    }
+    Ok(())
+}
+
+fn plan_task_admission_entries(
+    store_root: &Path,
+    canonical_root: &Path,
+    run_id: &str,
+    entries: &mut Vec<PackEntry>,
+) -> Result<()> {
+    let root = store_root
+        .join("runs")
+        .join(run_id)
+        .join("task_admissions");
+    if !store_source_exists(&root)? {
+        return Ok(());
+    }
+    if !root.is_dir() {
+        bail!("task_admissions path is not a directory: {}", root.display());
+    }
+    for task_entry in fs::read_dir(&root)? {
+        let task_entry = task_entry?;
+        crate::repository_path::reject_link(&task_entry.path())?;
+        if !task_entry.file_type()?.is_dir() {
+            bail!("task admission task entry is not a directory");
+        }
+        let task_id = task_entry.file_name().to_string_lossy().into_owned();
+        crate::repository_path::validate_store_id(&task_id)?;
+        for record_entry in fs::read_dir(task_entry.path())? {
+            let record_entry = record_entry?;
+            crate::repository_path::reject_link(&record_entry.path())?;
+            if !record_entry.file_type()?.is_file() {
+                bail!("task admission record is not a file");
+            }
+            let file_name = record_entry.file_name().to_string_lossy().into_owned();
+            let Some(attempt_id) = file_name.strip_suffix(".json") else {
+                bail!("task admission record must be JSON: `{file_name}`");
+            };
+            crate::repository_path::validate_store_id(attempt_id)?;
+            let archive_path = format!(
+                "runs/{run_id}/task_admissions/{task_id}/{file_name}"
+            );
+            validate_portable_namespace_path(&archive_path)?;
+            if let Some(data) =
+                read_store_file_if_exists(store_root, canonical_root, &record_entry.path())?
+            {
+                let record: FmsTaskAdmissionRecord = serde_json::from_slice(&data)
+                    .context("task admission record is not typed")?;
+                record.validate()?;
+                if record.lease.run_id != run_id
+                    || record.task.task_id != task_id
+                    || record.lease.attempt_id != attempt_id
+                {
+                    bail!("task admission identity does not match its path");
+                }
+                entries.push(PackEntry { archive_path, data });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn plan_coordinator_journal_entries(
+    store_root: &Path,
+    canonical_root: &Path,
+    run_id: &str,
+    entries: &mut Vec<PackEntry>,
+) -> Result<()> {
+    let root = store_root
+        .join("runs")
+        .join(run_id)
+        .join("coordinator_journal");
+    if !store_source_exists(&root)? {
+        return Ok(());
+    }
+    if !root.is_dir() {
+        bail!(
+            "coordinator_journal path is not a directory: {}",
+            root.display()
+        );
+    }
+    for direction_entry in fs::read_dir(&root)? {
+        let direction_entry = direction_entry?;
+        crate::repository_path::reject_link(&direction_entry.path())?;
+        if !direction_entry.file_type()?.is_dir() {
+            bail!("coordinator journal stream is not a directory");
+        }
+        let direction = direction_entry.file_name().to_string_lossy().into_owned();
+        crate::repository_path::validate_store_id(&direction)?;
+        if !matches!(direction.as_str(), "command" | "event") {
+            bail!("unknown coordinator journal direction `{direction}`");
+        }
+        for journal_entry in fs::read_dir(direction_entry.path())? {
+            let journal_entry = journal_entry?;
+            crate::repository_path::reject_link(&journal_entry.path())?;
+            if !journal_entry.file_type()?.is_file() {
+                bail!("coordinator journal entry is not a file");
+            }
+            let file_name = journal_entry.file_name().to_string_lossy().into_owned();
+            let Some(entry_id) = file_name.strip_suffix(".json") else {
+                bail!("coordinator journal record must be JSON: `{file_name}`");
+            };
+            crate::repository_path::validate_store_id(entry_id)?;
+            let archive_path = format!("runs/{run_id}/coordinator_journal/{direction}/{file_name}");
+            validate_portable_namespace_path(&archive_path)?;
+            if let Some(data) =
+                read_store_file_if_exists(store_root, canonical_root, &journal_entry.path())?
+            {
+                entries.push(PackEntry { archive_path, data });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn parse_run_ref(run_ref: &str) -> Result<&str> {

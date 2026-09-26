@@ -46,10 +46,18 @@ pub async fn get_mesh_region_membership(
     Path(region_id): Path<String>,
     Query(query): Query<MeshRegionMembershipQuery>,
 ) -> Result<Json<MeshRegionMembershipResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
     let mesh = snapshot
         .fem_mesh
         .as_ref()
@@ -88,10 +96,18 @@ pub async fn get_mesh_region_membership(
 pub async fn get_mesh_region_memberships(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<MeshRegionMembershipListResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
     let mesh = snapshot
         .fem_mesh
         .as_ref()

@@ -138,11 +138,8 @@ fn bound_dynamic_structure_factor(
     if original_nf.saturating_mul(original_nk) <= max_cells {
         return resource;
     }
-    let (f_indices, k_indices) = dynamic_structure_factor_axis_indices(
-        original_nf,
-        original_nk,
-        max_cells,
-    );
+    let (f_indices, k_indices) =
+        dynamic_structure_factor_axis_indices(original_nf, original_nk, max_cells);
     let project = |values: &[f64]| {
         f_indices
             .iter()
@@ -216,10 +213,15 @@ async fn read_typed_artifact<T>(
 where
     T: for<'de> Deserialize<'de>,
 {
+    let request_context = crate::capture_current_live_request_context(state).await?;
     let artifact_dir = require_current_live_artifact_dir(state).await?;
-    serde_json::from_value(read_json_artifact_value(&artifact_dir, relative_path)?)
+    let resource = serde_json::from_value(read_json_artifact_value(&artifact_dir, relative_path)?)
         .map(Json)
-        .map_err(|error| ApiError::internal(format!("invalid {relative_path} artifact: {error}")))
+        .map_err(|error| {
+            ApiError::internal(format!("invalid {relative_path} artifact: {error}"))
+        })?;
+    crate::validate_current_live_request_context(state, &request_context).await?;
+    Ok(resource)
 }
 
 #[cfg(test)]

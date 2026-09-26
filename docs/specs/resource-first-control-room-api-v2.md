@@ -28,6 +28,32 @@ The older public `/v1/live/current/...` tree has been removed. Only
 
 ## 2. Canonical route families
 
+### Warunek oczekiwanej sesji HTTP (P3a)
+
+Żądania powiązane z sesją mogą przekazać `x-fullmag-session-scope`:
+`session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`.
+Wszystkie trzy wartości pochodzą z tego samego odczytu statusu. `session_epoch`
+zachowuje tożsamość naukową, a `request_scope_epoch` oznacza instancję API i
+monotoniczną zmianę bieżącej sesji. Fasada przenosi
+`RequestOptions.sessionScopeKey` do nagłówka dla JSON i binary; nie dodaje
+go do URL. Niezgodność celu skutkuje `409 request_context_stale` przed
+mutacją. Niepoprawny format jest błędem żądania.
+
+Backend wiąże oczekiwaną tożsamość z immutable request context pod blokadą
+transition. Ponowne otwarcie tego samego `session_id` i `session_epoch` otrzymuje
+inny `request_scope_epoch`; stary nagłówek dostaje 409. Klucze cache, decode
+i generacja viewportu używają tej samej inkarnacji. Brak nagłówka pozostaje
+kompatybilny z bootstrapem i klientami
+w migracji; nie jest dowodem ochrony wieloetapowej operacji. Szczegóły
+ograniczeń i usunięcia adaptera: ADR 0011, uzupełnienie P3a z 22.09.2026.
+
+WebSocket nie przenosi scope w URL. Pierwszy `hello.payload.request_scope_epoch`
+jest wymagany i odpowiada inkarnacji przechwyconej przy upgrade. Klient ze
+znanym statusem nie przetwarza kolejnych zdarzeń przed zgodnym `hello`; przy
+niezgodności zamyka połączenie i ponownie pobiera status przez HTTP. Serwer
+zamyka strumień po przejściu do innej inkarnacji. Zdarzenia po `hello` są
+związane z tym połączeniem, a nie osobnym tokenem w każdym rekordzie.
+
 The API is organized by platform concepts, not by frontend screens:
 
 | Family | Responsibility |
@@ -45,6 +71,22 @@ The API is organized by platform concepts, not by frontend screens:
 | `diagnostics` | GPU/CPU telemetry, engine logs, and revisioned solver/publisher performance diagnostics |
 
 The default frontend base path is `/v2/sessions/current`.
+
+Jawne operacje `POST /v2/persistence/projects/{project_id}/runs` i
+`POST /v2/persistence/projects/{project_id}/runs/{run_id}/materialization`
+zwracają `409` z kodem `run_store_busy`, jeżeli magazyn ma aktywnego pisarza.
+Klient może ponowić to samo żądanie po zakończeniu konkurencyjnej operacji;
+Submit zachowuje ten sam klucz idempotencji. Konflikt blokady nie oznacza
+błędnego payloadu ani przyjęcia nowego runu. Nie wolno omijać blokady,
+zmieniać klucza ani tworzyć zastępczego magazynu w ramach takiego ponowienia.
+
+Recovery bieżącej sesji: `GET` i `DELETE /v2/sessions/current/persistence/recovery`
+obejmują wyłącznie snapshot o `session_id` przechwyconej aktywnej sesji.
+Walidacja kontekstu i operacja pozostają pod blokadą zmiany sesji. Usuwanie
+waliduje tożsamość dokumentu pod blokadą pisarza; niezgodna tożsamość lub schemat
+powodują błąd bez usunięcia. Pole `cleared` liczy rzeczywiście usunięty snapshot
+(0 lub 1). Globalne operacje magazynu używane poza tym endpointem zachowują
+oddzielny zakres. Kształt odpowiedzi OpenAPI pozostaje bez zmian.
 
 ## 3. Contract rules
 
@@ -231,6 +273,32 @@ endpoints are not runtime-session import or restore aliases; durable Save,
 host file selection, and the UI document lifecycle remain separate follow-up
 work.
 
+The durable run read model is `GET
+/v2/persistence/projects/{project_id}/runs/{run_id}`. It reads the accepted
+RunIntent and optional task catalog from managed project storage, verifies the
+pinned project/run identity, and exposes requested execution plus a typed,
+revisioned task summary. `catalog_state=pending_materialization` means no task
+catalog exists; `materialized` means task identities are durable, not that a
+worker has started. It does not read or change the current runtime session.
+
+`POST /v2/persistence/projects/{project_id}/runs` accepts the exact project
+archive, `run_intent.v1`, current `study_plan.v2` (with compatible
+`study_plan.v1` reads), and `study_problem_catalog.v1` JSON objects plus an
+explicit asset path map. Rust validates each versioned payload before it enters
+durable storage. Lowering rejects TimeEvolution without an explicit positive
+`until_seconds`. OpenAPI constrains each payload root to an
+object and generated TypeScript represents it as `Record<string, unknown>`;
+the detailed nested `ProblemIR` schema is not yet expanded by the API contract.
+
+`GET /v2/persistence/projects/{project_id}/runs` lists accepted run intents for
+that project, newest first. `limit` is 1–100 (default 50), and `next_cursor`
+is the last `run_id` returned; passing it as `cursor` reads the next page.
+An unknown cursor is a request error. The list exposes catalog state and task
+count without implying execution. Control Room reads it as a project-keyed
+resource in Study after a project document is opened; switching projects
+changes the resource identity. This source-level read path still needs HTTP
+and restart verification, and the current store scans intents before paging.
+
 `RestoreRuntime` is an explicit operation over a compatible checkpoint. It
 builds a candidate runtime, validates primary carriers and runtime identity,
 then performs one atomic swap or leaves the active runtime unchanged. Opening a
@@ -404,6 +472,13 @@ PATCH  /v2/sessions/current/model/planar-monitors/{monitor_id}
 DELETE /v2/sessions/current/model/planar-monitors/{monitor_id}
 POST   /v2/sessions/current/model/planar-monitors/{monitor_id}/duplicate
 ```
+
+The full `model/scene` and `committed_scene` resources preserve the enclosing
+`SceneDocument.monitors.planar` collection and `study.table_autosave` value.
+Dedicated monitor routes are projections over that same scene state; converting
+the complete scene to an API resource must not drop either field. Scene v2
+deserialization rejects unknown top-level and study fields so newer physical
+authoring data cannot be accepted and silently erased by an older server.
 
 The planar visualization source is a separate session resource and never uses
 `monitor_id = "default"` as a sentinel:

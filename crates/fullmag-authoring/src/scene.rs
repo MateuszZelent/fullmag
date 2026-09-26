@@ -11,6 +11,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct SceneDocument {
     #[serde(default = "default_scene_version")]
     pub version: String,
@@ -279,6 +280,7 @@ impl Default for TextureTransform3D {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct SceneCurrentModulesState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub modules: Vec<ScriptBuilderCurrentModuleState>,
@@ -287,6 +289,7 @@ pub struct SceneCurrentModulesState {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct SceneStudyState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<String>,
@@ -328,6 +331,8 @@ pub struct SceneStudyState {
     pub stages: Vec<ScriptBuilderStageState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub study_pipeline: Option<StudyPipelineDocument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table_autosave: Option<fullmag_ir::TableAutosaveIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_state: Option<ScriptBuilderInitialState>,
 }
@@ -823,8 +828,8 @@ fn default_mesh() -> ScriptBuilderMeshState {
         smoothing_steps: 1,
         optimize: String::new(),
         optimize_iterations: 1,
-        compute_quality: false,
-        per_element_quality: false,
+        compute_quality: true,
+        per_element_quality: true,
         interface_hmax: None,
         interface_thickness: None,
         transition_distance: None,
@@ -1224,6 +1229,99 @@ mod spin_authoring_tests {
             serde_json::from_value(value).expect("Python FDM scene must accept null per_magnet");
         let fdm = scene.study.fdm.expect("FDM state");
         assert!(fdm.per_object_grid.is_empty());
+    }
+
+    #[test]
+    fn scene_document_round_trips_study_table_autosave() {
+        let value = serde_json::json!({
+            "version": "scene.v2",
+            "study": {
+                "table_autosave": {
+                    "kind": "table_autosave",
+                    "table_id": "scene-table",
+                    "every_steps": 3,
+                    "quantities": ["step", "mx"],
+                    "expressions": ["custom_quantity"]
+                }
+            }
+        });
+
+        let scene: SceneDocument =
+            serde_json::from_value(value.clone()).expect("typed table autosave scene");
+        let serialized = serde_json::to_value(scene).expect("serialize typed scene");
+
+        assert_eq!(
+            serialized["study"]["table_autosave"],
+            value["study"]["table_autosave"]
+        );
+    }
+
+    #[test]
+    fn scene_document_rejects_unrecognized_versioned_fields() {
+        for value in [
+            serde_json::json!({"version": "scene.v2", "future_physics": {"D": 1.0}}),
+            serde_json::json!({"version": "scene.v2", "study": {"future_solver_policy": "new-policy"}}),
+            serde_json::json!({"version": "scene.v2", "current_modules": {"future_policy": "new-policy"}}),
+            serde_json::json!({
+                "version": "scene.v2",
+                "current_modules": {
+                    "modules": [{
+                        "kind": "antenna",
+                        "name": "drive",
+                        "solver": "fdm",
+                        "air_box_factor": 1.0,
+                        "antenna_kind": "wire",
+                        "drive": {"current_a": 0.0},
+                        "future_policy": "new-policy"
+                    }]
+                }
+            }),
+            serde_json::json!({
+                "version": "scene.v2",
+                "current_modules": {
+                    "modules": [{
+                        "kind": "antenna",
+                        "name": "drive",
+                        "solver": "fdm",
+                        "air_box_factor": 1.0,
+                        "antenna_kind": "wire",
+                        "drive": {"current_a": 0.0, "future_policy": "new-policy"}
+                    }]
+                }
+            }),
+            serde_json::json!({
+                "version": "scene.v2",
+                "current_modules": {
+                    "excitation_analysis": {
+                        "source": "drive",
+                        "method": "dispersion",
+                        "propagation_axis": [1.0, 0.0, 0.0],
+                        "samples": 8,
+                        "future_policy": "new-policy"
+                    }
+                }
+            }),
+        ] {
+            assert!(
+                serde_json::from_value::<SceneDocument>(value).is_err(),
+                "unrecognized scene.v2 fields must not be silently discarded"
+            );
+        }
+    }
+
+    #[test]
+    fn scene_document_rejects_malformed_current_module_states() {
+        for value in [
+            serde_json::json!({"version": "scene.v2", "current_modules": null}),
+            serde_json::json!({"version": "scene.v2", "current_modules": {"modules": null}}),
+            serde_json::json!({"version": "scene.v2", "current_modules": {"modules": [null]}}),
+            serde_json::json!({"version": "scene.v2", "current_modules": {"excitation_analysis": []}}),
+        ] {
+            assert!(
+                serde_json::from_value::<SceneDocument>(value).is_err(),
+                "malformed current-module state must not be normalized into an empty default"
+            );
+        }
     }
 
     #[test]

@@ -410,6 +410,13 @@ pub struct fullmag_fem_stage_transport_callback_v1 {
 pub const FULLMAG_FEM_MESH_DESC_ABI_VERSION: u32 = 2;
 pub const FULLMAG_FEM_MESH_DESC_ABI_LAYOUT_FINGERPRINT: &str =
     "fullmag:fem-mesh-desc:abi:v2:lp64:size232:typed-csr-global-ordinals";
+pub const FULLMAG_FEM_MESH_SPACE_PREPARATION_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_MESH_SPACE_PREPARATION_PRODUCER_ID: &str = "fullmag.mfem.mesh_space";
+pub const FULLMAG_FEM_MESH_SPACE_PREPARATION_SCHEMA_VERSION: &str =
+    "mfem_mesh_space_evidence.v1";
+pub const FULLMAG_FEM_MESH_SPACE_PREPARATION_PRODUCER_VERSION: &str = "1";
+pub const FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY: usize = 65;
+pub const FULLMAG_FEM_FE_FAMILY_H1: u32 = 1;
 pub const FULLMAG_FEM_MESH_ABI_LAYOUT_VERSION: u32 = 1;
 pub const FULLMAG_FEM_MESH_ABI_FIELD_COUNT: usize = 30;
 pub const FULLMAG_FEM_MESH_ABI_FINGERPRINT_CAPACITY: usize = 96;
@@ -458,6 +465,40 @@ pub struct fullmag_fem_mesh_desc {
     /// flat `[marker_a, marker_b] × count`.  Null/0 when not applicable.
     pub periodic_boundary_pair_markers: *const u32,
     pub periodic_boundary_pair_markers_len: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct fullmag_fem_mesh_space_preparation_request_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub mesh: *const fullmag_fem_mesh_desc,
+    pub fe_order: u32,
+    pub reserved_flags: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct fullmag_fem_mesh_space_preparation_evidence_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub mesh_dimension: u32,
+    pub fe_family: u32,
+    pub fe_order: u32,
+    pub mesh_matches_canonical_input: u32,
+    pub node_count: u64,
+    pub cell_count: u64,
+    pub boundary_element_count: u64,
+    pub local_dof_count: u64,
+    pub true_dof_count: u64,
+    pub quality_sample_count: u64,
+    pub invalid_cell_count: u64,
+    pub min_jacobian_determinant: f64,
+    pub max_jacobian_determinant: f64,
+    pub topology_fingerprint: [c_char; FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY],
+    pub marker_map_fingerprint: [c_char; FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY],
+    pub quality_fingerprint: [c_char; FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY],
+    pub space_fingerprint: [c_char; FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY],
 }
 
 #[repr(C)]
@@ -517,6 +558,18 @@ const _: () = {
     assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_node_pairs_len) == 208);
     assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_boundary_pair_markers) == 216);
     assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_boundary_pair_markers_len) == 224);
+    assert!(std::mem::size_of::<fullmag_fem_mesh_space_preparation_request_v1>() == 24);
+    assert!(std::mem::align_of::<fullmag_fem_mesh_space_preparation_request_v1>() == 8);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_space_preparation_request_v1, mesh) == 8);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_space_preparation_request_v1, fe_order) == 16);
+    assert!(std::mem::size_of::<fullmag_fem_mesh_space_preparation_evidence_v1>() == 360);
+    assert!(std::mem::align_of::<fullmag_fem_mesh_space_preparation_evidence_v1>() == 8);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_space_preparation_evidence_v1, node_count) == 24);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_space_preparation_evidence_v1, min_jacobian_determinant) == 80);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_space_preparation_evidence_v1, topology_fingerprint) == 96);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_space_preparation_evidence_v1, marker_map_fingerprint) == 161);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_space_preparation_evidence_v1, quality_fingerprint) == 226);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_space_preparation_evidence_v1, space_fingerprint) == 291);
     assert!(std::mem::size_of::<fullmag_fem_mesh_abi_layout>() == 360);
     assert!(std::mem::align_of::<fullmag_fem_mesh_abi_layout>() == 8);
     assert!(std::mem::offset_of!(fullmag_fem_mesh_abi_layout, abi_version) == 0);
@@ -2745,6 +2798,12 @@ extern "C" {
         out_layout: *mut fullmag_fem_regional_field_drive_abi_layout,
     ) -> i32;
     pub fn fullmag_fem_get_mesh_abi_layout(out_layout: *mut fullmag_fem_mesh_abi_layout) -> i32;
+    pub fn fullmag_fem_prepare_mesh_space_v1(
+        request: *const fullmag_fem_mesh_space_preparation_request_v1,
+        out_evidence: *mut fullmag_fem_mesh_space_preparation_evidence_v1,
+        error_message: *mut c_char,
+        error_message_capacity: u64,
+    ) -> i32;
     pub fn fullmag_fem_solve_steady_transport_v1(
         request: *const fullmag_fem_steady_transport_request_v1,
         result: *mut fullmag_fem_steady_transport_result_v1,

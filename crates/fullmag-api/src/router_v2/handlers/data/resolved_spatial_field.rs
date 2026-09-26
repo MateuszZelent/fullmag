@@ -1581,9 +1581,9 @@ fn resolve_planned_native_layer_field(
         "mat_alpha" => "alpha_field",
         _ => {
             return Err(ApiError::not_found(format!(
-            "quantity_not_materialized: field '{quantity_id}' has no native array for layer '{}'",
-            membership.layer_id
-        )))
+                "quantity_not_materialized: field '{quantity_id}' has no native array for layer '{}'",
+                membership.layer_id
+            )));
         }
     };
     let material = layer.get("material").ok_or_else(|| {

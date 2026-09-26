@@ -232,8 +232,10 @@ mod tests {
         assert_eq!(bundle.topology_revision, "11");
         assert_eq!(bundle.field.quantity_id, "H_eff");
         assert_eq!(bundle.field.carrier_fingerprint, "sha256:carrier");
-        assert!(bundle
-            .publication_id
-            .contains(&bundle.observation_frame.observation_frame_id));
+        assert!(
+            bundle
+                .publication_id
+                .contains(&bundle.observation_frame.observation_frame_id)
+        );
     }
 }

@@ -245,6 +245,7 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
 
     draft = {
         "revision": 1,
+        "study_name": base_problem.name,
         "backend": base_problem.runtime.backend_target.value,
         "requested_backend": base_problem.runtime.backend_target.value,
         "requested_device": base_problem.runtime.device_target.value,
@@ -487,7 +488,11 @@ def render_loaded_problem_as_script(
         lines.append("")
         lines.extend(spin_transport_lines)
 
-    field_drive_lines = _render_field_drives(base_problem, surface=surface)
+    field_drive_lines = _render_field_drives(
+        base_problem,
+        surface=surface,
+        overrides=overrides,
+    )
     if field_drive_lines:
         lines.append("")
         lines.extend(field_drive_lines)
@@ -618,10 +623,43 @@ def render_scene_document_as_script(scene_document: Mapping[str, object]) -> str
         script_path = Path(temporary) / "scene_document.py"
         script_path.write_text(bootstrap, encoding="utf-8")
         loaded = load_problem_from_script(script_path, lightweight_assets=True)
+        overrides = builder_overrides_from_scene_document(scene_for_render)
+        _omit_scene_mesh_editor_defaults(overrides)
         return render_loaded_problem_as_script(
             loaded,
-            overrides=builder_overrides_from_scene_document(scene_for_render),
+            overrides=overrides,
         )
+
+
+def _omit_scene_mesh_editor_defaults(overrides: dict[str, object]) -> None:
+    """Keep typed SceneDocument defaults from becoming explicit DSL settings.
+
+    A normal script-builder export must retain an authored ``True`` or default
+    algorithm value. This filter applies only to the SceneDocument bootstrap,
+    where those values come from editor state and were never authored by the
+    source DSL.
+    """
+    defaults: dict[str, object] = {
+        "algorithm_2d": 6,
+        "algorithm_3d": 1,
+        "compute_quality": True,
+        "per_element_quality": True,
+    }
+
+    def omit(config: object) -> None:
+        if not isinstance(config, dict):
+            return
+        for key, default in defaults.items():
+            value = config.get(key)
+            if type(value) is type(default) and value == default:
+                config[key] = None
+
+    omit(overrides.get("mesh"))
+    geometries = overrides.get("geometries")
+    if isinstance(geometries, list):
+        for geometry in geometries:
+            if isinstance(geometry, dict):
+                omit(geometry.get("mesh"))
 
 
 def _inherit_scene_stage_timestep(
@@ -655,7 +693,7 @@ def _render_scene_document_bootstrap(builder: Mapping[str, object]) -> str:
     lines = [
         "import fullmag as fm",
         "",
-        'study = fm.study("scene_document")',
+        f"study = fm.study({_python_literal(str(builder.get('study_name') or 'scene_document'))})",
         f"study.engine({_python_literal(backend)})",
         f"study.mode({_python_literal(mode)})",
     ]
@@ -720,6 +758,19 @@ def _render_scene_document_bootstrap(builder: Mapping[str, object]) -> str:
             raise ValueError(f"SceneDocument geometry {index} must be an object.")
         role = str(raw_object.get("role") or "magnet").lower()
         if role != "magnet":
+            name = str(raw_object.get("name") or raw_object.get("id") or f"object_{index}")
+            auxiliary = f"auxiliary_{index}"
+            shape = _render_shape_expression(raw_object)
+            if role == "antenna":
+                lines.append(
+                    f"{auxiliary} = study.antenna_object({shape}, "
+                    f"name={_python_literal(name)})"
+                )
+            else:
+                lines.append(
+                    f"{auxiliary} = study.geometry_object({shape}, "
+                    f"name={_python_literal(name)}, type={_python_literal(role)})"
+                )
             continue
         name = str(raw_object.get("name") or raw_object.get("id") or f"object_{index}")
         object_id = str(raw_object.get("object_id") or raw_object.get("id") or name)
@@ -768,6 +819,9 @@ def _render_scene_document_bootstrap(builder: Mapping[str, object]) -> str:
             texture_expression = _render_texture_expression(magnetization)
             if texture_expression is not None:
                 lines.append(f"{handle}.m = {texture_expression}")
+        absorbing_boundary = raw_object.get("absorbing_boundary")
+        if absorbing_boundary is not None:
+            lines.extend(_render_absorbing_boundary(handle, absorbing_boundary))
         mesh = raw_object.get("mesh")
         if isinstance(mesh, Mapping):
             mesh_kwargs = _render_scene_mesh_kwargs(mesh)
@@ -2547,8 +2601,8 @@ def _render_geometries_from_override(
     for geo_obj in geometries:
         g = _normalize_mapping(geo_obj)
         name = str(g.get("name", ""))
-        var_name = magnet_vars.get(name, "body")
         role = str(g.get("role") or "magnet")
+        var_name = magnet_vars.get(name, _safe_identifier(name or "body"))
 
         kind = str(g.get("geometry_kind", "Box"))
         params = _normalize_mapping(g.get("geometry_params"))
@@ -2560,9 +2614,15 @@ def _render_geometries_from_override(
         )
 
         if role != "magnet":
-            lines.append(
-                f"{var_name} = {_surface_call(surface, 'antenna_object')}({expr}, name={_py_repr(name)})"
-            )
+            if role == "antenna":
+                lines.append(
+                    f"{var_name} = {_surface_call(surface, 'antenna_object')}({expr}, name={_py_repr(name)})"
+                )
+            else:
+                lines.append(
+                    f"{var_name} = {_surface_call(surface, 'geometry_object')}({expr}, "
+                    f"name={_py_repr(name)}, type={_py_repr(role)})"
+                )
             lines.append("")
             continue
 
@@ -2634,7 +2694,7 @@ def _render_geometries_from_override(
             elif mag_kind == "random":
                 seed = mag.get("seed")
                 lines.append(f"{var_name}.m = fm.texture.random(seed={int(str(seed)) if seed is not None else 1})")
-            elif mag_kind in {"file", "sampled"}:
+            elif mag_kind in {"file", "sampled", "sampled_field"}:
                 src = str(mag.get("source_path", ""))
                 if src:
                     kwargs = []
@@ -3699,12 +3759,31 @@ def _render_field_profile_payload_expr(profile: dict[str, object]) -> str:
     raise ValueError(f"unsupported field profile kind: {kind}")
 
 
-def _render_field_drives(problem: Problem, *, surface: str) -> list[str]:
-    if not problem.field_drives:
+def _render_field_drives(
+    problem: Problem,
+    *,
+    surface: str,
+    overrides: Mapping[str, object] | None = None,
+) -> list[str]:
+    override_payload = overrides or {}
+    if "field_drives" in override_payload:
+        raw_drives = override_payload["field_drives"]
+        if not isinstance(raw_drives, list):
+            raise ValueError("field_drives override must be a list")
+        if any(not isinstance(drive, Mapping) for drive in raw_drives):
+            raise ValueError("each field_drives override entry must be an object")
+        expressions = [
+            _render_regional_field_drive_payload_expr(dict(drive))
+            for drive in raw_drives
+        ]
+    else:
+        expressions = [
+            _render_regional_field_drive_expr(drive) for drive in problem.field_drives
+        ]
+    if not expressions:
         return []
     lines = ["# Regional field drives"]
-    for drive in problem.field_drives:
-        expression = _render_regional_field_drive_expr(drive)
+    for expression in expressions:
         if surface == "study":
             lines.append(f"study.field_drives.add({expression})")
         else:
@@ -5576,6 +5655,8 @@ def _render_table_autosave(
     quantities = tuple(table_autosave.quantities or DEFAULT_TABLE_AUTOSAVE_QUANTITIES)
     if quantities != DEFAULT_TABLE_AUTOSAVE_QUANTITIES:
         kwargs.append(f"quantities={_py_literal(list(quantities))}")
+    if table_autosave.table_id != "default":
+        kwargs.append(f"table_id={_py_literal(table_autosave.table_id)}")
     lines = [
         "# Table autosave",
         f"{_surface_call(surface, 'tableautosave')}({', '.join(kwargs)})",
@@ -7305,10 +7386,14 @@ def _export_global_mesh_state(problem: Problem) -> dict[str, object]:
 
 def _is_pure_fdm_problem(problem: Problem) -> bool:
     discretization = problem.discretization
+    runtime_backend = getattr(
+        problem.runtime.backend_target,
+        "value",
+        problem.runtime.backend_target,
+    )
     return (
-        discretization is not None
-        and isinstance(discretization.fdm, FDM)
-        and discretization.fem is None
+        runtime_backend == "fdm"
+        and (discretization is None or discretization.fem is None)
     )
 
 

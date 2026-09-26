@@ -608,14 +608,16 @@ mod compatibility_tests {
         ] {
             assert_eq!(encoded[key], expected);
         }
-        assert!(encoded["timing_semantics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|entry| {
-                entry["id"] == "demag_hypre_device_elapsed_time_ns"
-                    && entry["kind"] == "device_elapsed"
-            }));
+        assert!(
+            encoded["timing_semantics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| {
+                    entry["id"] == "demag_hypre_device_elapsed_time_ns"
+                        && entry["kind"] == "device_elapsed"
+                })
+        );
     }
 
     #[test]

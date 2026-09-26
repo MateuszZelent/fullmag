@@ -42,9 +42,20 @@ pub async fn get_scalars(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ScalarsQuery>,
 ) -> Result<Json<ScalarWindow>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
-    let all_rows = guard.as_ref().map(|s| &s.scalar_rows[..]).unwrap_or(&[]);
-    let revision = guard.as_ref().map(|s| s.scalar_revision).unwrap_or(0);
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
+    let all_rows = &snapshot.scalar_rows[..];
+    let revision = snapshot.scalar_revision;
     let total = all_rows.len() as u64;
 
     let since = query.since_revision.unwrap_or(0) as usize;
@@ -139,27 +150,22 @@ pub async fn get_scalars(
         .collect();
 
     let returned = rows.len() as u64;
-    let observation_frames = guard
-        .as_ref()
-        .map(|snapshot| {
-            let generation_id = domain_generation_id(snapshot);
-            window
-                .iter()
-                .map(|row| {
-                    row.observation_frame.clone().unwrap_or_else(|| {
-                        AcceptedObservationFrameRef::for_snapshot(
-                            &snapshot.session.session_id,
-                            snapshot.session.started_at_unix_ms,
-                            generation_id.clone(),
-                            snapshot.mesh_revision,
-                            row.step,
-                            Some(row.time),
-                        )
-                    })
-                })
-                .collect()
+    let generation_id = domain_generation_id(snapshot);
+    let observation_frames = window
+        .iter()
+        .map(|row| {
+            row.observation_frame.clone().unwrap_or_else(|| {
+                AcceptedObservationFrameRef::for_snapshot(
+                    &snapshot.session.session_id,
+                    snapshot.session.started_at_unix_ms,
+                    generation_id.clone(),
+                    snapshot.mesh_revision,
+                    row.step,
+                    Some(row.time),
+                )
+            })
         })
-        .unwrap_or_default();
+        .collect();
 
     Ok(Json(ScalarWindow {
         revision,

@@ -3,7 +3,7 @@ use fullmag_ir::{EmptyPolicyIR, PlanarOperatorIR, PlanarReductionIR};
 use std::collections::BTreeMap;
 
 use super::frame::ResolvedFrame;
-use super::geometry::{integrate_clipped_tetra, projected_pixel_bounds, LinearVertex};
+use super::geometry::{LinearVertex, integrate_clipped_tetra, projected_pixel_bounds};
 use super::provenance;
 use super::reduction::{AccumulatorReduction, WeightedAccumulator};
 use super::{

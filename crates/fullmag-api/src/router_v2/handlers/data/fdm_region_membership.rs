@@ -128,7 +128,8 @@ pub async fn get_fdm_region_membership_binary(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
-    serve_fdm_region_membership_binary(state, headers, None).await
+    let context = crate::capture_current_live_request_context(&state).await?;
+    serve_fdm_region_membership_binary_with_context(state, headers, None, Some(&context)).await
 }
 
 #[utoipa::path(
@@ -164,29 +165,53 @@ pub async fn get_fdm_region_membership_binary_scoped(
     Query(query): Query<FdmRegionMembershipScopeQuery>,
     headers: HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
-    serve_fdm_region_membership_binary(state, headers, Some((query.owner_object_id, region_id)))
-        .await
+    let context = crate::capture_current_live_request_context(&state).await?;
+    serve_fdm_region_membership_binary_with_context(
+        state,
+        headers,
+        Some((query.owner_object_id, region_id)),
+        Some(&context),
+    )
+    .await
 }
 
-async fn serve_fdm_region_membership_binary(
+pub(crate) async fn serve_fdm_region_membership_binary_with_context(
     state: Arc<AppState>,
     headers: HeaderMap,
     region_scope: Option<(Option<String>, String)>,
+    context: Option<&crate::types::CurrentLiveRequestContext>,
 ) -> Result<axum::response::Response, ApiError> {
-    let guard = state.current_live_state.read().await;
-    let snapshot = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-    let (descriptor, original) = if has_membership_descriptor_artifact(snapshot) {
-        let (descriptor, artifact_dir) = load_descriptor(snapshot)?;
+    let snapshot = {
+        let _transition = if context.is_some() {
+            Some(state.current_live_session_transition.lock().await)
+        } else {
+            None
+        };
+        let guard = state.current_live_state.read().await;
+        let snapshot = guard
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        if let Some(context) = context {
+            crate::ensure_current_live_request_context(
+                snapshot,
+                context,
+                state
+                    .current_live_session_epoch
+                    .load(std::sync::atomic::Ordering::Acquire),
+            )?;
+        }
+        snapshot.clone()
+    };
+    let (descriptor, original) = if has_membership_descriptor_artifact(&snapshot) {
+        let (descriptor, artifact_dir) = load_descriptor(&snapshot)?;
         let binary_path = resolve_artifact_path(&artifact_dir, &descriptor.binary_path)?;
         let payload = std::fs::read(&binary_path).map_err(|error| {
             ApiError::internal(format!("failed to read FMRM artifact: {error}"))
         })?;
         (descriptor, payload)
-    } else if has_fdm_execution_plan(snapshot) {
-        let resolved = load_resolved_fdm_membership(snapshot)?;
-        let descriptor = descriptor_from_resolved_membership(snapshot, &resolved)?;
+    } else if has_fdm_execution_plan(&snapshot) {
+        let resolved = load_resolved_fdm_membership(&snapshot)?;
+        let descriptor = descriptor_from_resolved_membership(&snapshot, &resolved)?;
         let payload = serialize_resolved_membership_payload(&descriptor, &resolved)?;
         (descriptor, payload)
     } else {
@@ -263,7 +288,7 @@ async fn serve_fdm_region_membership_binary(
             .as_deref()
             .map(str::to_owned)
             .unwrap_or_else(|| {
-                crate::router_v2::handlers::sessions::status::domain_generation_id(snapshot)
+                crate::router_v2::handlers::sessions::status::domain_generation_id(&snapshot)
             })
             .as_str(),
     );
@@ -272,6 +297,20 @@ async fn serve_fdm_region_membership_binary(
         "x-fullmag-region-membership-revision",
         &snapshot.region_realization_revisions.membership.to_string(),
     );
+    if let Some(context) = context {
+        let _transition = state.current_live_session_transition.lock().await;
+        let current = state.current_live_state.read().await;
+        let current = current
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        crate::ensure_current_live_request_context(
+            current,
+            context,
+            state
+                .current_live_session_epoch
+                .load(std::sync::atomic::Ordering::Acquire),
+        )?;
+    }
     Ok(response)
 }
 

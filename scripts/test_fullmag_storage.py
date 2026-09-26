@@ -39,6 +39,15 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(layout, self.resolve())
         self.assertFalse((self.project / "storage").exists())
 
+    def test_inventory_ignores_non_registration_json_arrays(self):
+        layout = self.resolve()
+        index = Path(layout["storage_root"]) / "index"
+        index.mkdir(parents=True)
+        (index / "metrics-history.json").write_text("[]", encoding="utf-8")
+        result = storage.inventory(layout)
+        self.assertEqual(result["records"], [])
+        self.assertEqual(result["worktree_count"], 1)
+
     def test_dotenv_storage_root_and_process_precedence(self):
         custom = self.project / "configured-storage"
         custom.mkdir()

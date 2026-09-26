@@ -16,6 +16,7 @@ members = [
   "crates/fullmag-py-core",
   "crates/fullmag-quantities",
   "crates/fullmag-runner",
+  "crates/fullmag-runtime-control",
   "crates/fullmag-session",
 ]
 resolver = "2"

@@ -3,8 +3,8 @@
 use crate::error::ApiError;
 use crate::types::*;
 use fullmag_authoring::{
-    scene_document_problem_projection, scene_document_to_script_builder, SceneDocument,
-    ScriptBuilderState,
+    SceneDocument, ScriptBuilderState, scene_document_problem_projection,
+    scene_document_to_script_builder,
 };
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -298,6 +298,79 @@ pub(crate) fn load_scene_document_state(
             error
         ))
     })
+}
+
+pub(crate) fn scene_document_to_problem_ir(
+    repo_root: &Path,
+    workspace_root: &Path,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+) -> Result<fullmag_ir::ProblemIR, ApiError> {
+    requested_execution
+        .validate()
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    if !matches!(requested_execution.backend.as_str(), "auto" | "fdm") {
+        return Err(ApiError::bad_request(
+            "current live preparation materialization supports requested backend 'fdm' or 'auto'",
+        ));
+    }
+    scene_document_problem_projection(scene_document)
+        .map_err(|error| ApiError::bad_request(error.message))?;
+    std::fs::create_dir_all(workspace_root)
+        .map_err(|error| ApiError::internal(format!("failed to prepare workspace: {error}")))?;
+
+    let scene_path = workspace_root.join(format!("preparation-scene-{}.json", uuid_v4_hex()));
+    let scene_body = serde_json::to_vec(scene_document).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to serialize preparation SceneDocument: {error}"
+        ))
+    })?;
+    if let Err(error) = std::fs::write(&scene_path, scene_body) {
+        let _ = std::fs::remove_file(&scene_path);
+        return Err(ApiError::internal(format!(
+            "failed to persist preparation SceneDocument: {error}"
+        )));
+    }
+
+    let helper_args = vec![
+        "-m".to_string(),
+        "fullmag.runtime.helper".to_string(),
+        "export-scene-ir".to_string(),
+        "--scene-json".to_string(),
+        scene_path.display().to_string(),
+        "--backend".to_string(),
+        requested_execution.backend.clone(),
+        "--device".to_string(),
+        requested_execution.device.clone(),
+        "--precision".to_string(),
+        requested_execution.precision.clone(),
+        "--mode".to_string(),
+        requested_execution.mode.clone(),
+        "--asset-root".to_string(),
+        workspace_root.display().to_string(),
+    ];
+    let output = run_python_helper(repo_root, &helper_args);
+    let _ = std::fs::remove_file(&scene_path);
+    let output = output?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(ApiError::bad_request(format!(
+            "SceneDocument could not be lowered to ProblemIR: {}",
+            stderr.trim()
+        )));
+    }
+
+    let problem: fullmag_ir::ProblemIR =
+        serde_json::from_slice(&output.stdout).map_err(|error| {
+            ApiError::internal(format!("failed to decode generated ProblemIR: {error}"))
+        })?;
+    problem.validate().map_err(|errors| {
+        ApiError::internal(format!(
+            "canonical SceneDocument lowering produced invalid ProblemIR: {}",
+            errors.join("; ")
+        ))
+    })?;
+    Ok(problem)
 }
 
 pub(crate) fn scene_document_builder_projection(

@@ -2,8 +2,8 @@ use fullmag_ir::{InitialMagnetizationIR, RegionConflictPolicyIR};
 
 use crate::magnetization_textures::TextureSamplePoint;
 use crate::magnetization_textures_v2::sample_preset_texture_versioned;
-use crate::region_conflict::{resolve_region_conflict, RegionConflictCandidate};
-use crate::selection::geometry::{contains_point, GeometryPredicate};
+use crate::region_conflict::{RegionConflictCandidate, resolve_region_conflict};
+use crate::selection::geometry::{GeometryPredicate, contains_point};
 use crate::util::generate_random_unit_vectors;
 
 /// A region candidate projected onto a backend's discrete magnetic domain.

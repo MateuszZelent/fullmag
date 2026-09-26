@@ -56,7 +56,8 @@ pub async fn get_frozen_spins_resolved_mask(
     Path(mask_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let record = current_preview_record(&state, &mask_id)
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let record = current_preview_record(&state, &request_context, &mask_id)
         .await?
         .ok_or_else(|| {
             ApiError::not_found(format!("frozen spins resolved mask not found: {mask_id}"))

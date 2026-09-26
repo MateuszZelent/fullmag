@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
-use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use utoipa::ToSchema;

@@ -18,16 +18,16 @@ mod frozen_spins_selection_compiler_tests {
 
     use fullmag_ir::{
         BoundaryMembershipIR, ConstraintActivationIR, EmptySelectionPolicyIR,
-        FrozenReferencePolicyIR, FrozenSpinsIR, GeometryPredicateIR, InactiveSelectionPolicyIR,
-        ResolvedFrozenSpinsPlanIR, SelectionDefinitionIR, SelectionExprIR, SelectionFrameIR,
-        SelectionMembershipPolicyIR, SelectionSamplingIR, SelectionValidationContext,
-        FROZEN_SPINS_SCHEMA_VERSION, SELECTION_EXPR_SCHEMA_VERSION,
+        FROZEN_SPINS_SCHEMA_VERSION, FrozenReferencePolicyIR, FrozenSpinsIR, GeometryPredicateIR,
+        InactiveSelectionPolicyIR, ResolvedFrozenSpinsPlanIR, SELECTION_EXPR_SCHEMA_VERSION,
+        SelectionDefinitionIR, SelectionExprIR, SelectionFrameIR, SelectionMembershipPolicyIR,
+        SelectionSamplingIR, SelectionValidationContext,
     };
 
     use crate::{
-        compile_fdm_frozen_spins, compile_fem_frozen_spins, AffineTransform3, FdmFrozenSpinsDomain,
-        FemIncidentElement, FemTrueDofDomain, FrozenSpinsCompileRequest, FrozenSpinsStateSnapshot,
-        ResolvedFrozenSpinsReference, SelectionDofMembership,
+        AffineTransform3, FdmFrozenSpinsDomain, FemIncidentElement, FemTrueDofDomain,
+        FrozenSpinsCompileRequest, FrozenSpinsStateSnapshot, ResolvedFrozenSpinsReference,
+        SelectionDofMembership, compile_fdm_frozen_spins, compile_fem_frozen_spins,
     };
 
     fn constraint(id: &str, selector: SelectionExprIR) -> FrozenSpinsIR {
@@ -197,11 +197,13 @@ mod frozen_spins_selection_compiler_tests {
         assert_eq!(resolved.certificate.mask_sha256, resolved.mask_sha256);
         assert_eq!(resolved.certificate.resolved_reference_sha256.len(), 64);
         assert_eq!(resolved.certificate.authored_fingerprints.len(), 2);
-        assert!(resolved
-            .certificate
-            .authored_fingerprints
-            .iter()
-            .all(|fingerprint| fingerprint.selector_sha256.len() == 64));
+        assert!(
+            resolved
+                .certificate
+                .authored_fingerprints
+                .iter()
+                .all(|fingerprint| fingerprint.selector_sha256.len() == 64)
+        );
         assert_eq!(
             compile_fdm_frozen_spins(&domain, &request).unwrap(),
             resolved,
@@ -1378,27 +1380,33 @@ fn multilayer_pair_kernel_footprint_exposes_l_squared_cost_beyond_shift_telemetr
 fn multilayer_pair_kernel_footprint_rejects_pair_count_above_abi_v2_u32_limit() {
     let error = checked_multilayer_pair_kernel_footprint([1, 1, 1], 65_536)
         .expect_err("ABI v2 must reject L squared above its u32 pair-count limit");
-    assert!(error
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("u32 limit")));
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("u32 limit"))
+    );
 }
 
 #[test]
 fn multilayer_pair_kernel_footprint_rejects_padded_and_byte_overflow() {
     let padded_error = checked_multilayer_pair_kernel_footprint([u32::MAX, u32::MAX, 1], 1)
         .expect_err("padded cell product must not wrap");
-    assert!(padded_error
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("padded cell count overflow")));
+    assert!(
+        padded_error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("padded cell count overflow"))
+    );
 
     let bytes_error = checked_multilayer_pair_kernel_footprint([u32::MAX, 1, 1], 65_535)
         .expect_err("ABI v2 byte product must not wrap");
-    assert!(bytes_error
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("payload byte overflow")));
+    assert!(
+        bytes_error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("payload byte overflow"))
+    );
 }
 
 fn resolved_stage_autosave(
@@ -1671,10 +1679,12 @@ fn auto_sampling_filters_disabled_inactive_and_non_sinc_drives() {
 
     let error = resolve_auto_sampling_for_stage(&mut problem)
         .expect_err("automatic sampling must fail without an applicable active sinc drive");
-    assert!(error
-        .reasons
-        .iter()
-        .any(|reason| { reason.contains("active sinc") && reason.contains("excite") }));
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| { reason.contains("active sinc") && reason.contains("excite") })
+    );
 }
 
 #[test]
@@ -2151,9 +2161,11 @@ fn mesh_parts_from_merged_magnetic_has_no_air() {
 
     assert_eq!(parts.len(), 1);
     assert_eq!(parts[0].role, fullmag_ir::FemMeshPartRole::MagneticObject);
-    assert!(parts
-        .iter()
-        .all(|part| part.role != fullmag_ir::FemMeshPartRole::Air));
+    assert!(
+        parts
+            .iter()
+            .all(|part| part.role != fullmag_ir::FemMeshPartRole::Air)
+    );
 }
 
 #[test]
@@ -2245,10 +2257,12 @@ fn analyze_detects_interface_between_touching_markers() {
         ]
     );
     assert_eq!(analysis.shared_interface_nodes.len(), 3);
-    assert!(analysis
-        .shared_interface_nodes
-        .iter()
-        .all(|(_node, owners)| owners == &vec![1, 2]));
+    assert!(
+        analysis
+            .shared_interface_nodes
+            .iter()
+            .all(|(_node, owners)| owners == &vec![1, 2])
+    );
 }
 
 #[test]
@@ -2867,9 +2881,11 @@ fn pack_duplicates_shared_interface_nodes_per_region() {
     assert_eq!(packed.nodes[0], packed.nodes[4]);
     assert_eq!(packed.nodes[1], packed.nodes[5]);
     assert_eq!(packed.nodes[2], packed.nodes[6]);
-    assert!(mesh_parts
-        .iter()
-        .any(|part| part.role == fullmag_ir::FemMeshPartRole::Interface));
+    assert!(
+        mesh_parts
+            .iter()
+            .any(|part| part.role == fullmag_ir::FemMeshPartRole::Interface)
+    );
 }
 
 #[test]
@@ -3129,10 +3145,11 @@ fn fem_plan_maps_geometry_and_object_region_to_one_continuous_object() {
     );
     assert_eq!(fem.initial_magnetization.len(), 5);
     assert_eq!(fem.object_segments.len(), 2);
-    assert!(fem
-        .object_segments
-        .iter()
-        .all(|segment| segment.object_id == "strip"));
+    assert!(
+        fem.object_segments
+            .iter()
+            .all(|segment| segment.object_id == "strip")
+    );
     assert!(
         fem.ms_element_field.is_none(),
         "mesh-only object region must not introduce a discontinuous Ms element field"
@@ -3401,11 +3418,13 @@ fn fdm_plan_materializes_frozen_spins_from_problem_ir() {
             .expect("FDM plan must carry grid certificate")
             .grid_fingerprint
     );
-    assert!(frozen
-        .certificate
-        .warnings
-        .iter()
-        .any(|warning| warning.starts_with("frozen_reference_deferred:")));
+    assert!(
+        frozen
+            .certificate
+            .warnings
+            .iter()
+            .any(|warning| warning.starts_with("frozen_reference_deferred:"))
+    );
 }
 
 #[test]
@@ -3627,11 +3646,12 @@ fn fdm_object_region_material_overrides_materialize_to_cell_fields() {
     assert_eq!(legend.len(), 1);
     assert_eq!(legend[0].numeric_id, 1);
     assert_eq!(legend[0].region_id, region_id);
-    assert!(fdm
-        .grid_certificate
-        .as_ref()
-        .and_then(|certificate| certificate.region_legend_fingerprint.as_deref())
-        .is_some_and(|value| value.starts_with("sha256:")));
+    assert!(
+        fdm.grid_certificate
+            .as_ref()
+            .and_then(|certificate| certificate.region_legend_fingerprint.as_deref())
+            .is_some_and(|value| value.starts_with("sha256:"))
+    );
     let ms_field = fdm
         .material
         .ms_field
@@ -4306,10 +4326,11 @@ fn imported_geometry_without_grid_asset_is_rejected() {
     ir.regions[0].geometry = "mesh".to_string();
 
     let err = plan(&ir).expect_err("imported geometry should be rejected");
-    assert!(err
-        .reasons
-        .iter()
-        .any(|r| r.contains("requires a precomputed FDM grid asset")));
+    assert!(
+        err.reasons
+            .iter()
+            .any(|r| r.contains("requires a precomputed FDM grid asset"))
+    );
 }
 
 #[test]
@@ -4525,10 +4546,11 @@ fn fem_quasistatic_magnetoelastic_is_explicitly_rejected_until_mechanics_solver_
     };
 
     let err = plan(&ir).expect_err("quasistatic mechanics has no executable FEM solver yet");
-    assert!(err
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("quasistatic magnetoelasticity is not executable yet")));
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("quasistatic magnetoelasticity is not executable yet"))
+    );
 }
 
 #[test]
@@ -4556,10 +4578,11 @@ fn fem_elastodynamic_magnetoelastic_is_explicitly_rejected_until_mechanics_solve
     };
 
     let err = plan(&ir).expect_err("elastodynamic mechanics has no executable FEM solver yet");
-    assert!(err
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("elastodynamic magnetoelasticity is not executable yet")));
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("elastodynamic magnetoelasticity is not executable yet"))
+    );
 }
 
 #[test]
@@ -5411,11 +5434,12 @@ fn fem_backend_with_air_elements_lowers_study_universe_to_air_box_config() {
         }
         _ => panic!("expected FEM plan"),
     }
-    assert!(plan
-        .provenance
-        .notes
-        .iter()
-        .any(|note| note.contains("FEM air-box configuration")));
+    assert!(
+        plan.provenance
+            .notes
+            .iter()
+            .any(|note| note.contains("FEM air-box configuration"))
+    );
 }
 
 /// A complete airbox certifies the outer marker independently of its numeric ID.
@@ -5584,10 +5608,12 @@ fn fem_backend_with_air_elements_rejects_unknown_boundary_marker_in_strict_mode(
     let error = plan(&ir).expect_err(
         "strict FEM air-box planning should reject when marker 99 is absent and no explicit boundary_marker",
     );
-    assert!(error
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("Gamma_out") || reason.contains("certified")));
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("Gamma_out") || reason.contains("certified"))
+    );
 }
 
 #[test]
@@ -5821,11 +5847,13 @@ fn fem_backend_rejects_requested_shared_domain_without_air_elements() {
     });
 
     let error = plan(&ir).expect_err("shared-domain FEM without air should fail");
-    assert!(error
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("shared-domain FEM")
-            || reason.contains("study.build_domain_mesh()")));
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("shared-domain FEM")
+                || reason.contains("study.build_domain_mesh()"))
+    );
 }
 
 #[test]
@@ -6321,10 +6349,12 @@ fn fem_backend_multibody_rejects_incompatible_cubic_anisotropy_axes() {
     let error = plan(&ir).expect_err(
         "multi-body FEM must reject cubic anisotropy with incompatible crystallographic axes",
     );
-    assert!(error
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("shared anisotropy axes/material-law shape")));
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("shared anisotropy axes/material-law shape"))
+    );
 }
 
 #[test]
@@ -6493,11 +6523,21 @@ fn fem_plan_heterogeneous_materials_populates_region_materials_for_cuda() {
     assert_eq!(fem.bulk_dmi, Some(-0.5e-3));
     assert_eq!(
         fem.dind_field.as_ref().map(|values| values.as_slice()),
-        Some([1.0e-3, 1.0e-3, 1.0e-3, 1.0e-3, 2.0e-3, 2.0e-3, 2.0e-3, 2.0e-3].as_slice())
+        Some(
+            [
+                1.0e-3, 1.0e-3, 1.0e-3, 1.0e-3, 2.0e-3, 2.0e-3, 2.0e-3, 2.0e-3
+            ]
+            .as_slice()
+        )
     );
     assert_eq!(
         fem.dbulk_field.as_ref().map(|values| values.as_slice()),
-        Some([-0.5e-3, -0.5e-3, -0.5e-3, -0.5e-3, -1.5e-3, -1.5e-3, -1.5e-3, -1.5e-3].as_slice())
+        Some(
+            [
+                -0.5e-3, -0.5e-3, -0.5e-3, -0.5e-3, -1.5e-3, -1.5e-3, -1.5e-3, -1.5e-3
+            ]
+            .as_slice()
+        )
     );
 }
 
@@ -6879,10 +6919,11 @@ fn inactive_term_output_is_rejected_for_execution() {
     };
 
     let err = plan(&ir).expect_err("output requiring inactive term should be rejected");
-    assert!(err
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("requires Demag()")));
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("requires Demag()"))
+    );
 }
 
 fn attach_unit_fem_domain_mesh(ir: &mut ProblemIR) {
@@ -7009,14 +7050,16 @@ fn fem_dmi_field_outputs_require_matching_dmi_terms() {
     };
 
     let err = plan(&ir).expect_err("DMI field outputs require active DMI terms");
-    assert!(err
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("field output 'H_dmi' requires InterfacialDmi")));
-    assert!(err
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("field output 'H_dmi_bulk' requires BulkDmi")));
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("field output 'H_dmi' requires InterfacialDmi"))
+    );
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("field output 'H_dmi_bulk' requires BulkDmi"))
+    );
 }
 
 #[test]
@@ -7429,10 +7472,12 @@ fn rotated_interfacial_dmi_rejects_mixed_dmi_energy_channels() {
             EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
         ];
         let error = plan(&ir).expect_err("mixed DMI must fail closed");
-        assert!(error
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("cannot be combined")));
+        assert!(
+            error
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("cannot be combined"))
+        );
     }
 }
 
@@ -7482,10 +7527,12 @@ fn fem_rotated_dmi_field_outputs_fail_until_materialized() {
     };
 
     let error = plan(&ir).expect_err("FEM rotated DMI field is not materialized");
-    assert!(error
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("H_rotated_dmi")));
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("H_rotated_dmi"))
+    );
 }
 
 #[test]
@@ -8128,14 +8175,18 @@ fn fem_canonical_zhang_li_plan_preserves_identity_and_target_masks() {
             .map(|target| target.object_id.as_str()),
         Some("strip")
     );
-    assert!(contract
-        .active_node_mask
-        .as_ref()
-        .is_some_and(|mask| !mask.is_empty() && mask.iter().all(|selected| *selected)));
-    assert!(contract
-        .active_element_mask
-        .as_ref()
-        .is_some_and(|mask| !mask.is_empty() && mask.iter().all(|selected| *selected)));
+    assert!(
+        contract
+            .active_node_mask
+            .as_ref()
+            .is_some_and(|mask| !mask.is_empty() && mask.iter().all(|selected| *selected))
+    );
+    assert!(
+        contract
+            .active_element_mask
+            .as_ref()
+            .is_some_and(|mask| !mask.is_empty() && mask.iter().all(|selected| *selected))
+    );
 }
 
 #[test]
@@ -8275,10 +8326,12 @@ fn fem_prescribed_sot_cpu_plan_materializes_signed_fields_and_target_mask() {
         Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 0.25 })
     );
     assert!(contract.sot_drive.is_some());
-    assert!(contract
-        .active_node_mask
-        .as_ref()
-        .is_some_and(|mask| !mask.is_empty() && mask.iter().any(|selected| *selected)));
+    assert!(
+        contract
+            .active_node_mask
+            .as_ref()
+            .is_some_and(|mask| !mask.is_empty() && mask.iter().any(|selected| *selected))
+    );
 }
 
 #[test]
@@ -8379,10 +8432,11 @@ fn relaxation_rejects_time_dependent_and_unpaired_oersted_sources() {
     assert!(err.reasons.iter().any(|reason| {
         reason.contains("time-dependent Oersted") && reason.contains("conservative equilibrium")
     }));
-    assert!(err
-        .reasons
-        .iter()
-        .any(|reason| { reason.contains("Oersted") && reason.contains("field-energy parity") }));
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| { reason.contains("Oersted") && reason.contains("field-energy parity") })
+    );
 }
 
 #[test]
@@ -8936,12 +8990,16 @@ fn multilayer_fdm_lowers_frozen_spins_in_native_layer_order() {
         .expect("multilayer plan must carry the resolved mask");
     let first_layer_len = multilayer.layers[0].initial_magnetization.len();
     assert_eq!(frozen.frozen_mask.len(), 2 * first_layer_len);
-    assert!(frozen.frozen_mask[..first_layer_len]
-        .iter()
-        .all(|value| *value));
-    assert!(frozen.frozen_mask[first_layer_len..]
-        .iter()
-        .all(|value| !*value));
+    assert!(
+        frozen.frozen_mask[..first_layer_len]
+            .iter()
+            .all(|value| *value)
+    );
+    assert!(
+        frozen.frozen_mask[first_layer_len..]
+            .iter()
+            .all(|value| !*value)
+    );
     assert_eq!(frozen.frozen_dof_count as usize, first_layer_len);
 }
 
@@ -9041,14 +9099,18 @@ fn fdm_common_cell_size_resolves_heterogeneous_native_grids_without_rounding() {
         Some([2e-9, 2e-9, 2.5e-9])
     );
     assert_eq!(multilayer.mode, "three_d");
-    assert!(multilayer
-        .layers
-        .iter()
-        .all(|layer| { layer.convolution_cell_size == [2e-9, 2e-9, 2.5e-9] }));
-    assert!(multilayer
-        .layers
-        .iter()
-        .any(|layer| layer.transfer_kind == "push_pull"));
+    assert!(
+        multilayer
+            .layers
+            .iter()
+            .all(|layer| { layer.convolution_cell_size == [2e-9, 2e-9, 2.5e-9] })
+    );
+    assert!(
+        multilayer
+            .layers
+            .iter()
+            .any(|layer| layer.transfer_kind == "push_pull")
+    );
 }
 
 fn eight_layer_multilayer_problem_for_kernel_budget() -> ProblemIR {
@@ -9231,11 +9293,12 @@ fn multilayer_planner_rejects_abi_v2_pair_payload_above_memory_budget() {
     );
     let error = plan(&ir)
         .expect_err("full ABI v2 pair payload must fail planner admission before allocation");
-    assert!(error.reasons.iter().any(|reason| reason
-        .contains("admission_model=cuda_abi_v2_pair_payload")
-        && reason.contains("multilayer_convolution aggregate memory budget exceeded")
-        && reason.contains("kernel_bytes=12884902656")
-        && reason.contains("estimated_bytes=12952421120")));
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("admission_model=cuda_abi_v2_pair_payload")
+            && reason.contains("multilayer_convolution aggregate memory budget exceeded")
+            && reason.contains("kernel_bytes=12884902656")
+            && reason.contains("estimated_bytes=12952421120")
+    }));
 }
 
 #[test]
@@ -9671,10 +9734,12 @@ fn multilayer_planner_resolves_common_grid_modes_without_overriding_explicit_mod
         common_cell_size: None,
     });
     let error = plan(&conflict).expect_err("common_cells must reject explicit two_d_stack");
-    assert!(error
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("common_cells") && reason.contains("two_d_stack")));
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("common_cells") && reason.contains("two_d_stack"))
+    );
 }
 
 #[test]
@@ -9718,10 +9783,11 @@ fn two_d_stack_fails_closed_for_native_thickness_without_moment_preserving_avera
         common_cell_size: None,
     });
     let error = plan(&ir).expect_err("2D mode must not copy a native z slice");
-    assert!(error
-        .reasons
-        .iter()
-        .any(|reason| { reason.contains("moment_preserving") || reason.contains("two_d_stack") }));
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("moment_preserving") || reason.contains("two_d_stack")
+        })
+    );
 }
 
 #[test]
@@ -9808,10 +9874,11 @@ fn staged_multilayer_rejects_adaptive_rk23() {
     });
 
     let err = plan(&ir).expect_err("staged CPU multilayer must reject adaptive RK23");
-    assert!(err
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("multilayer") && reason.contains("adaptive_timestep")));
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("multilayer") && reason.contains("adaptive_timestep"))
+    );
 }
 
 #[test]
@@ -9846,10 +9913,11 @@ fn staged_multilayer_rejects_adaptive_rk23_max_error_convenience() {
         norm_tolerance: None,
     });
     let err = plan(&ir).expect_err("staged CPU multilayer must reject max-error RK23");
-    assert!(err
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("multilayer") && reason.contains("adaptive_timestep")));
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("multilayer") && reason.contains("adaptive_timestep"))
+    );
 }
 
 fn set_adaptive_rk45(problem: &mut ProblemIR, mode: fullmag_ir::AdaptiveToleranceModeIR) {
@@ -9898,10 +9966,12 @@ fn adaptive_fdm_requires_explicit_cpu_and_rejects_auto_or_cuda_routes() {
             );
         }
         let err = plan(&ir).expect_err("automatic adaptive FDM route must fail");
-        assert!(err
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("requires explicit") && reason.contains("device='cpu'")));
+        assert!(
+            err.reasons
+                .iter()
+                .any(|reason| reason.contains("requires explicit")
+                    && reason.contains("device='cpu'"))
+        );
     }
     let mut cpu = ProblemIR::bootstrap_example();
     set_adaptive_rk45(&mut cpu, fullmag_ir::AdaptiveToleranceModeIR::Advanced);
@@ -10127,11 +10197,12 @@ fn native_stacked_cuda_shape_does_not_admit_abi_v2_pair_payload() {
     assert_eq!(plan.planner_summary.estimated_pair_kernels, 0);
     assert_eq!(plan.planner_summary.estimated_unique_kernels, 0);
     assert_eq!(plan.planner_summary.estimated_kernel_bytes, 0);
-    assert!(plan
-        .planner_summary
-        .warnings
-        .iter()
-        .all(|warning| !warning.contains("cuda_abi_v2_l_squared_pair_payload")));
+    assert!(
+        plan.planner_summary
+            .warnings
+            .iter()
+            .all(|warning| !warning.contains("cuda_abi_v2_l_squared_pair_payload"))
+    );
 }
 
 #[test]
@@ -10153,11 +10224,12 @@ fn device_resident_d07_shape_retains_abi_v2_pair_payload_admission() {
     assert_eq!(plan.planner_summary.estimated_pair_kernels, 4);
     assert!(plan.planner_summary.estimated_unique_kernels > 0);
     assert!(plan.planner_summary.estimated_kernel_bytes > 0);
-    assert!(plan
-        .planner_summary
-        .warnings
-        .iter()
-        .any(|warning| warning.contains("cuda_abi_v2_l_squared_pair_payload")));
+    assert!(
+        plan.planner_summary
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("cuda_abi_v2_l_squared_pair_payload"))
+    );
 }
 
 #[test]
@@ -10170,17 +10242,21 @@ fn checked_multilayer_aggregate_memory_accepts_exact_boundary_and_rejects_next_b
     let error =
         crate::checked_multilayer_aggregate_memory_bytes(crate::FDM_GRID_MAX_BYTES - 1, 1, 1)
             .expect_err("one byte above aggregate boundary must fail");
-    assert!(error
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("aggregate memory budget exceeded")));
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("aggregate memory budget exceeded"))
+    );
 
     let overflow = crate::checked_multilayer_aggregate_memory_bytes(u64::MAX, 1, 0)
         .expect_err("aggregate addition overflow must fail closed");
-    assert!(overflow
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("aggregate memory overflow")));
+    assert!(
+        overflow
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("aggregate memory overflow"))
+    );
 }
 
 #[test]
@@ -10453,10 +10529,11 @@ fn multilayer_planner_materializes_translated_object_frame_region_membership() {
         .iter()
         .find(|layer| layer.object_id == "free")
         .expect("free layer");
-    assert!(free
-        .native_region_mask
-        .as_deref()
-        .is_some_and(|mask| mask.iter().any(|numeric_id| *numeric_id == 1)));
+    assert!(
+        free.native_region_mask
+            .as_deref()
+            .is_some_and(|mask| mask.iter().any(|numeric_id| *numeric_id == 1))
+    );
     assert!(free.native_region_legend.as_deref().is_some_and(|legend| {
         legend.iter().any(|entry| {
             entry.numeric_id == 1
@@ -10515,10 +10592,11 @@ fn multilayer_planner_rejects_positive_xy_and_z_volume_overlap() {
     *by = [10e-9, 0.0, 0.0];
 
     let err = plan(&ir).expect_err("positive physical volume overlap must fail closed");
-    assert!(err
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("overlapping bodies")));
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("overlapping bodies"))
+    );
 }
 
 #[test]
@@ -10544,10 +10622,11 @@ fn multilayer_planner_rejects_translated_sphere_box_volume_overlap() {
     ];
 
     let err = plan(&ir).expect_err("translated sphere and box volume overlap must fail closed");
-    assert!(err
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("overlapping bodies")));
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("overlapping bodies"))
+    );
 }
 
 #[test]
@@ -10572,10 +10651,11 @@ fn multilayer_planner_fails_closed_for_csg_body_overlap() {
     *by = [0.0, 0.0, 0.0];
 
     let err = plan(&ir).expect_err("CSG overlap must not be guessed from a bounding box");
-    assert!(err
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("cannot safely classify overlap")));
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("cannot safely classify overlap"))
+    );
 }
 
 #[test]
@@ -10600,10 +10680,11 @@ fn multilayer_planner_materializes_supported_csg_region_and_rejects_unsupported_
         .iter()
         .find(|layer| layer.object_id == "free")
         .expect("free layer");
-    assert!(free
-        .native_region_mask
-        .as_deref()
-        .is_some_and(|mask| { mask.iter().any(|numeric_id| *numeric_id == 1) }));
+    assert!(
+        free.native_region_mask
+            .as_deref()
+            .is_some_and(|mask| { mask.iter().any(|numeric_id| *numeric_id == 1) })
+    );
     assert!(free.native_region_legend.as_deref().is_some_and(|legend| {
         legend
             .iter()
@@ -10629,10 +10710,12 @@ fn multilayer_planner_materializes_supported_csg_region_and_rejects_unsupported_
         capability_policy: fullmag_ir::CouplingCapabilityPolicyIR::RequireRuntime,
     });
     let coupling_error = plan(&coupling_problem).expect_err("unsupported coupling must fail");
-    assert!(coupling_error
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("coupling")));
+    assert!(
+        coupling_error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("coupling"))
+    );
 }
 
 #[test]
@@ -10806,10 +10889,12 @@ fn stacked_two_body_problem_lowers_to_multilayer_plan() {
     let explicit_error = plan(&ir).expect_err(
         "explicit multilayer_convolution must not use the native single-grid fast path",
     );
-    assert!(explicit_error
-        .reasons
-        .iter()
-        .any(|reason| { reason.contains("staged CUDA") && reason.contains("rk45") }));
+    assert!(
+        explicit_error
+            .reasons
+            .iter()
+            .any(|reason| { reason.contains("staged CUDA") && reason.contains("rk45") })
+    );
 
     ir.backend_policy
         .discretization_hints
@@ -10938,15 +11023,19 @@ fn multilayer_planner_materializes_xy_offset_in_common_scratch_transfer() {
     {
         assert!((actual - expected).abs() < 1e-24);
     }
-    assert!(multilayer
-        .layers
-        .iter()
-        .all(|layer| layer.transfer_kind == "push_pull"));
-    assert!(multilayer
-        .planner_summary
-        .warnings
-        .iter()
-        .any(|warning| warning.contains("xy_geometry_uses_common_scratch_transfer")));
+    assert!(
+        multilayer
+            .layers
+            .iter()
+            .all(|layer| layer.transfer_kind == "push_pull")
+    );
+    assert!(
+        multilayer
+            .planner_summary
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("xy_geometry_uses_common_scratch_transfer"))
+    );
 }
 
 #[test]
@@ -11181,10 +11270,11 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
     );
     let err =
         plan(&invalid).expect_err("FEM eigen dispersion validation must reject broad k range");
-    assert!(err
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("max_k_rad_per_m")));
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("max_k_rad_per_m"))
+    );
 }
 
 #[test]
@@ -11290,10 +11380,11 @@ fn fem_eigen_carries_k0_kittel_validation_from_runtime_metadata() {
     );
     let err =
         plan(&invalid).expect_err("FEM eigen k0 Kittel validation must require three samples");
-    assert!(err
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("k0_kittel_validation.samples")));
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("k0_kittel_validation.samples"))
+    );
 
     let mut unsupported_demag_kind = invalid;
     unsupported_demag_kind.problem_meta.runtime_metadata.insert(
@@ -11316,10 +11407,11 @@ fn fem_eigen_carries_k0_kittel_validation_from_runtime_metadata() {
         }),
     );
     let err = plan(&unsupported_demag_kind).expect_err("unknown K0 Kittel demag_kind must fail");
-    assert!(err
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("demag_kind") && reason.contains("periodic_airbox_k0")));
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("demag_kind") && reason.contains("periodic_airbox_k0"))
+    );
 }
 
 #[test]
@@ -11722,18 +11814,20 @@ fn fem_eigen_bias_field_sweep_kittel_metadata_requires_sample_field_mapping() {
     });
 
     let mut field_mismatch = encoded.clone();
-    field_mismatch["problem_meta"]["runtime_metadata"]["k0_kittel_validation"]["samples"][1]
-        ["bias_field"] = serde_json::json!([41_000.0, 0.0, 0.0]);
+    field_mismatch["problem_meta"]["runtime_metadata"]["k0_kittel_validation"]["samples"][1]["bias_field"] =
+        serde_json::json!([41_000.0, 0.0, 0.0]);
     let ir: ProblemIR = serde_json::from_value(field_mismatch).unwrap();
     let error = plan(&ir).expect_err("mismatched oracle field must fail closed");
-    assert!(error
-        .reasons
-        .iter()
-        .any(|reason| { reason.contains("eigenmodes.bias_field_sweep_kittel_field_mismatch") }));
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| { reason.contains("eigenmodes.bias_field_sweep_kittel_field_mismatch") })
+    );
 
     let mut index_mismatch = encoded;
-    index_mismatch["problem_meta"]["runtime_metadata"]["k0_kittel_validation"]["samples"][2]
-        ["sample_index"] = serde_json::json!(7);
+    index_mismatch["problem_meta"]["runtime_metadata"]["k0_kittel_validation"]["samples"][2]["sample_index"] =
+        serde_json::json!(7);
     let ir: ProblemIR = serde_json::from_value(index_mismatch).unwrap();
     let error = plan(&ir).expect_err("mismatched oracle sample index must fail closed");
     assert!(error.reasons.iter().any(|reason| {
@@ -12041,10 +12135,12 @@ fn fem_eigen_k0_rejects_illegal_precision_and_nonzero_k_before_engine_resolution
         k_vector: [1.0, 0.0, 0.0],
     });
     let k_error = plan(&nonzero_k).expect_err("K0 engine must reject nonzero-k intent");
-    assert!(k_error
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("eigenmodes.k0_periodic_airbox_requires_exact_zero_k")));
+    assert!(
+        k_error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("eigenmodes.k0_periodic_airbox_requires_exact_zero_k"))
+    );
 }
 
 #[test]
@@ -12405,15 +12501,18 @@ fn fem_eigen_auto_demag_resolves_to_poisson_robin_on_shared_domain_mesh_with_air
             assert_eq!(fem.equilibrium_magnetization.len(), 8);
             let magnetic_start = fem.object_segments[0].node_start as usize;
             let magnetic_end = magnetic_start + fem.object_segments[0].node_count as usize;
-            assert!(fem.equilibrium_magnetization[magnetic_start..magnetic_end]
-                .iter()
-                .all(|value| value.iter().any(|component| component.abs() > 0.0)));
-            assert!(fem
-                .equilibrium_magnetization
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| *index < magnetic_start || *index >= magnetic_end)
-                .all(|(_, value)| *value == [0.0, 0.0, 0.0]));
+            assert!(
+                fem.equilibrium_magnetization[magnetic_start..magnetic_end]
+                    .iter()
+                    .all(|value| value.iter().any(|component| component.abs() > 0.0))
+            );
+            assert!(
+                fem.equilibrium_magnetization
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| *index < magnetic_start || *index >= magnetic_end)
+                    .all(|(_, value)| *value == [0.0, 0.0, 0.0])
+            );
         }
         other => panic!("expected FEM eigen plan, got {other:?}"),
     }
@@ -12488,10 +12587,11 @@ fn fem_eigen_periodic_bc_requires_periodic_node_pairs() {
     };
 
     let err = plan(&ir).expect_err("periodic FEM eigen without pairing metadata must fail");
-    assert!(err
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("mesh.periodic_node_pairs")));
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("mesh.periodic_node_pairs"))
+    );
 }
 
 #[test]
@@ -12937,14 +13037,16 @@ fn fem_eigen_surface_anisotropy_requires_positive_ks_and_axis() {
     };
 
     let err = plan(&ir).expect_err("invalid surface anisotropy config must fail planning");
-    assert!(err
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("surface_anisotropy_ks > 0")));
-    assert!(err
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("surface_anisotropy_axis")));
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("surface_anisotropy_ks > 0"))
+    );
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("surface_anisotropy_axis"))
+    );
 }
 
 #[test]
@@ -15659,10 +15761,12 @@ fn fdm_regional_field_drive_rejects_abm3_without_exact_stage_time_contract() {
     }
 
     let error = plan(&ir).expect_err("ABM3 drive must fail before runtime");
-    assert!(error
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("ABM3") && reason.contains("RegionalFieldDrive")));
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("ABM3") && reason.contains("RegionalFieldDrive"))
+    );
 }
 
 #[test]
@@ -18429,14 +18533,18 @@ fn fdm_grid_count_overflow_is_rejected() {
     let error = crate::geometry::checked_fdm_grid_cost(counts, 1)
         .expect_err("grid cell-count multiplication must reject u64 overflow");
 
-    assert!(error
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("fdm_grid_count_overflow")));
-    assert!(error
-        .reasons
-        .iter()
-        .any(|reason| { reason.contains("4294967295") && reason.contains("requested_counts") }));
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("fdm_grid_count_overflow"))
+    );
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| { reason.contains("4294967295") && reason.contains("requested_counts") })
+    );
 }
 
 #[test]
@@ -18445,14 +18553,18 @@ fn fdm_grid_memory_budget_is_rejected() {
     let error = crate::geometry::checked_fdm_grid_cost(counts, 16)
         .expect_err("grid allocation must reject a cost above the lane budget");
 
-    assert!(error
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("fdm_grid_memory_budget_exceeded")));
-    assert!(error
-        .reasons
-        .iter()
-        .any(|reason| { reason.contains("1000") && reason.contains("requested_counts") }));
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("fdm_grid_memory_budget_exceeded"))
+    );
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| { reason.contains("1000") && reason.contains("requested_counts") })
+    );
 }
 
 #[test]
@@ -18482,9 +18594,11 @@ fn fdm_per_magnet_cells_resolve_without_hidden_fallback() {
     };
 
     assert_eq!(cell_for_magnet(&hints, "left").unwrap(), [1e-9, 2e-9, 3e-9]);
-    assert!(cell_for_magnet(&hints, "missing")
-        .unwrap_err()
-        .contains("missing"));
+    assert!(
+        cell_for_magnet(&hints, "missing")
+            .unwrap_err()
+            .contains("missing")
+    );
     assert!(fdm_default_cell(&hints).is_err());
 }
 
@@ -18544,10 +18658,12 @@ fn fdm_multilayer_plan_resolves_complete_per_magnet_map_without_default() {
     match planned.backend_plan {
         BackendPlanIR::FdmMultilayer(multilayer) => {
             assert_eq!(multilayer.layers.len(), 2);
-            assert!(multilayer
-                .layers
-                .iter()
-                .all(|layer| layer.native_cell_size == [2e-9, 2e-9, 2e-9]));
+            assert!(
+                multilayer
+                    .layers
+                    .iter()
+                    .all(|layer| layer.native_cell_size == [2e-9, 2e-9, 2e-9])
+            );
         }
         other => panic!("expected FDM multilayer plan, got {other:?}"),
     }

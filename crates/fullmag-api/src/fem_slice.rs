@@ -8,7 +8,7 @@ use crate::planar_sampling::{
     FemPlanarField, Occupancy, PlanarComponent, PlanarSamplingEngine, ResolvedPlanarSampleRequest,
 };
 use fullmag_ir::{
-    PlanarExtentIR, PlanarFrameIR, PlanarOperatorIR, PLANAR_FRAME_NORMALIZATION_VERSION,
+    PLANAR_FRAME_NORMALIZATION_VERSION, PlanarExtentIR, PlanarFrameIR, PlanarOperatorIR,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,7 +114,7 @@ fn fem_tetra_linear_slice_via_planar_engine(
         | crate::field_projection::ComponentSelection::Index(index) => {
             return Err(ApiError::bad_request(format!(
                 "invalid_component: FEM planar slice supports vector components 0..2, got {index}"
-            )))
+            )));
         }
     };
     let source = FemPlanarField::new(

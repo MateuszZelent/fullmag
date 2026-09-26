@@ -253,9 +253,15 @@ install-cli install-cli-dev install-cli-static:
 	@mv -f .fullmag/local/bin/fullmag-bin.new .fullmag/local/bin/fullmag-bin
 	@cp "$${cargo_target_dir}/release/fullmag-api" .fullmag/local/bin/fullmag-api.new
 	@mv -f .fullmag/local/bin/fullmag-api.new .fullmag/local/bin/fullmag-api
+	@cp "$${cargo_target_dir}/release/fullmag-api-accepted-worker" .fullmag/local/bin/fullmag-api-accepted-worker.new
+	@mv -f .fullmag/local/bin/fullmag-api-accepted-worker.new .fullmag/local/bin/fullmag-api-accepted-worker
+	@cp "$${cargo_target_dir}/release/fullmag-api-accepted-supervisor" .fullmag/local/bin/fullmag-api-accepted-supervisor.new
+	@mv -f .fullmag/local/bin/fullmag-api-accepted-supervisor.new .fullmag/local/bin/fullmag-api-accepted-supervisor
 	@if command -v patchelf >/dev/null 2>&1; then \
 		patchelf --set-rpath '$$ORIGIN/../lib' .fullmag/local/bin/fullmag-bin; \
 		patchelf --set-rpath '$$ORIGIN/../lib' .fullmag/local/bin/fullmag-api; \
+		patchelf --set-rpath '$$ORIGIN/../lib' .fullmag/local/bin/fullmag-api-accepted-worker; \
+		patchelf --set-rpath '$$ORIGIN/../lib' .fullmag/local/bin/fullmag-api-accepted-supervisor; \
 	fi
 		@printf '%s\n' '#!/usr/bin/env bash' \
 			'SELF_DIR="$$(cd "$$(dirname "$$0")" && pwd)"' \

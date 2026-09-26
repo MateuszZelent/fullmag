@@ -6,7 +6,7 @@ use fullmag_ir::{
 };
 use std::collections::BTreeSet;
 
-use crate::region_conflict::{resolve_region_conflict, RegionConflictCandidate};
+use crate::region_conflict::{RegionConflictCandidate, resolve_region_conflict};
 
 fn geometry_translation(entry: &GeometryEntryIR) -> [f64; 3] {
     match entry {

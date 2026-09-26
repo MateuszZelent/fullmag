@@ -6,6 +6,8 @@ publish.workspace = true
 rust-version = "1.89"
 
 [dependencies]
+fullmag-ir = { path = "../fullmag-ir" }
+fullmag-plan = { path = "../fullmag-plan" }
 serde.workspace = true
 serde_json.workspace = true
 uuid = { version = "1", features = ["v4", "serde"] }

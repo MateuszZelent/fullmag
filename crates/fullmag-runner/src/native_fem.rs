@@ -126,6 +126,11 @@ use std::ptr;
 #[cfg(feature = "fem-gpu")]
 use std::sync::Arc;
 
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+mod mesh_preparation;
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+pub use mesh_preparation::prepare_fem_mesh_space;
+
 #[cfg(feature = "fem-gpu")]
 fn checked_native_finite(label: &str, value: f64) -> Result<f64, RunError> {
     if value.is_finite() {

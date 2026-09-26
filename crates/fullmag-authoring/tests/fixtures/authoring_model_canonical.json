@@ -1,0 +1,62 @@
+{
+  "schema_version": "authoring_model.v1",
+  "model_id": "model:canonical",
+  "name": "film μ\u2028🧲",
+  "components": [
+    {
+      "schema_version": "component_definition.v1",
+      "component_id": "component:film",
+      "name": "film",
+      "geometry": {
+        "kind": "box",
+        "dimensions_m": [2.5e-7, 5e-9, 1.0, -0.0, 1e20, 0.0001],
+        "unicode": "NiFe"
+      },
+      "material_ref": "Py",
+      "region_ids": ["region:bulk"],
+      "material_parameter_assignment_ids": ["assignment:Ms"],
+      "physics_assignment_ids": ["physics:default"],
+      "initial_state": {
+        "kind": "uniform",
+        "value": [1.0, 0.0, 0.0]
+      },
+      "mesh_recipe": {
+        "cell_size_m": [1e-8, 1e-8, 1e-9]
+      }
+    }
+  ],
+  "physics_configurations": [
+    {
+      "schema_version": "physics_configuration.v1",
+      "configuration_id": "physics:default",
+      "active_interaction_kinds": ["exchange"],
+      "energy_terms": [
+        {"kind": "exchange", "A_J_per_m": 1.3e-11}
+      ],
+      "source_ids": ["source:field"],
+      "constraint_ids": ["constraint:fixed"],
+      "module_ids": ["module:exchange"]
+    }
+  ],
+  "couplings": [
+    {"kind": "interface_exchange", "strength": 2.25e-6}
+  ],
+  "discretization": {
+    "kind": "fdm",
+    "cell_size_m": [2.5e-8, 5e-9, 1e-9]
+  },
+  "parameters": {
+    "schema_version": "parameter_library.v1",
+    "version": 1,
+    "parameters": [
+      {
+        "id": "Ms",
+        "value": 8e5,
+        "authored_unit": "A/m",
+        "display_unit": "kA/m",
+        "description": "saturation μ"
+      }
+    ]
+  },
+  "parameter_numerical_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

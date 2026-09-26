@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <limits>
 #include <unordered_set>
+#include <utility>
 
 namespace fullmag::fem {
 namespace {
@@ -450,30 +451,51 @@ bool element_topology(uint32_t cell_type, ElementTopology &topology) {
     }
 }
 
+bool import_mesh_descriptor(
+    const fullmag_fem_mesh_desc &descriptor,
+    FemMeshRuntimeState &mesh,
+    std::string &error)
+{
+    error.clear();
+    if (!validate_mesh_topology(descriptor, error)) {
+        return false;
+    }
+
+    FemMeshRuntimeState candidate;
+    candidate.n_nodes = static_cast<uint32_t>(descriptor.nodes_xyz_len / 3u);
+    candidate.n_elements = static_cast<uint32_t>(descriptor.cell_types_len);
+    candidate.n_boundary_faces = static_cast<uint32_t>(descriptor.facet_types_len);
+    copy_span(candidate.nodes_xyz, descriptor.nodes_xyz, descriptor.nodes_xyz_len);
+    copy_span(candidate.cell_types, descriptor.cell_types, descriptor.cell_types_len);
+    copy_span(candidate.cell_offsets, descriptor.cell_offsets, descriptor.cell_offsets_len);
+    copy_span(candidate.cell_nodes, descriptor.cell_nodes, descriptor.cell_nodes_len);
+    copy_span(candidate.cell_global_ordinals, descriptor.cell_global_ordinals,
+        descriptor.cell_global_ordinals_len);
+    copy_span(candidate.cell_markers, descriptor.cell_markers, descriptor.cell_markers_len);
+    copy_span(candidate.facet_types, descriptor.facet_types, descriptor.facet_types_len);
+    copy_span(candidate.facet_roles, descriptor.facet_roles, descriptor.facet_roles_len);
+    copy_span(candidate.facet_offsets, descriptor.facet_offsets, descriptor.facet_offsets_len);
+    copy_span(candidate.facet_nodes, descriptor.facet_nodes, descriptor.facet_nodes_len);
+    copy_span(candidate.facet_global_ordinals, descriptor.facet_global_ordinals,
+        descriptor.facet_global_ordinals_len);
+    copy_span(candidate.facet_markers, descriptor.facet_markers, descriptor.facet_markers_len);
+    copy_span(candidate.periodic_node_pairs, descriptor.periodic_node_pairs,
+        descriptor.periodic_node_pairs_len);
+    copy_span(candidate.periodic_boundary_pair_markers,
+        descriptor.periodic_boundary_pair_markers,
+        descriptor.periodic_boundary_pair_markers_len);
+    mesh = std::move(candidate);
+    return true;
+}
+
 bool initialize_mesh_plan_fields(
     Context &ctx,
     const fullmag_fem_mesh_desc &mesh,
     std::string &error)
 {
-    if (!validate_mesh_topology(mesh, error)) {
+    if (!import_mesh_descriptor(mesh, ctx.mesh, error)) {
         return false;
     }
-    ctx.mesh.n_nodes = static_cast<uint32_t>(mesh.nodes_xyz_len / 3u);
-    ctx.mesh.n_elements = static_cast<uint32_t>(mesh.cell_types_len);
-    ctx.mesh.n_boundary_faces = static_cast<uint32_t>(mesh.facet_types_len);
-    copy_span(ctx.mesh.nodes_xyz, mesh.nodes_xyz, mesh.nodes_xyz_len);
-    copy_span(ctx.mesh.cell_types, mesh.cell_types, mesh.cell_types_len);
-    copy_span(ctx.mesh.cell_offsets, mesh.cell_offsets, mesh.cell_offsets_len);
-    copy_span(ctx.mesh.cell_nodes, mesh.cell_nodes, mesh.cell_nodes_len);
-    copy_span(ctx.mesh.cell_global_ordinals, mesh.cell_global_ordinals, mesh.cell_global_ordinals_len);
-    copy_span(ctx.mesh.cell_markers, mesh.cell_markers, mesh.cell_markers_len);
-    copy_span(ctx.mesh.facet_types, mesh.facet_types, mesh.facet_types_len);
-    copy_span(ctx.mesh.facet_roles, mesh.facet_roles, mesh.facet_roles_len);
-    copy_span(ctx.mesh.facet_offsets, mesh.facet_offsets, mesh.facet_offsets_len);
-    copy_span(ctx.mesh.facet_nodes, mesh.facet_nodes, mesh.facet_nodes_len);
-    copy_span(ctx.mesh.facet_global_ordinals, mesh.facet_global_ordinals, mesh.facet_global_ordinals_len);
-    copy_span(ctx.mesh.facet_markers, mesh.facet_markers, mesh.facet_markers_len);
-    copy_span(ctx.mesh.periodic_node_pairs, mesh.periodic_node_pairs, mesh.periodic_node_pairs_len);
     if (!build_static_periodic_reduction(ctx, error)) {
         return false;
     }

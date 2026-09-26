@@ -17,9 +17,9 @@ use fullmag_ir::{
 use fullmag_ir::{ChargePotentialGaugeIR, TransportCouplingIR};
 use sha2::{Digest, Sha256};
 
+use crate::PlanError;
 use crate::physics_graph::physics_module_execution_enabled;
 use crate::surface_selectors::resolve_fem_surface_selector;
-use crate::PlanError;
 
 const FEM_STAGE_OERSTED_CALLBACK_POLICY: &str = "fem_stage_oersted_callback.v1";
 const FEM_STAGE_TRANSPORT_CALLBACK_POLICY: &str = "fem_stage_transport_callback.v1";
@@ -1298,7 +1298,7 @@ fn materialize_fem_descriptor(
         }
         fullmag_ir::ChargePotentialGaugeIR::ZeroMean if !charge_dirichlet.is_empty() => {
             return Err(vec![
-                "zero-mean gauge conflicts with voltage electrodes".into()
+                "zero-mean gauge conflicts with voltage electrodes".into(),
             ]);
         }
         _ => {}
@@ -1524,7 +1524,8 @@ fn validate_conservative_current_view(
     if view.boundary_faces.len() != expected_faces.len() {
         return Err(vec![format!(
             "{prefix} must classify every exterior/periodic Tri3 facet exactly once (authored {}, mesh {})",
-            view.boundary_faces.len(), expected_faces.len()
+            view.boundary_faces.len(),
+            expected_faces.len()
         )]);
     }
     let mut authored_faces = BTreeSet::new();
@@ -1803,7 +1804,9 @@ fn require_full_fem_domain(mask: &[bool], label: &str) -> Result<(), Vec<String>
     if mask.iter().all(|selected| *selected) && !mask.is_empty() {
         Ok(())
     } else {
-        Err(vec![format!("FEM conforming-H1 M1 requires {label} to cover the complete resolved mesh; submesh restriction is not implemented")])
+        Err(vec![format!(
+            "FEM conforming-H1 M1 requires {label} to cover the complete resolved mesh; submesh restriction is not implemented"
+        )])
     }
 }
 
@@ -2109,7 +2112,7 @@ fn resolve_spin_dirichlet(
             }
             fullmag_ir::SpinBoundaryIR::SpecifiedSpinFlux { .. } => {
                 return Err(vec![
-                    "specified spin flux is unsupported by FEM M1 C ABI".into()
+                    "specified spin flux is unsupported by FEM M1 C ABI".into(),
                 ]);
             }
             fullmag_ir::SpinBoundaryIR::PeriodicSpin { .. } => {
@@ -2983,9 +2986,11 @@ fn structured_boundary_face(
         "y_max" | "y+" => (StructuredBoundaryFaceIR::YMax, [0.0, 1.0, 0.0]),
         "z_min" | "z-" => (StructuredBoundaryFaceIR::ZMin, [0.0, 0.0, -1.0]),
         "z_max" | "z+" => (StructuredBoundaryFaceIR::ZMax, [0.0, 0.0, 1.0]),
-        other => return Err(vec![format!(
-            "structured FDM surface_id '{other}' is unsupported; use x_min/x_max/y_min/y_max/z_min/z_max"
-        )]),
+        other => {
+            return Err(vec![format!(
+                "structured FDM surface_id '{other}' is unsupported; use x_min/x_max/y_min/y_max/z_min/z_max"
+            )]);
+        }
     };
     if surface
         .orientation
@@ -4202,9 +4207,11 @@ mod tests {
             &multi_arm_context,
         )
         .expect_err("disconnected arms on one plane must fail");
-        assert!(errors
-            .iter()
-            .any(|error| error.contains("multiple disconnected")));
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("multiple disconnected"))
+        );
 
         let mut open_problem = problem(ExecutionDevice::Cpu);
         set_structured_closure(
@@ -4253,9 +4260,11 @@ mod tests {
         assert_eq!(plans[0].requested_execution.device, ExecutionDevice::Cpu);
         assert_eq!(plans[0].resolved_device, ExecutionDevice::Cpu);
         assert_eq!(plans[0].resolved_coupling, TransportCouplingIR::OneWay);
-        assert!(plans[0]
-            .capabilities
-            .contains(&"transport.spin.direct_she".to_string()));
+        assert!(
+            plans[0]
+                .capabilities
+                .contains(&"transport.spin.direct_she".to_string())
+        );
         assert_eq!(
             plans[0].inserted_default_boundaries,
             ["all_unassigned_external_surfaces"]
@@ -4313,9 +4322,11 @@ mod tests {
             .fdm_cpu_double_reciprocal
             .as_ref()
             .expect("reciprocal descriptor");
-        assert!(plans[0]
-            .capabilities
-            .contains(&"transport.spin.memory_loss".to_string()));
+        assert!(
+            plans[0]
+                .capabilities
+                .contains(&"transport.spin.memory_loss".to_string())
+        );
         assert!(matches!(
             descriptor.interfaces[0].law,
             fullmag_ir::ResolvedSpinInterfaceLawIR::MixingConductance {
@@ -4352,10 +4363,11 @@ mod tests {
             .expect("separate reciprocal descriptor");
         assert_eq!(descriptor.reciprocal_materials[0].sigma_parallel_spm, 4.4e6);
         assert_eq!(descriptor.reciprocal_materials[0].sigma_ahe_spm, 0.2e6);
-        assert!(plan
-            .capabilities
-            .iter()
-            .any(|capability| capability == "transport.spin.inverse_she"));
+        assert!(
+            plan.capabilities
+                .iter()
+                .any(|capability| capability == "transport.spin.inverse_she")
+        );
     }
 
     #[test]
@@ -4409,10 +4421,12 @@ mod tests {
             &context(&owners, &region_mask, &magnetization, &ms, &region_ids),
         )
         .expect_err("incomplete reciprocal material must fail closed");
-        assert!(error
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("sigma_parallel")));
+        assert!(
+            error
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("sigma_parallel"))
+        );
     }
 
     #[test]
@@ -4426,10 +4440,12 @@ mod tests {
         let error =
             resolve_spin_transport(&problem(ExecutionDevice::Gpu), BackendTarget::Fdm, &context)
                 .expect_err("GPU must not silently fall back");
-        assert!(error
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("cannot fall back silently")));
+        assert!(
+            error
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("cannot fall back silently"))
+        );
     }
 
     #[test]
@@ -4471,9 +4487,11 @@ mod tests {
             descriptor.integrator,
             fullmag_ir::CoupledSpinIntegratorIR::CoupledImexArk2
         );
-        assert!(plans[0]
-            .capabilities
-            .contains(&"transport.spin.transient_drift_diffusion".to_string()));
+        assert!(
+            plans[0]
+                .capabilities
+                .contains(&"transport.spin.transient_drift_diffusion".to_string())
+        );
         let provenance = serde_json::to_value(&plans[0]).expect("resolved plan provenance");
         assert_eq!(
             provenance["fdm_cpu_double_transient"]["spin_capacitance_As_per_V_m3"][0],
@@ -4551,18 +4569,25 @@ mod tests {
             &context(&owners, &region_mask, &magnetization, &ms, &region_ids),
         )
         .expect_err("M3 reference execution must remain strict-only");
-        assert!(error
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("strict execution mode")));
-        assert!(error
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("transient M3 reference execution supports CPU double")));
-        assert!(error
-            .reasons
-            .iter()
-            .all(|reason| !reason.contains("steady M1/M2")));
+        assert!(
+            error
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("strict execution mode"))
+        );
+        assert!(
+            error
+                .reasons
+                .iter()
+                .any(|reason| reason
+                    .contains("transient M3 reference execution supports CPU double"))
+        );
+        assert!(
+            error
+                .reasons
+                .iter()
+                .all(|reason| !reason.contains("steady M1/M2"))
+        );
     }
 
     fn fem_problem() -> ProblemIR {
@@ -4910,9 +4935,10 @@ mod tests {
             descriptor.validation_scope,
             "fem_cpu_double_conforming_h1_p1_reciprocal_m2"
         );
-        assert!(plan
-            .capabilities
-            .contains(&"transport.spin.inverse_she".to_string()));
+        assert!(
+            plan.capabilities
+                .contains(&"transport.spin.inverse_she".to_string())
+        );
     }
 
     #[test]
@@ -5013,10 +5039,12 @@ mod tests {
         };
         charge.boundaries.pop();
         let error = resolve(&incomplete).expect_err("incomplete charge coverage must fail");
-        assert!(error
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("face-exact ownership is incomplete")));
+        assert!(
+            error
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("face-exact ownership is incomplete"))
+        );
 
         let mut charge_conflict = fem_problem();
         let CurrentModuleIR::CurrentTransport {
@@ -5035,10 +5063,12 @@ mod tests {
             }],
         });
         let error = resolve(&charge_conflict).expect_err("charge conflict must fail");
-        assert!(error
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("conflicting FEM charge")));
+        assert!(
+            error
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("conflicting FEM charge"))
+        );
 
         let mut spin_conflict = fem_problem();
         spin_conflict.spin_transport_modules[0].boundaries = vec![
@@ -5060,10 +5090,12 @@ mod tests {
             },
         ];
         let error = resolve(&spin_conflict).expect_err("spin conflict must fail");
-        assert!(error
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("conflicting FEM spin")));
+        assert!(
+            error
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("conflicting FEM spin"))
+        );
 
         let mut defaults = fem_problem();
         let CurrentModuleIR::CurrentTransport {
@@ -5121,10 +5153,12 @@ mod tests {
         charge.boundaries.remove(1);
         let error = resolve(&partial_charge)
             .expect_err("one selected face must not silently expand to its shared marker");
-        assert!(error
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("face-exact")));
+        assert!(
+            error
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("face-exact"))
+        );
 
         let mut legal_charge = fem_problem();
         let CurrentModuleIR::CurrentTransport {
@@ -5188,10 +5222,12 @@ mod tests {
         ];
         let error = resolve(&partial_spin)
             .expect_err("spin selector must not silently expand to an unselected shared face");
-        assert!(error
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("face-exact")));
+        assert!(
+            error
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("face-exact"))
+        );
 
         let back = SurfaceRefIR {
             object_id: "strip".into(),
@@ -5231,10 +5267,11 @@ mod tests {
         )
         .expect_err("the v1 ABI has one linear policy and must not synthesize one");
 
-        assert!(error
-            .reasons
-            .iter()
-            .any(|reason| { reason.contains("identical charge and spin linear solver policies") }));
+        assert!(
+            error.reasons.iter().any(|reason| {
+                reason.contains("identical charge and spin linear solver policies")
+            })
+        );
     }
 
     #[test]
@@ -5256,10 +5293,12 @@ mod tests {
         )
         .expect_err("FEM M1 v1 is strict-only");
 
-        assert!(error
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("execution_mode=strict")));
+        assert!(
+            error
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("execution_mode=strict"))
+        );
     }
 
     #[test]
@@ -5666,10 +5705,12 @@ mod tests {
         reciprocal.spin_transport_modules[0].solver.engine = "native_m1_v1".into();
         let m2_error = resolve_spin_transport(&reciprocal, BackendTarget::Fdm, &context)
             .expect_err("native M2 must fail");
-        assert!(m2_error
-            .reasons
-            .join(" ")
-            .contains("M2/M3 fallback is forbidden"));
+        assert!(
+            m2_error
+                .reasons
+                .join(" ")
+                .contains("M2/M3 fallback is forbidden")
+        );
 
         let mut single = problem(ExecutionDevice::Cpu);
         single.spin_transport_modules[0].solver.engine = "native_m1_v1".into();
@@ -5678,20 +5719,24 @@ mod tests {
             .precision = ExecutionPrecision::Single;
         let single_error = resolve_spin_transport(&single, BackendTarget::Fdm, &context)
             .expect_err("native single precision must fail");
-        assert!(single_error
-            .reasons
-            .join(" ")
-            .contains("explicit FDM/CPU/double/strict"));
+        assert!(
+            single_error
+                .reasons
+                .join(" ")
+                .contains("explicit FDM/CPU/double/strict")
+        );
 
         let mut transient = problem(ExecutionDevice::Cpu);
         transient.spin_transport_modules[0].solver.engine = "native_m1_v1".into();
         transient.spin_transport_modules[0].mode = SpinTransportModeIR::Transient;
         let m3_error = resolve_spin_transport(&transient, BackendTarget::Fdm, &context)
             .expect_err("native M3 must fail");
-        assert!(m3_error
-            .reasons
-            .join(" ")
-            .contains("M2/M3 fallback is forbidden"));
+        assert!(
+            m3_error
+                .reasons
+                .join(" ")
+                .contains("M2/M3 fallback is forbidden")
+        );
     }
 
     #[test]
@@ -5734,10 +5779,12 @@ mod tests {
         }];
         let sml_error = resolve_spin_transport(&sml, BackendTarget::Fdm, &context)
             .expect_err("native SML must fail");
-        assert!(sml_error
-            .reasons
-            .join(" ")
-            .contains("does not support SML and cannot degrade"));
+        assert!(
+            sml_error
+                .reasons
+                .join(" ")
+                .contains("does not support SML and cannot degrade")
+        );
 
         let mut periodic = problem(ExecutionDevice::Cpu);
         periodic.spin_transport_modules[0].solver.engine = "native_m1_v1".into();
@@ -5757,10 +5804,12 @@ mod tests {
         }];
         let periodic_error = resolve_spin_transport(&periodic, BackendTarget::Fdm, &context)
             .expect_err("native periodic spin boundary must fail");
-        assert!(periodic_error
-            .reasons
-            .join(" ")
-            .contains("does not support specified spin flux or periodic"));
+        assert!(
+            periodic_error
+                .reasons
+                .join(" ")
+                .contains("does not support specified spin flux or periodic")
+        );
     }
 
     #[test]

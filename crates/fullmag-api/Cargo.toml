@@ -1,13 +1,35 @@
 [package]
 name = "fullmag-api"
+default-run = "fullmag-api"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[[bin]]
+name = "fullmag-api"
+path = "src/main.rs"
+
+[[bin]]
+name = "fullmag-api-accepted-worker"
+path = "src/accepted_worker_main.rs"
+
+[[bin]]
+name = "fullmag-api-accepted-supervisor"
+path = "src/accepted_supervisor_main.rs"
+
+[[bin]]
+name = "fullmag-api-openapi"
+path = "src/main.rs"
+required-features = ["openapi-codegen"]
+test = false
+bench = false
+
 [features]
 default = []
+openapi-codegen = []
 cuda = ["fullmag-runner/cuda"]
-fem-gpu = ["fullmag-runner/fem-gpu"]
+fem-native = ["fullmag-runner/fem-native"]
+fem-gpu = ["fem-native", "fullmag-runner/fem-gpu"]
 stage-autosave-hdf5 = ["fullmag-runner/stage-autosave-hdf5"]
 swagger-ui = ["dep:utoipa-swagger-ui"]
 
@@ -33,6 +55,7 @@ fullmag-plan = { path = "../fullmag-plan" }
 fullmag-quantities = { path = "../fullmag-quantities" }
 fullmag-runner = { path = "../fullmag-runner" }
 fullmag-session = { path = "../fullmag-session" }
+fullmag-runtime-control = { path = "../fullmag-runtime-control" }
 png = "0.17"
 tiny-skia = "0.11"
 fontdue = "0.9"

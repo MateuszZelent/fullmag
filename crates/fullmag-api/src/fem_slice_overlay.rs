@@ -403,17 +403,13 @@ fn quantize(value: f64, epsilon: f64) -> i64 {
 fn segment_key(a: [f64; 2], b: [f64; 2], epsilon: f64) -> ((i64, i64), (i64, i64)) {
     let qa = (quantize(a[0], epsilon), quantize(a[1], epsilon));
     let qb = (quantize(b[0], epsilon), quantize(b[1], epsilon));
-    if qa <= qb {
-        (qa, qb)
-    } else {
-        (qb, qa)
-    }
+    if qa <= qb { (qa, qb) } else { (qb, qa) }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::field_slice::{resolve_slice_query, FieldSliceQuery};
+    use crate::field_slice::{FieldSliceQuery, resolve_slice_query};
 
     #[test]
     fn collect_overlay_emits_cross_section_polygon_with_parent_element_id() {

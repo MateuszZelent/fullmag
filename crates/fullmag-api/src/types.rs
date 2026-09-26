@@ -26,9 +26,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use tokio::sync::{broadcast, watch, Mutex, RwLock};
+use std::sync::atomic::AtomicU64;
+use tokio::sync::{Mutex, RwLock, broadcast, watch};
 use utoipa::ToSchema;
 
 pub(crate) type CurrentPreviewConfig = LivePreviewRequest;
@@ -108,12 +108,16 @@ pub(crate) enum MeshCommandTarget {
 #[derive(Debug, Clone)]
 pub(crate) struct AppState {
     pub repo_root: PathBuf,
+    /// Managed, project-owned run storage resolved before this API starts.
+    pub submit_store_root: Option<PathBuf>,
     pub current_workspace_root: PathBuf,
     /// Sessionless local-live workspace snapshot used by the root `/` GUI.
     pub current_live_state: Arc<RwLock<Option<SessionStateResponse>>>,
     /// Lock order: current_live_session_transition precedes current-session state,
     /// resource, and realtime locks. It remains held through current-session publish.
     pub current_live_session_transition: Arc<Mutex<()>>,
+    /// Unique to this API process; paired with the transition counter for browser request scope.
+    pub request_scope_instance_id: String,
     /// Changes whenever explicit authoring replaces the current session.
     pub current_live_session_epoch: Arc<AtomicU64>,
     #[cfg(test)]
@@ -124,6 +128,11 @@ pub(crate) struct AppState {
     /// Last successfully accepted runner frame or idle liveness tick.
     /// Status/admission use it for degraded/disconnected transitions.
     pub current_live_last_seen_unix_ms: Arc<AtomicU64>,
+    /// Last durably published preparation receipt for the active run.
+    /// Kept outside the runner snapshot so the receipt cannot be replaced by
+    /// a stale progress frame and remains available to the resource handler.
+    pub current_live_preparation_receipt:
+        Arc<RwLock<Option<fullmag_session::FmsPreparationReceipt>>>,
     /// Resource-first realtime events for `/v2/sessions/current/events/ws`.
     pub current_live_realtime_events: broadcast::Sender<CurrentLiveRealtimeEvent>,
     /// Bounded replay buffer for the resource-first realtime stream.
@@ -173,6 +182,20 @@ pub(crate) struct AppState {
     /// Session-bound authoritative frozen-spins preview metadata and dense mask backing.
     /// The mask is never serialized into status or another JSON control-plane resource.
     pub frozen_spins_previews: Arc<RwLock<crate::session::FrozenSpinsPreviewStore>>,
+}
+
+/// Immutable identity captured before an async current-workspace operation.
+///
+/// Legacy `/sessions/current` routes still expose a session-scoped adapter, so
+/// this pilot uses the durable session/run identity rather than pretending the
+/// mutable `current` pointer is a project context.  A handler must validate it
+/// again immediately before it reads or publishes state after an await.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CurrentLiveRequestContext {
+    pub session_id: String,
+    pub run_id: Option<String>,
+    pub session_epoch: u64,
+    pub request_scope_epoch: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1142,6 +1165,25 @@ pub(crate) struct CurrentLiveSnapshotRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct CurrentLivePreparationReceiptRequest {
+    pub session_id: String,
+    pub receipt: fullmag_application::PreparationReceipt,
+}
+
+/// Internal bridge request for materializing preparation from the current
+/// immutable SceneDocument snapshot. ProblemIR is derived server-side through
+/// the canonical Python DSL so callers cannot substitute different physics.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CurrentLivePreparationMaterializationRequest {
+    pub session_id: String,
+    pub preparation_id: String,
+    pub scene_revision: u64,
+    pub requested_execution: fullmag_application::RequestedExecution,
+    pub display_projection: Value,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct CurrentLiveHeartbeatRequest {
     pub session_id: String,
 }
@@ -1625,6 +1667,7 @@ mod tests {
             domain_frame: None,
             stages: Vec::new(),
             study_pipeline: None,
+            table_autosave: None,
             initial_state: None,
             geometries: vec![fullmag_authoring::ScriptBuilderGeometryEntry {
                 name: "body".to_string(),

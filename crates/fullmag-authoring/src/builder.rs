@@ -188,8 +188,8 @@ impl Default for ScriptBuilderMeshState {
             smoothing_steps: default_mesh_smoothing(),
             optimize: String::new(),
             optimize_iterations: default_mesh_opt_iters(),
-            compute_quality: false,
-            per_element_quality: false,
+            compute_quality: true,
+            per_element_quality: true,
             interface_hmax: None,
             interface_thickness: None,
             transition_distance: None,
@@ -748,6 +748,7 @@ pub struct ScriptBuilderGeometryEntry {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ScriptBuilderDriveState {
     pub current_a: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -759,6 +760,7 @@ pub struct ScriptBuilderDriveState {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ScriptBuilderCurrentModuleState {
     pub kind: String,
     pub name: String,
@@ -771,6 +773,7 @@ pub struct ScriptBuilderCurrentModuleState {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ScriptBuilderExcitationAnalysisState {
     pub source: String,
     pub method: String,
@@ -868,6 +871,8 @@ pub struct ScriptBuilderState {
     pub stages: Vec<ScriptBuilderStageState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub study_pipeline: Option<StudyPipelineDocument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table_autosave: Option<fullmag_ir::TableAutosaveIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_state: Option<ScriptBuilderInitialState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

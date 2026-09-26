@@ -463,6 +463,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::simulation::get_simulation_preparation),
         )
         .route(
+            "/v2/sessions/current/simulation/preparation/materialization",
+            post(handlers::simulation::materialize_live_preparation),
+        )
+        .route(
             "/v2/sessions/current/simulation/runs/:run_id",
             get(handlers::simulation::get_run_by_id),
         )
@@ -1023,8 +1027,8 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             post(handlers::persistence::import_field_state),
         )
         .route(
-            "/v2/sessions/current/persistence/imports/inspections",
-            post(handlers::persistence::inspect_session),
+            "/v2/persistence/imports/inspections",
+            post(handlers::persistence::inspect_project_archive),
         )
         .route(
             "/v2/sessions/current/persistence/imports",
@@ -1041,6 +1045,19 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/persistence/projects/open",
             post(handlers::persistence::projects::open),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs",
+            get(handlers::persistence::projects::list_runs)
+                .post(handlers::persistence::projects::submit_run),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id",
+            get(handlers::persistence::projects::get_run),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/materialization",
+            post(handlers::persistence::projects::materialize_run),
         )
         .route(
             "/v2/sessions/current/persistence/recovery",
@@ -1063,6 +1080,9 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         ))
         .layer(axum::middleware::from_fn(
             middleware::version::contract_version_middleware,
+        ))
+        .layer(axum::middleware::from_fn(
+            middleware::session_scope::session_scope_middleware,
         ))
 }
 
@@ -1115,6 +1135,9 @@ async fn list_sessions(
 }
 
 async fn get_current_session(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()

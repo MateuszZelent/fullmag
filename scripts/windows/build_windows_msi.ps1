@@ -190,6 +190,8 @@ function Write-StageManifest {
     bin = @(
       "bin/fullmag.exe",
       "bin/fullmag-api.exe",
+      "bin/fullmag-api-accepted-worker.exe",
+      "bin/fullmag-api-accepted-supervisor.exe",
       "bin/fullmag-ui.exe",
       "bin/fullmag-bin.exe"
     )
@@ -205,6 +207,8 @@ function Test-StagedLayout {
   $required = @(
     (Join-Path $StageRoot "bin\fullmag.exe"),
     (Join-Path $StageRoot "bin\fullmag-api.exe"),
+    (Join-Path $StageRoot "bin\fullmag-api-accepted-worker.exe"),
+    (Join-Path $StageRoot "bin\fullmag-api-accepted-supervisor.exe"),
     (Join-Path $StageRoot "bin\fullmag-ui.exe"),
     (Join-Path $StageRoot "web\index.html"),
     (Join-Path $StageRoot "python\site-packages\fullmag\__init__.py"),
@@ -371,7 +375,13 @@ try {
   Ensure-Dir $examplesDir
   Ensure-Dir $licensesDir
 
-  foreach ($binary in @("fullmag.exe", "fullmag-api.exe", "fullmag-ui.exe")) {
+  foreach ($binary in @(
+    "fullmag.exe",
+    "fullmag-api.exe",
+    "fullmag-api-accepted-worker.exe",
+    "fullmag-api-accepted-supervisor.exe",
+    "fullmag-ui.exe"
+  )) {
     $sourceBinary = Join-Path $ReleaseDir $binary
     Require-File $sourceBinary
     Copy-Item -Force $sourceBinary (Join-Path $binDir $binary)

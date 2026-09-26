@@ -2890,6 +2890,18 @@ class Problem:
             result["physics_objects"] = physics_objects
         return result
 
+    def to_model_definition(self, *, model_id: str | None = None) -> "ModelDefinition":
+        """Return the read-only authoring projection for this problem.
+
+        The projection is an authoring/document boundary only.  It does not
+        materialize meshes, select a runtime, or create a second mutable
+        problem state.
+        """
+
+        from fullmag.model.authoring import ModelDefinition
+
+        return ModelDefinition.from_problem(self, model_id=model_id)
+
     def _collect_magnetization_constraints(self) -> tuple[FrozenSpins, ...]:
         collected: list[FrozenSpins] = list(self.magnetization_constraints)
         study_constraints = getattr(self.study, "constraints", ())

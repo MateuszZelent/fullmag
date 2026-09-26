@@ -26,15 +26,18 @@ use crate::types::AppState;
 pub async fn get_active_mode_composition(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ModeCompositionResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     reconcile_mode_composition_lifecycle(&state).await?;
-    Ok(Json(
-        state
-            .current_display_presentation
-            .read()
-            .await
-            .mode_composition
-            .clone(),
-    ))
+    let response = state
+        .current_display_presentation
+        .read()
+        .await
+        .mode_composition
+        .clone();
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(response))
 }
 
 #[utoipa::path(
@@ -52,9 +55,13 @@ pub async fn patch_active_mode_composition(
     State(state): State<Arc<AppState>>,
     Json(patch): Json<ModeCompositionPatch>,
 ) -> Result<Json<ModeCompositionResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     // One process-wide mutation queue makes the compare/apply/revalidate sequence
     // serial.  A stale base revision is still rejected, never silently overwritten.
     let _queue = mode_composition_mutation_queue().lock().await;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     reconcile_mode_composition_lifecycle(&state).await?;
     let current = state
         .current_display_presentation
@@ -73,6 +80,7 @@ pub async fn patch_active_mode_composition(
     presentation.mode_composition = next.clone();
     drop(presentation);
     emit_mode_composition_realtime_change(&state, next.revision).await?;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     Ok(Json(next))
 }
 
@@ -427,7 +435,7 @@ fn validate_layer(
         _ => {
             return Err(ApiError::bad_request(
                 "mode_composition_value_invalid: manual range must contain finite min < max",
-            ))
+            ));
         }
     }
     Ok(())

@@ -2,12 +2,12 @@ use fullmag_ir::{FdmHintsIR, FdmMaterialIR, GeometryEntryIR};
 
 const TAU: f64 = std::f64::consts::PI * 2.0;
 
+use crate::PlanError;
 use crate::selection::geometry::{
-    contains_point, normalize_axis as normalize_selection_axis, AffineTransform3,
-    BoundaryMembership, GeometryPredicate, SelectionError,
+    AffineTransform3, BoundaryMembership, GeometryPredicate, SelectionError, contains_point,
+    normalize_axis as normalize_selection_axis,
 };
 use crate::util::GRID_TOLERANCE;
-use crate::PlanError;
 
 /// Conservative per-cell planning estimate used before any FDM backing vector
 /// or geometry mask is allocated.  The estimate covers the state, material,

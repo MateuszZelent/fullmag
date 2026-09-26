@@ -94,6 +94,9 @@ case "${recipe}" in
     exec "${python_cmd}" "${script_dir}/verify_project_python_runtime.py" --repo-root "${repo_root}"
     ;;
   *"scripts/verify_project_api_runtime.py"*)
+    if [[ "${recipe}" == *"--include-project-run"* ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_project_api_runtime.py" --include-project-run --repo-root "${repo_root}"
+    fi
     if [[ "${recipe}" == *"--include-websocket"* ]]; then
       exec "${python_cmd}" "${script_dir}/verify_project_api_runtime.py" --include-websocket --repo-root "${repo_root}"
     fi
@@ -111,8 +114,42 @@ case "${recipe}" in
   *"scripts/verify_session_persistence.py"*"--route project-entrypoint-check"*)
     exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route project-entrypoint-check --repo-root "${repo_root}"
     ;;
+  *"scripts/verify_session_persistence.py"*"--route api-source-check"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-source-check --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-accepted-worker-check"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-worker-check --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-accepted-supervisor-tests"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-tests --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-preparation-tests"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-preparation-tests --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-project-run-tests"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-project-run-tests --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-recovery-tests"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-recovery-tests --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-scene-resource-tests"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-scene-resource-tests --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route authoring-contract-tests"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route authoring-contract-tests --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route authoring-scene-adapter-tests"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route authoring-scene-adapter-tests --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-openapi-codegen"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-openapi-codegen --repo-root "${repo_root}"
+    ;;
   *"scripts/verify_session_persistence.py"*"--route fem-capability-contract"*)
     exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route fem-capability-contract --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route"*)
+    echo "Unsupported explicit verification route; refusing default session tests" >&2
+    exit 2
     ;;
   *"scripts/verify_session_persistence.py"*"--repo-root"*)
     if [[ "${recipe}" == *"prepare-links"* || "${recipe}" == *"fullmag_storage.py"* || "${recipe}" == *"cargo test"* ]]; then

@@ -4349,7 +4349,7 @@ pub(crate) fn write_field_file(
     solver_dt: f64,
     values: &[[f64; 3]],
 ) -> std::io::Result<()> {
-    let field_json = serde_json::json!({
+    let mut field_json = serde_json::json!({
         "observable": observable,
         "unit": field_unit(observable),
         "step": step,
@@ -4359,6 +4359,39 @@ pub(crate) fn write_field_file(
         "provenance": artifact_provenance_json(context, provenance),
         "values": values,
     });
+    if observable == "m" {
+        let layout = field_json.get("layout").ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidData,
+                "magnetization field layout is missing",
+            )
+        })?;
+        let backend = layout
+            .get("backend")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::InvalidData,
+                    "magnetization field layout has no backend identity",
+                )
+            })?;
+        let layout_bytes = serde_json::to_vec(layout)
+            .map_err(|error| Error::new(ErrorKind::InvalidData, error))?;
+        let layout_sha256 = format!("{:x}", Sha256::digest(layout_bytes));
+        field_json
+            .as_object_mut()
+            .expect("field artifact JSON is an object")
+            .insert(
+                "state_identity".into(),
+                serde_json::json!({
+                    "schema_version": "magnetization_state.v1",
+                    "backend": backend,
+                    "layout_sha256": layout_sha256,
+                    "sample_count": values.len(),
+                }),
+            );
+    }
     fs::write(path, serde_json::to_string_pretty(&field_json).unwrap())
 }
 
@@ -4692,6 +4725,10 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
                 "origin_m": fdm.origin_m,
                 "grid_cells": fdm.grid.cells,
                 "cell_size": fdm.cell_size,
+                "grid_fingerprint": fdm
+                    .grid_certificate
+                    .as_ref()
+                    .map(|certificate| certificate.grid_fingerprint.clone()),
                 "total_cell_count": total_cells,
                 "active_mask_present": fdm.active_mask.is_some(),
                 "active_mask": fdm.active_mask.as_ref().map(|mask| mask.as_slice()),
@@ -4748,6 +4785,7 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
             "mesh_source": fem.mesh_source,
             "fe_order": fem.fe_order,
             "hmax": fem.hmax,
+            "topology_fingerprint": fem.mesh.topology_fingerprint_v6(),
             "n_nodes": fem.mesh.nodes.len(),
             "n_elements": fem.mesh.cell_count(),
         }),
@@ -4757,6 +4795,7 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
             "mesh_source": fem.mesh_source,
             "fe_order": fem.fe_order,
             "hmax": fem.hmax,
+            "topology_fingerprint": fem.mesh.topology_fingerprint_v6(),
             "n_nodes": fem.mesh.nodes.len(),
             "n_elements": fem.mesh.cell_count(),
             "mode_count": fem.count,
@@ -4774,6 +4813,7 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
             "mesh_source": fem.mesh_source,
             "fe_order": fem.fe_order,
             "hmax": fem.hmax,
+            "topology_fingerprint": fem.mesh.topology_fingerprint_v6(),
             "n_nodes": fem.mesh.nodes.len(),
             "n_elements": fem.mesh.cell_count(),
             "frequency_count": fem.frequencies_hz.values_hz.len(),
@@ -8862,6 +8902,58 @@ mod tests {
         assert_eq!(layout["active_cell_count"], 8);
         assert_eq!(layout["inactive_cell_count"], 0);
         assert_eq!(layout["active_fraction"], serde_json::json!(1.0));
+        assert!(layout["grid_fingerprint"].as_str().is_some());
+    }
+
+    #[test]
+    fn final_magnetization_artifact_binds_layout_and_sample_identity() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-state-identity-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create state identity fixture");
+
+        let plan = test_execution_plan(None);
+        let context = FieldArtifactContext {
+            problem_name: "state-identity".into(),
+            ir_version: "v0".into(),
+            source_hash: Some("source-bound".into()),
+            execution_mode: ExecutionMode::Strict,
+            layout: field_layout(&plan),
+            execution_resolution: None,
+        };
+        let path = root.join("m_final.json");
+        write_field_file(
+            &path,
+            &context,
+            &ExecutionProvenance::default(),
+            "m",
+            8,
+            8.0e-12,
+            1.0e-12,
+            &[[1.0, 0.0, 0.0]; 8],
+        )
+        .expect("write final magnetization field");
+        let field: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("read field artifact"))
+                .expect("parse field artifact JSON");
+        let layout_bytes = serde_json::to_vec(&context.layout).expect("serialize layout");
+        assert_eq!(
+            field["state_identity"]["schema_version"],
+            "magnetization_state.v1"
+        );
+        assert_eq!(field["state_identity"]["backend"], "fdm");
+        assert_eq!(
+            field["state_identity"]["layout_sha256"],
+            format!("{:x}", Sha256::digest(layout_bytes))
+        );
+        assert_eq!(field["state_identity"]["sample_count"], 8);
+
+        fs::remove_dir_all(root).expect("remove state identity fixture");
     }
 
     #[test]

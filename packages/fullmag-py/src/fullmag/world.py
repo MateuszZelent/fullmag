@@ -5957,10 +5957,18 @@ class StudyBuilder:
 
     def tableautosave(
         self,
-        every: SamplingPeriod,
+        every: SamplingPeriod | None = None,
         quantities: Sequence[str] | None = None,
+        *,
+        every_steps: int | None = None,
+        table_id: str = "default",
     ) -> "StudyBuilder":
-        tableautosave(every, quantities=quantities)
+        tableautosave(
+            every,
+            quantities=quantities,
+            every_steps=every_steps,
+            table_id=table_id,
+        )
         return self
 
     def tableadd(self, expression: object) -> "StudyBuilder":
@@ -8564,6 +8572,7 @@ def tableautosave(
     quantities: Sequence[str] | None = None,
     *,
     every_steps: int | None = None,
+    table_id: str = "default",
 ) -> None:
     """Configure a mumax-style scalar table autosave cadence.
 
@@ -8575,6 +8584,7 @@ def tableautosave(
         t_sampl=every,
         every_steps=every_steps,
         quantities=quantities,
+        table_id=table_id,
     )
 
 

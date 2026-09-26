@@ -28,10 +28,18 @@ pub async fn list_artifacts(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
     let artifact_dir = current_artifact_dir(snapshot);
     let stage_execution = snapshot.stage_execution.clone();
     let provenance_by_path = snapshot
@@ -117,10 +125,18 @@ pub async fn get_artifact(
     State(state): State<Arc<AppState>>,
     AxumPath(artifact_id): AxumPath<String>,
 ) -> Result<axum::response::Response, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
     let artifact_dir = current_artifact_dir(snapshot)
         .ok_or_else(|| ApiError::not_found("no artifact directory for the active workspace"))?;
     drop(guard);
@@ -137,5 +153,6 @@ pub async fn get_artifact(
     };
     let bytes = std::fs::read(&resolved)
         .map_err(|e| ApiError::internal(format!("failed to read artifact: {e}")))?;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     Ok(([(CONTENT_TYPE, content_type)], bytes).into_response())
 }

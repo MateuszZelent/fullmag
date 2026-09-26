@@ -58,6 +58,44 @@ from fullmag.model.spin_transport import (
 )
 
 
+_SCENE_CURRENT_MODULE_FIELDS = frozenset(
+    {
+        "kind",
+        "name",
+        "solver",
+        "air_box_factor",
+        "antenna_kind",
+        "antenna_params",
+        "drive",
+    }
+)
+_SCENE_CURRENT_DRIVE_FIELDS = frozenset(
+    {"current_a", "frequency_hz", "phase_rad", "waveform"}
+)
+_SCENE_EXCITATION_ANALYSIS_FIELDS = frozenset(
+    {"source", "method", "propagation_axis", "k_max_rad_per_m", "samples"}
+)
+_CURRENT_TRANSPORT_FIELDS = frozenset(
+    {
+        "kind",
+        "name",
+        "model",
+        "current_density",
+        "solve_region",
+        "conductivity_s_per_m",
+        "coupling",
+        "domain",
+        "materials",
+        "boundaries",
+        "gauge",
+        "solver",
+        "time_envelope",
+        "conservative_current_view",
+        "structured_current_closure",
+    }
+)
+
+
 def _material_id(name: str) -> str:
     return f"mat:{name}"
 
@@ -114,6 +152,15 @@ def _mapping(value: object, context: str) -> dict[str, object]:
     return dict(value)
 
 
+def _reject_unknown_fields(
+    entry: Mapping[str, object], supported_fields: frozenset[str], context: str
+) -> None:
+    unknown_fields = set(entry) - supported_fields
+    if unknown_fields:
+        names = ", ".join(sorted(str(name) for name in unknown_fields))
+        raise ValueError(f"{context} has unsupported fields: {names}")
+
+
 def _finite_number(value: object, context: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{context} must be a finite number")
@@ -146,6 +193,7 @@ def _nonempty_string(value: object, context: str) -> str:
 
 def _region_ref(value: object, context: str) -> RegionRef:
     entry = _mapping(value, context)
+    _reject_unknown_fields(entry, frozenset({"object_id", "region_id"}), context)
     object_id = _nonempty_string(entry.get("object_id"), f"{context}.object_id")
     region_id = entry.get("region_id")
     if region_id is not None:
@@ -157,6 +205,7 @@ def _decode_current_transport(value: object) -> CurrentTransport:
     entry = _mapping(value, "current_transport")
     if entry.get("kind") != "current_transport":
         raise ValueError(f"unsupported current transport kind {entry.get('kind')!r}")
+    _reject_unknown_fields(entry, _CURRENT_TRANSPORT_FIELDS, "current_transport")
     current_density = entry.get("current_density")
     domain_value = entry.get("domain", [])
     materials_value = entry.get("materials", [])
@@ -173,10 +222,27 @@ def _decode_current_transport(value: object) -> CurrentTransport:
     ]
     materials: list[ChargeTransportMaterialAssignment] = []
     for index, raw_assignment in enumerate(materials_value):
-        assignment = _mapping(raw_assignment, f"current_transport.materials[{index}]")
+        assignment_context = f"current_transport.materials[{index}]"
+        assignment = _mapping(raw_assignment, assignment_context)
+        _reject_unknown_fields(
+            assignment, frozenset({"region", "material"}), assignment_context
+        )
+        material_context = f"{assignment_context}.material"
         material = _mapping(
             assignment.get("material"),
-            f"current_transport.materials[{index}].material",
+            material_context,
+        )
+        _reject_unknown_fields(
+            material,
+            frozenset(
+                {
+                    "sigma_Spm",
+                    "sigma_parallel_Spm",
+                    "sigma_perpendicular_Spm",
+                    "sigma_AHE_Spm",
+                }
+            ),
+            material_context,
         )
         materials.append(
             ChargeTransportMaterialAssignment(
@@ -219,15 +285,22 @@ def _decode_current_transport(value: object) -> CurrentTransport:
 
     boundaries = []
     for index, raw_boundary in enumerate(boundaries_value):
-        boundary = _mapping(raw_boundary, f"current_transport.boundaries[{index}]")
+        boundary_context = f"current_transport.boundaries[{index}]"
+        boundary = _mapping(raw_boundary, boundary_context)
         surfaces_value = boundary.get("surfaces")
         if not isinstance(surfaces_value, list):
-            raise ValueError(f"current_transport.boundaries[{index}].surfaces must be a list")
+            raise ValueError(f"{boundary_context}.surfaces must be a list")
         surfaces = []
         for surface_index, raw_surface in enumerate(surfaces_value):
+            surface_context = f"{boundary_context}.surfaces[{surface_index}]"
             surface = _mapping(
                 raw_surface,
-                f"current_transport.boundaries[{index}].surfaces[{surface_index}]",
+                surface_context,
+            )
+            _reject_unknown_fields(
+                surface,
+                frozenset({"object_id", "surface_id", "orientation"}),
+                surface_context,
             )
             surfaces.append(
                 SurfaceRef(
@@ -246,10 +319,24 @@ def _decode_current_transport(value: object) -> CurrentTransport:
                     ),
                 )
             )
-        boundary_id = _nonempty_string(
-            boundary.get("id"), f"current_transport.boundaries[{index}].id"
-        )
         kind = boundary.get("kind")
+        boundary_fields = (
+            {
+                "voltage_electrode": frozenset(
+                    {"id", "kind", "surfaces", "potential_V"}
+                ),
+                "normal_current_electrode": frozenset(
+                    {"id", "kind", "surfaces", "outward_current_density_Apm2"}
+                ),
+                "insulating": frozenset({"id", "kind", "surfaces"}),
+            }.get(kind)
+            if isinstance(kind, str)
+            else None
+        )
+        if boundary_fields is None:
+            raise ValueError(f"unsupported charge boundary kind {kind!r}")
+        _reject_unknown_fields(boundary, boundary_fields, boundary_context)
+        boundary_id = _nonempty_string(boundary.get("id"), f"{boundary_context}.id")
         if kind == "voltage_electrode":
             boundaries.append(
                 VoltageElectrode(
@@ -282,7 +369,19 @@ def _decode_current_transport(value: object) -> CurrentTransport:
     solver = None
     if solver_value is not None:
         solver_entry = _mapping(solver_value, "current_transport.solver")
+        _reject_unknown_fields(
+            solver_entry,
+            frozenset(
+                {"engine", "linear", "physical_residual_version", "operator_version"}
+            ),
+            "current_transport.solver",
+        )
         linear = _mapping(solver_entry.get("linear"), "current_transport.solver.linear")
+        _reject_unknown_fields(
+            linear,
+            frozenset({"relative_tolerance", "absolute_tolerance", "max_iterations"}),
+            "current_transport.solver.linear",
+        )
         solver = ChargeSolverPolicy(
             engine=_nonempty_string(solver_entry.get("engine"), "current_transport.solver.engine"),
             relative_tolerance=_finite_number(
@@ -341,7 +440,9 @@ def _decode_current_transport(value: object) -> CurrentTransport:
         ),
         solver=solver,
         time_envelope=(
-            _decode_sot_envelope(entry["time_envelope"])
+            _decode_sot_envelope(
+                entry["time_envelope"], context="current_transport.time_envelope"
+            )
             if entry.get("time_envelope") is not None
             else None
         ),
@@ -360,19 +461,38 @@ def _decode_current_transport(value: object) -> CurrentTransport:
 
 def _decode_structured_current_closure(value: object) -> StructuredCurrentClosure:
     entry = _mapping(value, "current_transport.structured_current_closure")
+    root_context = "current_transport.structured_current_closure"
+    _reject_unknown_fields(
+        entry,
+        frozenset({"schema_version", "closure_id", "kind", "source_cuts"}),
+        root_context,
+    )
     cuts_value = entry.get("source_cuts")
     if not isinstance(cuts_value, list):
-        raise ValueError(
-            "current_transport.structured_current_closure.source_cuts must be a list"
-        )
+        raise ValueError(f"{root_context}.source_cuts must be a list")
     cuts: list[StructuredCurrentSourceCut] = []
     for index, raw_cut in enumerate(cuts_value):
-        context = f"current_transport.structured_current_closure.source_cuts[{index}]"
+        context = f"{root_context}.source_cuts[{index}]"
         cut = _mapping(raw_cut, context)
-        plane = _mapping(cut.get("plane"), f"{context}.plane")
-        drive = _mapping(cut.get("drive"), f"{context}.drive")
+        _reject_unknown_fields(
+            cut,
+            frozenset({"source_cut_id", "circuit_id", "region", "plane", "drive"}),
+            context,
+        )
+        plane_context = f"{context}.plane"
+        plane = _mapping(cut.get("plane"), plane_context)
+        _reject_unknown_fields(
+            plane, frozenset({"axis", "offset_m", "normal"}), plane_context
+        )
+        drive_context = f"{context}.drive"
+        drive = _mapping(cut.get("drive"), drive_context)
+        _reject_unknown_fields(
+            drive,
+            frozenset({"schema_version", "kind", "drive_id", "potential_jump_V"}),
+            drive_context,
+        )
         if drive.get("kind") != "impressed_potential_jump":
-            raise ValueError(f"{context}.drive.kind must be 'impressed_potential_jump'")
+            raise ValueError(f"{drive_context}.kind must be 'impressed_potential_jump'")
         cuts.append(
             StructuredCurrentSourceCut(
                 source_cut_id=_nonempty_string(
@@ -393,15 +513,15 @@ def _decode_structured_current_closure(value: object) -> StructuredCurrentClosur
                 ),
                 drive=ImpressedPotentialJump(
                     drive_id=_nonempty_string(
-                        drive.get("drive_id"), f"{context}.drive.drive_id"
+                        drive.get("drive_id"), f"{drive_context}.drive_id"
                     ),
                     potential_jump_V=_finite_number(
                         drive.get("potential_jump_V"),
-                        f"{context}.drive.potential_jump_V",
+                        f"{drive_context}.potential_jump_V",
                     ),
                     schema_version=_nonempty_string(
                         drive.get("schema_version"),
-                        f"{context}.drive.schema_version",
+                        f"{drive_context}.schema_version",
                     ),
                 ),
             )
@@ -409,22 +529,40 @@ def _decode_structured_current_closure(value: object) -> StructuredCurrentClosur
     return StructuredCurrentClosure(
         closure_id=_nonempty_string(
             entry.get("closure_id"),
-            "current_transport.structured_current_closure.closure_id",
+            f"{root_context}.closure_id",
         ),
         source_cuts=cuts,
         schema_version=_nonempty_string(
             entry.get("schema_version"),
-            "current_transport.structured_current_closure.schema_version",
+            f"{root_context}.schema_version",
         ),
         kind=_nonempty_string(
             entry.get("kind"),
-            "current_transport.structured_current_closure.kind",
+            f"{root_context}.kind",
         ),
     )
 
 
 def _decode_conservative_current_view(value: object) -> ConservativeCurrentView:
     entry = _mapping(value, "current_transport.conservative_current_view")
+    root_context = "current_transport.conservative_current_view"
+    _reject_unknown_fields(
+        entry,
+        frozenset(
+            {
+                "stable_vertex_ids",
+                "boundary_faces",
+                "identity",
+                "pins",
+                "closure",
+                "algebraic_relative_tolerance",
+                "physical_relative_gate",
+                "physical_absolute_gate_a",
+                "reference_mpi_gather_broadcast",
+            }
+        ),
+        root_context,
+    )
     stable_ids = entry.get("stable_vertex_ids")
     if not isinstance(stable_ids, list):
         raise ValueError("current_transport.conservative_current_view.stable_vertex_ids must be a list")
@@ -434,7 +572,13 @@ def _decode_conservative_current_view(value: object) -> ConservativeCurrentView:
         raise ValueError("current_transport.conservative_current_view.boundary_faces must be a list")
     boundary_faces = []
     for index, raw_face in enumerate(boundary_value):
-        face = _mapping(raw_face, f"current_transport.conservative_current_view.boundary_faces[{index}]")
+        face_context = f"{root_context}.boundary_faces[{index}]"
+        face = _mapping(raw_face, face_context)
+        _reject_unknown_fields(
+            face,
+            frozenset({"face_vertex_ids", "role", "circuit_id"}),
+            face_context,
+        )
         face_ids = face.get("face_vertex_ids")
         if not isinstance(face_ids, list):
             raise ValueError(f"current_transport.conservative_current_view.boundary_faces[{index}].face_vertex_ids must be a list")
@@ -450,7 +594,28 @@ def _decode_conservative_current_view(value: object) -> ConservativeCurrentView:
             )
         )
 
-    identity_value = _mapping(entry.get("identity"), "current_transport.conservative_current_view.identity")
+    identity_context = f"{root_context}.identity"
+    identity_value = _mapping(entry.get("identity"), identity_context)
+    _reject_unknown_fields(
+        identity_value,
+        frozenset(
+            {
+                "source_module_id",
+                "source_state_revision",
+                "source_field_digest",
+                "conductivity_digest",
+                "mesh_revision",
+                "topology_revision",
+                "geometry_digest",
+                "envelope_revision",
+                "envelope_digest",
+                "evaluated_envelope_multiplier",
+                "evaluation_time_s",
+                "stage_identity",
+            }
+        ),
+        identity_context,
+    )
     identity = ConservativeCurrentIdentity(
         source_module_id=_nonempty_string(identity_value.get("source_module_id"), "conservative_current_view.identity.source_module_id"),
         source_state_revision=_nonempty_string(identity_value.get("source_state_revision"), "conservative_current_view.identity.source_state_revision"),
@@ -466,7 +631,20 @@ def _decode_conservative_current_view(value: object) -> ConservativeCurrentView:
         stage_identity=_positive_integer(identity_value.get("stage_identity"), "conservative_current_view.identity.stage_identity"),
     )
 
-    pins_value = _mapping(entry.get("pins"), "current_transport.conservative_current_view.pins")
+    pins_context = f"{root_context}.pins"
+    pins_value = _mapping(entry.get("pins"), pins_context)
+    _reject_unknown_fields(
+        pins_value,
+        frozenset(
+            {
+                "required_source_state_revision",
+                "required_source_field_digest",
+                "required_mesh_revision",
+                "required_topology_revision",
+            }
+        ),
+        pins_context,
+    )
     pins = ConservativeCurrentPins(
         required_source_state_revision=_nonempty_string(pins_value.get("required_source_state_revision"), "conservative_current_view.pins.required_source_state_revision"),
         required_source_field_digest=_nonempty_string(pins_value.get("required_source_field_digest"), "conservative_current_view.pins.required_source_field_digest"),
@@ -474,8 +652,30 @@ def _decode_conservative_current_view(value: object) -> ConservativeCurrentView:
         required_topology_revision=_nonempty_string(pins_value.get("required_topology_revision"), "conservative_current_view.pins.required_topology_revision"),
     )
 
-    closure_value = _mapping(entry.get("closure"), "current_transport.conservative_current_view.closure")
+    closure_context = f"{root_context}.closure"
+    closure_value = _mapping(entry.get("closure"), closure_context)
     if closure_value.get("kind") == "external_lead":
+        _reject_unknown_fields(
+            closure_value,
+            frozenset(
+                {
+                    "kind",
+                    "operator_version",
+                    "revision",
+                    "digest",
+                    "drive_id",
+                    "outer_electrode_potential_drop_v",
+                    "lead_mesh",
+                    "lead_conductivity_spm_per_element",
+                    "lead_stable_vertex_ids",
+                    "interface_pairs",
+                    "minus_outer_electrode_face_vertex_ids",
+                    "plus_outer_electrode_face_vertex_ids",
+                    "lead_conductivity_digest",
+                }
+            ),
+            closure_context,
+        )
         lead_mesh = _mapping(
             closure_value.get("lead_mesh"),
             "conservative_current_view.closure.lead_mesh",
@@ -551,18 +751,35 @@ def _decode_conservative_current_view(value: object) -> ConservativeCurrentView:
         raise ValueError(
             "current_transport.conservative_current_view currently supports only closed_geometry closure"
         )
+    _reject_unknown_fields(
+        closure_value,
+        frozenset({"kind", "operator_version", "revision", "digest", "source_cuts"}),
+        closure_context,
+    )
     source_cuts_value = closure_value.get("source_cuts")
     if not isinstance(source_cuts_value, list):
         raise ValueError("conservative_current_view.closure.source_cuts must be a list")
     source_cuts = []
     for index, raw_cut in enumerate(source_cuts_value):
-        cut = _mapping(raw_cut, f"conservative_current_view.closure.source_cuts[{index}]")
+        cut_context = f"{closure_context}.source_cuts[{index}]"
+        cut = _mapping(raw_cut, cut_context)
+        _reject_unknown_fields(
+            cut,
+            frozenset({"id", "translation_m", "potential_drop_v", "face_pairs"}),
+            cut_context,
+        )
         pairs_value = cut.get("face_pairs")
         if not isinstance(pairs_value, list):
-            raise ValueError(f"conservative_current_view.closure.source_cuts[{index}].face_pairs must be a list")
+            raise ValueError(f"{cut_context}.face_pairs must be a list")
         pairs = []
         for pair_index, raw_pair in enumerate(pairs_value):
-            pair = _mapping(raw_pair, f"conservative_current_view.closure.source_cuts[{index}].face_pairs[{pair_index}]")
+            pair_context = f"{cut_context}.face_pairs[{pair_index}]"
+            pair = _mapping(raw_pair, pair_context)
+            _reject_unknown_fields(
+                pair,
+                frozenset({"minus_face_vertex_ids", "plus_face_vertex_ids"}),
+                pair_context,
+            )
             minus = pair.get("minus_face_vertex_ids")
             plus = pair.get("plus_face_vertex_ids")
             if not isinstance(minus, list) or not isinstance(plus, list):
@@ -598,52 +815,81 @@ def _decode_conservative_current_view(value: object) -> ConservativeCurrentView:
     )
 
 
-def _decode_sot_envelope(value: object) -> object:
-    entry = _mapping(value, "prescribed_sot.drive.envelope")
+def _decode_sot_envelope(
+    value: object, *, context: str = "prescribed_sot.drive.envelope"
+) -> object:
+    entry = _mapping(value, context)
     kind = entry.get("kind")
     if kind == "constant":
-        return ConstantEnvelope(_finite_number(entry.get("value"), "envelope.value"))
+        _reject_unknown_fields(entry, frozenset({"kind", "value"}), context)
+        return ConstantEnvelope(_finite_number(entry.get("value"), f"{context}.value"))
     if kind == "sinusoidal":
+        _reject_unknown_fields(
+            entry,
+            frozenset({"kind", "amplitude", "frequency_hz", "phase_rad", "offset"}),
+            context,
+        )
         return SinusoidalEnvelope(
-            _finite_number(entry.get("amplitude"), "envelope.amplitude"),
-            _finite_number(entry.get("frequency_hz"), "envelope.frequency_hz"),
-            phase_rad=_finite_number(entry.get("phase_rad"), "envelope.phase_rad"),
-            offset=_finite_number(entry.get("offset"), "envelope.offset"),
+            _finite_number(entry.get("amplitude"), f"{context}.amplitude"),
+            _finite_number(entry.get("frequency_hz"), f"{context}.frequency_hz"),
+            phase_rad=_finite_number(entry.get("phase_rad"), f"{context}.phase_rad"),
+            offset=_finite_number(entry.get("offset"), f"{context}.offset"),
         )
     if kind == "pulse":
+        _reject_unknown_fields(
+            entry, frozenset({"kind", "amplitude", "t_on_s", "t_off_s"}), context
+        )
         return PulseEnvelope(
-            _finite_number(entry.get("amplitude"), "envelope.amplitude"),
-            _finite_number(entry.get("t_on_s"), "envelope.t_on_s"),
-            _finite_number(entry.get("t_off_s"), "envelope.t_off_s"),
+            _finite_number(entry.get("amplitude"), f"{context}.amplitude"),
+            _finite_number(entry.get("t_on_s"), f"{context}.t_on_s"),
+            _finite_number(entry.get("t_off_s"), f"{context}.t_off_s"),
         )
     if kind == "piecewise_linear":
+        _reject_unknown_fields(entry, frozenset({"kind", "points"}), context)
         points = entry.get("points")
         if not isinstance(points, list):
-            raise ValueError("envelope.points must be a list")
-        return PiecewiseLinearEnvelope(
-            [
+            raise ValueError(f"{context}.points must be a list")
+        decoded_points = []
+        for index, point in enumerate(points):
+            point_context = f"{context}.points[{index}]"
+            point_entry = _mapping(point, point_context)
+            _reject_unknown_fields(
+                point_entry, frozenset({"time_s", "value"}), point_context
+            )
+            decoded_points.append(
                 TimeEnvelopePoint(
-                    _finite_number(_mapping(point, f"envelope.points[{index}]").get("time_s"), f"envelope.points[{index}].time_s"),
-                    _finite_number(_mapping(point, f"envelope.points[{index}]").get("value"), f"envelope.points[{index}].value"),
+                    _finite_number(point_entry.get("time_s"), f"{point_context}.time_s"),
+                    _finite_number(point_entry.get("value"), f"{point_context}.value"),
                 )
-                for index, point in enumerate(points)
-            ]
-        )
+            )
+        return PiecewiseLinearEnvelope(decoded_points)
     if kind == "sinc":
+        _reject_unknown_fields(
+            entry,
+            frozenset({"kind", "amplitude", "center_s", "bandwidth_hz", "offset"}),
+            context,
+        )
         return SincEnvelope(
-            _finite_number(entry.get("amplitude"), "envelope.amplitude"),
-            center_s=_finite_number(entry.get("center_s"), "envelope.center_s"),
-            bandwidth_hz=_finite_number(entry.get("bandwidth_hz"), "envelope.bandwidth_hz"),
-            offset=_finite_number(entry.get("offset"), "envelope.offset"),
+            _finite_number(entry.get("amplitude"), f"{context}.amplitude"),
+            center_s=_finite_number(entry.get("center_s"), f"{context}.center_s"),
+            bandwidth_hz=_finite_number(entry.get("bandwidth_hz"), f"{context}.bandwidth_hz"),
+            offset=_finite_number(entry.get("offset"), f"{context}.offset"),
         )
     if kind == "tabulated":
+        _reject_unknown_fields(
+            entry,
+            frozenset(
+                {"kind", "artifact_ref", "interpolation", "extrapolation", "bandwidth_hz"}
+            ),
+            context,
+        )
         bandwidth = entry.get("bandwidth_hz")
         return TabulatedEnvelope(
-            _nonempty_string(entry.get("artifact_ref"), "envelope.artifact_ref"),
-            interpolation=_nonempty_string(entry.get("interpolation"), "envelope.interpolation"),
-            extrapolation=_nonempty_string(entry.get("extrapolation"), "envelope.extrapolation"),
+            _nonempty_string(entry.get("artifact_ref"), f"{context}.artifact_ref"),
+            interpolation=_nonempty_string(entry.get("interpolation"), f"{context}.interpolation"),
+            extrapolation=_nonempty_string(entry.get("extrapolation"), f"{context}.extrapolation"),
             bandwidth_hz=(
-                _finite_number(bandwidth, "envelope.bandwidth_hz") if bandwidth is not None else None
+                _finite_number(bandwidth, f"{context}.bandwidth_hz") if bandwidth is not None else None
             ),
         )
     raise ValueError(f"unsupported prescribed SOT envelope kind {kind!r}")
@@ -1194,6 +1440,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
                 "object_mesh": geometry.get("mesh"),
                 "mesh_override": geometry.get("mesh"),
                 "regions": object_regions,
+                "absorbing_boundary": geometry.get("absorbing_boundary"),
                 "allocated_region_ids": allocated_region_ids,
                 "material_parameter_fields": geometry.get("material_parameter_fields") or [],
                 "visualization_hint": geometry.get("visualization_hint") or {},
@@ -1268,7 +1515,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         "revision": int(builder.get("revision", 0)),
         "scene": {
             "id": "scene",
-            "name": "Scene",
+            "name": str(builder.get("study_name") or "Scene"),
             "source_of_truth": "repo_head",
             "authoring_schema": "mesh-first-fem.v1",
         },
@@ -1384,11 +1631,17 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             )
         geometry = dict(obj.get("geometry") or {})
         geometry_params = dict(geometry.get("geometry_params") or {})
+        object_id = str(obj.get("id") or obj.get("name") or "")
+        name = str(obj.get("name") or obj.get("id") or "")
+        if is_auxiliary and object_id != name:
+            raise ValueError(
+                "scene_document_auxiliary_object_id_unsupported: "
+                f"object '{object_id}' has a name that cannot preserve its identity"
+            )
         transform = dict(obj.get("transform") or {})
-        translation = transform.get("translation")
-        if isinstance(translation, list) and len(translation) == 3:
-            if any(abs(float(value)) > 0 for value in translation):
-                geometry_params["translation"] = [float(value) for value in translation]
+        translation = _owner_frame_translation(transform, object_id)
+        if any(abs(value) > 0 for value in translation):
+            geometry_params["translation"] = list(translation)
 
         magnetization_asset = magnetization_assets.get(magnetization_ref, {})
         magnetization = {
@@ -1408,6 +1661,18 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             "preset_version": magnetization_asset.get("preset_version"),
             "ui_label": magnetization_asset.get("ui_label"),
         }
+        if (
+            not is_auxiliary
+            and magnetization["kind"] in {"file", "sampled", "sampled_field"}
+            and (
+                not isinstance(magnetization["source_path"], str)
+                or not magnetization["source_path"].strip()
+            )
+        ):
+            raise ValueError(
+                "scene_document_sampled_magnetization_missing_source_path: "
+                f"object '{object_id}' requires a source path"
+            )
         material_properties = materials.get(material_ref, {})
         physics_stack = _ensure_physics_stack(
             obj.get("physics_stack"),
@@ -1425,6 +1690,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             "bounds_min": geometry.get("bounds_min"),
             "bounds_max": geometry.get("bounds_max"),
             "mesh": obj.get("object_mesh", obj.get("mesh_override")),
+            "absorbing_boundary": obj.get("absorbing_boundary"),
             "object_regions": obj.get("regions") or [],
             "allocated_region_ids": obj.get("allocated_region_ids") or [],
             "material_parameter_fields": obj.get("material_parameter_fields") or [],
@@ -1437,10 +1703,84 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         geometries.append(entry)
 
     study = dict(scene.get("study") or {})
-    current_modules = dict(scene.get("current_modules") or {})
-    legacy_modules = current_modules.get("modules") or []
+    current_modules_value = scene.get("current_modules", {})
+    if not isinstance(current_modules_value, Mapping):
+        raise ValueError("SceneDocument.current_modules must be an object")
+    current_modules = dict(current_modules_value)
+    unknown_current_module_fields = set(current_modules) - {
+        "modules",
+        "excitation_analysis",
+    }
+    if unknown_current_module_fields:
+        names = ", ".join(sorted(str(name) for name in unknown_current_module_fields))
+        raise ValueError(
+            f"SceneDocument.current_modules has unsupported fields: {names}"
+        )
+    legacy_modules = current_modules.get("modules", [])
     if not isinstance(legacy_modules, list):
-        raise ValueError("current_modules.modules must be a list")
+        raise ValueError("SceneDocument.current_modules.modules must be a list")
+    for index, module in enumerate(legacy_modules):
+        if not isinstance(module, Mapping):
+            raise ValueError(
+                f"SceneDocument.current_modules.modules[{index}] must be an object"
+            )
+        if module.get("kind") == "current_transport":
+            # Compatibility input is checked by the canonical transport decoder below.
+            continue
+        unknown_module_fields = set(module) - _SCENE_CURRENT_MODULE_FIELDS
+        if unknown_module_fields:
+            names = ", ".join(sorted(str(name) for name in unknown_module_fields))
+            raise ValueError(
+                "SceneDocument.current_modules.modules["
+                f"{index}] has unsupported fields: {names}"
+            )
+        if "drive" not in module:
+            continue
+        drive = module["drive"]
+        if not isinstance(drive, Mapping):
+            raise ValueError(
+                f"SceneDocument.current_modules.modules[{index}].drive must be an object"
+            )
+        unknown_drive_fields = set(drive) - _SCENE_CURRENT_DRIVE_FIELDS
+        if unknown_drive_fields:
+            names = ", ".join(sorted(str(name) for name in unknown_drive_fields))
+            raise ValueError(
+                "SceneDocument.current_modules.modules["
+                f"{index}].drive has unsupported fields: {names}"
+            )
+        if "current_a" not in drive:
+            raise ValueError(
+                "SceneDocument.current_modules.modules["
+                f"{index}].drive is missing required field: current_a"
+            )
+    excitation_analysis = current_modules.get("excitation_analysis")
+    if excitation_analysis is not None:
+        if not isinstance(excitation_analysis, Mapping):
+            raise ValueError(
+                "SceneDocument.current_modules.excitation_analysis must be an object"
+            )
+        unknown_excitation_fields = (
+            set(excitation_analysis) - _SCENE_EXCITATION_ANALYSIS_FIELDS
+        )
+        if unknown_excitation_fields:
+            names = ", ".join(sorted(str(name) for name in unknown_excitation_fields))
+            raise ValueError(
+                "SceneDocument.current_modules.excitation_analysis has unsupported fields: "
+                f"{names}"
+            )
+        missing_excitation_fields = {
+            "source",
+            "method",
+            "propagation_axis",
+            "samples",
+        } - set(excitation_analysis)
+        if missing_excitation_fields:
+            names = ", ".join(sorted(missing_excitation_fields))
+            raise ValueError(
+                "SceneDocument.current_modules.excitation_analysis is missing "
+                "required fields: "
+                f"{names}"
+            )
     migrated_transports = [
         module
         for module in legacy_modules
@@ -1462,6 +1802,11 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("current_transports contains duplicate names")
     builder = {
         "revision": int(scene.get("revision", 0)),
+        "study_name": (
+            (scene.get("scene") or {}).get("name")
+            if isinstance(scene.get("scene"), Mapping)
+            else None
+        ),
         "backend": study.get("backend") or study.get("requested_backend"),
         "requested_backend": study.get("requested_backend", "auto"),
         "requested_device": study.get("requested_device", "auto"),
@@ -1484,20 +1829,51 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "geometries": geometries,
         "couplings": scene.get("couplings") or [],
         "current_modules": [*antenna_modules, *transports],
-        "excitation_analysis": current_modules.get("excitation_analysis"),
+        "excitation_analysis": excitation_analysis,
     }
     if "fdm" in study:
         builder["fdm"] = copy.deepcopy(study.get("fdm"))
-    field_drives = scene.get("field_drives")
-    if isinstance(field_drives, Mapping):
-        drives = field_drives.get("drives")
-        if isinstance(drives, list):
-            builder["field_drives"] = copy.deepcopy(drives)
-    monitors = scene.get("monitors")
-    if isinstance(monitors, Mapping):
-        planar = monitors.get("planar")
-        if isinstance(planar, list):
-            builder["planar_monitors"] = copy.deepcopy(planar)
+    if "field_drives" in scene:
+        field_drives = scene["field_drives"]
+        if not isinstance(field_drives, Mapping):
+            raise ValueError("SceneDocument.field_drives must be an object")
+        unknown_field_drive_fields = set(field_drives) - {"drives"}
+        if unknown_field_drive_fields:
+            names = ", ".join(
+                sorted(str(name) for name in unknown_field_drive_fields)
+            )
+            raise ValueError(
+                f"SceneDocument.field_drives has unsupported fields: {names}"
+            )
+        drives = field_drives.get("drives", [])
+        if not isinstance(drives, list):
+            raise ValueError("SceneDocument.field_drives.drives must be a list")
+        for index, drive in enumerate(drives):
+            if not isinstance(drive, Mapping):
+                raise ValueError(
+                    "SceneDocument.field_drives.drives["
+                    f"{index}] must be an object"
+                )
+        builder["field_drives"] = copy.deepcopy(drives)
+    if "monitors" in scene:
+        monitors = scene["monitors"]
+        if not isinstance(monitors, Mapping):
+            raise ValueError("SceneDocument.monitors must be an object")
+        unknown_monitor_fields = set(monitors) - {"planar"}
+        if unknown_monitor_fields:
+            names = ", ".join(sorted(str(name) for name in unknown_monitor_fields))
+            raise ValueError(
+                f"SceneDocument.monitors has unsupported fields: {names}"
+            )
+        planar = monitors.get("planar", [])
+        if not isinstance(planar, list):
+            raise ValueError("SceneDocument.monitors.planar must be a list")
+        for index, monitor in enumerate(planar):
+            if not isinstance(monitor, Mapping):
+                raise ValueError(
+                    f"SceneDocument.monitors.planar[{index}] must be an object"
+                )
+        builder["planar_monitors"] = copy.deepcopy(planar)
     if "spin_torques" in scene:
         builder["spin_torques"] = _canonical_spin_torques(
             scene["spin_torques"], scene_ids=False
@@ -1515,6 +1891,46 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             scene["oersted_terms"], scene_ids=False
         )
     return builder
+
+
+def _owner_frame_translation(
+    transform: Mapping[str, object], object_id: str
+) -> tuple[float, float, float]:
+    def vector(
+        key: str,
+        default: Sequence[float],
+    ) -> tuple[float, ...]:
+        raw = transform.get(key, default)
+        if (
+            isinstance(raw, (str, bytes))
+            or not isinstance(raw, Sequence)
+            or len(raw) != len(default)
+        ):
+            raise ValueError(
+                f"objects.{object_id}.transform.{key} must have {len(default)} components"
+            )
+        return tuple(
+            _finite_number(component, f"objects.{object_id}.transform.{key}[{index}]")
+            for index, component in enumerate(raw)
+        )
+
+    rotation = vector("rotation_quat", (0.0, 0.0, 0.0, 1.0))
+    scale = vector("scale", (1.0, 1.0, 1.0))
+    epsilon = math.ulp(1.0)
+    has_rotation = any(
+        abs(value - expected) > epsilon
+        for value, expected in zip(rotation, (0, 0, 0, 1))
+    )
+    has_scale = any(abs(value - 1.0) > epsilon for value in scale)
+    if has_rotation or has_scale:
+        raise ValueError(
+            "owner_transform_rotation_scale_unsupported: "
+            f"object '{object_id}' uses rotation or scale that is not represented "
+            "by the canonical FDM owner-frame lowering"
+        )
+
+    translation = vector("translation", (0.0, 0.0, 0.0))
+    return translation[0], translation[1], translation[2]
 
 
 def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
@@ -1679,6 +2095,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "initial_state": builder.get("initial_state"),
         "geometries": builder.get("geometries") or [],
         "couplings": builder.get("couplings") or [],
+        "field_drives": builder.get("field_drives") or [],
         "planar_monitors": builder.get("planar_monitors") or [],
         "current_modules": builder.get("current_modules") or [],
         "excitation_analysis": builder.get("excitation_analysis"),

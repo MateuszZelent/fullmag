@@ -8,4 +8,5 @@ publish.workspace = true
 fullmag-ir = { path = "../fullmag-ir" }
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
 utoipa = "5"

@@ -23,7 +23,10 @@ use crate::{
 pub async fn list_planar_monitors(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<PlanarMonitorCollectionResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     Ok(Json(PlanarMonitorCollectionResource {
         scene_revision: scene.revision,
         count: scene.monitors.planar.len(),
@@ -46,7 +49,10 @@ pub async fn create_planar_monitor(
     State(state): State<Arc<AppState>>,
     Json(request): Json<PlanarMonitorCreateRequest>,
 ) -> Result<Json<PlanarMonitorResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     check_scene_revision(scene.revision, request.expected_scene_revision)?;
     ensure_new_identity(
         &scene.monitors.planar,
@@ -55,7 +61,9 @@ pub async fn create_planar_monitor(
     )?;
     let monitor_id = request.monitor.id.clone();
     scene.monitors.planar.push(request.monitor);
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     monitor_resource(&committed, &monitor_id).map(Json)
 }
 
@@ -70,7 +78,10 @@ pub async fn get_planar_monitor(
     State(state): State<Arc<AppState>>,
     Path(monitor_id): Path<String>,
 ) -> Result<Json<PlanarMonitorResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     monitor_resource(&scene, &monitor_id).map(Json)
 }
 
@@ -87,7 +98,10 @@ pub async fn patch_planar_monitor(
     Path(monitor_id): Path<String>,
     Json(request): Json<PlanarMonitorPatchRequest>,
 ) -> Result<Json<PlanarMonitorResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     check_scene_revision(scene.revision, request.expected_scene_revision)?;
     if request.monitor.id != monitor_id {
         return Err(ApiError::bad_request(
@@ -111,7 +125,9 @@ pub async fn patch_planar_monitor(
         .find(|monitor| monitor.id == monitor_id)
         .ok_or_else(|| ApiError::not_found(format!("planar monitor not found: {monitor_id}")))?;
     *existing = request.monitor;
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     monitor_resource(&committed, &monitor_id).map(Json)
 }
 
@@ -128,7 +144,10 @@ pub async fn delete_planar_monitor(
     Path(monitor_id): Path<String>,
     Json(request): Json<PlanarMonitorDeleteRequest>,
 ) -> Result<Json<PlanarMonitorCollectionResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     check_scene_revision(scene.revision, request.expected_scene_revision)?;
     let before = scene.monitors.planar.len();
     scene
@@ -140,7 +159,9 @@ pub async fn delete_planar_monitor(
             "planar monitor not found: {monitor_id}"
         )));
     }
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     Ok(Json(PlanarMonitorCollectionResource {
         scene_revision: committed.revision,
         count: committed.monitors.planar.len(),
@@ -161,7 +182,10 @@ pub async fn duplicate_planar_monitor(
     Path(monitor_id): Path<String>,
     Json(request): Json<PlanarMonitorDuplicateRequest>,
 ) -> Result<Json<PlanarMonitorResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     check_scene_revision(scene.revision, request.expected_scene_revision)?;
     let source = scene
         .monitors
@@ -180,7 +204,9 @@ pub async fn duplicate_planar_monitor(
     ensure_new_identity(&scene.monitors.planar, &duplicate.id, &duplicate.name)?;
     let duplicate_id = duplicate.id.clone();
     scene.monitors.planar.push(duplicate);
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     monitor_resource(&committed, &duplicate_id).map(Json)
 }
 

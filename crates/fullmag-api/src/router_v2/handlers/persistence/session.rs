@@ -31,20 +31,22 @@ pub async fn export_session(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SessionExportRequest>,
 ) -> Result<Json<SessionExportResponse>, ApiError> {
-    crate::session_persistence::export_session(State(state), Json(req)).await
+    let context = crate::capture_current_live_request_context(&state).await?;
+    crate::session_persistence::export_session_with_context(State(state), Json(req), Some(&context))
+        .await
 }
 
 #[utoipa::path(
     post,
-    path = "/v2/sessions/current/persistence/imports/inspections",
+    path = "/v2/persistence/imports/inspections",
     request_body = SessionImportInspectRequest,
     responses(
-        (status = 200, description = "Session import inspection", body = SessionImportInspectResponse),
+        (status = 200, description = "Project archive import inspection", body = SessionImportInspectResponse),
         (status = 400, description = "Invalid .fms payload"),
     ),
     tag = "persistence"
 )]
-pub async fn inspect_session(
+pub async fn inspect_project_archive(
     Json(req): Json<SessionImportInspectRequest>,
 ) -> Result<Json<SessionImportInspectResponse>, ApiError> {
     crate::session_persistence::import_session_inspect(Json(req)).await
@@ -67,7 +69,13 @@ pub async fn commit_session(
     let request = request.map_err(|error| {
         ApiError::bad_request(format!("invalid_session_import_request: {error}"))
     })?;
-    crate::session_persistence::import_session_commit(State(state), request).await
+    let context = crate::capture_current_live_request_context(&state).await?;
+    crate::session_persistence::import_session_commit_with_context(
+        State(state),
+        request,
+        Some(&context),
+    )
+    .await
 }
 
 #[utoipa::path(
@@ -82,7 +90,8 @@ pub async fn commit_session(
 pub async fn list_checkpoints(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<CheckpointListResponse>, ApiError> {
-    crate::session_persistence::list_checkpoints(State(state)).await
+    let context = crate::capture_current_live_request_context(&state).await?;
+    crate::session_persistence::list_checkpoints_with_context(State(state), Some(&context)).await
 }
 
 #[utoipa::path(
@@ -101,7 +110,13 @@ pub async fn get_checkpoint(
     State(state): State<Arc<AppState>>,
     Path(checkpoint_id): Path<String>,
 ) -> Result<Json<CheckpointEntry>, ApiError> {
-    crate::session_persistence::get_checkpoint(State(state), checkpoint_id).await
+    let context = crate::capture_current_live_request_context(&state).await?;
+    crate::session_persistence::get_checkpoint_with_context(
+        State(state),
+        checkpoint_id,
+        Some(&context),
+    )
+    .await
 }
 
 #[utoipa::path(
@@ -119,7 +134,13 @@ pub async fn create_checkpoint(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CheckpointCreateRequest>,
 ) -> Result<Json<CheckpointCreateResponse>, ApiError> {
-    crate::session_persistence::create_checkpoint(State(state), Json(req)).await
+    let context = crate::capture_current_live_request_context(&state).await?;
+    crate::session_persistence::create_checkpoint_with_context(
+        State(state),
+        Json(req),
+        Some(&context),
+    )
+    .await
 }
 
 #[utoipa::path(
@@ -141,7 +162,14 @@ pub async fn restore_checkpoint(
     Path(checkpoint_id): Path<String>,
     Json(req): Json<CheckpointRestoreRequest>,
 ) -> Result<Json<CheckpointRestoreResponse>, ApiError> {
-    crate::session_persistence::restore_checkpoint(State(state), checkpoint_id, Json(req)).await
+    let context = crate::capture_current_live_request_context(&state).await?;
+    crate::session_persistence::restore_checkpoint_with_context(
+        State(state),
+        checkpoint_id,
+        Json(req),
+        Some(&context),
+    )
+    .await
 }
 
 #[utoipa::path(
@@ -159,7 +187,13 @@ pub async fn export_field_state(
     State(state): State<Arc<AppState>>,
     Json(req): Json<FieldStateExportRequest>,
 ) -> Result<Json<FieldStateExportResponse>, ApiError> {
-    crate::session_persistence::export_field_state(State(state), Json(req)).await
+    let context = crate::capture_current_live_request_context(&state).await?;
+    crate::session_persistence::export_field_state_with_context(
+        State(state),
+        Json(req),
+        Some(&context),
+    )
+    .await
 }
 
 #[utoipa::path(
@@ -177,7 +211,13 @@ pub async fn inspect_field_state(
     State(state): State<Arc<AppState>>,
     Json(req): Json<FieldStateInspectRequest>,
 ) -> Result<Json<FieldStateInspectResponse>, ApiError> {
-    crate::session_persistence::inspect_field_state(State(state), Json(req)).await
+    let context = crate::capture_current_live_request_context(&state).await?;
+    crate::session_persistence::inspect_field_state_with_context(
+        State(state),
+        Json(req),
+        Some(&context),
+    )
+    .await
 }
 
 #[utoipa::path(
@@ -195,7 +235,13 @@ pub async fn import_field_state(
     State(state): State<Arc<AppState>>,
     Json(req): Json<FieldStateImportRequest>,
 ) -> Result<Json<FieldStateImportResponse>, ApiError> {
-    crate::session_persistence::import_field_state(State(state), Json(req)).await
+    let context = crate::capture_current_live_request_context(&state).await?;
+    crate::session_persistence::import_field_state_with_context(
+        State(state),
+        Json(req),
+        Some(&context),
+    )
+    .await
 }
 
 #[utoipa::path(
@@ -209,7 +255,8 @@ pub async fn import_field_state(
 pub async fn list_recovery(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<RecoveryListResponse>, ApiError> {
-    crate::session_persistence::list_recovery(State(state)).await
+    let context = crate::capture_current_live_request_context(&state).await?;
+    crate::session_persistence::list_recovery_with_context(State(state), Some(&context)).await
 }
 
 #[utoipa::path(
@@ -223,5 +270,6 @@ pub async fn list_recovery(
 pub async fn clear_recovery(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<RecoveryClearResponse>, ApiError> {
-    crate::session_persistence::clear_recovery(State(state)).await
+    let context = crate::capture_current_live_request_context(&state).await?;
+    crate::session_persistence::clear_recovery_with_context(State(state), Some(&context)).await
 }

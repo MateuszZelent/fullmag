@@ -1,0 +1,15 @@
+[package]
+name = "fullmag-runtime-control"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono = { version = "0.4", features = ["serde"] }
+serde_json.workspace = true
+fullmag-application = { path = "../fullmag-application" }
+fullmag-session = { path = "../fullmag-session" }
+fullmag-authoring = { path = "../fullmag-authoring" }
+fullmag-ir = { path = "../fullmag-ir" }
+fullmag-plan = { path = "../fullmag-plan" }

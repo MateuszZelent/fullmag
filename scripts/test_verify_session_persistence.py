@@ -6,6 +6,9 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import os
+import shutil
+import subprocess
 
 import pytest
 
@@ -17,6 +20,21 @@ assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
+
+
+def test_unknown_explicit_route_is_not_silently_replaced_with_session_tests() -> None:
+    git_bash = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe"
+    bash = str(git_bash) if git_bash.is_file() else shutil.which("bash")
+    if not bash:
+        pytest.skip("Bash is required to exercise the just shell adapter")
+    result = subprocess.run(
+        [bash, "scripts/just_storage_shell.sh",
+         "python scripts/verify_session_persistence.py --route unknown-recovery-route --repo-root ."],
+        cwd=ROOT, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 2
+    assert "Unsupported explicit verification route" in result.stderr
+    assert '"receipt"' not in result.stdout
 
 
 def test_command_scope_is_fixed_to_session_package() -> None:
@@ -74,6 +92,128 @@ def test_project_entrypoint_route_covers_cli_python_and_desktop() -> None:
     assert "crates/fullmag-cli/src" in route.source_paths
     assert "crates/fullmag-py-core/src" in route.source_paths
     assert "apps/desktop/src-tauri/src" in route.source_paths
+
+
+def test_api_preparation_route_is_fixed_and_tracks_api_sources() -> None:
+    route = MODULE.ROUTES["api-preparation-tests"]
+    assert route.command == (
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api",
+        "preparation_materialization_route_tests::",
+        "--",
+        "--nocapture",
+    )
+    assert route.profile == "windows-api-source-check"
+    assert route.receipt_schema == "fullmag_api_preparation_test_v1"
+    assert route.requires_python is True
+    assert "crates/fullmag-api/src" in route.source_paths
+    assert "crates/fullmag-application/src" in route.source_paths
+    assert "packages/fullmag-py/pyproject.toml" in route.source_paths
+    assert "packages/fullmag-py/uv.lock" in route.source_paths
+    assert "packages/fullmag-py/src" in route.source_paths
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
+def test_api_accepted_worker_route_is_fixed_and_tracks_api_sources() -> None:
+    route = MODULE.ROUTES["api-accepted-worker-check"]
+    assert route.command == (
+        "cargo",
+        "check",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api-accepted-worker",
+    )
+    assert route.profile == "windows-api-source-check"
+    assert route.receipt_schema == "fullmag_api_accepted_worker_check_v1"
+    assert "crates/fullmag-api/src" in route.source_paths
+    assert "crates/fullmag-api/Cargo.toml" in route.source_paths
+
+
+def test_api_accepted_supervisor_route_is_fixed_and_tracks_api_sources() -> None:
+    route = MODULE.ROUTES["api-accepted-supervisor-tests"]
+    assert route.command == (
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api-accepted-supervisor",
+    )
+    assert route.profile == "windows-api-source-check"
+    assert route.receipt_schema == "fullmag_api_accepted_supervisor_test_v1"
+    assert "crates/fullmag-api/src" in route.source_paths
+    assert "crates/fullmag-api/Cargo.toml" in route.source_paths
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "check", "--workspace"), route)
+
+
+def test_api_scene_resource_route_is_fixed_and_tracks_api_sources() -> None:
+    route = MODULE.ROUTES["api-scene-resource-tests"]
+    assert route.command == (
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api",
+        "router_v2::tests::scene_resource_preserves_selection_and_frozen_spins_authoring_state",
+        "--",
+        "--exact",
+    )
+    assert route.profile == "windows-api-source-check"
+    assert route.receipt_schema == "fullmag_api_scene_resource_test_v1"
+    assert "crates/fullmag-api/src" in route.source_paths
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
+def test_authoring_scene_adapter_route_is_fixed_and_tracks_authoring_sources() -> None:
+    route = MODULE.ROUTES["authoring-scene-adapter-tests"]
+    assert route.command == (
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "fullmag-authoring",
+        "--lib",
+        "scene_document",
+        "--",
+        "--nocapture",
+    )
+    assert route.profile == "windows-api-source-check"
+    assert route.receipt_schema == "fullmag_authoring_scene_adapter_test_v1"
+    assert "crates/fullmag-authoring/src" in route.source_paths
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
+def test_api_preparation_route_pins_python_for_the_child_process(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    route = MODULE.ROUTES["api-preparation-tests"]
+    monkeypatch.delenv("FULLMAG_PYTHON", raising=False)
+    runtime = MODULE.python_runtime_identity(route)
+    assert runtime is not None
+    assert runtime["executable"] == str(Path(sys.executable).resolve())
+    assert runtime["version"].startswith("Python ")
+
+    paths = {
+        name: tmp_path / name
+        for name in ("target_dir", "cargo_home", "rustup_home", "temp_dir")
+    }
+    tools = {"cargo": Path(sys.executable), "rustc": Path(sys.executable)}
+    child = MODULE.child_environment({"env": {}}, paths, tools, route, runtime)
+    assert child["FULLMAG_PYTHON"] == runtime["executable"]
 
 
 def test_run_paths_are_contained_by_canonical_storage(tmp_path: Path) -> None:
@@ -138,10 +278,20 @@ def test_just_route_precedes_generic_prepare_links() -> None:
     assert '--route project-application-test --repo-root' in justfile
     assert '--route project-entrypoint-check --repo-root' in justfile
     assert '--route fem-capability-contract --repo-root' in justfile
+    assert '--route api-accepted-worker-check --repo-root' in justfile
+    assert '--route api-accepted-supervisor-tests --repo-root' in justfile
+    assert '--route api-preparation-tests --repo-root' in justfile
+    assert '--route api-scene-resource-tests --repo-root' in justfile
+    assert '--route authoring-scene-adapter-tests --repo-root' in justfile
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route project-application-check' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route project-application-test' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route project-entrypoint-check' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route fem-capability-contract' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-worker-check' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-tests' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-preparation-tests' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-scene-resource-tests' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route authoring-scene-adapter-tests' in shell
     dedicated = shell.index('exec "${python_cmd}" "${script_dir}/verify_session_persistence.py"')
     generic = shell.index('"${python_cmd}" "${resolver}" prepare-links')
     assert dedicated < generic

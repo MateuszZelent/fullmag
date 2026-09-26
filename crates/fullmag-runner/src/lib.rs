@@ -38,6 +38,8 @@ pub mod hysteresis;
 pub mod interactive;
 mod interactive_runtime;
 mod native_fem;
+#[cfg(feature = "fem-native")]
+pub use native_fem::prepare_fem_mesh_space;
 mod observation;
 mod physics_graph_execution;
 mod preview;
@@ -2432,6 +2434,142 @@ pub fn run_problem(
 ) -> Result<RunResult, RunError> {
     let plan = fullmag_plan::plan(problem)?;
     run_planned_problem(problem, &plan, until_seconds, output_dir)
+}
+
+/// Return the runner's canonical layout identity for supported study state
+/// inputs. The exact artifact layout is the contract; the worker must never
+/// infer compatibility from vector length alone.
+pub fn study_magnetization_layout_for_plan(
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<serde_json::Value, RunError> {
+    let layout = artifacts::field_layout(plan);
+    let backend = layout
+        .get("backend")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if layout.get("layout_error").is_some()
+        || !matches!(backend, "fdm" | "fdm_multilayer" | "fem")
+        || matches!(&plan.backend_plan, fullmag_ir::BackendPlanIR::Fem(fem) if fem.fe_order != 1)
+    {
+        return Err(RunError {
+            message: format!(
+                "study magnetization input is unsupported for runner layout `{backend}`"
+            ),
+        });
+    }
+    Ok(layout)
+}
+
+/// Apply an immutable, decoded study magnetization to a copy of the accepted
+/// execution plan. Only exact same-space FDM, FDM multilayer, and FEM H1 P1
+/// layouts are supported; this performs no interpolation or backend change.
+pub fn materialize_study_magnetization_input(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    source_layout: &serde_json::Value,
+    values: &[[f64; 3]],
+) -> Result<fullmag_ir::ExecutionPlanIR, RunError> {
+    let expected_layout = study_magnetization_layout_for_plan(plan)?;
+    if &expected_layout != source_layout {
+        return Err(RunError {
+            message: "study magnetization input space does not exactly match the accepted execution plan; cross-space transfer is unsupported".into(),
+        });
+    }
+    if values.is_empty() || values.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(RunError {
+            message: "study magnetization input must contain finite three-component samples"
+                .into(),
+        });
+    }
+
+    let expected_samples = study_plan_state_sample_count(plan, &expected_layout)?;
+    if values.len() != expected_samples {
+        return Err(RunError {
+            message: format!(
+                "study magnetization input has {} samples but the accepted execution plan requires {expected_samples}",
+                values.len()
+            ),
+        });
+    }
+
+    let mut materialized = plan.clone();
+    match &mut materialized.backend_plan {
+        fullmag_ir::BackendPlanIR::Fdm(fdm) => {
+            fdm.initial_magnetization.copy_from_slice(values);
+        }
+        fullmag_ir::BackendPlanIR::FdmMultilayer(multilayer) => {
+            let mut offset = 0usize;
+            for layer in &mut multilayer.layers {
+                let end = offset + layer.initial_magnetization.len();
+                layer
+                    .initial_magnetization
+                    .copy_from_slice(&values[offset..end]);
+                offset = end;
+            }
+        }
+        fullmag_ir::BackendPlanIR::Fem(fem) => {
+            fem.initial_magnetization.copy_from_slice(values);
+        }
+        _ => unreachable!("accepted layout was validated above"),
+    }
+    Ok(materialized)
+}
+
+fn study_plan_state_sample_count(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    layout: &serde_json::Value,
+) -> Result<usize, RunError> {
+    let invalid_layout = || RunError {
+        message: "study magnetization layout sample identity differs from the accepted execution plan".into(),
+    };
+    match (&plan.backend_plan, layout["backend"].as_str()) {
+        (fullmag_ir::BackendPlanIR::Fdm(fdm), Some("fdm")) => {
+            let sample_count = layout["total_cell_count"]
+                .as_u64()
+                .and_then(|count| usize::try_from(count).ok())
+                .ok_or_else(invalid_layout)?;
+            if sample_count != fdm.initial_magnetization.len() {
+                return Err(invalid_layout());
+            }
+            Ok(sample_count)
+        }
+        (fullmag_ir::BackendPlanIR::FdmMultilayer(multilayer), Some("fdm_multilayer")) => {
+            let layout_layers = layout["layers"].as_array().ok_or_else(invalid_layout)?;
+            if layout_layers.len() != multilayer.layers.len() {
+                return Err(invalid_layout());
+            }
+            let mut expected_offset = 0usize;
+            for (layer, descriptor) in multilayer.layers.iter().zip(layout_layers) {
+                let offset = descriptor["value_offset"]
+                    .as_u64()
+                    .and_then(|offset| usize::try_from(offset).ok())
+                    .ok_or_else(invalid_layout)?;
+                let count = descriptor["value_count"]
+                    .as_u64()
+                    .and_then(|count| usize::try_from(count).ok())
+                    .ok_or_else(invalid_layout)?;
+                if offset != expected_offset || count != layer.initial_magnetization.len() {
+                    return Err(invalid_layout());
+                }
+                expected_offset = expected_offset
+                    .checked_add(count)
+                    .ok_or_else(invalid_layout)?;
+            }
+            Ok(expected_offset)
+        }
+        (fullmag_ir::BackendPlanIR::Fem(fem), Some("fem")) if fem.fe_order == 1 => {
+            let sample_count = layout["n_nodes"]
+                .as_u64()
+                .and_then(|count| usize::try_from(count).ok())
+                .ok_or_else(invalid_layout)?;
+            if sample_count != fem.mesh.nodes.len()
+                || sample_count != fem.initial_magnetization.len()
+            {
+                return Err(invalid_layout());
+            }
+            Ok(sample_count)
+        }
+        _ => Err(invalid_layout()),
+    }
 }
 
 /// Run a problem with an already materialized execution plan.

@@ -6,9 +6,9 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 use crate::selection::geometry::{
-    contains_point, AffineTransform3, BoundaryMembership, GeometryPredicate,
+    AffineTransform3, BoundaryMembership, GeometryPredicate, contains_point,
 };
-use crate::{util::MU0, PlanError};
+use crate::{PlanError, util::MU0};
 
 pub(crate) fn resolve_fdm_regional_field_drives(
     drives: &[RegionalFieldDriveIR],
@@ -356,7 +356,7 @@ fn adaptive_cell_average(
             match geometry_cell_relation(entry, center, half)? {
                 CellRelation::Outside => return Ok(0.0),
                 CellRelation::Inside if matches!(envelope, FieldEnvelopeIR::Uniform {}) => {
-                    return Ok(1.0)
+                    return Ok(1.0);
                 }
                 CellRelation::Inside => return tensor_average(compiled, center, half, P4, W4),
                 CellRelation::Boundary => {}

@@ -59,7 +59,10 @@ fn require_spin_base_revision(scene: &SceneDocument, base_revision: u64) -> Resu
 pub async fn get_current_transports(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<CurrentTransportListResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     Ok(Json(CurrentTransportListResource {
         scene_revision: scene.revision,
         items: scene.current_transports,
@@ -71,7 +74,10 @@ pub async fn get_current_transport(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<SceneCurrentTransport>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     scene
         .current_transports
         .into_iter()
@@ -85,7 +91,10 @@ pub async fn create_current_transport(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CurrentTransportMutationRequest>,
 ) -> Result<Json<CurrentTransportCommitResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     require_spin_base_revision(&scene, req.base_revision)?;
     let name = req.resource.name().ok_or_else(|| {
         ApiError::bad_request("unsupported current transport variants are read-only")
@@ -109,7 +118,9 @@ pub async fn create_current_transport(
         },
     )?;
     scene.current_transports.push(resource.clone());
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     Ok(Json(CurrentTransportCommitResource {
         scene_revision: committed.revision,
         resource,
@@ -123,7 +134,10 @@ pub async fn patch_current_transport(
     Path(id): Path<String>,
     Json(req): Json<CurrentTransportMutationRequest>,
 ) -> Result<Json<CurrentTransportCommitResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     require_spin_base_revision(&scene, req.base_revision)?;
     if req.resource.known().is_none() {
         return Err(ApiError::bad_request(
@@ -155,7 +169,9 @@ pub async fn patch_current_transport(
     }
     let resource = req.resource;
     *slot = resource.clone();
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     Ok(Json(CurrentTransportCommitResource {
         scene_revision: committed.revision,
         resource,
@@ -169,7 +185,10 @@ pub async fn delete_current_transport(
     Path(id): Path<String>,
     Json(req): Json<SpinAuthoringDeleteRequest>,
 ) -> Result<Json<CurrentTransportCommitResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     require_spin_base_revision(&scene, req.base_revision)?;
     let index = scene
         .current_transports
@@ -190,7 +209,9 @@ pub async fn delete_current_transport(
             resource: resource.clone(),
         },
     )?;
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     Ok(Json(CurrentTransportCommitResource {
         scene_revision: committed.revision,
         resource,
@@ -202,7 +223,10 @@ pub async fn delete_current_transport(
 pub async fn get_spin_transports(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SpinTransportListResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     Ok(Json(SpinTransportListResource {
         scene_revision: scene.revision,
         items: scene.spin_transports,
@@ -213,7 +237,10 @@ pub async fn get_spin_transports(
 pub async fn get_spin_interfaces(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SpinInterfaceListResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     let mut items = Vec::new();
     for transport in &scene.spin_transports {
         let value = serde_json::to_value(transport).map_err(|error| {
@@ -239,6 +266,7 @@ pub async fn get_spin_interfaces(
             });
         }
     }
+    crate::validate_current_live_request_context(&state, &request_context).await?;
     Ok(Json(SpinInterfaceListResource {
         scene_revision: scene.revision,
         items,
@@ -564,7 +592,10 @@ pub async fn validate_transport_candidate(
             "unsupported transport validation version",
         ));
     }
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     require_spin_base_revision(&scene, req.base_revision)?;
     let mut execution = candidate_capability(&req.candidate);
     let apply_error = apply_validation_candidate(&mut scene, req.candidate).err();
@@ -601,7 +632,10 @@ pub async fn get_spin_transport(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<SceneSpinTransport>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     scene
         .spin_transports
         .into_iter()
@@ -615,7 +649,10 @@ pub async fn create_spin_transport(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SpinTransportMutationRequest>,
 ) -> Result<Json<SpinTransportCommitResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     require_spin_base_revision(&scene, req.base_revision)?;
     let id = req
         .resource
@@ -643,7 +680,9 @@ pub async fn create_spin_transport(
         },
     )?;
     scene.spin_transports.push(resource.clone());
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     Ok(Json(SpinTransportCommitResource {
         scene_revision: committed.revision,
         resource,
@@ -657,7 +696,10 @@ pub async fn patch_spin_transport(
     Path(id): Path<String>,
     Json(req): Json<SpinTransportMutationRequest>,
 ) -> Result<Json<SpinTransportCommitResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     require_spin_base_revision(&scene, req.base_revision)?;
     if req.resource.known().map(|resource| resource.id.as_str()) != Some(id.as_str()) {
         return Err(ApiError::bad_request(
@@ -684,7 +726,9 @@ pub async fn patch_spin_transport(
     }
     let resource = req.resource;
     *slot = resource.clone();
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     Ok(Json(SpinTransportCommitResource {
         scene_revision: committed.revision,
         resource,
@@ -698,7 +742,10 @@ pub async fn delete_spin_transport(
     Path(id): Path<String>,
     Json(req): Json<SpinAuthoringDeleteRequest>,
 ) -> Result<Json<SpinTransportCommitResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     require_spin_base_revision(&scene, req.base_revision)?;
     let index = scene
         .spin_transports
@@ -719,7 +766,9 @@ pub async fn delete_spin_transport(
             resource: resource.clone(),
         },
     )?;
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     Ok(Json(SpinTransportCommitResource {
         scene_revision: committed.revision,
         resource,
@@ -731,7 +780,10 @@ pub async fn delete_spin_transport(
 pub async fn get_spin_torques(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SpinTorqueListResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     Ok(Json(SpinTorqueListResource {
         scene_revision: scene.revision,
         items: scene.spin_torques,
@@ -743,7 +795,10 @@ pub async fn get_spin_torque(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<SceneSpinTorque>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     scene
         .spin_torques
         .into_iter()
@@ -757,7 +812,10 @@ pub async fn create_spin_torque(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SpinTorqueMutationRequest>,
 ) -> Result<Json<SpinTorqueCommitResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     require_spin_base_revision(&scene, req.base_revision)?;
     if scene
         .spin_torques
@@ -779,7 +837,9 @@ pub async fn create_spin_torque(
         },
     )?;
     scene.spin_torques.push(resource.clone());
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     Ok(Json(SpinTorqueCommitResource {
         scene_revision: committed.revision,
         resource,
@@ -793,7 +853,10 @@ pub async fn patch_spin_torque(
     Path(id): Path<String>,
     Json(req): Json<SpinTorqueMutationRequest>,
 ) -> Result<Json<SpinTorqueCommitResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     require_spin_base_revision(&scene, req.base_revision)?;
     if req.resource.id() != id {
         return Err(ApiError::bad_request(
@@ -825,7 +888,9 @@ pub async fn patch_spin_torque(
         .ok_or_else(|| ApiError::not_found(format!("spin torque not found: {id}")))?;
     let resource = req.resource;
     *slot = resource.clone();
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     Ok(Json(SpinTorqueCommitResource {
         scene_revision: committed.revision,
         resource,
@@ -839,7 +904,10 @@ pub async fn delete_spin_torque(
     Path(id): Path<String>,
     Json(req): Json<SpinAuthoringDeleteRequest>,
 ) -> Result<Json<SpinTorqueCommitResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     require_spin_base_revision(&scene, req.base_revision)?;
     let index = scene
         .spin_torques
@@ -863,7 +931,9 @@ pub async fn delete_spin_torque(
             resource: resource.clone(),
         },
     )?;
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     Ok(Json(SpinTorqueCommitResource {
         scene_revision: committed.revision,
         resource,
@@ -875,7 +945,10 @@ pub async fn delete_spin_torque(
 pub async fn get_oersted_fields(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<OerstedFieldListResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     Ok(Json(OerstedFieldListResource {
         scene_revision: scene.revision,
         items: scene.oersted_fields,
@@ -887,7 +960,10 @@ pub async fn get_oersted_field(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<SceneOerstedField>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     scene
         .oersted_fields
         .into_iter()
@@ -901,7 +977,10 @@ pub async fn create_oersted_field(
     State(state): State<Arc<AppState>>,
     Json(req): Json<OerstedFieldMutationRequest>,
 ) -> Result<Json<OerstedFieldCommitResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     require_spin_base_revision(&scene, req.base_revision)?;
     if scene
         .oersted_fields
@@ -923,7 +1002,9 @@ pub async fn create_oersted_field(
         },
     )?;
     scene.oersted_fields.push(resource.clone());
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     Ok(Json(OerstedFieldCommitResource {
         scene_revision: committed.revision,
         resource,
@@ -937,7 +1018,10 @@ pub async fn patch_oersted_field(
     Path(id): Path<String>,
     Json(req): Json<OerstedFieldMutationRequest>,
 ) -> Result<Json<OerstedFieldCommitResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     require_spin_base_revision(&scene, req.base_revision)?;
     if req.resource.id() != id {
         return Err(ApiError::bad_request(
@@ -969,7 +1053,9 @@ pub async fn patch_oersted_field(
         .ok_or_else(|| ApiError::not_found(format!("Oersted field not found: {id}")))?;
     let resource = req.resource;
     *slot = resource.clone();
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     Ok(Json(OerstedFieldCommitResource {
         scene_revision: committed.revision,
         resource,
@@ -983,7 +1069,10 @@ pub async fn delete_oersted_field(
     Path(id): Path<String>,
     Json(req): Json<SpinAuthoringDeleteRequest>,
 ) -> Result<Json<OerstedFieldCommitResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     require_spin_base_revision(&scene, req.base_revision)?;
     let index = scene
         .oersted_fields
@@ -1007,7 +1096,9 @@ pub async fn delete_oersted_field(
             resource: resource.clone(),
         },
     )?;
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     Ok(Json(OerstedFieldCommitResource {
         scene_revision: committed.revision,
         resource,
@@ -1027,7 +1118,10 @@ pub async fn delete_oersted_field(
 pub async fn get_authoring_scene(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SceneResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     SceneResource::from_scene_document(scene)
         .map(Json)
         .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
@@ -1036,7 +1130,7 @@ pub async fn get_authoring_scene(
 #[utoipa::path(
     put,
     path = "/v2/sessions/current/model/scene",
-    request_body = Value,
+    request_body = SceneResource,
     responses(
         (status = 200, description = "Committed canonical authoring scene document", body = SceneResource),
         (status = 400, description = "Invalid scene document payload"),
@@ -1049,10 +1143,16 @@ pub async fn replace_authoring_scene(
     State(state): State<Arc<AppState>>,
     Json(scene_value): Json<Value>,
 ) -> Result<Json<SceneResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let scene_document: SceneDocument = serde_json::from_value(scene_value).map_err(|error| {
         ApiError::bad_request(format!("invalid scene document payload: {error}"))
     })?;
-    let committed = crate::commit_current_live_scene_document(&state, scene_document).await?;
+    let committed = crate::commit_current_live_scene_document_for_context(
+        &state,
+        &request_context,
+        scene_document,
+    )
+    .await?;
     SceneResource::from_scene_document(committed)
         .map(Json)
         .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
@@ -1074,9 +1174,17 @@ pub async fn patch_authoring_scene(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ScenePatchRequest>,
 ) -> Result<Json<SceneResource>, ApiError> {
-    let current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let current_scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     let patched_scene = apply_scene_merge_patch(&current_scene, &req.merge_patch)?;
-    let committed = crate::commit_current_live_scene_document(&state, patched_scene).await?;
+    let committed = crate::commit_current_live_scene_document_for_context(
+        &state,
+        &request_context,
+        patched_scene,
+    )
+    .await?;
     SceneResource::from_scene_document(committed)
         .map(Json)
         .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
@@ -1094,7 +1202,10 @@ pub async fn patch_authoring_scene(
 pub async fn get_authoring_geometry_capabilities(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<GeometryCapabilitiesResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     Ok(Json(geometry_capabilities(scene.revision)))
 }
 
@@ -1110,7 +1221,10 @@ pub async fn get_authoring_geometry_capabilities(
 pub async fn get_authoring_geometry_validation(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<GeometryValidationResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     let backend_target = GeometryBackendTarget::from_scene(&scene);
     Ok(Json(validate_geometry_scene(&scene, backend_target)))
 }
@@ -1130,7 +1244,10 @@ pub async fn create_authoring_geometry_realization(
     State(state): State<Arc<AppState>>,
     Json(req): Json<GeometryRealizationRequest>,
 ) -> Result<Json<GeometryRealizationSnapshot>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     let backend_target = req
         .backend_target
         .as_deref()
@@ -1152,7 +1269,10 @@ pub async fn create_authoring_geometry_realization(
 pub async fn get_current_authoring_geometry_realization(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<GeometryRealizationSnapshot>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     let backend_target = GeometryBackendTarget::from_scene(&scene);
     Ok(Json(realize_geometry_scene(&scene, backend_target)))
 }
@@ -1169,7 +1289,10 @@ pub async fn get_current_authoring_geometry_realization(
 pub async fn get_authoring_geometry_diagnostics(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<GeometryDiagnosticsResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     let validation = validate_geometry_scene(&scene, GeometryBackendTarget::from_scene(&scene));
     Ok(Json(GeometryDiagnosticsResource {
         scene_revision: validation.scene_revision,
@@ -1195,7 +1318,10 @@ pub async fn get_authoring_geometry_diagnostic(
     State(state): State<Arc<AppState>>,
     Path(diagnostic_id): Path<String>,
 ) -> Result<Json<GeometryDiagnostic>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     let validation = validate_geometry_scene(&scene, GeometryBackendTarget::from_scene(&scene));
     let diagnostic = validation
         .diagnostics
@@ -1220,7 +1346,10 @@ pub async fn create_authoring_object(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ObjectCreateRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     apply_create_object_transaction(
         &mut scene,
         req.base_revision,
@@ -1236,7 +1365,9 @@ pub async fn create_authoring_object(
         req.universe,
         req.study_universe_mesh,
     )?;
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     serde_json::to_value(committed)
         .map(Json)
         .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
@@ -1260,9 +1391,14 @@ pub async fn patch_authoring_object(
     Path(object_id): Path<String>,
     Json(req): Json<ObjectPatchRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     apply_object_patch(&mut scene, &object_id, req)?;
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     serde_json::to_value(committed)
         .map(Json)
         .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
@@ -1284,9 +1420,14 @@ pub async fn delete_authoring_object(
     State(state): State<Arc<AppState>>,
     Path(object_id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     apply_delete_object_transaction(&mut scene, None, &object_id)?;
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     serde_json::to_value(committed)
         .map(Json)
         .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
@@ -1311,9 +1452,14 @@ pub async fn create_authoring_object_region(
     Path(object_id): Path<String>,
     Json(req): Json<ObjectRegionCreateRequest>,
 ) -> Result<Json<SceneResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     apply_create_object_region_transaction(&mut scene, req.base_revision, &object_id, req.region)?;
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     SceneResource::from_scene_document(committed)
         .map(Json)
         .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
@@ -1339,7 +1485,10 @@ pub async fn patch_authoring_object_region(
     Path((object_id, region_id)): Path<(String, String)>,
     Json(req): Json<ObjectRegionPatchRequest>,
 ) -> Result<Json<SceneResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     apply_patch_object_region_transaction(
         &mut scene,
         req.base_revision,
@@ -1347,7 +1496,9 @@ pub async fn patch_authoring_object_region(
         &region_id,
         req.patch,
     )?;
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     SceneResource::from_scene_document(committed)
         .map(Json)
         .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
@@ -1370,9 +1521,14 @@ pub async fn delete_authoring_object_region(
     State(state): State<Arc<AppState>>,
     Path((object_id, region_id)): Path<(String, String)>,
 ) -> Result<Json<SceneResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     apply_delete_object_region_transaction(&mut scene, None, &object_id, &region_id)?;
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     SceneResource::from_scene_document(committed)
         .map(Json)
         .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
@@ -1398,7 +1554,10 @@ pub async fn duplicate_authoring_object_region(
     Path((object_id, region_id)): Path<(String, String)>,
     Json(req): Json<ObjectRegionDuplicateRequest>,
 ) -> Result<Json<SceneResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     apply_duplicate_object_region_transaction(
         &mut scene,
         req.base_revision,
@@ -1406,7 +1565,9 @@ pub async fn duplicate_authoring_object_region(
         &region_id,
         req.name,
     )?;
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     SceneResource::from_scene_document(committed)
         .map(Json)
         .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
@@ -1431,14 +1592,19 @@ pub async fn reorder_authoring_object_regions(
     Path(object_id): Path<String>,
     Json(req): Json<ObjectRegionReorderRequest>,
 ) -> Result<Json<SceneResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     apply_reorder_object_regions_transaction(
         &mut scene,
         req.base_revision,
         &object_id,
         req.region_ids,
     )?;
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     SceneResource::from_scene_document(committed)
         .map(Json)
         .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
@@ -1456,8 +1622,12 @@ pub async fn reorder_authoring_object_regions(
 pub async fn get_authoring_regions(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<RegionListResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
-    let revisions = current_region_realization_revisions(&state).await;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
+    let revisions =
+        current_region_realization_revisions_for_context(&state, &request_context).await?;
     Ok(Json(RegionListResource {
         scene_revision: scene.revision,
         geometry_realization_revision: scene.revision,
@@ -1481,9 +1651,13 @@ pub async fn get_authoring_regions(
 pub async fn get_authoring_realized_regions(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<RegionListResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     let realization = realize_geometry_scene(&scene, GeometryBackendTarget::from_scene(&scene));
-    let revisions = current_region_realization_revisions(&state).await;
+    let revisions =
+        current_region_realization_revisions_for_context(&state, &request_context).await?;
     Ok(Json(RegionListResource {
         scene_revision: scene.revision,
         geometry_realization_revision: realization.realization_revision,
@@ -1507,8 +1681,12 @@ pub async fn get_authoring_realized_regions(
 pub async fn get_authoring_region_diagnostics(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<RegionDiagnosticsResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
-    let revisions = current_region_realization_revisions(&state).await;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
+    let revisions =
+        current_region_realization_revisions_for_context(&state, &request_context).await?;
     Ok(Json(RegionDiagnosticsResource {
         scene_revision: scene.revision,
         region_topology_revision: Some(revisions.topology),
@@ -1531,13 +1709,23 @@ pub async fn get_authoring_region_diagnostics(
 pub async fn get_authoring_material_fields(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<MaterialParameterFieldListResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     let guard = state.current_live_state.read().await;
-    let latest_fields = guard.as_ref().map(|snapshot| &snapshot.latest_fields);
-    let region_coefficients_revision = guard
+    let snapshot = guard
         .as_ref()
-        .map(|snapshot| snapshot.region_realization_revisions.coefficients)
-        .unwrap_or_default();
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
+    let latest_fields = Some(&snapshot.latest_fields);
+    let region_coefficients_revision = snapshot.region_realization_revisions.coefficients;
     Ok(Json(MaterialParameterFieldListResource {
         scene_revision: scene.revision,
         region_coefficients_revision: Some(region_coefficients_revision),
@@ -1557,23 +1745,29 @@ pub async fn get_authoring_material_fields(
 pub async fn get_authoring_couplings(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<CouplingListResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
-    let (execution_plan, fem_mesh) = state
-        .current_live_state
-        .read()
-        .await
-        .as_ref()
-        .map(|snapshot| {
-            let execution_plan = snapshot
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.get("execution_plan"))
-                .and_then(|value| {
-                    serde_json::from_value::<fullmag_ir::ExecutionPlanIR>(value.clone()).ok()
-                });
-            (execution_plan, snapshot.fem_mesh.clone())
-        })
-        .unwrap_or((None, None));
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
+    let (execution_plan, fem_mesh) = {
+        let _transition = state.current_live_session_transition.lock().await;
+        let session_epoch = state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire);
+        let current = state.current_live_state.read().await;
+        let snapshot = current
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        crate::ensure_current_live_request_context(snapshot, &request_context, session_epoch)?;
+        let execution_plan = snapshot
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("execution_plan"))
+            .and_then(|value| {
+                serde_json::from_value::<fullmag_ir::ExecutionPlanIR>(value.clone()).ok()
+            });
+        (execution_plan, snapshot.fem_mesh.clone())
+    };
     Ok(Json(CouplingListResource {
         scene_revision: scene.revision,
         couplings: authored_coupling_resources(&scene, execution_plan.as_ref(), fem_mesh.as_ref()),
@@ -1592,7 +1786,10 @@ pub async fn get_authoring_couplings(
 pub async fn get_authoring_field_drives(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<FieldDriveListResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     let drives = scene
         .field_drives
         .drives
@@ -1621,7 +1818,10 @@ pub async fn create_authoring_field_drive(
     State(state): State<Arc<AppState>>,
     Json(req): Json<FieldDriveCreateRequest>,
 ) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     apply_create_field_drive_transaction(
         &mut scene,
         req.base_revision,
@@ -1629,7 +1829,9 @@ pub async fn create_authoring_field_drive(
             .into_ir()
             .map_err(|error| ApiError::bad_request(format!("invalid field drive: {error}")))?,
     )?;
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     authoring_transaction_response("create_field_drive", committed)
 }
 
@@ -1651,7 +1853,10 @@ pub async fn replace_authoring_field_drive(
     Path(drive_id): Path<String>,
     Json(req): Json<FieldDriveReplaceRequest>,
 ) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     apply_replace_field_drive_transaction(
         &mut scene,
         req.base_revision,
@@ -1660,7 +1865,9 @@ pub async fn replace_authoring_field_drive(
             .into_ir()
             .map_err(|error| ApiError::bad_request(format!("invalid field drive: {error}")))?,
     )?;
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     authoring_transaction_response("replace_field_drive", committed)
 }
 
@@ -1681,9 +1888,14 @@ pub async fn delete_authoring_field_drive(
     Path(drive_id): Path<String>,
     Json(req): Json<FieldDriveDeleteRequest>,
 ) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     apply_delete_field_drive_transaction(&mut scene, req.base_revision, &drive_id)?;
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     authoring_transaction_response("delete_field_drive", committed)
 }
 
@@ -1702,9 +1914,17 @@ pub async fn create_authoring_coupling(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CouplingCreateRequest>,
 ) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
-    let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut current_scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     apply_create_coupling_transaction(&mut current_scene, req.base_revision, req.coupling)?;
-    let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+    let committed = crate::commit_current_live_scene_document_for_context(
+        &state,
+        &request_context,
+        current_scene,
+    )
+    .await?;
     authoring_transaction_response("create_coupling", committed)
 }
 
@@ -1728,14 +1948,22 @@ pub async fn patch_authoring_coupling(
     Path(coupling_id): Path<String>,
     Json(req): Json<CouplingPatchRequest>,
 ) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
-    let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut current_scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     apply_patch_coupling_transaction(
         &mut current_scene,
         req.base_revision,
         &coupling_id,
         req.patch,
     )?;
-    let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+    let committed = crate::commit_current_live_scene_document_for_context(
+        &state,
+        &request_context,
+        current_scene,
+    )
+    .await?;
     authoring_transaction_response("patch_coupling", committed)
 }
 
@@ -1758,9 +1986,17 @@ pub async fn delete_authoring_coupling(
     Path(coupling_id): Path<String>,
     Json(req): Json<CouplingDeleteRequest>,
 ) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
-    let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut current_scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     apply_delete_coupling_transaction(&mut current_scene, req.base_revision, &coupling_id)?;
-    let committed = crate::commit_current_live_scene_document(&state, current_scene).await?;
+    let committed = crate::commit_current_live_scene_document_for_context(
+        &state,
+        &request_context,
+        current_scene,
+    )
+    .await?;
     authoring_transaction_response("delete_coupling", committed)
 }
 
@@ -2549,6 +2785,7 @@ fn value_vec3(value: Option<&Value>) -> Option<[f64; 3]> {
     responses(
         (status = 200, description = "Committed canonical authoring scene after region patch", body = Value),
         (status = 404, description = "No active workspace, scene document, or region"),
+        (status = 409, description = "Base scene revision does not match current scene revision"),
     ),
     tag = "model"
 )]
@@ -2557,7 +2794,11 @@ pub async fn patch_authoring_region(
     Path(region_id): Path<String>,
     Json(req): Json<RegionPatchRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
+    check_base_scene_revision(&scene, req.base_revision)?;
     let object = find_scene_object_for_region_mut(&mut scene, &region_id)?;
     if let Some(name) = req.name {
         let name = name.trim();
@@ -2590,7 +2831,9 @@ pub async fn patch_authoring_region(
             }
         }
     }
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     serde_json::to_value(committed)
         .map(Json)
         .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
@@ -2616,7 +2859,10 @@ pub async fn patch_authoring_object_geometry(
     Path(object_id): Path<String>,
     Json(req): Json<ObjectGeometryPatchRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     apply_object_geometry_patch(
         &mut scene,
         &object_id,
@@ -2624,7 +2870,9 @@ pub async fn patch_authoring_object_geometry(
         req.geometry,
         req.transform,
     )?;
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     serde_json::to_value(committed)
         .map(Json)
         .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
@@ -2642,7 +2890,10 @@ pub async fn patch_authoring_object_geometry(
 pub async fn get_authoring_universe(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<UniverseResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     build_universe_resource(&scene).map(Json)
 }
 
@@ -2662,14 +2913,19 @@ pub async fn patch_authoring_universe(
     State(state): State<Arc<AppState>>,
     Json(req): Json<UniversePatchRequest>,
 ) -> Result<Json<UniverseResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     apply_universe_patch(
         &mut scene,
         req.base_revision,
         req.universe,
         req.sync_study_universe_mesh,
     )?;
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     build_universe_resource(&committed).map(Json)
 }
 
@@ -2689,7 +2945,10 @@ pub async fn fit_authoring_universe(
     State(state): State<Arc<AppState>>,
     Json(req): Json<UniverseFitRequest>,
 ) -> Result<Json<UniverseResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     apply_universe_fit(
         &mut scene,
         req.base_revision,
@@ -2697,7 +2956,9 @@ pub async fn fit_authoring_universe(
         req.minimum_size,
         req.sync_study_universe_mesh,
     )?;
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     build_universe_resource(&committed).map(Json)
 }
 
@@ -2713,7 +2974,10 @@ pub async fn fit_authoring_universe(
 pub async fn get_authoring_study_runtime(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<StudyRuntimeResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     Ok(Json(build_study_runtime_resource(&scene)))
 }
 
@@ -2731,7 +2995,10 @@ pub async fn patch_authoring_study_runtime(
     State(state): State<Arc<AppState>>,
     Json(req): Json<StudyRuntimePatchRequest>,
 ) -> Result<Json<StudyRuntimeResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     if let Some(value) = req.requested_backend {
         scene.study.requested_backend = value;
     }
@@ -2751,7 +3018,9 @@ pub async fn patch_authoring_study_runtime(
         };
     }
 
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     Ok(Json(build_study_runtime_resource(&committed)))
 }
 
@@ -2771,15 +3040,19 @@ pub async fn get_authoring_material(
     State(state): State<Arc<AppState>>,
     Path(material_id): Path<String>,
 ) -> Result<Json<MaterialResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     let material = scene
         .materials
         .iter()
         .find(|entry| entry.id == material_id)
         .ok_or_else(|| ApiError::not_found(format!("material not found: {material_id}")))?;
-    let region_coefficients_revision = current_region_realization_revisions(&state)
-        .await
-        .coefficients;
+    let region_coefficients_revision =
+        current_region_realization_revisions_for_context(&state, &request_context)
+            .await?
+            .coefficients;
     Ok(Json(build_material_resource(
         material,
         scene.revision,
@@ -2805,7 +3078,10 @@ pub async fn patch_authoring_material(
     Path(material_id): Path<String>,
     Json(req): Json<MaterialPatchRequest>,
 ) -> Result<Json<MaterialResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     let material = scene
         .materials
         .iter_mut()
@@ -2817,15 +3093,18 @@ pub async fn patch_authoring_material(
     sync_interfacial_dmi_for_material(&mut scene, &material_id);
     sync_bulk_dmi_for_material(&mut scene, &material_id);
 
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     let material = committed
         .materials
         .iter()
         .find(|entry| entry.id == material_id)
         .ok_or_else(|| ApiError::internal(format!("committed material missing: {material_id}")))?;
-    let region_coefficients_revision = current_region_realization_revisions(&state)
-        .await
-        .coefficients;
+    let region_coefficients_revision =
+        current_region_realization_revisions_for_context(&state, &request_context)
+            .await?
+            .coefficients;
     Ok(Json(build_material_resource(
         material,
         committed.revision,
@@ -2849,15 +3128,19 @@ pub async fn get_authoring_magnetization_asset(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
 ) -> Result<Json<MagnetizationAssetResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     let asset = scene
         .magnetization_assets
         .iter()
         .find(|entry| entry.id == asset_id)
         .ok_or_else(|| ApiError::not_found(format!("magnetization asset not found: {asset_id}")))?;
-    let initial_state_revision = current_region_realization_revisions(&state)
-        .await
-        .initial_state;
+    let initial_state_revision =
+        current_region_realization_revisions_for_context(&state, &request_context)
+            .await?
+            .initial_state;
     build_magnetization_asset_resource(&scene, asset, initial_state_revision).map(Json)
 }
 
@@ -2881,7 +3164,10 @@ pub async fn patch_authoring_magnetization_asset(
     Path(asset_id): Path<String>,
     Json(req): Json<MagnetizationAssetPatchRequest>,
 ) -> Result<Json<MagnetizationAssetResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     check_base_scene_revision(&scene, req.base_revision)?;
     let asset: MagnetizationAsset =
         serde_json::from_value(Value::Object(req.asset.into_iter().collect())).map_err(
@@ -2894,7 +3180,9 @@ pub async fn patch_authoring_magnetization_asset(
         )));
     }
     upsert_magnetization_asset(&mut scene, asset);
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     let asset = committed
         .magnetization_assets
         .iter()
@@ -2902,9 +3190,10 @@ pub async fn patch_authoring_magnetization_asset(
         .ok_or_else(|| {
             ApiError::internal(format!("committed magnetization asset missing: {asset_id}"))
         })?;
-    let initial_state_revision = current_region_realization_revisions(&state)
-        .await
-        .initial_state;
+    let initial_state_revision =
+        current_region_realization_revisions_for_context(&state, &request_context)
+            .await?
+            .initial_state;
     build_magnetization_asset_resource(&committed, asset, initial_state_revision).map(Json)
 }
 
@@ -2925,7 +3214,10 @@ pub async fn get_authoring_object_interaction(
     State(state): State<Arc<AppState>>,
     Path((object_id, interaction_kind)): Path<(String, String)>,
 ) -> Result<Json<ObjectInteractionResource>, ApiError> {
-    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     let kind = parse_interaction_kind(&interaction_kind)?;
     if matches!(
         kind,
@@ -2974,7 +3266,10 @@ pub async fn patch_authoring_object_interaction(
     Path((object_id, interaction_kind)): Path<(String, String)>,
     Json(req): Json<ObjectInteractionPatchRequest>,
 ) -> Result<Json<ObjectInteractionResource>, ApiError> {
-    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
     check_base_scene_revision(&scene, req.base_revision)?;
     let kind = parse_interaction_kind(&interaction_kind)?;
     if matches!(
@@ -2995,7 +3290,9 @@ pub async fn patch_authoring_object_interaction(
 
     apply_interaction_patch(object, kind, material_dind, material_dbulk, req)?;
 
-    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
     let object = committed
         .objects
         .iter()
@@ -3026,6 +3323,7 @@ pub async fn commit_authoring_transaction(
     State(state): State<Arc<AppState>>,
     Json(req): Json<AuthoringTransactionRequest>,
 ) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let (transaction_kind, committed) = match req {
         AuthoringTransactionRequest::ReplaceScene {
             base_revision,
@@ -3036,23 +3334,39 @@ pub async fn commit_authoring_transaction(
                     ApiError::bad_request(format!("invalid scene document payload: {error}"))
                 })?;
             if base_revision.is_some() {
-                let current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+                let current_scene = crate::get_or_load_current_live_scene_document_for_context(
+                    &state,
+                    &request_context,
+                )
+                .await?;
                 check_base_scene_revision(&current_scene, base_revision)?;
                 scene_document.revision = current_scene.revision;
             }
-            let committed =
-                crate::commit_current_live_scene_document(&state, scene_document).await?;
+            let committed = crate::commit_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+                scene_document,
+            )
+            .await?;
             ("replace_scene", committed)
         }
         AuthoringTransactionRequest::MergePatch {
             base_revision,
             merge_patch,
         } => {
-            let current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            let current_scene = crate::get_or_load_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+            )
+            .await?;
             check_base_scene_revision(&current_scene, base_revision)?;
             let patched_scene = apply_scene_merge_patch(&current_scene, &merge_patch)?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, patched_scene).await?;
+            let committed = crate::commit_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+                patched_scene,
+            )
+            .await?;
             ("merge_patch", committed)
         }
         AuthoringTransactionRequest::PatchMagnetization {
@@ -3062,7 +3376,11 @@ pub async fn commit_authoring_transaction(
             asset,
             magnetization_ref,
         } => {
-            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+            )
+            .await?;
             apply_patch_magnetization_transaction(
                 &mut current_scene,
                 base_revision,
@@ -3071,8 +3389,12 @@ pub async fn commit_authoring_transaction(
                 asset,
                 magnetization_ref,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            let committed = crate::commit_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+                current_scene,
+            )
+            .await?;
             ("patch_magnetization", committed)
         }
         AuthoringTransactionRequest::PatchObjectGeometry {
@@ -3081,7 +3403,11 @@ pub async fn commit_authoring_transaction(
             geometry,
             transform,
         } => {
-            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+            )
+            .await?;
             apply_object_geometry_patch(
                 &mut current_scene,
                 &object_id,
@@ -3089,8 +3415,12 @@ pub async fn commit_authoring_transaction(
                 geometry,
                 transform,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            let committed = crate::commit_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+                current_scene,
+            )
+            .await?;
             ("patch_object_geometry", committed)
         }
         AuthoringTransactionRequest::CreateObject {
@@ -3107,7 +3437,11 @@ pub async fn commit_authoring_transaction(
             universe,
             study_universe_mesh,
         } => {
-            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+            )
+            .await?;
             apply_create_object_transaction(
                 &mut current_scene,
                 base_revision,
@@ -3123,8 +3457,12 @@ pub async fn commit_authoring_transaction(
                 universe,
                 study_universe_mesh,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            let committed = crate::commit_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+                current_scene,
+            )
+            .await?;
             ("create_object", committed)
         }
         AuthoringTransactionRequest::CreateMaterial {
@@ -3134,7 +3472,11 @@ pub async fn commit_authoring_transaction(
             properties,
             references,
         } => {
-            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+            )
+            .await?;
             apply_create_material_transaction(
                 &mut current_scene,
                 base_revision,
@@ -3143,8 +3485,12 @@ pub async fn commit_authoring_transaction(
                 properties,
                 references,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            let committed = crate::commit_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+                current_scene,
+            )
+            .await?;
             ("create_material", committed)
         }
         AuthoringTransactionRequest::PatchMaterial {
@@ -3152,35 +3498,59 @@ pub async fn commit_authoring_transaction(
             material_id,
             patch,
         } => {
-            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+            )
+            .await?;
             apply_patch_material_transaction(
                 &mut current_scene,
                 base_revision,
                 &material_id,
                 patch,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            let committed = crate::commit_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+                current_scene,
+            )
+            .await?;
             ("patch_material", committed)
         }
         AuthoringTransactionRequest::DeleteMaterial {
             base_revision,
             material_id,
         } => {
-            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+            )
+            .await?;
             apply_delete_material_transaction(&mut current_scene, base_revision, &material_id)?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            let committed = crate::commit_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+                current_scene,
+            )
+            .await?;
             ("delete_material", committed)
         }
         AuthoringTransactionRequest::DeleteObject {
             base_revision,
             object_id,
         } => {
-            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+            )
+            .await?;
             apply_delete_object_transaction(&mut current_scene, base_revision, &object_id)?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            let committed = crate::commit_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+                current_scene,
+            )
+            .await?;
             ("delete_object", committed)
         }
         AuthoringTransactionRequest::RenameObject {
@@ -3188,10 +3558,18 @@ pub async fn commit_authoring_transaction(
             object_id,
             name,
         } => {
-            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+            )
+            .await?;
             apply_rename_object_transaction(&mut current_scene, base_revision, &object_id, name)?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            let committed = crate::commit_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+                current_scene,
+            )
+            .await?;
             ("rename_object", committed)
         }
         AuthoringTransactionRequest::CommitObjectTransform {
@@ -3199,15 +3577,23 @@ pub async fn commit_authoring_transaction(
             object_id,
             transform,
         } => {
-            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+            )
+            .await?;
             apply_commit_object_transform_transaction(
                 &mut current_scene,
                 base_revision,
                 &object_id,
                 transform,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            let committed = crate::commit_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+                current_scene,
+            )
+            .await?;
             ("commit_object_transform", committed)
         }
         AuthoringTransactionRequest::PatchUniverse {
@@ -3215,15 +3601,23 @@ pub async fn commit_authoring_transaction(
             universe,
             sync_study_universe_mesh,
         } => {
-            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+            )
+            .await?;
             apply_patch_universe_transaction(
                 &mut current_scene,
                 base_revision,
                 universe,
                 sync_study_universe_mesh,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            let committed = crate::commit_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+                current_scene,
+            )
+            .await?;
             ("patch_universe", committed)
         }
         AuthoringTransactionRequest::CreateObjectRegion {
@@ -3231,15 +3625,23 @@ pub async fn commit_authoring_transaction(
             object_id,
             region,
         } => {
-            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+            )
+            .await?;
             apply_create_object_region_transaction(
                 &mut current_scene,
                 base_revision,
                 &object_id,
                 region,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            let committed = crate::commit_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+                current_scene,
+            )
+            .await?;
             ("create_object_region", committed)
         }
         AuthoringTransactionRequest::PatchObjectRegion {
@@ -3248,7 +3650,11 @@ pub async fn commit_authoring_transaction(
             region_id,
             patch,
         } => {
-            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+            )
+            .await?;
             apply_patch_object_region_transaction(
                 &mut current_scene,
                 base_revision,
@@ -3256,8 +3662,12 @@ pub async fn commit_authoring_transaction(
                 &region_id,
                 patch,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            let committed = crate::commit_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+                current_scene,
+            )
+            .await?;
             ("patch_object_region", committed)
         }
         AuthoringTransactionRequest::PatchObjectMaterialFields {
@@ -3265,15 +3675,23 @@ pub async fn commit_authoring_transaction(
             object_id,
             fields,
         } => {
-            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+            )
+            .await?;
             apply_patch_object_material_fields_transaction(
                 &mut current_scene,
                 base_revision,
                 &object_id,
                 fields,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            let committed = crate::commit_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+                current_scene,
+            )
+            .await?;
             ("patch_object_material_fields", committed)
         }
         AuthoringTransactionRequest::DeleteObjectRegion {
@@ -3281,15 +3699,23 @@ pub async fn commit_authoring_transaction(
             object_id,
             region_id,
         } => {
-            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+            )
+            .await?;
             apply_delete_object_region_transaction(
                 &mut current_scene,
                 base_revision,
                 &object_id,
                 &region_id,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            let committed = crate::commit_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+                current_scene,
+            )
+            .await?;
             ("delete_object_region", committed)
         }
         AuthoringTransactionRequest::ReorderObjectRegions {
@@ -3297,25 +3723,41 @@ pub async fn commit_authoring_transaction(
             object_id,
             region_ids,
         } => {
-            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+            )
+            .await?;
             apply_reorder_object_regions_transaction(
                 &mut current_scene,
                 base_revision,
                 &object_id,
                 region_ids,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            let committed = crate::commit_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+                current_scene,
+            )
+            .await?;
             ("reorder_object_regions", committed)
         }
         AuthoringTransactionRequest::CreateCoupling {
             base_revision,
             coupling,
         } => {
-            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+            )
+            .await?;
             apply_create_coupling_transaction(&mut current_scene, base_revision, coupling)?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            let committed = crate::commit_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+                current_scene,
+            )
+            .await?;
             ("create_coupling", committed)
         }
         AuthoringTransactionRequest::PatchCoupling {
@@ -3323,28 +3765,49 @@ pub async fn commit_authoring_transaction(
             coupling_id,
             patch,
         } => {
-            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+            )
+            .await?;
             apply_patch_coupling_transaction(
                 &mut current_scene,
                 base_revision,
                 &coupling_id,
                 patch,
             )?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            let committed = crate::commit_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+                current_scene,
+            )
+            .await?;
             ("patch_coupling", committed)
         }
         AuthoringTransactionRequest::DeleteCoupling {
             base_revision,
             coupling_id,
         } => {
-            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            let mut current_scene = crate::get_or_load_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+            )
+            .await?;
             apply_delete_coupling_transaction(&mut current_scene, base_revision, &coupling_id)?;
-            let committed =
-                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            let committed = crate::commit_current_live_scene_document_for_context(
+                &state,
+                &request_context,
+                current_scene,
+            )
+            .await?;
             ("delete_coupling", committed)
         }
     };
+
+    // The transaction can perform several awaited scene loads/commits.  Keep
+    // the response fenced as well, so a session transition that completes
+    // after the commit cannot publish an ACK for a different current scene.
+    crate::validate_current_live_request_context(&state, &request_context).await?;
 
     let committed_scene = serde_json::to_value(&committed).map_err(|error| {
         ApiError::internal(format!("failed to serialize scene document: {error}"))
@@ -3384,9 +3847,12 @@ fn authoring_transaction_response(
 pub async fn get_authoring_script_source(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ScriptSourceResponse>, ApiError> {
-    crate::script::get_current_live_script_source(&state)
-        .await
-        .map(Json)
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    let response = crate::script::get_current_live_script_source(&state).await?;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(response))
 }
 
 #[utoipa::path(
@@ -3403,9 +3869,12 @@ pub async fn sync_authoring_script(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ScriptSyncRequest>,
 ) -> Result<Json<ScriptSyncResponse>, ApiError> {
-    crate::script::sync_current_live_script_with_request(&state, req)
-        .await
-        .map(Json)
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let _transition = state.current_live_session_transition.lock().await;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    let response = crate::script::sync_current_live_script_with_request(&state, req).await?;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    Ok(Json(response))
 }
 
 fn apply_scene_merge_patch(
@@ -4915,16 +5384,20 @@ fn magnetic_interaction_kind_id(kind: ScriptBuilderMagneticInteractionKind) -> &
     }
 }
 
-async fn current_region_realization_revisions(
+async fn current_region_realization_revisions_for_context(
     state: &Arc<AppState>,
-) -> fullmag_authoring::RegionRealizationRevisions {
-    state
-        .current_live_state
-        .read()
-        .await
+    context: &crate::types::CurrentLiveRequestContext,
+) -> Result<fullmag_authoring::RegionRealizationRevisions, ApiError> {
+    let _transition = state.current_live_session_transition.lock().await;
+    let session_epoch = state
+        .current_live_session_epoch
+        .load(std::sync::atomic::Ordering::Acquire);
+    let current = state.current_live_state.read().await;
+    let snapshot = current
         .as_ref()
-        .map(|snapshot| snapshot.region_realization_revisions)
-        .unwrap_or_default()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(snapshot, context, session_epoch)?;
+    Ok(snapshot.region_realization_revisions)
 }
 
 fn build_material_resource(

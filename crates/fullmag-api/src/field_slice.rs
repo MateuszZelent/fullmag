@@ -6,14 +6,14 @@
 use crate::error::ApiError;
 #[cfg(test)]
 use crate::field_projection::project_values;
-use crate::field_projection::{parse_component, ComponentSelection};
+use crate::field_projection::{ComponentSelection, parse_component};
 use crate::planar_sampling::{
     FdmPlanarField, FemPlanarField, Occupancy, PlanarCompatibilityReduction, PlanarComponent,
     PlanarSamplingEngine, ResolvedPlanarSampleRequest,
 };
 use fullmag_ir::{
-    EmptyPolicyIR, PlanarExtentIR, PlanarFrameIR, PlanarOperatorIR, PlanarReductionIR,
-    PLANAR_FRAME_NORMALIZATION_VERSION,
+    EmptyPolicyIR, PLANAR_FRAME_NORMALIZATION_VERSION, PlanarExtentIR, PlanarFrameIR,
+    PlanarOperatorIR, PlanarReductionIR,
 };
 use serde::{Deserialize, Serialize};
 
@@ -298,7 +298,7 @@ pub fn resolve_projection_query(
         other => {
             return Err(ApiError::bad_request(format!(
                 "invalid_query: unsupported projection reduction '{other}'"
-            )))
+            )));
         }
     };
 
@@ -311,7 +311,7 @@ pub fn resolve_projection_query(
         _ => {
             return Err(ApiError::bad_request(
                 "invalid_query: tile_x, tile_y and tile_size must be provided together",
-            ))
+            ));
         }
     };
     let tile_origin_x = tile_x
@@ -573,12 +573,12 @@ fn fdm_slice_via_planar_engine(
         ComponentSelection::AbsIndex(_) => {
             return Err(ApiError::bad_request(
                 "invalid_component: planar vectors expose x, y, and z",
-            ))
+            ));
         }
         ComponentSelection::Index(_) => {
             return Err(ApiError::bad_request(
                 "invalid_component: planar vectors expose x, y, and z",
-            ))
+            ));
         }
     };
     let source = FdmPlanarField::new(
@@ -1049,7 +1049,7 @@ fn projection_planar_component(
         ComponentSelection::Full => {
             return Err(ApiError::bad_request(
                 "invalid_query: projection/scalar requires a scalar component, not full",
-            ))
+            ));
         }
         ComponentSelection::Magnitude => PlanarComponent::Magnitude,
         ComponentSelection::MagnitudeSquared => PlanarComponent::MagnitudeSquared,
@@ -1062,7 +1062,7 @@ fn projection_planar_component(
         ComponentSelection::AbsIndex(index) | ComponentSelection::Index(index) => {
             return Err(ApiError::bad_request(format!(
                 "invalid_component: planar projection supports vector components 0..2, got {index}"
-            )))
+            )));
         }
     })
 }
@@ -1344,7 +1344,7 @@ fn fem_projection_via_planar_engine(
             ComponentSelection::Full => {
                 return Err(ApiError::bad_request(
                     "invalid_query: projection/scalar requires a scalar component, not full",
-                ))
+                ));
             }
             ComponentSelection::Magnitude => PlanarComponent::Magnitude,
             ComponentSelection::MagnitudeSquared => PlanarComponent::MagnitudeSquared,
@@ -1357,7 +1357,7 @@ fn fem_projection_via_planar_engine(
             ComponentSelection::AbsIndex(index) | ComponentSelection::Index(index) => {
                 return Err(ApiError::bad_request(format!(
                     "invalid_component: planar projection supports vector components 0..2, got {index}"
-                )))
+                )));
             }
         };
         let (u_axis, v_axis, normal) = match q.plane {
@@ -2091,11 +2091,13 @@ mod tests {
         let stddev =
             fem_projection_exact(&field, &resolve_projection_query(&stddev_query, 1).unwrap())
                 .unwrap();
-        assert!(stddev
-            .scalar_values
-            .iter()
-            .filter(|value| value.is_finite())
-            .all(|value| value.abs() < 1.0e-12));
+        assert!(
+            stddev
+                .scalar_values
+                .iter()
+                .filter(|value| value.is_finite())
+                .all(|value| value.abs() < 1.0e-12)
+        );
     }
 
     #[test]

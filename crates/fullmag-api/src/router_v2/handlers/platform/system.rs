@@ -64,10 +64,18 @@ pub async fn get_engine_log(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
 
     let body = EngineLogResource {
         revision: snapshot.engine_log.len() as u64,
@@ -83,6 +91,13 @@ pub async fn get_engine_log(
             .map(|entry| entry.timestamp_unix_ms)
             .unwrap_or(0)
     ));
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
     Ok(crate::router_v2::handlers::shared::conditional_json_response(&headers, &etag, &body))
 }
 
@@ -165,10 +180,18 @@ pub async fn get_solver_profile(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
     let body = snapshot.solver_profile.clone();
     let qualification_etag = body
         .timestep_qualification
@@ -188,5 +211,12 @@ pub async fn get_solver_profile(
         body.state,
         qualification_etag,
     ));
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
     Ok(crate::router_v2::handlers::shared::conditional_json_response(&headers, &etag, &body))
 }

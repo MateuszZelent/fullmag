@@ -1139,6 +1139,7 @@ dependencies = [
  "fullmag-plan",
  "fullmag-quantities",
  "fullmag-runner",
+ "fullmag-runtime-control",
  "fullmag-session",
  "futures-core",
  "png 0.17.16",
@@ -1160,6 +1161,8 @@ dependencies = [
 name = "fullmag-application"
 version = "0.1.0"
 dependencies = [
+ "fullmag-ir",
+ "fullmag-plan",
  "serde",
  "serde_json",
  "sha2",
@@ -1175,6 +1178,7 @@ dependencies = [
  "fullmag-ir",
  "serde",
  "serde_json",
+ "sha2",
  "utoipa",
 ]
 
@@ -1285,6 +1289,7 @@ dependencies = [
 name = "fullmag-plan"
 version = "0.1.0"
 dependencies = [
+ "fullmag-authoring",
  "fullmag-fdm-demag",
  "fullmag-ir",
  "fullmag-quantities",
@@ -1340,6 +1345,20 @@ dependencies = [
  "serde_json",
  "sha2",
  "uuid",
+]
+
+[[package]]
+name = "fullmag-runtime-control"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "fullmag-application",
+ "fullmag-authoring",
+ "fullmag-ir",
+ "fullmag-plan",
+ "fullmag-session",
+ "serde_json",
 ]
 
 [[package]]

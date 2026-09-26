@@ -25,13 +25,22 @@ use super::resolved_spatial_field::{
 )]
 pub async fn get_quantities_catalog(
     State(state): State<Arc<AppState>>,
-) -> Json<QuantityCatalogResponse> {
+) -> Result<Json<QuantityCatalogResponse>, crate::error::ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
     let mut response = QuantityCatalogResponse::build();
     let guard = state.current_live_state.read().await;
-    if let Some(snapshot) = guard.as_ref() {
-        annotate_runtime_quantity_state(&mut response, snapshot);
-    }
-    Json(response)
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| crate::error::ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )?;
+    annotate_runtime_quantity_state(&mut response, snapshot);
+    Ok(Json(response))
 }
 
 fn annotate_runtime_quantity_state(
@@ -325,13 +334,14 @@ mod tests {
             .expect("resolved capability");
         assert_eq!(demag.materialization_state, "unmaterialized");
         assert!(resolved.carriers.is_empty());
-        assert!(response.quantities.iter().all(|entry| entry
-            .resolved_capability
-            .as_ref()
-            .is_none_or(|resolved| resolved
-                .carriers
-                .iter()
-                .all(|carrier| !carrier.carrier_id.starts_with("declared:")))));
+        assert!(response.quantities.iter().all(|entry| {
+            entry.resolved_capability.as_ref().is_none_or(|resolved| {
+                resolved
+                    .carriers
+                    .iter()
+                    .all(|carrier| !carrier.carrier_id.starts_with("declared:"))
+            })
+        }));
     }
 
     #[test]

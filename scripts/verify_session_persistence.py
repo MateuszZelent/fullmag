@@ -75,6 +75,32 @@ CAPABILITY_SOURCE_PATHS = COMMON_SOURCE_PATHS + (
     "docs/specs/capability-matrix-v0.json",
     "scripts/validate_mixed_p1_capability_contract.py",
 )
+API_SOURCE_PATHS = COMMON_SOURCE_PATHS + (
+    "crates/fullmag-authoring/Cargo.toml",
+    "crates/fullmag-authoring/src",
+    "crates/fullmag-ir/Cargo.toml",
+    "crates/fullmag-ir/src",
+    "crates/fullmag-plan/Cargo.toml",
+    "crates/fullmag-plan/src",
+    "crates/fullmag-runtime-control/Cargo.toml",
+    "crates/fullmag-runtime-control/src",
+    "crates/fullmag-api/Cargo.toml",
+    "crates/fullmag-api/src",
+    "crates/fullmag-application/Cargo.toml",
+    "crates/fullmag-application/src",
+    "crates/fullmag-session/Cargo.toml",
+    "crates/fullmag-session/src",
+)
+API_PREPARATION_SOURCE_PATHS = API_SOURCE_PATHS + (
+    "packages/fullmag-py/pyproject.toml",
+    "packages/fullmag-py/uv.lock",
+    "packages/fullmag-py/src",
+)
+AUTHORING_SOURCE_PATHS = COMMON_SOURCE_PATHS + (
+    "crates/fullmag-authoring/Cargo.toml",
+    "crates/fullmag-authoring/src",
+    "crates/fullmag-authoring/tests",
+)
 
 
 @dataclass(frozen=True)
@@ -85,6 +111,7 @@ class RouteSpec:
     command: tuple[str, ...]
     source_paths: tuple[str, ...]
     local_dependency_manifest: str | None = None
+    requires_python: bool = False
 
 
 ROUTES = {
@@ -127,6 +154,142 @@ ROUTES = {
             "fullmag-desktop",
         ),
         source_paths=PROJECT_ENTRYPOINT_SOURCE_PATHS,
+    ),
+    "api-source-check": RouteSpec(
+        name="api-source-check",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_source_check_v1",
+        command=("cargo", "check", "--locked", "-p", "fullmag-api", "--bin", "fullmag-api"),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-accepted-worker-check": RouteSpec(
+        name="api-accepted-worker-check",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_worker_check_v1",
+        command=(
+            "cargo",
+            "check",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-worker",
+        ),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-accepted-supervisor-tests": RouteSpec(
+        name="api-accepted-supervisor-tests",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_supervisor_test_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-supervisor",
+        ),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-preparation-tests": RouteSpec(
+        name="api-preparation-tests",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_preparation_test_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "preparation_materialization_route_tests::",
+            "--",
+            "--nocapture",
+        ),
+        source_paths=API_PREPARATION_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+        requires_python=True,
+    ),
+    "api-project-run-tests": RouteSpec(
+        name="api-project-run-tests",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_project_run_test_v1",
+        command=("cargo", "test", "--locked", "-p", "fullmag-api",
+                 "--bin", "fullmag-api", "router_v2::tests::project_documents::"),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-recovery-tests": RouteSpec(
+        name="api-recovery-tests",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_recovery_test_v1",
+        command=("cargo", "test", "--locked", "-p", "fullmag-api",
+                 "--bin", "fullmag-api", "router_v2::tests::session_recovery_"),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-scene-resource-tests": RouteSpec(
+        name="api-scene-resource-tests",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_scene_resource_test_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "router_v2::tests::scene_resource_preserves_selection_and_frozen_spins_authoring_state",
+            "--",
+            "--exact",
+        ),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "authoring-contract-tests": RouteSpec(
+        name="authoring-contract-tests",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_authoring_contract_test_v1",
+        command=("cargo", "test", "--locked", "-p", "fullmag-authoring", "--lib"),
+        source_paths=AUTHORING_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-authoring/Cargo.toml",
+    ),
+    "authoring-scene-adapter-tests": RouteSpec(
+        name="authoring-scene-adapter-tests",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_authoring_scene_adapter_test_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-authoring",
+            "--lib",
+            "scene_document",
+            "--",
+            "--nocapture",
+        ),
+        source_paths=AUTHORING_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-authoring/Cargo.toml",
+    ),
+    "api-openapi-codegen": RouteSpec(
+        name="api-openapi-codegen",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_openapi_codegen_v1",
+        command=("cargo", "run", "--locked", "-p", "fullmag-api", "--features", "openapi-codegen", "--bin", "fullmag-api-openapi"),
+        source_paths=COMMON_SOURCE_PATHS + (
+            "crates/fullmag-api/Cargo.toml",
+            "crates/fullmag-api/src",
+            "crates/fullmag-application/src",
+            "crates/fullmag-session/src",
+        ),
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
     ),
     "fem-capability-contract": RouteSpec(
         name="fem-capability-contract",
@@ -394,14 +557,47 @@ def toolchain_identity() -> tuple[dict[str, Any], dict[str, Path]]:
     return versions, {"cargo": cargo, "rustc": rustc}
 
 
+def python_runtime_identity(route: str | RouteSpec) -> dict[str, str] | None:
+    """Pin and identify Python only for routes that exercise the Python DSL."""
+    spec = route_spec(route)
+    if not spec.requires_python:
+        return None
+
+    requested = os.environ.get("FULLMAG_PYTHON")
+    selected = requested or sys.executable
+    resolved = shutil.which(selected) if not Path(selected).is_absolute() else selected
+    executable = Path(resolved or selected).expanduser()
+    if not executable.is_file():
+        raise SessionCheckError(f"Selected Python interpreter is not a file: {selected}")
+    result = subprocess.run(
+        [str(executable), "-c", "import sys; print(sys.version.split()[0])"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        raise SessionCheckError(
+            "Selected Python interpreter failed its version probe: "
+            f"{result.stderr.strip() or result.stdout.strip() or result.returncode}"
+        )
+    return {
+        "executable": str(executable.resolve()),
+        "version": f"Python {result.stdout.strip()}",
+    }
+
+
 def child_environment(
     layout: Mapping[str, Any],
     paths: Mapping[str, Path],
     tools: Mapping[str, Path],
     route: str | RouteSpec = SESSION_ROUTE,
+    python_runtime: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     spec = route_spec(route)
     env = {str(key): str(value) for key, value in os.environ.items()}
+    env.pop("FULLMAG_PROJECT_RUN_FIXTURE_PATH", None)
+    if spec.name == "api-project-run-tests":
+        env["FULLMAG_PROJECT_RUN_FIXTURE_PATH"] = str(paths["run_root"] / "project-run-request.json")
     env.update({str(key): str(value) for key, value in layout["env"].items()})
     env.update(
         {
@@ -417,6 +613,12 @@ def child_environment(
             "TMP": str(paths["temp_dir"]),
         }
     )
+    if spec.requires_python:
+        if not python_runtime or not python_runtime.get("executable"):
+            raise SessionCheckError(
+                f"Route {spec.name} requires a pinned Python interpreter"
+            )
+        env["FULLMAG_PYTHON"] = python_runtime["executable"]
     # Cargo is invoked by its selected absolute path and rustc is pinned too;
     # putting the same toolchain bin directories first protects build scripts
     # from finding a rustup shim after RUSTUP_HOME is redirected to storage.
@@ -477,6 +679,8 @@ def run_route(repo_root: Path, route: str | RouteSpec = SESSION_ROUTE) -> int:
         }
         source_error: str | None = None
         tool_error: str | None = None
+        python_error: str | None = None
+        python_runtime: dict[str, str] | None = None
         try:
             receipt["source"] = source_identity(repo_root, spec)
         except Exception as error:  # receipt must explain a preflight failure
@@ -490,14 +694,22 @@ def run_route(repo_root: Path, route: str | RouteSpec = SESSION_ROUTE) -> int:
             receipt["toolchain"] = {"error": tool_error}
             tools = None
 
+        if spec.requires_python:
+            try:
+                python_runtime = python_runtime_identity(spec)
+                receipt["python_runtime"] = python_runtime
+            except Exception as error:  # receipt must explain a preflight failure
+                python_error = f"{type(error).__name__}: {error}"
+                receipt["python_runtime"] = {"error": python_error}
+
         _write_atomic_json(paths["receipt"], receipt)
         return_code = 2
         try:
-            if source_error or tool_error or tools is None:
+            if source_error or tool_error or python_error or tools is None:
                 receipt["state"] = "not_run"
-                receipt["error"] = source_error or tool_error
+                receipt["error"] = source_error or tool_error or python_error
             else:
-                env = child_environment(layout, paths, tools, spec)
+                env = child_environment(layout, paths, tools, spec, python_runtime)
                 receipt["state"] = "running"
                 receipt["execution_command"] = [str(tools["cargo"]), *spec.command[1:]]
                 _write_atomic_json(paths["receipt"], receipt)
@@ -506,13 +718,32 @@ def run_route(repo_root: Path, route: str | RouteSpec = SESSION_ROUTE) -> int:
                         [str(tools["cargo"]), *spec.command[1:]],
                         cwd=repo_root,
                         env=env,
-                        stdout=log,
-                        stderr=subprocess.STDOUT,
+                        stdout=subprocess.PIPE if spec.name == "api-openapi-codegen" else log,
+                        stderr=log if spec.name == "api-openapi-codegen" else subprocess.STDOUT,
                         text=True,
+                        encoding="utf-8",
                         check=False,
                     )
                 return_code = result.returncode
+                if return_code == 0 and spec.name == "api-openapi-codegen":
+                    document = json.loads(result.stdout)
+                    if "/v2/sessions/current/status" not in document.get("paths", {}) or "/v2/persistence/projects/{project_id}/runs" not in document.get("paths", {}):
+                        raise SessionCheckError("Generated OpenAPI omitted a required route")
+                    identity = document.get("x-fullmag-build-identity")
+                    if not isinstance(identity, dict) or any(not identity.get(field) for field in ("built_at_utc", "git_commit", "source_snapshot_sha256", "worktree_state")):
+                        raise SessionCheckError("Generated OpenAPI has no complete build identity")
+                    for field in ("built_at_utc", "git_commit", "source_snapshot_sha256", "worktree_state"):
+                        identity[field] = "generated-artifact"
+                    output = repo_root / "apps/control-room/src/kernel/api/generated/openapi-v2.json"
+                    _write_atomic_json(output, document)
+                    receipt["generated_artifact"] = {"path": str(output), "sha256": _sha256_file(output)}
                 receipt["exit_code"] = return_code
+                if return_code == 0 and spec.name == "api-project-run-tests":
+                    fixture = paths["run_root"] / "project-run-request.json"
+                    payload = json.loads(fixture.read_text(encoding="utf-8"))
+                    if not all(key in payload for key in ("archive_base64", "run_intent", "study_plan", "study_problem_catalog")):
+                        raise SessionCheckError("Project run fixture omitted required immutable inputs")
+                    receipt["project_run_fixture"] = {"path": str(fixture), "sha256": _sha256_file(fixture)}
                 receipt["test_summaries"] = _test_summaries(paths["log"])
                 receipt["state"] = "passed" if return_code == 0 else "failed"
         except BaseException as error:

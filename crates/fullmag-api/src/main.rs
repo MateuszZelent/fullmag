@@ -1,41 +1,43 @@
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{DefaultBodyLimit, Query, State};
-use axum::http::header::CONTENT_TYPE;
 use axum::http::StatusCode;
+use axum::http::header::CONTENT_TYPE;
 #[cfg(not(feature = "swagger-ui"))]
 use axum::response::Html;
 use axum::response::{IntoResponse, Response};
 use axum::{
-    routing::{get, post},
     Json, Router,
+    routing::{get, post},
 };
 use base64::Engine;
 use fullmag_authoring::{
-    normalize_scene_document_magnetization_assets, normalize_scene_document_study_pipeline_labels,
+    MagnetizationAsset, SceneDocument, normalize_scene_document_magnetization_assets,
+    normalize_scene_document_study_pipeline_labels,
     scene_document_has_unresolved_solve_prerequisites, validate_scene_document_for_authoring,
-    MagnetizationAsset, SceneDocument,
 };
 use fullmag_ir::{TextureMappingIR, TextureProjectionMode, TextureTransform3DIR};
-use fullmag_plan::{sample_preset_texture_versioned, TextureSamplePoint};
-use serde_json::{json, Value};
+use fullmag_plan::{TextureSamplePoint, sample_preset_texture_versioned};
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::{broadcast, watch, Mutex, RwLock};
-use tokio::time::{sleep_until, Duration, Instant};
+use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::sync::{Mutex, RwLock, broadcast, watch};
+use tokio::time::{Duration, Instant, sleep_until};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
 
-use fullmag_quantities::{quantity_spec, QuantityShape as QuantityKind};
+use fullmag_quantities::{QuantityShape as QuantityKind, quantity_spec};
 use fullmag_runner::LivePreviewField;
 
 mod analysis;
+mod accepted_study_worker;
 mod artifacts;
 mod assets;
 mod build_info;
+mod coordinator_persistence;
 mod error;
 mod fdm_planar_grid_overlay;
 mod feature_flags;
@@ -48,6 +50,7 @@ mod field_projection;
 mod field_render_png;
 mod field_slice;
 mod field_store;
+mod live_scene_preparation;
 mod openapi_v2;
 mod orientation_color;
 mod periodic_pairs_binary;
@@ -57,6 +60,7 @@ mod quantities;
 mod quantity_data_plane;
 mod realtime_policy;
 mod router_v2;
+mod run_intent_persistence;
 mod schemas;
 mod script;
 mod session;
@@ -762,8 +766,10 @@ mod realtime_change_tests {
         assert!(fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/manifest"));
         assert!(fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/topology"));
         assert!(fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/quality"));
-        assert!(fetches
-            .contains("/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields"));
+        assert!(
+            fetches
+                .contains("/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields")
+        );
         assert!(fetches.contains("/v2/sessions/current/meshing/mesh/periodic_pairs.v1"));
         assert!(fetches.contains("/v2/sessions/current/model/scene"));
         assert!(fetches.contains("/v2/sessions/current/model/planar-monitors"));
@@ -825,18 +831,26 @@ mod realtime_change_tests {
             .filter(|change| matches!(change.resource, RealtimeResourceName::PlanarFields))
             .collect::<Vec<_>>();
         assert_eq!(planar_fields.len(), 3);
-        assert!(planar_fields
-            .iter()
-            .all(|change| change.recommended_fetch.is_none()));
-        assert!(planar_fields
-            .iter()
-            .any(|change| change.resource_id.as_deref() == Some("monitor")));
-        assert!(planar_fields
-            .iter()
-            .any(|change| change.resource_id.as_deref() == Some("field")));
-        assert!(planar_fields
-            .iter()
-            .any(|change| change.resource_id.as_deref() == Some("mesh")));
+        assert!(
+            planar_fields
+                .iter()
+                .all(|change| change.recommended_fetch.is_none())
+        );
+        assert!(
+            planar_fields
+                .iter()
+                .any(|change| change.resource_id.as_deref() == Some("monitor"))
+        );
+        assert!(
+            planar_fields
+                .iter()
+                .any(|change| change.resource_id.as_deref() == Some("field"))
+        );
+        assert!(
+            planar_fields
+                .iter()
+                .any(|change| change.resource_id.as_deref() == Some("mesh"))
+        );
         let wire = serde_json::to_string(&planar_fields).expect("realtime changes serialize");
         for forbidden in [
             "scalar_values",
@@ -1052,10 +1066,12 @@ mod realtime_change_tests {
                     == Some("/v2/sessions/current/data/tables/default/rows")
         }));
         // Field samples should NOT show up.
-        assert!(changes
-            .iter()
-            .all(|c| !(matches!(c.resource, RealtimeResourceName::Fields)
-                && c.resource_id.as_deref() == Some("samples"))));
+        assert!(
+            changes
+                .iter()
+                .all(|c| !(matches!(c.resource, RealtimeResourceName::Fields)
+                    && c.resource_id.as_deref() == Some("samples")))
+        );
     }
 
     #[test]
@@ -1154,16 +1170,20 @@ mod realtime_change_tests {
         assert_eq!(batches.len(), 2);
         assert_eq!(batches[0].1, false);
         assert_eq!(batches[0].2, 0);
-        assert!(batches[0]
-            .0
-            .iter()
-            .all(|change| matches!(change.resource, RealtimeResourceName::Stages)));
+        assert!(
+            batches[0]
+                .0
+                .iter()
+                .all(|change| matches!(change.resource, RealtimeResourceName::Stages))
+        );
         assert_eq!(batches[1].1, true);
         assert_eq!(batches[1].2, policy.field_sample_publish_ms);
-        assert!(batches[1]
-            .0
-            .iter()
-            .all(|change| matches!(change.resource, RealtimeResourceName::Fields)));
+        assert!(
+            batches[1]
+                .0
+                .iter()
+                .all(|change| matches!(change.resource, RealtimeResourceName::Fields))
+        );
     }
 
     #[test]
@@ -1200,16 +1220,20 @@ mod realtime_change_tests {
         assert_eq!(batches.len(), 2);
         assert_eq!(batches[0].1, true);
         assert_eq!(batches[0].2, policy.table_rows_min_refetch_ms);
-        assert!(batches[0]
-            .0
-            .iter()
-            .all(|change| matches!(change.resource, RealtimeResourceName::Scalars)));
+        assert!(
+            batches[0]
+                .0
+                .iter()
+                .all(|change| matches!(change.resource, RealtimeResourceName::Scalars))
+        );
         assert_eq!(batches[1].1, true);
         assert_eq!(batches[1].2, policy.field_sample_publish_ms);
-        assert!(batches[1]
-            .0
-            .iter()
-            .all(|change| matches!(change.resource, RealtimeResourceName::Fields)));
+        assert!(
+            batches[1]
+                .0
+                .iter()
+                .all(|change| matches!(change.resource, RealtimeResourceName::Fields))
+        );
     }
 
     #[test]
@@ -1542,10 +1566,12 @@ mod terminal_snapshot_route_tests {
                 .map(|live| live.status.as_str()),
             Some("completed")
         );
-        assert!(snapshot
-            .live_state
-            .as_ref()
-            .is_some_and(|live| live.latest_step.finished));
+        assert!(
+            snapshot
+                .live_state
+                .as_ref()
+                .is_some_and(|live| live.latest_step.finished)
+        );
         assert!(snapshot.latest_fields.get("m").is_some());
         assert!(snapshot.latest_fields.get("H_eff").is_some());
 
@@ -2394,7 +2420,9 @@ fn parse_texture_projection_mode(value: &str) -> TextureProjectionMode {
 #[tokio::main]
 async fn main() {
     fullmag_build_info::print_startup_stamp();
-    if std::env::args().any(|arg| arg == "--print-openapi-v2") {
+    if option_env!("CARGO_BIN_NAME") == Some("fullmag-api-openapi")
+        || std::env::args().any(|arg| arg == "--print-openapi-v2")
+    {
         println!(
             "{}",
             serde_json::to_string_pretty(&openapi_v2::openapi_json())
@@ -2421,9 +2449,11 @@ async fn main() {
 
     let state = Arc::new(AppState {
         repo_root: repo_root.clone(),
+        submit_store_root: run_intent_persistence::configured_submit_store_root(&repo_root),
         current_workspace_root,
         current_live_state: Arc::new(RwLock::new(None)),
         current_live_session_transition: Arc::new(Mutex::new(())),
+        request_scope_instance_id: uuid::Uuid::new_v4().to_string(),
         current_live_session_epoch: Arc::new(AtomicU64::new(0)),
         #[cfg(test)]
         current_live_realtime_before_send_hook: Arc::new(Mutex::new(None)),
@@ -2431,6 +2461,7 @@ async fn main() {
             crate::schemas::status::SessionConnectivity::Connected,
         )),
         current_live_last_seen_unix_ms: Arc::new(AtomicU64::new(0)),
+        current_live_preparation_receipt: Arc::new(RwLock::new(None)),
         current_live_realtime_events: broadcast::channel(256).0,
         current_live_realtime_replay: Arc::new(Mutex::new(VecDeque::new())),
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
@@ -2476,6 +2507,14 @@ async fn main() {
         .route(
             "/v2/sessions/current/internal/live/snapshot",
             post(sync_current_live_snapshot),
+        )
+        .route(
+            "/v2/sessions/current/internal/live/preparation-receipt",
+            post(sync_current_live_preparation_receipt),
+        )
+        .route(
+            "/v2/sessions/current/internal/live/materialize-preparation",
+            post(materialize_current_live_preparation),
         )
         .route(
             "/v1/internal/live/current/session",
@@ -2599,8 +2638,7 @@ async fn healthz() -> Json<HealthResponse> {
 
 async fn vision() -> Json<VisionResponse> {
     Json(VisionResponse {
-        north_star:
-            "Describe one physical problem and execute it through FDM, FEM, or hybrid plans.",
+        north_star: "Describe one physical problem and execute it through FDM, FEM, or hybrid plans.",
         modes: ["strict", "extended", "hybrid"],
         runtime_spine: "current-live",
     })
@@ -3116,6 +3154,493 @@ pub(crate) async fn reset_current_live_session_resources(state: &AppState) {
     state
         .current_live_last_seen_unix_ms
         .store(0, Ordering::Relaxed);
+    *state.current_live_preparation_receipt.write().await = None;
+}
+
+async fn sync_current_live_preparation_receipt(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CurrentLivePreparationReceiptRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let context = capture_current_live_request_context(&state).await?;
+    if context.session_id != req.session_id {
+        return Err(ApiError::conflict(
+            "current_live_preparation_receipt_session_mismatch",
+        ));
+    }
+    let disposition = crate::live_scene_preparation::commit_live_preparation_receipt_for_context(
+        &state,
+        &context,
+        req.receipt,
+        None,
+        None,
+        None,
+    )
+    .await?;
+    let disposition = match disposition {
+        fullmag_session::PreparationReceiptCommitDisposition::Accepted => "accepted",
+        fullmag_session::PreparationReceiptCommitDisposition::Replayed => "replayed",
+    };
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "disposition": disposition,
+    })))
+}
+
+async fn materialize_current_live_preparation(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CurrentLivePreparationMaterializationRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let published = crate::live_scene_preparation::materialize_current_live_preparation(
+        &state, req,
+    )
+    .await?;
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "disposition": published.disposition,
+        "preparation_id": published.preparation_id,
+        "plan_fingerprint": published.plan_fingerprint,
+        "receipt_sha256": published.receipt_sha256,
+    })))
+}
+
+#[cfg(test)]
+mod preparation_materialization_route_tests {
+    use super::*;
+    use tower::ServiceExt;
+
+    fn scene_document_with_region_marker(revision: u64) -> fullmag_authoring::SceneDocument {
+        serde_json::from_value(json!({
+            "version": "scene.v2",
+            "revision": revision,
+            "objects": [{
+                "id": "strip",
+                "name": "strip",
+                "role": "magnet",
+                "geometry": {
+                    "geometry_kind": "Box",
+                    "geometry_params": {"size": [200e-9, 20e-9, 6e-9]}
+                },
+                "material_ref": "permalloy",
+                "magnetization_ref": "uniform",
+                "regions": [{
+                    "region_id": "strip:core",
+                    "owner_object": "strip",
+                    "name": "core",
+                    "shape": {"kind": "box", "size": [200e-9, 20e-9, 6e-9], "center": [0.0, 0.0, 0.0]},
+                    "frame": "object",
+                    "enabled": true,
+                    "priority": 1,
+                    "realization_policy": "inherit"
+                }]
+            }],
+            "materials": [{
+                "id": "permalloy",
+                "name": "Permalloy",
+                "properties": {"Ms": 800e3, "Aex": 13e-12, "alpha": 0.02}
+            }],
+            "magnetization_assets": [{
+                "id": "uniform",
+                "name": "Uniform",
+                "kind": "uniform",
+                "value": [0.0, 0.0, 1.0]
+            }],
+            "study": {
+                "backend": "fdm",
+                "requested_backend": "fdm",
+                "requested_device": "cpu",
+                "requested_precision": "double",
+                "requested_mode": "strict",
+                "fdm": {"default_cell": [10e-9, 10e-9, 6e-9]}
+            }
+        }))
+        .expect("scene document fixture should deserialize")
+    }
+
+    fn requested_execution() -> fullmag_application::RequestedExecution {
+        fullmag_application::RequestedExecution {
+            backend: "fdm".into(),
+            device: "cpu".into(),
+            precision: "double".into(),
+            mode: "strict".into(),
+        }
+    }
+
+    fn unvalidated_preparation_receipt() -> fullmag_application::PreparationReceipt {
+        use fullmag_plan::{PreparationPlan, PreparationProducer, PreparationProducerKind};
+
+        let fingerprint = |hex: char| format!("sha256:{}", hex.to_string().repeat(64));
+        let producer = |kind: PreparationProducerKind, output: char| {
+            PreparationProducer::new(
+                kind,
+                format!("fullmag.{}", kind.as_str()),
+                format!("{}.producer.v1", kind.as_str()),
+                "test",
+                fingerprint('a'),
+                fingerprint(output),
+            )
+            .unwrap()
+        };
+        let plan = PreparationPlan::new(
+            fingerprint('b'),
+            1,
+            fullmag_ir::BackendTarget::Auto,
+            fullmag_ir::BackendTarget::Fdm,
+            producer(PreparationProducerKind::Geometry, '1'),
+            producer(PreparationProducerKind::Display, '2'),
+            producer(PreparationProducerKind::Grid, '3'),
+            producer(PreparationProducerKind::Mesh, '4'),
+            producer(PreparationProducerKind::Space, '5'),
+        )
+        .unwrap();
+        fullmag_application::PreparationReceipt {
+            schema_version: fullmag_application::PREPARATION_RECEIPT_SCHEMA.into(),
+            preparation_id: "prep-run-fence".into(),
+            plan_fingerprint: "not-validated-before-run-fence".into(),
+            plan,
+            certificates: Vec::new(),
+            reuse: Vec::new(),
+            accepted_run_source: None,
+        }
+    }
+
+    fn preparation_snapshot(preparation_id: &str) -> crate::types::SimulationPreparationSnapshot {
+        crate::types::SimulationPreparationSnapshot {
+            preparation_id: preparation_id.into(),
+            revision: 1,
+            status: "running".into(),
+            active_stage_id: Some("planning".into()),
+            started_at_unix_ms: 1,
+            completed_at_unix_ms: None,
+            stages: Vec::new(),
+            log_tail: Vec::new(),
+            failure: None,
+        }
+    }
+
+    async fn set_active_preparation(state: &Arc<AppState>, preparation_id: &str) {
+        let mut current = state.current_live_state.write().await;
+        current
+            .as_mut()
+            .expect("test session must be active")
+            .simulation_preparation = Some(preparation_snapshot(preparation_id));
+    }
+
+    #[tokio::test]
+    async fn materialization_receipt_rejects_a_run_change_before_store_access() {
+        let state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let context = capture_current_live_request_context(&state).await.unwrap();
+        let stale_run_id = format!("stale-run-{}", uuid::Uuid::new_v4().simple());
+
+        let error = crate::live_scene_preparation::commit_live_preparation_receipt_for_context(
+            &state,
+            &context,
+            unvalidated_preparation_receipt(),
+            None,
+            None,
+            Some(&stale_run_id),
+        )
+        .await
+        .expect_err("a changed run must be fenced before receipt validation or storage");
+
+        assert_eq!(error.status, StatusCode::CONFLICT);
+        assert_eq!(
+            error.message,
+            "current_live_preparation_materialization_run_id_mismatch"
+        );
+    }
+
+    #[tokio::test]
+    async fn live_preparation_receipt_rejects_accepted_run_source_binding() {
+        let state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let context = capture_current_live_request_context(&state).await.unwrap();
+        let mut receipt = unvalidated_preparation_receipt();
+        receipt.accepted_run_source = Some(
+            fullmag_application::AcceptedRunPreparationSource {
+                schema_version: fullmag_application::ACCEPTED_RUN_PREPARATION_SOURCE_SCHEMA
+                    .into(),
+                run_id: fullmag_application::RunId::parse("accepted-run-test").unwrap(),
+                specification_fingerprint: format!("sha256:{}", "a".repeat(64)),
+                step_id: "study-step-test".into(),
+                problem_fingerprint: format!("sha256:{}", "b".repeat(64)),
+            },
+        );
+
+        let error = crate::live_scene_preparation::commit_live_preparation_receipt_for_context(
+            &state, &context, receipt, None, None, None,
+        )
+        .await
+        .expect_err("Live receipt must not claim accepted-run provenance");
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            error.message,
+            "live_preparation_receipt_cannot_carry_accepted_run_source"
+        );
+    }
+
+    #[tokio::test]
+    async fn materialization_route_binds_immutable_problem_to_current_run() {
+        let temporary = std::env::temp_dir().join(format!(
+            "fullmag-api-preparation-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&temporary).unwrap();
+        let mut state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        Arc::get_mut(&mut state).unwrap().repo_root = temporary.clone();
+        set_active_preparation(&state, "prep-api-materialized").await;
+        if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+            snapshot.scene_document = Some(scene_document_with_region_marker(7));
+        }
+
+        let store = fullmag_session::SessionStore::open(
+            temporary
+                .join(".fullmag")
+                .join("local-live")
+                .join("session-store"),
+        )
+        .unwrap();
+        store
+            .commit_run_catalog(&fullmag_session::FmsRunCatalog {
+                schema_version: fullmag_session::FMS_RUN_CATALOG_SCHEMA.into(),
+                run_id: "test-run".into(),
+                revision: 1,
+                updated_at: chrono::Utc::now(),
+                tasks: Vec::new(),
+            })
+            .unwrap();
+
+        let response = materialize_current_live_preparation(
+            State(state.clone()),
+            Json(CurrentLivePreparationMaterializationRequest {
+                session_id: "test-session".into(),
+                preparation_id: "prep-api-materialized".into(),
+                scene_revision: 7,
+                requested_execution: requested_execution(),
+                display_projection: json!({"selected_object_ids": ["strip"]}),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.0["status"], "ok");
+        assert_eq!(response.0["disposition"], "accepted");
+        assert_eq!(response.0["preparation_id"], "prep-api-materialized");
+        assert!(
+            response.0["receipt_sha256"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+
+        let replay = materialize_current_live_preparation(
+            State(state),
+            Json(CurrentLivePreparationMaterializationRequest {
+                session_id: "test-session".into(),
+                preparation_id: "prep-api-materialized".into(),
+                scene_revision: 7,
+                requested_execution: requested_execution(),
+                display_projection: json!({"selected_object_ids": ["strip"]}),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(replay.0["status"], "ok");
+        assert_eq!(replay.0["disposition"], "replayed");
+
+        let receipt = store
+            .read_preparation_receipt("test-run")
+            .unwrap()
+            .expect("materialized receipt must be durable");
+        assert_eq!(receipt.preparation_id, "prep-api-materialized");
+        assert_eq!(receipt.payload["schema_version"], "preparation_receipt.v1");
+        std::fs::remove_dir_all(&temporary).unwrap();
+    }
+
+    #[tokio::test]
+    async fn materialization_route_rejects_stale_scene_revision_before_planning() {
+        let temporary = std::env::temp_dir().join(format!(
+            "fullmag-api-preparation-stale-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&temporary).unwrap();
+        let mut state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        Arc::get_mut(&mut state).unwrap().repo_root = temporary.clone();
+        set_active_preparation(&state, "prep-stale").await;
+        if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+            snapshot.scene_document = Some(scene_document_with_region_marker(8));
+        }
+
+        let error = materialize_current_live_preparation(
+            State(state),
+            Json(CurrentLivePreparationMaterializationRequest {
+                session_id: "test-session".into(),
+                preparation_id: "prep-stale".into(),
+                scene_revision: 7,
+                requested_execution: requested_execution(),
+                display_projection: json!({}),
+            }),
+        )
+        .await
+        .expect_err("stale scene must be fenced before planner invocation");
+        assert_eq!(error.status, StatusCode::CONFLICT);
+        assert_eq!(
+            error.message,
+            "current_live_preparation_materialization_scene_revision_mismatch"
+        );
+        std::fs::remove_dir_all(&temporary).unwrap();
+    }
+
+    #[tokio::test]
+    async fn materialization_route_rejects_non_active_preparation_before_planning() {
+        let temporary = std::env::temp_dir().join(format!(
+            "fullmag-api-preparation-id-stale-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&temporary).unwrap();
+        let mut state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        Arc::get_mut(&mut state).unwrap().repo_root = temporary.clone();
+        set_active_preparation(&state, "prep-current").await;
+        if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+            snapshot.scene_document = Some(scene_document_with_region_marker(7));
+        }
+
+        let error = materialize_current_live_preparation(
+            State(state),
+            Json(CurrentLivePreparationMaterializationRequest {
+                session_id: "test-session".into(),
+                preparation_id: "prep-stale".into(),
+                scene_revision: 7,
+                requested_execution: requested_execution(),
+                display_projection: json!({}),
+            }),
+        )
+        .await
+        .expect_err("a non-active preparation must be rejected before planning");
+
+        assert_eq!(error.status, StatusCode::CONFLICT);
+        assert_eq!(
+            error.message,
+            "current_live_preparation_materialization_id_mismatch"
+        );
+        std::fs::remove_dir_all(&temporary).unwrap();
+    }
+
+    #[tokio::test]
+    async fn public_materialization_route_is_typed_and_session_scoped() {
+        let openapi = crate::openapi_v2::openapi_json();
+        let operation = &openapi["paths"]
+            ["/v2/sessions/current/simulation/preparation/materialization"]["post"];
+        assert_eq!(
+            operation["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/LivePreparationMaterializationRequest"
+        );
+
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v2/sessions/current/simulation/preparation/materialization")
+            .header(CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(
+                json!({
+                    "preparation_id": "prep-contract-test",
+                    "scene_revision": 7
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let response = crate::router_v2::build_v2_router()
+            .with_state(
+                crate::router_v2::tests::test_app_state_with_simulation_preparation("ready")
+                    .await,
+            )
+            .oneshot(request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v2/sessions/current/simulation/preparation/materialization")
+            .header(CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(
+                json!({
+                    "preparation_id": "prep-contract-test",
+                    "scene_revision": 7,
+                    "requested_execution": {
+                        "backend": "fdm",
+                        "device": "cpu",
+                        "precision": "double",
+                        "mode": "strict"
+                    }
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let response = crate::router_v2::build_v2_router()
+            .with_state(
+                crate::router_v2::tests::test_app_state_with_simulation_preparation("ready")
+                    .await,
+            )
+            .oneshot(request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        let temporary = std::env::temp_dir().join(format!(
+            "fullmag-api-public-preparation-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&temporary).unwrap();
+        let mut state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        Arc::get_mut(&mut state).unwrap().repo_root = temporary.clone();
+        set_active_preparation(&state, "prep-contract-test").await;
+        if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+            snapshot.scene_document = Some(scene_document_with_region_marker(7));
+        }
+        let store = fullmag_session::SessionStore::open(
+            temporary
+                .join(".fullmag")
+                .join("local-live")
+                .join("session-store"),
+        )
+        .unwrap();
+        store
+            .commit_run_catalog(&fullmag_session::FmsRunCatalog {
+                schema_version: fullmag_session::FMS_RUN_CATALOG_SCHEMA.into(),
+                run_id: "test-run".into(),
+                revision: 1,
+                updated_at: chrono::Utc::now(),
+                tasks: Vec::new(),
+            })
+            .unwrap();
+
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v2/sessions/current/simulation/preparation/materialization")
+            .header(CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(
+                json!({
+                    "preparation_id": "prep-contract-test",
+                    "scene_revision": 7
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let response = crate::router_v2::build_v2_router()
+            .with_state(state)
+            .oneshot(request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let resource: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(resource["disposition"], "accepted");
+        assert_eq!(resource["preparation_id"], "prep-contract-test");
+        assert_eq!(resource["scene_revision"], 7);
+        assert_eq!(resource["run_id"], "test-run");
+        assert!(resource["receipt_sha256"].as_str().is_some());
+        std::fs::remove_dir_all(&temporary).unwrap();
+    }
 }
 
 async fn sync_current_live_frame_update<F>(
@@ -3266,9 +3791,11 @@ where
         kind.label(),
         current_state_version,
         next.session.session_id,
-        next.run.as_ref().map(|run| run.run_id.as_str()).unwrap_or("-"),
-        next
-            .live_state
+        next.run
+            .as_ref()
+            .map(|run| run.run_id.as_str())
+            .unwrap_or("-"),
+        next.live_state
             .as_ref()
             .map(|state| state.latest_step.step)
             .unwrap_or(0),
@@ -3303,7 +3830,7 @@ where
                 })
         } else {
             None
-    };
+        };
     if state.current_live_session_epoch.load(Ordering::Relaxed) != admission_epoch {
         return Err(ApiError::conflict("current_live_session_transitioned"));
     }
@@ -3461,6 +3988,7 @@ async fn read_current_live_artifact(
 
 async fn build_current_live_realtime_hello_event(
     state: &AppState,
+    context: &CurrentLiveRequestContext,
 ) -> Result<LiveRealtimeServerEvent, ApiError> {
     let snapshot = state
         .current_live_state
@@ -3484,6 +4012,7 @@ async fn build_current_live_realtime_hello_event(
         contract_version: current_live_realtime_contract_version().to_string(),
         payload: HelloPayload {
             server_time: realtime_timestamp_now(),
+            request_scope_epoch: context.request_scope_epoch.clone(),
             replay_available_after_seq,
             current_seq,
             resource_revisions: realtime_state.revisions,
@@ -3548,17 +4077,21 @@ async fn send_current_live_realtime_record(
 pub(crate) async fn handle_current_live_realtime_ws(
     mut socket: WebSocket,
     state: Arc<AppState>,
+    context: CurrentLiveRequestContext,
     after_seq: u64,
 ) {
+    if !current_live_realtime_ws_scope_active(&state, &context).await {
+        return;
+    }
     let mut rx = state.current_live_realtime_events.subscribe();
-    let hello = match build_current_live_realtime_hello_event(&state).await {
+    let hello = match build_current_live_realtime_hello_event(&state, &context).await {
         Ok(event) => event,
         Err(error) => {
             tracing::warn!("failed to build realtime hello event: {:?}", error);
             return;
         }
     };
-    let (session_id, run_id, replay_available_after_seq) = match &hello {
+    let (session_id, run_id, replay_available_after_seq, current_seq) = match &hello {
         LiveRealtimeServerEvent::Hello {
             session_id,
             run_id,
@@ -3568,6 +4101,7 @@ pub(crate) async fn handle_current_live_realtime_ws(
             session_id.clone(),
             run_id.clone(),
             payload.replay_available_after_seq,
+            payload.current_seq,
         ),
         _ => return,
     };
@@ -3578,12 +4112,18 @@ pub(crate) async fn handle_current_live_realtime_ws(
             return;
         }
     };
+    if !current_live_realtime_ws_scope_active(&state, &context).await {
+        return;
+    }
     if socket.send(Message::Text(hello_json.into())).await.is_err() {
         return;
     }
 
-    let mut last_sent_seq = after_seq;
-    if after_seq > 0 && after_seq < replay_available_after_seq {
+    let mut last_sent_seq = after_seq.min(current_seq);
+    if after_seq > current_seq || (after_seq > 0 && after_seq < replay_available_after_seq) {
+        if !current_live_realtime_ws_scope_active(&state, &context).await {
+            return;
+        }
         let resync = build_current_live_realtime_resync_event(
             &state,
             session_id.clone(),
@@ -3613,6 +4153,9 @@ pub(crate) async fn handle_current_live_realtime_ws(
                 .collect::<Vec<_>>()
         };
         for event in replay_events {
+            if !current_live_realtime_ws_scope_active(&state, &context).await {
+                return;
+            }
             if !send_current_live_realtime_record(&mut socket, event, &mut last_sent_seq).await {
                 return;
             }
@@ -3625,6 +4168,9 @@ pub(crate) async fn handle_current_live_realtime_ws(
     loop {
         tokio::select! {
             result = rx.recv() => {
+                if !current_live_realtime_ws_scope_active(&state, &context).await {
+                    break;
+                }
                 match result {
                     Ok(event) => {
                         if event.seq <= last_sent_seq {
@@ -3662,6 +4208,9 @@ pub(crate) async fn handle_current_live_realtime_ws(
                 }
             }
             _ = sleep_until(heartbeat_deadline) => {
+                if !current_live_realtime_ws_scope_active(&state, &context).await {
+                    break;
+                }
                 let heartbeat_policy = state
                     .current_live_realtime_policy
                     .read()
@@ -3696,6 +4245,9 @@ pub(crate) async fn handle_current_live_realtime_ws(
                 }
             }
             msg = socket.recv() => {
+                if !current_live_realtime_ws_scope_active(&state, &context).await {
+                    break;
+                }
                 match msg {
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Ok(Message::Ping(payload))) => {
@@ -3708,6 +4260,16 @@ pub(crate) async fn handle_current_live_realtime_ws(
             }
         }
     }
+}
+
+async fn current_live_realtime_ws_scope_active(
+    state: &Arc<AppState>,
+    context: &CurrentLiveRequestContext,
+) -> bool {
+    let _transition = state.current_live_session_transition.lock().await;
+    validate_current_live_request_context(state, context)
+        .await
+        .is_ok()
 }
 
 async fn current_live_realtime_heartbeat_duration(state: &AppState) -> Duration {
@@ -3723,13 +4285,23 @@ async fn current_live_realtime_heartbeat_duration(state: &AppState) -> Duration 
 
 pub(crate) async fn import_asset_for_current_workspace(
     state: &Arc<AppState>,
+    request_context: &CurrentLiveRequestContext,
     req: ImportSessionAssetRequest,
 ) -> Result<SessionAssetImportResponse, ApiError> {
+    // Pin the workspace before writing files, and retain ownership through
+    // artifact-index refresh and realtime publication.
+    let _transition = state.current_live_session_transition.lock().await;
+    validate_current_live_request_context(state, request_context).await?;
     let (session_id, imports_dir) = {
         let current = state.current_live_state.read().await;
         let snapshot = current
             .as_ref()
             .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        ensure_current_live_request_context(
+            snapshot,
+            request_context,
+            state.current_live_session_epoch.load(Ordering::Acquire),
+        )?;
         let session_id = snapshot.session.session_id.clone();
         let artifact_dir = current_artifact_dir(snapshot)
             .unwrap_or_else(|| state.current_workspace_root.join("artifacts"));
@@ -3737,12 +4309,19 @@ pub(crate) async fn import_asset_for_current_workspace(
     };
 
     let response = import_asset_into_dir(state, &session_id, imports_dir.clone(), req)?;
+    validate_current_live_request_context(state, request_context).await?;
     let artifacts = read_artifacts_from_dir(imports_dir.parent())?;
+    validate_current_live_request_context(state, request_context).await?;
     let realtime_state = {
         let mut current = state.current_live_state.write().await;
         let snapshot = current
             .as_mut()
             .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        ensure_current_live_request_context(
+            snapshot,
+            request_context,
+            state.current_live_session_epoch.load(Ordering::Acquire),
+        )?;
         snapshot.artifacts = artifacts;
         current_live_realtime_state_from_snapshot(
             state,
@@ -3751,6 +4330,14 @@ pub(crate) async fn import_asset_for_current_workspace(
         )
         .await
     };
+    let session_epoch = state.current_live_session_epoch.load(Ordering::Acquire);
+    {
+        let current = state.current_live_state.read().await;
+        let snapshot = current
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        ensure_current_live_request_context(snapshot, request_context, session_epoch)?;
+    }
     publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0).await?;
     Ok(response)
 }
@@ -3821,14 +4408,108 @@ async fn load_scene_document_state_async(
     .map_err(|error| ApiError::internal(format!("scene document helper task failed: {error}")))?
 }
 
+pub(crate) async fn capture_current_live_request_context(
+    state: &Arc<AppState>,
+) -> Result<CurrentLiveRequestContext, ApiError> {
+    let _transition = state.current_live_session_transition.lock().await;
+    let session_epoch = state.current_live_session_epoch.load(Ordering::Acquire);
+    let request_scope_epoch = format!("{}:{session_epoch}", state.request_scope_instance_id);
+    let current = state.current_live_state.read().await;
+    let snapshot = current
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    ensure_current_live_request_scope(snapshot, &request_scope_epoch)?;
+    Ok(CurrentLiveRequestContext {
+        session_id: snapshot.session.session_id.clone(),
+        run_id: non_empty_identity(&snapshot.session.run_id),
+        session_epoch,
+        request_scope_epoch,
+    })
+}
+
+fn non_empty_identity(value: &str) -> Option<String> {
+    (!value.trim().is_empty()).then(|| value.to_string())
+}
+
+fn ensure_current_live_request_scope(
+    snapshot: &SessionStateResponse,
+    request_scope_epoch: &str,
+) -> Result<(), ApiError> {
+    let Some(expected) =
+        crate::router_v2::middleware::session_scope::current_expected_session_scope()
+    else {
+        return Ok(());
+    };
+    let actual_epoch = crate::router_v2::handlers::sessions::current_live_session_epoch(snapshot);
+    if expected.session_id != snapshot.session.session_id
+        || expected.session_epoch != actual_epoch
+        || expected.request_scope_epoch != request_scope_epoch
+    {
+        return Err(ApiError::conflict("request_context_stale"));
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_current_live_request_context(
+    snapshot: &SessionStateResponse,
+    context: &CurrentLiveRequestContext,
+    session_epoch: u64,
+) -> Result<(), ApiError> {
+    ensure_current_live_request_scope(snapshot, &context.request_scope_epoch)?;
+    let current_run_id = non_empty_identity(&snapshot.session.run_id);
+    if session_epoch != context.session_epoch
+        || snapshot.session.session_id != context.session_id
+        || current_run_id != context.run_id
+    {
+        return Err(ApiError::conflict("request_context_stale"));
+    }
+    Ok(())
+}
+
+pub(crate) async fn validate_current_live_request_context(
+    state: &Arc<AppState>,
+    context: &CurrentLiveRequestContext,
+) -> Result<(), ApiError> {
+    let session_epoch = state.current_live_session_epoch.load(Ordering::Acquire);
+    let current = state.current_live_state.read().await;
+    let snapshot = current
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    ensure_current_live_request_context(snapshot, context, session_epoch)
+}
+
 pub(crate) async fn get_or_load_current_live_scene_document(
     state: &Arc<AppState>,
 ) -> Result<SceneDocument, ApiError> {
+    get_or_load_current_live_scene_document_with_context(state, None).await
+}
+
+pub(crate) async fn get_or_load_current_live_scene_document_for_context(
+    state: &Arc<AppState>,
+    context: &CurrentLiveRequestContext,
+) -> Result<SceneDocument, ApiError> {
+    get_or_load_current_live_scene_document_with_context(state, Some(context)).await
+}
+
+async fn get_or_load_current_live_scene_document_with_context(
+    state: &Arc<AppState>,
+    context: Option<&CurrentLiveRequestContext>,
+) -> Result<SceneDocument, ApiError> {
+    if let Some(context) = context {
+        validate_current_live_request_context(state, context).await?;
+    }
     let script_path = {
         let current = state.current_live_state.read().await;
         let snapshot = current
             .as_ref()
             .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        if let Some(context) = context {
+            ensure_current_live_request_context(
+                snapshot,
+                context,
+                state.current_live_session_epoch.load(Ordering::Acquire),
+            )?;
+        }
         if let Some(scene_document) = snapshot.scene_document.clone() {
             return Ok(scene_document);
         }
@@ -3844,15 +4525,25 @@ pub(crate) async fn get_or_load_current_live_scene_document(
     // Scene export invokes the Python helper and must not run while the
     // current-state write lock is held. Otherwise one slow helper request
     // blocks the session list and the browser reports no local session.
-    let mut current_scene =
-        load_scene_document_state_async(state, Path::new(&script_path)).await?;
+    let mut current_scene = load_scene_document_state_async(state, Path::new(&script_path)).await?;
     normalize_scene_document_magnetization_assets(&mut current_scene);
     let builder_adapter = scene_document_builder_projection(&current_scene).ok();
 
+    // Revalidate the pinned identity after the slow helper and serialize the
+    // final publication with session transitions. A replaced `current`
+    // workspace can therefore never receive the old request's scene.
+    let _transition = state.current_live_session_transition.lock().await;
     let mut current = state.current_live_state.write().await;
     let snapshot = current
         .as_mut()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    if let Some(context) = context {
+        ensure_current_live_request_context(
+            snapshot,
+            context,
+            state.current_live_session_epoch.load(Ordering::Acquire),
+        )?;
+    }
     if snapshot.scene_document.is_none() {
         snapshot.builder_adapter = builder_adapter;
         snapshot.scene_document = Some(current_scene);
@@ -3865,8 +4556,27 @@ pub(crate) async fn get_or_load_current_live_scene_document(
 
 pub(crate) async fn commit_current_live_scene_document(
     state: &Arc<AppState>,
+    scene_document: SceneDocument,
+) -> Result<SceneDocument, ApiError> {
+    commit_current_live_scene_document_with_context(state, None, scene_document).await
+}
+
+pub(crate) async fn commit_current_live_scene_document_for_context(
+    state: &Arc<AppState>,
+    context: &CurrentLiveRequestContext,
+    scene_document: SceneDocument,
+) -> Result<SceneDocument, ApiError> {
+    commit_current_live_scene_document_with_context(state, Some(context), scene_document).await
+}
+
+async fn commit_current_live_scene_document_with_context(
+    state: &Arc<AppState>,
+    context: Option<&CurrentLiveRequestContext>,
     mut scene_document: SceneDocument,
 ) -> Result<SceneDocument, ApiError> {
+    if let Some(context) = context {
+        validate_current_live_request_context(state, context).await?;
+    }
     normalize_scene_document_magnetization_assets(&mut scene_document);
     normalize_scene_document_study_pipeline_labels(&mut scene_document);
     validate_scene_document_for_authoring(&scene_document)
@@ -3910,19 +4620,44 @@ pub(crate) async fn commit_current_live_scene_document(
         let mut current_scene = load_scene_document_state_async(state, &scene_path).await?;
         normalize_scene_document_magnetization_assets(&mut current_scene);
         let builder_adapter = scene_document_builder_projection(&current_scene).ok();
+        if let Some(context) = context {
+            validate_current_live_request_context(state, context).await?;
+        }
+        let _transition = state.current_live_session_transition.lock().await;
         let mut current = state.current_live_state.write().await;
         if let Some(snapshot) = current.as_mut() {
+            if let Some(context) = context {
+                ensure_current_live_request_context(
+                    snapshot,
+                    context,
+                    state.current_live_session_epoch.load(Ordering::Acquire),
+                )?;
+            }
             if snapshot.scene_document.is_none() {
                 snapshot.builder_adapter = builder_adapter;
                 snapshot.scene_document = Some(current_scene);
             }
         }
     }
-    let (scene_document, realtime_snapshot, display_revision, preset_texture_change_logs, live_rebuild_stats) = {
+    let (
+        scene_document,
+        realtime_snapshot,
+        display_revision,
+        preset_texture_change_logs,
+        live_rebuild_stats,
+    ) = {
+        let _transition = state.current_live_session_transition.lock().await;
         let mut current = state.current_live_state.write().await;
         let snapshot = current
             .as_mut()
             .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        if let Some(context) = context {
+            ensure_current_live_request_context(
+                snapshot,
+                context,
+                state.current_live_session_epoch.load(Ordering::Acquire),
+            )?;
+        }
         if let Some(current_scene) = snapshot.scene_document.as_ref() {
             if scene_document.revision != current_scene.revision {
                 return Err(ApiError::conflict(format!(
@@ -4020,14 +4755,30 @@ pub(crate) async fn commit_current_live_scene_document(
             live_rebuild_stats,
         )
     };
-    let realtime_state = current_live_realtime_state_from_snapshot(
-        state,
-        &realtime_snapshot,
-        display_revision,
-    )
-    .await;
-
-    publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0).await?;
+    if let Some(context) = context {
+        // Keep the identity fence through the realtime publication as well;
+        // otherwise a session transition between the final write and this
+        // await could route an old scene revision into the new workspace.
+        let _transition = state.current_live_session_transition.lock().await;
+        let current = state.current_live_state.read().await;
+        let snapshot = current
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        ensure_current_live_request_context(
+            snapshot,
+            context,
+            state.current_live_session_epoch.load(Ordering::Acquire),
+        )?;
+        let realtime_state =
+            current_live_realtime_state_from_snapshot(state, &realtime_snapshot, display_revision)
+                .await;
+        publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0).await?;
+    } else {
+        let realtime_state =
+            current_live_realtime_state_from_snapshot(state, &realtime_snapshot, display_revision)
+                .await;
+        publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0).await?;
+    }
     eprintln!(
         "[fullmag-api] TX -> frontend scene rev={} preset_texture_assets={} status=committed",
         scene_document.revision,
@@ -4430,11 +5181,7 @@ fn rotate_point_by_quat(point: [f64; 3], quat: [f64; 4]) -> [f64; 3] {
 }
 
 fn safe_scale_component(value: f64) -> f64 {
-    if value.abs() > 1.0e-30 {
-        value
-    } else {
-        1.0
-    }
+    if value.abs() > 1.0e-30 { value } else { 1.0 }
 }
 
 fn scene_magnetization_summary(scene: &SceneDocument) -> String {

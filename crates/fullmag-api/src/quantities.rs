@@ -2,7 +2,7 @@
 
 use crate::types::*;
 use fullmag_ir::{BackendPlanIR, ExecutionPlanIR};
-use fullmag_quantities::{quantity_specs, QuantityShape};
+use fullmag_quantities::{QuantityShape, quantity_specs};
 use fullmag_runner::{BackendCapabilities, FemMeshPayload};
 use serde_json::Value;
 
@@ -317,9 +317,11 @@ mod tests {
             .expect("missing magnetization descriptor");
 
         assert!(magnetization.available);
-        assert!(!quantities
-            .iter()
-            .any(|quantity| { quantity.id == "E_rotated_dmi" && quantity.available }));
+        assert!(
+            !quantities
+                .iter()
+                .any(|quantity| { quantity.id == "E_rotated_dmi" && quantity.available })
+        );
     }
 
     #[test]
@@ -499,9 +501,11 @@ mod tests {
                 &[],
                 "cell",
             );
-            assert!(quantities
-                .iter()
-                .any(|q| q.id == "E_rotated_dmi" && q.available));
+            assert!(
+                quantities
+                    .iter()
+                    .any(|q| q.id == "E_rotated_dmi" && q.available)
+            );
         }
     }
 
@@ -550,9 +554,11 @@ mod tests {
             &[],
             "cell",
         );
-        assert!(quantities
-            .iter()
-            .any(|quantity| quantity.id == "E_rotated_dmi" && quantity.available));
+        assert!(
+            quantities
+                .iter()
+                .any(|quantity| quantity.id == "E_rotated_dmi" && quantity.available)
+        );
 
         let conventional_plan =
             completed_run_plan(completed_multilayer_backend_plan(Some(3.0e-3), None, None));
@@ -574,9 +580,11 @@ mod tests {
             &[],
             "cell",
         );
-        assert!(!conventional_quantities
-            .iter()
-            .any(|quantity| quantity.id == "E_rotated_dmi" && quantity.available));
+        assert!(
+            !conventional_quantities
+                .iter()
+                .any(|quantity| quantity.id == "E_rotated_dmi" && quantity.available)
+        );
     }
 
     #[test]
@@ -653,9 +661,11 @@ mod tests {
             &[],
             "cell",
         );
-        assert!(quantities
-            .iter()
-            .any(|quantity| quantity.id == "E_rotated_dmi" && quantity.available));
+        assert!(
+            quantities
+                .iter()
+                .any(|quantity| quantity.id == "E_rotated_dmi" && quantity.available)
+        );
 
         let malformed_metadata = serde_json::json!({
             "execution_plan": {"backend_plan": {"unknown": true}}
@@ -669,8 +679,10 @@ mod tests {
             &[],
             "cell",
         );
-        assert!(quantities
-            .iter()
-            .any(|quantity| quantity.id == "E_rotated_dmi" && quantity.available));
+        assert!(
+            quantities
+                .iter()
+                .any(|quantity| quantity.id == "E_rotated_dmi" && quantity.available)
+        );
     }
 }

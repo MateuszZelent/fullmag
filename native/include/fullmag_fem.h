@@ -465,6 +465,51 @@ typedef struct {
     uint64_t periodic_boundary_pair_markers_len;
 } fullmag_fem_mesh_desc;
 
+/*
+ * Stateless MFEM mesh/function-space preparation.
+ *
+ * The producer imports the canonical mesh, builds and validates an MFEM Mesh
+ * and H1 FiniteElementSpace, and returns versioned evidence. It must not
+ * initialize a solver Context or configure a runtime device.
+ */
+#define FULLMAG_FEM_MESH_SPACE_PREPARATION_ABI_VERSION 1u
+#define FULLMAG_FEM_MESH_SPACE_PREPARATION_PRODUCER_ID "fullmag.mfem.mesh_space"
+#define FULLMAG_FEM_MESH_SPACE_PREPARATION_SCHEMA_VERSION "mfem_mesh_space_evidence.v1"
+#define FULLMAG_FEM_MESH_SPACE_PREPARATION_PRODUCER_VERSION "1"
+#define FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY 65u
+
+#define FULLMAG_FEM_FE_FAMILY_H1 1u
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    const fullmag_fem_mesh_desc *mesh;
+    uint32_t fe_order;
+    uint32_t reserved_flags;
+} fullmag_fem_mesh_space_preparation_request_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t mesh_dimension;
+    uint32_t fe_family;
+    uint32_t fe_order;
+    uint32_t mesh_matches_canonical_input;
+    uint64_t node_count;
+    uint64_t cell_count;
+    uint64_t boundary_element_count;
+    uint64_t local_dof_count;
+    uint64_t true_dof_count;
+    uint64_t quality_sample_count;
+    uint64_t invalid_cell_count;
+    double min_jacobian_determinant;
+    double max_jacobian_determinant;
+    char topology_fingerprint[FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY];
+    char marker_map_fingerprint[FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY];
+    char quality_fingerprint[FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY];
+    char space_fingerprint[FULLMAG_FEM_MESH_SPACE_PREPARATION_FINGERPRINT_CAPACITY];
+} fullmag_fem_mesh_space_preparation_evidence_v1;
+
 #define FULLMAG_FEM_MESH_ABI_LAYOUT_VERSION 1u
 #define FULLMAG_FEM_MESH_ABI_FIELD_COUNT 30u
 #define FULLMAG_FEM_MESH_ABI_FINGERPRINT_CAPACITY 96u
@@ -3046,6 +3091,12 @@ int fullmag_fem_get_frequency_domain_modal_abi_layout_v5(
     fullmag_fem_frequency_domain_modal_abi_layout_v5 *out_layout
 );
 int fullmag_fem_get_mesh_abi_layout(fullmag_fem_mesh_abi_layout *out_layout);
+int fullmag_fem_prepare_mesh_space_v1(
+    const fullmag_fem_mesh_space_preparation_request_v1 *request,
+    fullmag_fem_mesh_space_preparation_evidence_v1 *out_evidence,
+    char *error_message,
+    uint64_t error_message_capacity
+);
 int fullmag_fem_frequency_domain_initial_sweep_progress(
     uint64_t total_frequency_points,
     fullmag_fem_frequency_domain_sweep_progress *out_progress

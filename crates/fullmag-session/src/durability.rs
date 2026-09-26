@@ -119,6 +119,23 @@ pub(crate) fn sync_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Re-establish the available durability barriers for an already visible
+/// immutable record. Call only while holding its store writer lease and after
+/// verifying exact payload identity. Visibility alone is not confirmation.
+pub(crate) fn confirm_publication(dest: &Path) -> Result<()> {
+    let result = (|| {
+        File::options().read(true).write(true).open(dest)?.sync_all()?;
+        let parent = dest.parent().context("publication has no parent directory")?;
+        sync_directory(parent)?;
+        #[cfg(test)]
+        if take_directory_barrier_failure(dest) {
+            anyhow::bail!("injected directory barrier failure during confirmation");
+        }
+        Ok(())
+    })();
+    result.map_err(|error| anyhow::Error::new(PublicationUncertain::new(dest.to_path_buf(), error)))
+}
+
 /// Unique, exclusive staging beside the target; no shared `.part` pathname.
 ///
 /// This is the data publication path and therefore consumes the test fault

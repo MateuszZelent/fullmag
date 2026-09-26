@@ -3,6 +3,38 @@ use utoipa::ToSchema;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
+pub enum PreparationMaterializationDisposition {
+    Accepted,
+    Replayed,
+}
+
+/// Typed request for preparing the immutable scene revision in the current
+/// Live session. Execution intent and display projection are captured by the
+/// server from that same session snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LivePreparationMaterializationRequest {
+    #[schema(min_length = 1, max_length = 128)]
+    pub preparation_id: String,
+    pub scene_revision: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct LivePreparationMaterializationResource {
+    pub disposition: PreparationMaterializationDisposition,
+    #[schema(max_length = 128)]
+    pub preparation_id: String,
+    pub scene_revision: u64,
+    #[schema(max_length = 128)]
+    pub run_id: String,
+    #[schema(max_length = 71)]
+    pub plan_fingerprint: String,
+    #[schema(max_length = 71)]
+    pub receipt_sha256: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum PreparationStatus {
     Connecting,
     Running,
@@ -107,6 +139,23 @@ pub struct PreparationFailureResource {
     pub diagnostics_correlation_id: Option<String>,
 }
 
+/// Identity-only view of the durable preparation receipt.  The complete
+/// certificates stay in the session store; the browser receives enough
+/// provenance to distinguish the accepted plan from an in-flight candidate.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PreparationReceiptResource {
+    #[schema(max_length = 64)]
+    pub schema_version: String,
+    #[schema(max_length = 128)]
+    pub preparation_id: String,
+    #[schema(max_length = 128)]
+    pub run_id: String,
+    #[schema(max_length = 71)]
+    pub plan_fingerprint: String,
+    #[schema(max_length = 64)]
+    pub payload_sha256: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SimulationPreparationResource {
     #[schema(max_length = 128)]
@@ -123,4 +172,6 @@ pub struct SimulationPreparationResource {
     #[schema(max_items = 200)]
     pub log_tail: Vec<PreparationLogEntryResource>,
     pub failure: Option<PreparationFailureResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<PreparationReceiptResource>,
 }

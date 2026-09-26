@@ -226,6 +226,47 @@ check:
 check-session-persistence:
     cargo check --locked -p fullmag-session --lib
 
+# Source-only API check for application/session adapters; excludes test targets.
+check-api-source:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-source-check --repo-root "{{repo_root}}"
+
+# Source check for the one-shot accepted-run worker process binary.
+check-api-accepted-worker:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-worker-check --repo-root "{{repo_root}}"
+
+# Compile and run the isolated supervisor slot/process reconciliation regressions.
+verify-api-accepted-supervisor:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-supervisor-tests --repo-root "{{repo_root}}"
+
+# Run the narrowly scoped API preparation materialization route regressions.
+verify-api-preparation:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-preparation-tests --repo-root "{{repo_root}}"
+
+# Run runtime-free project document and durable Submit HTTP regressions.
+verify-api-project-runs:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-project-run-tests --repo-root "{{repo_root}}"
+
+# Run current-session recovery isolation HTTP regressions.
+verify-api-recovery:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-recovery-tests --repo-root "{{repo_root}}"
+
+# Run the SceneResource preservation contract through the API source test route.
+verify-api-scene-resource:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-scene-resource-tests --repo-root "{{repo_root}}"
+
+# Run the SceneDocument-to-builder preservation contract in fullmag-authoring.
+verify-authoring-contracts:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route authoring-contract-tests --repo-root "{{repo_root}}"
+
+# Run the SceneDocument-to-builder preservation contract in fullmag-authoring.
+verify-authoring-scene-adapter:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route authoring-scene-adapter-tests --repo-root "{{repo_root}}"
+
+# Managed OpenAPI source generation; the emitted JSON remains a versioned
+# frontend artifact, while all Cargo output stays under canonical storage.
+generate-api-openapi:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-openapi-codegen --repo-root "{{repo_root}}"
+
 # Run only after the operator has allowed compilation of these regression tests.
 verify-session-persistence:
     {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --repo-root "{{repo_root}}"
@@ -245,6 +286,9 @@ check-project-entrypoints:
 
 # Managed runtime-free API smoke with source identity, bounded HTTP scope and
 # controlled process-restart project reconnect.
+verify-project-run-restart:
+    {{storage_python}} "{{repo_root}}/scripts/verify_project_api_runtime.py" --include-project-run --repo-root "{{repo_root}}"
+
 verify-project-api-runtime:
     {{storage_python}} "{{repo_root}}/scripts/verify_project_api_runtime.py" --repo-root "{{repo_root}}"
 
@@ -3771,6 +3815,9 @@ verify-fem-preparation-clock-contract:
 
 verify-fem-preparation-api-contract:
     docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-api router_v2::tests::simulation_preparation_preserves_backward_clock_adjustment_evidence -- --exact --nocapture'
+
+verify-fem-mesh-space-preparation-contract:
+    COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" docker compose run --rm --no-deps fem-cpu bash -lc 'set -euo pipefail; cd /workspace; build_root="${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/fem-mesh-space-preparation"; build_dir="$build_root/native"; cargo_target="$build_root/cargo-target"; mkdir -p "$build_root"; cmake -S native -B "$build_dir" -DFULLMAG_ENABLE_CUDA=OFF -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fem_mesh_space_preparation_contract; ctest --test-dir "$build_dir/backends/fem" --output-on-failure --no-tests=error -R "^fem_mesh_space_preparation_contract$"; FULLMAG_FEM_LIB_DIR="$build_dir/backends/fem" LD_LIBRARY_PATH="$build_dir/backends/fem:/opt/fullmag-deps/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_TARGET_DIR="$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-native native_fem::mesh_preparation::tests::runner_preparation_exercises_native_mesh_space_abi -- --exact --nocapture'
 
 verify-fem-preview-callback-source-contract:
     docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-runner --features fem-gpu tests::fem_preview_materialization_stays_outside_callback_deadline -- --exact --nocapture'

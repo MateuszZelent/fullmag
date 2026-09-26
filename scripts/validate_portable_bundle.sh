@@ -47,6 +47,8 @@ check_runpath_contains() {
 require_file "$BUNDLE_ROOT/bin/fullmag"
 require_file "$BUNDLE_ROOT/bin/fullmag-bin"
 require_file "$BUNDLE_ROOT/bin/fullmag-api"
+require_file "$BUNDLE_ROOT/bin/fullmag-api-accepted-worker"
+require_file "$BUNDLE_ROOT/bin/fullmag-api-accepted-supervisor"
 require_file "$BUNDLE_ROOT/lib/libfullmag_fdm.so.0"
 require_file "$BUNDLE_ROOT/web/index.html"
 require_file "$BUNDLE_ROOT/python/bin/python"
@@ -57,11 +59,15 @@ require_file "$BUNDLE_ROOT/share/version.json"
 
 check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-bin"
 check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api"
+check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-accepted-worker"
+check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-accepted-supervisor"
 check_no_missing_ldd "$BUNDLE_ROOT/lib/libfullmag_fdm.so.0"
 check_no_missing_ldd "$BUNDLE_ROOT/python/bin/python"
 
 check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-bin" '$ORIGIN/../lib'
 check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api" '$ORIGIN/../lib'
+check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-accepted-worker" '$ORIGIN/../lib'
+check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-accepted-supervisor" '$ORIGIN/../lib'
 check_runpath_contains "$BUNDLE_ROOT/lib/libfullmag_fdm.so.0" '$ORIGIN'
 
 if [[ -x "$BUNDLE_ROOT/runtimes/fdm-cuda/bin/fullmag-fdm-cuda-bin" ]]; then

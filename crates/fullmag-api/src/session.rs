@@ -12,12 +12,12 @@ use crate::router_v2::handlers::data::fields::{
     load_fdm_multilayer_airbox_carrier, resolved_fdm_multilayer_airbox_field,
 };
 use crate::router_v2::handlers::data::resolved_spatial_field::{
-    full_field_publication_carrier_identity, resolve_current_spatial_field, ResolvedSpatialField,
+    ResolvedSpatialField, full_field_publication_carrier_identity, resolve_current_spatial_field,
 };
 use crate::router_v2::handlers::sessions::status::domain_generation_id;
 use crate::types::*;
 use fullmag_runner::{LivePreviewField, RuntimeStatus};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 
@@ -514,7 +514,7 @@ fn remesh_command_completion(
     record: &TrackedCommandRecord,
     snapshot: &SessionStateResponse,
 ) -> Option<CommandCompletionState> {
-    use fullmag_session::mesh_operation::{mesh_command_outcome, MeshCommandStatus};
+    use fullmag_session::mesh_operation::{MeshCommandStatus, mesh_command_outcome};
     let outcome = mesh_command_outcome(
         snapshot.mesh_workspace.as_ref()?,
         &record.command.command_id,
@@ -2726,19 +2726,23 @@ mod tests {
         annotate_solver_profile_api_visibility(&mut profile, 5);
         annotate_solver_profile_publisher_apply(&mut profile, 7);
 
-        assert!(profile.latest_samples[0]
-            .trace
-            .as_ref()
-            .expect("historical trace")
-            .api_revision
-            .is_none());
-        assert!(profile.latest_samples[0]
-            .trace
-            .as_ref()
-            .expect("historical trace")
-            .segments
-            .get("publisher_apply_ns")
-            .is_none());
+        assert!(
+            profile.latest_samples[0]
+                .trace
+                .as_ref()
+                .expect("historical trace")
+                .api_revision
+                .is_none()
+        );
+        assert!(
+            profile.latest_samples[0]
+                .trace
+                .as_ref()
+                .expect("historical trace")
+                .segments
+                .get("publisher_apply_ns")
+                .is_none()
+        );
         let newest = profile.latest_samples[1]
             .trace
             .as_ref()
@@ -3198,11 +3202,13 @@ mod tests {
             },
         )
         .expect("constraint-free runtime status frame should apply");
-        assert!(current
-            .metadata
-            .as_ref()
-            .and_then(|value| value.get("frozen_spins_runtime_status"))
-            .is_none());
+        assert!(
+            current
+                .metadata
+                .as_ref()
+                .and_then(|value| value.get("frozen_spins_runtime_status"))
+                .is_none()
+        );
     }
 
     #[test]
@@ -4385,10 +4391,12 @@ mod tests {
             Some("cp-000041")
         );
         assert_eq!(record.state_transition.as_deref(), Some("restored"));
-        assert!(record
-            .artifact_refs
-            .iter()
-            .any(|artifact_ref| artifact_ref == "cp-common-state"));
+        assert!(
+            record
+                .artifact_refs
+                .iter()
+                .any(|artifact_ref| artifact_ref == "cp-common-state")
+        );
     }
 
     fn session_command(command_id: &str, kind: &str) -> SessionCommand {
@@ -4593,10 +4601,12 @@ mod tests {
             current.region_realization_revisions.membership,
             initial_revision + 1
         );
-        assert!(current
-            .artifacts
-            .iter()
-            .any(|artifact| artifact.path == "mesh/fdm_region_membership.v2.json"));
+        assert!(
+            current
+                .artifacts
+                .iter()
+                .any(|artifact| artifact.path == "mesh/fdm_region_membership.v2.json")
+        );
 
         finalize_current_live_apply(&mut current, CurrentLiveApplyFlags::default())
             .expect("unchanged FMRM artifact should remain stable");
@@ -4997,13 +5007,15 @@ mod tests {
                 .and_then(|mesh| mesh.generation_id.as_deref()),
             Some("legacy-domain-gen")
         );
-        assert!(current
-            .live_state
-            .as_ref()
-            .unwrap()
-            .latest_step
-            .fem_mesh
-            .is_none());
+        assert!(
+            current
+                .live_state
+                .as_ref()
+                .unwrap()
+                .latest_step
+                .fem_mesh
+                .is_none()
+        );
 
         let cached = current
             .preview_cache
@@ -5717,10 +5729,12 @@ mod tests {
                 .map(|state| state.status.as_str()),
             Some("completed")
         );
-        assert!(current
-            .live_state
-            .as_ref()
-            .is_some_and(|state| state.latest_step.finished));
+        assert!(
+            current
+                .live_state
+                .as_ref()
+                .is_some_and(|state| state.latest_step.finished)
+        );
         assert!(current.latest_fields.get("m").is_some());
         assert!(current.latest_fields.get("H_eff").is_some());
         assert_eq!(current.preview_cache.iter().count(), 0);

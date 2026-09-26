@@ -697,7 +697,10 @@ fn deferred_mesh_failure_stage(
         .get("last_build_error")
         .and_then(serde_json::Value::as_str)
         .filter(|error| !error.trim().is_empty())?;
-    let payload = workspace.get("last_build_summary")?;
+    let payload = workspace
+        .get("last_build_attempt")
+        .filter(|value| value.is_object())
+        .or_else(|| workspace.get("last_build_summary"))?;
     match payload.get("phase").and_then(serde_json::Value::as_str) {
         Some("preparing_domain" | "meshing" | "postprocessing") => {}
         _ => return None,
@@ -4109,27 +4112,30 @@ fn overlay_mesh_workspace(
                 value
             }),
     );
+    let effective_airbox_target = overlay
+        .effective_airbox_target
+        .clone()
+        .or_else(|| obj.get("effective_airbox_target").cloned())
+        .unwrap_or(serde_json::Value::Null);
     obj.insert(
         "effective_airbox_target".to_string(),
-        overlay
-            .effective_airbox_target
-            .clone()
-            .unwrap_or(serde_json::Value::Null),
+        effective_airbox_target,
     );
+    let effective_per_object_targets = overlay
+        .effective_per_object_targets
+        .clone()
+        .or_else(|| obj.get("effective_per_object_targets").cloned())
+        .unwrap_or(serde_json::Value::Null);
     obj.insert(
         "effective_per_object_targets".to_string(),
-        overlay
-            .effective_per_object_targets
-            .clone()
-            .unwrap_or(serde_json::Value::Null),
+        effective_per_object_targets,
     );
-    obj.insert(
-        "last_build_summary".to_string(),
-        overlay
-            .last_build_summary
-            .clone()
-            .unwrap_or(serde_json::Value::Null),
-    );
+    let last_build_summary = overlay
+        .last_build_summary
+        .clone()
+        .or_else(|| obj.get("last_build_summary").cloned())
+        .unwrap_or(serde_json::Value::Null);
+    obj.insert("last_build_summary".to_string(), last_build_summary);
     obj.insert(
         "last_build_error".to_string(),
         overlay
@@ -12910,6 +12916,10 @@ mod tests {
             let workspace = serde_json::json!({
                 "last_build_error": "raw mesher failure",
                 "last_build_summary": {
+                    "build_id": "mesh:last-good",
+                    "status": "completed"
+                },
+                "last_build_attempt": {
                     "phase": phase,
                     "message": "Shared-domain mesh build failed"
                 }
@@ -12918,6 +12928,19 @@ mod tests {
             assert_eq!(
                 deferred_mesh_failure_stage(Some(&workspace)),
                 Some(stage_id)
+            );
+
+            let legacy_workspace = serde_json::json!({
+                "last_build_error": "raw mesher failure",
+                "last_build_summary": {
+                    "phase": phase,
+                    "message": "Shared-domain mesh build failed"
+                }
+            });
+            assert_eq!(
+                deferred_mesh_failure_stage(Some(&legacy_workspace)),
+                Some(stage_id),
+                "legacy failure summaries remain readable"
             );
         }
     }
@@ -13903,6 +13926,75 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn mesh_build_overlay_keeps_last_successful_artifact_during_new_attempt() {
+        let last_success = serde_json::json!({
+            "build_id": "mesh:previous-success",
+            "status": "completed",
+            "source_scene_revision": 12
+        });
+        let airbox_target = serde_json::json!({ "hmax": "5e-9" });
+        let per_object_targets = serde_json::json!({
+            "film": { "hmax": "2e-9" }
+        });
+        let mut workspace = serde_json::json!({
+            "last_build_summary": last_success,
+            "effective_airbox_target": airbox_target,
+            "effective_per_object_targets": per_object_targets,
+            "last_build_error": "an earlier build failed"
+        });
+        let mut overlay = super::CurrentMeshBuildOverlay {
+            active_build: Some(serde_json::json!({ "build_id": "mesh:next-attempt" })),
+            effective_airbox_target: None,
+            effective_per_object_targets: None,
+            last_build_summary: None,
+            last_build_error: None,
+            active_phase: Some("meshing".to_string()),
+            progress_percent: None,
+            progress_label: None,
+            attempt_index: None,
+            algorithm_3d: None,
+            attempt_status: None,
+            attempt_failure_reason: None,
+            next_algorithm_3d: None,
+            progress_kind: None,
+            last_recoverable_attempt: None,
+            phase_started_at: Instant::now(),
+            phase_durations_ms: Vec::new(),
+            failed: false,
+        };
+
+        super::overlay_mesh_workspace(&mut workspace, &overlay);
+
+        assert_eq!(
+            workspace["last_build_summary"]["build_id"],
+            "mesh:previous-success"
+        );
+        assert_eq!(workspace["effective_airbox_target"], airbox_target);
+        assert_eq!(
+            workspace["effective_per_object_targets"],
+            per_object_targets
+        );
+        assert!(workspace["last_build_error"].is_null());
+        assert_eq!(workspace["active_build"]["build_id"], "mesh:next-attempt");
+
+        overlay.active_build = None;
+        overlay.effective_airbox_target = Some(serde_json::Value::Null);
+        overlay.effective_per_object_targets = Some(serde_json::Value::Null);
+        overlay.last_build_summary = Some(serde_json::json!({
+            "build_id": "mesh:next-success",
+            "status": "completed"
+        }));
+        super::overlay_mesh_workspace(&mut workspace, &overlay);
+
+        assert_eq!(
+            workspace["last_build_summary"]["build_id"],
+            "mesh:next-success"
+        );
+        assert!(workspace["effective_airbox_target"].is_null());
+        assert!(workspace["effective_per_object_targets"].is_null());
     }
 
     #[test]

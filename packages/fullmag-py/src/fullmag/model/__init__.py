@@ -126,6 +126,7 @@ from .physics_scope import (
 )
 from .selection import Selection, SelectionDefinition, SelectionScalar
 from .parameters import ParameterDefinition, ParameterExpression, ParameterLibrary, ParameterValue
+from .authoring import ComponentDefinition, ModelDefinition, PhysicsConfiguration
 from .spin_torque import (
     ConstantEnvelope,
     InterfaceCppSTT,
@@ -195,6 +196,9 @@ __all__ = [
     "ParameterExpression",
     "ParameterLibrary",
     "ParameterValue",
+    "ComponentDefinition",
+    "ModelDefinition",
+    "PhysicsConfiguration",
     "BackendTarget",
     "CubicAnisotropy",
     "ThermalNoise",

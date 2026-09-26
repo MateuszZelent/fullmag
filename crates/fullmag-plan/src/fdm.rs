@@ -8,40 +8,40 @@ use fullmag_ir::{
     DiscretizationHintsIR, EnergyTermIR, ExchangeBoundaryCondition, ExchangeCouplingModeIR,
     ExecutionPlanIR, ExecutionPrecision, FdmFftPlanIR, FdmGridCertificateIR, FdmLayerPlanIR,
     FdmMaterialIR, FdmMultilayerPlanIR, FdmMultilayerSummaryIR, FdmPlanIR, FdmPrecisionPolicyIR,
-    FrozenReferencePolicyIR, GeometryEntryIR, GridDimensions, InitialMagnetizationIR,
+    FrozenReferencePolicyIR, GeometryEntryIR, GridDimensions, IR_VERSION, InitialMagnetizationIR,
     IntegratorChoice, OutputPlanIR, ProblemIR, ProvenancePlanIR, RegionFrameIR, RegionShapeIR,
     RelaxationAlgorithmIR, SeedPolicy, SelectionMembershipPolicyIR, ThermalSeedConfig,
-    TimeDependenceIR, IR_VERSION,
+    TimeDependenceIR,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::antenna_zeeman::{has_prescribed_zeeman_mask_source, resolve_prescribed_zeeman_masks};
 use crate::current_transport::{
-    resolve_current_transports, resolve_fdm_gpu_charge_transports_with_active_graph,
-    CurrentTransportExecutableLane,
+    CurrentTransportExecutableLane, resolve_current_transports,
+    resolve_fdm_gpu_charge_transports_with_active_graph,
 };
 use crate::error::PlanError;
 use crate::geometry::{
-    cell_for_magnet, checked_fdm_grid_cost, extract_multilayer_geometry, fdm_default_cell,
-    ir_to_shape, shape_local_bounds, validate_realized_grid, voxelize_shape, GeometryShape,
-    LoweredBody, FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+    FDM_GRID_ESTIMATED_BYTES_PER_CELL, GeometryShape, LoweredBody, cell_for_magnet,
+    checked_fdm_grid_cost, extract_multilayer_geometry, fdm_default_cell, ir_to_shape,
+    shape_local_bounds, validate_realized_grid, voxelize_shape,
 };
 use crate::magnetization_textures::TextureSamplePoint;
 use crate::magnetization_textures_v2::sample_preset_texture_versioned;
-use crate::oersted::{resolve_fdm_oersted_term, ResolvedOerstedTerm};
-use crate::region_conflict::{resolve_region_conflict, RegionConflictCandidate};
+use crate::oersted::{ResolvedOerstedTerm, resolve_fdm_oersted_term};
+use crate::region_conflict::{RegionConflictCandidate, resolve_region_conflict};
 use crate::region_textures::sample_region_initial_on_mask;
 use crate::selection::geometry::{contains_point, geometry_entry_bounds, normalize_axis};
 use crate::selection::{
-    compile_fdm_frozen_spins, compile_fdm_points_frozen_spins, FdmFrozenSpinsDomain,
-    FrozenSpinsCompileRequest, ResolvedFrozenSpinsReference, SelectionDofMembership,
+    FdmFrozenSpinsDomain, FrozenSpinsCompileRequest, ResolvedFrozenSpinsReference,
+    SelectionDofMembership, compile_fdm_frozen_spins, compile_fdm_points_frozen_spins,
 };
 use crate::spin_torque::{
-    resolve_legacy_spin_torque, resolve_sot_fields, SpinTorqueExecutableLane,
+    SpinTorqueExecutableLane, resolve_legacy_spin_torque, resolve_sot_fields,
 };
 use crate::util::{
-    active_stage_id, generate_random_unit_vectors, runtime_device_request, runtime_requests_cuda,
-    GRID_TOLERANCE, MU0,
+    GRID_TOLERANCE, MU0, active_stage_id, generate_random_unit_vectors, runtime_device_request,
+    runtime_requests_cuda,
 };
 
 use crate::validate::{
@@ -233,7 +233,7 @@ pub fn resolve_multilayer_kernel_memory(
                 reasons: vec![format!(
                     "unsupported multilayer kernel catalog mode '{other}'"
                 )],
-            })
+            });
         }
     };
     let common_cells = common_cells.map(|value| value as usize);
@@ -299,7 +299,7 @@ pub fn resolve_multilayer_kernel_memory(
                     return Err(fullmag_fdm_demag::DescriptorError::Invalid(format!(
                         "layer '{}' has unsupported transfer_kind '{other}'",
                         layer.layer_id
-                    )))
+                    )));
                 }
             };
             FdmLayerDescriptor::new(
@@ -479,7 +479,8 @@ fn validate_rotated_dmi_boundary_exchange_stiffness(
         if mask.len() != cell_count {
             return Err(format!(
                 "RotatedInterfacialDmi boundary Aex validation received active mask length {}, expected {}",
-                mask.len(), cell_count
+                mask.len(),
+                cell_count
             ));
         }
     }
@@ -487,7 +488,8 @@ fn validate_rotated_dmi_boundary_exchange_stiffness(
         if field.len() != cell_count {
             return Err(format!(
                 "RotatedInterfacialDmi boundary Aex validation received resolved Aex field length {}, expected {}",
-                field.len(), cell_count
+                field.len(),
+                cell_count
             ));
         }
     }
@@ -1163,7 +1165,8 @@ fn resolve_fdm_frozen_spins(
         return Err(PlanError {
             reasons: vec![format!(
                 "frozen_spins_fdm_reference_size_mismatch: initial magnetization has {} cells, resolved grid has {}",
-                initial_magnetization.len(), expected_cells
+                initial_magnetization.len(),
+                expected_cells
             )],
         });
     }
@@ -1173,7 +1176,8 @@ fn resolve_fdm_frozen_spins(
         return Err(PlanError {
             reasons: vec![format!(
                 "frozen_spins_fdm_domain_size_mismatch: active mask has {} cells, resolved grid has {}",
-                resolved_active_mask.len(), expected_cells
+                resolved_active_mask.len(),
+                expected_cells
             )],
         });
     }
@@ -3067,11 +3071,7 @@ pub(crate) fn plan_fdm(
             let is_uniform = v
                 .iter()
                 .all(|&val| (val - material.saturation_magnetisation).abs() <= 1e-12);
-            if is_uniform {
-                None
-            } else {
-                Some(v)
-            }
+            if is_uniform { None } else { Some(v) }
         }
         Err(e) => {
             errors.push(e);
@@ -3104,11 +3104,7 @@ pub(crate) fn plan_fdm(
             let is_uniform = v
                 .iter()
                 .all(|&val| (val - material.exchange_stiffness).abs() <= 1e-12);
-            if is_uniform {
-                None
-            } else {
-                Some(v)
-            }
+            if is_uniform { None } else { Some(v) }
         }
         Err(e) => {
             errors.push(e);
@@ -3131,11 +3127,7 @@ pub(crate) fn plan_fdm(
     let alpha_field_opt = match alpha_field_resolved {
         Ok(v) => {
             let is_uniform = v.iter().all(|&val| (val - material.damping).abs() <= 1e-12);
-            if is_uniform {
-                None
-            } else {
-                Some(v)
-            }
+            if is_uniform { None } else { Some(v) }
         }
         Err(e) => {
             errors.push(e);
@@ -3171,9 +3163,7 @@ pub(crate) fn plan_fdm(
             radius, grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
         ),
         GeometryShape::SinWaveguide {
-            period,
-            amplitude,
-            ..
+            period, amplitude, ..
         } => format!(
             "SinWaveguide (period={:.3e}, amplitude={:.3e}) voxelized to {}x{}x{} grid, {}/{} active cells",
             period, amplitude, grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
@@ -4114,7 +4104,7 @@ pub(crate) fn plan_fdm_multilayer(
                     "FDM discretization hints are required for the public multilayer FDM path"
                         .to_string(),
                 ],
-            })
+            });
         }
     };
     if !matches!(
@@ -5006,13 +4996,15 @@ pub(crate) fn plan_fdm_multilayer(
                 let pair_count =
                     u32::try_from(resolved.catalog.pair_bindings.len()).map_err(|_| PlanError {
                         reasons: vec![
-                            "multilayer_convolution pair kernel telemetry exceeds u32".to_string()
+                            "multilayer_convolution pair kernel telemetry exceeds u32".to_string(),
                         ],
                     })?;
                 let unique_count =
                     u32::try_from(resolved.catalog.keys.len()).map_err(|_| PlanError {
-                        reasons: vec!["multilayer_convolution unique kernel telemetry exceeds u32"
-                            .to_string()],
+                        reasons: vec![
+                            "multilayer_convolution unique kernel telemetry exceeds u32"
+                                .to_string(),
+                        ],
                     })?;
                 if resolved.aggregate_bytes > crate::FDM_GRID_MAX_BYTES {
                     errors.push(format!(

@@ -351,6 +351,16 @@ bool verify_finalized_mesh(
         error = "finalized MFEM mesh contains an inverted element";
         return false;
     }
+    for (uint32_t node = 0; node < source.n_nodes; ++node) {
+        const auto *actual = mesh.GetVertex(static_cast<int>(node));
+        for (uint32_t axis = 0; axis < 3u; ++axis) {
+            if (!std::isfinite(actual[axis]) ||
+                actual[axis] != source.nodes_xyz[3u * node + axis]) {
+                error = "finalized MFEM mesh vertex coordinates differ from canonical input";
+                return false;
+            }
+        }
+    }
     for (uint32_t element = 0; element < source.n_elements; ++element) {
         if (mesh.GetElementGeometry(static_cast<int>(element)) !=
             expected_geometry(source.cell_types[element])) {
@@ -385,13 +395,41 @@ bool verify_finalized_mesh(
             }
         }
     }
-    for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
-        const mfem::Geometry::Type expected = boundaries[static_cast<size_t>(boundary)].type ==
-                FULLMAG_FEM_FACET_TRI3
-            ? mfem::Geometry::TRIANGLE
-            : mfem::Geometry::SQUARE;
-        if (mesh.GetBdrElementGeometry(boundary) != expected) {
-            error = "finalized MFEM boundary geometry differs from canonical facet type";
+    std::vector<bool> matched_boundaries(boundaries.size(), false);
+    for (const BoundaryRecord &expected_boundary : boundaries) {
+        const mfem::Geometry::Type expected_geometry =
+            expected_boundary.type == FULLMAG_FEM_FACET_TRI3
+                ? mfem::Geometry::TRIANGLE
+                : mfem::Geometry::SQUARE;
+        const uint8_t expected_arity = facet_arity(expected_boundary.type);
+        bool found = false;
+        for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
+            if (matched_boundaries[static_cast<size_t>(boundary)] ||
+                mesh.GetBdrElementGeometry(boundary) != expected_geometry ||
+                mesh.GetBdrAttribute(boundary) != expected_boundary.attribute) {
+                continue;
+            }
+            mfem::Array<int> vertices;
+            mesh.GetBdrElementVertices(boundary, vertices);
+            if (vertices.Size() != static_cast<int>(expected_arity)) {
+                continue;
+            }
+            bool same_owner_connectivity = true;
+            for (uint8_t node = 0; node < expected_arity; ++node) {
+                if (vertices[node] != static_cast<int>(expected_boundary.nodes[node])) {
+                    same_owner_connectivity = false;
+                    break;
+                }
+            }
+            if (!same_owner_connectivity) {
+                continue;
+            }
+            matched_boundaries[static_cast<size_t>(boundary)] = true;
+            found = true;
+            break;
+        }
+        if (!found) {
+            error = "finalized MFEM boundary connectivity or marker differs from the canonical owner face";
             return false;
         }
     }

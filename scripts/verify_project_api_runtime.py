@@ -3,7 +3,7 @@
 
 The route builds the API with the exact source snapshot captured immediately
 before the build, starts it on an isolated loopback port, and exercises only
-health, build identity, project New/Open, an empty recovery read, and a
+health, build identity, project New/Open, session-scoped recovery rejection, and a
 controlled process restart followed by a bytes-only project reopen.  It never
 creates a filesystem project target, restores a runtime session, or invokes a
 solver.  The receipt is kept under the resolver-owned build storage so the
@@ -75,6 +75,7 @@ def json_request(
     method: str = "GET",
     payload: object | None = None,
     timeout: float = 10.0,
+    expected_error: int | None = None,
 ) -> tuple[int, object]:
     body = None
     headers = {"accept": "application/json"}
@@ -88,11 +89,22 @@ def json_request(
             return response.status, json.loads(raw.decode("utf-8"))
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")
+        if error.code == expected_error:
+            return error.code, json.loads(detail)
         raise ApiRuntimeSmokeError(
             f"HTTP {error.code} for {method} {url}: {detail[:500]}"
         ) from error
     except urllib.error.URLError as error:
         raise ApiRuntimeSmokeError(f"request failed for {method} {url}: {error}") from error
+
+
+def runtime_free_recovery(base_url: str) -> dict:
+    status, payload = json_request(
+        f"{base_url}/v2/sessions/current/persistence/recovery", expected_error=404
+    )
+    if status != 404 or not isinstance(payload, dict) or payload.get("code") != "not_found":
+        raise ApiRuntimeSmokeError("recovery must reject a request without an active session")
+    return {"status": status, "code": payload["code"]}
 
 
 def free_loopback_port() -> int:
@@ -120,7 +132,7 @@ def contained_run_paths(layout: dict[str, str], run_id: str) -> dict[str, Path]:
             run_root / "state", build_storage, "project API state root"
         ),
         "target_dir": storage.validate_path(
-            run_root / "cargo-target", build_storage, "project API cargo target"
+            Path(layout["build_root"]) / "cargo-target", build_storage, "project API cargo target"
         ),
         "cargo_home": storage.validate_path(
             Path(layout["cache_root"]) / "cargo",
@@ -295,7 +307,57 @@ def assert_build_identity(
     return build_identity
 
 
-def run(repo_root: Path, *, include_websocket: bool = False) -> tuple[int, dict[str, object]]:
+def load_project_run_fixture(layout: dict[str, object]) -> tuple[dict, dict]:
+    source = os.environ.get("FULLMAG_PROJECT_RUN_FIXTURE_RECEIPT")
+    if not source:
+        raise ApiRuntimeSmokeError("FULLMAG_PROJECT_RUN_FIXTURE_RECEIPT is required")
+    receipt_path = storage.validate_path(Path(source), Path(layout["build_storage_root"]), "run fixture receipt")
+    fixture_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    if (fixture_receipt.get("route") != "api-project-run-tests"
+            or fixture_receipt.get("state") != "passed"
+            or fixture_receipt.get("source_changed_during_run") is not False):
+        raise ApiRuntimeSmokeError("run fixture requires a passing source-bound HTTP receipt")
+    artifact = fixture_receipt["project_run_fixture"]
+    path = storage.validate_path(Path(artifact["path"]), receipt_path.parent, "run fixture payload")
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != artifact["sha256"]:
+        raise ApiRuntimeSmokeError("run fixture hash differs from its receipt")
+    payload = json.loads(raw)
+    identity = uuid.uuid4().hex
+    payload["run_intent"]["idempotency_key"] = f"restart-{identity}"
+    payload["run_intent"]["specification"]["run_id"] = f"run-{identity}"
+    return payload, {"receipt": str(receipt_path), "sha256": artifact["sha256"]}
+
+
+def probe_project_run(base_url: str, payload: dict, previous: dict | None = None) -> dict:
+    intent = payload["run_intent"]
+    project_id = intent["specification"]["snapshot"]["project_id"]
+    run_id = intent["specification"]["run_id"]
+    route = f"{base_url}/v2/persistence/projects/{project_id}/runs"
+    run_route = f"{route}/{run_id}"
+    if previous is not None:
+        _, restored = json_request(run_route)
+        if restored != previous["snapshot"]:
+            raise ApiRuntimeSmokeError("durable run changed across API process restart")
+    status, accepted = json_request(route, method="POST", payload=payload)
+    if (status != (200 if previous else 201) or accepted.get("run_id") != run_id
+            or accepted.get("disposition") != ("replayed" if previous else "accepted")):
+        raise ApiRuntimeSmokeError("Submit did not preserve durable idempotency across restart")
+    _, catalog = json_request(f"{run_route}/materialization", method="POST")
+    _, snapshot = json_request(run_route)
+    if (catalog.get("execution_state") != "pending_preparation"
+            or not catalog.get("task_ids") or snapshot.get("catalog_state") != "materialized"):
+        raise ApiRuntimeSmokeError("run was not materialized into blocked preparation tasks")
+    tasks = snapshot.get("tasks", [])
+    if not tasks or any(task.get("lifecycle") != "accepted"
+                        or task.get("readiness", {}).get("state") != "blocked" for task in tasks):
+        raise ApiRuntimeSmokeError("runtime-free probe unexpectedly advanced a task")
+    if previous is not None and (catalog != previous["catalog"] or snapshot != previous["snapshot"]):
+        raise ApiRuntimeSmokeError("replay changed the durable run catalog")
+    return {"run_id": run_id, "catalog": catalog, "snapshot": snapshot}
+
+
+def run(repo_root: Path, *, include_websocket: bool = False, include_project_run: bool = False) -> tuple[int, dict[str, object]]:
     if os.name != "nt":
         raise ApiRuntimeSmokeError("managed project API routes are supported only on Windows")
 
@@ -341,6 +403,12 @@ def run(repo_root: Path, *, include_websocket: bool = False) -> tuple[int, dict[
         process_exit_codes: list[int | None] = []
         return_code = 2
         try:
+            run_payload = None
+            if include_project_run:
+                run_payload, fixture_evidence = load_project_run_fixture(layout)
+                receipt["project_run_fixture"] = fixture_evidence
+                receipt["runtime_scope"].append("durable Submit/materialization/replay across process restart")
+                receipt["runtime_mutations"].append("synthetic durable run and blocked task catalog; no worker")
             identity = source_identity.capture(repo_root, ignore_non_runtime_dirty=True)
             write_atomic_json(paths["source_snapshot"], identity)
             receipt["source_identity"] = identity
@@ -382,6 +450,9 @@ def run(repo_root: Path, *, include_websocket: bool = False) -> tuple[int, dict[
             binary = paths["target_dir"] / "debug" / binary_name
             if not binary.is_file() or binary.stat().st_size == 0:
                 raise ApiRuntimeSmokeError(f"fullmag-api binary is missing or empty: {binary}")
+            preserved_binary = paths["run_root"] / binary_name
+            shutil.copy2(binary, preserved_binary)
+            binary = preserved_binary
             receipt["binary"] = str(binary)
             receipt["binary_sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
             receipt["state"] = "running"
@@ -451,11 +522,7 @@ def run(repo_root: Path, *, include_websocket: bool = False) -> tuple[int, dict[
                     or opened.get("mode", {}).get("kind") != "read_write"
                 ):
                     raise ApiRuntimeSmokeError("open project contract mismatch")
-                _, recovery = json_request(
-                    f"{base_url}/v2/sessions/current/persistence/recovery"
-                )
-                if not isinstance(recovery, dict) or recovery.get("snapshots") != []:
-                    raise ApiRuntimeSmokeError("recovery endpoint was not empty after runtime-free smoke")
+                recovery = runtime_free_recovery(base_url)
                 if include_websocket:
                     _, scratch_session = json_request(
                         f"{base_url}/v2/sessions",
@@ -484,6 +551,9 @@ def run(repo_root: Path, *, include_websocket: bool = False) -> tuple[int, dict[
                         "precision": "double",
                         "solver_started": False,
                     }
+                if run_payload is not None:
+                    run_before_restart = probe_project_run(base_url, run_payload)
+                    receipt["project_run_before_restart"] = run_before_restart
                 first_exit = terminate_process(process)
                 process_exit_codes.append(first_exit)
                 process = None
@@ -540,15 +610,10 @@ def run(repo_root: Path, *, include_websocket: bool = False) -> tuple[int, dict[
                     raise ApiRuntimeSmokeError(
                         "project identity or clean state changed after API reconnect"
                     )
-                _, reconnect_recovery = json_request(
-                    f"{reconnect_base_url}/v2/sessions/current/persistence/recovery"
-                )
-                if (
-                    not isinstance(reconnect_recovery, dict)
-                    or reconnect_recovery.get("snapshots") != []
-                ):
-                    raise ApiRuntimeSmokeError(
-                        "recovery endpoint was not empty after reconnect smoke"
+                reconnect_recovery = runtime_free_recovery(reconnect_base_url)
+                if run_payload is not None:
+                    receipt["project_run_after_restart"] = probe_project_run(
+                        reconnect_base_url, run_payload, run_before_restart
                     )
                 second_exit = terminate_process(process)
                 process_exit_codes.append(second_exit)
@@ -597,7 +662,8 @@ def run(repo_root: Path, *, include_websocket: bool = False) -> tuple[int, dict[
             receipt["finished_at"] = utc_now()
             receipt["exit_code"] = return_code
             write_atomic_json(paths["receipt"], receipt)
-        print(json.dumps(receipt, indent=2, ensure_ascii=False))
+        print(json.dumps({"receipt": str(paths["receipt"]), "state": receipt["state"],
+                          "error": receipt.get("error")}, ensure_ascii=False))
         return return_code, receipt
 
 
@@ -609,9 +675,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="also create an empty scratch session and verify the managed realtime handshake/reconnect",
     )
+    parser.add_argument("--include-project-run", action="store_true",
+                        help="verify durable Submit and materialization across process restart")
     args = parser.parse_args(argv)
     try:
-        return run(args.repo_root.resolve(), include_websocket=args.include_websocket)[0]
+        return run(args.repo_root.resolve(), include_websocket=args.include_websocket,
+                   include_project_run=args.include_project_run)[0]
     except Exception as error:
         print(f"project API runtime smoke failed before receipt: {type(error).__name__}: {error}", file=sys.stderr)
         return 2

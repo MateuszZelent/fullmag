@@ -715,7 +715,7 @@ def inventory(layout):
     for path in sorted((root / "index").glob("*.json")):
         validate_path(path, root, "index record")
         record = json.loads(path.read_text(encoding="utf-8"))
-        if record.get("schema") == SCHEMA and record.get("worktree_id"):
+        if isinstance(record, dict) and record.get("schema") == SCHEMA and record.get("worktree_id"):
             records.append(record)
     owners = {os.path.normcase(record["repo_root"]): record for record in records}
     checkouts = []

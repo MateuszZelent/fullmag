@@ -848,10 +848,12 @@ mod tests {
         assert!(charge.descriptor_sha256.starts_with("sha256:"));
         assert_eq!(charge.charge_active_cells.len(), 3000);
         assert!(charge.charge_active_cells.iter().all(|active| *active));
-        assert!(charge
-            .charge_conductivity_spm
-            .iter()
-            .all(|sigma| *sigma == 4.0e6));
+        assert!(
+            charge
+                .charge_conductivity_spm
+                .iter()
+                .all(|sigma| *sigma == 4.0e6)
+        );
         assert_eq!(charge.charge_boundaries.len(), 6);
         let faces = charge
             .charge_boundaries
@@ -1089,10 +1091,12 @@ mod tests {
             potential_v: 0.0,
         };
         let mixed_error = crate::plan(&mixed).expect_err("mixed boundary profile must fail");
-        assert!(mixed_error
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("gauge=zero_mean conflicts with voltage electrodes")));
+        assert!(
+            mixed_error
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("gauge=zero_mean conflicts with voltage electrodes"))
+        );
 
         let mut wrong_gauge = same_sign;
         charge_definition_mut(&mut wrong_gauge).gauge = ChargePotentialGaugeIR::DirichletReference;

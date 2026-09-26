@@ -4,6 +4,25 @@ use fullmag_session::{
 };
 
 #[test]
+fn session_recovery_preserves_other_sessions_and_rejects_mismatched_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = SessionStore::open(directory.path().join("store")).unwrap();
+    for id in ["session-a", "session-b"] {
+        store.write_recovery(&FmsSessionManifest::new(id, id, SaveProfile::Compact)).unwrap();
+    }
+    assert_eq!(store.read_session_recovery("session-a").unwrap().unwrap().session_id, "session-a");
+    assert_eq!(store.clear_session_recovery("session-a").unwrap(), 1);
+    assert_eq!(store.clear_session_recovery("session-a").unwrap(), 0);
+    assert!(store.read_session_recovery("session-b").unwrap().is_some());
+    let foreign = std::fs::read(store.root().join("recovery/session-b.json")).unwrap();
+    std::fs::write(store.root().join("recovery/session-a.json"), &foreign).unwrap();
+    assert!(store.read_session_recovery("session-a").is_err());
+    assert!(store.clear_session_recovery("session-a").is_err());
+    assert_eq!(std::fs::read(store.root().join("recovery/session-a.json")).unwrap(), foreign);
+    assert!(store.clear_session_recovery("../escape").is_err());
+}
+
+#[test]
 fn malicious_ids_and_control_documents_never_escape_or_replace_the_lock() {
     let directory = tempfile::tempdir().unwrap();
     let store = SessionStore::open(directory.path().join("store")).unwrap();

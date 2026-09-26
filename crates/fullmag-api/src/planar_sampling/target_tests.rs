@@ -12,8 +12,8 @@ use crate::router_v2::handlers::data::resolved_spatial_field::{
 use crate::schemas::mesh::FdmRegionLegendEntryResource;
 
 use super::{
-    resolve_spatial_target, sample_resolved_target, PlanarComponent, PlanarSampleIdentity,
-    ResolvedPlanarSampleRequest, ResolvedSpatialScope,
+    PlanarComponent, PlanarSampleIdentity, ResolvedPlanarSampleRequest, ResolvedSpatialScope,
+    resolve_spatial_target, sample_resolved_target,
 };
 
 fn explicit_frame(
@@ -457,13 +457,15 @@ fn airbox_scope_requires_exact_legal_airbox_carrier_quantity() {
         SpatialFieldSourceKind::Persisted,
     )
     .unwrap();
-    assert!(resolve_spatial_target(
-        &field,
-        &MonitorTargetIR::Domain,
-        ResolvedSpatialScope::Airbox { scope_id: None },
-        &PlanarOperatorIR::PlaneSample,
-    )
-    .is_ok());
+    assert!(
+        resolve_spatial_target(
+            &field,
+            &MonitorTargetIR::Domain,
+            ResolvedSpatialScope::Airbox { scope_id: None },
+            &PlanarOperatorIR::PlaneSample,
+        )
+        .is_ok()
+    );
 
     let non_airbox = scalar_fdm_field(multi_object_membership(vec![1, 2]), vec![4.0, 9.0]);
     let error = resolve_spatial_target(
@@ -573,12 +575,14 @@ fn constant_field_is_invariant_under_frame_rotation_and_resolution() {
             &request(frame, PlanarOperatorIR::PlaneSample, resolution),
         )
         .unwrap();
-        assert!(sample
-            .scalar_values
-            .iter()
-            .zip(&sample.occupancy)
-            .filter(|(_, occupancy)| **occupancy != super::Occupancy::Empty)
-            .all(|(value, _)| (*value - 6.25).abs() < 1.0e-12));
+        assert!(
+            sample
+                .scalar_values
+                .iter()
+                .zip(&sample.occupancy)
+                .filter(|(_, occupancy)| **occupancy != super::Occupancy::Empty)
+                .all(|(value, _)| (*value - 6.25).abs() < 1.0e-12)
+        );
     }
 }
 

@@ -117,6 +117,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         domain_frame: None,
         stages: Vec::new(),
         study_pipeline: None,
+        table_autosave: None,
         initial_state: None,
         geometries: vec![fullmag_authoring::ScriptBuilderGeometryEntry {
             name: "body".to_string(),
@@ -641,9 +642,11 @@ pub(crate) fn test_app_state() -> Arc<AppState> {
 
     Arc::new(AppState {
         repo_root: PathBuf::from("."),
+        submit_store_root: None,
         current_workspace_root: PathBuf::from("."),
         current_live_state: Arc::new(RwLock::new(None)),
         current_live_session_transition: Arc::new(Mutex::new(())),
+        request_scope_instance_id: "test-api-instance".to_string(),
         current_live_session_epoch: Arc::new(AtomicU64::new(0)),
         current_live_realtime_before_send_hook: Arc::new(Mutex::new(None)),
         current_live_connectivity: Arc::new(RwLock::new(
@@ -658,6 +661,7 @@ pub(crate) fn test_app_state() -> Arc<AppState> {
             )
             .unwrap_or(u64::MAX),
         )),
+        current_live_preparation_receipt: Arc::new(RwLock::new(None)),
         current_live_realtime_events: tokio::sync::broadcast::channel(16).0,
         current_live_realtime_replay: Arc::new(Mutex::new(VecDeque::new())),
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
@@ -689,7 +693,7 @@ pub(crate) fn test_app_state() -> Arc<AppState> {
 
 /// `AppState` with a minimal live session populated, so endpoints that read
 /// from `current_live_state` can return 200.
-async fn test_app_state_with_live_session() -> Arc<AppState> {
+pub(crate) async fn test_app_state_with_live_session() -> Arc<AppState> {
     let state = test_app_state();
 
     let session = SessionManifest {
@@ -851,7 +855,9 @@ fn simulation_preparation_fixture(status: &str) -> SimulationPreparationSnapshot
     }
 }
 
-async fn test_app_state_with_simulation_preparation(status: &str) -> Arc<AppState> {
+pub(crate) async fn test_app_state_with_simulation_preparation(
+    status: &str,
+) -> Arc<AppState> {
     test_app_state_with_simulation_preparation_snapshot(simulation_preparation_fixture(status))
         .await
 }
@@ -2117,19 +2123,27 @@ async fn physics_graph_resource_exposes_thin_normalized_graph_for_supported_scen
         ),
         (
             "object_local_current_chain",
-            include_str!("../../../fullmag-authoring/tests/fixtures/physics_graph/object_local_current_chain.json"),
+            include_str!(
+                "../../../fullmag-authoring/tests/fixtures/physics_graph/object_local_current_chain.json"
+            ),
         ),
         (
             "global_field_drive",
-            include_str!("../../../fullmag-authoring/tests/fixtures/physics_graph/global_field_drive.json"),
+            include_str!(
+                "../../../fullmag-authoring/tests/fixtures/physics_graph/global_field_drive.json"
+            ),
         ),
         (
             "cross_object_interface",
-            include_str!("../../../fullmag-authoring/tests/fixtures/physics_graph/cross_object_interface.json"),
+            include_str!(
+                "../../../fullmag-authoring/tests/fixtures/physics_graph/cross_object_interface.json"
+            ),
         ),
         (
             "unresolved_legacy",
-            include_str!("../../../fullmag-authoring/tests/fixtures/physics_graph/unresolved_legacy.json"),
+            include_str!(
+                "../../../fullmag-authoring/tests/fixtures/physics_graph/unresolved_legacy.json"
+            ),
         ),
     ];
 
@@ -2734,9 +2748,11 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
 
     let state = Arc::new(AppState {
         repo_root: repo_root.clone(),
+        submit_store_root: Some(repo_root.join("submit-store")),
         current_workspace_root: repo_root.clone(),
         current_live_state: Arc::new(RwLock::new(None)),
         current_live_session_transition: Arc::new(Mutex::new(())),
+        request_scope_instance_id: "test-api-instance".to_string(),
         current_live_session_epoch: Arc::new(AtomicU64::new(0)),
         current_live_realtime_before_send_hook: Arc::new(Mutex::new(None)),
         current_live_connectivity: Arc::new(RwLock::new(
@@ -2751,6 +2767,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
             )
             .unwrap_or(u64::MAX),
         )),
+        current_live_preparation_receipt: Arc::new(RwLock::new(None)),
         current_live_realtime_events: tokio::sync::broadcast::channel(16).0,
         current_live_realtime_replay: Arc::new(Mutex::new(VecDeque::new())),
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
@@ -23602,6 +23619,69 @@ fn simulation_preparation_openapi_registers_route_and_bounded_schemas() {
     assert!(schemas["PreparationExecutionSummary"]["properties"]
         .get("backend")
         .is_some());
+
+    let materialize =
+        &openapi["paths"]["/v2/sessions/current/simulation/preparation/materialization"]["post"];
+    assert_eq!(
+        materialize["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/LivePreparationMaterializationRequest"
+    );
+    assert_eq!(
+        materialize["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/LivePreparationMaterializationResource"
+    );
+}
+
+#[tokio::test]
+async fn live_preparation_materialization_is_exposed_as_typed_http_route() {
+    let payload = serde_json::json!({
+        "preparation_id": "prep-contract-test",
+        "scene_revision": 7
+    });
+    let app =
+        build_v2_router().with_state(test_app_state_with_simulation_preparation("ready").await);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/preparation/materialization")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = body_json(response).await;
+    assert!(body["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("no scene document"));
+
+    let app =
+        build_v2_router().with_state(test_app_state_with_simulation_preparation("ready").await);
+    let body = serde_json::json!({
+        "preparation_id": "prep-contract-test",
+        "scene_revision": 7,
+        "requested_execution": {
+            "backend": "fdm",
+            "device": "cpu",
+            "precision": "double",
+            "mode": "strict"
+        }
+    });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/preparation/materialization")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]
@@ -26558,7 +26638,7 @@ async fn session_import_inspect_round_trips_exported_session() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v2/sessions/current/persistence/imports/inspections")
+                .uri("/v2/persistence/imports/inspections")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
@@ -27268,7 +27348,7 @@ async fn solved_session_export_restores_frequency_artifacts_after_source_history
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v2/sessions/current/persistence/imports/inspections")
+                .uri("/v2/persistence/imports/inspections")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({ "fms_base64": fms_base64 }).to_string(),
@@ -28720,6 +28800,35 @@ async fn uploaded_airbox_h5_field_state_can_be_attached_without_apply_shape_chec
     assert_eq!(imported["applied_point_count"], 0);
     assert_eq!(imported["mode"], "attach");
 
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn session_recovery_is_scoped_to_current_session() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let context = crate::capture_current_live_request_context(&state).await.unwrap();
+    let store = crate::session_persistence::open_store(&state).unwrap();
+    for id in [context.session_id.as_str(), "foreign-recovery-session"] {
+        store.write_recovery(&fullmag_session::FmsSessionManifest::new(
+            id, id, fullmag_session::SaveProfile::Compact,
+        )).unwrap();
+    }
+    let response = app.clone().oneshot(Request::builder()
+        .uri("/v2/sessions/current/persistence/recovery")
+        .body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["snapshots"].as_array().unwrap().len(), 1);
+    assert_eq!(json["snapshots"][0]["session_id"], context.session_id);
+    for expected_count in [1, 0] {
+        let response = app.clone().oneshot(Request::builder()
+            .method("DELETE")
+            .uri("/v2/sessions/current/persistence/recovery")
+            .body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_json(response).await["cleared"], expected_count);
+    }
+    assert!(store.read_session_recovery("foreign-recovery-session").unwrap().is_some());
     let _ = fs::remove_dir_all(&repo_root);
 }
 
@@ -32033,6 +32142,12 @@ async fn asyncapi_document_returns_200() {
 
     let json = body_json(response).await;
     assert_eq!(json["asyncapi"], "2.6.0");
+    assert!(
+        json["components"]["schemas"]["HelloEvent"]["allOf"][1]["properties"]["payload"]
+            ["required"]
+            .as_array()
+            .is_some_and(|fields| fields.contains(&serde_json::json!("request_scope_epoch")))
+    );
     assert_eq!(
         json["channels"]["/v2/sessions/current/events/ws"]["subscribe"]["operationId"],
         "subscribeCurrentLiveRealtime"
@@ -47997,6 +48112,359 @@ async fn scene_commit_rejects_a_cross_family_stale_candidate_atomically() {
         .any(|constraint| constraint.frozen_spins().id == "pin-race"));
 }
 
+#[tokio::test]
+async fn context_bound_scene_commit_rejects_an_epoch_transition() {
+    let state = frozen_spins_test_state().await;
+    let context = crate::capture_current_live_request_context(&state)
+        .await
+        .expect("request context");
+    let mut scene = crate::get_or_load_current_live_scene_document_for_context(&state, &context)
+        .await
+        .expect("context-bound scene");
+    scene.scene.name = "stale context edit".to_string();
+    state
+        .current_live_session_epoch
+        .fetch_add(1, std::sync::atomic::Ordering::Release);
+
+    let error = crate::commit_current_live_scene_document_for_context(&state, &context, scene)
+        .await
+        .expect_err("a stale request context must not publish");
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.message, "request_context_stale");
+}
+
+#[tokio::test]
+async fn context_bound_compute_enqueue_rejects_an_epoch_transition_before_queueing() {
+    let state = test_app_state_with_live_session().await;
+    let context = crate::capture_current_live_request_context(&state)
+        .await
+        .expect("request context");
+    let command: SessionCommand = serde_json::from_value(serde_json::json!({
+        "seq": 0,
+        "command_id": "cmd-stale-context",
+        "kind": "compute_fields",
+        "created_at_unix_ms": 1_700_000_000_000u128
+    }))
+    .expect("minimal compute command");
+    state
+        .current_live_session_epoch
+        .fetch_add(1, std::sync::atomic::Ordering::Release);
+
+    let error = crate::router_v2::handlers::simulation::commands::
+        enqueue_session_command_impl_with_context(
+            state.clone(),
+            &Default::default(),
+            command,
+            Some(&context),
+        )
+        .await
+        .expect_err("a stale compute request must not enqueue");
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.message, "request_context_stale");
+    assert!(state.current_control_queue.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn context_bound_binary_membership_read_rejects_stale_epoch_before_artifact_io() {
+    let state = test_app_state_with_live_session().await;
+    let context = crate::capture_current_live_request_context(&state)
+        .await
+        .expect("request context");
+    state
+        .current_live_session_epoch
+        .fetch_add(1, std::sync::atomic::Ordering::Release);
+
+    let error = crate::router_v2::handlers::data::fdm_region_membership::
+        serve_fdm_region_membership_binary_with_context(
+            state,
+            Default::default(),
+            None,
+            Some(&context),
+        )
+        .await
+        .expect_err("a stale binary request must not read the replacement workspace");
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.message, "request_context_stale");
+}
+
+#[tokio::test]
+async fn context_bound_persistence_read_rejects_a_stale_epoch_before_store_access() {
+    let state = test_app_state_with_live_session().await;
+    let context = crate::capture_current_live_request_context(&state)
+        .await
+        .expect("request context");
+    state
+        .current_live_session_epoch
+        .fetch_add(1, std::sync::atomic::Ordering::Release);
+
+    let error = crate::session_persistence::list_checkpoints_with_context(
+        axum::extract::State(state),
+        Some(&context),
+    )
+    .await
+    .expect_err("a stale persistence request must not access the replacement store");
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.message, "request_context_stale");
+}
+
+#[tokio::test]
+async fn context_bound_checkpoint_capture_rejects_a_stale_epoch_before_store_access() {
+    let state = test_app_state_with_live_session().await;
+    let context = crate::capture_current_live_request_context(&state)
+        .await
+        .expect("request context");
+    state
+        .current_live_session_epoch
+        .fetch_add(1, std::sync::atomic::Ordering::Release);
+
+    let request =
+        serde_json::from_value(serde_json::json!({})).expect("default checkpoint capture request");
+    let error = crate::session_persistence::create_checkpoint_with_context(
+        axum::extract::State(state),
+        axum::Json(request),
+        Some(&context),
+    )
+    .await
+    .expect_err("a stale checkpoint capture must not access the replacement store");
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.message, "request_context_stale");
+}
+
+#[tokio::test]
+async fn context_bound_checkpoint_restore_rejects_a_stale_epoch_before_store_access() {
+    let state = test_app_state_with_live_session().await;
+    let context = crate::capture_current_live_request_context(&state)
+        .await
+        .expect("request context");
+    state
+        .current_live_session_epoch
+        .fetch_add(1, std::sync::atomic::Ordering::Release);
+
+    let request =
+        serde_json::from_value(serde_json::json!({})).expect("default checkpoint restore request");
+    let error = crate::session_persistence::restore_checkpoint_with_context(
+        axum::extract::State(state),
+        "stale-checkpoint".to_string(),
+        axum::Json(request),
+        Some(&context),
+    )
+    .await
+    .expect_err("a stale checkpoint restore must not access the replacement store");
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.message, "request_context_stale");
+}
+
+#[tokio::test]
+async fn context_bound_field_state_persistence_rejects_a_stale_epoch_before_file_io() {
+    let state = test_app_state_with_live_session().await;
+    let context = crate::capture_current_live_request_context(&state)
+        .await
+        .expect("request context");
+    state
+        .current_live_session_epoch
+        .fetch_add(1, std::sync::atomic::Ordering::Release);
+
+    let export_request = serde_json::from_value(serde_json::json!({
+        "target": {"kind": "object", "id": "object-1"},
+        "quantity_id": "m",
+        "format": "field_state_json"
+    }))
+    .expect("field-state export request");
+    let error = crate::session_persistence::export_field_state_with_context(
+        axum::extract::State(state.clone()),
+        axum::Json(export_request),
+        Some(&context),
+    )
+    .await
+    .expect_err("a stale field-state export must not write a file");
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.message, "request_context_stale");
+
+    let inspect_request = serde_json::from_value(serde_json::json!({
+        "artifact_ref": "field-states/stale.json",
+        "target": {"kind": "object", "id": "object-1"},
+        "quantity_id": "m"
+    }))
+    .expect("field-state inspect request");
+    let error = crate::session_persistence::inspect_field_state_with_context(
+        axum::extract::State(state.clone()),
+        axum::Json(inspect_request),
+        Some(&context),
+    )
+    .await
+    .expect_err("a stale field-state inspection must not read an artifact");
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.message, "request_context_stale");
+
+    let import_request = serde_json::from_value(serde_json::json!({
+        "artifact_ref": "field-states/stale.json",
+        "target": {"kind": "object", "id": "object-1"},
+        "quantity_id": "m",
+        "mode": "attach"
+    }))
+    .expect("field-state import request");
+    let error = crate::session_persistence::import_field_state_with_context(
+        axum::extract::State(state),
+        axum::Json(import_request),
+        Some(&context),
+    )
+    .await
+    .expect_err("a stale field-state import must not mutate the replacement workspace");
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.message, "request_context_stale");
+}
+
+#[tokio::test]
+async fn context_bound_session_export_and_import_reject_a_stale_epoch_before_archive_io() {
+    let state = test_app_state_with_live_session().await;
+    let context = crate::capture_current_live_request_context(&state)
+        .await
+        .expect("request context");
+    state
+        .current_live_session_epoch
+        .fetch_add(1, std::sync::atomic::Ordering::Release);
+
+    let export_request = serde_json::from_value(serde_json::json!({
+        "profile": "compact"
+    }))
+    .expect("session export request");
+    let error = crate::session_persistence::export_session_with_context(
+        axum::extract::State(state.clone()),
+        axum::Json(export_request),
+        Some(&context),
+    )
+    .await
+    .expect_err("a stale session export must not read or pack an archive");
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.message, "request_context_stale");
+
+    let import_request = serde_json::from_value(serde_json::json!({
+        "fms_base64": "not-read-after-stale-context"
+    }))
+    .expect("session import request");
+    let error = crate::session_persistence::import_session_commit_with_context(
+        axum::extract::State(state),
+        axum::Json(import_request),
+        Some(&context),
+    )
+    .await
+    .expect_err("a stale session import must not publish an archive");
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.message, "request_context_stale");
+}
+
+#[tokio::test]
+async fn asset_import_waits_for_transition_before_processing_file_content() {
+    let state = test_app_state_with_live_session().await;
+    let context = crate::capture_current_live_request_context(&state)
+        .await
+        .expect("request context");
+    let transition = state.current_live_session_transition.lock().await;
+    let import = crate::import_asset_for_current_workspace(
+        &state,
+        &context,
+        crate::ImportSessionAssetRequest {
+            file_name: "transition-import.ovf".to_owned(),
+            content_base64: "invalid-base64-must-not-be-decoded".to_owned(),
+            target_realization: "fdm".to_owned(),
+        },
+    );
+    tokio::pin!(import);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(10), &mut import)
+            .await
+            .is_err(),
+        "import must wait for workspace ownership before decoding"
+    );
+    state
+        .current_live_session_epoch
+        .fetch_add(1, std::sync::atomic::Ordering::Release);
+    drop(transition);
+    let error = import
+        .await
+        .expect_err("transition invalidates the waiting import");
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.message, "request_context_stale");
+}
+
+#[tokio::test]
+async fn context_bound_asset_import_rejects_stale_epoch_before_decoding_or_writing() {
+    let state = test_app_state_with_live_session().await;
+    let context = crate::capture_current_live_request_context(&state)
+        .await
+        .expect("request context");
+    state
+        .current_live_session_epoch
+        .fetch_add(1, std::sync::atomic::Ordering::Release);
+    let error = crate::import_asset_for_current_workspace(
+        &state,
+        &context,
+        crate::ImportSessionAssetRequest {
+            file_name: "stale-import.ovf".to_owned(),
+            content_base64: "invalid-base64-must-not-be-decoded".to_owned(),
+            target_realization: "fdm".to_owned(),
+        },
+    )
+    .await
+    .expect_err("stale asset import must be rejected before file processing");
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.message, "request_context_stale");
+}
+
+#[tokio::test]
+async fn context_bound_events_publication_rejects_a_stale_epoch() {
+    let state = test_app_state_with_live_session().await;
+    let context = crate::capture_current_live_request_context(&state)
+        .await
+        .expect("request context");
+    state
+        .current_live_session_epoch
+        .fetch_add(1, std::sync::atomic::Ordering::Release);
+
+    let error = crate::router_v2::handlers::platform::realtime::
+        publish_communication_policy_change_with_context(&state, 1, Some(&context))
+        .await
+        .expect_err("a stale events request must not publish to a replacement workspace");
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.message, "request_context_stale");
+}
+
+#[tokio::test]
+async fn communication_policy_patch_waits_for_transition_before_mutating_policy() {
+    let state = test_app_state_with_live_session().await;
+    let context = crate::capture_current_live_request_context(&state)
+        .await
+        .expect("request context");
+    let before = state.current_live_realtime_policy.read().await.clone();
+    let transition = state.current_live_session_transition.lock().await;
+    let patch = serde_json::from_value(serde_json::json!({
+        "heartbeat_enabled": !before.effective.heartbeat_enabled
+    }))
+    .expect("valid realtime policy patch");
+    let update =
+        crate::router_v2::handlers::platform::realtime::patch_communication_policy_with_context(
+            &state, patch, &context,
+        );
+    tokio::pin!(update);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(10), &mut update)
+            .await
+            .is_err(),
+        "patch must wait for workspace ownership before mutating policy"
+    );
+    state
+        .current_live_session_epoch
+        .fetch_add(1, std::sync::atomic::Ordering::Release);
+    drop(transition);
+
+    let error = update.await.expect_err("stale patch must be rejected");
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.message, "request_context_stale");
+    let after = state.current_live_realtime_policy.read().await;
+    assert_eq!(after.revision, before.revision);
+    assert_eq!(after.effective, before.effective);
+}
+
 #[test]
 fn scene_resource_preserves_selection_and_frozen_spins_authoring_state() {
     let mut scene = sample_scene_document();
@@ -48021,6 +48489,31 @@ fn scene_resource_preserves_selection_and_frozen_spins_authoring_state() {
         "inactive_selection": "warn_and_intersect"
     }]))
     .expect("constraint fixture");
+    scene.monitors.planar = serde_json::from_value(serde_json::json!([{
+        "id": "midplane",
+        "name": "Midplane",
+        "target": {"kind": "object", "object_id": "body"},
+        "frame": {
+            "origin_m": [0.0, 0.0, 0.0],
+            "u_axis": [1.0, 0.0, 0.0],
+            "v_axis": [0.0, 1.0, 0.0],
+            "normal": [0.0, 0.0, 1.0],
+            "preset": "xy",
+            "normalization_version": "planar_frame_v1",
+            "extent": {"kind": "target_bounds", "padding_m": 0.0}
+        },
+        "operator": {"kind": "plane_sample"}
+    }]))
+    .expect("monitor fixture");
+    scene.study.table_autosave = Some(
+        serde_json::from_value(serde_json::json!({
+            "kind": "table_autosave",
+            "table_id": "scene-table",
+            "every_steps": 3,
+            "quantities": ["step", "mx"]
+        }))
+        .expect("table autosave fixture"),
+    );
 
     let resource = crate::schemas::authoring::SceneResource::from_scene_document(scene.clone())
         .expect("scene resource projection");
@@ -48032,6 +48525,14 @@ fn scene_resource_preserves_selection_and_frozen_spins_authoring_state() {
             .map(Vec::len),
         Some(1)
     );
+    assert_eq!(
+        projected["monitors"]["planar"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        projected["study"]["table_autosave"]["table_id"],
+        "scene-table"
+    );
     let roundtrip: fullmag_authoring::SceneDocument =
         serde_json::from_value(projected).expect("scene resource returns to canonical scene");
     assert_eq!(roundtrip.selections, scene.selections);
@@ -48039,6 +48540,8 @@ fn scene_resource_preserves_selection_and_frozen_spins_authoring_state() {
         roundtrip.magnetization_constraints,
         scene.magnetization_constraints
     );
+    assert_eq!(roundtrip.monitors.planar, scene.monitors.planar);
+    assert_eq!(roundtrip.study.table_autosave, scene.study.table_autosave);
 }
 
 #[test]
@@ -48578,6 +49081,9 @@ async fn frozen_spins_delayed_insert_cannot_clear_a_newer_session_epoch() {
             .await;
     assert_eq!(status, StatusCode::OK);
     let old_id = preview["preview_id"].as_str().unwrap();
+    let request_context = crate::capture_current_live_request_context(&state)
+        .await
+        .expect("request context");
     let old_record = state
         .frozen_spins_previews
         .read()
@@ -48600,6 +49106,7 @@ async fn frozen_spins_delayed_insert_cannot_clear_a_newer_session_epoch() {
 
     let error = super::handlers::model::frozen_spins::insert_current_preview_record(
         &state,
+        &request_context,
         "late-session-a".to_string(),
         old_record,
     )
@@ -48620,12 +49127,20 @@ async fn frozen_spins_shared_model_and_data_read_holds_the_session_epoch() {
             .await;
     assert_eq!(status, StatusCode::OK);
     let preview_id = preview["preview_id"].as_str().unwrap().to_string();
+    let request_context = crate::capture_current_live_request_context(&state)
+        .await
+        .expect("request context");
 
     let store_guard = state.frozen_spins_previews.write().await;
     let read_state = state.clone();
     let read_id = preview_id.clone();
     let read_task = tokio::spawn(async move {
-        super::handlers::model::frozen_spins::current_preview_record(&read_state, &read_id).await
+        super::handlers::model::frozen_spins::current_preview_record(
+            &read_state,
+            &request_context,
+            &read_id,
+        )
+        .await
     });
     let mut observed_session_reader = false;
     for _ in 0..256 {
@@ -49041,3 +49556,6 @@ mod remesh_admission;
 
 #[path = "tests/project_documents.rs"]
 mod project_documents;
+
+#[path = "tests/session_scope.rs"]
+mod session_scope;

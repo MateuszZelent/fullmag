@@ -114,6 +114,194 @@ fn workspace(script: &[u8]) -> FmsWorkspaceManifest {
 }
 
 #[test]
+fn archive_roundtrip_preserves_independent_coordinator_attempts() {
+    use fullmag_session::*;
+    let directory = tempfile::tempdir().unwrap();
+    let store = SessionStore::open(directory.path().join("journal-store")).unwrap();
+    store.commit_run(&run_manifest("run-journal")).unwrap();
+    let now = chrono::Utc::now();
+    let task = |id: &str, attempt: &str| FmsTaskCatalogEntry {
+        task_id: id.into(),
+        input_fingerprint: "a".repeat(64),
+        lifecycle: FmsTaskLifecycle::Running,
+        readiness: FmsTaskReadiness::Ready,
+        observation: Some(FmsObservationState::Live),
+        attempt_id: Some(attempt.into()),
+        ownership_epoch: Some(1),
+        resolved_input_fingerprint: None,
+        artifact_ids: vec![],
+        resource_id: Some(format!("resource-{id}")),
+        coordinator_watermark: None,
+        coordinator_genesis: None,
+    };
+    let resource_lease = |task_id: &str,
+                          attempt_id: &str,
+                          resource_id: &str,
+                          lease_token: &str,
+                          ownership_epoch: u64| FmsResourceLease {
+        schema_version: FMS_RESOURCE_LEASE_SCHEMA.into(),
+        resource_id: resource_id.into(),
+        kind: FmsResourceKind::Cpu,
+        budget: FmsResourceBudget {
+            cpu_millis: 100,
+            memory_bytes: 1,
+            gpu_memory_bytes: 0,
+            storage_bytes: 1,
+        },
+        run_id: "run-journal".into(),
+        task_id: task_id.into(),
+        attempt_id: attempt_id.into(),
+        ownership_epoch,
+        lease_token: lease_token.into(),
+        state: FmsResourceLeaseState::Active,
+        acquired_at: now,
+        heartbeat_at: now,
+        heartbeat_sequence: 0,
+        released_at: None,
+    };
+    let mut catalog = FmsRunCatalog {
+        schema_version: FMS_RUN_CATALOG_SCHEMA.into(),
+        run_id: "run-journal".into(),
+        revision: 1,
+        updated_at: now,
+        tasks: vec![task("task-a", "attempt-a"), task("task-b", "attempt-b")],
+    };
+    store.commit_run_catalog(&catalog).unwrap();
+    let lease_a = resource_lease("task-a", "attempt-a", "resource-task-a", "lease-a", 1);
+    let lease_b = resource_lease("task-b", "attempt-b", "resource-task-b", "lease-b", 1);
+    store.commit_resource_lease(&lease_a).unwrap();
+    store.commit_resource_lease(&lease_b).unwrap();
+    let payload = serde_json::json!({"fixture": "journal archive"});
+    let entry = FmsCoordinatorJournalEntry {
+        schema_version: FMS_COORDINATOR_JOURNAL_SCHEMA.into(),
+        entry_id: "event-a".into(),
+        run_id: "run-journal".into(),
+        task_id: "task-a".into(),
+        attempt_id: "attempt-a".into(),
+        ownership_epoch: 1,
+        lease_token: "lease-a".into(),
+        direction: FmsCoordinatorJournalDirection::Event,
+        sequence: 1,
+        terminal: true,
+        payload_sha256: canonical_json_sha256(&payload),
+        payload,
+        created_at: now,
+    };
+    store.commit_coordinator_journal_entry(&entry).unwrap();
+    let other = FmsCoordinatorJournalEntry {
+        entry_id: "event-b".into(),
+        task_id: "task-b".into(),
+        attempt_id: "attempt-b".into(),
+        lease_token: "lease-b".into(),
+        terminal: false,
+        ..entry.clone()
+    };
+    store.commit_coordinator_journal_entry(&other).unwrap();
+    store.release_resource_lease(&lease_a).unwrap();
+    catalog.tasks[0].attempt_id = Some("attempt-a-retry".into());
+    catalog.tasks[0].ownership_epoch = Some(2);
+    catalog.revision += 1;
+    store.commit_run_catalog(&catalog).unwrap();
+    let retry_lease = resource_lease(
+        "task-a",
+        "attempt-a-retry",
+        "resource-task-a",
+        "lease-a-retry",
+        2,
+    );
+    store.commit_resource_lease(&retry_lease).unwrap();
+    let retry = FmsCoordinatorJournalEntry {
+        entry_id: "event-a-retry".into(),
+        attempt_id: "attempt-a-retry".into(),
+        ownership_epoch: 2,
+        lease_token: "lease-a-retry".into(),
+        terminal: false,
+        ..entry.clone()
+    };
+    store.commit_coordinator_journal_entry(&retry).unwrap();
+    let before = store.read_coordinator_journal("run-journal").unwrap();
+    let claim = serde_json::json!({"run_id":"run-journal", "task_id":"task-a",
+        "attempt_id":"attempt-a-retry", "ownership_epoch":2, "lease_token":"lease-a-retry"});
+    let command = serde_json::json!({"schema_version":"worker_protocol.v1", "message_id":"command-start",
+        "claim":claim, "sequence":1, "command":{"kind":"start"}});
+    let pending = FmsWorkerInboxRecord::new(serde_json::json!({"schema_version":"worker_inbox.v1",
+        "claim":claim, "applied":[], "pending":command}))
+    .unwrap();
+    let applied = FmsWorkerInboxRecord::new(serde_json::json!({"schema_version":"worker_inbox.v1",
+        "claim":claim, "applied":[command], "pending":null}))
+    .unwrap();
+    assert!(store.commit_worker_inbox(&applied).is_err());
+    store.commit_worker_inbox(&pending).unwrap();
+    store.commit_worker_inbox(&pending).unwrap();
+    store.commit_worker_inbox(&applied).unwrap();
+    assert!(store.commit_worker_inbox(&pending).is_err());
+    let mut forged = pending.payload.clone();
+    forged["claim"]["lease_token"] = serde_json::json!("forged");
+    forged["pending"]["claim"]["lease_token"] = serde_json::json!("forged");
+    assert!(store
+        .commit_worker_inbox(&FmsWorkerInboxRecord::new(forged).unwrap())
+        .is_err());
+    let mut duplicate = applied.payload.clone();
+    duplicate["pending"] = duplicate["applied"][0].clone();
+    duplicate["pending"]["sequence"] = serde_json::json!(2);
+    assert!(FmsWorkerInboxRecord::new(duplicate).is_err());
+    let mut session = FmsSessionManifest::new("journal-session", "Journal", SaveProfile::Archive);
+    session
+        .run_refs
+        .push("runs/run-journal/run_manifest.json".into());
+    let script = b"print('journal fixture')";
+    let documents = HashMap::from([
+        ("main.py".into(), script.to_vec()),
+        ("ui_state.json".into(), b"{}".to_vec()),
+        ("scene_document.json".into(), b"{}".to_vec()),
+    ]);
+    let mut archive = Cursor::new(Vec::new());
+    pack_fms(
+        &mut archive,
+        &store,
+        &session,
+        &workspace(script),
+        &FmsExportProfile::for_profile(SaveProfile::Archive),
+        &documents,
+        &PackOptions::default(),
+    )
+    .unwrap();
+    let bytes = archive.into_inner();
+    preflight_fms(Cursor::new(&bytes), &[]).unwrap();
+    let imported = SessionStore::open(directory.path().join("journal-imported")).unwrap();
+    unpack_fms(Cursor::new(bytes), &imported).unwrap();
+    assert_eq!(
+        imported.read_run_catalog("run-journal").unwrap(),
+        Some(catalog)
+    );
+    assert_eq!(
+        imported.read_coordinator_journal("run-journal").unwrap(),
+        before
+    );
+    let inbox_path = applied.relative_path().unwrap();
+    assert_eq!(
+        imported.read_document(&inbox_path).unwrap(),
+        store.read_document(&inbox_path).unwrap()
+    );
+    imported.commit_worker_inbox(&applied).unwrap();
+    assert!(imported.commit_worker_inbox(&pending).is_err());
+    let next = FmsCoordinatorJournalEntry {
+        entry_id: "event-b-next".into(),
+        sequence: 2,
+        ..other
+    };
+    imported.commit_coordinator_journal_entry(&next).unwrap();
+    assert!(imported.commit_coordinator_journal_entry(&entry).is_err());
+    assert_eq!(
+        imported
+            .read_coordinator_journal("run-journal")
+            .unwrap()
+            .len(),
+        4
+    );
+}
+
+#[test]
 fn capture_descriptors_materially_reference_primary_and_auxiliary_bytes() {
     let directory = tempfile::tempdir().unwrap();
     let store = SessionStore::open(directory.path().join("store")).unwrap();
@@ -400,6 +588,181 @@ fn opaque_and_artifact_index_cas_roots_cannot_bypass_reachability() {
     let report = walk_archive_documents(&documents, ReachabilityMode::Restore).unwrap();
     assert!(!report.complete);
     assert!(report.object_refs.contains(&hidden_hash));
+}
+
+#[test]
+fn archive_roundtrip_preserves_task_scoped_accepted_preparation_receipt() {
+    use fullmag_session::*;
+
+    let directory = tempfile::tempdir().unwrap();
+    let store = SessionStore::open(directory.path().join("store")).unwrap();
+    let run_id = "run-task-receipt";
+    store.commit_run(&run_manifest(run_id)).unwrap();
+    let specification = serde_json::json!({"run_id": run_id, "snapshot": "accepted"});
+    let intent = FmsRunIntent::new(run_id, "submit-task-receipt", specification);
+    let specification_fingerprint =
+        format!("sha256:{}", canonical_json_sha256(&intent.specification));
+    store.commit_run_intent(&intent).unwrap();
+
+    let step_id = "step:relax";
+    let task_id = task_id_for_study_step(run_id, step_id).unwrap();
+    let input_fingerprint = "b".repeat(64);
+    store
+        .commit_run_catalog(&FmsRunCatalog {
+            schema_version: FMS_RUN_CATALOG_SCHEMA.into(),
+            run_id: run_id.into(),
+            revision: 1,
+            updated_at: chrono::Utc::now(),
+            tasks: vec![
+                FmsTaskCatalogEntry {
+                    task_id: task_id.clone(),
+                    input_fingerprint: input_fingerprint.clone(),
+                    lifecycle: FmsTaskLifecycle::Accepted,
+                    readiness: FmsTaskReadiness::Blocked {
+                        reason: "awaiting dependency resolution".into(),
+                    },
+                    observation: None,
+                    attempt_id: None,
+                    ownership_epoch: None,
+                    resolved_input_fingerprint: None,
+                    artifact_ids: Vec::new(),
+                    resource_id: None,
+                    coordinator_watermark: None,
+                    coordinator_genesis: None,
+                },
+                FmsTaskCatalogEntry {
+                    task_id: "task-admission-archive".into(),
+                    input_fingerprint: "d".repeat(64),
+                    lifecycle: FmsTaskLifecycle::Queued,
+                    readiness: FmsTaskReadiness::Ready,
+                    observation: None,
+                    attempt_id: None,
+                    ownership_epoch: None,
+                    resolved_input_fingerprint: None,
+                    artifact_ids: Vec::new(),
+                    resource_id: None,
+                    coordinator_watermark: None,
+                    coordinator_genesis: None,
+                },
+            ],
+        })
+        .unwrap();
+    let plan_fingerprint = format!("sha256:{}", "a".repeat(64));
+    let problem_fingerprint = format!("sha256:{}", "c".repeat(64));
+    let payload = serde_json::json!({
+        "schema_version": FMS_PREPARATION_RECEIPT_SCHEMA,
+        "preparation_id": format!("prep-{task_id}"),
+        "plan_fingerprint": plan_fingerprint,
+        "plan": {
+            "schema_version": "preparation_plan.v2",
+            "problem_fingerprint": problem_fingerprint,
+            "source": {
+                "kind": "accepted_run_step",
+                "run_id": run_id,
+                "specification_fingerprint": specification_fingerprint,
+                "step_id": step_id
+            }
+        },
+        "accepted_run_source": {
+            "schema_version": "accepted_run_preparation_source.v1",
+            "run_id": run_id,
+            "specification_fingerprint": specification_fingerprint,
+            "step_id": step_id,
+            "problem_fingerprint": problem_fingerprint
+        },
+        "certificates": []
+    });
+    let receipt = FmsTaskPreparationReceipt::new(
+        run_id,
+        step_id,
+        input_fingerprint,
+        format!("prep-{task_id}"),
+        plan_fingerprint,
+        payload,
+    )
+    .unwrap();
+    store.commit_task_preparation_receipt(&receipt).unwrap();
+
+    let now = chrono::Utc::now();
+    let admission_lease = FmsResourceLease {
+        schema_version: FMS_RESOURCE_LEASE_SCHEMA.into(),
+        resource_id: "cpu-archive".into(),
+        kind: FmsResourceKind::Cpu,
+        budget: FmsResourceBudget {
+            cpu_millis: 100,
+            memory_bytes: 1,
+            gpu_memory_bytes: 0,
+            storage_bytes: 1,
+        },
+        run_id: run_id.into(),
+        task_id: "task-admission-archive".into(),
+        attempt_id: "attempt-archive".into(),
+        ownership_epoch: 1,
+        lease_token: "lease-archive".into(),
+        state: FmsResourceLeaseState::Active,
+        acquired_at: now,
+        heartbeat_at: now,
+        heartbeat_sequence: 0,
+        released_at: None,
+    };
+    assert_eq!(
+        store.commit_task_admission(&admission_lease).unwrap(),
+        TaskAdmissionCommitDisposition::Admitted
+    );
+
+    let mut session =
+        FmsSessionManifest::new("task-receipt-session", "Task receipt", SaveProfile::Archive);
+    session
+        .run_refs
+        .push(format!("runs/{run_id}/run_manifest.json"));
+    let script = b"print('task receipt')";
+    let documents = HashMap::from([
+        ("main.py".into(), script.to_vec()),
+        ("ui_state.json".into(), b"{}".to_vec()),
+        ("scene_document.json".into(), b"{}".to_vec()),
+    ]);
+    let mut archive = Cursor::new(Vec::new());
+    pack_fms(
+        &mut archive,
+        &store,
+        &session,
+        &workspace(script),
+        &FmsExportProfile::for_profile(SaveProfile::Archive),
+        &documents,
+        &PackOptions::default(),
+    )
+    .unwrap();
+    let bytes = archive.into_inner();
+    let preflight = preflight_fms(Cursor::new(&bytes), &[]).unwrap();
+    let receipt_path = format!("runs/{run_id}/task_preparation_receipts/{task_id}.json");
+    assert!(preflight.reachability.file_refs.contains(&receipt_path));
+    let admission_path =
+        format!("runs/{run_id}/task_admissions/task-admission-archive/attempt-archive.json");
+    assert!(preflight.reachability.file_refs.contains(&admission_path));
+
+    let imported = SessionStore::open(directory.path().join("imported")).unwrap();
+    unpack_fms(Cursor::new(bytes), &imported).unwrap();
+    assert_eq!(
+        imported
+            .read_task_preparation_receipt(run_id, &task_id)
+            .unwrap(),
+        Some(receipt)
+    );
+    let catalog = imported.read_run_catalog(run_id).unwrap().unwrap();
+    assert!(matches!(
+        catalog.tasks[0].readiness,
+        FmsTaskReadiness::Blocked { .. }
+    ));
+    assert_eq!(
+        imported.reconcile_task_admissions(run_id).unwrap(),
+        vec![TaskAdmissionCommitDisposition::Replayed]
+    );
+    assert_eq!(
+        imported
+            .read_active_resource_lease_for_task(run_id, "task-admission-archive")
+            .unwrap(),
+        Some(admission_lease)
+    );
 }
 
 #[test]

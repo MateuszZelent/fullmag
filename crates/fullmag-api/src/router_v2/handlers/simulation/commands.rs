@@ -48,17 +48,23 @@ pub async fn submit_command(
     headers: HeaderMap,
     Json(req): Json<StructuredCommandRequest>,
 ) -> Result<Json<CommandResponse>, ApiError> {
-    let response = submit_structured_command_impl(state, &headers, req).await?;
+    let context = crate::capture_current_live_request_context(&state).await?;
+    let response =
+        submit_structured_command_impl_with_context(state, &headers, req, Some(&context)).await?;
     Ok(Json(response))
 }
 
-pub(crate) async fn submit_structured_command_impl(
+async fn submit_structured_command_impl_with_context(
     state: Arc<AppState>,
     headers: &HeaderMap,
     mut req: StructuredCommandRequest,
+    context: Option<&crate::types::CurrentLiveRequestContext>,
 ) -> Result<CommandResponse, ApiError> {
+    validate_optional_request_context(&state, context).await?;
     reject_imported_read_only_command(&state).await?;
+    validate_optional_request_context(&state, context).await?;
     enforce_session_command_admission(&state).await?;
+    validate_optional_request_context(&state, context).await?;
     validate_relax_command_controls(&req)?;
     validate_solver_policy_controls(&req)?;
     match &mut req {
@@ -77,7 +83,7 @@ pub(crate) async fn submit_structured_command_impl(
         _ => {}
     }
     if request_has_adaptive_solver_policy(&req) {
-        if let Some(scene) = current_authoring_gate_scene(&state).await? {
+        if let Some(scene) = current_authoring_gate_scene_with_context(&state, context).await? {
             validate_solver_policy_lane(
                 &req,
                 &scene.study.requested_backend,
@@ -86,7 +92,10 @@ pub(crate) async fn submit_structured_command_impl(
             )?;
         }
     }
-    if let Some((scene, realization)) = validate_authoring_gate_for_command(&state, &req).await? {
+    validate_optional_request_context(&state, context).await?;
+    if let Some((scene, realization)) =
+        validate_authoring_gate_for_command_with_context(&state, &req, context).await?
+    {
         attach_geometry_realization_to_mesh_request(&mut req, &scene, &realization)?;
     }
     let now = std::time::SystemTime::now()
@@ -96,9 +105,13 @@ pub(crate) async fn submit_structured_command_impl(
     let command_id = format!("fm-{}", uuid::Uuid::new_v4());
     let mut command = command_from_structured(req, command_id, now);
     attach_frozen_spins_runtime_plan_binding(&state, &mut command).await?;
+    validate_optional_request_context(&state, context).await?;
     if command.kind == "fdm_grid_refresh" {
         if let Some(reason) = fdm_grid_refresh_rejection_reason(&state).await? {
-            return reject_session_command_impl(state, headers, command, reason).await;
+            return reject_session_command_impl_with_context(
+                state, headers, command, reason, context,
+            )
+            .await;
         }
         let has_scene_problem_patch = command
             .mesh_options
@@ -106,16 +119,27 @@ pub(crate) async fn submit_structured_command_impl(
             .and_then(|options| options.get("scene_problem_patch"))
             .is_some();
         if !has_scene_problem_patch {
-            return reject_session_command_impl(
+            return reject_session_command_impl_with_context(
                 state,
                 headers,
                 command,
                 "FDM grid refresh requires a materialized authoring scene.".into(),
+                context,
             )
             .await;
         }
     }
-    enqueue_session_command_impl(state, headers, command).await
+    enqueue_session_command_impl_with_context(state, headers, command, context).await
+}
+
+async fn validate_optional_request_context(
+    state: &Arc<AppState>,
+    context: Option<&crate::types::CurrentLiveRequestContext>,
+) -> Result<(), ApiError> {
+    if let Some(context) = context {
+        crate::validate_current_live_request_context(state, context).await?;
+    }
+    Ok(())
 }
 
 async fn enforce_session_command_admission(state: &Arc<AppState>) -> Result<(), ApiError> {
@@ -618,18 +642,53 @@ async fn attach_frozen_spins_runtime_plan_binding(
     Ok(())
 }
 
-pub(crate) async fn enqueue_frozen_spins_runtime_replan_if_running(
+pub(crate) async fn enqueue_frozen_spins_runtime_replan_if_running_with_context(
+    state: &Arc<AppState>,
+    context: &crate::types::CurrentLiveRequestContext,
+    source_scene_revision: u64,
+) -> Result<Option<String>, ApiError> {
+    enqueue_frozen_spins_runtime_replan_if_running_inner(
+        state,
+        source_scene_revision,
+        Some(context),
+    )
+    .await
+}
+
+async fn enqueue_frozen_spins_runtime_replan_if_running_inner(
     state: &Arc<AppState>,
     source_scene_revision: u64,
-) -> Option<String> {
+    context: Option<&crate::types::CurrentLiveRequestContext>,
+) -> Result<Option<String>, ApiError> {
+    if let Some(context) = context {
+        crate::validate_current_live_request_context(state, context).await?;
+    }
     let is_running = state
         .current_live_state
         .read()
         .await
         .as_ref()
-        .is_some_and(|snapshot| runtime_state_for_command_validation(snapshot) == "running");
+        .is_some_and(|snapshot| {
+            if let Some(context) = context {
+                if crate::ensure_current_live_request_context(
+                    snapshot,
+                    context,
+                    state
+                        .current_live_session_epoch
+                        .load(std::sync::atomic::Ordering::Acquire),
+                )
+                .is_err()
+                {
+                    return false;
+                }
+            }
+            runtime_state_for_command_validation(snapshot) == "running"
+        });
     if !is_running {
-        return None;
+        if let Some(context) = context {
+            crate::validate_current_live_request_context(state, context).await?;
+        }
+        return Ok(None);
     }
 
     let now = std::time::SystemTime::now()
@@ -651,12 +710,29 @@ pub(crate) async fn enqueue_frozen_spins_runtime_replan_if_running(
             "[fullmag-api] frozen spins runtime replan was not queued: {}",
             error.message
         );
-        return None;
+        return Ok(None);
+    }
+    if let Some(context) = context {
+        crate::validate_current_live_request_context(state, context).await?;
     }
     let headers = HeaderMap::new();
-    match enqueue_session_command_impl(Arc::clone(state), &headers, command).await {
-        Ok(response) => Some(response.command_id),
+    let enqueue_result = if let Some(context) = context {
+        enqueue_session_command_impl_with_context(
+            Arc::clone(state),
+            &headers,
+            command,
+            Some(context),
+        )
+        .await
+    } else {
+        enqueue_session_command_impl(Arc::clone(state), &headers, command).await
+    };
+    match enqueue_result {
+        Ok(response) => Ok(Some(response.command_id)),
         Err(error) => {
+            if context.is_some() && error.message == "request_context_stale" {
+                return Err(error);
+            }
             let was_queued = state
                 .current_command_ledger
                 .lock()
@@ -667,7 +743,7 @@ pub(crate) async fn enqueue_frozen_spins_runtime_replan_if_running(
                 "[fullmag-api] frozen spins runtime replan publication warning: {}",
                 error.message
             );
-            was_queued.then_some(command_id)
+            Ok(was_queued.then_some(command_id))
         }
     }
 }
@@ -786,9 +862,10 @@ fn stage_id_for_command_validation(index: usize) -> String {
     format!("stage-{index:03}")
 }
 
-async fn validate_authoring_gate_for_command(
+async fn validate_authoring_gate_for_command_with_context(
     state: &Arc<AppState>,
     req: &StructuredCommandRequest,
+    context: Option<&crate::types::CurrentLiveRequestContext>,
 ) -> Result<Option<(SceneDocument, GeometryRealizationSnapshot)>, ApiError> {
     let should_check_mesh = matches!(
         req,
@@ -806,7 +883,7 @@ async fn validate_authoring_gate_for_command(
     if !should_check_mesh && !should_check_run {
         return Ok(None);
     }
-    let Some(scene) = current_authoring_gate_scene(state).await? else {
+    let Some(scene) = current_authoring_gate_scene_with_context(state, context).await? else {
         return Ok(None);
     };
     let backend_target = GeometryBackendTarget::from_scene(&scene);
@@ -833,25 +910,45 @@ async fn validate_authoring_gate_for_command(
     Ok(None)
 }
 
-async fn current_authoring_gate_scene(
+async fn current_authoring_gate_scene_with_context(
     state: &Arc<AppState>,
+    context: Option<&crate::types::CurrentLiveRequestContext>,
 ) -> Result<Option<fullmag_authoring::SceneDocument>, ApiError> {
-    let script_path = {
+    let (scene_document, script_path) = {
         let current = state.current_live_state.read().await;
         let Some(snapshot) = current.as_ref() else {
             return Err(ApiError::not_found("no active local live workspace"));
         };
-        if let Some(scene) = snapshot.scene_document.clone() {
-            return Ok(Some(scene));
+        if let Some(context) = context {
+            crate::ensure_current_live_request_context(
+                snapshot,
+                context,
+                state
+                    .current_live_session_epoch
+                    .load(std::sync::atomic::Ordering::Acquire),
+            )?;
         }
-        snapshot.session.script_path.trim().to_string()
+        (
+            snapshot.scene_document.clone(),
+            snapshot.session.script_path.trim().to_string(),
+        )
     };
+
+    if let Some(scene) = scene_document {
+        return Ok(Some(scene));
+    }
 
     if script_path.is_empty() || !Path::new(&script_path).is_file() {
         return Ok(None);
     }
 
-    match crate::get_or_load_current_live_scene_document(state).await {
+    let loaded = match context {
+        Some(context) => {
+            crate::get_or_load_current_live_scene_document_for_context(state, context).await
+        }
+        None => crate::get_or_load_current_live_scene_document(state).await,
+    };
+    match loaded {
         Ok(scene) => Ok(Some(scene)),
         Err(error) if error.status == axum::http::StatusCode::NOT_FOUND => Ok(None),
         Err(error) => Err(error),
@@ -1398,12 +1495,39 @@ pub(crate) async fn enqueue_session_command_impl(
     headers: &HeaderMap,
     command: SessionCommand,
 ) -> Result<CommandResponse, ApiError> {
+    enqueue_session_command_impl_with_context(state, headers, command, None).await
+}
+
+pub(crate) async fn enqueue_session_command_impl_with_context(
+    state: Arc<AppState>,
+    headers: &HeaderMap,
+    command: SessionCommand,
+    context: Option<&crate::types::CurrentLiveRequestContext>,
+) -> Result<CommandResponse, ApiError> {
     // Keep admission and queue/ledger insertion atomic. Snapshot -> ledger is
     // also the publication lock order; no snapshot may change under this check.
+    // A context-bound request additionally holds the session-transition fence
+    // for the complete queue insertion and realtime publication. This prevents
+    // a command prepared against one current workspace from being committed to
+    // a replacement workspace while the handler is awaiting ledger locks.
+    let _transition = if context.is_some() {
+        Some(state.current_live_session_transition.lock().await)
+    } else {
+        None
+    };
     let current = state.current_live_state.read().await;
     let snapshot = current
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    if let Some(context) = context {
+        crate::ensure_current_live_request_context(
+            snapshot,
+            context,
+            state
+                .current_live_session_epoch
+                .load(std::sync::atomic::Ordering::Acquire),
+        )?;
+    }
     let mut responses = state.current_command_responses.lock().await;
     let idempotency_key = command_request_key(headers);
     if let Some(key) = idempotency_key.as_ref() {
@@ -1489,14 +1613,33 @@ fn reserve_command_ledger_entry(
     Ok(())
 }
 
-async fn reject_session_command_impl(
+async fn reject_session_command_impl_with_context(
     state: Arc<AppState>,
     headers: &HeaderMap,
     mut command: SessionCommand,
     error: String,
+    context: Option<&crate::types::CurrentLiveRequestContext>,
 ) -> Result<CommandResponse, ApiError> {
+    let _transition = if context.is_some() {
+        Some(state.current_live_session_transition.lock().await)
+    } else {
+        None
+    };
     if state.current_live_state.read().await.is_none() {
         return Err(ApiError::not_found("no active local live workspace"));
+    }
+    if let Some(context) = context {
+        let current = state.current_live_state.read().await;
+        let snapshot = current
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        crate::ensure_current_live_request_context(
+            snapshot,
+            context,
+            state
+                .current_live_session_epoch
+                .load(std::sync::atomic::Ordering::Acquire),
+        )?;
     }
 
     if let Some(idempotency_key) = command_request_key(headers) {
@@ -1548,6 +1691,15 @@ async fn reject_session_command_impl(
     }
 
     if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
+        if let Some(context) = context {
+            crate::ensure_current_live_request_context(
+                &snapshot,
+                context,
+                state
+                    .current_live_session_epoch
+                    .load(std::sync::atomic::Ordering::Acquire),
+            )?;
+        }
         let display_revision = state.current_display_selection.read().await.revision;
         let realtime_state =
             crate::current_live_realtime_state_from_snapshot(&state, &snapshot, display_revision)

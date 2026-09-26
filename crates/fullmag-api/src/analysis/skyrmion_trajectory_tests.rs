@@ -1,8 +1,8 @@
 use std::f64::consts::{FRAC_PI_3, FRAC_PI_6, PI};
 
 use super::skyrmion_trajectory::{
-    analyze_skyrmion_hall_angle_v1, AcceptedTrajectorySampleV1, AcceptedTrajectorySeriesV1,
-    SkyrmionHallReasonCodeV1, SkyrmionTrajectoryProvenanceV1, SkyrmionTrajectorySourceV1,
+    AcceptedTrajectorySampleV1, AcceptedTrajectorySeriesV1, SkyrmionHallReasonCodeV1,
+    SkyrmionTrajectoryProvenanceV1, SkyrmionTrajectorySourceV1, analyze_skyrmion_hall_angle_v1,
 };
 
 const SAMPLE_DT_S: f64 = 10.0e-12;

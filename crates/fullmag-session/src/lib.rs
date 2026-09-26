@@ -25,6 +25,8 @@ pub mod repository_path;
 pub mod store;
 pub mod types;
 mod writer;
+mod worker_inbox;
+pub use worker_inbox::FmsWorkerInboxRecord;
 
 // Re-export the most commonly used items at crate root.
 pub use capture::{
@@ -41,4 +43,4 @@ pub use fms::{
 };
 pub use store::{GcPlan, SessionStore};
 pub use types::*;
-pub use writer::WriteTransaction;
+pub use writer::{StoreWriterBusy, WriteTransaction};

@@ -233,6 +233,50 @@ the legacy whole-state snapshot compatibility route.
 
 ## Consequences
 
+### Uzupełnienie P3a — oczekiwana sesja żądania (22.09.2026)
+
+Alias `current` musi odrzucać zapis rozpoczęty przez klienta w innej sesji.
+Samo przypięcie kontekstu po stronie handlera nie rozwiązuje zmiany sesji
+między kolejnymi żądaniami jednej operacji edycyjnej.
+
+Klient przekazuje opcjonalny nagłówek `x-fullmag-session-scope` w formacie
+`session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>`.
+To warunek zgodności celu, a nie mechanizm uwierzytelniania. Backend sprawdza
+go podczas przechwytywania kontekstu pod blokadą zmiany sesji; nie trzyma
+tej blokady przez całe wywołanie handlera. Wewnętrzny licznik transition
+pozostaje odrębnym zabezpieczeniem po operacjach asynchronicznych.
+
+Frontendowy epoch zachowuje semantykę tekstowej tożsamości publikowanej przez
+status. Nie wolno interpretować go jako wewnętrznego licznika. Ponowne
+otwarcie identycznej tożsamości z tym samym timestampem wymaga osobnego
+dowodu; ten nagłówek sam nie gwarantuje rozróżnienia takich instancji.
+
+Uzupełnienie 23.09.2026: `LiveStatus.session.request_scope_epoch` łączy losowy
+identyfikator instancji API z monotonicznym licznikiem transition. Kanoniczny
+nagłówek dodaje trzeci składnik `&request_scope_epoch=<encodeURIComponent(...)>`;
+poprzedni dwuskładnikowy zapis jest niepoprawny. Cache zasobów i viewport
+odróżniają inkarnacje nawet przy identycznym `session_id` i naukowym
+`session_epoch`. Pole `session_epoch` observation frames i ich identyfikatory
+pozostają bez zmian. Bootstrap bez nagłówka nadal działa; niemigrowany klient
+z nagłówkiem musi przejść na nowy kontrakt. WebSocket przechwytuje tę samą
+inkarnację przy upgrade i kończy strumień po transition; klient ponownie
+otwiera połączenie po zmianie klucza. Wymagany
+`hello.payload.request_scope_epoch` potwierdza zakres przed przyjęciem
+kolejnych zdarzeń; przy niezgodności klient zamyka socket i pobiera status.
+Zdarzenia po `hello` dziedziczą zakres połączenia, nie niosą osobnego tokenu.
+Pełna kwalifikacja realtime pozostaje otwarta. Weryfikacja wymaga odrzucenia starego
+scope przy identycznym session ID/timestamp oraz regeneracji OpenAPI.
+
+Nagłówek obejmuje JSON i binary HTTP. Początkowy status oraz globalne zasoby
+nie wymagają znanej sesji. Brak nagłówka pozostaje adapterem zgodności dla
+niemigrowanych klientów, z właścicielem API/P3a i warunkiem usunięcia:
+pełny inventory konsumentów oraz potwierdzone scenariusze CLI/browser.
+WebSocket nadal służy do invalidation i nie otrzymuje scope w URL.
+
+Odbiór wymaga testów parsowania, odrzucenia starej mutacji bez skutku
+ubocznego, zachowania nagłówka w JSON/binary i zmiany sesji między żądaniami.
+Implementacja źródłowa i regenerated OpenAPI nie zastępują tych dowodów.
+
 ### Positive
 - First load drops from 1–3 s to < 500 ms.
 - Quantity switching becomes near-instant (cache hit < 50 ms).
