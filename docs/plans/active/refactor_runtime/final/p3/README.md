@@ -9,14 +9,17 @@ dokładnym claimem i lease. Supervisor stosuje globalny dla store limit jednego
 workera, czeka na exit, uzgadnia journal/inbox/completion barrier i zwalnia
 lease dopiero po potwierdzonym terminalnym sukcesie. Pending effect zachowuje
 lease; pending sprzed pierwszego side effectu lub z ukończonym receiptem może
-zostać odtworzony bez drugiego uruchomienia solvera.
+zostać odtworzony bez drugiego uruchomienia solvera. Supervisor wymaga jawnego
+`--worker-timeout-seconds`, a po przekroczeniu monotonicznego deadline zabija
+proces, czeka na potwierdzony exit i dopiero potem rekoncyliuje trwały stan.
 
 Brakuje automatycznego wyboru taska, puli większej niż jeden, heartbeatów,
-cancel/retry/orphan reconciliation oraz pełnego E2E z dwoma zbudowanymi
+operator cancel/retry/orphan reconciliation oraz pełnego E2E z dwoma zbudowanymi
 binariami nad accepted store. Pozostałe lane'y, runtime/browser i kwalifikacja
 fizyczna także są otwarte. Szczegóły opisują
-[`28-one-shot-accepted-worker-process.md`](28-one-shot-accepted-worker-process.md)
-i [`29-accepted-worker-supervisor.md`](29-accepted-worker-supervisor.md).
+[`28-one-shot-accepted-worker-process.md`](28-one-shot-accepted-worker-process.md),
+[`29-accepted-worker-supervisor.md`](29-accepted-worker-supervisor.md)
+i [`30-supervisor-timeout.md`](30-supervisor-timeout.md).
 
 API ma jawny adapter allow-listy `RunResult` → typowane payloady dla
 wspieranych wyjść. Szczegóły i wcześniejszy dowód opisuje

@@ -3,9 +3,11 @@ use fullmag_application::{CoordinatorPhase, TaskLifecycle, WorkerCommand, Worker
 use fullmag_session::{FmsResourceLease, SessionStore};
 use serde::Serialize;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 const SUPERVISOR_DIRECTORY: &str = "supervisor-slots";
 const SINGLE_WORKER_SLOT: &str = "slot-0";
@@ -14,7 +16,13 @@ const SLOT_OWNER_FILE: &str = "owner.v1.json";
 #[derive(Debug)]
 pub(crate) struct SupervisedWorkerResult {
     pub(crate) recovered_terminal_completion: bool,
+    pub(crate) worker_timed_out: bool,
     pub(crate) worker_summary: serde_json::Value,
+}
+
+struct ObservedWorkerProcess {
+    output: Output,
+    timed_out: bool,
 }
 
 #[derive(Serialize)]
@@ -136,9 +144,13 @@ pub(crate) fn run_supervised_accepted_worker(
     task_id: &str,
     worker_executable: &Path,
     max_concurrency: usize,
+    worker_timeout: Duration,
 ) -> Result<SupervisedWorkerResult> {
     if max_concurrency != 1 {
         bail!("accepted-worker supervisor currently requires --max-concurrency 1");
+    }
+    if worker_timeout.is_zero() {
+        bail!("accepted-worker supervisor requires a positive worker timeout");
     }
     let slot = SupervisorSlot::acquire(store, run_id, task_id)?;
     let run_id_typed = fullmag_application::RunId::parse(run_id.to_owned())
@@ -159,8 +171,14 @@ pub(crate) fn run_supervised_accepted_worker(
         bail!("resource lease changed while the supervisor captured its task claim");
     }
 
-    let output = spawn_worker(worker_executable, store.root(), run_id, task_id)?;
-    let reconciliation = reconcile_worker_exit(store, &claim, &lease, &output);
+    let outcome = spawn_worker(
+        worker_executable,
+        store.root(),
+        run_id,
+        task_id,
+        worker_timeout,
+    )?;
+    let reconciliation = reconcile_worker_exit(store, &claim, &lease, &outcome);
     match reconciliation {
         Ok(result) => {
             slot.release()?;
@@ -181,7 +199,8 @@ fn spawn_worker(
     store_root: &Path,
     run_id: &str,
     task_id: &str,
-) -> Result<Output> {
+    worker_timeout: Duration,
+) -> Result<ObservedWorkerProcess> {
     let metadata = fs::symlink_metadata(worker_executable).with_context(|| {
         format!(
             "inspect accepted worker executable `{}`",
@@ -191,7 +210,7 @@ fn spawn_worker(
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         bail!("accepted worker executable must be a regular file");
     }
-    Command::new(worker_executable)
+    let child = Command::new(worker_executable)
         .arg("--store-root")
         .arg(store_root)
         .arg("--run-id")
@@ -201,16 +220,93 @@ fn spawn_worker(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
-        .with_context(|| format!("spawn accepted worker `{}`", worker_executable.display()))
+        .spawn()
+        .with_context(|| format!("spawn accepted worker `{}`", worker_executable.display()))?;
+    observe_child(child, Some(worker_timeout))
+}
+
+fn observe_child(mut child: Child, timeout: Option<Duration>) -> Result<ObservedWorkerProcess> {
+    let stdout = child
+        .stdout
+        .take()
+        .context("accepted worker stdout pipe is unavailable")?;
+    let stderr = child
+        .stderr
+        .take()
+        .context("accepted worker stderr pipe is unavailable")?;
+    let stdout_reader = spawn_output_reader(stdout);
+    let stderr_reader = spawn_output_reader(stderr);
+    let started = Instant::now();
+
+    loop {
+        if let Some(status) = child.try_wait().context("observe accepted worker exit")? {
+            return collect_child_output(status, false, stdout_reader, stderr_reader);
+        }
+        if timeout.is_some_and(|limit| started.elapsed() >= limit) {
+            if let Err(error) = child.kill() {
+                if let Some(status) = child
+                    .try_wait()
+                    .context("recheck accepted worker after timeout kill race")?
+                {
+                    return collect_child_output(status, false, stdout_reader, stderr_reader);
+                }
+                return Err(error).context("terminate accepted worker after timeout");
+            }
+            let status = child
+                .wait()
+                .context("confirm accepted worker termination after timeout")?;
+            return collect_child_output(status, true, stdout_reader, stderr_reader);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn spawn_output_reader<R>(mut stream: R) -> JoinHandle<std::io::Result<Vec<u8>>>
+where
+    R: Read + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stream.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    })
+}
+
+fn collect_child_output(
+    status: ExitStatus,
+    timed_out: bool,
+    stdout_reader: JoinHandle<std::io::Result<Vec<u8>>>,
+    stderr_reader: JoinHandle<std::io::Result<Vec<u8>>>,
+) -> Result<ObservedWorkerProcess> {
+    let stdout = join_output_reader(stdout_reader, "stdout")?;
+    let stderr = join_output_reader(stderr_reader, "stderr")?;
+    Ok(ObservedWorkerProcess {
+        output: Output {
+            status,
+            stdout,
+            stderr,
+        },
+        timed_out,
+    })
+}
+
+fn join_output_reader(
+    reader: JoinHandle<std::io::Result<Vec<u8>>>,
+    stream_name: &str,
+) -> Result<Vec<u8>> {
+    reader
+        .join()
+        .map_err(|_| anyhow::anyhow!("accepted worker {stream_name} reader panicked"))?
+        .with_context(|| format!("read accepted worker {stream_name}"))
 }
 
 fn reconcile_worker_exit(
     store: &SessionStore,
     claim: &fullmag_application::TaskClaim,
     lease: &FmsResourceLease,
-    output: &Output,
+    outcome: &ObservedWorkerProcess,
 ) -> Result<SupervisedWorkerResult> {
+    let output = &outcome.output;
     let recovered = fullmag_runtime_control::recover_coordinator(store, claim)
         .context("recover coordinator after worker exit")?;
     let phase = recovered.coordinator.phase();
@@ -258,7 +354,15 @@ fn reconcile_worker_exit(
             .context("release exact worker resource lease after terminal exit")?;
         return Ok(SupervisedWorkerResult {
             recovered_terminal_completion: !output.status.success(),
-            worker_summary,
+            worker_timed_out: outcome.timed_out,
+            worker_summary: if outcome.timed_out {
+                serde_json::json!({
+                    "status": "recovered_after_timeout",
+                    "exit_code": output.status.code(),
+                })
+            } else {
+                worker_summary
+            },
         });
     }
 
@@ -282,7 +386,7 @@ fn reconcile_worker_exit(
             &mut coordinator,
             WorkerEvent::Failed {
                 retryable: true,
-                reason: worker_failure_reason(output),
+                reason: worker_failure_reason(outcome),
             },
         )?;
         store
@@ -314,7 +418,11 @@ fn parse_worker_summary(output: &Output) -> Result<serde_json::Value> {
     Ok(summary)
 }
 
-fn worker_failure_reason(output: &Output) -> String {
+fn worker_failure_reason(outcome: &ObservedWorkerProcess) -> String {
+    let output = &outcome.output;
+    if outcome.timed_out {
+        return "accepted worker process exceeded its explicit timeout and was terminated".into();
+    }
     let stderr = String::from_utf8_lossy(&output.stderr);
     let normalized = stderr.split_whitespace().collect::<Vec<_>>().join(" ");
     let detail = if normalized.is_empty() {
@@ -357,6 +465,7 @@ fn commit_worker_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     fn temporary_store(name: &str) -> (PathBuf, SessionStore) {
         let root = std::env::temp_dir().join(format!(
@@ -389,6 +498,7 @@ mod tests {
             "task-a",
             Path::new("missing-worker"),
             2,
+            Duration::from_secs(1),
         )
         .unwrap_err();
         assert!(error.to_string().contains("--max-concurrency 1"));
@@ -398,17 +508,46 @@ mod tests {
     #[test]
     fn process_boundary_spawns_and_observes_child_exit() {
         let current_test_process = std::env::current_exe().unwrap();
-        let output = spawn_worker(
+        let outcome = spawn_worker(
             &current_test_process,
             Path::new("unused-store"),
             "run-a",
             "task-a",
+            Duration::from_secs(5),
         )
         .unwrap();
         assert!(
-            !output.status.success(),
+            !outcome.output.status.success(),
             "the Rust test harness must reject worker-only CLI arguments"
         );
-        assert!(!output.stderr.is_empty());
+        assert!(!outcome.output.stderr.is_empty());
+        assert!(!outcome.timed_out);
+    }
+
+    #[test]
+    fn timeout_child_fixture() {
+        if std::env::var_os("FULLMAG_ACCEPTED_SUPERVISOR_TIMEOUT_CHILD").is_some() {
+            std::thread::sleep(Duration::from_secs(30));
+        }
+    }
+
+    #[test]
+    fn supervised_child_timeout_waits_for_confirmed_process_exit() {
+        let current_test_process = std::env::current_exe().unwrap();
+        let child = Command::new(current_test_process)
+            .arg("--exact")
+            .arg("accepted_study_supervisor::tests::timeout_child_fixture")
+            .arg("--nocapture")
+            .env("FULLMAG_ACCEPTED_SUPERVISOR_TIMEOUT_CHILD", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let started = Instant::now();
+        let outcome = observe_child(child, Some(Duration::from_millis(100))).unwrap();
+        assert!(outcome.timed_out);
+        assert!(!outcome.output.status.success());
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }

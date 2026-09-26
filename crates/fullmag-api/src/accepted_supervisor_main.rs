@@ -3,6 +3,7 @@ mod accepted_study_supervisor;
 
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
+use std::time::Duration;
 
 struct SupervisorArgs {
     store_root: PathBuf,
@@ -10,6 +11,7 @@ struct SupervisorArgs {
     task_id: String,
     worker_executable: Option<PathBuf>,
     max_concurrency: usize,
+    worker_timeout: Duration,
 }
 
 fn main() {
@@ -33,12 +35,14 @@ fn run() -> Result<()> {
         &args.task_id,
         &worker_executable,
         args.max_concurrency,
+        args.worker_timeout,
     )?;
     println!(
         "{}",
         serde_json::to_string(&serde_json::json!({
             "status": "completed",
             "recovered_terminal_completion": result.recovered_terminal_completion,
+            "worker_timed_out": result.worker_timed_out,
             "worker": result.worker_summary,
         }))?
     );
@@ -61,6 +65,7 @@ fn parse_args() -> Result<SupervisorArgs> {
     let mut task_id = None;
     let mut worker_executable = None;
     let mut max_concurrency = None;
+    let mut worker_timeout_seconds = None;
     let mut args = std::env::args_os().skip(1);
     while let Some(argument) = args.next() {
         let flag = argument
@@ -98,11 +103,24 @@ fn parse_args() -> Result<SupervisorArgs> {
                         .context("max concurrency must be a positive integer")?,
                 );
             }
+            "--worker-timeout-seconds" if worker_timeout_seconds.is_none() => {
+                let value = value
+                    .into_string()
+                    .map_err(|_| anyhow::anyhow!("worker timeout must be valid UTF-8"))?;
+                let seconds = value
+                    .parse::<u64>()
+                    .context("worker timeout must be a positive integer")?;
+                if seconds == 0 {
+                    bail!("worker timeout must be greater than zero");
+                }
+                worker_timeout_seconds = Some(seconds);
+            }
             "--store-root"
             | "--run-id"
             | "--task-id"
             | "--worker-executable"
-            | "--max-concurrency" => {
+            | "--max-concurrency"
+            | "--worker-timeout-seconds" => {
                 bail!("supervisor option `{flag}` was supplied more than once")
             }
             _ => bail!("unknown supervisor option `{flag}`"),
@@ -114,6 +132,9 @@ fn parse_args() -> Result<SupervisorArgs> {
         task_id: task_id.context("missing required --task-id")?,
         worker_executable,
         max_concurrency: max_concurrency.unwrap_or(1),
+        worker_timeout: Duration::from_secs(
+            worker_timeout_seconds.context("missing required --worker-timeout-seconds")?,
+        ),
     })
 }
 
