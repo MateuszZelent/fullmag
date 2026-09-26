@@ -13,15 +13,16 @@ zostać odtworzony bez drugiego uruchomienia solvera. Supervisor wymaga jawnego
 `--worker-timeout-seconds`, a po przekroczeniu monotonicznego deadline zabija
 proces, czeka na potwierdzony exit i dopiero potem rekoncyliuje trwały stan.
 
-Brakuje automatycznego wyboru taska, puli większej niż jeden, heartbeat ACK dla
-zdalnego transportu, operator cancel/retry/orphan reconciliation oraz process
-E2E pozostałych lane'ów.
+Brakuje automatycznego wyboru taska, puli większej niż jeden, heartbeat/Stop ACK
+dla zdalnego transportu, retry/orphan reconciliation, pełnego process E2E
+anulowania oraz process E2E pozostałych lane'ów.
 Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`28-one-shot-accepted-worker-process.md`](28-one-shot-accepted-worker-process.md),
 [`29-accepted-worker-supervisor.md`](29-accepted-worker-supervisor.md),
 [`30-supervisor-timeout.md`](30-supervisor-timeout.md),
-[`31-supervisor-worker-e2e.md`](31-supervisor-worker-e2e.md)
-i [`32-supervisor-process-heartbeat.md`](32-supervisor-process-heartbeat.md).
+[`31-supervisor-worker-e2e.md`](31-supervisor-worker-e2e.md),
+[`32-supervisor-process-heartbeat.md`](32-supervisor-process-heartbeat.md)
+i [`33-operator-task-cancellation.md`](33-operator-task-cancellation.md).
 
 API ma jawny adapter allow-listy `RunResult` → typowane payloady dla
 wspieranych wyjść. Szczegóły i wcześniejszy dowód opisuje

@@ -17,12 +17,14 @@ const SLOT_OWNER_FILE: &str = "owner.v1.json";
 pub(crate) struct SupervisedWorkerResult {
     pub(crate) recovered_terminal_completion: bool,
     pub(crate) worker_timed_out: bool,
+    pub(crate) worker_cancelled: bool,
     pub(crate) worker_summary: serde_json::Value,
 }
 
 struct ObservedWorkerProcess {
     output: Output,
     timed_out: bool,
+    stop_requested: bool,
 }
 
 #[derive(Serialize)]
@@ -186,6 +188,7 @@ pub(crate) fn run_supervised_accepted_worker(
         worker_timeout,
         heartbeat_interval,
         || renew_resource_lease(store, &mut active_lease),
+        || task_stop_requested(store, run_id, task_id),
     )?;
     let reconciliation = reconcile_worker_exit(store, &claim, &active_lease, &outcome);
     match reconciliation {
@@ -221,6 +224,21 @@ fn task_is_terminal(store: &SessionStore, lease: &FmsResourceLease) -> Result<bo
     ))
 }
 
+fn task_stop_requested(store: &SessionStore, run_id: &str, task_id: &str) -> Result<bool> {
+    let catalog = store
+        .read_run_catalog(run_id)?
+        .context("accepted-worker control poll requires its run catalog")?;
+    let task = catalog
+        .tasks
+        .iter()
+        .find(|task| task.task_id == task_id)
+        .context("accepted-worker control poll task is missing")?;
+    Ok(matches!(
+        task.lifecycle,
+        fullmag_session::FmsTaskLifecycle::Stopping
+    ))
+}
+
 fn renew_resource_lease(store: &SessionStore, lease: &mut FmsResourceLease) -> Result<bool> {
     if task_is_terminal(store, lease)? {
         return Ok(false);
@@ -241,17 +259,19 @@ fn renew_resource_lease(store: &SessionStore, lease: &mut FmsResourceLease) -> R
     Ok(true)
 }
 
-fn spawn_worker<F>(
+fn spawn_worker<H, C>(
     worker_executable: &Path,
     store_root: &Path,
     run_id: &str,
     task_id: &str,
     worker_timeout: Duration,
     heartbeat_interval: Duration,
-    heartbeat: F,
+    heartbeat: H,
+    stop_requested: C,
 ) -> Result<ObservedWorkerProcess>
 where
-    F: FnMut() -> Result<bool>,
+    H: FnMut() -> Result<bool>,
+    C: FnMut() -> Result<bool>,
 {
     let metadata = fs::symlink_metadata(worker_executable).with_context(|| {
         format!(
@@ -279,17 +299,20 @@ where
         Some(worker_timeout),
         Some(heartbeat_interval),
         heartbeat,
+        stop_requested,
     )
 }
 
-fn observe_child<F>(
+fn observe_child<H, C>(
     mut child: Child,
     timeout: Option<Duration>,
     heartbeat_interval: Option<Duration>,
-    mut heartbeat: F,
+    mut heartbeat: H,
+    mut stop_requested: C,
 ) -> Result<ObservedWorkerProcess>
 where
-    F: FnMut() -> Result<bool>,
+    H: FnMut() -> Result<bool>,
+    C: FnMut() -> Result<bool>,
 {
     let stdout = child
         .stdout
@@ -307,7 +330,7 @@ where
 
     loop {
         if let Some(status) = child.try_wait().context("observe accepted worker exit")? {
-            return collect_child_output(status, false, stdout_reader, stderr_reader);
+            return collect_child_output(status, false, false, stdout_reader, stderr_reader);
         }
         if timeout.is_some_and(|limit| started.elapsed() >= limit) {
             if let Err(error) = child.kill() {
@@ -315,14 +338,35 @@ where
                     .try_wait()
                     .context("recheck accepted worker after timeout kill race")?
                 {
-                    return collect_child_output(status, false, stdout_reader, stderr_reader);
+                    return collect_child_output(
+                        status,
+                        false,
+                        false,
+                        stdout_reader,
+                        stderr_reader,
+                    );
                 }
                 return Err(error).context("terminate accepted worker after timeout");
             }
             let status = child
                 .wait()
                 .context("confirm accepted worker termination after timeout")?;
-            return collect_child_output(status, true, stdout_reader, stderr_reader);
+            return collect_child_output(status, true, false, stdout_reader, stderr_reader);
+        }
+        if stop_requested()? {
+            if let Err(error) = child.kill() {
+                if let Some(status) = child
+                    .try_wait()
+                    .context("recheck accepted worker after operator stop race")?
+                {
+                    return collect_child_output(status, false, true, stdout_reader, stderr_reader);
+                }
+                return Err(error).context("terminate accepted worker after operator stop");
+            }
+            let status = child
+                .wait()
+                .context("confirm accepted worker termination after operator stop")?;
+            return collect_child_output(status, false, true, stdout_reader, stderr_reader);
         }
         if heartbeat_enabled
             && heartbeat_interval.is_some_and(|interval| last_heartbeat.elapsed() >= interval)
@@ -366,6 +410,7 @@ where
 fn collect_child_output(
     status: ExitStatus,
     timed_out: bool,
+    stop_requested: bool,
     stdout_reader: JoinHandle<std::io::Result<Vec<u8>>>,
     stderr_reader: JoinHandle<std::io::Result<Vec<u8>>>,
 ) -> Result<ObservedWorkerProcess> {
@@ -378,6 +423,7 @@ fn collect_child_output(
             stderr,
         },
         timed_out,
+        stop_requested,
     })
 }
 
@@ -446,6 +492,7 @@ fn reconcile_worker_exit(
         return Ok(SupervisedWorkerResult {
             recovered_terminal_completion: !output.status.success(),
             worker_timed_out: outcome.timed_out,
+            worker_cancelled: false,
             worker_summary: if outcome.timed_out {
                 serde_json::json!({
                     "status": "recovered_after_timeout",
@@ -454,6 +501,25 @@ fn reconcile_worker_exit(
             } else {
                 worker_summary
             },
+        });
+    }
+
+    if outcome.stop_requested && phase == CoordinatorPhase::Stopping {
+        let mut coordinator =
+            fullmag_application::DurableWorkerCoordinator::new(recovered.coordinator);
+        commit_worker_event(store, &mut coordinator, WorkerEvent::Stopped)
+            .context("persist terminal worker cancellation after confirmed process exit")?;
+        store
+            .release_resource_lease(lease)
+            .context("release cancelled worker resource lease after confirmed process exit")?;
+        return Ok(SupervisedWorkerResult {
+            recovered_terminal_completion: false,
+            worker_timed_out: false,
+            worker_cancelled: true,
+            worker_summary: serde_json::json!({
+                "status": "cancelled",
+                "exit_code": output.status.code(),
+            }),
         });
     }
 
@@ -609,6 +675,7 @@ mod tests {
             Duration::from_secs(5),
             Duration::from_secs(1),
             || Ok(true),
+            || Ok(false),
         )
         .unwrap();
         assert!(
@@ -624,6 +691,34 @@ mod tests {
         if std::env::var_os("FULLMAG_ACCEPTED_SUPERVISOR_TIMEOUT_CHILD").is_some() {
             std::thread::sleep(Duration::from_secs(30));
         }
+    }
+
+    #[test]
+    fn operator_stop_terminates_child_and_records_distinct_outcome() {
+        let current_test_process = std::env::current_exe().unwrap();
+        let child = Command::new(current_test_process)
+            .arg("--exact")
+            .arg("accepted_study_supervisor::tests::timeout_child_fixture")
+            .arg("--nocapture")
+            .env("FULLMAG_ACCEPTED_SUPERVISOR_TIMEOUT_CHILD", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let started = Instant::now();
+        let outcome = observe_child(
+            child,
+            Some(Duration::from_secs(5)),
+            Some(Duration::from_millis(20)),
+            || Ok(true),
+            || Ok(true),
+        )
+        .unwrap();
+        assert!(outcome.stop_requested);
+        assert!(!outcome.timed_out);
+        assert!(!outcome.output.status.success());
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[test]
@@ -649,6 +744,7 @@ mod tests {
                 heartbeat_count += 1;
                 Ok(true)
             },
+            || Ok(false),
         )
         .unwrap();
         assert!(outcome.timed_out);

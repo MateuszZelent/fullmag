@@ -28,7 +28,9 @@ use crate::schemas::projects::{
     ProjectRunExecutionState, ProjectRunListQuery, ProjectRunListResource,
     ProjectRunMaterializationResource, ProjectRunRequestedExecutionResource, ProjectRunResource,
     ProjectRunSubmitDisposition, ProjectRunSubmitRequest, ProjectRunSubmitResource,
-    ProjectRunSummaryResource, ProjectRunTaskResource, PROJECT_ARCHIVE_MAX_BYTES,
+    ProjectRunSummaryResource, ProjectRunTaskCancellationDisposition,
+    ProjectRunTaskCancellationRequest, ProjectRunTaskCancellationResource, ProjectRunTaskLifecycle,
+    ProjectRunTaskResource, PROJECT_ARCHIVE_MAX_BYTES,
 };
 use crate::types::AppState;
 
@@ -100,8 +102,9 @@ pub async fn submit_run(
             .submit_store_root
             .as_ref()
             .ok_or_else(|| ApiError::internal("managed project run storage is not configured"))?;
-        let store = fullmag_session::SessionStore::open(store_root)
-            .map_err(|error| map_run_store_error(error, |error| ApiError::internal(error.to_string())))?;
+        let store = fullmag_session::SessionStore::open(store_root).map_err(|error| {
+            map_run_store_error(error, |error| ApiError::internal(error.to_string()))
+        })?;
         let result = crate::run_intent_persistence::commit_archived_run_intent(
             &store,
             &intent,
@@ -125,10 +128,11 @@ pub async fn submit_run(
                 "idempotency key was accepted for another run specification",
             ));
         }
-        let accepted = result
-            .map_err(|error| map_run_store_error(error, |error| {
+        let accepted = result.map_err(|error| {
+            map_run_store_error(error, |error| {
                 ApiError::bad_request(format!("invalid_run_submission: {error:#}"))
-            }))?;
+            })
+        })?;
         let materialized = store
             .read_run_catalog(accepted.run_id.as_str())
             .map_err(|error| ApiError::internal(error.to_string()))?
@@ -199,9 +203,11 @@ pub async fn materialize_run(
             run_id.as_str(),
             &project_id,
         )
-        .map_err(|error| map_run_store_error(error, |error| {
-            ApiError::bad_request(format!("run_materialization_failed: {error:#}"))
-        }))
+        .map_err(|error| {
+            map_run_store_error(error, |error| {
+                ApiError::bad_request(format!("run_materialization_failed: {error:#}"))
+            })
+        })
     })
     .await
     .map_err(|error| ApiError::internal(format!("run materialization task failed: {error}")))??;
@@ -211,6 +217,95 @@ pub async fn materialize_run(
         task_ids: catalog.tasks.into_iter().map(|task| task.task_id).collect(),
         execution_state: ProjectRunExecutionState::PendingPreparation,
     }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v2/persistence/projects/{project_id}/runs/{run_id}/tasks/{task_id}/cancellation",
+    params(
+        ("project_id" = String, Path, description = "Pinned project identity"),
+        ("run_id" = String, Path, description = "Accepted durable run identity"),
+        ("task_id" = String, Path, description = "Exact durable task identity")
+    ),
+    request_body = ProjectRunTaskCancellationRequest,
+    responses(
+        (status = 202, description = "Durable Stop command accepted", body = ProjectRunTaskCancellationResource),
+        (status = 200, description = "Identical Stop command replayed", body = ProjectRunTaskCancellationResource),
+        (status = 400, description = "Invalid task identity or cancellation reason"),
+        (status = 404, description = "Accepted run intent is missing"),
+        (status = 409, description = "Task is not running or a conflicting cancellation exists")
+    ),
+    tag = "persistence"
+)]
+pub async fn cancel_run_task(
+    Path((project_id, run_id, task_id)): Path<(String, String, String)>,
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<ProjectRunTaskCancellationRequest>,
+) -> Result<(StatusCode, Json<ProjectRunTaskCancellationResource>), ApiError> {
+    let project_id = ProjectId::parse(project_id)
+        .map_err(|error| ApiError::bad_request(format!("invalid project_id: {error}")))?;
+    let run_id = RunId::parse(run_id)
+        .map_err(|error| ApiError::bad_request(format!("invalid run_id: {error}")))?;
+    let task_id = fullmag_application::TaskId::parse(task_id)
+        .map_err(|error| ApiError::bad_request(format!("invalid task_id: {error}")))?;
+    if request.reason.trim().is_empty() {
+        return Err(ApiError::bad_request(
+            "cancellation reason must not be empty",
+        ));
+    }
+    let response_run_id = run_id.as_str().to_owned();
+    let response_task_id = task_id.as_str().to_owned();
+    let reason = request.reason;
+    let result = tokio::task::spawn_blocking(move || {
+        let store_root = state
+            .submit_store_root
+            .as_ref()
+            .ok_or_else(|| ApiError::internal("managed project run storage is not configured"))?;
+        let store = open_existing_run_store(store_root)?;
+        let intent = store
+            .read_run_intent(run_id.as_str())
+            .map_err(|error| ApiError::internal(error.to_string()))?
+            .ok_or_else(|| ApiError::not_found("accepted run intent is missing"))?;
+        let specification: RunSpecification = serde_json::from_value(intent.specification)
+            .map_err(|error| ApiError::internal(format!("invalid durable RunSpec: {error}")))?;
+        if specification.snapshot.project_id != project_id {
+            return Err(ApiError::conflict("run belongs to another project"));
+        }
+        fullmag_runtime_control::request_accepted_task_stop(
+            &store,
+            &run_id,
+            task_id.as_str(),
+            &reason,
+        )
+        .map_err(|error| {
+            map_run_store_error(error, |error| {
+                ApiError::conflict_with_code("run_task_cancel_rejected", format!("{error:#}"))
+            })
+        })
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("run cancellation task failed: {error}")))??;
+    let (status, disposition) = match result.disposition {
+        fullmag_runtime_control::AcceptedTaskStopDisposition::Accepted => (
+            StatusCode::ACCEPTED,
+            ProjectRunTaskCancellationDisposition::Accepted,
+        ),
+        fullmag_runtime_control::AcceptedTaskStopDisposition::Replayed => (
+            StatusCode::OK,
+            ProjectRunTaskCancellationDisposition::Replayed,
+        ),
+    };
+    Ok((
+        status,
+        Json(ProjectRunTaskCancellationResource {
+            disposition,
+            run_id: response_run_id,
+            task_id: response_task_id,
+            command_id: result.command.message_id,
+            lifecycle: ProjectRunTaskLifecycle::Stopping,
+            catalog_revision: result.catalog_revision,
+        }),
+    ))
 }
 
 fn open_existing_run_store(root: &FsPath) -> Result<fullmag_session::SessionStore, ApiError> {

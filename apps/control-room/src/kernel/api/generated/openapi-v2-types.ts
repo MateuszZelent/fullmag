@@ -116,6 +116,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/tasks/{task_id}/cancellation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["persistence_post_persistence_projects_project_id_runs_run_id_tasks_task_id_cancellation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/platform/asyncapi.json": {
         parameters: {
             query?: never;
@@ -9642,7 +9658,7 @@ export interface components {
             run_intent: {
                 [key: string]: unknown;
             };
-            /** @description Versioned `study_plan.v1` object with typed steps and references. */
+            /** @description Versioned `study_plan.v2` object with typed steps, references and runner controls. */
             study_plan: {
                 [key: string]: unknown;
             };
@@ -9668,6 +9684,19 @@ export interface components {
             run_id: string;
             /** Format: int64 */
             task_count: number;
+        };
+        /** @enum {string} */
+        ProjectRunTaskCancellationDisposition: "accepted" | "replayed";
+        ProjectRunTaskCancellationRequest: {
+            /** @description Stable operator-visible reason persisted in the fenced Stop command. */
+            reason: string;
+        };
+        ProjectRunTaskCancellationResource: {
+            command_id: string;
+            disposition: components["schemas"]["ProjectRunTaskCancellationDisposition"];
+            lifecycle: components["schemas"]["ProjectRunTaskLifecycle"];
+            run_id: string;
+            task_id: string;
         };
         /** @enum {string} */
         ProjectRunTaskLifecycle: "accepted" | "queued" | "preparing" | "running" | "stopping" | "succeeded" | "failed" | "cancelled" | "interrupted";
@@ -13250,6 +13279,67 @@ export interface operations {
                 content?: never;
             };
             /** @description Run belongs to another project */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_persistence_projects_project_id_runs_run_id_tasks_task_id_cancellation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Pinned project identity */
+                project_id: string;
+                /** @description Accepted durable run identity */
+                run_id: string;
+                /** @description Exact durable task identity */
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectRunTaskCancellationRequest"];
+            };
+        };
+        responses: {
+            /** @description Identical Stop command replayed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRunTaskCancellationResource"];
+                };
+            };
+            /** @description Durable Stop command accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRunTaskCancellationResource"];
+                };
+            };
+            /** @description Invalid task identity or cancellation reason */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Accepted run intent is missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Task is not running or a conflicting cancellation exists */
             409: {
                 headers: {
                     [name: string]: unknown;

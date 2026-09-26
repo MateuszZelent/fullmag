@@ -314,6 +314,7 @@ def test_just_route_precedes_generic_prepare_links() -> None:
     assert '--route project-entrypoint-check --repo-root' in justfile
     assert '--route fem-capability-contract --repo-root' in justfile
     assert '--route api-accepted-worker-check --repo-root' in justfile
+    assert '--route runtime-control-tests --repo-root' in justfile
     assert '--route api-accepted-supervisor-tests --repo-root' in justfile
     assert '--route api-accepted-supervisor-e2e --repo-root' in justfile
     assert '--route api-preparation-tests --repo-root' in justfile
@@ -324,6 +325,7 @@ def test_just_route_precedes_generic_prepare_links() -> None:
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route project-entrypoint-check' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route fem-capability-contract' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-worker-check' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route runtime-control-tests' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-tests' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-e2e' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-preparation-tests' in shell

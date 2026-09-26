@@ -45,6 +45,7 @@ fn run() -> Result<()> {
             "status": "completed",
             "recovered_terminal_completion": result.recovered_terminal_completion,
             "worker_timed_out": result.worker_timed_out,
+            "worker_cancelled": result.worker_cancelled,
             "worker": result.worker_summary,
         }))?
     );

@@ -1060,6 +1060,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             post(handlers::persistence::projects::materialize_run),
         )
         .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/tasks/:task_id/cancellation",
+            post(handlers::persistence::projects::cancel_run_task),
+        )
+        .route(
             "/v2/sessions/current/persistence/recovery",
             get(handlers::persistence::list_recovery).delete(handlers::persistence::clear_recovery),
         )

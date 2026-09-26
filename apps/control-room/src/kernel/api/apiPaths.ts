@@ -1014,6 +1014,10 @@ export const PROJECT_RUN_PATH = openApiV2Path(
   "/v2/persistence/projects/{project_id}/runs/{run_id}",
 );
 
+export const PROJECT_RUN_TASK_CANCELLATION_PATH = openApiV2Path(
+  "/v2/persistence/projects/{project_id}/runs/{run_id}/tasks/{task_id}/cancellation",
+);
+
 export const PERSISTENCE_RECOVERY_PATH = openApiV2Path(
   "/v2/sessions/current/persistence/recovery",
 );

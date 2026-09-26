@@ -165,6 +165,14 @@ ROUTES = {
         source_paths=API_SOURCE_PATHS,
         local_dependency_manifest="crates/fullmag-api/Cargo.toml",
     ),
+    "runtime-control-tests": RouteSpec(
+        name="runtime-control-tests",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_runtime_control_test_v1",
+        command=("cargo", "test", "--locked", "-p", "fullmag-runtime-control"),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-runtime-control/Cargo.toml",
+    ),
     "api-accepted-worker-check": RouteSpec(
         name="api-accepted-worker-check",
         profile="windows-api-source-check",

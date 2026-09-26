@@ -367,6 +367,92 @@ pub fn recover_coordinator(
     })
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AcceptedTaskStopDisposition {
+    Accepted,
+    Replayed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AcceptedTaskStop {
+    pub disposition: AcceptedTaskStopDisposition,
+    pub command: fullmag_application::WorkerCommandEnvelope,
+    pub catalog_revision: u64,
+}
+
+/// Durably request cancellation of the exact currently-owned task attempt.
+/// Repeating the same reason while the task is already stopping returns the
+/// original command. A different reason or a non-running lifecycle fails
+/// closed instead of inventing a second control sequence.
+pub fn request_accepted_task_stop(
+    store: &SessionStore,
+    run_id: &fullmag_application::RunId,
+    task_id: &str,
+    reason: &str,
+) -> Result<AcceptedTaskStop> {
+    if reason.trim().is_empty() {
+        bail!("accepted task stop reason must not be empty");
+    }
+    let claim = claim::load_current_task_claim(store, run_id, task_id)?;
+    let recovered = recover_coordinator(store, &claim)?;
+    if recovered.coordinator.phase() == fullmag_application::CoordinatorPhase::Stopping {
+        let existing = recovered
+            .commands
+            .iter()
+            .find(|command| {
+                matches!(
+                    &command.command,
+                    fullmag_application::WorkerCommand::Stop { .. }
+                )
+            })
+            .context("stopping task has no durable Stop command")?;
+        let fullmag_application::WorkerCommand::Stop {
+            reason: existing_reason,
+        } = &existing.command
+        else {
+            unreachable!("filtered Stop command")
+        };
+        if existing_reason != reason {
+            bail!("accepted task already has a different durable Stop reason");
+        }
+        return Ok(AcceptedTaskStop {
+            disposition: AcceptedTaskStopDisposition::Replayed,
+            command: existing.clone(),
+            catalog_revision: store
+                .read_run_catalog(run_id.as_str())?
+                .context("accepted task run catalog is missing")?
+                .revision,
+        });
+    }
+    if recovered.coordinator.phase() != fullmag_application::CoordinatorPhase::Running {
+        bail!("accepted task stop requires a running task");
+    }
+    let mut coordinator = fullmag_application::DurableWorkerCoordinator::new(recovered.coordinator);
+    let command = coordinator
+        .commit_command(
+            fullmag_application::WorkerCommand::Stop {
+                reason: reason.to_owned(),
+            },
+            None,
+            |transition| {
+                commit_transition(store, transition)
+                    .map(|_| ())
+                    .map_err(|error| {
+                        fullmag_application::CoordinatorError::Invalid(format!("{error:#}"))
+                    })
+            },
+        )
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    Ok(AcceptedTaskStop {
+        disposition: AcceptedTaskStopDisposition::Accepted,
+        command,
+        catalog_revision: store
+            .read_run_catalog(run_id.as_str())?
+            .context("accepted task run catalog is missing")?
+            .revision,
+    })
+}
+
 /// Immutable bytes accepted by Submit, independent of the active UI project.
 pub struct AcceptedRunSnapshot {
     pub intent: fullmag_session::FmsRunIntent,
@@ -415,13 +501,187 @@ pub use claim::{commit_claimed_task_admission, load_current_task_claim};
 
 mod study;
 pub use study::{
-    load_accepted_study_snapshot, load_accepted_worker_step,
-    load_accepted_worker_step_for_start, publish_accepted_task_prepare,
-    publish_study_outputs, queue_accepted_study_task, validate_requested_execution,
-    validate_study_task_completion, AcceptedStudySnapshot, AcceptedWorkerStep,
-    QueuedAcceptedStudyTask, StudyOutputPayload,
+    load_accepted_study_snapshot, load_accepted_worker_step, load_accepted_worker_step_for_start,
+    publish_accepted_task_prepare, publish_study_outputs, queue_accepted_study_task,
+    validate_requested_execution, validate_study_task_completion, AcceptedStudySnapshot,
+    AcceptedWorkerStep, QueuedAcceptedStudyTask, StudyOutputPayload,
     ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION,
 };
 
 mod worker_inbox;
 pub use worker_inbox::DurableWorkerInbox;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fullmag_application::{
+        CoordinatorError, CoordinatorPhase, DurableWorkerCoordinator, ResourceBudget, ResourceKind,
+        ResourceLease, RunId, TaskLifecycle, TaskRecord, WorkerCommand, WorkerCoordinator,
+        WorkerEvent, WorkerEventEnvelope, WORKER_PROTOCOL_SCHEMA,
+    };
+    use fullmag_session::{
+        FmsCoordinatorWatermark, FmsResourceBudget, FmsResourceKind, FmsResourceLease,
+        FmsResourceLeaseState, FmsRunCatalog, FmsTaskCatalogEntry, FmsTaskLifecycle,
+        FmsTaskReadiness, FMS_RESOURCE_LEASE_SCHEMA, FMS_RUN_CATALOG_SCHEMA,
+    };
+
+    #[test]
+    fn accepted_task_stop_is_durable_idempotent_and_terminal_after_stopped_event() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let mut task =
+            TaskRecord::new(RunId::parse("run-operator-stop").unwrap(), "a".repeat(64)).unwrap();
+        task.queue().unwrap();
+        let claim = task
+            .claim(
+                ResourceLease::new(
+                    "cpu-stop",
+                    ResourceKind::Cpu,
+                    ResourceBudget {
+                        cpu_millis: 100,
+                        memory_bytes: 1,
+                        gpu_memory_bytes: 0,
+                        storage_bytes: 1,
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let now = chrono::Utc::now();
+        store
+            .commit_run_catalog(&FmsRunCatalog {
+                schema_version: FMS_RUN_CATALOG_SCHEMA.into(),
+                run_id: claim.run_id.as_str().into(),
+                revision: 1,
+                updated_at: now,
+                tasks: vec![FmsTaskCatalogEntry {
+                    task_id: claim.task_id.as_str().into(),
+                    input_fingerprint: "a".repeat(64),
+                    lifecycle: FmsTaskLifecycle::Preparing,
+                    readiness: FmsTaskReadiness::Ready,
+                    observation: None,
+                    attempt_id: Some(claim.attempt_id.as_str().into()),
+                    ownership_epoch: Some(claim.ownership_epoch.value()),
+                    resolved_input_fingerprint: None,
+                    artifact_ids: Vec::new(),
+                    resource_id: Some(claim.lease.resource_id.clone()),
+                    coordinator_watermark: Some(FmsCoordinatorWatermark::default()),
+                    coordinator_genesis: None,
+                }],
+            })
+            .unwrap();
+        let durable_lease = FmsResourceLease {
+            schema_version: FMS_RESOURCE_LEASE_SCHEMA.into(),
+            resource_id: claim.lease.resource_id.clone(),
+            kind: FmsResourceKind::Cpu,
+            budget: FmsResourceBudget {
+                cpu_millis: 100,
+                memory_bytes: 1,
+                gpu_memory_bytes: 0,
+                storage_bytes: 1,
+            },
+            run_id: claim.run_id.as_str().into(),
+            task_id: claim.task_id.as_str().into(),
+            attempt_id: claim.attempt_id.as_str().into(),
+            ownership_epoch: claim.ownership_epoch.value(),
+            lease_token: claim.lease.lease_token.as_str().into(),
+            state: FmsResourceLeaseState::Active,
+            acquired_at: now,
+            heartbeat_at: now,
+            heartbeat_sequence: 0,
+            released_at: None,
+        };
+        store.commit_resource_lease(&durable_lease).unwrap();
+
+        let mut coordinator =
+            DurableWorkerCoordinator::new(WorkerCoordinator::new(task, claim.clone()).unwrap());
+        commit_coordinator_genesis(&store, &coordinator.checkpoint()).unwrap();
+        coordinator
+            .commit_command(WorkerCommand::Start, None, |transition| {
+                commit_transition(&store, transition)
+                    .map(|_| ())
+                    .map_err(|error| CoordinatorError::Invalid(format!("{error:#}")))
+            })
+            .unwrap();
+        coordinator
+            .commit_event(
+                WorkerEventEnvelope {
+                    schema_version: WORKER_PROTOCOL_SCHEMA.into(),
+                    message_id: "event-started-operator-stop".into(),
+                    sequence: 1,
+                    claim: claim.identity(),
+                    event: WorkerEvent::Started,
+                },
+                |transition| {
+                    commit_transition(&store, transition)
+                        .map(|_| ())
+                        .map_err(|error| CoordinatorError::Invalid(format!("{error:#}")))
+                },
+            )
+            .unwrap();
+
+        let accepted = request_accepted_task_stop(
+            &store,
+            &claim.run_id,
+            claim.task_id.as_str(),
+            "operator requested cancellation",
+        )
+        .unwrap();
+        assert_eq!(accepted.disposition, AcceptedTaskStopDisposition::Accepted);
+        assert_eq!(accepted.catalog_revision, 5);
+        assert!(matches!(
+            accepted.command.command,
+            WorkerCommand::Stop { .. }
+        ));
+        let replayed = request_accepted_task_stop(
+            &store,
+            &claim.run_id,
+            claim.task_id.as_str(),
+            "operator requested cancellation",
+        )
+        .unwrap();
+        assert_eq!(replayed.disposition, AcceptedTaskStopDisposition::Replayed);
+        assert_eq!(replayed.catalog_revision, accepted.catalog_revision);
+        assert_eq!(replayed.command, accepted.command);
+        assert!(request_accepted_task_stop(
+            &store,
+            &claim.run_id,
+            claim.task_id.as_str(),
+            "different operator reason",
+        )
+        .is_err());
+
+        let current_claim =
+            load_current_task_claim(&store, &claim.run_id, claim.task_id.as_str()).unwrap();
+        let recovered = recover_coordinator(&store, &current_claim).unwrap();
+        assert_eq!(recovered.coordinator.phase(), CoordinatorPhase::Stopping);
+        let mut stopping = DurableWorkerCoordinator::new(recovered.coordinator);
+        stopping
+            .commit_event(
+                WorkerEventEnvelope {
+                    schema_version: WORKER_PROTOCOL_SCHEMA.into(),
+                    message_id: "event-stopped-operator-stop".into(),
+                    sequence: 2,
+                    claim: claim.identity(),
+                    event: WorkerEvent::Stopped,
+                },
+                |transition| {
+                    commit_transition(&store, transition)
+                        .map(|_| ())
+                        .map_err(|error| CoordinatorError::Invalid(format!("{error:#}")))
+                },
+            )
+            .unwrap();
+        assert_eq!(stopping.phase(), CoordinatorPhase::Terminal);
+        assert_eq!(
+            stopping.checkpoint().task.lifecycle,
+            TaskLifecycle::Cancelled
+        );
+        let catalog = store
+            .read_run_catalog(claim.run_id.as_str())
+            .unwrap()
+            .unwrap();
+        assert_eq!(catalog.tasks[0].lifecycle, FmsTaskLifecycle::Cancelled);
+        store.release_resource_lease(&durable_lease).unwrap();
+    }
+}

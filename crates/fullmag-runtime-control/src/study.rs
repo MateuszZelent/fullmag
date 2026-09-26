@@ -1831,12 +1831,12 @@ mod dependency_tests {
     #[test]
     fn study_dispatch_requires_declared_inputs_and_succeeded_step_outputs() {
         let inputs = ports();
-        let catalog = catalog(FmsTaskLifecycle::Succeeded);
+        let run_catalog = catalog(FmsTaskLifecycle::Succeeded);
         assert!(validate_study_input_dependencies(
             "run-study-dependency",
             &inputs,
             &resolved_inputs(),
-            &catalog,
+            &run_catalog,
             Some(&artifact_catalog()),
         )
         .is_ok());
@@ -1844,7 +1844,7 @@ mod dependency_tests {
             "run-study-dependency",
             &inputs,
             &BTreeMap::new(),
-            &catalog,
+            &run_catalog,
             Some(&artifact_catalog()),
         )
         .is_err());
@@ -1861,7 +1861,7 @@ mod dependency_tests {
             "run-study-dependency",
             &inputs,
             &extra,
-            &catalog,
+            &run_catalog,
             Some(&artifact_catalog()),
         )
         .is_err());

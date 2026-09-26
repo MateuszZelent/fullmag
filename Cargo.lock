@@ -1359,6 +1359,7 @@ dependencies = [
  "fullmag-plan",
  "fullmag-session",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

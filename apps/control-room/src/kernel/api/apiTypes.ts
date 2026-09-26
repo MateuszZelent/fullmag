@@ -830,6 +830,10 @@ export type ProjectRunMaterializationResource =
 export type ProjectRunResource = components["schemas"]["ProjectRunResource"];
 export type ProjectRunListQuery = components["schemas"]["ProjectRunListQuery"];
 export type ProjectRunListResource = components["schemas"]["ProjectRunListResource"];
+export type ProjectRunTaskCancellationRequest =
+  components["schemas"]["ProjectRunTaskCancellationRequest"];
+export type ProjectRunTaskCancellationResource =
+  components["schemas"]["ProjectRunTaskCancellationResource"];
 type GeneratedStructuredCommandRequest =
   components["schemas"]["StructuredCommandRequest"];
 type RuntimeCommandIntent = components["schemas"]["RuntimeCommandIntent"];

@@ -4957,6 +4957,42 @@ describe("ControlRoomApi", () => {
     }]);
   });
 
+  it("requests durable cancellation for the exact project run task", async () => {
+    const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestBody(init.body) : null,
+          method: init?.method,
+          url: String(url),
+        });
+        return jsonResponse({
+          disposition: "accepted",
+          run_id: "run-1",
+          task_id: "task-1",
+          command_id: "command-1",
+          lifecycle: "stopping",
+          catalog_revision: 4,
+        });
+      },
+    });
+
+    const result = await api.persistence.projects.cancelRunTask(
+      "project-1",
+      "run-1",
+      "task-1",
+      { reason: "Cancelled by operator from Control Room" },
+    );
+
+    expect(result.catalog_revision).toBe(4);
+    expect(requests).toEqual([{
+      body: { reason: "Cancelled by operator from Control Room" },
+      method: "POST",
+      url: "http://127.0.0.1:8765/v2/persistence/projects/project-1/runs/run-1/tasks/task-1/cancellation",
+    }]);
+  });
+
   it("reads a durable project run without a current-session target", async () => {
     const requests: Array<{ method: string | undefined; url: string }> = [];
     const api = new ControlRoomApi({

@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { useProjectDocumentSnapshot } from "@/kernel/persistence/ProjectDocumentStatus";
 import {
+  useCancelProjectRunTask,
   useProjectRunResource,
   useProjectRunsResource,
 } from "@/kernel/resources/projectRunResources";
@@ -20,8 +21,29 @@ export function ProjectRunsSection() {
 function ProjectRunsPage({ projectId }: { projectId: string }) {
   const [cursor, setCursor] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<{
+    message: string;
+    taskId: string;
+  } | null>(null);
   const runs = useProjectRunsResource(projectId, cursor);
   const selectedRun = useProjectRunResource(projectId, selectedRunId);
+  const cancelTask = useCancelProjectRunTask(projectId, selectedRunId, cursor);
+
+  const handleCancelTask = async (taskId: string) => {
+    setPendingTaskId(taskId);
+    setCancelError(null);
+    try {
+      await cancelTask(taskId, "Cancelled by operator from Control Room");
+    } catch (error) {
+      setCancelError({
+        message: error instanceof Error ? error.message : "Cancellation failed.",
+        taskId,
+      });
+    } finally {
+      setPendingTaskId((current) => (current === taskId ? null : current));
+    }
+  };
 
   return (
     <InspectorGroup
@@ -80,14 +102,34 @@ function ProjectRunsPage({ projectId }: { projectId: string }) {
               </div>
               <div className="grid min-w-0 gap-1">
                 {selectedRun.data.tasks.map((task) => (
-                  <div className="min-w-0 text-fm-xs" key={task.task_id}>
-                    <span className="font-medium text-fm-primary">{task.lifecycle}</span>
-                    {task.readiness.state === "blocked"
-                      ? ` · blocked: ${task.readiness.reason}`
-                      : " · ready"}
+                  <div className="grid min-w-0 gap-1 text-fm-xs" key={task.task_id}>
+                    <div>
+                      <span className="font-medium text-fm-primary">{task.lifecycle}</span>
+                      {task.readiness.state === "blocked"
+                        ? ` · blocked: ${task.readiness.reason}`
+                        : " · ready"}
+                    </div>
                     <div className="truncate text-fm-muted" title={task.task_id}>
                       {task.task_id}
                     </div>
+                    {task.lifecycle === "running" ? (
+                      <Button
+                        aria-label={`Cancel task ${task.task_id}`}
+                        className="justify-self-start"
+                        disabled={pendingTaskId === task.task_id}
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => void handleCancelTask(task.task_id)}
+                      >
+                        {pendingTaskId === task.task_id ? "Cancelling…" : "Cancel"}
+                      </Button>
+                    ) : null}
+                    {task.lifecycle === "stopping" ? (
+                      <div className="text-fm-muted">Cancellation requested</div>
+                    ) : null}
+                    {cancelError?.taskId === task.task_id ? (
+                      <p role="alert">Could not cancel task: {cancelError.message}</p>
+                    ) : null}
                   </div>
                 ))}
                 {selectedRun.data.tasks.length === 0 ? <p>No tasks have been materialized.</p> : null}

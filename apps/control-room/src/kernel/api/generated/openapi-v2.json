@@ -22857,6 +22857,59 @@
         ],
         "type": "object"
       },
+      "ProjectRunTaskCancellationDisposition": {
+        "enum": [
+          "accepted",
+          "replayed"
+        ],
+        "type": "string"
+      },
+      "ProjectRunTaskCancellationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "description": "Stable operator-visible reason persisted in the fenced Stop command.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
+      "ProjectRunTaskCancellationResource": {
+        "properties": {
+          "catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "command_id": {
+            "type": "string"
+          },
+          "disposition": {
+            "$ref": "#/components/schemas/ProjectRunTaskCancellationDisposition"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProjectRunTaskLifecycle"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "disposition",
+          "run_id",
+          "task_id",
+          "command_id",
+          "lifecycle",
+          "catalog_revision"
+        ],
+        "type": "object"
+      },
       "ProjectRunTaskLifecycle": {
         "enum": [
           "accepted",
@@ -36512,6 +36565,84 @@
           },
           "409": {
             "description": "Run belongs to another project"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/tasks/{task_id}/cancellation": {
+      "post": {
+        "operationId": "persistence_post_persistence_projects_project_id_runs_run_id_tasks_task_id_cancellation",
+        "parameters": [
+          {
+            "description": "Pinned project identity",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Accepted durable run identity",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact durable task identity",
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectRunTaskCancellationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectRunTaskCancellationResource"
+                }
+              }
+            },
+            "description": "Identical Stop command replayed"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectRunTaskCancellationResource"
+                }
+              }
+            },
+            "description": "Durable Stop command accepted"
+          },
+          "400": {
+            "description": "Invalid task identity or cancellation reason"
+          },
+          "404": {
+            "description": "Accepted run intent is missing"
+          },
+          "409": {
+            "description": "Task is not running or a conflicting cancellation exists"
           }
         },
         "tags": [

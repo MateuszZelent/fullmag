@@ -230,6 +230,11 @@ check-session-persistence:
 check-api-source:
     {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-source-check --repo-root "{{repo_root}}"
 
+# Run the durable coordinator/runtime-control regression suite through the
+# canonical project storage route.
+verify-runtime-control:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route runtime-control-tests --repo-root "{{repo_root}}"
+
 # Source check for the one-shot accepted-run worker process binary.
 check-api-accepted-worker:
     {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-worker-check --repo-root "{{repo_root}}"

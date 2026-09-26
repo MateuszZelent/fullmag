@@ -197,6 +197,30 @@ pub(crate) struct ProjectRunMaterializationResource {
     pub execution_state: ProjectRunExecutionState,
 }
 
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProjectRunTaskCancellationRequest {
+    /// Stable operator-visible reason persisted in the fenced Stop command.
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ProjectRunTaskCancellationResource {
+    pub disposition: ProjectRunTaskCancellationDisposition,
+    pub run_id: String,
+    pub task_id: String,
+    pub command_id: String,
+    pub lifecycle: ProjectRunTaskLifecycle,
+    pub catalog_revision: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ProjectRunTaskCancellationDisposition {
+    Accepted,
+    Replayed,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ProjectRunSubmitDisposition {

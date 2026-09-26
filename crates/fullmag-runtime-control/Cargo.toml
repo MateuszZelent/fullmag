@@ -13,3 +13,6 @@ fullmag-session = { path = "../fullmag-session" }
 fullmag-authoring = { path = "../fullmag-authoring" }
 fullmag-ir = { path = "../fullmag-ir" }
 fullmag-plan = { path = "../fullmag-plan" }
+
+[dev-dependencies]
+tempfile = "3"

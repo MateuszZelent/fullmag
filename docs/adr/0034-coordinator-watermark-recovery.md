@@ -54,6 +54,12 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
 8. Publikacja artefaktów sprawdza i wiąże bieżącą wersję lease pod tym samym
    writer lockiem. Heartbeat nie może przypadkowo unieważnić publikacji tego
    samego właściciela, a release lub nowe ownership nadal ją odrzucają.
+9. Operator cancel jest trwałą komendą `Stop` związaną z aktualnym claimem.
+   Identyczny replay zachowuje command identity; konflikt przyczyny jest
+   odrzucany. Potwierdzone zatrzymanie procesu publikuje `Stopped`, ustawia
+   terminalne `Cancelled` i dopiero wtedy pozwala zwolnić najnowszy lease.
+   Jeżeli terminalny sukces został trwale opublikowany wcześniej, ma
+   pierwszeństwo nad późnym żądaniem anulowania.
 
 ## Konsekwencje
 
@@ -70,6 +76,9 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
   transportu, reconciliation efektów workera ani dowodu zwolnienia zasobów.
 - Heartbeat procesu potwierdza liveness lokalnego procesu i utrzymanie lease.
   Nie jest dowodem postępu solvera, poprawności fizyki ani kwalifikacji lane'u.
+- `Stopping` oznacza trwałe żądanie, a `Cancelled` potwierdzony terminalny
+  wynik koordynatora. Samo kliknięcie UI ani wysłanie HTTP nie dowodzi wyjścia
+  procesu i nie uprawnia do zwolnienia lease.
 
 ## Obowiązki implementacyjne
 
@@ -92,6 +101,9 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
 - Regresje procesu sprawdzają dodatnią sekwencję heartbeat, retry kontencji
   writera, zatrzymanie timera po terminalnym lifecycle, publikację pod nowszym
   heartbeat oraz release dokładnej ostatniej wersji lease po exit.
+- Regresje anulowania sprawdzają trwałość i replay `Stop`, konflikt przyczyny,
+  potwierdzony exit potomka, rozdzielenie timeout/cancel, terminalne
+  `Cancelled` oraz odrzucenie późnego `Completed`.
 
 ## Migracja i rollback
 

@@ -305,6 +305,14 @@ impl WorkerCoordinator {
                 }
                 Some(TaskLifecycle::Failed)
             }
+            Some(WorkerEvent::Stopped) => {
+                if task.assessment.is_some() {
+                    return Err(CoordinatorError::Invalid(
+                        "cancelled checkpoint must not carry a scientific assessment".into(),
+                    ));
+                }
+                Some(TaskLifecycle::Cancelled)
+            }
             _ => None,
         };
         if let Some(expected) = terminal_lifecycle {
@@ -469,6 +477,8 @@ impl WorkerCoordinator {
             }
             WorkerEvent::Stopped => {
                 self.require_lifecycle(TaskLifecycle::Stopping)?;
+                self.task
+                    .finish(&self.claim, TaskLifecycle::Cancelled, None)?;
                 self.task.observation = Some(ObservationState::Stale);
             }
             WorkerEvent::Completed { assessment } => {
@@ -866,7 +876,9 @@ mod tests {
         coordinator
             .accept_event(event(&coordinator, 3, "stopped", WorkerEvent::Stopped))
             .unwrap();
-        coordinator
+        assert_eq!(coordinator.phase(), CoordinatorPhase::Terminal);
+        assert_eq!(coordinator.task().lifecycle, TaskLifecycle::Cancelled);
+        assert!(coordinator
             .accept_event(event(
                 &coordinator,
                 4,
@@ -875,7 +887,7 @@ mod tests {
                     assessment: crate::execution::ScientificAssessment::Converged,
                 },
             ))
-            .unwrap();
+            .is_err());
         coordinator.request_release().unwrap();
         assert_eq!(coordinator.phase(), CoordinatorPhase::ReleaseRequested);
         assert!(

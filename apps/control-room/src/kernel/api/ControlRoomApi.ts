@@ -186,6 +186,7 @@ import {
   PROJECT_RUN_SUBMIT_PATH,
   PROJECT_RUN_MATERIALIZATION_PATH,
   PROJECT_RUN_PATH,
+  PROJECT_RUN_TASK_CANCELLATION_PATH,
   PLATFORM_CAPABILITIES_PATH,
   PLATFORM_HEALTH_PATH,
   SESSIONS_PATH,
@@ -450,6 +451,8 @@ import type {
   ProjectRunResource,
   ProjectRunListQuery,
   ProjectRunListResource,
+  ProjectRunTaskCancellationRequest,
+  ProjectRunTaskCancellationResource,
   LivePreparationMaterializationRequest,
   LivePreparationMaterializationResource,
   SolverEnergyCurrentResource,
@@ -2654,6 +2657,28 @@ export class ControlRoomApi {
           undefined,
           options,
           { path: { project_id: projectId, run_id: runId } },
+        ),
+      cancelRunTask: (
+        projectId: string,
+        runId: string,
+        taskId: string,
+        request: ProjectRunTaskCancellationRequest,
+        options?: RequestOptions,
+      ) =>
+        this.postJson<
+          ProjectRunTaskCancellationResource,
+          ProjectRunTaskCancellationRequest
+        >(
+          PROJECT_RUN_TASK_CANCELLATION_PATH,
+          request,
+          options,
+          {
+            path: {
+              project_id: projectId,
+              run_id: runId,
+              task_id: taskId,
+            },
+          },
         ),
     },
   };
