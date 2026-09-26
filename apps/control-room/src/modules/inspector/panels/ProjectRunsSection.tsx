@@ -112,7 +112,7 @@ function ProjectRunsPage({ projectId }: { projectId: string }) {
                     <div className="truncate text-fm-muted" title={task.task_id}>
                       {task.task_id}
                     </div>
-                    {task.lifecycle === "running" ? (
+                    {task.lifecycle === "preparing" || task.lifecycle === "running" ? (
                       <Button
                         aria-label={`Cancel task ${task.task_id}`}
                         className="justify-self-start"

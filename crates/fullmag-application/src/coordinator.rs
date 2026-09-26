@@ -322,14 +322,14 @@ impl WorkerCoordinator {
         } else {
             let started = events.iter().any(|entry| matches!(entry.event, WorkerEvent::Started));
             let stopping = commands.iter().any(|entry| matches!(entry.command, WorkerCommand::Stop { .. }));
-            let expected = if stopping && started {
+            let expected = if stopping {
                 TaskLifecycle::Stopping
             } else if started {
                 TaskLifecycle::Running
             } else {
                 TaskLifecycle::Preparing
             };
-            if task.lifecycle != expected || (stopping && !started) || task.assessment.is_some() {
+            if task.lifecycle != expected || task.assessment.is_some() {
                 return Err(CoordinatorError::Invalid("checkpoint active lifecycle mismatch".into()));
             }
         }
@@ -406,7 +406,11 @@ impl WorkerCoordinator {
         &mut self,
         reason: impl Into<String>,
     ) -> Result<WorkerCommandEnvelope, CoordinatorError> {
-        self.require_lifecycle(TaskLifecycle::Running)?;
+        if !matches!(self.task.lifecycle, TaskLifecycle::Preparing | TaskLifecycle::Running) {
+            return Err(CoordinatorError::Invalid(
+                "stop requires a preparing or running task".into(),
+            ));
+        }
         let command = self.emit(WorkerCommand::Stop {
             reason: reason.into(),
         })?;
@@ -837,6 +841,21 @@ mod tests {
         let stopped = coordinator.stop("operator request").unwrap();
         assert_eq!(stopped.sequence, first.sequence + 1);
         assert_eq!(coordinator.phase(), CoordinatorPhase::Stopping);
+    }
+
+    #[test]
+    fn stop_before_started_is_restorable_and_finishes_cancelled() {
+        let mut coordinator = coordinator();
+        let start = coordinator.start().unwrap();
+        let stop = coordinator.stop("operator cancelled before worker start").unwrap();
+        assert_eq!(coordinator.phase(), CoordinatorPhase::Stopping);
+        let checkpoint = coordinator.checkpoint();
+        let mut restored = WorkerCoordinator::restore(checkpoint, &[start, stop], &[]).unwrap();
+        assert_eq!(restored.phase(), CoordinatorPhase::Stopping);
+        let stopped = event(&restored, 1, "stopped-before-start", WorkerEvent::Stopped);
+        restored.accept_event(stopped).unwrap();
+        assert_eq!(restored.phase(), CoordinatorPhase::Terminal);
+        assert_eq!(restored.task().lifecycle, TaskLifecycle::Cancelled);
     }
 
     #[test]

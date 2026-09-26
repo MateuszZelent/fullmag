@@ -36642,7 +36642,7 @@
             "description": "Accepted run intent is missing"
           },
           "409": {
-            "description": "Task is not running or a conflicting cancellation exists"
+            "description": "Task is not preparing/running or a conflicting cancellation exists"
           }
         },
         "tags": [

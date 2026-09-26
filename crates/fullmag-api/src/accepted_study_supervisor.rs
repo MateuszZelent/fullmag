@@ -179,6 +179,32 @@ pub(crate) fn run_supervised_accepted_worker(
         bail!("resource lease changed while the supervisor captured its task claim");
     }
 
+    let recovered_before_spawn = fullmag_runtime_control::recover_coordinator(store, &claim)
+        .context("recover coordinator before spawning accepted worker")?;
+    if recovered_before_spawn.coordinator.phase() == CoordinatorPhase::Stopping
+        && !recovered_before_spawn
+            .events
+            .iter()
+            .any(|event| matches!(&event.event, WorkerEvent::Started))
+    {
+        let mut coordinator =
+            fullmag_application::DurableWorkerCoordinator::new(recovered_before_spawn.coordinator);
+        commit_worker_event(store, &mut coordinator, WorkerEvent::Stopped)
+            .context("persist cancellation before accepted worker spawn")?;
+        store
+            .release_resource_lease(&lease)
+            .context("release pre-start cancelled worker resource lease")?;
+        slot.release()?;
+        return Ok(SupervisedWorkerResult {
+            recovered_terminal_completion: false,
+            worker_timed_out: false,
+            worker_cancelled: true,
+            worker_summary: serde_json::json!({
+                "status": "cancelled_before_start",
+            }),
+        });
+    }
+
     let mut active_lease = lease;
     let outcome = spawn_worker(
         worker_executable,

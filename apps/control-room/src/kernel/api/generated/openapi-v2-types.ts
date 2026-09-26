@@ -9692,6 +9692,8 @@ export interface components {
             reason: string;
         };
         ProjectRunTaskCancellationResource: {
+            /** Format: int64 */
+            catalog_revision: number;
             command_id: string;
             disposition: components["schemas"]["ProjectRunTaskCancellationDisposition"];
             lifecycle: components["schemas"]["ProjectRunTaskLifecycle"];
@@ -13339,7 +13341,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Task is not running or a conflicting cancellation exists */
+            /** @description Task is not preparing/running or a conflicting cancellation exists */
             409: {
                 headers: {
                     [name: string]: unknown;

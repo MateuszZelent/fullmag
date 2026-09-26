@@ -64,6 +64,10 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
     publikacji journalu i projekcji. Nie wykonuje osobnego odczytu po commicie,
     którego błąd mógłby ukryć skuteczną mutację. Idempotentny replay zwraca
     rewizję odzyskaną wraz z tym samym durable coordinator snapshotem.
+11. `Stop` może przeprowadzić `Preparing` do `Stopping`, jeżeli journal zawiera
+    trwały `Start` dla dokładnego claimu. Supervisor odtwarza ten stan przed
+    spawnem. Brak `Started` oznacza publikację `Stopped` bez utworzenia procesu,
+    terminalne `Cancelled` oraz release dokładnego lease i globalnego slotu.
 
 ## Konsekwencje
 
@@ -107,7 +111,8 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
   heartbeat oraz release dokładnej ostatniej wersji lease po exit.
 - Regresje anulowania sprawdzają trwałość i replay `Stop`, konflikt przyczyny,
   potwierdzony exit potomka, rozdzielenie timeout/cancel, terminalne
-  `Cancelled` oraz odrzucenie późnego `Completed`.
+  `Cancelled`, odrzucenie późnego `Completed` oraz anulowanie po trwałym
+  `Start`, ale przed `Started`, bez spawnu procesu potomnego.
 - Process E2E buduje supervisor i worker, zatrzymuje potomka po trwałym
   `Started`, sprawdza `Cancelled`, release ostatniego lease, brak artefaktów
   sukcesu i pozostawiony pending `Start`; osobna trasa potwierdza nadal sukces.
@@ -123,7 +128,7 @@ przeprowadzać migracji przez zgadywanie stanu pustego journalu.
 
 Source/contract gates są oddzielone od procesu workera i kwalifikacji solvera.
 Testy integracyjne wymagają managed build runnera. Pełne lokalne process E2E
-sukcesu i anulowania ograniczonego FDM CPU przechodzi. P5-B pozostaje otwarte
-do automatycznego schedulera, fencing retry/orphanów, anulowania przed `Start`,
-zdalnego ACK i dowodu braku równoległego starego workera dla pozostałych
-lane'ów.
+sukcesu, anulowania żywego procesu i anulowania przed spawnem ograniczonego FDM
+CPU przechodzą. P5-B pozostaje otwarte do automatycznego schedulera, fencing
+retry/orphanów, zdalnego ACK i dowodu braku równoległego starego workera dla
+pozostałych lane'ów.

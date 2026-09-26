@@ -1681,13 +1681,25 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
     drop(coordinator);
     let supervisor_executable = std::env::var_os("FULLMAG_ACCEPTED_SUPERVISOR_E2E_BIN");
     let worker_executable = std::env::var_os("FULLMAG_ACCEPTED_WORKER_E2E_BIN");
-    if std::env::var("FULLMAG_ACCEPTED_SUPERVISOR_CANCEL_E2E").as_deref() == Ok("1") {
+    let cancel_e2e = std::env::var("FULLMAG_ACCEPTED_SUPERVISOR_CANCEL_E2E").as_deref() == Ok("1");
+    let prestart_cancel_e2e =
+        std::env::var("FULLMAG_ACCEPTED_SUPERVISOR_PRESTART_CANCEL_E2E").as_deref() == Ok("1");
+    if cancel_e2e || prestart_cancel_e2e {
         let supervisor_executable = supervisor_executable
             .as_ref()
             .expect("cancel E2E requires the built supervisor binary");
         let worker_executable = worker_executable
             .as_ref()
             .expect("cancel E2E requires the built worker binary");
+        let cancellation_before_spawn = prestart_cancel_e2e.then(|| {
+            fullmag_runtime_control::request_accepted_task_stop(
+                &store,
+                &accepted_run_id,
+                claim.task_id.as_str(),
+                "operator pre-start cancellation E2E",
+            )
+            .expect("durably cancel accepted task before supervisor spawn")
+        });
         let mut child = std::process::Command::new(supervisor_executable)
             .arg("--store-root")
             .arg(store.root())
@@ -1710,58 +1722,62 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             .expect("spawn the built accepted supervisor for cancellation E2E");
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let cancellation = loop {
-            if child
-                .try_wait()
-                .expect("observe cancellation E2E supervisor")
-                .is_some()
-            {
-                let output = child
-                    .wait_with_output()
-                    .expect("collect early cancellation E2E supervisor exit");
-                panic!(
-                    "accepted supervisor exited before Started: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
-            }
-            let lifecycle = store
-                .read_run_catalog(accepted_run_id.as_str())
-                .unwrap()
-                .unwrap()
-                .tasks[0]
-                .lifecycle;
-            if lifecycle == fullmag_session::FmsTaskLifecycle::Running {
-                match fullmag_runtime_control::request_accepted_task_stop(
-                    &store,
-                    &accepted_run_id,
-                    claim.task_id.as_str(),
-                    "operator cancellation E2E",
-                ) {
-                    Ok(cancellation) => break cancellation,
-                    Err(error) if format!("{error:#}").contains("session store writer is busy") => {
-                    }
-                    Err(error) => panic!("durable operator Stop failed: {error:#}"),
+        let cancellation = if let Some(cancellation) = cancellation_before_spawn {
+            cancellation
+        } else {
+            loop {
+                if child
+                    .try_wait()
+                    .expect("observe cancellation E2E supervisor")
+                    .is_some()
+                {
+                    let output = child
+                        .wait_with_output()
+                        .expect("collect early cancellation E2E supervisor exit");
+                    panic!(
+                        "accepted supervisor exited before Started: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
                 }
-            } else if matches!(
-                lifecycle,
-                fullmag_session::FmsTaskLifecycle::Succeeded
-                    | fullmag_session::FmsTaskLifecycle::Failed
-                    | fullmag_session::FmsTaskLifecycle::Cancelled
-                    | fullmag_session::FmsTaskLifecycle::Interrupted
-            ) {
-                panic!("worker became terminal before the cancellation request: {lifecycle:?}");
+                let lifecycle = store
+                    .read_run_catalog(accepted_run_id.as_str())
+                    .unwrap()
+                    .unwrap()
+                    .tasks[0]
+                    .lifecycle;
+                if lifecycle == fullmag_session::FmsTaskLifecycle::Running {
+                    match fullmag_runtime_control::request_accepted_task_stop(
+                        &store,
+                        &accepted_run_id,
+                        claim.task_id.as_str(),
+                        "operator cancellation E2E",
+                    ) {
+                        Ok(cancellation) => break cancellation,
+                        Err(error)
+                            if format!("{error:#}").contains("session store writer is busy") => {}
+                        Err(error) => panic!("durable operator Stop failed: {error:#}"),
+                    }
+                } else if matches!(
+                    lifecycle,
+                    fullmag_session::FmsTaskLifecycle::Succeeded
+                        | fullmag_session::FmsTaskLifecycle::Failed
+                        | fullmag_session::FmsTaskLifecycle::Cancelled
+                        | fullmag_session::FmsTaskLifecycle::Interrupted
+                ) {
+                    panic!("worker became terminal before the cancellation request: {lifecycle:?}");
+                }
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let output = child
+                        .wait_with_output()
+                        .expect("collect timed out cancellation E2E supervisor");
+                    panic!(
+                        "worker did not publish Started before the cancellation deadline: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
             }
-            if std::time::Instant::now() >= deadline {
-                let _ = child.kill();
-                let output = child
-                    .wait_with_output()
-                    .expect("collect timed out cancellation E2E supervisor");
-                panic!(
-                    "worker did not publish Started before the cancellation deadline: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
         };
         assert_eq!(
             cancellation.disposition,
@@ -1782,7 +1798,14 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         assert_eq!(summary["worker_cancelled"], true);
         assert_eq!(summary["worker_timed_out"], false);
         assert_eq!(summary["recovered_terminal_completion"], false);
-        assert_eq!(summary["worker"]["status"], "cancelled");
+        assert_eq!(
+            summary["worker"]["status"],
+            if prestart_cancel_e2e {
+                "cancelled_before_start"
+            } else {
+                "cancelled"
+            }
+        );
 
         let catalog = store
             .read_run_catalog(accepted_run_id.as_str())
@@ -1823,7 +1846,11 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             &store,
             &accepted_run_id,
             claim.task_id.as_str(),
-            "operator cancellation E2E",
+            if prestart_cancel_e2e {
+                "operator pre-start cancellation E2E"
+            } else {
+                "operator cancellation E2E"
+            },
         )
         .is_err());
         fs::remove_dir_all(repo_root).unwrap();

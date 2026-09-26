@@ -183,6 +183,8 @@ pub struct RecoveredCoordinator {
     pub coordinator: fullmag_application::WorkerCoordinator,
     /// Original command identities for reconciliation, not automatic dispatch.
     pub commands: Vec<fullmag_application::WorkerCommandEnvelope>,
+    /// Original event identities for deciding whether a process side effect began.
+    pub events: Vec<fullmag_application::WorkerEventEnvelope>,
     pub catalog_revision: u64,
 }
 
@@ -372,6 +374,7 @@ pub fn recover_coordinator(
     Ok(RecoveredCoordinator {
         coordinator,
         commands,
+        events,
         catalog_revision: catalog.revision,
     })
 }
@@ -430,8 +433,20 @@ pub fn request_accepted_task_stop(
             catalog_revision: recovered.catalog_revision,
         });
     }
-    if recovered.coordinator.phase() != fullmag_application::CoordinatorPhase::Running {
-        bail!("accepted task stop requires a running task");
+    if recovered.coordinator.phase() == fullmag_application::CoordinatorPhase::Preparing
+        && !matches!(
+            recovered.commands.last().map(|command| &command.command),
+            Some(fullmag_application::WorkerCommand::Start)
+        )
+    {
+        bail!("accepted task pre-start stop requires a durable Start command");
+    }
+    if !matches!(
+        recovered.coordinator.phase(),
+        fullmag_application::CoordinatorPhase::Preparing
+            | fullmag_application::CoordinatorPhase::Running
+    ) {
+        bail!("accepted task stop requires a preparing or running task");
     }
     let mut coordinator = fullmag_application::DurableWorkerCoordinator::new(recovered.coordinator);
     let mut catalog_revision = None;

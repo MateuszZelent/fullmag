@@ -233,7 +233,7 @@ pub async fn materialize_run(
         (status = 200, description = "Identical Stop command replayed", body = ProjectRunTaskCancellationResource),
         (status = 400, description = "Invalid task identity or cancellation reason"),
         (status = 404, description = "Accepted run intent is missing"),
-        (status = 409, description = "Task is not running or a conflicting cancellation exists")
+        (status = 409, description = "Task is not preparing/running or a conflicting cancellation exists")
     ),
     tag = "persistence"
 )]

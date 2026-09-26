@@ -1448,6 +1448,7 @@ fn allowed_transition(from: TaskLifecycle, to: TaskLifecycle) -> bool {
         (TaskLifecycle::Accepted, TaskLifecycle::Queued)
             | (TaskLifecycle::Queued, TaskLifecycle::Preparing)
             | (TaskLifecycle::Preparing, TaskLifecycle::Running)
+            | (TaskLifecycle::Preparing, TaskLifecycle::Stopping)
             | (TaskLifecycle::Preparing, TaskLifecycle::Failed)
             | (TaskLifecycle::Preparing, TaskLifecycle::Cancelled)
             | (TaskLifecycle::Preparing, TaskLifecycle::Interrupted)
