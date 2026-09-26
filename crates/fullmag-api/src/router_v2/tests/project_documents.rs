@@ -1684,7 +1684,9 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
     let cancel_e2e = std::env::var("FULLMAG_ACCEPTED_SUPERVISOR_CANCEL_E2E").as_deref() == Ok("1");
     let prestart_cancel_e2e =
         std::env::var("FULLMAG_ACCEPTED_SUPERVISOR_PRESTART_CANCEL_E2E").as_deref() == Ok("1");
-    if cancel_e2e || prestart_cancel_e2e {
+    let automatic_retry_e2e =
+        std::env::var("FULLMAG_ACCEPTED_SUPERVISOR_AUTOMATIC_RETRY_E2E").as_deref() == Ok("1");
+    if cancel_e2e || prestart_cancel_e2e || automatic_retry_e2e {
         let supervisor_executable = supervisor_executable
             .as_ref()
             .expect("cancel E2E requires the built supervisor binary");
@@ -1700,7 +1702,8 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             )
             .expect("durably cancel accepted task before supervisor spawn")
         });
-        let mut child = std::process::Command::new(supervisor_executable)
+        let mut supervisor_command = std::process::Command::new(supervisor_executable);
+        supervisor_command
             .arg("--store-root")
             .arg(store.root())
             .arg("--run-id")
@@ -1714,12 +1717,58 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             .arg("--worker-timeout-seconds")
             .arg("30")
             .arg("--heartbeat-interval-milliseconds")
-            .arg("500")
+            .arg("500");
+        if automatic_retry_e2e {
+            supervisor_command.arg("--max-automatic-retries").arg("1");
+        }
+        let mut child = supervisor_command
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("spawn the built accepted supervisor for cancellation E2E");
+
+        if automatic_retry_e2e {
+            let output = child
+                .wait_with_output()
+                .expect("collect automatic retry E2E supervisor exit");
+            assert!(
+                output.status.success(),
+                "automatic retry supervisor failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(summary["retry_scheduled"], true);
+            assert_eq!(summary["worker"]["status"], "retry_scheduled");
+            let catalog = store
+                .read_run_catalog(accepted_run_id.as_str())
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                catalog.tasks[0].lifecycle,
+                fullmag_session::FmsTaskLifecycle::Queued
+            );
+            assert_eq!(catalog.tasks[0].attempt_id, None);
+            assert!(store
+                .read_active_resource_lease_for_task(
+                    accepted_run_id.as_str(),
+                    claim.task_id.as_str(),
+                )
+                .unwrap()
+                .is_none());
+            let decisions = store
+                .list_retry_decisions(accepted_run_id.as_str())
+                .unwrap();
+            assert_eq!(decisions.len(), 1);
+            assert_eq!(decisions[0].action, fullmag_session::FmsRetryAction::Retry);
+            assert_eq!(decisions[0].attempt_id, claim.attempt_id.as_str());
+            assert!(store
+                .read_artifact_catalog(accepted_run_id.as_str())
+                .unwrap()
+                .is_none());
+            fs::remove_dir_all(repo_root).unwrap();
+            return;
+        }
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let cancellation = if let Some(cancellation) = cancellation_before_spawn {

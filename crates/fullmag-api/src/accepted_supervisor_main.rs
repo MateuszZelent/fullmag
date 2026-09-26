@@ -13,6 +13,7 @@ struct SupervisorArgs {
     max_concurrency: usize,
     worker_timeout: Duration,
     heartbeat_interval: Duration,
+    max_automatic_retries: usize,
 }
 
 fn main() {
@@ -38,6 +39,7 @@ fn run() -> Result<()> {
         args.max_concurrency,
         args.worker_timeout,
         args.heartbeat_interval,
+        args.max_automatic_retries,
     )?;
     println!(
         "{}",
@@ -46,6 +48,7 @@ fn run() -> Result<()> {
             "recovered_terminal_completion": result.recovered_terminal_completion,
             "worker_timed_out": result.worker_timed_out,
             "worker_cancelled": result.worker_cancelled,
+            "retry_scheduled": result.retry_scheduled,
             "worker": result.worker_summary,
         }))?
     );
@@ -70,6 +73,7 @@ fn parse_args() -> Result<SupervisorArgs> {
     let mut max_concurrency = None;
     let mut worker_timeout_seconds = None;
     let mut heartbeat_interval_milliseconds = None;
+    let mut max_automatic_retries = None;
     let mut args = std::env::args_os().skip(1);
     while let Some(argument) = args.next() {
         let flag = argument
@@ -131,6 +135,16 @@ fn parse_args() -> Result<SupervisorArgs> {
                 }
                 heartbeat_interval_milliseconds = Some(milliseconds);
             }
+            "--max-automatic-retries" if max_automatic_retries.is_none() => {
+                let value = value
+                    .into_string()
+                    .map_err(|_| anyhow::anyhow!("max automatic retries must be valid UTF-8"))?;
+                max_automatic_retries = Some(
+                    value
+                        .parse::<usize>()
+                        .context("max automatic retries must be a non-negative integer")?,
+                );
+            }
             "--store-root"
             | "--run-id"
             | "--task-id"
@@ -138,6 +152,9 @@ fn parse_args() -> Result<SupervisorArgs> {
             | "--max-concurrency"
             | "--worker-timeout-seconds"
             | "--heartbeat-interval-milliseconds" => {
+                bail!("supervisor option `{flag}` was supplied more than once")
+            }
+            "--max-automatic-retries" => {
                 bail!("supervisor option `{flag}` was supplied more than once")
             }
             _ => bail!("unknown supervisor option `{flag}`"),
@@ -156,6 +173,7 @@ fn parse_args() -> Result<SupervisorArgs> {
             heartbeat_interval_milliseconds
                 .context("missing required --heartbeat-interval-milliseconds")?,
         ),
+        max_automatic_retries: max_automatic_retries.unwrap_or(0),
     })
 }
 

@@ -1,6 +1,9 @@
 use anyhow::{bail, Context, Result};
 use fullmag_application::{CoordinatorPhase, TaskLifecycle, WorkerCommand, WorkerEvent};
-use fullmag_session::{FmsResourceLease, SessionStore};
+use fullmag_session::{
+    FmsResourceLease, FmsRetryAction, FmsRetryDecision, FmsRetryTrigger, SessionStore,
+    FMS_RETRY_DECISION_SCHEMA,
+};
 use serde::Serialize;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -18,6 +21,7 @@ pub(crate) struct SupervisedWorkerResult {
     pub(crate) recovered_terminal_completion: bool,
     pub(crate) worker_timed_out: bool,
     pub(crate) worker_cancelled: bool,
+    pub(crate) retry_scheduled: bool,
     pub(crate) worker_summary: serde_json::Value,
 }
 
@@ -148,6 +152,7 @@ pub(crate) fn run_supervised_accepted_worker(
     max_concurrency: usize,
     worker_timeout: Duration,
     heartbeat_interval: Duration,
+    max_automatic_retries: usize,
 ) -> Result<SupervisedWorkerResult> {
     if max_concurrency != 1 {
         bail!("accepted-worker supervisor currently requires --max-concurrency 1");
@@ -199,6 +204,7 @@ pub(crate) fn run_supervised_accepted_worker(
             recovered_terminal_completion: false,
             worker_timed_out: false,
             worker_cancelled: true,
+            retry_scheduled: false,
             worker_summary: serde_json::json!({
                 "status": "cancelled_before_start",
             }),
@@ -216,7 +222,13 @@ pub(crate) fn run_supervised_accepted_worker(
         || renew_resource_lease(store, &mut active_lease),
         || task_stop_requested(store, run_id, task_id),
     )?;
-    let reconciliation = reconcile_worker_exit(store, &claim, &active_lease, &outcome);
+    let reconciliation = reconcile_worker_exit(
+        store,
+        &claim,
+        &active_lease,
+        &outcome,
+        max_automatic_retries,
+    );
     match reconciliation {
         Ok(result) => {
             slot.release()?;
@@ -468,6 +480,7 @@ fn reconcile_worker_exit(
     claim: &fullmag_application::TaskClaim,
     lease: &FmsResourceLease,
     outcome: &ObservedWorkerProcess,
+    max_automatic_retries: usize,
 ) -> Result<SupervisedWorkerResult> {
     let output = &outcome.output;
     let recovered = fullmag_runtime_control::recover_coordinator(store, claim)
@@ -519,6 +532,7 @@ fn reconcile_worker_exit(
             recovered_terminal_completion: !output.status.success(),
             worker_timed_out: outcome.timed_out,
             worker_cancelled: false,
+            retry_scheduled: false,
             worker_summary: if outcome.timed_out {
                 serde_json::json!({
                     "status": "recovered_after_timeout",
@@ -542,6 +556,7 @@ fn reconcile_worker_exit(
             recovered_terminal_completion: false,
             worker_timed_out: false,
             worker_cancelled: true,
+            retry_scheduled: false,
             worker_summary: serde_json::json!({
                 "status": "cancelled",
                 "exit_code": output.status.code(),
@@ -552,17 +567,19 @@ fn reconcile_worker_exit(
     if output.status.success() {
         bail!("worker exited successfully without a durable succeeded task");
     }
-    if inbox_checkpoint.pending.is_some() {
+    if inbox_checkpoint.pending.is_some() && accepted_worker_attempt_reserved(store, claim)? {
         bail!(
             "worker exited with an ambiguous pending effect; resource lease retained for reconciliation: {}",
             worker_failure_reason(outcome)
         );
     }
 
+    let mut retryable_failure_reason = None;
     if matches!(
         phase,
         CoordinatorPhase::Preparing | CoordinatorPhase::Running
     ) {
+        let reason = worker_failure_reason(outcome);
         let mut coordinator =
             fullmag_application::DurableWorkerCoordinator::new(recovered.coordinator);
         commit_worker_event(
@@ -570,13 +587,44 @@ fn reconcile_worker_exit(
             &mut coordinator,
             WorkerEvent::Failed {
                 retryable: true,
-                reason: worker_failure_reason(outcome),
+                reason: reason.clone(),
             },
         )?;
+        retryable_failure_reason = Some(reason);
+    } else if phase == CoordinatorPhase::Terminal
+        && checkpoint.task.lifecycle == TaskLifecycle::Failed
+    {
+        retryable_failure_reason =
+            recovered
+                .events
+                .iter()
+                .rev()
+                .find_map(|event| match &event.event {
+                    WorkerEvent::Failed {
+                        retryable: true,
+                        reason,
+                    } => Some(reason.clone()),
+                    _ => None,
+                });
+    }
+
+    if let Some(reason) = retryable_failure_reason {
         store
             .release_resource_lease(lease)
             .context("release failed worker resource lease after terminal process exit")?;
-        bail!("accepted worker failed before entering a durable side effect");
+        if schedule_automatic_retry(store, claim, lease, &reason, max_automatic_retries)? {
+            return Ok(SupervisedWorkerResult {
+                recovered_terminal_completion: false,
+                worker_timed_out: outcome.timed_out,
+                worker_cancelled: false,
+                retry_scheduled: true,
+                worker_summary: serde_json::json!({
+                    "status": "retry_scheduled",
+                    "exit_code": output.status.code(),
+                }),
+            });
+        }
+        bail!("accepted worker failed before entering a durable side effect: {reason}");
     }
 
     if phase == CoordinatorPhase::Terminal {
@@ -585,6 +633,90 @@ fn reconcile_worker_exit(
             .context("release terminal failed worker resource lease")?;
     }
     bail!("accepted worker exited without a successful durable completion")
+}
+
+fn accepted_worker_attempt_reserved(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+) -> Result<bool> {
+    for (value, label) in [
+        (claim.run_id.as_str(), "run_id"),
+        (claim.task_id.as_str(), "task_id"),
+        (claim.attempt_id.as_str(), "attempt_id"),
+    ] {
+        fullmag_session::repository_path::validate_store_id(value)
+            .with_context(|| format!("worker attempt {label} is invalid"))?;
+    }
+    let relative = format!(
+        "runs/{}/worker-attempts/{}/{}/epoch-{}",
+        claim.run_id.as_str(),
+        claim.task_id.as_str(),
+        claim.attempt_id.as_str(),
+        claim.ownership_epoch.value()
+    );
+    let path = fullmag_session::repository_path::checked_path(store.root(), &relative)
+        .context("resolve supervised worker attempt reservation")?;
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) => {
+            if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                bail!(
+                    "worker attempt reservation `{}` must be a real directory",
+                    path.display()
+                );
+            }
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error)
+            .with_context(|| format!("inspect worker attempt reservation `{}`", path.display())),
+    }
+}
+
+fn schedule_automatic_retry(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+    lease: &FmsResourceLease,
+    reason: &str,
+    max_automatic_retries: usize,
+) -> Result<bool> {
+    if max_automatic_retries == 0 {
+        return Ok(false);
+    }
+    let prior_retries = store
+        .list_retry_decisions(claim.run_id.as_str())?
+        .into_iter()
+        .filter(|decision| {
+            decision.task_id == claim.task_id.as_str() && decision.action == FmsRetryAction::Retry
+        })
+        .count();
+    if prior_retries >= max_automatic_retries {
+        return Ok(false);
+    }
+    let identity = format!(
+        "{}:{}:{}",
+        claim.task_id.as_str(),
+        claim.attempt_id.as_str(),
+        claim.ownership_epoch.value()
+    );
+    let decision = FmsRetryDecision {
+        schema_version: FMS_RETRY_DECISION_SCHEMA.into(),
+        decision_id: format!(
+            "automatic-retry-{}",
+            fullmag_session::hex_sha256(identity.as_bytes())
+        ),
+        run_id: claim.run_id.as_str().into(),
+        task_id: claim.task_id.as_str().into(),
+        attempt_id: claim.attempt_id.as_str().into(),
+        ownership_epoch: claim.ownership_epoch.value(),
+        trigger: FmsRetryTrigger::WorkerDisconnected,
+        action: FmsRetryAction::Retry,
+        reason: reason.into(),
+        created_at: lease.acquired_at,
+    };
+    store
+        .apply_retry_decision(&decision)
+        .context("persist and apply automatic retry decision")?;
+    Ok(true)
 }
 
 fn parse_worker_summary(output: &Output) -> Result<serde_json::Value> {
@@ -684,6 +816,7 @@ mod tests {
             2,
             Duration::from_secs(1),
             Duration::from_millis(100),
+            0,
         )
         .unwrap_err();
         assert!(error.to_string().contains("--max-concurrency 1"));

@@ -68,6 +68,14 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
     trwały `Start` dla dokładnego claimu. Supervisor odtwarza ten stan przed
     spawnem. Brak `Started` oznacza publikację `Stopped` bez utworzenia procesu,
     terminalne `Cancelled` oraz release dokładnego lease i globalnego slotu.
+12. Automatyczny retry jest dozwolony tylko po potwierdzonym wyjściu procesu i
+    przy braku prywatnego katalogu dokładnego attemptu. Sam pending `Start` nie
+    jest dowodem rozpoczęcia efektu; istniejąca rezerwacja attemptu oznacza stan
+    niejednoznaczny, zachowuje lease i wymaga rekoncyliacji.
+13. Limit automatycznych retry jest jawny, domyślnie wynosi zero i obejmuje
+    wszystkie trwałe decyzje `Retry` dla taska w runie. Każda decyzja przechodzi
+    przez istniejący attempt/epoch fence. Task wraca do `Queued`; supervisor nie
+    wybiera w tej samej operacji nowego attemptu.
 
 ## Konsekwencje
 
@@ -116,6 +124,9 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
 - Process E2E buduje supervisor i worker, zatrzymuje potomka po trwałym
   `Started`, sprawdza `Cancelled`, release ostatniego lease, brak artefaktów
   sukcesu i pozostawiony pending `Start`; osobna trasa potwierdza nadal sukces.
+- Regresja automatycznego retry wymusza wyjście workera po zweryfikowaniu
+  pending `Start`, ale przed rezerwacją effect directory. Sprawdza trwałą
+  decyzję, powrót taska do `Queued`, brak lease i artefaktów.
 
 ## Migracja i rollback
 
@@ -130,5 +141,5 @@ Source/contract gates są oddzielone od procesu workera i kwalifikacji solvera.
 Testy integracyjne wymagają managed build runnera. Pełne lokalne process E2E
 sukcesu, anulowania żywego procesu i anulowania przed spawnem ograniczonego FDM
 CPU przechodzą. P5-B pozostaje otwarte do automatycznego schedulera, fencing
-retry/orphanów, zdalnego ACK i dowodu braku równoległego starego workera dla
+okna release→decision i orphanów, zdalnego ACK oraz dowodu braku równoległego starego workera dla
 pozostałych lane'ów.

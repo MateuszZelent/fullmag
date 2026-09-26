@@ -12,9 +12,12 @@ lease; pending sprzed pierwszego side effectu lub z ukończonym receiptem może
 zostać odtworzony bez drugiego uruchomienia solvera. Supervisor wymaga jawnego
 `--worker-timeout-seconds`, a po przekroczeniu monotonicznego deadline zabija
 proces, czeka na potwierdzony exit i dopiero potem rekoncyliuje trwały stan.
+Opcjonalny, ograniczony `--max-automatic-retries` stosuje fenced decyzję
+`Retry` wyłącznie po udowodnionym wyjściu workera przed rezerwacją prywatnego
+katalogu attemptu. Istniejąca rezerwacja zachowuje fail-closed lease.
 
 Brakuje automatycznego wyboru taska, puli większej niż jeden, heartbeat/Stop ACK
-dla zdalnego transportu, retry/orphan reconciliation oraz process E2E
+dla zdalnego transportu, atomowej/orphan reconciliation retry oraz process E2E
 pozostałych lane'ów. Anulowanie przed uruchomieniem workera jest obsłużone
 trwale i nie wykonuje spawnu procesu potomnego.
 Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
@@ -25,7 +28,8 @@ Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`32-supervisor-process-heartbeat.md`](32-supervisor-process-heartbeat.md),
 [`33-operator-task-cancellation.md`](33-operator-task-cancellation.md),
 [`34-supervisor-cancel-e2e.md`](34-supervisor-cancel-e2e.md)
-i [`35-supervisor-prestart-cancel.md`](35-supervisor-prestart-cancel.md).
+[`35-supervisor-prestart-cancel.md`](35-supervisor-prestart-cancel.md)
+i [`36-supervisor-automatic-retry.md`](36-supervisor-automatic-retry.md).
 
 API ma jawny adapter allow-listy `RunResult` → typowane payloady dla
 wspieranych wyjść. Szczegóły i wcześniejszy dowód opisuje

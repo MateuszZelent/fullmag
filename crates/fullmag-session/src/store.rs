@@ -801,6 +801,34 @@ impl SessionStore {
         Ok(Some(decision))
     }
 
+    /// List immutable retry decisions for one run in stable identity order.
+    pub fn list_retry_decisions(&self, run_id: &str) -> Result<Vec<FmsRetryDecision>> {
+        validate_store_id(run_id)?;
+        let directory = checked_path(&self.root, &format!("runs/{run_id}/retry_decisions"))?;
+        if !directory.exists() {
+            return Ok(Vec::new());
+        }
+        let mut decisions = Vec::new();
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            let metadata = entry.file_type()?;
+            if metadata.is_symlink() || !metadata.is_file() {
+                anyhow::bail!("unsafe retry decision entry `{}`", entry.path().display());
+            }
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            let decision_id = file_name
+                .strip_suffix(".json")
+                .context("retry decision entry must be JSON")?;
+            validate_store_id(decision_id)?;
+            decisions.push(
+                self.read_retry_decision(run_id, decision_id)?
+                    .context("listed retry decision disappeared during read")?,
+            );
+        }
+        decisions.sort_by(|left, right| left.decision_id.cmp(&right.decision_id));
+        Ok(decisions)
+    }
+
     /// Persist the verified initial coordinator checkpoint before a new claim
     /// is allowed to publish worker commands.
     pub fn commit_coordinator_genesis(
@@ -3336,6 +3364,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(loaded, decision);
+        assert_eq!(
+            store.list_retry_decisions("run-retry").unwrap(),
+            vec![decision.clone()]
+        );
         let mut stale = decision.clone();
         stale.decision_id = "decision-stale".into();
         stale.ownership_epoch = 2;

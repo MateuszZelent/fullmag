@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 const RUNNER_INITIAL_STATE_FILE: &str = "m_initial.json";
 const RUNNER_FINAL_STATE_FILE: &str = "m_final.json";
@@ -802,7 +803,6 @@ pub(crate) fn run_pending_accepted_start(
         .context("accepted worker run id is invalid")?;
     fullmag_session::repository_path::validate_store_id(task_id)
         .context("accepted worker task id is invalid")?;
-
     let run_id = fullmag_application::RunId::parse(run_id.to_owned())
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let intent = store
@@ -820,8 +820,10 @@ pub(crate) fn run_pending_accepted_start(
         &specification.snapshot.project_id,
     )
     .context("load immutable accepted study for worker process")?;
-    let claim = fullmag_runtime_control::load_current_task_claim(store, &run_id, task_id)
-        .context("worker process requires the exact active durable task claim")?;
+    let claim = retry_store_writer_busy(|| {
+        fullmag_runtime_control::load_current_task_claim(store, &run_id, task_id)
+    })
+    .context("worker process requires the exact active durable task claim")?;
     let recovered = fullmag_runtime_control::recover_coordinator(store, &claim)
         .context("worker process could not recover the durable coordinator")?;
     let starts = recovered
@@ -877,6 +879,8 @@ pub(crate) fn run_pending_accepted_start(
         bail!("worker process Start was already consumed; no solver was launched");
     }
 
+    accepted_worker_test_fail_before_start_effect()?;
+
     if let Some(pending) = inbox_checkpoint.pending.as_ref() {
         if pending != &start {
             bail!("worker inbox has another pending command and requires reconciliation");
@@ -930,11 +934,13 @@ fn apply_accepted_start_effect(
     claim: &fullmag_application::TaskClaim,
     start: &fullmag_application::WorkerCommandEnvelope,
 ) -> Result<AcceptedWorkerProcessResult> {
-    let accepted_step = fullmag_runtime_control::load_accepted_worker_step_for_start(
-        store,
-        &specification.snapshot.project_id,
-        start,
-    )
+    let accepted_step = retry_store_writer_busy(|| {
+        fullmag_runtime_control::load_accepted_worker_step_for_start(
+            store,
+            &specification.snapshot.project_id,
+            start,
+        )
+    })
     .context("load accepted worker step")?;
     let recovered_coordinator = fullmag_runtime_control::recover_coordinator(store, claim)
         .context("recover worker coordinator before Start")?;
@@ -1010,6 +1016,33 @@ fn apply_accepted_start_effect(
         output_catalog: published,
         receipt_recovered_before_publication: true,
     })
+}
+
+fn accepted_worker_test_fail_before_start_effect() -> Result<()> {
+    if std::env::var("FULLMAG_ENABLE_TEST_HOOKS").as_deref() == Ok("1")
+        && std::env::var("FULLMAG_TEST_ACCEPTED_WORKER_FAIL_BEFORE_EFFECT").as_deref() == Ok("1")
+    {
+        bail!("controlled accepted worker failure before durable side effect");
+    }
+    Ok(())
+}
+
+fn retry_store_writer_busy<T>(mut operation: impl FnMut() -> Result<T>) -> Result<T> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if error
+                    .chain()
+                    .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
+                    && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn accepted_worker_test_delay_after_started() -> Result<()> {
