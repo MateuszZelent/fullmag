@@ -60,6 +60,10 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
    terminalne `Cancelled` i dopiero wtedy pozwala zwolnić najnowszy lease.
    Jeżeli terminalny sukces został trwale opublikowany wcześniej, ma
    pierwszeństwo nad późnym żądaniem anulowania.
+10. Odpowiedź przyjętego `Stop` zwraca rewizję katalogu uzyskaną z tej samej
+    publikacji journalu i projekcji. Nie wykonuje osobnego odczytu po commicie,
+    którego błąd mógłby ukryć skuteczną mutację. Idempotentny replay zwraca
+    rewizję odzyskaną wraz z tym samym durable coordinator snapshotem.
 
 ## Konsekwencje
 
@@ -104,6 +108,9 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
 - Regresje anulowania sprawdzają trwałość i replay `Stop`, konflikt przyczyny,
   potwierdzony exit potomka, rozdzielenie timeout/cancel, terminalne
   `Cancelled` oraz odrzucenie późnego `Completed`.
+- Process E2E buduje supervisor i worker, zatrzymuje potomka po trwałym
+  `Started`, sprawdza `Cancelled`, release ostatniego lease, brak artefaktów
+  sukcesu i pozostawiony pending `Start`; osobna trasa potwierdza nadal sukces.
 
 ## Migracja i rollback
 
@@ -115,8 +122,8 @@ przeprowadzać migracji przez zgadywanie stanu pustego journalu.
 ## Walidacja i status
 
 Source/contract gates są oddzielone od procesu workera i kwalifikacji solvera.
-Testy integracyjne wymagają managed build runnera. Durable genesis daje
-recoverable initial coordinator state, ale nie wykonuje atomowego claimu z
-rezerwacją zasobu i nie uruchamia supervisora/transportu. P5-B pozostaje
-otwarte do podłączenia admission, fencing retry/orphanów i dowodu braku
-równoległego starego workera.
+Testy integracyjne wymagają managed build runnera. Pełne lokalne process E2E
+sukcesu i anulowania ograniczonego FDM CPU przechodzi. P5-B pozostaje otwarte
+do automatycznego schedulera, fencing retry/orphanów, anulowania przed `Start`,
+zdalnego ACK i dowodu braku równoległego starego workera dla pozostałych
+lane'ów.

@@ -187,6 +187,18 @@ def test_api_accepted_supervisor_e2e_route_builds_both_processes() -> None:
         ("FULLMAG_ACCEPTED_WORKER_E2E_BIN", "fullmag-api-accepted-worker"),
     )
     assert route.receipt_schema == "fullmag_api_accepted_supervisor_e2e_v1"
+
+
+def test_api_accepted_supervisor_cancel_e2e_route_builds_both_processes() -> None:
+    route = MODULE.ROUTES["api-accepted-supervisor-cancel-e2e"]
+    assert route.setup_commands == MODULE.ROUTES["api-accepted-supervisor-e2e"].setup_commands
+    assert route.binary_env == MODULE.ROUTES["api-accepted-supervisor-e2e"].binary_env
+    assert dict(route.environment) == {
+        "FULLMAG_ACCEPTED_SUPERVISOR_CANCEL_E2E": "1",
+        "FULLMAG_ENABLE_TEST_HOOKS": "1",
+        "FULLMAG_TEST_ACCEPTED_WORKER_AFTER_STARTED_DELAY_MS": "3000",
+    }
+    assert route.receipt_schema == "fullmag_api_accepted_supervisor_cancel_e2e_v1"
     with pytest.raises(MODULE.SessionCheckError):
         MODULE.validate_command(("cargo", "test", "--workspace"), route)
 
@@ -317,6 +329,7 @@ def test_just_route_precedes_generic_prepare_links() -> None:
     assert '--route runtime-control-tests --repo-root' in justfile
     assert '--route api-accepted-supervisor-tests --repo-root' in justfile
     assert '--route api-accepted-supervisor-e2e --repo-root' in justfile
+    assert '--route api-accepted-supervisor-cancel-e2e --repo-root' in justfile
     assert '--route api-preparation-tests --repo-root' in justfile
     assert '--route api-scene-resource-tests --repo-root' in justfile
     assert '--route authoring-scene-adapter-tests --repo-root' in justfile
@@ -328,6 +341,7 @@ def test_just_route_precedes_generic_prepare_links() -> None:
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route runtime-control-tests' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-tests' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-e2e' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-cancel-e2e' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-preparation-tests' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-scene-resource-tests' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route authoring-scene-adapter-tests' in shell

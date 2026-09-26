@@ -62,6 +62,13 @@ pub fn commit_transition(
     store: &SessionStore,
     transition: &CoordinatorTransition,
 ) -> Result<CoordinatorJournalCommitDisposition> {
+    commit_transition_with_catalog_revision(store, transition).map(|(disposition, _)| disposition)
+}
+
+fn commit_transition_with_catalog_revision(
+    store: &SessionStore,
+    transition: &CoordinatorTransition,
+) -> Result<(CoordinatorJournalCommitDisposition, u64)> {
     if let CoordinatorMessage::Event(envelope) = &transition.message {
         if matches!(&envelope.event, WorkerEvent::Completed { .. }) {
             study::validate_study_task_completion(store, &transition.checkpoint.claim)?;
@@ -74,8 +81,8 @@ pub fn commit_transition(
         entry.created_at = prior.created_at;
     }
     let disposition = store.commit_coordinator_journal_entry(&entry)?;
-    reconcile_coordinator_catalog(store, &transition.checkpoint.claim)?;
-    Ok(disposition)
+    let catalog = reconcile_coordinator_catalog(store, &transition.checkpoint.claim)?;
+    Ok((disposition, catalog.revision))
 }
 
 /// Persist the zero-watermark checkpoint before exposing a newly admitted
@@ -176,6 +183,7 @@ pub struct RecoveredCoordinator {
     pub coordinator: fullmag_application::WorkerCoordinator,
     /// Original command identities for reconciliation, not automatic dispatch.
     pub commands: Vec<fullmag_application::WorkerCommandEnvelope>,
+    pub catalog_revision: u64,
 }
 
 /// Repair the catalog projection from the complete durable journal. Journal
@@ -364,6 +372,7 @@ pub fn recover_coordinator(
     Ok(RecoveredCoordinator {
         coordinator,
         commands,
+        catalog_revision: catalog.revision,
     })
 }
 
@@ -418,16 +427,14 @@ pub fn request_accepted_task_stop(
         return Ok(AcceptedTaskStop {
             disposition: AcceptedTaskStopDisposition::Replayed,
             command: existing.clone(),
-            catalog_revision: store
-                .read_run_catalog(run_id.as_str())?
-                .context("accepted task run catalog is missing")?
-                .revision,
+            catalog_revision: recovered.catalog_revision,
         });
     }
     if recovered.coordinator.phase() != fullmag_application::CoordinatorPhase::Running {
         bail!("accepted task stop requires a running task");
     }
     let mut coordinator = fullmag_application::DurableWorkerCoordinator::new(recovered.coordinator);
+    let mut catalog_revision = None;
     let command = coordinator
         .commit_command(
             fullmag_application::WorkerCommand::Stop {
@@ -435,8 +442,10 @@ pub fn request_accepted_task_stop(
             },
             None,
             |transition| {
-                commit_transition(store, transition)
-                    .map(|_| ())
+                commit_transition_with_catalog_revision(store, transition)
+                    .map(|(_, revision)| {
+                        catalog_revision = Some(revision);
+                    })
                     .map_err(|error| {
                         fullmag_application::CoordinatorError::Invalid(format!("{error:#}"))
                     })
@@ -446,10 +455,8 @@ pub fn request_accepted_task_stop(
     Ok(AcceptedTaskStop {
         disposition: AcceptedTaskStopDisposition::Accepted,
         command,
-        catalog_revision: store
-            .read_run_catalog(run_id.as_str())?
-            .context("accepted task run catalog is missing")?
-            .revision,
+        catalog_revision: catalog_revision
+            .context("accepted task Stop commit did not return a catalog revision")?,
     })
 }
 

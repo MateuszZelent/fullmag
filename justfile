@@ -247,6 +247,9 @@ verify-api-accepted-supervisor:
 verify-api-accepted-supervisor-e2e:
     {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-supervisor-e2e --repo-root "{{repo_root}}"
 
+verify-api-accepted-supervisor-cancel-e2e:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-supervisor-cancel-e2e --repo-root "{{repo_root}}"
+
 # Run the narrowly scoped API preparation materialization route regressions.
 verify-api-preparation:
     {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-preparation-tests --repo-root "{{repo_root}}"

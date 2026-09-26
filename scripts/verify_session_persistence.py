@@ -114,6 +114,7 @@ class RouteSpec:
     requires_python: bool = False
     setup_commands: tuple[tuple[str, ...], ...] = ()
     binary_env: tuple[tuple[str, str], ...] = ()
+    environment: tuple[tuple[str, str], ...] = ()
 
 
 ROUTES = {
@@ -236,6 +237,46 @@ ROUTES = {
         binary_env=(
             ("FULLMAG_ACCEPTED_SUPERVISOR_E2E_BIN", "fullmag-api-accepted-supervisor"),
             ("FULLMAG_ACCEPTED_WORKER_E2E_BIN", "fullmag-api-accepted-worker"),
+        ),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-accepted-supervisor-cancel-e2e": RouteSpec(
+        name="api-accepted-supervisor-cancel-e2e",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_supervisor_cancel_e2e_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "router_v2::tests::project_documents::explicit_project_run_submit_is_durable_and_replays_without_live_session",
+            "--",
+            "--exact",
+            "--nocapture",
+        ),
+        setup_commands=((
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-supervisor",
+            "--bin",
+            "fullmag-api-accepted-worker",
+        ),),
+        binary_env=(
+            ("FULLMAG_ACCEPTED_SUPERVISOR_E2E_BIN", "fullmag-api-accepted-supervisor"),
+            ("FULLMAG_ACCEPTED_WORKER_E2E_BIN", "fullmag-api-accepted-worker"),
+        ),
+        environment=(
+            ("FULLMAG_ACCEPTED_SUPERVISOR_CANCEL_E2E", "1"),
+            ("FULLMAG_ENABLE_TEST_HOOKS", "1"),
+            ("FULLMAG_TEST_ACCEPTED_WORKER_AFTER_STARTED_DELAY_MS", "3000"),
         ),
         source_paths=API_SOURCE_PATHS,
         local_dependency_manifest="crates/fullmag-api/Cargo.toml",
@@ -646,6 +687,7 @@ def child_environment(
     executable_suffix = ".exe" if os.name == "nt" else ""
     for variable, binary_name in spec.binary_env:
         env[variable] = str(paths["target_dir"] / "debug" / f"{binary_name}{executable_suffix}")
+    env.update(dict(spec.environment))
     env.update({str(key): str(value) for key, value in layout["env"].items()})
     env.update(
         {

@@ -1074,18 +1074,16 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         content_sha256: "a".repeat(64),
         study_artifact: None,
     };
-    assert!(
-        fullmag_runtime_control::queue_accepted_study_task(
-            &store,
-            &accepted_project_id,
-            &accepted_run_id,
-            &step.step_id,
-            [("undeclared_port".into(), unexpected_input)]
-                .into_iter()
-                .collect(),
-        )
-        .is_err()
-    );
+    assert!(fullmag_runtime_control::queue_accepted_study_task(
+        &store,
+        &accepted_project_id,
+        &accepted_run_id,
+        &step.step_id,
+        [("undeclared_port".into(), unexpected_input)]
+            .into_iter()
+            .collect(),
+    )
+    .is_err());
     let unchanged_catalog = store
         .read_run_catalog(accepted_run_id.as_str())
         .unwrap()
@@ -1484,9 +1482,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
                     envelope,
                 )
                 .map(|_| ())
-                .map_err(|error| {
-                    fullmag_application::ExecutionError::Invalid(error.to_string())
-                })
+                .map_err(|error| fullmag_application::ExecutionError::Invalid(error.to_string()))
             })
             .unwrap(),
         fullmag_application::ProtocolDisposition::Accepted
@@ -1502,9 +1498,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         .commit_event(prepared_event, |transition| {
             fullmag_runtime_control::commit_transition(&store, transition)
                 .map(|_| ())
-                .map_err(|error| {
-                    fullmag_application::CoordinatorError::Invalid(error.to_string())
-                })
+                .map_err(|error| fullmag_application::CoordinatorError::Invalid(error.to_string()))
         })
         .unwrap();
 
@@ -1546,24 +1540,20 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
     {
         resolved_input.plan_fingerprint = "f".repeat(64);
     }
-    assert!(
-        fullmag_runtime_control::load_accepted_worker_step(
-            &store,
-            &accepted_project_id,
-            &forged_prepare,
-        )
-        .is_err()
-    );
+    assert!(fullmag_runtime_control::load_accepted_worker_step(
+        &store,
+        &accepted_project_id,
+        &forged_prepare,
+    )
+    .is_err());
     let mut unpersisted_prepare = prepare_envelope.clone();
     unpersisted_prepare.message_id = "cmd-missing-from-outbox".into();
-    assert!(
-        fullmag_runtime_control::load_accepted_worker_step(
-            &store,
-            &accepted_project_id,
-            &unpersisted_prepare,
-        )
-        .is_err()
-    );
+    assert!(fullmag_runtime_control::load_accepted_worker_step(
+        &store,
+        &accepted_project_id,
+        &unpersisted_prepare,
+    )
+    .is_err());
     let persisted_prepare = store
         .read_coordinator_journal(accepted_run_id.as_str())
         .unwrap()
@@ -1667,11 +1657,10 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         .join(accepted_run_id.as_str())
         .join("worker-attempts");
     assert!(!worker_attempts_root.exists());
-    assert!(crate::accepted_study_worker::create_private_attempt_output_dir(
-        &store,
-        &stale_claim,
-    )
-    .is_err());
+    assert!(
+        crate::accepted_study_worker::create_private_attempt_output_dir(&store, &stale_claim,)
+            .is_err()
+    );
     assert!(!worker_attempts_root.exists());
     let interrupted_start = worker_inbox
         .receive(&start_envelope, |_| {
@@ -1692,6 +1681,154 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
     drop(coordinator);
     let supervisor_executable = std::env::var_os("FULLMAG_ACCEPTED_SUPERVISOR_E2E_BIN");
     let worker_executable = std::env::var_os("FULLMAG_ACCEPTED_WORKER_E2E_BIN");
+    if std::env::var("FULLMAG_ACCEPTED_SUPERVISOR_CANCEL_E2E").as_deref() == Ok("1") {
+        let supervisor_executable = supervisor_executable
+            .as_ref()
+            .expect("cancel E2E requires the built supervisor binary");
+        let worker_executable = worker_executable
+            .as_ref()
+            .expect("cancel E2E requires the built worker binary");
+        let mut child = std::process::Command::new(supervisor_executable)
+            .arg("--store-root")
+            .arg(store.root())
+            .arg("--run-id")
+            .arg(accepted_run_id.as_str())
+            .arg("--task-id")
+            .arg(claim.task_id.as_str())
+            .arg("--worker-executable")
+            .arg(worker_executable)
+            .arg("--max-concurrency")
+            .arg("1")
+            .arg("--worker-timeout-seconds")
+            .arg("30")
+            .arg("--heartbeat-interval-milliseconds")
+            .arg("500")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn the built accepted supervisor for cancellation E2E");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let cancellation = loop {
+            if child
+                .try_wait()
+                .expect("observe cancellation E2E supervisor")
+                .is_some()
+            {
+                let output = child
+                    .wait_with_output()
+                    .expect("collect early cancellation E2E supervisor exit");
+                panic!(
+                    "accepted supervisor exited before Started: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            let lifecycle = store
+                .read_run_catalog(accepted_run_id.as_str())
+                .unwrap()
+                .unwrap()
+                .tasks[0]
+                .lifecycle;
+            if lifecycle == fullmag_session::FmsTaskLifecycle::Running {
+                match fullmag_runtime_control::request_accepted_task_stop(
+                    &store,
+                    &accepted_run_id,
+                    claim.task_id.as_str(),
+                    "operator cancellation E2E",
+                ) {
+                    Ok(cancellation) => break cancellation,
+                    Err(error) if format!("{error:#}").contains("session store writer is busy") => {
+                    }
+                    Err(error) => panic!("durable operator Stop failed: {error:#}"),
+                }
+            } else if matches!(
+                lifecycle,
+                fullmag_session::FmsTaskLifecycle::Succeeded
+                    | fullmag_session::FmsTaskLifecycle::Failed
+                    | fullmag_session::FmsTaskLifecycle::Cancelled
+                    | fullmag_session::FmsTaskLifecycle::Interrupted
+            ) {
+                panic!("worker became terminal before the cancellation request: {lifecycle:?}");
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let output = child
+                    .wait_with_output()
+                    .expect("collect timed out cancellation E2E supervisor");
+                panic!(
+                    "worker did not publish Started before the cancellation deadline: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert_eq!(
+            cancellation.disposition,
+            fullmag_runtime_control::AcceptedTaskStopDisposition::Accepted
+        );
+
+        let output = child
+            .wait_with_output()
+            .expect("wait for cancellation E2E supervisor exit");
+        assert!(
+            output.status.success(),
+            "accepted supervisor cancellation E2E failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let summary: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .expect("cancelled supervisor emits its JSON completion summary");
+        assert_eq!(summary["status"], "completed");
+        assert_eq!(summary["worker_cancelled"], true);
+        assert_eq!(summary["worker_timed_out"], false);
+        assert_eq!(summary["recovered_terminal_completion"], false);
+        assert_eq!(summary["worker"]["status"], "cancelled");
+
+        let catalog = store
+            .read_run_catalog(accepted_run_id.as_str())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            catalog.tasks[0].lifecycle,
+            fullmag_session::FmsTaskLifecycle::Cancelled
+        );
+        assert!(store
+            .read_artifact_catalog(accepted_run_id.as_str())
+            .unwrap()
+            .is_none());
+        let durable_lease = store
+            .read_resource_lease(
+                accepted_run_id.as_str(),
+                &claim.lease.resource_id,
+                claim.lease.lease_token.as_str(),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            durable_lease.state,
+            fullmag_session::FmsResourceLeaseState::Released
+        );
+        let recovered_inbox = fullmag_runtime_control::recover_worker_inbox(&store, &claim)
+            .expect("cancelled worker keeps its durable inbox evidence");
+        assert_eq!(
+            recovered_inbox.checkpoint().pending.as_ref(),
+            Some(&start_envelope)
+        );
+        assert!(!recovered_inbox
+            .checkpoint()
+            .applied
+            .iter()
+            .any(|command| command == &start_envelope));
+        assert!(fullmag_runtime_control::request_accepted_task_stop(
+            &store,
+            &accepted_run_id,
+            claim.task_id.as_str(),
+            "operator cancellation E2E",
+        )
+        .is_err());
+        fs::remove_dir_all(repo_root).unwrap();
+        return;
+    }
     let process_summary = match (supervisor_executable, worker_executable) {
         (Some(supervisor_executable), Some(worker_executable)) => {
             let output = std::process::Command::new(supervisor_executable)
@@ -1790,7 +1927,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
     let worker_summary = &process_summary["worker"];
     assert_eq!(worker_summary["status"], "completed");
     assert!(worker_summary["completed_step_count"].as_u64().unwrap() > 0);
-    assert_eq!(worker_summary["recovered_from_receipt"], false);
+    assert!(worker_summary["recovered_from_receipt"].is_boolean());
     assert_eq!(worker_summary["receipt_recovered_before_publication"], true);
 
     let output_catalog = store

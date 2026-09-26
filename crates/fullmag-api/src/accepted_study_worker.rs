@@ -954,6 +954,8 @@ fn apply_accepted_start_effect(
         _ => bail!("accepted Start is no longer runnable"),
     }
 
+    accepted_worker_test_delay_after_started()?;
+
     let execution = execute_accepted_worker_start(
         store,
         &specification.snapshot.project_id,
@@ -1008,6 +1010,26 @@ fn apply_accepted_start_effect(
         output_catalog: published,
         receipt_recovered_before_publication: true,
     })
+}
+
+fn accepted_worker_test_delay_after_started() -> Result<()> {
+    if std::env::var("FULLMAG_ENABLE_TEST_HOOKS").as_deref() != Ok("1") {
+        return Ok(());
+    }
+    let Some(value) = std::env::var_os("FULLMAG_TEST_ACCEPTED_WORKER_AFTER_STARTED_DELAY_MS")
+    else {
+        return Ok(());
+    };
+    let milliseconds = value
+        .to_str()
+        .context("accepted worker test delay must be valid UTF-8")?
+        .parse::<u64>()
+        .context("accepted worker test delay must be an integer")?;
+    if milliseconds == 0 || milliseconds > 30_000 {
+        bail!("accepted worker test delay must be within 1..=30000 milliseconds");
+    }
+    std::thread::sleep(std::time::Duration::from_millis(milliseconds));
+    Ok(())
 }
 
 fn commit_worker_event(
