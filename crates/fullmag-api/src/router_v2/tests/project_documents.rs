@@ -1690,72 +1690,111 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
     );
     drop(worker_inbox);
     drop(coordinator);
-    let process_result = crate::accepted_study_worker::run_pending_accepted_start(
-        &store,
-        accepted_run_id.as_str(),
-        claim.task_id.as_str(),
-    )
-    .expect("one-shot worker process executes the exact durable accepted Start");
-    assert_eq!(
-        process_result.execution.status,
-        fullmag_runner::RunStatus::Completed
-    );
-    assert!(process_result.execution.completed_step_count > 0);
-    assert!(!process_result.execution.recovered_from_receipt);
-    assert!(process_result.receipt_recovered_before_publication);
+    let supervisor_executable = std::env::var_os("FULLMAG_ACCEPTED_SUPERVISOR_E2E_BIN");
+    let worker_executable = std::env::var_os("FULLMAG_ACCEPTED_WORKER_E2E_BIN");
+    let process_summary = match (supervisor_executable, worker_executable) {
+        (Some(supervisor_executable), Some(worker_executable)) => {
+            let output = std::process::Command::new(supervisor_executable)
+                .arg("--store-root")
+                .arg(store.root())
+                .arg("--run-id")
+                .arg(accepted_run_id.as_str())
+                .arg("--task-id")
+                .arg(claim.task_id.as_str())
+                .arg("--worker-executable")
+                .arg(worker_executable)
+                .arg("--max-concurrency")
+                .arg("1")
+                .arg("--worker-timeout-seconds")
+                .arg("30")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .expect("spawn the built accepted supervisor binary");
+            assert!(
+                output.status.success(),
+                "accepted supervisor E2E failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let summary: serde_json::Value = serde_json::from_slice(&output.stdout)
+                .expect("accepted supervisor emits its JSON completion summary");
+            assert_eq!(summary["status"], "completed");
+            assert_eq!(summary["recovered_terminal_completion"], false);
+            assert_eq!(summary["worker_timed_out"], false);
+            let durable_lease = store
+                .read_resource_lease(
+                    accepted_run_id.as_str(),
+                    &claim.lease.resource_id,
+                    claim.lease.lease_token.as_str(),
+                )
+                .unwrap()
+                .expect("supervisor E2E keeps the fenced lease record");
+            assert_eq!(
+                durable_lease.state,
+                fullmag_session::FmsResourceLeaseState::Released,
+                "supervisor releases the exact lease only after the worker exits and completion is durable"
+            );
+            summary
+        }
+        (None, None) => {
+            let process_result = crate::accepted_study_worker::run_pending_accepted_start(
+                &store,
+                accepted_run_id.as_str(),
+                claim.task_id.as_str(),
+            )
+            .expect("one-shot worker process executes the exact durable accepted Start");
+            assert_eq!(
+                process_result.execution.status,
+                fullmag_runner::RunStatus::Completed
+            );
+            assert!(process_result.execution.completed_step_count > 0);
+            assert!(!process_result.execution.recovered_from_receipt);
+            assert!(process_result.receipt_recovered_before_publication);
 
-    let mut recovered_inbox = fullmag_runtime_control::DurableWorkerInbox::recover(
-        fullmag_session::SessionStore::open(store.root().to_path_buf()).unwrap(),
-        claim.clone(),
-    )
-    .unwrap();
-    assert_eq!(
-        recovered_inbox
-            .receive(&start_envelope, |_| {
-                panic!("replayed Start must not run the solver")
+            let mut recovered_inbox = fullmag_runtime_control::DurableWorkerInbox::recover(
+                fullmag_session::SessionStore::open(store.root().to_path_buf()).unwrap(),
+                claim.clone(),
+            )
+            .unwrap();
+            assert_eq!(
+                recovered_inbox
+                    .receive(&start_envelope, |_| {
+                        panic!("replayed Start must not run the solver")
+                    })
+                    .unwrap(),
+                fullmag_application::ProtocolDisposition::Replayed
+            );
+            serde_json::json!({
+                "status": "completed",
+                "recovered_terminal_completion": false,
+                "worker_timed_out": false,
+                "worker": {
+                    "status": "completed",
+                    "completed_step_count": process_result.execution.completed_step_count,
+                    "recovered_from_receipt": process_result.execution.recovered_from_receipt,
+                    "receipt_recovered_before_publication": process_result.receipt_recovered_before_publication,
+                    "output_catalog_revision": process_result.output_catalog.revision,
+                    "attempt_output_dir": process_result.execution.attempt_output_dir,
+                }
             })
-            .unwrap(),
-        fullmag_application::ProtocolDisposition::Replayed
-    );
-    let execution = process_result.execution;
-    let runner_outputs = execution.outputs;
-    assert_eq!(runner_outputs.len(), 2);
-    let output_bytes = runner_outputs
-        .iter()
-        .find(|output| output.port_id == "final_state")
+        }
+        _ => panic!("accepted supervisor E2E requires both built binary paths"),
+    };
+    let worker_summary = &process_summary["worker"];
+    assert_eq!(worker_summary["status"], "completed");
+    assert!(worker_summary["completed_step_count"].as_u64().unwrap() > 0);
+    assert_eq!(worker_summary["recovered_from_receipt"], false);
+    assert_eq!(worker_summary["receipt_recovered_before_publication"], true);
+
+    let output_catalog = store
+        .read_artifact_catalog(accepted_run_id.as_str())
         .unwrap()
-        .bytes
-        .clone();
-    let state_artifact: serde_json::Value = serde_json::from_slice(&output_bytes).unwrap();
-    let execution_resolution = &state_artifact["provenance"]["execution_resolution"];
-    assert_eq!(execution_resolution["authored_request"]["device"], "cpu");
-    assert_eq!(execution_resolution["effective_request"]["device"], "cpu");
-    assert_eq!(execution_resolution["resolved_execution"]["device"], "cpu");
-    assert_eq!(execution_resolution["resolved_execution"]["backend"], "fdm");
+        .expect("accepted worker publishes its output catalog");
     assert_eq!(
-        execution_resolution["resolved_execution"]["precision"],
-        "double"
+        worker_summary["output_catalog_revision"].as_u64(),
+        Some(output_catalog.revision)
     );
-    assert_eq!(execution_resolution["fallback_occurred"], false);
-    let scalar_bytes = runner_outputs
-        .iter()
-        .find(|output| output.port_id == "total_energy")
-        .unwrap()
-        .bytes
-        .clone();
-    let attempt_output_dir = execution.attempt_output_dir;
-    assert!(attempt_output_dir.starts_with(store.root()));
-    let expected_epoch_dir = format!("epoch-{}", claim.ownership_epoch.value());
-    assert_eq!(
-        attempt_output_dir
-            .file_name()
-            .and_then(|name| name.to_str()),
-        Some(expected_epoch_dir.as_str())
-    );
-    assert!(
-        crate::accepted_study_worker::create_private_attempt_output_dir(&store, &claim).is_err()
-    );
-    let output_catalog = process_result.output_catalog;
     let output_entry = output_catalog
         .entries
         .iter()
@@ -1768,6 +1807,54 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         })
         .expect("accepted study output is durably published");
     assert_eq!(output_entry.artifact_type, "state");
+    let output_bytes = store
+        .cas()
+        .get(output_entry.object_ref.as_deref().unwrap())
+        .unwrap()
+        .expect("accepted final state bytes are stored in CAS");
+    let state_artifact: serde_json::Value = serde_json::from_slice(&output_bytes).unwrap();
+    let execution_resolution = &state_artifact["provenance"]["execution_resolution"];
+    assert_eq!(execution_resolution["authored_request"]["device"], "cpu");
+    assert_eq!(execution_resolution["effective_request"]["device"], "cpu");
+    assert_eq!(execution_resolution["resolved_execution"]["device"], "cpu");
+    assert_eq!(execution_resolution["resolved_execution"]["backend"], "fdm");
+    assert_eq!(
+        execution_resolution["resolved_execution"]["precision"],
+        "double"
+    );
+    assert_eq!(execution_resolution["fallback_occurred"], false);
+    let scalar_entry = output_catalog
+        .entries
+        .iter()
+        .find(|entry| {
+            entry
+                .study_output
+                .as_ref()
+                .is_some_and(|output| output.port_id == "total_energy")
+        })
+        .expect("declared scalar output is durably published");
+    assert_eq!(scalar_entry.artifact_type, "scalar");
+    let scalar_bytes = store
+        .cas()
+        .get(scalar_entry.object_ref.as_deref().unwrap())
+        .unwrap()
+        .expect("accepted scalar bytes are stored in CAS");
+    let attempt_output_dir = std::path::PathBuf::from(
+        worker_summary["attempt_output_dir"]
+            .as_str()
+            .expect("worker summary includes its private attempt output directory"),
+    );
+    assert!(attempt_output_dir.starts_with(store.root()));
+    let expected_epoch_dir = format!("epoch-{}", claim.ownership_epoch.value());
+    assert_eq!(
+        attempt_output_dir
+            .file_name()
+            .and_then(|name| name.to_str()),
+        Some(expected_epoch_dir.as_str())
+    );
+    assert!(
+        crate::accepted_study_worker::create_private_attempt_output_dir(&store, &claim).is_err()
+    );
     let published_task = store
         .read_run_catalog(accepted_run_id.as_str())
         .unwrap()
@@ -1789,19 +1876,8 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             .cas()
             .get(output_entry.object_ref.as_deref().unwrap())
             .unwrap(),
-        Some(output_bytes)
+        Some(output_bytes.clone())
     );
-    let scalar_entry = output_catalog
-        .entries
-        .iter()
-        .find(|entry| {
-            entry
-                .study_output
-                .as_ref()
-                .is_some_and(|output| output.port_id == "total_energy")
-        })
-        .expect("declared scalar output is durably published");
-    assert_eq!(scalar_entry.artifact_type, "scalar");
     assert_eq!(
         store
             .cas()

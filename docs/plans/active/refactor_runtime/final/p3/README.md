@@ -14,12 +14,12 @@ zostać odtworzony bez drugiego uruchomienia solvera. Supervisor wymaga jawnego
 proces, czeka na potwierdzony exit i dopiero potem rekoncyliuje trwały stan.
 
 Brakuje automatycznego wyboru taska, puli większej niż jeden, heartbeatów,
-operator cancel/retry/orphan reconciliation oraz pełnego E2E z dwoma zbudowanymi
-binariami nad accepted store. Pozostałe lane'y, runtime/browser i kwalifikacja
-fizyczna także są otwarte. Szczegóły opisują
+operator cancel/retry/orphan reconciliation oraz process E2E pozostałych lane'ów.
+Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`28-one-shot-accepted-worker-process.md`](28-one-shot-accepted-worker-process.md),
-[`29-accepted-worker-supervisor.md`](29-accepted-worker-supervisor.md)
-i [`30-supervisor-timeout.md`](30-supervisor-timeout.md).
+[`29-accepted-worker-supervisor.md`](29-accepted-worker-supervisor.md),
+[`30-supervisor-timeout.md`](30-supervisor-timeout.md)
+i [`31-supervisor-worker-e2e.md`](31-supervisor-worker-e2e.md).
 
 API ma jawny adapter allow-listy `RunResult` → typowane payloady dla
 wspieranych wyjść. Szczegóły i wcześniejszy dowód opisuje

@@ -112,6 +112,8 @@ class RouteSpec:
     source_paths: tuple[str, ...]
     local_dependency_manifest: str | None = None
     requires_python: bool = False
+    setup_commands: tuple[tuple[str, ...], ...] = ()
+    binary_env: tuple[tuple[str, str], ...] = ()
 
 
 ROUTES = {
@@ -191,6 +193,41 @@ ROUTES = {
             "fullmag-api",
             "--bin",
             "fullmag-api-accepted-supervisor",
+        ),
+        source_paths=API_SOURCE_PATHS,
+        local_dependency_manifest="crates/fullmag-api/Cargo.toml",
+    ),
+    "api-accepted-supervisor-e2e": RouteSpec(
+        name="api-accepted-supervisor-e2e",
+        profile="windows-api-source-check",
+        receipt_schema="fullmag_api_accepted_supervisor_e2e_v1",
+        command=(
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api",
+            "router_v2::tests::project_documents::explicit_project_run_submit_is_durable_and_replays_without_live_session",
+            "--",
+            "--exact",
+            "--nocapture",
+        ),
+        setup_commands=((
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fullmag-api",
+            "--bin",
+            "fullmag-api-accepted-supervisor",
+            "--bin",
+            "fullmag-api-accepted-worker",
+        ),),
+        binary_env=(
+            ("FULLMAG_ACCEPTED_SUPERVISOR_E2E_BIN", "fullmag-api-accepted-supervisor"),
+            ("FULLMAG_ACCEPTED_WORKER_E2E_BIN", "fullmag-api-accepted-worker"),
         ),
         source_paths=API_SOURCE_PATHS,
         local_dependency_manifest="crates/fullmag-api/Cargo.toml",
@@ -598,6 +635,9 @@ def child_environment(
     env.pop("FULLMAG_PROJECT_RUN_FIXTURE_PATH", None)
     if spec.name == "api-project-run-tests":
         env["FULLMAG_PROJECT_RUN_FIXTURE_PATH"] = str(paths["run_root"] / "project-run-request.json")
+    executable_suffix = ".exe" if os.name == "nt" else ""
+    for variable, binary_name in spec.binary_env:
+        env[variable] = str(paths["target_dir"] / "debug" / f"{binary_name}{executable_suffix}")
     env.update({str(key): str(value) for key, value in layout["env"].items()})
     env.update(
         {
@@ -712,20 +752,43 @@ def run_route(repo_root: Path, route: str | RouteSpec = SESSION_ROUTE) -> int:
                 env = child_environment(layout, paths, tools, spec, python_runtime)
                 receipt["state"] = "running"
                 receipt["execution_command"] = [str(tools["cargo"]), *spec.command[1:]]
+                receipt["setup_commands"] = [
+                    [str(tools["cargo"]), *command[1:]] for command in spec.setup_commands
+                ]
                 _write_atomic_json(paths["receipt"], receipt)
+                result: subprocess.CompletedProcess[str] | None = None
+                return_code = 0
                 with paths["log"].open("w", encoding="utf-8", newline="\n") as log:
-                    result = subprocess.run(
-                        [str(tools["cargo"]), *spec.command[1:]],
-                        cwd=repo_root,
-                        env=env,
-                        stdout=subprocess.PIPE if spec.name == "api-openapi-codegen" else log,
-                        stderr=log if spec.name == "api-openapi-codegen" else subprocess.STDOUT,
-                        text=True,
-                        encoding="utf-8",
-                        check=False,
-                    )
-                return_code = result.returncode
+                    for command in spec.setup_commands:
+                        log.write("setup command: " + " ".join(command) + "\n")
+                        log.flush()
+                        setup_result = subprocess.run(
+                            [str(tools["cargo"]), *command[1:]],
+                            cwd=repo_root,
+                            env=env,
+                            stdout=log,
+                            stderr=subprocess.STDOUT,
+                            text=True,
+                            encoding="utf-8",
+                            check=False,
+                        )
+                        return_code = setup_result.returncode
+                        if return_code != 0:
+                            break
+                    if return_code == 0:
+                        result = subprocess.run(
+                            [str(tools["cargo"]), *spec.command[1:]],
+                            cwd=repo_root,
+                            env=env,
+                            stdout=subprocess.PIPE if spec.name == "api-openapi-codegen" else log,
+                            stderr=log if spec.name == "api-openapi-codegen" else subprocess.STDOUT,
+                            text=True,
+                            encoding="utf-8",
+                            check=False,
+                        )
+                        return_code = result.returncode
                 if return_code == 0 and spec.name == "api-openapi-codegen":
+                    assert result is not None
                     document = json.loads(result.stdout)
                     if "/v2/sessions/current/status" not in document.get("paths", {}) or "/v2/persistence/projects/{project_id}/runs" not in document.get("paths", {}):
                         raise SessionCheckError("Generated OpenAPI omitted a required route")
