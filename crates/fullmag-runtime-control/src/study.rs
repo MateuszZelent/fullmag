@@ -419,6 +419,34 @@ pub fn queue_accepted_study_task(
         && durable_task.resource_id.is_none()
         && durable_task.coordinator_watermark.is_none()
         && durable_task.coordinator_genesis.is_none();
+    let retry_queue_replay = if durable_task.lifecycle == fullmag_session::FmsTaskLifecycle::Queued
+        && matches!(&durable_task.readiness, fullmag_session::FmsTaskReadiness::Ready)
+        && durable_task.attempt_id.is_none()
+        && durable_task.resolved_input_fingerprint.is_none()
+        && durable_task.artifact_ids.is_empty()
+        && durable_task.resource_id.is_none()
+    {
+        match durable_task.ownership_epoch {
+            Some(ownership_epoch) => {
+                let matching_decisions = store
+                    .list_retry_decisions(run_id.as_str())?
+                    .into_iter()
+                    .filter(|decision| {
+                        decision.task_id == durable_task.task_id
+                            && decision.ownership_epoch == ownership_epoch
+                            && decision.action == fullmag_session::FmsRetryAction::Retry
+                    })
+                    .count();
+                if matching_decisions > 1 {
+                    bail!("multiple retry decisions authorize the same queued task epoch");
+                }
+                matching_decisions == 1
+            }
+            None => false,
+        }
+    } else {
+        false
+    };
     let should_publish_queue = durable_task.lifecycle
         == fullmag_session::FmsTaskLifecycle::Accepted
         && matches!(
@@ -432,7 +460,7 @@ pub fn queue_accepted_study_task(
             &durable_task.readiness,
             fullmag_session::FmsTaskReadiness::Ready
         )
-        && has_no_claim_or_runtime_progress;
+        && (has_no_claim_or_runtime_progress || retry_queue_replay);
     if !should_publish_queue && !is_queue_replay {
         bail!("accepted study task is not in the unclaimed scheduler-owned queue state");
     }
@@ -463,9 +491,20 @@ pub fn queue_accepted_study_task(
             .context("publish dependency-checked accepted task queue state")?;
     }
 
+    let durable_task = catalog.tasks[task_index].clone();
     let mut task = TaskRecord::new(run_id.clone(), expected_fingerprint)?;
     task.task_id = fullmag_application::TaskId::parse(expected_task_id)?;
     task.queue()?;
+    task.ownership_epoch = durable_task
+        .ownership_epoch
+        .map(fullmag_application::OwnershipEpoch::new)
+        .transpose()?;
+    task.observation = durable_task.observation.map(|value| match value {
+        fullmag_session::FmsObservationState::Live => fullmag_application::ObservationState::Live,
+        fullmag_session::FmsObservationState::Stale => fullmag_application::ObservationState::Stale,
+        fullmag_session::FmsObservationState::Disconnected => fullmag_application::ObservationState::Disconnected,
+        fullmag_session::FmsObservationState::Reconciling => fullmag_application::ObservationState::Reconciling,
+    });
     Ok(QueuedAcceptedStudyTask {
         task,
         step_id: step_id.into(),
@@ -2005,6 +2044,30 @@ pub fn publish_accepted_task_prepare(
         (Err(error), None) => {
             Err(anyhow::Error::new(error)).context("committing accepted task Prepare command")
         }
+    }
+}
+
+/// Publish the exact Start command after a durable Prepare for the same claim.
+/// The coordinator journal remains the transport outbox and the worker side
+/// effect stays owned by the process supervisor.
+pub fn publish_accepted_task_start(
+    store: &SessionStore,
+    coordinator: &mut DurableWorkerCoordinator,
+) -> Result<WorkerCommandEnvelope> {
+    let mut publication_error = None;
+    let result = coordinator.commit_command(WorkerCommand::Start, None, |transition| {
+        crate::commit_transition(store, transition)
+            .map(|_| ())
+            .map_err(|error| {
+                publication_error = Some(error);
+                CoordinatorError::Invalid("durable Start publication failed".into())
+            })
+    });
+    match (result, publication_error) {
+        (Ok(envelope), None) => Ok(envelope),
+        (_, Some(error)) => Err(error).context("publishing accepted task Start command"),
+        (Err(error), None) => Err(anyhow::Error::new(error))
+            .context("committing accepted task Start command"),
     }
 }
 

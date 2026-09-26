@@ -244,6 +244,59 @@ def test_api_accepted_supervisor_retry_recovery_e2e_route_builds_both_processes(
         MODULE.validate_command(("cargo", "test", "--workspace"), route)
 
 
+def test_api_accepted_scheduler_e2e_route_builds_scheduler_and_worker() -> None:
+    route = MODULE.ROUTES["api-accepted-scheduler-e2e"]
+    assert route.setup_commands == ((
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api-accepted-scheduler",
+        "--bin",
+        "fullmag-api-accepted-worker",
+    ),)
+    assert dict(route.binary_env) == {
+        "FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN": "fullmag-api-accepted-scheduler",
+        "FULLMAG_ACCEPTED_WORKER_E2E_BIN": "fullmag-api-accepted-worker",
+    }
+    assert dict(route.environment) == {"FULLMAG_ACCEPTED_SCHEDULER_E2E": "1"}
+    assert route.receipt_schema == "fullmag_api_accepted_scheduler_e2e_v1"
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
+def test_api_accepted_scheduler_retry_e2e_route_builds_all_processes() -> None:
+    route = MODULE.ROUTES["api-accepted-scheduler-retry-e2e"]
+    assert route.setup_commands == ((
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api-accepted-scheduler",
+        "--bin",
+        "fullmag-api-accepted-supervisor",
+        "--bin",
+        "fullmag-api-accepted-worker",
+    ),)
+    assert dict(route.binary_env) == {
+        "FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN": "fullmag-api-accepted-scheduler",
+        "FULLMAG_ACCEPTED_SUPERVISOR_E2E_BIN": "fullmag-api-accepted-supervisor",
+        "FULLMAG_ACCEPTED_WORKER_E2E_BIN": "fullmag-api-accepted-worker",
+    }
+    assert dict(route.environment) == {
+        "FULLMAG_ACCEPTED_SCHEDULER_RETRY_E2E": "1",
+        "FULLMAG_ENABLE_TEST_HOOKS": "1",
+        "FULLMAG_TEST_ACCEPTED_WORKER_FAIL_BEFORE_EFFECT": "1",
+    }
+    assert route.receipt_schema == "fullmag_api_accepted_scheduler_retry_e2e_v1"
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
 def test_api_scene_resource_route_is_fixed_and_tracks_api_sources() -> None:
     route = MODULE.ROUTES["api-scene-resource-tests"]
     assert route.command == (
@@ -374,6 +427,8 @@ def test_just_route_precedes_generic_prepare_links() -> None:
     assert '--route api-accepted-supervisor-prestart-cancel-e2e --repo-root' in justfile
     assert '--route api-accepted-supervisor-automatic-retry-e2e --repo-root' in justfile
     assert '--route api-accepted-supervisor-retry-recovery-e2e --repo-root' in justfile
+    assert '--route api-accepted-scheduler-e2e --repo-root' in justfile
+    assert '--route api-accepted-scheduler-retry-e2e --repo-root' in justfile
     assert '--route api-preparation-tests --repo-root' in justfile
     assert '--route api-scene-resource-tests --repo-root' in justfile
     assert '--route authoring-scene-adapter-tests --repo-root' in justfile
@@ -389,6 +444,8 @@ def test_just_route_precedes_generic_prepare_links() -> None:
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-prestart-cancel-e2e' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-automatic-retry-e2e' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-retry-recovery-e2e' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-e2e' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-retry-e2e' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-preparation-tests' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-scene-resource-tests' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route authoring-scene-adapter-tests' in shell

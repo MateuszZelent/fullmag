@@ -1064,6 +1064,47 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         persisted_task.readiness,
         fullmag_session::FmsTaskReadiness::Blocked { .. }
     ));
+    if std::env::var("FULLMAG_ACCEPTED_SCHEDULER_E2E").as_deref() == Ok("1") {
+        let scheduler_executable = std::env::var_os("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN")
+            .expect("scheduler E2E requires the built accepted scheduler binary");
+        let worker_executable = std::env::var_os("FULLMAG_ACCEPTED_WORKER_E2E_BIN")
+            .expect("scheduler E2E requires the built accepted worker binary");
+        let output = std::process::Command::new(scheduler_executable)
+            .arg("--store-root").arg(store.root())
+            .arg("--run-id").arg(accepted_run_id.as_str())
+            .arg("--resource-id").arg("cpu-scheduler-e2e")
+            .arg("--resource-kind").arg("cpu")
+            .arg("--cpu-millis").arg("100")
+            .arg("--memory-bytes").arg("1048576")
+            .arg("--gpu-memory-bytes").arg("0")
+            .arg("--storage-bytes").arg("8388608")
+            .arg("--worker-executable").arg(worker_executable)
+            .arg("--max-concurrency").arg("1")
+            .arg("--max-tasks").arg("1")
+            .arg("--worker-timeout-seconds").arg("30")
+            .arg("--heartbeat-interval-milliseconds").arg("500")
+            .arg("--max-automatic-retries").arg("0")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("run the built accepted scheduler");
+        assert!(output.status.success(), "accepted scheduler E2E failed: {}", String::from_utf8_lossy(&output.stderr));
+        let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(summary["status"], "completed");
+        assert_eq!(summary["scheduled_count"], 1);
+        assert_eq!(summary["executed"][0]["task_id"], persisted_task.task_id.as_str());
+        assert_eq!(summary["executed"][0]["step_id"], step.step_id.as_str());
+        assert_eq!(summary["executed"][0]["admission"], "admitted");
+        assert_eq!(summary["executed"][0]["worker"]["status"], "completed");
+        let catalog = store.read_run_catalog(accepted_run_id.as_str()).unwrap().unwrap();
+        let task = catalog.tasks.iter().find(|task| task.task_id == persisted_task.task_id).unwrap();
+        assert_eq!(task.lifecycle, fullmag_session::FmsTaskLifecycle::Succeeded);
+        assert_eq!(task.ownership_epoch, Some(1));
+        assert!(!task.artifact_ids.is_empty());
+        assert!(store.read_active_resource_lease_for_task(accepted_run_id.as_str(), persisted_task.task_id.as_str()).unwrap().is_none());
+        return;
+    }
     let revision_before_invalid_queue = store
         .read_run_catalog(accepted_run_id.as_str())
         .unwrap()
@@ -1686,9 +1727,11 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         std::env::var("FULLMAG_ACCEPTED_SUPERVISOR_PRESTART_CANCEL_E2E").as_deref() == Ok("1");
     let automatic_retry_e2e =
         std::env::var("FULLMAG_ACCEPTED_SUPERVISOR_AUTOMATIC_RETRY_E2E").as_deref() == Ok("1");
+    let scheduler_retry_e2e =
+        std::env::var("FULLMAG_ACCEPTED_SCHEDULER_RETRY_E2E").as_deref() == Ok("1");
     let retry_recovery_e2e =
         std::env::var("FULLMAG_ACCEPTED_SUPERVISOR_RETRY_RECOVERY_E2E").as_deref() == Ok("1");
-    if cancel_e2e || prestart_cancel_e2e || automatic_retry_e2e || retry_recovery_e2e {
+    if cancel_e2e || prestart_cancel_e2e || automatic_retry_e2e || scheduler_retry_e2e || retry_recovery_e2e {
         let supervisor_executable = supervisor_executable
             .as_ref()
             .expect("cancel E2E requires the built supervisor binary");
@@ -1720,7 +1763,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             .arg("30")
             .arg("--heartbeat-interval-milliseconds")
             .arg("500");
-        if automatic_retry_e2e || retry_recovery_e2e {
+        if automatic_retry_e2e || scheduler_retry_e2e || retry_recovery_e2e {
             supervisor_command.arg("--max-automatic-retries").arg("1");
         }
         let mut child = supervisor_command
@@ -1730,7 +1773,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             .spawn()
             .expect("spawn the built accepted supervisor for cancellation E2E");
 
-        if automatic_retry_e2e || retry_recovery_e2e {
+        if automatic_retry_e2e || scheduler_retry_e2e || retry_recovery_e2e {
             let output = child
                 .wait_with_output()
                 .expect("collect automatic retry E2E supervisor exit");
@@ -1824,6 +1867,41 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
                 .read_artifact_catalog(accepted_run_id.as_str())
                 .unwrap()
                 .is_none());
+            if scheduler_retry_e2e {
+                let scheduler_executable = std::env::var_os("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN")
+                    .expect("scheduler retry E2E requires the built scheduler binary");
+                let retry = std::process::Command::new(scheduler_executable)
+                    .arg("--store-root").arg(store.root())
+                    .arg("--run-id").arg(accepted_run_id.as_str())
+                    .arg("--resource-id").arg("cpu-scheduler-retry-e2e")
+                    .arg("--resource-kind").arg("cpu")
+                    .arg("--cpu-millis").arg("100")
+                    .arg("--memory-bytes").arg("1048576")
+                    .arg("--gpu-memory-bytes").arg("0")
+                    .arg("--storage-bytes").arg("8388608")
+                    .arg("--worker-executable").arg(worker_executable)
+                    .arg("--max-concurrency").arg("1")
+                    .arg("--max-tasks").arg("1")
+                    .arg("--worker-timeout-seconds").arg("30")
+                    .arg("--heartbeat-interval-milliseconds").arg("5000")
+                    .arg("--max-automatic-retries").arg("0")
+                    .env_remove("FULLMAG_TEST_ACCEPTED_WORKER_FAIL_BEFORE_EFFECT")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .output()
+                    .expect("run scheduler for the durable retry");
+                assert!(retry.status.success(), "accepted scheduler retry E2E failed: {}", String::from_utf8_lossy(&retry.stderr));
+                let retry_summary: serde_json::Value = serde_json::from_slice(&retry.stdout).unwrap();
+                assert_eq!(retry_summary["status"], "completed");
+                assert_eq!(retry_summary["scheduled_count"], 1);
+                assert_eq!(retry_summary["executed"][0]["ownership_epoch"], 2);
+                assert_eq!(retry_summary["executed"][0]["worker"]["status"], "completed");
+                let catalog = store.read_run_catalog(accepted_run_id.as_str()).unwrap().unwrap();
+                assert_eq!(catalog.tasks[0].lifecycle, fullmag_session::FmsTaskLifecycle::Succeeded);
+                assert_eq!(catalog.tasks[0].ownership_epoch, Some(2));
+                assert!(!catalog.tasks[0].artifact_ids.is_empty());
+            }
             fs::remove_dir_all(repo_root).unwrap();
             return;
         }

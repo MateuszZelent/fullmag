@@ -521,12 +521,15 @@ pub fn load_accepted_run_snapshot(
 mod claim;
 pub use claim::{commit_claimed_task_admission, load_current_task_claim};
 
+mod scheduler;
+pub use scheduler::{schedule_next_ready_accepted_task, ScheduledAcceptedTask};
+
 mod study;
 pub use study::{
     load_accepted_study_snapshot, load_accepted_worker_step, load_accepted_worker_step_for_start,
-    publish_accepted_task_prepare, publish_study_outputs, queue_accepted_study_task,
-    validate_requested_execution, validate_study_task_completion, AcceptedStudySnapshot,
-    AcceptedWorkerStep, QueuedAcceptedStudyTask, StudyOutputPayload,
+    publish_accepted_task_prepare, publish_accepted_task_start, publish_study_outputs,
+    queue_accepted_study_task, validate_requested_execution, validate_study_task_completion,
+    AcceptedStudySnapshot, AcceptedWorkerStep, QueuedAcceptedStudyTask, StudyOutputPayload,
     ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION,
 };
 

@@ -78,6 +78,14 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("web\\index.html", content)
         self.assertNotIn("apps\\web\\out", content)
 
+    def test_accepted_scheduler_is_in_portable_and_windows_packages(self) -> None:
+        portable = (ROOT / "scripts/package_fullmag_portable.sh").read_text(encoding="utf-8")
+        validator = (ROOT / "scripts/validate_portable_bundle.sh").read_text(encoding="utf-8")
+        windows = WINDOWS_MSI_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("bin/fullmag-api-accepted-scheduler", portable)
+        self.assertIn("bin/fullmag-api-accepted-scheduler", validator)
+        self.assertIn("bin/fullmag-api-accepted-scheduler.exe", windows)
+
     def test_managed_runtime_export_has_safe_automatic_pruning(self) -> None:
         exporter = (ROOT / "scripts/export_fem_gpu_runtime.sh").read_text(encoding="utf-8")
         pruner = (ROOT / "scripts/prune_managed_fem_runtimes.sh").read_text(encoding="utf-8")

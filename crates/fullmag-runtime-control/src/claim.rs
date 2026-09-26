@@ -44,9 +44,31 @@ pub fn commit_claimed_task_admission(
         bail!("application task differs from the durable ready task");
     }
     validate_claimed_task_resource(store, claim)?;
+    let retry_queue_epoch = durable_task.ownership_epoch.is_some_and(|prior_epoch| {
+        prior_epoch
+            .checked_add(1)
+            .is_some_and(|next_epoch| next_epoch == claim.ownership_epoch.value())
+    });
+    let retry_queue_authorized = if retry_queue_epoch {
+        let matching_decisions = store
+            .list_retry_decisions(claim.run_id.as_str())?
+            .into_iter()
+            .filter(|decision| {
+                decision.task_id == claim.task_id.as_str()
+                    && Some(decision.ownership_epoch) == durable_task.ownership_epoch
+                    && decision.action == fullmag_session::FmsRetryAction::Retry
+            })
+            .count();
+        if matching_decisions > 1 {
+            bail!("multiple retry decisions authorize the same queued task epoch");
+        }
+        matching_decisions == 1
+    } else {
+        false
+    };
     let is_unclaimed_queue = durable_task.lifecycle == FmsTaskLifecycle::Queued
         && durable_task.attempt_id.is_none()
-        && durable_task.ownership_epoch.is_none()
+        && (durable_task.ownership_epoch.is_none() || retry_queue_authorized)
         && durable_task.resource_id.is_none();
     let is_exact_replay = durable_task.lifecycle == FmsTaskLifecycle::Preparing
         && durable_task.attempt_id.as_deref() == Some(claim.attempt_id.as_str())
@@ -96,7 +118,16 @@ pub fn commit_claimed_task_admission(
 /// request and any concrete FEM eigen device already resolved by the planner.
 /// The durable lease records the selected device for `auto`; explicit requests
 /// can never cross CPU/GPU lanes at admission.
-fn validate_claimed_task_resource(store: &SessionStore, claim: &TaskClaim) -> Result<()> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ClaimedTaskResourceCompatibility {
+    Compatible,
+    Incompatible(String),
+}
+
+pub(crate) fn claimed_task_resource_compatibility(
+    store: &SessionStore,
+    claim: &TaskClaim,
+) -> Result<ClaimedTaskResourceCompatibility> {
     let intent = store
         .read_run_intent(claim.run_id.as_str())?
         .context("accepted task admission requires its immutable run intent")?;
@@ -143,41 +174,50 @@ fn validate_claimed_task_resource(store: &SessionStore, claim: &TaskClaim) -> Re
         .as_ref()
         .and_then(|plan| plan.provenance.fem_eigen_execution_resolution.as_ref())
         .map(|resolution| resolution.resolved_device);
-    validate_solver_resource_device(
+    Ok(solver_resource_compatibility(
         &specification.requested_execution.device,
         &claim.lease.kind,
         planned_device,
-    )
+    )?)
 }
 
-fn validate_solver_resource_device(
+fn validate_claimed_task_resource(store: &SessionStore, claim: &TaskClaim) -> Result<()> {
+    match claimed_task_resource_compatibility(store, claim)? {
+        ClaimedTaskResourceCompatibility::Compatible => Ok(()),
+        ClaimedTaskResourceCompatibility::Incompatible(reason) => bail!(reason),
+    }
+}
+
+fn solver_resource_compatibility(
     requested_device: &str,
     resource_kind: &ResourceKind,
     planned_device: Option<ExecutionDevice>,
-) -> Result<()> {
+) -> Result<ClaimedTaskResourceCompatibility> {
     let (offered_device, offered_name) = match resource_kind {
         ResourceKind::Cpu => (ExecutionDevice::Cpu, "cpu"),
         ResourceKind::Gpu => (ExecutionDevice::Gpu, "gpu"),
         ResourceKind::Storage | ResourceKind::Meshing => {
-            bail!("study solver task requires a CPU or GPU resource lease")
+            return Ok(ClaimedTaskResourceCompatibility::Incompatible(
+                "study solver task requires a CPU or GPU resource lease".into(),
+            ));
         }
     };
     if requested_device != "auto" && requested_device != offered_name {
-        bail!(
+        return Ok(ClaimedTaskResourceCompatibility::Incompatible(format!(
             "claimed {offered_name} resource does not match explicit RunSpec device `{requested_device}`"
-        );
+        )));
     }
     if let Some(planned_device) = planned_device {
         if planned_device == ExecutionDevice::Auto {
             bail!("accepted execution plan did not resolve its FEM eigen device");
         }
         if planned_device != offered_device {
-            bail!(
+            return Ok(ClaimedTaskResourceCompatibility::Incompatible(format!(
                 "claimed {offered_name} resource does not match the planner-resolved FEM eigen device `{planned_device:?}`"
-            );
+            )));
         }
     }
-    Ok(())
+    Ok(ClaimedTaskResourceCompatibility::Compatible)
 }
 
 /// Reconstruct the current claim only when the run catalog and its active

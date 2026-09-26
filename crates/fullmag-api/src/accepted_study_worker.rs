@@ -604,11 +604,13 @@ pub(crate) fn execute_accepted_worker_start(
     {
         bail!("accepted Start is not the pending command after one durable Prepare");
     }
-    let current_claim = fullmag_runtime_control::load_current_task_claim(
-        store,
-        &accepted_step.claim.run_id,
-        accepted_step.claim.task_id.as_str(),
-    )
+    let current_claim = retry_store_writer_busy(|| {
+        fullmag_runtime_control::load_current_task_claim(
+            store,
+            &accepted_step.claim.run_id,
+            accepted_step.claim.task_id.as_str(),
+        )
+    })
     .context("accepted Start no longer owns the current task claim")?;
     if !accepted_step.claim.is_same_or_renewed_by(&current_claim) {
         bail!("accepted Start worker context has a stale task claim");

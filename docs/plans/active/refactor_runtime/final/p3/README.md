@@ -682,3 +682,22 @@ i scoped API diff check **PASS**. Guard nie uruchamia workera i nie potwierdza
 faktycznie użytego GPU/CPU. Scheduler, pule zasobów, supervisor/transport,
 runtime i kwalifikacja fizyczna pozostają otwarte; P3 **50%**, całość około
 **27%**. Szczegóły: [`22-device-lane-admission-fence.md`](22-device-lane-admission-fence.md).
+
+## Ograniczony scheduler accepted task — 27.09.2026
+
+`fullmag-api-accepted-scheduler` wybiera pierwszy dependency-ready task jednego
+immutable runu dla jawnej oferty CPU/GPU, wykonuje device fence i durable
+admission, a następnie publikuje `Prepare`, `Prepared` i pending `Start` przed
+uruchomieniem istniejącego supervisora. Ponowne admission kolejnego epochu
+wymaga dokładnie jednej trwałej decyzji `Retry` dla poprzedniego ownera.
+
+E2E pierwszej próby i E2E retry kończą się sukcesem. Druga trasa wymusza awarię
+przed side effect, wraca do kolejki i kończy nowy attempt z
+`ownership_epoch = 2`. Receipty: `557b3400e25045e59652836afe4efd97`
+oraz `c4ea19ef2b674713aa56be5ae8eb30a8`; testy tras Python: **23/23 PASS**.
+
+Scheduler jest ograniczony do jednego runu, jawnego zasobu i skończonej liczby
+tasków. Rezydentna pula, fairness wielu runów, zdalne ACK, orphan recovery i
+pozostałe lane'y pozostają otwarte. P3 wynosi około **72%**, P5 około **34%**,
+a całość około **34%**. Szczegóły:
+[`38-accepted-task-scheduler.md`](38-accepted-task-scheduler.md).

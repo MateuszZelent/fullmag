@@ -18,6 +18,10 @@ name = "fullmag-api-accepted-supervisor"
 path = "src/accepted_supervisor_main.rs"
 
 [[bin]]
+name = "fullmag-api-accepted-scheduler"
+path = "src/accepted_scheduler_main.rs"
+
+[[bin]]
 name = "fullmag-api-openapi"
 path = "src/main.rs"
 required-features = ["openapi-codegen"]
