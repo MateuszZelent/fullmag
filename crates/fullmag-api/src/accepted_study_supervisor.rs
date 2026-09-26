@@ -145,12 +145,18 @@ pub(crate) fn run_supervised_accepted_worker(
     worker_executable: &Path,
     max_concurrency: usize,
     worker_timeout: Duration,
+    heartbeat_interval: Duration,
 ) -> Result<SupervisedWorkerResult> {
     if max_concurrency != 1 {
         bail!("accepted-worker supervisor currently requires --max-concurrency 1");
     }
     if worker_timeout.is_zero() {
         bail!("accepted-worker supervisor requires a positive worker timeout");
+    }
+    if heartbeat_interval.is_zero() || heartbeat_interval >= worker_timeout {
+        bail!(
+            "accepted-worker supervisor heartbeat interval must be positive and shorter than the worker timeout"
+        );
     }
     let slot = SupervisorSlot::acquire(store, run_id, task_id)?;
     let run_id_typed = fullmag_application::RunId::parse(run_id.to_owned())
@@ -171,14 +177,17 @@ pub(crate) fn run_supervised_accepted_worker(
         bail!("resource lease changed while the supervisor captured its task claim");
     }
 
+    let mut active_lease = lease;
     let outcome = spawn_worker(
         worker_executable,
         store.root(),
         run_id,
         task_id,
         worker_timeout,
+        heartbeat_interval,
+        || renew_resource_lease(store, &mut active_lease),
     )?;
-    let reconciliation = reconcile_worker_exit(store, &claim, &lease, &outcome);
+    let reconciliation = reconcile_worker_exit(store, &claim, &active_lease, &outcome);
     match reconciliation {
         Ok(result) => {
             slot.release()?;
@@ -194,13 +203,56 @@ pub(crate) fn run_supervised_accepted_worker(
     }
 }
 
-fn spawn_worker(
+fn task_is_terminal(store: &SessionStore, lease: &FmsResourceLease) -> Result<bool> {
+    let catalog = store
+        .read_run_catalog(&lease.run_id)?
+        .context("accepted-worker heartbeat requires its run catalog")?;
+    let task = catalog
+        .tasks
+        .iter()
+        .find(|task| task.task_id == lease.task_id)
+        .context("accepted-worker heartbeat task is missing")?;
+    Ok(matches!(
+        task.lifecycle,
+        fullmag_session::FmsTaskLifecycle::Succeeded
+            | fullmag_session::FmsTaskLifecycle::Failed
+            | fullmag_session::FmsTaskLifecycle::Cancelled
+            | fullmag_session::FmsTaskLifecycle::Interrupted
+    ))
+}
+
+fn renew_resource_lease(store: &SessionStore, lease: &mut FmsResourceLease) -> Result<bool> {
+    if task_is_terminal(store, lease)? {
+        return Ok(false);
+    }
+    let mut renewed = lease.clone();
+    renewed.heartbeat_sequence = renewed
+        .heartbeat_sequence
+        .checked_add(1)
+        .context("accepted-worker resource lease heartbeat sequence exhausted")?;
+    renewed.heartbeat_at = chrono::Utc::now();
+    if let Err(error) = store.heartbeat_resource_lease(&renewed) {
+        if task_is_terminal(store, lease)? {
+            return Ok(false);
+        }
+        return Err(error).context("renew accepted-worker resource lease");
+    }
+    *lease = renewed;
+    Ok(true)
+}
+
+fn spawn_worker<F>(
     worker_executable: &Path,
     store_root: &Path,
     run_id: &str,
     task_id: &str,
     worker_timeout: Duration,
-) -> Result<ObservedWorkerProcess> {
+    heartbeat_interval: Duration,
+    heartbeat: F,
+) -> Result<ObservedWorkerProcess>
+where
+    F: FnMut() -> Result<bool>,
+{
     let metadata = fs::symlink_metadata(worker_executable).with_context(|| {
         format!(
             "inspect accepted worker executable `{}`",
@@ -222,10 +274,23 @@ fn spawn_worker(
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| format!("spawn accepted worker `{}`", worker_executable.display()))?;
-    observe_child(child, Some(worker_timeout))
+    observe_child(
+        child,
+        Some(worker_timeout),
+        Some(heartbeat_interval),
+        heartbeat,
+    )
 }
 
-fn observe_child(mut child: Child, timeout: Option<Duration>) -> Result<ObservedWorkerProcess> {
+fn observe_child<F>(
+    mut child: Child,
+    timeout: Option<Duration>,
+    heartbeat_interval: Option<Duration>,
+    mut heartbeat: F,
+) -> Result<ObservedWorkerProcess>
+where
+    F: FnMut() -> Result<bool>,
+{
     let stdout = child
         .stdout
         .take()
@@ -237,6 +302,8 @@ fn observe_child(mut child: Child, timeout: Option<Duration>) -> Result<Observed
     let stdout_reader = spawn_output_reader(stdout);
     let stderr_reader = spawn_output_reader(stderr);
     let started = Instant::now();
+    let mut last_heartbeat = Instant::now();
+    let mut heartbeat_enabled = heartbeat_interval.is_some();
 
     loop {
         if let Some(status) = child.try_wait().context("observe accepted worker exit")? {
@@ -256,6 +323,30 @@ fn observe_child(mut child: Child, timeout: Option<Duration>) -> Result<Observed
                 .wait()
                 .context("confirm accepted worker termination after timeout")?;
             return collect_child_output(status, true, stdout_reader, stderr_reader);
+        }
+        if heartbeat_enabled
+            && heartbeat_interval.is_some_and(|interval| last_heartbeat.elapsed() >= interval)
+        {
+            match heartbeat() {
+                Ok(keep_renewing) => heartbeat_enabled = keep_renewing,
+                Err(error) => {
+                    if error
+                        .chain()
+                        .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
+                    {
+                        std::thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = join_output_reader(stdout_reader, "stdout");
+                    let _ = join_output_reader(stderr_reader, "stderr");
+                    return Err(error.context(
+                        "accepted-worker heartbeat failed; child was terminated before returning",
+                    ));
+                }
+            }
+            last_heartbeat = Instant::now();
         }
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -371,7 +462,8 @@ fn reconcile_worker_exit(
     }
     if inbox_checkpoint.pending.is_some() {
         bail!(
-            "worker exited with an ambiguous pending effect; resource lease retained for reconciliation"
+            "worker exited with an ambiguous pending effect; resource lease retained for reconciliation: {}",
+            worker_failure_reason(outcome)
         );
     }
 
@@ -499,6 +591,7 @@ mod tests {
             Path::new("missing-worker"),
             2,
             Duration::from_secs(1),
+            Duration::from_millis(100),
         )
         .unwrap_err();
         assert!(error.to_string().contains("--max-concurrency 1"));
@@ -514,6 +607,8 @@ mod tests {
             "run-a",
             "task-a",
             Duration::from_secs(5),
+            Duration::from_secs(1),
+            || Ok(true),
         )
         .unwrap();
         assert!(
@@ -545,9 +640,20 @@ mod tests {
             .spawn()
             .unwrap();
         let started = Instant::now();
-        let outcome = observe_child(child, Some(Duration::from_millis(100))).unwrap();
+        let mut heartbeat_count = 0_u64;
+        let outcome = observe_child(
+            child,
+            Some(Duration::from_millis(100)),
+            Some(Duration::from_millis(20)),
+            || {
+                heartbeat_count += 1;
+                Ok(true)
+            },
+        )
+        .unwrap();
         assert!(outcome.timed_out);
         assert!(!outcome.output.status.success());
+        assert!(heartbeat_count > 0);
         assert!(started.elapsed() < Duration::from_secs(5));
     }
 }

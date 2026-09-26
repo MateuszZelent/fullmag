@@ -42,6 +42,18 @@ przekazany do transportu przed sukcesem obu kroków.
 run/task/attempt/epoch/lease i watermarkiem `(0,0)`. Legacy task bez genesis
 pozostaje odmową. Jeśli watermark jest dodatni, genesis nie zastępuje
 utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
+6. `heartbeat_sequence` jest monotoniczną wersją liveness tego samego lease,
+   a nie nowym właścicielem taska. Fencing właściciela pozostaje związany z
+   run/task/attempt/ownership epoch/resource/lease token. Snapshot claimu może
+   publikować pod aktywnym lease o równej lub wyższej sekwencji heartbeat tylko
+   wtedy, gdy wszystkie niezmienne pola właściciela, kind i budget są zgodne.
+7. Lokalny supervisor procesu odnawia lease wyłącznie podczas obserwacji
+   żywego potomka. Chwilowy `StoreWriterBusy` jest ponawiany; utrata tokenu,
+   epoch, aktywnego stanu lub inny błąd kończy potomka przed zwrotem. Terminalny
+   lifecycle wyłącza timer, ale release następuje dopiero po potwierdzonym exit.
+8. Publikacja artefaktów sprawdza i wiąże bieżącą wersję lease pod tym samym
+   writer lockiem. Heartbeat nie może przypadkowo unieważnić publikacji tego
+   samego właściciela, a release lub nowe ownership nadal ją odrzucają.
 
 ## Konsekwencje
 
@@ -56,6 +68,8 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
   Odzyskanie utraconego payloadu nie jest automatyczne.
 - Sam watermark nie zastępuje fenced admission, bootstrapu, supervisora,
   transportu, reconciliation efektów workera ani dowodu zwolnienia zasobów.
+- Heartbeat procesu potwierdza liveness lokalnego procesu i utrzymanie lease.
+  Nie jest dowodem postępu solvera, poprawności fizyki ani kwalifikacji lane'u.
 
 ## Obowiązki implementacyjne
 
@@ -75,6 +89,9 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
 - Regresje sprawdzają odzyskanie świeżego genesis bez transitionów, awans
   watermarku po command i event, replay bez podwójnego awansu, repair catalogu
   w tyle oraz odmowę po utracie wpisów wskazanych przez watermark.
+- Regresje procesu sprawdzają dodatnią sekwencję heartbeat, retry kontencji
+  writera, zatrzymanie timera po terminalnym lifecycle, publikację pod nowszym
+  heartbeat oraz release dokładnej ostatniej wersji lease po exit.
 
 ## Migracja i rollback
 

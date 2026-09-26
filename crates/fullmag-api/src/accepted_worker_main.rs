@@ -3,6 +3,10 @@ mod accepted_study_worker;
 
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+const STORE_WRITER_RETRY_LIMIT: Duration = Duration::from_secs(5);
+const STORE_WRITER_RETRY_DELAY: Duration = Duration::from_millis(10);
 
 struct WorkerArgs {
     store_root: PathBuf,
@@ -21,8 +25,19 @@ fn run() -> Result<()> {
     let args = parse_args()?;
     let store = fullmag_session::SessionStore::open_existing(&args.store_root)
         .with_context(|| format!("open session store `{}`", args.store_root.display()))?;
-    let result =
-        accepted_study_worker::run_pending_accepted_start(&store, &args.run_id, &args.task_id)?;
+    let started = Instant::now();
+    let result = loop {
+        match accepted_study_worker::run_pending_accepted_start(&store, &args.run_id, &args.task_id)
+        {
+            Ok(result) => break result,
+            Err(error)
+                if is_store_writer_busy(&error) && started.elapsed() < STORE_WRITER_RETRY_LIMIT =>
+            {
+                std::thread::sleep(STORE_WRITER_RETRY_DELAY);
+            }
+            Err(error) => return Err(error),
+        }
+    };
     let summary = serde_json::json!({
         "status": format!("{:?}", result.execution.status).to_lowercase(),
         "completed_step_count": result.execution.completed_step_count,
@@ -33,6 +48,13 @@ fn run() -> Result<()> {
     });
     println!("{}", serde_json::to_string(&summary)?);
     Ok(())
+}
+
+fn is_store_writer_busy(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
+        || format!("{error:#}").contains("session store writer is busy")
 }
 
 fn parse_args() -> Result<WorkerArgs> {

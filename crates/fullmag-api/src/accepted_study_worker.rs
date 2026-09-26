@@ -38,6 +38,17 @@ struct WorkerExecutionReceiptIdentity {
     plan_fingerprint: String,
 }
 
+impl WorkerExecutionReceiptIdentity {
+    fn matches_same_attempt(&self, current: &Self) -> bool {
+        self.schema_version == current.schema_version
+            && self.claim.is_same_or_renewed_by(&current.claim)
+            && self.start_message_id == current.start_message_id
+            && self.start_sequence == current.start_sequence
+            && self.case_id == current.case_id
+            && self.plan_fingerprint == current.plan_fingerprint
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WorkerExecutionStartedReceipt {
@@ -92,7 +103,7 @@ pub(crate) fn create_private_attempt_output_dir(
         claim.task_id.as_str(),
     )
     .context("worker attempt output requires a current durable claim")?;
-    if current_claim != *claim {
+    if !claim.is_same_or_renewed_by(&current_claim) {
         bail!("worker attempt output claim is stale");
     }
 
@@ -346,7 +357,7 @@ fn recover_completed_worker_execution(
     let started: WorkerExecutionStartedReceipt =
         read_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_STARTED_RECEIPT)?
             .context("existing attempt has no durable started receipt; refusing to rerun")?;
-    if started.identity != *expected_identity {
+    if !started.identity.matches_same_attempt(expected_identity) {
         bail!("existing worker start receipt belongs to another command or claim");
     }
     let completed: WorkerExecutionCompletedReceipt =
@@ -354,7 +365,7 @@ fn recover_completed_worker_execution(
             "worker outcome is unknown because no completed receipt exists; refusing to rerun",
         )?;
     if completed.schema_version != WORKER_EXECUTION_RECEIPT_SCHEMA
-        || completed.identity != *expected_identity
+        || !completed.identity.matches_same_attempt(expected_identity)
         || completed.status != RunStatus::Completed
         || completed.completed_step_count == 0
     {
@@ -598,7 +609,7 @@ pub(crate) fn execute_accepted_worker_start(
         accepted_step.claim.task_id.as_str(),
     )
     .context("accepted Start no longer owns the current task claim")?;
-    if current_claim != accepted_step.claim {
+    if !accepted_step.claim.is_same_or_renewed_by(&current_claim) {
         bail!("accepted Start worker context has a stale task claim");
     }
 
@@ -710,7 +721,7 @@ pub(crate) fn execute_accepted_worker_start(
                 accepted_step.claim.task_id.as_str(),
             )
             .context("reconcile accepted worker receipt under the current claim")?;
-            if current_claim != accepted_step.claim {
+            if !accepted_step.claim.is_same_or_renewed_by(&current_claim) {
                 bail!("accepted worker receipt belongs to a stale task claim");
             }
             return recover_completed_worker_execution(
@@ -894,7 +905,7 @@ pub(crate) fn run_pending_accepted_start(
                     "revalidate worker process claim: {error:#}"
                 ))
             })?;
-            if current_claim != claim {
+            if !claim.is_same_or_renewed_by(&current_claim) {
                 return Err(fullmag_application::ExecutionError::ProtocolFenceRejected);
             }
             completed = Some(

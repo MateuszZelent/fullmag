@@ -12,6 +12,7 @@ struct SupervisorArgs {
     worker_executable: Option<PathBuf>,
     max_concurrency: usize,
     worker_timeout: Duration,
+    heartbeat_interval: Duration,
 }
 
 fn main() {
@@ -36,6 +37,7 @@ fn run() -> Result<()> {
         &worker_executable,
         args.max_concurrency,
         args.worker_timeout,
+        args.heartbeat_interval,
     )?;
     println!(
         "{}",
@@ -66,6 +68,7 @@ fn parse_args() -> Result<SupervisorArgs> {
     let mut worker_executable = None;
     let mut max_concurrency = None;
     let mut worker_timeout_seconds = None;
+    let mut heartbeat_interval_milliseconds = None;
     let mut args = std::env::args_os().skip(1);
     while let Some(argument) = args.next() {
         let flag = argument
@@ -115,12 +118,25 @@ fn parse_args() -> Result<SupervisorArgs> {
                 }
                 worker_timeout_seconds = Some(seconds);
             }
+            "--heartbeat-interval-milliseconds" if heartbeat_interval_milliseconds.is_none() => {
+                let value = value
+                    .into_string()
+                    .map_err(|_| anyhow::anyhow!("heartbeat interval must be valid UTF-8"))?;
+                let milliseconds = value
+                    .parse::<u64>()
+                    .context("heartbeat interval must be a positive integer")?;
+                if milliseconds == 0 {
+                    bail!("heartbeat interval must be greater than zero");
+                }
+                heartbeat_interval_milliseconds = Some(milliseconds);
+            }
             "--store-root"
             | "--run-id"
             | "--task-id"
             | "--worker-executable"
             | "--max-concurrency"
-            | "--worker-timeout-seconds" => {
+            | "--worker-timeout-seconds"
+            | "--heartbeat-interval-milliseconds" => {
                 bail!("supervisor option `{flag}` was supplied more than once")
             }
             _ => bail!("unknown supervisor option `{flag}`"),
@@ -134,6 +150,10 @@ fn parse_args() -> Result<SupervisorArgs> {
         max_concurrency: max_concurrency.unwrap_or(1),
         worker_timeout: Duration::from_secs(
             worker_timeout_seconds.context("missing required --worker-timeout-seconds")?,
+        ),
+        heartbeat_interval: Duration::from_millis(
+            heartbeat_interval_milliseconds
+                .context("missing required --heartbeat-interval-milliseconds")?,
         ),
     })
 }

@@ -115,6 +115,13 @@ uruchomiono hostowego ani równoległego fallbacku. Supervisor, dekodowanie i
 materializacja wejść w rzeczywistym workerze, publication przed terminalnym
 eventem oraz runtime proof nadal pozostają poza tą implementacją.
 
+Aktualizacja 26.09.2026: zbudowany supervisor uruchamia zbudowanego accepted
+workera dla ograniczonego FDM CPU/double/strict, odnawia resource lease podczas
+życia procesu, publikuje typowane outputy i manifest przed `Completed`, a po
+terminalnym lifecycle czeka na exit i zwalnia ostatnią wersję lease. Zarządzane
+E2E ma 1/1 PASS. Nie rozszerza to kwalifikacji na FDM GPU, FEM CPU/GPU, fizykę,
+crash supervisora, orphan recovery, operator cancel ani retry orchestration.
+
 ## Migracja i rollback
 
 Stare outputy bez manifestu pozostają zachowane i eksportowalne, ale nie są

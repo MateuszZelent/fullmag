@@ -47,6 +47,7 @@ To jest pełne E2E produkcyjnych binariów dla obecnego ograniczonego lane
 FDM CPU/double/strict i krótkiego fixture. Nie kwalifikuje zbieżności ani fizyki,
 FDM GPU, FEM CPU/GPU, długiego runu, crashu supervisora, power loss, heartbeat,
 operator cancel, retry policy, orphan reconciliation, puli większej niż jeden
-ani zwolnienia VRAM. Heartbeat wymaga najpierw kontraktu odświeżania claimu:
-proste zwiększenie `heartbeat_sequence` unieważniłoby obecny claim workera przy
-późniejszej publikacji.
+ani zwolnienia VRAM. Późniejszy checkpoint
+[`32-supervisor-process-heartbeat.md`](32-supervisor-process-heartbeat.md)
+dodaje heartbeat lokalnego procesu bez zmiany właściciela claimu; zdalny
+`HeartbeatAck`, orphan reclamation i pozostałe granice nadal są otwarte.

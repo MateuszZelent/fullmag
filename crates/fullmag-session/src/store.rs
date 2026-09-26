@@ -1375,7 +1375,12 @@ impl SessionStore {
         let current_lease: FmsResourceLease = serde_json::from_slice(&lease_bytes)
             .with_context(|| format!("parsing resource lease {}", lease_path.display()))?;
         current_lease.validate()?;
-        if current_lease != *lease || current_lease.state != FmsResourceLeaseState::Active {
+        if current_lease.state != FmsResourceLeaseState::Active
+            || !current_lease.identity_matches(lease)
+            || current_lease.kind != lease.kind
+            || current_lease.budget != lease.budget
+            || current_lease.heartbeat_sequence < lease.heartbeat_sequence
+        {
             anyhow::bail!("artifact publication lease fence rejected");
         }
 
@@ -3560,6 +3565,10 @@ mod tests {
             released_at: None,
         };
         store.commit_resource_lease(&lease).unwrap();
+        let mut heartbeat_lease = lease.clone();
+        heartbeat_lease.heartbeat_sequence = 1;
+        heartbeat_lease.heartbeat_at = chrono::Utc::now();
+        store.heartbeat_resource_lease(&heartbeat_lease).unwrap();
 
         let bytes = b"final state from the successful attempt";
         let object_ref = store.cas().put(bytes).unwrap();
@@ -3716,7 +3725,7 @@ mod tests {
             .append_artifact_catalog_entries_for_lease(&lease, &[late_entry])
             .is_err());
 
-        store.release_resource_lease(&lease).unwrap();
+        store.release_resource_lease(&heartbeat_lease).unwrap();
         let late_bytes = b"late output after lease release";
         let late_object = store.cas().put(late_bytes).unwrap();
         let late_entry = FmsArtifactCatalogEntry {

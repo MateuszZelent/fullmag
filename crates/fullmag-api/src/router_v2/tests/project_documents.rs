@@ -1707,6 +1707,8 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
                 .arg("1")
                 .arg("--worker-timeout-seconds")
                 .arg("30")
+                .arg("--heartbeat-interval-milliseconds")
+                .arg("250")
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
@@ -1734,6 +1736,10 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
                 durable_lease.state,
                 fullmag_session::FmsResourceLeaseState::Released,
                 "supervisor releases the exact lease only after the worker exits and completion is durable"
+            );
+            assert!(
+                durable_lease.heartbeat_sequence > claim.lease.heartbeat_sequence,
+                "supervisor renews the resource lease while the worker process is alive"
             );
             summary
         }

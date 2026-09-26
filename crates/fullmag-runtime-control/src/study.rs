@@ -523,11 +523,13 @@ pub fn load_accepted_worker_step(
     if !matches!(
         durable_task.lifecycle,
         fullmag_session::FmsTaskLifecycle::Preparing
+            | fullmag_session::FmsTaskLifecycle::Running
+            | fullmag_session::FmsTaskLifecycle::Stopping
     ) || !matches!(
         durable_task.readiness,
         fullmag_session::FmsTaskReadiness::Ready
     ) {
-        bail!("worker Prepare requires a ready task in Preparing lifecycle");
+        bail!("worker Prepare requires a ready task under an active claim");
     }
 
     let mut matching_steps = Vec::new();
@@ -641,7 +643,10 @@ pub fn load_accepted_worker_step(
         .context("durable worker Prepare payload is not a coordinator transition")?;
     if transition.schema_version != COORDINATOR_TRANSITION_SCHEMA
         || transition.message != CoordinatorMessage::Command(envelope.clone())
-        || transition.checkpoint.claim != current_claim
+        || !transition
+            .checkpoint
+            .claim
+            .is_same_or_renewed_by(&current_claim)
         || transition.checkpoint.command_sequence != envelope.sequence
         || transition.checkpoint.task.input_fingerprint != durable_task.input_fingerprint
     {
@@ -791,7 +796,7 @@ pub fn publish_study_outputs(
         || durable_lease.ownership_epoch != claim.ownership_epoch.value()
         || durable_lease.resource_id != claim.lease.resource_id
         || durable_lease.lease_token != claim.lease.lease_token.as_str()
-        || durable_lease.heartbeat_sequence != claim.lease.heartbeat_sequence
+        || durable_lease.heartbeat_sequence < claim.lease.heartbeat_sequence
         || durable_lease.kind != expected_kind
         || durable_lease.budget != expected_budget
     {

@@ -256,6 +256,17 @@ impl TaskClaim {
         }
     }
 
+    /// Return true when `current` is the same fenced owner with an equal or
+    /// newer lease heartbeat. Heartbeats refresh liveness; they do not create
+    /// a new attempt, ownership epoch, resource assignment, or lease token.
+    pub fn is_same_or_renewed_by(&self, current: &Self) -> bool {
+        self.identity() == current.identity()
+            && self.lease.resource_id == current.lease.resource_id
+            && self.lease.kind == current.lease.kind
+            && self.lease.budget == current.lease.budget
+            && self.lease.heartbeat_sequence <= current.lease.heartbeat_sequence
+    }
+
     fn matches(&self, other: &Self) -> bool {
         self.run_id == other.run_id
             && self.task_id == other.task_id
@@ -1567,6 +1578,39 @@ mod tests {
             task.fence(&first),
             Err(ExecutionError::FenceRejected)
         ));
+    }
+
+    #[test]
+    fn renewed_heartbeat_preserves_owner_but_not_resource_or_token_changes() {
+        let run_id = RunId::parse("run-heartbeat-owner").unwrap();
+        let mut task = TaskRecord::new(run_id, "a".repeat(64)).unwrap();
+        task.queue().unwrap();
+        let claim = task
+            .claim(
+                ResourceLease::new(
+                    "cpu-0",
+                    ResourceKind::Cpu,
+                    ResourceBudget {
+                        cpu_millis: 100,
+                        memory_bytes: 1,
+                        gpu_memory_bytes: 0,
+                        storage_bytes: 1,
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mut renewed = claim.clone();
+        renewed.lease = renewed.lease.heartbeat().unwrap();
+        assert!(claim.is_same_or_renewed_by(&renewed));
+        assert!(!renewed.is_same_or_renewed_by(&claim));
+
+        let mut foreign_resource = renewed.clone();
+        foreign_resource.lease.resource_id = "cpu-1".into();
+        assert!(!claim.is_same_or_renewed_by(&foreign_resource));
+        let mut foreign_token = renewed;
+        foreign_token.lease.lease_token = LeaseToken::new();
+        assert!(!claim.is_same_or_renewed_by(&foreign_token));
     }
 
     #[test]
