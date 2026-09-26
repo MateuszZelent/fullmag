@@ -1902,6 +1902,43 @@ impl SessionStore {
         Ok(Some(lease))
     }
 
+    /// Read the exact active lease retained by a durable retry decision.
+    ///
+    /// Unlike the ordinary task lookup, this accepts the terminal
+    /// Failed/Interrupted lifecycle between decision publication and retry
+    /// application. The immutable decision proves which attempt and epoch were
+    /// reconciled; callers must still explicitly release the returned lease.
+    pub fn read_active_resource_lease_for_retry_decision(
+        &self,
+        decision: &FmsRetryDecision,
+    ) -> Result<Option<FmsResourceLease>> {
+        decision.validate()?;
+        let _writer_lease = self.write_transaction()?;
+        let catalog = self
+            .read_run_catalog(&decision.run_id)?
+            .context("retry lease recovery requires a durable run catalog")?;
+        let task = catalog
+            .tasks
+            .iter()
+            .find(|task| task.task_id == decision.task_id)
+            .context("retry lease recovery task is missing from the run catalog")?;
+        decision.validate_for_task(task)?;
+        let Some(resource_id) = task.resource_id.as_deref() else {
+            return Ok(None);
+        };
+        let Some(lease) = self.find_active_resource_lease_unlocked(resource_id)? else {
+            return Ok(None);
+        };
+        if lease.run_id != decision.run_id
+            || lease.task_id != decision.task_id
+            || lease.attempt_id != decision.attempt_id
+            || lease.ownership_epoch != decision.ownership_epoch
+        {
+            anyhow::bail!("active retry lease does not match the durable decision fence");
+        }
+        Ok(Some(lease))
+    }
+
     /// Require the exact active resource lease for a worker publication.
     pub fn require_active_resource_lease(
         &self,

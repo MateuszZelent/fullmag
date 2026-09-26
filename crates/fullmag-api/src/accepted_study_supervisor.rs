@@ -4,7 +4,7 @@ use fullmag_session::{
     FmsResourceLease, FmsRetryAction, FmsRetryDecision, FmsRetryTrigger, SessionStore,
     FMS_RETRY_DECISION_SCHEMA,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 const SUPERVISOR_DIRECTORY: &str = "supervisor-slots";
 const SINGLE_WORKER_SLOT: &str = "slot-0";
-const SLOT_OWNER_FILE: &str = "owner.v1.json";
+const SLOT_OWNER_FILE: &str = "owner.v2.json";
 
 #[derive(Debug)]
 pub(crate) struct SupervisedWorkerResult {
@@ -31,13 +31,14 @@ struct ObservedWorkerProcess {
     stop_requested: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct SupervisorSlotOwner<'a> {
-    schema_version: &'static str,
+struct SupervisorSlotOwner {
+    schema_version: String,
     process_id: u32,
-    run_id: &'a str,
-    task_id: &'a str,
+    process_start_token: String,
+    run_id: String,
+    task_id: String,
     acquired_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -48,7 +49,12 @@ struct SupervisorSlot {
 }
 
 impl SupervisorSlot {
-    fn acquire(store: &SessionStore, run_id: &str, task_id: &str) -> Result<Self> {
+    fn acquire(
+        store: &SessionStore,
+        run_id: &str,
+        task_id: &str,
+        allow_stale_retry_recovery: bool,
+    ) -> Result<Self> {
         fullmag_session::repository_path::validate_store_id(run_id)
             .context("supervisor run id is invalid")?;
         fullmag_session::repository_path::validate_store_id(task_id)
@@ -61,18 +67,20 @@ impl SupervisorSlot {
         match fs::create_dir(&path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                bail!(
-                    "accepted-worker concurrency limit is occupied; stale slots require explicit orphan reconciliation"
-                )
+                reclaim_stale_retry_slot(&path, run_id, task_id, allow_stale_retry_recovery)?;
+                fs::create_dir(&path)
+                    .context("reacquire accepted-worker slot after stale retry recovery")?;
             }
             Err(error) => return Err(error).context("acquire accepted-worker supervisor slot"),
         }
         let owner_path = path.join(SLOT_OWNER_FILE);
         let owner = SupervisorSlotOwner {
-            schema_version: "fullmag.accepted_worker_supervisor_slot.v1",
+            schema_version: "fullmag.accepted_worker_supervisor_slot.v2".into(),
             process_id: std::process::id(),
-            run_id,
-            task_id,
+            process_start_token: process_start_token(std::process::id())?
+                .context("current supervisor process is not observable")?,
+            run_id: run_id.into(),
+            task_id: task_id.into(),
             acquired_at: chrono::Utc::now(),
         };
         let result = (|| -> Result<()> {
@@ -105,6 +113,113 @@ impl SupervisorSlot {
         self.released = true;
         Ok(())
     }
+}
+
+fn reclaim_stale_retry_slot(
+    slot_path: &Path,
+    run_id: &str,
+    task_id: &str,
+    allow_stale_retry_recovery: bool,
+) -> Result<()> {
+    if !allow_stale_retry_recovery {
+        bail!(
+            "accepted-worker concurrency limit is occupied; stale slots require explicit orphan reconciliation"
+        );
+    }
+    let metadata = fs::symlink_metadata(slot_path)
+        .context("inspect occupied accepted-worker supervisor slot")?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        bail!("occupied accepted-worker supervisor slot must be a real directory");
+    }
+    let owner_path = slot_path.join(SLOT_OWNER_FILE);
+    let owner_metadata = fs::symlink_metadata(&owner_path)
+        .context("stale retry slot requires its immutable owner record")?;
+    if !owner_metadata.is_file() || owner_metadata.file_type().is_symlink() {
+        bail!("stale retry slot owner must be a regular file");
+    }
+    let owner: SupervisorSlotOwner = serde_json::from_slice(
+        &fs::read(&owner_path).context("read occupied supervisor slot owner")?,
+    )
+    .context("parse occupied supervisor slot owner")?;
+    if owner.schema_version != "fullmag.accepted_worker_supervisor_slot.v2"
+        || owner.run_id != run_id
+        || owner.task_id != task_id
+    {
+        bail!("occupied supervisor slot does not belong to this retry recovery");
+    }
+    if process_start_token(owner.process_id)?.as_deref() == Some(&owner.process_start_token) {
+        bail!("accepted-worker concurrency limit is occupied by a live supervisor process");
+    }
+    fs::remove_file(&owner_path).context("remove confirmed stale supervisor slot owner")?;
+    fs::remove_dir(slot_path).context("remove confirmed stale supervisor slot")?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn process_start_token(process_id: u32) -> Result<Option<String>> {
+    let path = PathBuf::from(format!("/proc/{process_id}/stat"));
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| format!("read process stat `{}`", path.display()))
+        }
+    };
+    let command_end = contents
+        .rfind(')')
+        .context("process stat has no command terminator")?;
+    let start_time = contents[command_end + 1..]
+        .split_whitespace()
+        .nth(19)
+        .context("process stat has no start-time field")?;
+    Ok(Some(format!("linux-starttime-{start_time}")))
+}
+
+#[cfg(windows)]
+fn process_start_token(process_id: u32) -> Result<Option<String>> {
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
+    if handle.is_null() {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(87) {
+            return Ok(None);
+        }
+        return Err(error).with_context(|| format!("open supervisor process {process_id}"));
+    }
+    let result = (|| -> Result<Option<String>> {
+        let mut exit_code = 0_u32;
+        if unsafe { GetExitCodeProcess(handle, &mut exit_code) } == 0 {
+            return Err(std::io::Error::last_os_error()).context("read supervisor exit code");
+        }
+        if exit_code != STILL_ACTIVE as u32 {
+            return Ok(None);
+        }
+        let mut creation: FILETIME = unsafe { std::mem::zeroed() };
+        let mut exit: FILETIME = unsafe { std::mem::zeroed() };
+        let mut kernel: FILETIME = unsafe { std::mem::zeroed() };
+        let mut user: FILETIME = unsafe { std::mem::zeroed() };
+        if unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) } == 0
+        {
+            return Err(std::io::Error::last_os_error()).context("read supervisor process times");
+        }
+        Ok(Some(format!(
+            "windows-filetime-{:08x}{:08x}",
+            creation.dwHighDateTime, creation.dwLowDateTime
+        )))
+    })();
+    unsafe {
+        CloseHandle(handle);
+    }
+    result
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn process_start_token(_process_id: u32) -> Result<Option<String>> {
+    bail!("supervisor process identity is unsupported on this platform")
 }
 
 impl Drop for SupervisorSlot {
@@ -165,7 +280,12 @@ pub(crate) fn run_supervised_accepted_worker(
             "accepted-worker supervisor heartbeat interval must be positive and shorter than the worker timeout"
         );
     }
-    let slot = SupervisorSlot::acquire(store, run_id, task_id)?;
+    let recoverable_retry = retry_decision_for_terminal_task(store, run_id, task_id)?.is_some();
+    let slot = SupervisorSlot::acquire(store, run_id, task_id, recoverable_retry)?;
+    if let Some(result) = reconcile_durable_retry_before_spawn(store, run_id, task_id)? {
+        slot.release()?;
+        return Ok(result);
+    }
     let run_id_typed = fullmag_application::RunId::parse(run_id.to_owned())
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let claim = fullmag_runtime_control::load_current_task_claim(store, &run_id_typed, task_id)
@@ -609,10 +729,19 @@ fn reconcile_worker_exit(
     }
 
     if let Some(reason) = retryable_failure_reason {
-        store
-            .release_resource_lease(lease)
-            .context("release failed worker resource lease after terminal process exit")?;
-        if schedule_automatic_retry(store, claim, lease, &reason, max_automatic_retries)? {
+        if let Some(decision) =
+            automatic_retry_decision(store, claim, lease, &reason, max_automatic_retries)?
+        {
+            store
+                .commit_retry_decision(&decision)
+                .context("persist automatic retry decision before releasing its lease")?;
+            accepted_supervisor_test_fail_after_retry_decision()?;
+            store
+                .release_resource_lease(lease)
+                .context("release failed worker resource lease after durable retry decision")?;
+            store
+                .apply_retry_decision(&decision)
+                .context("apply automatic retry decision after explicit lease release")?;
             return Ok(SupervisedWorkerResult {
                 recovered_terminal_completion: false,
                 worker_timed_out: outcome.timed_out,
@@ -624,6 +753,9 @@ fn reconcile_worker_exit(
                 }),
             });
         }
+        store
+            .release_resource_lease(lease)
+            .context("release failed worker resource lease after terminal process exit")?;
         bail!("accepted worker failed before entering a durable side effect: {reason}");
     }
 
@@ -672,15 +804,86 @@ fn accepted_worker_attempt_reserved(
     }
 }
 
-fn schedule_automatic_retry(
+fn reconcile_durable_retry_before_spawn(
+    store: &SessionStore,
+    run_id: &str,
+    task_id: &str,
+) -> Result<Option<SupervisedWorkerResult>> {
+    let Some(decision) = retry_decision_for_terminal_task(store, run_id, task_id)? else {
+        return Ok(None);
+    };
+    if let Some(lease) = store.read_active_resource_lease_for_retry_decision(&decision)? {
+        store
+            .release_resource_lease(&lease)
+            .context("release lease retained by durable retry decision")?;
+    }
+    store
+        .apply_retry_decision(&decision)
+        .context("recover durable retry decision before worker spawn")?;
+    Ok(Some(SupervisedWorkerResult {
+        recovered_terminal_completion: false,
+        worker_timed_out: false,
+        worker_cancelled: false,
+        retry_scheduled: true,
+        worker_summary: serde_json::json!({
+            "status": "retry_recovered",
+            "decision_id": decision.decision_id,
+        }),
+    }))
+}
+
+fn retry_decision_for_terminal_task(
+    store: &SessionStore,
+    run_id: &str,
+    task_id: &str,
+) -> Result<Option<FmsRetryDecision>> {
+    let catalog = store
+        .read_run_catalog(run_id)?
+        .context("retry recovery requires a durable run catalog")?;
+    let task = catalog
+        .tasks
+        .iter()
+        .find(|task| task.task_id == task_id)
+        .context("retry recovery task is missing from the run catalog")?;
+    if !matches!(
+        task.lifecycle,
+        fullmag_session::FmsTaskLifecycle::Failed | fullmag_session::FmsTaskLifecycle::Interrupted
+    ) {
+        return Ok(None);
+    }
+    let (Some(attempt_id), Some(ownership_epoch)) =
+        (task.attempt_id.as_deref(), task.ownership_epoch)
+    else {
+        return Ok(None);
+    };
+    let mut matching = store
+        .list_retry_decisions(run_id)?
+        .into_iter()
+        .filter(|decision| {
+            decision.task_id == task_id
+                && decision.attempt_id == attempt_id
+                && decision.ownership_epoch == ownership_epoch
+                && decision.action == FmsRetryAction::Retry
+        })
+        .collect::<Vec<_>>();
+    if matching.len() > 1 {
+        bail!("multiple retry decisions match the current terminal task attempt");
+    }
+    let Some(decision) = matching.pop() else {
+        return Ok(None);
+    };
+    Ok(Some(decision))
+}
+
+fn automatic_retry_decision(
     store: &SessionStore,
     claim: &fullmag_application::TaskClaim,
     lease: &FmsResourceLease,
     reason: &str,
     max_automatic_retries: usize,
-) -> Result<bool> {
+) -> Result<Option<FmsRetryDecision>> {
     if max_automatic_retries == 0 {
-        return Ok(false);
+        return Ok(None);
     }
     let prior_retries = store
         .list_retry_decisions(claim.run_id.as_str())?
@@ -690,7 +893,7 @@ fn schedule_automatic_retry(
         })
         .count();
     if prior_retries >= max_automatic_retries {
-        return Ok(false);
+        return Ok(None);
     }
     let identity = format!(
         "{}:{}:{}",
@@ -698,7 +901,7 @@ fn schedule_automatic_retry(
         claim.attempt_id.as_str(),
         claim.ownership_epoch.value()
     );
-    let decision = FmsRetryDecision {
+    Ok(Some(FmsRetryDecision {
         schema_version: FMS_RETRY_DECISION_SCHEMA.into(),
         decision_id: format!(
             "automatic-retry-{}",
@@ -712,11 +915,18 @@ fn schedule_automatic_retry(
         action: FmsRetryAction::Retry,
         reason: reason.into(),
         created_at: lease.acquired_at,
-    };
-    store
-        .apply_retry_decision(&decision)
-        .context("persist and apply automatic retry decision")?;
-    Ok(true)
+    }))
+}
+
+fn accepted_supervisor_test_fail_after_retry_decision() -> Result<()> {
+    if std::env::var("FULLMAG_ENABLE_TEST_HOOKS").as_deref() == Ok("1")
+        && std::env::var("FULLMAG_TEST_ACCEPTED_SUPERVISOR_FAIL_AFTER_RETRY_DECISION").as_deref()
+            == Ok("1")
+    {
+        eprintln!("controlled supervisor crash after durable retry decision");
+        std::process::exit(86);
+    }
+    Ok(())
 }
 
 fn parse_worker_summary(output: &Output) -> Result<serde_json::Value> {
@@ -795,10 +1005,10 @@ mod tests {
     #[test]
     fn single_worker_slot_is_exclusive_and_reusable_after_release() {
         let (root, store) = temporary_store("slot");
-        let first = SupervisorSlot::acquire(&store, "run-a", "task-a").unwrap();
-        assert!(SupervisorSlot::acquire(&store, "run-b", "task-b").is_err());
+        let first = SupervisorSlot::acquire(&store, "run-a", "task-a", false).unwrap();
+        assert!(SupervisorSlot::acquire(&store, "run-b", "task-b", false).is_err());
         first.release().unwrap();
-        SupervisorSlot::acquire(&store, "run-b", "task-b")
+        SupervisorSlot::acquire(&store, "run-b", "task-b", false)
             .unwrap()
             .release()
             .unwrap();

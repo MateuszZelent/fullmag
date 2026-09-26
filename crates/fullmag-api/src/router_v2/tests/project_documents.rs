@@ -1686,7 +1686,9 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         std::env::var("FULLMAG_ACCEPTED_SUPERVISOR_PRESTART_CANCEL_E2E").as_deref() == Ok("1");
     let automatic_retry_e2e =
         std::env::var("FULLMAG_ACCEPTED_SUPERVISOR_AUTOMATIC_RETRY_E2E").as_deref() == Ok("1");
-    if cancel_e2e || prestart_cancel_e2e || automatic_retry_e2e {
+    let retry_recovery_e2e =
+        std::env::var("FULLMAG_ACCEPTED_SUPERVISOR_RETRY_RECOVERY_E2E").as_deref() == Ok("1");
+    if cancel_e2e || prestart_cancel_e2e || automatic_retry_e2e || retry_recovery_e2e {
         let supervisor_executable = supervisor_executable
             .as_ref()
             .expect("cancel E2E requires the built supervisor binary");
@@ -1718,7 +1720,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             .arg("30")
             .arg("--heartbeat-interval-milliseconds")
             .arg("500");
-        if automatic_retry_e2e {
+        if automatic_retry_e2e || retry_recovery_e2e {
             supervisor_command.arg("--max-automatic-retries").arg("1");
         }
         let mut child = supervisor_command
@@ -1728,18 +1730,74 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             .spawn()
             .expect("spawn the built accepted supervisor for cancellation E2E");
 
-        if automatic_retry_e2e {
+        if automatic_retry_e2e || retry_recovery_e2e {
             let output = child
                 .wait_with_output()
                 .expect("collect automatic retry E2E supervisor exit");
-            assert!(
-                output.status.success(),
-                "automatic retry supervisor failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            let summary: serde_json::Value = if retry_recovery_e2e {
+                assert!(!output.status.success());
+                assert!(String::from_utf8_lossy(&output.stderr)
+                    .contains("controlled supervisor crash after durable retry decision"));
+                let catalog = store
+                    .read_run_catalog(accepted_run_id.as_str())
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    catalog.tasks[0].lifecycle,
+                    fullmag_session::FmsTaskLifecycle::Failed
+                );
+                let decisions = store
+                    .list_retry_decisions(accepted_run_id.as_str())
+                    .unwrap();
+                assert_eq!(decisions.len(), 1);
+                assert!(store
+                    .read_active_resource_lease_for_retry_decision(&decisions[0])
+                    .unwrap()
+                    .is_some());
+                let recovery = std::process::Command::new(supervisor_executable)
+                    .arg("--store-root")
+                    .arg(store.root())
+                    .arg("--run-id")
+                    .arg(accepted_run_id.as_str())
+                    .arg("--task-id")
+                    .arg(claim.task_id.as_str())
+                    .arg("--worker-executable")
+                    .arg(repo_root.join("worker-must-not-be-spawned.exe"))
+                    .arg("--max-concurrency")
+                    .arg("1")
+                    .arg("--worker-timeout-seconds")
+                    .arg("30")
+                    .arg("--heartbeat-interval-milliseconds")
+                    .arg("500")
+                    .env_remove("FULLMAG_TEST_ACCEPTED_SUPERVISOR_FAIL_AFTER_RETRY_DECISION")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .output()
+                    .expect("restart supervisor to recover the durable retry decision");
+                assert!(
+                    recovery.status.success(),
+                    "retry recovery supervisor failed: {}",
+                    String::from_utf8_lossy(&recovery.stderr)
+                );
+                serde_json::from_slice(&recovery.stdout).unwrap()
+            } else {
+                assert!(
+                    output.status.success(),
+                    "automatic retry supervisor failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                serde_json::from_slice(&output.stdout).unwrap()
+            };
             assert_eq!(summary["retry_scheduled"], true);
-            assert_eq!(summary["worker"]["status"], "retry_scheduled");
+            assert_eq!(
+                summary["worker"]["status"],
+                if retry_recovery_e2e {
+                    "retry_recovered"
+                } else {
+                    "retry_scheduled"
+                }
+            );
             let catalog = store
                 .read_run_catalog(accepted_run_id.as_str())
                 .unwrap()

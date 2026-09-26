@@ -14,10 +14,12 @@ zostać odtworzony bez drugiego uruchomienia solvera. Supervisor wymaga jawnego
 proces, czeka na potwierdzony exit i dopiero potem rekoncyliuje trwały stan.
 Opcjonalny, ograniczony `--max-automatic-retries` stosuje fenced decyzję
 `Retry` wyłącznie po udowodnionym wyjściu workera przed rezerwacją prywatnego
-katalogu attemptu. Istniejąca rezerwacja zachowuje fail-closed lease.
+katalogu attemptu. Decyzja jest zapisywana przed release; restart supervisora
+zwalnia zachowany lease i replayuje dokładną decyzję bez spawnu workera.
+Istniejąca rezerwacja attemptu zachowuje fail-closed lease.
 
 Brakuje automatycznego wyboru taska, puli większej niż jeden, heartbeat/Stop ACK
-dla zdalnego transportu, atomowej/orphan reconciliation retry oraz process E2E
+dla zdalnego transportu, orphan reconciliation sprzed zapisu decyzji oraz process E2E
 pozostałych lane'ów. Anulowanie przed uruchomieniem workera jest obsłużone
 trwale i nie wykonuje spawnu procesu potomnego.
 Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
@@ -29,7 +31,8 @@ Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`33-operator-task-cancellation.md`](33-operator-task-cancellation.md),
 [`34-supervisor-cancel-e2e.md`](34-supervisor-cancel-e2e.md)
 [`35-supervisor-prestart-cancel.md`](35-supervisor-prestart-cancel.md)
-i [`36-supervisor-automatic-retry.md`](36-supervisor-automatic-retry.md).
+[`36-supervisor-automatic-retry.md`](36-supervisor-automatic-retry.md)
+i [`37-supervisor-retry-recovery.md`](37-supervisor-retry-recovery.md).
 
 API ma jawny adapter allow-listy `RunResult` → typowane payloady dla
 wspieranych wyjść. Szczegóły i wcześniejszy dowód opisuje

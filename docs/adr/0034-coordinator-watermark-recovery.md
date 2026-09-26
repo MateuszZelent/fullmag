@@ -76,6 +76,11 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
     wszystkie trwałe decyzje `Retry` dla taska w runie. Każda decyzja przechodzi
     przez istniejący attempt/epoch fence. Task wraca do `Queued`; supervisor nie
     wybiera w tej samej operacji nowego attemptu.
+14. Decyzja automatycznego retry jest publikowana przed release lease. Po
+    restarcie jedna decyzja dopasowana do terminalnego task/attempt/epoch
+    uprawnia supervisor do odczytu i zwolnienia zachowanego aktywnego lease oraz
+    idempotentnego zastosowania decyzji przed jakimkolwiek spawnem. Brak decyzji
+    nie jest dowodem śmierci workera i nie uprawnia do takeover.
 
 ## Konsekwencje
 
@@ -127,6 +132,9 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
 - Regresja automatycznego retry wymusza wyjście workera po zweryfikowaniu
   pending `Start`, ale przed rezerwacją effect directory. Sprawdza trwałą
   decyzję, powrót taska do `Queued`, brak lease i artefaktów.
+- Regresja restartowa wymusza twarde wyjście procesu supervisora po journalu decyzji, lecz przed
+  release, a drugi proces musi dokończyć release/apply bez dostępu do binarium
+  workera.
 
 ## Migracja i rollback
 
@@ -140,6 +148,6 @@ przeprowadzać migracji przez zgadywanie stanu pustego journalu.
 Source/contract gates są oddzielone od procesu workera i kwalifikacji solvera.
 Testy integracyjne wymagają managed build runnera. Pełne lokalne process E2E
 sukcesu, anulowania żywego procesu i anulowania przed spawnem ograniczonego FDM
-CPU przechodzą. P5-B pozostaje otwarte do automatycznego schedulera, fencing
-okna release→decision i orphanów, zdalnego ACK oraz dowodu braku równoległego starego workera dla
+CPU przechodzą. P5-B pozostaje otwarte do automatycznego schedulera, orphan
+reconciliation sprzed journalu decyzji, zdalnego ACK oraz dowodu braku równoległego starego workera dla
 pozostałych lane'ów.

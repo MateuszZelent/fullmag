@@ -229,6 +229,21 @@ def test_api_accepted_supervisor_automatic_retry_e2e_route_builds_both_processes
         MODULE.validate_command(("cargo", "test", "--workspace"), route)
 
 
+def test_api_accepted_supervisor_retry_recovery_e2e_route_builds_both_processes() -> None:
+    route = MODULE.ROUTES["api-accepted-supervisor-retry-recovery-e2e"]
+    assert route.setup_commands == MODULE.ROUTES["api-accepted-supervisor-e2e"].setup_commands
+    assert route.binary_env == MODULE.ROUTES["api-accepted-supervisor-e2e"].binary_env
+    assert dict(route.environment) == {
+        "FULLMAG_ACCEPTED_SUPERVISOR_RETRY_RECOVERY_E2E": "1",
+        "FULLMAG_ENABLE_TEST_HOOKS": "1",
+        "FULLMAG_TEST_ACCEPTED_WORKER_FAIL_BEFORE_EFFECT": "1",
+        "FULLMAG_TEST_ACCEPTED_SUPERVISOR_FAIL_AFTER_RETRY_DECISION": "1",
+    }
+    assert route.receipt_schema == "fullmag_api_accepted_supervisor_retry_recovery_e2e_v1"
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
 def test_api_scene_resource_route_is_fixed_and_tracks_api_sources() -> None:
     route = MODULE.ROUTES["api-scene-resource-tests"]
     assert route.command == (
@@ -358,6 +373,7 @@ def test_just_route_precedes_generic_prepare_links() -> None:
     assert '--route api-accepted-supervisor-cancel-e2e --repo-root' in justfile
     assert '--route api-accepted-supervisor-prestart-cancel-e2e --repo-root' in justfile
     assert '--route api-accepted-supervisor-automatic-retry-e2e --repo-root' in justfile
+    assert '--route api-accepted-supervisor-retry-recovery-e2e --repo-root' in justfile
     assert '--route api-preparation-tests --repo-root' in justfile
     assert '--route api-scene-resource-tests --repo-root' in justfile
     assert '--route authoring-scene-adapter-tests --repo-root' in justfile
@@ -372,6 +388,7 @@ def test_just_route_precedes_generic_prepare_links() -> None:
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-cancel-e2e' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-prestart-cancel-e2e' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-automatic-retry-e2e' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-retry-recovery-e2e' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-preparation-tests' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-scene-resource-tests' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route authoring-scene-adapter-tests' in shell
