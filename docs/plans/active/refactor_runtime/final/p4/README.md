@@ -576,3 +576,21 @@ Regresję store dodano, lecz nie kompilowano zgodnie z aktywnym zakazem testów
 jednostkowych. Restart/process E2E i native FEM pozostają `NOT VERIFIED`; P4
 pozostaje na **50%**, a cały plan na około **49%**. Szczegóły:
 [13-preparation-scheduler-fairness.md](13-preparation-scheduler-fairness.md).
+
+## Jawna decyzja retry preparacji FEM — 28.09.2026
+
+Commit `5c6a4be99` dodaje immutable `preparation_retry_decision.v1` oraz CLI
+`fullmag-api-preparation-retry`. Decyzja wiąże dokładny failed preparation
+attempt, ciągły numer retry, stały limit wszystkich prób i przyczynę operatora.
+Store wymaga trwałego exit receiptu i zwolnionego lease, a scheduler dopuszcza
+następną próbę dopiero po pokryciu każdej awarii dokładnie jedną decyzją.
+Atomowy admission porównuje również oczekiwaną sekwencję, więc przestarzały
+kandydat nie może wykorzystać nowszej autoryzacji.
+
+FMS/reachability zachowują decyzje, a pakiety portable Linux i Windows MSI
+wymagają nowego CLI. Source check, scoped rustfmt, parsery dystrybucji,
+statyczna kontrola pakowania i diff check przeszły. Regresję store dodano, ale
+nie kompilowano zgodnie z aktywnym zakazem testów jednostkowych. Managed
+process/native FEM E2E oraz rzeczywiste paczki pozostają `NOT VERIFIED`; P4
+pozostaje na **50%**, a cały plan na około **49%**. Szczegóły:
+[14-preparation-retry-decision.md](14-preparation-retry-decision.md).

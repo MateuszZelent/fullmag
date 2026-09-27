@@ -1927,3 +1927,20 @@ Regresja store została dodana, ale nie uruchomiona z powodu zakazu kompilacji
 testów jednostkowych. Restart/process E2E i native FEM pozostają **NOT
 VERIFIED**. **P4 50%, cały plan około 49%**. Szczegóły:
 [p4/13-preparation-scheduler-fairness.md](p4/13-preparation-scheduler-fairness.md).
+
+## P4-B — jawna decyzja retry preparacji FEM — 28.09.2026
+
+`preparation_retry_decision.v1` wiąże dokładny failed preparation attempt,
+ciągły numer retry, stały `max_attempts` i przyczynę operatora. Store wymaga
+trwałego failed exit oraz sfinalizowanego lease. Scheduler blokuje task do
+czasu decyzji, a atomowy admission odrzuca kandydata wyliczonego dla starszej
+sekwencji. Kolejna awaria ponownie wymaga nowej decyzji; limit nie może zostać
+podniesiony po pierwszym retry.
+
+CLI publikujące decyzję jest częścią portable Linux i Windows MSI, a FMS i
+reachability zachowują jej typowaną tożsamość. Source check, scoped rustfmt,
+parsery dystrybucji, statyczna kontrola pakowania i diff check: **PASS**.
+Regresja store została dodana, lecz nie uruchomiona z powodu zakazu kompilacji
+testów jednostkowych. Managed process/native FEM E2E i rzeczywiste paczki
+pozostają **NOT VERIFIED**. **P4 50%, cały plan około 49%**. Szczegóły:
+[p4/14-preparation-retry-decision.md](p4/14-preparation-retry-decision.md).
