@@ -5,8 +5,9 @@ use anyhow::{bail, Context, Result};
 use fullmag_application::RunSpecification;
 use fullmag_session::{
     FmsPreparationResourceLease, FmsPreparationResourceOffer, FmsPreparationResourcePool,
-    FmsResourceLeaseState, FmsTaskLifecycle, FmsTaskReadiness, SessionStore,
-    FMS_PREPARATION_RESOURCE_LEASE_SCHEMA, FMS_TASK_AWAITING_PREPARATION_REASON,
+    FmsResourceLeaseState, FmsSchedulerPoolCheckpoint, FmsSchedulerRunSource, FmsTaskLifecycle,
+    FmsTaskReadiness, SessionStore, FMS_PREPARATION_RESOURCE_LEASE_SCHEMA,
+    FMS_SCHEDULER_POOL_CHECKPOINT_SCHEMA, FMS_TASK_AWAITING_PREPARATION_REASON,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -45,6 +46,8 @@ struct ActivePreparation {
 struct CompletedPreparation {
     lease: FmsPreparationResourceLease,
     result: accepted_fem_preparation_supervisor::SupervisedPreparationResult,
+    checkpoint_run_ids: Option<Vec<String>>,
+    next_run_id: Option<String>,
 }
 
 #[derive(Default)]
@@ -156,11 +159,32 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
     let mut completed = Vec::new();
     let mut observed_pool = None::<FmsPreparationResourcePool>;
     let mut observed_resource_ids = BTreeSet::new();
+    let checkpoint = retry_store_writer_busy(|| {
+        store.read_preparation_scheduler_pool_checkpoint(&args.pool_id)
+    })?;
+    if checkpoint
+        .as_ref()
+        .is_some_and(|checkpoint| checkpoint.run_source != FmsSchedulerRunSource::Store)
+    {
+        bail!("preparation scheduler checkpoint has an invalid run source");
+    }
+    let mut next_run_id = checkpoint
+        .as_ref()
+        .and_then(|checkpoint| checkpoint.next_run_id.clone());
+    let mut checkpoint_sequence = checkpoint
+        .map(|checkpoint| checkpoint.sequence)
+        .unwrap_or(0);
     let mut idle_poll_count = 0usize;
     let mut consecutive_idle_polls = 0usize;
 
     loop {
-        reap_finished(&mut active, &mut completed)?;
+        reap_finished(
+            &store,
+            &args.pool_id,
+            &mut checkpoint_sequence,
+            &mut active,
+            &mut completed,
+        )?;
         let draining = shutdown_requested.load(Ordering::Acquire);
         if draining && active.is_empty() {
             break;
@@ -197,6 +221,8 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
                         preparer_executable.clone(),
                         args.process_timeout,
                         args.heartbeat_interval,
+                        None,
+                        None,
                     ),
                     lease,
                 },
@@ -220,7 +246,8 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
                         .map(|resource| resource.resource_id.clone()),
                 );
                 observed_pool = Some(pool.clone());
-                let candidates = preparation_candidates(&store)?;
+                let candidates = preparation_candidates(&store, next_run_id.as_deref())?;
+                let checkpoint_run_ids = distinct_run_ids(&candidates);
                 for offer in &pool.resources {
                     if active.len() >= args.max_concurrency
                         || args
@@ -243,6 +270,9 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
                         continue;
                     };
                     let resource_id = lease.resource_id.clone();
+                    let next_after_admission =
+                        next_equal_priority_run(&candidates, &lease.run_id, &lease.task_id);
+                    next_run_id = next_after_admission.clone();
                     active.insert(
                         resource_id,
                         ActivePreparation {
@@ -252,6 +282,8 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
                                 preparer_executable.clone(),
                                 args.process_timeout,
                                 args.heartbeat_interval,
+                                Some(checkpoint_run_ids.clone()),
+                                next_after_admission,
                             ),
                             lease,
                         },
@@ -296,6 +328,7 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
             "shutdown_requested": shutdown,
             "pool_id": args.pool_id,
             "pool_generation": observed_pool.as_ref().map(|pool| pool.generation).unwrap_or(0),
+            "pool_checkpoint_sequence": checkpoint_sequence,
             "resource_ids": observed_resource_ids,
             "scheduled_count": completed.len(),
             "idle_poll_count": idle_poll_count,
@@ -305,7 +338,10 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
     Ok(())
 }
 
-fn preparation_candidates(store: &SessionStore) -> Result<Vec<PreparationCandidate>> {
+fn preparation_candidates(
+    store: &SessionStore,
+    next_run_id: Option<&str>,
+) -> Result<Vec<PreparationCandidate>> {
     let mut candidates = Vec::new();
     for intent in store.list_run_intents()? {
         let specification: RunSpecification = serde_json::from_value(intent.specification)
@@ -355,7 +391,55 @@ fn preparation_candidates(store: &SessionStore) -> Result<Vec<PreparationCandida
             .then_with(|| left.run_id.cmp(&right.run_id))
             .then_with(|| left.task_id.cmp(&right.task_id))
     });
-    Ok(candidates)
+    let mut ordered = Vec::with_capacity(candidates.len());
+    let mut group_start = 0usize;
+    while group_start < candidates.len() {
+        let priority = candidates[group_start].priority;
+        let group_end = candidates[group_start..]
+            .iter()
+            .position(|candidate| candidate.priority != priority)
+            .map(|offset| group_start + offset)
+            .unwrap_or(candidates.len());
+        let group = &candidates[group_start..group_end];
+        let rotation = next_run_id
+            .and_then(|next| group.iter().position(|candidate| candidate.run_id == next))
+            .unwrap_or(0);
+        ordered.extend(group[rotation..].iter().cloned());
+        ordered.extend(group[..rotation].iter().cloned());
+        group_start = group_end;
+    }
+    Ok(ordered)
+}
+
+fn distinct_run_ids(candidates: &[PreparationCandidate]) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    candidates
+        .iter()
+        .filter_map(|candidate| {
+            seen.insert(candidate.run_id.clone())
+                .then(|| candidate.run_id.clone())
+        })
+        .collect()
+}
+
+fn next_equal_priority_run(
+    candidates: &[PreparationCandidate],
+    selected_run_id: &str,
+    selected_task_id: &str,
+) -> Option<String> {
+    let selected_index = candidates.iter().position(|candidate| {
+        candidate.run_id == selected_run_id && candidate.task_id == selected_task_id
+    })?;
+    let selected_priority = candidates[selected_index].priority;
+    candidates
+        .iter()
+        .skip(selected_index + 1)
+        .chain(candidates.iter().take(selected_index + 1))
+        .find(|candidate| {
+            candidate.priority == selected_priority && candidate.run_id != selected_run_id
+        })
+        .map(|candidate| candidate.run_id.clone())
+        .or_else(|| Some(selected_run_id.to_owned()))
 }
 
 fn admit_candidate(
@@ -419,6 +503,9 @@ fn validate_pool_progress(
 }
 
 fn reap_finished(
+    store: &SessionStore,
+    pool_id: &str,
+    checkpoint_sequence: &mut u64,
     active: &mut ActivePreparations,
     completed: &mut Vec<serde_json::Value>,
 ) -> Result<()> {
@@ -433,6 +520,24 @@ fn reap_finished(
             Ok(result) => result.context("supervise scheduled FEM preparation")?,
             Err(_) => bail!("scheduled FEM preparation supervisor thread panicked"),
         };
+        if let Some(run_ids) = completed_preparation.checkpoint_run_ids.as_ref() {
+            let checkpoint = FmsSchedulerPoolCheckpoint {
+                schema_version: FMS_SCHEDULER_POOL_CHECKPOINT_SCHEMA.into(),
+                pool_id: pool_id.to_owned(),
+                sequence: checkpoint_sequence
+                    .checked_add(1)
+                    .context("preparation scheduler checkpoint sequence overflow")?,
+                run_source: FmsSchedulerRunSource::Store,
+                run_ids: run_ids.clone(),
+                next_run_id: completed_preparation.next_run_id.clone(),
+            };
+            retry_store_writer_busy(|| {
+                store
+                    .commit_preparation_scheduler_pool_checkpoint(*checkpoint_sequence, &checkpoint)
+            })
+            .context("commit preparation scheduler pool checkpoint")?;
+            *checkpoint_sequence = checkpoint.sequence;
+        }
         completed.push(serde_json::json!({
             "resource_id": completed_preparation.lease.resource_id,
             "run_id": completed_preparation.lease.run_id,
@@ -457,6 +562,8 @@ fn spawn_supervisor(
     preparer_executable: PathBuf,
     process_timeout: Duration,
     heartbeat_interval: Duration,
+    checkpoint_run_ids: Option<Vec<String>>,
+    next_run_id: Option<String>,
 ) -> JoinHandle<Result<CompletedPreparation>> {
     std::thread::spawn(move || {
         let store = retry_store_writer_busy(|| SessionStore::open_existing(&store_root))
@@ -472,7 +579,12 @@ fn spawn_supervisor(
             process_timeout,
             heartbeat_interval,
         )?;
-        Ok(CompletedPreparation { lease, result })
+        Ok(CompletedPreparation {
+            lease,
+            result,
+            checkpoint_run_ids,
+            next_run_id,
+        })
     })
 }
 

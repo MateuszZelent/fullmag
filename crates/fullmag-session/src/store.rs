@@ -417,6 +417,75 @@ impl SessionStore {
         Ok(SchedulerPoolCheckpointCommitDisposition::Accepted)
     }
 
+    pub fn read_preparation_scheduler_pool_checkpoint(
+        &self,
+        pool_id: &str,
+    ) -> Result<Option<FmsSchedulerPoolCheckpoint>> {
+        validate_store_id(pool_id)?;
+        let relative = format!("scheduler_pools/{pool_id}.preparation.json");
+        let path = checked_path(&self.root, &relative)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        reject_link(&path)?;
+        let checkpoint: FmsSchedulerPoolCheckpoint = serde_json::from_slice(&fs::read(&path)?)
+            .with_context(|| {
+                format!("parsing preparation scheduler pool checkpoint `{relative}`")
+            })?;
+        checkpoint.validate()?;
+        if checkpoint.pool_id != pool_id {
+            anyhow::bail!(
+                "preparation scheduler pool checkpoint identity does not match its path"
+            );
+        }
+        Ok(Some(checkpoint))
+    }
+
+    pub fn commit_preparation_scheduler_pool_checkpoint(
+        &self,
+        expected_sequence: u64,
+        checkpoint: &FmsSchedulerPoolCheckpoint,
+    ) -> Result<SchedulerPoolCheckpointCommitDisposition> {
+        checkpoint.validate()?;
+        if checkpoint.run_source != FmsSchedulerRunSource::Store {
+            anyhow::bail!("preparation scheduler checkpoint requires store run discovery");
+        }
+        if checkpoint.sequence
+            != expected_sequence
+                .checked_add(1)
+                .context("preparation scheduler pool checkpoint sequence overflow")?
+        {
+            anyhow::bail!("preparation scheduler pool checkpoint sequence is not contiguous");
+        }
+        let _writer_lease = self.write_transaction()?;
+        let relative = format!(
+            "scheduler_pools/{}.preparation.json",
+            checkpoint.pool_id
+        );
+        let path = create_parent(&self.root, &relative)?;
+        if path.exists() {
+            reject_link(&path)?;
+            let existing: FmsSchedulerPoolCheckpoint =
+                serde_json::from_slice(&fs::read(&path)?).with_context(|| {
+                    format!("parsing preparation scheduler pool checkpoint `{relative}`")
+                })?;
+            existing.validate()?;
+            if existing == *checkpoint {
+                return Ok(SchedulerPoolCheckpointCommitDisposition::Replayed);
+            }
+            if existing.pool_id != checkpoint.pool_id
+                || existing.sequence != expected_sequence
+                || existing.run_source != checkpoint.run_source
+            {
+                anyhow::bail!("preparation scheduler pool checkpoint compare-and-swap conflict");
+            }
+        } else if expected_sequence != 0 {
+            anyhow::bail!("preparation scheduler pool checkpoint is missing before update");
+        }
+        atomic_write(&path, &serde_json::to_vec_pretty(checkpoint)?)?;
+        Ok(SchedulerPoolCheckpointCommitDisposition::Accepted)
+    }
+
     pub fn read_scheduler_resource_pool(
         &self,
         pool_id: &str,
@@ -4355,6 +4424,58 @@ mod tests {
         assert!(store
             .commit_scheduler_pool_checkpoint(2, &changed_membership)
             .is_err());
+    }
+
+    #[test]
+    fn preparation_scheduler_checkpoint_is_isolated_and_allows_store_membership_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(dir.path().join("store")).unwrap();
+        let first = FmsSchedulerPoolCheckpoint {
+            schema_version: FMS_SCHEDULER_POOL_CHECKPOINT_SCHEMA.into(),
+            pool_id: "pool-preparation".into(),
+            sequence: 1,
+            run_source: FmsSchedulerRunSource::Store,
+            run_ids: vec!["run-a".into(), "run-b".into()],
+            next_run_id: Some("run-b".into()),
+        };
+        assert_eq!(
+            store
+                .commit_preparation_scheduler_pool_checkpoint(0, &first)
+                .unwrap(),
+            SchedulerPoolCheckpointCommitDisposition::Accepted
+        );
+        assert_eq!(
+            store
+                .read_preparation_scheduler_pool_checkpoint("pool-preparation")
+                .unwrap(),
+            Some(first.clone())
+        );
+        assert!(store
+            .read_scheduler_pool_checkpoint("pool-preparation")
+            .unwrap()
+            .is_none());
+
+        let mut second = first.clone();
+        second.sequence = 2;
+        second.run_ids = vec!["run-b".into(), "run-c".into()];
+        second.next_run_id = Some("run-c".into());
+        assert_eq!(
+            store
+                .commit_preparation_scheduler_pool_checkpoint(1, &second)
+                .unwrap(),
+            SchedulerPoolCheckpointCommitDisposition::Accepted
+        );
+        assert!(store
+            .commit_preparation_scheduler_pool_checkpoint(1, &first)
+            .is_err());
+        let report = crate::reachability::walk_store_root(
+            store.root(),
+            crate::reachability::ReachabilityMode::Export,
+        )
+        .unwrap();
+        assert!(report
+            .file_refs
+            .contains("scheduler_pools/pool-preparation.preparation.json"));
     }
 
     #[test]

@@ -17,7 +17,7 @@ use crate::types::{
     FmsPreparationProcessExitReceipt, FmsPreparationProcessLaunch, FmsPreparationResourceLease,
     FmsPreparationResourcePool, FmsResourceLease, FmsRetryDecision, FmsRunCatalog,
     FmsRunIntent, FmsRunManifest, FmsSchedulerPoolCheckpoint, FmsSchedulerResourcePool,
-    FmsSessionManifest, FmsTaskAdmissionRecord, FmsTaskPreparationReceipt,
+    FmsSchedulerRunSource, FmsSessionManifest, FmsTaskAdmissionRecord, FmsTaskPreparationReceipt,
     FmsWorkerProcessExitReceipt, FmsWorkspaceManifest, TensorDescriptor,
 };
 
@@ -712,6 +712,17 @@ impl StoreWalker {
                 pool.validate()?;
                 if pool.pool_id != pool_id {
                     bail!("preparation resource pool `{relative}` has mismatched path identity");
+                }
+            } else if let Some(pool_id) = name.strip_suffix(".preparation.json") {
+                validate_component(pool_id)?;
+                let checkpoint: FmsSchedulerPoolCheckpoint = parse_json(&data, &relative)?;
+                checkpoint.validate()?;
+                if checkpoint.pool_id != pool_id
+                    || checkpoint.run_source != FmsSchedulerRunSource::Store
+                {
+                    bail!(
+                        "preparation scheduler pool checkpoint `{relative}` has mismatched path identity"
+                    );
                 }
             } else if let Some(pool_id) = name.strip_suffix(".resources.json") {
                 validate_component(pool_id)?;
