@@ -45,7 +45,8 @@ Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`40-multi-run-scheduler-pool.md`](40-multi-run-scheduler-pool.md),
 [`41-scheduler-run-discovery.md`](41-scheduler-run-discovery.md) i
 [`42-persistent-scheduler-cursor.md`](42-persistent-scheduler-cursor.md) i
-[`43-parallel-resource-supervision.md`](43-parallel-resource-supervision.md).
+[`43-parallel-resource-supervision.md`](43-parallel-resource-supervision.md) i
+[`44-parallel-writer-contention.md`](44-parallel-writer-contention.md).
 
 ## Ograniczona pula wielu runów — 27.09.2026
 
@@ -119,6 +120,24 @@ PASS**, receipt `940b79ad3ff04006b58455569e37e38d`; oba mają content
 `source_changed_during_run=false`. Implementacja:
 `ce39157e25fff1bca6c0c6906cd10730b5899926`. Szczegóły:
 [`43-parallel-resource-supervision.md`](43-parallel-resource-supervision.md).
+
+## Odporność na równoległą kontencję writera — 27.09.2026
+
+Heartbeat, publikacja eventu supervisora, recovery trwałej decyzji retry,
+queue/checkpoint schedulera oraz reopen store dla inboxu i receipt recovery
+ponawiają wyłącznie tę samą idempotentną operację po typowanym
+`StoreWriterBusy`. Event zachowuje envelope i message ID, a CAS/fencing nadal
+kończą się fail-closed.
+
+Managed E2E wymusza 250 ms natywnej kontencji writera podczas startu drugiego
+schedulera i kończy oba taski sukcesem: **1/1 PASS**, receipt
+`52d3c67d2fa94c0d95bdfbb1bdd628f4`. Supervisor: **9/9 PASS**, receipt
+`c19554ce606d4c419739abed582a067f`. Oba receipty mają content
+`c52da19e6ddd7ef1a1d32f4091592dbe9bc360d47776ea564d72287f6947ef50` oraz
+`source_changed_during_run=false`. Implementacja:
+`741f1f19171f9b02c904385dfb8f6154d030bcbe`. Procenty pozostają bez zmian:
+P3 **79%**, P5 **48%**, całość **38%**. Szczegóły:
+[`44-parallel-writer-contention.md`](44-parallel-writer-contention.md).
 
 API ma jawny adapter allow-listy `RunResult` → typowane payloady dla
 wspieranych wyjść. Szczegóły i wcześniejszy dowód opisuje
