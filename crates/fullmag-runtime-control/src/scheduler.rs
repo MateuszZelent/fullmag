@@ -101,6 +101,13 @@ pub fn schedule_next_ready_accepted_task(
         if !scheduler_owned_accepted && !unclaimed_queue {
             continue;
         }
+        if scheduler_owned_accepted
+            && store
+                .read_task_preparation_receipt(run_id.as_str(), task_id.as_str())?
+                .is_none()
+        {
+            continue;
+        }
         if !inputs_are_automatically_resolvable(run_id.as_str(), &study_step.inputs, &catalog)? {
             continue;
         }

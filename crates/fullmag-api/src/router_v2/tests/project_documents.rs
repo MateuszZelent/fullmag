@@ -1,5 +1,43 @@
 use super::*;
 
+struct KillOnDropChild(Option<std::process::Child>);
+
+impl KillOnDropChild {
+    fn new(child: std::process::Child) -> Self {
+        Self(Some(child))
+    }
+
+    fn wait_with_output(mut self) -> std::io::Result<std::process::Output> {
+        self.0
+            .take()
+            .expect("guarded child must exist")
+            .wait_with_output()
+    }
+}
+
+impl std::ops::Deref for KillOnDropChild {
+    type Target = std::process::Child;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref().expect("guarded child must exist")
+    }
+}
+
+impl std::ops::DerefMut for KillOnDropChild {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_mut().expect("guarded child must exist")
+    }
+}
+
+impl Drop for KillOnDropChild {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 #[test]
 #[ignore = "subprocess fixture for worker inbox recovery"]
 fn worker_inbox_process_interruption_child() {
@@ -1017,7 +1055,11 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
     assert_eq!(wrong_read.status(), StatusCode::CONFLICT);
     let mut conflicting: serde_json::Value = serde_json::from_str(&body).unwrap();
     conflicting["run_intent"]["specification"]["parameters"] = serde_json::json!({"alpha": 0.5});
-    let conflict = app.oneshot(submit(conflicting.to_string())).await.unwrap();
+    let conflict = app
+        .clone()
+        .oneshot(submit(conflicting.to_string()))
+        .await
+        .unwrap();
     assert_eq!(conflict.status(), StatusCode::CONFLICT);
     assert!(state.current_live_state.read().await.is_none());
     let store =
@@ -1095,6 +1137,8 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             == Ok("1");
     let scheduler_resource_pool_e2e =
         std::env::var("FULLMAG_ACCEPTED_SCHEDULER_RESOURCE_POOL_E2E").as_deref() == Ok("1");
+    let scheduler_resident_discovery_e2e =
+        std::env::var("FULLMAG_ACCEPTED_SCHEDULER_RESIDENT_DISCOVERY_E2E").as_deref() == Ok("1");
     let scheduler_multi_run_e2e = scheduler_pool_e2e || scheduler_discovery_e2e;
     if scheduler_parallel_resources_e2e {
         let scheduler_executable = std::path::PathBuf::from(
@@ -1389,6 +1433,178 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
                 .unwrap()
                 .is_none());
         }
+        return;
+    }
+    if scheduler_resident_discovery_e2e {
+        let scheduler_executable = std::path::PathBuf::from(
+            std::env::var_os("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN")
+                .expect("resident discovery E2E requires the built accepted scheduler binary"),
+        );
+        let worker_executable = std::path::PathBuf::from(
+            std::env::var_os("FULLMAG_ACCEPTED_WORKER_E2E_BIN")
+                .expect("resident discovery E2E requires the built accepted worker binary"),
+        );
+        let scheduler = std::process::Command::new(&scheduler_executable)
+            .arg("--store-root")
+            .arg(store.root())
+            .arg("--discover-runs")
+            .arg("true")
+            .arg("--pool-id")
+            .arg("resident-discovery-e2e")
+            .arg("--resident")
+            .arg("true")
+            .arg("--resource-id")
+            .arg("cpu-resident-e2e")
+            .arg("--resource-kind")
+            .arg("cpu")
+            .arg("--cpu-millis")
+            .arg("100")
+            .arg("--memory-bytes")
+            .arg("1048576")
+            .arg("--gpu-memory-bytes")
+            .arg("0")
+            .arg("--storage-bytes")
+            .arg("8388608")
+            .arg("--worker-executable")
+            .arg(&worker_executable)
+            .arg("--max-concurrency")
+            .arg("1")
+            .arg("--max-tasks")
+            .arg("3")
+            .arg("--max-idle-polls")
+            .arg("0")
+            .arg("--idle-poll-milliseconds")
+            .arg("20")
+            .arg("--worker-timeout-seconds")
+            .arg("30")
+            .arg("--heartbeat-interval-milliseconds")
+            .arg("250")
+            .arg("--max-automatic-retries")
+            .arg("0")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn resident accepted scheduler");
+        let mut scheduler = KillOnDropChild::new(scheduler);
+        let initial_deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let first = store
+                .read_run_catalog(accepted_run_id.as_str())
+                .unwrap()
+                .unwrap()
+                .tasks[0]
+                .lifecycle;
+            let second = store
+                .read_run_catalog(&second_run_id)
+                .unwrap()
+                .unwrap()
+                .tasks[0]
+                .lifecycle;
+            if first == fullmag_session::FmsTaskLifecycle::Succeeded
+                && second == fullmag_session::FmsTaskLifecycle::Succeeded
+            {
+                break;
+            }
+            if std::time::Instant::now() >= initial_deadline {
+                let _ = scheduler.kill();
+                let output = scheduler.wait_with_output().unwrap();
+                panic!(
+                    "resident scheduler did not finish initial runs: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        assert!(
+            scheduler.try_wait().unwrap().is_none(),
+            "resident scheduler exited during an idle gap"
+        );
+
+        let mut third_payload: serde_json::Value = serde_json::from_str(&body).unwrap();
+        third_payload["run_intent"]["idempotency_key"] =
+            serde_json::json!("submit-http-resident-third");
+        third_payload["run_intent"]["specification"]["run_id"] =
+            serde_json::json!("run-http-resident-third");
+        let third_body = third_payload.to_string();
+        let third_deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let third_run = loop {
+            let response = app
+                .clone()
+                .oneshot(submit(third_body.clone()))
+                .await
+                .unwrap();
+            let status = response.status();
+            let response = body_json(response).await;
+            if status == StatusCode::CREATED {
+                break response;
+            }
+            if status == StatusCode::CONFLICT
+                && response["code"] == "run_store_busy"
+                && std::time::Instant::now() < third_deadline
+            {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                continue;
+            }
+            panic!("late resident run submission failed with {status}: {response}");
+        };
+        let third_run_id = third_run["run_id"].as_str().unwrap().to_string();
+        let third_materialization = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!(
+                        "/v2/persistence/projects/project-submit/runs/{third_run_id}/materialization"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(third_materialization.status(), StatusCode::OK);
+
+        let completion_deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if scheduler.try_wait().unwrap().is_some() {
+                break;
+            }
+            if std::time::Instant::now() >= completion_deadline {
+                let _ = scheduler.kill();
+                let output = scheduler.wait_with_output().unwrap();
+                panic!(
+                    "resident scheduler did not consume the late run: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let output = scheduler.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "resident scheduler failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(summary["status"], "completed");
+        assert_eq!(summary["resident"], true);
+        assert_eq!(summary["scheduled_count"], 3);
+        assert!(summary["idle_poll_count"].as_u64().unwrap() > 0);
+        assert!(summary["run_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == &serde_json::json!(third_run_id)));
+        let third_catalog = store.read_run_catalog(&third_run_id).unwrap().unwrap();
+        assert_eq!(
+            third_catalog.tasks[0].lifecycle,
+            fullmag_session::FmsTaskLifecycle::Succeeded
+        );
+        assert_eq!(summary["pool_checkpoint_sequence"], 3);
         return;
     }
     if scheduler_e2e || scheduler_multi_run_e2e || scheduler_persistent_cursor_e2e {

@@ -23,6 +23,7 @@ struct SchedulerArgs {
     store_root: PathBuf,
     run_ids: Vec<String>,
     discover_runs: bool,
+    resident: bool,
     pool_id: Option<String>,
     resources: Vec<SchedulerResourceOffer>,
     worker_executable: Option<PathBuf>,
@@ -236,7 +237,7 @@ fn run() -> Result<()> {
             if scheduled_any {
                 continue;
             }
-            if consecutive_idle_polls >= args.max_idle_polls {
+            if !args.resident && consecutive_idle_polls >= args.max_idle_polls {
                 break;
             }
             idle_poll_count += 1;
@@ -313,6 +314,7 @@ fn run() -> Result<()> {
             "run_id": if observed_run_ids.len() == 1 { observed_run_ids.first() } else { None },
             "run_ids": observed_run_ids,
             "run_source": if args.discover_runs { "store" } else { "explicit" },
+            "resident": args.resident,
             "pool_id": args.pool_id,
             "pool_checkpoint_sequence": checkpoint_sequence,
             "resource_count": resource_ids.len(),
@@ -429,6 +431,11 @@ fn parse_args() -> Result<SchedulerArgs> {
     if discover_runs == !run_ids.is_empty() {
         bail!("scheduler requires either explicit --run-id values or --discover-runs true");
     }
+    let resident = values
+        .remove("--resident")
+        .map(|value| parse_bool("--resident", value))
+        .transpose()?
+        .unwrap_or(false);
     let pool_id = values
         .remove("--pool-id")
         .map(|value| {
@@ -437,6 +444,12 @@ fn parse_args() -> Result<SchedulerArgs> {
                 .map_err(|_| anyhow::anyhow!("scheduler option `--pool-id` must be valid UTF-8"))
         })
         .transpose()?;
+    if resident && !discover_runs {
+        bail!("resident scheduler requires --discover-runs true");
+    }
+    if resident && pool_id.is_none() {
+        bail!("resident scheduler requires --pool-id");
+    }
     let store_root = PathBuf::from(take_required_string(&mut values, "--store-root")?);
     let legacy_resource_flags = [
         "--resource-id",
@@ -526,6 +539,12 @@ fn parse_args() -> Result<SchedulerArgs> {
     if max_idle_polls > 0 && idle_poll_milliseconds == 0 {
         bail!("scheduler idle poll interval must be positive when idle polling is enabled");
     }
+    if resident && max_idle_polls != 0 {
+        bail!("resident scheduler requires --max-idle-polls 0");
+    }
+    if resident && idle_poll_milliseconds == 0 {
+        bail!("resident scheduler idle poll interval must be positive");
+    }
     let worker_executable = values.remove("--worker-executable").map(PathBuf::from);
     if let Some(flag) = values.keys().next() {
         bail!("unknown scheduler option `{flag}`");
@@ -534,6 +553,7 @@ fn parse_args() -> Result<SchedulerArgs> {
         store_root,
         run_ids,
         discover_runs,
+        resident,
         pool_id,
         resources,
         worker_executable,
