@@ -166,6 +166,28 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
     `run_intent.json`. Brak katalogu i katalog z taskiem nieterminalnym zajmują
     miejsce. Niepusty katalog zwalnia miejsce dopiero wtedy, gdy wszystkie
     taski są `Succeeded`, `Failed`, `Cancelled` lub `Interrupted`.
+28. Checkpoint każdego wpisu journalu jest atomowym watermarkiem obu strumieni.
+    Pod jednym writer lockiem store wymaga dokładnego kolejnego prefiksu
+    command/event. Równoległa publikacja drugiego strumienia unieważnia stary
+    checkpoint i wymaga recovery przed ponowieniem dokładnego envelope.
+29. Heartbeat supervisora jest trwałą komendą `Heartbeat`. Fizyczny
+    `heartbeat_sequence` lease zwiększa się dopiero po worker-originated
+    `HeartbeatAck` dla tej samej wartości. Żywy PID bez ACK nie odnawia lease.
+30. `worker_protocol.v3` dodaje nieterminalne `Completing`. Po tym zdarzeniu
+    worker drenuje prefiks komend, supervisor nie publikuje następnego heartbeat,
+    a nowy `Stop` jest odrzucany. Dopiero potem worker publikuje outputy i
+    `Completed`.
+31. Trwały `Stop` nie zabija poprawnie działającego workera. Worker oznacza go
+    jako applied, przerywa kontrolowany side effect i publikuje `Stopped`.
+    Supervisor po obserwacji Stop wyłącza heartbeat, czeka na exit i zwalnia
+    lease dopiero po terminalnej rekoncyliacji.
+32. Dokładny nadal aktywny lease może przyjąć końcową, już potwierdzoną
+    sekwencję heartbeat po terminalnym zdarzeniu, ale przed release. Wyjątek
+    służy wyłącznie domknięciu ACK; admission terminalnego taska i nowy
+    ownership nadal są odrzucane.
+33. `stop_requested` w receipcie opisuje intencję operatora, nie wynik procesu.
+    Niezerowy exit zawsze zachowuje `failure_reason`; Stop nie może zamienić
+    awarii workera w potwierdzone anulowanie.
 
 ## Konsekwencje
 
@@ -210,6 +232,11 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
   backlogiem, lecz nie jest limitem per-project/per-tenant ani rozproszonym
   quota managerem. Obiekty CAS zweryfikowane przed atomowym admission mogą po
   `429` pozostać nieosiągalne i podlegają bezpiecznej polityce GC.
+- Lease potwierdza teraz liveness widziane przez proces workera, a nie tylko
+  poll PID przez supervisora. Nadal nie jest dowodem postępu solvera ani
+  zwolnienia urządzenia na innym hoście.
+- `Completing` wyznacza zamknięcie control plane przed `Completed`. Publiczny
+  cancel przegrywający ten fence otrzymuje odmowę zamiast pozornego sukcesu.
 
 ## Obowiązki implementacyjne
 
@@ -284,6 +311,11 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
 - Managed próba publicznego Submitu wypełnia limit, wymaga replayu `200`,
   odmowy nowego payloadu `429` bez intentu, terminalizuje część backlogu i
   wymaga późniejszego `201` dla dokładnie tego samego odrzuconego payloadu.
+- Managed process E2E wymaga dla każdego sukcesu dokładnej, niepustej pary
+  `Heartbeat`/`HeartbeatAck`, jednego `Completing` przed `Completed`, pustego
+  pending inboxu i released lease z końcową sekwencją ACK. Osobny przebieg
+  publikuje publiczny `Stop` podczas `Running` i wymaga applied Stop,
+  worker-originated `Stopped`, poprawnego exit receiptu oraz release lease.
 
 ## Migracja i rollback
 
@@ -310,5 +342,9 @@ Submit/materialization/readback przez publiczne API v2; legacy `run-json`
 pozostaje bezpośrednią ścieżką do osobnego cutoveru. Immutable priority i
 lokalne ograniczone okno kolejki mają process E2E dla pięciu runów. Atomowy
 limit publicznego Submitu ma osobny dowód `200/429/201` i nie publikuje intentu
-po odmowie. P5-B pozostaje otwarte do zdalnego ACK oraz dowodu braku
-równoległego starego workera i zwolnienia urządzenia dla pozostałych lane'ów.
+po odmowie. `worker_protocol.v3` ma procesowy dowód rzeczywistych
+`HeartbeatAck`, bariery `Completing` oraz worker-originated `Stopped` dla
+lokalnego FDM CPU/double/strict (receipt
+`ee5c9689c1af4be7b11797c3815d960b`). P5-B pozostaje otwarte dla transportu
+cross-host, dowodu braku równoległego starego workera i zwolnienia urządzenia
+na pozostałych lane'ach.

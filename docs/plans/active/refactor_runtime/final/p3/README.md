@@ -1030,3 +1030,18 @@ niematerializowany mimo priorytetu `100`, pozostał poza gotową kolejką: **PAS
 Publiczny Submit pozostaje bez limitu backlogu. P3 wynosi **89%**, P5 **76%**,
 a całość około **46%**. Szczegóły:
 [`55-priority-and-bounded-queue.md`](55-priority-and-bounded-queue.md).
+
+## Durable worker control ACK i completion fence — 27.09.2026
+
+`worker_protocol.v3` przenosi heartbeat i Stop na trwały transport obsługiwany
+przez worker. Fizyczny lease rośnie dopiero po odpowiadającym
+`HeartbeatAck`; `Completing` zamyka control plane przed outputami i
+`Completed`, a anulowanie wymaga applied Stop oraz worker-originated `Stopped`.
+Store utrzymuje atomowy wspólny watermark command/event.
+
+Source check: **PASS**, receipt `3467a65769be4235bf64e87bfcd1e2f3`.
+Managed process E2E sukcesów oraz publicznego Stop: **PASS**, receipt
+`ee5c9689c1af4be7b11797c3815d960b`. Testy jednostkowe są **NOT RUN** zgodnie
+z aktywnym zakazem kompilowania targetów testowych. P3 wynosi **92%**, P5
+**84%**, a całość około **48%**. Szczegóły:
+[`57-worker-control-ack.md`](57-worker-control-ack.md).

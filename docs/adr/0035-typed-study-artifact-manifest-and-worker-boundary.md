@@ -58,6 +58,11 @@ diagnostykę, pliki pośrednie i częściowe wyniki.
    `worker_protocol.v2`; v1 nie jest reinterpretowany jako kompletne typowane
    wejście. `artifact_catalog.v1` zachowuje dotychczasowe rekordy; manifest ma
    własny versioned schema i jest zwykłym CAS-backed artifact catalog entry.
+9. Faktyczny control ACK i jednoznaczna granica ukończenia wymagają
+   `worker_protocol.v3`. Worker publikuje `Completing`, drenuje durable inbox i
+   dopiero potem publikuje manifest/outputy oraz `Completed`. Heartbeat i Stop
+   mają worker-originated `HeartbeatAck`/`Stopped`; v2 pozostaje czytelny tylko
+   przy recovery istniejącego attemptu i nie może być mieszany z v3.
 
 ## Konsekwencje
 
@@ -122,12 +127,20 @@ terminalnym lifecycle czeka na exit i zwalnia ostatnią wersję lease. Zarządza
 E2E ma 1/1 PASS. Nie rozszerza to kwalifikacji na FDM GPU, FEM CPU/GPU, fizykę,
 crash supervisora, orphan recovery, operator cancel ani retry orchestration.
 
+Aktualizacja 27.09.2026: `worker_protocol.v3` dodaje trwały Heartbeat/ACK,
+worker-originated Stop/Stopped, atomowy cross-stream checkpoint oraz
+`Completing` przed publikacją outputów i `Completed`. Managed process E2E
+rzeczywistych binariów przechodzi dla sukcesu i publicznego anulowania FDM
+CPU/double/strict (receipt `ee5c9689c1af4be7b11797c3815d960b`). Nie
+rozszerza to kwalifikacji manifestu ani solvera na GPU/FEM lub host zdalny.
+
 ## Migracja i rollback
 
 Stare outputy bez manifestu pozostają zachowane i eksportowalne, ale nie są
 wejściem do nowego `StepOutput`. Protocol v1 pozostaje tylko dla historycznych
-zapisów i workerów bez dispatchu; coordinator nie wysyła v2 do procesu
-deklarującego v1. Rollback wyłącza admission nowych typowanych tasków i
+zapisów i workerów bez dispatchu; v2 może być odtworzony w obrębie istniejącego
+attemptu, lecz nowe próby używają v3. Coordinator nie miesza wersji w jednym
+attemptcie. Rollback wyłącza admission nowych typowanych tasków i
 zachowuje zaakceptowane runy oraz ich CAS. Nie usuwa outputów ani nie uruchamia
 ponownie tasków z niepewnym pending effectem.
 
