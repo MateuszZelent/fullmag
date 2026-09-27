@@ -1824,3 +1824,17 @@ diff check: **PASS**. Testów jednostkowych nie kompilowano; managed process i
 native FEM E2E są **NOT VERIFIED**. Scheduler, supervisor, exit receipt i
 recovery pozostają otwarte. **P4 50%, cały plan około 49%**. Szczegóły:
 [p4/06-preparation-resource-pool.md](p4/06-preparation-resource-pool.md).
+
+## P4-B — preparation process exit receipt — 27.09.2026
+
+`preparation_process_exit_receipt.v1` utrwala dowód zebrania procesu preparera
+i jest fenced do RunId/TaskId/preparation attemptu, resource_id, tokenu oraz
+ostatniej sekwencji heartbeat. Store publikuje go tylko przy aktywnym lease,
+obsługuje identyczny replay i recovery. FMS pack, store reachability i archive
+preflight zachowują typowany receipt także przed solverowym run manifestem.
+
+Source check session/runtime-control/API i obu binariów oraz diff check:
+**PASS**. Testów jednostkowych nie kompilowano. Supervisor, atomowa finalizacja
+readiness/release, process E2E i native FEM pozostają otwarte. **P4 50%, cały
+plan około 49%**. Szczegóły:
+[p4/07-preparation-process-exit-receipt.md](p4/07-preparation-process-exit-receipt.md).

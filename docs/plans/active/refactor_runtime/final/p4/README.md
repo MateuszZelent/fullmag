@@ -476,3 +476,16 @@ Rezydentny scheduler, supervisor, exit receipt i recovery pozostają otwarte;
 managed process/native FEM E2E jest `NOT VERIFIED`. P4 pozostaje na **50%**, a
 cały plan na około **49%**. Szczegóły:
 [06-preparation-resource-pool.md](06-preparation-resource-pool.md).
+
+## Preparation process exit receipt — 27.09.2026
+
+Commit `f8417b8eb` dodaje immutable `preparation_process_exit_receipt.v1`,
+fenced do preparation attemptu, tokenu i ostatniej sekwencji heartbeat.
+Store zachowuje idempotentny zapis, odczyt/listowanie i recovery aktywnego
+lease; FMS pack oraz reachability walidują receipt także bez solverowego run
+manifestu. Source check i diff check przeszły.
+
+Supervisor i atomowa finalizacja readiness/release pozostają otwarte; process
+E2E i native FEM są `NOT VERIFIED`. P4 pozostaje na **50%**, a cały plan na
+około **49%**. Szczegóły:
+[07-preparation-process-exit-receipt.md](07-preparation-process-exit-receipt.md).
