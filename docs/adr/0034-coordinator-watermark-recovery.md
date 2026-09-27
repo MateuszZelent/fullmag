@@ -124,6 +124,11 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
     `gpu_memory_bytes`, a GPU dodatniego `gpu_memory_bytes`. Ogólna walidacja
     `ResourceBudget` pozostaje szersza, ponieważ ten typ obsługuje także zasoby
     Storage i Meshing.
+22. Scheduler, supervisor i worker stosują jedną pięciosekundową politykę
+    ponawiania `StoreWriterBusy`. Kolejne próby otrzymują deterministyczny
+    jitter zależny od procesu, wątku i numeru próby, aby konkurenci nie
+    pozostawali w lockstep. Retry nie obejmuje innego błędu i nie zmienia
+    tożsamości operacji, commandu, eventu, claimu ani oczekiwanej sekwencji.
 
 ## Konsekwencje
 
@@ -156,6 +161,9 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
   minimalnego zapotrzebowania konkretnego taska, nie sumuje obciążenia wielu
   tasków i nie dowodzi egzekwowania limitów przez system operacyjny, kontener
   ani urządzenie GPU.
+- Jitter poprawia liveness lokalnej kontencji, lecz nie zastępuje kolejki
+  rozproszonej ani nie uprawnia do ponowienia nieidempotentnego side effectu.
+  Po przekroczeniu deadline'u store nadal zwraca dokładny błąd fail-closed.
 
 ## Obowiązki implementacyjne
 
@@ -211,6 +219,9 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
   `status=drained`, `shutdown_requested=true`, `max_tasks=null`.
 - Regresje centralnej zgodności ofert sprawdzają każdy brakujący wymiar budżetu
   CPU/GPU oraz poprawne oferty obu klas przed jakimkolwiek zapisem admission.
+- Dwie kolejne regresje statycznej puli i osobna regresja z wymuszoną kontencją
+  muszą potwierdzić overlap, terminalny sukces i zwolnienie obu lease'ów na
+  identycznym źródle.
 
 ## Migracja i rollback
 

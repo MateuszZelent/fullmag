@@ -1580,3 +1580,25 @@ FAIL przez `session store writer is busy` albo brak overlapu. Nie ma jeszcze
 per-task minimum, agregacji pojemności ani egzekwowania limitów hosta/GPU.
 Procenty pozostają bez zmian: **P3 83%, P5 60%, całość około 41%**. Szczegóły:
 [p3/48-solver-resource-budget-admission.md](p3/48-solver-resource-budget-admission.md).
+
+## P3-B/P5-B — stabilne współbieżne retry writera — 27.09.2026
+
+Stałe 10-ms ponowienia ustawiały scheduler, supervisory i workery w lockstep.
+Wspólna polityka zachowuje pięciosekundowy deadline i dokładną operację, lecz
+stosuje jitter PID/wątek/próba. Inne błędy niż `StoreWriterBusy` nadal nie są
+ponawiane. Diagnostyczny RED: oba workery `Failed`, receipt
+`6df0cec6e8d74fcfadda92c684c6861e`. GREEN na identycznym końcowym źródle:
+
+- `runtime-control` 5/5 PASS — `2405575ca3ca4929930bc08e598a1d9e`,
+- supervisor 9/9 PASS — `5a85bf1e8d3b49469ede3b96b5072650`,
+- statyczna pula 1/1 PASS dwa razy — `65becc3ffb0c4a35870fc5b18adb4a69`
+  i `b0ed828fd2054ede8583ce2fab7ada80`,
+- wymuszona kontencja dwóch zasobów 1/1 PASS —
+  `4a44c4639e7d45808910d581348d17c0`.
+
+Procesowe receipty przypinają content
+`0e0521139d107f5b6c97a103b684a1018cf012aa7958ac7f950d86fa3b33c086`
+i `source_changed_during_run=false`. Implementacja:
+`7865603f07fb3ad9b52f70c6e67678a974121406`. Przyrost stabilizuje już
+policzony zakres, więc pozostaje **P3 83%, P5 60%, całość około 41%**.
+Szczegóły: [p3/49-writer-retry-jitter.md](p3/49-writer-retry-jitter.md).

@@ -38,7 +38,8 @@ busy` albo brakiem overlapu w 10 sekund. Ostatni receipt:
 `9f2c865e9bda429eacde8ab205ad6e00` — **FAIL**. Oferty w scenariuszu miały
 poprawny budżet i oba taski przechodziły admission do `Preparing`/`Running`,
 więc awaria nie wskazuje odrzucenia przez nowy guard. Stabilizacja współbieżnej
-kontencji writera pozostaje osobnym otwartym zadaniem P5-B.
+kontencji writera była osobnym zadaniem P5-B; została następnie zamknięta w
+[`49-writer-retry-jitter.md`](49-writer-retry-jitter.md).
 
 ## Granica checkpointu
 

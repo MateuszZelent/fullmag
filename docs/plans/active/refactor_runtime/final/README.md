@@ -8,8 +8,10 @@ Aktualny checkpoint implementacyjny na `masterze`: **P0 około 85%**, **P1 okoł
 
 Najnowsze uszczelnienie centralnego admission odrzuca oferty CPU/GPU bez
 pełnego i spójnego budżetu CPU, RAM, storage oraz VRAM właściwego dla lane'u.
-Procesowa bramka statycznej puli pozostaje niestabilna pod współbieżną
-kontencją writera, dlatego ten przyrost nie podnosi procentów P3/P5.
+Wspólna, pięciosekundowa polityka retry z jitterem usuwa lockstep schedulera,
+supervisorów i workerów; dwie kolejne próby puli oraz wymuszona kontencja
+przechodzą na identycznym źródle. Przyrost stabilizuje już policzony zakres,
+dlatego nie podnosi procentów P3/P5.
 
 ## Dokumenty finalne
 

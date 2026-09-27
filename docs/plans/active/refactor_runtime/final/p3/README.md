@@ -55,7 +55,8 @@ Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`45-bounded-static-resource-pool.md`](45-bounded-static-resource-pool.md) i
 [`46-resident-scheduler-discovery.md`](46-resident-scheduler-discovery.md) i
 [`47-resident-scheduler-drain.md`](47-resident-scheduler-drain.md) i
-[`48-solver-resource-budget-admission.md`](48-solver-resource-budget-admission.md).
+[`48-solver-resource-budget-admission.md`](48-solver-resource-budget-admission.md) i
+[`49-writer-retry-jitter.md`](49-writer-retry-jitter.md).
 
 ## Ograniczona pula wielu runów — 27.09.2026
 
@@ -911,3 +912,15 @@ Procesowa bramka puli pozostaje niestabilna przez kontencję writera; jedna pró
 PASS i kolejne FAIL nie pozwalają podnieść procentów. **P3 83%, P5 60%, całość
 około 41%**. Szczegóły:
 [`48-solver-resource-budget-admission.md`](48-solver-resource-budget-admission.md).
+
+## P3-B/P5-B — stabilne retry writera — 27.09.2026
+
+Wspólne bounded retry schedulera, supervisora i workera zachowuje
+pięciosekundowy limit, lecz rozsuwa konkurentów jitterem PID/wątek/próba.
+`StoreWriterBusy` nie zagładza już obu workerów w lockstep. Testy supervisora:
+**9/9 PASS**; dwie kolejne próby statycznej puli i wymuszona kontencja:
+**PASS**. Receipty: `5a85bf1e8d3b49469ede3b96b5072650`,
+`65becc3ffb0c4a35870fc5b18adb4a69`, `b0ed828fd2054ede8583ce2fab7ada80`
+i `4a44c4639e7d45808910d581348d17c0`. Procenty bez zmian: **P3 83%, P5
+60%, całość około 41%**. Szczegóły:
+[`49-writer-retry-jitter.md`](49-writer-retry-jitter.md).
