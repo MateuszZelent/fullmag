@@ -23,16 +23,18 @@ po awarii sprzed decyzji; istniejąca rezerwacja attemptu nadal zachowuje
 fail-closed lease.
 
 Bounded scheduler wybiera dependency-ready task z jawnej puli RunId przez
-round-robin i statyczną pulę ofert zasobów. Starsza pojedyncza oferta pozostaje
-obsługiwana. Opcjonalny tryb store-discovery ponownie
+round-robin i statyczną albo trwałą dynamiczną pulę ofert zasobów. Starsza
+pojedyncza oferta pozostaje obsługiwana. Opcjonalny tryb store-discovery ponownie
 odczytuje trwałe intenty podczas polling. Opcjonalny `--pool-id`
 zapisuje sequence-fenced kursor fairness i odtwarza następny RunId w kolejnym
 procesie. `--resident true` utrzymuje discovery podczas pustych skanów i wymaga
 tożsamości puli. `--max-tasks 0` oznacza brak limitu tylko dla tego trybu.
 Sygnał systemowy zatrzymuje nowe admission, pozwala dokończyć aktywne workery,
-zapisać checkpointy i zwolnić lease przed statusem `drained`. Brakuje nadal
-dynamicznej puli, priorytetów/backpressure, heartbeat/Stop ACK dla zdalnego
-transportu oraz process E2E pozostałych lane'ów. Anulowanie przed uruchomieniem
+zapisać checkpointy i zwolnić lease przed statusem `drained`. Snapshot
+członkostwa może podmienić A na B bez odebrania aktywnego lease A. Brakuje nadal
+automatycznego discovery pojemności, priorytetów/backpressure oraz
+heartbeat/Stop ACK dla zdalnego transportu. Process E2E pozostałych lane'ów
+również są otwarte. Anulowanie przed uruchomieniem
 workera jest obsłużone trwale i nie wykonuje spawnu procesu potomnego.
 Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`28-one-shot-accepted-worker-process.md`](28-one-shot-accepted-worker-process.md),
@@ -56,7 +58,8 @@ Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`46-resident-scheduler-discovery.md`](46-resident-scheduler-discovery.md) i
 [`47-resident-scheduler-drain.md`](47-resident-scheduler-drain.md) i
 [`48-solver-resource-budget-admission.md`](48-solver-resource-budget-admission.md) i
-[`49-writer-retry-jitter.md`](49-writer-retry-jitter.md).
+[`49-writer-retry-jitter.md`](49-writer-retry-jitter.md) i
+[`50-dynamic-resource-pool.md`](50-dynamic-resource-pool.md).
 
 ## Ograniczona pula wielu runów — 27.09.2026
 
@@ -924,3 +927,15 @@ pięciosekundowy limit, lecz rozsuwa konkurentów jitterem PID/wątek/próba.
 i `4a44c4639e7d45808910d581348d17c0`. Procenty bez zmian: **P3 83%, P5
 60%, całość około 41%**. Szczegóły:
 [`49-writer-retry-jitter.md`](49-writer-retry-jitter.md).
+
+## P3-B/P5-B — dynamiczna trwała pula zasobów — 27.09.2026
+
+`scheduler_resource_pool.v1` publikuje kolejne generacje przez compare-and-swap,
+a rezydentny scheduler kluczuje aktywne nadzory stabilnym `resource_id`.
+Procesowe E2E przechodzi sekwencję pusta pula → A → B, usuwa A podczas
+`Running`, a mimo to kończy dokładny lease A i wykonuje drugi task na B:
+**1/1 PASS**, receipt `aee0b2e7111f49fa85f05e591446e0eb`, content
+`01f81e6636c4944eb52919452e19526e842fe24a17b07392eb13ff1051ddbec6`.
+Kontrakt dystrybucji publikatora ma **12/12 PASS**. P3 wynosi **84%**, P5
+**64%**, a całość około **42%**. Szczegóły:
+[`50-dynamic-resource-pool.md`](50-dynamic-resource-pool.md).

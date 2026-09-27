@@ -129,6 +129,15 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
     jitter zależny od procesu, wątku i numeru próby, aby konkurenci nie
     pozostawali w lockstep. Retry nie obejmuje innego błędu i nie zmienia
     tożsamości operacji, commandu, eventu, claimu ani oczekiwanej sekwencji.
+23. Rezydentny scheduler może użyć trwałego `scheduler_resource_pool.v1`
+    zamiast ofert procesu. Snapshot ma identyfikator puli, dodatnią i ciągłą
+    generację oraz unikalne typowane oferty. Publikator zapisuje następną
+    generację przez compare-and-swap; pusta lista jawnie oznacza brak nowych
+    admission. Scheduler kluczuje aktywne nadzory stabilnym `resource_id`.
+    Usunięcie zasobu blokuje kolejne admission, lecz nie unieważnia istniejącego
+    lease i nie odłącza workera. Zmiana rodzaju lub budżetu aktywnego zasobu,
+    cofnięcie generacji, zmiana payloadu bez nowej generacji albo zniknięcie już
+    opublikowanej puli kończą usługę fail-closed.
 
 ## Konsekwencje
 
@@ -152,11 +161,12 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
 - `Stopping` oznacza trwałe żądanie, a `Cancelled` potwierdzony terminalny
   wynik koordynatora. Samo kliknięcie UI ani wysłanie HTTP nie dowodzi wyjścia
   procesu i nie uprawnia do zwolnienia lease.
-- Statyczna pula wielu zasobów, rezydentne store-discovery i jawny drain
+- Statyczna oraz dynamiczna pula wielu zasobów, rezydentne store-discovery i
+  jawny drain
   zmniejszają potrzebę uruchamiania procesu per zasób i per okres pracy.
   Brak limitu tasków jest bezpieczny wyłącznie w trybie rezydentnym z obsługą
-  sygnału. Nadal nie jest to usługa z dynamicznym discovery zasobów, polityką
-  priorytetów, backpressure ani rozproszonym lock managerem.
+  sygnału. Trwały snapshot członkostwa nie jest automatycznym discovery hostów,
+  polityką priorytetów, backpressure ani rozproszonym lock managerem.
 - Poprawny kształt budżetu jest warunkiem admission, ale nie określa jeszcze
   minimalnego zapotrzebowania konkretnego taska, nie sumuje obciążenia wielu
   tasków i nie dowodzi egzekwowania limitów przez system operacyjny, kontener
@@ -222,6 +232,11 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
 - Dwie kolejne regresje statycznej puli i osobna regresja z wymuszoną kontencją
   muszą potwierdzić overlap, terminalny sukces i zwolnienie obu lease'ów na
   identycznym źródle.
+- Regresja dynamicznej puli publikuje kolejno pustą generację, zasób A oraz
+  zasób B. Usuwa A podczas `Running`, wymaga dokończenia dokładnego lease A,
+  przyjęcia drugiego taska na B, terminalnego sukcesu obu tasków i braku
+  aktywnych lease'ów. Osobne regresje zachowują statyczną pulę i resident run
+  discovery.
 
 ## Migracja i rollback
 
@@ -237,7 +252,8 @@ Testy integracyjne wymagają managed build runnera. Pełne lokalne process E2E
 sukcesu, anulowania żywego procesu, anulowania przed spawnem i orphan recovery
 sprzed decyzji ograniczonego FDM CPU przechodzą. Przechodzą również bounded
 statyczna pula dwóch zasobów, rezydentne discovery runu utworzonego po starcie
-schedulera oraz kontrolowany drain procesu bez limitu tasków. P5-B pozostaje
-otwarte do dynamicznej puli, priorytetów i backpressure, zdalnego ACK oraz
-dowodu braku równoległego starego workera i zwolnienia urządzenia dla
+schedulera, kontrolowany drain procesu bez limitu tasków oraz monotoniczną
+dynamiczną pulę A → B z zachowaniem aktywnego lease. P5-B pozostaje otwarte do
+automatycznego discovery pojemności, priorytetów i backpressure, zdalnego ACK
+oraz dowodu braku równoległego starego workera i zwolnienia urządzenia dla
 pozostałych lane'ów.
