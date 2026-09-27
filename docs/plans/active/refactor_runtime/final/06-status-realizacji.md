@@ -1761,3 +1761,21 @@ pozostają **NOT RUN** zgodnie z zakazem kompilowania targetów testowych.
 Transport cross-host, FDM GPU, FEM CPU/GPU, dowód zwolnienia urządzenia i
 release qualification pozostają otwarte. **P3 92%, P5 84%, całość około
 48%**. Szczegóły: [p3/57-worker-control-ack.md](p3/57-worker-control-ack.md).
+
+## P4-B — accepted-run native FEM preparation — 27.09.2026
+
+`fullmag-plan` i `AcceptedStudySnapshot` tworzą FEM preparation plan/receipt
+związany bezpośrednio z immutable RunSpec, krokiem i kanonicznym ProblemIR.
+Nowe binarium `fullmag-api-accepted-fem-preparer` odtwarza krok z RunId/TaskId,
+wymaga nieprzejętego accepted taska, uruchamia bezstanowy native mesh/H1
+producer i idempotentnie publikuje task-scoped receipt. Istniejący receipt jest
+walidowany i replayowany bez ponownej pracy native; Live state nie uczestniczy
+w tej ścieżce.
+
+Source check plan/runtime/API i osobnego binarium oraz scoped format/diff check:
+**PASS**. Managed native build i process E2E pozostają **NOT VERIFIED** —
+`just runner-container-status` zwrócił `Docker Desktop coordinator request
+failed`; nie zastosowano hostowego obejścia. Automatyczny admission/supervisor
+zasobu `Meshing` i accepted worker FEM CPU pozostają otwarte. **P4 50%, całość
+około 49%**. Szczegóły:
+[p4/03-accepted-run-fem-preparation.md](p4/03-accepted-run-fem-preparation.md).

@@ -421,3 +421,19 @@ To potwierdza source-level fence i kontrakt callera. Odczytowy podgląd
 zarządzane wykonanie native FEM zatrzymuje się przed Compose na storage
 preflight istniejącego `.fullmag`. Browser/Live, native C++/ABI i walidacja
 fizyczna pozostają `NOT VERIFIED`; P4 (**50%**) i całość (~**27%**) bez zmian.
+
+## Accepted-run native FEM preparation — 27.09.2026
+
+Commit `88bea8d8e` dodaje rozłączną od Live materializację FEM dla immutable
+accepted snapshotu oraz proces `fullmag-api-accepted-fem-preparer`. Proces
+ponownie weryfikuje kanoniczny execution plan, tworzy native mesh/H1 evidence
+z przypiętego `MeshIR`, publikuje task-scoped `FmsTaskPreparationReceipt` i
+obsługuje replay bez ponownego wywołania native producer'a. Build bez feature'a
+`fem-native` kończy wykonanie fail-closed.
+
+Source check `fullmag-plan`, `fullmag-runtime-control`, głównego API oraz nowego
+binarium **PASS**. Managed native build i process E2E są `NOT VERIFIED`, ponieważ
+`just runner-container-status` zwraca `Docker Desktop coordinator request
+failed`. Nadal brakuje automatycznego admission/supervision na zasobie
+`Meshing` oraz accepted workera FEM CPU. P4 pozostaje na **50%**, a cały plan
+na około **49%**. Szczegóły: [03-accepted-run-fem-preparation.md](03-accepted-run-fem-preparation.md).
