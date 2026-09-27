@@ -427,6 +427,7 @@ pub(crate) fn run_supervised_accepted_worker(
     {
         bail!("resource lease changed while the supervisor captured its task claim");
     }
+    let gpu_uuid = worker_gpu_uuid(&lease)?;
 
     let recovered_before_spawn =
         retry_store_writer_busy(|| fullmag_runtime_control::recover_coordinator(store, &claim))
@@ -461,6 +462,7 @@ pub(crate) fn run_supervised_accepted_worker(
         store.root(),
         run_id,
         task_id,
+        gpu_uuid.as_deref(),
         worker_timeout,
         heartbeat_interval,
         || renew_resource_lease(store, &mut active_lease),
@@ -699,6 +701,7 @@ fn spawn_worker<H, C>(
     store_root: &Path,
     run_id: &str,
     task_id: &str,
+    gpu_uuid: Option<&str>,
     worker_timeout: Duration,
     heartbeat_interval: Duration,
     heartbeat: H,
@@ -728,6 +731,14 @@ where
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(gpu_uuid) = gpu_uuid {
+        // The local resource publisher embeds the physical NVIDIA UUID in the
+        // durable resource id. Mask the child to that exact lease, then use
+        // ordinal zero inside the one-device view.
+        command
+            .env("CUDA_VISIBLE_DEVICES", gpu_uuid)
+            .env("FULLMAG_FDM_GPU_INDEX", "0");
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -743,6 +754,23 @@ where
         heartbeat,
         stop_requested,
     )
+}
+
+fn worker_gpu_uuid(lease: &fullmag_session::FmsResourceLease) -> Result<Option<String>> {
+    if lease.kind != fullmag_session::FmsResourceKind::Gpu {
+        return Ok(None);
+    }
+    let (_, uuid) = lease.resource_id.rsplit_once(".gpu.").context(
+        "accepted GPU resource id has no local-discovery `.gpu.<nvidia-uuid>` binding",
+    )?;
+    if uuid.is_empty()
+        || !uuid
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        bail!("accepted GPU resource id contains an invalid NVIDIA UUID binding");
+    }
+    Ok(Some(uuid.to_owned()))
 }
 
 fn observe_child<H, C>(
@@ -1754,6 +1782,7 @@ mod tests {
             Path::new("unused-store"),
             "run-a",
             "task-a",
+            None,
             Duration::from_secs(5),
             Duration::from_secs(1),
             || Ok(true),

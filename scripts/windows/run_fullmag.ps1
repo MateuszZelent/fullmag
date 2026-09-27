@@ -30,6 +30,8 @@ param(
 
   [switch]$BuildOnly,
 
+  [switch]$SkipCompatibilityLinks,
+
   [Alias("skip_local_changes")]
   [switch]$SkipLocalChanges,
 
@@ -82,6 +84,7 @@ if ($env:FULLMAG_STORAGE_MANAGED_ENTRY -ne "1") {
     $managedArguments += @("-InitialMagnetizationStateSampleIndex", $InitialMagnetizationStateSampleIndex.ToString())
   }
   if ($BuildOnly) { $managedArguments += "-BuildOnly" }
+  if ($SkipCompatibilityLinks) { $managedArguments += "-SkipCompatibilityLinks" }
   if ($SkipLocalChanges) { $managedArguments += "-SkipLocalChanges" }
   $managedExitCode = Invoke-FullmagStorageManagedScript `
     -RepoRoot $RepoRoot -Profile $StorageProfile -ScriptPath $PSCommandPath `
@@ -430,7 +433,9 @@ $nextDistDir = if ($needsControlRoomToolchain -and $Frontend -eq "dev") {
 $prepareArguments = @{
   RepoRoot = $RepoRoot
   Profile = $StorageProfile
-  Compat = $true
+}
+if (-not $SkipCompatibilityLinks) {
+  $prepareArguments.Compat = $true
 }
 if ($needsControlRoomToolchain) {
   $prepareArguments.Frontend = $true
@@ -438,7 +443,12 @@ if ($needsControlRoomToolchain) {
 if ($nextDistDir) {
   $prepareArguments.NextDistDir = $nextDistDir
 }
-$null = Prepare-FullmagStorageLinks @prepareArguments
+if ($SkipCompatibilityLinks -and -not $BuildOnly) {
+  throw "SkipCompatibilityLinks is allowed only for an isolated BuildOnly invocation"
+}
+if (-not $SkipCompatibilityLinks -or $needsControlRoomToolchain) {
+  $null = Prepare-FullmagStorageLinks @prepareArguments
+}
 
 foreach ($directory in @(
   $CargoHome, $RustupHome, $PnpmHome, $PnpmStore, $NpmCache, $PipCache, $UvCache,

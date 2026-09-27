@@ -1716,10 +1716,10 @@ bool context_preflight_multilayer_workspace_v2(
 
     const uint64_t scalar_bytes = scalar_size(ctx.precision);
     const uint64_t complex_bytes = complex_size(ctx.precision);
-    // The optional rotated-DMI field is allocated only for plans that enable
-    // the interaction; keep the preflight estimate aligned with that path.
-    const uint64_t layer_vector_component_count =
-        (11 + (plan.has_rotated_interfacial_dmi != 0 ? 1 : 0)) * 3;
+    // The frozen multilayer v2 descriptor cannot carry rotated DMI. Its
+    // versioned setter allocates and validates that optional workspace as a
+    // separate transaction after the base multilayer plan has been uploaded.
+    const uint64_t layer_vector_component_count = 11 * 3;
     for (uint32_t layer_index = 0;
          layer_index < plan.layer_count;
          ++layer_index)

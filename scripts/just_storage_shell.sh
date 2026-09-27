@@ -105,6 +105,9 @@ case "${recipe}" in
   *"scripts/verify_resource_discovery_runtime.py"*)
     exec "${python_cmd}" "${script_dir}/verify_resource_discovery_runtime.py" --repo-root "${repo_root}"
     ;;
+  *"scripts/verify_accepted_fdm_gpu_runtime.py"*)
+    exec "${python_cmd}" "${script_dir}/verify_accepted_fdm_gpu_runtime.py" --repo-root "${repo_root}"
+    ;;
   *"scripts/verify_project_active_run_runtime.py"*)
     exec "${python_cmd}" "${script_dir}/verify_project_active_run_runtime.py" --repo-root "${repo_root}"
     ;;

@@ -675,11 +675,11 @@ pub(crate) fn execute_accepted_worker_start(
     let specification = &accepted.run.specification;
     let request = &specification.requested_execution;
     if request.backend != "fdm"
-        || request.device != "cpu"
+        || !matches!(request.device.as_str(), "cpu" | "gpu")
         || request.precision != "double"
         || request.mode != "strict"
     {
-        bail!("accepted worker currently supports only FDM CPU double strict");
+        bail!("accepted worker currently supports only FDM CPU/GPU double strict");
     }
     if !specification
         .parameters
@@ -690,11 +690,21 @@ pub(crate) fn execute_accepted_worker_start(
     {
         bail!("accepted worker has no binding for RunSpec parameters or seeds");
     }
-    if !matches!(
-        &accepted_step.claim.lease.kind,
-        fullmag_application::ResourceKind::Cpu
-    ) {
-        bail!("accepted FDM CPU execution requires a CPU resource lease");
+    let lease_matches_request = matches!(
+        (
+            request.device.as_str(),
+            &accepted_step.claim.lease.kind,
+            accepted_step.claim.lease.budget.gpu_memory_bytes,
+        ),
+        ("cpu", fullmag_application::ResourceKind::Cpu, 0)
+            | ("gpu", fullmag_application::ResourceKind::Gpu, 1..)
+    );
+    if !lease_matches_request {
+        bail!(
+            "accepted FDM {} execution requires a matching {} resource lease and VRAM budget",
+            request.device,
+            request.device.to_uppercase()
+        );
     }
     if accepted_step.problem.backend_policy.requested_backend != fullmag_ir::BackendTarget::Fdm
         || accepted_step.problem.backend_policy.execution_precision
@@ -709,13 +719,16 @@ pub(crate) fn execute_accepted_worker_start(
             fullmag_ir::BackendPlanIR::Fdm(_)
         )
     {
-        bail!("accepted worker execution plan is outside the FDM CPU double strict lane");
+        bail!("accepted worker execution plan is outside the FDM CPU/GPU double strict lanes");
     }
-    if std::env::var("FULLMAG_FDM_EXECUTION")
-        .ok()
-        .is_some_and(|value| value != "cpu")
-    {
-        bail!("FULLMAG_FDM_EXECUTION overrides the accepted CPU device request");
+    if let Ok(value) = std::env::var("FULLMAG_FDM_EXECUTION") {
+        let normalized = value.replace("cuda", "gpu");
+        if normalized != request.device {
+            bail!(
+                "FULLMAG_FDM_EXECUTION overrides the accepted {} device request",
+                request.device
+            );
+        }
     }
 
     let until_seconds = accepted_step
@@ -771,12 +784,12 @@ pub(crate) fn execute_accepted_worker_start(
     };
 
     // RunSpec is the accepted source for requested device/precision. Project
-    // that explicit CPU request into the runner's runtime-selection metadata;
+    // that explicit device request into the runner's runtime-selection metadata;
     // the environment guard above prevents a managed override from changing it.
     let mut problem = accepted_step.problem.clone();
     problem.problem_meta.runtime_metadata.insert(
         "runtime_selection".into(),
-        serde_json::json!({"device": "cpu", "precision": "double"}),
+        serde_json::json!({"device": request.device, "precision": "double"}),
     );
     let display_selection = fullmag_runner::DisplaySelectionState::default;
     let result =
@@ -792,7 +805,7 @@ pub(crate) fn execute_accepted_worker_start(
             |_| StepAction::Continue,
         )
         .map_err(|error| anyhow::anyhow!(error.to_string()))
-        .context("execute accepted FDM CPU runner plan")?;
+        .with_context(|| format!("execute accepted FDM {} runner plan", request.device))?;
     if result.status == RunStatus::Cancelled {
         return Ok(AcceptedRunnerExecution {
             status: result.status,
@@ -803,7 +816,10 @@ pub(crate) fn execute_accepted_worker_start(
         });
     }
     if result.status != RunStatus::Completed {
-        bail!("accepted FDM CPU runner did not complete successfully");
+        bail!(
+            "accepted FDM {} runner did not complete successfully",
+            request.device
+        );
     }
     let outputs = collect_runner_study_outputs(
         &study_step.outputs,

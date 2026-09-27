@@ -359,6 +359,9 @@ verify-project-api-runtime:
 verify-api-resource-discovery-runtime:
     {{storage_python}} "{{repo_root}}/scripts/verify_resource_discovery_runtime.py" --repo-root "{{repo_root}}"
 
+verify-api-accepted-fdm-gpu-runtime:
+    {{storage_python}} "{{repo_root}}/scripts/verify_accepted_fdm_gpu_runtime.py" --repo-root "{{repo_root}}"
+
 # Managed realtime transport smoke with an empty scratch session.  This checks
 # the websocket handshake and after_seq reconnect without starting a solver.
 verify-project-realtime-runtime:
