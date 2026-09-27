@@ -15,8 +15,8 @@ use crate::types::{
     ArtifactIndex, BackendStatePayload, CommonSolverState, FieldRole, FmsArtifactCatalog,
     FmsCheckpoint, FmsCoordinatorJournalDirection, FmsExportProfile, FmsPreparationReceipt,
     FmsResourceLease, FmsRetryDecision, FmsRunCatalog, FmsRunIntent, FmsRunManifest,
-    FmsSessionManifest, FmsTaskAdmissionRecord, FmsTaskPreparationReceipt, FmsWorkspaceManifest,
-    TensorDescriptor,
+    FmsSessionManifest, FmsTaskAdmissionRecord, FmsTaskPreparationReceipt,
+    FmsWorkerProcessExitReceipt, FmsWorkspaceManifest, TensorDescriptor,
 };
 
 /// The same claim-scoped continuity rules apply to stores and portable archives.
@@ -494,6 +494,7 @@ impl StoreWalker {
             self.walk_task_preparation_receipts(&run_entry.path(), &run_id)?;
             self.walk_run_task_admissions(&run_entry.path(), &run_id)?;
             self.walk_run_retry_decisions(&run_entry.path(), &run_id)?;
+            self.walk_run_worker_process_exit_receipts(&run_entry.path(), &run_id)?;
             let checkpoint_dir = run_entry.path().join("checkpoints");
             if checkpoint_dir.exists() {
                 if !checkpoint_dir.is_dir() {
@@ -624,6 +625,46 @@ impl StoreWalker {
             decision.validate()?;
             if decision.run_id != run_id || decision.decision_id != decision_id {
                 bail!("retry decision `{relative}` contains mismatched path identity")
+            }
+        }
+        Ok(())
+    }
+
+    fn walk_run_worker_process_exit_receipts(
+        &mut self,
+        run_dir: &Path,
+        run_id: &str,
+    ) -> Result<()> {
+        let directory = run_dir.join("worker_process_exit_receipts");
+        if !directory.exists() {
+            return Ok(());
+        }
+        if !directory.is_dir() {
+            bail!(
+                "run worker_process_exit_receipts path is not a directory: {}",
+                directory.display()
+            )
+        }
+        for entry in read_directory(&directory)? {
+            if entry.file_type()?.is_symlink() || !entry.file_type()?.is_file() {
+                bail!(
+                    "unsafe worker process exit receipt entry `{}`",
+                    entry.path().display()
+                )
+            }
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            let Some(receipt_id) = file_name.strip_suffix(".json") else {
+                bail!("worker process exit receipt entry must be JSON: `{file_name}`")
+            };
+            validate_component(receipt_id)?;
+            let relative =
+                format!("runs/{run_id}/worker_process_exit_receipts/{file_name}");
+            let data = self.read_file(&entry.path(), &relative)?;
+            let receipt: FmsWorkerProcessExitReceipt = parse_json(&data, &relative)?;
+            if receipt.relative_path()? != relative {
+                bail!(
+                    "worker process exit receipt `{relative}` contains mismatched path identity"
+                )
             }
         }
         Ok(())
@@ -1484,6 +1525,14 @@ impl<'a> ArchiveWalker<'a> {
                 self.walk_retry_decision(&name, expected_run_id)?;
             }
         }
+        let process_exit_prefix =
+            format!("runs/{expected_run_id}/worker_process_exit_receipts/");
+        let process_exit_names = self.documents.keys().cloned().collect::<Vec<_>>();
+        for name in process_exit_names {
+            if name.starts_with(&process_exit_prefix) && name.ends_with(".json") {
+                self.walk_worker_process_exit_receipt(&name, expected_run_id)?;
+            }
+        }
         let journal_prefix = format!("runs/{expected_run_id}/coordinator_journal/");
         let journal_names = self.documents.keys().cloned().collect::<Vec<_>>();
         let mut journal_entries = Vec::new();
@@ -1780,6 +1829,38 @@ impl<'a> ArchiveWalker<'a> {
         if decision.run_id != expected_run_id || decision.decision_id != decision_id {
             bail!("retry decision `{relative}` contains mismatched path identity")
         }
+        self.report.file_refs.insert(relative.to_string());
+        Ok(())
+    }
+
+    fn walk_worker_process_exit_receipt(
+        &mut self,
+        relative: &str,
+        expected_run_id: &str,
+    ) -> Result<()> {
+        let Some(data) = self.documents.get(relative) else {
+            return self.report.missing(format!(
+                "archive references missing worker process exit receipt `{relative}`"
+            ));
+        };
+        let prefix = format!("runs/{expected_run_id}/worker_process_exit_receipts/");
+        let Some(file_name) = relative.strip_prefix(&prefix) else {
+            bail!("invalid worker process exit receipt path `{relative}`")
+        };
+        let Some(receipt_id) = file_name.strip_suffix(".json") else {
+            bail!("worker process exit receipt path must end in .json: `{relative}`")
+        };
+        if receipt_id.is_empty() || receipt_id.contains('/') {
+            bail!("invalid worker process exit receipt path `{relative}`")
+        }
+        validate_component(receipt_id)?;
+        let receipt: FmsWorkerProcessExitReceipt = parse_json(data, relative)?;
+        if receipt.run_id != expected_run_id || receipt.receipt_id != receipt_id {
+            bail!(
+                "worker process exit receipt `{relative}` contains mismatched path identity"
+            )
+        }
+        receipt.validate()?;
         self.report.file_refs.insert(relative.to_string());
         Ok(())
     }

@@ -1,8 +1,9 @@
 use anyhow::{bail, Context, Result};
 use fullmag_application::{CoordinatorPhase, TaskLifecycle, WorkerCommand, WorkerEvent};
 use fullmag_session::{
-    FmsResourceLease, FmsRetryAction, FmsRetryDecision, FmsRetryTrigger, SessionStore,
-    FMS_RETRY_DECISION_SCHEMA,
+    FmsResourceLease, FmsRetryAction, FmsRetryDecision, FmsRetryTrigger,
+    FmsWorkerProcessExitReceipt, SessionStore, FMS_RETRY_DECISION_SCHEMA,
+    FMS_WORKER_PROCESS_EXIT_RECEIPT_SCHEMA,
 };
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
@@ -29,6 +30,9 @@ struct ObservedWorkerProcess {
     output: Output,
     timed_out: bool,
     stop_requested: bool,
+    process_id: u32,
+    process_start_token: Option<String>,
+    control_failure_reason: Option<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -112,6 +116,10 @@ impl SupervisorSlot {
         fs::remove_dir(&self.path).context("release accepted-worker supervisor slot")?;
         self.released = true;
         Ok(())
+    }
+
+    fn retain_for_reconciliation(mut self) {
+        self.released = true;
     }
 }
 
@@ -281,8 +289,21 @@ pub(crate) fn run_supervised_accepted_worker(
         );
     }
     let recoverable_retry = retry_decision_for_terminal_task(store, run_id, task_id)?.is_some();
-    let slot = SupervisorSlot::acquire(store, run_id, task_id, recoverable_retry)?;
+    let recoverable_process_exit =
+        worker_process_exit_receipt_for_current_task(store, run_id, task_id)?.is_some();
+    let slot = SupervisorSlot::acquire(
+        store,
+        run_id,
+        task_id,
+        recoverable_retry || recoverable_process_exit,
+    )?;
     if let Some(result) = reconcile_durable_retry_before_spawn(store, run_id, task_id)? {
+        slot.release()?;
+        return Ok(result);
+    }
+    if let Some(result) =
+        reconcile_durable_worker_exit_before_spawn(store, run_id, task_id, max_automatic_retries)?
+    {
         slot.release()?;
         return Ok(result);
     }
@@ -332,7 +353,7 @@ pub(crate) fn run_supervised_accepted_worker(
     }
 
     let mut active_lease = lease;
-    let outcome = spawn_worker(
+    let outcome = match spawn_worker(
         worker_executable,
         store.root(),
         run_id,
@@ -341,12 +362,39 @@ pub(crate) fn run_supervised_accepted_worker(
         heartbeat_interval,
         || renew_resource_lease(store, &mut active_lease),
         || task_stop_requested(store, run_id, task_id),
-    )?;
+    ) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            slot.retain_for_reconciliation();
+            return Err(error.context(
+                "worker observation failed before durable process-exit reconciliation; supervisor slot retained",
+            ));
+        }
+    };
+    let process_exit_receipt = match worker_process_exit_receipt(&claim, &active_lease, &outcome) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            slot.retain_for_reconciliation();
+            return Err(
+                error.context("build durable process-exit receipt; supervisor slot retained")
+            );
+        }
+    };
+    if let Err(error) =
+        retry_store_writer_busy(|| store.commit_worker_process_exit_receipt(&process_exit_receipt))
+    {
+        slot.retain_for_reconciliation();
+        return Err(
+            error.context("persist confirmed worker process exit; supervisor slot retained")
+        );
+    }
+    accepted_supervisor_test_fail_after_process_exit_receipt()?;
     let reconciliation = reconcile_worker_exit(
         store,
         &claim,
         &active_lease,
-        &outcome,
+        &process_exit_receipt,
+        Some(&outcome.output),
         max_automatic_retries,
     );
     match reconciliation {
@@ -472,6 +520,7 @@ where
     H: FnMut() -> Result<bool>,
     C: FnMut() -> Result<bool>,
 {
+    let process_id = child.id();
     let stdout = child
         .stdout
         .take()
@@ -482,13 +531,42 @@ where
         .context("accepted worker stderr pipe is unavailable")?;
     let stdout_reader = spawn_output_reader(stdout);
     let stderr_reader = spawn_output_reader(stderr);
+    let process_start_token = match process_start_token(process_id) {
+        Ok(token) => token,
+        Err(error) => {
+            let reason = format!("inspect accepted worker process identity: {error:#}");
+            let _ = child.kill();
+            let status = child
+                .wait()
+                .context("reap accepted worker after process identity failure")?;
+            let mut outcome = collect_child_output(
+                status,
+                false,
+                false,
+                process_id,
+                None,
+                stdout_reader,
+                stderr_reader,
+            )?;
+            outcome.control_failure_reason = Some(reason);
+            return Ok(outcome);
+        }
+    };
     let started = Instant::now();
     let mut last_heartbeat = Instant::now();
     let mut heartbeat_enabled = heartbeat_interval.is_some();
 
     loop {
         if let Some(status) = child.try_wait().context("observe accepted worker exit")? {
-            return collect_child_output(status, false, false, stdout_reader, stderr_reader);
+            return collect_child_output(
+                status,
+                false,
+                false,
+                process_id,
+                process_start_token,
+                stdout_reader,
+                stderr_reader,
+            );
         }
         if timeout.is_some_and(|limit| started.elapsed() >= limit) {
             if let Err(error) = child.kill() {
@@ -500,6 +578,8 @@ where
                         status,
                         false,
                         false,
+                        process_id,
+                        process_start_token,
                         stdout_reader,
                         stderr_reader,
                     );
@@ -509,22 +589,67 @@ where
             let status = child
                 .wait()
                 .context("confirm accepted worker termination after timeout")?;
-            return collect_child_output(status, true, false, stdout_reader, stderr_reader);
+            return collect_child_output(
+                status,
+                true,
+                false,
+                process_id,
+                process_start_token,
+                stdout_reader,
+                stderr_reader,
+            );
         }
-        if stop_requested()? {
+        let stop_requested_now = match stop_requested() {
+            Ok(stop_requested) => stop_requested,
+            Err(error) => {
+                let reason = format!("poll durable worker Stop request: {error:#}");
+                let _ = child.kill();
+                let status = child
+                    .wait()
+                    .context("reap accepted worker after Stop polling failure")?;
+                let mut outcome = collect_child_output(
+                    status,
+                    false,
+                    false,
+                    process_id,
+                    process_start_token,
+                    stdout_reader,
+                    stderr_reader,
+                )?;
+                outcome.control_failure_reason = Some(reason);
+                return Ok(outcome);
+            }
+        };
+        if stop_requested_now {
             if let Err(error) = child.kill() {
                 if let Some(status) = child
                     .try_wait()
                     .context("recheck accepted worker after operator stop race")?
                 {
-                    return collect_child_output(status, false, true, stdout_reader, stderr_reader);
+                    return collect_child_output(
+                        status,
+                        false,
+                        true,
+                        process_id,
+                        process_start_token,
+                        stdout_reader,
+                        stderr_reader,
+                    );
                 }
                 return Err(error).context("terminate accepted worker after operator stop");
             }
             let status = child
                 .wait()
                 .context("confirm accepted worker termination after operator stop")?;
-            return collect_child_output(status, false, true, stdout_reader, stderr_reader);
+            return collect_child_output(
+                status,
+                false,
+                true,
+                process_id,
+                process_start_token,
+                stdout_reader,
+                stderr_reader,
+            );
         }
         if heartbeat_enabled
             && heartbeat_interval.is_some_and(|interval| last_heartbeat.elapsed() >= interval)
@@ -539,13 +664,22 @@ where
                         std::thread::sleep(Duration::from_millis(10));
                         continue;
                     }
+                    let reason = format!("renew accepted-worker heartbeat: {error:#}");
                     let _ = child.kill();
-                    let _ = child.wait();
-                    let _ = join_output_reader(stdout_reader, "stdout");
-                    let _ = join_output_reader(stderr_reader, "stderr");
-                    return Err(error.context(
-                        "accepted-worker heartbeat failed; child was terminated before returning",
-                    ));
+                    let status = child
+                        .wait()
+                        .context("reap accepted worker after heartbeat failure")?;
+                    let mut outcome = collect_child_output(
+                        status,
+                        false,
+                        false,
+                        process_id,
+                        process_start_token,
+                        stdout_reader,
+                        stderr_reader,
+                    )?;
+                    outcome.control_failure_reason = Some(reason);
+                    return Ok(outcome);
                 }
             }
             last_heartbeat = Instant::now();
@@ -569,6 +703,8 @@ fn collect_child_output(
     status: ExitStatus,
     timed_out: bool,
     stop_requested: bool,
+    process_id: u32,
+    process_start_token: Option<String>,
     stdout_reader: JoinHandle<std::io::Result<Vec<u8>>>,
     stderr_reader: JoinHandle<std::io::Result<Vec<u8>>>,
 ) -> Result<ObservedWorkerProcess> {
@@ -582,6 +718,9 @@ fn collect_child_output(
         },
         timed_out,
         stop_requested,
+        process_id,
+        process_start_token,
+        control_failure_reason: None,
     })
 }
 
@@ -599,10 +738,11 @@ fn reconcile_worker_exit(
     store: &SessionStore,
     claim: &fullmag_application::TaskClaim,
     lease: &FmsResourceLease,
-    outcome: &ObservedWorkerProcess,
+    process_exit: &FmsWorkerProcessExitReceipt,
+    observed_output: Option<&Output>,
     max_automatic_retries: usize,
 ) -> Result<SupervisedWorkerResult> {
-    let output = &outcome.output;
+    process_exit.validate_for_lease(lease)?;
     let recovered = fullmag_runtime_control::recover_coordinator(store, claim)
         .context("recover coordinator after worker exit")?;
     let phase = recovered.coordinator.phase();
@@ -644,19 +784,27 @@ fn reconcile_worker_exit(
         {
             bail!("terminal worker completion lacks an applied durable Start");
         }
-        let worker_summary = parse_worker_summary(output)?;
+        let worker_summary = match observed_output {
+            Some(output) => parse_worker_summary(output)?,
+            None => serde_json::json!({
+                "status": "process_exit_recovered",
+                "exit_code": process_exit.exit_code,
+                "receipt_id": process_exit.receipt_id,
+            }),
+        };
         store
             .release_resource_lease(lease)
             .context("release exact worker resource lease after terminal exit")?;
         return Ok(SupervisedWorkerResult {
-            recovered_terminal_completion: !output.status.success(),
-            worker_timed_out: outcome.timed_out,
+            recovered_terminal_completion: observed_output.is_none()
+                || !process_exit.status_success,
+            worker_timed_out: process_exit.timed_out,
             worker_cancelled: false,
             retry_scheduled: false,
-            worker_summary: if outcome.timed_out {
+            worker_summary: if process_exit.timed_out {
                 serde_json::json!({
                     "status": "recovered_after_timeout",
-                    "exit_code": output.status.code(),
+                    "exit_code": process_exit.exit_code,
                 })
             } else {
                 worker_summary
@@ -664,11 +812,17 @@ fn reconcile_worker_exit(
         });
     }
 
-    if outcome.stop_requested && phase == CoordinatorPhase::Stopping {
-        let mut coordinator =
-            fullmag_application::DurableWorkerCoordinator::new(recovered.coordinator);
-        commit_worker_event(store, &mut coordinator, WorkerEvent::Stopped)
-            .context("persist terminal worker cancellation after confirmed process exit")?;
+    if process_exit.stop_requested
+        && (phase == CoordinatorPhase::Stopping
+            || (phase == CoordinatorPhase::Terminal
+                && checkpoint.task.lifecycle == TaskLifecycle::Cancelled))
+    {
+        if phase == CoordinatorPhase::Stopping {
+            let mut coordinator =
+                fullmag_application::DurableWorkerCoordinator::new(recovered.coordinator);
+            commit_worker_event(store, &mut coordinator, WorkerEvent::Stopped)
+                .context("persist terminal worker cancellation after confirmed process exit")?;
+        }
         store
             .release_resource_lease(lease)
             .context("release cancelled worker resource lease after confirmed process exit")?;
@@ -679,18 +833,21 @@ fn reconcile_worker_exit(
             retry_scheduled: false,
             worker_summary: serde_json::json!({
                 "status": "cancelled",
-                "exit_code": output.status.code(),
+                "exit_code": process_exit.exit_code,
             }),
         });
     }
 
-    if output.status.success() {
+    if process_exit.status_success {
         bail!("worker exited successfully without a durable succeeded task");
     }
     if inbox_checkpoint.pending.is_some() && accepted_worker_attempt_reserved(store, claim)? {
         bail!(
             "worker exited with an ambiguous pending effect; resource lease retained for reconciliation: {}",
-            worker_failure_reason(outcome)
+            process_exit
+                .failure_reason
+                .as_deref()
+                .context("failed worker process exit receipt has no reason")?
         );
     }
 
@@ -699,7 +856,10 @@ fn reconcile_worker_exit(
         phase,
         CoordinatorPhase::Preparing | CoordinatorPhase::Running
     ) {
-        let reason = worker_failure_reason(outcome);
+        let reason = process_exit
+            .failure_reason
+            .clone()
+            .context("failed worker process exit receipt has no reason")?;
         let mut coordinator =
             fullmag_application::DurableWorkerCoordinator::new(recovered.coordinator);
         commit_worker_event(
@@ -714,18 +874,18 @@ fn reconcile_worker_exit(
     } else if phase == CoordinatorPhase::Terminal
         && checkpoint.task.lifecycle == TaskLifecycle::Failed
     {
-        retryable_failure_reason =
-            recovered
-                .events
-                .iter()
-                .rev()
-                .find_map(|event| match &event.event {
-                    WorkerEvent::Failed {
-                        retryable: true,
-                        reason,
-                    } => Some(reason.clone()),
-                    _ => None,
-                });
+        retryable_failure_reason = recovered
+            .events
+            .iter()
+            .rev()
+            .find_map(|event| match &event.event {
+                WorkerEvent::Failed {
+                    retryable: true,
+                    reason,
+                } => Some(reason.clone()),
+                _ => None,
+            })
+            .or_else(|| process_exit.failure_reason.clone());
     }
 
     if let Some(reason) = retryable_failure_reason {
@@ -744,12 +904,12 @@ fn reconcile_worker_exit(
                 .context("apply automatic retry decision after explicit lease release")?;
             return Ok(SupervisedWorkerResult {
                 recovered_terminal_completion: false,
-                worker_timed_out: outcome.timed_out,
+                worker_timed_out: process_exit.timed_out,
                 worker_cancelled: false,
                 retry_scheduled: true,
                 worker_summary: serde_json::json!({
                     "status": "retry_scheduled",
-                    "exit_code": output.status.code(),
+                    "exit_code": process_exit.exit_code,
                 }),
             });
         }
@@ -802,6 +962,188 @@ fn accepted_worker_attempt_reserved(
         Err(error) => Err(error)
             .with_context(|| format!("inspect worker attempt reservation `{}`", path.display())),
     }
+}
+
+fn worker_process_exit_receipt(
+    claim: &fullmag_application::TaskClaim,
+    lease: &FmsResourceLease,
+    outcome: &ObservedWorkerProcess,
+) -> Result<FmsWorkerProcessExitReceipt> {
+    if lease.run_id != claim.run_id.as_str()
+        || lease.task_id != claim.task_id.as_str()
+        || lease.attempt_id != claim.attempt_id.as_str()
+        || lease.ownership_epoch != claim.ownership_epoch.value()
+        || lease.resource_id != claim.lease.resource_id
+        || lease.lease_token != claim.lease.lease_token.as_str()
+        || lease.heartbeat_sequence < claim.lease.heartbeat_sequence
+    {
+        bail!("worker process exit cannot be bound to a changed task claim");
+    }
+    let identity = format!(
+        "{}:{}:{}:{}:{}",
+        claim.task_id.as_str(),
+        claim.attempt_id.as_str(),
+        claim.ownership_epoch.value(),
+        lease.resource_id,
+        lease.lease_token,
+    );
+    let receipt = FmsWorkerProcessExitReceipt {
+        schema_version: FMS_WORKER_PROCESS_EXIT_RECEIPT_SCHEMA.into(),
+        receipt_id: format!(
+            "worker-process-exit-{}",
+            fullmag_session::hex_sha256(identity.as_bytes())
+        ),
+        run_id: claim.run_id.as_str().into(),
+        task_id: claim.task_id.as_str().into(),
+        attempt_id: claim.attempt_id.as_str().into(),
+        ownership_epoch: claim.ownership_epoch.value(),
+        resource_id: lease.resource_id.clone(),
+        lease_token: lease.lease_token.clone(),
+        lease_heartbeat_sequence: lease.heartbeat_sequence,
+        process_id: outcome.process_id,
+        process_start_token: outcome.process_start_token.clone(),
+        status_success: outcome.output.status.success(),
+        exit_code: outcome.output.status.code(),
+        timed_out: outcome.timed_out,
+        stop_requested: outcome.stop_requested,
+        failure_reason: if outcome.output.status.success() || outcome.stop_requested {
+            None
+        } else {
+            Some(worker_failure_reason(outcome))
+        },
+        observed_at: chrono::Utc::now(),
+    };
+    receipt.validate_for_lease(lease)?;
+    Ok(receipt)
+}
+
+fn worker_process_exit_receipt_for_current_task(
+    store: &SessionStore,
+    run_id: &str,
+    task_id: &str,
+) -> Result<Option<FmsWorkerProcessExitReceipt>> {
+    let catalog = store
+        .read_run_catalog(run_id)?
+        .context("worker process exit recovery requires a durable run catalog")?;
+    let task = catalog
+        .tasks
+        .iter()
+        .find(|task| task.task_id == task_id)
+        .context("worker process exit recovery task is missing from the run catalog")?;
+    let (Some(attempt_id), Some(ownership_epoch), Some(resource_id)) = (
+        task.attempt_id.as_deref(),
+        task.ownership_epoch,
+        task.resource_id.as_deref(),
+    ) else {
+        return Ok(None);
+    };
+    let mut matching = store
+        .list_worker_process_exit_receipts(run_id)?
+        .into_iter()
+        .filter(|receipt| {
+            receipt.task_id == task_id
+                && receipt.attempt_id == attempt_id
+                && receipt.ownership_epoch == ownership_epoch
+                && receipt.resource_id == resource_id
+        })
+        .collect::<Vec<_>>();
+    if matching.len() > 1 {
+        bail!("multiple worker process exit receipts match the current task attempt");
+    }
+    Ok(matching.pop())
+}
+
+fn claim_from_worker_process_exit(
+    receipt: &FmsWorkerProcessExitReceipt,
+    lease: &FmsResourceLease,
+) -> Result<fullmag_application::TaskClaim> {
+    receipt.validate_for_lease(lease)?;
+    let kind = match lease.kind {
+        fullmag_session::FmsResourceKind::Cpu => fullmag_application::ResourceKind::Cpu,
+        fullmag_session::FmsResourceKind::Gpu => fullmag_application::ResourceKind::Gpu,
+        fullmag_session::FmsResourceKind::Storage => fullmag_application::ResourceKind::Storage,
+        fullmag_session::FmsResourceKind::Meshing => fullmag_application::ResourceKind::Meshing,
+    };
+    Ok(fullmag_application::TaskClaim {
+        run_id: fullmag_application::RunId::parse(receipt.run_id.clone())
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?,
+        task_id: fullmag_application::TaskId::parse(receipt.task_id.clone())
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?,
+        attempt_id: fullmag_application::AttemptId::parse(receipt.attempt_id.clone())
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?,
+        ownership_epoch: fullmag_application::OwnershipEpoch::new(receipt.ownership_epoch)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?,
+        lease: fullmag_application::ResourceLease {
+            resource_id: lease.resource_id.clone(),
+            kind,
+            budget: fullmag_application::ResourceBudget {
+                cpu_millis: lease.budget.cpu_millis,
+                memory_bytes: lease.budget.memory_bytes,
+                gpu_memory_bytes: lease.budget.gpu_memory_bytes,
+                storage_bytes: lease.budget.storage_bytes,
+            },
+            lease_token: fullmag_application::LeaseToken::parse(lease.lease_token.clone())
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?,
+            heartbeat_sequence: lease.heartbeat_sequence,
+        },
+    })
+}
+
+fn reconcile_durable_worker_exit_before_spawn(
+    store: &SessionStore,
+    run_id: &str,
+    task_id: &str,
+    max_automatic_retries: usize,
+) -> Result<Option<SupervisedWorkerResult>> {
+    let Some(receipt) = worker_process_exit_receipt_for_current_task(store, run_id, task_id)?
+    else {
+        return Ok(None);
+    };
+    let Some(lease) = store.read_active_resource_lease_for_worker_process_exit(&receipt)? else {
+        let catalog = store
+            .read_run_catalog(run_id)?
+            .context("reconciled process exit requires its run catalog")?;
+        let task = catalog
+            .tasks
+            .iter()
+            .find(|task| task.task_id == task_id)
+            .context("reconciled process exit task is missing")?;
+        return match task.lifecycle {
+            fullmag_session::FmsTaskLifecycle::Succeeded => Ok(Some(SupervisedWorkerResult {
+                recovered_terminal_completion: true,
+                worker_timed_out: receipt.timed_out,
+                worker_cancelled: false,
+                retry_scheduled: false,
+                worker_summary: serde_json::json!({
+                    "status": "process_exit_already_reconciled",
+                    "receipt_id": receipt.receipt_id,
+                }),
+            })),
+            fullmag_session::FmsTaskLifecycle::Cancelled => Ok(Some(SupervisedWorkerResult {
+                recovered_terminal_completion: false,
+                worker_timed_out: false,
+                worker_cancelled: true,
+                retry_scheduled: false,
+                worker_summary: serde_json::json!({
+                    "status": "process_exit_already_reconciled",
+                    "receipt_id": receipt.receipt_id,
+                }),
+            })),
+            _ => bail!(
+                "worker process exit receipt has no active lease and no reconciled terminal outcome"
+            ),
+        };
+    };
+    let claim = claim_from_worker_process_exit(&receipt, &lease)?;
+    let mut result =
+        reconcile_worker_exit(store, &claim, &lease, &receipt, None, max_automatic_retries)?;
+    if result.retry_scheduled {
+        result.worker_summary = serde_json::json!({
+            "status": "process_exit_retry_recovered",
+            "receipt_id": receipt.receipt_id,
+        });
+    }
+    Ok(Some(result))
 }
 
 fn reconcile_durable_retry_before_spawn(
@@ -929,6 +1271,36 @@ fn accepted_supervisor_test_fail_after_retry_decision() -> Result<()> {
     Ok(())
 }
 
+fn accepted_supervisor_test_fail_after_process_exit_receipt() -> Result<()> {
+    if std::env::var("FULLMAG_ENABLE_TEST_HOOKS").as_deref() == Ok("1")
+        && std::env::var("FULLMAG_TEST_ACCEPTED_SUPERVISOR_FAIL_AFTER_PROCESS_EXIT_RECEIPT")
+            .as_deref()
+            == Ok("1")
+    {
+        eprintln!("controlled supervisor crash after durable process exit receipt");
+        std::process::exit(87);
+    }
+    Ok(())
+}
+
+fn retry_store_writer_busy<T>(mut operation: impl FnMut() -> Result<T>) -> Result<T> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if error
+                    .chain()
+                    .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
+                    && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 fn parse_worker_summary(output: &Output) -> Result<serde_json::Value> {
     if !output.status.success() {
         return Ok(serde_json::json!({
@@ -945,6 +1317,10 @@ fn parse_worker_summary(output: &Output) -> Result<serde_json::Value> {
 }
 
 fn worker_failure_reason(outcome: &ObservedWorkerProcess) -> String {
+    if let Some(reason) = outcome.control_failure_reason.as_deref() {
+        let detail = reason.chars().take(512).collect::<String>();
+        return format!("accepted worker supervisor control failed: {detail}");
+    }
     let output = &outcome.output;
     if outcome.timed_out {
         return "accepted worker process exceeded its explicit timeout and was terminated".into();
@@ -1087,6 +1463,38 @@ mod tests {
         assert!(outcome.stop_requested);
         assert!(!outcome.timed_out);
         assert!(!outcome.output.status.success());
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn control_poll_failure_reaps_child_and_records_failure_outcome() {
+        let current_test_process = std::env::current_exe().unwrap();
+        let child = Command::new(current_test_process)
+            .arg("--exact")
+            .arg("accepted_study_supervisor::tests::timeout_child_fixture")
+            .arg("--nocapture")
+            .env("FULLMAG_ACCEPTED_SUPERVISOR_TIMEOUT_CHILD", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let started = Instant::now();
+        let outcome = observe_child(
+            child,
+            Some(Duration::from_secs(5)),
+            Some(Duration::from_millis(20)),
+            || Ok(true),
+            || bail!("controlled Stop polling failure"),
+        )
+        .unwrap();
+        assert!(!outcome.stop_requested);
+        assert!(!outcome.timed_out);
+        assert!(!outcome.output.status.success());
+        assert!(outcome
+            .control_failure_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("controlled Stop polling failure")));
         assert!(started.elapsed() < Duration::from_secs(5));
     }
 

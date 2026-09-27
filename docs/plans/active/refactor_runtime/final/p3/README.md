@@ -16,12 +16,15 @@ Opcjonalny, ograniczony `--max-automatic-retries` stosuje fenced decyzję
 `Retry` wyłącznie po udowodnionym wyjściu workera przed rezerwacją prywatnego
 katalogu attemptu. Decyzja jest zapisywana przed release; restart supervisora
 zwalnia zachowany lease i replayuje dokładną decyzję bez spawnu workera.
-Istniejąca rezerwacja attemptu zachowuje fail-closed lease.
+Supervisor zapisuje również fenced `worker_process_exit_receipt.v1` natychmiast
+po reap potomka. Restart może dzięki niemu domknąć sukces, anulowanie albo retry
+po awarii sprzed decyzji; istniejąca rezerwacja attemptu nadal zachowuje
+fail-closed lease.
 
-Brakuje automatycznego wyboru taska, puli większej niż jeden, heartbeat/Stop ACK
-dla zdalnego transportu, orphan reconciliation sprzed zapisu decyzji oraz process E2E
-pozostałych lane'ów. Anulowanie przed uruchomieniem workera jest obsłużone
-trwale i nie wykonuje spawnu procesu potomnego.
+Bounded scheduler wybiera dependency-ready task jednego runu i jawnego zasobu.
+Brakuje rezydentnej puli wielu runów, fairness, heartbeat/Stop ACK dla zdalnego
+transportu oraz process E2E pozostałych lane'ów. Anulowanie przed uruchomieniem
+workera jest obsłużone trwale i nie wykonuje spawnu procesu potomnego.
 Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`28-one-shot-accepted-worker-process.md`](28-one-shot-accepted-worker-process.md),
 [`29-accepted-worker-supervisor.md`](29-accepted-worker-supervisor.md),
@@ -31,8 +34,10 @@ Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`33-operator-task-cancellation.md`](33-operator-task-cancellation.md),
 [`34-supervisor-cancel-e2e.md`](34-supervisor-cancel-e2e.md)
 [`35-supervisor-prestart-cancel.md`](35-supervisor-prestart-cancel.md)
-[`36-supervisor-automatic-retry.md`](36-supervisor-automatic-retry.md)
-i [`37-supervisor-retry-recovery.md`](37-supervisor-retry-recovery.md).
+[`36-supervisor-automatic-retry.md`](36-supervisor-automatic-retry.md),
+[`37-supervisor-retry-recovery.md`](37-supervisor-retry-recovery.md),
+[`38-accepted-task-scheduler.md`](38-accepted-task-scheduler.md) i
+[`39-supervisor-process-exit-receipt.md`](39-supervisor-process-exit-receipt.md).
 
 API ma jawny adapter allow-listy `RunResult` → typowane payloady dla
 wspieranych wyjść. Szczegóły i wcześniejszy dowód opisuje
@@ -701,3 +706,28 @@ tasków. Rezydentna pula, fairness wielu runów, zdalne ACK, orphan recovery i
 pozostałe lane'y pozostają otwarte. P3 wynosi około **72%**, P5 około **34%**,
 a całość około **34%**. Szczegóły:
 [`38-accepted-task-scheduler.md`](38-accepted-task-scheduler.md).
+
+## Receipt zakończenia procesu i orphan recovery — 27.09.2026
+
+Supervisor publikuje immutable receipt dopiero po potwierdzonym exit procesu i
+przed zmianą terminalną, decyzją retry oraz release lease. Receipt jest
+fenced do ostatniego heartbeat dokładnego claimu, przenośny w `.fms` i pozwala
+restartowi przejąć martwy slot bez zgadywania liveness. Process E2E twardo
+kończy pierwszy supervisor po receipcie, a drugi domyka retry z nieistniejącym
+binarium workera: **1/1 PASS**, receipt
+`2cc7eed7314f48f6b7a11163c242257f`. Kontrole zwykłego sukcesu i anulowania
+żywego procesu również mają **1/1 PASS** (`7d6fb25844954b45a6311f0ceed15ab8`,
+`81b3c2242b6c492db088a5aa7d0d2131`). Wszystkie trzy przypinają content
+`689d19d7f8fd5e11828f04a3fc166a1d1a71c861c8bf24167ae0c5b9c6dd615f` i
+`source_changed_during_run=false`. Pełna bramka sesji: **65 + 9 + 13 PASS**,
+receipt `c7768a2914ce4fe19dae02424d4894c5`; rejestr tras: **24/24 PASS**. Worker
+ponawia chwilowy konflikt writer lock przy idempotentnych odczytach durable
+store i zapisie CAS, zanim utworzy niezmienny completed receipt. Błąd pollingu
+kontroli jest rejestrowany po kill/reap, a błąd sprzed receiptu zachowuje slot
+fail-closed; regresja tej ścieżki ma **1/1 PASS**.
+
+Lokalne orphan window sprzed decyzji jest zamknięte dla zweryfikowanego FDM
+CPU. Zdalny transport, pozostałe lane'y i dowód zwolnienia urządzenia nadal są
+otwarte. P3 wynosi około **74%**, P5 około **36%**, a całość około **35%**.
+Szczegóły:
+[`39-supervisor-process-exit-receipt.md`](39-supervisor-process-exit-receipt.md).

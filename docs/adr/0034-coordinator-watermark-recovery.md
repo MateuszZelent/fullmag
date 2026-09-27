@@ -81,6 +81,25 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
     uprawnia supervisor do odczytu i zwolnienia zachowanego aktywnego lease oraz
     idempotentnego zastosowania decyzji przed jakimkolwiek spawnem. Brak decyzji
     nie jest dowodem śmierci workera i nie uprawnia do takeover.
+15. Supervisor publikuje niezmienny `worker_process_exit_receipt.v1` natychmiast
+    po `wait`/reap potomka i przed zdarzeniem terminalnym, decyzją retry lub
+    release. Receipt wiąże run/task/attempt/epoch, resource/token, dokładną
+    sekwencję ostatniego heartbeat lease, PID i — gdy system go udostępnia —
+    token startu procesu, status exit, timeout/Stop oraz ograniczoną przyczynę
+    błędu. Tylko taki receipt, przy martwym właścicielu lokalnego slotu, pozwala
+    restartowi przejąć orphan reconciliation sprzed decyzji. Sam brak PID,
+    nieaktualny heartbeat lub wiek lease nadal nie stanowi dowodu zakończenia.
+16. Recovery receiptu zawsze poprzedza spawn. Odtwarza dokładny claim z
+    zachowanego aktywnego lease, replayuje istniejący journal, a następnie
+    domyka sukces, anulowanie lub nieudany exit. Retry nadal wymaga braku
+    katalogu efektu i jawnego limitu; decyzja jest zapisywana przed release.
+    Receipt nie uprawnia do zmiany resource, lane'u, attemptu ani epochu.
+17. Jeżeli obserwacja procesu albo zapis receiptu zawiedzie przed trwałym
+    dowodem wyjścia, supervisor zachowuje globalny slot i lease fail-closed.
+    Chwilowy konflikt writer lock jest ponawiany tylko dla idempotentnych
+    odczytów durable store i zapisu CAS/receiptu. Błąd pollingu heartbeat lub
+    `Stop` powoduje kill i reap potomka; potwierdzony wynik oraz przyczyna są
+    następnie publikowane w receipcie zamiast zwolnienia slotu bez dowodu.
 
 ## Konsekwencje
 
@@ -97,6 +116,10 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
   transportu, reconciliation efektów workera ani dowodu zwolnienia zasobów.
 - Heartbeat procesu potwierdza liveness lokalnego procesu i utrzymanie lease.
   Nie jest dowodem postępu solvera, poprawności fizyki ani kwalifikacji lane'u.
+- Receipt procesu jest dowodem wyłącznie tego, że supervisor zreapował dokładny
+  proces potomny przypisany do fenced claimu. Nie jest scientific receiptem,
+  dowodem zwolnienia pamięci urządzenia na zdalnym hoście ani kwalifikacją
+  pozostałych lane'ów.
 - `Stopping` oznacza trwałe żądanie, a `Cancelled` potwierdzony terminalny
   wynik koordynatora. Samo kliknięcie UI ani wysłanie HTTP nie dowodzi wyjścia
   procesu i nie uprawnia do zwolnienia lease.
@@ -135,6 +158,12 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
 - Regresja restartowa wymusza twarde wyjście procesu supervisora po journalu decyzji, lecz przed
   release, a drugi proces musi dokończyć release/apply bez dostępu do binarium
   workera.
+- Regresja wcześniejszego orphan window wymusza twarde wyjście supervisora po
+  potwierdzonym exit i trwałym `worker_process_exit_receipt.v1`, ale przed
+  terminalnym eventem i decyzją. Restart otrzymuje nieistniejące binarium
+  workera; musi utworzyć dokładnie jedną decyzję, zwolnić exact lease i ustawić
+  task na `Queued` bez spawnu. Store/archiwum osobno sprawdzają fencing,
+  idempotencję, reachability oraz roundtrip `.fms` receiptu.
 
 ## Migracja i rollback
 
@@ -147,7 +176,7 @@ przeprowadzać migracji przez zgadywanie stanu pustego journalu.
 
 Source/contract gates są oddzielone od procesu workera i kwalifikacji solvera.
 Testy integracyjne wymagają managed build runnera. Pełne lokalne process E2E
-sukcesu, anulowania żywego procesu i anulowania przed spawnem ograniczonego FDM
-CPU przechodzą. P5-B pozostaje otwarte do automatycznego schedulera, orphan
-reconciliation sprzed journalu decyzji, zdalnego ACK oraz dowodu braku równoległego starego workera dla
-pozostałych lane'ów.
+sukcesu, anulowania żywego procesu, anulowania przed spawnem i orphan recovery
+sprzed decyzji ograniczonego FDM CPU przechodzą. P5-B pozostaje otwarte do
+rezydentnej puli wielu runów, zdalnego ACK oraz dowodu braku równoległego
+starego workera i zwolnienia urządzenia dla pozostałych lane'ów.

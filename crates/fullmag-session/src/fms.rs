@@ -27,6 +27,7 @@
 //! │     │  └─ <task_id>/<attempt_id>.json
 //! │     ├─ resource_leases/
 //! │     ├─ retry_decisions/
+//! │     ├─ worker_process_exit_receipts/
 //! │     ├─ coordinator_journal/
 //! │     ├─ checkpoints/
 //! │     └─ artifacts/
@@ -428,6 +429,12 @@ fn plan_run_entries(
         plan_resource_lease_entries(store_root, canonical_root, run_id, &mut entries)?;
         plan_task_admission_entries(store_root, canonical_root, run_id, &mut entries)?;
         plan_retry_decision_entries(store_root, canonical_root, run_id, &mut entries)?;
+        plan_worker_process_exit_receipt_entries(
+            store_root,
+            canonical_root,
+            run_id,
+            &mut entries,
+        )?;
         plan_coordinator_journal_entries(store_root, canonical_root, run_id, &mut entries)?;
         let inbox_root = store_root.join("runs").join(run_id).join("worker_inbox");
         if store_source_exists(&inbox_root)? {
@@ -542,6 +549,53 @@ fn plan_retry_decision_entries(
         if let Some(data) =
             read_store_file_if_exists(store_root, canonical_root, &decision_entry.path())?
         {
+            entries.push(PackEntry { archive_path, data });
+        }
+    }
+    Ok(())
+}
+
+fn plan_worker_process_exit_receipt_entries(
+    store_root: &Path,
+    canonical_root: &Path,
+    run_id: &str,
+    entries: &mut Vec<PackEntry>,
+) -> Result<()> {
+    let root = store_root
+        .join("runs")
+        .join(run_id)
+        .join("worker_process_exit_receipts");
+    if !store_source_exists(&root)? {
+        return Ok(());
+    }
+    if !root.is_dir() {
+        bail!(
+            "worker_process_exit_receipts path is not a directory: {}",
+            root.display()
+        );
+    }
+    for receipt_entry in fs::read_dir(&root)? {
+        let receipt_entry = receipt_entry?;
+        crate::repository_path::reject_link(&receipt_entry.path())?;
+        if !receipt_entry.file_type()?.is_file() {
+            bail!("worker process exit receipt entry is not a file");
+        }
+        let file_name = receipt_entry.file_name().to_string_lossy().into_owned();
+        let Some(receipt_id) = file_name.strip_suffix(".json") else {
+            bail!("worker process exit receipt must be JSON: `{file_name}`");
+        };
+        crate::repository_path::validate_store_id(receipt_id)?;
+        let archive_path =
+            format!("runs/{run_id}/worker_process_exit_receipts/{file_name}");
+        validate_portable_namespace_path(&archive_path)?;
+        if let Some(data) =
+            read_store_file_if_exists(store_root, canonical_root, &receipt_entry.path())?
+        {
+            let receipt: crate::FmsWorkerProcessExitReceipt = serde_json::from_slice(&data)
+                .context("worker process exit receipt is not typed")?;
+            if receipt.relative_path()? != archive_path {
+                bail!("worker process exit receipt path identity mismatch");
+            }
             entries.push(PackEntry { archive_path, data });
         }
     }

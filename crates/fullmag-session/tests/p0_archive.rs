@@ -709,6 +709,28 @@ fn archive_roundtrip_preserves_task_scoped_accepted_preparation_receipt() {
         store.commit_task_admission(&admission_lease).unwrap(),
         TaskAdmissionCommitDisposition::Admitted
     );
+    let process_exit_receipt = FmsWorkerProcessExitReceipt {
+        schema_version: FMS_WORKER_PROCESS_EXIT_RECEIPT_SCHEMA.into(),
+        receipt_id: "process-exit-archive".into(),
+        run_id: run_id.into(),
+        task_id: "task-admission-archive".into(),
+        attempt_id: "attempt-archive".into(),
+        ownership_epoch: 1,
+        resource_id: "cpu-archive".into(),
+        lease_token: "lease-archive".into(),
+        lease_heartbeat_sequence: 0,
+        process_id: 42,
+        process_start_token: Some("archive-fixture-process".into()),
+        status_success: false,
+        exit_code: Some(1),
+        timed_out: false,
+        stop_requested: false,
+        failure_reason: Some("accepted worker process failed: archive fixture".into()),
+        observed_at: now,
+    };
+    store
+        .commit_worker_process_exit_receipt(&process_exit_receipt)
+        .unwrap();
 
     let mut session =
         FmsSessionManifest::new("task-receipt-session", "Task receipt", SaveProfile::Archive);
@@ -739,6 +761,12 @@ fn archive_roundtrip_preserves_task_scoped_accepted_preparation_receipt() {
     let admission_path =
         format!("runs/{run_id}/task_admissions/task-admission-archive/attempt-archive.json");
     assert!(preflight.reachability.file_refs.contains(&admission_path));
+    let process_exit_path =
+        format!("runs/{run_id}/worker_process_exit_receipts/process-exit-archive.json");
+    assert!(preflight
+        .reachability
+        .file_refs
+        .contains(&process_exit_path));
 
     let imported = SessionStore::open(directory.path().join("imported")).unwrap();
     unpack_fms(Cursor::new(bytes), &imported).unwrap();
@@ -762,6 +790,12 @@ fn archive_roundtrip_preserves_task_scoped_accepted_preparation_receipt() {
             .read_active_resource_lease_for_task(run_id, "task-admission-archive")
             .unwrap(),
         Some(admission_lease)
+    );
+    assert_eq!(
+        imported
+            .read_worker_process_exit_receipt(run_id, "process-exit-archive")
+            .unwrap(),
+        Some(process_exit_receipt)
     );
 }
 

@@ -319,7 +319,7 @@ fn persist_completed_worker_execution(
         {
             bail!("accepted worker output codec version is not registered");
         }
-        let object_ref = store.cas().put(&output.bytes)?;
+        let object_ref = retry_store_writer_busy(|| store.cas().put(&output.bytes))?;
         output_refs.push(WorkerExecutionOutputReference {
             port_id: output.port_id.clone(),
             case_id: output.case_id.clone(),
@@ -585,10 +585,11 @@ pub(crate) fn execute_accepted_worker_start(
     if !start.claim.matches_claim(&accepted_step.claim) {
         bail!("accepted Start does not match the worker task claim");
     }
-    let inbox_checkpoint =
+    let inbox_checkpoint = retry_store_writer_busy(|| {
         fullmag_runtime_control::recover_worker_inbox(store, &accepted_step.claim)
-            .context("load durable worker inbox before accepted Start execution")?
-            .checkpoint();
+    })
+    .context("load durable worker inbox before accepted Start execution")?
+    .checkpoint();
     if inbox_checkpoint.pending.as_ref() != Some(start)
         || inbox_checkpoint
             .applied
@@ -616,11 +617,13 @@ pub(crate) fn execute_accepted_worker_start(
         bail!("accepted Start worker context has a stale task claim");
     }
 
-    let accepted = fullmag_runtime_control::load_accepted_study_snapshot(
-        store,
-        &accepted_step.claim.run_id,
-        project_id,
-    )
+    let accepted = retry_store_writer_busy(|| {
+        fullmag_runtime_control::load_accepted_study_snapshot(
+            store,
+            &accepted_step.claim.run_id,
+            project_id,
+        )
+    })
     .context("load immutable accepted study for worker execution")?;
     let study_step = accepted
         .study
@@ -699,7 +702,9 @@ pub(crate) fn execute_accepted_worker_start(
     let execution_plan = materialize_resolved_study_inputs(store, accepted_step)
         .context("materialize accepted CAS inputs for the runner")?;
     let receipt_identity = worker_execution_receipt_identity(start, accepted_step, case_id)?;
-    let attempt_output_dir = match create_private_attempt_output_dir(store, &accepted_step.claim) {
+    let attempt_output_dir = match retry_store_writer_busy(|| {
+        create_private_attempt_output_dir(store, &accepted_step.claim)
+    }) {
         Ok(path) => {
             write_immutable_attempt_receipt(
                 &path,
@@ -718,11 +723,13 @@ pub(crate) fn execute_accepted_worker_start(
                 return Err(reservation_error)
                     .context("reserve output directory for the accepted worker attempt");
             };
-            let current_claim = fullmag_runtime_control::load_current_task_claim(
-                store,
-                &accepted_step.claim.run_id,
-                accepted_step.claim.task_id.as_str(),
-            )
+            let current_claim = retry_store_writer_busy(|| {
+                fullmag_runtime_control::load_current_task_claim(
+                    store,
+                    &accepted_step.claim.run_id,
+                    accepted_step.claim.task_id.as_str(),
+                )
+            })
             .context("reconcile accepted worker receipt under the current claim")?;
             if !accepted_step.claim.is_same_or_renewed_by(&current_claim) {
                 bail!("accepted worker receipt belongs to a stale task claim");
@@ -816,18 +823,21 @@ pub(crate) fn run_pending_accepted_start(
     if specification.run_id != run_id {
         bail!("accepted worker RunSpec belongs to another run");
     }
-    let accepted = fullmag_runtime_control::load_accepted_study_snapshot(
-        store,
-        &run_id,
-        &specification.snapshot.project_id,
-    )
+    let accepted = retry_store_writer_busy(|| {
+        fullmag_runtime_control::load_accepted_study_snapshot(
+            store,
+            &run_id,
+            &specification.snapshot.project_id,
+        )
+    })
     .context("load immutable accepted study for worker process")?;
     let claim = retry_store_writer_busy(|| {
         fullmag_runtime_control::load_current_task_claim(store, &run_id, task_id)
     })
     .context("worker process requires the exact active durable task claim")?;
-    let recovered = fullmag_runtime_control::recover_coordinator(store, &claim)
-        .context("worker process could not recover the durable coordinator")?;
+    let recovered =
+        retry_store_writer_busy(|| fullmag_runtime_control::recover_coordinator(store, &claim))
+            .context("worker process could not recover the durable coordinator")?;
     let starts = recovered
         .commands
         .iter()
@@ -851,11 +861,12 @@ pub(crate) fn run_pending_accepted_start(
         bail!("worker process cannot execute Start in the recovered coordinator phase");
     }
 
-    let worker_store = SessionStore::open_existing(store.root().to_path_buf())
-        .context("open the durable worker inbox store")?;
-    let mut inbox =
+    let mut inbox = retry_store_writer_busy(|| {
+        let worker_store = SessionStore::open_existing(store.root().to_path_buf())
+            .context("open the durable worker inbox store")?;
         fullmag_runtime_control::DurableWorkerInbox::recover(worker_store, claim.clone())
-            .context("worker process requires an existing durable inbox")?;
+            .context("worker process requires an existing durable inbox")
+    })?;
     let inbox_checkpoint = inbox.checkpoint();
     if inbox_checkpoint.claim != claim.identity()
         || inbox_checkpoint
@@ -901,11 +912,13 @@ pub(crate) fn run_pending_accepted_start(
             if envelope != &start {
                 return Err(fullmag_application::ExecutionError::ProtocolFenceRejected);
             }
-            let current_claim = fullmag_runtime_control::load_current_task_claim(
-                store,
-                &claim.run_id,
-                claim.task_id.as_str(),
-            )
+            let current_claim = retry_store_writer_busy(|| {
+                fullmag_runtime_control::load_current_task_claim(
+                    store,
+                    &claim.run_id,
+                    claim.task_id.as_str(),
+                )
+            })
             .map_err(|error| {
                 fullmag_application::ExecutionError::Invalid(format!(
                     "revalidate worker process claim: {error:#}"
@@ -944,8 +957,9 @@ fn apply_accepted_start_effect(
         )
     })
     .context("load accepted worker step")?;
-    let recovered_coordinator = fullmag_runtime_control::recover_coordinator(store, claim)
-        .context("recover worker coordinator before Start")?;
+    let recovered_coordinator =
+        retry_store_writer_busy(|| fullmag_runtime_control::recover_coordinator(store, claim))
+            .context("recover worker coordinator before Start")?;
     let mut coordinator =
         fullmag_application::DurableWorkerCoordinator::new(recovered_coordinator.coordinator);
     match coordinator.phase() {

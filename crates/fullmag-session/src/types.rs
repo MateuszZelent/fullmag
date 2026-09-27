@@ -1144,6 +1144,137 @@ pub enum RetryDecisionApplyDisposition {
     Replayed,
 }
 
+/// Schema version for immutable proof that a supervised worker process exited.
+pub const FMS_WORKER_PROCESS_EXIT_RECEIPT_SCHEMA: &str = "worker_process_exit_receipt.v1";
+
+/// Durable proof captured only after the supervisor has reaped its child.
+///
+/// The receipt is fenced to the exact task claim and the last active lease
+/// heartbeat observed by that supervisor.  It authorizes orphan
+/// reconciliation after a supervisor crash, but never creates a new claim or
+/// treats a missing process as evidence of termination.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsWorkerProcessExitReceipt {
+    pub schema_version: String,
+    pub receipt_id: String,
+    pub run_id: String,
+    pub task_id: String,
+    pub attempt_id: String,
+    pub ownership_epoch: u64,
+    pub resource_id: String,
+    pub lease_token: String,
+    pub lease_heartbeat_sequence: u64,
+    pub process_id: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_start_token: Option<String>,
+    pub status_success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub stop_requested: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+    pub observed_at: DateTime<Utc>,
+}
+
+impl FmsWorkerProcessExitReceipt {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != FMS_WORKER_PROCESS_EXIT_RECEIPT_SCHEMA {
+            bail!(
+                "unsupported worker process exit receipt schema `{}`",
+                self.schema_version
+            );
+        }
+        for (value, field) in [
+            (self.receipt_id.as_str(), "receipt_id"),
+            (self.run_id.as_str(), "run_id"),
+            (self.task_id.as_str(), "task_id"),
+            (self.attempt_id.as_str(), "attempt_id"),
+            (self.resource_id.as_str(), "resource_id"),
+            (self.lease_token.as_str(), "lease_token"),
+        ] {
+            crate::repository_path::validate_store_id(value)
+                .with_context(|| format!("invalid worker process exit receipt {field}"))?;
+        }
+        if self.ownership_epoch == 0 {
+            bail!("worker process exit receipt ownership_epoch must be greater than zero");
+        }
+        if self.process_id == 0 {
+            bail!("worker process exit receipt process_id must be greater than zero");
+        }
+        if self
+            .process_start_token
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty() || value.len() > 256)
+        {
+            bail!("worker process exit receipt process_start_token is invalid");
+        }
+        if self.timed_out && self.stop_requested {
+            bail!("worker process exit receipt cannot be both timed out and operator-stopped");
+        }
+        if self.status_success && self.timed_out {
+            bail!("a timed-out worker process exit cannot report success");
+        }
+        match self.failure_reason.as_deref() {
+            Some(reason) if reason.trim().is_empty() || reason.len() > 4096 => {
+                bail!("worker process exit receipt failure_reason is invalid")
+            }
+            Some(_) if self.status_success || self.stop_requested => {
+                bail!("successful or operator-stopped process exit must not carry a failure reason")
+            }
+            None if !self.status_success && !self.stop_requested => {
+                bail!("failed worker process exit requires a failure reason")
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    pub fn relative_path(&self) -> Result<String> {
+        self.validate()?;
+        Ok(format!(
+            "runs/{}/worker_process_exit_receipts/{}.json",
+            self.run_id, self.receipt_id
+        ))
+    }
+
+    pub fn validate_for_task(&self, task: &FmsTaskCatalogEntry) -> Result<()> {
+        self.validate()?;
+        if task.task_id != self.task_id
+            || task.attempt_id.as_deref() != Some(self.attempt_id.as_str())
+            || task.ownership_epoch != Some(self.ownership_epoch)
+            || task.resource_id.as_deref() != Some(self.resource_id.as_str())
+            || !matches!(task.readiness, FmsTaskReadiness::Ready)
+        {
+            bail!("worker process exit receipt ownership fence does not match the run catalog");
+        }
+        Ok(())
+    }
+
+    pub fn validate_for_lease(&self, lease: &FmsResourceLease) -> Result<()> {
+        self.validate()?;
+        if lease.state != FmsResourceLeaseState::Active
+            || lease.run_id != self.run_id
+            || lease.task_id != self.task_id
+            || lease.attempt_id != self.attempt_id
+            || lease.ownership_epoch != self.ownership_epoch
+            || lease.resource_id != self.resource_id
+            || lease.lease_token != self.lease_token
+            || lease.heartbeat_sequence != self.lease_heartbeat_sequence
+        {
+            bail!("worker process exit receipt ownership fence does not match the active lease");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkerProcessExitReceiptCommitDisposition {
+    Accepted,
+    Replayed,
+}
+
 /// Schema version for the durable coordinator message journal.
 pub const FMS_COORDINATOR_JOURNAL_SCHEMA: &str = "coordinator_journal.v1";
 

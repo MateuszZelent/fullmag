@@ -829,6 +829,150 @@ impl SessionStore {
         Ok(decisions)
     }
 
+    /// Persist immutable proof that a supervised child process was reaped.
+    ///
+    /// Publication requires the exact current catalog claim and the last
+    /// active lease heartbeat held by the supervisor.  Replaying the same
+    /// receipt is idempotent; changing any observed outcome conflicts.
+    pub fn commit_worker_process_exit_receipt(
+        &self,
+        receipt: &FmsWorkerProcessExitReceipt,
+    ) -> Result<WorkerProcessExitReceiptCommitDisposition> {
+        receipt.validate()?;
+        let _writer_lease = self.write_transaction()?;
+        let catalog = self
+            .read_run_catalog(&receipt.run_id)?
+            .context("worker process exit receipt requires a durable run catalog")?;
+        let task = catalog
+            .tasks
+            .iter()
+            .find(|task| task.task_id == receipt.task_id)
+            .context("worker process exit receipt task is missing from the run catalog")?;
+        receipt.validate_for_task(task)?;
+        let lease = self
+            .read_resource_lease(
+                &receipt.run_id,
+                &receipt.resource_id,
+                &receipt.lease_token,
+            )?
+            .context("worker process exit receipt requires its durable resource lease")?;
+        receipt.validate_for_lease(&lease)?;
+
+        let relative = receipt.relative_path()?;
+        let path = checked_path(&self.root, &relative)?;
+        if path.exists() {
+            let data = fs::read(&path)
+                .with_context(|| format!("reading worker process exit receipt {}", path.display()))?;
+            let existing: FmsWorkerProcessExitReceipt = serde_json::from_slice(&data)
+                .with_context(|| format!("parsing worker process exit receipt {}", path.display()))?;
+            existing.validate()?;
+            if existing.relative_path()? != relative {
+                anyhow::bail!("worker process exit receipt identity does not match its path");
+            }
+            if existing == *receipt {
+                return Ok(WorkerProcessExitReceiptCommitDisposition::Replayed);
+            }
+            anyhow::bail!(
+                "worker process exit receipt `{}` conflicts with the durable payload",
+                receipt.receipt_id
+            );
+        }
+        let path = create_parent(&self.root, &relative)?;
+        atomic_write(&path, &serde_json::to_vec_pretty(receipt)?)?;
+        Ok(WorkerProcessExitReceiptCommitDisposition::Accepted)
+    }
+
+    /// Read one immutable worker process exit receipt by durable identity.
+    pub fn read_worker_process_exit_receipt(
+        &self,
+        run_id: &str,
+        receipt_id: &str,
+    ) -> Result<Option<FmsWorkerProcessExitReceipt>> {
+        validate_store_id(run_id)?;
+        validate_store_id(receipt_id)?;
+        let relative = format!(
+            "runs/{run_id}/worker_process_exit_receipts/{receipt_id}.json"
+        );
+        let path = checked_path(&self.root, &relative)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        let data = fs::read(&path)?;
+        let receipt: FmsWorkerProcessExitReceipt = serde_json::from_slice(&data)
+            .with_context(|| format!("parsing worker process exit receipt {}", path.display()))?;
+        if receipt.relative_path()? != relative {
+            anyhow::bail!("worker process exit receipt identity does not match its path");
+        }
+        Ok(Some(receipt))
+    }
+
+    /// List immutable worker process exit receipts for one run.
+    pub fn list_worker_process_exit_receipts(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<FmsWorkerProcessExitReceipt>> {
+        validate_store_id(run_id)?;
+        let directory = checked_path(
+            &self.root,
+            &format!("runs/{run_id}/worker_process_exit_receipts"),
+        )?;
+        if !directory.exists() {
+            return Ok(Vec::new());
+        }
+        let mut receipts = Vec::new();
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            let metadata = entry.file_type()?;
+            if metadata.is_symlink() || !metadata.is_file() {
+                anyhow::bail!(
+                    "unsafe worker process exit receipt entry `{}`",
+                    entry.path().display()
+                );
+            }
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            let receipt_id = file_name
+                .strip_suffix(".json")
+                .context("worker process exit receipt entry must be JSON")?;
+            validate_store_id(receipt_id)?;
+            receipts.push(
+                self.read_worker_process_exit_receipt(run_id, receipt_id)?
+                    .context("listed worker process exit receipt disappeared during read")?,
+            );
+        }
+        receipts.sort_by(|left, right| left.receipt_id.cmp(&right.receipt_id));
+        Ok(receipts)
+    }
+
+    /// Read the exact active lease retained after a durable process exit.
+    pub fn read_active_resource_lease_for_worker_process_exit(
+        &self,
+        receipt: &FmsWorkerProcessExitReceipt,
+    ) -> Result<Option<FmsResourceLease>> {
+        receipt.validate()?;
+        let _writer_lease = self.write_transaction()?;
+        let catalog = self
+            .read_run_catalog(&receipt.run_id)?
+            .context("worker process exit recovery requires a durable run catalog")?;
+        let task = catalog
+            .tasks
+            .iter()
+            .find(|task| task.task_id == receipt.task_id)
+            .context("worker process exit recovery task is missing from the run catalog")?;
+        receipt.validate_for_task(task)?;
+        let Some(lease) = self.read_resource_lease(
+            &receipt.run_id,
+            &receipt.resource_id,
+            &receipt.lease_token,
+        )? else {
+            return Ok(None);
+        };
+        if lease.state == FmsResourceLeaseState::Released {
+            return Ok(None);
+        }
+        receipt.validate_for_lease(&lease)?;
+        Ok(Some(lease))
+    }
+
     /// Persist the verified initial coordinator checkpoint before a new claim
     /// is allowed to publish worker commands.
     pub fn commit_coordinator_genesis(
@@ -4175,6 +4319,84 @@ mod admission_tests {
                 tasks,
             })
             .unwrap();
+    }
+
+    #[test]
+    fn worker_process_exit_receipt_is_fenced_idempotent_and_retained_after_release() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(temp.path().join("session-store")).unwrap();
+        seed_catalog(&store, vec![queued_task("task-process-exit")]);
+        let claim_lease = lease(
+            "task-process-exit",
+            "attempt-process-exit",
+            "lease-process-exit",
+        );
+        store.commit_task_admission(&claim_lease).unwrap();
+        let receipt = FmsWorkerProcessExitReceipt {
+            schema_version: FMS_WORKER_PROCESS_EXIT_RECEIPT_SCHEMA.into(),
+            receipt_id: "process-exit-receipt".into(),
+            run_id: "run-admission".into(),
+            task_id: "task-process-exit".into(),
+            attempt_id: "attempt-process-exit".into(),
+            ownership_epoch: 1,
+            resource_id: "cpu-0".into(),
+            lease_token: "lease-process-exit".into(),
+            lease_heartbeat_sequence: 0,
+            process_id: 42,
+            process_start_token: Some("test-process-start".into()),
+            status_success: false,
+            exit_code: Some(1),
+            timed_out: false,
+            stop_requested: false,
+            failure_reason: Some("accepted worker process failed: fixture".into()),
+            observed_at: Utc::now(),
+        };
+
+        assert_eq!(
+            store
+                .commit_worker_process_exit_receipt(&receipt)
+                .unwrap(),
+            WorkerProcessExitReceiptCommitDisposition::Accepted
+        );
+        assert_eq!(
+            store
+                .commit_worker_process_exit_receipt(&receipt)
+                .unwrap(),
+            WorkerProcessExitReceiptCommitDisposition::Replayed
+        );
+        assert_eq!(
+            store
+                .list_worker_process_exit_receipts("run-admission")
+                .unwrap(),
+            vec![receipt.clone()]
+        );
+        assert_eq!(
+            store
+                .read_active_resource_lease_for_worker_process_exit(&receipt)
+                .unwrap(),
+            Some(claim_lease.clone())
+        );
+        let mut stale = receipt.clone();
+        stale.receipt_id = "stale-process-exit-receipt".into();
+        stale.lease_heartbeat_sequence = 1;
+        assert!(store.commit_worker_process_exit_receipt(&stale).is_err());
+
+        store.release_resource_lease(&claim_lease).unwrap();
+        assert!(store
+            .read_active_resource_lease_for_worker_process_exit(&receipt)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store
+                .read_worker_process_exit_receipt("run-admission", "process-exit-receipt")
+                .unwrap(),
+            Some(receipt)
+        );
+        crate::reachability::walk_store_root(
+            store.root(),
+            crate::reachability::ReachabilityMode::Gc,
+        )
+        .unwrap();
     }
 
     #[test]

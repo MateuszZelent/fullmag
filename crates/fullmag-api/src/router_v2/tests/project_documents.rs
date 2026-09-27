@@ -1731,7 +1731,16 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         std::env::var("FULLMAG_ACCEPTED_SCHEDULER_RETRY_E2E").as_deref() == Ok("1");
     let retry_recovery_e2e =
         std::env::var("FULLMAG_ACCEPTED_SUPERVISOR_RETRY_RECOVERY_E2E").as_deref() == Ok("1");
-    if cancel_e2e || prestart_cancel_e2e || automatic_retry_e2e || scheduler_retry_e2e || retry_recovery_e2e {
+    let process_exit_recovery_e2e =
+        std::env::var("FULLMAG_ACCEPTED_SUPERVISOR_PROCESS_EXIT_RECOVERY_E2E").as_deref()
+            == Ok("1");
+    if cancel_e2e
+        || prestart_cancel_e2e
+        || automatic_retry_e2e
+        || scheduler_retry_e2e
+        || retry_recovery_e2e
+        || process_exit_recovery_e2e
+    {
         let supervisor_executable = supervisor_executable
             .as_ref()
             .expect("cancel E2E requires the built supervisor binary");
@@ -1763,7 +1772,11 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             .arg("30")
             .arg("--heartbeat-interval-milliseconds")
             .arg("500");
-        if automatic_retry_e2e || scheduler_retry_e2e || retry_recovery_e2e {
+        if automatic_retry_e2e
+            || scheduler_retry_e2e
+            || retry_recovery_e2e
+            || process_exit_recovery_e2e
+        {
             supervisor_command.arg("--max-automatic-retries").arg("1");
         }
         let mut child = supervisor_command
@@ -1773,7 +1786,11 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             .spawn()
             .expect("spawn the built accepted supervisor for cancellation E2E");
 
-        if automatic_retry_e2e || scheduler_retry_e2e || retry_recovery_e2e {
+        if automatic_retry_e2e
+            || scheduler_retry_e2e
+            || retry_recovery_e2e
+            || process_exit_recovery_e2e
+        {
             let output = child
                 .wait_with_output()
                 .expect("collect automatic retry E2E supervisor exit");
@@ -1824,6 +1841,54 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
                     String::from_utf8_lossy(&recovery.stderr)
                 );
                 serde_json::from_slice(&recovery.stdout).unwrap()
+            } else if process_exit_recovery_e2e {
+                assert!(!output.status.success());
+                assert!(String::from_utf8_lossy(&output.stderr)
+                    .contains("controlled supervisor crash after durable process exit receipt"));
+                let receipts = store
+                    .list_worker_process_exit_receipts(accepted_run_id.as_str())
+                    .unwrap();
+                assert_eq!(receipts.len(), 1);
+                assert!(!receipts[0].status_success);
+                assert!(store
+                    .read_active_resource_lease_for_worker_process_exit(&receipts[0])
+                    .unwrap()
+                    .is_some());
+                assert!(store
+                    .list_retry_decisions(accepted_run_id.as_str())
+                    .unwrap()
+                    .is_empty());
+                let recovery = std::process::Command::new(supervisor_executable)
+                    .arg("--store-root")
+                    .arg(store.root())
+                    .arg("--run-id")
+                    .arg(accepted_run_id.as_str())
+                    .arg("--task-id")
+                    .arg(claim.task_id.as_str())
+                    .arg("--worker-executable")
+                    .arg(repo_root.join("worker-must-not-be-spawned.exe"))
+                    .arg("--max-concurrency")
+                    .arg("1")
+                    .arg("--worker-timeout-seconds")
+                    .arg("30")
+                    .arg("--heartbeat-interval-milliseconds")
+                    .arg("500")
+                    .arg("--max-automatic-retries")
+                    .arg("1")
+                    .env_remove(
+                        "FULLMAG_TEST_ACCEPTED_SUPERVISOR_FAIL_AFTER_PROCESS_EXIT_RECEIPT",
+                    )
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .output()
+                    .expect("restart supervisor to recover the durable process exit receipt");
+                assert!(
+                    recovery.status.success(),
+                    "process exit recovery supervisor failed: {}",
+                    String::from_utf8_lossy(&recovery.stderr)
+                );
+                serde_json::from_slice(&recovery.stdout).unwrap()
             } else {
                 assert!(
                     output.status.success(),
@@ -1837,6 +1902,8 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
                 summary["worker"]["status"],
                 if retry_recovery_e2e {
                     "retry_recovered"
+                } else if process_exit_recovery_e2e {
+                    "process_exit_retry_recovered"
                 } else {
                     "retry_scheduled"
                 }
