@@ -1280,6 +1280,137 @@ impl SessionStore {
         Ok(Some(lease))
     }
 
+    /// Persist a one-shot preparation process launch authorization. Only an
+    /// `Accepted` result authorizes the caller to spawn. `Replayed` proves a
+    /// prior supervisor crossed the durable launch boundary and therefore must
+    /// fail closed until that attempt is reconciled.
+    pub fn commit_preparation_process_launch(
+        &self,
+        launch: &FmsPreparationProcessLaunch,
+    ) -> Result<PreparationProcessLaunchCommitDisposition> {
+        launch.validate()?;
+        let _writer_lease = self.write_transaction()?;
+        let catalog = self
+            .read_run_catalog(&launch.run_id)?
+            .context("preparation process launch requires a durable run catalog")?;
+        let task = catalog
+            .tasks
+            .iter()
+            .find(|task| task.task_id == launch.task_id)
+            .context("preparation process launch task is missing from the run catalog")?;
+        if task.lifecycle != FmsTaskLifecycle::Accepted
+            || task.attempt_id.is_some()
+            || task.ownership_epoch.is_some()
+            || task.resource_id.is_some()
+        {
+            anyhow::bail!("preparation process launch task has a solver claim");
+        }
+        let lease = self
+            .read_preparation_resource_lease(
+                &launch.run_id,
+                &launch.resource_id,
+                &launch.lease_token,
+            )?
+            .context("preparation process launch requires its durable resource lease")?;
+        launch.validate_for_lease(&lease)?;
+
+        let relative = launch.relative_path()?;
+        let path = checked_path(&self.root, &relative)?;
+        if path.exists() {
+            let existing: FmsPreparationProcessLaunch =
+                serde_json::from_slice(&fs::read(&path)?).with_context(|| {
+                    format!("parsing preparation process launch {}", path.display())
+                })?;
+            existing.validate()?;
+            if existing.relative_path()? != relative {
+                anyhow::bail!("preparation process launch identity does not match its path");
+            }
+            if existing == *launch {
+                return Ok(PreparationProcessLaunchCommitDisposition::Replayed);
+            }
+            anyhow::bail!(
+                "preparation process launch `{}` conflicts with the durable payload",
+                launch.launch_id
+            );
+        }
+        if self
+            .list_preparation_process_launches(&launch.run_id)?
+            .into_iter()
+            .any(|existing| {
+                existing.task_id == launch.task_id
+                    && existing.preparation_attempt_id == launch.preparation_attempt_id
+                    && existing.resource_id == launch.resource_id
+                    && existing.lease_token == launch.lease_token
+            })
+        {
+            anyhow::bail!(
+                "preparation attempt `{}` already has a durable process launch",
+                launch.preparation_attempt_id
+            );
+        }
+        atomic_write(
+            &create_parent(&self.root, &relative)?,
+            &serde_json::to_vec_pretty(launch)?,
+        )?;
+        Ok(PreparationProcessLaunchCommitDisposition::Accepted)
+    }
+
+    pub fn read_preparation_process_launch(
+        &self,
+        run_id: &str,
+        launch_id: &str,
+    ) -> Result<Option<FmsPreparationProcessLaunch>> {
+        validate_store_id(run_id)?;
+        validate_store_id(launch_id)?;
+        let relative = format!("runs/{run_id}/preparation_process_launches/{launch_id}.json");
+        let path = checked_path(&self.root, &relative)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        let launch: FmsPreparationProcessLaunch = serde_json::from_slice(&fs::read(&path)?)
+            .with_context(|| format!("parsing preparation process launch {}", path.display()))?;
+        if launch.relative_path()? != relative {
+            anyhow::bail!("preparation process launch identity does not match its path");
+        }
+        Ok(Some(launch))
+    }
+
+    pub fn list_preparation_process_launches(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<FmsPreparationProcessLaunch>> {
+        validate_store_id(run_id)?;
+        let directory = checked_path(
+            &self.root,
+            &format!("runs/{run_id}/preparation_process_launches"),
+        )?;
+        if !directory.exists() {
+            return Ok(Vec::new());
+        }
+        let mut launches = Vec::new();
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            let metadata = entry.file_type()?;
+            if metadata.is_symlink() || !metadata.is_file() {
+                anyhow::bail!(
+                    "unsafe preparation process launch entry `{}`",
+                    entry.path().display()
+                );
+            }
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            let launch_id = file_name
+                .strip_suffix(".json")
+                .context("preparation process launch entry must be JSON")?;
+            validate_store_id(launch_id)?;
+            launches.push(
+                self.read_preparation_process_launch(run_id, launch_id)?
+                    .context("listed preparation process launch disappeared during read")?,
+            );
+        }
+        launches.sort_by(|left, right| left.launch_id.cmp(&right.launch_id));
+        Ok(launches)
+    }
+
     /// Persist immutable proof that a supervised preparation process was
     /// reaped while the exact preparation lease remained active.
     pub fn commit_preparation_process_exit_receipt(
@@ -1311,6 +1442,22 @@ impl SessionStore {
             )?
             .context("preparation process exit receipt requires its durable resource lease")?;
         receipt.validate_for_lease(&lease)?;
+        let launches = self
+            .list_preparation_process_launches(&receipt.run_id)?
+            .into_iter()
+            .filter(|launch| {
+                launch.task_id == receipt.task_id
+                    && launch.preparation_attempt_id == receipt.preparation_attempt_id
+                    && launch.resource_id == receipt.resource_id
+                    && launch.lease_token == receipt.lease_token
+                    && launch.lease_heartbeat_sequence <= receipt.lease_heartbeat_sequence
+            })
+            .collect::<Vec<_>>();
+        if launches.len() != 1 {
+            anyhow::bail!(
+                "preparation process exit receipt requires exactly one matching durable launch"
+            );
+        }
 
         let relative = receipt.relative_path()?;
         let path = checked_path(&self.root, &relative)?;

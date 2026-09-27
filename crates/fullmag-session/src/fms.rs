@@ -29,6 +29,7 @@
 //! │     ├─ preparation_resource_leases/
 //! │     ├─ retry_decisions/
 //! │     ├─ worker_process_exit_receipts/
+//! │     ├─ preparation_process_launches/
 //! │     ├─ preparation_process_exit_receipts/
 //! │     ├─ coordinator_journal/
 //! │     ├─ checkpoints/
@@ -443,6 +444,12 @@ fn plan_run_entries(
             run_id,
             &mut entries,
         )?;
+        plan_preparation_process_launch_entries(
+            store_root,
+            canonical_root,
+            run_id,
+            &mut entries,
+        )?;
         plan_preparation_process_exit_receipt_entries(
             store_root,
             canonical_root,
@@ -712,6 +719,52 @@ fn plan_preparation_process_exit_receipt_entries(
                 .context("preparation process exit receipt is not typed")?;
             if receipt.relative_path()? != archive_path {
                 bail!("preparation process exit receipt path identity mismatch");
+            }
+            entries.push(PackEntry { archive_path, data });
+        }
+    }
+    Ok(())
+}
+
+fn plan_preparation_process_launch_entries(
+    store_root: &Path,
+    canonical_root: &Path,
+    run_id: &str,
+    entries: &mut Vec<PackEntry>,
+) -> Result<()> {
+    let root = store_root
+        .join("runs")
+        .join(run_id)
+        .join("preparation_process_launches");
+    if !store_source_exists(&root)? {
+        return Ok(());
+    }
+    if !root.is_dir() {
+        bail!(
+            "preparation_process_launches path is not a directory: {}",
+            root.display()
+        );
+    }
+    for launch_entry in fs::read_dir(&root)? {
+        let launch_entry = launch_entry?;
+        crate::repository_path::reject_link(&launch_entry.path())?;
+        if !launch_entry.file_type()?.is_file() {
+            bail!("preparation process launch entry is not a file");
+        }
+        let file_name = launch_entry.file_name().to_string_lossy().into_owned();
+        let Some(launch_id) = file_name.strip_suffix(".json") else {
+            bail!("preparation process launch must be JSON: `{file_name}`");
+        };
+        crate::repository_path::validate_store_id(launch_id)?;
+        let archive_path = format!("runs/{run_id}/preparation_process_launches/{file_name}");
+        validate_portable_namespace_path(&archive_path)?;
+        if let Some(data) =
+            read_store_file_if_exists(store_root, canonical_root, &launch_entry.path())?
+        {
+            let launch: crate::FmsPreparationProcessLaunch = serde_json::from_slice(&data)
+                .context("preparation process launch is not typed")?;
+            if launch.relative_path()? != archive_path {
+                bail!("preparation process launch path identity mismatch");
             }
             entries.push(PackEntry { archive_path, data });
         }

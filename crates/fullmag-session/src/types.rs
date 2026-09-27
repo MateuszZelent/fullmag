@@ -1481,6 +1481,93 @@ pub enum WorkerProcessExitReceiptCommitDisposition {
     Replayed,
 }
 
+pub const FMS_PREPARATION_PROCESS_LAUNCH_SCHEMA: &str = "preparation_process_launch.v1";
+
+/// Immutable authorization for exactly one accepted-run preparation process
+/// spawn. Only the first accepted commit permits the supervisor to spawn; a
+/// replay is deliberately ambiguous and must never authorize another child.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsPreparationProcessLaunch {
+    pub schema_version: String,
+    pub launch_id: String,
+    pub run_id: String,
+    pub task_id: String,
+    pub preparation_attempt_id: String,
+    pub resource_id: String,
+    pub lease_token: String,
+    pub lease_heartbeat_sequence: u64,
+    pub supervisor_process_id: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supervisor_start_token: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl FmsPreparationProcessLaunch {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != FMS_PREPARATION_PROCESS_LAUNCH_SCHEMA {
+            bail!(
+                "unsupported preparation process launch schema `{}`",
+                self.schema_version
+            );
+        }
+        for (value, field) in [
+            (self.launch_id.as_str(), "launch_id"),
+            (self.run_id.as_str(), "run_id"),
+            (self.task_id.as_str(), "task_id"),
+            (
+                self.preparation_attempt_id.as_str(),
+                "preparation_attempt_id",
+            ),
+            (self.resource_id.as_str(), "resource_id"),
+            (self.lease_token.as_str(), "lease_token"),
+        ] {
+            crate::repository_path::validate_store_id(value)
+                .with_context(|| format!("invalid preparation process launch {field}"))?;
+        }
+        if self.supervisor_process_id == 0 {
+            bail!("preparation process launch supervisor_process_id must be greater than zero");
+        }
+        if self
+            .supervisor_start_token
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty() || value.len() > 256)
+        {
+            bail!("preparation process launch supervisor_start_token is invalid");
+        }
+        Ok(())
+    }
+
+    pub fn relative_path(&self) -> Result<String> {
+        self.validate()?;
+        Ok(format!(
+            "runs/{}/preparation_process_launches/{}.json",
+            self.run_id, self.launch_id
+        ))
+    }
+
+    pub fn validate_for_lease(&self, lease: &FmsPreparationResourceLease) -> Result<()> {
+        self.validate()?;
+        if lease.state != FmsResourceLeaseState::Active
+            || lease.run_id != self.run_id
+            || lease.task_id != self.task_id
+            || lease.preparation_attempt_id != self.preparation_attempt_id
+            || lease.resource_id != self.resource_id
+            || lease.lease_token != self.lease_token
+            || lease.heartbeat_sequence != self.lease_heartbeat_sequence
+        {
+            bail!("preparation process launch ownership fence does not match the active lease");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreparationProcessLaunchCommitDisposition {
+    Accepted,
+    Replayed,
+}
+
 pub const FMS_PREPARATION_PROCESS_EXIT_RECEIPT_SCHEMA: &str =
     "preparation_process_exit_receipt.v1";
 

@@ -14,7 +14,7 @@ use anyhow::{bail, Context, Result};
 use crate::types::{
     ArtifactIndex, BackendStatePayload, CommonSolverState, FieldRole, FmsArtifactCatalog,
     FmsCheckpoint, FmsCoordinatorJournalDirection, FmsExportProfile, FmsPreparationReceipt,
-    FmsPreparationProcessExitReceipt, FmsPreparationResourceLease,
+    FmsPreparationProcessExitReceipt, FmsPreparationProcessLaunch, FmsPreparationResourceLease,
     FmsPreparationResourcePool, FmsResourceLease, FmsRetryDecision, FmsRunCatalog,
     FmsRunIntent, FmsRunManifest, FmsSchedulerPoolCheckpoint, FmsSchedulerResourcePool,
     FmsSessionManifest, FmsTaskAdmissionRecord, FmsTaskPreparationReceipt,
@@ -498,6 +498,7 @@ impl StoreWalker {
             self.walk_run_task_admissions(&run_entry.path(), &run_id)?;
             self.walk_run_retry_decisions(&run_entry.path(), &run_id)?;
             self.walk_run_worker_process_exit_receipts(&run_entry.path(), &run_id)?;
+            self.walk_run_preparation_process_launches(&run_entry.path(), &run_id)?;
             self.walk_run_preparation_process_exit_receipts(&run_entry.path(), &run_id)?;
             let checkpoint_dir = run_entry.path().join("checkpoints");
             if checkpoint_dir.exists() {
@@ -807,6 +808,45 @@ impl StoreWalker {
             if receipt.relative_path()? != relative {
                 bail!(
                     "preparation process exit receipt `{relative}` contains mismatched path identity"
+                )
+            }
+        }
+        Ok(())
+    }
+
+    fn walk_run_preparation_process_launches(
+        &mut self,
+        run_dir: &Path,
+        run_id: &str,
+    ) -> Result<()> {
+        let directory = run_dir.join("preparation_process_launches");
+        if !directory.exists() {
+            return Ok(());
+        }
+        if !directory.is_dir() {
+            bail!(
+                "run preparation_process_launches path is not a directory: {}",
+                directory.display()
+            )
+        }
+        for entry in read_directory(&directory)? {
+            if entry.file_type()?.is_symlink() || !entry.file_type()?.is_file() {
+                bail!(
+                    "unsafe preparation process launch entry `{}`",
+                    entry.path().display()
+                )
+            }
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            let Some(launch_id) = file_name.strip_suffix(".json") else {
+                bail!("preparation process launch entry must be JSON: `{file_name}`")
+            };
+            validate_component(launch_id)?;
+            let relative = format!("runs/{run_id}/preparation_process_launches/{file_name}");
+            let data = self.read_file(&entry.path(), &relative)?;
+            let launch: FmsPreparationProcessLaunch = parse_json(&data, &relative)?;
+            if launch.relative_path()? != relative {
+                bail!(
+                    "preparation process launch `{relative}` contains mismatched path identity"
                 )
             }
         }
@@ -1550,6 +1590,31 @@ impl<'a> ArchiveWalker<'a> {
             }
         }
 
+        let preparation_launch_marker = "/preparation_process_launches/";
+        let preparation_launch_runs = self
+            .documents
+            .keys()
+            .filter_map(|name| {
+                let rest = name.strip_prefix("runs/")?;
+                let (run_id, _) = rest.split_once(preparation_launch_marker)?;
+                Some(run_id.to_string())
+            })
+            .collect::<HashSet<_>>();
+        for run_id in preparation_launch_runs {
+            validate_component(&run_id)?;
+            let run_manifest_ref = format!("runs/{run_id}/run_manifest.json");
+            if self.documents.contains_key(&run_manifest_ref) {
+                continue;
+            }
+            let prefix = format!("runs/{run_id}/preparation_process_launches/");
+            let names = self.documents.keys().cloned().collect::<Vec<_>>();
+            for name in names {
+                if name.starts_with(&prefix) && name.ends_with(".json") {
+                    self.walk_preparation_process_launch(&name, &run_id)?;
+                }
+            }
+        }
+
         let preparation_exit_marker = "/preparation_process_exit_receipts/";
         let preparation_exit_runs = self
             .documents
@@ -1743,6 +1808,14 @@ impl<'a> ArchiveWalker<'a> {
         for name in preparation_exit_names {
             if name.starts_with(&preparation_exit_prefix) && name.ends_with(".json") {
                 self.walk_preparation_process_exit_receipt(&name, expected_run_id)?;
+            }
+        }
+        let preparation_launch_prefix =
+            format!("runs/{expected_run_id}/preparation_process_launches/");
+        let preparation_launch_names = self.documents.keys().cloned().collect::<Vec<_>>();
+        for name in preparation_launch_names {
+            if name.starts_with(&preparation_launch_prefix) && name.ends_with(".json") {
+                self.walk_preparation_process_launch(&name, expected_run_id)?;
             }
         }
         let journal_prefix = format!("runs/{expected_run_id}/coordinator_journal/");
@@ -2152,6 +2225,36 @@ impl<'a> ArchiveWalker<'a> {
             )
         }
         receipt.validate()?;
+        self.report.file_refs.insert(relative.to_string());
+        Ok(())
+    }
+
+    fn walk_preparation_process_launch(
+        &mut self,
+        relative: &str,
+        expected_run_id: &str,
+    ) -> Result<()> {
+        let Some(data) = self.documents.get(relative) else {
+            return self.report.missing(format!(
+                "archive references missing preparation process launch `{relative}`"
+            ));
+        };
+        let prefix = format!("runs/{expected_run_id}/preparation_process_launches/");
+        let Some(file_name) = relative.strip_prefix(&prefix) else {
+            bail!("invalid preparation process launch path `{relative}`")
+        };
+        let Some(launch_id) = file_name.strip_suffix(".json") else {
+            bail!("preparation process launch path must end in .json: `{relative}`")
+        };
+        if launch_id.is_empty() || launch_id.contains('/') {
+            bail!("invalid preparation process launch path `{relative}`")
+        }
+        validate_component(launch_id)?;
+        let launch: FmsPreparationProcessLaunch = parse_json(data, relative)?;
+        if launch.run_id != expected_run_id || launch.launch_id != launch_id {
+            bail!("preparation process launch `{relative}` contains mismatched path identity")
+        }
+        launch.validate()?;
         self.report.file_refs.insert(relative.to_string());
         Ok(())
     }
