@@ -6,7 +6,7 @@ scheduler, and worker binaries. It submits six immutable RunSpec v2 payloads
 through HTTP, proves atomic public Submit backpressure and replay, proves
 strict immutable priority with a bounded queue window, publishes discovered
 host capacity, executes the highest-priority runs, and requires each exact
-durable resource lease to be released.
+durable resource lease to be released after worker-originated control ACKs.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 
 
@@ -42,7 +43,7 @@ from verify_session_persistence import toolchain_identity  # noqa: E402
 
 
 PROFILE = "windows-project-api-runtime"
-RECEIPT_SCHEMA = "fullmag_resource_discovery_runtime_v3"
+RECEIPT_SCHEMA = "fullmag_resource_discovery_runtime_v4"
 FIXTURE = "tests/fixtures/runtime/resource-discovery-run-v2.json"
 API_BINARY_NAMES = (
     "fullmag-api",
@@ -103,6 +104,7 @@ def contained_paths(layout: dict[str, object], invocation_id: str) -> dict[str, 
         "api_submit_log": run_root / "api-submit.log",
         "publisher_log": run_root / "resource-pool.log",
         "scheduler_log": run_root / "scheduler.log",
+        "scheduler_cancel_log": run_root / "scheduler-cancel.log",
         "api_result_log": run_root / "api-result.log",
     }
 
@@ -204,6 +206,143 @@ def run_json_process(
     return payload
 
 
+def run_worker_cancellation_scenario(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    log_path: Path,
+    base_url: str,
+    project_id: str,
+    run_id: str,
+    task_id: str,
+) -> dict[str, object]:
+    cancel_env = dict(env)
+    cancel_env["FULLMAG_ENABLE_TEST_HOOKS"] = "1"
+    cancel_env["FULLMAG_TEST_ACCEPTED_WORKER_AFTER_STARTED_DELAY_MS"] = "30000"
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=cancel_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    stdout = ""
+    stderr = ""
+    try:
+        deadline = time.monotonic() + 30.0
+        observed = None
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                break
+            _, observed = json_request(
+                f"{base_url}/v2/persistence/projects/{project_id}/runs/{run_id}"
+            )
+            tasks = observed.get("tasks", []) if isinstance(observed, dict) else []
+            lifecycle = tasks[0].get("lifecycle") if len(tasks) == 1 else None
+            if lifecycle == "running":
+                break
+            if lifecycle in {"succeeded", "failed", "cancelled", "interrupted"}:
+                raise ResourceDiscoveryRuntimeError(
+                    f"cancellation worker became terminal before Stop: {lifecycle}"
+                )
+            time.sleep(0.05)
+        else:
+            raise ResourceDiscoveryRuntimeError(
+                "cancellation worker did not publish Started before the deadline"
+            )
+        if process.poll() is not None:
+            raise ResourceDiscoveryRuntimeError(
+                "cancellation scheduler exited before the worker published Started"
+            )
+        cancellation_url = (
+            f"{base_url}/v2/persistence/projects/{project_id}/runs/{run_id}"
+            f"/tasks/{task_id}/cancellation"
+        )
+        cancellation_deadline = time.monotonic() + 20.0
+        while True:
+            cancellation_status, cancellation = json_request(
+                cancellation_url,
+                method="POST",
+                payload={"reason": "managed worker Stop acknowledgement proof"},
+                expected_error=409,
+            )
+            if cancellation_status in {200, 202}:
+                break
+            if (
+                cancellation_status != 409
+                or not isinstance(cancellation, dict)
+                or cancellation.get("code") != "run_store_busy"
+                or time.monotonic() >= cancellation_deadline
+            ):
+                raise ResourceDiscoveryRuntimeError(
+                    "public cancellation hit a non-retryable storage conflict: "
+                    f"status={cancellation_status} body={cancellation}"
+                )
+            time.sleep(0.02)
+        if (
+            cancellation_status not in {200, 202}
+            or not isinstance(cancellation, dict)
+            or cancellation.get("disposition") not in {"accepted", "replayed"}
+            or cancellation.get("lifecycle") != "stopping"
+        ):
+            raise ResourceDiscoveryRuntimeError(
+                "public cancellation did not durably accept the Stop command"
+            )
+        stdout, stderr = process.communicate(timeout=60)
+        if process.returncode != 0:
+            raise ResourceDiscoveryRuntimeError(
+                f"cancellation scheduler failed with code {process.returncode}"
+            )
+        try:
+            scheduler = json.loads(stdout)
+        except json.JSONDecodeError as error:
+            raise ResourceDiscoveryRuntimeError(
+                "cancellation scheduler did not emit one JSON result"
+            ) from error
+        executed = scheduler.get("executed", []) if isinstance(scheduler, dict) else []
+        if (
+            scheduler.get("status") != "completed"
+            or scheduler.get("scheduled_count") != 1
+            or len(executed) != 1
+            or executed[0].get("run_id") != run_id
+            or executed[0].get("worker_cancelled") is not True
+            or executed[0].get("worker", {}).get("status") != "cancelled"
+        ):
+            raise ResourceDiscoveryRuntimeError(
+                "scheduler did not report one worker-acknowledged cancellation"
+            )
+        return {
+            "request": cancellation,
+            "scheduler": scheduler,
+        }
+    finally:
+        if process.poll() is None:
+            try:
+                process.terminate()
+                tail_out, tail_err = process.communicate(timeout=5)
+                stdout += tail_out
+                stderr += tail_err
+            except subprocess.TimeoutExpired:
+                process.kill()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    stderr += "\ncleanup could not reap cancellation scheduler"
+                if process.stdout is not None:
+                    process.stdout.close()
+                if process.stderr is not None:
+                    process.stderr.close()
+            except OSError as cleanup_error:
+                stderr += f"\ncancellation scheduler cleanup failed: {cleanup_error}"
+        log_path.write_text(
+            f"$ {' '.join(command)}\nexit_code={process.returncode}\n"
+            f"--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+            encoding="utf-8",
+        )
+
+
 def start_api(
     binary: Path,
     repo_root: Path,
@@ -262,6 +401,180 @@ def durable_leases(store_root: Path, run_id: str) -> list[dict[str, object]]:
     return leases
 
 
+def worker_control_evidence(
+    store_root: Path,
+    run_id: str,
+    lease: dict[str, object],
+    *,
+    expected_terminal: str = "completed",
+) -> dict[str, object]:
+    run_root = store_root / "runs" / run_id
+    journal_root = run_root / "coordinator_journal"
+    entries = []
+    for direction in ("command", "event"):
+        direction_root = journal_root / direction
+        if not direction_root.is_dir():
+            raise ResourceDiscoveryRuntimeError(
+                f"worker control journal has no {direction} stream for {run_id}"
+            )
+        for path in sorted(direction_root.glob("*.json")):
+            entry = json.loads(path.read_text(encoding="utf-8"))
+            message = entry.get("payload", {}).get("message", {})
+            envelope = message.get("envelope", {})
+            checkpoint = entry.get("payload", {}).get("checkpoint", {})
+            if (
+                entry.get("direction") != direction
+                or message.get("direction") != direction
+                or envelope.get("schema_version") != "worker_protocol.v3"
+                or entry.get("run_id") != run_id
+                or entry.get("attempt_id") != lease.get("attempt_id")
+                or entry.get("lease_token") != lease.get("lease_token")
+                or envelope.get("sequence") != entry.get("sequence")
+            ):
+                raise ResourceDiscoveryRuntimeError(
+                    f"worker control journal identity mismatch for {run_id}"
+                )
+            entries.append(
+                {
+                    "direction": direction,
+                    "sequence": int(entry["sequence"]),
+                    "checkpoint": (
+                        int(checkpoint.get("command_sequence", -1)),
+                        int(checkpoint.get("event_sequence", -1)),
+                    ),
+                    "payload": envelope.get(direction, {}),
+                }
+            )
+    entries.sort(key=lambda entry: sum(entry["checkpoint"]))
+    watermark = (0, 0)
+    for entry in entries:
+        expected = (
+            (watermark[0] + 1, watermark[1])
+            if entry["direction"] == "command"
+            else (watermark[0], watermark[1] + 1)
+        )
+        if entry["checkpoint"] != expected or entry["sequence"] != expected[
+            0 if entry["direction"] == "command" else 1
+        ]:
+            raise ResourceDiscoveryRuntimeError(
+                f"worker control journal is not one atomic combined prefix for {run_id}"
+            )
+        watermark = expected
+
+    commands = sorted(
+        (entry for entry in entries if entry["direction"] == "command"),
+        key=lambda entry: entry["sequence"],
+    )
+    events = sorted(
+        (entry for entry in entries if entry["direction"] == "event"),
+        key=lambda entry: entry["sequence"],
+    )
+    heartbeat_sequences = [
+        int(entry["payload"]["lease_heartbeat_sequence"])
+        for entry in commands
+        if entry["payload"].get("kind") == "heartbeat"
+    ]
+    acknowledged_sequences = [
+        int(entry["payload"]["lease_heartbeat_sequence"])
+        for entry in events
+        if entry["payload"].get("kind") == "heartbeat_ack"
+    ]
+    event_kinds = [str(entry["payload"].get("kind")) for entry in events]
+    command_kinds = [str(entry["payload"].get("kind")) for entry in commands]
+    if heartbeat_sequences != acknowledged_sequences or (
+        expected_terminal == "completed" and not heartbeat_sequences
+    ):
+        raise ResourceDiscoveryRuntimeError(
+            f"worker heartbeat commands do not have exact worker ACKs for {run_id}"
+        )
+    if expected_terminal == "completed":
+        if (
+            event_kinds.count("completing") != 1
+            or event_kinds.count("completed") != 1
+            or event_kinds.index("completing") >= event_kinds.index("completed")
+            or "stop" in command_kinds
+            or "stopped" in event_kinds
+        ):
+            raise ResourceDiscoveryRuntimeError(
+                f"worker completion quiescence barrier is missing or misordered for {run_id}"
+            )
+    elif expected_terminal == "stopped":
+        if (
+            command_kinds.count("stop") != 1
+            or event_kinds.count("stopped") != 1
+            or "completing" in event_kinds
+            or "completed" in event_kinds
+        ):
+            raise ResourceDiscoveryRuntimeError(
+                f"worker Stop command does not have one worker Stopped event for {run_id}"
+            )
+    else:
+        raise ResourceDiscoveryRuntimeError(
+            f"unsupported worker control terminal expectation: {expected_terminal}"
+        )
+    if lease.get("heartbeat_sequence") != acknowledged_sequences[-1]:
+        raise ResourceDiscoveryRuntimeError(
+            f"released lease does not carry the final worker ACK for {run_id}"
+        )
+
+    inbox_paths = sorted((run_root / "worker_inbox").glob("*.json"))
+    if len(inbox_paths) != 1:
+        raise ResourceDiscoveryRuntimeError(
+            f"worker control proof requires one durable inbox for {run_id}"
+        )
+    inbox = json.loads(inbox_paths[0].read_text(encoding="utf-8")).get("payload", {})
+    applied_heartbeats = [
+        int(envelope["command"]["lease_heartbeat_sequence"])
+        for envelope in inbox.get("applied", [])
+        if envelope.get("command", {}).get("kind") == "heartbeat"
+    ]
+    if inbox.get("pending") is not None or applied_heartbeats != heartbeat_sequences:
+        raise ResourceDiscoveryRuntimeError(
+            f"durable worker inbox did not apply every heartbeat for {run_id}"
+        )
+    applied_kinds = [
+        str(envelope.get("command", {}).get("kind"))
+        for envelope in inbox.get("applied", [])
+    ]
+    if expected_terminal == "stopped" and applied_kinds.count("stop") != 1:
+        raise ResourceDiscoveryRuntimeError(
+            f"durable worker inbox did not apply the Stop command for {run_id}"
+        )
+    process_exit_paths = sorted((run_root / "worker_process_exit_receipts").glob("*.json"))
+    if len(process_exit_paths) != 1:
+        raise ResourceDiscoveryRuntimeError(
+            f"worker control proof requires one process-exit receipt for {run_id}"
+        )
+    process_exit = json.loads(process_exit_paths[0].read_text(encoding="utf-8"))
+    expected_stop_requested = expected_terminal == "stopped"
+    if (
+        process_exit.get("status_success") is not True
+        or process_exit.get("stop_requested") is not expected_stop_requested
+    ):
+        raise ResourceDiscoveryRuntimeError(
+            f"worker process-exit receipt does not match {expected_terminal} for {run_id}"
+        )
+    return {
+        "protocol_schema": "worker_protocol.v3",
+        "combined_checkpoint": {
+            "command_sequence": watermark[0],
+            "event_sequence": watermark[1],
+        },
+        "heartbeat_sequences": heartbeat_sequences,
+        "acknowledged_sequences": acknowledged_sequences,
+        "event_kinds": event_kinds,
+        "command_kinds": command_kinds,
+        "inbox_pending": False,
+        "process_exit": {
+            "status_success": process_exit["status_success"],
+            "stop_requested": process_exit["stop_requested"],
+            "timed_out": process_exit["timed_out"],
+        },
+        "lease_heartbeat_sequence": lease["heartbeat_sequence"],
+        "lease_state": lease["state"],
+    }
+
+
 def run(repo_root: Path) -> tuple[int, dict[str, object]]:
     if os.name != "nt":
         raise ResourceDiscoveryRuntimeError("managed resource discovery runtime is Windows-only")
@@ -289,6 +602,7 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
                 "local CPU/RAM/storage and optional NVIDIA GPU discovery",
                 "durable resource-pool publication and scheduler admission",
                 "production accepted worker process and exact lease release",
+                "worker-originated HeartbeatAck and completion quiescence barrier",
             ],
         }
         write_atomic_json(paths["receipt"], receipt)
@@ -573,9 +887,10 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
             receipt["scheduler"] = scheduler
 
             leases_by_run = {}
+            worker_control_by_run = {}
             for _, executed_run_id, _, _ in requests[:4]:
                 leases = durable_leases(store_root, executed_run_id)
-                if any(
+                if len(leases) != 1 or any(
                     lease.get("state") != "released"
                     or lease.get("released_at") is None
                     or lease.get("resource_id") != cpu_offer["resource_id"]
@@ -585,7 +900,11 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
                         "an exact discovered resource lease was not durably released"
                     )
                 leases_by_run[executed_run_id] = leases
+                worker_control_by_run[executed_run_id] = worker_control_evidence(
+                    store_root, executed_run_id, leases[0]
+                )
             receipt["resource_leases"] = leases_by_run
+            receipt["worker_control"] = worker_control_by_run
 
             api_process, api_log, result_url = start_api(
                 binaries["fullmag-api"], repo_root, env, paths["api_result_log"]
@@ -607,6 +926,78 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
                 )
             receipt["submit"]["backpressure"]["after_terminal_status"] = released_status
             receipt["submit"]["backpressure"]["after_terminal"] = released_body
+
+            materialization_status, materialization = json_request(
+                f"{result_url}/v2/persistence/projects/{project_id}/runs/{overload[1]}"
+                "/materialization",
+                method="POST",
+            )
+            task_ids = (
+                materialization.get("task_ids", [])
+                if isinstance(materialization, dict)
+                else []
+            )
+            if materialization_status != 200 or len(task_ids) != 1:
+                raise ResourceDiscoveryRuntimeError(
+                    "cancellation proof run did not materialize exactly one task"
+                )
+            cancellation_scheduler_command = [
+                str(binaries["fullmag-api-accepted-scheduler"]),
+                "--store-root", str(store_root),
+                "--discover-runs", "true",
+                "--pool-id", pool_id,
+                "--resident", "true",
+                "--discover-resources", "true",
+                "--worker-executable", str(binaries["fullmag-api-accepted-worker"]),
+                "--max-concurrency", "1",
+                "--max-queued-runs", "2",
+                "--max-tasks", "1",
+                "--max-idle-polls", "0",
+                "--idle-poll-milliseconds", "20",
+                "--worker-timeout-seconds", "60",
+                "--heartbeat-interval-milliseconds", "250",
+                "--max-automatic-retries", "0",
+            ]
+            cancellation = run_worker_cancellation_scenario(
+                cancellation_scheduler_command,
+                cwd=repo_root,
+                env=env,
+                log_path=paths["scheduler_cancel_log"],
+                base_url=result_url,
+                project_id=project_id,
+                run_id=overload[1],
+                task_id=str(task_ids[0]),
+            )
+            cancellation_leases = durable_leases(store_root, overload[1])
+            if (
+                len(cancellation_leases) != 1
+                or cancellation_leases[0].get("state") != "released"
+                or cancellation_leases[0].get("released_at") is None
+            ):
+                raise ResourceDiscoveryRuntimeError(
+                    "worker cancellation did not release its exact resource lease"
+                )
+            cancellation["worker_control"] = worker_control_evidence(
+                store_root,
+                overload[1],
+                cancellation_leases[0],
+                expected_terminal="stopped",
+            )
+            cancellation["resource_leases"] = cancellation_leases
+            _, cancelled_run = json_request(
+                f"{result_url}/v2/persistence/projects/{project_id}/runs/{overload[1]}"
+            )
+            cancelled_tasks = cancelled_run.get("tasks", [])
+            if (
+                len(cancelled_tasks) != 1
+                or cancelled_tasks[0].get("lifecycle") != "cancelled"
+            ):
+                raise ResourceDiscoveryRuntimeError(
+                    "public run projection did not expose worker-acknowledged cancellation"
+                )
+            cancellation["run"] = cancelled_run
+            receipt["cancellation"] = cancellation
+
             after_scheduler = {}
             for label, expected_run_id, priority, _ in requests:
                 _, after = json_request(

@@ -1,10 +1,10 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use fullmag_application::DecodedStudyArtifact;
 use fullmag_authoring::{
     StudyAcceptancePolicy, StudyInputPort, StudyInputSource, StudyOutputPort, StudyPortDataKind,
 };
 use fullmag_ir::ExecutionPlanIR;
-use fullmag_runner::{RunResult, RunStatus};
+use fullmag_runner::{RunResult, RunStatus, StepAction};
 use fullmag_runtime_control::{AcceptedWorkerStep, StudyOutputPayload};
 use fullmag_session::SessionStore;
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const RUNNER_INITIAL_STATE_FILE: &str = "m_initial.json";
@@ -26,6 +29,22 @@ pub(crate) struct AcceptedRunnerExecution {
     pub(crate) outputs: Vec<StudyOutputPayload>,
     pub(crate) attempt_output_dir: PathBuf,
     pub(crate) recovered_from_receipt: bool,
+}
+
+pub(crate) enum AcceptedWorkerProcessOutcome {
+    Completed(AcceptedWorkerProcessResult),
+    Stopped { acknowledged_heartbeat_count: usize },
+}
+
+struct WorkerControlLoop {
+    interrupt_requested: Arc<AtomicBool>,
+    execution_finished: Arc<AtomicBool>,
+    handle: JoinHandle<Result<WorkerControlLoopResult>>,
+}
+
+struct WorkerControlLoopResult {
+    stop_received: bool,
+    acknowledged_heartbeat_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -576,6 +595,7 @@ pub(crate) fn execute_accepted_worker_start(
     start: &fullmag_application::WorkerCommandEnvelope,
     accepted_step: &AcceptedWorkerStep,
     case_id: &str,
+    interrupt_requested: Option<&AtomicBool>,
 ) -> Result<AcceptedRunnerExecution> {
     if !matches!(&start.command, fullmag_application::WorkerCommand::Start) {
         bail!("accepted runner execution requires a durable Start command");
@@ -590,7 +610,12 @@ pub(crate) fn execute_accepted_worker_start(
     })
     .context("load durable worker inbox before accepted Start execution")?
     .checkpoint();
-    if inbox_checkpoint.pending.as_ref() != Some(start)
+    let start_is_pending = inbox_checkpoint.pending.as_ref() == Some(start);
+    let start_is_applied = inbox_checkpoint
+        .applied
+        .iter()
+        .any(|command| command == start);
+    if (!start_is_pending && !start_is_applied)
         || inbox_checkpoint
             .applied
             .iter()
@@ -603,7 +628,7 @@ pub(crate) fn execute_accepted_worker_start(
             .count()
             != 1
     {
-        bail!("accepted Start is not the pending command after one durable Prepare");
+        bail!("accepted Start is not the durable command after one applied Prepare");
     }
     let current_claim = retry_store_writer_busy(|| {
         fullmag_runtime_control::load_current_task_claim(
@@ -753,14 +778,30 @@ pub(crate) fn execute_accepted_worker_start(
         "runtime_selection".into(),
         serde_json::json!({"device": "cpu", "precision": "double"}),
     );
-    let result = fullmag_runner::run_planned_problem(
-        &problem,
-        &execution_plan,
-        until_seconds,
-        &attempt_output_dir,
-    )
-    .map_err(|error| anyhow::anyhow!(error.to_string()))
-    .context("execute accepted FDM CPU runner plan")?;
+    let display_selection = fullmag_runner::DisplaySelectionState::default;
+    let result =
+        fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot(
+            &problem,
+            &execution_plan,
+            until_seconds,
+            &attempt_output_dir,
+            u64::MAX,
+            &display_selection,
+            interrupt_requested,
+            false,
+            |_| StepAction::Continue,
+        )
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+        .context("execute accepted FDM CPU runner plan")?;
+    if result.status == RunStatus::Cancelled {
+        return Ok(AcceptedRunnerExecution {
+            status: result.status,
+            completed_step_count: result.steps.len(),
+            outputs: Vec::new(),
+            attempt_output_dir,
+            recovered_from_receipt: false,
+        });
+    }
     if result.status != RunStatus::Completed {
         bail!("accepted FDM CPU runner did not complete successfully");
     }
@@ -807,7 +848,7 @@ pub(crate) fn run_pending_accepted_start(
     store: &SessionStore,
     run_id: &str,
     task_id: &str,
-) -> Result<AcceptedWorkerProcessResult> {
+) -> Result<AcceptedWorkerProcessOutcome> {
     fullmag_session::repository_path::validate_store_id(run_id)
         .context("accepted worker run id is invalid")?;
     fullmag_session::repository_path::validate_store_id(task_id)
@@ -850,13 +891,11 @@ pub(crate) fn run_pending_accepted_start(
         bail!("worker process requires exactly one durable Start for its claim");
     }
     let start = starts[0].clone();
-    if recovered.commands.last() != Some(&start) {
-        bail!("worker process refuses a Start superseded by another command");
-    }
     if !matches!(
         recovered.coordinator.phase(),
         fullmag_application::CoordinatorPhase::Preparing
             | fullmag_application::CoordinatorPhase::Running
+            | fullmag_application::CoordinatorPhase::Stopping
     ) {
         bail!("worker process cannot execute Start in the recovered coordinator phase");
     }
@@ -898,15 +937,12 @@ pub(crate) fn run_pending_accepted_start(
         if pending != &start {
             bail!("worker inbox has another pending command and requires reconciliation");
         }
-        let completed =
-            apply_accepted_start_effect(store, &specification, &accepted, &claim, &start)?;
         inbox
             .confirm_applied(&start)
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        return Ok(completed);
+        return apply_accepted_start_effect(store, &specification, &accepted, &claim, &start);
     }
 
-    let mut completed = None;
     let disposition = inbox
         .receive(&start, |envelope| {
             if envelope != &start {
@@ -927,19 +963,13 @@ pub(crate) fn run_pending_accepted_start(
             if !claim.is_same_or_renewed_by(&current_claim) {
                 return Err(fullmag_application::ExecutionError::ProtocolFenceRejected);
             }
-            completed = Some(
-                apply_accepted_start_effect(store, &specification, &accepted, &claim, envelope)
-                    .map_err(|error| {
-                        fullmag_application::ExecutionError::Invalid(format!("{error:#}"))
-                    })?,
-            );
             Ok(())
         })
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     if disposition != fullmag_application::ProtocolDisposition::Accepted {
         bail!("worker process Start was already consumed; no solver was launched");
     }
-    completed.context("worker process accepted Start without a completed execution result")
+    apply_accepted_start_effect(store, &specification, &accepted, &claim, &start)
 }
 
 fn apply_accepted_start_effect(
@@ -948,7 +978,7 @@ fn apply_accepted_start_effect(
     accepted: &fullmag_runtime_control::AcceptedStudySnapshot,
     claim: &fullmag_application::TaskClaim,
     start: &fullmag_application::WorkerCommandEnvelope,
-) -> Result<AcceptedWorkerProcessResult> {
+) -> Result<AcceptedWorkerProcessOutcome> {
     let accepted_step = retry_store_writer_busy(|| {
         fullmag_runtime_control::load_accepted_worker_step_for_start(
             store,
@@ -976,7 +1006,8 @@ fn apply_accepted_start_effect(
         _ => bail!("accepted Start is no longer runnable"),
     }
 
-    accepted_worker_test_delay_after_started()?;
+    let control = WorkerControlLoop::start(store.root(), claim.clone())?;
+    accepted_worker_test_delay_after_started(&control.interrupt_requested)?;
 
     let execution = execute_accepted_worker_start(
         store,
@@ -984,8 +1015,13 @@ fn apply_accepted_start_effect(
         start,
         &accepted_step,
         "default",
+        Some(&control.interrupt_requested),
     )
     .context("execute accepted worker Start")?;
+    if execution.status == RunStatus::Cancelled {
+        let control_result = finish_worker_control(store, claim, control)?;
+        return publish_worker_stopped(store, claim, control_result);
+    }
     let receipt_store = retry_store_writer_busy(|| {
         SessionStore::open_existing(store.root().to_path_buf())
             .context("reopen worker receipt store")
@@ -996,10 +1032,57 @@ fn apply_accepted_start_effect(
         start,
         &accepted_step,
         "default",
+        None,
     )
     .context("recover completed worker receipt before publication")?;
     if !durable_execution.recovered_from_receipt || durable_execution.outputs != execution.outputs {
         bail!("worker receipt recovery differs from the completed runner output");
+    }
+    if control.interrupt_requested.load(Ordering::Acquire) {
+        let control_result = finish_worker_control(store, claim, control)?;
+        return publish_worker_stopped(store, claim, control_result);
+    }
+    loop {
+        let recovered_before_completing = retry_store_writer_busy(|| {
+            fullmag_runtime_control::recover_coordinator(store, claim)
+        })
+        .context("recover worker coordinator before completion barrier")?;
+        match recovered_before_completing.coordinator.phase() {
+            fullmag_application::CoordinatorPhase::Stopping => {
+                let control_result = finish_worker_control(store, claim, control)?;
+                return publish_worker_stopped(store, claim, control_result);
+            }
+            fullmag_application::CoordinatorPhase::Running => {
+                let mut coordinator = fullmag_application::DurableWorkerCoordinator::new(
+                    recovered_before_completing.coordinator,
+                );
+                match commit_worker_event(
+                    store,
+                    &mut coordinator,
+                    fullmag_application::WorkerEvent::Completing,
+                ) {
+                    Ok(()) => break,
+                    Err(error) => {
+                        let raced = retry_store_writer_busy(|| {
+                            fullmag_runtime_control::recover_coordinator(store, claim)
+                        })
+                        .context("recover worker completion barrier race")?;
+                        if raced.coordinator.phase()
+                            == fullmag_application::CoordinatorPhase::Stopping
+                        {
+                            let control_result = finish_worker_control(store, claim, control)?;
+                            return publish_worker_stopped(store, claim, control_result);
+                        }
+                        return Err(error).context("persist worker Completing event");
+                    }
+                }
+            }
+            _ => bail!("accepted worker completion barrier requires a running coordinator"),
+        }
+    }
+    let control_result = finish_worker_control(store, claim, control)?;
+    if control_result.stop_received {
+        return publish_worker_stopped(store, claim, control_result);
     }
     let published = retry_store_writer_busy(|| {
         fullmag_runtime_control::publish_study_outputs(
@@ -1013,6 +1096,11 @@ fn apply_accepted_start_effect(
     .context("publish accepted worker outputs")?;
     fullmag_runtime_control::validate_study_task_completion(store, claim)
         .context("validate accepted worker completion barrier")?;
+    let recovered_before_completion =
+        retry_store_writer_busy(|| fullmag_runtime_control::recover_coordinator(store, claim))
+            .context("recover worker coordinator before completion publication")?;
+    let mut coordinator =
+        fullmag_application::DurableWorkerCoordinator::new(recovered_before_completion.coordinator);
     match coordinator.phase() {
         fullmag_application::CoordinatorPhase::Running => {
             commit_worker_event(
@@ -1031,11 +1119,208 @@ fn apply_accepted_start_effect(
             ) => {}
         _ => bail!("accepted worker completion requires a running or succeeded coordinator"),
     }
-    Ok(AcceptedWorkerProcessResult {
-        execution,
-        output_catalog: published,
-        receipt_recovered_before_publication: true,
+    Ok(AcceptedWorkerProcessOutcome::Completed(
+        AcceptedWorkerProcessResult {
+            execution,
+            output_catalog: published,
+            receipt_recovered_before_publication: true,
+        },
+    ))
+}
+
+fn finish_worker_control(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+    control: WorkerControlLoop,
+) -> Result<WorkerControlLoopResult> {
+    let mut result = control.finish()?;
+    let final_interrupt = AtomicBool::new(false);
+    let final_result = consume_worker_control_commands(store, claim, &final_interrupt)?;
+    result.stop_received |= final_result.stop_received;
+    result.acknowledged_heartbeat_count += final_result.acknowledged_heartbeat_count;
+    Ok(result)
+}
+
+fn publish_worker_stopped(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+    control_result: WorkerControlLoopResult,
+) -> Result<AcceptedWorkerProcessOutcome> {
+    if !control_result.stop_received {
+        bail!("runner cancellation requires an applied durable worker Stop command");
+    }
+    let recovered =
+        retry_store_writer_busy(|| fullmag_runtime_control::recover_coordinator(store, claim))
+            .context("recover worker coordinator before Stopped acknowledgement")?;
+    let mut coordinator = fullmag_application::DurableWorkerCoordinator::new(recovered.coordinator);
+    match coordinator.phase() {
+        fullmag_application::CoordinatorPhase::Stopping => {
+            commit_worker_event(
+                store,
+                &mut coordinator,
+                fullmag_application::WorkerEvent::Stopped,
+            )
+            .context("persist worker-originated Stopped event")?;
+        }
+        fullmag_application::CoordinatorPhase::Terminal
+            if matches!(
+                coordinator.checkpoint().task.lifecycle,
+                fullmag_application::TaskLifecycle::Cancelled
+            ) => {}
+        _ => bail!("worker Stopped acknowledgement requires a durable Stop command"),
+    }
+    Ok(AcceptedWorkerProcessOutcome::Stopped {
+        acknowledged_heartbeat_count: control_result.acknowledged_heartbeat_count,
     })
+}
+
+impl WorkerControlLoop {
+    fn start(store_root: &Path, claim: fullmag_application::TaskClaim) -> Result<Self> {
+        let interrupt_requested = Arc::new(AtomicBool::new(false));
+        let execution_finished = Arc::new(AtomicBool::new(false));
+        let thread_interrupt = Arc::clone(&interrupt_requested);
+        let thread_finished = Arc::clone(&execution_finished);
+        let store_root = store_root.to_path_buf();
+        let handle = std::thread::Builder::new()
+            .name("fullmag-accepted-worker-control".into())
+            .spawn(move || {
+                let store = SessionStore::open_existing(store_root)
+                    .context("open session store for worker control loop")?;
+                let mut acknowledged_heartbeat_count = 0_usize;
+                loop {
+                    let consumed =
+                        consume_worker_control_commands(&store, &claim, &thread_interrupt)?;
+                    acknowledged_heartbeat_count += consumed.acknowledged_heartbeat_count;
+                    if consumed.stop_received {
+                        return Ok(WorkerControlLoopResult {
+                            stop_received: true,
+                            acknowledged_heartbeat_count,
+                        });
+                    }
+                    if thread_finished.load(Ordering::Acquire) {
+                        return Ok(WorkerControlLoopResult {
+                            stop_received: false,
+                            acknowledged_heartbeat_count,
+                        });
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            })
+            .context("spawn accepted worker control loop")?;
+        Ok(Self {
+            interrupt_requested,
+            execution_finished,
+            handle,
+        })
+    }
+
+    fn finish(self) -> Result<WorkerControlLoopResult> {
+        self.execution_finished.store(true, Ordering::Release);
+        self.handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("accepted worker control loop panicked"))?
+    }
+}
+
+fn consume_worker_control_commands(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+    interrupt_requested: &AtomicBool,
+) -> Result<WorkerControlLoopResult> {
+    let store_root = store.root().to_path_buf();
+    let mut inbox = retry_store_writer_busy(|| {
+        let worker_store = SessionStore::open_existing(store_root.clone())
+            .context("open durable worker inbox store for control command")?;
+        fullmag_runtime_control::DurableWorkerInbox::recover(worker_store, claim.clone())
+    })
+    .context("recover durable worker inbox for control command")?;
+    let mut acknowledged_heartbeat_count = 0_usize;
+    loop {
+        let checkpoint = inbox.checkpoint();
+        if checkpoint.pending.is_some() {
+            bail!("worker control inbox has an uncertain pending command");
+        }
+        let catalog = store
+            .read_run_catalog(claim.run_id.as_str())?
+            .context("worker control command requires its run catalog")?;
+        let task = catalog
+            .tasks
+            .iter()
+            .find(|task| task.task_id == claim.task_id.as_str())
+            .context("worker control command task is missing from its run catalog")?;
+        let durable_command_count = task
+            .coordinator_watermark
+            .as_ref()
+            .map_or(0, |watermark| watermark.command_sequence);
+        if durable_command_count <= checkpoint.applied.len() as u64 {
+            return Ok(WorkerControlLoopResult {
+                stop_received: false,
+                acknowledged_heartbeat_count,
+            });
+        }
+        let recovered =
+            retry_store_writer_busy(|| fullmag_runtime_control::recover_coordinator(store, claim))
+                .context("recover coordinator for worker control command")?;
+        let Some(command) = recovered.commands.get(checkpoint.applied.len()).cloned() else {
+            return Ok(WorkerControlLoopResult {
+                stop_received: false,
+                acknowledged_heartbeat_count,
+            });
+        };
+        match &command.command {
+            fullmag_application::WorkerCommand::Heartbeat {
+                lease_heartbeat_sequence,
+            } => {
+                inbox
+                    .receive(&command, |_| Ok(()))
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                let recovered_after_apply = retry_store_writer_busy(|| {
+                    fullmag_runtime_control::recover_coordinator(store, claim)
+                })
+                .context("recover coordinator before worker HeartbeatAck")?;
+                if !recovered_after_apply.events.iter().any(|event| {
+                    matches!(
+                        &event.event,
+                        fullmag_application::WorkerEvent::HeartbeatAck {
+                            lease_heartbeat_sequence: acknowledged
+                        } if acknowledged == lease_heartbeat_sequence
+                    )
+                }) {
+                    let mut coordinator = fullmag_application::DurableWorkerCoordinator::new(
+                        recovered_after_apply.coordinator,
+                    );
+                    commit_worker_event(
+                        store,
+                        &mut coordinator,
+                        fullmag_application::WorkerEvent::HeartbeatAck {
+                            lease_heartbeat_sequence: *lease_heartbeat_sequence,
+                        },
+                    )
+                    .context("persist worker-originated HeartbeatAck")?;
+                }
+                acknowledged_heartbeat_count += 1;
+            }
+            fullmag_application::WorkerCommand::Stop { .. } => {
+                inbox
+                    .receive(&command, |_| {
+                        interrupt_requested.store(true, Ordering::Release);
+                        Ok(())
+                    })
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                return Ok(WorkerControlLoopResult {
+                    stop_received: true,
+                    acknowledged_heartbeat_count,
+                });
+            }
+            fullmag_application::WorkerCommand::Prepare { .. }
+            | fullmag_application::WorkerCommand::Start => {
+                bail!("worker control loop found an unapplied startup command")
+            }
+            fullmag_application::WorkerCommand::Release => {
+                bail!("worker control loop received Release before terminal process exit")
+            }
+        }
+    }
 }
 
 fn accepted_worker_test_fail_before_start_effect() -> Result<()> {
@@ -1051,7 +1336,7 @@ fn retry_store_writer_busy<T>(mut operation: impl FnMut() -> Result<T>) -> Resul
     fullmag_runtime_control::retry_store_writer_busy(&mut operation)
 }
 
-fn accepted_worker_test_delay_after_started() -> Result<()> {
+fn accepted_worker_test_delay_after_started(interrupt_requested: &AtomicBool) -> Result<()> {
     if std::env::var("FULLMAG_ENABLE_TEST_HOOKS").as_deref() != Ok("1") {
         return Ok(());
     }
@@ -1067,7 +1352,10 @@ fn accepted_worker_test_delay_after_started() -> Result<()> {
     if milliseconds == 0 || milliseconds > 30_000 {
         bail!("accepted worker test delay must be within 1..=30000 milliseconds");
     }
-    std::thread::sleep(std::time::Duration::from_millis(milliseconds));
+    let deadline = Instant::now() + Duration::from_millis(milliseconds);
+    while Instant::now() < deadline && !interrupt_requested.load(Ordering::Acquire) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
     Ok(())
 }
 
@@ -1076,38 +1364,65 @@ fn commit_worker_event(
     coordinator: &mut fullmag_application::DurableWorkerCoordinator,
     event: fullmag_application::WorkerEvent,
 ) -> Result<()> {
-    let checkpoint = coordinator.checkpoint();
-    let sequence = checkpoint
-        .event_sequence
-        .checked_add(1)
-        .context("worker event sequence exhausted")?;
-    let envelope = fullmag_application::WorkerEventEnvelope {
-        schema_version: fullmag_application::WORKER_PROTOCOL_SCHEMA.into(),
-        message_id: uuid::Uuid::new_v4().simple().to_string(),
-        sequence,
-        claim: checkpoint.claim.identity(),
-        event,
-    };
-    let expected = envelope.clone();
-    let mut publication_error = None;
-    let result = coordinator.commit_event(envelope, |transition| {
-        fullmag_runtime_control::commit_transition(store, transition)
-            .map(|_| ())
-            .map_err(|error| {
-                publication_error = Some(error);
-                fullmag_application::CoordinatorError::Invalid(
-                    "durable worker event publication failed".into(),
-                )
-            })
-    });
-    match (result, publication_error) {
-        (Ok(_), None) => Ok(()),
-        (_, Some(error)) if is_store_writer_busy(&error) => {
-            retry_pending_worker_event(store, coordinator, &expected)
+    for _ in 0..8 {
+        let checkpoint = coordinator.checkpoint();
+        let sequence = checkpoint
+            .event_sequence
+            .checked_add(1)
+            .context("worker event sequence exhausted")?;
+        let envelope = fullmag_application::WorkerEventEnvelope {
+            schema_version: coordinator.protocol_schema().into(),
+            message_id: uuid::Uuid::new_v4().simple().to_string(),
+            sequence,
+            claim: checkpoint.claim.identity(),
+            event: event.clone(),
+        };
+        let expected = envelope.clone();
+        let mut publication_error = None;
+        let result = coordinator.commit_event(envelope, |transition| {
+            fullmag_runtime_control::commit_transition(store, transition)
+                .map(|_| ())
+                .map_err(|error| {
+                    publication_error = Some(error);
+                    fullmag_application::CoordinatorError::Invalid(
+                        "durable worker event publication failed".into(),
+                    )
+                })
+        });
+        match (result, publication_error) {
+            (Ok(_), None) => return Ok(()),
+            (_, Some(error)) if is_store_writer_busy(&error) => {
+                match retry_pending_worker_event(store, coordinator, &expected) {
+                    Ok(()) => return Ok(()),
+                    Err(error) if is_coordinator_watermark_conflict(&error) => {
+                        let claim = coordinator.claim().clone();
+                        let recovered = retry_store_writer_busy(|| {
+                            fullmag_runtime_control::recover_coordinator(store, &claim)
+                        })
+                        .context("recover worker coordinator after retried transition race")?;
+                        *coordinator = fullmag_application::DurableWorkerCoordinator::new(
+                            recovered.coordinator,
+                        );
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            (_, Some(error)) if is_coordinator_watermark_conflict(&error) => {
+                let claim = coordinator.claim().clone();
+                let recovered = retry_store_writer_busy(|| {
+                    fullmag_runtime_control::recover_coordinator(store, &claim)
+                })
+                .context("recover worker coordinator after concurrent transition")?;
+                *coordinator =
+                    fullmag_application::DurableWorkerCoordinator::new(recovered.coordinator);
+            }
+            (_, Some(error)) => return Err(error).context("publish durable worker event"),
+            (Err(error), None) => {
+                return Err(anyhow::Error::new(error)).context("commit worker event");
+            }
         }
-        (_, Some(error)) => Err(error).context("publish durable worker event"),
-        (Err(error), None) => Err(anyhow::Error::new(error)).context("commit worker event"),
     }
+    bail!("worker event publication exceeded concurrent transition retry limit")
 }
 
 fn retry_pending_worker_event(
@@ -1155,6 +1470,10 @@ fn is_store_writer_busy(error: &anyhow::Error) -> bool {
     error
         .chain()
         .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
+}
+
+fn is_coordinator_watermark_conflict(error: &anyhow::Error) -> bool {
+    format!("{error:#}").contains("coordinator journal cross-stream watermark changed")
 }
 
 /// Convert the runner's explicit output files and terminal result into the

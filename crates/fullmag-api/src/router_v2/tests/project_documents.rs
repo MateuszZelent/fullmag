@@ -3139,12 +3139,18 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             summary
         }
         (None, None) => {
-            let process_result = crate::accepted_study_worker::run_pending_accepted_start(
+            let process_outcome = crate::accepted_study_worker::run_pending_accepted_start(
                 &store,
                 accepted_run_id.as_str(),
                 claim.task_id.as_str(),
             )
             .expect("one-shot worker process executes the exact durable accepted Start");
+            let crate::accepted_study_worker::AcceptedWorkerProcessOutcome::Completed(
+                process_result,
+            ) = process_outcome
+            else {
+                panic!("one-shot worker completed without a Stop command")
+            };
             assert_eq!(
                 process_result.execution.status,
                 fullmag_runner::RunStatus::Completed

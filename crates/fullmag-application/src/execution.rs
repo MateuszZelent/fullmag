@@ -295,7 +295,7 @@ impl ClaimIdentity {
     }
 }
 
-pub const WORKER_PROTOCOL_SCHEMA: &str = "worker_protocol.v2";
+pub const WORKER_PROTOCOL_SCHEMA: &str = "worker_protocol.v3";
 
 /// Commands are at-least-once transport messages.  The ledger below makes a
 /// repeated message idempotent, while a new command must advance its sequence.
@@ -368,6 +368,9 @@ pub enum WorkerEvent {
     Started,
     HeartbeatAck { lease_heartbeat_sequence: u64 },
     Progress { source_step: u64 },
+    /// The worker completed its side effect and is draining every control
+    /// command that won the journal fence before terminal publication.
+    Completing,
     Stopped,
     Completed { assessment: ScientificAssessment },
     Failed { retryable: bool, reason: String },
@@ -1422,9 +1425,9 @@ fn validate_protocol_identity(
     message_id: &str,
     sequence: u64,
 ) -> Result<(), ExecutionError> {
-    if schema_version != WORKER_PROTOCOL_SCHEMA {
+    if !matches!(schema_version, "worker_protocol.v2" | WORKER_PROTOCOL_SCHEMA) {
         return Err(ExecutionError::Invalid(format!(
-            "schema_version must be {WORKER_PROTOCOL_SCHEMA}"
+            "schema_version must be worker_protocol.v2 or {WORKER_PROTOCOL_SCHEMA}"
         )));
     }
     validate_identifier(message_id, "worker message_id")?;

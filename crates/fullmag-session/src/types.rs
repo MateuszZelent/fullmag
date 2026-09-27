@@ -1356,10 +1356,10 @@ impl FmsWorkerProcessExitReceipt {
             Some(reason) if reason.trim().is_empty() || reason.len() > 4096 => {
                 bail!("worker process exit receipt failure_reason is invalid")
             }
-            Some(_) if self.status_success || self.stop_requested => {
-                bail!("successful or operator-stopped process exit must not carry a failure reason")
+            Some(_) if self.status_success => {
+                bail!("successful process exit must not carry a failure reason")
             }
-            None if !self.status_success && !self.stop_requested => {
+            None if !self.status_success => {
                 bail!("failed worker process exit requires a failure reason")
             }
             _ => {}
@@ -1505,6 +1505,23 @@ impl FmsCoordinatorJournalEntry {
             bail!("coordinator journal ownership fence does not match the run catalog");
         }
         Ok(())
+    }
+
+    pub fn checkpoint_watermarks(&self) -> Result<(u64, u64)> {
+        let checkpoint = self
+            .payload
+            .get("checkpoint")
+            .and_then(Value::as_object)
+            .context("coordinator journal payload has no checkpoint object")?;
+        let command_sequence = checkpoint
+            .get("command_sequence")
+            .and_then(Value::as_u64)
+            .context("coordinator journal checkpoint has no command_sequence")?;
+        let event_sequence = checkpoint
+            .get("event_sequence")
+            .and_then(Value::as_u64)
+            .context("coordinator journal checkpoint has no event_sequence")?;
+        Ok((command_sequence, event_sequence))
     }
 }
 

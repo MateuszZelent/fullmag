@@ -367,11 +367,10 @@ pub(crate) fn run_supervised_accepted_worker(
     let recoverable_retry = retry_decision_for_terminal_task(store, run_id, task_id)
         .context("inspect durable retry before supervisor slot acquisition")?
         .is_some();
-    let recoverable_process_exit = worker_process_exit_receipt_for_current_task(
-        store, run_id, task_id,
-    )
-    .context("inspect durable process exit before supervisor slot acquisition")?
-    .is_some();
+    let recoverable_process_exit =
+        worker_process_exit_receipt_for_current_task(store, run_id, task_id)
+            .context("inspect durable process exit before supervisor slot acquisition")?
+            .is_some();
     let catalog = store
         .read_run_catalog(run_id)
         .context("read run catalog before supervisor slot acquisition")?
@@ -401,13 +400,9 @@ pub(crate) fn run_supervised_accepted_worker(
         slot.release()?;
         return Ok(result);
     }
-    if let Some(result) = reconcile_durable_worker_exit_before_spawn(
-        store,
-        run_id,
-        task_id,
-        max_automatic_retries,
-    )
-    .context("reconcile durable process exit before accepted-worker spawn")?
+    if let Some(result) =
+        reconcile_durable_worker_exit_before_spawn(store, run_id, task_id, max_automatic_retries)
+            .context("reconcile durable process exit before accepted-worker spawn")?
     {
         slot.release()?;
         return Ok(result);
@@ -418,11 +413,10 @@ pub(crate) fn run_supervised_accepted_worker(
         fullmag_runtime_control::load_current_task_claim(store, &run_id_typed, task_id)
     })
     .context("supervisor requires an exact active task claim")?;
-    let lease = retry_store_writer_busy(|| {
-        store.read_active_resource_lease_for_task(run_id, task_id)
-    })
-        .context("read active resource lease before accepted-worker spawn")?
-        .context("supervisor requires an active resource lease")?;
+    let lease =
+        retry_store_writer_busy(|| store.read_active_resource_lease_for_task(run_id, task_id))
+            .context("read active resource lease before accepted-worker spawn")?
+            .context("supervisor requires an active resource lease")?;
     if lease.run_id != claim.run_id.as_str()
         || lease.task_id != claim.task_id.as_str()
         || lease.attempt_id != claim.attempt_id.as_str()
@@ -480,6 +474,13 @@ pub(crate) fn run_supervised_accepted_worker(
             ));
         }
     };
+    if let Err(error) = reconcile_final_resource_heartbeat(store, &claim, &mut active_lease) {
+        slot.retain_for_reconciliation();
+        return Err(error.context(format!(
+            "reconcile final worker-acknowledged resource heartbeat; {}",
+            worker_failure_reason(&outcome)
+        )));
+    }
     let process_exit_receipt = match worker_process_exit_receipt(&claim, &active_lease, &outcome) {
         Ok(receipt) => receipt,
         Err(error) => {
@@ -558,20 +559,139 @@ fn renew_resource_lease(store: &SessionStore, lease: &mut FmsResourceLease) -> R
     if task_is_terminal(store, lease)? {
         return Ok(false);
     }
-    let mut renewed = lease.clone();
-    renewed.heartbeat_sequence = renewed
+    let run_id = fullmag_application::RunId::parse(lease.run_id.clone())
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let claim = retry_store_writer_busy(|| {
+        fullmag_runtime_control::load_current_task_claim(store, &run_id, &lease.task_id)
+    })
+    .context("load accepted-worker claim before heartbeat command")?;
+    if reconcile_acknowledged_resource_lease(store, &claim, lease)? {
+        return Ok(true);
+    }
+    let recovered =
+        retry_store_writer_busy(|| fullmag_runtime_control::recover_coordinator(store, &claim))
+            .context("recover accepted-worker coordinator before heartbeat command")?;
+    if recovered
+        .events
+        .iter()
+        .any(|event| matches!(&event.event, WorkerEvent::Completing))
+    {
+        return Ok(false);
+    }
+    if recovered.coordinator.phase() == CoordinatorPhase::Stopping {
+        return Ok(true);
+    }
+    if !matches!(
+        recovered.coordinator.phase(),
+        CoordinatorPhase::Preparing | CoordinatorPhase::Running
+    ) {
+        return Ok(false);
+    }
+    if recovered.commands.iter().any(|command| {
+        matches!(
+            &command.command,
+            WorkerCommand::Heartbeat {
+                lease_heartbeat_sequence
+            } if *lease_heartbeat_sequence > lease.heartbeat_sequence
+        )
+    }) {
+        return Ok(true);
+    }
+    let next_sequence = lease
         .heartbeat_sequence
         .checked_add(1)
         .context("accepted-worker resource lease heartbeat sequence exhausted")?;
-    renewed.heartbeat_at = chrono::Utc::now();
-    if let Err(error) = retry_store_writer_busy(|| store.heartbeat_resource_lease(&renewed)) {
-        if task_is_terminal(store, lease)? {
-            return Ok(false);
+    let mut coordinator = fullmag_application::DurableWorkerCoordinator::new(recovered.coordinator);
+    if let Err(error) = commit_worker_command(
+        store,
+        &mut coordinator,
+        WorkerCommand::Heartbeat {
+            lease_heartbeat_sequence: next_sequence,
+        },
+    ) {
+        if is_coordinator_watermark_conflict(&error) {
+            return Ok(true);
         }
-        return Err(error).context("renew accepted-worker resource lease");
+        return Err(error).context("persist accepted-worker heartbeat command");
     }
+    Ok(true)
+}
+
+/// Advance the physical lease only after the worker process durably accepted
+/// the matching Heartbeat command and published its fenced acknowledgement.
+fn reconcile_acknowledged_resource_lease(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+    lease: &mut FmsResourceLease,
+) -> Result<bool> {
+    let recovered =
+        retry_store_writer_busy(|| fullmag_runtime_control::recover_coordinator(store, claim))
+            .context("recover accepted-worker heartbeat acknowledgement")?;
+    let Some(pending_sequence) = recovered
+        .commands
+        .iter()
+        .filter_map(|command| match &command.command {
+            WorkerCommand::Heartbeat {
+                lease_heartbeat_sequence,
+            } if *lease_heartbeat_sequence > lease.heartbeat_sequence => {
+                Some(*lease_heartbeat_sequence)
+            }
+            _ => None,
+        })
+        .max()
+    else {
+        return Ok(false);
+    };
+    let expected = lease
+        .heartbeat_sequence
+        .checked_add(1)
+        .context("accepted-worker resource lease heartbeat sequence exhausted")?;
+    if pending_sequence != expected {
+        bail!(
+            "worker heartbeat command sequence skipped from {} to {}",
+            lease.heartbeat_sequence,
+            pending_sequence
+        );
+    }
+    if !recovered.events.iter().any(|event| {
+        matches!(
+            &event.event,
+            WorkerEvent::HeartbeatAck {
+                lease_heartbeat_sequence
+            } if *lease_heartbeat_sequence == pending_sequence
+        )
+    }) {
+        return Ok(false);
+    }
+    let mut renewed = lease.clone();
+    renewed.heartbeat_sequence = pending_sequence;
+    renewed.heartbeat_at = chrono::Utc::now();
+    retry_store_writer_busy(|| store.heartbeat_resource_lease(&renewed))
+        .context("renew worker-acknowledged resource lease")?;
     *lease = renewed;
     Ok(true)
+}
+
+fn reconcile_final_resource_heartbeat(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+    lease: &mut FmsResourceLease,
+) -> Result<()> {
+    reconcile_acknowledged_resource_lease(store, claim, lease)?;
+    let recovered =
+        retry_store_writer_busy(|| fullmag_runtime_control::recover_coordinator(store, claim))
+            .context("recover final accepted-worker heartbeat state")?;
+    if recovered.commands.iter().any(|command| {
+        matches!(
+            &command.command,
+            WorkerCommand::Heartbeat {
+                lease_heartbeat_sequence
+            } if *lease_heartbeat_sequence > lease.heartbeat_sequence
+        )
+    }) {
+        bail!("accepted worker exited with an unacknowledged heartbeat command");
+    }
+    Ok(())
 }
 
 fn spawn_worker<H, C>(
@@ -671,13 +791,14 @@ where
     let started = Instant::now();
     let mut last_heartbeat = Instant::now();
     let mut heartbeat_enabled = heartbeat_interval.is_some();
+    let mut stop_observed = false;
 
     loop {
         if let Some(status) = child.try_wait().context("observe accepted worker exit")? {
             return collect_child_output(
                 status,
                 false,
-                false,
+                stop_observed,
                 process_id,
                 process_start_token,
                 stdout_reader,
@@ -693,7 +814,7 @@ where
                     return collect_child_output(
                         status,
                         false,
-                        false,
+                        stop_observed,
                         process_id,
                         process_start_token,
                         stdout_reader,
@@ -708,7 +829,7 @@ where
             return collect_child_output(
                 status,
                 true,
-                false,
+                stop_observed,
                 process_id,
                 process_start_token,
                 stdout_reader,
@@ -726,7 +847,7 @@ where
                 let mut outcome = collect_child_output(
                     status,
                     false,
-                    false,
+                    stop_observed,
                     process_id,
                     process_start_token,
                     stdout_reader,
@@ -737,35 +858,8 @@ where
             }
         };
         if stop_requested_now {
-            if let Err(error) = child.kill() {
-                if let Some(status) = child
-                    .try_wait()
-                    .context("recheck accepted worker after operator stop race")?
-                {
-                    return collect_child_output(
-                        status,
-                        false,
-                        true,
-                        process_id,
-                        process_start_token,
-                        stdout_reader,
-                        stderr_reader,
-                    );
-                }
-                return Err(error).context("terminate accepted worker after operator stop");
-            }
-            let status = child
-                .wait()
-                .context("confirm accepted worker termination after operator stop")?;
-            return collect_child_output(
-                status,
-                false,
-                true,
-                process_id,
-                process_start_token,
-                stdout_reader,
-                stderr_reader,
-            );
+            stop_observed = true;
+            heartbeat_enabled = false;
         }
         if heartbeat_enabled
             && heartbeat_interval.is_some_and(|interval| last_heartbeat.elapsed() >= interval)
@@ -788,7 +882,7 @@ where
                     let mut outcome = collect_child_output(
                         status,
                         false,
-                        false,
+                        stop_observed,
                         process_id,
                         process_start_token,
                         stdout_reader,
@@ -1118,7 +1212,7 @@ fn worker_process_exit_receipt(
         exit_code: outcome.output.status.code(),
         timed_out: outcome.timed_out,
         stop_requested: outcome.stop_requested,
-        failure_reason: if outcome.output.status.success() || outcome.stop_requested {
+        failure_reason: if outcome.output.status.success() {
             None
         } else {
             Some(worker_failure_reason(outcome))
@@ -1431,6 +1525,68 @@ fn worker_failure_reason(outcome: &ObservedWorkerProcess) -> String {
     format!("accepted worker process failed: {detail}")
 }
 
+fn commit_worker_command(
+    store: &SessionStore,
+    coordinator: &mut fullmag_application::DurableWorkerCoordinator,
+    command: WorkerCommand,
+) -> Result<fullmag_application::WorkerCommandEnvelope> {
+    let mut publication_error = None;
+    let result = coordinator.commit_command(command, None, |transition| {
+        fullmag_runtime_control::commit_transition(store, transition)
+            .map(|_| ())
+            .map_err(|error| {
+                publication_error = Some(error);
+                fullmag_application::CoordinatorError::Invalid(
+                    "durable supervisor command publication failed".into(),
+                )
+            })
+    });
+    match (result, publication_error) {
+        (Ok(envelope), None) => Ok(envelope),
+        (_, Some(error)) if is_store_writer_busy(&error) => {
+            retry_pending_worker_command(store, coordinator)
+        }
+        (_, Some(error)) => Err(error).context("publish durable supervisor command"),
+        (Err(error), None) => Err(anyhow::Error::new(error)).context("commit supervisor command"),
+    }
+}
+
+fn retry_pending_worker_command(
+    store: &SessionStore,
+    coordinator: &mut fullmag_application::DurableWorkerCoordinator,
+) -> Result<fullmag_application::WorkerCommandEnvelope> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut publication_error = None;
+        let result = coordinator.retry_publication(|transition| {
+            fullmag_runtime_control::commit_transition(store, transition)
+                .map(|_| ())
+                .map_err(|error| {
+                    publication_error = Some(error);
+                    fullmag_application::CoordinatorError::Invalid(
+                        "durable supervisor command publication retry failed".into(),
+                    )
+                })
+        });
+        match (result, publication_error) {
+            (Ok(fullmag_application::CoordinatorMessage::Command(envelope)), None) => {
+                return Ok(envelope);
+            }
+            (Ok(fullmag_application::CoordinatorMessage::Event(_)), None) => {
+                bail!("retried supervisor publication is not a command")
+            }
+            (_, Some(error)) if is_store_writer_busy(&error) && Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            (_, Some(error)) => return Err(error).context("publish durable supervisor command"),
+            (Err(error), None) => {
+                return Err(anyhow::Error::new(error))
+                    .context("publish durable supervisor command");
+            }
+        }
+    }
+}
+
 fn commit_worker_event(
     store: &SessionStore,
     coordinator: &mut fullmag_application::DurableWorkerCoordinator,
@@ -1442,7 +1598,7 @@ fn commit_worker_event(
         .checked_add(1)
         .context("worker event sequence exhausted")?;
     let envelope = fullmag_application::WorkerEventEnvelope {
-        schema_version: fullmag_application::WORKER_PROTOCOL_SCHEMA.into(),
+        schema_version: coordinator.protocol_schema().into(),
         message_id: uuid::Uuid::new_v4().simple().to_string(),
         sequence,
         claim: checkpoint.claim.identity(),
@@ -1517,6 +1673,10 @@ fn is_store_writer_busy(error: &anyhow::Error) -> bool {
     error
         .chain()
         .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
+}
+
+fn is_coordinator_watermark_conflict(error: &anyhow::Error) -> bool {
+    format!("{error:#}").contains("coordinator journal cross-stream watermark changed")
 }
 
 #[cfg(test)]

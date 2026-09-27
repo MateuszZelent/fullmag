@@ -1315,6 +1315,54 @@ impl SessionStore {
             active_lease.heartbeat_sequence,
         )?;
 
+        let mut command_watermark = 0_u64;
+        let mut event_watermark = 0_u64;
+        for existing in self.read_coordinator_journal(&entry.run_id)? {
+            if existing.task_id != entry.task_id
+                || existing.attempt_id != entry.attempt_id
+                || existing.ownership_epoch != entry.ownership_epoch
+            {
+                continue;
+            }
+            if existing.lease_token != entry.lease_token {
+                anyhow::bail!(
+                    "coordinator journal lease token changed within one task attempt"
+                );
+            }
+            match existing.direction {
+                FmsCoordinatorJournalDirection::Command => {
+                    command_watermark = command_watermark.max(existing.sequence)
+                }
+                FmsCoordinatorJournalDirection::Event => {
+                    event_watermark = event_watermark.max(existing.sequence)
+                }
+            }
+        }
+        let (entry_command_watermark, entry_event_watermark) = entry.checkpoint_watermarks()?;
+        let expected = match entry.direction {
+            FmsCoordinatorJournalDirection::Command => (
+                command_watermark
+                    .checked_add(1)
+                    .context("coordinator command watermark exhausted")?,
+                event_watermark,
+            ),
+            FmsCoordinatorJournalDirection::Event => (
+                command_watermark,
+                event_watermark
+                    .checked_add(1)
+                    .context("coordinator event watermark exhausted")?,
+            ),
+        };
+        if (entry_command_watermark, entry_event_watermark) != expected {
+            anyhow::bail!(
+                "coordinator journal cross-stream watermark changed (expected command/event {}/{}, received {}/{})",
+                expected.0,
+                expected.1,
+                entry_command_watermark,
+                entry_event_watermark
+            );
+        }
+
         let stream_root = checked_path(
             &self.root,
             &format!(
@@ -2169,7 +2217,7 @@ impl SessionStore {
             anyhow::bail!("resource lease acquisition requires active state");
         }
         let _writer_lease = self.write_transaction()?;
-        self.validate_resource_lease_owner_unlocked(lease)?;
+        self.validate_resource_lease_owner_unlocked(lease, false)?;
         if let Some(existing) = self.find_active_resource_lease_unlocked(&lease.resource_id)? {
             if existing.identity_matches(lease)
                 && existing.kind == lease.kind
@@ -2351,7 +2399,11 @@ impl SessionStore {
             anyhow::bail!("resource lease heartbeat requires active state");
         }
         let _writer_lease = self.write_transaction()?;
-        self.validate_resource_lease_owner_unlocked(lease)?;
+        // A worker may publish its terminal event immediately after the final
+        // HeartbeatAck. Permit that exact still-active lease to record the
+        // acknowledged sequence before release; identity and monotonic fences
+        // below remain unchanged.
+        self.validate_resource_lease_owner_unlocked(lease, true)?;
         let path = self.resource_lease_path(lease)?;
         let data = fs::read(&path)
             .with_context(|| format!("reading resource lease {}", path.display()))?;
@@ -2441,7 +2493,11 @@ impl SessionStore {
         )?)
     }
 
-    fn validate_resource_lease_owner_unlocked(&self, lease: &FmsResourceLease) -> Result<()> {
+    fn validate_resource_lease_owner_unlocked(
+        &self,
+        lease: &FmsResourceLease,
+        allow_terminal_reconciliation: bool,
+    ) -> Result<()> {
         let catalog = self
             .read_run_catalog(&lease.run_id)?
             .context("resource lease requires a durable run catalog")?;
@@ -2455,13 +2511,15 @@ impl SessionStore {
         {
             anyhow::bail!("resource lease ownership does not match the run catalog");
         }
-        if matches!(
+        if !allow_terminal_reconciliation
+            && matches!(
             task.lifecycle,
             FmsTaskLifecycle::Succeeded
                 | FmsTaskLifecycle::Failed
                 | FmsTaskLifecycle::Cancelled
                 | FmsTaskLifecycle::Interrupted
-        ) {
+        )
+        {
             anyhow::bail!("terminal task cannot acquire or renew a resource lease");
         }
         Ok(())

@@ -1,7 +1,7 @@
 #[path = "accepted_study_worker.rs"]
 mod accepted_study_worker;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -38,14 +38,24 @@ fn run() -> Result<()> {
             Err(error) => return Err(error),
         }
     };
-    let summary = serde_json::json!({
-        "status": format!("{:?}", result.execution.status).to_lowercase(),
-        "completed_step_count": result.execution.completed_step_count,
-        "recovered_from_receipt": result.execution.recovered_from_receipt,
-        "receipt_recovered_before_publication": result.receipt_recovered_before_publication,
-        "output_catalog_revision": result.output_catalog.revision,
-        "attempt_output_dir": result.execution.attempt_output_dir,
-    });
+    let summary = match result {
+        accepted_study_worker::AcceptedWorkerProcessOutcome::Completed(result) => {
+            serde_json::json!({
+                "status": format!("{:?}", result.execution.status).to_lowercase(),
+                "completed_step_count": result.execution.completed_step_count,
+                "recovered_from_receipt": result.execution.recovered_from_receipt,
+                "receipt_recovered_before_publication": result.receipt_recovered_before_publication,
+                "output_catalog_revision": result.output_catalog.revision,
+                "attempt_output_dir": result.execution.attempt_output_dir,
+            })
+        }
+        accepted_study_worker::AcceptedWorkerProcessOutcome::Stopped {
+            acknowledged_heartbeat_count,
+        } => serde_json::json!({
+            "status": "cancelled",
+            "acknowledged_heartbeat_count": acknowledged_heartbeat_count,
+        }),
+    };
     println!("{}", serde_json::to_string(&summary)?);
     Ok(())
 }

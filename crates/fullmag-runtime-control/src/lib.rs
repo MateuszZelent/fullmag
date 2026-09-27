@@ -438,58 +438,68 @@ pub fn request_accepted_task_stop(
         bail!("accepted task stop reason must not be empty");
     }
     let claim = claim::load_current_task_claim(store, run_id, task_id)?;
-    let recovered = recover_coordinator(store, &claim)?;
-    if recovered.coordinator.phase() == fullmag_application::CoordinatorPhase::Stopping {
-        let existing = recovered
-            .commands
-            .iter()
-            .find(|command| {
-                matches!(
-                    &command.command,
-                    fullmag_application::WorkerCommand::Stop { .. }
-                )
-            })
-            .context("stopping task has no durable Stop command")?;
-        let fullmag_application::WorkerCommand::Stop {
-            reason: existing_reason,
-        } = &existing.command
-        else {
-            unreachable!("filtered Stop command")
-        };
-        if existing_reason != reason {
-            bail!("accepted task already has a different durable Stop reason");
+    for _ in 0..8 {
+        let recovered = recover_coordinator(store, &claim)?;
+        if recovered.coordinator.phase() == fullmag_application::CoordinatorPhase::Stopping {
+            let existing = recovered
+                .commands
+                .iter()
+                .find(|command| {
+                    matches!(
+                        &command.command,
+                        fullmag_application::WorkerCommand::Stop { .. }
+                    )
+                })
+                .context("stopping task has no durable Stop command")?;
+            let fullmag_application::WorkerCommand::Stop {
+                reason: existing_reason,
+            } = &existing.command
+            else {
+                unreachable!("filtered Stop command")
+            };
+            if existing_reason != reason {
+                bail!("accepted task already has a different durable Stop reason");
+            }
+            return Ok(AcceptedTaskStop {
+                disposition: AcceptedTaskStopDisposition::Replayed,
+                command: existing.clone(),
+                catalog_revision: recovered.catalog_revision,
+            });
         }
-        return Ok(AcceptedTaskStop {
-            disposition: AcceptedTaskStopDisposition::Replayed,
-            command: existing.clone(),
-            catalog_revision: recovered.catalog_revision,
-        });
-    }
-    if recovered.coordinator.phase() == fullmag_application::CoordinatorPhase::Preparing
-        && !matches!(
-            recovered.commands.last().map(|command| &command.command),
-            Some(fullmag_application::WorkerCommand::Start)
-        )
-    {
-        bail!("accepted task pre-start stop requires a durable Start command");
-    }
-    if !matches!(
-        recovered.coordinator.phase(),
-        fullmag_application::CoordinatorPhase::Preparing
-            | fullmag_application::CoordinatorPhase::Running
-    ) {
-        bail!("accepted task stop requires a preparing or running task");
-    }
-    let mut coordinator = fullmag_application::DurableWorkerCoordinator::new(recovered.coordinator);
-    let mut catalog_revision = None;
-    let command = coordinator
-        .commit_command(
+        if recovered.coordinator.phase() == fullmag_application::CoordinatorPhase::Running
+            && recovered.events.iter().any(|event| {
+                matches!(&event.event, fullmag_application::WorkerEvent::Completing)
+            })
+        {
+            bail!("accepted task is already completing");
+        }
+        if recovered.coordinator.phase() == fullmag_application::CoordinatorPhase::Preparing
+            && !matches!(
+                recovered.commands.last().map(|command| &command.command),
+                Some(fullmag_application::WorkerCommand::Start)
+            )
+        {
+            bail!("accepted task pre-start stop requires a durable Start command");
+        }
+        if !matches!(
+            recovered.coordinator.phase(),
+            fullmag_application::CoordinatorPhase::Preparing
+                | fullmag_application::CoordinatorPhase::Running
+        ) {
+            bail!("accepted task stop requires a preparing or running task");
+        }
+        let mut coordinator =
+            fullmag_application::DurableWorkerCoordinator::new(recovered.coordinator);
+        let mut catalog_revision = None;
+        let command = match coordinator.commit_command(
             fullmag_application::WorkerCommand::Stop {
                 reason: reason.to_owned(),
             },
             None,
             |transition| {
-                commit_transition_with_catalog_revision(store, transition)
+                retry_store_writer_busy(|| {
+                    commit_transition_with_catalog_revision(store, transition)
+                })
                     .map(|(_, revision)| {
                         catalog_revision = Some(revision);
                     })
@@ -497,14 +507,25 @@ pub fn request_accepted_task_stop(
                         fullmag_application::CoordinatorError::Invalid(format!("{error:#}"))
                     })
             },
-        )
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    Ok(AcceptedTaskStop {
-        disposition: AcceptedTaskStopDisposition::Accepted,
-        command,
-        catalog_revision: catalog_revision
-            .context("accepted task Stop commit did not return a catalog revision")?,
-    })
+        ) {
+            Ok(command) => command,
+            Err(error)
+                if error
+                    .to_string()
+                    .contains("coordinator journal cross-stream watermark changed") =>
+            {
+                continue;
+            }
+            Err(error) => return Err(anyhow::anyhow!(error.to_string())),
+        };
+        return Ok(AcceptedTaskStop {
+            disposition: AcceptedTaskStopDisposition::Accepted,
+            command,
+            catalog_revision: catalog_revision
+                .context("accepted task Stop commit did not return a catalog revision")?,
+        });
+    }
+    bail!("accepted task Stop exceeded concurrent transition retry limit")
 }
 
 /// Immutable bytes accepted by Submit, independent of the active UI project.

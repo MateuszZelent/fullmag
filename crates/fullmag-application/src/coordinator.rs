@@ -104,6 +104,7 @@ pub struct WorkerCoordinator {
     task: TaskRecord,
     claim: TaskClaim,
     ledger: WorkerProtocolLedger,
+    protocol_schema: String,
     next_command_sequence: u64,
     release_requested: bool,
 }
@@ -123,6 +124,7 @@ impl DurableWorkerCoordinator {
     pub fn checkpoint(&self) -> CoordinatorCheckpoint { self.active.checkpoint() }
     pub fn claim(&self) -> &TaskClaim { self.active.claim() }
     pub fn phase(&self) -> CoordinatorPhase { self.active.phase() }
+    pub fn protocol_schema(&self) -> &str { self.active.protocol_schema() }
     pub fn pending_transition(&self) -> Option<&CoordinatorTransition> {
         self.pending.as_ref().map(|(_, transition)| transition)
     }
@@ -192,6 +194,7 @@ impl WorkerCoordinator {
             task,
             claim: claim.clone(),
             ledger: WorkerProtocolLedger::new(&claim),
+            protocol_schema: WORKER_PROTOCOL_SCHEMA.into(),
             next_command_sequence: 1,
             release_requested: false,
         })
@@ -292,6 +295,22 @@ impl WorkerCoordinator {
             return Err(CoordinatorError::Invalid("checkpoint task identity mismatch".into()));
         }
         let ledger = WorkerProtocolLedger::restore(&claim, commands, events)?;
+        let protocol_schema = commands
+            .first()
+            .map(|entry| entry.schema_version.as_str())
+            .or_else(|| events.first().map(|entry| entry.schema_version.as_str()))
+            .unwrap_or(WORKER_PROTOCOL_SCHEMA);
+        if commands
+            .iter()
+            .any(|entry| entry.schema_version != protocol_schema)
+            || events
+                .iter()
+                .any(|entry| entry.schema_version != protocol_schema)
+        {
+            return Err(CoordinatorError::Invalid(
+                "coordinator journal mixes worker protocol schemas".into(),
+            ));
+        }
         let terminal_lifecycle = match events.last().map(|entry| &entry.event) {
             Some(WorkerEvent::Completed { assessment }) => {
                 if task.assessment != Some(*assessment) {
@@ -344,11 +363,22 @@ impl WorkerCoordinator {
             .ok_or_else(|| CoordinatorError::Invalid("coordinator command sequence exhausted".into()))?;
         let release_requested = commands.last().is_some_and(|entry| matches!(entry.command, WorkerCommand::Release));
         task.mark_reconciling();
-        Ok(Self { task, claim, ledger, next_command_sequence, release_requested })
+        Ok(Self {
+            task,
+            claim,
+            ledger,
+            protocol_schema: protocol_schema.into(),
+            next_command_sequence,
+            release_requested,
+        })
     }
 
     pub fn claim(&self) -> &TaskClaim {
         &self.claim
+    }
+
+    pub fn protocol_schema(&self) -> &str {
+        &self.protocol_schema
     }
 
     pub fn phase(&self) -> CoordinatorPhase {
@@ -479,6 +509,10 @@ impl WorkerCoordinator {
                 self.require_lifecycle(TaskLifecycle::Running)?;
                 self.task.observation = Some(ObservationState::Live);
             }
+            WorkerEvent::Completing => {
+                self.require_lifecycle(TaskLifecycle::Running)?;
+                self.task.observation = Some(ObservationState::Live);
+            }
             WorkerEvent::Stopped => {
                 self.require_lifecycle(TaskLifecycle::Stopping)?;
                 self.task
@@ -516,7 +550,7 @@ impl WorkerCoordinator {
                 CoordinatorError::Invalid("coordinator command sequence exhausted".into())
             })?;
         let envelope = WorkerCommandEnvelope {
-            schema_version: WORKER_PROTOCOL_SCHEMA.into(),
+            schema_version: self.protocol_schema.clone(),
             message_id: format!("command-{}", Uuid::new_v4().simple()),
             sequence,
             claim: self.claim.identity(),
