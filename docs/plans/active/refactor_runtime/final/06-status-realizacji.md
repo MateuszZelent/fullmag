@@ -1899,3 +1899,17 @@ Source check session i czterech binariów, rustfmt schedulera oraz diff check:
 **PASS**. Testów jednostkowych nie kompilowano. Managed scheduler/process/native
 FEM E2E pozostaje **NOT VERIFIED**. **P4 50%, cały plan około 49%**. Szczegóły:
 [p4/11-preparation-admission-scheduler.md](p4/11-preparation-admission-scheduler.md).
+
+## P4-B — dystrybucja runtime preparacji FEM — 28.09.2026
+
+Pakiety portable Linux i Windows MSI zawierają teraz preparer, supervisor,
+scheduler oraz publisher generacyjnej puli zasobów preparacji FEM. Walidator
+portable sprawdza obecność, zależności dynamiczne i RPATH każdego procesu, a
+MSI obejmuje je stagingiem, manifestem i kontrolą kompletności. Kontrakt
+źródłowy wydania pilnuje pełnej listy accepted-runtime.
+
+Parsery Bash, PowerShell i Python, statyczna kontrola pokrycia pakowania oraz
+diff check: **PASS**. Testów jednostkowych nie kompilowano. Build rzeczywistych
+paczek oraz managed scheduler/process/native FEM E2E pozostają **NOT
+VERIFIED**. **P4 50%, cały plan około 49%**. Szczegóły:
+[p4/12-preparation-runtime-distribution.md](p4/12-preparation-runtime-distribution.md).

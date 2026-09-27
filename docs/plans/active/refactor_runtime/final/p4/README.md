@@ -548,3 +548,17 @@ diff check przeszły. Testów jednostkowych nie kompilowano. Managed
 scheduler/process/native FEM E2E pozostaje `NOT VERIFIED`; P4 pozostaje na
 **50%**, a cały plan na około **49%**. Szczegóły:
 [11-preparation-admission-scheduler.md](11-preparation-admission-scheduler.md).
+
+## Dystrybucja runtime preparacji FEM — 28.09.2026
+
+Commit `390df0802` dodaje preparer, supervisor, scheduler i publisher puli
+preparacji FEM do pakietu portable Linux oraz Windows MSI. Linuxowy walidator
+wymaga każdego procesu, sprawdza jego zależności dynamiczne i RPATH; staging
+MSI wiąże te same pliki z manifestem i kontrolą kompletności.
+
+Parsery Bash, PowerShell i Python, statyczna kontrola pokrycia pakowania oraz
+diff check przeszły. Testów jednostkowych nie kompilowano. Rzeczywiste
+zbudowanie pakietów i managed scheduler/process/native FEM E2E pozostają
+`NOT VERIFIED`; P4 pozostaje na **50%**, a cały plan na około **49%**.
+Szczegóły:
+[12-preparation-runtime-distribution.md](12-preparation-runtime-distribution.md).
