@@ -1419,6 +1419,123 @@ impl SessionStore {
         Ok(Some(lease))
     }
 
+    /// Reconcile a durable preparation-process exit exactly once. Successful
+    /// preparation advances the accepted task to dependency resolution only
+    /// when its immutable preparation receipt exists. Both success and failure
+    /// release the resource only after the process-exit receipt is durable.
+    pub fn finalize_preparation_process_exit(
+        &self,
+        receipt: &FmsPreparationProcessExitReceipt,
+    ) -> Result<PreparationProcessFinalizationDisposition> {
+        receipt.validate()?;
+        let _writer_lease = self.write_transaction()?;
+        let persisted = self
+            .read_preparation_process_exit_receipt(&receipt.run_id, &receipt.receipt_id)?
+            .context("preparation process exit must be durable before finalization")?;
+        if persisted != *receipt {
+            anyhow::bail!("preparation process exit receipt differs from durable proof");
+        }
+        let mut lease = self
+            .read_preparation_resource_lease(
+                &receipt.run_id,
+                &receipt.resource_id,
+                &receipt.lease_token,
+            )?
+            .context("preparation process finalization requires its durable lease")?;
+        let lease_identity_matches = lease.run_id == receipt.run_id
+            && lease.task_id == receipt.task_id
+            && lease.preparation_attempt_id == receipt.preparation_attempt_id
+            && lease.resource_id == receipt.resource_id
+            && lease.lease_token == receipt.lease_token
+            && lease.heartbeat_sequence == receipt.lease_heartbeat_sequence;
+        if !lease_identity_matches {
+            anyhow::bail!("preparation process finalization lease fence rejected");
+        }
+
+        let mut catalog = self
+            .read_run_catalog(&receipt.run_id)?
+            .context("preparation process finalization requires a durable run catalog")?;
+        let task_index = catalog
+            .tasks
+            .iter()
+            .position(|task| task.task_id == receipt.task_id)
+            .context("preparation process finalization task is missing from the run catalog")?;
+        let task = &catalog.tasks[task_index];
+        if task.lifecycle != FmsTaskLifecycle::Accepted
+            || task.attempt_id.is_some()
+            || task.ownership_epoch.is_some()
+            || task.resource_id.is_some()
+        {
+            anyhow::bail!("preparation process finalization task has a solver claim");
+        }
+        let awaiting_preparation = matches!(
+            &task.readiness,
+            FmsTaskReadiness::Blocked { reason }
+                if reason == FMS_TASK_AWAITING_PREPARATION_REASON
+        );
+        let awaiting_dependencies = matches!(
+            &task.readiness,
+            FmsTaskReadiness::Blocked { reason }
+                if reason == FMS_TASK_AWAITING_DEPENDENCY_RESOLUTION_REASON
+        );
+
+        if lease.state == FmsResourceLeaseState::Released {
+            let replayed = if receipt.status_success {
+                awaiting_dependencies
+                    && self
+                        .read_task_preparation_receipt(&receipt.run_id, &receipt.task_id)?
+                        .is_some()
+            } else {
+                awaiting_preparation
+            };
+            if replayed {
+                return Ok(PreparationProcessFinalizationDisposition::Replayed);
+            }
+            anyhow::bail!("released preparation lease has an incomplete finalization projection");
+        }
+        receipt.validate_for_lease(&lease)?;
+
+        if receipt.status_success {
+            if self
+                .read_task_preparation_receipt(&receipt.run_id, &receipt.task_id)?
+                .is_none()
+            {
+                anyhow::bail!(
+                    "successful preparation process cannot finalize without a preparation receipt"
+                );
+            }
+            if !awaiting_preparation && !awaiting_dependencies {
+                anyhow::bail!("successful preparation process found incompatible task readiness");
+            }
+            if awaiting_preparation {
+                catalog.tasks[task_index].readiness = FmsTaskReadiness::Blocked {
+                    reason: FMS_TASK_AWAITING_DEPENDENCY_RESOLUTION_REASON.into(),
+                };
+                catalog.revision = catalog
+                    .revision
+                    .checked_add(1)
+                    .context("run catalog revision exhausted during preparation finalization")?;
+                catalog.updated_at = chrono::Utc::now();
+                self.commit_run_catalog_unlocked(&catalog)?;
+            }
+        } else if !awaiting_preparation {
+            anyhow::bail!("failed preparation process found incompatible task readiness");
+        }
+
+        lease.state = FmsResourceLeaseState::Released;
+        lease.released_at = Some(chrono::Utc::now());
+        lease.validate()?;
+        atomic_write(
+            &checked_path(&self.root, &lease.relative_path()?)?,
+            &serde_json::to_vec_pretty(&lease)?,
+        )?;
+        Ok(if receipt.status_success {
+            PreparationProcessFinalizationDisposition::Succeeded
+        } else {
+            PreparationProcessFinalizationDisposition::Failed
+        })
+    }
+
     /// Persist the verified initial coordinator checkpoint before a new claim
     /// is allowed to publish worker commands.
     pub fn commit_coordinator_genesis(
@@ -2620,7 +2737,7 @@ impl SessionStore {
             anyhow::bail!("preparation resource lease heartbeat requires active state");
         }
         let _writer_lease = self.write_transaction()?;
-        self.validate_preparation_resource_lease_owner_unlocked(lease)?;
+        self.validate_preparation_resource_lease_catalog_owner_unlocked(lease)?;
         let relative = lease.relative_path()?;
         let path = checked_path(&self.root, &relative)?;
         let current: FmsPreparationResourceLease = serde_json::from_slice(&fs::read(&path)?)?;
@@ -2667,6 +2784,20 @@ impl SessionStore {
         }
         if current.heartbeat_sequence != lease.heartbeat_sequence {
             anyhow::bail!("stale preparation resource lease cannot release a newer heartbeat");
+        }
+        if self
+            .list_preparation_process_exit_receipts(&lease.run_id)?
+            .iter()
+            .any(|receipt| {
+                receipt.task_id == lease.task_id
+                    && receipt.preparation_attempt_id == lease.preparation_attempt_id
+                    && receipt.resource_id == lease.resource_id
+                    && receipt.lease_token == lease.lease_token
+            })
+        {
+            anyhow::bail!(
+                "preparation lease with a durable process exit must use finalization"
+            );
         }
         current.state = FmsResourceLeaseState::Released;
         current.released_at = Some(chrono::Utc::now());
@@ -2953,16 +3084,24 @@ impl SessionStore {
         &self,
         lease: &FmsPreparationResourceLease,
     ) -> Result<()> {
-        let catalog = self
-            .read_run_catalog(&lease.run_id)?
-            .context("preparation resource lease requires a durable run catalog")?;
-        lease.validate_for_catalog(&catalog)?;
+        self.validate_preparation_resource_lease_catalog_owner_unlocked(lease)?;
         if self
             .read_task_preparation_receipt(&lease.run_id, &lease.task_id)?
             .is_some()
         {
-            anyhow::bail!("prepared task cannot acquire or renew a preparation resource lease");
+            anyhow::bail!("prepared task cannot acquire a preparation resource lease");
         }
+        Ok(())
+    }
+
+    fn validate_preparation_resource_lease_catalog_owner_unlocked(
+        &self,
+        lease: &FmsPreparationResourceLease,
+    ) -> Result<()> {
+        let catalog = self
+            .read_run_catalog(&lease.run_id)?
+            .context("preparation resource lease requires a durable run catalog")?;
+        lease.validate_for_catalog(&catalog)?;
         Ok(())
     }
 

@@ -1591,6 +1591,13 @@ pub enum PreparationProcessExitReceiptCommitDisposition {
     Replayed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreparationProcessFinalizationDisposition {
+    Succeeded,
+    Failed,
+    Replayed,
+}
+
 /// Schema version for the durable coordinator message journal.
 pub const FMS_COORDINATOR_JOURNAL_SCHEMA: &str = "coordinator_journal.v1";
 
