@@ -356,6 +356,33 @@ def test_api_accepted_scheduler_persistent_cursor_e2e_route_builds_scheduler_and
         MODULE.validate_command(("cargo", "test", "--workspace"), route)
 
 
+def test_api_accepted_scheduler_parallel_resources_e2e_route_builds_scheduler_and_worker() -> None:
+    route = MODULE.ROUTES["api-accepted-scheduler-parallel-resources-e2e"]
+    assert route.setup_commands == ((
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api-accepted-scheduler",
+        "--bin",
+        "fullmag-api-accepted-worker",
+    ),)
+    assert dict(route.binary_env) == {
+        "FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN": "fullmag-api-accepted-scheduler",
+        "FULLMAG_ACCEPTED_WORKER_E2E_BIN": "fullmag-api-accepted-worker",
+    }
+    assert dict(route.environment) == {
+        "FULLMAG_ACCEPTED_SCHEDULER_PARALLEL_RESOURCES_E2E": "1",
+        "FULLMAG_ENABLE_TEST_HOOKS": "1",
+        "FULLMAG_TEST_ACCEPTED_WORKER_AFTER_STARTED_DELAY_MS": "5000",
+    }
+    assert route.receipt_schema == "fullmag_api_accepted_scheduler_parallel_resources_e2e_v1"
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
 def test_api_accepted_scheduler_retry_e2e_route_builds_all_processes() -> None:
     route = MODULE.ROUTES["api-accepted-scheduler-retry-e2e"]
     assert route.setup_commands == ((

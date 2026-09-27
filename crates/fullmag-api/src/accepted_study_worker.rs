@@ -999,13 +999,15 @@ fn apply_accepted_start_effect(
     if !durable_execution.recovered_from_receipt || durable_execution.outputs != execution.outputs {
         bail!("worker receipt recovery differs from the completed runner output");
     }
-    let published = fullmag_runtime_control::publish_study_outputs(
-        store,
-        accepted,
-        claim,
-        &accepted_step.step_id,
-        &durable_execution.outputs,
-    )
+    let published = retry_store_writer_busy(|| {
+        fullmag_runtime_control::publish_study_outputs(
+            store,
+            accepted,
+            claim,
+            &accepted_step.step_id,
+            &durable_execution.outputs,
+        )
+    })
     .context("publish accepted worker outputs")?;
     fullmag_runtime_control::validate_study_task_completion(store, claim)
         .context("validate accepted worker completion barrier")?;
@@ -1098,16 +1100,73 @@ fn commit_worker_event(
         claim: checkpoint.claim.identity(),
         event,
     };
-    coordinator
-        .commit_event(envelope, |transition| {
+    let expected = envelope.clone();
+    let mut publication_error = None;
+    let result = coordinator.commit_event(envelope, |transition| {
+        fullmag_runtime_control::commit_transition(store, transition)
+            .map(|_| ())
+            .map_err(|error| {
+                publication_error = Some(error);
+                fullmag_application::CoordinatorError::Invalid(
+                    "durable worker event publication failed".into(),
+                )
+            })
+    });
+    match (result, publication_error) {
+        (Ok(_), None) => Ok(()),
+        (_, Some(error)) if is_store_writer_busy(&error) => {
+            retry_pending_worker_event(store, coordinator, &expected)
+        }
+        (_, Some(error)) => Err(error).context("publish durable worker event"),
+        (Err(error), None) => Err(anyhow::Error::new(error)).context("commit worker event"),
+    }
+}
+
+fn retry_pending_worker_event(
+    store: &SessionStore,
+    coordinator: &mut fullmag_application::DurableWorkerCoordinator,
+    expected: &fullmag_application::WorkerEventEnvelope,
+) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut publication_error = None;
+        let result = coordinator.retry_publication(|transition| {
             fullmag_runtime_control::commit_transition(store, transition)
                 .map(|_| ())
                 .map_err(|error| {
-                    fullmag_application::CoordinatorError::Invalid(format!("{error:#}"))
+                    publication_error = Some(error);
+                    fullmag_application::CoordinatorError::Invalid(
+                        "durable worker event publication retry failed".into(),
+                    )
                 })
-        })
-        .map(|_| ())
-        .map_err(|error| anyhow::anyhow!(error.to_string()))
+        });
+        match (result, publication_error) {
+            (Ok(fullmag_application::CoordinatorMessage::Event(envelope)), None)
+                if envelope == *expected =>
+            {
+                return Ok(());
+            }
+            (Ok(fullmag_application::CoordinatorMessage::Event(_)), None) => {
+                bail!("retried worker event differs from the retained publication");
+            }
+            (Ok(fullmag_application::CoordinatorMessage::Command(_)), None) => {
+                bail!("retried worker publication is not an event");
+            }
+            (_, Some(error)) if is_store_writer_busy(&error) && Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            (_, Some(error)) => return Err(error).context("publish durable worker event"),
+            (Err(error), None) => {
+                return Err(anyhow::Error::new(error)).context("publish durable worker event");
+            }
+        }
+    }
+}
+
+fn is_store_writer_busy(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
 }
 
 /// Convert the runner's explicit output files and terminal result into the

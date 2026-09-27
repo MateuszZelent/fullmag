@@ -274,6 +274,9 @@ verify-api-accepted-scheduler-discovery-e2e:
 verify-api-accepted-scheduler-persistent-cursor-e2e:
     {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-scheduler-persistent-cursor-e2e --repo-root "{{repo_root}}"
 
+verify-api-accepted-scheduler-parallel-resources-e2e:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-scheduler-parallel-resources-e2e --repo-root "{{repo_root}}"
+
 verify-api-accepted-scheduler-retry-e2e:
     {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-scheduler-retry-e2e --repo-root "{{repo_root}}"
 

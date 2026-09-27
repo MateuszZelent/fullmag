@@ -1,9 +1,8 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use fullmag_application::{CoordinatorPhase, TaskLifecycle, WorkerCommand, WorkerEvent};
 use fullmag_session::{
-    FmsResourceLease, FmsRetryAction, FmsRetryDecision, FmsRetryTrigger,
-    FmsWorkerProcessExitReceipt, SessionStore, FMS_RETRY_DECISION_SCHEMA,
-    FMS_WORKER_PROCESS_EXIT_RECEIPT_SCHEMA,
+    FMS_RETRY_DECISION_SCHEMA, FMS_WORKER_PROCESS_EXIT_RECEIPT_SCHEMA, FmsResourceLease,
+    FmsRetryAction, FmsRetryDecision, FmsRetryTrigger, FmsWorkerProcessExitReceipt, SessionStore,
 };
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
@@ -14,7 +13,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const SUPERVISOR_DIRECTORY: &str = "supervisor-slots";
-const SINGLE_WORKER_SLOT: &str = "slot-0";
+const LEGACY_SINGLE_WORKER_SLOT: &str = "slot-0";
 const SLOT_OWNER_FILE: &str = "owner.v2.json";
 
 #[derive(Debug)]
@@ -43,6 +42,10 @@ struct SupervisorSlotOwner {
     process_start_token: String,
     run_id: String,
     task_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resource_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_concurrency: Option<usize>,
     acquired_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -57,34 +60,59 @@ impl SupervisorSlot {
         store: &SessionStore,
         run_id: &str,
         task_id: &str,
+        resource_id: &str,
+        max_concurrency: usize,
         allow_stale_retry_recovery: bool,
     ) -> Result<Self> {
         fullmag_session::repository_path::validate_store_id(run_id)
             .context("supervisor run id is invalid")?;
         fullmag_session::repository_path::validate_store_id(task_id)
             .context("supervisor task id is invalid")?;
+        fullmag_session::repository_path::validate_store_id(resource_id)
+            .context("supervisor resource id is invalid")?;
+        if max_concurrency == 0 {
+            bail!("accepted-worker supervisor max concurrency must be positive");
+        }
         let _writer = store
             .write_transaction()
             .context("lock store before acquiring supervisor slot")?;
         let slots_root = ensure_real_directory(store.root(), SUPERVISOR_DIRECTORY)?;
-        let path = slots_root.join(SINGLE_WORKER_SLOT);
-        match fs::create_dir(&path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                reclaim_stale_retry_slot(&path, run_id, task_id, allow_stale_retry_recovery)?;
-                fs::create_dir(&path)
-                    .context("reacquire accepted-worker slot after stale retry recovery")?;
-            }
-            Err(error) => return Err(error).context("acquire accepted-worker supervisor slot"),
+        let path = slots_root.join(format!(
+            "resource-{}",
+            fullmag_session::hex_sha256(resource_id.as_bytes())
+        ));
+        if path.exists() {
+            reclaim_stale_retry_slot(
+                &path,
+                run_id,
+                task_id,
+                Some(resource_id),
+                allow_stale_retry_recovery,
+            )?;
         }
+        let legacy_path = slots_root.join(LEGACY_SINGLE_WORKER_SLOT);
+        if allow_stale_retry_recovery && legacy_path.exists() {
+            reclaim_stale_retry_slot(&legacy_path, run_id, task_id, None, true)?;
+        }
+        let (active_slots, active_limit) = inspect_active_supervisor_slots(&slots_root)?;
+        let effective_limit =
+            active_limit.map_or(max_concurrency, |limit| limit.min(max_concurrency));
+        if active_slots >= effective_limit {
+            bail!(
+                "accepted-worker concurrency limit {effective_limit} is occupied by {active_slots} supervisor process(es)"
+            );
+        }
+        fs::create_dir(&path).context("acquire accepted-worker resource supervisor slot")?;
         let owner_path = path.join(SLOT_OWNER_FILE);
         let owner = SupervisorSlotOwner {
-            schema_version: "fullmag.accepted_worker_supervisor_slot.v2".into(),
+            schema_version: "fullmag.accepted_worker_supervisor_slot.v3".into(),
             process_id: std::process::id(),
             process_start_token: process_start_token(std::process::id())?
                 .context("current supervisor process is not observable")?,
             run_id: run_id.into(),
             task_id: task_id.into(),
+            resource_id: Some(resource_id.into()),
+            max_concurrency: Some(max_concurrency),
             acquired_at: chrono::Utc::now(),
         };
         let result = (|| -> Result<()> {
@@ -127,11 +155,12 @@ fn reclaim_stale_retry_slot(
     slot_path: &Path,
     run_id: &str,
     task_id: &str,
+    resource_id: Option<&str>,
     allow_stale_retry_recovery: bool,
 ) -> Result<()> {
     if !allow_stale_retry_recovery {
         bail!(
-            "accepted-worker concurrency limit is occupied; stale slots require explicit orphan reconciliation"
+            "accepted-worker resource slot is occupied; stale slots require explicit orphan reconciliation"
         );
     }
     let metadata = fs::symlink_metadata(slot_path)
@@ -149,9 +178,12 @@ fn reclaim_stale_retry_slot(
         &fs::read(&owner_path).context("read occupied supervisor slot owner")?,
     )
     .context("parse occupied supervisor slot owner")?;
-    if owner.schema_version != "fullmag.accepted_worker_supervisor_slot.v2"
-        || owner.run_id != run_id
+    if !matches!(
+        owner.schema_version.as_str(),
+        "fullmag.accepted_worker_supervisor_slot.v2" | "fullmag.accepted_worker_supervisor_slot.v3"
+    ) || owner.run_id != run_id
         || owner.task_id != task_id
+        || resource_id.is_some_and(|resource_id| owner.resource_id.as_deref() != Some(resource_id))
     {
         bail!("occupied supervisor slot does not belong to this retry recovery");
     }
@@ -163,6 +195,50 @@ fn reclaim_stale_retry_slot(
     Ok(())
 }
 
+fn inspect_active_supervisor_slots(slots_root: &Path) -> Result<(usize, Option<usize>)> {
+    let mut active_slots = 0_usize;
+    let mut active_limit: Option<usize> = None;
+    for entry in fs::read_dir(slots_root).context("list accepted-worker supervisor slots")? {
+        let entry = entry.context("read accepted-worker supervisor slot entry")?;
+        let metadata = fs::symlink_metadata(entry.path())
+            .context("inspect accepted-worker supervisor slot entry")?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            bail!("accepted-worker supervisor slot entries must be real directories");
+        }
+        let owner_path = entry.path().join(SLOT_OWNER_FILE);
+        let owner_metadata = fs::symlink_metadata(&owner_path)
+            .context("active supervisor slot requires its immutable owner record")?;
+        if !owner_metadata.is_file() || owner_metadata.file_type().is_symlink() {
+            bail!("active supervisor slot owner must be a regular file");
+        }
+        let owner: SupervisorSlotOwner = serde_json::from_slice(
+            &fs::read(&owner_path).context("read active supervisor slot owner")?,
+        )
+        .context("parse active supervisor slot owner")?;
+        let owner_limit = match owner.schema_version.as_str() {
+            "fullmag.accepted_worker_supervisor_slot.v2" => 1,
+            "fullmag.accepted_worker_supervisor_slot.v3" => owner
+                .max_concurrency
+                .filter(|limit| *limit > 0)
+                .context("v3 supervisor slot owner requires positive max_concurrency")?,
+            other => bail!("unsupported supervisor slot owner schema `{other}`"),
+        };
+        if owner.schema_version == "fullmag.accepted_worker_supervisor_slot.v3" {
+            let resource_id = owner
+                .resource_id
+                .as_deref()
+                .context("v3 supervisor slot owner requires resource_id")?;
+            fullmag_session::repository_path::validate_store_id(resource_id)
+                .context("active supervisor slot resource id is invalid")?;
+        }
+        active_slots = active_slots
+            .checked_add(1)
+            .context("accepted-worker supervisor slot count overflow")?;
+        active_limit = Some(active_limit.map_or(owner_limit, |limit| limit.min(owner_limit)));
+    }
+    Ok((active_slots, active_limit))
+}
+
 #[cfg(target_os = "linux")]
 fn process_start_token(process_id: u32) -> Result<Option<String>> {
     let path = PathBuf::from(format!("/proc/{process_id}/stat"));
@@ -170,7 +246,7 @@ fn process_start_token(process_id: u32) -> Result<Option<String>> {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
-            return Err(error).with_context(|| format!("read process stat `{}`", path.display()))
+            return Err(error).with_context(|| format!("read process stat `{}`", path.display()));
         }
     };
     let command_end = contents
@@ -277,8 +353,8 @@ pub(crate) fn run_supervised_accepted_worker(
     heartbeat_interval: Duration,
     max_automatic_retries: usize,
 ) -> Result<SupervisedWorkerResult> {
-    if max_concurrency != 1 {
-        bail!("accepted-worker supervisor currently requires --max-concurrency 1");
+    if max_concurrency == 0 {
+        bail!("accepted-worker supervisor max concurrency must be positive");
     }
     if worker_timeout.is_zero() {
         bail!("accepted-worker supervisor requires a positive worker timeout");
@@ -291,12 +367,28 @@ pub(crate) fn run_supervised_accepted_worker(
     let recoverable_retry = retry_decision_for_terminal_task(store, run_id, task_id)?.is_some();
     let recoverable_process_exit =
         worker_process_exit_receipt_for_current_task(store, run_id, task_id)?.is_some();
-    let slot = SupervisorSlot::acquire(
-        store,
-        run_id,
-        task_id,
-        recoverable_retry || recoverable_process_exit,
-    )?;
+    let catalog = store
+        .read_run_catalog(run_id)?
+        .context("supervisor requires a durable run catalog before slot acquisition")?;
+    let resource_id = catalog
+        .tasks
+        .iter()
+        .find(|task| task.task_id == task_id)
+        .context("supervisor task is missing before slot acquisition")?
+        .resource_id
+        .clone()
+        .context("supervisor task has no assigned resource before slot acquisition")?;
+    let slot = retry_store_writer_busy(|| {
+        SupervisorSlot::acquire(
+            store,
+            run_id,
+            task_id,
+            &resource_id,
+            max_concurrency,
+            recoverable_retry || recoverable_process_exit,
+        )
+    })
+    .context("acquire accepted-worker supervisor slot")?;
     if let Some(result) = reconcile_durable_retry_before_spawn(store, run_id, task_id)? {
         slot.release()?;
         return Ok(result);
@@ -309,8 +401,10 @@ pub(crate) fn run_supervised_accepted_worker(
     }
     let run_id_typed = fullmag_application::RunId::parse(run_id.to_owned())
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    let claim = fullmag_runtime_control::load_current_task_claim(store, &run_id_typed, task_id)
-        .context("supervisor requires an exact active task claim")?;
+    let claim = retry_store_writer_busy(|| {
+        fullmag_runtime_control::load_current_task_claim(store, &run_id_typed, task_id)
+    })
+    .context("supervisor requires an exact active task claim")?;
     let lease = store
         .read_active_resource_lease_for_task(run_id, task_id)?
         .context("supervisor requires an active resource lease")?;
@@ -325,8 +419,9 @@ pub(crate) fn run_supervised_accepted_worker(
         bail!("resource lease changed while the supervisor captured its task claim");
     }
 
-    let recovered_before_spawn = fullmag_runtime_control::recover_coordinator(store, &claim)
-        .context("recover coordinator before spawning accepted worker")?;
+    let recovered_before_spawn =
+        retry_store_writer_busy(|| fullmag_runtime_control::recover_coordinator(store, &claim))
+            .context("recover coordinator before spawning accepted worker")?;
     if recovered_before_spawn.coordinator.phase() == CoordinatorPhase::Stopping
         && !recovered_before_spawn
             .events
@@ -337,8 +432,7 @@ pub(crate) fn run_supervised_accepted_worker(
             fullmag_application::DurableWorkerCoordinator::new(recovered_before_spawn.coordinator);
         commit_worker_event(store, &mut coordinator, WorkerEvent::Stopped)
             .context("persist cancellation before accepted worker spawn")?;
-        store
-            .release_resource_lease(&lease)
+        retry_store_writer_busy(|| store.release_resource_lease(&lease))
             .context("release pre-start cancelled worker resource lease")?;
         slot.release()?;
         return Ok(SupervisedWorkerResult {
@@ -743,8 +837,9 @@ fn reconcile_worker_exit(
     max_automatic_retries: usize,
 ) -> Result<SupervisedWorkerResult> {
     process_exit.validate_for_lease(lease)?;
-    let recovered = fullmag_runtime_control::recover_coordinator(store, claim)
-        .context("recover coordinator after worker exit")?;
+    let recovered =
+        retry_store_writer_busy(|| fullmag_runtime_control::recover_coordinator(store, claim))
+            .context("recover coordinator after worker exit")?;
     let phase = recovered.coordinator.phase();
     let checkpoint = recovered.coordinator.checkpoint();
     let starts = recovered
@@ -792,8 +887,7 @@ fn reconcile_worker_exit(
                 "receipt_id": process_exit.receipt_id,
             }),
         };
-        store
-            .release_resource_lease(lease)
+        retry_store_writer_busy(|| store.release_resource_lease(lease))
             .context("release exact worker resource lease after terminal exit")?;
         return Ok(SupervisedWorkerResult {
             recovered_terminal_completion: observed_output.is_none()
@@ -823,8 +917,7 @@ fn reconcile_worker_exit(
             commit_worker_event(store, &mut coordinator, WorkerEvent::Stopped)
                 .context("persist terminal worker cancellation after confirmed process exit")?;
         }
-        store
-            .release_resource_lease(lease)
+        retry_store_writer_busy(|| store.release_resource_lease(lease))
             .context("release cancelled worker resource lease after confirmed process exit")?;
         return Ok(SupervisedWorkerResult {
             recovered_terminal_completion: false,
@@ -892,15 +985,12 @@ fn reconcile_worker_exit(
         if let Some(decision) =
             automatic_retry_decision(store, claim, lease, &reason, max_automatic_retries)?
         {
-            store
-                .commit_retry_decision(&decision)
+            retry_store_writer_busy(|| store.commit_retry_decision(&decision))
                 .context("persist automatic retry decision before releasing its lease")?;
             accepted_supervisor_test_fail_after_retry_decision()?;
-            store
-                .release_resource_lease(lease)
+            retry_store_writer_busy(|| store.release_resource_lease(lease))
                 .context("release failed worker resource lease after durable retry decision")?;
-            store
-                .apply_retry_decision(&decision)
+            retry_store_writer_busy(|| store.apply_retry_decision(&decision))
                 .context("apply automatic retry decision after explicit lease release")?;
             return Ok(SupervisedWorkerResult {
                 recovered_terminal_completion: false,
@@ -913,15 +1003,13 @@ fn reconcile_worker_exit(
                 }),
             });
         }
-        store
-            .release_resource_lease(lease)
+        retry_store_writer_busy(|| store.release_resource_lease(lease))
             .context("release failed worker resource lease after terminal process exit")?;
         bail!("accepted worker failed before entering a durable side effect: {reason}");
     }
 
     if phase == CoordinatorPhase::Terminal {
-        store
-            .release_resource_lease(lease)
+        retry_store_writer_busy(|| store.release_resource_lease(lease))
             .context("release terminal failed worker resource lease")?;
     }
     bail!("accepted worker exited without a successful durable completion")
@@ -1379,33 +1467,55 @@ mod tests {
     }
 
     #[test]
-    fn single_worker_slot_is_exclusive_and_reusable_after_release() {
+    fn bounded_resource_slots_enforce_identity_and_global_limit() {
         let (root, store) = temporary_store("slot");
-        let first = SupervisorSlot::acquire(&store, "run-a", "task-a", false).unwrap();
-        assert!(SupervisorSlot::acquire(&store, "run-b", "task-b", false).is_err());
+        let first = SupervisorSlot::acquire(&store, "run-a", "task-a", "cpu-a", 2, false).unwrap();
+        assert!(
+            SupervisorSlot::acquire(&store, "run-b", "task-b", "cpu-a", 2, false).is_err(),
+            "one physical resource must not receive two live supervisors"
+        );
+        let second = SupervisorSlot::acquire(&store, "run-b", "task-b", "cpu-b", 2, false).unwrap();
+        assert!(
+            SupervisorSlot::acquire(&store, "run-c", "task-c", "cpu-c", 2, false).is_err(),
+            "the configured global bound must apply across resource identities"
+        );
         first.release().unwrap();
-        SupervisorSlot::acquire(&store, "run-b", "task-b", false)
+        SupervisorSlot::acquire(&store, "run-c", "task-c", "cpu-c", 2, false)
             .unwrap()
             .release()
             .unwrap();
+        second.release().unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn unsupported_concurrency_is_rejected_before_store_lookup() {
+    fn active_tighter_limit_cannot_be_widened_by_another_process() {
+        let (root, store) = temporary_store("tight-limit");
+        let first = SupervisorSlot::acquire(&store, "run-a", "task-a", "cpu-a", 1, false).unwrap();
+        assert!(SupervisorSlot::acquire(&store, "run-b", "task-b", "cpu-b", 2, false).is_err());
+        first.release().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn zero_concurrency_is_rejected_before_store_lookup() {
         let (root, store) = temporary_store("limit");
         let error = run_supervised_accepted_worker(
             &store,
             "run-a",
             "task-a",
             Path::new("missing-worker"),
-            2,
+            0,
             Duration::from_secs(1),
             Duration::from_millis(100),
             0,
         )
         .unwrap_err();
-        assert!(error.to_string().contains("--max-concurrency 1"));
+        assert!(
+            error
+                .to_string()
+                .contains("max concurrency must be positive")
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1491,10 +1601,12 @@ mod tests {
         assert!(!outcome.stop_requested);
         assert!(!outcome.timed_out);
         assert!(!outcome.output.status.success());
-        assert!(outcome
-            .control_failure_reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains("controlled Stop polling failure")));
+        assert!(
+            outcome
+                .control_failure_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("controlled Stop polling failure"))
+        );
         assert!(started.elapsed() < Duration::from_secs(5));
     }
 

@@ -72,6 +72,19 @@ fn persist_checkpoint(
     claim: &TaskClaim,
     checkpoint: &WorkerInboxCheckpoint,
 ) -> Result<(), ExecutionError> {
-    crate::commit_worker_checkpoint(store, claim, checkpoint)
-        .map_err(|error| ExecutionError::Invalid(error.to_string()))
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match crate::commit_worker_checkpoint(store, claim, checkpoint) {
+            Ok(()) => return Ok(()),
+            Err(error)
+                if error
+                    .chain()
+                    .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => return Err(ExecutionError::Invalid(error.to_string())),
+        }
+    }
 }

@@ -2023,7 +2023,8 @@ pub fn publish_accepted_task_prepare(
         inputs,
     )?;
 
-    crate::commit_coordinator_genesis(store, &checkpoint)?;
+    retry_store_writer_busy(|| crate::commit_coordinator_genesis(store, &checkpoint))
+        .context("publishing accepted task coordinator genesis")?;
 
     let mut publication_error = None;
     let result = coordinator.commit_command(
@@ -2040,6 +2041,11 @@ pub fn publish_accepted_task_prepare(
     );
     match (result, publication_error) {
         (Ok(envelope), None) => Ok(envelope),
+        (_, Some(error)) if is_store_writer_busy(&error) => retry_pending_command_publication(
+            store,
+            coordinator,
+            "publishing accepted task Prepare command",
+        ),
         (_, Some(error)) => Err(error).context("publishing accepted task Prepare command"),
         (Err(error), None) => {
             Err(anyhow::Error::new(error)).context("committing accepted task Prepare command")
@@ -2065,9 +2071,79 @@ pub fn publish_accepted_task_start(
     });
     match (result, publication_error) {
         (Ok(envelope), None) => Ok(envelope),
+        (_, Some(error)) if is_store_writer_busy(&error) => retry_pending_command_publication(
+            store,
+            coordinator,
+            "publishing accepted task Start command",
+        ),
         (_, Some(error)) => Err(error).context("publishing accepted task Start command"),
-        (Err(error), None) => Err(anyhow::Error::new(error))
-            .context("committing accepted task Start command"),
+        (Err(error), None) => {
+            Err(anyhow::Error::new(error)).context("committing accepted task Start command")
+        }
+    }
+}
+
+fn retry_pending_command_publication(
+    store: &SessionStore,
+    coordinator: &mut DurableWorkerCoordinator,
+    context: &'static str,
+) -> Result<WorkerCommandEnvelope> {
+    let expected = match &coordinator
+        .pending_transition()
+        .context("coordinator lost the pending command publication")?
+        .message
+    {
+        CoordinatorMessage::Command(envelope) => envelope.clone(),
+        CoordinatorMessage::Event(_) => bail!("pending coordinator publication is not a command"),
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let mut publication_error = None;
+        let result = coordinator.retry_publication(|transition| {
+            crate::commit_transition(store, transition)
+                .map(|_| ())
+                .map_err(|error| {
+                    publication_error = Some(error);
+                    CoordinatorError::Invalid("durable command publication retry failed".into())
+                })
+        });
+        match (result, publication_error) {
+            (Ok(CoordinatorMessage::Command(envelope)), None) if envelope == expected => {
+                return Ok(envelope);
+            }
+            (Ok(CoordinatorMessage::Command(_)), None) => {
+                bail!("retried coordinator command differs from the retained publication");
+            }
+            (Ok(CoordinatorMessage::Event(_)), None) => {
+                bail!("retried coordinator publication is not a command");
+            }
+            (_, Some(error))
+                if is_store_writer_busy(&error) && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            (_, Some(error)) => return Err(error).context(context),
+            (Err(error), None) => return Err(anyhow::Error::new(error)).context(context),
+        }
+    }
+}
+
+fn is_store_writer_busy(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
+}
+
+fn retry_store_writer_busy<T>(mut action: impl FnMut() -> Result<T>) -> Result<T> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match action() {
+            Ok(value) => return Ok(value),
+            Err(error) if is_store_writer_busy(&error) && std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => return Err(error),
+        }
     }
 }
 

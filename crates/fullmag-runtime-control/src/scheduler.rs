@@ -7,9 +7,9 @@
 
 use anyhow::{Context, Result, bail};
 use fullmag_application::{
-    CoordinatorError, DurableWorkerCoordinator, ExecutionError, ResourceLease, RunId, TaskClaim,
-    WORKER_PROTOCOL_SCHEMA, WorkerCommandEnvelope, WorkerCoordinator, WorkerEvent,
-    WorkerEventEnvelope,
+    CoordinatorError, CoordinatorMessage, DurableWorkerCoordinator, ExecutionError, ResourceLease,
+    RunId, TaskClaim, WORKER_PROTOCOL_SCHEMA, WorkerCommandEnvelope, WorkerCoordinator,
+    WorkerEvent, WorkerEventEnvelope,
 };
 use fullmag_authoring::StudyInputSource;
 use fullmag_session::{FmsTaskLifecycle, FmsTaskReadiness, SessionStore};
@@ -119,7 +119,9 @@ pub fn schedule_next_ready_accepted_task(
         {
             continue;
         }
-        let admission = crate::commit_claimed_task_admission(store, &task, &claim)?;
+        let admission =
+            retry_store_writer_busy(|| crate::commit_claimed_task_admission(store, &task, &claim))
+                .context("durably admitting accepted task claim")?;
         let coordinator = WorkerCoordinator::new(task, claim.clone())?;
         let mut coordinator = DurableWorkerCoordinator::new(coordinator);
         let prepare = crate::publish_accepted_task_prepare(
@@ -135,11 +137,13 @@ pub fn schedule_next_ready_accepted_task(
         );
         worker_inbox
             .receive(&prepare, |envelope| {
-                crate::load_accepted_worker_step(
-                    store,
-                    &specification.snapshot.project_id,
-                    envelope,
-                )
+                retry_store_writer_busy(|| {
+                    crate::load_accepted_worker_step(
+                        store,
+                        &specification.snapshot.project_id,
+                        envelope,
+                    )
+                })
                 .map(|_| ())
                 .map_err(|error| ExecutionError::Invalid(error.to_string()))
             })
@@ -156,22 +160,17 @@ pub fn schedule_next_ready_accepted_task(
                 .as_bytes()
             )
         );
-        coordinator
-            .commit_event(
-                WorkerEventEnvelope {
-                    schema_version: WORKER_PROTOCOL_SCHEMA.into(),
-                    message_id: prepared_message_id,
-                    sequence: 1,
-                    claim: claim.identity(),
-                    event: WorkerEvent::Prepared,
-                },
-                |transition| {
-                    crate::commit_transition(store, transition)
-                        .map(|_| ())
-                        .map_err(|error| CoordinatorError::Invalid(error.to_string()))
-                },
-            )
-            .map_err(|error| anyhow::anyhow!(error))?;
+        commit_prepared_event_with_retry(
+            store,
+            &mut coordinator,
+            WorkerEventEnvelope {
+                schema_version: WORKER_PROTOCOL_SCHEMA.into(),
+                message_id: prepared_message_id,
+                sequence: 1,
+                claim: claim.identity(),
+                event: WorkerEvent::Prepared,
+            },
+        )?;
         let start = crate::publish_accepted_task_start(store, &mut coordinator)?;
         const EXTERNAL_START_HANDOFF: &str =
             "accepted scheduler staged Start for external supervisor execution";
@@ -195,6 +194,99 @@ pub fn schedule_next_ready_accepted_task(
         }));
     }
     Ok(None)
+}
+
+fn retry_store_writer_busy<T>(mut action: impl FnMut() -> Result<T>) -> Result<T> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match action() {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if error
+                    .chain()
+                    .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn commit_prepared_event_with_retry(
+    store: &SessionStore,
+    coordinator: &mut DurableWorkerCoordinator,
+    event: WorkerEventEnvelope,
+) -> Result<()> {
+    let expected = event.clone();
+    let mut publication_error = None;
+    let result = coordinator.commit_event(event, |transition| {
+        crate::commit_transition(store, transition)
+            .map(|_| ())
+            .map_err(|error| {
+                publication_error = Some(error);
+                CoordinatorError::Invalid("durable Prepared publication failed".into())
+            })
+    });
+    match (result, publication_error) {
+        (Ok(_), None) => Ok(()),
+        (_, Some(error)) if is_store_writer_busy(&error) => {
+            retry_pending_event_publication(store, coordinator, &expected)
+        }
+        (_, Some(error)) => Err(error).context("publishing accepted task Prepared event"),
+        (Err(error), None) => {
+            Err(anyhow::Error::new(error)).context("committing accepted task Prepared event")
+        }
+    }
+}
+
+fn retry_pending_event_publication(
+    store: &SessionStore,
+    coordinator: &mut DurableWorkerCoordinator,
+    expected: &WorkerEventEnvelope,
+) -> Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let mut publication_error = None;
+        let result = coordinator.retry_publication(|transition| {
+            crate::commit_transition(store, transition)
+                .map(|_| ())
+                .map_err(|error| {
+                    publication_error = Some(error);
+                    CoordinatorError::Invalid("durable Prepared publication retry failed".into())
+                })
+        });
+        match (result, publication_error) {
+            (Ok(CoordinatorMessage::Event(envelope)), None) if envelope == *expected => {
+                return Ok(());
+            }
+            (Ok(CoordinatorMessage::Event(_)), None) => {
+                bail!("retried Prepared event differs from the retained publication");
+            }
+            (Ok(CoordinatorMessage::Command(_)), None) => {
+                bail!("retried coordinator publication is not an event");
+            }
+            (_, Some(error))
+                if is_store_writer_busy(&error) && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            (_, Some(error)) => {
+                return Err(error).context("publishing accepted task Prepared event");
+            }
+            (Err(error), None) => {
+                return Err(anyhow::Error::new(error))
+                    .context("publishing accepted task Prepared event");
+            }
+        }
+    }
+}
+
+fn is_store_writer_busy(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
 }
 
 fn inputs_are_automatically_resolvable(

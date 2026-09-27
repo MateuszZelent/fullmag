@@ -1090,7 +1090,168 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         std::env::var("FULLMAG_ACCEPTED_SCHEDULER_DISCOVERY_E2E").as_deref() == Ok("1");
     let scheduler_persistent_cursor_e2e =
         std::env::var("FULLMAG_ACCEPTED_SCHEDULER_PERSISTENT_CURSOR_E2E").as_deref() == Ok("1");
+    let scheduler_parallel_resources_e2e =
+        std::env::var("FULLMAG_ACCEPTED_SCHEDULER_PARALLEL_RESOURCES_E2E").as_deref()
+            == Ok("1");
     let scheduler_multi_run_e2e = scheduler_pool_e2e || scheduler_discovery_e2e;
+    if scheduler_parallel_resources_e2e {
+        let scheduler_executable = std::path::PathBuf::from(
+            std::env::var_os("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN")
+                .expect("parallel resource E2E requires the built accepted scheduler binary"),
+        );
+        let worker_executable = std::path::PathBuf::from(
+            std::env::var_os("FULLMAG_ACCEPTED_WORKER_E2E_BIN")
+                .expect("parallel resource E2E requires the built accepted worker binary"),
+        );
+        let scheduler_command = |run_id: &str, resource_id: &str| {
+            let mut command = std::process::Command::new(&scheduler_executable);
+            command
+                .arg("--store-root")
+                .arg(store.root())
+                .arg("--run-id")
+                .arg(run_id)
+                .arg("--resource-id")
+                .arg(resource_id)
+                .arg("--resource-kind")
+                .arg("cpu")
+                .arg("--cpu-millis")
+                .arg("100")
+                .arg("--memory-bytes")
+                .arg("1048576")
+                .arg("--gpu-memory-bytes")
+                .arg("0")
+                .arg("--storage-bytes")
+                .arg("8388608")
+                .arg("--worker-executable")
+                .arg(&worker_executable)
+                .arg("--max-concurrency")
+                .arg("2")
+                .arg("--max-tasks")
+                .arg("1")
+                .arg("--max-idle-polls")
+                .arg("0")
+                .arg("--idle-poll-milliseconds")
+                .arg("10")
+                .arg("--worker-timeout-seconds")
+                .arg("30")
+                .arg("--heartbeat-interval-milliseconds")
+                .arg("250")
+                .arg("--max-automatic-retries")
+                .arg("0")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            command
+        };
+        let mut first = scheduler_command(accepted_run_id.as_str(), "cpu-parallel-a")
+            .spawn()
+            .expect("spawn first parallel accepted scheduler");
+        let first_running_deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let lifecycle = store
+                .read_run_catalog(accepted_run_id.as_str())
+                .unwrap()
+                .unwrap()
+                .tasks[0]
+                .lifecycle;
+            if lifecycle == fullmag_session::FmsTaskLifecycle::Running {
+                break;
+            }
+            if std::time::Instant::now() >= first_running_deadline {
+                let _ = first.kill();
+                let output = first.wait_with_output().unwrap();
+                panic!(
+                    "first scheduler did not reach Running: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        let conflict = scheduler_command(&second_run_id, "cpu-parallel-a")
+            .output()
+            .expect("run conflicting scheduler against occupied resource");
+        assert!(!conflict.status.success());
+        assert!(
+            String::from_utf8_lossy(&conflict.stderr)
+                .contains("resource already has an active lease"),
+            "same-resource rejection must come from durable lease fencing: {}",
+            String::from_utf8_lossy(&conflict.stderr)
+        );
+
+        let mut second = scheduler_command(&second_run_id, "cpu-parallel-b")
+            .spawn()
+            .expect("spawn second parallel accepted scheduler");
+        let overlap_deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let first_lifecycle = store
+                .read_run_catalog(accepted_run_id.as_str())
+                .unwrap()
+                .unwrap()
+                .tasks[0]
+                .lifecycle;
+            let second_lifecycle = store
+                .read_run_catalog(&second_run_id)
+                .unwrap()
+                .unwrap()
+                .tasks[0]
+                .lifecycle;
+            if first_lifecycle == fullmag_session::FmsTaskLifecycle::Running
+                && second_lifecycle == fullmag_session::FmsTaskLifecycle::Running
+            {
+                break;
+            }
+            if std::time::Instant::now() >= overlap_deadline {
+                let _ = first.kill();
+                let _ = second.kill();
+                let first_output = first.wait_with_output().unwrap();
+                let second_output = second.wait_with_output().unwrap();
+                panic!(
+                    "parallel schedulers did not overlap; first={}, second={}",
+                    String::from_utf8_lossy(&first_output.stderr),
+                    String::from_utf8_lossy(&second_output.stderr)
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let first_output = first.wait_with_output().unwrap();
+        let second_output = second.wait_with_output().unwrap();
+        assert!(
+            first_output.status.success(),
+            "first parallel scheduler failed: {}",
+            String::from_utf8_lossy(&first_output.stderr)
+        );
+        assert!(
+            second_output.status.success(),
+            "second parallel scheduler failed: {}",
+            String::from_utf8_lossy(&second_output.stderr)
+        );
+        for output in [&first_output, &second_output] {
+            let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(summary["status"], "completed");
+            assert_eq!(summary["scheduled_count"], 1);
+            assert_eq!(summary["executed"][0]["worker"]["status"], "completed");
+        }
+        for run_id in [accepted_run_id.as_str(), second_run_id.as_str()] {
+            let catalog = store.read_run_catalog(run_id).unwrap().unwrap();
+            let task = catalog.tasks.first().unwrap();
+            assert_eq!(task.lifecycle, fullmag_session::FmsTaskLifecycle::Succeeded);
+            assert!(store
+                .read_active_resource_lease_for_task(run_id, task.task_id.as_str())
+                .unwrap()
+                .is_none());
+        }
+        assert_eq!(
+            std::fs::read_dir(store.root().join("supervisor-slots"))
+                .unwrap()
+                .count(),
+            0,
+            "clean process exits must release every supervisor slot"
+        );
+        return;
+    }
     if scheduler_e2e || scheduler_multi_run_e2e || scheduler_persistent_cursor_e2e {
         let scheduler_executable = std::path::PathBuf::from(
             std::env::var_os("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN")
