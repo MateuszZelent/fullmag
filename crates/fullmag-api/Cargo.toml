@@ -20,6 +20,12 @@ test = false
 bench = false
 
 [[bin]]
+name = "fullmag-api-accepted-fem-preparation-supervisor"
+path = "src/accepted_fem_preparation_supervisor_main.rs"
+test = false
+bench = false
+
+[[bin]]
 name = "fullmag-api-accepted-supervisor"
 path = "src/accepted_supervisor_main.rs"
 
