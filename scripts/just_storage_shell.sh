@@ -117,6 +117,12 @@ case "${recipe}" in
   *"scripts/verify_session_persistence.py"*"--route api-source-check"*)
     exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-source-check --repo-root "${repo_root}"
     ;;
+  *"scripts/verify_session_persistence.py"*"--route api-resource-pool-check"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-resource-pool-check --repo-root "${repo_root}"
+    ;;
+  *"scripts/verify_session_persistence.py"*"--route api-resource-pool-discovery-smoke"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-resource-pool-discovery-smoke --repo-root "${repo_root}"
+    ;;
   *"scripts/verify_session_persistence.py"*"--route runtime-control-tests"*)
     exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route runtime-control-tests --repo-root "${repo_root}"
     ;;

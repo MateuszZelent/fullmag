@@ -1142,6 +1142,7 @@ dependencies = [
  "fullmag-runtime-control",
  "fullmag-session",
  "futures-core",
+ "libc",
  "png 0.17.16",
  "serde",
  "serde_json",

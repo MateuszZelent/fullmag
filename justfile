@@ -230,6 +230,14 @@ check-session-persistence:
 check-api-source:
     {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-source-check --repo-root "{{repo_root}}"
 
+# Source check for truthful local resource capacity discovery and publication.
+check-api-resource-pool:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-resource-pool-check --repo-root "{{repo_root}}"
+
+# Probe host CPU, RAM, storage and optional NVIDIA capacity without publishing.
+verify-api-resource-pool-discovery-smoke:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-resource-pool-discovery-smoke --repo-root "{{repo_root}}"
+
 # Run the durable coordinator/runtime-control regression suite through the
 # canonical project storage route.
 verify-runtime-control:

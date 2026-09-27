@@ -138,7 +138,13 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
     lease i nie odłącza workera. Zmiana rodzaju lub budżetu aktywnego zasobu,
     cofnięcie generacji, zmiana payloadu bez nowej generacji albo zniknięcie już
     opublikowanej puli kończą usługę fail-closed.
-24. `run_spec.v2` wiąże requested execution z jawnym
+24. Publikator puli może wyprowadzić lokalny snapshot z bieżącej dostępnej
+    pojemności hosta. CPU, RAM i storage są po odjęciu jawnych rezerw dzielone
+    między wszystkie publikowane oferty; nie wolno przypisać całej wspólnej
+    pojemności każdemu GPU. UUID i wolny VRAM pochodzą z `nvidia-smi`.
+    Wymagany GPU bez poprawnego pomiaru blokuje publikację. `dry-run` wykonuje
+    ten sam pomiar i walidację bez zmiany trwałej generacji.
+25. `run_spec.v2` wiąże requested execution z jawnym
     `minimum_resources` dla CPU, RAM, VRAM i storage. CPU wymaga zerowego
     VRAM, GPU dodatniego VRAM, a wszystkie warianty dodatnich CPU, RAM i
     storage. Scheduler porównuje pełny budżet oraz klasę urządzenia przed
@@ -179,6 +185,9 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
   wielu tasków i nie dowodzi egzekwowania limitów przez system operacyjny,
   kontener ani urządzenie GPU. Legacy `run_spec.v1` zachowuje poprzednie
   zachowanie i nie jest automatycznie wzbogacany przez zgadywanie wymagań.
+- Lokalny snapshot jest chwilowym pomiarem dostępnej pojemności, a nie
+  egzekwowaniem limitu przez OS, kontener lub sterownik. Nie jest discovery
+  hostów zdalnych ani klastrowym resource managerem.
 - Jitter poprawia liveness lokalnej kontencji, lecz nie zastępuje kolejki
   rozproszonej ani nie uprawnia do ponowienia nieidempotentnego side effectu.
   Po przekroczeniu deadline'u store nadal zwraca dokładny błąd fail-closed.
@@ -249,6 +258,10 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
   odczyt legacy v1. Regresje schedulera sprawdzają każdy zbyt mały wymiar,
   brak mutacji taska po odmowie i późniejsze wykonanie przez wystarczającą
   ofertę.
+- Managed próba discovery musi uruchomić binarkę w trybie `dry-run`, potwierdzić
+  dodatnie CPU/RAM/storage, jawny status GPU oraz niepokrywający się podział
+  wspólnej pojemności. Osobne process E2E ma nadal objąć publikację snapshotu,
+  admission schedulera, wykonanie taska i zwolnienie lease.
 
 ## Migracja i rollback
 
@@ -268,7 +281,8 @@ anulowania przed spawnem i orphan recovery
 sprzed decyzji ograniczonego FDM CPU przechodzą. Przechodzą również bounded
 statyczna pula dwóch zasobów, rezydentne discovery runu utworzonego po starcie
 schedulera, kontrolowany drain procesu bez limitu tasków oraz monotoniczną
-dynamiczną pulę A → B z zachowaniem aktywnego lease. P5-B pozostaje otwarte do
-automatycznego discovery pojemności, priorytetów i backpressure, zdalnego ACK
+dynamiczną pulę A → B z zachowaniem aktywnego lease. Lokalny discovery dry-run
+CPU/RAM/storage/VRAM także przechodzi, lecz nie publikuje ani nie wykonuje
+solvera. P5-B pozostaje otwarte do process E2E discovery, priorytetów i backpressure, zdalnego ACK
 oraz dowodu braku równoległego starego workera i zwolnienia urządzenia dla
 pozostałych lane'ów.

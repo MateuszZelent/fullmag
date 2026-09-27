@@ -31,8 +31,10 @@ procesie. `--resident true` utrzymuje discovery podczas pustych skanów i wymaga
 tożsamości puli. `--max-tasks 0` oznacza brak limitu tylko dla tego trybu.
 Sygnał systemowy zatrzymuje nowe admission, pozwala dokończyć aktywne workery,
 zapisać checkpointy i zwolnić lease przed statusem `drained`. Snapshot
-członkostwa może podmienić A na B bez odebrania aktywnego lease A. Brakuje nadal
-automatycznego discovery pojemności, priorytetów/backpressure oraz
+członkostwa może podmienić A na B bez odebrania aktywnego lease A. Lokalne
+discovery wykrywa CPU/RAM/storage/VRAM i dzieli wspólną pojemność z jawnymi
+rezerwami; brakuje jego process E2E z publikacją i schedulerem,
+priorytetów/backpressure oraz
 heartbeat/Stop ACK dla zdalnego transportu. Process E2E pozostałych lane'ów
 również są otwarte. Anulowanie przed uruchomieniem
 workera jest obsłużone trwale i nie wykonuje spawnu procesu potomnego.
@@ -954,3 +956,16 @@ Rust oraz process E2E są zapisane lub wyspecyfikowane, lecz **NOT RUN** podczas
 aktywnego zakazu kompilowania testów jednostkowych. P3 wynosi **85%**, P5
 **65%**, a całość około **42%**. Szczegóły:
 [`51-task-resource-requirements.md`](51-task-resource-requirements.md).
+
+## Lokalne discovery pojemności zasobów — 27.09.2026
+
+Publikator puli wykrywa teraz bieżące CPU, dostępny RAM, wolne storage i wolny
+VRAM NVIDIA. Jawne rezerwy są odejmowane przed równym podziałem wspólnej
+pojemności hosta między ofertę CPU i oferty GPU. Managed `dry-run` wykrył 48
+logicznych CPU i jedną kartę NVIDIA, a następnie utworzył dwie niepokrywające
+się oferty: **PASS**, receipt `0689f7a754844492a208b379996b9e85`.
+Source-only check binarki: **PASS**, receipt
+`bdbc2e6b74ff4f09ba55074b1e4509b1`. Publikacja do store i wykonanie solvera
+pozostają osobną bramką. P3 wynosi **85%**, P5 **68%**, a całość około **43%**.
+Szczegóły:
+[`52-local-resource-capacity-discovery.md`](52-local-resource-capacity-discovery.md).
