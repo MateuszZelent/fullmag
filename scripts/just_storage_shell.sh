@@ -159,6 +159,9 @@ case "${recipe}" in
   *"scripts/verify_session_persistence.py"*"--route api-accepted-scheduler-parallel-resources-e2e"*)
     exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-parallel-resources-e2e --repo-root "${repo_root}"
     ;;
+  *"scripts/verify_session_persistence.py"*"--route api-accepted-scheduler-resource-pool-e2e"*)
+    exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-resource-pool-e2e --repo-root "${repo_root}"
+    ;;
   *"scripts/verify_session_persistence.py"*"--route api-accepted-scheduler-retry-e2e"*)
     exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-retry-e2e --repo-root "${repo_root}"
     ;;

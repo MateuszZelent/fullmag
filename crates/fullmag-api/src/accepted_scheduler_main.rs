@@ -6,17 +6,25 @@ use fullmag_application::{ResourceBudget, ResourceKind, ResourceLease, RunId};
 use fullmag_session::{
     FMS_SCHEDULER_POOL_CHECKPOINT_SCHEMA, FmsSchedulerPoolCheckpoint, FmsSchedulerRunSource,
 };
+use serde::Deserialize;
 use std::path::PathBuf;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SchedulerResourceOffer {
+    resource_id: String,
+    kind: ResourceKind,
+    budget: ResourceBudget,
+}
 
 struct SchedulerArgs {
     store_root: PathBuf,
     run_ids: Vec<String>,
     discover_runs: bool,
     pool_id: Option<String>,
-    resource_id: String,
-    resource_kind: ResourceKind,
-    resource_budget: ResourceBudget,
+    resources: Vec<SchedulerResourceOffer>,
     worker_executable: Option<PathBuf>,
     max_concurrency: usize,
     max_tasks: usize,
@@ -25,6 +33,45 @@ struct SchedulerArgs {
     worker_timeout: Duration,
     heartbeat_interval: Duration,
     max_automatic_retries: usize,
+}
+
+struct CompletedWorker {
+    resource_index: usize,
+    run_id: RunId,
+    scheduled: fullmag_runtime_control::ScheduledAcceptedTask,
+    result: accepted_study_supervisor::SupervisedWorkerResult,
+    available_run_ids: Vec<RunId>,
+}
+
+struct PendingWorker {
+    resource_index: usize,
+    run_id: RunId,
+    scheduled: fullmag_runtime_control::ScheduledAcceptedTask,
+}
+
+#[derive(Default)]
+struct ActiveWorkers(std::collections::BTreeMap<usize, JoinHandle<Result<CompletedWorker>>>);
+
+impl std::ops::Deref for ActiveWorkers {
+    type Target = std::collections::BTreeMap<usize, JoinHandle<Result<CompletedWorker>>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for ActiveWorkers {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for ActiveWorkers {
+    fn drop(&mut self) {
+        for handle in std::mem::take(&mut self.0).into_values() {
+            let _ = handle.join();
+        }
+    }
 }
 
 fn main() {
@@ -36,8 +83,9 @@ fn main() {
 
 fn run() -> Result<()> {
     let args = parse_args()?;
-    let store = fullmag_session::SessionStore::open_existing(&args.store_root)
-        .with_context(|| format!("open session store `{}`", args.store_root.display()))?;
+    let store =
+        retry_store_writer_busy(|| fullmag_session::SessionStore::open_existing(&args.store_root))
+            .with_context(|| format!("open session store `{}`", args.store_root.display()))?;
     let mut run_ids = Vec::with_capacity(args.run_ids.len());
     let mut unique_run_ids = std::collections::BTreeSet::new();
     for value in args.run_ids {
@@ -75,6 +123,11 @@ fn run() -> Result<()> {
         None => sibling_worker_executable()?,
     };
     let mut executed = Vec::new();
+    let resource_ids = args
+        .resources
+        .iter()
+        .map(|resource| resource.resource_id.clone())
+        .collect::<Vec<_>>();
     let mut next_run_id = checkpoint
         .as_ref()
         .and_then(|checkpoint| checkpoint.next_run_id.as_deref())
@@ -90,7 +143,8 @@ fn run() -> Result<()> {
         .collect::<Vec<_>>();
     let mut idle_poll_count = 0;
     let mut consecutive_idle_polls = 0;
-    while executed.len() < args.max_tasks {
+    let mut active_workers = ActiveWorkers::default();
+    while executed.len() < args.max_tasks || !active_workers.is_empty() {
         let available_run_ids = if args.discover_runs {
             let mut discovered = store
                 .list_run_intents()?
@@ -112,29 +166,76 @@ fn run() -> Result<()> {
         } else {
             run_ids.clone()
         };
-        let mut selected = None;
-        let start_index = next_run_id
-            .as_ref()
-            .and_then(|next| available_run_ids.iter().position(|run_id| run_id == next))
-            .unwrap_or(0);
-        for offset in 0..available_run_ids.len() {
-            let run_index = (start_index + offset) % available_run_ids.len();
-            let offer = ResourceLease::new(
-                args.resource_id.clone(),
-                args.resource_kind.clone(),
-                args.resource_budget.clone(),
-            )
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-            if let Some(scheduled) = fullmag_runtime_control::schedule_next_ready_accepted_task(
-                &store,
-                &available_run_ids[run_index],
-                offer,
-            )? {
-                selected = Some((run_index, scheduled));
+        let mut scheduled_any = false;
+        let mut pending_workers = Vec::<PendingWorker>::new();
+        for (resource_index, resource) in args.resources.iter().enumerate() {
+            if active_workers.len() + pending_workers.len() >= args.max_concurrency
+                || executed.len() + active_workers.len() + pending_workers.len() >= args.max_tasks
+            {
                 break;
             }
+            if active_workers.contains_key(&resource_index)
+                || pending_workers
+                    .iter()
+                    .any(|pending| pending.resource_index == resource_index)
+            {
+                continue;
+            }
+            let start_index = next_run_id
+                .as_ref()
+                .and_then(|next| available_run_ids.iter().position(|run_id| run_id == next))
+                .unwrap_or(0);
+            let mut selected = None;
+            for offset in 0..available_run_ids.len() {
+                let run_index = (start_index + offset) % available_run_ids.len();
+                let offer = ResourceLease::new(
+                    resource.resource_id.clone(),
+                    resource.kind.clone(),
+                    resource.budget.clone(),
+                )
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                if let Some(scheduled) = fullmag_runtime_control::schedule_next_ready_accepted_task(
+                    &store,
+                    &available_run_ids[run_index],
+                    offer,
+                )? {
+                    selected = Some((run_index, scheduled));
+                    break;
+                }
+            }
+            let Some((run_index, scheduled)) = selected else {
+                continue;
+            };
+            scheduled_any = true;
+            consecutive_idle_polls = 0;
+            let run_id = available_run_ids[run_index].clone();
+            next_run_id =
+                Some(available_run_ids[(run_index + 1) % available_run_ids.len()].clone());
+            pending_workers.push(PendingWorker {
+                resource_index,
+                run_id,
+                scheduled,
+            });
         }
-        let Some((run_index, scheduled)) = selected else {
+        for pending in pending_workers {
+            let handle = spawn_supervised_worker(
+                args.store_root.clone(),
+                pending.resource_index,
+                pending.run_id,
+                pending.scheduled,
+                available_run_ids.clone(),
+                worker_executable.clone(),
+                args.max_concurrency,
+                args.worker_timeout,
+                args.heartbeat_interval,
+                args.max_automatic_retries,
+            );
+            active_workers.insert(pending.resource_index, handle);
+        }
+        if active_workers.is_empty() {
+            if scheduled_any {
+                continue;
+            }
             if consecutive_idle_polls >= args.max_idle_polls {
                 break;
             }
@@ -142,20 +243,26 @@ fn run() -> Result<()> {
             consecutive_idle_polls += 1;
             std::thread::sleep(args.idle_poll_interval);
             continue;
+        }
+        let Some(resource_index) = active_workers
+            .iter()
+            .find_map(|(resource_index, handle)| handle.is_finished().then_some(*resource_index))
+        else {
+            std::thread::sleep(Duration::from_millis(10));
+            continue;
         };
-        consecutive_idle_polls = 0;
-        let run_id = &available_run_ids[run_index];
-        next_run_id = Some(available_run_ids[(run_index + 1) % available_run_ids.len()].clone());
-        let result = accepted_study_supervisor::run_supervised_accepted_worker(
-            &store,
-            run_id.as_str(),
-            scheduled.claim.task_id.as_str(),
-            &worker_executable,
-            args.max_concurrency,
-            args.worker_timeout,
-            args.heartbeat_interval,
-            args.max_automatic_retries,
-        )?;
+        let handle = active_workers
+            .remove(&resource_index)
+            .context("finished scheduler worker handle disappeared")?;
+        let completed = match handle.join() {
+            Ok(Ok(completed)) => completed,
+            Ok(Err(error)) => {
+                return Err(error).context("supervise scheduled accepted worker");
+            }
+            Err(_) => {
+                bail!("scheduled accepted worker supervision thread panicked");
+            }
+        };
         if let Some(pool_id) = args.pool_id.as_deref() {
             let checkpoint = FmsSchedulerPoolCheckpoint {
                 schema_version: FMS_SCHEDULER_POOL_CHECKPOINT_SCHEMA.into(),
@@ -164,7 +271,8 @@ fn run() -> Result<()> {
                     .checked_add(1)
                     .context("scheduler pool checkpoint sequence overflow")?,
                 run_source,
-                run_ids: available_run_ids
+                run_ids: completed
+                    .available_run_ids
                     .iter()
                     .map(|run_id| run_id.as_str().to_owned())
                     .collect(),
@@ -179,22 +287,23 @@ fn run() -> Result<()> {
             checkpoint_sequence = checkpoint.sequence;
         }
         executed.push(serde_json::json!({
-            "run_id": run_id.as_str(),
-            "task_id": scheduled.claim.task_id.as_str(),
-            "step_id": scheduled.step_id,
-            "attempt_id": scheduled.claim.attempt_id.as_str(),
-            "ownership_epoch": scheduled.claim.ownership_epoch.value(),
-            "admission": match scheduled.admission {
+            "resource_id": args.resources[completed.resource_index].resource_id,
+            "run_id": completed.run_id.as_str(),
+            "task_id": completed.scheduled.claim.task_id.as_str(),
+            "step_id": completed.scheduled.step_id,
+            "attempt_id": completed.scheduled.claim.attempt_id.as_str(),
+            "ownership_epoch": completed.scheduled.claim.ownership_epoch.value(),
+            "admission": match completed.scheduled.admission {
                 fullmag_session::TaskAdmissionCommitDisposition::Admitted => "admitted",
                 fullmag_session::TaskAdmissionCommitDisposition::Replayed => "replayed",
                 fullmag_session::TaskAdmissionCommitDisposition::Superseded => "superseded",
             },
-            "prepare_message_id": scheduled.prepare.message_id,
-            "start_message_id": scheduled.start.message_id,
-            "worker_timed_out": result.worker_timed_out,
-            "worker_cancelled": result.worker_cancelled,
-            "retry_scheduled": result.retry_scheduled,
-            "worker": result.worker_summary,
+            "prepare_message_id": completed.scheduled.prepare.message_id,
+            "start_message_id": completed.scheduled.start.message_id,
+            "worker_timed_out": completed.result.worker_timed_out,
+            "worker_cancelled": completed.result.worker_cancelled,
+            "retry_scheduled": completed.result.retry_scheduled,
+            "worker": completed.result.worker_summary,
         }));
     }
     println!(
@@ -206,12 +315,51 @@ fn run() -> Result<()> {
             "run_source": if args.discover_runs { "store" } else { "explicit" },
             "pool_id": args.pool_id,
             "pool_checkpoint_sequence": checkpoint_sequence,
+            "resource_count": resource_ids.len(),
+            "resource_ids": resource_ids,
             "scheduled_count": executed.len(),
             "idle_poll_count": idle_poll_count,
             "executed": executed,
         }))?
     );
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_supervised_worker(
+    store_root: PathBuf,
+    resource_index: usize,
+    run_id: RunId,
+    scheduled: fullmag_runtime_control::ScheduledAcceptedTask,
+    available_run_ids: Vec<RunId>,
+    worker_executable: PathBuf,
+    max_concurrency: usize,
+    worker_timeout: Duration,
+    heartbeat_interval: Duration,
+    max_automatic_retries: usize,
+) -> JoinHandle<Result<CompletedWorker>> {
+    std::thread::spawn(move || {
+        let store =
+            retry_store_writer_busy(|| fullmag_session::SessionStore::open_existing(&store_root))
+                .with_context(|| format!("open session store `{}`", store_root.display()))?;
+        let result = accepted_study_supervisor::run_supervised_accepted_worker(
+            &store,
+            run_id.as_str(),
+            scheduled.claim.task_id.as_str(),
+            &worker_executable,
+            max_concurrency,
+            worker_timeout,
+            heartbeat_interval,
+            max_automatic_retries,
+        )?;
+        Ok(CompletedWorker {
+            resource_index,
+            run_id,
+            scheduled,
+            result,
+            available_run_ids,
+        })
+    })
 }
 
 fn retry_store_writer_busy<T>(mut operation: impl FnMut() -> Result<T>) -> Result<T> {
@@ -245,25 +393,32 @@ fn sibling_worker_executable() -> Result<PathBuf> {
 fn parse_args() -> Result<SchedulerArgs> {
     let mut values = std::collections::BTreeMap::new();
     let mut run_ids = Vec::new();
+    let mut resource_offers = Vec::new();
     let mut args = std::env::args_os().skip(1);
     while let Some(argument) = args.next() {
         let flag = argument
             .into_string()
             .map_err(|_| anyhow::anyhow!("scheduler option name must be valid UTF-8"))?;
-        if !flag.starts_with("--") || (flag != "--run-id" && values.contains_key(&flag)) {
+        if !flag.starts_with("--")
+            || (flag != "--run-id" && flag != "--resource-offer" && values.contains_key(&flag))
+        {
             bail!("invalid or duplicate scheduler option `{flag}`");
         }
         let value = args
             .next()
             .with_context(|| format!("scheduler option `{flag}` requires a value"))?;
-        if flag == "--run-id" {
-            run_ids.push(
-                value.into_string().map_err(|_| {
+        match flag.as_str() {
+            "--run-id" => {
+                run_ids.push(value.into_string().map_err(|_| {
                     anyhow::anyhow!("scheduler option `--run-id` must be valid UTF-8")
-                })?,
-            );
-        } else {
-            values.insert(flag, value);
+                })?)
+            }
+            "--resource-offer" => resource_offers.push(value.into_string().map_err(|_| {
+                anyhow::anyhow!("scheduler option `--resource-offer` must be valid UTF-8")
+            })?),
+            _ => {
+                values.insert(flag, value);
+            }
         }
     }
     let discover_runs = values
@@ -282,33 +437,61 @@ fn parse_args() -> Result<SchedulerArgs> {
                 .map_err(|_| anyhow::anyhow!("scheduler option `--pool-id` must be valid UTF-8"))
         })
         .transpose()?;
-    let mut take_string = |flag: &str| -> Result<String> {
-        values
-            .remove(flag)
-            .with_context(|| format!("missing required {flag}"))?
-            .into_string()
-            .map_err(|_| anyhow::anyhow!("scheduler option `{flag}` must be valid UTF-8"))
+    let store_root = PathBuf::from(take_required_string(&mut values, "--store-root")?);
+    let legacy_resource_flags = [
+        "--resource-id",
+        "--resource-kind",
+        "--cpu-millis",
+        "--memory-bytes",
+        "--gpu-memory-bytes",
+        "--storage-bytes",
+    ];
+    let resources = if resource_offers.is_empty() {
+        let resource_id = take_required_string(&mut values, "--resource-id")?;
+        let resource_kind = match take_required_string(&mut values, "--resource-kind")?.as_str() {
+            "cpu" => ResourceKind::Cpu,
+            "gpu" => ResourceKind::Gpu,
+            other => bail!("unsupported scheduler resource kind `{other}`"),
+        };
+        vec![SchedulerResourceOffer {
+            resource_id,
+            kind: resource_kind,
+            budget: ResourceBudget {
+                cpu_millis: take_required_u64(&mut values, "--cpu-millis")?,
+                memory_bytes: take_required_u64(&mut values, "--memory-bytes")?,
+                gpu_memory_bytes: take_required_u64(&mut values, "--gpu-memory-bytes")?,
+                storage_bytes: take_required_u64(&mut values, "--storage-bytes")?,
+            },
+        }]
+    } else {
+        if let Some(flag) = legacy_resource_flags
+            .iter()
+            .find(|flag| values.contains_key(**flag))
+        {
+            bail!("scheduler option `--resource-offer` cannot be combined with `{flag}`");
+        }
+        let mut unique_resource_ids = std::collections::BTreeSet::new();
+        resource_offers
+            .into_iter()
+            .map(|value| {
+                let offer = serde_json::from_str::<SchedulerResourceOffer>(&value)
+                    .context("scheduler option `--resource-offer` must be valid resource JSON")?;
+                ResourceLease::new(
+                    offer.resource_id.clone(),
+                    offer.kind.clone(),
+                    offer.budget.clone(),
+                )
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                if !unique_resource_ids.insert(offer.resource_id.clone()) {
+                    bail!("duplicate scheduler resource id `{}`", offer.resource_id);
+                }
+                Ok(offer)
+            })
+            .collect::<Result<Vec<_>>>()?
     };
-    let store_root = PathBuf::from(take_string("--store-root")?);
-    let resource_id = take_string("--resource-id")?;
-    let resource_kind = match take_string("--resource-kind")?.as_str() {
-        "cpu" => ResourceKind::Cpu,
-        "gpu" => ResourceKind::Gpu,
-        other => bail!("unsupported scheduler resource kind `{other}`"),
-    };
-    let mut take_u64 = |flag: &str| -> Result<u64> {
-        take_string(flag)?
-            .parse::<u64>()
-            .with_context(|| format!("scheduler option `{flag}` must be a non-negative integer"))
-    };
-    let resource_budget = ResourceBudget {
-        cpu_millis: take_u64("--cpu-millis")?,
-        memory_bytes: take_u64("--memory-bytes")?,
-        gpu_memory_bytes: take_u64("--gpu-memory-bytes")?,
-        storage_bytes: take_u64("--storage-bytes")?,
-    };
-    let worker_timeout_seconds = take_u64("--worker-timeout-seconds")?;
-    let heartbeat_interval_milliseconds = take_u64("--heartbeat-interval-milliseconds")?;
+    let worker_timeout_seconds = take_required_u64(&mut values, "--worker-timeout-seconds")?;
+    let heartbeat_interval_milliseconds =
+        take_required_u64(&mut values, "--heartbeat-interval-milliseconds")?;
     if worker_timeout_seconds == 0 || heartbeat_interval_milliseconds == 0 {
         bail!("scheduler timeout and heartbeat interval must be positive");
     }
@@ -352,9 +535,7 @@ fn parse_args() -> Result<SchedulerArgs> {
         run_ids,
         discover_runs,
         pool_id,
-        resource_id,
-        resource_kind,
-        resource_budget,
+        resources,
         worker_executable,
         max_concurrency,
         max_tasks,
@@ -364,6 +545,26 @@ fn parse_args() -> Result<SchedulerArgs> {
         heartbeat_interval: Duration::from_millis(heartbeat_interval_milliseconds),
         max_automatic_retries,
     })
+}
+
+fn take_required_string(
+    values: &mut std::collections::BTreeMap<String, std::ffi::OsString>,
+    flag: &str,
+) -> Result<String> {
+    values
+        .remove(flag)
+        .with_context(|| format!("missing required {flag}"))?
+        .into_string()
+        .map_err(|_| anyhow::anyhow!("scheduler option `{flag}` must be valid UTF-8"))
+}
+
+fn take_required_u64(
+    values: &mut std::collections::BTreeMap<String, std::ffi::OsString>,
+    flag: &str,
+) -> Result<u64> {
+    take_required_string(values, flag)?
+        .parse::<u64>()
+        .with_context(|| format!("scheduler option `{flag}` must be a non-negative integer"))
 }
 
 fn parse_bool(flag: &str, value: std::ffi::OsString) -> Result<bool> {

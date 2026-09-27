@@ -1093,6 +1093,8 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
     let scheduler_parallel_resources_e2e =
         std::env::var("FULLMAG_ACCEPTED_SCHEDULER_PARALLEL_RESOURCES_E2E").as_deref()
             == Ok("1");
+    let scheduler_resource_pool_e2e =
+        std::env::var("FULLMAG_ACCEPTED_SCHEDULER_RESOURCE_POOL_E2E").as_deref() == Ok("1");
     let scheduler_multi_run_e2e = scheduler_pool_e2e || scheduler_discovery_e2e;
     if scheduler_parallel_resources_e2e {
         let scheduler_executable = std::path::PathBuf::from(
@@ -1268,6 +1270,125 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             0,
             "clean process exits must release every supervisor slot"
         );
+        return;
+    }
+    if scheduler_resource_pool_e2e {
+        let scheduler_executable = std::path::PathBuf::from(
+            std::env::var_os("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN")
+                .expect("resource pool E2E requires the built accepted scheduler binary"),
+        );
+        let worker_executable = std::path::PathBuf::from(
+            std::env::var_os("FULLMAG_ACCEPTED_WORKER_E2E_BIN")
+                .expect("resource pool E2E requires the built accepted worker binary"),
+        );
+        let resource_offer = |resource_id: &str| {
+            serde_json::json!({
+                "resource_id": resource_id,
+                "kind": "cpu",
+                "budget": {
+                    "cpu_millis": 100,
+                    "memory_bytes": 1048576,
+                    "gpu_memory_bytes": 0,
+                    "storage_bytes": 8388608,
+                },
+            })
+            .to_string()
+        };
+        let mut scheduler = std::process::Command::new(&scheduler_executable)
+            .arg("--store-root")
+            .arg(store.root())
+            .arg("--run-id")
+            .arg(accepted_run_id.as_str())
+            .arg("--run-id")
+            .arg(&second_run_id)
+            .arg("--resource-offer")
+            .arg(resource_offer("cpu-pool-a"))
+            .arg("--resource-offer")
+            .arg(resource_offer("cpu-pool-b"))
+            .arg("--worker-executable")
+            .arg(&worker_executable)
+            .arg("--max-concurrency")
+            .arg("2")
+            .arg("--max-tasks")
+            .arg("2")
+            .arg("--max-idle-polls")
+            .arg("0")
+            .arg("--idle-poll-milliseconds")
+            .arg("10")
+            .arg("--worker-timeout-seconds")
+            .arg("30")
+            .arg("--heartbeat-interval-milliseconds")
+            .arg("250")
+            .arg("--max-automatic-retries")
+            .arg("0")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn bounded resource pool scheduler");
+        let overlap_deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let first_lifecycle = store
+                .read_run_catalog(accepted_run_id.as_str())
+                .unwrap()
+                .unwrap()
+                .tasks[0]
+                .lifecycle;
+            let second_lifecycle = store
+                .read_run_catalog(&second_run_id)
+                .unwrap()
+                .unwrap()
+                .tasks[0]
+                .lifecycle;
+            if first_lifecycle == fullmag_session::FmsTaskLifecycle::Running
+                && second_lifecycle == fullmag_session::FmsTaskLifecycle::Running
+            {
+                break;
+            }
+            if std::time::Instant::now() >= overlap_deadline {
+                let _ = scheduler.kill();
+                let output = scheduler.wait_with_output().unwrap();
+                panic!(
+                    "resource pool tasks did not overlap: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let output = scheduler.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "resource pool scheduler failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(summary["status"], "completed");
+        assert_eq!(summary["scheduled_count"], 2);
+        assert_eq!(summary["resource_count"], 2);
+        assert_eq!(
+            summary["resource_ids"],
+            serde_json::json!(["cpu-pool-a", "cpu-pool-b"])
+        );
+        let executed_resources = summary["executed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["resource_id"].as_str().unwrap())
+            .collect::<std::collections::BTreeSet<_>>();
+        let expected_resources = ["cpu-pool-a", "cpu-pool-b"]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(executed_resources, expected_resources);
+        for run_id in [accepted_run_id.as_str(), second_run_id.as_str()] {
+            let catalog = store.read_run_catalog(run_id).unwrap().unwrap();
+            let task = catalog.tasks.first().unwrap();
+            assert_eq!(task.lifecycle, fullmag_session::FmsTaskLifecycle::Succeeded);
+            assert!(store
+                .read_active_resource_lease_for_task(run_id, task.task_id.as_str())
+                .unwrap()
+                .is_none());
+        }
         return;
     }
     if scheduler_e2e || scheduler_multi_run_e2e || scheduler_persistent_cursor_e2e {
