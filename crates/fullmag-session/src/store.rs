@@ -2811,11 +2811,103 @@ impl SessionStore {
         self.commit_preparation_resource_lease_unlocked(lease)
     }
 
+    /// Try to acquire one exact pool offer without turning ordinary scheduler
+    /// races into store corruption errors. `None` means that either the task or
+    /// the physical resource is no longer available. Pool generation and
+    /// payload mismatches remain hard errors.
+    pub fn try_commit_preparation_resource_lease_from_pool(
+        &self,
+        pool_id: &str,
+        pool_generation: u64,
+        lease: &FmsPreparationResourceLease,
+    ) -> Result<Option<PreparationResourceLeaseCommitDisposition>> {
+        validate_store_id(pool_id)?;
+        lease.validate()?;
+        if lease.state != FmsResourceLeaseState::Active {
+            anyhow::bail!("preparation resource lease acquisition requires active state");
+        }
+        let _writer_lease = self.write_transaction()?;
+        let pool = self
+            .read_preparation_resource_pool(pool_id)?
+            .context("preparation admission requires a durable resource pool")?;
+        if pool.generation != pool_generation {
+            anyhow::bail!("preparation resource pool generation changed before admission");
+        }
+        let offer = pool
+            .resources
+            .iter()
+            .find(|offer| offer.resource_id == lease.resource_id)
+            .context("preparation resource is absent from the selected pool generation")?;
+        if offer.budget != lease.budget {
+            anyhow::bail!("preparation lease budget differs from the durable pool offer");
+        }
+
+        let catalog = self
+            .read_run_catalog(&lease.run_id)?
+            .context("preparation resource lease requires a durable run catalog")?;
+        let task = catalog.tasks.iter().find(|task| task.task_id == lease.task_id);
+        let task_available = task.is_some_and(|task| {
+            task.lifecycle == FmsTaskLifecycle::Accepted
+                && matches!(
+                    &task.readiness,
+                    FmsTaskReadiness::Blocked { reason }
+                        if reason == FMS_TASK_AWAITING_PREPARATION_REASON
+                )
+                && task.attempt_id.is_none()
+                && task.ownership_epoch.is_none()
+                && task.resource_id.is_none()
+        });
+        if !task_available
+            || self
+                .read_task_preparation_receipt(&lease.run_id, &lease.task_id)?
+                .is_some()
+        {
+            return Ok(None);
+        }
+
+        if let Some(existing) =
+            self.find_active_preparation_resource_lease_for_task_unlocked(
+                &lease.run_id,
+                &lease.task_id,
+            )?
+        {
+            if existing.identity_matches(lease) && existing.budget == lease.budget {
+                return Ok(Some(PreparationResourceLeaseCommitDisposition::Replayed));
+            }
+            return Ok(None);
+        }
+        if self
+            .find_active_resource_lease_unlocked(&lease.resource_id)?
+            .is_some()
+            || self
+                .find_active_preparation_resource_lease_unlocked(&lease.resource_id)?
+                .is_some()
+        {
+            return Ok(None);
+        }
+        self.commit_preparation_resource_lease_unlocked(lease)
+            .map(Some)
+    }
+
     fn commit_preparation_resource_lease_unlocked(
         &self,
         lease: &FmsPreparationResourceLease,
     ) -> Result<PreparationResourceLeaseCommitDisposition> {
         self.validate_preparation_resource_lease_owner_unlocked(lease)?;
+        if let Some(existing) =
+            self.find_active_preparation_resource_lease_for_task_unlocked(
+                &lease.run_id,
+                &lease.task_id,
+            )?
+        {
+            if existing.identity_matches(lease) && existing.budget == lease.budget {
+                return Ok(PreparationResourceLeaseCommitDisposition::Replayed);
+            }
+            anyhow::bail!(
+                "task `{}` already has an active durable preparation lease",
+                lease.task_id
+            );
+        }
         if self
             .find_active_resource_lease_unlocked(&lease.resource_id)?
             .is_some()
@@ -2873,6 +2965,84 @@ impl SessionStore {
             anyhow::bail!("preparation resource lease identity does not match its path");
         }
         Ok(Some(lease))
+    }
+
+    pub fn list_active_preparation_resource_leases(
+        &self,
+    ) -> Result<Vec<FmsPreparationResourceLease>> {
+        let runs = checked_path(&self.root, "runs")?;
+        if !runs.exists() {
+            return Ok(Vec::new());
+        }
+        let mut active = Vec::new();
+        for run_entry in fs::read_dir(&runs)? {
+            let run_entry = run_entry?;
+            reject_link(&run_entry.path())?;
+            if !run_entry.file_type()?.is_dir() {
+                anyhow::bail!("unsupported runs entry `{}`", run_entry.path().display());
+            }
+            let run_id = run_entry
+                .file_name()
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("non-UTF8 run identifier"))?;
+            validate_store_id(&run_id)?;
+            let root = run_entry.path().join("preparation_resource_leases");
+            if !root.exists() {
+                continue;
+            }
+            reject_link(&root)?;
+            if !root.is_dir() {
+                anyhow::bail!("preparation_resource_leases path is not a directory");
+            }
+            for resource_entry in fs::read_dir(&root)? {
+                let resource_entry = resource_entry?;
+                reject_link(&resource_entry.path())?;
+                if !resource_entry.file_type()?.is_dir() {
+                    anyhow::bail!("preparation resource lease resource entry is not a directory");
+                }
+                let resource_id = resource_entry
+                    .file_name()
+                    .into_string()
+                    .map_err(|_| anyhow::anyhow!("non-UTF8 preparation resource identifier"))?;
+                validate_store_id(&resource_id)?;
+                for lease_entry in fs::read_dir(resource_entry.path())? {
+                    let lease_entry = lease_entry?;
+                    reject_link(&lease_entry.path())?;
+                    if !lease_entry.file_type()?.is_file() {
+                        anyhow::bail!("preparation resource lease entry is not a file");
+                    }
+                    let file_name = lease_entry
+                        .file_name()
+                        .into_string()
+                        .map_err(|_| anyhow::anyhow!("non-UTF8 preparation lease file name"))?;
+                    let lease_token = file_name
+                        .strip_suffix(".json")
+                        .context("preparation resource lease file name must end in .json")?;
+                    validate_store_id(lease_token)?;
+                    let lease: FmsPreparationResourceLease =
+                        serde_json::from_slice(&fs::read(lease_entry.path())?)?;
+                    lease.validate()?;
+                    if lease.run_id != run_id
+                        || lease.resource_id != resource_id
+                        || lease.lease_token != lease_token
+                    {
+                        anyhow::bail!("preparation resource lease path identity mismatch");
+                    }
+                    if lease.state == FmsResourceLeaseState::Active {
+                        active.push(lease);
+                    }
+                }
+            }
+        }
+        active.sort_by(|left, right| {
+            (&left.run_id, &left.task_id, &left.resource_id, &left.lease_token).cmp(&(
+                &right.run_id,
+                &right.task_id,
+                &right.resource_id,
+                &right.lease_token,
+            ))
+        });
+        Ok(active)
     }
 
     pub fn heartbeat_preparation_resource_lease(
@@ -3376,6 +3546,26 @@ impl SessionStore {
                     active = Some(lease);
                 }
             }
+        }
+        Ok(active)
+    }
+
+    fn find_active_preparation_resource_lease_for_task_unlocked(
+        &self,
+        run_id: &str,
+        task_id: &str,
+    ) -> Result<Option<FmsPreparationResourceLease>> {
+        validate_store_id(run_id)?;
+        validate_store_id(task_id)?;
+        let mut matching = self
+            .list_active_preparation_resource_leases()?
+            .into_iter()
+            .filter(|lease| lease.run_id == run_id && lease.task_id == task_id);
+        let active = matching.next();
+        if matching.next().is_some() {
+            anyhow::bail!(
+                "multiple active preparation leases found for task `{run_id}/{task_id}`"
+            );
         }
         Ok(active)
     }
