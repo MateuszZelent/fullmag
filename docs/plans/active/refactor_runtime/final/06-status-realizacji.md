@@ -1797,3 +1797,16 @@ process exit receipt i lease-fenced publikacja preparation receiptu pozostają
 otwarte; managed native FEM i process E2E są **NOT VERIFIED**. **P4 50%, cały
 plan około 49%**. Szczegóły:
 [p4/04-preparation-resource-lease.md](p4/04-preparation-resource-lease.md).
+
+## P4-B — lease-fenced FEM receipt — 27.09.2026
+
+Accepted FEM preparer wymaga teraz resource_id, preparation attempt i tokenu.
+Store odczytuje trwały lease ponownie pod writer lockiem i publikuje nowy
+receipt tylko dla aktywnej, dokładnie zgodnej własności RunId/TaskId/attempt.
+Replay identycznego receiptu pozostaje idempotentny i nie ponawia native pracy.
+
+Source check session/API/preparera i diff check: **PASS**. Testów jednostkowych
+nie kompilowano zgodnie z zakazem; managed native FEM i process E2E są **NOT
+VERIFIED**. Pula, admission, supervisor, exit receipt, recovery i finalizacja
+readiness pozostają otwarte. **P4 50%, cały plan około 49%**. Szczegóły:
+[p4/05-lease-fenced-fem-receipt.md](p4/05-lease-fenced-fem-receipt.md).

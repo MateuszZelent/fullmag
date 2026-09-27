@@ -451,3 +451,15 @@ Pula, admission, supervisor, process exit receipt i lease-fenced publikacja
 preparation receiptu pozostają otwarte. Managed native runtime nadal jest
 `NOT VERIFIED`; P4 pozostaje na **50%**, a cały plan na około **49%**.
 Szczegóły: [04-preparation-resource-lease.md](04-preparation-resource-lease.md).
+
+## Lease-fenced publikacja FEM receipt — 27.09.2026
+
+Commit `2f7e1f45f` wymaga pełnej tożsamości preparation lease w CLI preparera i
+ponownie waliduje aktywną własność pod writer lockiem bezpośrednio przed
+publikacją immutable receiptu. Idempotentny replay tej samej trwałej
+tożsamości nie powtarza native producer'a. Source check i diff check przeszły;
+managed native/process E2E pozostają `NOT VERIFIED`.
+
+Pula, admission, supervisor, exit receipt i recovery pozostają otwarte. P4
+pozostaje na **50%**, a cały plan na około **49%**. Szczegóły:
+[05-lease-fenced-fem-receipt.md](05-lease-fenced-fem-receipt.md).
