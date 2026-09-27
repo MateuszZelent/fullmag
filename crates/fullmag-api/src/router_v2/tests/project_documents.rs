@@ -1165,6 +1165,9 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             == Ok("1");
     let scheduler_resource_pool_e2e =
         std::env::var("FULLMAG_ACCEPTED_SCHEDULER_RESOURCE_POOL_E2E").as_deref() == Ok("1");
+    let scheduler_dynamic_resource_pool_e2e =
+        std::env::var("FULLMAG_ACCEPTED_SCHEDULER_DYNAMIC_RESOURCE_POOL_E2E").as_deref()
+            == Ok("1");
     let scheduler_resident_discovery_e2e =
         std::env::var("FULLMAG_ACCEPTED_SCHEDULER_RESIDENT_DISCOVERY_E2E").as_deref() == Ok("1");
     let scheduler_resident_drain_e2e =
@@ -1344,6 +1347,175 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             0,
             "clean process exits must release every supervisor slot"
         );
+        return;
+    }
+    if scheduler_dynamic_resource_pool_e2e {
+        let scheduler_executable = std::path::PathBuf::from(
+            std::env::var_os("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN")
+                .expect("dynamic resource pool E2E requires the built accepted scheduler binary"),
+        );
+        let worker_executable = std::path::PathBuf::from(
+            std::env::var_os("FULLMAG_ACCEPTED_WORKER_E2E_BIN")
+                .expect("dynamic resource pool E2E requires the built accepted worker binary"),
+        );
+        let publisher_executable = std::path::PathBuf::from(
+            std::env::var_os("FULLMAG_RESOURCE_POOL_E2E_BIN")
+                .expect("dynamic resource pool E2E requires the built resource pool binary"),
+        );
+        let pool_id = "dynamic-resource-pool-e2e";
+        let resource_offer = |resource_id: &str| {
+            serde_json::json!({
+                "resource_id": resource_id,
+                "kind": "cpu",
+                "budget": {
+                    "cpu_millis": 100,
+                    "memory_bytes": 1048576,
+                    "gpu_memory_bytes": 0,
+                    "storage_bytes": 8388608,
+                },
+            })
+            .to_string()
+        };
+        let publish = |expected_generation: u64, resource: Option<&str>| {
+            let mut command = std::process::Command::new(&publisher_executable);
+            command
+                .arg("--store-root")
+                .arg(store.root())
+                .arg("--pool-id")
+                .arg(pool_id)
+                .arg("--expected-generation")
+                .arg(expected_generation.to_string());
+            if let Some(resource) = resource {
+                command.arg("--resource-offer").arg(resource_offer(resource));
+            }
+            let output = command.output().expect("publish scheduler resource pool");
+            assert!(
+                output.status.success(),
+                "resource pool publication failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+        };
+        let empty = publish(0, None);
+        assert_eq!(empty["generation"], 1);
+        assert_eq!(empty["resource_count"], 0);
+
+        let scheduler = std::process::Command::new(&scheduler_executable)
+            .arg("--store-root")
+            .arg(store.root())
+            .arg("--discover-runs")
+            .arg("true")
+            .arg("--pool-id")
+            .arg(pool_id)
+            .arg("--resident")
+            .arg("true")
+            .arg("--discover-resources")
+            .arg("true")
+            .arg("--worker-executable")
+            .arg(&worker_executable)
+            .arg("--max-concurrency")
+            .arg("2")
+            .arg("--max-tasks")
+            .arg("2")
+            .arg("--max-idle-polls")
+            .arg("0")
+            .arg("--idle-poll-milliseconds")
+            .arg("20")
+            .arg("--worker-timeout-seconds")
+            .arg("30")
+            .arg("--heartbeat-interval-milliseconds")
+            .arg("250")
+            .arg("--max-automatic-retries")
+            .arg("0")
+            .env("FULLMAG_TEST_ACCEPTED_WORKER_AFTER_STARTED_DELAY_MS", "1000")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn dynamic resource pool scheduler");
+        let mut scheduler = KillOnDropChild::new(scheduler);
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        assert!(
+            scheduler.try_wait().unwrap().is_none(),
+            "scheduler exited while the durable resource pool was empty"
+        );
+        let first = publish(1, Some("cpu-dynamic-a"));
+        assert_eq!(first["generation"], 2);
+
+        let running_deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            let first_lifecycle = store
+                .read_run_catalog(accepted_run_id.as_str())
+                .unwrap()
+                .unwrap()
+                .tasks[0]
+                .lifecycle;
+            let second_lifecycle = store
+                .read_run_catalog(&second_run_id)
+                .unwrap()
+                .unwrap()
+                .tasks[0]
+                .lifecycle;
+            if first_lifecycle == fullmag_session::FmsTaskLifecycle::Running
+                || second_lifecycle == fullmag_session::FmsTaskLifecycle::Running
+            {
+                break;
+            }
+            if std::time::Instant::now() >= running_deadline {
+                let _ = scheduler.kill();
+                let output = scheduler.wait_with_output().unwrap();
+                panic!(
+                    "dynamic resource scheduler did not start resource A: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let second = publish(2, Some("cpu-dynamic-b"));
+        assert_eq!(second["generation"], 3);
+
+        let output = scheduler.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "dynamic resource pool scheduler failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(summary["status"], "completed");
+        assert_eq!(summary["scheduled_count"], 2);
+        assert_eq!(summary["resource_source"], "store");
+        assert_eq!(summary["resource_pool_generation"], 3);
+        assert_eq!(
+            summary["resource_ids"],
+            serde_json::json!(["cpu-dynamic-a", "cpu-dynamic-b"])
+        );
+        let executed_resources = summary["executed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["resource_id"].as_str().unwrap())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            executed_resources,
+            ["cpu-dynamic-a", "cpu-dynamic-b"]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+        for run_id in [accepted_run_id.as_str(), second_run_id.as_str()] {
+            let catalog = store.read_run_catalog(run_id).unwrap().unwrap();
+            assert_eq!(
+                catalog.tasks[0].lifecycle,
+                fullmag_session::FmsTaskLifecycle::Succeeded
+            );
+            assert!(store
+                .read_active_resource_lease_for_task(
+                    run_id,
+                    catalog.tasks[0].task_id.as_str(),
+                )
+                .unwrap()
+                .is_none());
+        }
         return;
     }
     if scheduler_resource_pool_e2e {

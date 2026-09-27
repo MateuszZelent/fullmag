@@ -418,8 +418,9 @@ pub(crate) fn run_supervised_accepted_worker(
         fullmag_runtime_control::load_current_task_claim(store, &run_id_typed, task_id)
     })
     .context("supervisor requires an exact active task claim")?;
-    let lease = store
-        .read_active_resource_lease_for_task(run_id, task_id)
+    let lease = retry_store_writer_busy(|| {
+        store.read_active_resource_lease_for_task(run_id, task_id)
+    })
         .context("read active resource lease before accepted-worker spawn")?
         .context("supervisor requires an active resource lease")?;
     if lease.run_id != claim.run_id.as_str()

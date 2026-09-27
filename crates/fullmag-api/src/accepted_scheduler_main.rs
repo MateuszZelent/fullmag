@@ -1,21 +1,22 @@
 #[path = "accepted_study_supervisor.rs"]
 mod accepted_study_supervisor;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use fullmag_application::{ResourceBudget, ResourceKind, ResourceLease, RunId};
 use fullmag_session::{
-    FMS_SCHEDULER_POOL_CHECKPOINT_SCHEMA, FmsSchedulerPoolCheckpoint, FmsSchedulerRunSource,
+    FmsResourceBudget, FmsResourceKind, FmsSchedulerPoolCheckpoint, FmsSchedulerResourceOffer,
+    FmsSchedulerResourcePool, FmsSchedulerRunSource, FMS_SCHEDULER_POOL_CHECKPOINT_SCHEMA,
 };
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::{
-    Arc,
     atomic::{AtomicBool, Ordering},
+    Arc,
 };
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct SchedulerResourceOffer {
     resource_id: String,
@@ -29,6 +30,7 @@ struct SchedulerArgs {
     discover_runs: bool,
     resident: bool,
     pool_id: Option<String>,
+    discover_resources: bool,
     resources: Vec<SchedulerResourceOffer>,
     worker_executable: Option<PathBuf>,
     max_concurrency: usize,
@@ -41,7 +43,7 @@ struct SchedulerArgs {
 }
 
 struct CompletedWorker {
-    resource_index: usize,
+    resource_id: String,
     run_id: RunId,
     scheduled: fullmag_runtime_control::ScheduledAcceptedTask,
     result: accepted_study_supervisor::SupervisedWorkerResult,
@@ -49,16 +51,21 @@ struct CompletedWorker {
 }
 
 struct PendingWorker {
-    resource_index: usize,
+    resource: SchedulerResourceOffer,
     run_id: RunId,
     scheduled: fullmag_runtime_control::ScheduledAcceptedTask,
 }
 
+struct ActiveWorker {
+    resource: SchedulerResourceOffer,
+    handle: JoinHandle<Result<CompletedWorker>>,
+}
+
 #[derive(Default)]
-struct ActiveWorkers(std::collections::BTreeMap<usize, JoinHandle<Result<CompletedWorker>>>);
+struct ActiveWorkers(std::collections::BTreeMap<String, ActiveWorker>);
 
 impl std::ops::Deref for ActiveWorkers {
-    type Target = std::collections::BTreeMap<usize, JoinHandle<Result<CompletedWorker>>>;
+    type Target = std::collections::BTreeMap<String, ActiveWorker>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -74,7 +81,51 @@ impl std::ops::DerefMut for ActiveWorkers {
 impl Drop for ActiveWorkers {
     fn drop(&mut self) {
         for handle in std::mem::take(&mut self.0).into_values() {
-            let _ = handle.join();
+            let _ = handle.handle.join();
+        }
+    }
+}
+
+impl TryFrom<FmsSchedulerResourceOffer> for SchedulerResourceOffer {
+    type Error = anyhow::Error;
+
+    fn try_from(value: FmsSchedulerResourceOffer) -> Result<Self> {
+        let kind = match value.kind {
+            FmsResourceKind::Cpu => ResourceKind::Cpu,
+            FmsResourceKind::Gpu => ResourceKind::Gpu,
+            FmsResourceKind::Storage | FmsResourceKind::Meshing => {
+                bail!("scheduler solver resource pool supports only CPU and GPU offers")
+            }
+        };
+        Ok(Self {
+            resource_id: value.resource_id,
+            kind,
+            budget: ResourceBudget {
+                cpu_millis: value.budget.cpu_millis,
+                memory_bytes: value.budget.memory_bytes,
+                gpu_memory_bytes: value.budget.gpu_memory_bytes,
+                storage_bytes: value.budget.storage_bytes,
+            },
+        })
+    }
+}
+
+impl From<&SchedulerResourceOffer> for FmsSchedulerResourceOffer {
+    fn from(value: &SchedulerResourceOffer) -> Self {
+        Self {
+            resource_id: value.resource_id.clone(),
+            kind: match value.kind {
+                ResourceKind::Cpu => FmsResourceKind::Cpu,
+                ResourceKind::Gpu => FmsResourceKind::Gpu,
+                ResourceKind::Storage => FmsResourceKind::Storage,
+                ResourceKind::Meshing => FmsResourceKind::Meshing,
+            },
+            budget: FmsResourceBudget {
+                cpu_millis: value.budget.cpu_millis,
+                memory_bytes: value.budget.memory_bytes,
+                gpu_memory_bytes: value.budget.gpu_memory_bytes,
+                storage_bytes: value.budget.storage_bytes,
+            },
         }
     }
 }
@@ -195,11 +246,13 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
         None => sibling_worker_executable()?,
     };
     let mut executed = Vec::new();
-    let resource_ids = args
+    let mut current_resources = args.resources.clone();
+    let mut observed_resource_ids = args
         .resources
         .iter()
         .map(|resource| resource.resource_id.clone())
-        .collect::<Vec<_>>();
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut resource_pool = None::<FmsSchedulerResourcePool>;
     let mut next_run_id = checkpoint
         .as_ref()
         .and_then(|checkpoint| checkpoint.next_run_id.as_deref())
@@ -225,6 +278,45 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
         if draining && active_workers.is_empty() {
             break;
         }
+        if args.discover_resources {
+            let pool_id = args
+                .pool_id
+                .as_deref()
+                .context("dynamic resource discovery requires a scheduler pool id")?;
+            if let Some(discovered) = store.read_scheduler_resource_pool(pool_id)? {
+                if let Some(previous) = &resource_pool {
+                    if discovered.generation < previous.generation {
+                        bail!("scheduler resource pool generation regressed");
+                    }
+                    if discovered.generation == previous.generation && discovered != *previous {
+                        bail!("scheduler resource pool changed without a new generation");
+                    }
+                }
+                if resource_pool.as_ref() != Some(&discovered) {
+                    let resources = discovered
+                        .resources
+                        .clone()
+                        .into_iter()
+                        .map(SchedulerResourceOffer::try_from)
+                        .collect::<Result<Vec<_>>>()?;
+                    for resource in &resources {
+                        if let Some(active) = active_workers.get(&resource.resource_id) {
+                            if active.resource != *resource {
+                                bail!(
+                                    "active scheduler resource `{}` changed kind or budget",
+                                    resource.resource_id
+                                );
+                            }
+                        }
+                        observed_resource_ids.insert(resource.resource_id.clone());
+                    }
+                    current_resources = resources;
+                    resource_pool = Some(discovered);
+                }
+            } else if resource_pool.is_some() {
+                bail!("scheduler resource pool disappeared after publication");
+            }
+        }
         let available_run_ids = if args.discover_runs {
             let mut discovered = store
                 .list_run_intents()?
@@ -248,7 +340,7 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
         };
         let mut scheduled_any = false;
         let mut pending_workers = Vec::<PendingWorker>::new();
-        for (resource_index, resource) in args.resources.iter().enumerate() {
+        for resource in &current_resources {
             if draining || shutdown_requested.load(Ordering::Acquire) {
                 break;
             }
@@ -259,10 +351,10 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
             {
                 break;
             }
-            if active_workers.contains_key(&resource_index)
+            if active_workers.contains_key(&resource.resource_id)
                 || pending_workers
                     .iter()
-                    .any(|pending| pending.resource_index == resource_index)
+                    .any(|pending| pending.resource.resource_id == resource.resource_id)
             {
                 continue;
             }
@@ -297,15 +389,16 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
             next_run_id =
                 Some(available_run_ids[(run_index + 1) % available_run_ids.len()].clone());
             pending_workers.push(PendingWorker {
-                resource_index,
+                resource: resource.clone(),
                 run_id,
                 scheduled,
             });
         }
         for pending in pending_workers {
+            let resource_id = pending.resource.resource_id.clone();
             let handle = spawn_supervised_worker(
                 args.store_root.clone(),
-                pending.resource_index,
+                resource_id.clone(),
                 pending.run_id,
                 pending.scheduled,
                 available_run_ids.clone(),
@@ -315,7 +408,13 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
                 args.heartbeat_interval,
                 args.max_automatic_retries,
             );
-            active_workers.insert(pending.resource_index, handle);
+            active_workers.insert(
+                resource_id,
+                ActiveWorker {
+                    resource: pending.resource,
+                    handle,
+                },
+            );
         }
         if active_workers.is_empty() {
             if scheduled_any {
@@ -332,17 +431,16 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
             std::thread::sleep(args.idle_poll_interval);
             continue;
         }
-        let Some(resource_index) = active_workers
-            .iter()
-            .find_map(|(resource_index, handle)| handle.is_finished().then_some(*resource_index))
-        else {
+        let Some(resource_id) = active_workers.iter().find_map(|(resource_id, worker)| {
+            worker.handle.is_finished().then(|| resource_id.clone())
+        }) else {
             std::thread::sleep(Duration::from_millis(10));
             continue;
         };
-        let handle = active_workers
-            .remove(&resource_index)
+        let worker = active_workers
+            .remove(&resource_id)
             .context("finished scheduler worker handle disappeared")?;
-        let completed = match handle.join() {
+        let completed = match worker.handle.join() {
             Ok(Ok(completed)) => completed,
             Ok(Err(error)) => {
                 return Err(error).context("supervise scheduled accepted worker");
@@ -375,7 +473,7 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
             checkpoint_sequence = checkpoint.sequence;
         }
         executed.push(serde_json::json!({
-            "resource_id": args.resources[completed.resource_index].resource_id,
+            "resource_id": completed.resource_id,
             "run_id": completed.run_id.as_str(),
             "task_id": completed.scheduled.claim.task_id.as_str(),
             "step_id": completed.scheduled.step_id,
@@ -413,8 +511,10 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
             "max_tasks": args.max_tasks,
             "pool_id": args.pool_id,
             "pool_checkpoint_sequence": checkpoint_sequence,
-            "resource_count": resource_ids.len(),
-            "resource_ids": resource_ids,
+            "resource_source": if args.discover_resources { "store" } else { "explicit" },
+            "resource_pool_generation": resource_pool.as_ref().map(|pool| pool.generation).unwrap_or(0),
+            "resource_count": observed_resource_ids.len(),
+            "resource_ids": observed_resource_ids,
             "scheduled_count": executed.len(),
             "idle_poll_count": idle_poll_count,
             "executed": executed,
@@ -426,7 +526,7 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
 #[allow(clippy::too_many_arguments)]
 fn spawn_supervised_worker(
     store_root: PathBuf,
-    resource_index: usize,
+    resource_id: String,
     run_id: RunId,
     scheduled: fullmag_runtime_control::ScheduledAcceptedTask,
     available_run_ids: Vec<RunId>,
@@ -451,7 +551,7 @@ fn spawn_supervised_worker(
             max_automatic_retries,
         )?;
         Ok(CompletedWorker {
-            resource_index,
+            resource_id,
             run_id,
             scheduled,
             result,
@@ -532,6 +632,17 @@ fn parse_args() -> Result<SchedulerArgs> {
     if resident && pool_id.is_none() {
         bail!("resident scheduler requires --pool-id");
     }
+    let discover_resources = values
+        .remove("--discover-resources")
+        .map(|value| parse_bool("--discover-resources", value))
+        .transpose()?
+        .unwrap_or(false);
+    if discover_resources && !resident {
+        bail!("dynamic resource discovery requires --resident true");
+    }
+    if discover_resources && pool_id.is_none() {
+        bail!("dynamic resource discovery requires --pool-id");
+    }
     let store_root = PathBuf::from(take_required_string(&mut values, "--store-root")?);
     let legacy_resource_flags = [
         "--resource-id",
@@ -541,7 +652,18 @@ fn parse_args() -> Result<SchedulerArgs> {
         "--gpu-memory-bytes",
         "--storage-bytes",
     ];
-    let resources = if resource_offers.is_empty() {
+    let resources = if discover_resources {
+        if !resource_offers.is_empty() {
+            bail!("scheduler option `--discover-resources` cannot be combined with `--resource-offer`");
+        }
+        if let Some(flag) = legacy_resource_flags
+            .iter()
+            .find(|flag| values.contains_key(**flag))
+        {
+            bail!("scheduler option `--discover-resources` cannot be combined with `{flag}`");
+        }
+        Vec::new()
+    } else if resource_offers.is_empty() {
         let resource_id = take_required_string(&mut values, "--resource-id")?;
         let resource_kind = match take_required_string(&mut values, "--resource-kind")?.as_str() {
             "cpu" => ResourceKind::Cpu,
@@ -646,6 +768,7 @@ fn parse_args() -> Result<SchedulerArgs> {
         discover_runs,
         resident,
         pool_id,
+        discover_resources,
         resources,
         worker_executable,
         max_concurrency,

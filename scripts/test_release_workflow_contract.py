@@ -85,6 +85,9 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("bin/fullmag-api-accepted-scheduler", portable)
         self.assertIn("bin/fullmag-api-accepted-scheduler", validator)
         self.assertIn("bin/fullmag-api-accepted-scheduler.exe", windows)
+        self.assertIn("bin/fullmag-api-resource-pool", portable)
+        self.assertIn("bin/fullmag-api-resource-pool", validator)
+        self.assertIn("bin/fullmag-api-resource-pool.exe", windows)
 
     def test_managed_runtime_export_has_safe_automatic_pruning(self) -> None:
         exporter = (ROOT / "scripts/export_fem_gpu_runtime.sh").read_text(encoding="utf-8")

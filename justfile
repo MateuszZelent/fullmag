@@ -280,6 +280,9 @@ verify-api-accepted-scheduler-parallel-resources-e2e:
 verify-api-accepted-scheduler-resource-pool-e2e:
     {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-scheduler-resource-pool-e2e --repo-root "{{repo_root}}"
 
+verify-api-accepted-scheduler-dynamic-resource-pool-e2e:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-scheduler-dynamic-resource-pool-e2e --repo-root "{{repo_root}}"
+
 verify-api-accepted-scheduler-resident-discovery-e2e:
     {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-scheduler-resident-discovery-e2e --repo-root "{{repo_root}}"
 
