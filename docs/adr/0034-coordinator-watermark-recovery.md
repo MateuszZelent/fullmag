@@ -118,6 +118,12 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
     nowych tasków, dołącza już aktywne nadzory, zapisuje ich checkpointy i
     kończy ze statusem `drained`. Worker Windows działa w osobnej grupie
     procesu, aby sygnał grupy schedulera nie przerwał pracy objętej drain.
+21. Centralna granica zgodności claimu odrzuca ofertę solvera z niepełnym
+    budżetem przed durable admission. CPU i GPU wymagają dodatnich
+    `cpu_millis`, `memory_bytes` i `storage_bytes`; CPU wymaga zerowego
+    `gpu_memory_bytes`, a GPU dodatniego `gpu_memory_bytes`. Ogólna walidacja
+    `ResourceBudget` pozostaje szersza, ponieważ ten typ obsługuje także zasoby
+    Storage i Meshing.
 
 ## Konsekwencje
 
@@ -146,6 +152,10 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
   Brak limitu tasków jest bezpieczny wyłącznie w trybie rezydentnym z obsługą
   sygnału. Nadal nie jest to usługa z dynamicznym discovery zasobów, polityką
   priorytetów, backpressure ani rozproszonym lock managerem.
+- Poprawny kształt budżetu jest warunkiem admission, ale nie określa jeszcze
+  minimalnego zapotrzebowania konkretnego taska, nie sumuje obciążenia wielu
+  tasków i nie dowodzi egzekwowania limitów przez system operacyjny, kontener
+  ani urządzenie GPU.
 
 ## Obowiązki implementacyjne
 
@@ -199,6 +209,8 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
   wysyła sygnał zatrzymania i wymaga sukcesu aktywnego workera, zwolnienia
   lease, pozostawienia drugiego taska w `Accepted` oraz summary
   `status=drained`, `shutdown_requested=true`, `max_tasks=null`.
+- Regresje centralnej zgodności ofert sprawdzają każdy brakujący wymiar budżetu
+  CPU/GPU oraz poprawne oferty obu klas przed jakimkolwiek zapisem admission.
 
 ## Migracja i rollback
 

@@ -54,7 +54,8 @@ Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`44-parallel-writer-contention.md`](44-parallel-writer-contention.md) i
 [`45-bounded-static-resource-pool.md`](45-bounded-static-resource-pool.md) i
 [`46-resident-scheduler-discovery.md`](46-resident-scheduler-discovery.md) i
-[`47-resident-scheduler-drain.md`](47-resident-scheduler-drain.md).
+[`47-resident-scheduler-drain.md`](47-resident-scheduler-drain.md) i
+[`48-solver-resource-budget-admission.md`](48-solver-resource-budget-admission.md).
 
 ## Ograniczona pula wielu runów — 27.09.2026
 
@@ -898,3 +899,15 @@ CPU. Zdalny transport, pozostałe lane'y i dowód zwolnienia urządzenia nadal s
 otwarte. P3 wynosi około **74%**, P5 około **36%**, a całość około **35%**.
 Szczegóły:
 [`39-supervisor-process-exit-receipt.md`](39-supervisor-process-exit-receipt.md).
+
+## P3-B/P5-B — budżet oferty solvera — 27.09.2026
+
+Centralny device fence odrzuca teraz przed admission oferty CPU/GPU bez
+pełnego, spójnego budżetu CPU, RAM, storage i — dla GPU — VRAM. Końcowa bramka
+`runtime-control`: **5/5 PASS**, receipt
+`e1db7ebf48674bab877249d6761ae0e9`, content
+`f5f644c92a85c557916fa62b97c373efb3bd69f587e5c56ef0175615bbb14a6a`.
+Procesowa bramka puli pozostaje niestabilna przez kontencję writera; jedna próba
+PASS i kolejne FAIL nie pozwalają podnieść procentów. **P3 83%, P5 60%, całość
+około 41%**. Szczegóły:
+[`48-solver-resource-budget-admission.md`](48-solver-resource-budget-admission.md).

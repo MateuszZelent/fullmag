@@ -1562,3 +1562,21 @@ Dynamiczne członkostwo zasobów, priorytety/backpressure, zdalny heartbeat/Stop
 ACK, process E2E pozostałych lane'ów i kwalifikacja release pozostają otwarte.
 **P3 83%, P5 60%, całość około 41%**. Szczegóły:
 [p3/47-resident-scheduler-drain.md](p3/47-resident-scheduler-drain.md).
+
+## P3-B/P5-B — fail-closed budżet oferty solvera — 27.09.2026
+
+Centralna granica zgodności claimu wymaga teraz kompletnego budżetu CPU/RAM/
+storage dla CPU i GPU oraz VRAM zgodnego z lane'em. Niepełna oferta jest
+odrzucana przed utworzeniem attemptu i lease'u. Test-first: RED **3 PASS / 2
+FAIL**, receipt `22a25b308d5045d2af180be6b5023132`; końcowa bramka
+`runtime-control` **5/5 PASS**, receipt
+`e1db7ebf48674bab877249d6761ae0e9`, content
+`f5f644c92a85c557916fa62b97c373efb3bd69f587e5c56ef0175615bbb14a6a`,
+`source_changed_during_run=false`. Implementacja:
+`07d2938891675f8bfb2d770672334c2cbda775d7`.
+
+Procesowa bramka statycznej puli nie jest stabilna: jedna próba PASS, kolejne
+FAIL przez `session store writer is busy` albo brak overlapu. Nie ma jeszcze
+per-task minimum, agregacji pojemności ani egzekwowania limitów hosta/GPU.
+Procenty pozostają bez zmian: **P3 83%, P5 60%, całość około 41%**. Szczegóły:
+[p3/48-solver-resource-budget-admission.md](p3/48-solver-resource-budget-admission.md).
