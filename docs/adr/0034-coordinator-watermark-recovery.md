@@ -151,6 +151,14 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
     pierwszą mutacją queue/claim/admission. Niespełniająca oferta pozostawia
     task w dotychczasowym stanie. `run_spec.v1` pozostaje czytelny bez tego
     pola, ale nie może go zawierać; nowe zapisy używają wyłącznie v2.
+26. `run_spec.v2` dopuszcza addytywne `scheduling_priority` od `-1000` do
+    `1000`; domyślne zero nie jest serializowane, więc wcześniejsze fingerprinty
+    pozostają stabilne. Scheduler wybiera wyższy priorytet przed niższym, a
+    trwały kursor round-robin działa w obrębie tej samej klasy. Dodatni
+    `--max-queued-runs`, nie mniejszy niż concurrency, ogranicza lokalne okno
+    dependency-ready runów i raportuje peak kolejki oraz liczbę odsuniętych.
+    Niematerializowany albo zależnościowo zablokowany run nie zajmuje okna;
+    run poza oknem nie jest mutowany.
 
 ## Konsekwencje
 
@@ -179,7 +187,7 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
   zmniejszają potrzebę uruchamiania procesu per zasób i per okres pracy.
   Brak limitu tasków jest bezpieczny wyłącznie w trybie rezydentnym z obsługą
   sygnału. Trwały snapshot członkostwa nie jest automatycznym discovery hostów,
-  polityką priorytetów, backpressure ani rozproszonym lock managerem.
+  limitem publicznego Submitu, rozproszonym backpressure ani lock managerem.
 - `run_spec.v2` określa minimalne zapotrzebowanie przyjętego runu, a scheduler
   odrzuca zbyt małą ofertę przed mutacją taska. Kontrakt nie sumuje obciążenia
   wielu tasków i nie dowodzi egzekwowania limitów przez system operacyjny,
@@ -285,7 +293,8 @@ dynamiczną pulę A → B z zachowaniem aktywnego lease. Lokalny discovery dry-r
 CPU/RAM/storage/VRAM oraz procesowe E2E publikacji, admission, workera FDM CPU i
 zwolnienia dokładnego lease także przechodzą. Produkcyjne CLI wykonuje immutable
 Submit/materialization/readback przez publiczne API v2; legacy `run-json`
-pozostaje bezpośrednią ścieżką do osobnego cutoveru. P5-B pozostaje otwarte do
-priorytetów i backpressure, zdalnego ACK
+pozostaje bezpośrednią ścieżką do osobnego cutoveru. Immutable priority i
+lokalne ograniczone okno kolejki mają process E2E dla pięciu runów; P5-B
+pozostaje otwarte do limitu/backpressure publicznego Submitu, zdalnego ACK
 oraz dowodu braku równoległego starego workera i zwolnienia urządzenia dla
 pozostałych lane'ów.

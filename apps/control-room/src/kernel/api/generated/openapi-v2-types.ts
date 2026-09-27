@@ -9650,6 +9650,8 @@ export interface components {
             project_id: string;
             requested_execution: components["schemas"]["ProjectRunRequestedExecutionResource"];
             run_id: string;
+            /** Format: int32 */
+            scheduling_priority: number;
             tasks: components["schemas"]["ProjectRunTaskResource"][];
         };
         /** @enum {string} */
@@ -9693,6 +9695,8 @@ export interface components {
             payload_fingerprint: string;
             requested_execution: components["schemas"]["ProjectRunRequestedExecutionResource"];
             run_id: string;
+            /** Format: int32 */
+            scheduling_priority: number;
             /** Format: int64 */
             task_count: number;
         };

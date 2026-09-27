@@ -2,10 +2,11 @@
 mod accepted_study_supervisor;
 
 use anyhow::{bail, Context, Result};
-use fullmag_application::{ResourceBudget, ResourceKind, ResourceLease, RunId};
+use fullmag_application::{ResourceBudget, ResourceKind, ResourceLease, RunId, RunSpecification};
 use fullmag_session::{
     FmsResourceBudget, FmsResourceKind, FmsSchedulerPoolCheckpoint, FmsSchedulerResourceOffer,
-    FmsSchedulerResourcePool, FmsSchedulerRunSource, FMS_SCHEDULER_POOL_CHECKPOINT_SCHEMA,
+    FmsSchedulerResourcePool, FmsSchedulerRunSource, SessionStore,
+    FMS_SCHEDULER_POOL_CHECKPOINT_SCHEMA,
 };
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -34,6 +35,7 @@ struct SchedulerArgs {
     resources: Vec<SchedulerResourceOffer>,
     worker_executable: Option<PathBuf>,
     max_concurrency: usize,
+    max_queued_runs: usize,
     max_tasks: Option<usize>,
     max_idle_polls: usize,
     idle_poll_interval: Duration,
@@ -59,6 +61,35 @@ struct PendingWorker {
 struct ActiveWorker {
     resource: SchedulerResourceOffer,
     handle: JoinHandle<Result<CompletedWorker>>,
+}
+
+#[derive(Clone, Debug)]
+struct PrioritizedRun {
+    run_id: RunId,
+    priority: i32,
+}
+
+struct RunQueueSnapshot {
+    ordered: Vec<PrioritizedRun>,
+    all_ordered: Vec<PrioritizedRun>,
+    queued_run_count: usize,
+    backpressured_run_count: usize,
+}
+
+impl RunQueueSnapshot {
+    fn next_equal_priority_run(&self, selected_index: usize) -> Option<RunId> {
+        let selected = self.ordered.get(selected_index)?;
+        let selected_index = self
+            .all_ordered
+            .iter()
+            .position(|candidate| candidate.run_id == selected.run_id)?;
+        self.all_ordered
+            .iter()
+            .skip(selected_index + 1)
+            .chain(self.all_ordered.iter().take(selected_index + 1))
+            .find(|candidate| candidate.priority == selected.priority)
+            .map(|candidate| candidate.run_id.clone())
+    }
 }
 
 #[derive(Default)]
@@ -268,6 +299,8 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
         .collect::<Vec<_>>();
     let mut idle_poll_count = 0;
     let mut consecutive_idle_polls = 0;
+    let mut peak_queued_run_count = 0usize;
+    let mut peak_backpressured_run_count = 0usize;
     let mut active_workers = ActiveWorkers::default();
     while args
         .max_tasks
@@ -317,7 +350,7 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
                 bail!("scheduler resource pool disappeared after publication");
             }
         }
-        let available_run_ids = if args.discover_runs {
+        let checkpoint_run_ids = if args.discover_runs {
             let mut discovered = store
                 .list_run_intents()?
                 .into_iter()
@@ -338,6 +371,15 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
         } else {
             run_ids.clone()
         };
+        let queue = build_run_queue_snapshot(
+            &store,
+            &checkpoint_run_ids,
+            next_run_id.as_ref(),
+            args.max_queued_runs,
+        )?;
+        peak_queued_run_count = peak_queued_run_count.max(queue.queued_run_count);
+        peak_backpressured_run_count =
+            peak_backpressured_run_count.max(queue.backpressured_run_count);
         let mut scheduled_any = false;
         let mut pending_workers = Vec::<PendingWorker>::new();
         for resource in &current_resources {
@@ -358,13 +400,8 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
             {
                 continue;
             }
-            let start_index = next_run_id
-                .as_ref()
-                .and_then(|next| available_run_ids.iter().position(|run_id| run_id == next))
-                .unwrap_or(0);
             let mut selected = None;
-            for offset in 0..available_run_ids.len() {
-                let run_index = (start_index + offset) % available_run_ids.len();
+            for (run_index, candidate) in queue.ordered.iter().enumerate() {
                 let offer = ResourceLease::new(
                     resource.resource_id.clone(),
                     resource.kind.clone(),
@@ -373,7 +410,7 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
                 if let Some(scheduled) = fullmag_runtime_control::schedule_next_ready_accepted_task(
                     &store,
-                    &available_run_ids[run_index],
+                    &candidate.run_id,
                     offer,
                 )? {
                     selected = Some((run_index, scheduled));
@@ -385,9 +422,8 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
             };
             scheduled_any = true;
             consecutive_idle_polls = 0;
-            let run_id = available_run_ids[run_index].clone();
-            next_run_id =
-                Some(available_run_ids[(run_index + 1) % available_run_ids.len()].clone());
+            let run_id = queue.ordered[run_index].run_id.clone();
+            next_run_id = queue.next_equal_priority_run(run_index);
             pending_workers.push(PendingWorker {
                 resource: resource.clone(),
                 run_id,
@@ -401,7 +437,7 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
                 resource_id.clone(),
                 pending.run_id,
                 pending.scheduled,
-                available_run_ids.clone(),
+                checkpoint_run_ids.clone(),
                 worker_executable.clone(),
                 args.max_concurrency,
                 args.worker_timeout,
@@ -509,6 +545,9 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
             "resident": args.resident,
             "shutdown_requested": shutdown_requested,
             "max_tasks": args.max_tasks,
+            "max_queued_runs": args.max_queued_runs,
+            "peak_queued_run_count": peak_queued_run_count,
+            "peak_backpressured_run_count": peak_backpressured_run_count,
             "pool_id": args.pool_id,
             "pool_checkpoint_sequence": checkpoint_sequence,
             "resource_source": if args.discover_resources { "store" } else { "explicit" },
@@ -521,6 +560,72 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
         }))?
     );
     Ok(())
+}
+
+fn build_run_queue_snapshot(
+    store: &SessionStore,
+    run_ids: &[RunId],
+    next_run_id: Option<&RunId>,
+    max_queued_runs: usize,
+) -> Result<RunQueueSnapshot> {
+    let mut queued = Vec::new();
+    for run_id in run_ids {
+        let intent = store.read_run_intent(run_id.as_str())?.with_context(|| {
+            format!(
+                "scheduler run `{}` has no immutable intent",
+                run_id.as_str()
+            )
+        })?;
+        let specification: RunSpecification = serde_json::from_value(intent.specification)
+            .with_context(|| {
+                format!("scheduler run `{}` has an invalid RunSpec", run_id.as_str())
+            })?;
+        specification
+            .validate()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        if specification.run_id != *run_id {
+            bail!("scheduler run id differs from the immutable RunSpec");
+        }
+        if fullmag_runtime_control::accepted_run_has_scheduler_ready_task(store, run_id)? {
+            queued.push(PrioritizedRun {
+                run_id: run_id.clone(),
+                priority: specification.scheduling_priority,
+            });
+        }
+    }
+
+    queued.sort_by(|left, right| {
+        right
+            .priority
+            .cmp(&left.priority)
+            .then_with(|| left.run_id.cmp(&right.run_id))
+    });
+    let mut ordered = Vec::with_capacity(queued.len());
+    let mut group_start = 0usize;
+    while group_start < queued.len() {
+        let priority = queued[group_start].priority;
+        let group_end = queued[group_start..]
+            .iter()
+            .position(|candidate| candidate.priority != priority)
+            .map(|offset| group_start + offset)
+            .unwrap_or(queued.len());
+        let group = &queued[group_start..group_end];
+        let rotation = next_run_id
+            .and_then(|next| group.iter().position(|candidate| candidate.run_id == *next))
+            .unwrap_or(0);
+        ordered.extend(group[rotation..].iter().cloned());
+        ordered.extend(group[..rotation].iter().cloned());
+        group_start = group_end;
+    }
+    let queued_run_count = ordered.len();
+    let all_ordered = ordered.clone();
+    ordered.truncate(max_queued_runs);
+    Ok(RunQueueSnapshot {
+        ordered,
+        all_ordered,
+        queued_run_count,
+        backpressured_run_count: queued_run_count.saturating_sub(max_queued_runs),
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -714,6 +819,11 @@ fn parse_args() -> Result<SchedulerArgs> {
         .map(|value| parse_usize("--max-concurrency", value))
         .transpose()?
         .unwrap_or(1);
+    let max_queued_runs = values
+        .remove("--max-queued-runs")
+        .map(|value| parse_usize("--max-queued-runs", value))
+        .transpose()?
+        .unwrap_or(256);
     let max_tasks_value = values
         .remove("--max-tasks")
         .map(|value| parse_usize("--max-tasks", value))
@@ -746,6 +856,12 @@ fn parse_args() -> Result<SchedulerArgs> {
     if max_concurrency == 0 {
         bail!("scheduler max concurrency must be positive");
     }
+    if max_queued_runs == 0 {
+        bail!("scheduler max queued runs must be positive");
+    }
+    if max_queued_runs < max_concurrency {
+        bail!("scheduler max queued runs must be at least max concurrency");
+    }
     if max_idle_polls > 0 && idle_poll_milliseconds == 0 {
         bail!("scheduler idle poll interval must be positive when idle polling is enabled");
     }
@@ -769,6 +885,7 @@ fn parse_args() -> Result<SchedulerArgs> {
         resources,
         worker_executable,
         max_concurrency,
+        max_queued_runs,
         max_tasks,
         max_idle_polls,
         idle_poll_interval: Duration::from_millis(idle_poll_milliseconds),

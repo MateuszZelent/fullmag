@@ -247,7 +247,18 @@ pub struct RunSpecification {
     pub seeds: BTreeMap<String, u64>,
     pub dependencies: Vec<RunDependency>,
     pub immutable_assets: Vec<ImmutableAssetReference>,
+    /// Immutable scheduler priority. Higher values are considered first;
+    /// equal-priority runs retain durable round-robin fairness.
+    #[serde(default, skip_serializing_if = "is_default_scheduling_priority")]
+    pub scheduling_priority: i32,
     pub requested_execution: RequestedExecution,
+}
+
+pub const MIN_SCHEDULING_PRIORITY: i32 = -1_000;
+pub const MAX_SCHEDULING_PRIORITY: i32 = 1_000;
+
+fn is_default_scheduling_priority(value: &i32) -> bool {
+    *value == 0
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -275,6 +286,7 @@ impl RunSpecification {
             seeds: BTreeMap::new(),
             dependencies: Vec::new(),
             immutable_assets: Vec::new(),
+            scheduling_priority: 0,
             requested_execution,
         }
     }
@@ -308,6 +320,12 @@ impl RunSpecification {
         self.snapshot.validate()?;
         self.study.validate()?;
         validate_sha256(&self.study_catalog_sha256, "study_catalog_sha256")?;
+        if !(MIN_SCHEDULING_PRIORITY..=MAX_SCHEDULING_PRIORITY).contains(&self.scheduling_priority)
+        {
+            return Err(RunSpecError::Invalid(format!(
+                "scheduling_priority must be between {MIN_SCHEDULING_PRIORITY} and {MAX_SCHEDULING_PRIORITY}"
+            )));
+        }
         self.requested_execution.validate()?;
         validate_json(&self.parameters, "parameters")?;
 

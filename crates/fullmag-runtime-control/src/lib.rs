@@ -554,7 +554,10 @@ mod claim;
 pub use claim::{commit_claimed_task_admission, load_current_task_claim};
 
 mod scheduler;
-pub use scheduler::{schedule_next_ready_accepted_task, ScheduledAcceptedTask};
+pub use scheduler::{
+    accepted_run_has_scheduler_ready_task, schedule_next_ready_accepted_task,
+    ScheduledAcceptedTask,
+};
 
 mod study;
 pub use study::{

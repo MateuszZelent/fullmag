@@ -26,6 +26,89 @@ pub struct ScheduledAcceptedTask {
     pub start: WorkerCommandEnvelope,
 }
 
+/// Report whether an accepted run has at least one task the scheduler can
+/// queue without mutating durable state.
+pub fn accepted_run_has_scheduler_ready_task(
+    store: &SessionStore,
+    run_id: &RunId,
+) -> Result<bool> {
+    let intent = store
+        .read_run_intent(run_id.as_str())?
+        .context("accepted scheduler requires an immutable run intent")?;
+    let specification: fullmag_application::RunSpecification =
+        serde_json::from_value(intent.specification.clone())
+            .context("accepted scheduler run specification is not typed")?;
+    if specification.run_id != *run_id {
+        bail!("accepted scheduler run id differs from the immutable RunSpec");
+    }
+    let Some(catalog) = store.read_run_catalog(run_id.as_str())? else {
+        return Ok(false);
+    };
+    let accepted =
+        crate::load_accepted_study_snapshot(store, run_id, &specification.snapshot.project_id)?;
+
+    for study_step in &accepted.study.steps {
+        let execution_step = accepted
+            .lowered
+            .steps
+            .iter()
+            .find(|step| step.step_id == study_step.step_id)
+            .with_context(|| {
+                format!(
+                    "accepted scheduler step `{}` has no lowered execution record",
+                    study_step.step_id
+                )
+            })?;
+        if !study_step.enabled
+            || !execution_step.enabled
+            || !matches!(
+                &execution_step.status,
+                fullmag_plan::StudyStepLoweringStatus::Planned
+            )
+        {
+            continue;
+        }
+        let task_id =
+            fullmag_session::task_id_for_study_step(run_id.as_str(), &study_step.step_id)?;
+        let durable_task = catalog
+            .tasks
+            .iter()
+            .find(|task| task.task_id == task_id)
+            .with_context(|| {
+                format!(
+                    "accepted scheduler step `{}` has no durable task",
+                    study_step.step_id
+                )
+            })?;
+        let scheduler_owned_accepted = durable_task.lifecycle == FmsTaskLifecycle::Accepted
+            && matches!(
+                &durable_task.readiness,
+                FmsTaskReadiness::Blocked { reason }
+                    if reason == crate::ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION
+            )
+            && durable_task.attempt_id.is_none()
+            && durable_task.resource_id.is_none();
+        let unclaimed_queue = durable_task.lifecycle == FmsTaskLifecycle::Queued
+            && durable_task.readiness == FmsTaskReadiness::Ready
+            && durable_task.attempt_id.is_none()
+            && durable_task.resource_id.is_none();
+        if !scheduler_owned_accepted && !unclaimed_queue {
+            continue;
+        }
+        if scheduler_owned_accepted
+            && store
+                .read_task_preparation_receipt(run_id.as_str(), task_id.as_str())?
+                .is_none()
+        {
+            continue;
+        }
+        if inputs_are_automatically_resolvable(run_id.as_str(), &study_step.inputs, &catalog)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Select and durably dispatch one accepted task for the supplied resource.
 ///
 /// Tasks are considered in immutable study order. A required StepOutput is

@@ -22757,6 +22757,10 @@
           "run_id": {
             "type": "string"
           },
+          "scheduling_priority": {
+            "format": "int32",
+            "type": "integer"
+          },
           "tasks": {
             "items": {
               "$ref": "#/components/schemas/ProjectRunTaskResource"
@@ -22768,6 +22772,7 @@
           "project_id",
           "run_id",
           "payload_fingerprint",
+          "scheduling_priority",
           "requested_execution",
           "catalog_state",
           "tasks"
@@ -22882,6 +22887,10 @@
           "run_id": {
             "type": "string"
           },
+          "scheduling_priority": {
+            "format": "int32",
+            "type": "integer"
+          },
           "task_count": {
             "format": "int64",
             "minimum": 0,
@@ -22892,6 +22901,7 @@
           "run_id",
           "accepted_at",
           "payload_fingerprint",
+          "scheduling_priority",
           "requested_execution",
           "catalog_state",
           "task_count"

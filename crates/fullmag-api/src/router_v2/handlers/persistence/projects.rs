@@ -427,6 +427,7 @@ pub async fn get_run(
             project_id: project_id.as_str().into(),
             run_id: run_id.as_str().into(),
             payload_fingerprint: intent.payload_sha256,
+            scheduling_priority: specification.scheduling_priority,
             requested_execution: ProjectRunRequestedExecutionResource {
                 backend: specification.requested_execution.backend,
                 device: specification.requested_execution.device,
@@ -562,6 +563,7 @@ pub async fn list_runs(
                 run_id: intent.run_id,
                 accepted_at: intent.accepted_at.to_rfc3339(),
                 payload_fingerprint: intent.payload_sha256,
+                scheduling_priority: specification.scheduling_priority,
                 requested_execution: ProjectRunRequestedExecutionResource {
                     backend: specification.requested_execution.backend,
                     device: specification.requested_execution.device,

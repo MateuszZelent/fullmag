@@ -36,8 +36,9 @@ discovery wykrywa CPU/RAM/storage/VRAM i dzieli wspólną pojemność z jawnymi
 rezerwami. Zarządzane process E2E publikuje ten snapshot, wykonuje admission
 FDM CPU, uruchamia worker i potwierdza zwolnienie dokładnego lease. CLI ma
 publiczny transport immutable Submit/materialization/readback; legacy
-`run-json` nadal wymaga cutoveru. Otwarte są priorytety/backpressure oraz
-heartbeat/Stop ACK dla zdalnego transportu. Process E2E pozostałych lane'ów
+`run-json` nadal wymaga cutoveru. Immutable priority steruje kolejnością, a
+ograniczone okno kolejki raportuje lokalne backpressure. Otwarte są limity
+publicznego Submitu oraz heartbeat/Stop ACK dla zdalnego transportu. Process E2E pozostałych lane'ów
 również są otwarte. Anulowanie przed uruchomieniem
 workera jest obsłużone trwale i nie wykonuje spawnu procesu potomnego.
 Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
@@ -63,7 +64,12 @@ Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`47-resident-scheduler-drain.md`](47-resident-scheduler-drain.md) i
 [`48-solver-resource-budget-admission.md`](48-solver-resource-budget-admission.md) i
 [`49-writer-retry-jitter.md`](49-writer-retry-jitter.md) i
-[`50-dynamic-resource-pool.md`](50-dynamic-resource-pool.md).
+[`50-dynamic-resource-pool.md`](50-dynamic-resource-pool.md),
+[`51-task-resource-requirements.md`](51-task-resource-requirements.md),
+[`52-local-resource-capacity-discovery.md`](52-local-resource-capacity-discovery.md),
+[`53-resource-discovery-process-e2e.md`](53-resource-discovery-process-e2e.md),
+[`54-cli-accepted-run-transport.md`](54-cli-accepted-run-transport.md) i
+[`55-priority-and-bounded-queue.md`](55-priority-and-bounded-queue.md).
 
 ## Ograniczona pula wielu runów — 27.09.2026
 
@@ -992,3 +998,17 @@ worker FDM CPU i release lease: **PASS**, receipt
 Legacy `run-json` pozostaje otwarte do osobnego cutoveru. P3 wynosi **88%**, P5
 **74%**, a całość około **45%**. Szczegóły:
 [`54-cli-accepted-run-transport.md`](54-cli-accepted-run-transport.md).
+
+## Immutable priority i ograniczone okno kolejki — 27.09.2026
+
+`run_spec.v2` zachowuje `scheduling_priority`, publiczne API zwraca je w
+readbacku, a scheduler wybiera wyższy priorytet przed niższym i utrzymuje
+round-robin wewnątrz tej samej klasy. `--max-queued-runs` ogranicza lokalne
+okno: managed E2E przy kolejce `5`, limicie `2` i jednym zasobie wykonało
+kolejno priorytet `10` oraz trzy równorzędne runy `0`, zaraportowało peak trzech
+runów odsuniętych i pozostawiło priorytet `-10` w `accepted`. Szósty run,
+niematerializowany mimo priorytetu `100`, pozostał poza gotową kolejką: **PASS**, receipt
+`f36023b7219c4122ad3e1943cf376cac`, `source_changed_during_run=false`.
+Publiczny Submit pozostaje bez limitu backlogu. P3 wynosi **89%**, P5 **76%**,
+a całość około **46%**. Szczegóły:
+[`55-priority-and-bounded-queue.md`](55-priority-and-bounded-queue.md).

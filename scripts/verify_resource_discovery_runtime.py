@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Verify local resource discovery through the production accepted-run processes.
 
-This managed Windows route builds the real API, resource-pool publisher,
-scheduler, and worker binaries. It submits one immutable RunSpec v2 through
-HTTP, publishes the discovered host capacity, executes exactly that run, and
+This managed Windows route builds the real CLI, API, resource-pool publisher,
+scheduler, and worker binaries. It submits six immutable RunSpec v2 payloads
+through HTTP, proves strict immutable priority with a bounded queue window,
+publishes discovered host capacity, executes the highest-priority run, and
 requires the exact durable resource lease to be released.
 """
 
@@ -40,7 +41,7 @@ from verify_session_persistence import toolchain_identity  # noqa: E402
 
 
 PROFILE = "windows-project-api-runtime"
-RECEIPT_SCHEMA = "fullmag_resource_discovery_runtime_v1"
+RECEIPT_SCHEMA = "fullmag_resource_discovery_runtime_v2"
 FIXTURE = "tests/fixtures/runtime/resource-discovery-run-v2.json"
 API_BINARY_NAMES = (
     "fullmag-api",
@@ -99,8 +100,6 @@ def contained_paths(layout: dict[str, object], invocation_id: str) -> dict[str, 
         "source_after": run_root / "source-snapshot-after.v2.json",
         "cargo_log": run_root / "cargo.log",
         "api_submit_log": run_root / "api-submit.log",
-        "cli_submit_log": run_root / "cli-submit.log",
-        "runtime_request": run_root / "accepted-run-request.json",
         "publisher_log": run_root / "resource-pool.log",
         "scheduler_log": run_root / "scheduler.log",
         "api_result_log": run_root / "api-result.log",
@@ -118,7 +117,34 @@ def load_fixture(repo_root: Path) -> tuple[dict[str, object], dict[str, object]]
     intent = payload["run_intent"]
     intent["idempotency_key"] = f"resource-discovery-{identity}"
     intent["specification"]["run_id"] = run_id
-    return payload, {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest(), "run_id": run_id}
+    return payload, {
+        "path": str(path),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "identity": identity,
+        "run_id": run_id,
+    }
+
+
+def prioritized_requests(
+    fixture: dict[str, object], identity: str
+) -> list[tuple[str, str, int, dict[str, object]]]:
+    requests = []
+    for label, prefix, priority in (
+        ("high", "000", 10),
+        ("normal-a", "100", 0),
+        ("normal-b", "110", 0),
+        ("normal-c", "120", 0),
+        ("low", "200", -10),
+        ("unmaterialized", "900", 100),
+    ):
+        request = json.loads(json.dumps(fixture))
+        run_id = f"{prefix}-runtime-{identity}"
+        intent = request["run_intent"]
+        intent["idempotency_key"] = f"resource-discovery-{label}-{identity}"
+        intent["specification"]["run_id"] = run_id
+        intent["specification"]["scheduling_priority"] = priority
+        requests.append((label, run_id, priority, request))
+    return requests
 
 
 def existing_run_ids(store_root: Path) -> list[str]:
@@ -244,7 +270,8 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
             "state": "preflight",
             "paths": {key: str(value) for key, value in paths.items()},
             "runtime_scope": [
-                "fullmag submit-run-json through public HTTP v2 for one immutable RunSpec v2",
+                "fullmag submit-run-json through public HTTP v2 for six immutable RunSpec v2 payloads",
+                "strict immutable scheduling priority and a bounded two-run queue window",
                 "local CPU/RAM/storage and optional NVIDIA GPU discovery",
                 "durable resource-pool publication and scheduler admission",
                 "production accepted worker process and exact lease release",
@@ -257,8 +284,9 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
         try:
             fixture, fixture_evidence = load_fixture(repo_root)
             receipt["fixture"] = fixture_evidence
-            write_atomic_json(paths["runtime_request"], fixture)
-            run_id = str(fixture_evidence["run_id"])
+            requests = prioritized_requests(fixture, str(fixture_evidence["identity"]))
+            for label, _, _, request in requests:
+                write_atomic_json(paths["run_root"] / f"accepted-run-request-{label}.json", request)
             project_id = str(fixture["run_intent"]["specification"]["snapshot"]["project_id"])
             run_minimum = fixture["run_intent"]["specification"]["requested_execution"]["minimum_resources"]
             identity = source_identity.capture(repo_root, ignore_non_runtime_dirty=True)
@@ -267,8 +295,17 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
             toolchain, tools = toolchain_identity()
             receipt["toolchain"] = toolchain
             env = child_environment(layout, paths, tools, PROFILE)
+            runtime_worktree_id = f"{layout['worktree_id']}-verify-{invocation_id[:12]}"
+            runtime_runs_root = storage.validate_path(
+                Path(env["FULLMAG_PROJECT_STORAGE_ROOT"]) / "runs" / runtime_worktree_id,
+                Path(env["FULLMAG_PROJECT_STORAGE_ROOT"]),
+                "isolated resource discovery runs root",
+            )
+            runtime_runs_root.mkdir(parents=True, exist_ok=True)
             env.update(
                 {
+                    "FULLMAG_WORKTREE_ID": runtime_worktree_id,
+                    "FULLMAG_RUNS_ROOT": str(runtime_runs_root),
                     "FULLMAG_SOURCE_GIT_COMMIT": str(identity["head_commit_full"]),
                     "FULLMAG_SOURCE_WORKTREE_STATE": "dirty" if identity["source_snapshot_dirty"] else "clean",
                     "FULLMAG_SOURCE_SNAPSHOT_SHA256": str(identity["source_snapshot_sha256"]),
@@ -280,9 +317,10 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
             receipt["shared_store_guard"] = {
                 "store_root": str(store_root),
                 "prior_run_count": len(prior_runs),
-                "run_source": "explicit",
-                "run_id": run_id,
-                "max_tasks": 1,
+                "run_source": "store",
+                "run_ids": [request[1] for request in requests],
+                "max_queued_runs": 2,
+                "max_tasks": 4,
             }
 
             cargo = str(tools["cargo"])
@@ -347,46 +385,66 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
                     "worktree_state": "dirty" if identity["source_snapshot_dirty"] else "clean",
                 },
             )
-            cli_command = [
-                str(binaries["fullmag"]),
-                "submit-run-json",
-                str(paths["runtime_request"]),
-                "--api-url",
-                base_url,
-            ]
-            cli_submit = run_json_process(
-                cli_command,
-                cwd=repo_root,
-                env=env,
-                log_path=paths["cli_submit_log"],
-                timeout=45,
-            )
-            if (
-                cli_submit.get("operation") != "submit_accepted_run"
-                or cli_submit.get("transport") != "public_http_v2"
-                or cli_submit.get("project_id") != project_id
-                or cli_submit.get("run_id") != run_id
-            ):
-                raise ResourceDiscoveryRuntimeError("CLI accepted-run transport identity mismatch")
-            submit_status = cli_submit.get("submit", {}).get("status")
-            submitted = cli_submit.get("submit", {}).get("body", {})
-            if submit_status != 201 or submitted.get("disposition") != "accepted" or submitted.get("run_id") != run_id:
-                raise ResourceDiscoveryRuntimeError("CLI Submit did not accept the expected immutable run")
-            materialized = cli_submit.get("materialization", {}).get("body", {})
-            before = cli_submit.get("run", {}).get("body", {})
-            tasks = before.get("tasks", [])
-            if (
-                materialized.get("execution_state") != "pending_preparation"
-                or before.get("catalog_state") != "materialized"
-                or len(tasks) != 1
-                or tasks[0].get("lifecycle") != "accepted"
-                or tasks[0].get("readiness", {}).get("state") != "blocked"
-            ):
-                raise ResourceDiscoveryRuntimeError("materialized run did not expose one blocked accepted task")
+            cli_submits = []
+            for label, expected_run_id, priority, _ in requests:
+                request_path = paths["run_root"] / f"accepted-run-request-{label}.json"
+                cli_command = [
+                    str(binaries["fullmag"]),
+                    "submit-run-json",
+                    str(request_path),
+                    "--api-url",
+                    base_url,
+                ]
+                if label == "unmaterialized":
+                    cli_command.append("--submit-only")
+                cli_submit = run_json_process(
+                    cli_command,
+                    cwd=repo_root,
+                    env=env,
+                    log_path=paths["run_root"] / f"cli-submit-{label}.log",
+                    timeout=45,
+                )
+                if (
+                    cli_submit.get("operation") != "submit_accepted_run"
+                    or cli_submit.get("transport") != "public_http_v2"
+                    or cli_submit.get("project_id") != project_id
+                    or cli_submit.get("run_id") != expected_run_id
+                ):
+                    raise ResourceDiscoveryRuntimeError("CLI accepted-run transport identity mismatch")
+                submit_status = cli_submit.get("submit", {}).get("status")
+                submitted = cli_submit.get("submit", {}).get("body", {})
+                if (
+                    submit_status != 201
+                    or submitted.get("disposition") != "accepted"
+                    or submitted.get("run_id") != expected_run_id
+                ):
+                    raise ResourceDiscoveryRuntimeError("CLI Submit did not accept the expected immutable run")
+                if label == "unmaterialized":
+                    if cli_submit.get("materialization") is not None or cli_submit.get("run") is not None:
+                        raise ResourceDiscoveryRuntimeError(
+                            "submit-only run unexpectedly materialized a task catalog"
+                        )
+                    cli_submits.append(cli_submit)
+                    continue
+                materialized = cli_submit.get("materialization", {}).get("body", {})
+                before = cli_submit.get("run", {}).get("body", {})
+                tasks = before.get("tasks", [])
+                if (
+                    materialized.get("execution_state") != "pending_preparation"
+                    or before.get("catalog_state") != "materialized"
+                    or before.get("scheduling_priority") != priority
+                    or len(tasks) != 1
+                    or tasks[0].get("lifecycle") != "accepted"
+                    or tasks[0].get("readiness", {}).get("state") != "blocked"
+                ):
+                    raise ResourceDiscoveryRuntimeError(
+                        "materialized run did not preserve priority and one blocked accepted task"
+                    )
+                cli_submits.append(cli_submit)
             receipt["submit"] = {
                 "health": health,
                 "build_identity": build_identity,
-                "cli": cli_submit,
+                "cli": cli_submits,
             }
             receipt["api_submit_exit_code"] = terminate_process(api_process)
             api_process = None
@@ -419,13 +477,14 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
             scheduler_command = [
                 str(binaries["fullmag-api-accepted-scheduler"]),
                 "--store-root", str(store_root),
-                "--run-id", run_id,
+                "--discover-runs", "true",
                 "--pool-id", pool_id,
                 "--resident", "true",
                 "--discover-resources", "true",
                 "--worker-executable", str(binaries["fullmag-api-accepted-worker"]),
                 "--max-concurrency", "1",
-                "--max-tasks", "1",
+                "--max-queued-runs", "2",
+                "--max-tasks", "4",
                 "--max-idle-polls", "0",
                 "--idle-poll-milliseconds", "20",
                 "--worker-timeout-seconds", "60",
@@ -438,42 +497,68 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
             executed = scheduler.get("executed")
             if (
                 scheduler.get("status") != "completed"
-                or scheduler.get("scheduled_count") != 1
-                or scheduler.get("run_source") != "explicit"
+                or scheduler.get("scheduled_count") != 4
+                or scheduler.get("run_source") != "store"
+                or scheduler.get("max_queued_runs") != 2
+                or scheduler.get("peak_queued_run_count") != 5
+                or scheduler.get("peak_backpressured_run_count") != 3
                 or scheduler.get("resource_source") != "store"
                 or scheduler.get("resource_pool_generation") != 1
                 or not isinstance(executed, list)
-                or len(executed) != 1
-                or executed[0].get("run_id") != run_id
-                or executed[0].get("resource_id") != cpu_offer["resource_id"]
-                or executed[0].get("worker", {}).get("status") != "completed"
+                or [item.get("run_id") for item in executed]
+                != [request[1] for request in requests[:4]]
+                or any(item.get("resource_id") != cpu_offer["resource_id"] for item in executed)
+                or any(item.get("worker", {}).get("status") != "completed" for item in executed)
             ):
-                raise ResourceDiscoveryRuntimeError("scheduler did not execute the submitted run on the discovered CPU offer")
+                raise ResourceDiscoveryRuntimeError(
+                    "scheduler did not preserve strict priority and equal-priority fairness"
+                )
             receipt["scheduler"] = scheduler
 
-            leases = durable_leases(store_root, run_id)
-            if any(
-                lease.get("state") != "released"
-                or lease.get("released_at") is None
-                or lease.get("resource_id") != cpu_offer["resource_id"]
-                for lease in leases
-            ):
-                raise ResourceDiscoveryRuntimeError("the exact discovered resource lease was not durably released")
-            receipt["resource_leases"] = leases
+            leases_by_run = {}
+            for _, executed_run_id, _, _ in requests[:4]:
+                leases = durable_leases(store_root, executed_run_id)
+                if any(
+                    lease.get("state") != "released"
+                    or lease.get("released_at") is None
+                    or lease.get("resource_id") != cpu_offer["resource_id"]
+                    for lease in leases
+                ):
+                    raise ResourceDiscoveryRuntimeError(
+                        "an exact discovered resource lease was not durably released"
+                    )
+                leases_by_run[executed_run_id] = leases
+            receipt["resource_leases"] = leases_by_run
 
             api_process, api_log, result_url = start_api(
                 binaries["fullmag-api"], repo_root, env, paths["api_result_log"]
             )
             wait_for_health(result_url, api_process)
-            _, after = json_request(
-                f"{result_url}/v2/persistence/projects/{project_id}/runs/{run_id}"
-            )
-            after_tasks = after.get("tasks", [])
-            if len(after_tasks) != 1 or after_tasks[0].get("lifecycle") != "succeeded":
-                raise ResourceDiscoveryRuntimeError("public run projection did not expose terminal success")
-            if after.get("requested_execution", {}).get("minimum_resources") != run_minimum:
-                raise ResourceDiscoveryRuntimeError("public run projection lost immutable resource minima")
-            receipt["after_scheduler"] = after
+            after_scheduler = {}
+            for label, expected_run_id, priority, _ in requests:
+                _, after = json_request(
+                    f"{result_url}/v2/persistence/projects/{project_id}/runs/{expected_run_id}"
+                )
+                after_tasks = after.get("tasks", [])
+                if label == "unmaterialized":
+                    lifecycle_matches = (
+                        after.get("catalog_state") == "pending_materialization"
+                        and not after_tasks
+                    )
+                else:
+                    expected_lifecycle = "accepted" if label == "low" else "succeeded"
+                    lifecycle_matches = (
+                        len(after_tasks) == 1
+                        and after_tasks[0].get("lifecycle") == expected_lifecycle
+                    )
+                if after.get("scheduling_priority") != priority or not lifecycle_matches:
+                    raise ResourceDiscoveryRuntimeError(
+                        "public run projection did not preserve priority ordering and lifecycle"
+                    )
+                if after.get("requested_execution", {}).get("minimum_resources") != run_minimum:
+                    raise ResourceDiscoveryRuntimeError("public run projection lost immutable resource minima")
+                after_scheduler[label] = after
+            receipt["after_scheduler"] = after_scheduler
             receipt["api_result_exit_code"] = terminate_process(api_process)
             api_process = None
             api_log.close()
