@@ -285,6 +285,29 @@ def test_api_accepted_scheduler_e2e_route_builds_scheduler_and_worker() -> None:
         MODULE.validate_command(("cargo", "test", "--workspace"), route)
 
 
+def test_api_accepted_scheduler_pool_e2e_route_builds_scheduler_and_worker() -> None:
+    route = MODULE.ROUTES["api-accepted-scheduler-pool-e2e"]
+    assert route.setup_commands == ((
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "fullmag-api",
+        "--bin",
+        "fullmag-api-accepted-scheduler",
+        "--bin",
+        "fullmag-api-accepted-worker",
+    ),)
+    assert dict(route.binary_env) == {
+        "FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN": "fullmag-api-accepted-scheduler",
+        "FULLMAG_ACCEPTED_WORKER_E2E_BIN": "fullmag-api-accepted-worker",
+    }
+    assert dict(route.environment) == {"FULLMAG_ACCEPTED_SCHEDULER_POOL_E2E": "1"}
+    assert route.receipt_schema == "fullmag_api_accepted_scheduler_pool_e2e_v1"
+    with pytest.raises(MODULE.SessionCheckError):
+        MODULE.validate_command(("cargo", "test", "--workspace"), route)
+
+
 def test_api_accepted_scheduler_retry_e2e_route_builds_all_processes() -> None:
     route = MODULE.ROUTES["api-accepted-scheduler-retry-e2e"]
     assert route.setup_commands == ((
@@ -447,6 +470,7 @@ def test_just_route_precedes_generic_prepare_links() -> None:
     assert '--route api-accepted-supervisor-retry-recovery-e2e --repo-root' in justfile
     assert '--route api-accepted-supervisor-process-exit-recovery-e2e --repo-root' in justfile
     assert '--route api-accepted-scheduler-e2e --repo-root' in justfile
+    assert '--route api-accepted-scheduler-pool-e2e --repo-root' in justfile
     assert '--route api-accepted-scheduler-retry-e2e --repo-root' in justfile
     assert '--route api-preparation-tests --repo-root' in justfile
     assert '--route api-scene-resource-tests --repo-root' in justfile
@@ -465,6 +489,7 @@ def test_just_route_precedes_generic_prepare_links() -> None:
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-retry-recovery-e2e' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-supervisor-process-exit-recovery-e2e' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-e2e' in shell
+    assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-pool-e2e' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-accepted-scheduler-retry-e2e' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-preparation-tests' in shell
     assert 'exec "${python_cmd}" "${script_dir}/verify_session_persistence.py" --route api-scene-resource-tests' in shell

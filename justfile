@@ -265,6 +265,9 @@ verify-api-accepted-supervisor-process-exit-recovery-e2e:
 verify-api-accepted-scheduler-e2e:
     {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-scheduler-e2e --repo-root "{{repo_root}}"
 
+verify-api-accepted-scheduler-pool-e2e:
+    {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-scheduler-pool-e2e --repo-root "{{repo_root}}"
+
 verify-api-accepted-scheduler-retry-e2e:
     {{storage_python}} "{{repo_root}}/scripts/verify_session_persistence.py" --route api-accepted-scheduler-retry-e2e --repo-root "{{repo_root}}"
 

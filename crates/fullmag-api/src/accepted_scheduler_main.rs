@@ -8,13 +8,15 @@ use std::time::Duration;
 
 struct SchedulerArgs {
     store_root: PathBuf,
-    run_id: String,
+    run_ids: Vec<String>,
     resource_id: String,
     resource_kind: ResourceKind,
     resource_budget: ResourceBudget,
     worker_executable: Option<PathBuf>,
     max_concurrency: usize,
     max_tasks: usize,
+    max_idle_polls: usize,
+    idle_poll_interval: Duration,
     worker_timeout: Duration,
     heartbeat_interval: Duration,
     max_automatic_retries: usize,
@@ -31,25 +33,54 @@ fn run() -> Result<()> {
     let args = parse_args()?;
     let store = fullmag_session::SessionStore::open_existing(&args.store_root)
         .with_context(|| format!("open session store `{}`", args.store_root.display()))?;
-    let run_id =
-        RunId::parse(args.run_id.clone()).map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let mut run_ids = Vec::with_capacity(args.run_ids.len());
+    let mut unique_run_ids = std::collections::BTreeSet::new();
+    for value in args.run_ids {
+        let run_id = RunId::parse(value).map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        if !unique_run_ids.insert(run_id.clone()) {
+            bail!("duplicate scheduler run id `{}`", run_id.as_str());
+        }
+        run_ids.push(run_id);
+    }
     let worker_executable = match args.worker_executable {
         Some(path) => path,
         None => sibling_worker_executable()?,
     };
     let mut executed = Vec::new();
-    for _ in 0..args.max_tasks {
-        let offer = ResourceLease::new(
-            args.resource_id.clone(),
-            args.resource_kind.clone(),
-            args.resource_budget.clone(),
-        )
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        let Some(scheduled) =
-            fullmag_runtime_control::schedule_next_ready_accepted_task(&store, &run_id, offer)?
-        else {
-            break;
+    let mut next_run_index = 0;
+    let mut idle_poll_count = 0;
+    let mut consecutive_idle_polls = 0;
+    while executed.len() < args.max_tasks {
+        let mut selected = None;
+        for offset in 0..run_ids.len() {
+            let run_index = (next_run_index + offset) % run_ids.len();
+            let offer = ResourceLease::new(
+                args.resource_id.clone(),
+                args.resource_kind.clone(),
+                args.resource_budget.clone(),
+            )
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            if let Some(scheduled) = fullmag_runtime_control::schedule_next_ready_accepted_task(
+                &store,
+                &run_ids[run_index],
+                offer,
+            )? {
+                selected = Some((run_index, scheduled));
+                break;
+            }
+        }
+        let Some((run_index, scheduled)) = selected else {
+            if consecutive_idle_polls >= args.max_idle_polls {
+                break;
+            }
+            idle_poll_count += 1;
+            consecutive_idle_polls += 1;
+            std::thread::sleep(args.idle_poll_interval);
+            continue;
         };
+        consecutive_idle_polls = 0;
+        let run_id = &run_ids[run_index];
+        next_run_index = (run_index + 1) % run_ids.len();
         let result = accepted_study_supervisor::run_supervised_accepted_worker(
             &store,
             run_id.as_str(),
@@ -61,6 +92,7 @@ fn run() -> Result<()> {
             args.max_automatic_retries,
         )?;
         executed.push(serde_json::json!({
+            "run_id": run_id.as_str(),
             "task_id": scheduled.claim.task_id.as_str(),
             "step_id": scheduled.step_id,
             "attempt_id": scheduled.claim.attempt_id.as_str(),
@@ -82,8 +114,10 @@ fn run() -> Result<()> {
         "{}",
         serde_json::to_string(&serde_json::json!({
             "status": if executed.is_empty() { "idle" } else { "completed" },
-            "run_id": run_id.as_str(),
+            "run_id": if run_ids.len() == 1 { Some(run_ids[0].as_str()) } else { None },
+            "run_ids": run_ids.iter().map(RunId::as_str).collect::<Vec<_>>(),
             "scheduled_count": executed.len(),
+            "idle_poll_count": idle_poll_count,
             "executed": executed,
         }))?
     );
@@ -102,18 +136,30 @@ fn sibling_worker_executable() -> Result<PathBuf> {
 
 fn parse_args() -> Result<SchedulerArgs> {
     let mut values = std::collections::BTreeMap::new();
+    let mut run_ids = Vec::new();
     let mut args = std::env::args_os().skip(1);
     while let Some(argument) = args.next() {
         let flag = argument
             .into_string()
             .map_err(|_| anyhow::anyhow!("scheduler option name must be valid UTF-8"))?;
-        if !flag.starts_with("--") || values.contains_key(&flag) {
+        if !flag.starts_with("--") || (flag != "--run-id" && values.contains_key(&flag)) {
             bail!("invalid or duplicate scheduler option `{flag}`");
         }
         let value = args
             .next()
             .with_context(|| format!("scheduler option `{flag}` requires a value"))?;
-        values.insert(flag, value);
+        if flag == "--run-id" {
+            run_ids.push(
+                value.into_string().map_err(|_| {
+                    anyhow::anyhow!("scheduler option `--run-id` must be valid UTF-8")
+                })?,
+            );
+        } else {
+            values.insert(flag, value);
+        }
+    }
+    if run_ids.is_empty() {
+        bail!("missing required --run-id");
     }
     let mut take_string = |flag: &str| -> Result<String> {
         values
@@ -123,7 +169,6 @@ fn parse_args() -> Result<SchedulerArgs> {
             .map_err(|_| anyhow::anyhow!("scheduler option `{flag}` must be valid UTF-8"))
     };
     let store_root = PathBuf::from(take_string("--store-root")?);
-    let run_id = take_string("--run-id")?;
     let resource_id = take_string("--resource-id")?;
     let resource_kind = match take_string("--resource-kind")?.as_str() {
         "cpu" => ResourceKind::Cpu,
@@ -156,6 +201,16 @@ fn parse_args() -> Result<SchedulerArgs> {
         .map(|value| parse_usize("--max-tasks", value))
         .transpose()?
         .unwrap_or(1);
+    let max_idle_polls = values
+        .remove("--max-idle-polls")
+        .map(|value| parse_usize("--max-idle-polls", value))
+        .transpose()?
+        .unwrap_or(0);
+    let idle_poll_milliseconds = values
+        .remove("--idle-poll-milliseconds")
+        .map(|value| parse_u64("--idle-poll-milliseconds", value))
+        .transpose()?
+        .unwrap_or(100);
     let max_automatic_retries = values
         .remove("--max-automatic-retries")
         .map(|value| parse_usize("--max-automatic-retries", value))
@@ -164,23 +219,36 @@ fn parse_args() -> Result<SchedulerArgs> {
     if max_concurrency == 0 || max_tasks == 0 {
         bail!("scheduler max concurrency and max tasks must be positive");
     }
+    if max_idle_polls > 0 && idle_poll_milliseconds == 0 {
+        bail!("scheduler idle poll interval must be positive when idle polling is enabled");
+    }
     let worker_executable = values.remove("--worker-executable").map(PathBuf::from);
     if let Some(flag) = values.keys().next() {
         bail!("unknown scheduler option `{flag}`");
     }
     Ok(SchedulerArgs {
         store_root,
-        run_id,
+        run_ids,
         resource_id,
         resource_kind,
         resource_budget,
         worker_executable,
         max_concurrency,
         max_tasks,
+        max_idle_polls,
+        idle_poll_interval: Duration::from_millis(idle_poll_milliseconds),
         worker_timeout: Duration::from_secs(worker_timeout_seconds),
         heartbeat_interval: Duration::from_millis(heartbeat_interval_milliseconds),
         max_automatic_retries,
     })
+}
+
+fn parse_u64(flag: &str, value: std::ffi::OsString) -> Result<u64> {
+    value
+        .into_string()
+        .map_err(|_| anyhow::anyhow!("scheduler option `{flag}` must be valid UTF-8"))?
+        .parse::<u64>()
+        .with_context(|| format!("scheduler option `{flag}` must be a non-negative integer"))
 }
 
 fn parse_usize(flag: &str, value: std::ffi::OsString) -> Result<usize> {
