@@ -22,8 +22,9 @@ po awarii sprzed decyzji; istniejąca rezerwacja attemptu nadal zachowuje
 fail-closed lease.
 
 Bounded scheduler wybiera dependency-ready task z jawnej puli RunId przez
-round-robin i jedną ofertę zasobu. Brakuje rezydentnej usługi, dynamicznego
-discovery, trwałej fairness między restartami, heartbeat/Stop ACK dla zdalnego
+round-robin i jedną ofertę zasobu. Opcjonalny tryb store-discovery ponownie
+odczytuje trwałe intenty podczas bounded polling. Brakuje rezydentnej usługi,
+trwałej fairness między restartami, heartbeat/Stop ACK dla zdalnego
 transportu oraz process E2E pozostałych lane'ów. Anulowanie przed uruchomieniem
 workera jest obsłużone trwale i nie wykonuje spawnu procesu potomnego.
 Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
@@ -38,8 +39,9 @@ Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`36-supervisor-automatic-retry.md`](36-supervisor-automatic-retry.md),
 [`37-supervisor-retry-recovery.md`](37-supervisor-retry-recovery.md),
 [`38-accepted-task-scheduler.md`](38-accepted-task-scheduler.md),
-[`39-supervisor-process-exit-receipt.md`](39-supervisor-process-exit-receipt.md) i
-[`40-multi-run-scheduler-pool.md`](40-multi-run-scheduler-pool.md).
+[`39-supervisor-process-exit-receipt.md`](39-supervisor-process-exit-receipt.md),
+[`40-multi-run-scheduler-pool.md`](40-multi-run-scheduler-pool.md) i
+[`41-scheduler-run-discovery.md`](41-scheduler-run-discovery.md).
 
 ## Ograniczona pula wielu runów — 27.09.2026
 
@@ -56,6 +58,21 @@ Pula jest statyczna i lokalna; nie stanowi rezydentnej usługi ani trwałego
 schedulera wielozasobowego. P3 wynosi około **76%**, P5 około **39%**, a całość
 około **36%**. Szczegóły:
 [`40-multi-run-scheduler-pool.md`](40-multi-run-scheduler-pool.md).
+
+## Odkrywanie zaakceptowanych runów — 27.09.2026
+
+Tryb `--discover-runs true` odczytuje trwałe `run_intent` przy każdym skanie,
+sortuje RunId i utrzymuje kursor round-robin po tożsamości. Tryb jawny i
+discovery są rozłączne. Managed E2E bez ręcznych RunId wykonuje dwa taski i
+zwalnia oba lease'y: **1/1 PASS**, receipt
+`ccb8f7f6e5a04b2bb976af262896da70`, content
+`91bb5ee9b1fe140635f992525169ef165e7240b4e8b87d701e92fba29a2ca988`,
+`source_changed_during_run=false`. Rejestr tras: **26/26 PASS**.
+
+Discovery jest lokalne i ograniczone czasowo; kursor nie jest jeszcze trwały
+między restartami. P3 wynosi około **77%**, P5 około **41%**, a całość pozostaje
+na poziomie około **36%**. Szczegóły:
+[`41-scheduler-run-discovery.md`](41-scheduler-run-discovery.md).
 
 API ma jawny adapter allow-listy `RunResult` → typowane payloady dla
 wspieranych wyjść. Szczegóły i wcześniejszy dowód opisuje
