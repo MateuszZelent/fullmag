@@ -429,6 +429,85 @@ pub enum SchedulerPoolCheckpointCommitDisposition {
     Replayed,
 }
 
+pub const FMS_SCHEDULER_RESOURCE_POOL_SCHEMA: &str = "scheduler_resource_pool.v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsSchedulerResourceOffer {
+    pub resource_id: String,
+    pub kind: FmsResourceKind,
+    pub budget: FmsResourceBudget,
+}
+
+impl FmsSchedulerResourceOffer {
+    pub fn validate(&self) -> Result<()> {
+        crate::repository_path::validate_store_id(&self.resource_id)?;
+        if self.budget.cpu_millis == 0 {
+            bail!("scheduler resource offer requires positive cpu_millis");
+        }
+        if self.budget.memory_bytes == 0 {
+            bail!("scheduler resource offer requires positive memory_bytes");
+        }
+        if self.budget.storage_bytes == 0 {
+            bail!("scheduler resource offer requires positive storage_bytes");
+        }
+        match self.kind {
+            FmsResourceKind::Cpu if self.budget.gpu_memory_bytes != 0 => {
+                bail!("CPU scheduler resource offer requires zero gpu_memory_bytes")
+            }
+            FmsResourceKind::Gpu if self.budget.gpu_memory_bytes == 0 => {
+                bail!("GPU scheduler resource offer requires positive gpu_memory_bytes")
+            }
+            FmsResourceKind::Cpu | FmsResourceKind::Gpu => {}
+            FmsResourceKind::Storage | FmsResourceKind::Meshing => {
+                bail!("scheduler solver resource pool supports only CPU and GPU offers")
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Monotonic local membership snapshot for one scheduler resource pool.
+/// Removal blocks new admission only; an active fenced lease remains the
+/// authority until its supervisor publishes an explicit release.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsSchedulerResourcePool {
+    pub schema_version: String,
+    pub pool_id: String,
+    pub generation: u64,
+    pub resources: Vec<FmsSchedulerResourceOffer>,
+}
+
+impl FmsSchedulerResourcePool {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != FMS_SCHEDULER_RESOURCE_POOL_SCHEMA {
+            bail!(
+                "unsupported scheduler resource pool schema `{}`",
+                self.schema_version
+            );
+        }
+        crate::repository_path::validate_store_id(&self.pool_id)?;
+        if self.generation == 0 {
+            bail!("scheduler resource pool generation must be positive");
+        }
+        let mut seen = BTreeSet::new();
+        for resource in &self.resources {
+            resource.validate()?;
+            if !seen.insert(resource.resource_id.as_str()) {
+                bail!("scheduler resource pool contains a duplicate resource id");
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchedulerResourcePoolCommitDisposition {
+    Accepted,
+    Replayed,
+}
+
 /// Schema version for the durable preparation receipt bound to one run.
 pub const FMS_PREPARATION_RECEIPT_SCHEMA: &str = "preparation_receipt.v1";
 /// Schema for an immutable preparation publication scoped to one study task.

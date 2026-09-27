@@ -341,6 +341,64 @@ impl SessionStore {
         Ok(SchedulerPoolCheckpointCommitDisposition::Accepted)
     }
 
+    pub fn read_scheduler_resource_pool(
+        &self,
+        pool_id: &str,
+    ) -> Result<Option<FmsSchedulerResourcePool>> {
+        validate_store_id(pool_id)?;
+        let relative = format!("scheduler_pools/{pool_id}.resources.json");
+        let path = checked_path(&self.root, &relative)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        reject_link(&path)?;
+        let pool: FmsSchedulerResourcePool = serde_json::from_slice(&fs::read(&path)?)
+            .with_context(|| format!("parsing scheduler resource pool `{relative}`"))?;
+        pool.validate()?;
+        if pool.pool_id != pool_id {
+            anyhow::bail!("scheduler resource pool identity does not match its path");
+        }
+        Ok(Some(pool))
+    }
+
+    pub fn commit_scheduler_resource_pool(
+        &self,
+        expected_generation: u64,
+        pool: &FmsSchedulerResourcePool,
+    ) -> Result<SchedulerResourcePoolCommitDisposition> {
+        pool.validate()?;
+        if pool.generation
+            != expected_generation
+                .checked_add(1)
+                .context("scheduler resource pool generation overflow")?
+        {
+            anyhow::bail!("scheduler resource pool generation is not contiguous");
+        }
+        let _writer_lease = self.write_transaction()?;
+        let relative = format!("scheduler_pools/{}.resources.json", pool.pool_id);
+        let path = create_parent(&self.root, &relative)?;
+        if path.exists() {
+            reject_link(&path)?;
+            let existing: FmsSchedulerResourcePool =
+                serde_json::from_slice(&fs::read(&path)?).with_context(|| {
+                    format!("parsing scheduler resource pool `{relative}`")
+                })?;
+            existing.validate()?;
+            if existing == *pool {
+                return Ok(SchedulerResourcePoolCommitDisposition::Replayed);
+            }
+            if existing.pool_id != pool.pool_id
+                || existing.generation != expected_generation
+            {
+                anyhow::bail!("scheduler resource pool compare-and-swap conflict");
+            }
+        } else if expected_generation != 0 {
+            anyhow::bail!("scheduler resource pool is missing before update");
+        }
+        atomic_write(&path, &serde_json::to_vec_pretty(pool)?)?;
+        Ok(SchedulerResourcePoolCommitDisposition::Accepted)
+    }
+
     fn find_run_intent_unlocked(&self, idempotency_key: &str) -> Result<Option<FmsRunIntent>> {
         let mut found = None;
         for intent in self.list_run_intents()? {
@@ -3178,6 +3236,67 @@ mod tests {
         assert!(store
             .commit_scheduler_pool_checkpoint(2, &changed_membership)
             .is_err());
+    }
+
+    #[test]
+    fn scheduler_resource_pool_is_generation_fenced_and_allows_empty_membership() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(dir.path().join("store")).unwrap();
+        let empty = FmsSchedulerResourcePool {
+            schema_version: FMS_SCHEDULER_RESOURCE_POOL_SCHEMA.into(),
+            pool_id: "pool-dynamic".into(),
+            generation: 1,
+            resources: Vec::new(),
+        };
+        assert_eq!(
+            store.commit_scheduler_resource_pool(0, &empty).unwrap(),
+            SchedulerResourcePoolCommitDisposition::Accepted
+        );
+        assert_eq!(
+            store.commit_scheduler_resource_pool(0, &empty).unwrap(),
+            SchedulerResourcePoolCommitDisposition::Replayed
+        );
+        assert_eq!(
+            store.read_scheduler_resource_pool("pool-dynamic").unwrap(),
+            Some(empty.clone())
+        );
+
+        let populated = FmsSchedulerResourcePool {
+            generation: 2,
+            resources: vec![FmsSchedulerResourceOffer {
+                resource_id: "cpu-dynamic-a".into(),
+                kind: FmsResourceKind::Cpu,
+                budget: FmsResourceBudget {
+                    cpu_millis: 100,
+                    memory_bytes: 1024,
+                    gpu_memory_bytes: 0,
+                    storage_bytes: 4096,
+                },
+            }],
+            ..empty.clone()
+        };
+        assert_eq!(
+            store
+                .commit_scheduler_resource_pool(1, &populated)
+                .unwrap(),
+            SchedulerResourcePoolCommitDisposition::Accepted
+        );
+        let report = crate::reachability::walk_store_root(
+            store.root(),
+            crate::reachability::ReachabilityMode::Export,
+        )
+        .unwrap();
+        assert!(
+            report
+                .file_refs
+                .contains("scheduler_pools/pool-dynamic.resources.json")
+        );
+        assert!(store.commit_scheduler_resource_pool(1, &empty).is_err());
+
+        let mut invalid = populated;
+        invalid.generation = 3;
+        invalid.resources[0].budget.storage_bytes = 0;
+        assert!(store.commit_scheduler_resource_pool(2, &invalid).is_err());
     }
 
     #[test]

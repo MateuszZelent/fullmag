@@ -15,8 +15,9 @@ use crate::types::{
     ArtifactIndex, BackendStatePayload, CommonSolverState, FieldRole, FmsArtifactCatalog,
     FmsCheckpoint, FmsCoordinatorJournalDirection, FmsExportProfile, FmsPreparationReceipt,
     FmsResourceLease, FmsRetryDecision, FmsRunCatalog, FmsRunIntent, FmsRunManifest,
-    FmsSchedulerPoolCheckpoint, FmsSessionManifest, FmsTaskAdmissionRecord, FmsTaskPreparationReceipt,
-    FmsWorkerProcessExitReceipt, FmsWorkspaceManifest, TensorDescriptor,
+    FmsSchedulerPoolCheckpoint, FmsSchedulerResourcePool, FmsSessionManifest,
+    FmsTaskAdmissionRecord, FmsTaskPreparationReceipt, FmsWorkerProcessExitReceipt,
+    FmsWorkspaceManifest, TensorDescriptor,
 };
 
 /// The same claim-scoped continuity rules apply to stores and portable archives.
@@ -638,20 +639,27 @@ impl StoreWalker {
         }
         for entry in read_directory(&directory)? {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if entry.file_type()?.is_symlink()
-                || !entry.file_type()?.is_file()
-                || !name.ends_with(".json")
-            {
+            if entry.file_type()?.is_symlink() || !entry.file_type()?.is_file() {
                 bail!("unknown scheduler pool checkpoint entry `{name}`");
             }
-            let pool_id = name.trim_end_matches(".json");
-            validate_component(pool_id)?;
             let relative = format!("scheduler_pools/{name}");
             let data = self.read_file(&entry.path(), &relative)?;
-            let checkpoint: FmsSchedulerPoolCheckpoint = parse_json(&data, &relative)?;
-            checkpoint.validate()?;
-            if checkpoint.pool_id != pool_id {
-                bail!("scheduler pool checkpoint `{relative}` has mismatched path identity");
+            if let Some(pool_id) = name.strip_suffix(".resources.json") {
+                validate_component(pool_id)?;
+                let pool: FmsSchedulerResourcePool = parse_json(&data, &relative)?;
+                pool.validate()?;
+                if pool.pool_id != pool_id {
+                    bail!("scheduler resource pool `{relative}` has mismatched path identity");
+                }
+            } else if let Some(pool_id) = name.strip_suffix(".json") {
+                validate_component(pool_id)?;
+                let checkpoint: FmsSchedulerPoolCheckpoint = parse_json(&data, &relative)?;
+                checkpoint.validate()?;
+                if checkpoint.pool_id != pool_id {
+                    bail!("scheduler pool checkpoint `{relative}` has mismatched path identity");
+                }
+            } else {
+                bail!("unknown scheduler pool checkpoint entry `{name}`");
             }
         }
         Ok(())
