@@ -461,21 +461,7 @@ fn spawn_supervised_worker(
 }
 
 fn retry_store_writer_busy<T>(mut operation: impl FnMut() -> Result<T>) -> Result<T> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        match operation() {
-            Ok(value) => return Ok(value),
-            Err(error)
-                if error
-                    .chain()
-                    .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
-                    && Instant::now() < deadline =>
-            {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Err(error) => return Err(error),
-        }
-    }
+    fullmag_runtime_control::retry_store_writer_busy(&mut operation)
 }
 
 fn sibling_worker_executable() -> Result<PathBuf> {

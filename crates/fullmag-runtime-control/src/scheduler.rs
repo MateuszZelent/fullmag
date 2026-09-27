@@ -207,21 +207,7 @@ pub fn schedule_next_ready_accepted_task(
 }
 
 fn retry_store_writer_busy<T>(mut action: impl FnMut() -> Result<T>) -> Result<T> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        match action() {
-            Ok(value) => return Ok(value),
-            Err(error)
-                if error
-                    .chain()
-                    .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
-                    && std::time::Instant::now() < deadline =>
-            {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            Err(error) => return Err(error),
-        }
-    }
+    crate::retry_store_writer_busy(&mut action)
 }
 
 fn commit_prepared_event_with_retry(

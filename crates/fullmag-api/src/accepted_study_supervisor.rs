@@ -364,11 +364,17 @@ pub(crate) fn run_supervised_accepted_worker(
             "accepted-worker supervisor heartbeat interval must be positive and shorter than the worker timeout"
         );
     }
-    let recoverable_retry = retry_decision_for_terminal_task(store, run_id, task_id)?.is_some();
-    let recoverable_process_exit =
-        worker_process_exit_receipt_for_current_task(store, run_id, task_id)?.is_some();
+    let recoverable_retry = retry_decision_for_terminal_task(store, run_id, task_id)
+        .context("inspect durable retry before supervisor slot acquisition")?
+        .is_some();
+    let recoverable_process_exit = worker_process_exit_receipt_for_current_task(
+        store, run_id, task_id,
+    )
+    .context("inspect durable process exit before supervisor slot acquisition")?
+    .is_some();
     let catalog = store
-        .read_run_catalog(run_id)?
+        .read_run_catalog(run_id)
+        .context("read run catalog before supervisor slot acquisition")?
         .context("supervisor requires a durable run catalog before slot acquisition")?;
     let resource_id = catalog
         .tasks
@@ -389,12 +395,19 @@ pub(crate) fn run_supervised_accepted_worker(
         )
     })
     .context("acquire accepted-worker supervisor slot")?;
-    if let Some(result) = reconcile_durable_retry_before_spawn(store, run_id, task_id)? {
+    if let Some(result) = reconcile_durable_retry_before_spawn(store, run_id, task_id)
+        .context("reconcile durable retry before accepted-worker spawn")?
+    {
         slot.release()?;
         return Ok(result);
     }
-    if let Some(result) =
-        reconcile_durable_worker_exit_before_spawn(store, run_id, task_id, max_automatic_retries)?
+    if let Some(result) = reconcile_durable_worker_exit_before_spawn(
+        store,
+        run_id,
+        task_id,
+        max_automatic_retries,
+    )
+    .context("reconcile durable process exit before accepted-worker spawn")?
     {
         slot.release()?;
         return Ok(result);
@@ -406,7 +419,8 @@ pub(crate) fn run_supervised_accepted_worker(
     })
     .context("supervisor requires an exact active task claim")?;
     let lease = store
-        .read_active_resource_lease_for_task(run_id, task_id)?
+        .read_active_resource_lease_for_task(run_id, task_id)
+        .context("read active resource lease before accepted-worker spawn")?
         .context("supervisor requires an active resource lease")?;
     if lease.run_id != claim.run_id.as_str()
         || lease.task_id != claim.task_id.as_str()
@@ -1379,21 +1393,7 @@ fn accepted_supervisor_test_fail_after_process_exit_receipt() -> Result<()> {
 }
 
 fn retry_store_writer_busy<T>(mut operation: impl FnMut() -> Result<T>) -> Result<T> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        match operation() {
-            Ok(value) => return Ok(value),
-            Err(error)
-                if error
-                    .chain()
-                    .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
-                    && Instant::now() < deadline =>
-            {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Err(error) => return Err(error),
-        }
-    }
+    fullmag_runtime_control::retry_store_writer_busy(&mut operation)
 }
 
 fn parse_worker_summary(output: &Output) -> Result<serde_json::Value> {

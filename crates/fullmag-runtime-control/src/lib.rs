@@ -11,6 +11,38 @@ use fullmag_session::{
     FMS_COORDINATOR_JOURNAL_SCHEMA,
 };
 
+/// Retry only a transient native store-writer conflict for the same
+/// idempotent operation. Process- and thread-dependent jitter prevents
+/// scheduler, supervisor, and worker loops from repeatedly colliding in
+/// lockstep while preserving the five-second bounded wait.
+pub fn retry_store_writer_busy<T>(mut operation: impl FnMut() -> Result<T>) -> Result<T> {
+    use std::hash::{Hash, Hasher};
+    use std::time::{Duration, Instant};
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut attempt = 0_u64;
+    loop {
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if error
+                    .chain()
+                    .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
+                    && Instant::now() < deadline =>
+            {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                std::process::id().hash(&mut hasher);
+                std::thread::current().id().hash(&mut hasher);
+                attempt.hash(&mut hasher);
+                let delay = Duration::from_millis(5 + hasher.finish() % 36);
+                attempt = attempt.saturating_add(1);
+                std::thread::sleep(delay.min(deadline.saturating_duration_since(Instant::now())));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 pub fn commit_worker_checkpoint(
     store: &SessionStore,
     claim: &fullmag_application::TaskClaim,
