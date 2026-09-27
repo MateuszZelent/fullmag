@@ -31,15 +31,15 @@ SessionStore oraz bez zmiany generacji puli. Dotychczasowe jawne
 | Host CPU/RAM/storage | PASS | 48 000 CPU millis, 96 988 733 440 B RAM, 29 014 499 328 B storage | Wartości chwilowe z czasu próby. |
 | NVIDIA discovery | PASS | 1 GPU, UUID `GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937`, 8 987 344 896 B wolnego VRAM | Dowodzi dostępności tej karty w czasie próby, nie wykonania solvera GPU. |
 | Partycjonowanie wspólnej pojemności | PASS | dwie oferty po 24 000 CPU millis, 48 494 366 720 B RAM i 14 507 249 664 B storage | Brak podwójnego zadeklarowania wspólnych zasobów w snapshotcie. |
-| Discovery → publikacja → scheduler → solver | NOT RUN | wymagany osobny managed process E2E | `dry-run` nie zapisuje puli ani nie uruchamia taska. |
+| Discovery → publikacja → scheduler → solver | PASS | receipt `61dc4f8fb04345e889207ca3aecaa47a`; szczegóły w [`53-resource-discovery-process-e2e.md`](53-resource-discovery-process-e2e.md) | Osobna bramka procesowa FDM CPU; `dry-run` nadal pozostaje niemutującym dowodem samego discovery. |
 | Zachowanie przy braku `nvidia-smi` i przekroczonych rezerwach | NOT RUN | walidacja jest zaimplementowana | Aktywny zakaz kompilowania i uruchamiania testów jednostkowych. |
 
 ## Granica checkpointu
 
 Pomiar opisuje chwilowo dostępną pojemność i nie jest egzekwowaniem limitów
 przez system operacyjny, kontener albo sterownik. Nie wykrywa hostów zdalnych,
-nie agreguje puli klastra i nie dodaje priorytetów ani backpressure. Następna
-bramka P5-B powinna opublikować wykryty snapshot do SessionStore, uruchomić
-rezydentny scheduler i potwierdzić admission oraz zwolnienie dokładnego lease.
+nie agreguje puli klastra i nie dodaje priorytetów ani backpressure. Osobna
+bramka procesowa publikuje snapshot do SessionStore, uruchamia rezydentny
+scheduler i potwierdza admission oraz zwolnienie dokładnego lease dla FDM CPU.
 
 Po tym przyroście: **P3 85%, P5 68%, całość około 43%**.

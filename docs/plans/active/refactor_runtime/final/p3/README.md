@@ -33,8 +33,9 @@ Sygnał systemowy zatrzymuje nowe admission, pozwala dokończyć aktywne workery
 zapisać checkpointy i zwolnić lease przed statusem `drained`. Snapshot
 członkostwa może podmienić A na B bez odebrania aktywnego lease A. Lokalne
 discovery wykrywa CPU/RAM/storage/VRAM i dzieli wspólną pojemność z jawnymi
-rezerwami; brakuje jego process E2E z publikacją i schedulerem,
-priorytetów/backpressure oraz
+rezerwami. Zarządzane process E2E publikuje ten snapshot, wykonuje admission
+FDM CPU, uruchamia worker i potwierdza zwolnienie dokładnego lease;
+priorytety/backpressure oraz
 heartbeat/Stop ACK dla zdalnego transportu. Process E2E pozostałych lane'ów
 również są otwarte. Anulowanie przed uruchomieniem
 workera jest obsłużone trwale i nie wykonuje spawnu procesu potomnego.
@@ -969,3 +970,13 @@ Source-only check binarki: **PASS**, receipt
 pozostają osobną bramką. P3 wynosi **85%**, P5 **68%**, a całość około **43%**.
 Szczegóły:
 [`52-local-resource-capacity-discovery.md`](52-local-resource-capacity-discovery.md).
+
+## Process E2E discovery → lease → worker — 27.09.2026
+
+Nowa recepta buduje rzeczywiste binaria API, publishera, schedulera i workera,
+przyjmuje przez HTTP `run_spec.v2`, publikuje generację wykrytej puli i wykonuje
+dokładnie jeden task FDM CPU. Publiczny readback kończy się `succeeded`, a
+trwały lease wykrytej oferty ma `released` z `released_at`: **PASS**, receipt
+`61dc4f8fb04345e889207ca3aecaa47a`. Snapshot źródeł nie zmienił się w trakcie.
+P3 wynosi **87%**, P5 **72%**, a całość około **44%**. Szczegóły:
+[`53-resource-discovery-process-e2e.md`](53-resource-discovery-process-e2e.md).

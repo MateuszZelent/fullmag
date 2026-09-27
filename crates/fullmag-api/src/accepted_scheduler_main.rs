@@ -626,9 +626,6 @@ fn parse_args() -> Result<SchedulerArgs> {
                 .map_err(|_| anyhow::anyhow!("scheduler option `--pool-id` must be valid UTF-8"))
         })
         .transpose()?;
-    if resident && !discover_runs {
-        bail!("resident scheduler requires --discover-runs true");
-    }
     if resident && pool_id.is_none() {
         bail!("resident scheduler requires --pool-id");
     }

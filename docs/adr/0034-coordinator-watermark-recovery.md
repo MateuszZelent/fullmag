@@ -258,10 +258,10 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
   odczyt legacy v1. Regresje schedulera sprawdzają każdy zbyt mały wymiar,
   brak mutacji taska po odmowie i późniejsze wykonanie przez wystarczającą
   ofertę.
-- Managed próba discovery musi uruchomić binarkę w trybie `dry-run`, potwierdzić
+- Managed próba discovery uruchamia binarkę w trybie `dry-run`, potwierdza
   dodatnie CPU/RAM/storage, jawny status GPU oraz niepokrywający się podział
-  wspólnej pojemności. Osobne process E2E ma nadal objąć publikację snapshotu,
-  admission schedulera, wykonanie taska i zwolnienie lease.
+  wspólnej pojemności. Osobne process E2E publikuje snapshot, wykonuje admission
+  FDM CPU, uruchamia task i wymaga zwolnienia dokładnego lease.
 
 ## Migracja i rollback
 
@@ -282,7 +282,8 @@ sprzed decyzji ograniczonego FDM CPU przechodzą. Przechodzą również bounded
 statyczna pula dwóch zasobów, rezydentne discovery runu utworzonego po starcie
 schedulera, kontrolowany drain procesu bez limitu tasków oraz monotoniczną
 dynamiczną pulę A → B z zachowaniem aktywnego lease. Lokalny discovery dry-run
-CPU/RAM/storage/VRAM także przechodzi, lecz nie publikuje ani nie wykonuje
-solvera. P5-B pozostaje otwarte do process E2E discovery, priorytetów i backpressure, zdalnego ACK
+CPU/RAM/storage/VRAM oraz procesowe E2E publikacji, admission, workera FDM CPU i
+zwolnienia dokładnego lease także przechodzą. P5-B pozostaje otwarte do
+priorytetów i backpressure, zdalnego ACK
 oraz dowodu braku równoległego starego workera i zwolnienia urządzenia dla
 pozostałych lane'ów.

@@ -354,6 +354,11 @@ verify-project-run-restart:
 verify-project-api-runtime:
     {{storage_python}} "{{repo_root}}/scripts/verify_project_api_runtime.py" --repo-root "{{repo_root}}"
 
+# Managed production-process proof for local capacity discovery, durable pool
+# publication, scheduler admission, worker execution, and exact lease release.
+verify-api-resource-discovery-runtime:
+    {{storage_python}} "{{repo_root}}/scripts/verify_resource_discovery_runtime.py" --repo-root "{{repo_root}}"
+
 # Managed realtime transport smoke with an empty scratch session.  This checks
 # the websocket handshake and after_seq reconnect without starting a solver.
 verify-project-realtime-runtime:

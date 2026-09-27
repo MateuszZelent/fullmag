@@ -102,6 +102,9 @@ case "${recipe}" in
     fi
     exec "${python_cmd}" "${script_dir}/verify_project_api_runtime.py" --repo-root "${repo_root}"
     ;;
+  *"scripts/verify_resource_discovery_runtime.py"*)
+    exec "${python_cmd}" "${script_dir}/verify_resource_discovery_runtime.py" --repo-root "${repo_root}"
+    ;;
   *"scripts/verify_project_active_run_runtime.py"*)
     exec "${python_cmd}" "${script_dir}/verify_project_active_run_runtime.py" --repo-root "${repo_root}"
     ;;
