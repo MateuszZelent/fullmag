@@ -1045,3 +1045,23 @@ Managed process E2E sukcesów oraz publicznego Stop: **PASS**, receipt
 z aktywnym zakazem kompilowania targetów testowych. P3 wynosi **92%**, P5
 **84%**, a całość około **48%**. Szczegóły:
 [`57-worker-control-ack.md`](57-worker-control-ack.md).
+
+## Accepted FDM GPU z dokładnym przypisaniem urządzenia — 27.09.2026
+
+Accepted worker wykonuje teraz FDM CPU albo GPU dla `double/strict`, wymaga
+zgodnego rodzaju lease i dodatniego budżetu VRAM dla GPU. Supervisor wyprowadza
+fizyczny UUID NVIDIA z identyfikatora lokalnie odkrytego zasobu, ustawia
+`CUDA_VISIBLE_DEVICES=<uuid>` oraz mapuje workerowi ordinal zero. Sprzeczny
+override urządzenia i GPU lease bez wiązania UUID są odrzucane przed
+wykonaniem; forced GPU nie ma fallbacku CPU.
+
+Pełny produkcyjny przebieg publiczne HTTP v2 → dynamiczna pula → scheduler →
+supervisor → worker → runner CUDA → publiczny readback: **PASS**, receipt
+`3eea662894de4721819fcd6cf1bfd59c`,
+`source_changed_during_run=false`. Wynik ma `cuda_fdm`, dokładne
+`fdm/gpu/double/strict`, `fallback_occurred=false`, worker-originated
+`HeartbeatAck`, `succeeded` i zwolniony dokładny lease
+`GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937`. Source check: **PASS**, receipt
+`5dd42bd76a5b4a938543ab9dd3432fdc`. P3 wynosi **93%**, P5 **87%**, a całość
+około **49%**. Szczegóły:
+[`58-accepted-fdm-gpu-runtime.md`](58-accepted-fdm-gpu-runtime.md).
