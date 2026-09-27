@@ -14,6 +14,12 @@ name = "fullmag-api-accepted-worker"
 path = "src/accepted_worker_main.rs"
 
 [[bin]]
+name = "fullmag-api-accepted-fem-preparer"
+path = "src/accepted_fem_preparer_main.rs"
+test = false
+bench = false
+
+[[bin]]
 name = "fullmag-api-accepted-supervisor"
 path = "src/accepted_supervisor_main.rs"
 

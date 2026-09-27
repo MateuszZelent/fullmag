@@ -813,6 +813,52 @@ impl PreparationMaterialization {
         display_fingerprint: impl Into<String>,
         native: &NativeFemMeshSpaceEvidence,
     ) -> Result<Self, PreparationPlanError> {
+        Self::from_fem_execution_plan_with_identity(
+            problem_fingerprint,
+            PreparationPlanIdentity::LiveScene { scene_revision },
+            requested_backend,
+            execution_plan,
+            geometry_fingerprint,
+            display_fingerprint,
+            native,
+        )
+    }
+
+    /// Materialize native FEM preparation from an immutable accepted-run
+    /// step. The resulting plan carries no Live scene revision and is bound to
+    /// the exact RunSpecification and step supplied by the accepted snapshot.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_fem_execution_plan_for_accepted_run(
+        problem_fingerprint: impl Into<String>,
+        source: PreparationPlanSource,
+        requested_backend: BackendTarget,
+        execution_plan: &ExecutionPlanIR,
+        geometry_fingerprint: impl Into<String>,
+        display_fingerprint: impl Into<String>,
+        native: &NativeFemMeshSpaceEvidence,
+    ) -> Result<Self, PreparationPlanError> {
+        source.validate()?;
+        Self::from_fem_execution_plan_with_identity(
+            problem_fingerprint,
+            PreparationPlanIdentity::AcceptedRun(source),
+            requested_backend,
+            execution_plan,
+            geometry_fingerprint,
+            display_fingerprint,
+            native,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_fem_execution_plan_with_identity(
+        problem_fingerprint: impl Into<String>,
+        identity: PreparationPlanIdentity,
+        requested_backend: BackendTarget,
+        execution_plan: &ExecutionPlanIR,
+        geometry_fingerprint: impl Into<String>,
+        display_fingerprint: impl Into<String>,
+        native: &NativeFemMeshSpaceEvidence,
+    ) -> Result<Self, PreparationPlanError> {
         if execution_plan.common.requested_backend != requested_backend {
             return Err(PreparationPlanError::Contract(
                 "preparation requested backend does not match the execution plan".into(),
@@ -888,17 +934,30 @@ impl PreparationMaterialization {
             native.topology_fingerprint.clone(),
             native.space_fingerprint.clone(),
         )?;
-        let plan = PreparationPlan::new(
-            problem_fingerprint,
-            scene_revision,
-            requested_backend,
-            BackendTarget::Fem,
-            geometry,
-            display,
-            grid,
-            mesh,
-            space,
-        )?;
+        let plan = match identity {
+            PreparationPlanIdentity::LiveScene { scene_revision } => PreparationPlan::new(
+                problem_fingerprint,
+                scene_revision,
+                requested_backend,
+                BackendTarget::Fem,
+                geometry,
+                display,
+                grid,
+                mesh,
+                space,
+            )?,
+            PreparationPlanIdentity::AcceptedRun(source) => PreparationPlan::new_for_accepted_run(
+                problem_fingerprint,
+                source,
+                requested_backend,
+                BackendTarget::Fem,
+                geometry,
+                display,
+                grid,
+                mesh,
+                space,
+            )?,
+        };
 
         let mut marker_ids = fem
             .mesh

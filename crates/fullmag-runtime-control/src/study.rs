@@ -96,6 +96,80 @@ impl AcceptedStudySnapshot {
         .map_err(Into::into)
     }
 
+    /// Materialize a native FEM preparation receipt for one exact planned
+    /// step in this immutable accepted snapshot. The caller must supply
+    /// evidence produced from the pinned FEM mesh and finite-element order;
+    /// Live scene state is never consulted or rebound.
+    pub fn materialize_fem_preparation_receipt(
+        &self,
+        preparation_id: impl Into<String>,
+        step_id: &str,
+        native: &fullmag_plan::NativeFemMeshSpaceEvidence,
+    ) -> Result<PreparationReceipt> {
+        let step = self
+            .lowered
+            .steps
+            .iter()
+            .find(|step| step.step_id == step_id)
+            .with_context(|| format!("accepted study has no step `{step_id}`"))?;
+        if !matches!(&step.status, StudyStepLoweringStatus::Planned) {
+            bail!("accepted study step `{step_id}` is not planned");
+        }
+        let execution_plan = step
+            .execution_plan
+            .as_ref()
+            .with_context(|| format!("accepted study step `{step_id}` has no execution plan"))?;
+        let entry = self
+            .catalog
+            .entries()
+            .iter()
+            .find(|entry| entry.step_id() == step_id)
+            .with_context(|| format!("accepted study step `{step_id}` has no ProblemIR"))?;
+        let problem = entry.problem();
+        let replanned = fullmag_plan::plan(problem)
+            .with_context(|| format!("replan accepted ProblemIR for `{step_id}`"))?;
+        if serde_json::to_value(&replanned)? != serde_json::to_value(execution_plan)? {
+            bail!("accepted execution plan differs from canonical planner for `{step_id}`");
+        }
+        let specification_fingerprint = self.run.specification.fingerprint()?;
+        let source = PreparationPlanSource::accepted_run_step(
+            self.run.specification.run_id.as_str(),
+            format!("sha256:{specification_fingerprint}"),
+            step_id,
+        )?;
+        let problem_fingerprint = preparation_fingerprint(&serde_json::to_value(problem)?);
+        let geometry_projection = serde_json::json!({
+            "schema_version": "geometry_projection.v1",
+            "geometry": &problem.geometry,
+            "geometry_assets": &problem.geometry_assets,
+            "regions": &problem.regions,
+            "object_regions": &problem.object_regions,
+            "mesh_semantics": &problem.mesh_semantics,
+        });
+        let display_projection = serde_json::json!({
+            "schema_version": "display_projection.v1",
+            "payload": {"source": "accepted_run_default"},
+        });
+        let materialization = PreparationMaterialization::from_fem_execution_plan_for_accepted_run(
+            problem_fingerprint,
+            source,
+            problem.backend_policy.requested_backend,
+            execution_plan,
+            preparation_fingerprint(&geometry_projection),
+            preparation_fingerprint(&display_projection),
+            native,
+        )?;
+        PreparationReceipt::ready_for_accepted_run(
+            preparation_id,
+            materialization.plan,
+            materialization.certificates,
+            Vec::new(),
+            &self.run.specification,
+            step_id,
+        )
+        .map_err(Into::into)
+    }
+
     /// Bind a prepared receipt only after matching it to this immutable study
     /// snapshot's planned step and canonical ProblemIR.
     pub fn bind_preparation_receipt(
