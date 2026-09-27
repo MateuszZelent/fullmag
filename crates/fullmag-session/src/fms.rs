@@ -1461,7 +1461,14 @@ pub fn unpack_fms<R: Read + Seek>(reader: R, store: &SessionStore) -> Result<Fms
 
 fn ensure_unpack_destination_pristine(root: &Path) -> Result<()> {
     let allowed_files = ["WRITER.lock", "WRITER.owner.json", "LOCK"];
-    let allowed_directories = ["manifests", "runs", "recovery", "temp", "objects"];
+    let allowed_directories = [
+        "manifests",
+        "runs",
+        "scheduler_pools",
+        "recovery",
+        "temp",
+        "objects",
+    ];
     for entry in fs::read_dir(root)? {
         let entry = entry?;
         crate::repository_path::reject_link(&entry.path())?;

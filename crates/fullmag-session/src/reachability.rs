@@ -15,7 +15,7 @@ use crate::types::{
     ArtifactIndex, BackendStatePayload, CommonSolverState, FieldRole, FmsArtifactCatalog,
     FmsCheckpoint, FmsCoordinatorJournalDirection, FmsExportProfile, FmsPreparationReceipt,
     FmsResourceLease, FmsRetryDecision, FmsRunCatalog, FmsRunIntent, FmsRunManifest,
-    FmsSessionManifest, FmsTaskAdmissionRecord, FmsTaskPreparationReceipt,
+    FmsSchedulerPoolCheckpoint, FmsSessionManifest, FmsTaskAdmissionRecord, FmsTaskPreparationReceipt,
     FmsWorkerProcessExitReceipt, FmsWorkspaceManifest, TensorDescriptor,
 };
 
@@ -220,6 +220,7 @@ impl StoreWalker {
         self.walk_current_pointer()?;
         self.walk_sessions_dir()?;
         self.walk_recovery_dir()?;
+        self.walk_scheduler_pools_dir()?;
         self.walk_runs_dir()?;
         self.walk_objects_dir()?;
 
@@ -247,7 +248,7 @@ impl StoreWalker {
                         bail!("session control entry `{name}` is not a file")
                     }
                 }
-                "manifests" | "runs" | "recovery" | "objects" => {
+                "manifests" | "runs" | "scheduler_pools" | "recovery" | "objects" => {
                     if !entry.file_type()?.is_dir() {
                         bail!("session root `{name}` is not a directory")
                     }
@@ -625,6 +626,32 @@ impl StoreWalker {
             decision.validate()?;
             if decision.run_id != run_id || decision.decision_id != decision_id {
                 bail!("retry decision `{relative}` contains mismatched path identity")
+            }
+        }
+        Ok(())
+    }
+
+    fn walk_scheduler_pools_dir(&mut self) -> Result<()> {
+        let directory = self.root.join("scheduler_pools");
+        if !directory.exists() {
+            return Ok(());
+        }
+        for entry in read_directory(&directory)? {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if entry.file_type()?.is_symlink()
+                || !entry.file_type()?.is_file()
+                || !name.ends_with(".json")
+            {
+                bail!("unknown scheduler pool checkpoint entry `{name}`");
+            }
+            let pool_id = name.trim_end_matches(".json");
+            validate_component(pool_id)?;
+            let relative = format!("scheduler_pools/{name}");
+            let data = self.read_file(&entry.path(), &relative)?;
+            let checkpoint: FmsSchedulerPoolCheckpoint = parse_json(&data, &relative)?;
+            checkpoint.validate()?;
+            if checkpoint.pool_id != pool_id {
+                bail!("scheduler pool checkpoint `{relative}` has mismatched path identity");
             }
         }
         Ok(())

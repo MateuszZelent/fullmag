@@ -3,6 +3,9 @@ mod accepted_study_supervisor;
 
 use anyhow::{Context, Result, bail};
 use fullmag_application::{ResourceBudget, ResourceKind, ResourceLease, RunId};
+use fullmag_session::{
+    FMS_SCHEDULER_POOL_CHECKPOINT_SCHEMA, FmsSchedulerPoolCheckpoint, FmsSchedulerRunSource,
+};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -10,6 +13,7 @@ struct SchedulerArgs {
     store_root: PathBuf,
     run_ids: Vec<String>,
     discover_runs: bool,
+    pool_id: Option<String>,
     resource_id: String,
     resource_kind: ResourceKind,
     resource_budget: ResourceBudget,
@@ -43,12 +47,43 @@ fn run() -> Result<()> {
         }
         run_ids.push(run_id);
     }
+    let run_source = if args.discover_runs {
+        FmsSchedulerRunSource::Store
+    } else {
+        FmsSchedulerRunSource::Explicit
+    };
+    let checkpoint = args
+        .pool_id
+        .as_deref()
+        .map(|pool_id| store.read_scheduler_pool_checkpoint(pool_id))
+        .transpose()?
+        .flatten();
+    if let Some(checkpoint) = &checkpoint {
+        if checkpoint.run_source != run_source
+            || (matches!(run_source, FmsSchedulerRunSource::Explicit)
+                && checkpoint.run_ids
+                    != run_ids
+                        .iter()
+                        .map(|run_id| run_id.as_str().to_owned())
+                        .collect::<Vec<_>>())
+        {
+            bail!("scheduler pool checkpoint does not match the configured run source");
+        }
+    }
     let worker_executable = match args.worker_executable {
         Some(path) => path,
         None => sibling_worker_executable()?,
     };
     let mut executed = Vec::new();
-    let mut next_run_id = None;
+    let mut next_run_id = checkpoint
+        .as_ref()
+        .and_then(|checkpoint| checkpoint.next_run_id.as_deref())
+        .map(RunId::parse)
+        .transpose()
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let mut checkpoint_sequence = checkpoint
+        .map(|checkpoint| checkpoint.sequence)
+        .unwrap_or(0);
     let mut observed_run_ids = run_ids
         .iter()
         .map(|run_id| run_id.as_str().to_owned())
@@ -121,6 +156,25 @@ fn run() -> Result<()> {
             args.heartbeat_interval,
             args.max_automatic_retries,
         )?;
+        if let Some(pool_id) = args.pool_id.as_deref() {
+            let checkpoint = FmsSchedulerPoolCheckpoint {
+                schema_version: FMS_SCHEDULER_POOL_CHECKPOINT_SCHEMA.into(),
+                pool_id: pool_id.to_owned(),
+                sequence: checkpoint_sequence
+                    .checked_add(1)
+                    .context("scheduler pool checkpoint sequence overflow")?,
+                run_source,
+                run_ids: available_run_ids
+                    .iter()
+                    .map(|run_id| run_id.as_str().to_owned())
+                    .collect(),
+                next_run_id: next_run_id
+                    .as_ref()
+                    .map(|run_id| run_id.as_str().to_owned()),
+            };
+            store.commit_scheduler_pool_checkpoint(checkpoint_sequence, &checkpoint)?;
+            checkpoint_sequence = checkpoint.sequence;
+        }
         executed.push(serde_json::json!({
             "run_id": run_id.as_str(),
             "task_id": scheduled.claim.task_id.as_str(),
@@ -147,6 +201,8 @@ fn run() -> Result<()> {
             "run_id": if observed_run_ids.len() == 1 { observed_run_ids.first() } else { None },
             "run_ids": observed_run_ids,
             "run_source": if args.discover_runs { "store" } else { "explicit" },
+            "pool_id": args.pool_id,
+            "pool_checkpoint_sequence": checkpoint_sequence,
             "scheduled_count": executed.len(),
             "idle_poll_count": idle_poll_count,
             "executed": executed,
@@ -197,6 +253,14 @@ fn parse_args() -> Result<SchedulerArgs> {
     if discover_runs == !run_ids.is_empty() {
         bail!("scheduler requires either explicit --run-id values or --discover-runs true");
     }
+    let pool_id = values
+        .remove("--pool-id")
+        .map(|value| {
+            value
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("scheduler option `--pool-id` must be valid UTF-8"))
+        })
+        .transpose()?;
     let mut take_string = |flag: &str| -> Result<String> {
         values
             .remove(flag)
@@ -266,6 +330,7 @@ fn parse_args() -> Result<SchedulerArgs> {
         store_root,
         run_ids,
         discover_runs,
+        pool_id,
         resource_id,
         resource_kind,
         resource_budget,

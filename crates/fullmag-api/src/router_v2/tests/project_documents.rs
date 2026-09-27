@@ -1088,21 +1088,30 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         std::env::var("FULLMAG_ACCEPTED_SCHEDULER_POOL_E2E").as_deref() == Ok("1");
     let scheduler_discovery_e2e =
         std::env::var("FULLMAG_ACCEPTED_SCHEDULER_DISCOVERY_E2E").as_deref() == Ok("1");
+    let scheduler_persistent_cursor_e2e =
+        std::env::var("FULLMAG_ACCEPTED_SCHEDULER_PERSISTENT_CURSOR_E2E").as_deref() == Ok("1");
     let scheduler_multi_run_e2e = scheduler_pool_e2e || scheduler_discovery_e2e;
-    if scheduler_e2e || scheduler_multi_run_e2e {
-        let scheduler_executable = std::env::var_os("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN")
-            .expect("scheduler E2E requires the built accepted scheduler binary");
-        let worker_executable = std::env::var_os("FULLMAG_ACCEPTED_WORKER_E2E_BIN")
-            .expect("scheduler E2E requires the built accepted worker binary");
-        let mut scheduler = std::process::Command::new(scheduler_executable);
+    if scheduler_e2e || scheduler_multi_run_e2e || scheduler_persistent_cursor_e2e {
+        let scheduler_executable = std::path::PathBuf::from(
+            std::env::var_os("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN")
+                .expect("scheduler E2E requires the built accepted scheduler binary"),
+        );
+        let worker_executable = std::path::PathBuf::from(
+            std::env::var_os("FULLMAG_ACCEPTED_WORKER_E2E_BIN")
+                .expect("scheduler E2E requires the built accepted worker binary"),
+        );
+        let mut scheduler = std::process::Command::new(&scheduler_executable);
         scheduler.arg("--store-root").arg(store.root());
         if scheduler_discovery_e2e {
             scheduler.arg("--discover-runs").arg("true");
         } else {
             scheduler.arg("--run-id").arg(accepted_run_id.as_str());
         }
-        if scheduler_pool_e2e {
+        if scheduler_pool_e2e || scheduler_persistent_cursor_e2e {
             scheduler.arg("--run-id").arg(&second_run_id);
+        }
+        if scheduler_persistent_cursor_e2e {
+            scheduler.arg("--pool-id").arg("scheduler-persistent-e2e");
         }
         let output = scheduler
             .arg("--resource-id").arg("cpu-scheduler-e2e")
@@ -1111,7 +1120,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             .arg("--memory-bytes").arg("1048576")
             .arg("--gpu-memory-bytes").arg("0")
             .arg("--storage-bytes").arg("8388608")
-            .arg("--worker-executable").arg(worker_executable)
+            .arg("--worker-executable").arg(&worker_executable)
             .arg("--max-concurrency").arg("1")
             .arg("--max-tasks").arg(if scheduler_multi_run_e2e { "3" } else { "1" })
             .arg("--max-idle-polls").arg(if scheduler_multi_run_e2e { "1" } else { "0" })
@@ -1137,12 +1146,62 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         assert_eq!(summary["executed"][0]["step_id"], step.step_id.as_str());
         assert_eq!(summary["executed"][0]["admission"], "admitted");
         assert_eq!(summary["executed"][0]["worker"]["status"], "completed");
+        if scheduler_persistent_cursor_e2e {
+            assert_eq!(summary["pool_id"], "scheduler-persistent-e2e");
+            assert_eq!(summary["pool_checkpoint_sequence"], 1);
+        }
         let catalog = store.read_run_catalog(accepted_run_id.as_str()).unwrap().unwrap();
         let task = catalog.tasks.iter().find(|task| task.task_id == persisted_task.task_id).unwrap();
         assert_eq!(task.lifecycle, fullmag_session::FmsTaskLifecycle::Succeeded);
         assert_eq!(task.ownership_epoch, Some(1));
         assert!(!task.artifact_ids.is_empty());
         assert!(store.read_active_resource_lease_for_task(accepted_run_id.as_str(), persisted_task.task_id.as_str()).unwrap().is_none());
+        if scheduler_persistent_cursor_e2e {
+            let second_output = std::process::Command::new(&scheduler_executable)
+                .arg("--store-root").arg(store.root())
+                .arg("--run-id").arg(accepted_run_id.as_str())
+                .arg("--run-id").arg(&second_run_id)
+                .arg("--pool-id").arg("scheduler-persistent-e2e")
+                .arg("--resource-id").arg("cpu-scheduler-e2e")
+                .arg("--resource-kind").arg("cpu")
+                .arg("--cpu-millis").arg("100")
+                .arg("--memory-bytes").arg("1048576")
+                .arg("--gpu-memory-bytes").arg("0")
+                .arg("--storage-bytes").arg("8388608")
+                .arg("--worker-executable").arg(&worker_executable)
+                .arg("--max-concurrency").arg("1")
+                .arg("--max-tasks").arg("1")
+                .arg("--max-idle-polls").arg("0")
+                .arg("--idle-poll-milliseconds").arg("10")
+                .arg("--worker-timeout-seconds").arg("30")
+                .arg("--heartbeat-interval-milliseconds").arg("500")
+                .arg("--max-automatic-retries").arg("0")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .expect("restart the accepted scheduler with its durable cursor");
+            assert!(second_output.status.success(), "accepted scheduler cursor restart E2E failed: {}", String::from_utf8_lossy(&second_output.stderr));
+            let second_summary: serde_json::Value =
+                serde_json::from_slice(&second_output.stdout).unwrap();
+            assert_eq!(second_summary["scheduled_count"], 1);
+            assert_eq!(second_summary["pool_checkpoint_sequence"], 2);
+            assert_eq!(second_summary["executed"][0]["run_id"], second_run_id.as_str());
+            assert_eq!(second_summary["executed"][0]["worker"]["status"], "completed");
+            let checkpoint = store
+                .read_scheduler_pool_checkpoint("scheduler-persistent-e2e")
+                .unwrap()
+                .unwrap();
+            assert_eq!(checkpoint.sequence, 2);
+            assert_eq!(checkpoint.next_run_id.as_deref(), Some(accepted_run_id.as_str()));
+            let second_catalog = store.read_run_catalog(&second_run_id).unwrap().unwrap();
+            let second_task = second_catalog.tasks.first().unwrap();
+            assert_eq!(second_task.lifecycle, fullmag_session::FmsTaskLifecycle::Succeeded);
+            assert!(store
+                .read_active_resource_lease_for_task(&second_run_id, second_task.task_id.as_str())
+                .unwrap()
+                .is_none());
+        }
         if scheduler_multi_run_e2e {
             let second_catalog = store.read_run_catalog(&second_run_id).unwrap().unwrap();
             let second_task = second_catalog.tasks.first().unwrap();

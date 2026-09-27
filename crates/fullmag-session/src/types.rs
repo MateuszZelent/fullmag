@@ -372,6 +372,63 @@ pub enum RunIntentCommitDisposition {
     Replayed { run_id: String },
 }
 
+pub const FMS_SCHEDULER_POOL_CHECKPOINT_SCHEMA: &str = "scheduler_pool_checkpoint.v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FmsSchedulerRunSource {
+    Explicit,
+    Store,
+}
+
+/// Operational cursor for one bounded scheduler pool. This state belongs to
+/// the local store and is deliberately not part of a portable project export.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsSchedulerPoolCheckpoint {
+    pub schema_version: String,
+    pub pool_id: String,
+    pub sequence: u64,
+    pub run_source: FmsSchedulerRunSource,
+    pub run_ids: Vec<String>,
+    pub next_run_id: Option<String>,
+}
+
+impl FmsSchedulerPoolCheckpoint {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != FMS_SCHEDULER_POOL_CHECKPOINT_SCHEMA {
+            bail!(
+                "unsupported scheduler pool checkpoint schema `{}`",
+                self.schema_version
+            );
+        }
+        crate::repository_path::validate_store_id(&self.pool_id)?;
+        if self.sequence == 0 {
+            bail!("scheduler pool checkpoint sequence must be positive");
+        }
+        let mut seen = BTreeSet::new();
+        for run_id in &self.run_ids {
+            crate::repository_path::validate_store_id(run_id)?;
+            if !seen.insert(run_id) {
+                bail!("scheduler pool checkpoint contains a duplicate run id");
+            }
+        }
+        if matches!(self.run_source, FmsSchedulerRunSource::Explicit) && self.run_ids.is_empty() {
+            bail!("explicit scheduler pool checkpoint requires run ids");
+        }
+        if let Some(next_run_id) = self.next_run_id.as_deref() {
+            crate::repository_path::validate_store_id(next_run_id)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchedulerPoolCheckpointCommitDisposition {
+    Accepted,
+    Replayed,
+}
+
 /// Schema version for the durable preparation receipt bound to one run.
 pub const FMS_PREPARATION_RECEIPT_SCHEMA: &str = "preparation_receipt.v1";
 /// Schema for an immutable preparation publication scoped to one study task.

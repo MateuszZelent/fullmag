@@ -8,6 +8,7 @@
 //! ├── WRITER.owner.json // atomic owner metadata
 //! ├── manifests/       // session manifest JSON files
 //! ├── runs/            // per-run intent/catalog/admissions/leases/manifests
+//! ├── scheduler_pools/ // local operational fairness cursors
 //! ├── objects/         // CAS blob store
 //! │   └── sha256/
 //! ├── temp/            // in-flight writes
@@ -48,6 +49,7 @@ impl SessionStore {
         for sub in [
             "manifests",
             "runs",
+            "scheduler_pools",
             "recovery",
             "temp",
             "objects/sha256",
@@ -57,7 +59,14 @@ impl SessionStore {
         }
         if !initialized {
             let _lease = writer.acquire()?;
-            for sub in ["manifests", "runs", "recovery", "temp", "objects"] {
+            for sub in [
+                "manifests",
+                "runs",
+                "scheduler_pools",
+                "recovery",
+                "temp",
+                "objects",
+            ] {
                 fs::create_dir_all(checked_path(&root, sub)?)?;
             }
             let _ = CasStore::with_writer(checked_path(&root, "objects")?, writer.clone())?;
@@ -269,6 +278,67 @@ impl SessionStore {
                 .then_with(|| right.run_id.cmp(&left.run_id))
         });
         Ok(intents)
+    }
+
+    pub fn read_scheduler_pool_checkpoint(
+        &self,
+        pool_id: &str,
+    ) -> Result<Option<FmsSchedulerPoolCheckpoint>> {
+        validate_store_id(pool_id)?;
+        let relative = format!("scheduler_pools/{pool_id}.json");
+        let path = checked_path(&self.root, &relative)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        reject_link(&path)?;
+        let checkpoint: FmsSchedulerPoolCheckpoint = serde_json::from_slice(&fs::read(&path)?)
+            .with_context(|| format!("parsing scheduler pool checkpoint `{relative}`"))?;
+        checkpoint.validate()?;
+        if checkpoint.pool_id != pool_id {
+            anyhow::bail!("scheduler pool checkpoint identity does not match its path");
+        }
+        Ok(Some(checkpoint))
+    }
+
+    pub fn commit_scheduler_pool_checkpoint(
+        &self,
+        expected_sequence: u64,
+        checkpoint: &FmsSchedulerPoolCheckpoint,
+    ) -> Result<SchedulerPoolCheckpointCommitDisposition> {
+        checkpoint.validate()?;
+        if checkpoint.sequence
+            != expected_sequence
+                .checked_add(1)
+                .context("scheduler pool checkpoint sequence overflow")?
+        {
+            anyhow::bail!("scheduler pool checkpoint sequence is not contiguous");
+        }
+        let _writer_lease = self.write_transaction()?;
+        let relative = format!("scheduler_pools/{}.json", checkpoint.pool_id);
+        let path = create_parent(&self.root, &relative)?;
+        if path.exists() {
+            reject_link(&path)?;
+            let existing: FmsSchedulerPoolCheckpoint =
+                serde_json::from_slice(&fs::read(&path)?).with_context(|| {
+                    format!("parsing scheduler pool checkpoint `{relative}`")
+                })?;
+            existing.validate()?;
+            if existing == *checkpoint {
+                return Ok(SchedulerPoolCheckpointCommitDisposition::Replayed);
+            }
+            if existing.pool_id != checkpoint.pool_id
+                || existing.sequence != expected_sequence
+                || existing.run_source != checkpoint.run_source
+                || (matches!(checkpoint.run_source, FmsSchedulerRunSource::Explicit)
+                    && existing.run_ids != checkpoint.run_ids)
+            {
+                anyhow::bail!("scheduler pool checkpoint compare-and-swap conflict");
+            }
+        } else if expected_sequence != 0 {
+            anyhow::bail!("scheduler pool checkpoint is missing before update");
+        }
+        atomic_write(&path, &serde_json::to_vec_pretty(checkpoint)?)?;
+        Ok(SchedulerPoolCheckpointCommitDisposition::Accepted)
     }
 
     fn find_run_intent_unlocked(&self, idempotency_key: &str) -> Result<Option<FmsRunIntent>> {
@@ -3058,6 +3128,56 @@ mod tests {
             .insert("asset-1".into(), "d".repeat(64));
         assert!(store.commit_run_intent(&missing_asset).is_err());
         assert!(store.read_run_intent("run-7").unwrap().is_none());
+    }
+
+    #[test]
+    fn scheduler_pool_checkpoint_is_sequence_fenced_and_replayable() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(dir.path().join("store")).unwrap();
+        let first = FmsSchedulerPoolCheckpoint {
+            schema_version: FMS_SCHEDULER_POOL_CHECKPOINT_SCHEMA.into(),
+            pool_id: "pool-a".into(),
+            sequence: 1,
+            run_source: FmsSchedulerRunSource::Explicit,
+            run_ids: vec!["run-a".into(), "run-b".into()],
+            next_run_id: Some("run-b".into()),
+        };
+        assert_eq!(
+            store.commit_scheduler_pool_checkpoint(0, &first).unwrap(),
+            SchedulerPoolCheckpointCommitDisposition::Accepted
+        );
+        assert_eq!(
+            store.commit_scheduler_pool_checkpoint(0, &first).unwrap(),
+            SchedulerPoolCheckpointCommitDisposition::Replayed
+        );
+        assert_eq!(
+            store.read_scheduler_pool_checkpoint("pool-a").unwrap(),
+            Some(first.clone())
+        );
+        let report = crate::reachability::walk_store_root(
+            store.root(),
+            crate::reachability::ReachabilityMode::Export,
+        )
+        .unwrap();
+        assert!(report
+            .file_refs
+            .contains("scheduler_pools/pool-a.json"));
+
+        let mut second = first.clone();
+        second.sequence = 2;
+        second.next_run_id = Some("run-a".into());
+        assert_eq!(
+            store.commit_scheduler_pool_checkpoint(1, &second).unwrap(),
+            SchedulerPoolCheckpointCommitDisposition::Accepted
+        );
+        assert!(store.commit_scheduler_pool_checkpoint(1, &first).is_err());
+
+        let mut changed_membership = second;
+        changed_membership.sequence = 3;
+        changed_membership.run_ids.pop();
+        assert!(store
+            .commit_scheduler_pool_checkpoint(2, &changed_membership)
+            .is_err());
     }
 
     #[test]
