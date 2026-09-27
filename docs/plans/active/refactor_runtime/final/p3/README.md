@@ -23,8 +23,9 @@ fail-closed lease.
 
 Bounded scheduler wybiera dependency-ready task z jawnej puli RunId przez
 round-robin i jedną ofertę zasobu. Opcjonalny tryb store-discovery ponownie
-odczytuje trwałe intenty podczas bounded polling. Brakuje rezydentnej usługi,
-trwałej fairness między restartami, heartbeat/Stop ACK dla zdalnego
+odczytuje trwałe intenty podczas bounded polling. Opcjonalny `--pool-id`
+zapisuje sequence-fenced kursor fairness i odtwarza następny RunId w kolejnym
+procesie. Brakuje rezydentnej usługi, heartbeat/Stop ACK dla zdalnego
 transportu oraz process E2E pozostałych lane'ów. Anulowanie przed uruchomieniem
 workera jest obsłużone trwale i nie wykonuje spawnu procesu potomnego.
 Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
@@ -40,8 +41,9 @@ Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`37-supervisor-retry-recovery.md`](37-supervisor-retry-recovery.md),
 [`38-accepted-task-scheduler.md`](38-accepted-task-scheduler.md),
 [`39-supervisor-process-exit-receipt.md`](39-supervisor-process-exit-receipt.md),
-[`40-multi-run-scheduler-pool.md`](40-multi-run-scheduler-pool.md) i
-[`41-scheduler-run-discovery.md`](41-scheduler-run-discovery.md).
+[`40-multi-run-scheduler-pool.md`](40-multi-run-scheduler-pool.md),
+[`41-scheduler-run-discovery.md`](41-scheduler-run-discovery.md) i
+[`42-persistent-scheduler-cursor.md`](42-persistent-scheduler-cursor.md).
 
 ## Ograniczona pula wielu runów — 27.09.2026
 
@@ -73,6 +75,28 @@ Discovery jest lokalne i ograniczone czasowo; kursor nie jest jeszcze trwały
 między restartami. P3 wynosi około **77%**, P5 około **41%**, a całość pozostaje
 na poziomie około **36%**. Szczegóły:
 [`41-scheduler-run-discovery.md`](41-scheduler-run-discovery.md).
+
+## Trwały kursor fairness schedulera — 27.09.2026
+
+Opcjonalny `--pool-id` zapisuje w lokalnym `SessionStore` checkpoint źródła
+runów, członkostwa, następnego RunId i monotonicznej sekwencji. Zapis używa
+single-writer lease oraz compare-and-swap, a jawna pula nie może zmienić
+członkostwa pod istniejącą tożsamością. Checkpoint powstaje po powrocie
+supervisora, więc błąd zapisu nie osieroca świeżo przyjętego taska.
+
+Managed E2E uruchamia scheduler w dwóch kolejnych procesach: pierwszy wykonuje
+run A i zapisuje kursor na B, drugi odtwarza checkpoint i wykonuje run B:
+**1/1 PASS**, receipt `42ad24467d53494dabaffb3b1522bce7`, content
+`81dce51a572b37228b7344610cc52b4cbda6632f4d3b6284fa1aa7feb2385018`,
+`source_changed_during_run=false`. Pełna bramka SessionStore: **66 + 9 + 13
+PASS**, receipt `ad768b85eda24b0bbdbb30f75b2269fb`; rejestr tras: **27/27 PASS**.
+Implementacja: `6f2d2416b272f68f11165ea96f6e9b7325e4755e`.
+
+Kursor jest lokalnym stanem operacyjnym i nie wchodzi do przenośnego eksportu
+`.fms`. Nadal brakuje rezydentnej pętli, priorytetów, backpressure, wielu
+równoległych zasobów i zdalnego heartbeat/Stop ACK. P3 wynosi około **78%**, P5
+około **44%**, a całość około **37%**. Szczegóły:
+[`42-persistent-scheduler-cursor.md`](42-persistent-scheduler-cursor.md).
 
 API ma jawny adapter allow-listy `RunResult` → typowane payloady dla
 wspieranych wyjść. Szczegóły i wcześniejszy dowód opisuje
