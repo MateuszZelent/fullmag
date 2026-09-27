@@ -21,8 +21,9 @@ po reap potomka. Restart może dzięki niemu domknąć sukces, anulowanie albo r
 po awarii sprzed decyzji; istniejąca rezerwacja attemptu nadal zachowuje
 fail-closed lease.
 
-Bounded scheduler wybiera dependency-ready task jednego runu i jawnego zasobu.
-Brakuje rezydentnej puli wielu runów, fairness, heartbeat/Stop ACK dla zdalnego
+Bounded scheduler wybiera dependency-ready task z jawnej puli RunId przez
+round-robin i jedną ofertę zasobu. Brakuje rezydentnej usługi, dynamicznego
+discovery, trwałej fairness między restartami, heartbeat/Stop ACK dla zdalnego
 transportu oraz process E2E pozostałych lane'ów. Anulowanie przed uruchomieniem
 workera jest obsłużone trwale i nie wykonuje spawnu procesu potomnego.
 Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
@@ -36,8 +37,25 @@ Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`35-supervisor-prestart-cancel.md`](35-supervisor-prestart-cancel.md)
 [`36-supervisor-automatic-retry.md`](36-supervisor-automatic-retry.md),
 [`37-supervisor-retry-recovery.md`](37-supervisor-retry-recovery.md),
-[`38-accepted-task-scheduler.md`](38-accepted-task-scheduler.md) i
-[`39-supervisor-process-exit-receipt.md`](39-supervisor-process-exit-receipt.md).
+[`38-accepted-task-scheduler.md`](38-accepted-task-scheduler.md),
+[`39-supervisor-process-exit-receipt.md`](39-supervisor-process-exit-receipt.md) i
+[`40-multi-run-scheduler-pool.md`](40-multi-run-scheduler-pool.md).
+
+## Ograniczona pula wielu runów — 27.09.2026
+
+`fullmag-api-accepted-scheduler` przyjmuje uporządkowaną listę powtarzalnych
+`--run-id` i przesuwa kursor round-robin po każdym wybranym tasku. Jawne limity
+tasków oraz kolejnych pustych skanów zapewniają skończone wykonanie. E2E dwóch
+zmaterializowanych runów potwierdza kolejność A → B, sukces obu workerów, brak
+aktywnych lease'ów i jedno ograniczone odpytywanie po wyczerpaniu pracy:
+**1/1 PASS**, receipt `164acb699d794dafa882bb8cdbd2983e`, content
+`c0c2917e34b81ddbd5a2a7e487d9016fcd63feae7e7309dee1358e6eda3031bc`,
+`source_changed_during_run=false`. Rejestr tras: **25/25 PASS**.
+
+Pula jest statyczna i lokalna; nie stanowi rezydentnej usługi ani trwałego
+schedulera wielozasobowego. P3 wynosi około **76%**, P5 około **39%**, a całość
+około **36%**. Szczegóły:
+[`40-multi-run-scheduler-pool.md`](40-multi-run-scheduler-pool.md).
 
 API ma jawny adapter allow-listy `RunResult` → typowane payloady dla
 wspieranych wyjść. Szczegóły i wcześniejszy dowód opisuje
