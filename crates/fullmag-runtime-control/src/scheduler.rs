@@ -105,13 +105,16 @@ pub fn schedule_next_ready_accepted_task(
             continue;
         }
 
-        let queued = crate::queue_accepted_study_task(
-            store,
-            &specification.snapshot.project_id,
-            run_id,
-            &study_step.step_id,
-            Default::default(),
-        )?;
+        let queued = retry_store_writer_busy(|| {
+            crate::queue_accepted_study_task(
+                store,
+                &specification.snapshot.project_id,
+                run_id,
+                &study_step.step_id,
+                Default::default(),
+            )
+        })
+        .context("durably queueing accepted study task")?;
         let mut task = queued.task;
         let claim = task.claim(resource_offer.clone())?;
         if let ClaimedTaskResourceCompatibility::Incompatible(_) =
@@ -131,10 +134,10 @@ pub fn schedule_next_ready_accepted_task(
             &study_step.step_id,
             queued.resolved_inputs,
         )?;
-        let mut worker_inbox = crate::DurableWorkerInbox::new(
-            SessionStore::open_existing(store.root().to_path_buf())?,
-            claim.clone(),
-        );
+        let inbox_store =
+            retry_store_writer_busy(|| SessionStore::open_existing(store.root().to_path_buf()))
+                .context("open accepted scheduler worker inbox store")?;
+        let mut worker_inbox = crate::DurableWorkerInbox::new(inbox_store, claim.clone());
         worker_inbox
             .receive(&prepare, |envelope| {
                 retry_store_writer_busy(|| {

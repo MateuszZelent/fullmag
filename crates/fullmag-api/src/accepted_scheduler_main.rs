@@ -7,7 +7,7 @@ use fullmag_session::{
     FMS_SCHEDULER_POOL_CHECKPOINT_SCHEMA, FmsSchedulerPoolCheckpoint, FmsSchedulerRunSource,
 };
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 struct SchedulerArgs {
     store_root: PathBuf,
@@ -172,7 +172,10 @@ fn run() -> Result<()> {
                     .as_ref()
                     .map(|run_id| run_id.as_str().to_owned()),
             };
-            store.commit_scheduler_pool_checkpoint(checkpoint_sequence, &checkpoint)?;
+            retry_store_writer_busy(|| {
+                store.commit_scheduler_pool_checkpoint(checkpoint_sequence, &checkpoint)
+            })
+            .context("commit scheduler pool checkpoint")?;
             checkpoint_sequence = checkpoint.sequence;
         }
         executed.push(serde_json::json!({
@@ -209,6 +212,24 @@ fn run() -> Result<()> {
         }))?
     );
     Ok(())
+}
+
+fn retry_store_writer_busy<T>(mut operation: impl FnMut() -> Result<T>) -> Result<T> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if error
+                    .chain()
+                    .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
+                    && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn sibling_worker_executable() -> Result<PathBuf> {

@@ -1180,9 +1180,27 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             String::from_utf8_lossy(&conflict.stderr)
         );
 
+        let contention_deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let writer_contention = loop {
+            match store.write_transaction() {
+                Ok(transaction) => break transaction,
+                Err(error)
+                    if error
+                        .chain()
+                        .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
+                        && std::time::Instant::now() < contention_deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => panic!("acquire deterministic writer contention: {error:#}"),
+            }
+        };
         let mut second = scheduler_command(&second_run_id, "cpu-parallel-b")
             .spawn()
             .expect("spawn second parallel accepted scheduler");
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        drop(writer_contention);
         let overlap_deadline =
             std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {

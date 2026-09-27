@@ -986,8 +986,10 @@ fn apply_accepted_start_effect(
         "default",
     )
     .context("execute accepted worker Start")?;
-    let receipt_store = SessionStore::open_existing(store.root().to_path_buf())
-        .context("reopen worker receipt store")?;
+    let receipt_store = retry_store_writer_busy(|| {
+        SessionStore::open_existing(store.root().to_path_buf())
+            .context("reopen worker receipt store")
+    })?;
     let durable_execution = execute_accepted_worker_start(
         &receipt_store,
         &specification.snapshot.project_id,

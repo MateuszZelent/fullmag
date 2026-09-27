@@ -549,7 +549,7 @@ fn renew_resource_lease(store: &SessionStore, lease: &mut FmsResourceLease) -> R
         .checked_add(1)
         .context("accepted-worker resource lease heartbeat sequence exhausted")?;
     renewed.heartbeat_at = chrono::Utc::now();
-    if let Err(error) = store.heartbeat_resource_lease(&renewed) {
+    if let Err(error) = retry_store_writer_busy(|| store.heartbeat_resource_lease(&renewed)) {
         if task_is_terminal(store, lease)? {
             return Ok(false);
         }
@@ -851,10 +851,12 @@ fn reconcile_worker_exit(
         bail!("supervised worker claim requires exactly one durable Start");
     }
     let start = starts[0];
-    let inbox_store = SessionStore::open_existing(store.root().to_path_buf())?;
-    let mut inbox =
+    let mut inbox = retry_store_writer_busy(|| {
+        let inbox_store = SessionStore::open_existing(store.root().to_path_buf())
+            .context("open worker inbox store after process exit")?;
         fullmag_runtime_control::DurableWorkerInbox::recover(inbox_store, claim.clone())
-            .context("recover worker inbox after process exit")?;
+            .context("recover worker inbox after process exit")
+    })?;
     let mut inbox_checkpoint = inbox.checkpoint();
 
     let durable_success = phase == CoordinatorPhase::Terminal
@@ -1243,12 +1245,10 @@ fn reconcile_durable_retry_before_spawn(
         return Ok(None);
     };
     if let Some(lease) = store.read_active_resource_lease_for_retry_decision(&decision)? {
-        store
-            .release_resource_lease(&lease)
+        retry_store_writer_busy(|| store.release_resource_lease(&lease))
             .context("release lease retained by durable retry decision")?;
     }
-    store
-        .apply_retry_decision(&decision)
+    retry_store_writer_busy(|| store.apply_retry_decision(&decision))
         .context("recover durable retry decision before worker spawn")?;
     Ok(Some(SupervisedWorkerResult {
         recovered_terminal_completion: false,
@@ -1440,16 +1440,75 @@ fn commit_worker_event(
         claim: checkpoint.claim.identity(),
         event,
     };
-    coordinator
-        .commit_event(envelope, |transition| {
+    let expected = envelope.clone();
+    let mut publication_error = None;
+    let result = coordinator.commit_event(envelope, |transition| {
+        fullmag_runtime_control::commit_transition(store, transition)
+            .map(|_| ())
+            .map_err(|error| {
+                publication_error = Some(error);
+                fullmag_application::CoordinatorError::Invalid(
+                    "durable supervisor event publication failed".into(),
+                )
+            })
+    });
+    match (result, publication_error) {
+        (Ok(_), None) => Ok(()),
+        (_, Some(error)) if is_store_writer_busy(&error) => {
+            retry_pending_worker_event(store, coordinator, &expected)
+        }
+        (_, Some(error)) => Err(error).context("publish durable supervisor event"),
+        (Err(error), None) => Err(anyhow::Error::new(error)).context("commit supervisor event"),
+    }
+}
+
+fn retry_pending_worker_event(
+    store: &SessionStore,
+    coordinator: &mut fullmag_application::DurableWorkerCoordinator,
+    expected: &fullmag_application::WorkerEventEnvelope,
+) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut publication_error = None;
+        let result = coordinator.retry_publication(|transition| {
             fullmag_runtime_control::commit_transition(store, transition)
                 .map(|_| ())
                 .map_err(|error| {
-                    fullmag_application::CoordinatorError::Invalid(format!("{error:#}"))
+                    publication_error = Some(error);
+                    fullmag_application::CoordinatorError::Invalid(
+                        "durable supervisor event publication retry failed".into(),
+                    )
                 })
-        })
-        .map(|_| ())
-        .map_err(|error| anyhow::anyhow!(error.to_string()))
+        });
+        match (result, publication_error) {
+            (Ok(fullmag_application::CoordinatorMessage::Event(envelope)), None)
+                if envelope == *expected =>
+            {
+                return Ok(());
+            }
+            (Ok(fullmag_application::CoordinatorMessage::Event(_)), None) => {
+                bail!("retried supervisor event differs from the retained publication");
+            }
+            (Ok(fullmag_application::CoordinatorMessage::Command(_)), None) => {
+                bail!("retried supervisor publication is not an event");
+            }
+            (_, Some(error)) if is_store_writer_busy(&error) && Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            (_, Some(error)) => {
+                return Err(error).context("publish durable supervisor event");
+            }
+            (Err(error), None) => {
+                return Err(anyhow::Error::new(error)).context("publish durable supervisor event");
+            }
+        }
+    }
+}
+
+fn is_store_writer_busy(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
 }
 
 #[cfg(test)]
