@@ -1870,3 +1870,18 @@ niezmienionych plikach. Testów jednostkowych nie kompilowano. Supervisor,
 process E2E i native FEM pozostają **NOT VERIFIED**. **P4 50%, cały plan około
 49%**. Szczegóły:
 [p4/09-preparation-process-launch-intent.md](p4/09-preparation-process-launch-intent.md).
+
+## P4-B — accepted FEM preparation supervisor — 28.09.2026
+
+`fullmag-api-accepted-fem-preparation-supervisor` wykonuje pojedynczy proces na
+dokładnym preparation lease. Recovery finalizuje trwały exit bez ponownego
+spawnu i odrzuca launch bez exit jako niejednoznaczny. Świeży przebieg wymaga
+nowego `Accepted` launch intentu, odnawia heartbeat, egzekwuje timeout, czeka na
+potwierdzony exit, publikuje fenced receipt i dopiero potem finalizuje
+readiness/release.
+
+Source check supervisora i preparera, rustfmt nowych plików oraz diff check:
+**PASS**. Testów jednostkowych nie kompilowano. Rezydentny scheduler, managed
+process E2E i native FEM pozostają **NOT VERIFIED**. **P4 50%, cały plan około
+49%**. Szczegóły:
+[p4/10-accepted-fem-preparation-supervisor.md](p4/10-accepted-fem-preparation-supervisor.md).

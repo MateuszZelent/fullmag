@@ -516,3 +516,19 @@ baseline drift w wielu niezmienionych plikach; testów jednostkowych nie
 kompilowano zgodnie z aktywnym zakazem. Supervisor/process E2E i native FEM
 pozostają `NOT VERIFIED`. P4 pozostaje na **50%**, a cały plan na około **49%**.
 Szczegóły: [09-preparation-process-launch-intent.md](09-preparation-process-launch-intent.md).
+
+## Supervisor accepted FEM preparation — 28.09.2026
+
+Commit `bd8ec68bf` dodaje proces
+`fullmag-api-accepted-fem-preparation-supervisor`. Supervisor rekoncyliuje
+istniejący exit bez spawnu, odrzuca launch bez exit jako niejednoznaczny, a nowy
+preparer uruchamia wyłącznie po pierwszym `Accepted` launch intentu. Odnawia
+lease, egzekwuje timeout, potwierdza zakończenie potomka, publikuje fenced exit
+receipt i wywołuje atomową finalizację readiness/release.
+
+Source check nowego supervisora i preparera, rustfmt nowych plików oraz diff
+check przeszły. Testów jednostkowych nie kompilowano zgodnie z aktywnym
+zakazem. Rezydentny scheduler, managed process E2E i native FEM pozostają
+`NOT VERIFIED`. P4 pozostaje na **50%**, a cały plan na około **49%**.
+Szczegóły:
+[10-accepted-fem-preparation-supervisor.md](10-accepted-fem-preparation-supervisor.md).
