@@ -78,8 +78,8 @@ wynik dowodzi, że recovery zakończyło się przed kodem spawnu.
 
 Zarządzane receipty przypinają dirty
 `master@9ce6680b0a6eb906c45e15c6784eda12e4cc4440` oraz hash pełnej treści objętej
-trasą. Końcowy commit przyrostu zostanie przypięty w aktualizacji statusu po
-integracji.
+trasą. Dokładny zweryfikowany zakres został zintegrowany w
+`db1661c6b8bcbb01881b9193e2072abc03e1ed5d`.
 
 ## Granice
 

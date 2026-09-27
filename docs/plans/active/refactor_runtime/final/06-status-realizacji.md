@@ -1,6 +1,9 @@
 # Status realizacji całego planu refaktoryzacji
 
-Data ostatniego przyrostu: 27.09.2026. Baza przyrostu: `master@f0eacfac059fe394f84bf5159e7c7564f918a630`; końcowe receipt'y przypinają także hash treści bieżącego przyrostu. Receipt'y i starsze smoke'y zachowują własną przypiętą tożsamość źródła.
+Data ostatniego przyrostu: 27.09.2026. Zintegrowany przyrost:
+`master@db1661c6b8bcbb01881b9193e2072abc03e1ed5d`; końcowe receipt'y przypinają
+także hash treści sprzed commita. Receipt'y i starsze smoke'y zachowują własną
+przypiętą tożsamość źródła.
 
 Procenty poniżej opisują **zakres implementacyjny planu**, a nie gotowość
 produkcyjną. Etap liczę jako wykonany tylko wtedy, gdy istnieje odpowiadający
