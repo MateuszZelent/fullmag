@@ -562,3 +562,17 @@ zbudowanie pakietów i managed scheduler/process/native FEM E2E pozostają
 `NOT VERIFIED`; P4 pozostaje na **50%**, a cały plan na około **49%**.
 Szczegóły:
 [12-preparation-runtime-distribution.md](12-preparation-runtime-distribution.md).
+
+## Trwały kursor fairness preparacji — 28.09.2026
+
+Commit `3512c3b94` zapisuje po zakończeniu supervisora osobny, sekwencyjny
+checkpoint puli preparacji. Scheduler odtwarza następny RunId i wykonuje
+round-robin wewnątrz tej samej klasy priorytetu; dynamiczna lista runów może
+zmieniać membership. CAS odrzuca przestarzałego lub konkurencyjnego pisarza, a
+reachability waliduje lokalny plik bez dodawania go do `.fms`.
+
+Source check session i schedulera, scoped rustfmt oraz diff check przeszły.
+Regresję store dodano, lecz nie kompilowano zgodnie z aktywnym zakazem testów
+jednostkowych. Restart/process E2E i native FEM pozostają `NOT VERIFIED`; P4
+pozostaje na **50%**, a cały plan na około **49%**. Szczegóły:
+[13-preparation-scheduler-fairness.md](13-preparation-scheduler-fairness.md).

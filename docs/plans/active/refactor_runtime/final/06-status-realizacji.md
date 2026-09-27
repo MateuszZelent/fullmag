@@ -1913,3 +1913,17 @@ diff check: **PASS**. Testów jednostkowych nie kompilowano. Build rzeczywistych
 paczek oraz managed scheduler/process/native FEM E2E pozostają **NOT
 VERIFIED**. **P4 50%, cały plan około 49%**. Szczegóły:
 [p4/12-preparation-runtime-distribution.md](p4/12-preparation-runtime-distribution.md).
+
+## P4-B — trwały kursor fairness preparacji — 28.09.2026
+
+Scheduler preparacji ma teraz osobny lokalny checkpoint puli z monotoniczną
+sekwencją i następnym RunId. Priority pozostaje nadrzędne, a round-robin działa
+wewnątrz równej klasy; zmiany membership są dozwolone dla store discovery.
+Checkpoint jest publikowany dopiero po zakończeniu supervisora i chroniony
+writer lockiem oraz CAS. Recovery aktywnego lease nie przesuwa kursora.
+
+Source check session i schedulera, scoped rustfmt i diff check: **PASS**.
+Regresja store została dodana, ale nie uruchomiona z powodu zakazu kompilacji
+testów jednostkowych. Restart/process E2E i native FEM pozostają **NOT
+VERIFIED**. **P4 50%, cały plan około 49%**. Szczegóły:
+[p4/13-preparation-scheduler-fairness.md](p4/13-preparation-scheduler-fairness.md).
