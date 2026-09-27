@@ -9,6 +9,7 @@ use std::time::Duration;
 struct SchedulerArgs {
     store_root: PathBuf,
     run_ids: Vec<String>,
+    discover_runs: bool,
     resource_id: String,
     resource_kind: ResourceKind,
     resource_budget: ResourceBudget,
@@ -47,13 +48,42 @@ fn run() -> Result<()> {
         None => sibling_worker_executable()?,
     };
     let mut executed = Vec::new();
-    let mut next_run_index = 0;
+    let mut next_run_id = None;
+    let mut observed_run_ids = run_ids
+        .iter()
+        .map(|run_id| run_id.as_str().to_owned())
+        .collect::<Vec<_>>();
     let mut idle_poll_count = 0;
     let mut consecutive_idle_polls = 0;
     while executed.len() < args.max_tasks {
+        let available_run_ids = if args.discover_runs {
+            let mut discovered = store
+                .list_run_intents()?
+                .into_iter()
+                .map(|intent| {
+                    RunId::parse(intent.run_id).map_err(|error| anyhow::anyhow!(error.to_string()))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            discovered.sort();
+            for run_id in &discovered {
+                if !observed_run_ids
+                    .iter()
+                    .any(|value| value == run_id.as_str())
+                {
+                    observed_run_ids.push(run_id.as_str().to_owned());
+                }
+            }
+            discovered
+        } else {
+            run_ids.clone()
+        };
         let mut selected = None;
-        for offset in 0..run_ids.len() {
-            let run_index = (next_run_index + offset) % run_ids.len();
+        let start_index = next_run_id
+            .as_ref()
+            .and_then(|next| available_run_ids.iter().position(|run_id| run_id == next))
+            .unwrap_or(0);
+        for offset in 0..available_run_ids.len() {
+            let run_index = (start_index + offset) % available_run_ids.len();
             let offer = ResourceLease::new(
                 args.resource_id.clone(),
                 args.resource_kind.clone(),
@@ -62,7 +92,7 @@ fn run() -> Result<()> {
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             if let Some(scheduled) = fullmag_runtime_control::schedule_next_ready_accepted_task(
                 &store,
-                &run_ids[run_index],
+                &available_run_ids[run_index],
                 offer,
             )? {
                 selected = Some((run_index, scheduled));
@@ -79,8 +109,8 @@ fn run() -> Result<()> {
             continue;
         };
         consecutive_idle_polls = 0;
-        let run_id = &run_ids[run_index];
-        next_run_index = (run_index + 1) % run_ids.len();
+        let run_id = &available_run_ids[run_index];
+        next_run_id = Some(available_run_ids[(run_index + 1) % available_run_ids.len()].clone());
         let result = accepted_study_supervisor::run_supervised_accepted_worker(
             &store,
             run_id.as_str(),
@@ -114,8 +144,9 @@ fn run() -> Result<()> {
         "{}",
         serde_json::to_string(&serde_json::json!({
             "status": if executed.is_empty() { "idle" } else { "completed" },
-            "run_id": if run_ids.len() == 1 { Some(run_ids[0].as_str()) } else { None },
-            "run_ids": run_ids.iter().map(RunId::as_str).collect::<Vec<_>>(),
+            "run_id": if observed_run_ids.len() == 1 { observed_run_ids.first() } else { None },
+            "run_ids": observed_run_ids,
+            "run_source": if args.discover_runs { "store" } else { "explicit" },
             "scheduled_count": executed.len(),
             "idle_poll_count": idle_poll_count,
             "executed": executed,
@@ -158,8 +189,13 @@ fn parse_args() -> Result<SchedulerArgs> {
             values.insert(flag, value);
         }
     }
-    if run_ids.is_empty() {
-        bail!("missing required --run-id");
+    let discover_runs = values
+        .remove("--discover-runs")
+        .map(|value| parse_bool("--discover-runs", value))
+        .transpose()?
+        .unwrap_or(false);
+    if discover_runs == !run_ids.is_empty() {
+        bail!("scheduler requires either explicit --run-id values or --discover-runs true");
     }
     let mut take_string = |flag: &str| -> Result<String> {
         values
@@ -229,6 +265,7 @@ fn parse_args() -> Result<SchedulerArgs> {
     Ok(SchedulerArgs {
         store_root,
         run_ids,
+        discover_runs,
         resource_id,
         resource_kind,
         resource_budget,
@@ -241,6 +278,18 @@ fn parse_args() -> Result<SchedulerArgs> {
         heartbeat_interval: Duration::from_millis(heartbeat_interval_milliseconds),
         max_automatic_retries,
     })
+}
+
+fn parse_bool(flag: &str, value: std::ffi::OsString) -> Result<bool> {
+    match value
+        .into_string()
+        .map_err(|_| anyhow::anyhow!("scheduler option `{flag}` must be valid UTF-8"))?
+        .as_str()
+    {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => bail!("scheduler option `{flag}` must be true or false"),
+    }
 }
 
 fn parse_u64(flag: &str, value: std::ffi::OsString) -> Result<u64> {

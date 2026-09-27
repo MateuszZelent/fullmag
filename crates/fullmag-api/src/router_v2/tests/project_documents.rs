@@ -737,7 +737,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         .to_string()
         .contains("requires an accepted positive until_seconds"));
     let catalog_value = serde_json::to_value(&catalog).unwrap();
-    let specification = RunSpecification::new(
+    let mut specification = RunSpecification::new(
         ProjectSnapshot::from_envelope(&definition).unwrap(),
         StudyReference {
             study_id: StudyId::parse("study-submit").unwrap(),
@@ -753,6 +753,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             mode: "strict".into(),
         },
     );
+    specification.run_id = RunId::parse("run-http-first").unwrap();
     let intent = RunIntent::new("submit-http-test", specification);
     let body = serde_json::json!({
         "archive_base64": base64::Engine::encode(
@@ -1085,17 +1086,21 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         std::env::var("FULLMAG_ACCEPTED_SCHEDULER_E2E").as_deref() == Ok("1");
     let scheduler_pool_e2e =
         std::env::var("FULLMAG_ACCEPTED_SCHEDULER_POOL_E2E").as_deref() == Ok("1");
-    if scheduler_e2e || scheduler_pool_e2e {
+    let scheduler_discovery_e2e =
+        std::env::var("FULLMAG_ACCEPTED_SCHEDULER_DISCOVERY_E2E").as_deref() == Ok("1");
+    let scheduler_multi_run_e2e = scheduler_pool_e2e || scheduler_discovery_e2e;
+    if scheduler_e2e || scheduler_multi_run_e2e {
         let scheduler_executable = std::env::var_os("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN")
             .expect("scheduler E2E requires the built accepted scheduler binary");
         let worker_executable = std::env::var_os("FULLMAG_ACCEPTED_WORKER_E2E_BIN")
             .expect("scheduler E2E requires the built accepted worker binary");
         let mut scheduler = std::process::Command::new(scheduler_executable);
-        scheduler
-            .arg("--store-root")
-            .arg(store.root())
-            .arg("--run-id")
-            .arg(accepted_run_id.as_str());
+        scheduler.arg("--store-root").arg(store.root());
+        if scheduler_discovery_e2e {
+            scheduler.arg("--discover-runs").arg("true");
+        } else {
+            scheduler.arg("--run-id").arg(accepted_run_id.as_str());
+        }
         if scheduler_pool_e2e {
             scheduler.arg("--run-id").arg(&second_run_id);
         }
@@ -1108,8 +1113,8 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             .arg("--storage-bytes").arg("8388608")
             .arg("--worker-executable").arg(worker_executable)
             .arg("--max-concurrency").arg("1")
-            .arg("--max-tasks").arg(if scheduler_pool_e2e { "3" } else { "1" })
-            .arg("--max-idle-polls").arg(if scheduler_pool_e2e { "1" } else { "0" })
+            .arg("--max-tasks").arg(if scheduler_multi_run_e2e { "3" } else { "1" })
+            .arg("--max-idle-polls").arg(if scheduler_multi_run_e2e { "1" } else { "0" })
             .arg("--idle-poll-milliseconds").arg("10")
             .arg("--worker-timeout-seconds").arg("30")
             .arg("--heartbeat-interval-milliseconds").arg("500")
@@ -1122,7 +1127,11 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         assert!(output.status.success(), "accepted scheduler E2E failed: {}", String::from_utf8_lossy(&output.stderr));
         let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(summary["status"], "completed");
-        assert_eq!(summary["scheduled_count"], if scheduler_pool_e2e { 2 } else { 1 });
+        assert_eq!(summary["scheduled_count"], if scheduler_multi_run_e2e { 2 } else { 1 });
+        assert_eq!(
+            summary["run_source"],
+            if scheduler_discovery_e2e { "store" } else { "explicit" }
+        );
         assert_eq!(summary["executed"][0]["run_id"], accepted_run_id.as_str());
         assert_eq!(summary["executed"][0]["task_id"], persisted_task.task_id.as_str());
         assert_eq!(summary["executed"][0]["step_id"], step.step_id.as_str());
@@ -1134,7 +1143,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         assert_eq!(task.ownership_epoch, Some(1));
         assert!(!task.artifact_ids.is_empty());
         assert!(store.read_active_resource_lease_for_task(accepted_run_id.as_str(), persisted_task.task_id.as_str()).unwrap().is_none());
-        if scheduler_pool_e2e {
+        if scheduler_multi_run_e2e {
             let second_catalog = store.read_run_catalog(&second_run_id).unwrap().unwrap();
             let second_task = second_catalog.tasks.first().unwrap();
             assert_eq!(summary["run_id"], serde_json::Value::Null);
