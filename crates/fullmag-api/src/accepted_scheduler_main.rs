@@ -8,6 +8,10 @@ use fullmag_session::{
 };
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -28,7 +32,7 @@ struct SchedulerArgs {
     resources: Vec<SchedulerResourceOffer>,
     worker_executable: Option<PathBuf>,
     max_concurrency: usize,
-    max_tasks: usize,
+    max_tasks: Option<usize>,
     max_idle_polls: usize,
     idle_poll_interval: Duration,
     worker_timeout: Duration,
@@ -84,6 +88,73 @@ fn main() {
 
 fn run() -> Result<()> {
     let args = parse_args()?;
+    let shutdown_requested = Arc::new(AtomicBool::new(false));
+    if !args.resident {
+        return run_scheduler(args, shutdown_requested);
+    }
+    let scheduler_shutdown = Arc::clone(&shutdown_requested);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .build()
+        .context("build resident scheduler signal runtime")?;
+    runtime.block_on(async move {
+        let mut scheduler =
+            tokio::task::spawn_blocking(move || run_scheduler(args, scheduler_shutdown));
+        tokio::select! {
+            result = &mut scheduler => {
+                result.context("join resident scheduler loop")?
+            }
+            signal = wait_for_shutdown_signal() => {
+                shutdown_requested.store(true, Ordering::Release);
+                signal?;
+                scheduler.await.context("join draining resident scheduler loop")?
+            }
+        }
+    })
+}
+
+async fn wait_for_shutdown_signal() -> Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .context("install resident scheduler SIGTERM handler")?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                result.context("listen for resident scheduler SIGINT")?;
+            }
+            received = terminate.recv() => {
+                if received.is_none() {
+                    bail!("resident scheduler SIGTERM stream closed");
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        let mut ctrl_break = tokio::signal::windows::ctrl_break()
+            .context("install resident scheduler CTRL_BREAK handler")?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                result.context("listen for resident scheduler CTRL_C")?;
+            }
+            received = ctrl_break.recv() => {
+                if received.is_none() {
+                    bail!("resident scheduler CTRL_BREAK stream closed");
+                }
+            }
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .context("listen for resident scheduler shutdown")?;
+    }
+    Ok(())
+}
+
+fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Result<()> {
     let store =
         retry_store_writer_busy(|| fullmag_session::SessionStore::open_existing(&args.store_root))
             .with_context(|| format!("open session store `{}`", args.store_root.display()))?;
@@ -145,7 +216,15 @@ fn run() -> Result<()> {
     let mut idle_poll_count = 0;
     let mut consecutive_idle_polls = 0;
     let mut active_workers = ActiveWorkers::default();
-    while executed.len() < args.max_tasks || !active_workers.is_empty() {
+    while args
+        .max_tasks
+        .map_or(true, |max_tasks| executed.len() < max_tasks)
+        || !active_workers.is_empty()
+    {
+        let draining = shutdown_requested.load(Ordering::Acquire);
+        if draining && active_workers.is_empty() {
+            break;
+        }
         let available_run_ids = if args.discover_runs {
             let mut discovered = store
                 .list_run_intents()?
@@ -170,8 +249,13 @@ fn run() -> Result<()> {
         let mut scheduled_any = false;
         let mut pending_workers = Vec::<PendingWorker>::new();
         for (resource_index, resource) in args.resources.iter().enumerate() {
+            if draining || shutdown_requested.load(Ordering::Acquire) {
+                break;
+            }
             if active_workers.len() + pending_workers.len() >= args.max_concurrency
-                || executed.len() + active_workers.len() + pending_workers.len() >= args.max_tasks
+                || args.max_tasks.is_some_and(|max_tasks| {
+                    executed.len() + active_workers.len() + pending_workers.len() >= max_tasks
+                })
             {
                 break;
             }
@@ -236,6 +320,9 @@ fn run() -> Result<()> {
         if active_workers.is_empty() {
             if scheduled_any {
                 continue;
+            }
+            if shutdown_requested.load(Ordering::Acquire) {
+                break;
             }
             if !args.resident && consecutive_idle_polls >= args.max_idle_polls {
                 break;
@@ -307,14 +394,23 @@ fn run() -> Result<()> {
             "worker": completed.result.worker_summary,
         }));
     }
+    let shutdown_requested = shutdown_requested.load(Ordering::Acquire);
     println!(
         "{}",
         serde_json::to_string(&serde_json::json!({
-            "status": if executed.is_empty() { "idle" } else { "completed" },
+            "status": if shutdown_requested {
+                "drained"
+            } else if executed.is_empty() {
+                "idle"
+            } else {
+                "completed"
+            },
             "run_id": if observed_run_ids.len() == 1 { observed_run_ids.first() } else { None },
             "run_ids": observed_run_ids,
             "run_source": if args.discover_runs { "store" } else { "explicit" },
             "resident": args.resident,
+            "shutdown_requested": shutdown_requested,
+            "max_tasks": args.max_tasks,
             "pool_id": args.pool_id,
             "pool_checkpoint_sequence": checkpoint_sequence,
             "resource_count": resource_ids.len(),
@@ -513,11 +609,20 @@ fn parse_args() -> Result<SchedulerArgs> {
         .map(|value| parse_usize("--max-concurrency", value))
         .transpose()?
         .unwrap_or(1);
-    let max_tasks = values
+    let max_tasks_value = values
         .remove("--max-tasks")
         .map(|value| parse_usize("--max-tasks", value))
         .transpose()?
         .unwrap_or(1);
+    let max_tasks = if max_tasks_value == 0 {
+        if resident {
+            None
+        } else {
+            bail!("unbounded scheduler tasks require --resident true");
+        }
+    } else {
+        Some(max_tasks_value)
+    };
     let max_idle_polls = values
         .remove("--max-idle-polls")
         .map(|value| parse_usize("--max-idle-polls", value))
@@ -533,8 +638,8 @@ fn parse_args() -> Result<SchedulerArgs> {
         .map(|value| parse_usize("--max-automatic-retries", value))
         .transpose()?
         .unwrap_or(0);
-    if max_concurrency == 0 || max_tasks == 0 {
-        bail!("scheduler max concurrency and max tasks must be positive");
+    if max_concurrency == 0 {
+        bail!("scheduler max concurrency must be positive");
     }
     if max_idle_polls > 0 && idle_poll_milliseconds == 0 {
         bail!("scheduler idle poll interval must be positive when idle polling is enabled");

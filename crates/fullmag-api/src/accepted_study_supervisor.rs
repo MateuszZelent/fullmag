@@ -582,7 +582,8 @@ where
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         bail!("accepted worker executable must be a regular file");
     }
-    let child = Command::new(worker_executable)
+    let mut command = Command::new(worker_executable);
+    command
         .arg("--store-root")
         .arg(store_root)
         .arg("--run-id")
@@ -591,7 +592,13 @@ where
         .arg(task_id)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP);
+    }
+    let child = command
         .spawn()
         .with_context(|| format!("spawn accepted worker `{}`", worker_executable.display()))?;
     observe_child(

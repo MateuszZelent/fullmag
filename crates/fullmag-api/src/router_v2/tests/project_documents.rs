@@ -38,6 +38,34 @@ impl Drop for KillOnDropChild {
     }
 }
 
+#[cfg(windows)]
+fn request_graceful_shutdown(child: &std::process::Child) -> std::io::Result<()> {
+    let sent = unsafe {
+        windows_sys::Win32::System::Console::GenerateConsoleCtrlEvent(
+            windows_sys::Win32::System::Console::CTRL_BREAK_EVENT,
+            child.id(),
+        )
+    };
+    if sent == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn request_graceful_shutdown(child: &std::process::Child) -> std::io::Result<()> {
+    unsafe extern "C" {
+        fn kill(pid: i32, signal: i32) -> i32;
+    }
+    const SIGTERM: i32 = 15;
+    if unsafe { kill(child.id() as i32, SIGTERM) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
 #[test]
 #[ignore = "subprocess fixture for worker inbox recovery"]
 fn worker_inbox_process_interruption_child() {
@@ -1139,6 +1167,8 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         std::env::var("FULLMAG_ACCEPTED_SCHEDULER_RESOURCE_POOL_E2E").as_deref() == Ok("1");
     let scheduler_resident_discovery_e2e =
         std::env::var("FULLMAG_ACCEPTED_SCHEDULER_RESIDENT_DISCOVERY_E2E").as_deref() == Ok("1");
+    let scheduler_resident_drain_e2e =
+        std::env::var("FULLMAG_ACCEPTED_SCHEDULER_RESIDENT_DRAIN_E2E").as_deref() == Ok("1");
     let scheduler_multi_run_e2e = scheduler_pool_e2e || scheduler_discovery_e2e;
     if scheduler_parallel_resources_e2e {
         let scheduler_executable = std::path::PathBuf::from(
@@ -1393,8 +1423,15 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             if std::time::Instant::now() >= overlap_deadline {
                 let _ = scheduler.kill();
                 let output = scheduler.wait_with_output().unwrap();
+                let first_receipts = store
+                    .list_worker_process_exit_receipts(accepted_run_id.as_str())
+                    .unwrap();
+                let second_receipts = store
+                    .list_worker_process_exit_receipts(&second_run_id)
+                    .unwrap();
                 panic!(
-                    "resource pool tasks did not overlap: {}",
+                    "resource pool tasks did not overlap (first={first_lifecycle:?}, second={second_lifecycle:?}, first_receipts={first_receipts:?}, second_receipts={second_receipts:?}, status={}): {}",
+                    output.status,
                     String::from_utf8_lossy(&output.stderr)
                 );
             }
@@ -1605,6 +1642,127 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             fullmag_session::FmsTaskLifecycle::Succeeded
         );
         assert_eq!(summary["pool_checkpoint_sequence"], 3);
+        return;
+    }
+    if scheduler_resident_drain_e2e {
+        let scheduler_executable = std::path::PathBuf::from(
+            std::env::var_os("FULLMAG_ACCEPTED_SCHEDULER_E2E_BIN")
+                .expect("resident drain E2E requires the built accepted scheduler binary"),
+        );
+        let worker_executable = std::path::PathBuf::from(
+            std::env::var_os("FULLMAG_ACCEPTED_WORKER_E2E_BIN")
+                .expect("resident drain E2E requires the built accepted worker binary"),
+        );
+        let mut command = std::process::Command::new(&scheduler_executable);
+        command
+            .arg("--store-root")
+            .arg(store.root())
+            .arg("--discover-runs")
+            .arg("true")
+            .arg("--pool-id")
+            .arg("resident-drain-e2e")
+            .arg("--resident")
+            .arg("true")
+            .arg("--resource-id")
+            .arg("cpu-resident-drain-e2e")
+            .arg("--resource-kind")
+            .arg("cpu")
+            .arg("--cpu-millis")
+            .arg("100")
+            .arg("--memory-bytes")
+            .arg("1048576")
+            .arg("--gpu-memory-bytes")
+            .arg("0")
+            .arg("--storage-bytes")
+            .arg("8388608")
+            .arg("--worker-executable")
+            .arg(&worker_executable)
+            .arg("--max-concurrency")
+            .arg("1")
+            .arg("--max-tasks")
+            .arg("0")
+            .arg("--max-idle-polls")
+            .arg("0")
+            .arg("--idle-poll-milliseconds")
+            .arg("20")
+            .arg("--worker-timeout-seconds")
+            .arg("30")
+            .arg("--heartbeat-interval-milliseconds")
+            .arg("250")
+            .arg("--max-automatic-retries")
+            .arg("0")
+            .env("FULLMAG_TEST_ACCEPTED_WORKER_AFTER_STARTED_DELAY_MS", "1500")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(
+                windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP,
+            );
+        }
+        let scheduler = command
+            .spawn()
+            .expect("spawn resident drain accepted scheduler");
+        let mut scheduler = KillOnDropChild::new(scheduler);
+        let running_deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let first = store
+                .read_run_catalog(accepted_run_id.as_str())
+                .unwrap()
+                .unwrap()
+                .tasks[0]
+                .lifecycle;
+            if first == fullmag_session::FmsTaskLifecycle::Running {
+                break;
+            }
+            if let Some(status) = scheduler.try_wait().unwrap() {
+                let output = scheduler.wait_with_output().unwrap();
+                panic!(
+                    "resident drain scheduler exited before Running ({status}): {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            if std::time::Instant::now() >= running_deadline {
+                panic!("resident drain scheduler did not reach Running");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        request_graceful_shutdown(&scheduler).expect("request scheduler drain");
+        let output = scheduler.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "resident drain scheduler failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(summary["status"], "drained");
+        assert_eq!(summary["resident"], true);
+        assert_eq!(summary["shutdown_requested"], true);
+        assert_eq!(summary["max_tasks"], serde_json::Value::Null);
+        assert_eq!(summary["scheduled_count"], 1);
+        let first = store
+            .read_run_catalog(accepted_run_id.as_str())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            first.tasks[0].lifecycle,
+            fullmag_session::FmsTaskLifecycle::Succeeded
+        );
+        let second = store.read_run_catalog(&second_run_id).unwrap().unwrap();
+        assert_eq!(
+            second.tasks[0].lifecycle,
+            fullmag_session::FmsTaskLifecycle::Accepted
+        );
+        assert!(store
+            .read_active_resource_lease_for_task(
+                accepted_run_id.as_str(),
+                first.tasks[0].task_id.as_str(),
+            )
+            .unwrap()
+            .is_none());
         return;
     }
     if scheduler_e2e || scheduler_multi_run_e2e || scheduler_persistent_cursor_e2e {
