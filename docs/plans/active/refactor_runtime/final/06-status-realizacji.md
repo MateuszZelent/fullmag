@@ -1853,3 +1853,20 @@ Source check session/runtime-control/API i obu binariów oraz diff check:
 native FEM pozostają **NOT VERIFIED**. **P4 50%, cały plan około 49%**.
 Szczegóły:
 [p4/08-preparation-exit-finalization.md](p4/08-preparation-exit-finalization.md).
+
+## P4-B — preparation process launch intent — 27.09.2026
+
+`preparation_process_launch.v1` jest immutable granicą przed spawnem i wiąże
+task, preparation attempt, resource, token, sekwencję heartbeat oraz proces
+supervisora. Tylko pierwszy zapis `Accepted` uprawnia do uruchomienia potomka;
+identyczny replay po restarcie zachowuje niejednoznaczność i nie pozwala na
+drugi spawn. Exit receipt wymaga dokładnie jednego zgodnego launch intentu.
+FMS pack i oba walkery reachability walidują rekord także bez solverowego run
+manifestu.
+
+Source check session/runtime-control/API i obu binariów oraz diff check:
+**PASS**. Globalny fmt check ma wcześniejszy baseline drift w wielu
+niezmienionych plikach. Testów jednostkowych nie kompilowano. Supervisor,
+process E2E i native FEM pozostają **NOT VERIFIED**. **P4 50%, cały plan około
+49%**. Szczegóły:
+[p4/09-preparation-process-launch-intent.md](p4/09-preparation-process-launch-intent.md).

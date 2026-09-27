@@ -501,3 +501,18 @@ receipcie jest odrzucany. Source check i diff check przeszły.
 Supervisor/process E2E i native FEM pozostają `NOT VERIFIED`. P4 pozostaje na
 **50%**, a cały plan na około **49%**. Szczegóły:
 [08-preparation-exit-finalization.md](08-preparation-exit-finalization.md).
+
+## Jednorazowy launch intent preparacji — 27.09.2026
+
+`preparation_process_launch.v1` wyznacza teraz trwałą granicę przed spawnem.
+Store ponownie sprawdza aktywny preparation lease i brak solver claimu; tylko
+pierwszy wynik `Accepted` pozwala uruchomić proces. Identyczny replay jest
+stanem niejednoznacznym po restarcie i nie zezwala na drugi spawn. Exit receipt
+wymaga dokładnie jednego zgodnego launch intentu, a FMS pack/reachability
+walidują nowy rekord także bez solverowego run manifestu.
+
+Source check i diff check przeszły. Globalny fmt check ujawnił wcześniejszy
+baseline drift w wielu niezmienionych plikach; testów jednostkowych nie
+kompilowano zgodnie z aktywnym zakazem. Supervisor/process E2E i native FEM
+pozostają `NOT VERIFIED`. P4 pozostaje na **50%**, a cały plan na około **49%**.
+Szczegóły: [09-preparation-process-launch-intent.md](09-preparation-process-launch-intent.md).
