@@ -106,6 +106,12 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
     `max_concurrency` i limitem tasków. Główny proces sam zapisuje checkpoint
     fairness. Każde wyjście, także po błędzie, musi dołączyć aktywne nadzory;
     nie wolno odłączyć workera ani uznać samego zakończenia nici za release.
+19. Jawny tryb rezydentnego discovery może kontynuować skany po okresie bez
+    gotowych tasków wyłącznie dla źródła store i trwałej tożsamości puli.
+    Dodatni `max_tasks` nadal ogranicza lifecycle tego przyrostu. Run z
+    opublikowanym katalogiem, lecz bez preparation receiptu pozostaje chwilowo
+    niegotowy; scheduler nie może go zakolejkować ani zakończyć całej usługi.
+    Obecny, ale błędny receipt pozostaje błędem fail-closed.
 
 ## Konsekwencje
 
@@ -129,9 +135,11 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
 - `Stopping` oznacza trwałe żądanie, a `Cancelled` potwierdzony terminalny
   wynik koordynatora. Samo kliknięcie UI ani wysłanie HTTP nie dowodzi wyjścia
   procesu i nie uprawnia do zwolnienia lease.
-- Statyczna pula wielu zasobów zmniejsza potrzebę uruchamiania procesu per
-  zasób, lecz nie stanowi rezydentnej usługi, dynamicznego discovery zasobów,
-  polityki priorytetów ani rozproszonego lock managera.
+- Statyczna pula wielu zasobów oraz rezydentne store-discovery zmniejszają
+  potrzebę uruchamiania procesu per zasób i per okres pracy. Dodatni limit
+  tasków nadal kończy proces; nie jest to usługa z graceful shutdown/drain,
+  dynamicznym discovery zasobów, polityką priorytetów ani rozproszonym lock
+  managerem.
 
 ## Obowiązki implementacyjne
 
@@ -177,6 +185,10 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
   wymaga jednoczesnego `Running`, terminalnego sukcesu obu tasków, dwóch
   dokładnych `resource_id` w summary i braku aktywnych lease. Osobna regresja
   zachowuje same-resource fencing dwóch procesów pod kontencją writera.
+- Regresja rezydentnego discovery uruchamia scheduler przed utworzeniem
+  ostatniego runu, potwierdza przeżycie pustego okresu, następnie publikuje i
+  materializuje nowy run. Ten sam proces ma wykonać trzeci task, zapisać trzeci
+  checkpoint puli i zakończyć się dopiero po osiągnięciu `max_tasks`.
 
 ## Migracja i rollback
 
@@ -191,7 +203,8 @@ Source/contract gates są oddzielone od procesu workera i kwalifikacji solvera.
 Testy integracyjne wymagają managed build runnera. Pełne lokalne process E2E
 sukcesu, anulowania żywego procesu, anulowania przed spawnem i orphan recovery
 sprzed decyzji ograniczonego FDM CPU przechodzą. Przechodzi również bounded
-statyczna pula dwóch zasobów w jednym procesie. P5-B pozostaje otwarte do
-rezydentnej usługi z dynamiczną pulą, priorytetami i backpressure, zdalnego ACK
-oraz dowodu braku równoległego starego workera i zwolnienia urządzenia dla
-pozostałych lane'ów.
+statyczna pula dwóch zasobów w jednym procesie oraz rezydentne discovery runu
+utworzonego po starcie schedulera. P5-B pozostaje otwarte do graceful
+shutdown/drain, bezpiecznego trybu bez limitu tasków, dynamicznej puli,
+priorytetów i backpressure, zdalnego ACK oraz dowodu braku równoległego starego
+workera i zwolnienia urządzenia dla pozostałych lane'ów.

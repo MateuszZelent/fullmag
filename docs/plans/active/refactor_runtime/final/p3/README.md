@@ -25,11 +25,13 @@ fail-closed lease.
 Bounded scheduler wybiera dependency-ready task z jawnej puli RunId przez
 round-robin i statyczną pulę ofert zasobów. Starsza pojedyncza oferta pozostaje
 obsługiwana. Opcjonalny tryb store-discovery ponownie
-odczytuje trwałe intenty podczas bounded polling. Opcjonalny `--pool-id`
+odczytuje trwałe intenty podczas polling. Opcjonalny `--pool-id`
 zapisuje sequence-fenced kursor fairness i odtwarza następny RunId w kolejnym
-procesie. Brakuje rezydentnej usługi, heartbeat/Stop ACK dla zdalnego
-transportu oraz process E2E pozostałych lane'ów. Anulowanie przed uruchomieniem
-workera jest obsłużone trwale i nie wykonuje spawnu procesu potomnego.
+procesie. `--resident true` utrzymuje discovery podczas pustych skanów, wymaga
+tożsamości puli i pozostaje ograniczone dodatnim `--max-tasks`. Brakuje pełnej
+usługi z graceful shutdown/drain, heartbeat/Stop ACK dla zdalnego transportu
+oraz process E2E pozostałych lane'ów. Anulowanie przed uruchomieniem workera
+jest obsłużone trwale i nie wykonuje spawnu procesu potomnego.
 Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`28-one-shot-accepted-worker-process.md`](28-one-shot-accepted-worker-process.md),
 [`29-accepted-worker-supervisor.md`](29-accepted-worker-supervisor.md),
@@ -48,7 +50,8 @@ Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`42-persistent-scheduler-cursor.md`](42-persistent-scheduler-cursor.md) i
 [`43-parallel-resource-supervision.md`](43-parallel-resource-supervision.md) i
 [`44-parallel-writer-contention.md`](44-parallel-writer-contention.md) i
-[`45-bounded-static-resource-pool.md`](45-bounded-static-resource-pool.md).
+[`45-bounded-static-resource-pool.md`](45-bounded-static-resource-pool.md) i
+[`46-resident-scheduler-discovery.md`](46-resident-scheduler-discovery.md).
 
 ## Ograniczona pula wielu runów — 27.09.2026
 
@@ -157,6 +160,27 @@ same-resource fencing i kontencji writera: **1/1 PASS**, receipt
 `source_changed_during_run=false`. Rejestr tras: **29/29 PASS**. Implementacja:
 `df69370d2`. P3 wynosi około **81%**, P5 około **53%**, a całość około **39%**.
 Szczegóły: [`45-bounded-static-resource-pool.md`](45-bounded-static-resource-pool.md).
+
+## Rezydentne wykrywanie nowych runów — 27.09.2026
+
+Jawny `--resident true` utrzymuje proces podczas pustych skanów store i pozwala
+temu samemu schedulerowi wykonać run utworzony po jego starcie. Tryb wymaga
+store-discovery, `--pool-id`, dodatniego interwału oraz zerowego limitu pustych
+skanów; wykonanie nadal kończy dodatni `--max-tasks`. Scheduler pomija chwilowy
+stan, w którym katalog taska jest już widoczny, ale preparation receipt nie
+został jeszcze opublikowany, i ponownie ocenia go w następnym skanie.
+
+Managed E2E dwóch początkowych i jednego późnego runu: **1/1 PASS**, receipt
+`05699005c4084b8aac9f6b57ac498dfa`. Regresje statycznej puli i trwałego kursora:
+**PASS**, receipty `7060b688339047f990acbe567846d95f` oraz
+`fb85c57255594ee79bcb12c033586006`. Wszystkie trzy przypinają content
+`0ea304a8d92f2b02cf5171c37f82dc106e33d174dc19c71951f808ba0b7bcf4b` i
+`source_changed_during_run=false`; rejestr tras: **30/30 PASS**.
+
+Pełna usługa nadal wymaga graceful shutdown/drain, sterowanego trybu bez limitu
+tasków, priorytetów, backpressure, dynamicznej puli i zdalnego ACK. P3 wynosi
+około **82%**, P5 około **56%**, a całość około **40%**. Szczegóły:
+[`46-resident-scheduler-discovery.md`](46-resident-scheduler-discovery.md).
 
 API ma jawny adapter allow-listy `RunResult` → typowane payloady dla
 wspieranych wyjść. Szczegóły i wcześniejszy dowód opisuje
