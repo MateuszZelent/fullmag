@@ -14,11 +14,11 @@ use anyhow::{bail, Context, Result};
 use crate::types::{
     ArtifactIndex, BackendStatePayload, CommonSolverState, FieldRole, FmsArtifactCatalog,
     FmsCheckpoint, FmsCoordinatorJournalDirection, FmsExportProfile, FmsPreparationReceipt,
-    FmsPreparationResourceLease, FmsPreparationResourcePool, FmsResourceLease,
-    FmsRetryDecision, FmsRunCatalog, FmsRunIntent, FmsRunManifest,
-    FmsSchedulerPoolCheckpoint, FmsSchedulerResourcePool, FmsSessionManifest,
-    FmsTaskAdmissionRecord, FmsTaskPreparationReceipt, FmsWorkerProcessExitReceipt,
-    FmsWorkspaceManifest, TensorDescriptor,
+    FmsPreparationProcessExitReceipt, FmsPreparationResourceLease,
+    FmsPreparationResourcePool, FmsResourceLease, FmsRetryDecision, FmsRunCatalog,
+    FmsRunIntent, FmsRunManifest, FmsSchedulerPoolCheckpoint, FmsSchedulerResourcePool,
+    FmsSessionManifest, FmsTaskAdmissionRecord, FmsTaskPreparationReceipt,
+    FmsWorkerProcessExitReceipt, FmsWorkspaceManifest, TensorDescriptor,
 };
 
 /// The same claim-scoped continuity rules apply to stores and portable archives.
@@ -498,6 +498,7 @@ impl StoreWalker {
             self.walk_run_task_admissions(&run_entry.path(), &run_id)?;
             self.walk_run_retry_decisions(&run_entry.path(), &run_id)?;
             self.walk_run_worker_process_exit_receipts(&run_entry.path(), &run_id)?;
+            self.walk_run_preparation_process_exit_receipts(&run_entry.path(), &run_id)?;
             let checkpoint_dir = run_entry.path().join("checkpoints");
             if checkpoint_dir.exists() {
                 if !checkpoint_dir.is_dir() {
@@ -766,6 +767,46 @@ impl StoreWalker {
             if receipt.relative_path()? != relative {
                 bail!(
                     "worker process exit receipt `{relative}` contains mismatched path identity"
+                )
+            }
+        }
+        Ok(())
+    }
+
+    fn walk_run_preparation_process_exit_receipts(
+        &mut self,
+        run_dir: &Path,
+        run_id: &str,
+    ) -> Result<()> {
+        let directory = run_dir.join("preparation_process_exit_receipts");
+        if !directory.exists() {
+            return Ok(());
+        }
+        if !directory.is_dir() {
+            bail!(
+                "run preparation_process_exit_receipts path is not a directory: {}",
+                directory.display()
+            )
+        }
+        for entry in read_directory(&directory)? {
+            if entry.file_type()?.is_symlink() || !entry.file_type()?.is_file() {
+                bail!(
+                    "unsafe preparation process exit receipt entry `{}`",
+                    entry.path().display()
+                )
+            }
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            let Some(receipt_id) = file_name.strip_suffix(".json") else {
+                bail!("preparation process exit receipt entry must be JSON: `{file_name}`")
+            };
+            validate_component(receipt_id)?;
+            let relative =
+                format!("runs/{run_id}/preparation_process_exit_receipts/{file_name}");
+            let data = self.read_file(&entry.path(), &relative)?;
+            let receipt: FmsPreparationProcessExitReceipt = parse_json(&data, &relative)?;
+            if receipt.relative_path()? != relative {
+                bail!(
+                    "preparation process exit receipt `{relative}` contains mismatched path identity"
                 )
             }
         }
@@ -1509,6 +1550,31 @@ impl<'a> ArchiveWalker<'a> {
             }
         }
 
+        let preparation_exit_marker = "/preparation_process_exit_receipts/";
+        let preparation_exit_runs = self
+            .documents
+            .keys()
+            .filter_map(|name| {
+                let rest = name.strip_prefix("runs/")?;
+                let (run_id, _) = rest.split_once(preparation_exit_marker)?;
+                Some(run_id.to_string())
+            })
+            .collect::<HashSet<_>>();
+        for run_id in preparation_exit_runs {
+            validate_component(&run_id)?;
+            let run_manifest_ref = format!("runs/{run_id}/run_manifest.json");
+            if self.documents.contains_key(&run_manifest_ref) {
+                continue;
+            }
+            let prefix = format!("runs/{run_id}/preparation_process_exit_receipts/");
+            let names = self.documents.keys().cloned().collect::<Vec<_>>();
+            for name in names {
+                if name.starts_with(&prefix) && name.ends_with(".json") {
+                    self.walk_preparation_process_exit_receipt(&name, &run_id)?;
+                }
+            }
+        }
+
         // Export planning may intentionally pass only the selected run
         // entries (without the top-level session manifest).  Checkpoints are
         // still roots in that view and must receive the same traversal.
@@ -1669,6 +1735,14 @@ impl<'a> ArchiveWalker<'a> {
         for name in process_exit_names {
             if name.starts_with(&process_exit_prefix) && name.ends_with(".json") {
                 self.walk_worker_process_exit_receipt(&name, expected_run_id)?;
+            }
+        }
+        let preparation_exit_prefix =
+            format!("runs/{expected_run_id}/preparation_process_exit_receipts/");
+        let preparation_exit_names = self.documents.keys().cloned().collect::<Vec<_>>();
+        for name in preparation_exit_names {
+            if name.starts_with(&preparation_exit_prefix) && name.ends_with(".json") {
+                self.walk_preparation_process_exit_receipt(&name, expected_run_id)?;
             }
         }
         let journal_prefix = format!("runs/{expected_run_id}/coordinator_journal/");
@@ -2043,6 +2117,38 @@ impl<'a> ArchiveWalker<'a> {
         if receipt.run_id != expected_run_id || receipt.receipt_id != receipt_id {
             bail!(
                 "worker process exit receipt `{relative}` contains mismatched path identity"
+            )
+        }
+        receipt.validate()?;
+        self.report.file_refs.insert(relative.to_string());
+        Ok(())
+    }
+
+    fn walk_preparation_process_exit_receipt(
+        &mut self,
+        relative: &str,
+        expected_run_id: &str,
+    ) -> Result<()> {
+        let Some(data) = self.documents.get(relative) else {
+            return self.report.missing(format!(
+                "archive references missing preparation process exit receipt `{relative}`"
+            ));
+        };
+        let prefix = format!("runs/{expected_run_id}/preparation_process_exit_receipts/");
+        let Some(file_name) = relative.strip_prefix(&prefix) else {
+            bail!("invalid preparation process exit receipt path `{relative}`")
+        };
+        let Some(receipt_id) = file_name.strip_suffix(".json") else {
+            bail!("preparation process exit receipt path must end in .json: `{relative}`")
+        };
+        if receipt_id.is_empty() || receipt_id.contains('/') {
+            bail!("invalid preparation process exit receipt path `{relative}`")
+        }
+        validate_component(receipt_id)?;
+        let receipt: FmsPreparationProcessExitReceipt = parse_json(data, relative)?;
+        if receipt.run_id != expected_run_id || receipt.receipt_id != receipt_id {
+            bail!(
+                "preparation process exit receipt `{relative}` contains mismatched path identity"
             )
         }
         receipt.validate()?;

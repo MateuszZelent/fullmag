@@ -967,6 +967,8 @@ pub enum FmsTaskReadiness {
 }
 
 pub const FMS_TASK_AWAITING_PREPARATION_REASON: &str = "accepted_task_awaiting_preparation";
+pub const FMS_TASK_AWAITING_DEPENDENCY_RESOLUTION_REASON: &str =
+    "awaiting dependency resolution and runtime admission";
 
 impl Default for FmsTaskReadiness {
     fn default() -> Self {
@@ -1475,6 +1477,116 @@ impl FmsWorkerProcessExitReceipt {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkerProcessExitReceiptCommitDisposition {
+    Accepted,
+    Replayed,
+}
+
+pub const FMS_PREPARATION_PROCESS_EXIT_RECEIPT_SCHEMA: &str =
+    "preparation_process_exit_receipt.v1";
+
+/// Immutable proof that the supervisor reaped one accepted-run preparation
+/// process while it still owned the exact durable meshing lease.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsPreparationProcessExitReceipt {
+    pub schema_version: String,
+    pub receipt_id: String,
+    pub run_id: String,
+    pub task_id: String,
+    pub preparation_attempt_id: String,
+    pub resource_id: String,
+    pub lease_token: String,
+    pub lease_heartbeat_sequence: u64,
+    pub process_id: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_start_token: Option<String>,
+    pub status_success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+    pub observed_at: DateTime<Utc>,
+}
+
+impl FmsPreparationProcessExitReceipt {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != FMS_PREPARATION_PROCESS_EXIT_RECEIPT_SCHEMA {
+            bail!(
+                "unsupported preparation process exit receipt schema `{}`",
+                self.schema_version
+            );
+        }
+        for (value, field) in [
+            (self.receipt_id.as_str(), "receipt_id"),
+            (self.run_id.as_str(), "run_id"),
+            (self.task_id.as_str(), "task_id"),
+            (
+                self.preparation_attempt_id.as_str(),
+                "preparation_attempt_id",
+            ),
+            (self.resource_id.as_str(), "resource_id"),
+            (self.lease_token.as_str(), "lease_token"),
+        ] {
+            crate::repository_path::validate_store_id(value)
+                .with_context(|| format!("invalid preparation process exit receipt {field}"))?;
+        }
+        if self.process_id == 0 {
+            bail!("preparation process exit receipt process_id must be greater than zero");
+        }
+        if self
+            .process_start_token
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty() || value.len() > 256)
+        {
+            bail!("preparation process exit receipt process_start_token is invalid");
+        }
+        if self.status_success && (self.timed_out || self.exit_code != Some(0)) {
+            bail!("successful preparation process exit requires exit code zero without timeout");
+        }
+        match self.failure_reason.as_deref() {
+            Some(reason) if reason.trim().is_empty() || reason.len() > 4096 => {
+                bail!("preparation process exit receipt failure_reason is invalid")
+            }
+            Some(_) if self.status_success => {
+                bail!("successful preparation process exit must not carry a failure reason")
+            }
+            None if !self.status_success => {
+                bail!("failed preparation process exit requires a failure reason")
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    pub fn relative_path(&self) -> Result<String> {
+        self.validate()?;
+        Ok(format!(
+            "runs/{}/preparation_process_exit_receipts/{}.json",
+            self.run_id, self.receipt_id
+        ))
+    }
+
+    pub fn validate_for_lease(&self, lease: &FmsPreparationResourceLease) -> Result<()> {
+        self.validate()?;
+        if lease.state != FmsResourceLeaseState::Active
+            || lease.run_id != self.run_id
+            || lease.task_id != self.task_id
+            || lease.preparation_attempt_id != self.preparation_attempt_id
+            || lease.resource_id != self.resource_id
+            || lease.lease_token != self.lease_token
+            || lease.heartbeat_sequence != self.lease_heartbeat_sequence
+        {
+            bail!(
+                "preparation process exit receipt ownership fence does not match the active lease"
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreparationProcessExitReceiptCommitDisposition {
     Accepted,
     Replayed,
 }

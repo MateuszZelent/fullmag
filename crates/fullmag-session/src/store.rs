@@ -1280,6 +1280,145 @@ impl SessionStore {
         Ok(Some(lease))
     }
 
+    /// Persist immutable proof that a supervised preparation process was
+    /// reaped while the exact preparation lease remained active.
+    pub fn commit_preparation_process_exit_receipt(
+        &self,
+        receipt: &FmsPreparationProcessExitReceipt,
+    ) -> Result<PreparationProcessExitReceiptCommitDisposition> {
+        receipt.validate()?;
+        let _writer_lease = self.write_transaction()?;
+        let catalog = self
+            .read_run_catalog(&receipt.run_id)?
+            .context("preparation process exit receipt requires a durable run catalog")?;
+        let task = catalog
+            .tasks
+            .iter()
+            .find(|task| task.task_id == receipt.task_id)
+            .context("preparation process exit receipt task is missing from the run catalog")?;
+        if task.lifecycle != FmsTaskLifecycle::Accepted
+            || task.attempt_id.is_some()
+            || task.ownership_epoch.is_some()
+            || task.resource_id.is_some()
+        {
+            anyhow::bail!("preparation process exit receipt task has a solver claim");
+        }
+        let lease = self
+            .read_preparation_resource_lease(
+                &receipt.run_id,
+                &receipt.resource_id,
+                &receipt.lease_token,
+            )?
+            .context("preparation process exit receipt requires its durable resource lease")?;
+        receipt.validate_for_lease(&lease)?;
+
+        let relative = receipt.relative_path()?;
+        let path = checked_path(&self.root, &relative)?;
+        if path.exists() {
+            let existing: FmsPreparationProcessExitReceipt =
+                serde_json::from_slice(&fs::read(&path)?).with_context(|| {
+                    format!("parsing preparation process exit receipt {}", path.display())
+                })?;
+            existing.validate()?;
+            if existing.relative_path()? != relative {
+                anyhow::bail!(
+                    "preparation process exit receipt identity does not match its path"
+                );
+            }
+            if existing == *receipt {
+                return Ok(PreparationProcessExitReceiptCommitDisposition::Replayed);
+            }
+            anyhow::bail!(
+                "preparation process exit receipt `{}` conflicts with the durable payload",
+                receipt.receipt_id
+            );
+        }
+        atomic_write(
+            &create_parent(&self.root, &relative)?,
+            &serde_json::to_vec_pretty(receipt)?,
+        )?;
+        Ok(PreparationProcessExitReceiptCommitDisposition::Accepted)
+    }
+
+    pub fn read_preparation_process_exit_receipt(
+        &self,
+        run_id: &str,
+        receipt_id: &str,
+    ) -> Result<Option<FmsPreparationProcessExitReceipt>> {
+        validate_store_id(run_id)?;
+        validate_store_id(receipt_id)?;
+        let relative =
+            format!("runs/{run_id}/preparation_process_exit_receipts/{receipt_id}.json");
+        let path = checked_path(&self.root, &relative)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        let receipt: FmsPreparationProcessExitReceipt = serde_json::from_slice(&fs::read(&path)?)
+            .with_context(|| {
+                format!("parsing preparation process exit receipt {}", path.display())
+            })?;
+        if receipt.relative_path()? != relative {
+            anyhow::bail!("preparation process exit receipt identity does not match its path");
+        }
+        Ok(Some(receipt))
+    }
+
+    pub fn list_preparation_process_exit_receipts(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<FmsPreparationProcessExitReceipt>> {
+        validate_store_id(run_id)?;
+        let directory = checked_path(
+            &self.root,
+            &format!("runs/{run_id}/preparation_process_exit_receipts"),
+        )?;
+        if !directory.exists() {
+            return Ok(Vec::new());
+        }
+        let mut receipts = Vec::new();
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            let metadata = entry.file_type()?;
+            if metadata.is_symlink() || !metadata.is_file() {
+                anyhow::bail!(
+                    "unsafe preparation process exit receipt entry `{}`",
+                    entry.path().display()
+                );
+            }
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            let receipt_id = file_name
+                .strip_suffix(".json")
+                .context("preparation process exit receipt entry must be JSON")?;
+            validate_store_id(receipt_id)?;
+            receipts.push(
+                self.read_preparation_process_exit_receipt(run_id, receipt_id)?
+                    .context("listed preparation process exit receipt disappeared during read")?,
+            );
+        }
+        receipts.sort_by(|left, right| left.receipt_id.cmp(&right.receipt_id));
+        Ok(receipts)
+    }
+
+    pub fn read_active_preparation_lease_for_process_exit(
+        &self,
+        receipt: &FmsPreparationProcessExitReceipt,
+    ) -> Result<Option<FmsPreparationResourceLease>> {
+        receipt.validate()?;
+        let _writer_lease = self.write_transaction()?;
+        let Some(lease) = self.read_preparation_resource_lease(
+            &receipt.run_id,
+            &receipt.resource_id,
+            &receipt.lease_token,
+        )? else {
+            return Ok(None);
+        };
+        if lease.state == FmsResourceLeaseState::Released {
+            return Ok(None);
+        }
+        receipt.validate_for_lease(&lease)?;
+        Ok(Some(lease))
+    }
+
     /// Persist the verified initial coordinator checkpoint before a new claim
     /// is allowed to publish worker commands.
     pub fn commit_coordinator_genesis(

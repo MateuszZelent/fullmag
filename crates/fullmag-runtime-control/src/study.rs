@@ -421,7 +421,7 @@ impl AcceptedStudySnapshot {
 /// Stable initial blocked reason assigned when accepted study tasks are
 /// materialized. Only this scheduler-owned state may be advanced to `Queued`.
 pub const ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION: &str =
-    "awaiting dependency resolution and runtime admission";
+    fullmag_session::FMS_TASK_AWAITING_DEPENDENCY_RESOLUTION_REASON;
 
 /// A dependency-checked task that is durably queued and ready for a later
 /// explicit resource claim. Queueing does not choose a device or start a
