@@ -5,8 +5,9 @@ study, identity admission, format komunikatów, coordinator state machine i
 trwałe zastosowanie decyzji retry są typowane. Jednorazowy
 `fullmag-api-accepted-worker` wykonuje ograniczoną ścieżkę FDM CPU double
 strict, a `fullmag-api-accepted-supervisor` uruchamia go jako osobny proces pod
-dokładnym claimem i lease. Supervisor stosuje globalny dla store limit jednego
-workera, czeka na exit, uzgadnia journal/inbox/completion barrier i zwalnia
+dokładnym claimem i lease. Supervisor stosuje globalny dla store bounded limit
+i osobny slot dla każdego `resource_id`, czeka na exit, uzgadnia
+journal/inbox/completion barrier i zwalnia
 lease dopiero po potwierdzonym terminalnym sukcesie. Pending effect zachowuje
 lease; pending sprzed pierwszego side effectu lub z ukończonym receiptem może
 zostać odtworzony bez drugiego uruchomienia solvera. Supervisor wymaga jawnego
@@ -43,7 +44,8 @@ Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`39-supervisor-process-exit-receipt.md`](39-supervisor-process-exit-receipt.md),
 [`40-multi-run-scheduler-pool.md`](40-multi-run-scheduler-pool.md),
 [`41-scheduler-run-discovery.md`](41-scheduler-run-discovery.md) i
-[`42-persistent-scheduler-cursor.md`](42-persistent-scheduler-cursor.md).
+[`42-persistent-scheduler-cursor.md`](42-persistent-scheduler-cursor.md) i
+[`43-parallel-resource-supervision.md`](43-parallel-resource-supervision.md).
 
 ## Ograniczona pula wielu runów — 27.09.2026
 
@@ -93,10 +95,30 @@ PASS**, receipt `ad768b85eda24b0bbdbb30f75b2269fb`; rejestr tras: **27/27 PASS**
 Implementacja: `6f2d2416b272f68f11165ea96f6e9b7325e4755e`.
 
 Kursor jest lokalnym stanem operacyjnym i nie wchodzi do przenośnego eksportu
-`.fms`. Nadal brakuje rezydentnej pętli, priorytetów, backpressure, wielu
-równoległych zasobów i zdalnego heartbeat/Stop ACK. P3 wynosi około **78%**, P5
-około **44%**, a całość około **37%**. Szczegóły:
+`.fms`. Następny przyrost zastępuje pojedynczy slot supervisora slotem per
+`resource_id`, zachowuje globalny bounded limit i potwierdza procesowo dwa
+równoległe zasoby FDM CPU oraz odmowę podwójnego przydziału tego samego zasobu.
+Nadal brakuje rezydentnej pętli, priorytetów, backpressure, dynamicznego
+discovery zasobów i zdalnego heartbeat/Stop ACK. P3 wynosi około **79%**, P5
+około **48%**, a całość około **38%**. Szczegóły:
 [`42-persistent-scheduler-cursor.md`](42-persistent-scheduler-cursor.md).
+
+## Równoległy supervisor zasobów — 27.09.2026
+
+Owner slotu v3 wiąże proces z dokładnym `resource_id` i limitem współbieżności.
+Efektywny limit jest minimum żądań aktywnych ownerów, więc kolejny proces nie
+może poszerzyć istniejącej granicy. Same-resource admission pozostaje chronione
+durable lease, a krótkie konflikty single-writer ponawiają wyłącznie dokładne,
+idempotentne publikacje.
+
+Managed E2E obserwuje dwa taski jednocześnie w `Running` na różnych CPU,
+terminalny sukces obu workerów oraz zwolnienie lease'ów i slotów: **1/1 PASS**,
+receipt `2650df727cbd4359b51c7a0286f32382`. Skupione testy supervisora: **9/9
+PASS**, receipt `940b79ad3ff04006b58455569e37e38d`; oba mają content
+`b257f47cf6a13170b98a3d016d8fd09ec644a18f26108a49f61254a4ac0ce3cf` i
+`source_changed_during_run=false`. Implementacja:
+`ce39157e25fff1bca6c0c6906cd10730b5899926`. Szczegóły:
+[`43-parallel-resource-supervision.md`](43-parallel-resource-supervision.md).
 
 API ma jawny adapter allow-listy `RunResult` → typowane payloady dla
 wspieranych wyjść. Szczegóły i wcześniejszy dowód opisuje
