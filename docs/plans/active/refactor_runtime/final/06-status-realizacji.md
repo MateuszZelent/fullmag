@@ -1779,3 +1779,21 @@ failed`; nie zastosowano hostowego obejścia. Automatyczny admission/supervisor
 zasobu `Meshing` i accepted worker FEM CPU pozostają otwarte. **P4 50%, całość
 około 49%**. Szczegóły:
 [p4/03-accepted-run-fem-preparation.md](p4/03-accepted-run-fem-preparation.md).
+
+## P4-B — preparation resource lease — 27.09.2026
+
+ADR-0037 rozdziela własność zasobu meshowania od solverowego
+`resource_lease.v1`. Implementacja `preparation_resource_lease.v1` utrwala
+RunId/TaskId/preparation attempt, budżet, token i heartbeat, wymaga
+nieprzejętego taska `Accepted/Blocked` oraz odrzuca task z gotowym receiptem.
+Store egzekwuje globalną wyłączność resource_id między lease przygotowania i
+solvera. Eksport FMS, store reachability i archive preflight walidują rekordy
+także przed powstaniem solverowego run manifestu.
+
+`cargo check --locked -p fullmag-session -p fullmag-api --bin
+fullmag-api-accepted-fem-preparer` i diff check: **PASS**. Testów jednostkowych
+nie kompilowano zgodnie z aktywnym zakazem. Pula, admission, supervisor,
+process exit receipt i lease-fenced publikacja preparation receiptu pozostają
+otwarte; managed native FEM i process E2E są **NOT VERIFIED**. **P4 50%, cały
+plan około 49%**. Szczegóły:
+[p4/04-preparation-resource-lease.md](p4/04-preparation-resource-lease.md).

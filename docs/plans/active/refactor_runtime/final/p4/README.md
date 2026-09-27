@@ -437,3 +437,17 @@ binarium **PASS**. Managed native build i process E2E są `NOT VERIFIED`, poniew
 failed`. Nadal brakuje automatycznego admission/supervision na zasobie
 `Meshing` oraz accepted workera FEM CPU. P4 pozostaje na **50%**, a cały plan
 na około **49%**. Szczegóły: [03-accepted-run-fem-preparation.md](03-accepted-run-fem-preparation.md).
+
+## Preparation resource lease — 27.09.2026
+
+ADR-0037 i commit `22654cce4` dodają osobny
+`preparation_resource_lease.v1` dla accepted FEM. Task pozostaje zablokowany
+przed solver admission, store egzekwuje globalną wyłączność resource_id między
+solverem i przygotowaniem, a FMS eksport/import waliduje pełną tożsamość lease
+także bez solverowego run manifestu. Source check pakietów session/API i
+preparera oraz diff check przeszły.
+
+Pula, admission, supervisor, process exit receipt i lease-fenced publikacja
+preparation receiptu pozostają otwarte. Managed native runtime nadal jest
+`NOT VERIFIED`; P4 pozostaje na **50%**, a cały plan na około **49%**.
+Szczegóły: [04-preparation-resource-lease.md](04-preparation-resource-lease.md).
