@@ -2218,6 +2218,15 @@ impl SessionStore {
         }
         let _writer_lease = self.write_transaction()?;
         self.validate_resource_lease_owner_unlocked(lease, false)?;
+        if self
+            .find_active_preparation_resource_lease_unlocked(&lease.resource_id)?
+            .is_some()
+        {
+            anyhow::bail!(
+                "resource `{}` already has an active durable preparation lease",
+                lease.resource_id
+            );
+        }
         if let Some(existing) = self.find_active_resource_lease_unlocked(&lease.resource_id)? {
             if existing.identity_matches(lease)
                 && existing.kind == lease.kind
@@ -2249,6 +2258,141 @@ impl SessionStore {
             &json,
         )?;
         Ok(ResourceLeaseCommitDisposition::Acquired)
+    }
+
+    /// Atomically acquire one meshing resource while the accepted task remains
+    /// blocked before solver admission.
+    pub fn commit_preparation_resource_lease(
+        &self,
+        lease: &FmsPreparationResourceLease,
+    ) -> Result<PreparationResourceLeaseCommitDisposition> {
+        lease.validate()?;
+        if lease.state != FmsResourceLeaseState::Active {
+            anyhow::bail!("preparation resource lease acquisition requires active state");
+        }
+        let _writer_lease = self.write_transaction()?;
+        self.validate_preparation_resource_lease_owner_unlocked(lease)?;
+        if self
+            .find_active_resource_lease_unlocked(&lease.resource_id)?
+            .is_some()
+        {
+            anyhow::bail!(
+                "resource `{}` already has an active durable solver lease",
+                lease.resource_id
+            );
+        }
+        if let Some(existing) =
+            self.find_active_preparation_resource_lease_unlocked(&lease.resource_id)?
+        {
+            if existing.identity_matches(lease) && existing.budget == lease.budget {
+                return Ok(PreparationResourceLeaseCommitDisposition::Replayed);
+            }
+            anyhow::bail!(
+                "resource `{}` already has an active durable preparation lease",
+                lease.resource_id
+            );
+        }
+        let relative = lease.relative_path()?;
+        let path = checked_path(&self.root, &relative)?;
+        if path.exists() {
+            anyhow::bail!(
+                "preparation resource lease token path already exists for `{}`",
+                lease.lease_token
+            );
+        }
+        atomic_write(
+            &create_parent(&self.root, &relative)?,
+            &serde_json::to_vec_pretty(lease)?,
+        )?;
+        Ok(PreparationResourceLeaseCommitDisposition::Acquired)
+    }
+
+    pub fn read_preparation_resource_lease(
+        &self,
+        run_id: &str,
+        resource_id: &str,
+        lease_token: &str,
+    ) -> Result<Option<FmsPreparationResourceLease>> {
+        for value in [run_id, resource_id, lease_token] {
+            validate_store_id(value)?;
+        }
+        let relative = format!(
+            "runs/{run_id}/preparation_resource_leases/{resource_id}/{lease_token}.json"
+        );
+        let path = checked_path(&self.root, &relative)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        let lease: FmsPreparationResourceLease = serde_json::from_slice(&fs::read(&path)?)
+            .with_context(|| format!("parsing preparation resource lease {}", path.display()))?;
+        if lease.relative_path()? != relative {
+            anyhow::bail!("preparation resource lease identity does not match its path");
+        }
+        Ok(Some(lease))
+    }
+
+    pub fn heartbeat_preparation_resource_lease(
+        &self,
+        lease: &FmsPreparationResourceLease,
+    ) -> Result<()> {
+        lease.validate()?;
+        if lease.state != FmsResourceLeaseState::Active {
+            anyhow::bail!("preparation resource lease heartbeat requires active state");
+        }
+        let _writer_lease = self.write_transaction()?;
+        self.validate_preparation_resource_lease_owner_unlocked(lease)?;
+        let relative = lease.relative_path()?;
+        let path = checked_path(&self.root, &relative)?;
+        let current: FmsPreparationResourceLease = serde_json::from_slice(&fs::read(&path)?)?;
+        current.validate()?;
+        if !current.identity_matches(lease) || current.budget != lease.budget {
+            anyhow::bail!("preparation resource lease heartbeat ownership fence rejected");
+        }
+        if current.state != FmsResourceLeaseState::Active {
+            anyhow::bail!("preparation resource lease is already released");
+        }
+        if lease.heartbeat_sequence == current.heartbeat_sequence {
+            if lease == &current {
+                return Ok(());
+            }
+            anyhow::bail!("preparation resource lease heartbeat conflicts with durable payload");
+        }
+        if lease.heartbeat_sequence != current.heartbeat_sequence.saturating_add(1) {
+            anyhow::bail!(
+                "preparation resource lease heartbeat sequence must advance by one"
+            );
+        }
+        atomic_write(&path, &serde_json::to_vec_pretty(lease)?)?;
+        Ok(())
+    }
+
+    pub fn release_preparation_resource_lease(
+        &self,
+        lease: &FmsPreparationResourceLease,
+    ) -> Result<()> {
+        lease.validate()?;
+        if lease.state != FmsResourceLeaseState::Active {
+            anyhow::bail!("preparation resource lease release requires active state");
+        }
+        let _writer_lease = self.write_transaction()?;
+        let relative = lease.relative_path()?;
+        let path = checked_path(&self.root, &relative)?;
+        let mut current: FmsPreparationResourceLease = serde_json::from_slice(&fs::read(&path)?)?;
+        current.validate()?;
+        if !current.identity_matches(lease) || current.budget != lease.budget {
+            anyhow::bail!("preparation resource lease release ownership fence rejected");
+        }
+        if current.state == FmsResourceLeaseState::Released {
+            return Ok(());
+        }
+        if current.heartbeat_sequence != lease.heartbeat_sequence {
+            anyhow::bail!("stale preparation resource lease cannot release a newer heartbeat");
+        }
+        current.state = FmsResourceLeaseState::Released;
+        current.released_at = Some(chrono::Utc::now());
+        current.validate()?;
+        atomic_write(&path, &serde_json::to_vec_pretty(&current)?)?;
+        Ok(())
     }
 
     /// Read the active lease for a task whose ownership is already recorded in
@@ -2525,6 +2669,23 @@ impl SessionStore {
         Ok(())
     }
 
+    fn validate_preparation_resource_lease_owner_unlocked(
+        &self,
+        lease: &FmsPreparationResourceLease,
+    ) -> Result<()> {
+        let catalog = self
+            .read_run_catalog(&lease.run_id)?
+            .context("preparation resource lease requires a durable run catalog")?;
+        lease.validate_for_catalog(&catalog)?;
+        if self
+            .read_task_preparation_receipt(&lease.run_id, &lease.task_id)?
+            .is_some()
+        {
+            anyhow::bail!("prepared task cannot acquire or renew a preparation resource lease");
+        }
+        Ok(())
+    }
+
     fn find_active_resource_lease_unlocked(
         &self,
         resource_id: &str,
@@ -2576,6 +2737,74 @@ impl SessionStore {
                     if active.is_some() {
                         anyhow::bail!(
                             "multiple active durable leases found for resource `{resource_id}`"
+                        );
+                    }
+                    active = Some(lease);
+                }
+            }
+        }
+        Ok(active)
+    }
+
+    fn find_active_preparation_resource_lease_unlocked(
+        &self,
+        resource_id: &str,
+    ) -> Result<Option<FmsPreparationResourceLease>> {
+        validate_store_id(resource_id)?;
+        let runs = checked_path(&self.root, "runs")?;
+        if !runs.exists() {
+            return Ok(None);
+        }
+        let mut active = None;
+        for run_entry in fs::read_dir(&runs)? {
+            let run_entry = run_entry?;
+            reject_link(&run_entry.path())?;
+            if !run_entry.file_type()?.is_dir() {
+                anyhow::bail!("unsupported runs entry `{}`", run_entry.path().display());
+            }
+            let run_id = run_entry
+                .file_name()
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("non-UTF8 run identifier"))?;
+            validate_store_id(&run_id)?;
+            let resource_dir = run_entry
+                .path()
+                .join("preparation_resource_leases")
+                .join(resource_id);
+            if !resource_dir.exists() {
+                continue;
+            }
+            reject_link(&resource_dir)?;
+            if !resource_dir.is_dir() {
+                anyhow::bail!("preparation resource lease identity path is not a directory");
+            }
+            for lease_entry in fs::read_dir(&resource_dir)? {
+                let lease_entry = lease_entry?;
+                reject_link(&lease_entry.path())?;
+                if !lease_entry.file_type()?.is_file() {
+                    anyhow::bail!("preparation resource lease entry is not a file");
+                }
+                let file_name = lease_entry
+                    .file_name()
+                    .into_string()
+                    .map_err(|_| anyhow::anyhow!("non-UTF8 preparation lease file name"))?;
+                let lease_token = file_name
+                    .strip_suffix(".json")
+                    .context("preparation resource lease file name must end in .json")?;
+                validate_store_id(lease_token)?;
+                let lease: FmsPreparationResourceLease =
+                    serde_json::from_slice(&fs::read(lease_entry.path())?)?;
+                lease.validate()?;
+                if lease.run_id != run_id
+                    || lease.resource_id != resource_id
+                    || lease.lease_token != lease_token
+                {
+                    anyhow::bail!("preparation resource lease path identity mismatch");
+                }
+                if lease.state == FmsResourceLeaseState::Active {
+                    if active.is_some() {
+                        anyhow::bail!(
+                            "multiple active durable preparation leases found for resource `{resource_id}`"
                         );
                     }
                     active = Some(lease);

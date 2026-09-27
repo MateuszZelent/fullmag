@@ -100,7 +100,7 @@ pub(crate) fn prepare_accepted_fem_task(
         || !matches!(
             &task.readiness,
             FmsTaskReadiness::Blocked { reason }
-                if reason == fullmag_runtime_control::ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION
+                if reason == fullmag_session::FMS_TASK_AWAITING_PREPARATION_REASON
         )
         || task.attempt_id.is_some()
         || task.resource_id.is_some()

@@ -335,13 +335,18 @@ pub(crate) fn materialize_accepted_run_catalog(
             let task_id = fullmag_session::task_id_for_study_step(run_id, &step.step_id)?;
             let input_fingerprint =
                 fullmag_application::study_task_input_fingerprint(specification, step)?;
+            let awaiting_reason = match step.execution_plan.as_ref() {
+                Some(plan) if plan.common.resolved_backend == fullmag_ir::BackendTarget::Fem => {
+                    fullmag_session::FMS_TASK_AWAITING_PREPARATION_REASON
+                }
+                _ => fullmag_runtime_control::ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION,
+            };
             Ok(FmsTaskCatalogEntry {
                 task_id,
                 input_fingerprint,
                 lifecycle: FmsTaskLifecycle::Accepted,
                 readiness: FmsTaskReadiness::Blocked {
-                    reason: fullmag_runtime_control::ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION
-                        .into(),
+                    reason: awaiting_reason.into(),
                 },
                 observation: None,
                 attempt_id: None,

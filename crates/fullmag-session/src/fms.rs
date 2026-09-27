@@ -26,6 +26,7 @@
 //! │     ├─ task_admissions/
 //! │     │  └─ <task_id>/<attempt_id>.json
 //! │     ├─ resource_leases/
+//! │     ├─ preparation_resource_leases/
 //! │     ├─ retry_decisions/
 //! │     ├─ worker_process_exit_receipts/
 //! │     ├─ coordinator_journal/
@@ -427,6 +428,12 @@ fn plan_run_entries(
             }
         }
         plan_resource_lease_entries(store_root, canonical_root, run_id, &mut entries)?;
+        plan_preparation_resource_lease_entries(
+            store_root,
+            canonical_root,
+            run_id,
+            &mut entries,
+        )?;
         plan_task_admission_entries(store_root, canonical_root, run_id, &mut entries)?;
         plan_retry_decision_entries(store_root, canonical_root, run_id, &mut entries)?;
         plan_worker_process_exit_receipt_entries(
@@ -550,6 +557,62 @@ fn plan_retry_decision_entries(
             read_store_file_if_exists(store_root, canonical_root, &decision_entry.path())?
         {
             entries.push(PackEntry { archive_path, data });
+        }
+    }
+    Ok(())
+}
+
+fn plan_preparation_resource_lease_entries(
+    store_root: &Path,
+    canonical_root: &Path,
+    run_id: &str,
+    entries: &mut Vec<PackEntry>,
+) -> Result<()> {
+    let root = store_root
+        .join("runs")
+        .join(run_id)
+        .join("preparation_resource_leases");
+    if !store_source_exists(&root)? {
+        return Ok(());
+    }
+    if !root.is_dir() {
+        bail!(
+            "preparation_resource_leases path is not a directory: {}",
+            root.display()
+        );
+    }
+    for resource_entry in fs::read_dir(&root)? {
+        let resource_entry = resource_entry?;
+        crate::repository_path::reject_link(&resource_entry.path())?;
+        if !resource_entry.file_type()?.is_dir() {
+            bail!("preparation resource lease resource entry is not a directory");
+        }
+        let resource_id = resource_entry.file_name().to_string_lossy().into_owned();
+        crate::repository_path::validate_store_id(&resource_id)?;
+        for lease_entry in fs::read_dir(resource_entry.path())? {
+            let lease_entry = lease_entry?;
+            crate::repository_path::reject_link(&lease_entry.path())?;
+            if !lease_entry.file_type()?.is_file() {
+                bail!("preparation resource lease record is not a file");
+            }
+            let file_name = lease_entry.file_name().to_string_lossy().into_owned();
+            let Some(lease_token) = file_name.strip_suffix(".json") else {
+                bail!("preparation resource lease record must be JSON: `{file_name}`");
+            };
+            crate::repository_path::validate_store_id(lease_token)?;
+            let archive_path = format!(
+                "runs/{run_id}/preparation_resource_leases/{resource_id}/{file_name}"
+            );
+            validate_portable_namespace_path(&archive_path)?;
+            if let Some(data) =
+                read_store_file_if_exists(store_root, canonical_root, &lease_entry.path())?
+            {
+                let lease: crate::FmsPreparationResourceLease = serde_json::from_slice(&data)?;
+                if lease.relative_path()? != archive_path {
+                    bail!("preparation resource lease path identity mismatch");
+                }
+                entries.push(PackEntry { archive_path, data });
+            }
         }
     }
     Ok(())

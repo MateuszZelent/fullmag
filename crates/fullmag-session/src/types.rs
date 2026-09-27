@@ -900,6 +900,8 @@ pub enum FmsTaskReadiness {
     Blocked { reason: String },
 }
 
+pub const FMS_TASK_AWAITING_PREPARATION_REASON: &str = "accepted_task_awaiting_preparation";
+
 impl Default for FmsTaskReadiness {
     fn default() -> Self {
         Self::Ready
@@ -1857,6 +1859,119 @@ impl FmsResourceLease {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceLeaseCommitDisposition {
+    Acquired,
+    Replayed,
+}
+
+pub const FMS_PREPARATION_RESOURCE_LEASE_SCHEMA: &str = "preparation_resource_lease.v1";
+
+/// Durable ownership of one meshing resource while an accepted task remains
+/// blocked before solver admission. This is deliberately separate from
+/// `FmsResourceLease`, whose owner is a claimed solver attempt and epoch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsPreparationResourceLease {
+    pub schema_version: String,
+    pub resource_id: String,
+    pub budget: FmsResourceBudget,
+    pub run_id: String,
+    pub task_id: String,
+    pub preparation_attempt_id: String,
+    pub lease_token: String,
+    pub state: FmsResourceLeaseState,
+    pub acquired_at: DateTime<Utc>,
+    pub heartbeat_at: DateTime<Utc>,
+    pub heartbeat_sequence: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub released_at: Option<DateTime<Utc>>,
+}
+
+impl FmsPreparationResourceLease {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != FMS_PREPARATION_RESOURCE_LEASE_SCHEMA {
+            bail!(
+                "unsupported preparation resource lease schema `{}`",
+                self.schema_version
+            );
+        }
+        for (value, field) in [
+            (self.resource_id.as_str(), "resource_id"),
+            (self.run_id.as_str(), "run_id"),
+            (self.task_id.as_str(), "task_id"),
+            (
+                self.preparation_attempt_id.as_str(),
+                "preparation_attempt_id",
+            ),
+            (self.lease_token.as_str(), "lease_token"),
+        ] {
+            crate::repository_path::validate_store_id(value)
+                .with_context(|| format!("invalid preparation resource lease {field}"))?;
+        }
+        self.budget.validate()?;
+        if self.budget.cpu_millis == 0
+            || self.budget.memory_bytes == 0
+            || self.budget.storage_bytes == 0
+            || self.budget.gpu_memory_bytes != 0
+        {
+            bail!(
+                "preparation meshing resource requires positive CPU, memory, and storage budgets and zero GPU memory"
+            );
+        }
+        match (self.state, self.released_at.is_some()) {
+            (FmsResourceLeaseState::Active, true) => {
+                bail!("active preparation resource lease must not have released_at")
+            }
+            (FmsResourceLeaseState::Released, false) => {
+                bail!("released preparation resource lease requires released_at")
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    pub fn validate_for_catalog(&self, catalog: &FmsRunCatalog) -> Result<()> {
+        if catalog.run_id != self.run_id {
+            bail!("preparation resource lease belongs to another run catalog");
+        }
+        let task = catalog
+            .tasks
+            .iter()
+            .find(|task| task.task_id == self.task_id)
+            .context("preparation resource lease task is missing from the run catalog")?;
+        if task.lifecycle != FmsTaskLifecycle::Accepted
+            || !matches!(
+                &task.readiness,
+                FmsTaskReadiness::Blocked { reason }
+                    if reason == FMS_TASK_AWAITING_PREPARATION_REASON
+            )
+            || task.attempt_id.is_some()
+            || task.ownership_epoch.is_some()
+            || task.resource_id.is_some()
+        {
+            bail!("preparation resource lease requires an unclaimed accepted task awaiting preparation");
+        }
+        Ok(())
+    }
+
+    pub fn identity_matches(&self, other: &Self) -> bool {
+        self.resource_id == other.resource_id
+            && self.run_id == other.run_id
+            && self.task_id == other.task_id
+            && self.preparation_attempt_id == other.preparation_attempt_id
+            && self.lease_token == other.lease_token
+    }
+
+    pub fn relative_path(&self) -> Result<String> {
+        self.validate()?;
+        Ok(format!(
+            "runs/{}/preparation_resource_leases/{}/{}.json",
+            self.run_id, self.resource_id, self.lease_token
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreparationResourceLeaseCommitDisposition {
     Acquired,
     Replayed,
 }

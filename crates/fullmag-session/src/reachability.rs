@@ -14,10 +14,10 @@ use anyhow::{bail, Context, Result};
 use crate::types::{
     ArtifactIndex, BackendStatePayload, CommonSolverState, FieldRole, FmsArtifactCatalog,
     FmsCheckpoint, FmsCoordinatorJournalDirection, FmsExportProfile, FmsPreparationReceipt,
-    FmsResourceLease, FmsRetryDecision, FmsRunCatalog, FmsRunIntent, FmsRunManifest,
-    FmsSchedulerPoolCheckpoint, FmsSchedulerResourcePool, FmsSessionManifest,
-    FmsTaskAdmissionRecord, FmsTaskPreparationReceipt, FmsWorkerProcessExitReceipt,
-    FmsWorkspaceManifest, TensorDescriptor,
+    FmsPreparationResourceLease, FmsResourceLease, FmsRetryDecision, FmsRunCatalog,
+    FmsRunIntent, FmsRunManifest, FmsSchedulerPoolCheckpoint, FmsSchedulerResourcePool,
+    FmsSessionManifest, FmsTaskAdmissionRecord, FmsTaskPreparationReceipt,
+    FmsWorkerProcessExitReceipt, FmsWorkspaceManifest, TensorDescriptor,
 };
 
 /// The same claim-scoped continuity rules apply to stores and portable archives.
@@ -528,6 +528,7 @@ impl StoreWalker {
             }
             self.walk_run_artifacts(&run_entry.path(), &run_id)?;
             self.walk_run_resource_leases(&run_entry.path(), &run_id)?;
+            self.walk_run_preparation_resource_leases(&run_entry.path(), &run_id)?;
             self.walk_run_coordinator_journal(&run_entry.path(), &run_id)?;
             let inbox_root = crate::repository_path::checked_path(
                 &self.root,
@@ -627,6 +628,64 @@ impl StoreWalker {
             decision.validate()?;
             if decision.run_id != run_id || decision.decision_id != decision_id {
                 bail!("retry decision `{relative}` contains mismatched path identity")
+            }
+        }
+        Ok(())
+    }
+
+    fn walk_run_preparation_resource_leases(
+        &mut self,
+        run_dir: &Path,
+        run_id: &str,
+    ) -> Result<()> {
+        let directory = run_dir.join("preparation_resource_leases");
+        if !directory.exists() {
+            return Ok(());
+        }
+        if !directory.is_dir() {
+            bail!(
+                "run preparation_resource_leases path is not a directory: {}",
+                directory.display()
+            )
+        }
+        for resource_entry in read_directory(&directory)? {
+            if resource_entry.file_type()?.is_symlink() || !resource_entry.file_type()?.is_dir() {
+                bail!(
+                    "unsafe preparation resource lease root `{}`",
+                    resource_entry.path().display()
+                )
+            }
+            let resource_id = resource_entry.file_name().to_string_lossy().into_owned();
+            validate_component(&resource_id).with_context(|| {
+                format!("invalid preparation resource lease resource `{resource_id}`")
+            })?;
+            for lease_entry in read_directory(&resource_entry.path())? {
+                if lease_entry.file_type()?.is_symlink() || !lease_entry.file_type()?.is_file() {
+                    bail!(
+                        "unsafe preparation resource lease entry `{}`",
+                        lease_entry.path().display()
+                    )
+                }
+                let file_name = lease_entry.file_name().to_string_lossy().into_owned();
+                let Some(lease_token) = file_name.strip_suffix(".json") else {
+                    bail!("preparation resource lease entry must be JSON: `{file_name}`")
+                };
+                validate_component(lease_token)?;
+                let relative = format!(
+                    "runs/{run_id}/preparation_resource_leases/{resource_id}/{file_name}"
+                );
+                let data = self.read_file(&lease_entry.path(), &relative)?;
+                let lease: FmsPreparationResourceLease = parse_json(&data, &relative)?;
+                lease.validate()?;
+                if lease.run_id != run_id
+                    || lease.resource_id != resource_id
+                    || lease.lease_token != lease_token
+                    || lease.relative_path()? != relative
+                {
+                    bail!(
+                        "preparation resource lease `{relative}` contains mismatched path identity"
+                    )
+                }
             }
         }
         Ok(())
@@ -1414,6 +1473,34 @@ impl<'a> ArchiveWalker<'a> {
             }
         }
 
+        // Preparation may acquire capacity before a solver run manifest
+        // exists. Treat those leases as roots so accepted-run archives cannot
+        // smuggle an unvalidated control document through import preflight.
+        let preparation_lease_marker = "/preparation_resource_leases/";
+        let preparation_lease_runs = self
+            .documents
+            .keys()
+            .filter_map(|name| {
+                let rest = name.strip_prefix("runs/")?;
+                let (run_id, _) = rest.split_once(preparation_lease_marker)?;
+                Some(run_id.to_string())
+            })
+            .collect::<HashSet<_>>();
+        for run_id in preparation_lease_runs {
+            validate_component(&run_id)?;
+            let run_manifest_ref = format!("runs/{run_id}/run_manifest.json");
+            if self.documents.contains_key(&run_manifest_ref) {
+                continue;
+            }
+            let lease_prefix = format!("runs/{run_id}/preparation_resource_leases/");
+            let lease_names = self.documents.keys().cloned().collect::<Vec<_>>();
+            for name in lease_names {
+                if name.starts_with(&lease_prefix) && name.ends_with(".json") {
+                    self.walk_preparation_resource_lease(&name, &run_id)?;
+                }
+            }
+        }
+
         // Export planning may intentionally pass only the selected run
         // entries (without the top-level session manifest).  Checkpoints are
         // still roots in that view and must receive the same traversal.
@@ -1551,6 +1638,14 @@ impl<'a> ArchiveWalker<'a> {
         for name in lease_names {
             if name.starts_with(&lease_prefix) && name.ends_with(".json") {
                 self.walk_resource_lease(&name, expected_run_id)?;
+            }
+        }
+        let preparation_lease_prefix =
+            format!("runs/{expected_run_id}/preparation_resource_leases/");
+        let preparation_lease_names = self.documents.keys().cloned().collect::<Vec<_>>();
+        for name in preparation_lease_names {
+            if name.starts_with(&preparation_lease_prefix) && name.ends_with(".json") {
+                self.walk_preparation_resource_lease(&name, expected_run_id)?;
             }
         }
         let retry_prefix = format!("runs/{expected_run_id}/retry_decisions/");
@@ -1863,6 +1958,53 @@ impl<'a> ArchiveWalker<'a> {
         decision.validate()?;
         if decision.run_id != expected_run_id || decision.decision_id != decision_id {
             bail!("retry decision `{relative}` contains mismatched path identity")
+        }
+        self.report.file_refs.insert(relative.to_string());
+        Ok(())
+    }
+
+    fn walk_preparation_resource_lease(
+        &mut self,
+        relative: &str,
+        expected_run_id: &str,
+    ) -> Result<()> {
+        let Some(data) = self.documents.get(relative) else {
+            return self.report.missing(format!(
+                "archive references missing preparation resource lease `{relative}`"
+            ));
+        };
+        let rest = relative
+            .strip_prefix(&format!(
+                "runs/{expected_run_id}/preparation_resource_leases/"
+            ))
+            .ok_or_else(|| {
+                anyhow::anyhow!("invalid preparation resource lease path `{relative}`")
+            })?;
+        let Some((resource_id, token_file)) = rest.split_once('/') else {
+            bail!("invalid preparation resource lease path `{relative}`")
+        };
+        let Some(lease_token) = token_file.strip_suffix(".json") else {
+            bail!("invalid preparation resource lease path `{relative}`")
+        };
+        if resource_id.is_empty()
+            || resource_id.contains('/')
+            || lease_token.is_empty()
+            || lease_token.contains('/')
+        {
+            bail!("invalid preparation resource lease path `{relative}`")
+        }
+        validate_component(resource_id)?;
+        validate_component(lease_token)?;
+        let lease: FmsPreparationResourceLease = parse_json(data, relative)?;
+        lease.validate()?;
+        if lease.run_id != expected_run_id
+            || lease.resource_id != resource_id
+            || lease.lease_token != lease_token
+            || lease.relative_path()? != relative
+        {
+            bail!(
+                "preparation resource lease `{relative}` contains mismatched path identity"
+            )
         }
         self.report.file_refs.insert(relative.to_string());
         Ok(())
