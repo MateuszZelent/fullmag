@@ -489,3 +489,15 @@ Supervisor i atomowa finalizacja readiness/release pozostają otwarte; process
 E2E i native FEM są `NOT VERIFIED`. P4 pozostaje na **50%**, a cały plan na
 około **49%**. Szczegóły:
 [07-preparation-process-exit-receipt.md](07-preparation-process-exit-receipt.md).
+
+## Atomowa finalizacja preparation exit — 27.09.2026
+
+Commit `51a534fe4` łączy durable exit receipt, preparation receipt i aktywny
+lease. Sukces przesuwa readiness do dependency resolution przed zwolnieniem
+zasobu; awaria zachowuje task oczekujący na przygotowanie. Replay naprawia
+przerwanie między zapisem katalogu i lease, a bezpośredni release po exit
+receipcie jest odrzucany. Source check i diff check przeszły.
+
+Supervisor/process E2E i native FEM pozostają `NOT VERIFIED`. P4 pozostaje na
+**50%**, a cały plan na około **49%**. Szczegóły:
+[08-preparation-exit-finalization.md](08-preparation-exit-finalization.md).

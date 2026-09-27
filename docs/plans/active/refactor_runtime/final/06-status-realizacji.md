@@ -1838,3 +1838,18 @@ Source check session/runtime-control/API i obu binariów oraz diff check:
 readiness/release, process E2E i native FEM pozostają otwarte. **P4 50%, cały
 plan około 49%**. Szczegóły:
 [p4/07-preparation-process-exit-receipt.md](p4/07-preparation-process-exit-receipt.md).
+
+## P4-B — preparation exit finalization — 27.09.2026
+
+Store finalizuje preparation attempt tylko z identycznym durable exit
+receiptem i lease. Sukces wymaga immutable FEM preparation receiptu, zmienia
+readiness na dependency resolution, podnosi rewizję katalogu i dopiero potem
+zwalnia zasób. Awaria pozostawia task w stanie oczekiwania, lecz release nadal
+wymaga exit receiptu. Replay naprawia przerwanie między projekcją katalogu i
+lease; bezpośredni release po trwałym exit jest blokowany.
+
+Source check session/runtime-control/API i obu binariów oraz diff check:
+**PASS**. Testów jednostkowych nie kompilowano. Supervisor, process E2E i
+native FEM pozostają **NOT VERIFIED**. **P4 50%, cały plan około 49%**.
+Szczegóły:
+[p4/08-preparation-exit-finalization.md](p4/08-preparation-exit-finalization.md).
