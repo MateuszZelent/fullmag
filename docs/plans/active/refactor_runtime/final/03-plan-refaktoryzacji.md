@@ -126,6 +126,11 @@ obsługiwana. Nie wolno po cichu pomijać transformacji podczas tworzenia
 
 Brama P4: preparation receipt jest przypięty do runu/receptury i nie może pochodzić z innego draftu. Rollback pozostawia ostatni poprawny artefakt z jego tożsamością; nie promuje niezweryfikowanego kandydata.
 
+Admission kosztownego przygotowania accepted runu opisuje
+[ADR-0037](../../../../adr/0037-accepted-preparation-resource-admission.md).
+Używa osobnego lease i supervisora zasobu `Meshing`; nie przeciąża claimu,
+ownership epoch ani lifecycle workera solvera.
+
 Granica integracji: przygotowanie aktywnej sesji Live jest związane z jej
 epoch, rewizją `SceneDocument` i aktywnym preparation ID. `ProjectRun` pozostaje
 runtime-free i przyjmuje immutable archive/RunIntent/study/catalog. Adapter
