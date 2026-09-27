@@ -87,6 +87,17 @@ pub(crate) enum Command {
         #[arg(long, default_value = "run_output")]
         output_dir: PathBuf,
     },
+    /// Submit an immutable accepted-run request through the public API v2.
+    SubmitRunJson {
+        /// JSON containing archive_base64, RunIntent, StudyPlan, and StudyProblemCatalog.
+        path: PathBuf,
+        /// Fullmag API origin, for example http://127.0.0.1:8000.
+        #[arg(long)]
+        api_url: String,
+        /// Accept the immutable intent without materializing its task catalog.
+        #[arg(long, default_value_t = false)]
+        submit_only: bool,
+    },
     /// Resume an exact FDM CPU checkpoint, including Frozen Spins state.
     ResumeJson {
         /// Canonical ProblemIR JSON used to recreate and validate the plan.

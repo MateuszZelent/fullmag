@@ -283,7 +283,9 @@ statyczna pula dwóch zasobów, rezydentne discovery runu utworzonego po starcie
 schedulera, kontrolowany drain procesu bez limitu tasków oraz monotoniczną
 dynamiczną pulę A → B z zachowaniem aktywnego lease. Lokalny discovery dry-run
 CPU/RAM/storage/VRAM oraz procesowe E2E publikacji, admission, workera FDM CPU i
-zwolnienia dokładnego lease także przechodzą. P5-B pozostaje otwarte do
+zwolnienia dokładnego lease także przechodzą. Produkcyjne CLI wykonuje immutable
+Submit/materialization/readback przez publiczne API v2; legacy `run-json`
+pozostaje bezpośrednią ścieżką do osobnego cutoveru. P5-B pozostaje otwarte do
 priorytetów i backpressure, zdalnego ACK
 oraz dowodu braku równoległego starego workera i zwolnienia urządzenia dla
 pozostałych lane'ów.

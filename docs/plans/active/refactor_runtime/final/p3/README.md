@@ -34,8 +34,9 @@ zapisać checkpointy i zwolnić lease przed statusem `drained`. Snapshot
 członkostwa może podmienić A na B bez odebrania aktywnego lease A. Lokalne
 discovery wykrywa CPU/RAM/storage/VRAM i dzieli wspólną pojemność z jawnymi
 rezerwami. Zarządzane process E2E publikuje ten snapshot, wykonuje admission
-FDM CPU, uruchamia worker i potwierdza zwolnienie dokładnego lease;
-priorytety/backpressure oraz
+FDM CPU, uruchamia worker i potwierdza zwolnienie dokładnego lease. CLI ma
+publiczny transport immutable Submit/materialization/readback; legacy
+`run-json` nadal wymaga cutoveru. Otwarte są priorytety/backpressure oraz
 heartbeat/Stop ACK dla zdalnego transportu. Process E2E pozostałych lane'ów
 również są otwarte. Anulowanie przed uruchomieniem
 workera jest obsłużone trwale i nie wykonuje spawnu procesu potomnego.
@@ -980,3 +981,14 @@ trwały lease wykrytej oferty ma `released` z `released_at`: **PASS**, receipt
 `61dc4f8fb04345e889207ca3aecaa47a`. Snapshot źródeł nie zmienił się w trakcie.
 P3 wynosi **87%**, P5 **72%**, a całość około **44%**. Szczegóły:
 [`53-resource-discovery-process-e2e.md`](53-resource-discovery-process-e2e.md).
+
+## CLI accepted-run przez publiczne API — 27.09.2026
+
+`fullmag submit-run-json` przyjmuje kompletny immutable payload, waliduje
+tożsamości i origin, a następnie wykonuje publiczny Submit, materializację oraz
+readback. Ta sama managed próba przechodzi dalej przez odkrytą pulę, scheduler,
+worker FDM CPU i release lease: **PASS**, receipt
+`3bc1a29aa19c42f396f2cb77ddb710ee`, `source_changed_during_run=false`.
+Legacy `run-json` pozostaje otwarte do osobnego cutoveru. P3 wynosi **88%**, P5
+**74%**, a całość około **45%**. Szczegóły:
+[`54-cli-accepted-run-transport.md`](54-cli-accepted-run-transport.md).

@@ -42,12 +42,13 @@ from verify_session_persistence import toolchain_identity  # noqa: E402
 PROFILE = "windows-project-api-runtime"
 RECEIPT_SCHEMA = "fullmag_resource_discovery_runtime_v1"
 FIXTURE = "tests/fixtures/runtime/resource-discovery-run-v2.json"
-BINARY_NAMES = (
+API_BINARY_NAMES = (
     "fullmag-api",
     "fullmag-api-resource-pool",
     "fullmag-api-accepted-scheduler",
     "fullmag-api-accepted-worker",
 )
+BINARY_NAMES = API_BINARY_NAMES + ("fullmag",)
 
 
 class ResourceDiscoveryRuntimeError(RuntimeError):
@@ -98,6 +99,8 @@ def contained_paths(layout: dict[str, object], invocation_id: str) -> dict[str, 
         "source_after": run_root / "source-snapshot-after.v2.json",
         "cargo_log": run_root / "cargo.log",
         "api_submit_log": run_root / "api-submit.log",
+        "cli_submit_log": run_root / "cli-submit.log",
+        "runtime_request": run_root / "accepted-run-request.json",
         "publisher_log": run_root / "resource-pool.log",
         "scheduler_log": run_root / "scheduler.log",
         "api_result_log": run_root / "api-result.log",
@@ -241,7 +244,7 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
             "state": "preflight",
             "paths": {key: str(value) for key, value in paths.items()},
             "runtime_scope": [
-                "public HTTP Submit and materialization of one immutable RunSpec v2",
+                "fullmag submit-run-json through public HTTP v2 for one immutable RunSpec v2",
                 "local CPU/RAM/storage and optional NVIDIA GPU discovery",
                 "durable resource-pool publication and scheduler admission",
                 "production accepted worker process and exact lease release",
@@ -254,6 +257,7 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
         try:
             fixture, fixture_evidence = load_fixture(repo_root)
             receipt["fixture"] = fixture_evidence
+            write_atomic_json(paths["runtime_request"], fixture)
             run_id = str(fixture_evidence["run_id"])
             project_id = str(fixture["run_intent"]["specification"]["snapshot"]["project_id"])
             run_minimum = fixture["run_intent"]["specification"]["requested_execution"]["minimum_resources"]
@@ -282,7 +286,16 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
             }
 
             cargo = str(tools["cargo"])
-            build_command = [cargo, "build", "--locked", "--offline", "-p", "fullmag-api"]
+            build_command = [
+                cargo,
+                "build",
+                "--locked",
+                "--offline",
+                "-p",
+                "fullmag-api",
+                "-p",
+                "fullmag-cli",
+            ]
             for name in BINARY_NAMES:
                 build_command.extend(["--bin", name])
             receipt["build_command"] = build_command
@@ -334,12 +347,33 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
                     "worktree_state": "dirty" if identity["source_snapshot_dirty"] else "clean",
                 },
             )
-            runs_url = f"{base_url}/v2/persistence/projects/{project_id}/runs"
-            submit_status, submitted = json_request(runs_url, method="POST", payload=fixture)
+            cli_command = [
+                str(binaries["fullmag"]),
+                "submit-run-json",
+                str(paths["runtime_request"]),
+                "--api-url",
+                base_url,
+            ]
+            cli_submit = run_json_process(
+                cli_command,
+                cwd=repo_root,
+                env=env,
+                log_path=paths["cli_submit_log"],
+                timeout=45,
+            )
+            if (
+                cli_submit.get("operation") != "submit_accepted_run"
+                or cli_submit.get("transport") != "public_http_v2"
+                or cli_submit.get("project_id") != project_id
+                or cli_submit.get("run_id") != run_id
+            ):
+                raise ResourceDiscoveryRuntimeError("CLI accepted-run transport identity mismatch")
+            submit_status = cli_submit.get("submit", {}).get("status")
+            submitted = cli_submit.get("submit", {}).get("body", {})
             if submit_status != 201 or submitted.get("disposition") != "accepted" or submitted.get("run_id") != run_id:
-                raise ResourceDiscoveryRuntimeError("public Submit did not accept the expected immutable run")
-            _, materialized = json_request(f"{runs_url}/{run_id}/materialization", method="POST")
-            _, before = json_request(f"{runs_url}/{run_id}")
+                raise ResourceDiscoveryRuntimeError("CLI Submit did not accept the expected immutable run")
+            materialized = cli_submit.get("materialization", {}).get("body", {})
+            before = cli_submit.get("run", {}).get("body", {})
             tasks = before.get("tasks", [])
             if (
                 materialized.get("execution_state") != "pending_preparation"
@@ -352,10 +386,7 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
             receipt["submit"] = {
                 "health": health,
                 "build_identity": build_identity,
-                "status": submit_status,
-                "response": submitted,
-                "materialization": materialized,
-                "before_scheduler": before,
+                "cli": cli_submit,
             }
             receipt["api_submit_exit_code"] = terminate_process(api_process)
             api_process = None

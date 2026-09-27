@@ -1,11 +1,12 @@
 use anyhow::{anyhow, bail, Context, Result};
-use fullmag_application::{DocumentMode, FileProjectRepository, ProjectApplication, ProjectSource};
 use clap::Parser;
+use fullmag_application::{DocumentMode, FileProjectRepository, ProjectApplication, ProjectSource};
 use fullmag_engine::run_reference_exchange_demo;
 use fullmag_ir::{BackendPlanIR, BackendTarget, ProblemIR};
 use serde_json::Value;
 use std::ffi::OsString;
 
+mod accepted_run_transport;
 mod args;
 mod command_bridge;
 mod communication_policy;
@@ -214,6 +215,14 @@ fn main() -> Result<()> {
                 "{}",
                 serde_json::to_string_pretty(&run_json_summary(&result, &output_dir))?
             );
+        }
+        Command::SubmitRunJson {
+            path,
+            api_url,
+            submit_only,
+        } => {
+            let result = accepted_run_transport::submit_run_json(&path, &api_url, submit_only)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Command::ResumeJson {
             path,
@@ -655,6 +664,7 @@ fn is_script_mode(raw_args: &[OsString]) -> bool {
         "validate-json",
         "plan-json",
         "run-json",
+        "submit-run-json",
         "resume-json",
         "resolve-runtime-invocation",
         "session",
