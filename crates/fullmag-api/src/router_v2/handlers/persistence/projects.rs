@@ -44,6 +44,14 @@ fn map_run_store_error(
             "run_store_busy",
             "run storage has an active writer; retry the same request after it completes",
         )
+    } else if let Some(backlog) = error.downcast_ref::<fullmag_session::RunBacklogFull>() {
+        ApiError::too_many_requests_with_code(
+            "run_backlog_full",
+            format!(
+                "accepted run backlog is full ({}/{}); retry after a run reaches a terminal state",
+                backlog.active_run_count, backlog.limit
+            ),
+        )
     } else {
         otherwise(error)
     }
@@ -58,7 +66,8 @@ fn map_run_store_error(
         (status = 201, description = "Durable run intent accepted", body = ProjectRunSubmitResource),
         (status = 200, description = "Identical submit replayed", body = ProjectRunSubmitResource),
         (status = 400, description = "Invalid immutable submission inputs"),
-        (status = 409, description = "Project identity or idempotency conflict")
+        (status = 409, description = "Project identity or idempotency conflict"),
+        (status = 429, description = "Durable non-terminal run backlog is full")
     ),
     tag = "persistence"
 )]
@@ -106,13 +115,14 @@ pub async fn submit_run(
         let store = fullmag_session::SessionStore::open(store_root).map_err(|error| {
             map_run_store_error(error, |error| ApiError::internal(error.to_string()))
         })?;
-        let result = crate::run_intent_persistence::commit_archived_run_intent(
+        let result = crate::run_intent_persistence::commit_archived_run_intent_with_backlog_limit(
             &store,
             &intent,
             &archive,
             &study,
             &catalog,
             &asset_paths,
+            state.submit_backlog_limit,
         );
         if result.is_err()
             && intent.validate().is_ok()

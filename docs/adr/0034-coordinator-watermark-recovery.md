@@ -159,6 +159,13 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
     dependency-ready runów i raportuje peak kolejki oraz liczbę odsuniętych.
     Niematerializowany albo zależnościowo zablokowany run nie zajmuje okna;
     run poza oknem nie jest mutowany.
+27. Publiczny Submit ma dodatni globalny limit nieterminalnych accepted runów,
+    rozstrzygany raz przy starcie API. Idempotentny replay jest rozstrzygany
+    przed admission. Kontrola pojemności i publikacja nowego intentu używają
+    jednego writer locka; pełny backlog zwraca `429/run_backlog_full` bez
+    `run_intent.json`. Brak katalogu i katalog z taskiem nieterminalnym zajmują
+    miejsce. Niepusty katalog zwalnia miejsce dopiero wtedy, gdy wszystkie
+    taski są `Succeeded`, `Failed`, `Cancelled` lub `Interrupted`.
 
 ## Konsekwencje
 
@@ -199,6 +206,10 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
 - Jitter poprawia liveness lokalnej kontencji, lecz nie zastępuje kolejki
   rozproszonej ani nie uprawnia do ponowienia nieidempotentnego side effectu.
   Po przekroczeniu deadline'u store nadal zwraca dokładny błąd fail-closed.
+- Limit publicznego Submitu chroni pojedynczy trwały store przed nieograniczonym
+  backlogiem, lecz nie jest limitem per-project/per-tenant ani rozproszonym
+  quota managerem. Obiekty CAS zweryfikowane przed atomowym admission mogą po
+  `429` pozostać nieosiągalne i podlegają bezpiecznej polityce GC.
 
 ## Obowiązki implementacyjne
 
@@ -270,6 +281,9 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
   dodatnie CPU/RAM/storage, jawny status GPU oraz niepokrywający się podział
   wspólnej pojemności. Osobne process E2E publikuje snapshot, wykonuje admission
   FDM CPU, uruchamia task i wymaga zwolnienia dokładnego lease.
+- Managed próba publicznego Submitu wypełnia limit, wymaga replayu `200`,
+  odmowy nowego payloadu `429` bez intentu, terminalizuje część backlogu i
+  wymaga późniejszego `201` dla dokładnie tego samego odrzuconego payloadu.
 
 ## Migracja i rollback
 
@@ -294,7 +308,7 @@ CPU/RAM/storage/VRAM oraz procesowe E2E publikacji, admission, workera FDM CPU i
 zwolnienia dokładnego lease także przechodzą. Produkcyjne CLI wykonuje immutable
 Submit/materialization/readback przez publiczne API v2; legacy `run-json`
 pozostaje bezpośrednią ścieżką do osobnego cutoveru. Immutable priority i
-lokalne ograniczone okno kolejki mają process E2E dla pięciu runów; P5-B
-pozostaje otwarte do limitu/backpressure publicznego Submitu, zdalnego ACK
-oraz dowodu braku równoległego starego workera i zwolnienia urządzenia dla
-pozostałych lane'ów.
+lokalne ograniczone okno kolejki mają process E2E dla pięciu runów. Atomowy
+limit publicznego Submitu ma osobny dowód `200/429/201` i nie publikuje intentu
+po odmowie. P5-B pozostaje otwarte do zdalnego ACK oraz dowodu braku
+równoległego starego workera i zwolnienia urządzenia dla pozostałych lane'ów.

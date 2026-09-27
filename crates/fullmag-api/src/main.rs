@@ -2450,6 +2450,8 @@ async fn main() {
     let state = Arc::new(AppState {
         repo_root: repo_root.clone(),
         submit_store_root: run_intent_persistence::configured_submit_store_root(&repo_root),
+        submit_backlog_limit: run_intent_persistence::configured_submit_backlog_limit()
+            .expect("accepted run backlog limit configuration must be valid"),
         current_workspace_root,
         current_live_state: Arc::new(RwLock::new(None)),
         current_live_session_transition: Arc::new(Mutex::new(())),

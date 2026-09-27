@@ -36521,6 +36521,9 @@
           },
           "409": {
             "description": "Project identity or idempotency conflict"
+          },
+          "429": {
+            "description": "Durable non-terminal run backlog is full"
           }
         },
         "tags": [

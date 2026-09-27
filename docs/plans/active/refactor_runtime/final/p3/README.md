@@ -37,9 +37,10 @@ rezerwami. Zarządzane process E2E publikuje ten snapshot, wykonuje admission
 FDM CPU, uruchamia worker i potwierdza zwolnienie dokładnego lease. CLI ma
 publiczny transport immutable Submit/materialization/readback; legacy
 `run-json` nadal wymaga cutoveru. Immutable priority steruje kolejnością, a
-ograniczone okno kolejki raportuje lokalne backpressure. Otwarte są limity
-publicznego Submitu oraz heartbeat/Stop ACK dla zdalnego transportu. Process E2E pozostałych lane'ów
-również są otwarte. Anulowanie przed uruchomieniem
+ograniczone okno kolejki raportuje lokalne backpressure. Publiczny Submit ma
+atomowy limit nieterminalnego backlogu i stabilne `429/run_backlog_full`.
+Otwarte są heartbeat/Stop ACK dla zdalnego transportu oraz process E2E
+pozostałych lane'ów. Anulowanie przed uruchomieniem
 workera jest obsłużone trwale i nie wykonuje spawnu procesu potomnego.
 Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`28-one-shot-accepted-worker-process.md`](28-one-shot-accepted-worker-process.md),
@@ -69,7 +70,24 @@ Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`52-local-resource-capacity-discovery.md`](52-local-resource-capacity-discovery.md),
 [`53-resource-discovery-process-e2e.md`](53-resource-discovery-process-e2e.md),
 [`54-cli-accepted-run-transport.md`](54-cli-accepted-run-transport.md) i
-[`55-priority-and-bounded-queue.md`](55-priority-and-bounded-queue.md).
+[`55-priority-and-bounded-queue.md`](55-priority-and-bounded-queue.md) i
+[`56-public-submit-backpressure.md`](56-public-submit-backpressure.md).
+
+## Atomowy limit publicznego Submitu — 27.09.2026
+
+Publiczny Submit egzekwuje teraz globalny limit nieterminalnych accepted runów
+pod tym samym writer lockiem co publikacja intentu. Replay pozostaje dostępny
+przy pełnym backlogu, a nowy payload otrzymuje `429/run_backlog_full` bez
+`run_intent.json`. Pojemność wraca dopiero po terminalnym zakończeniu wszystkich
+tasków niepustego katalogu.
+
+Managed E2E przy limicie `6` potwierdziło `200/replayed`, `429` bez publikacji,
+cztery terminalne wykonania i późniejsze `201/accepted`: **PASS**, receipt
+`407dc187d1b44d2cb8b8c04d4cd5699d`, `source_changed_during_run=false`.
+OpenAPI codegen: **PASS**, receipt `1c4fe9ab6d34414a9e9dcd40b2ba2478`.
+Zdalny heartbeat/Stop ACK, pozostałe lane'y oraz legacy `run-json` cutover
+pozostają otwarte. P3 wynosi **90%**, P5 **78%**, a całość około **47%**.
+Szczegóły: [`56-public-submit-backpressure.md`](56-public-submit-backpressure.md).
 
 ## Ograniczona pula wielu runów — 27.09.2026
 

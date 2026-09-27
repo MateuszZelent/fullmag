@@ -25,6 +25,7 @@ use fullmag_runner::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -110,6 +111,9 @@ pub(crate) struct AppState {
     pub repo_root: PathBuf,
     /// Managed, project-owned run storage resolved before this API starts.
     pub submit_store_root: Option<PathBuf>,
+    /// Global durable bound for accepted runs that have not reached a terminal
+    /// task catalog. Replays do not consume another backlog slot.
+    pub submit_backlog_limit: NonZeroUsize,
     pub current_workspace_root: PathBuf,
     /// Sessionless local-live workspace snapshot used by the root `/` GUI.
     pub current_live_state: Arc<RwLock<Option<SessionStateResponse>>>,

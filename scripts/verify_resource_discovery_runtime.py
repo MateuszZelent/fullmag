@@ -3,9 +3,10 @@
 
 This managed Windows route builds the real CLI, API, resource-pool publisher,
 scheduler, and worker binaries. It submits six immutable RunSpec v2 payloads
-through HTTP, proves strict immutable priority with a bounded queue window,
-publishes discovered host capacity, executes the highest-priority run, and
-requires the exact durable resource lease to be released.
+through HTTP, proves atomic public Submit backpressure and replay, proves
+strict immutable priority with a bounded queue window, publishes discovered
+host capacity, executes the highest-priority runs, and requires each exact
+durable resource lease to be released.
 """
 
 from __future__ import annotations
@@ -41,7 +42,7 @@ from verify_session_persistence import toolchain_identity  # noqa: E402
 
 
 PROFILE = "windows-project-api-runtime"
-RECEIPT_SCHEMA = "fullmag_resource_discovery_runtime_v2"
+RECEIPT_SCHEMA = "fullmag_resource_discovery_runtime_v3"
 FIXTURE = "tests/fixtures/runtime/resource-discovery-run-v2.json"
 API_BINARY_NAMES = (
     "fullmag-api",
@@ -145,6 +146,18 @@ def prioritized_requests(
         intent["specification"]["scheduling_priority"] = priority
         requests.append((label, run_id, priority, request))
     return requests
+
+
+def overload_request(
+    fixture: dict[str, object], identity: str
+) -> tuple[str, str, int, dict[str, object]]:
+    request = json.loads(json.dumps(fixture))
+    run_id = f"950-runtime-{identity}"
+    intent = request["run_intent"]
+    intent["idempotency_key"] = f"resource-discovery-overload-{identity}"
+    intent["specification"]["run_id"] = run_id
+    intent["specification"]["scheduling_priority"] = 1000
+    return "overload", run_id, 1000, request
 
 
 def existing_run_ids(store_root: Path) -> list[str]:
@@ -271,6 +284,7 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
             "paths": {key: str(value) for key, value in paths.items()},
             "runtime_scope": [
                 "fullmag submit-run-json through public HTTP v2 for six immutable RunSpec v2 payloads",
+                "atomic six-run public Submit backlog limit, 429 rejection, and replay while full",
                 "strict immutable scheduling priority and a bounded two-run queue window",
                 "local CPU/RAM/storage and optional NVIDIA GPU discovery",
                 "durable resource-pool publication and scheduler admission",
@@ -285,8 +299,12 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
             fixture, fixture_evidence = load_fixture(repo_root)
             receipt["fixture"] = fixture_evidence
             requests = prioritized_requests(fixture, str(fixture_evidence["identity"]))
+            overload = overload_request(fixture, str(fixture_evidence["identity"]))
             for label, _, _, request in requests:
                 write_atomic_json(paths["run_root"] / f"accepted-run-request-{label}.json", request)
+            write_atomic_json(
+                paths["run_root"] / "accepted-run-request-overload.json", overload[3]
+            )
             project_id = str(fixture["run_intent"]["specification"]["snapshot"]["project_id"])
             run_minimum = fixture["run_intent"]["specification"]["requested_execution"]["minimum_resources"]
             identity = source_identity.capture(repo_root, ignore_non_runtime_dirty=True)
@@ -310,6 +328,7 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
                     "FULLMAG_SOURCE_WORKTREE_STATE": "dirty" if identity["source_snapshot_dirty"] else "clean",
                     "FULLMAG_SOURCE_SNAPSHOT_SHA256": str(identity["source_snapshot_sha256"]),
                     "FULLMAG_DISABLE_STATIC_CONTROL_ROOM": "1",
+                    "FULLMAG_ACCEPTED_RUN_BACKLOG_LIMIT": "6",
                 }
             )
             store_root = Path(env["FULLMAG_RUNS_ROOT"]) / "session-store"
@@ -319,6 +338,8 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
                 "prior_run_count": len(prior_runs),
                 "run_source": "store",
                 "run_ids": [request[1] for request in requests],
+                "overload_run_id": overload[1],
+                "submit_backlog_limit": 6,
                 "max_queued_runs": 2,
                 "max_tasks": 4,
             }
@@ -441,10 +462,46 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
                         "materialized run did not preserve priority and one blocked accepted task"
                     )
                 cli_submits.append(cli_submit)
+            runs_url = f"{base_url}/v2/persistence/projects/{project_id}/runs"
+            replay_status, replay_body = json_request(
+                runs_url, method="POST", payload=requests[0][3]
+            )
+            if (
+                replay_status != 200
+                or not isinstance(replay_body, dict)
+                or replay_body.get("disposition") != "replayed"
+                or replay_body.get("run_id") != requests[0][1]
+            ):
+                raise ResourceDiscoveryRuntimeError(
+                    "idempotent Submit replay was not accepted while the backlog was full"
+                )
+            overload_status, overload_body = json_request(
+                runs_url,
+                method="POST",
+                payload=overload[3],
+                expected_error=429,
+            )
+            if (
+                overload_status != 429
+                or not isinstance(overload_body, dict)
+                or overload_body.get("code") != "run_backlog_full"
+                or (store_root / "runs" / overload[1] / "run_intent.json").exists()
+            ):
+                raise ResourceDiscoveryRuntimeError(
+                    "public Submit backlog did not reject overload before durable intent publication"
+                )
             receipt["submit"] = {
                 "health": health,
                 "build_identity": build_identity,
                 "cli": cli_submits,
+                "backpressure": {
+                    "limit": 6,
+                    "replay_status": replay_status,
+                    "replay": replay_body,
+                    "overload_status": overload_status,
+                    "overload": overload_body,
+                    "intent_published": False,
+                },
             }
             receipt["api_submit_exit_code"] = terminate_process(api_process)
             api_process = None
@@ -534,6 +591,22 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
                 binaries["fullmag-api"], repo_root, env, paths["api_result_log"]
             )
             wait_for_health(result_url, api_process)
+            released_status, released_body = json_request(
+                f"{result_url}/v2/persistence/projects/{project_id}/runs",
+                method="POST",
+                payload=overload[3],
+            )
+            if (
+                released_status != 201
+                or not isinstance(released_body, dict)
+                or released_body.get("disposition") != "accepted"
+                or released_body.get("run_id") != overload[1]
+            ):
+                raise ResourceDiscoveryRuntimeError(
+                    "terminal runs did not release public Submit backlog capacity"
+                )
+            receipt["submit"]["backpressure"]["after_terminal_status"] = released_status
+            receipt["submit"]["backpressure"]["after_terminal"] = released_body
             after_scheduler = {}
             for label, expected_run_id, priority, _ in requests:
                 _, after = json_request(

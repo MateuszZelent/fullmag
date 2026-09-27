@@ -13217,6 +13217,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Durable non-terminal run backlog is full */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     persistence_get_persistence_projects_project_id_runs_run_id: {

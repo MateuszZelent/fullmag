@@ -41,6 +41,6 @@ pub use durability::{
 pub use fms::{
     inspect_fms, pack_fms, pack_fms_file, preflight_fms, unpack_fms, FmsPreflight, PackOptions,
 };
-pub use store::{GcPlan, SessionStore};
+pub use store::{GcPlan, RunBacklogFull, SessionStore};
 pub use types::*;
 pub use writer::{StoreWriterBusy, WriteTransaction};

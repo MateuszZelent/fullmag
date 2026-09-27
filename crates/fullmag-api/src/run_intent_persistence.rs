@@ -3,6 +3,7 @@
 //! invoking this boundary; publication alone does not schedule a worker.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -18,6 +19,25 @@ use fullmag_session::{
     FmsTaskReadiness, PreparationReceiptCommitDisposition, RunIntentCommitDisposition,
     SessionStore, FMS_RUN_CATALOG_SCHEMA,
 };
+
+pub(crate) const DEFAULT_ACCEPTED_RUN_BACKLOG_LIMIT: usize = 256;
+const ACCEPTED_RUN_BACKLOG_LIMIT_ENV: &str = "FULLMAG_ACCEPTED_RUN_BACKLOG_LIMIT";
+
+pub(crate) fn configured_submit_backlog_limit() -> Result<NonZeroUsize> {
+    let value = match std::env::var(ACCEPTED_RUN_BACKLOG_LIMIT_ENV) {
+        Ok(raw) => raw.parse::<usize>().with_context(|| {
+            format!("{ACCEPTED_RUN_BACKLOG_LIMIT_ENV} must be a positive integer")
+        })?,
+        Err(std::env::VarError::NotPresent) => DEFAULT_ACCEPTED_RUN_BACKLOG_LIMIT,
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("read {ACCEPTED_RUN_BACKLOG_LIMIT_ENV} from the process environment")
+            })
+        }
+    };
+    NonZeroUsize::new(value)
+        .with_context(|| format!("{ACCEPTED_RUN_BACKLOG_LIMIT_ENV} must be greater than zero"))
+}
 
 /// Accept only the layout exported by the managed storage resolver. Direct
 /// API launches without that validated environment cannot publish new runs.
@@ -72,6 +92,46 @@ pub(crate) fn commit_archived_run_intent(
     catalog: &StudyProblemCatalog,
     asset_paths: &BTreeMap<String, String>,
 ) -> Result<SubmitReceipt> {
+    commit_archived_run_intent_with_optional_backlog_limit(
+        store,
+        intent,
+        archive_bytes,
+        study,
+        catalog,
+        asset_paths,
+        None,
+    )
+}
+
+pub(crate) fn commit_archived_run_intent_with_backlog_limit(
+    store: &SessionStore,
+    intent: &RunIntent,
+    archive_bytes: &[u8],
+    study: &StudyPlan,
+    catalog: &StudyProblemCatalog,
+    asset_paths: &BTreeMap<String, String>,
+    backlog_limit: NonZeroUsize,
+) -> Result<SubmitReceipt> {
+    commit_archived_run_intent_with_optional_backlog_limit(
+        store,
+        intent,
+        archive_bytes,
+        study,
+        catalog,
+        asset_paths,
+        Some(backlog_limit),
+    )
+}
+
+fn commit_archived_run_intent_with_optional_backlog_limit(
+    store: &SessionStore,
+    intent: &RunIntent,
+    archive_bytes: &[u8],
+    study: &StudyPlan,
+    catalog: &StudyProblemCatalog,
+    asset_paths: &BTreeMap<String, String>,
+    backlog_limit: Option<NonZeroUsize>,
+) -> Result<SubmitReceipt> {
     let opened = FileProjectRepository::new()
         .open(ProjectSource::Bytes {
             display_name: "submitted-project.fms".into(),
@@ -104,13 +164,14 @@ pub(crate) fn commit_archived_run_intent(
             .to_vec();
         asset_payloads.insert(asset.asset_id.clone(), bytes);
     }
-    commit_validated_run_intent(
+    commit_validated_run_intent_with_optional_backlog_limit(
         store,
         intent,
         &opened.envelope,
         study,
         catalog,
         &asset_payloads,
+        backlog_limit,
     )
 }
 
@@ -121,6 +182,26 @@ pub(crate) fn commit_validated_run_intent(
     study: &StudyPlan,
     catalog: &StudyProblemCatalog,
     asset_payloads: &BTreeMap<String, Vec<u8>>,
+) -> Result<SubmitReceipt> {
+    commit_validated_run_intent_with_optional_backlog_limit(
+        store,
+        intent,
+        definition,
+        study,
+        catalog,
+        asset_payloads,
+        None,
+    )
+}
+
+fn commit_validated_run_intent_with_optional_backlog_limit(
+    store: &SessionStore,
+    intent: &RunIntent,
+    definition: &ProjectEnvelope,
+    study: &StudyPlan,
+    catalog: &StudyProblemCatalog,
+    asset_payloads: &BTreeMap<String, Vec<u8>>,
+    backlog_limit: Option<NonZeroUsize>,
 ) -> Result<SubmitReceipt> {
     intent.validate().context("validate typed run intent")?;
     intent.specification.snapshot.verify_envelope(definition)?;
@@ -186,7 +267,10 @@ pub(crate) fn commit_validated_run_intent(
     if durable.payload_sha256 != payload_fingerprint {
         bail!("application and durable run specification fingerprints differ");
     }
-    let disposition = store.commit_run_intent(&durable)?;
+    let disposition = match backlog_limit {
+        Some(limit) => store.commit_run_intent_with_backlog_limit(&durable, limit)?,
+        None => store.commit_run_intent(&durable)?,
+    };
     let (disposition, run_id) = match disposition {
         RunIntentCommitDisposition::Accepted => (
             SubmitDisposition::Accepted,

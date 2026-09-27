@@ -28,6 +28,27 @@ use crate::repository_path::{checked_path, create_parent, reject_link, validate_
 use crate::types::*;
 use crate::writer::{WriteTransaction, Writer};
 
+/// Admission was refused because the durable non-terminal run backlog reached
+/// its configured bound. The check and accepted-intent publication happen
+/// under the same native writer lease.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunBacklogFull {
+    pub active_run_count: usize,
+    pub limit: usize,
+}
+
+impl std::fmt::Display for RunBacklogFull {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "accepted run backlog is full ({}/{})",
+            self.active_run_count, self.limit
+        )
+    }
+}
+
+impl std::error::Error for RunBacklogFull {}
+
 /// The internal session store backed by a directory tree and a CAS.
 pub struct SessionStore {
     root: PathBuf,
@@ -165,6 +186,25 @@ impl SessionStore {
     /// key for another payload fails closed.  The application/coordinator
     /// remains responsible for creating the run manifest and scheduling work.
     pub fn commit_run_intent(&self, intent: &FmsRunIntent) -> Result<RunIntentCommitDisposition> {
+        self.commit_run_intent_with_optional_backlog_limit(intent, None)
+    }
+
+    /// Publish an accepted Submit intent while enforcing a durable bound on
+    /// non-terminal runs. Idempotent replay is resolved before admission, so a
+    /// client can always recover the original acknowledgement while full.
+    pub fn commit_run_intent_with_backlog_limit(
+        &self,
+        intent: &FmsRunIntent,
+        limit: std::num::NonZeroUsize,
+    ) -> Result<RunIntentCommitDisposition> {
+        self.commit_run_intent_with_optional_backlog_limit(intent, Some(limit))
+    }
+
+    fn commit_run_intent_with_optional_backlog_limit(
+        &self,
+        intent: &FmsRunIntent,
+        limit: Option<std::num::NonZeroUsize>,
+    ) -> Result<RunIntentCommitDisposition> {
         intent.validate()?;
         let _lease = self.write_transaction()?;
         if let Some(object_ref) = intent.definition_object_ref.as_deref() {
@@ -205,16 +245,52 @@ impl SessionStore {
             );
         }
 
-        let path = create_parent(
-            &self.root,
-            &format!("runs/{}/run_intent.json", intent.run_id),
-        )?;
+        let relative_path = format!("runs/{}/run_intent.json", intent.run_id);
+        let path = checked_path(&self.root, &relative_path)?;
         if path.exists() {
             anyhow::bail!("run intent path already exists for run `{}`", intent.run_id);
         }
+        if let Some(limit) = limit {
+            let active_run_count = self.active_run_intent_count_unlocked()?;
+            if active_run_count >= limit.get() {
+                return Err(RunBacklogFull {
+                    active_run_count,
+                    limit: limit.get(),
+                }
+                .into());
+            }
+        }
+        let path = create_parent(&self.root, &relative_path)?;
         let json = serde_json::to_vec_pretty(intent)?;
         atomic_write(&path, &json)?;
         Ok(RunIntentCommitDisposition::Accepted)
+    }
+
+    fn active_run_intent_count_unlocked(&self) -> Result<usize> {
+        let mut active_run_count = 0usize;
+        for intent in self.list_run_intents()? {
+            let is_active = match self.read_run_catalog(&intent.run_id)? {
+                None => true,
+                Some(catalog) => {
+                    catalog.tasks.is_empty()
+                        || catalog.tasks.iter().any(|task| {
+                            !matches!(
+                                task.lifecycle,
+                                FmsTaskLifecycle::Succeeded
+                                    | FmsTaskLifecycle::Failed
+                                    | FmsTaskLifecycle::Cancelled
+                                    | FmsTaskLifecycle::Interrupted
+                            )
+                        })
+                }
+            };
+            if is_active {
+                active_run_count = active_run_count
+                    .checked_add(1)
+                    .context("accepted run backlog count overflowed")?;
+            }
+        }
+        Ok(active_run_count)
     }
 
     /// Read the durable accepted intent for one run, if present.
