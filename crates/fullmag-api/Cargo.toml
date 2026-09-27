@@ -32,6 +32,12 @@ name = "fullmag-api-resource-pool"
 path = "src/resource_pool_main.rs"
 
 [[bin]]
+name = "fullmag-api-preparation-resource-pool"
+path = "src/preparation_resource_pool_main.rs"
+test = false
+bench = false
+
+[[bin]]
 name = "fullmag-api-openapi"
 path = "src/main.rs"
 required-features = ["openapi-codegen"]

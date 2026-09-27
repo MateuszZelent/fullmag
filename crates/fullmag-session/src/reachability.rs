@@ -14,10 +14,11 @@ use anyhow::{bail, Context, Result};
 use crate::types::{
     ArtifactIndex, BackendStatePayload, CommonSolverState, FieldRole, FmsArtifactCatalog,
     FmsCheckpoint, FmsCoordinatorJournalDirection, FmsExportProfile, FmsPreparationReceipt,
-    FmsPreparationResourceLease, FmsResourceLease, FmsRetryDecision, FmsRunCatalog,
-    FmsRunIntent, FmsRunManifest, FmsSchedulerPoolCheckpoint, FmsSchedulerResourcePool,
-    FmsSessionManifest, FmsTaskAdmissionRecord, FmsTaskPreparationReceipt,
-    FmsWorkerProcessExitReceipt, FmsWorkspaceManifest, TensorDescriptor,
+    FmsPreparationResourceLease, FmsPreparationResourcePool, FmsResourceLease,
+    FmsRetryDecision, FmsRunCatalog, FmsRunIntent, FmsRunManifest,
+    FmsSchedulerPoolCheckpoint, FmsSchedulerResourcePool, FmsSessionManifest,
+    FmsTaskAdmissionRecord, FmsTaskPreparationReceipt, FmsWorkerProcessExitReceipt,
+    FmsWorkspaceManifest, TensorDescriptor,
 };
 
 /// The same claim-scoped continuity rules apply to stores and portable archives.
@@ -703,7 +704,14 @@ impl StoreWalker {
             }
             let relative = format!("scheduler_pools/{name}");
             let data = self.read_file(&entry.path(), &relative)?;
-            if let Some(pool_id) = name.strip_suffix(".resources.json") {
+            if let Some(pool_id) = name.strip_suffix(".preparation-resources.json") {
+                validate_component(pool_id)?;
+                let pool: FmsPreparationResourcePool = parse_json(&data, &relative)?;
+                pool.validate()?;
+                if pool.pool_id != pool_id {
+                    bail!("preparation resource pool `{relative}` has mismatched path identity");
+                }
+            } else if let Some(pool_id) = name.strip_suffix(".resources.json") {
                 validate_component(pool_id)?;
                 let pool: FmsSchedulerResourcePool = parse_json(&data, &relative)?;
                 pool.validate()?;

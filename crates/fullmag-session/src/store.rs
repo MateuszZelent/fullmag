@@ -475,6 +475,67 @@ impl SessionStore {
         Ok(SchedulerResourcePoolCommitDisposition::Accepted)
     }
 
+    pub fn read_preparation_resource_pool(
+        &self,
+        pool_id: &str,
+    ) -> Result<Option<FmsPreparationResourcePool>> {
+        validate_store_id(pool_id)?;
+        let relative = format!("scheduler_pools/{pool_id}.preparation-resources.json");
+        let path = checked_path(&self.root, &relative)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        reject_link(&path)?;
+        let pool: FmsPreparationResourcePool = serde_json::from_slice(&fs::read(&path)?)
+            .with_context(|| format!("parsing preparation resource pool `{relative}`"))?;
+        pool.validate()?;
+        if pool.pool_id != pool_id {
+            anyhow::bail!("preparation resource pool identity does not match its path");
+        }
+        Ok(Some(pool))
+    }
+
+    pub fn commit_preparation_resource_pool(
+        &self,
+        expected_generation: u64,
+        pool: &FmsPreparationResourcePool,
+    ) -> Result<PreparationResourcePoolCommitDisposition> {
+        pool.validate()?;
+        if pool.generation
+            != expected_generation
+                .checked_add(1)
+                .context("preparation resource pool generation overflow")?
+        {
+            anyhow::bail!("preparation resource pool generation is not contiguous");
+        }
+        let _writer_lease = self.write_transaction()?;
+        let relative = format!(
+            "scheduler_pools/{}.preparation-resources.json",
+            pool.pool_id
+        );
+        let path = create_parent(&self.root, &relative)?;
+        if path.exists() {
+            reject_link(&path)?;
+            let existing: FmsPreparationResourcePool =
+                serde_json::from_slice(&fs::read(&path)?).with_context(|| {
+                    format!("parsing preparation resource pool `{relative}`")
+                })?;
+            existing.validate()?;
+            if existing == *pool {
+                return Ok(PreparationResourcePoolCommitDisposition::Replayed);
+            }
+            if existing.pool_id != pool.pool_id
+                || existing.generation != expected_generation
+            {
+                anyhow::bail!("preparation resource pool compare-and-swap conflict");
+            }
+        } else if expected_generation != 0 {
+            anyhow::bail!("preparation resource pool is missing before update");
+        }
+        atomic_write(&path, &serde_json::to_vec_pretty(pool)?)?;
+        Ok(PreparationResourcePoolCommitDisposition::Accepted)
+    }
+
     fn find_run_intent_unlocked(&self, idempotency_key: &str) -> Result<Option<FmsRunIntent>> {
         let mut found = None;
         for intent in self.list_run_intents()? {
@@ -2313,6 +2374,44 @@ impl SessionStore {
             anyhow::bail!("preparation resource lease acquisition requires active state");
         }
         let _writer_lease = self.write_transaction()?;
+        self.commit_preparation_resource_lease_unlocked(lease)
+    }
+
+    /// Acquire a preparation lease only from the exact durable pool
+    /// generation and offer observed by the admission loop.
+    pub fn commit_preparation_resource_lease_from_pool(
+        &self,
+        pool_id: &str,
+        pool_generation: u64,
+        lease: &FmsPreparationResourceLease,
+    ) -> Result<PreparationResourceLeaseCommitDisposition> {
+        validate_store_id(pool_id)?;
+        lease.validate()?;
+        if lease.state != FmsResourceLeaseState::Active {
+            anyhow::bail!("preparation resource lease acquisition requires active state");
+        }
+        let _writer_lease = self.write_transaction()?;
+        let pool = self
+            .read_preparation_resource_pool(pool_id)?
+            .context("preparation admission requires a durable resource pool")?;
+        if pool.generation != pool_generation {
+            anyhow::bail!("preparation resource pool generation changed before admission");
+        }
+        let offer = pool
+            .resources
+            .iter()
+            .find(|offer| offer.resource_id == lease.resource_id)
+            .context("preparation resource is absent from the selected pool generation")?;
+        if offer.budget != lease.budget {
+            anyhow::bail!("preparation lease budget differs from the durable pool offer");
+        }
+        self.commit_preparation_resource_lease_unlocked(lease)
+    }
+
+    fn commit_preparation_resource_lease_unlocked(
+        &self,
+        lease: &FmsPreparationResourceLease,
+    ) -> Result<PreparationResourceLeaseCommitDisposition> {
         self.validate_preparation_resource_lease_owner_unlocked(lease)?;
         if self
             .find_active_resource_lease_unlocked(&lease.resource_id)?

@@ -508,6 +508,72 @@ pub enum SchedulerResourcePoolCommitDisposition {
     Replayed,
 }
 
+pub const FMS_PREPARATION_RESOURCE_POOL_SCHEMA: &str = "preparation_resource_pool.v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsPreparationResourceOffer {
+    pub resource_id: String,
+    pub budget: FmsResourceBudget,
+}
+
+impl FmsPreparationResourceOffer {
+    pub fn validate(&self) -> Result<()> {
+        crate::repository_path::validate_store_id(&self.resource_id)?;
+        self.budget.validate()?;
+        if self.budget.cpu_millis == 0
+            || self.budget.memory_bytes == 0
+            || self.budget.storage_bytes == 0
+            || self.budget.gpu_memory_bytes != 0
+        {
+            bail!(
+                "preparation resource offer requires positive CPU, memory, and storage budgets and zero GPU memory"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Monotonic membership snapshot for resources allowed to execute accepted-run
+/// preparation. This pool never admits solver workers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsPreparationResourcePool {
+    pub schema_version: String,
+    pub pool_id: String,
+    pub generation: u64,
+    pub resources: Vec<FmsPreparationResourceOffer>,
+}
+
+impl FmsPreparationResourcePool {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != FMS_PREPARATION_RESOURCE_POOL_SCHEMA {
+            bail!(
+                "unsupported preparation resource pool schema `{}`",
+                self.schema_version
+            );
+        }
+        crate::repository_path::validate_store_id(&self.pool_id)?;
+        if self.generation == 0 {
+            bail!("preparation resource pool generation must be positive");
+        }
+        let mut seen = BTreeSet::new();
+        for resource in &self.resources {
+            resource.validate()?;
+            if !seen.insert(resource.resource_id.as_str()) {
+                bail!("preparation resource pool contains a duplicate resource id");
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreparationResourcePoolCommitDisposition {
+    Accepted,
+    Replayed,
+}
+
 /// Schema version for the durable preparation receipt bound to one run.
 pub const FMS_PREPARATION_RECEIPT_SCHEMA: &str = "preparation_receipt.v1";
 /// Schema for an immutable preparation publication scoped to one study task.
