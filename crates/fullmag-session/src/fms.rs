@@ -28,6 +28,7 @@
 //! │     ├─ resource_leases/
 //! │     ├─ preparation_resource_leases/
 //! │     ├─ retry_decisions/
+//! │     ├─ preparation_retry_decisions/
 //! │     ├─ worker_process_exit_receipts/
 //! │     ├─ preparation_process_launches/
 //! │     ├─ preparation_process_exit_receipts/
@@ -438,6 +439,12 @@ fn plan_run_entries(
         )?;
         plan_task_admission_entries(store_root, canonical_root, run_id, &mut entries)?;
         plan_retry_decision_entries(store_root, canonical_root, run_id, &mut entries)?;
+        plan_preparation_retry_decision_entries(
+            store_root,
+            canonical_root,
+            run_id,
+            &mut entries,
+        )?;
         plan_worker_process_exit_receipt_entries(
             store_root,
             canonical_root,
@@ -627,6 +634,54 @@ fn plan_preparation_resource_lease_entries(
                 }
                 entries.push(PackEntry { archive_path, data });
             }
+        }
+    }
+    Ok(())
+}
+
+fn plan_preparation_retry_decision_entries(
+    store_root: &Path,
+    canonical_root: &Path,
+    run_id: &str,
+    entries: &mut Vec<PackEntry>,
+) -> Result<()> {
+    let root = store_root
+        .join("runs")
+        .join(run_id)
+        .join("preparation_retry_decisions");
+    if !store_source_exists(&root)? {
+        return Ok(());
+    }
+    if !root.is_dir() {
+        bail!(
+            "preparation_retry_decisions path is not a directory: {}",
+            root.display()
+        );
+    }
+    for decision_entry in fs::read_dir(&root)? {
+        let decision_entry = decision_entry?;
+        crate::repository_path::reject_link(&decision_entry.path())?;
+        if !decision_entry.file_type()?.is_file() {
+            bail!("preparation retry decision entry is not a file");
+        }
+        let file_name = decision_entry.file_name().to_string_lossy().into_owned();
+        let Some(decision_id) = file_name.strip_suffix(".json") else {
+            bail!("preparation retry decision must be JSON: `{file_name}`");
+        };
+        crate::repository_path::validate_store_id(decision_id)?;
+        let archive_path = format!(
+            "runs/{run_id}/preparation_retry_decisions/{file_name}"
+        );
+        validate_portable_namespace_path(&archive_path)?;
+        if let Some(data) =
+            read_store_file_if_exists(store_root, canonical_root, &decision_entry.path())?
+        {
+            let decision: crate::FmsPreparationRetryDecision = serde_json::from_slice(&data)
+                .context("preparation retry decision is not typed")?;
+            if decision.relative_path()? != archive_path {
+                bail!("preparation retry decision path identity mismatch");
+            }
+            entries.push(PackEntry { archive_path, data });
         }
     }
     Ok(())

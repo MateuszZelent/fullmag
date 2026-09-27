@@ -50,6 +50,12 @@ test = false
 bench = false
 
 [[bin]]
+name = "fullmag-api-preparation-retry"
+path = "src/preparation_retry_main.rs"
+test = false
+bench = false
+
+[[bin]]
 name = "fullmag-api-openapi"
 path = "src/main.rs"
 required-features = ["openapi-codegen"]

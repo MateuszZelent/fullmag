@@ -198,6 +198,7 @@ function Write-StageManifest {
       "bin/fullmag-api-accepted-fem-preparation-supervisor.exe",
       "bin/fullmag-api-accepted-fem-preparation-scheduler.exe",
       "bin/fullmag-api-preparation-resource-pool.exe",
+      "bin/fullmag-api-preparation-retry.exe",
       "bin/fullmag-ui.exe",
       "bin/fullmag-bin.exe"
     )
@@ -221,6 +222,7 @@ function Test-StagedLayout {
     (Join-Path $StageRoot "bin\fullmag-api-accepted-fem-preparation-supervisor.exe"),
     (Join-Path $StageRoot "bin\fullmag-api-accepted-fem-preparation-scheduler.exe"),
     (Join-Path $StageRoot "bin\fullmag-api-preparation-resource-pool.exe"),
+    (Join-Path $StageRoot "bin\fullmag-api-preparation-retry.exe"),
     (Join-Path $StageRoot "bin\fullmag-ui.exe"),
     (Join-Path $StageRoot "web\index.html"),
     (Join-Path $StageRoot "python\site-packages\fullmag\__init__.py"),
@@ -398,6 +400,7 @@ try {
     "fullmag-api-accepted-fem-preparation-supervisor.exe",
     "fullmag-api-accepted-fem-preparation-scheduler.exe",
     "fullmag-api-preparation-resource-pool.exe",
+    "fullmag-api-preparation-retry.exe",
     "fullmag-ui.exe"
   )) {
     $sourceBinary = Join-Path $ReleaseDir $binary

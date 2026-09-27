@@ -55,6 +55,7 @@ require_file "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparer"
 require_file "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparation-supervisor"
 require_file "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparation-scheduler"
 require_file "$BUNDLE_ROOT/bin/fullmag-api-preparation-resource-pool"
+require_file "$BUNDLE_ROOT/bin/fullmag-api-preparation-retry"
 require_file "$BUNDLE_ROOT/lib/libfullmag_fdm.so.0"
 require_file "$BUNDLE_ROOT/web/index.html"
 require_file "$BUNDLE_ROOT/python/bin/python"
@@ -73,6 +74,7 @@ check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparer"
 check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparation-supervisor"
 check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparation-scheduler"
 check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-preparation-resource-pool"
+check_no_missing_ldd "$BUNDLE_ROOT/bin/fullmag-api-preparation-retry"
 check_no_missing_ldd "$BUNDLE_ROOT/lib/libfullmag_fdm.so.0"
 check_no_missing_ldd "$BUNDLE_ROOT/python/bin/python"
 
@@ -86,6 +88,7 @@ check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparer" '$OR
 check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparation-supervisor" '$ORIGIN/../lib'
 check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-accepted-fem-preparation-scheduler" '$ORIGIN/../lib'
 check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-preparation-resource-pool" '$ORIGIN/../lib'
+check_runpath_contains "$BUNDLE_ROOT/bin/fullmag-api-preparation-retry" '$ORIGIN/../lib'
 check_runpath_contains "$BUNDLE_ROOT/lib/libfullmag_fdm.so.0" '$ORIGIN'
 
 if [[ -x "$BUNDLE_ROOT/runtimes/fdm-cuda/bin/fullmag-fdm-cuda-bin" ]]; then

@@ -1752,6 +1752,284 @@ impl SessionStore {
         })
     }
 
+    pub fn commit_preparation_retry_decision(
+        &self,
+        decision: &FmsPreparationRetryDecision,
+    ) -> Result<PreparationRetryDecisionCommitDisposition> {
+        decision.validate()?;
+        let _writer_lease = self.write_transaction()?;
+        let relative = decision.relative_path()?;
+        let path = checked_path(&self.root, &relative)?;
+        if path.exists() {
+            reject_link(&path)?;
+            let existing: FmsPreparationRetryDecision =
+                serde_json::from_slice(&fs::read(&path)?).with_context(|| {
+                    format!("parsing preparation retry decision {}", path.display())
+                })?;
+            existing.validate()?;
+            if existing.relative_path()? != relative {
+                anyhow::bail!("preparation retry decision identity does not match its path");
+            }
+            if existing.same_immutable_payload(decision) {
+                return Ok(PreparationRetryDecisionCommitDisposition::Replayed);
+            }
+            anyhow::bail!(
+                "preparation retry decision `{}` conflicts with the durable payload",
+                decision.decision_id
+            );
+        }
+
+        let catalog = self
+            .read_run_catalog(&decision.run_id)?
+            .context("preparation retry decision requires a durable run catalog")?;
+        let task = catalog
+            .tasks
+            .iter()
+            .find(|task| task.task_id == decision.task_id)
+            .context("preparation retry decision task is missing from the run catalog")?;
+        if task.lifecycle != FmsTaskLifecycle::Accepted
+            || !matches!(
+                &task.readiness,
+                FmsTaskReadiness::Blocked { reason }
+                    if reason == FMS_TASK_AWAITING_PREPARATION_REASON
+            )
+            || task.attempt_id.is_some()
+            || task.ownership_epoch.is_some()
+            || task.resource_id.is_some()
+        {
+            anyhow::bail!("preparation retry decision requires an unclaimed awaiting task");
+        }
+        if self
+            .read_task_preparation_receipt(&decision.run_id, &decision.task_id)?
+            .is_some()
+        {
+            anyhow::bail!("prepared task cannot receive a preparation retry decision");
+        }
+        if self
+            .find_active_preparation_resource_lease_for_task_unlocked(
+                &decision.run_id,
+                &decision.task_id,
+            )?
+            .is_some()
+        {
+            anyhow::bail!("active preparation attempt cannot receive a retry decision");
+        }
+
+        let failed_receipts = self
+            .list_preparation_process_exit_receipts(&decision.run_id)?
+            .into_iter()
+            .filter(|receipt| receipt.task_id == decision.task_id && !receipt.status_success)
+            .collect::<Vec<_>>();
+        let mut failed_attempts = std::collections::BTreeMap::new();
+        for receipt in failed_receipts {
+            if failed_attempts
+                .insert(receipt.preparation_attempt_id.clone(), receipt)
+                .is_some()
+            {
+                anyhow::bail!("preparation task has duplicate failed exit receipts for one attempt");
+            }
+        }
+        let target = failed_attempts
+            .get(&decision.failed_preparation_attempt_id)
+            .context("preparation retry decision does not reference a failed process exit")?;
+        let target_lease = self
+            .read_preparation_resource_lease(
+                &target.run_id,
+                &target.resource_id,
+                &target.lease_token,
+            )?
+            .context("preparation retry decision requires the failed attempt lease")?;
+        if target_lease.state != FmsResourceLeaseState::Released
+            || target_lease.task_id != decision.task_id
+            || target_lease.preparation_attempt_id != decision.failed_preparation_attempt_id
+        {
+            anyhow::bail!("preparation retry decision requires a finalized failed attempt");
+        }
+
+        let mut prior = self
+            .list_preparation_retry_decisions(&decision.run_id)?
+            .into_iter()
+            .filter(|existing| existing.task_id == decision.task_id)
+            .collect::<Vec<_>>();
+        prior.sort_by_key(|existing| existing.retry_sequence);
+        if decision.retry_sequence != prior.len() as u32 + 1
+            || failed_attempts.len() != decision.retry_sequence as usize
+        {
+            anyhow::bail!("preparation retry decision sequence does not match failed attempts");
+        }
+        let mut decided_attempts = std::collections::BTreeSet::new();
+        for (index, existing) in prior.iter().enumerate() {
+            if existing.retry_sequence != index as u32 + 1
+                || existing.max_attempts != decision.max_attempts
+                || !failed_attempts.contains_key(&existing.failed_preparation_attempt_id)
+                || !decided_attempts.insert(existing.failed_preparation_attempt_id.as_str())
+            {
+                anyhow::bail!("preparation retry decision history is inconsistent");
+            }
+        }
+        let undecided = failed_attempts
+            .keys()
+            .filter(|attempt_id| !decided_attempts.contains(attempt_id.as_str()))
+            .collect::<Vec<_>>();
+        if undecided.len() != 1 || undecided[0].as_str() != decision.failed_preparation_attempt_id {
+            anyhow::bail!("preparation retry decision must authorize the only undecided failure");
+        }
+
+        atomic_write(
+            &create_parent(&self.root, &relative)?,
+            &serde_json::to_vec_pretty(decision)?,
+        )?;
+        Ok(PreparationRetryDecisionCommitDisposition::Accepted)
+    }
+
+    pub fn read_preparation_retry_decision(
+        &self,
+        run_id: &str,
+        decision_id: &str,
+    ) -> Result<Option<FmsPreparationRetryDecision>> {
+        validate_store_id(run_id)?;
+        validate_store_id(decision_id)?;
+        let relative = format!(
+            "runs/{run_id}/preparation_retry_decisions/{decision_id}.json"
+        );
+        let path = checked_path(&self.root, &relative)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        reject_link(&path)?;
+        let decision: FmsPreparationRetryDecision = serde_json::from_slice(&fs::read(&path)?)
+            .with_context(|| format!("parsing preparation retry decision {}", path.display()))?;
+        if decision.relative_path()? != relative {
+            anyhow::bail!("preparation retry decision identity does not match its path");
+        }
+        Ok(Some(decision))
+    }
+
+    pub fn list_preparation_retry_decisions(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<FmsPreparationRetryDecision>> {
+        validate_store_id(run_id)?;
+        let directory = checked_path(
+            &self.root,
+            &format!("runs/{run_id}/preparation_retry_decisions"),
+        )?;
+        if !directory.exists() {
+            return Ok(Vec::new());
+        }
+        let mut decisions = Vec::new();
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            if entry.file_type()?.is_symlink() || !entry.file_type()?.is_file() {
+                anyhow::bail!(
+                    "unsafe preparation retry decision entry `{}`",
+                    entry.path().display()
+                );
+            }
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            let decision_id = file_name
+                .strip_suffix(".json")
+                .context("preparation retry decision entry must be JSON")?;
+            validate_store_id(decision_id)?;
+            decisions.push(
+                self.read_preparation_retry_decision(run_id, decision_id)?
+                    .context("listed preparation retry decision disappeared during read")?,
+            );
+        }
+        decisions.sort_by(|left, right| left.decision_id.cmp(&right.decision_id));
+        Ok(decisions)
+    }
+
+    /// Return the retry sequence authorizing the next preparation attempt.
+    /// Sequence zero denotes the initial attempt; `None` means the task is
+    /// waiting for a new explicit retry decision.
+    pub fn preparation_attempt_authorization_sequence(
+        &self,
+        run_id: &str,
+        task_id: &str,
+    ) -> Result<Option<u32>> {
+        validate_store_id(run_id)?;
+        validate_store_id(task_id)?;
+        let _writer_lease = self.write_transaction()?;
+        self.preparation_attempt_authorization_sequence_unlocked(run_id, task_id)
+    }
+
+    fn preparation_attempt_authorization_sequence_unlocked(
+        &self,
+        run_id: &str,
+        task_id: &str,
+    ) -> Result<Option<u32>> {
+        let catalog = self
+            .read_run_catalog(run_id)?
+            .context("preparation attempt authorization requires a durable run catalog")?;
+        let task = catalog
+            .tasks
+            .iter()
+            .find(|task| task.task_id == task_id)
+            .context("preparation attempt authorization task is missing from the run catalog")?;
+        if task.lifecycle != FmsTaskLifecycle::Accepted
+            || !matches!(
+                &task.readiness,
+                FmsTaskReadiness::Blocked { reason }
+                    if reason == FMS_TASK_AWAITING_PREPARATION_REASON
+            )
+            || task.attempt_id.is_some()
+            || task.ownership_epoch.is_some()
+            || task.resource_id.is_some()
+            || self.read_task_preparation_receipt(run_id, task_id)?.is_some()
+            || self
+                .find_active_preparation_resource_lease_for_task_unlocked(run_id, task_id)?
+                .is_some()
+        {
+            return Ok(None);
+        }
+        let failed_receipts = self
+            .list_preparation_process_exit_receipts(run_id)?
+            .into_iter()
+            .filter(|receipt| receipt.task_id == task_id && !receipt.status_success)
+            .collect::<Vec<_>>();
+        let failed_attempts = failed_receipts
+            .iter()
+            .map(|receipt| receipt.preparation_attempt_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        if failed_attempts.len() != failed_receipts.len() {
+            anyhow::bail!("preparation task has duplicate failed exit receipts for one attempt");
+        }
+        let mut decisions = self
+            .list_preparation_retry_decisions(run_id)?
+            .into_iter()
+            .filter(|decision| decision.task_id == task_id)
+            .collect::<Vec<_>>();
+        decisions.sort_by_key(|decision| decision.retry_sequence);
+        if failed_attempts.is_empty() {
+            if decisions.is_empty() {
+                return Ok(Some(0));
+            }
+            anyhow::bail!("preparation retry decisions exist without failed attempts");
+        }
+        if decisions.len() > failed_attempts.len() {
+            anyhow::bail!("preparation retry decision count exceeds failed attempts");
+        }
+        let mut decided_attempts = std::collections::BTreeSet::new();
+        let mut max_attempts = None;
+        for (index, decision) in decisions.iter().enumerate() {
+            decision.validate()?;
+            if decision.retry_sequence != index as u32 + 1
+                || !failed_attempts.contains(&decision.failed_preparation_attempt_id)
+                || !decided_attempts.insert(decision.failed_preparation_attempt_id.as_str())
+                || max_attempts.is_some_and(|value| value != decision.max_attempts)
+            {
+                anyhow::bail!("preparation retry decision history is inconsistent");
+            }
+            max_attempts = Some(decision.max_attempts);
+        }
+        if decisions.len() == failed_attempts.len() {
+            Ok(Some(decisions.len() as u32))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Persist the verified initial coordinator checkpoint before a new claim
     /// is allowed to publish worker commands.
     pub fn commit_coordinator_genesis(
@@ -2888,6 +3166,7 @@ impl SessionStore {
         &self,
         pool_id: &str,
         pool_generation: u64,
+        expected_authorization_sequence: u32,
         lease: &FmsPreparationResourceLease,
     ) -> Result<Option<PreparationResourceLeaseCommitDisposition>> {
         validate_store_id(pool_id)?;
@@ -2926,10 +3205,15 @@ impl SessionStore {
                 && task.ownership_epoch.is_none()
                 && task.resource_id.is_none()
         });
+        let authorization_sequence = self.preparation_attempt_authorization_sequence_unlocked(
+            &lease.run_id,
+            &lease.task_id,
+        )?;
         if !task_available
             || self
                 .read_task_preparation_receipt(&lease.run_id, &lease.task_id)?
                 .is_some()
+            || authorization_sequence != Some(expected_authorization_sequence)
         {
             return Ok(None);
         }
@@ -2976,6 +3260,12 @@ impl SessionStore {
                 "task `{}` already has an active durable preparation lease",
                 lease.task_id
             );
+        }
+        if self
+            .preparation_attempt_authorization_sequence_unlocked(&lease.run_id, &lease.task_id)?
+            .is_none()
+        {
+            anyhow::bail!("preparation attempt requires an explicit retry decision");
         }
         if self
             .find_active_resource_lease_unlocked(&lease.resource_id)?
@@ -4476,6 +4766,190 @@ mod tests {
         assert!(report
             .file_refs
             .contains("scheduler_pools/pool-preparation.preparation.json"));
+    }
+
+    #[test]
+    fn preparation_retry_requires_the_exact_failed_attempt_and_sequence() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(dir.path().join("store")).unwrap();
+        let run_id = "run-preparation-retry";
+        let task_id = "task-preparation-retry";
+        store
+            .commit_run_catalog(&FmsRunCatalog {
+                schema_version: FMS_RUN_CATALOG_SCHEMA.into(),
+                run_id: run_id.into(),
+                revision: 1,
+                updated_at: Utc::now(),
+                tasks: vec![FmsTaskCatalogEntry {
+                    task_id: task_id.into(),
+                    input_fingerprint: "input-preparation-retry".into(),
+                    lifecycle: FmsTaskLifecycle::Accepted,
+                    readiness: FmsTaskReadiness::Blocked {
+                        reason: FMS_TASK_AWAITING_PREPARATION_REASON.into(),
+                    },
+                    observation: None,
+                    attempt_id: None,
+                    ownership_epoch: None,
+                    resolved_input_fingerprint: None,
+                    artifact_ids: Vec::new(),
+                    resource_id: None,
+                    coordinator_watermark: None,
+                    coordinator_genesis: None,
+                }],
+            })
+            .unwrap();
+        let budget = FmsResourceBudget {
+            cpu_millis: 100,
+            memory_bytes: 1024,
+            gpu_memory_bytes: 0,
+            storage_bytes: 4096,
+        };
+        let pool = FmsPreparationResourcePool {
+            schema_version: FMS_PREPARATION_RESOURCE_POOL_SCHEMA.into(),
+            pool_id: "pool-preparation-retry".into(),
+            generation: 1,
+            resources: vec![FmsPreparationResourceOffer {
+                resource_id: "cpu-preparation-retry".into(),
+                budget: budget.clone(),
+            }],
+        };
+        store.commit_preparation_resource_pool(0, &pool).unwrap();
+
+        let now = Utc::now();
+        let first_lease = FmsPreparationResourceLease {
+            schema_version: FMS_PREPARATION_RESOURCE_LEASE_SCHEMA.into(),
+            resource_id: "cpu-preparation-retry".into(),
+            budget: budget.clone(),
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            preparation_attempt_id: "prep-attempt-r0-first".into(),
+            lease_token: "prep-lease-first".into(),
+            state: FmsResourceLeaseState::Active,
+            acquired_at: now,
+            heartbeat_at: now,
+            heartbeat_sequence: 0,
+            released_at: None,
+        };
+        assert_eq!(
+            store
+                .try_commit_preparation_resource_lease_from_pool(
+                    &pool.pool_id,
+                    pool.generation,
+                    0,
+                    &first_lease,
+                )
+                .unwrap(),
+            Some(PreparationResourceLeaseCommitDisposition::Acquired)
+        );
+        let launch = FmsPreparationProcessLaunch {
+            schema_version: FMS_PREPARATION_PROCESS_LAUNCH_SCHEMA.into(),
+            launch_id: "prep-launch-first".into(),
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            preparation_attempt_id: first_lease.preparation_attempt_id.clone(),
+            resource_id: first_lease.resource_id.clone(),
+            lease_token: first_lease.lease_token.clone(),
+            lease_heartbeat_sequence: 0,
+            supervisor_process_id: 41,
+            supervisor_start_token: Some("supervisor-first".into()),
+            created_at: now,
+        };
+        store.commit_preparation_process_launch(&launch).unwrap();
+        let failed_exit = FmsPreparationProcessExitReceipt {
+            schema_version: FMS_PREPARATION_PROCESS_EXIT_RECEIPT_SCHEMA.into(),
+            receipt_id: "prep-exit-first".into(),
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            preparation_attempt_id: first_lease.preparation_attempt_id.clone(),
+            resource_id: first_lease.resource_id.clone(),
+            lease_token: first_lease.lease_token.clone(),
+            lease_heartbeat_sequence: 0,
+            process_id: 42,
+            process_start_token: Some("preparer-first".into()),
+            status_success: false,
+            exit_code: Some(1),
+            timed_out: false,
+            failure_reason: Some("fixture failure".into()),
+            observed_at: now,
+        };
+        store
+            .commit_preparation_process_exit_receipt(&failed_exit)
+            .unwrap();
+        assert_eq!(
+            store.finalize_preparation_process_exit(&failed_exit).unwrap(),
+            PreparationProcessFinalizationDisposition::Failed
+        );
+        assert_eq!(
+            store
+                .preparation_attempt_authorization_sequence(run_id, task_id)
+                .unwrap(),
+            None
+        );
+
+        let decision = FmsPreparationRetryDecision {
+            schema_version: FMS_PREPARATION_RETRY_DECISION_SCHEMA.into(),
+            decision_id: "prep-retry-first".into(),
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            failed_preparation_attempt_id: first_lease.preparation_attempt_id.clone(),
+            retry_sequence: 1,
+            max_attempts: 2,
+            reason: "operator approved one retry".into(),
+            created_at: Utc::now(),
+        };
+        assert_eq!(
+            store.commit_preparation_retry_decision(&decision).unwrap(),
+            PreparationRetryDecisionCommitDisposition::Accepted
+        );
+        let mut replay = decision.clone();
+        replay.created_at += chrono::Duration::seconds(1);
+        assert_eq!(
+            store.commit_preparation_retry_decision(&replay).unwrap(),
+            PreparationRetryDecisionCommitDisposition::Replayed
+        );
+        assert_eq!(
+            store
+                .preparation_attempt_authorization_sequence(run_id, task_id)
+                .unwrap(),
+            Some(1)
+        );
+
+        let second_now = Utc::now();
+        let second_lease = FmsPreparationResourceLease {
+            preparation_attempt_id: "prep-attempt-r1-second".into(),
+            lease_token: "prep-lease-second".into(),
+            acquired_at: second_now,
+            heartbeat_at: second_now,
+            ..first_lease
+        };
+        assert!(store
+            .try_commit_preparation_resource_lease_from_pool(
+                &pool.pool_id,
+                pool.generation,
+                0,
+                &second_lease,
+            )
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store
+                .try_commit_preparation_resource_lease_from_pool(
+                    &pool.pool_id,
+                    pool.generation,
+                    1,
+                    &second_lease,
+                )
+                .unwrap(),
+            Some(PreparationResourceLeaseCommitDisposition::Acquired)
+        );
+        let report = crate::reachability::walk_store_root(
+            store.root(),
+            crate::reachability::ReachabilityMode::Export,
+        )
+        .unwrap();
+        assert!(report.file_refs.contains(
+            "runs/run-preparation-retry/preparation_retry_decisions/prep-retry-first.json"
+        ));
     }
 
     #[test]

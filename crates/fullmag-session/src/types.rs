@@ -1685,6 +1685,85 @@ pub enum PreparationProcessFinalizationDisposition {
     Replayed,
 }
 
+pub const FMS_PREPARATION_RETRY_DECISION_SCHEMA: &str = "preparation_retry_decision.v1";
+
+/// Immutable operator authorization for one additional preparation attempt.
+/// `retry_sequence` counts retries after the initial attempt, while
+/// `max_attempts` includes the initial attempt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsPreparationRetryDecision {
+    pub schema_version: String,
+    pub decision_id: String,
+    pub run_id: String,
+    pub task_id: String,
+    pub failed_preparation_attempt_id: String,
+    pub retry_sequence: u32,
+    pub max_attempts: u32,
+    pub reason: String,
+    pub created_at: DateTime<Utc>,
+}
+
+impl FmsPreparationRetryDecision {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != FMS_PREPARATION_RETRY_DECISION_SCHEMA {
+            bail!(
+                "unsupported preparation retry decision schema `{}`",
+                self.schema_version
+            );
+        }
+        for (value, field) in [
+            (self.decision_id.as_str(), "decision_id"),
+            (self.run_id.as_str(), "run_id"),
+            (self.task_id.as_str(), "task_id"),
+            (
+                self.failed_preparation_attempt_id.as_str(),
+                "failed_preparation_attempt_id",
+            ),
+        ] {
+            crate::repository_path::validate_store_id(value)
+                .with_context(|| format!("invalid preparation retry decision {field}"))?;
+        }
+        if self.retry_sequence == 0 {
+            bail!("preparation retry decision retry_sequence must be positive");
+        }
+        if self.max_attempts < 2 || self.retry_sequence >= self.max_attempts {
+            bail!(
+                "preparation retry decision must authorize an attempt within max_attempts"
+            );
+        }
+        if self.reason.trim().is_empty() || self.reason.len() > 4096 {
+            bail!("preparation retry decision reason is invalid");
+        }
+        Ok(())
+    }
+
+    pub fn relative_path(&self) -> Result<String> {
+        self.validate()?;
+        Ok(format!(
+            "runs/{}/preparation_retry_decisions/{}.json",
+            self.run_id, self.decision_id
+        ))
+    }
+
+    pub fn same_immutable_payload(&self, other: &Self) -> bool {
+        self.schema_version == other.schema_version
+            && self.decision_id == other.decision_id
+            && self.run_id == other.run_id
+            && self.task_id == other.task_id
+            && self.failed_preparation_attempt_id == other.failed_preparation_attempt_id
+            && self.retry_sequence == other.retry_sequence
+            && self.max_attempts == other.max_attempts
+            && self.reason == other.reason
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreparationRetryDecisionCommitDisposition {
+    Accepted,
+    Replayed,
+}
+
 /// Schema version for the durable coordinator message journal.
 pub const FMS_COORDINATOR_JOURNAL_SCHEMA: &str = "coordinator_journal.v1";
 

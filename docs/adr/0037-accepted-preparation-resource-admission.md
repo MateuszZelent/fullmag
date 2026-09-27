@@ -72,6 +72,14 @@ kontraktu; solverowa pula celowo przyjmuje tylko CPU/GPU.
 11. Lane FEM GPU pozostaje osobną kwalifikacją. Sukces meshowania na CPU nie
     rozstrzyga requested/resolved urządzenia solvera ani nie uprawnia do
     fallbacku GPU→CPU.
+12. Failed preparation nie jest automatycznie ponawiane. Operator publikuje
+    immutable `preparation_retry_decision.v1`, przypięte do dokładnego failed
+    `preparation_attempt_id`, monotonicznego numeru retry i stałego limitu
+    wszystkich prób. Decyzja jest dozwolona dopiero po trwałym exit receipcie i
+    zwolnieniu dokładnego lease. Scheduler dopuszcza następną próbę wyłącznie,
+    gdy każdy dotychczasowy failed attempt ma jedną decyzję; kolejna awaria
+    ponownie blokuje task. Zwiększenie limitu po pierwszej decyzji jest
+    odrzucane.
 
 ## Konsekwencje
 
@@ -87,6 +95,10 @@ kontraktu; solverowa pula celowo przyjmuje tylko CPU/GPU.
   producer ponownie.
 - Model nie jest schedulerem HPC ani gwarancją limitów OS. Budżet i lease są
   admission/provenance; egzekwowanie limitów procesu wymaga osobnej warstwy.
+- Retry preparation pozostawia pełny łańcuch wcześniejszych attemptów i ich
+  exit receiptów. Decyzja nie usuwa artefaktów, nie zmienia RunSpec i nie
+  autoryzuje solvera; jedynie otwiera admission jednego kolejnego preparation
+  attemptu w ramach ustalonego limitu.
 
 ## Weryfikacja
 
@@ -98,6 +110,9 @@ kontraktu; solverowa pula celowo przyjmuje tylko CPU/GPU.
   preparation attempt są odrzucane.
 - Crash przed exit receiptem zachowuje lease. Recovery z poprawnym receiptem
   finalizuje dokładnie raz; utrata ACK nie wykonuje native producer'a drugi raz.
+- Retry bez failed exit, przed zwolnieniem lease, dla już zdecydowanego attemptu,
+  z luką sekwencji albo ponad `max_attempts` jest odrzucane. Po nowej awarii
+  wcześniejsza decyzja nie autoryzuje kolejnej próby.
 - Solver scheduler nie wybiera FEM taska przed finalizacją przygotowania, a po
   finalizacji otrzymuje ten sam immutable receipt.
 - Managed FEM CPU E2E obejmuje Submit → preparation admission → native

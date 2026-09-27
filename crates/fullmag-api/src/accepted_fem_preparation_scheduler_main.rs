@@ -36,6 +36,7 @@ struct PreparationCandidate {
     run_id: String,
     task_id: String,
     priority: i32,
+    authorization_sequence: u32,
 }
 
 struct ActivePreparation {
@@ -355,12 +356,6 @@ fn preparation_candidates(
         let Some(catalog) = store.read_run_catalog(&intent.run_id)? else {
             continue;
         };
-        let failed_tasks = store
-            .list_preparation_process_exit_receipts(&intent.run_id)?
-            .into_iter()
-            .filter(|receipt| !receipt.status_success)
-            .map(|receipt| receipt.task_id)
-            .collect::<BTreeSet<_>>();
         for task in catalog.tasks {
             if task.lifecycle == FmsTaskLifecycle::Accepted
                 && matches!(
@@ -371,15 +366,20 @@ fn preparation_candidates(
                 && task.attempt_id.is_none()
                 && task.ownership_epoch.is_none()
                 && task.resource_id.is_none()
-                && !failed_tasks.contains(&task.task_id)
                 && store
                     .read_task_preparation_receipt(&intent.run_id, &task.task_id)?
                     .is_none()
             {
+                let Some(authorization_sequence) = store
+                    .preparation_attempt_authorization_sequence(&intent.run_id, &task.task_id)?
+                else {
+                    continue;
+                };
                 candidates.push(PreparationCandidate {
                     run_id: intent.run_id.clone(),
                     task_id: task.task_id,
                     priority: specification.scheduling_priority,
+                    authorization_sequence,
                 });
             }
         }
@@ -457,7 +457,11 @@ fn admit_candidate(
             budget: offer.budget.clone(),
             run_id: candidate.run_id.clone(),
             task_id: candidate.task_id.clone(),
-            preparation_attempt_id: format!("prep-attempt-{}", uuid::Uuid::new_v4()),
+            preparation_attempt_id: format!(
+                "prep-attempt-r{}-{}",
+                candidate.authorization_sequence,
+                uuid::Uuid::new_v4()
+            ),
             lease_token: format!("prep-lease-{}", uuid::Uuid::new_v4()),
             state: FmsResourceLeaseState::Active,
             acquired_at: now,
@@ -466,7 +470,12 @@ fn admit_candidate(
             released_at: None,
         };
         if retry_store_writer_busy(|| {
-            store.try_commit_preparation_resource_lease_from_pool(pool_id, pool_generation, &lease)
+            store.try_commit_preparation_resource_lease_from_pool(
+                pool_id,
+                pool_generation,
+                candidate.authorization_sequence,
+                &lease,
+            )
         })?
         .is_some()
         {

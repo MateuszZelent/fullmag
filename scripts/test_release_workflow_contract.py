@@ -89,6 +89,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "fullmag-api-accepted-fem-preparation-supervisor",
             "fullmag-api-accepted-fem-preparation-scheduler",
             "fullmag-api-preparation-resource-pool",
+            "fullmag-api-preparation-retry",
         )
         for binary in packaged_binaries:
             with self.subTest(binary=binary):
