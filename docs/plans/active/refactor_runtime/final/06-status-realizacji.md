@@ -1885,3 +1885,17 @@ Source check supervisora i preparera, rustfmt nowych plików oraz diff check:
 process E2E i native FEM pozostają **NOT VERIFIED**. **P4 50%, cały plan około
 49%**. Szczegóły:
 [p4/10-accepted-fem-preparation-supervisor.md](p4/10-accepted-fem-preparation-supervisor.md).
+
+## P4-B — atomowy preparation admission i scheduler — 28.09.2026
+
+Store atomowo rezerwuje task i resource z dokładnej generacji puli, odrzuca
+drugi aktywny lease tego samego taska i udostępnia typowaną listę aktywnych
+preparation lease do recovery. Rezydentny scheduler wykrywa accepted taski,
+respektuje immutable priority, pulę i bounded concurrency, odzyskuje aktywne
+lease, uruchamia supervisor oraz wykonuje drain po sygnale. Failed exit nie
+powoduje automatycznej pętli retry.
+
+Source check session i czterech binariów, rustfmt schedulera oraz diff check:
+**PASS**. Testów jednostkowych nie kompilowano. Managed scheduler/process/native
+FEM E2E pozostaje **NOT VERIFIED**. **P4 50%, cały plan około 49%**. Szczegóły:
+[p4/11-preparation-admission-scheduler.md](p4/11-preparation-admission-scheduler.md).

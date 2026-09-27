@@ -532,3 +532,19 @@ zakazem. Rezydentny scheduler, managed process E2E i native FEM pozostają
 `NOT VERIFIED`. P4 pozostaje na **50%**, a cały plan na około **49%**.
 Szczegóły:
 [10-accepted-fem-preparation-supervisor.md](10-accepted-fem-preparation-supervisor.md).
+
+## Atomowy admission i scheduler preparacji — 28.09.2026
+
+Commity `82ce8ed84` i `9846e5736` domykają wyścig task+resource oraz dodają
+`fullmag-api-accepted-fem-preparation-scheduler`. Store zwraca `None` przy
+zwykłym braku admission, lecz zachowuje fail-closed dla niezgodnej
+generacji lub oferty. Scheduler odkrywa accepted taski i aktywne lease,
+respektuje priorytet, generacyjną pulę i limit równoległości, odzyskuje lease po
+restarcie, uruchamia supervisor oraz wykonuje graceful drain.
+
+Trwały failed exit blokuje automatyczne ponowienie, aby native failure nie
+tworzył pętli. Source check czterech binariów i session, rustfmt schedulera oraz
+diff check przeszły. Testów jednostkowych nie kompilowano. Managed
+scheduler/process/native FEM E2E pozostaje `NOT VERIFIED`; P4 pozostaje na
+**50%**, a cały plan na około **49%**. Szczegóły:
+[11-preparation-admission-scheduler.md](11-preparation-admission-scheduler.md).
