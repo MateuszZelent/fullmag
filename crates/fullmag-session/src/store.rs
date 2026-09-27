@@ -725,8 +725,50 @@ impl SessionStore {
         receipt: &FmsTaskPreparationReceipt,
     ) -> Result<PreparationReceiptCommitDisposition> {
         receipt.validate()?;
-        let relative = receipt.relative_path()?;
         let _lease = self.write_transaction()?;
+        self.commit_task_preparation_receipt_unlocked(receipt)
+    }
+
+    /// Publish an accepted-run preparation receipt only while the exact
+    /// preparation attempt owns an active durable meshing lease.
+    pub fn commit_task_preparation_receipt_with_preparation_lease(
+        &self,
+        receipt: &FmsTaskPreparationReceipt,
+        resource_id: &str,
+        preparation_attempt_id: &str,
+        lease_token: &str,
+    ) -> Result<PreparationReceiptCommitDisposition> {
+        receipt.validate()?;
+        for value in [resource_id, preparation_attempt_id, lease_token] {
+            validate_store_id(value)?;
+        }
+        let _writer_lease = self.write_transaction()?;
+        let lease = self
+            .read_preparation_resource_lease(&receipt.run_id, resource_id, lease_token)?
+            .context("preparation receipt publication requires a durable resource lease")?;
+        if lease.task_id != receipt.task_id
+            || lease.preparation_attempt_id != preparation_attempt_id
+            || lease.state != FmsResourceLeaseState::Active
+        {
+            anyhow::bail!(
+                "preparation receipt publication is not owned by the active preparation lease"
+            );
+        }
+        if self
+            .read_task_preparation_receipt(&receipt.run_id, &receipt.task_id)?
+            .is_some()
+        {
+            return self.commit_task_preparation_receipt_unlocked(receipt);
+        }
+        self.validate_preparation_resource_lease_owner_unlocked(&lease)?;
+        self.commit_task_preparation_receipt_unlocked(receipt)
+    }
+
+    fn commit_task_preparation_receipt_unlocked(
+        &self,
+        receipt: &FmsTaskPreparationReceipt,
+    ) -> Result<PreparationReceiptCommitDisposition> {
+        let relative = receipt.relative_path()?;
         let catalog = self
             .read_run_catalog(&receipt.run_id)?
             .context("task preparation receipt requires a durable run catalog")?;

@@ -5,8 +5,8 @@ use fullmag_application::{RunId, RunSpecification};
 use fullmag_ir::{BackendPlanIR, BackendTarget};
 use fullmag_plan::StudyStepLoweringStatus;
 use fullmag_session::{
-    FmsTaskLifecycle, FmsTaskPreparationReceipt, FmsTaskReadiness,
-    PreparationReceiptCommitDisposition, SessionStore,
+    FmsResourceLeaseState, FmsTaskLifecycle, FmsTaskPreparationReceipt,
+    FmsTaskReadiness, PreparationReceiptCommitDisposition, SessionStore,
 };
 
 #[derive(Debug)]
@@ -26,11 +26,20 @@ pub(crate) fn prepare_accepted_fem_task(
     store: &SessionStore,
     run_id: &str,
     task_id: &str,
+    resource_id: &str,
+    preparation_attempt_id: &str,
+    lease_token: &str,
 ) -> Result<AcceptedFemPreparationResult> {
     fullmag_session::repository_path::validate_store_id(run_id)
         .context("accepted FEM preparer run id is invalid")?;
     fullmag_session::repository_path::validate_store_id(task_id)
         .context("accepted FEM preparer task id is invalid")?;
+    fullmag_session::repository_path::validate_store_id(resource_id)
+        .context("accepted FEM preparer resource id is invalid")?;
+    fullmag_session::repository_path::validate_store_id(preparation_attempt_id)
+        .context("accepted FEM preparer attempt id is invalid")?;
+    fullmag_session::repository_path::validate_store_id(lease_token)
+        .context("accepted FEM preparer lease token is invalid")?;
     let run_id =
         RunId::parse(run_id.to_owned()).map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let intent = store
@@ -55,6 +64,14 @@ pub(crate) fn prepare_accepted_fem_task(
         .iter()
         .find(|task| task.task_id == task_id)
         .context("accepted FEM preparation task is missing from the run catalog")?;
+    let preparation_lease = store
+        .read_preparation_resource_lease(run_id.as_str(), resource_id, lease_token)?
+        .context("accepted FEM preparation resource lease is missing")?;
+    if preparation_lease.task_id != task_id
+        || preparation_lease.preparation_attempt_id != preparation_attempt_id
+    {
+        bail!("accepted FEM preparation lease belongs to another task attempt");
+    }
 
     let step = accepted
         .lowered
@@ -107,6 +124,9 @@ pub(crate) fn prepare_accepted_fem_task(
     {
         bail!("new accepted FEM preparation requires an unclaimed accepted task");
     }
+    if preparation_lease.state != FmsResourceLeaseState::Active {
+        bail!("new accepted FEM preparation requires an active resource lease");
+    }
 
     let native = produce_native_fem_evidence(&fem_plan.mesh, fem_plan.fe_order)?;
     let preparation_id = format!("prep-{task_id}");
@@ -129,7 +149,12 @@ pub(crate) fn prepare_accepted_fem_task(
         payload,
     )?;
     let replayed = matches!(
-        store.commit_task_preparation_receipt(&durable)?,
+        store.commit_task_preparation_receipt_with_preparation_lease(
+            &durable,
+            resource_id,
+            preparation_attempt_id,
+            lease_token,
+        )?,
         PreparationReceiptCommitDisposition::Replayed
     );
     let verified = accepted
