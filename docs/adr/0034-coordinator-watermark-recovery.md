@@ -138,6 +138,13 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
     lease i nie odłącza workera. Zmiana rodzaju lub budżetu aktywnego zasobu,
     cofnięcie generacji, zmiana payloadu bez nowej generacji albo zniknięcie już
     opublikowanej puli kończą usługę fail-closed.
+24. `run_spec.v2` wiąże requested execution z jawnym
+    `minimum_resources` dla CPU, RAM, VRAM i storage. CPU wymaga zerowego
+    VRAM, GPU dodatniego VRAM, a wszystkie warianty dodatnich CPU, RAM i
+    storage. Scheduler porównuje pełny budżet oraz klasę urządzenia przed
+    pierwszą mutacją queue/claim/admission. Niespełniająca oferta pozostawia
+    task w dotychczasowym stanie. `run_spec.v1` pozostaje czytelny bez tego
+    pola, ale nie może go zawierać; nowe zapisy używają wyłącznie v2.
 
 ## Konsekwencje
 
@@ -167,10 +174,11 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
   Brak limitu tasków jest bezpieczny wyłącznie w trybie rezydentnym z obsługą
   sygnału. Trwały snapshot członkostwa nie jest automatycznym discovery hostów,
   polityką priorytetów, backpressure ani rozproszonym lock managerem.
-- Poprawny kształt budżetu jest warunkiem admission, ale nie określa jeszcze
-  minimalnego zapotrzebowania konkretnego taska, nie sumuje obciążenia wielu
-  tasków i nie dowodzi egzekwowania limitów przez system operacyjny, kontener
-  ani urządzenie GPU.
+- `run_spec.v2` określa minimalne zapotrzebowanie przyjętego runu, a scheduler
+  odrzuca zbyt małą ofertę przed mutacją taska. Kontrakt nie sumuje obciążenia
+  wielu tasków i nie dowodzi egzekwowania limitów przez system operacyjny,
+  kontener ani urządzenie GPU. Legacy `run_spec.v1` zachowuje poprzednie
+  zachowanie i nie jest automatycznie wzbogacany przez zgadywanie wymagań.
 - Jitter poprawia liveness lokalnej kontencji, lecz nie zastępuje kolejki
   rozproszonej ani nie uprawnia do ponowienia nieidempotentnego side effectu.
   Po przekroczeniu deadline'u store nadal zwraca dokładny błąd fail-closed.
@@ -237,6 +245,10 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
   przyjęcia drugiego taska na B, terminalnego sukcesu obu tasków i braku
   aktywnych lease'ów. Osobne regresje zachowują statyczną pulę i resident run
   discovery.
+- Regresje `run_spec.v2` sprawdzają obowiązkowe minima, zgodność CPU/GPU oraz
+  odczyt legacy v1. Regresje schedulera sprawdzają każdy zbyt mały wymiar,
+  brak mutacji taska po odmowie i późniejsze wykonanie przez wystarczającą
+  ofertę.
 
 ## Migracja i rollback
 
@@ -248,8 +260,11 @@ przeprowadzać migracji przez zgadywanie stanu pustego journalu.
 ## Walidacja i status
 
 Source/contract gates są oddzielone od procesu workera i kwalifikacji solvera.
-Testy integracyjne wymagają managed build runnera. Pełne lokalne process E2E
-sukcesu, anulowania żywego procesu, anulowania przed spawnem i orphan recovery
+Testy integracyjne wymagają managed build runnera. Kontrakt `run_spec.v2`,
+scheduler i readback OpenAPI przechodzą source-only check; zapisane regresje
+minimum zasobów pozostają `NOT RUN` podczas aktywnego zakazu kompilowania testów
+jednostkowych. Pełne lokalne process E2E sukcesu, anulowania żywego procesu,
+anulowania przed spawnem i orphan recovery
 sprzed decyzji ograniczonego FDM CPU przechodzą. Przechodzą również bounded
 statyczna pula dwóch zasobów, rezydentne discovery runu utworzonego po starcie
 schedulera, kontrolowany drain procesu bez limitu tasków oraz monotoniczną

@@ -939,3 +939,18 @@ Procesowe E2E przechodzi sekwencję pusta pula → A → B, usuwa A podczas
 Kontrakt dystrybucji publikatora ma **12/12 PASS**. P3 wynosi **84%**, P5
 **64%**, a całość około **42%**. Szczegóły:
 [`50-dynamic-resource-pool.md`](50-dynamic-resource-pool.md).
+
+## Minimalne wymagania zasobowe runu — 27.09.2026
+
+`run_spec.v2` dodaje obowiązkowe `requested_execution.minimum_resources` dla
+CPU, RAM, VRAM i storage. Legacy `run_spec.v1` pozostaje czytelny bez pola.
+Scheduler odrzuca niewystarczającą lub niezgodną klasą urządzenia ofertę przed
+queue/claim/admission, a OpenAPI v2 zwraca minima w odczycie runu i liście
+runów.
+
+Source-only check API **PASS**, receipt `206be62e3e324810874101b74477cb2c`;
+OpenAPI/types/client, Control Room typecheck i API hygiene **PASS**. Regresje
+Rust oraz process E2E są zapisane lub wyspecyfikowane, lecz **NOT RUN** podczas
+aktywnego zakazu kompilowania testów jednostkowych. P3 wynosi **85%**, P5
+**65%**, a całość około **42%**. Szczegóły:
+[`51-task-resource-requirements.md`](51-task-resource-requirements.md).
