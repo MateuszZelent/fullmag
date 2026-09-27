@@ -463,3 +463,16 @@ managed native/process E2E pozostają `NOT VERIFIED`.
 Pula, admission, supervisor, exit receipt i recovery pozostają otwarte. P4
 pozostaje na **50%**, a cały plan na około **49%**. Szczegóły:
 [05-lease-fenced-fem-receipt.md](05-lease-fenced-fem-receipt.md).
+
+## Preparation resource pool — 27.09.2026
+
+Commit `dcf2f1334` dodaje oddzielny `preparation_resource_pool.v1`, generacyjny
+CAS i publisher ofert Meshing. Atomowe acquisition lease ponownie sprawdza pod
+writer lockiem pool_id, generację, resource_id i budżet, a potem stosuje
+istniejącą globalną wyłączność względem solvera. Source check obu binariów,
+format nowego pliku i diff check przeszły.
+
+Rezydentny scheduler, supervisor, exit receipt i recovery pozostają otwarte;
+managed process/native FEM E2E jest `NOT VERIFIED`. P4 pozostaje na **50%**, a
+cały plan na około **49%**. Szczegóły:
+[06-preparation-resource-pool.md](06-preparation-resource-pool.md).

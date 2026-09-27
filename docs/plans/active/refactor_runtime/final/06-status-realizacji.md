@@ -1810,3 +1810,17 @@ nie kompilowano zgodnie z zakazem; managed native FEM i process E2E są **NOT
 VERIFIED**. Pula, admission, supervisor, exit receipt, recovery i finalizacja
 readiness pozostają otwarte. **P4 50%, cały plan około 49%**. Szczegóły:
 [p4/05-lease-fenced-fem-receipt.md](p4/05-lease-fenced-fem-receipt.md).
+
+## P4-B — preparation resource pool — 27.09.2026
+
+Osobny `preparation_resource_pool.v1` przechowuje generacyjny snapshot ofert
+Meshing z dodatnimi CPU/RAM/storage i zerowym VRAM. Publisher obsługuje jawne
+oferty, pustą pulę, dry-run i CAS. Admission preparation lease atomowo
+sprawdza trwałą generację, resource_id i budżet przed kontrolą taska oraz
+globalnej wyłączności z solverem.
+
+Source check session/API, publishera i preparera, format nowego binarium oraz
+diff check: **PASS**. Testów jednostkowych nie kompilowano; managed process i
+native FEM E2E są **NOT VERIFIED**. Scheduler, supervisor, exit receipt i
+recovery pozostają otwarte. **P4 50%, cały plan około 49%**. Szczegóły:
+[p4/06-preparation-resource-pool.md](p4/06-preparation-resource-pool.md).
