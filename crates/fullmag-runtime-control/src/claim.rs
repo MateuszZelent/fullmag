@@ -177,6 +177,7 @@ pub(crate) fn claimed_task_resource_compatibility(
     Ok(solver_resource_compatibility(
         &specification.requested_execution.device,
         &claim.lease.kind,
+        &claim.lease.budget,
         planned_device,
     )?)
 }
@@ -191,6 +192,7 @@ fn validate_claimed_task_resource(store: &SessionStore, claim: &TaskClaim) -> Re
 fn solver_resource_compatibility(
     requested_device: &str,
     resource_kind: &ResourceKind,
+    resource_budget: &ResourceBudget,
     planned_device: Option<ExecutionDevice>,
 ) -> Result<ClaimedTaskResourceCompatibility> {
     let (offered_device, offered_name) = match resource_kind {
@@ -202,6 +204,9 @@ fn solver_resource_compatibility(
             ));
         }
     };
+    if let Some(reason) = invalid_solver_resource_budget(resource_kind, resource_budget) {
+        return Ok(ClaimedTaskResourceCompatibility::Incompatible(reason));
+    }
     if requested_device != "auto" && requested_device != offered_name {
         return Ok(ClaimedTaskResourceCompatibility::Incompatible(format!(
             "claimed {offered_name} resource does not match explicit RunSpec device `{requested_device}`"
@@ -218,6 +223,85 @@ fn solver_resource_compatibility(
         }
     }
     Ok(ClaimedTaskResourceCompatibility::Compatible)
+}
+
+fn invalid_solver_resource_budget(
+    resource_kind: &ResourceKind,
+    budget: &ResourceBudget,
+) -> Option<String> {
+    if budget.cpu_millis == 0 {
+        return Some("solver resource budget requires positive cpu_millis".into());
+    }
+    if budget.memory_bytes == 0 {
+        return Some("solver resource budget requires positive memory_bytes".into());
+    }
+    match resource_kind {
+        ResourceKind::Cpu if budget.gpu_memory_bytes != 0 => {
+            return Some("CPU solver resource budget requires zero gpu_memory_bytes".into());
+        }
+        ResourceKind::Gpu if budget.gpu_memory_bytes == 0 => {
+            return Some("GPU solver resource budget requires positive gpu_memory_bytes".into());
+        }
+        _ => {}
+    }
+    if budget.storage_bytes == 0 {
+        return Some("solver resource budget requires positive storage_bytes".into());
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ClaimedTaskResourceCompatibility, solver_resource_compatibility};
+    use fullmag_application::{ResourceBudget, ResourceKind};
+
+    fn budget(
+        cpu_millis: u64,
+        memory_bytes: u64,
+        gpu_memory_bytes: u64,
+        storage_bytes: u64,
+    ) -> ResourceBudget {
+        ResourceBudget {
+            cpu_millis,
+            memory_bytes,
+            gpu_memory_bytes,
+            storage_bytes,
+        }
+    }
+
+    fn assert_incompatible(kind: ResourceKind, budget: ResourceBudget, expected: &str) {
+        let result = solver_resource_compatibility("auto", &kind, &budget, None).unwrap();
+        let ClaimedTaskResourceCompatibility::Incompatible(reason) = result else {
+            panic!("invalid solver resource budget was accepted");
+        };
+        assert!(reason.contains(expected), "unexpected reason: {reason}");
+    }
+
+    #[test]
+    fn solver_resource_budget_requires_complete_cpu_capacity() {
+        assert_incompatible(ResourceKind::Cpu, budget(0, 1, 0, 1), "cpu_millis");
+        assert_incompatible(ResourceKind::Cpu, budget(100, 0, 0, 1), "memory_bytes");
+        assert_incompatible(ResourceKind::Cpu, budget(100, 1, 1, 1), "gpu_memory_bytes");
+        assert_incompatible(ResourceKind::Cpu, budget(100, 1, 0, 0), "storage_bytes");
+        assert_eq!(
+            solver_resource_compatibility("auto", &ResourceKind::Cpu, &budget(100, 1, 0, 1), None,)
+                .unwrap(),
+            ClaimedTaskResourceCompatibility::Compatible
+        );
+    }
+
+    #[test]
+    fn solver_resource_budget_requires_complete_gpu_capacity() {
+        assert_incompatible(ResourceKind::Gpu, budget(0, 1, 1, 1), "cpu_millis");
+        assert_incompatible(ResourceKind::Gpu, budget(100, 0, 1, 1), "memory_bytes");
+        assert_incompatible(ResourceKind::Gpu, budget(100, 1, 0, 1), "gpu_memory_bytes");
+        assert_incompatible(ResourceKind::Gpu, budget(100, 1, 1, 0), "storage_bytes");
+        assert_eq!(
+            solver_resource_compatibility("auto", &ResourceKind::Gpu, &budget(100, 1, 1, 1), None,)
+                .unwrap(),
+            ClaimedTaskResourceCompatibility::Compatible
+        );
+    }
 }
 
 /// Reconstruct the current claim only when the run catalog and its active
