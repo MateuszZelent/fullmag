@@ -8,7 +8,8 @@
 use anyhow::{Context, Result, bail};
 use fullmag_application::{
     CoordinatorError, CoordinatorMessage, DurableWorkerCoordinator, ExecutionError, ResourceLease,
-    RunId, TaskClaim, WORKER_PROTOCOL_SCHEMA, WorkerCommandEnvelope, WorkerCoordinator,
+    RequestedResourceBudget, ResourceKind, RunId, TaskClaim, WORKER_PROTOCOL_SCHEMA,
+    WorkerCommandEnvelope, WorkerCoordinator,
     WorkerEvent, WorkerEventEnvelope,
 };
 use fullmag_authoring::StudyInputSource;
@@ -48,6 +49,15 @@ pub fn schedule_next_ready_accepted_task(
     }
     let accepted =
         crate::load_accepted_study_snapshot(store, run_id, &specification.snapshot.project_id)?;
+    if let Some(required) = specification.requested_execution.minimum_resources.as_ref() {
+        if !resource_offer_satisfies_requested_minimum(
+            &specification.requested_execution.device,
+            required,
+            &resource_offer,
+        ) {
+            return Ok(None);
+        }
+    }
 
     for study_step in &accepted.study.steps {
         let execution_step = accepted
@@ -206,6 +216,24 @@ pub fn schedule_next_ready_accepted_task(
     Ok(None)
 }
 
+fn resource_offer_satisfies_requested_minimum(
+    requested_device: &str,
+    required: &RequestedResourceBudget,
+    offer: &ResourceLease,
+) -> bool {
+    let device_matches = match requested_device {
+        "cpu" => offer.kind == ResourceKind::Cpu,
+        "gpu" => offer.kind == ResourceKind::Gpu,
+        "auto" => matches!(offer.kind, ResourceKind::Cpu | ResourceKind::Gpu),
+        _ => false,
+    };
+    device_matches
+        && offer.budget.cpu_millis >= required.cpu_millis
+        && offer.budget.memory_bytes >= required.memory_bytes
+        && offer.budget.gpu_memory_bytes >= required.gpu_memory_bytes
+        && offer.budget.storage_bytes >= required.storage_bytes
+}
+
 fn retry_store_writer_busy<T>(mut action: impl FnMut() -> Result<T>) -> Result<T> {
     crate::retry_store_writer_busy(&mut action)
 }
@@ -310,4 +338,81 @@ fn inputs_are_automatically_resolvable(
         }
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod resource_requirement_tests {
+    use super::resource_offer_satisfies_requested_minimum;
+    use fullmag_application::{RequestedResourceBudget, ResourceBudget, ResourceKind};
+
+    fn offer(
+        kind: ResourceKind,
+        cpu_millis: u64,
+        memory_bytes: u64,
+        gpu_memory_bytes: u64,
+        storage_bytes: u64,
+    ) -> fullmag_application::ResourceLease {
+        fullmag_application::ResourceLease::new(
+            "resource-test",
+            kind,
+            ResourceBudget {
+                cpu_millis,
+                memory_bytes,
+                gpu_memory_bytes,
+                storage_bytes,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn cpu_offer_must_meet_every_requested_minimum() {
+        let required = RequestedResourceBudget {
+            cpu_millis: 500,
+            memory_bytes: 2_000,
+            gpu_memory_bytes: 0,
+            storage_bytes: 4_000,
+        };
+        assert!(resource_offer_satisfies_requested_minimum(
+            "cpu",
+            &required,
+            &offer(ResourceKind::Cpu, 500, 2_000, 0, 4_000),
+        ));
+        for insufficient in [
+            offer(ResourceKind::Cpu, 499, 2_000, 0, 4_000),
+            offer(ResourceKind::Cpu, 500, 1_999, 0, 4_000),
+            offer(ResourceKind::Cpu, 500, 2_000, 0, 3_999),
+        ] {
+            assert!(!resource_offer_satisfies_requested_minimum(
+                "cpu",
+                &required,
+                &insufficient,
+            ));
+        }
+    }
+
+    #[test]
+    fn gpu_minimum_rejects_cpu_and_insufficient_vram() {
+        let required = RequestedResourceBudget {
+            cpu_millis: 500,
+            memory_bytes: 2_000,
+            gpu_memory_bytes: 8_000,
+            storage_bytes: 4_000,
+        };
+        assert!(!resource_offer_satisfies_requested_minimum(
+            "gpu",
+            &required,
+            &offer(ResourceKind::Cpu, 500, 2_000, 0, 4_000),
+        ));
+        assert!(!resource_offer_satisfies_requested_minimum(
+            "gpu",
+            &required,
+            &offer(ResourceKind::Gpu, 500, 2_000, 7_999, 4_000),
+        ));
+        assert!(resource_offer_satisfies_requested_minimum(
+            "gpu",
+            &required,
+            &offer(ResourceKind::Gpu, 500, 2_000, 8_000, 4_000),
+        ));
+    }
 }

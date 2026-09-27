@@ -13,7 +13,8 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
-pub const RUN_SPEC_SCHEMA: &str = "run_spec.v1";
+pub const LEGACY_RUN_SPEC_SCHEMA: &str = "run_spec.v1";
+pub const RUN_SPEC_SCHEMA: &str = "run_spec.v2";
 pub const RUN_INTENT_SCHEMA: &str = "run_intent.v1";
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -116,11 +117,54 @@ impl StudyReference {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct RequestedResourceBudget {
+    pub cpu_millis: u64,
+    pub memory_bytes: u64,
+    pub gpu_memory_bytes: u64,
+    pub storage_bytes: u64,
+}
+
+impl RequestedResourceBudget {
+    pub fn validate_for_device(&self, device: &str) -> Result<(), RunSpecError> {
+        if self.cpu_millis == 0 {
+            return Err(RunSpecError::Invalid(
+                "minimum_resources.cpu_millis must be greater than zero".into(),
+            ));
+        }
+        if self.memory_bytes == 0 {
+            return Err(RunSpecError::Invalid(
+                "minimum_resources.memory_bytes must be greater than zero".into(),
+            ));
+        }
+        if self.storage_bytes == 0 {
+            return Err(RunSpecError::Invalid(
+                "minimum_resources.storage_bytes must be greater than zero".into(),
+            ));
+        }
+        match device {
+            "cpu" if self.gpu_memory_bytes != 0 => Err(RunSpecError::Invalid(
+                "CPU minimum_resources requires zero gpu_memory_bytes".into(),
+            )),
+            "gpu" if self.gpu_memory_bytes == 0 => Err(RunSpecError::Invalid(
+                "GPU minimum_resources requires positive gpu_memory_bytes".into(),
+            )),
+            "auto" | "cpu" | "gpu" => Ok(()),
+            _ => Err(RunSpecError::Invalid(
+                "minimum_resources device is invalid".into(),
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RequestedExecution {
     pub backend: String,
     pub device: String,
     pub precision: String,
     pub mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_resources: Option<RequestedResourceBudget>,
 }
 
 impl RequestedExecution {
@@ -128,7 +172,11 @@ impl RequestedExecution {
         require_one_of(&self.backend, "backend", &["auto", "fdm", "fem", "hybrid"])?;
         require_one_of(&self.device, "device", &["auto", "cpu", "gpu"])?;
         require_one_of(&self.precision, "precision", &["single", "double"])?;
-        require_one_of(&self.mode, "mode", &["strict", "extended", "hybrid"])
+        require_one_of(&self.mode, "mode", &["strict", "extended", "hybrid"])?;
+        if let Some(resources) = &self.minimum_resources {
+            resources.validate_for_device(&self.device)?;
+        }
+        Ok(())
     }
 }
 
@@ -232,10 +280,29 @@ impl RunSpecification {
     }
 
     pub fn validate(&self) -> Result<(), RunSpecError> {
-        if self.schema_version != RUN_SPEC_SCHEMA {
+        if !matches!(
+            self.schema_version.as_str(),
+            LEGACY_RUN_SPEC_SCHEMA | RUN_SPEC_SCHEMA
+        ) {
             return Err(RunSpecError::Invalid(format!(
-                "schema_version must be {RUN_SPEC_SCHEMA}"
+                "schema_version must be {LEGACY_RUN_SPEC_SCHEMA} or {RUN_SPEC_SCHEMA}"
             )));
+        }
+        match (
+            self.schema_version.as_str(),
+            self.requested_execution.minimum_resources.as_ref(),
+        ) {
+            (RUN_SPEC_SCHEMA, None) => {
+                return Err(RunSpecError::Invalid(
+                    "run_spec.v2 requires requested_execution.minimum_resources".into(),
+                ));
+            }
+            (LEGACY_RUN_SPEC_SCHEMA, Some(_)) => {
+                return Err(RunSpecError::Invalid(
+                    "run_spec.v1 cannot contain requested_execution.minimum_resources".into(),
+                ));
+            }
+            _ => {}
         }
         require_identifier(self.run_id.as_str(), "run_id")?;
         self.snapshot.validate()?;
@@ -508,6 +575,12 @@ mod tests {
                 device: "cpu".into(),
                 precision: "double".into(),
                 mode: "strict".into(),
+                minimum_resources: Some(RequestedResourceBudget {
+                    cpu_millis: 100,
+                    memory_bytes: 1,
+                    gpu_memory_bytes: 0,
+                    storage_bytes: 1,
+                }),
             },
         )
     }
@@ -526,6 +599,40 @@ mod tests {
         let first = spec.fingerprint().unwrap();
         spec.study_catalog_sha256 = "d".repeat(64);
         assert_ne!(first, spec.fingerprint().unwrap());
+    }
+
+    #[test]
+    fn resource_budget_is_required_only_by_run_spec_v2() {
+        let mut current = specification();
+        current.requested_execution.minimum_resources = None;
+        assert!(current.validate().is_err());
+
+        let mut legacy = specification();
+        legacy.schema_version = LEGACY_RUN_SPEC_SCHEMA.into();
+        legacy.requested_execution.minimum_resources = None;
+        legacy.validate().unwrap();
+
+        legacy.requested_execution.minimum_resources = Some(RequestedResourceBudget {
+            cpu_millis: 100,
+            memory_bytes: 1,
+            gpu_memory_bytes: 0,
+            storage_bytes: 1,
+        });
+        assert!(legacy.validate().is_err());
+    }
+
+    #[test]
+    fn resource_budget_matches_requested_device() {
+        let mut specification = specification();
+        specification.requested_execution.device = "gpu".into();
+        assert!(specification.validate().is_err());
+        specification
+            .requested_execution
+            .minimum_resources
+            .as_mut()
+            .unwrap()
+            .gpu_memory_bytes = 1;
+        specification.validate().unwrap();
     }
 
     #[test]

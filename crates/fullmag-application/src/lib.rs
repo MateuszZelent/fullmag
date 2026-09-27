@@ -54,7 +54,8 @@ pub use repository::{
     RepositoryOpenResult,
 };
 pub use run_spec::{
-    ImmutableAssetReference, ProjectSnapshot, RequestedExecution, RunDependency, RunId, RunIntent,
+    ImmutableAssetReference, ProjectSnapshot, RequestedExecution, RequestedResourceBudget,
+    RunDependency, RunId, RunIntent,
     RunIntentLedger, RunSpecError, RunSpecification, StudyId, StudyReference, SubmitDisposition,
     SubmitReceipt, RUN_INTENT_SCHEMA, RUN_SPEC_SCHEMA,
 };

@@ -285,6 +285,7 @@ pub async fn materialize_live_preparation(
             device: scene.study.requested_device.clone(),
             precision: scene.study.requested_precision.clone(),
             mode: scene.study.requested_mode.clone(),
+            minimum_resources: None,
         };
         let display_projection =
             serde_json::to_value(&snapshot.display_selection).map_err(|error| {

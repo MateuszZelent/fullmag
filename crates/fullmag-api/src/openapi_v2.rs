@@ -519,6 +519,7 @@ use utoipa::OpenApi;
         crate::schemas::projects::ProjectRunListResource,
         crate::schemas::projects::ProjectRunSummaryResource,
         crate::schemas::projects::ProjectRunRequestedExecutionResource,
+        crate::schemas::projects::ProjectRunMinimumResourceBudgetResource,
         crate::schemas::projects::ProjectRunCatalogState,
         crate::schemas::projects::ProjectRunTaskResource,
         crate::schemas::projects::ProjectRunTaskLifecycle,

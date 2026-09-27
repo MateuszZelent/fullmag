@@ -817,6 +817,12 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             device: "cpu".into(),
             precision: "double".into(),
             mode: "strict".into(),
+            minimum_resources: Some(fullmag_application::RequestedResourceBudget {
+                cpu_millis: 100,
+                memory_bytes: 1,
+                gpu_memory_bytes: 0,
+                storage_bytes: 1,
+            }),
         },
     );
     specification.run_id = RunId::parse("run-http-first").unwrap();
@@ -955,6 +961,15 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
     assert_eq!(read_back.status(), StatusCode::OK);
     let read_back = body_json(read_back).await;
     assert_eq!(read_back["catalog_state"], "materialized");
+    assert_eq!(
+        read_back["requested_execution"]["minimum_resources"],
+        serde_json::json!({
+            "cpu_millis": 100,
+            "memory_bytes": 1,
+            "gpu_memory_bytes": 0,
+            "storage_bytes": 1,
+        })
+    );
     assert_eq!(read_back["catalog_revision"], 1);
     assert_eq!(read_back["tasks"][0]["lifecycle"], "accepted");
     assert_eq!(read_back["tasks"][0]["readiness"]["state"], "blocked");

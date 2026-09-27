@@ -1529,6 +1529,12 @@ mod tests {
                 device: "cpu".into(),
                 precision: "double".into(),
                 mode: "strict".into(),
+                minimum_resources: Some(crate::RequestedResourceBudget {
+                    cpu_millis: 100,
+                    memory_bytes: 1,
+                    gpu_memory_bytes: 0,
+                    storage_bytes: 1,
+                }),
             },
         );
         specification.run_id = RunId::parse(run_id).unwrap();

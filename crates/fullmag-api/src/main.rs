@@ -3262,6 +3262,12 @@ mod preparation_materialization_route_tests {
             device: "cpu".into(),
             precision: "double".into(),
             mode: "strict".into(),
+            minimum_resources: Some(fullmag_application::RequestedResourceBudget {
+                cpu_millis: 100,
+                memory_bytes: 1,
+                gpu_memory_bytes: 0,
+                storage_bytes: 1,
+            }),
         }
     }
 

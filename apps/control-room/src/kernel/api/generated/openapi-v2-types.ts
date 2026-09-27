@@ -9623,11 +9623,22 @@ export interface components {
             run_id: string;
             task_ids: string[];
         };
+        ProjectRunMinimumResourceBudgetResource: {
+            /** Format: int64 */
+            cpu_millis: number;
+            /** Format: int64 */
+            gpu_memory_bytes: number;
+            /** Format: int64 */
+            memory_bytes: number;
+            /** Format: int64 */
+            storage_bytes: number;
+        };
         /** @enum {string} */
         ProjectRunObservationState: "live" | "stale" | "disconnected" | "reconciling";
         ProjectRunRequestedExecutionResource: {
             backend: string;
             device: string;
+            minimum_resources?: null | components["schemas"]["ProjectRunMinimumResourceBudgetResource"];
             mode: string;
             precision: string;
         };

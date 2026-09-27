@@ -97,6 +97,15 @@ pub(crate) struct ProjectRunRequestedExecutionResource {
     pub device: String,
     pub precision: String,
     pub mode: String,
+    pub minimum_resources: Option<ProjectRunMinimumResourceBudgetResource>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ProjectRunMinimumResourceBudgetResource {
+    pub cpu_millis: u64,
+    pub memory_bytes: u64,
+    pub gpu_memory_bytes: u64,
+    pub storage_bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]

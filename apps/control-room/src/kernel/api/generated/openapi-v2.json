@@ -22659,6 +22659,37 @@
         ],
         "type": "object"
       },
+      "ProjectRunMinimumResourceBudgetResource": {
+        "properties": {
+          "cpu_millis": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "gpu_memory_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "storage_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cpu_millis",
+          "memory_bytes",
+          "gpu_memory_bytes",
+          "storage_bytes"
+        ],
+        "type": "object"
+      },
       "ProjectRunObservationState": {
         "enum": [
           "live",
@@ -22675,6 +22706,16 @@
           },
           "device": {
             "type": "string"
+          },
+          "minimum_resources": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectRunMinimumResourceBudgetResource"
+              }
+            ]
           },
           "mode": {
             "type": "string"
