@@ -100,6 +100,12 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
     odczytów durable store i zapisu CAS/receiptu. Błąd pollingu heartbeat lub
     `Stop` powoduje kill i reap potomka; potwierdzony wynik oraz przyczyna są
     następnie publikowane w receipcie zamiast zwolnienia slotu bez dowodu.
+18. Jeden bounded scheduler może przyjąć statyczną listę typowanych ofert
+    zasobów. Admission wszystkich aktualnie wolnych zasobów pozostaje
+    centralne, a nadzory workerów mogą działać równolegle pod wspólnym
+    `max_concurrency` i limitem tasków. Główny proces sam zapisuje checkpoint
+    fairness. Każde wyjście, także po błędzie, musi dołączyć aktywne nadzory;
+    nie wolno odłączyć workera ani uznać samego zakończenia nici za release.
 
 ## Konsekwencje
 
@@ -123,6 +129,9 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
 - `Stopping` oznacza trwałe żądanie, a `Cancelled` potwierdzony terminalny
   wynik koordynatora. Samo kliknięcie UI ani wysłanie HTTP nie dowodzi wyjścia
   procesu i nie uprawnia do zwolnienia lease.
+- Statyczna pula wielu zasobów zmniejsza potrzebę uruchamiania procesu per
+  zasób, lecz nie stanowi rezydentnej usługi, dynamicznego discovery zasobów,
+  polityki priorytetów ani rozproszonego lock managera.
 
 ## Obowiązki implementacyjne
 
@@ -164,6 +173,10 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
   workera; musi utworzyć dokładnie jedną decyzję, zwolnić exact lease i ustawić
   task na `Queued` bez spawnu. Store/archiwum osobno sprawdzają fencing,
   idempotencję, reachability oraz roundtrip `.fms` receiptu.
+- Regresja statycznej puli uruchamia jeden scheduler z dwiema ofertami CPU,
+  wymaga jednoczesnego `Running`, terminalnego sukcesu obu tasków, dwóch
+  dokładnych `resource_id` w summary i braku aktywnych lease. Osobna regresja
+  zachowuje same-resource fencing dwóch procesów pod kontencją writera.
 
 ## Migracja i rollback
 
@@ -177,6 +190,8 @@ przeprowadzać migracji przez zgadywanie stanu pustego journalu.
 Source/contract gates są oddzielone od procesu workera i kwalifikacji solvera.
 Testy integracyjne wymagają managed build runnera. Pełne lokalne process E2E
 sukcesu, anulowania żywego procesu, anulowania przed spawnem i orphan recovery
-sprzed decyzji ograniczonego FDM CPU przechodzą. P5-B pozostaje otwarte do
-rezydentnej puli wielu runów, zdalnego ACK oraz dowodu braku równoległego
-starego workera i zwolnienia urządzenia dla pozostałych lane'ów.
+sprzed decyzji ograniczonego FDM CPU przechodzą. Przechodzi również bounded
+statyczna pula dwóch zasobów w jednym procesie. P5-B pozostaje otwarte do
+rezydentnej usługi z dynamiczną pulą, priorytetami i backpressure, zdalnego ACK
+oraz dowodu braku równoległego starego workera i zwolnienia urządzenia dla
+pozostałych lane'ów.

@@ -23,7 +23,8 @@ po awarii sprzed decyzji; istniejąca rezerwacja attemptu nadal zachowuje
 fail-closed lease.
 
 Bounded scheduler wybiera dependency-ready task z jawnej puli RunId przez
-round-robin i jedną ofertę zasobu. Opcjonalny tryb store-discovery ponownie
+round-robin i statyczną pulę ofert zasobów. Starsza pojedyncza oferta pozostaje
+obsługiwana. Opcjonalny tryb store-discovery ponownie
 odczytuje trwałe intenty podczas bounded polling. Opcjonalny `--pool-id`
 zapisuje sequence-fenced kursor fairness i odtwarza następny RunId w kolejnym
 procesie. Brakuje rezydentnej usługi, heartbeat/Stop ACK dla zdalnego
@@ -46,7 +47,8 @@ Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`41-scheduler-run-discovery.md`](41-scheduler-run-discovery.md) i
 [`42-persistent-scheduler-cursor.md`](42-persistent-scheduler-cursor.md) i
 [`43-parallel-resource-supervision.md`](43-parallel-resource-supervision.md) i
-[`44-parallel-writer-contention.md`](44-parallel-writer-contention.md).
+[`44-parallel-writer-contention.md`](44-parallel-writer-contention.md) i
+[`45-bounded-static-resource-pool.md`](45-bounded-static-resource-pool.md).
 
 ## Ograniczona pula wielu runów — 27.09.2026
 
@@ -138,6 +140,23 @@ schedulera i kończy oba taski sukcesem: **1/1 PASS**, receipt
 `741f1f19171f9b02c904385dfb8f6154d030bcbe`. Procenty pozostają bez zmian:
 P3 **79%**, P5 **48%**, całość **38%**. Szczegóły:
 [`44-parallel-writer-contention.md`](44-parallel-writer-contention.md).
+
+## Ograniczona statyczna pula zasobów — 27.09.2026
+
+Jeden `fullmag-api-accepted-scheduler` przyjmuje powtarzalne, typowane
+`--resource-offer`, centralnie wykonuje fenced admission i uruchamia równoległe
+nadzory pod wspólnym `max_concurrency` oraz `max_tasks`. Stare flagi pojedynczej
+oferty pozostają zgodne. Checkpoint puli zapisuje wyłącznie główny proces, a
+strażnik dołącza wszystkie aktywne nici także po błędzie.
+
+Managed E2E jednego procesu z dwoma CPU: **1/1 PASS**, receipt
+`496cd7e28ee74d9b802df49fb9a6d109`. Regresja dwóch niezależnych procesów,
+same-resource fencing i kontencji writera: **1/1 PASS**, receipt
+`cf71502a403641b98139bd4e6859fefc`. Oba mają content
+`504511447248ae44101f412be5036ce41d0e26e3af08633ebef420af4a2da1f5` i
+`source_changed_during_run=false`. Rejestr tras: **29/29 PASS**. Implementacja:
+`df69370d2`. P3 wynosi około **81%**, P5 około **53%**, a całość około **39%**.
+Szczegóły: [`45-bounded-static-resource-pool.md`](45-bounded-static-resource-pool.md).
 
 API ma jawny adapter allow-listy `RunResult` → typowane payloady dla
 wspieranych wyjść. Szczegóły i wcześniejszy dowód opisuje
