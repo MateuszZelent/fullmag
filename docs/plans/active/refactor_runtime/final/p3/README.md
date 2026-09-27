@@ -27,11 +27,13 @@ round-robin i statyczną pulę ofert zasobów. Starsza pojedyncza oferta pozosta
 obsługiwana. Opcjonalny tryb store-discovery ponownie
 odczytuje trwałe intenty podczas polling. Opcjonalny `--pool-id`
 zapisuje sequence-fenced kursor fairness i odtwarza następny RunId w kolejnym
-procesie. `--resident true` utrzymuje discovery podczas pustych skanów, wymaga
-tożsamości puli i pozostaje ograniczone dodatnim `--max-tasks`. Brakuje pełnej
-usługi z graceful shutdown/drain, heartbeat/Stop ACK dla zdalnego transportu
-oraz process E2E pozostałych lane'ów. Anulowanie przed uruchomieniem workera
-jest obsłużone trwale i nie wykonuje spawnu procesu potomnego.
+procesie. `--resident true` utrzymuje discovery podczas pustych skanów i wymaga
+tożsamości puli. `--max-tasks 0` oznacza brak limitu tylko dla tego trybu.
+Sygnał systemowy zatrzymuje nowe admission, pozwala dokończyć aktywne workery,
+zapisać checkpointy i zwolnić lease przed statusem `drained`. Brakuje nadal
+dynamicznej puli, priorytetów/backpressure, heartbeat/Stop ACK dla zdalnego
+transportu oraz process E2E pozostałych lane'ów. Anulowanie przed uruchomieniem
+workera jest obsłużone trwale i nie wykonuje spawnu procesu potomnego.
 Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`28-one-shot-accepted-worker-process.md`](28-one-shot-accepted-worker-process.md),
 [`29-accepted-worker-supervisor.md`](29-accepted-worker-supervisor.md),
@@ -51,7 +53,8 @@ Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`43-parallel-resource-supervision.md`](43-parallel-resource-supervision.md) i
 [`44-parallel-writer-contention.md`](44-parallel-writer-contention.md) i
 [`45-bounded-static-resource-pool.md`](45-bounded-static-resource-pool.md) i
-[`46-resident-scheduler-discovery.md`](46-resident-scheduler-discovery.md).
+[`46-resident-scheduler-discovery.md`](46-resident-scheduler-discovery.md) i
+[`47-resident-scheduler-drain.md`](47-resident-scheduler-drain.md).
 
 ## Ograniczona pula wielu runów — 27.09.2026
 
@@ -181,6 +184,27 @@ Pełna usługa nadal wymaga graceful shutdown/drain, sterowanego trybu bez limit
 tasków, priorytetów, backpressure, dynamicznej puli i zdalnego ACK. P3 wynosi
 około **82%**, P5 około **56%**, a całość około **40%**. Szczegóły:
 [`46-resident-scheduler-discovery.md`](46-resident-scheduler-discovery.md).
+
+## Bezpieczny drain rezydentnego schedulera — 27.09.2026
+
+`--max-tasks 0` uruchamia brak limitu wyłącznie w trybie rezydentnym. Scheduler
+obsługuje `SIGINT`/`SIGTERM` na Unix oraz `CTRL_C`/`CTRL_BREAK` na Windows,
+zamyka admission, dołącza aktywne nadzory i kończy jako `drained`. Osobna grupa
+procesu workera na Windows zapobiega przerwaniu aktywnego taska przez sygnał
+grupy schedulera.
+
+Managed drain E2E: **1/1 PASS**, receipt
+`35134cc2923e409bb174a2353fe2023f`. Trwały kursor: **1/1 PASS**, receipt
+`90c10f0258d341969241aa3a8a8adcaf`. Dwie kolejne próby statycznej puli:
+**PASS**, receipty `19d19fe847d54ac39fc27bb8b3a1fddf` i
+`708db2cbb93545c691662e2e364baeac`. Wszystkie przypinają content
+`cf27b562fe77b7e597d5750c2c75ad6e88d90c500be2d115a71d4f8ac3df89b6` i
+`source_changed_during_run=false`; rejestr tras: **31/31 PASS**.
+
+Dynamiczne członkostwo zasobów, priorytety/backpressure, zdalny ACK i pozostałe
+lane'y pozostają otwarte. P3 wynosi około **83%**, P5 około **60%**, a całość
+około **41%**. Szczegóły:
+[`47-resident-scheduler-drain.md`](47-resident-scheduler-drain.md).
 
 API ma jawny adapter allow-listy `RunResult` → typowane payloady dla
 wspieranych wyjść. Szczegóły i wcześniejszy dowód opisuje

@@ -108,10 +108,16 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
     nie wolno odłączyć workera ani uznać samego zakończenia nici za release.
 19. Jawny tryb rezydentnego discovery może kontynuować skany po okresie bez
     gotowych tasków wyłącznie dla źródła store i trwałej tożsamości puli.
-    Dodatni `max_tasks` nadal ogranicza lifecycle tego przyrostu. Run z
-    opublikowanym katalogiem, lecz bez preparation receiptu pozostaje chwilowo
-    niegotowy; scheduler nie może go zakolejkować ani zakończyć całej usługi.
-    Obecny, ale błędny receipt pozostaje błędem fail-closed.
+    `--max-tasks 0` oznacza brak limitu tylko przy `--resident true`; proces
+    ograniczony nadal wymaga dodatniego limitu. Run z opublikowanym katalogiem,
+    lecz bez preparation receiptu pozostaje chwilowo niegotowy; scheduler nie
+    może go zakolejkować ani zakończyć całej usługi. Obecny, ale błędny receipt
+    pozostaje błędem fail-closed.
+20. Rezydentny scheduler obsługuje `SIGINT`/`SIGTERM` na Unix oraz
+    `CTRL_C`/`CTRL_BREAK` na Windows. Po żądaniu zatrzymania nie przyjmuje
+    nowych tasków, dołącza już aktywne nadzory, zapisuje ich checkpointy i
+    kończy ze statusem `drained`. Worker Windows działa w osobnej grupie
+    procesu, aby sygnał grupy schedulera nie przerwał pracy objętej drain.
 
 ## Konsekwencje
 
@@ -135,11 +141,11 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
 - `Stopping` oznacza trwałe żądanie, a `Cancelled` potwierdzony terminalny
   wynik koordynatora. Samo kliknięcie UI ani wysłanie HTTP nie dowodzi wyjścia
   procesu i nie uprawnia do zwolnienia lease.
-- Statyczna pula wielu zasobów oraz rezydentne store-discovery zmniejszają
-  potrzebę uruchamiania procesu per zasób i per okres pracy. Dodatni limit
-  tasków nadal kończy proces; nie jest to usługa z graceful shutdown/drain,
-  dynamicznym discovery zasobów, polityką priorytetów ani rozproszonym lock
-  managerem.
+- Statyczna pula wielu zasobów, rezydentne store-discovery i jawny drain
+  zmniejszają potrzebę uruchamiania procesu per zasób i per okres pracy.
+  Brak limitu tasków jest bezpieczny wyłącznie w trybie rezydentnym z obsługą
+  sygnału. Nadal nie jest to usługa z dynamicznym discovery zasobów, polityką
+  priorytetów, backpressure ani rozproszonym lock managerem.
 
 ## Obowiązki implementacyjne
 
@@ -189,6 +195,10 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
   ostatniego runu, potwierdza przeżycie pustego okresu, następnie publikuje i
   materializuje nowy run. Ten sam proces ma wykonać trzeci task, zapisać trzeci
   checkpoint puli i zakończyć się dopiero po osiągnięciu `max_tasks`.
+- Regresja drain uruchamia scheduler bez limitu tasków, czeka na `Running`,
+  wysyła sygnał zatrzymania i wymaga sukcesu aktywnego workera, zwolnienia
+  lease, pozostawienia drugiego taska w `Accepted` oraz summary
+  `status=drained`, `shutdown_requested=true`, `max_tasks=null`.
 
 ## Migracja i rollback
 
@@ -202,9 +212,9 @@ przeprowadzać migracji przez zgadywanie stanu pustego journalu.
 Source/contract gates są oddzielone od procesu workera i kwalifikacji solvera.
 Testy integracyjne wymagają managed build runnera. Pełne lokalne process E2E
 sukcesu, anulowania żywego procesu, anulowania przed spawnem i orphan recovery
-sprzed decyzji ograniczonego FDM CPU przechodzą. Przechodzi również bounded
-statyczna pula dwóch zasobów w jednym procesie oraz rezydentne discovery runu
-utworzonego po starcie schedulera. P5-B pozostaje otwarte do graceful
-shutdown/drain, bezpiecznego trybu bez limitu tasków, dynamicznej puli,
-priorytetów i backpressure, zdalnego ACK oraz dowodu braku równoległego starego
-workera i zwolnienia urządzenia dla pozostałych lane'ów.
+sprzed decyzji ograniczonego FDM CPU przechodzą. Przechodzą również bounded
+statyczna pula dwóch zasobów, rezydentne discovery runu utworzonego po starcie
+schedulera oraz kontrolowany drain procesu bez limitu tasków. P5-B pozostaje
+otwarte do dynamicznej puli, priorytetów i backpressure, zdalnego ACK oraz
+dowodu braku równoległego starego workera i zwolnienia urządzenia dla
+pozostałych lane'ów.
