@@ -337,7 +337,8 @@ całej lane ani pozostałych kontraktów tej strony.
 - [x] brak zmian Python/`ProblemIR` opisany jawnie
 - [x] runtime/API/proweniencja opisane
 - [x] walidacja i typowane błędy opisane
-- [ ] implementacja `AcceptedStateRef` i `ObservationRuntime`
+- [x] backend-neutralny typ i strict walidacja `AcceptedStateRef`
+- [ ] materializacja `AcceptedStateRef` przez lane'y i `ObservationRuntime`
 - [ ] atomowy autosave frame descriptor i reader
 - [ ] transactional `.fms` runtime import/export
 - [ ] receipts numeryczne, managed CPU/GPU i browser/WebGL
@@ -356,7 +357,8 @@ całej lane ani pozostałych kontraktów tej strony.
 | Twierdzenie | Ścieżka | Symbol | Odpowiedzialność | Lane | Dowód |
 |---|---|---|---|---|---|
 | docelowy funkcjonał obserwacji | `docs/physics/interactive-observation-and-restart-semantics.md` | `DOC-ANCHOR:observation-functional` | planowany backend-neutralny funkcjonał quantity | wszystkie | planned contract, bez runtime proof |
-| docelowa accepted-state identity | `docs/adr/0025-persistent-runtime-and-observation-sources.md` | `DOC-ANCHOR:accepted-state-identity` | planowany `AcceptedStateRef` | wszystkie | planned contract, bez runtime proof |
+| normatywna accepted-state identity | `docs/adr/0025-persistent-runtime-and-observation-sources.md` | `DOC-ANCHOR:accepted-state-identity` | siedem pól trwałego ID i osobna generacja runtime'u | wszystkie | accepted contract |
+| accepted-state identity | `crates/fullmag-runner/src/observation.rs` | `AcceptedStateRef` | backend-neutralny typ, strict wire validation i dokładna równość ID/generacji | wszystkie | source contract PASS; materializacja lane'ów i runtime proof otwarte |
 | docelowa availability | `docs/physics/interactive-observation-and-restart-semantics.md` | `DOC-ANCHOR:quantity-availability` | planowane przecięcie katalogu, fizyki, planu, lane'u i nośników | wszystkie | planned contract, bez runtime proof |
 | docelowa semantyka resume | `docs/physics/interactive-observation-and-restart-semantics.md` | `DOC-ANCHOR:resume-trajectory` | planowane rozróżnienie logical/exact | wszystkie | planned contract, bez runtime proof |
 | obecny eager batch do zastąpienia | `crates/fullmag-runner/src/interactive/runtime.rs` | `build_atomic_terminal_update` | bieżąca luka: terminalny snapshot FDM | FDM CPU/GPU | superseded/gap evidence, nie źródło równania docelowego |

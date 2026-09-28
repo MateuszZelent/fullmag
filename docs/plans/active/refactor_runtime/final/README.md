@@ -49,9 +49,10 @@ browser/runtime nadal pozostają otwarte.
 7. [Checkpoint P3](p3/README.md) — typed studies, `study_execution_plan.v2` i lowering do `fullmag-plan`, RunSpecification, durable catalogs, leases, worker identity, retry decision, coordinator journal, przypięty horyzont TimeEvolution, one-shot worker, resource-scoped supervisor oraz scheduler dependency-ready tasków z trwałym retry, restartowym kursorem fairness, dynamiczną pulą zasobów, bounded priority queue, limitem backlogu, rezydentnym discovery, graceful drain i worker-originated control ACK; transport cross-host i pozostałe lane'y pozostają otwarte.
 8. [Checkpoint P3a](p3a/README.md) — pilot immutable request context oraz kolejne przyrosty sesyjnej tożsamości klienta dla data-plane i resource hooks; pełny inventory endpointów jest w [macierzy owner/write policy](p3a/06-endpoint-owner-policy.md).
 9. [Checkpoint P4](p4/README.md) — `PreparationPlan`, typed producers, FDM materialization z resolved planu, adaptery grid/mesh, application receipt, `PreparationBinding` w wejściu `Prepare`, durable publikacja tożsamości per run, last-good mesh UI, jawne FDM `Build Grid`, wspólne Operations/Problems, trwały journal komend Live oraz publiczny readback dokładnego kroku, czasu i segmentu zastosowania komendy.
-10. [Checkpoint P8-A](p8/01-retire-legacy-web-archive.md) — usunięcie 981 plików archiwalnej kopii `_to_delete_legacy_web` przy zachowaniu aktywnego Control Room i jawnych granic kwalifikacji release.
-11. [Tabela statusu całego planu](06-status-realizacji.md) — procenty etapów, wykonane zakresy, dowody i blokery.
-12. [Semantic history P2-D](p2/05-semantic-history.md) — revision-fenced Undo/Redo i granice obecnego slice'u.
+10. [Checkpoint P5](p5/README.md) — bezpieczny runtime, granice zastosowania komend i źródłowy kontrakt `AcceptedStateRef`; materializacja lane'ów i managed qualification pozostają otwarte.
+11. [Checkpoint P8-A](p8/01-retire-legacy-web-archive.md) — usunięcie 981 plików archiwalnej kopii `_to_delete_legacy_web` przy zachowaniu aktywnego Control Room i jawnych granic kwalifikacji release.
+12. [Tabela statusu całego planu](06-status-realizacji.md) — procenty etapów, wykonane zakresy, dowody i blokery.
+13. [Semantic history P2-D](p2/05-semantic-history.md) — revision-fenced Undo/Redo i granice obecnego slice'u.
 
 ## Jak używać pakietu
 
