@@ -184,9 +184,13 @@ dispatch, failure i rekoncyliacja publikują snapshot przed zmianą projekcji w
 pamięci. Restart zachowuje terminalne wpisy, a operacje bez terminalnego ACK
 oznacza jako przerwane bez automatycznego replayu. Rewizja zasobu jest teraz
 monotoniczną rewizją journalu, więc sama zmiana statusu invaliduje Operations.
-Produkcyjny `cargo check` API/session: **PASS**; regresje source dodano, lecz nie
-uruchomiono zgodnie z aktywnym zakazem testów jednostkowych. Managed restart,
-native FEM i wspólna projekcja zdarzeń preparation/mesh pozostają otwarte.
+Produkcyjny `cargo check` API/session oraz ukierunkowane regresje source
+replace/reopen i restart active/terminal: **PASS** (1/1 + 1/1). Uzupełniono
+brakujący testowy import `chrono::Utc`, który blokował kompilację modułu
+`fullmag-session`. Reachability waliduje nowy lokalny root i jego atomowy
+wskaźnik, a import `.fms` dopuszcza wyłącznie pusty staging; pełny pakiet
+`fullmag-session --lib`: **70/70**. Managed restart, native FEM i wspólna
+projekcja zdarzeń preparation/mesh pozostają otwarte.
 Wskaźniki: **P4 50%**, cały plan około **49%**. Szczegóły:
 [`p4/19-live-command-journal.md`](p4/19-live-command-journal.md).
 

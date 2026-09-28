@@ -223,6 +223,7 @@ impl StoreWalker {
         self.walk_sessions_dir()?;
         self.walk_recovery_dir()?;
         self.walk_scheduler_pools_dir()?;
+        self.walk_live_command_journals_dir()?;
         self.walk_runs_dir()?;
         self.walk_objects_dir()?;
 
@@ -250,7 +251,12 @@ impl StoreWalker {
                         bail!("session control entry `{name}` is not a file")
                     }
                 }
-                "manifests" | "runs" | "scheduler_pools" | "recovery" | "objects" => {
+                "manifests"
+                | "runs"
+                | "scheduler_pools"
+                | "live_command_journals"
+                | "recovery"
+                | "objects" => {
                     if !entry.file_type()?.is_dir() {
                         bail!("session root `{name}` is not a directory")
                     }
@@ -782,6 +788,90 @@ impl StoreWalker {
                 }
             } else {
                 bail!("unknown scheduler pool checkpoint entry `{name}`");
+            }
+        }
+        Ok(())
+    }
+
+    fn walk_live_command_journals_dir(&mut self) -> Result<()> {
+        let directory = self.root.join("live_command_journals");
+        if !directory.exists() {
+            return Ok(());
+        }
+        reject_link_chain(&self.root, "live_command_journals")?;
+        for session_entry in read_directory(&directory)? {
+            let session_id = session_entry.file_name().to_string_lossy().into_owned();
+            validate_component(&session_id)?;
+            reject_link_chain(
+                &self.root,
+                &format!("live_command_journals/{session_id}"),
+            )?;
+            if session_entry.file_type()?.is_symlink() || !session_entry.file_type()?.is_dir() {
+                bail!("live command journal session entry must be a directory: `{session_id}`");
+            }
+
+            let session_directory = session_entry.path();
+            let generations_directory = session_directory.join("generations");
+            let current_path = session_directory.join("CURRENT");
+            let mut published_generation = None;
+            for entry in read_directory(&session_directory)? {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                match name.as_str() {
+                    "CURRENT" => {
+                        if entry.file_type()?.is_symlink() || !entry.file_type()?.is_file() {
+                            bail!("live command journal CURRENT must be a regular file");
+                        }
+                        let relative = format!("live_command_journals/{session_id}/CURRENT");
+                        let generation =
+                            String::from_utf8(self.read_file(&current_path, &relative)?)
+                                .context("live command journal CURRENT must contain UTF-8")?
+                                .trim()
+                                .to_string();
+                        validate_component(&generation)?;
+                        if !generation.starts_with("generation-") {
+                            bail!("live command journal CURRENT has an invalid generation");
+                        }
+                        published_generation = Some(generation);
+                    }
+                    "generations" => {
+                        reject_link_chain(
+                            &self.root,
+                            &format!("live_command_journals/{session_id}/generations"),
+                        )?;
+                        if entry.file_type()?.is_symlink() || !entry.file_type()?.is_dir() {
+                            bail!("live command journal generations must be a directory");
+                        }
+                    }
+                    _ => bail!("unknown live command journal session entry `{name}`"),
+                }
+            }
+
+            if generations_directory.exists() {
+                for generation_entry in read_directory(&generations_directory)? {
+                    let file_name = generation_entry.file_name().to_string_lossy().into_owned();
+                    if generation_entry.file_type()?.is_symlink()
+                        || !generation_entry.file_type()?.is_file()
+                    {
+                        bail!("live command journal generation must be a regular file");
+                    }
+                    let Some(generation) = file_name.strip_suffix(".json") else {
+                        bail!("live command journal generation must use the .json extension");
+                    };
+                    validate_component(generation)?;
+                    if !generation.starts_with("generation-") {
+                        bail!("live command journal has an invalid generation `{file_name}`");
+                    }
+                    let relative =
+                        format!("live_command_journals/{session_id}/generations/{file_name}");
+                    self.read_file(&generation_entry.path(), &relative)?;
+                }
+            }
+
+            if let Some(generation) = published_generation {
+                let published_path = generations_directory.join(format!("{generation}.json"));
+                if !published_path.is_file() {
+                    bail!("live command journal CURRENT points to a missing generation");
+                }
             }
         }
         Ok(())

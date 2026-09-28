@@ -1690,6 +1690,7 @@ fn ensure_unpack_destination_pristine(root: &Path) -> Result<()> {
         "manifests",
         "runs",
         "scheduler_pools",
+        "live_command_journals",
         "recovery",
         "temp",
         "objects",

@@ -4624,6 +4624,7 @@ fn magnetization_from_bytes(data: &[u8]) -> Vec<[f64; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
 
     #[test]
     fn live_command_journal_replaces_current_generation_and_reopens() {
@@ -4659,6 +4660,18 @@ mod tests {
         .unwrap()
         .count();
         assert_eq!(generation_count, 1);
+
+        let report = crate::reachability::walk_store_root(
+            &root,
+            crate::reachability::ReachabilityMode::Export,
+        )
+        .unwrap();
+        assert!(report
+            .file_refs
+            .contains("live_command_journals/session-command-journal/CURRENT"));
+        assert!(report.file_refs.iter().any(|reference| reference.starts_with(
+            "live_command_journals/session-command-journal/generations/generation-"
+        )));
     }
 
     fn test_resource_lease(
@@ -4915,7 +4928,7 @@ mod tests {
                 updated_at: Utc::now(),
                 tasks: vec![FmsTaskCatalogEntry {
                     task_id: task_id.into(),
-                    input_fingerprint: "input-preparation-retry".into(),
+                    input_fingerprint: "a".repeat(64),
                     lifecycle: FmsTaskLifecycle::Accepted,
                     readiness: FmsTaskReadiness::Blocked {
                         reason: FMS_TASK_AWAITING_PREPARATION_REASON.into(),
@@ -6147,7 +6160,10 @@ mod tests {
             now,
         );
         store.commit_resource_lease(&journal_lease).unwrap();
-        let payload = serde_json::json!({"status": "started"});
+        let payload = serde_json::json!({
+            "status": "started",
+            "checkpoint": {"command_sequence": 0, "event_sequence": 1}
+        });
         let entry = FmsCoordinatorJournalEntry {
             schema_version: FMS_COORDINATOR_JOURNAL_SCHEMA.into(),
             entry_id: "event-one".into(),
@@ -6166,7 +6182,10 @@ mod tests {
         let entry_path = store.coordinator_journal_path(&entry).unwrap();
         crate::durability::fail_directory_barrier_for(&entry_path);
         let uncertain = store.commit_coordinator_journal_entry(&entry).unwrap_err();
-        assert!(uncertain.is::<crate::PublicationUncertain>());
+        assert!(
+            uncertain.is::<crate::PublicationUncertain>(),
+            "unexpected coordinator journal publication error: {uncertain:#}"
+        );
         assert_eq!(
             store
                 .read_coordinator_journal_entry(
@@ -6186,7 +6205,10 @@ mod tests {
             CoordinatorJournalCommitDisposition::Replayed
         );
 
-        let terminal_payload = serde_json::json!({"status": "failed"});
+        let terminal_payload = serde_json::json!({
+            "status": "failed",
+            "checkpoint": {"command_sequence": 0, "event_sequence": 2}
+        });
         let terminal = FmsCoordinatorJournalEntry {
             entry_id: "event-two".into(),
             sequence: 2,
@@ -6197,7 +6219,10 @@ mod tests {
         };
         store.commit_coordinator_journal_entry(&terminal).unwrap();
 
-        let after_terminal_payload = serde_json::json!({"status": "late"});
+        let after_terminal_payload = serde_json::json!({
+            "status": "late",
+            "checkpoint": {"command_sequence": 0, "event_sequence": 3}
+        });
         let after_terminal = FmsCoordinatorJournalEntry {
             entry_id: "event-three".into(),
             sequence: 3,
@@ -6239,12 +6264,18 @@ mod tests {
             now,
         );
         store.commit_resource_lease(&other_lease).unwrap();
+        let other_payload = serde_json::json!({
+            "status": "other-started",
+            "checkpoint": {"command_sequence": 0, "event_sequence": 1}
+        });
         let other = FmsCoordinatorJournalEntry {
             entry_id: "event-other-one".into(),
             task_id: "task-other".into(),
             attempt_id: "attempt-other".into(),
             lease_token: "lease-other".into(),
             sequence: 1,
+            payload_sha256: canonical_json_sha256(&other_payload),
+            payload: other_payload,
             ..after_terminal.clone()
         };
         store.commit_coordinator_journal_entry(&other).unwrap();
@@ -6264,12 +6295,18 @@ mod tests {
             chrono::Utc::now(),
         );
         store.commit_resource_lease(&retry_lease).unwrap();
+        let retry_payload = serde_json::json!({
+            "status": "retry-started",
+            "checkpoint": {"command_sequence": 0, "event_sequence": 1}
+        });
         let retried = FmsCoordinatorJournalEntry {
             entry_id: "event-retry-one".into(),
             attempt_id: "attempt-retry".into(),
             ownership_epoch: 2,
             lease_token: "lease-retry".into(),
             sequence: 1,
+            payload_sha256: canonical_json_sha256(&retry_payload),
+            payload: retry_payload,
             ..after_terminal.clone()
         };
         store.commit_coordinator_journal_entry(&retried).unwrap();
@@ -6281,7 +6318,10 @@ mod tests {
             store.commit_coordinator_journal_entry(&retried).unwrap(),
             CoordinatorJournalCommitDisposition::Replayed
         );
-        let after_release_payload = serde_json::json!({"status": "late-after-release"});
+        let after_release_payload = serde_json::json!({
+            "status": "late-after-release",
+            "checkpoint": {"command_sequence": 0, "event_sequence": 2}
+        });
         let after_release = FmsCoordinatorJournalEntry {
             entry_id: "event-retry-after-release".into(),
             sequence: 2,
@@ -6296,14 +6336,20 @@ mod tests {
             entry_id: "event-retry-wrong-lease".into(),
             lease_token: "lease-forged".into(),
             sequence: 2,
-            ..retried.clone()
+            ..after_release.clone()
         };
         assert!(store
             .commit_coordinator_journal_entry(&changed_lease)
             .is_err());
+        let other_next_payload = serde_json::json!({
+            "status": "other-next",
+            "checkpoint": {"command_sequence": 0, "event_sequence": 2}
+        });
         let other_next = FmsCoordinatorJournalEntry {
             entry_id: "event-other-two".into(),
             sequence: 2,
+            payload_sha256: canonical_json_sha256(&other_next_payload),
+            payload: other_next_payload,
             ..other
         };
         store.commit_coordinator_journal_entry(&other_next).unwrap();

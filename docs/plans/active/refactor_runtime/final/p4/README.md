@@ -670,8 +670,11 @@ Restart zachowuje terminalną historię, a niepotwierdzone komendy oznacza jako
 
 Immutable generation, atomowy `CURRENT`, native single-writer lock, dokładny
 readback po niepewnej publikacji i monotoniczna rewizja zasobu są podłączone.
-Produkcyjny `cargo check` API/session: **PASS**. Regresje replace/reopen i
-restart active/terminal dodano, lecz nie uruchomiono zgodnie z aktywnym zakazem
-testów jednostkowych. Managed restart pozostaje `NOT VERIFIED`; **P4 50%, cały
-plan około 49%**. Szczegóły:
+Produkcyjny `cargo check` API/session oraz ukierunkowane regresje replace/reopen
+i restart active/terminal: **PASS** (1/1 + 1/1). Brakujący testowy import
+`chrono::Utc`, który blokował kompilację modułu `fullmag-session`, został
+uzupełniony. Walker reachability waliduje lokalny root journalu, a import `.fms`
+dopuszcza tylko jego pusty staging; pełny `fullmag-session --lib`: **70/70**.
+Managed restart pozostaje `NOT VERIFIED`; **P4 50%, cały plan około 49%**.
+Szczegóły:
 [19-live-command-journal.md](19-live-command-journal.md).

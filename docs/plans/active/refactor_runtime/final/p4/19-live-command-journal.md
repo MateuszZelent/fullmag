@@ -1,7 +1,7 @@
 # P4-C/P5-D — trwały journal komend aktywnego workspace’u
 
 Data: 28.09.2026
-Status: produkcyjny target kompiluje się; recovery runtime i testy jednostkowe pozostają nieuruchomione
+Status: produkcyjny target i ukierunkowane regresje source PASS; managed recovery pozostaje niezweryfikowane
 
 ## Problem
 
@@ -54,13 +54,29 @@ nową decyzję na podstawie stanu runtime.
 |---|---:|
 | `cargo check -p fullmag-api --bin fullmag-api` | PASS |
 | Kompilacja `fullmag-session` jako zależności produkcyjnej | PASS |
-| Ukierunkowane regresje source: replace/reopen oraz restart active/terminal | DODANE |
-| Testy jednostkowe | NOT RUN — aktywny zakaz kompilowania i uruchamiania testów jednostkowych |
+| `cargo test -p fullmag-session store::tests::live_command_journal_replaces_current_generation_and_reopens --lib -- --exact` | PASS — 1/1 |
+| `cargo test -p fullmag-api live_command_journal::tests::recovery_preserves_terminal_history_and_fails_unknown_active_outcomes --bin fullmag-api -- --exact` | PASS — 1/1 |
+| `cargo test -p fullmag-session --lib` | PASS — 70/70 |
 | Managed restart API/runner | NOT VERIFIED — koordynator Docker Desktop nie odpowiada |
 | `git diff --check` | PASS |
 
-Kompilacja zgłosiła wyłącznie wcześniejsze ostrzeżenia w innych modułach.
-Nie jest dowodem recovery procesu ani managed runtime.
+Pierwsza kompilacja testów ujawniła brakujący testowy import `chrono::Utc` w
+`fullmag-session`; import został uzupełniony, a ponowienie obu dokładnych
+regresji zakończyło się powodzeniem. Pozostałe komunikaty kompilatora to
+wcześniejsze ostrzeżenia. Testy source nie są dowodem recovery procesu ani
+managed runtime.
+
+Pełny pakiet testów ujawnił także brak integracji nowego rootu z walkerem
+reachability i stagingiem importu `.fms`. Walker rozpoznaje teraz lokalny
+namespace, odrzuca linki/reparse, obce wpisy, niepoprawne nazwy generacji oraz
+`CURRENT` bez wskazanego pliku. Import dopuszcza automatycznie utworzony katalog
+wyłącznie wtedy, gdy jest pusty; journal pozostaje lokalnym stanem operacyjnym i
+nie jest dodawany do archiwum `.fms`. Regresja journalu sprawdza również obecność
+`CURRENT` i immutable generation w raporcie reachability.
+
+Przywrócono dwa starsze fixture'y wykryte przez pełny pakiet: preparation retry
+używa poprawnego digestu SHA-256, a coordinator journal niesie wymagane
+watermarki command/event. Nie zmienia to kontraktów produkcyjnych.
 
 ## Granica etapu
 
