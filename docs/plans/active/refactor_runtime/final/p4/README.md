@@ -626,3 +626,20 @@ stabilność Inspectora oraz zdrowy WebGL (`contextLost=false`, drawing buffer
 zakazu ich kompilacji. Managed/native process E2E pozostaje **NOT VERIFIED**.
 **P4 50%, cały plan około 49%**. Szczegóły:
 [16-mesh-last-good-ui.md](16-mesh-last-good-ui.md).
+
+## Jawne Build Grid dla FDM — 28.09.2026
+
+Control Room ma teraz wspólne polecenie `grid.build-fdm` dostępne w ribbonie
+Mesh oraz menu kontekstowym Explorera wyłącznie dla jawnego lane'u FDM.
+Polecenie wymaga gotowej kanonicznej sceny i wysyła `fdm_grid_refresh` z
+`precondition.scene_revision`; FEM i nierozstrzygnięty lane pozostają
+fail-closed. Explorer przekazuje do kontekstu komendy już załadowany zasób
+sceny, bez osobnego odczytu API.
+
+Typecheck, kontrola składni skryptów, scoped ESLint i browser smoke: **PASS**.
+Smoke potwierdził zgodny payload, brak akcji FEM w ribbonie FDM, aktywne
+polecenie Explorera, brak 404/błędów konsoli i zdrowy WebGL
+(`contextLost=false`, drawing buffer `703×478`). Testów jednostkowych nie
+uruchomiono z powodu aktywnego zakazu ich kompilacji. **P4 50%, cały plan około
+49%**. Szczegóły:
+[17-explicit-fdm-build-grid.md](17-explicit-fdm-build-grid.md).

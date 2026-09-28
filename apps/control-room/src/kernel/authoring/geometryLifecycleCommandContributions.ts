@@ -246,6 +246,22 @@ function femMeshCommandDisabledReason(context: CommandContext): string | null {
   return null;
 }
 
+export const FEM_GRID_COMMAND_NOT_APPLICABLE_REASON =
+  "Build Grid is only applicable to an FDM structured-grid session.";
+
+export const UNKNOWN_GRID_COMMAND_LANE_REASON =
+  "Session discretization is unresolved; Build Grid remains unavailable until an explicit FDM lane is published.";
+
+function fdmGridBuildDisabledReason(context: CommandContext): string | null {
+  if (!context.api) return "Control-room API is unavailable.";
+  const lane = meshCommandLane(context);
+  if (lane === "fem") return FEM_GRID_COMMAND_NOT_APPLICABLE_REASON;
+  if (lane === "unknown") return UNKNOWN_GRID_COMMAND_LANE_REASON;
+  return sceneBaseRevision(context) === null
+    ? "The canonical scene revision is unavailable. Refetch the scene before building the grid."
+    : null;
+}
+
 function selectedObjectId(context: Pick<CommandContext, "selection">): string | null {
   const selection = context.selection?.get();
   return selection?.ref?.type === "scene-object"
@@ -1270,6 +1286,34 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
     isEnabled: (context) => geometryValidationDisabledReason(context) === null,
     disabledReason: geometryValidationDisabledReason,
     run: runGeometryValidation,
+  },
+  {
+    id: "grid.build-fdm",
+    title: "Build Grid",
+    category: "Mesh",
+    group: "mesh",
+    scope: "workspace",
+    isEnabled: (context) => fdmGridBuildDisabledReason(context) === null,
+    disabledReason: fdmGridBuildDisabledReason,
+    run: (context) => {
+      const disabledReason = fdmGridBuildDisabledReason(context);
+      if (disabledReason) {
+        return { message: disabledReason, status: "failed" };
+      }
+      const sceneRevision = sceneBaseRevision(context);
+      if (sceneRevision === null) {
+        return {
+          message:
+            "The canonical scene revision is unavailable. Refetch the scene before building the grid.",
+          status: "failed",
+        };
+      }
+      return runFdmGridRefreshOperation(context, {
+        kind: "fdm_grid_refresh",
+        precondition: { scene_revision: sceneRevision },
+        reason: "explicit_build_grid",
+      });
+    },
   },
   {
     id: "geometry.add-microstrip-antenna",

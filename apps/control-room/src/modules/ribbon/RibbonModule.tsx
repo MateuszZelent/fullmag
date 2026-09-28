@@ -239,6 +239,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
   const scene = useSceneResource({
     enabled:
       activeTab === "geometry" ||
+      activeTab === "mesh" ||
       (activeTab === "view" && selection.ref?.type === "mesh-part"),
   });
   const sceneObjectIds = useMemo(

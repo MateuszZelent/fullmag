@@ -4153,7 +4153,7 @@ describe("ribbon structure", () => {
     });
   });
 
-  it("fails closed to the Mesh overview for an explicit FDM session", () => {
+  it("exposes Build Grid without FEM mesh actions for an explicit FDM session", () => {
     const visualization = new ObjectVisualizationController();
     const sessionStatus = {
       domain: { discretization: "fdm" },
@@ -4197,8 +4197,12 @@ describe("ribbon structure", () => {
         mesh_summary: { node_count: 9, element_count: 8 },
       } as never,
     });
-    expect(mesh?.groups.map((group) => group.id)).toEqual(["mesh-view"]);
-    expect(mesh?.groups.find((group) => group.id === "build")).toBeUndefined();
+    expect(mesh?.groups.map((group) => group.id)).toEqual(["build", "mesh-view"]);
+    expect(
+      mesh?.groups
+        .find((group) => group.id === "build")
+        ?.actions.find((action) => action.id === "grid.build-fdm"),
+    ).toMatchObject({ label: "Build Grid" });
     expect(mesh?.groups.find((group) => group.id === "method")).toBeUndefined();
     expect(mesh?.groups.find((group) => group.id === "size")).toBeUndefined();
     const inspectorAction = mesh?.groups
@@ -4306,6 +4310,9 @@ describe("ribbon structure", () => {
 
     const mesh = buildRibbonTabContent("mesh", context);
     const buildGroup = mesh?.groups.find((group) => group.id === "build");
+    expect(
+      buildGroup?.actions.find((action) => action.id === "grid.build-fdm"),
+    ).toBeUndefined();
     expect(
       buildGroup?.actions.find(
         (action) => action.id === "mesh.build-shared-domain",

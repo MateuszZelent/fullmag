@@ -51,5 +51,6 @@ Pozostają nieuruchomione do czasu zniesienia zakazu testów jednostkowych.
 Ten etap domyka fragment P4-C dotyczący zachowania i jawnego przedstawienia
 ostatniej poprawnej siatki. Nie zamyka całej bramki P4: nadal brakuje managed
 process E2E preparacji FEM oraz pozostałych elementów workflow
-Geometry/Grid/Mesh/Compute i Operations/Problems. Stan pozostaje: **P4 50%**,
-cały plan około **49%**.
+Geometry/Mesh/Compute i Operations/Problems. Jawne FDM `Build Grid` zostało
+zrealizowane w kolejnym checkpointcie. Stan pozostaje: **P4 50%**, cały plan
+około **49%**.

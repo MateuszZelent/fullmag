@@ -40,7 +40,10 @@ import {
   useCommandDetailResource,
   useRuntimeCommandControlResourceData,
 } from "@/kernel/resources/studyRuntimeResources";
-import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
+import {
+  MODEL_SCENE_PATH,
+  VISUALIZATION_STATE_PATH,
+} from "@/kernel/api/apiPaths";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import type { KernelApi, ModuleId } from "@/kernel/types";
 import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
@@ -512,6 +515,7 @@ interface ExplorerTreeViewProps {
   kernel: KernelApi;
   moduleId: ModuleId;
   nodes: readonly ExplorerNode[];
+  sceneResourceData: unknown;
   tabId: ExplorerTabId;
 }
 
@@ -522,6 +526,7 @@ export function ExplorerTreeView({
   kernel,
   moduleId,
   nodes,
+  sceneResourceData,
   tabId,
 }: ExplorerTreeViewProps) {
   const treeRef = useRef<HTMLDivElement | null>(null);
@@ -534,9 +539,10 @@ export function ExplorerTreeView({
   const commandResourceData = useMemo(
     () => ({
       ...runtimeResourceData,
+      [MODEL_SCENE_PATH]: sceneResourceData,
       [VISUALIZATION_STATE_PATH]: visualizationState.data,
     }),
-    [runtimeResourceData, visualizationState.data],
+    [runtimeResourceData, sceneResourceData, visualizationState.data],
   );
   const rows = useMemo(
     () => flattenVisibleExplorerRows(nodes, expandedIds),

@@ -36,8 +36,10 @@ import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 import { SelectionController } from "../selection/SelectionController";
 
 import {
+  FEM_GRID_COMMAND_NOT_APPLICABLE_REASON,
   FDM_MESH_COMMAND_NOT_APPLICABLE_REASON,
   GEOMETRY_LIFECYCLE_COMMANDS,
+  UNKNOWN_GRID_COMMAND_LANE_REASON,
   UNKNOWN_MESH_COMMAND_LANE_REASON,
   resolveMeshCommandLane,
   resumeMeshBuildObservation,
@@ -1561,6 +1563,72 @@ describe("geometry lifecycle command contributions", () => {
       reason: "test_policy_commit",
     });
     expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(14);
+  });
+
+  it("builds the committed FDM grid through an explicit command", async () => {
+    const registry = registryWithLifecycleCommands();
+    const submit = vi.fn(async () => ({
+      accepted: true,
+      command_id: "cmd-explicit-fdm-grid",
+    }));
+    const detail = vi.fn(async () => ({
+      command_id: "cmd-explicit-fdm-grid",
+      completion_status: "completed",
+      kind: "fdm_grid_refresh",
+      resource_invalidations: [
+        { resource_key: "data/domain/topology", revision: 18 },
+      ],
+      seq: 18,
+      status: "completed",
+    }));
+    const context: CommandContext = {
+      api: { commands: { detail, submit } } as never,
+      resourceData: {
+        ...sessionStatus("fdm"),
+        [MODEL_SCENE_PATH]: { revision: 17 },
+      },
+      source: "test",
+    };
+
+    expect(registry.isEnabled("grid.build-fdm", context)).toBe(true);
+    await expect(registry.execute("grid.build-fdm", context)).resolves.toEqual({
+      commandId: "cmd-explicit-fdm-grid",
+      status: "completed",
+    });
+    expect(submit).toHaveBeenCalledWith({
+      client_intent_id: expect.stringMatching(/^fdm-grid-refresh-/),
+      kind: "fdm_grid_refresh",
+      precondition: { scene_revision: 17 },
+      reason: "explicit_build_grid",
+    });
+  });
+
+  it("exposes Build Grid only for a resolved FDM lane with a canonical scene", () => {
+    const registry = registryWithLifecycleCommands();
+    const api = { commands: {} } as never;
+    const context = (discretization: string, scene: unknown = { revision: 17 }) => ({
+      api,
+      resourceData: {
+        ...sessionStatus(discretization),
+        [MODEL_SCENE_PATH]: scene,
+      },
+      source: "test" as const,
+    });
+
+    expect(registry.isEnabled("grid.build-fdm", context("fem"))).toBe(false);
+    expect(
+      registry.get("grid.build-fdm")?.disabledReason?.(context("fem")),
+    ).toBe(FEM_GRID_COMMAND_NOT_APPLICABLE_REASON);
+    expect(registry.isEnabled("grid.build-fdm", context("auto"))).toBe(false);
+    expect(
+      registry.get("grid.build-fdm")?.disabledReason?.(context("auto")),
+    ).toBe(UNKNOWN_GRID_COMMAND_LANE_REASON);
+    expect(registry.isEnabled("grid.build-fdm", context("fdm", null))).toBe(false);
+    expect(
+      registry.get("grid.build-fdm")?.disabledReason?.(context("fdm", null)),
+    ).toBe(
+      "The canonical scene revision is unavailable. Refetch the scene before building the grid.",
+    );
   });
 
   it("restores an FDM grid refresh observation after reload without a FEM mesh target", async () => {

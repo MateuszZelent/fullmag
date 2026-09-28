@@ -3583,6 +3583,7 @@ describe("buildModelTree", () => {
       buildModelTree({ domainPresentation: fdmExplorerPresentation() }),
     );
     expect(nodes.find((node) => node.id === "model:mesh")).toMatchObject({
+      contextCommands: ["grid.build-fdm", "workspace.focus-selection"],
       kind: "mesh.root",
       label: "Mesh",
     });
@@ -3968,6 +3969,11 @@ describe("buildModelTree", () => {
       kind: "airbox.root",
       label: "Airbox",
       status: "mesh-stale",
+    });
+    expect(
+      nodes.find((node) => node.id === "model:mesh:shared-domain"),
+    ).toMatchObject({
+      contextCommands: ["grid.build-fdm"],
     });
     expect(nodes.find((node) => node.id === "model:mesh")).toMatchObject({
       kind: "mesh.root",

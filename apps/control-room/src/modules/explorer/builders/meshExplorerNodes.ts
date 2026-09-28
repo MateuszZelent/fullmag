@@ -276,6 +276,7 @@ export function buildFdmMeshPolicyNode(
       badge: `${grid.shape.join(" × ")} / ${cellCount} cells`,
       icon: "mesh",
       status,
+      contextCommands: ["grid.build-fdm"],
     },
     {
       id: "model:mesh:magnetic-support",
@@ -330,7 +331,7 @@ export function buildFdmMeshPolicyNode(
     badge: `FDM · ${grid.shape.join(" × ")} / ${cellCount} cells`,
     icon: "mesh",
     status,
-    contextCommands: ["workspace.focus-selection"],
+    contextCommands: ["grid.build-fdm", "workspace.focus-selection"],
     children: [
       {
         id: domainMeshId,
@@ -340,6 +341,7 @@ export function buildFdmMeshPolicyNode(
         badge: `structured grid · ${grid.shape.join(" × ")} / ${cellCount} cells`,
         icon: "mesh",
         status,
+        contextCommands: ["grid.build-fdm"],
         children: [...structuredGridDetails, ...multilayerDetails],
       },
       {

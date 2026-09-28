@@ -157,6 +157,15 @@ i [`p3/32-supervisor-process-heartbeat.md`](p3/32-supervisor-process-heartbeat.m
 | **P7** | Studies złożone, wiele projektów i targety | **0%** | Zależności, case mapping i target contracts są zaplanowane. | Brak study compiler, wieloprojektowego runtime, target adapters i raportów reprodukowalnych. |
 | **P8** | Cutover, dystrybucja, macierz CAE i wydanie | **2%** | Cutover, rollback, packaging i release gates są zdefiniowane; usunięto jawnie zaakceptowaną archiwalną kopię `_to_delete_legacy_web` (981 śledzonych plików), gdy aktywne skrypty root wskazują Control Room. | Brak usunięcia legacy writers backendu, pełnej kwalifikacji klientów/cutover, managed build/package, pełnej macierzy CAE, review/CI/merge i release qualification. |
 
+Aktualizacja P4-C z 28.09.2026: Control Room ma jawne `Build Grid` dla FDM w
+ribbonie i Explorerze. Obie powierzchnie wywołują `grid.build-fdm`, wymagają
+kanonicznej rewizji sceny i wysyłają `fdm_grid_refresh` z revision fence.
+Browser smoke potwierdził payload, granicę FDM/FEM, brak 404 i błędów konsoli
+oraz zdrowy WebGL (`703×478`, `contextLost=false`). Przyrost realizuje część
+P4-C, ale nie zamyka pełnego Operations/Problems ani bramki native/managed;
+wskaźniki pozostają **P4 50%** i około **49%** dla całego planu. Szczegóły:
+[`p4/17-explicit-fdm-build-grid.md`](p4/17-explicit-fdm-build-grid.md).
+
 Uwaga do wiersza P3-B: trwałe wpisy `retry_decision.v1` oraz ich
 [`coordinator_journal.v1`](p3/03-coordinator-journal.md) są już source-level PASS (`SessionStore` zapewnia
 replay, claim/epoch fencing, contiguous command/event sequence, terminal

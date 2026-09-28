@@ -969,6 +969,9 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           kernel={kernel}
           moduleId={moduleId}
           nodes={nodes}
+          sceneResourceData={
+            modelResource.status === "ready" ? modelResource.data : null
+          }
           tabId={activeTab}
         />
         <footer className="fm-explorer-toolbar">

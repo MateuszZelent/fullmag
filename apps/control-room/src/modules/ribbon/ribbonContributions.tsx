@@ -531,6 +531,7 @@ const meshTab: RibbonTabContent = {
       subtitle: "mesh",
       tone: "compute",
       actions: [
+        { id: "grid.build-fdm", icon: icon(Grid3X3), label: "Build Grid", accent: true, iconColor: C.green, tooltip: "Rebuild the structured FDM grid from the committed scene" },
         { id: "mesh.build-selected", icon: icon(RefreshCw),  label: "Build",      accent: true, splitButton: true, iconColor: C.green, menu: [...statusMenu("mesh-build-status", "Mesh state", "Not built", "warning"), separator("mesh-build-sep"), ...menu("mesh-build", "Build scope", ["Selected object", "All objects", "Universe mesh", "Shared solver mesh"])] },
         { id: "mesh.build-shared-domain", icon: icon(Zap),   label: "Build All",  splitButton: true, iconColor: C.yellow, menu: menu("mesh-build-all", "Build all", ["FDM mesh", "FEM shared domain", "Quality report"]) },
         { id: "mesh-stats",     icon: icon(BarChart3),  label: "Statistics",               iconColor: C.peach },
@@ -1194,14 +1195,31 @@ function meshLastGoodProvenance(context: RibbonBuildContext): {
 
 function buildNonFemMeshTabContent(
   content: RibbonTabContent,
+  discretization: string | null,
 ): RibbonTabContent {
   const overviewLabel = "Open mesh overview";
   const viewGroup = content.groups.find((group) => group.id === "mesh-view");
   if (!viewGroup) return { ...content, groups: [] };
 
+  const buildGroup = content.groups.find((group) => group.id === "build");
+  const buildGridAction = buildGroup?.actions.find(
+    (action) => action.id === "grid.build-fdm",
+  );
+  const fdmBuildGroups =
+    discretization === "fdm" && buildGroup && buildGridAction
+      ? [
+          {
+            ...buildGroup,
+            subtitle: "structured grid",
+            actions: [buildGridAction],
+          },
+        ]
+      : [];
+
   return {
     ...content,
     groups: [
+      ...fdmBuildGroups,
       {
         ...viewGroup,
         title: "Mesh",
@@ -1239,7 +1257,7 @@ function buildMeshTabContent(
 ): RibbonTabContent {
   const discretization = ribbonDiscretization(context);
   if (discretization !== "fem") {
-    return buildNonFemMeshTabContent(content);
+    return buildNonFemMeshTabContent(content, discretization);
   }
 
   const status = meshBuildStatus(context);
@@ -1254,10 +1272,13 @@ function buildMeshTabContent(
     ...content,
     groups: content.groups.map((group) => {
       if (group.id === "build") {
+        const actions = group.actions.filter(
+          (action) => action.id !== "grid.build-fdm",
+        );
         return {
           ...group,
           subtitle: status.label,
-          actions: group.actions.map((action) => {
+          actions: actions.map((action) => {
             if (action.id === "mesh.build-selected") {
               return {
                 ...action,
