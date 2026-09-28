@@ -344,7 +344,8 @@ całej lane ani pozostałych kontraktów tej strony.
 - [x] walidacja i typowane błędy opisane
 - [x] backend-neutralny typ i strict walidacja `AcceptedStateRef`
 - [x] kanoniczny builder `clock_digest`/`state_digest` dla kompletu nazwanych primary carriers
-- [ ] podłączenie buildera i materializacja `AcceptedStateRef` przez lane'y oraz `ObservationRuntime`
+- [x] źródłowy snapshot prostego lane'u FDM CPU z transakcyjnego stanu solvera
+- [ ] pełna materializacja `AcceptedStateRef` przez wszystkie lane'y oraz `ObservationRuntime`
 - [ ] atomowy autosave frame descriptor i reader
 - [ ] transactional `.fms` runtime import/export
 - [ ] receipts numeryczne, managed CPU/GPU i browser/WebGL
@@ -365,6 +366,7 @@ całej lane ani pozostałych kontraktów tej strony.
 | docelowy funkcjonał obserwacji | `docs/physics/interactive-observation-and-restart-semantics.md` | `DOC-ANCHOR:observation-functional` | planowany backend-neutralny funkcjonał quantity | wszystkie | planned contract, bez runtime proof |
 | normatywna accepted-state identity | `docs/adr/0025-persistent-runtime-and-observation-sources.md` | `DOC-ANCHOR:accepted-state-identity` | siedem pól trwałego ID i osobna generacja runtime'u | wszystkie | accepted contract |
 | accepted-state identity | `crates/fullmag-runner/src/observation.rs` | `AcceptedStateRef`, `ObservationClock`, `accepted_state_digests` | backend-neutralny typ, strict wire validation, kanoniczny zegar i content-bound primary carriers | wszystkie | source contract i known vector PASS; materializacja lane'ów i runtime proof otwarte |
+| accepted-state lane snapshot | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `fullmag.fdm.cpu.accepted-state-snapshot.v1` | zegar oraz `state_digest` prostego FDM CPU związany z transakcyjnym stanem solvera | FDM CPU | source/in-process PASS; coupled transport, Frozen Spins, pełny ref i managed runtime otwarte |
 | docelowa availability | `docs/physics/interactive-observation-and-restart-semantics.md` | `DOC-ANCHOR:quantity-availability` | planowane przecięcie katalogu, fizyki, planu, lane'u i nośników | wszystkie | planned contract, bez runtime proof |
 | docelowa semantyka resume | `docs/physics/interactive-observation-and-restart-semantics.md` | `DOC-ANCHOR:resume-trajectory` | planowane rozróżnienie logical/exact | wszystkie | planned contract, bez runtime proof |
 | obecny eager batch do zastąpienia | `crates/fullmag-runner/src/interactive/runtime.rs` | `build_atomic_terminal_update` | bieżąca luka: terminalny snapshot FDM | FDM CPU/GPU | superseded/gap evidence, nie źródło równania docelowego |

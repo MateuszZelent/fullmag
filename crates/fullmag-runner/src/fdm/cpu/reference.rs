@@ -66,6 +66,69 @@ use std::time::Instant;
 
 const MAX_COUPLED_ADAPTIVE_REJECTIONS: u64 = 50;
 const FDM_ABM3_RUNNER_CHECKPOINT_SCHEMA: &str = "fullmag.fdm.cpu.abm3-checkpoint.v1";
+const FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA: &str = "fullmag.fdm.cpu.accepted-state-snapshot.v1";
+const FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE: &str = "solver/fdm_cpu_accepted_state_snapshot.v1.json";
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FdmCpuAcceptedStateSnapshotV1 {
+    schema_version: String,
+    clock: crate::ObservationClock,
+    clock_digest: String,
+    state_digest: String,
+    primary_carrier_ids: Vec<String>,
+}
+
+fn fdm_cpu_accepted_state_snapshot(
+    plan: &FdmPlanIR,
+    accepted_step: u64,
+    time_seconds: f64,
+    dt_seconds: Option<f64>,
+    transactional_state_digest: &str,
+) -> Result<Option<FdmCpuAcceptedStateSnapshotV1>, RunError> {
+    // The transactional CPU digest covers magnetization, integrator memory,
+    // and the accepted thermal RNG interval. Coupled transport and Frozen
+    // Spins own additional primary carriers, so this lane must stay unavailable
+    // until those carriers are supplied explicitly.
+    if !plan.spin_transport_plans.is_empty() || plan.frozen_spins.is_some() {
+        return Ok(None);
+    }
+    if !transactional_state_digest.starts_with("sha256:")
+        || transactional_state_digest.len() != 71
+        || !transactional_state_digest[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(RunError {
+            message: "FDM CPU accepted state requires a canonical transactional state digest"
+                .to_string(),
+        });
+    }
+
+    let clock = crate::ObservationClock {
+        accepted_step,
+        time_seconds,
+        dt_seconds,
+    };
+    let carrier_id = "fdm.cpu.transactional-state-digest.v1";
+    let digests = crate::accepted_state_digests(
+        clock,
+        &[crate::AcceptedPrimaryCarrier {
+            carrier_id,
+            canonical_bytes: transactional_state_digest.as_bytes(),
+        }],
+    )
+    .map_err(|error| RunError {
+        message: format!("materializing FDM CPU accepted state snapshot: {error}"),
+    })?;
+    Ok(Some(FdmCpuAcceptedStateSnapshotV1 {
+        schema_version: FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA.to_string(),
+        clock,
+        clock_digest: digests.clock_digest,
+        state_digest: digests.state_digest,
+        primary_carrier_ids: vec![carrier_id.to_string()],
+    }))
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2404,6 +2467,13 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         .map_err(|error| RunError {
             message: format!("CPU FDM transaction checkpoint digest: {error}"),
         })?;
+    let accepted_state_snapshot = fdm_cpu_accepted_state_snapshot(
+        plan,
+        step_count,
+        state.time_seconds,
+        (!is_direct_minimization && last_solver_dt > 0.0).then_some(last_solver_dt),
+        &checkpoint_digest,
+    )?;
     let mut final_provenance = artifacts.provenance_snapshot();
     if let Some(fft_execution) = final_provenance.fdm_fft_execution.as_mut() {
         let telemetry = fft_workspace.telemetry();
@@ -2542,6 +2612,14 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
             relative_path: "solver/fdm_cpu_abm3_checkpoint.v1.json".to_string(),
             bytes: serde_json::to_vec_pretty(&checkpoint).map_err(|error| RunError {
                 message: format!("serializing final FDM CPU ABM3 checkpoint artifact: {error}"),
+            })?,
+        });
+    }
+    if let Some(snapshot) = accepted_state_snapshot {
+        auxiliary_artifacts.push(crate::types::AuxiliaryArtifact {
+            relative_path: FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE.to_string(),
+            bytes: serde_json::to_vec_pretty(&snapshot).map_err(|error| RunError {
+                message: format!("serializing FDM CPU accepted state snapshot: {error}"),
             })?,
         });
     }
@@ -3851,6 +3929,93 @@ mod tests {
             bulk_dmi: None,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn fdm_cpu_accepted_state_snapshot_is_content_bound_and_strictly_scoped() {
+        let plan = make_test_plan();
+        let first = fdm_cpu_accepted_state_snapshot(
+            &plan,
+            5,
+            5.0e-14,
+            Some(1.0e-14),
+            &format!("sha256:{}", "a".repeat(64)),
+        )
+        .expect("accepted state snapshot")
+        .expect("supported simple FDM CPU lane");
+        let changed = fdm_cpu_accepted_state_snapshot(
+            &plan,
+            5,
+            5.0e-14,
+            Some(1.0e-14),
+            &format!("sha256:{}", "b".repeat(64)),
+        )
+        .expect("changed accepted state snapshot")
+        .expect("supported simple FDM CPU lane");
+
+        assert_eq!(first.schema_version, FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA);
+        assert_eq!(first.clock.accepted_step, 5);
+        assert_eq!(
+            first.primary_carrier_ids,
+            ["fdm.cpu.transactional-state-digest.v1"]
+        );
+        assert_eq!(first.clock_digest, changed.clock_digest);
+        assert_ne!(first.state_digest, changed.state_digest);
+
+        let invalid =
+            fdm_cpu_accepted_state_snapshot(&plan, 5, 5.0e-14, Some(1.0e-14), "not-a-digest")
+                .expect_err("noncanonical carrier digest must fail closed");
+        assert!(invalid
+            .message
+            .contains("canonical transactional state digest"));
+
+        let mut frozen = plan;
+        frozen.frozen_spins = Some(resolved_frozen_spins_test_plan(vec![false; 16]));
+        assert!(fdm_cpu_accepted_state_snapshot(
+            &frozen,
+            5,
+            5.0e-14,
+            Some(1.0e-14),
+            &format!("sha256:{}", "a".repeat(64)),
+        )
+        .expect("unsupported lane remains unavailable")
+        .is_none());
+    }
+
+    #[test]
+    fn simple_fdm_cpu_lane_emits_snapshot_from_its_final_transactional_state() {
+        let plan = make_test_plan();
+        let executed = execute_reference_fdm(&plan, 2.0e-14, &[], None, None)
+            .expect("simple FDM CPU execution");
+        let artifact = executed
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE)
+            .expect("accepted state snapshot artifact");
+        let snapshot: FdmCpuAcceptedStateSnapshotV1 =
+            serde_json::from_slice(&artifact.bytes).expect("strict accepted state snapshot");
+        let transaction = executed
+            .provenance
+            .fdm_cpu_step_transaction_telemetry
+            .as_ref()
+            .expect("FDM CPU transaction telemetry");
+        let recomputed = crate::accepted_state_digests(
+            snapshot.clock,
+            &[crate::AcceptedPrimaryCarrier {
+                carrier_id: "fdm.cpu.transactional-state-digest.v1",
+                canonical_bytes: transaction.checkpoint_digest.as_bytes(),
+            }],
+        )
+        .expect("recompute accepted state digest from the lane carrier");
+
+        assert_eq!(
+            snapshot.clock.accepted_step,
+            transaction.accepted_step_count
+        );
+        assert_eq!(snapshot.clock_digest, recomputed.clock_digest);
+        assert_eq!(snapshot.state_digest, recomputed.state_digest);
+        assert_eq!(snapshot.clock.time_seconds, 2.0e-14);
+        assert_eq!(snapshot.clock.dt_seconds, Some(1.0e-14));
     }
 
     #[test]
