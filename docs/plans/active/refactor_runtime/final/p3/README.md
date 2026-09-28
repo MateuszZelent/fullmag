@@ -1074,9 +1074,8 @@ około **49%**. Szczegóły:
 Publiczne `run-json` prowadzi teraz wyłącznie przez HTTP API v2 i immutable
 accepted-run. Repozytoryjne bramki, które nadal potrzebują bezpośredniego
 ProblemIR, używają ukrytego `run-problem-json-direct`; dotychczasowe
-`submit-run-json` jest ukrytym aliasem zgodności. Regresje parsera pilnują pól i
-publicznego helpu. `cargo check` i kontrole źródłowe przechodzą; test parsera
-jest **NOT VERIFIED**, ponieważ hostowy `target` wyczerpał wolne miejsce, a
-managed runner pozostaje niedostępny.
-Wskaźniki pozostają **P3 93%, P5 87%, całość około 49%**. Szczegóły:
+`submit-run-json` jest ukrytym aliasem zgodności. `cargo check`, kontrole
+źródłowe i ukierunkowany test CLI **13/13 PASS**; trzy nowe regresje pilnują pól
+i publicznego helpu. Osobny managed przebieg dokładnie pod nową nazwą pozostaje
+**NOT VERIFIED**. Wskaźniki: **P3 94%, P5 89%, całość około 49%**. Szczegóły:
 [`59-cli-run-json-cutover.md`](59-cli-run-json-cutover.md).

@@ -34,14 +34,14 @@ repozytoryjne wywołania używają już nazwy publicznej.
 ## Weryfikacja i ograniczenia
 
 `cargo check -p fullmag-cli --bin fullmag`, scoped `rustfmt`, Cargo metadata i
-składnia dziewięciu zmienionych skryptów Python przechodzą. Trzy testy parsera
-CLI zostały dodane, ale profil testowy zatrzymał się przed ich wykonaniem z `no
-space on device`; po próbie wolumin `C:` miał około 12 MiB wolnego miejsca.
-Wspólny `target` nie został usunięty, ponieważ mógł być używany przez inne
-zadania. Managed runner pozostaje niedostępny z wcześniejszym `Docker Desktop
-coordinator request failed`.
+składnia dziewięciu zmienionych skryptów Python przechodzą. Po potwierdzeniu
+braku aktywnych kompilacji, agentów i mountów checkoutu usunięto wyłącznie
+odtwarzalny `target/debug/incremental`; odzyskano 26,37 GiB. Ukierunkowany test
+CLI następnie zakończył się **13/13 PASS**, w tym trzy nowe regresje parsera i
+publicznego helpu. Managed runner pozostaje niedostępny z wcześniejszym `Docker
+Desktop coordinator request failed`.
 
-Dlatego cutover jest zamknięty na poziomie źródła i decyzji architektonicznej,
-ale test parsera oraz procesowy dowód publicznej nazwy pozostają **NOT
-VERIFIED**. Wskaźniki pozostają konserwatywnie: **P3 93%, P5 87%, cały plan
-około 49%**.
+Cutover jest zamknięty na poziomie kontraktu, implementacji i parsera. Istniejący
+managed proof obejmuje dokładnie ten sam transport pod wcześniejszą nazwą;
+osobny procesowy przebieg publicznego `run-json` pozostaje **NOT VERIFIED**.
+Wskaźniki: **P3 94%, P5 89%, cały plan około 49%**.
