@@ -678,3 +678,14 @@ dopuszcza tylko jego pusty staging; pełny `fullmag-session --lib`: **70/70**.
 Managed restart pozostaje `NOT VERIFIED`; **P4 50%, cały plan około 49%**.
 Szczegóły:
 [19-live-command-journal.md](19-live-command-journal.md).
+
+## Potwierdzenie granicy zastosowania komendy Live — 28.09.2026
+
+Wykonawca zapisuje `applied_step`, `applied_time_seconds` i deterministyczny
+`segment_id` w rekordzie etapu, a publiczny szczegół komendy projektuje te dane
+przez dokładne `command_id`. OpenAPI v2 i typy Control Room zostały
+zregenerowane. Ukierunkowane regresje CLI i API, oba source checki, typecheck
+oraz diff check są **PASS**. Pełny `AcceptedStateRef`, restart solvera i managed
+runtime pozostają **NOT VERIFIED**. **P5 90%, P4 50%, cały plan około 49%**.
+Szczegóły:
+[20-live-command-application-boundary.md](20-live-command-application-boundary.md).

@@ -4851,6 +4851,10 @@ export interface components {
         };
         CommandDetailResource: {
             accepted_at_unix_ms?: number | null;
+            /** Format: int64 */
+            applied_step?: number | null;
+            /** Format: double */
+            applied_time_seconds?: number | null;
             artifact_refs?: string[];
             checkpoint_ref?: string | null;
             client_intent_id?: string | null;
@@ -4892,6 +4896,7 @@ export interface components {
             resource_invalidations?: components["schemas"]["CommandResourceInvalidationResource"][];
             resume_from_checkpoint_ref?: string | null;
             run_id?: string | null;
+            segment_id?: string | null;
             /** Format: int64 */
             seq: number;
             solver_policy?: null | components["schemas"]["SolverPolicyRequest"];

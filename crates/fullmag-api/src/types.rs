@@ -1278,6 +1278,12 @@ pub(crate) struct StageExecutionRecord {
     #[serde(default)]
     pub started_at_unix_ms: Option<u64>,
     #[serde(default)]
+    pub applied_step: Option<u64>,
+    #[serde(default)]
+    pub applied_time_seconds: Option<f64>,
+    #[serde(default)]
+    pub segment_id: Option<String>,
+    #[serde(default)]
     pub completed_at_unix_ms: Option<u64>,
     #[serde(default)]
     pub reason: Option<fullmag_ir::StageStopReason>,

@@ -2458,6 +2458,15 @@ pub async fn get_command_detail(
         accepted_at_unix_ms,
         dispatched_at_unix_ms: record.dispatched_at_unix_ms,
         started_at_unix_ms,
+        applied_step: stage_linkage
+            .as_ref()
+            .and_then(|linkage| linkage.applied_step),
+        applied_time_seconds: stage_linkage
+            .as_ref()
+            .and_then(|linkage| linkage.applied_time_seconds),
+        segment_id: stage_linkage
+            .as_ref()
+            .and_then(|linkage| linkage.segment_id.clone()),
         completed_at_unix_ms: record.completed_at_unix_ms,
         terminal_at_unix_ms,
         completion_status: record
@@ -3820,6 +3829,9 @@ struct CommandStageLinkage {
     stage_id: Option<String>,
     stage_index: Option<u32>,
     started_at_unix_ms: Option<u128>,
+    applied_step: Option<u64>,
+    applied_time_seconds: Option<f64>,
+    segment_id: Option<String>,
     completed_at_unix_ms: Option<u128>,
     artifact_refs: Vec<String>,
     checkpoint_ref: Option<String>,
@@ -3863,6 +3875,9 @@ fn command_stage_linkage_from_record(
         ),
         stage_index: Some(index as u32),
         started_at_unix_ms: record.started_at_unix_ms.map(u128::from),
+        applied_step: record.applied_step,
+        applied_time_seconds: record.applied_time_seconds,
+        segment_id: record.segment_id.clone(),
         completed_at_unix_ms: record.completed_at_unix_ms.map(u128::from),
         artifact_refs: record.artifact_refs.clone(),
         checkpoint_ref: record.checkpoint_ref.clone(),

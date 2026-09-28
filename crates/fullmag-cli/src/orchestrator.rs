@@ -4224,6 +4224,9 @@ fn scripted_stage_execution_state(
             mesh_topology_fingerprint: None,
             mesh_revision: None,
             started_at_unix_ms: None,
+            applied_step: None,
+            applied_time_seconds: None,
+            segment_id: None,
             completed_at_unix_ms: None,
             reason: None,
             converged: false,
@@ -4416,6 +4419,9 @@ fn stage_record(index: usize, kind: Option<&str>) -> CurrentLiveStageExecutionRe
         mesh_topology_fingerprint: None,
         mesh_revision: None,
         started_at_unix_ms: None,
+        applied_step: None,
+        applied_time_seconds: None,
+        segment_id: None,
         completed_at_unix_ms: None,
         reason: None,
         converged: false,
@@ -4441,6 +4447,24 @@ fn stage_record(index: usize, kind: Option<&str>) -> CurrentLiveStageExecutionRe
         current_settle_step_index: None,
         current_settle_step_kind: None,
         current_settle_step_method: None,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct CommandApplicationBoundary {
+    applied_step: u64,
+    applied_time_seconds: f64,
+    segment_id: String,
+}
+
+impl CommandApplicationBoundary {
+    fn new(run_id: &str, command_id: &str, applied_step: u64, applied_time_seconds: f64) -> Self {
+        let time_bits = applied_time_seconds.to_bits();
+        Self {
+            applied_step,
+            applied_time_seconds,
+            segment_id: format!("segment:{run_id}:{command_id}:{applied_step}:{time_bits:016x}"),
+        }
     }
 }
 
@@ -4480,6 +4504,7 @@ impl ActiveSequenceState {
         command_id: &str,
         started_at_unix_ms: u128,
         artifact_ref: Option<String>,
+        application_boundary: Option<&CommandApplicationBoundary>,
     ) {
         let current_index = self.current_stage_index();
         if current_index >= self.stages.len() {
@@ -4490,6 +4515,10 @@ impl ActiveSequenceState {
         record.status = "running".to_string();
         record.command_id = Some(command_id.to_string());
         record.started_at_unix_ms = Some(millis_to_u64(started_at_unix_ms));
+        record.applied_step = application_boundary.map(|boundary| boundary.applied_step);
+        record.applied_time_seconds =
+            application_boundary.map(|boundary| boundary.applied_time_seconds);
+        record.segment_id = application_boundary.map(|boundary| boundary.segment_id.clone());
         record.completed_at_unix_ms = None;
         record.progress_percent = Some(5.0);
         record.progress_label = Some("starting".to_string());
@@ -4595,6 +4624,9 @@ impl ActiveSequenceState {
                 mesh_topology_fingerprint: previous.mesh_topology_fingerprint,
                 mesh_revision: previous.mesh_revision,
                 started_at_unix_ms: previous.started_at_unix_ms,
+                applied_step: previous.applied_step,
+                applied_time_seconds: previous.applied_time_seconds,
+                segment_id: previous.segment_id,
                 completed_at_unix_ms: completed_at_unix_ms
                     .map(millis_to_u64)
                     .or(previous.completed_at_unix_ms),
@@ -10360,6 +10392,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     .get("sampling_resolution"),
             )?;
             let running_at_unix_ms = unix_time_millis()?;
+            let application_boundary = CommandApplicationBoundary::new(
+                &run_id,
+                &command.command_id,
+                step_offset,
+                time_offset,
+            );
             let stage_fem_mesh_asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(
                 &execution_plan.backend_plan,
             );
@@ -10379,6 +10417,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     &command.command_id,
                     running_at_unix_ms,
                     Some(current_stage_artifact_dir.display().to_string()),
+                    Some(&application_boundary),
                 );
                 sequence.mark_current_fem_mesh_identity(stage_fem_mesh_asset.as_ref());
             }
@@ -11585,6 +11624,7 @@ mod tests {
         attach_stage_fem_mesh_identity,
         classify_wait_for_solve_command,
         continuation_source_from_backend_plan,
+        CommandApplicationBoundary,
         cumulative_rhs_evals,
         current_fdm_mesh_workspace,
         default_domain_region_markers,
@@ -15330,13 +15370,35 @@ mod tests {
     }
 
     #[test]
+    fn active_sequence_records_the_exact_application_boundary_and_segment() {
+        let mut sequence = ActiveSequenceState::single_current();
+        let boundary = CommandApplicationBoundary::new("run-7", "cmd-hot-apply", 42, 2.5e-12);
+
+        sequence.mark_current_started("cmd-hot-apply", 1_700_000_000_000, None, Some(&boundary));
+        sequence.mark_current("completed", None, Some(1_700_000_001_000), None);
+
+        let stage = sequence
+            .completed_stage_execution("awaiting_command")
+            .stages
+            .into_iter()
+            .next()
+            .expect("stage record should be present");
+        assert_eq!(stage.applied_step, Some(42));
+        assert_eq!(stage.applied_time_seconds, Some(2.5e-12));
+        assert_eq!(
+            stage.segment_id.as_deref(),
+            Some("segment:run-7:cmd-hot-apply:42:3d85fd7fe1796495")
+        );
+    }
+
+    #[test]
     fn active_sequence_tracks_pause_checkpoint_and_resume_ref() {
         let mut sequence = ActiveSequenceState::new(vec![SequenceStage::Run {
             until_seconds: 1e-9,
             max_steps: Some(100),
         }]);
 
-        sequence.mark_current_started("cmd-stage-0", 1_700_000_000_000, None);
+        sequence.mark_current_started("cmd-stage-0", 1_700_000_000_000, None, None);
         sequence.mark_current(
             "paused",
             None,
@@ -15348,7 +15410,7 @@ mod tests {
             Some("runs/run-1/checkpoints/cp-000042/common_state.json".to_string()),
         );
         sequence.mark_current_resume_from_checkpoint("cp-000042");
-        sequence.mark_current_started("cmd-stage-0", 1_700_000_001_000, None);
+        sequence.mark_current_started("cmd-stage-0", 1_700_000_001_000, None, None);
 
         let stage = sequence
             .stage_execution(Some("run"), "running")
@@ -15417,7 +15479,7 @@ mod tests {
         }]);
 
         sequence.mark_current_materialized_kind("flat_hysteresis");
-        sequence.mark_current_started("cmd-stage-0", 1_700_000_000_000, None);
+        sequence.mark_current_started("cmd-stage-0", 1_700_000_000_000, None, None);
         sequence.mark_current("completed", None, Some(1_700_000_001_000), None);
 
         let execution = sequence.completed_stage_execution("awaiting_command");
@@ -15522,7 +15584,7 @@ mod tests {
         let sequence = active_sequence
             .as_mut()
             .expect("active sequence should be present");
-        sequence.mark_current_started("cmd-solve", 1_700_000_000_000, None);
+        sequence.mark_current_started("cmd-solve", 1_700_000_000_000, None, None);
         sequence.mark_current("paused", None, None, None);
 
         let execution =
@@ -16199,7 +16261,7 @@ mod tests {
         assert_eq!(scripted.stages[0].mesh_revision, None);
 
         let mut interactive = ActiveSequenceState::single_current();
-        interactive.mark_current_started("cmd-interactive", 1_700_000_000_000, None);
+        interactive.mark_current_started("cmd-interactive", 1_700_000_000_000, None, None);
         interactive.mark_current_fem_mesh_identity(Some(&asset));
         let interactive_execution = interactive.stage_execution(Some("relax"), "running");
         assert_eq!(
@@ -16719,7 +16781,7 @@ mod tests {
     #[test]
     fn active_sequence_preserves_completed_relaxation_metric_and_identity() {
         let mut state = ActiveSequenceState::single_current();
-        state.mark_current_started("cmd-relax", 1_700_000_000_000, None);
+        state.mark_current_started("cmd-relax", 1_700_000_000_000, None, None);
         let completion = fullmag_ir::StageCompletionIR {
             status: "completed".into(),
             converged: true,
