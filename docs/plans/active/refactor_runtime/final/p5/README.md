@@ -17,9 +17,12 @@ aktywnego runtime'u.
 3. [Snapshot zaakceptowanego stanu FDM CPU](03-fdm-cpu-accepted-state-snapshot.md)
    — rzeczywisty terminalny stan prostego lane'u CPU związany z jego receipt'em
    transakcyjnym, z fail-closed dla brakujących nośników sprzężonych.
-4. [Granica zastosowania komendy Live](../p4/20-live-command-application-boundary.md)
+4. [Trwały `AcceptedStateRef` prostego FDM CPU](04-durable-fdm-cpu-accepted-state-ref.md)
+   — powiązanie snapshotu z accepted RunId/stage, preparation, planem i
+   ownership epoch w immutable worker receipt oraz jego recovery.
+5. [Granica zastosowania komendy Live](../p4/20-live-command-application-boundary.md)
    — publiczny readback kroku, czasu i segmentu faktycznego zastosowania komendy.
 
-Pełna materializacja digestów przez wszystkie lane'y, publikacja
-`AcceptedStateRef` w runtime/API, checkpoint compatibility, observation runtime
-i managed qualification pozostają otwarte. P5 wynosi **92%**.
+Materializacja dla coupled/Frozen Spins, FDM GPU i FEM, publiczny zasób API,
+checkpoint compatibility, observation runtime i managed qualification
+pozostają otwarte. P5 wynosi **93%**.

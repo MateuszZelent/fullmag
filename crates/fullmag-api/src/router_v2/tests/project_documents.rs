@@ -3158,6 +3158,26 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             assert!(process_result.execution.completed_step_count > 0);
             assert!(!process_result.execution.recovered_from_receipt);
             assert!(process_result.receipt_recovered_before_publication);
+            let accepted_state_ref = process_result
+                .execution
+                .accepted_state_ref
+                .as_ref()
+                .expect("simple accepted FDM CPU worker publishes AcceptedStateRef");
+            assert_eq!(accepted_state_ref.id.run_id, accepted_run_id.as_str());
+            assert_eq!(
+                accepted_state_ref.id.stage_id.as_deref(),
+                Some(step.step_id.as_str())
+            );
+            assert_eq!(
+                accepted_state_ref.generation.runtime_epoch,
+                claim.ownership_epoch.value()
+            );
+            assert_eq!(
+                accepted_state_ref.generation.accepted_revision,
+                accepted_state_ref.id.accepted_step
+            );
+            assert!(accepted_state_ref.id.plan_digest.starts_with("sha256:"));
+            assert!(accepted_state_ref.id.domain_digest.starts_with("sha256:"));
 
             let mut recovered_inbox = fullmag_runtime_control::DurableWorkerInbox::recover(
                 fullmag_session::SessionStore::open(store.root().to_path_buf()).unwrap(),

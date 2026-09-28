@@ -4,6 +4,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
 
+pub const FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA: &str =
+    "fullmag.fdm.cpu.accepted-state-snapshot.v1";
+pub const FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE: &str =
+    "solver/fdm_cpu_accepted_state_snapshot.v1.json";
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ObservationClock {
@@ -58,6 +63,65 @@ pub struct AcceptedPrimaryCarrier<'a> {
 pub struct AcceptedStateDigests {
     pub clock_digest: String,
     pub state_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FdmCpuAcceptedStateSnapshotV1 {
+    pub schema_version: String,
+    pub clock: ObservationClock,
+    pub clock_digest: String,
+    pub state_digest: String,
+    pub primary_carrier_ids: Vec<String>,
+}
+
+impl FdmCpuAcceptedStateSnapshotV1 {
+    pub fn from_transactional_state_digest(
+        clock: ObservationClock,
+        transactional_state_digest: &str,
+    ) -> Result<Self, AcceptedStateIdentityError> {
+        if !is_canonical_sha256(transactional_state_digest) {
+            return Err(AcceptedStateIdentityError::InvalidDigest {
+                field: "transactional_state_digest",
+            });
+        }
+        let carrier_id = "fdm.cpu.transactional-state-digest.v1";
+        let digests = accepted_state_digests(
+            clock,
+            &[AcceptedPrimaryCarrier {
+                carrier_id,
+                canonical_bytes: transactional_state_digest.as_bytes(),
+            }],
+        )?;
+        Ok(Self {
+            schema_version: FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA.to_string(),
+            clock,
+            clock_digest: digests.clock_digest,
+            state_digest: digests.state_digest,
+            primary_carrier_ids: vec![carrier_id.to_string()],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), AcceptedStateIdentityError> {
+        if self.schema_version != FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA {
+            return Err(AcceptedStateIdentityError::InvalidSnapshotSchema);
+        }
+        self.clock.validate()?;
+        if self.clock.digest()? != self.clock_digest {
+            return Err(AcceptedStateIdentityError::InvalidDigest {
+                field: "clock_digest",
+            });
+        }
+        if !is_canonical_sha256(&self.state_digest) {
+            return Err(AcceptedStateIdentityError::InvalidDigest {
+                field: "state_digest",
+            });
+        }
+        if self.primary_carrier_ids != ["fdm.cpu.transactional-state-digest.v1"] {
+            return Err(AcceptedStateIdentityError::InvalidPrimaryCarrierSet);
+        }
+        Ok(())
+    }
 }
 
 pub fn accepted_state_digests(
@@ -201,6 +265,8 @@ pub enum AcceptedStateIdentityError {
     MissingPrimaryCarriers,
     EmptyCarrierId,
     DuplicateCarrierId,
+    InvalidSnapshotSchema,
+    InvalidPrimaryCarrierSet,
     InvalidDigest { field: &'static str },
 }
 
@@ -222,6 +288,12 @@ impl fmt::Display for AcceptedStateIdentityError {
             }
             Self::DuplicateCarrierId => {
                 formatter.write_str("accepted state primary carrier ids must be unique")
+            }
+            Self::InvalidSnapshotSchema => {
+                formatter.write_str("accepted state snapshot schema is unsupported")
+            }
+            Self::InvalidPrimaryCarrierSet => {
+                formatter.write_str("accepted state snapshot primary carrier set is invalid")
             }
             Self::InvalidDigest { field } => {
                 write!(formatter, "accepted state {field} must be canonical sha256")

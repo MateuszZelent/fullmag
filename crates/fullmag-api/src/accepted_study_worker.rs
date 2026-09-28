@@ -4,7 +4,10 @@ use fullmag_authoring::{
     StudyAcceptancePolicy, StudyInputPort, StudyInputSource, StudyOutputPort, StudyPortDataKind,
 };
 use fullmag_ir::ExecutionPlanIR;
-use fullmag_runner::{RunResult, RunStatus, StepAction};
+use fullmag_runner::{
+    AcceptedStateGeneration, AcceptedStateId, AcceptedStateRef, FdmCpuAcceptedStateSnapshotV1,
+    RunResult, RunStatus, StepAction, FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE,
+};
 use fullmag_runtime_control::{AcceptedWorkerStep, StudyOutputPayload};
 use fullmag_session::SessionStore;
 use serde::{Deserialize, Serialize};
@@ -29,6 +32,7 @@ pub(crate) struct AcceptedRunnerExecution {
     pub(crate) outputs: Vec<StudyOutputPayload>,
     pub(crate) attempt_output_dir: PathBuf,
     pub(crate) recovered_from_receipt: bool,
+    pub(crate) accepted_state_ref: Option<AcceptedStateRef>,
 }
 
 pub(crate) enum AcceptedWorkerProcessOutcome {
@@ -95,6 +99,8 @@ struct WorkerExecutionCompletedReceipt {
     status: RunStatus,
     completed_step_count: usize,
     outputs: Vec<WorkerExecutionOutputReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    accepted_state_ref: Option<AcceptedStateRef>,
 }
 
 /// Reserve one private runner output directory for the exact active task
@@ -275,6 +281,87 @@ fn worker_execution_receipt_identity(
     })
 }
 
+fn accepted_state_ref_from_runner_snapshot(
+    attempt_output_dir: &Path,
+    accepted_step: &AcceptedWorkerStep,
+    required_for_supported_lane: bool,
+) -> Result<Option<AcceptedStateRef>> {
+    if accepted_step.resolved_input.requested_execution.device != "cpu" {
+        return Ok(None);
+    }
+    let fullmag_ir::BackendPlanIR::Fdm(fdm_plan) = &accepted_step.execution_plan.backend_plan
+    else {
+        return Ok(None);
+    };
+    if !fdm_plan.spin_transport_plans.is_empty() || fdm_plan.frozen_spins.is_some() {
+        return Ok(None);
+    }
+
+    let snapshot_path = attempt_output_dir.join(FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE);
+    match fs::symlink_metadata(&snapshot_path) {
+        Ok(_) => {}
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound && !required_for_supported_lane =>
+        {
+            return Ok(None);
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "inspect accepted state snapshot `{}`",
+                    snapshot_path.display()
+                )
+            });
+        }
+    }
+    let bytes = read_explicit_runner_artifact(
+        attempt_output_dir,
+        FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE,
+        64 * 1024,
+    )
+    .context("read accepted FDM CPU state snapshot")?;
+    let snapshot: FdmCpuAcceptedStateSnapshotV1 =
+        serde_json::from_slice(&bytes).context("decode accepted FDM CPU state snapshot")?;
+    snapshot
+        .validate()
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+        .context("validate accepted FDM CPU state snapshot")?;
+
+    let plan_digest = format!(
+        "sha256:{}",
+        fullmag_session::canonical_json_sha256(&serde_json::json!({
+            "schema_version": "fullmag.accepted-state-plan.v1",
+            "problem": &accepted_step.problem,
+            "execution_plan": &accepted_step.execution_plan,
+            "requested_execution": &accepted_step.resolved_input.requested_execution,
+        }))
+    );
+    let reference = AcceptedStateRef {
+        id: AcceptedStateId {
+            run_id: accepted_step.claim.run_id.as_str().to_string(),
+            stage_id: Some(accepted_step.step_id.clone()),
+            accepted_step: snapshot.clock.accepted_step,
+            clock_digest: snapshot.clock_digest,
+            state_digest: snapshot.state_digest,
+            domain_digest: accepted_step
+                .resolved_input
+                .preparation
+                .plan_fingerprint
+                .clone(),
+            plan_digest,
+        },
+        generation: AcceptedStateGeneration {
+            runtime_epoch: accepted_step.claim.ownership_epoch.value(),
+            accepted_revision: snapshot.clock.accepted_step,
+        },
+    };
+    reference
+        .validate()
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+        .context("validate accepted FDM CPU state reference")?;
+    Ok(Some(reference))
+}
+
 fn expected_output_binding(
     port: &StudyOutputPort,
 ) -> Result<(&'static str, &'static str, &'static str)> {
@@ -309,6 +396,7 @@ fn persist_completed_worker_execution(
     status: RunStatus,
     completed_step_count: usize,
     outputs: &[StudyOutputPayload],
+    accepted_state_ref: Option<&AcceptedStateRef>,
 ) -> Result<()> {
     let mut declared = BTreeMap::new();
     for port in declared_outputs {
@@ -359,6 +447,7 @@ fn persist_completed_worker_execution(
         status,
         completed_step_count,
         outputs: output_refs,
+        accepted_state_ref: accepted_state_ref.cloned(),
     };
     write_immutable_attempt_receipt(
         attempt_output_dir,
@@ -373,6 +462,7 @@ fn recover_completed_worker_execution(
     expected_identity: &WorkerExecutionReceiptIdentity,
     declared_outputs: &[StudyOutputPort],
     max_output_bytes: u64,
+    expected_accepted_state_ref: Option<&AcceptedStateRef>,
 ) -> Result<AcceptedRunnerExecution> {
     let started: WorkerExecutionStartedReceipt =
         read_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_STARTED_RECEIPT)?
@@ -388,6 +478,7 @@ fn recover_completed_worker_execution(
         || !completed.identity.matches_same_attempt(expected_identity)
         || completed.status != RunStatus::Completed
         || completed.completed_step_count == 0
+        || completed.accepted_state_ref.as_ref() != expected_accepted_state_ref
     {
         bail!("completed worker receipt is invalid for the current accepted Start");
     }
@@ -473,6 +564,7 @@ fn recover_completed_worker_execution(
         outputs,
         attempt_output_dir: attempt_output_dir.to_path_buf(),
         recovered_from_receipt: true,
+        accepted_state_ref: completed.accepted_state_ref,
     })
 }
 
@@ -772,12 +864,15 @@ pub(crate) fn execute_accepted_worker_start(
             if !accepted_step.claim.is_same_or_renewed_by(&current_claim) {
                 bail!("accepted worker receipt belongs to a stale task claim");
             }
+            let expected_accepted_state_ref =
+                accepted_state_ref_from_runner_snapshot(&existing_path, accepted_step, false)?;
             return recover_completed_worker_execution(
                 store,
                 &existing_path,
                 &receipt_identity,
                 &study_step.outputs,
                 accepted_step.claim.lease.budget.storage_bytes,
+                expected_accepted_state_ref.as_ref(),
             )
             .context("recover completed accepted worker attempt without rerunning solver");
         }
@@ -813,6 +908,7 @@ pub(crate) fn execute_accepted_worker_start(
             outputs: Vec::new(),
             attempt_output_dir,
             recovered_from_receipt: false,
+            accepted_state_ref: None,
         });
     }
     if result.status != RunStatus::Completed {
@@ -829,6 +925,8 @@ pub(crate) fn execute_accepted_worker_start(
         accepted_step.claim.lease.budget.storage_bytes,
     )
     .context("collect explicit typed outputs from the accepted runner attempt")?;
+    let accepted_state_ref =
+        accepted_state_ref_from_runner_snapshot(&attempt_output_dir, accepted_step, true)?;
     persist_completed_worker_execution(
         store,
         &attempt_output_dir,
@@ -837,6 +935,7 @@ pub(crate) fn execute_accepted_worker_start(
         result.status,
         result.steps.len(),
         &outputs,
+        accepted_state_ref.as_ref(),
     )
     .context("persist immutable completed worker output receipt")?;
 
@@ -846,6 +945,7 @@ pub(crate) fn execute_accepted_worker_start(
         outputs,
         attempt_output_dir,
         recovered_from_receipt: false,
+        accepted_state_ref,
     })
 }
 
@@ -1051,7 +1151,10 @@ fn apply_accepted_start_effect(
         None,
     )
     .context("recover completed worker receipt before publication")?;
-    if !durable_execution.recovered_from_receipt || durable_execution.outputs != execution.outputs {
+    if !durable_execution.recovered_from_receipt
+        || durable_execution.outputs != execution.outputs
+        || durable_execution.accepted_state_ref != execution.accepted_state_ref
+    {
         bail!("worker receipt recovery differs from the completed runner output");
     }
     if control.interrupt_requested.load(Ordering::Acquire) {
@@ -1670,7 +1773,7 @@ fn read_explicit_runner_artifact(
     let canonical_file = path
         .canonicalize()
         .with_context(|| format!("canonicalize runner artifact `{file_name}`"))?;
-    if canonical_file.parent() != Some(root.as_path()) {
+    if !canonical_file.starts_with(&root) {
         bail!("runner artifact `{file_name}` escapes the private attempt output directory");
     }
     let bytes =
