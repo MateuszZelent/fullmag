@@ -359,6 +359,11 @@ verify-project-api-runtime:
 verify-api-resource-discovery-runtime:
     {{storage_python}} "{{repo_root}}/scripts/verify_resource_discovery_runtime.py" --repo-root "{{repo_root}}"
 
+# Managed production-process proof for immutable accepted-run FEM preparation,
+# its dedicated Meshing lease, native mesh/space receipt, and lease release.
+verify-api-accepted-fem-preparation-runtime:
+    docker compose run --rm --no-deps fem-cpu bash -lc 'set -euo pipefail; cd /workspace; route_root="${FULLMAG_BUILD_ROOT:-/workspace/.fullmag-build}/accepted-fem-preparation-runtime"; python3 scripts/verify_accepted_fem_preparation_runtime.py --repo-root /workspace --build-root "$route_root/build" --output-root "$route_root/evidence"'
+
 verify-api-accepted-fdm-gpu-runtime:
     {{storage_python}} "{{repo_root}}/scripts/verify_accepted_fdm_gpu_runtime.py" --repo-root "{{repo_root}}"
 
