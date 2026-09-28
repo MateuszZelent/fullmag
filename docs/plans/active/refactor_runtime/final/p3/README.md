@@ -34,9 +34,9 @@ zapisać checkpointy i zwolnić lease przed statusem `drained`. Snapshot
 członkostwa może podmienić A na B bez odebrania aktywnego lease A. Lokalne
 discovery wykrywa CPU/RAM/storage/VRAM i dzieli wspólną pojemność z jawnymi
 rezerwami. Zarządzane process E2E publikuje ten snapshot, wykonuje admission
-FDM CPU, uruchamia worker i potwierdza zwolnienie dokładnego lease. CLI ma
-publiczny transport immutable Submit/materialization/readback; legacy
-`run-json` nadal wymaga cutoveru. Immutable priority steruje kolejnością, a
+FDM CPU, uruchamia worker i potwierdza zwolnienie dokładnego lease. Publiczne
+`run-json` wykonuje immutable Submit/materialization/readback; direct ProblemIR
+pozostaje ukrytym narzędziem repozytoryjnym. Immutable priority steruje kolejnością, a
 ograniczone okno kolejki raportuje lokalne backpressure. Publiczny Submit ma
 atomowy limit nieterminalnego backlogu i stabilne `429/run_backlog_full`.
 Otwarte są heartbeat/Stop ACK dla zdalnego transportu oraz process E2E
@@ -71,7 +71,10 @@ Runtime/browser i kwalifikacja fizyczna także są otwarte. Szczegóły opisują
 [`53-resource-discovery-process-e2e.md`](53-resource-discovery-process-e2e.md),
 [`54-cli-accepted-run-transport.md`](54-cli-accepted-run-transport.md) i
 [`55-priority-and-bounded-queue.md`](55-priority-and-bounded-queue.md) i
-[`56-public-submit-backpressure.md`](56-public-submit-backpressure.md).
+[`56-public-submit-backpressure.md`](56-public-submit-backpressure.md),
+[`57-worker-control-ack.md`](57-worker-control-ack.md),
+[`58-accepted-fdm-gpu-runtime.md`](58-accepted-fdm-gpu-runtime.md) oraz
+[`59-cli-run-json-cutover.md`](59-cli-run-json-cutover.md).
 
 ## Atomowy limit publicznego Submitu — 27.09.2026
 
@@ -1008,13 +1011,13 @@ P3 wynosi **87%**, P5 **72%**, a całość około **44%**. Szczegóły:
 
 ## CLI accepted-run przez publiczne API — 27.09.2026
 
-`fullmag submit-run-json` przyjmuje kompletny immutable payload, waliduje
+`fullmag run-json` przyjmuje kompletny immutable payload, waliduje
 tożsamości i origin, a następnie wykonuje publiczny Submit, materializację oraz
 readback. Ta sama managed próba przechodzi dalej przez odkrytą pulę, scheduler,
 worker FDM CPU i release lease: **PASS**, receipt
 `3bc1a29aa19c42f396f2cb77ddb710ee`, `source_changed_during_run=false`.
-Legacy `run-json` pozostaje otwarte do osobnego cutoveru. P3 wynosi **88%**, P5
-**74%**, a całość około **45%**. Szczegóły:
+Historyczna nazwa `submit-run-json` pozostaje ukrytym aliasem zgodności. P3
+wynosiło po tym checkpointcie **88%**, P5 **74%**, a całość około **45%**. Szczegóły:
 [`54-cli-accepted-run-transport.md`](54-cli-accepted-run-transport.md).
 
 ## Immutable priority i ograniczone okno kolejki — 27.09.2026
@@ -1065,3 +1068,15 @@ supervisor → worker → runner CUDA → publiczny readback: **PASS**, receipt
 `5dd42bd76a5b4a938543ab9dd3432fdc`. P3 wynosi **93%**, P5 **87%**, a całość
 około **49%**. Szczegóły:
 [`58-accepted-fdm-gpu-runtime.md`](58-accepted-fdm-gpu-runtime.md).
+
+## Cutover publicznego `run-json` — 28.09.2026
+
+Publiczne `run-json` prowadzi teraz wyłącznie przez HTTP API v2 i immutable
+accepted-run. Repozytoryjne bramki, które nadal potrzebują bezpośredniego
+ProblemIR, używają ukrytego `run-problem-json-direct`; dotychczasowe
+`submit-run-json` jest ukrytym aliasem zgodności. Regresje parsera pilnują pól i
+publicznego helpu. `cargo check` i kontrole źródłowe przechodzą; test parsera
+jest **NOT VERIFIED**, ponieważ hostowy `target` wyczerpał wolne miejsce, a
+managed runner pozostaje niedostępny.
+Wskaźniki pozostają **P3 93%, P5 87%, całość około 49%**. Szczegóły:
+[`59-cli-run-json-cutover.md`](59-cli-run-json-cutover.md).

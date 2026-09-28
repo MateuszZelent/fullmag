@@ -200,7 +200,7 @@ fn main() -> Result<()> {
                 .map_err(join_errors)?;
             println!("{}", serde_json::to_string_pretty(&plan)?);
         }
-        Command::RunJson {
+        Command::RunProblemJsonDirect {
             path,
             until,
             output_dir,
@@ -213,10 +213,15 @@ fn main() -> Result<()> {
                 .map_err(|e| anyhow!("{}", e))?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&run_json_summary(&result, &output_dir))?
+                serde_json::to_string_pretty(&direct_run_summary(&result, &output_dir))?
             );
         }
-        Command::SubmitRunJson {
+        Command::RunJson {
+            path,
+            api_url,
+            submit_only,
+        }
+        | Command::SubmitRunJson {
             path,
             api_url,
             submit_only,
@@ -251,7 +256,7 @@ fn main() -> Result<()> {
                     &execution_plan.output_plan.outputs,
                 )
                 .map_err(|error| anyhow!(error.message))?;
-                serde_json::to_value(run_json_summary(&result, std::path::Path::new("")))?
+                serde_json::to_value(direct_run_summary(&result, std::path::Path::new("")))?
             } else {
                 serde_json::to_value(
                     fullmag_runner::resume_reference_fdm_from_coupled_checkpoint_evidence(
@@ -595,7 +600,7 @@ fn launch_ui(ui: UiCli) -> Result<()> {
     Ok(())
 }
 
-fn run_json_summary(
+fn direct_run_summary(
     result: &fullmag_runner::RunResult,
     output_dir: &std::path::Path,
 ) -> serde_json::Value {
@@ -665,6 +670,7 @@ fn is_script_mode(raw_args: &[OsString]) -> bool {
         "plan-json",
         "run-json",
         "submit-run-json",
+        "run-problem-json-direct",
         "resume-json",
         "resolve-runtime-invocation",
         "session",
@@ -1049,7 +1055,7 @@ mod tests {
     };
 
     #[test]
-    fn run_json_summary_reports_create_and_first_accepted_step_demag_apply_aggregate() {
+    fn direct_run_summary_reports_create_and_first_accepted_step_demag_apply_aggregate() {
         let result = fullmag_runner::RunResult {
             status: fullmag_runner::RunStatus::Completed,
             steps: vec![
@@ -1082,7 +1088,7 @@ mod tests {
             completion: None,
         };
 
-        let payload = run_json_summary(&result, std::path::Path::new("/tmp/run"));
+        let payload = direct_run_summary(&result, std::path::Path::new("/tmp/run"));
 
         assert_eq!(payload["backend_create_wall_time_ns"], 91);
         assert_eq!(
@@ -1566,6 +1572,82 @@ mod tests {
             cli.command,
             Command::Runtime(RuntimeCommand::Doctor)
         ));
+    }
+
+    #[test]
+    fn cli_parses_run_json_as_public_accepted_run_transport() {
+        let cli = Cli::try_parse_from([
+            "fullmag",
+            "run-json",
+            "accepted-run.json",
+            "--api-url",
+            "http://127.0.0.1:8000",
+            "--submit-only",
+        ])
+        .expect("cli parse");
+
+        assert!(matches!(
+            cli.command,
+            Command::RunJson {
+                path,
+                api_url,
+                submit_only: true,
+            } if path == std::path::Path::new("accepted-run.json")
+                && api_url == "http://127.0.0.1:8000"
+        ));
+    }
+
+    #[test]
+    fn cli_keeps_hidden_submit_run_json_compatibility_alias() {
+        let cli = Cli::try_parse_from([
+            "fullmag",
+            "submit-run-json",
+            "accepted-run.json",
+            "--api-url",
+            "http://127.0.0.1:8000",
+        ])
+        .expect("cli parse");
+
+        assert!(matches!(
+            cli.command,
+            Command::SubmitRunJson {
+                path,
+                api_url,
+                submit_only: false,
+            } if path == std::path::Path::new("accepted-run.json")
+                && api_url == "http://127.0.0.1:8000"
+        ));
+    }
+
+    #[test]
+    fn cli_keeps_direct_problem_runner_hidden_from_public_help() {
+        use clap::CommandFactory;
+
+        let cli = Cli::try_parse_from([
+            "fullmag",
+            "run-problem-json-direct",
+            "problem.json",
+            "--until",
+            "1e-12",
+            "--output-dir",
+            "artifacts",
+        ])
+        .expect("cli parse");
+        assert!(matches!(
+            cli.command,
+            Command::RunProblemJsonDirect {
+                path,
+                until,
+                output_dir,
+            } if path == std::path::Path::new("problem.json")
+                && until == 1e-12
+                && output_dir == std::path::Path::new("artifacts")
+        ));
+
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("run-json"));
+        assert!(!help.contains("submit-run-json"));
+        assert!(!help.contains("run-problem-json-direct"));
     }
 
     #[test]

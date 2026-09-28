@@ -363,7 +363,7 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
             cli_submit = run_json_process(
                 [
                     str(binaries["fullmag"]),
-                    "submit-run-json",
+                    "run-json",
                     str(request_path),
                     "--api-url",
                     base_url,

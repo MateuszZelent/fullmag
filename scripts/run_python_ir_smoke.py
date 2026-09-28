@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Smoke test: serialize ProblemIR from Python, validate and plan via CLI.
 
-Also tests the run-json command for the exchange-only executable example.
+Also tests the internal direct ProblemIR command for the exchange-only executable example.
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def smoke_validate_and_plan(cli_path: Path, script: Path, combinations: list[tup
 
 
 def smoke_run_json(cli_path: Path, script: Path) -> None:
-    """Run the exchange_relax example end-to-end via CLI run-json."""
+    """Run the exchange_relax example end-to-end via the internal direct CLI route."""
     loaded = load_problem_from_script(script)
     simulation = Simulation(loaded.problem, backend="fdm", mode="strict")
 
@@ -56,7 +56,7 @@ def smoke_run_json(cli_path: Path, script: Path) -> None:
         output_dir = temp_dir / "artifacts"
         run_cli(
             cli_path,
-            "run-json",
+            "run-problem-json-direct",
             str(ir_path),
             "--until", "1e-12",
             "--output-dir", str(output_dir),
@@ -79,13 +79,13 @@ def smoke_run_json(cli_path: Path, script: Path) -> None:
             if not any(snapshot_dir.glob("step_*.json")):
                 raise AssertionError(f"No field snapshots written to: {snapshot_dir}")
 
-        print(f"  ✓ {script.name} [fdm/strict] run-json → artifacts")
+        print(f"  ✓ {script.name} [fdm/strict] direct ProblemIR → artifacts")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cli", required=True, help="Path to fullmag CLI binary")
-    parser.add_argument("--skip-run", action="store_true", help="Skip run-json test")
+    parser.add_argument("--skip-run", action="store_true", help="Skip direct ProblemIR test")
     args = parser.parse_args()
 
     cli_path = Path(args.cli).resolve()
@@ -106,9 +106,9 @@ def main() -> int:
         [("fdm", "strict")],
     )
 
-    # 3. End-to-end run-json test
+    # 3. End-to-end direct ProblemIR test
     if not args.skip_run:
-        print("Smoke: run-json end-to-end")
+        print("Smoke: direct ProblemIR end-to-end")
         smoke_run_json(cli_path, EXECUTABLE_EXAMPLE)
 
     print("Python IR smoke test passed.")

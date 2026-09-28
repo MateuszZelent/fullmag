@@ -4,7 +4,7 @@ Data checkpointu: 27.09.2026.
 
 ## Zakres
 
-`fullmag submit-run-json <request.json> --api-url <origin>` jest produkcyjnym
+`fullmag run-json <request.json> --api-url <origin>` jest produkcyjnym
 wejściem CLI dla kompletnego immutable Submit payloadu. Komenda:
 
 - ogranicza rozmiar i parsuje wejście JSON;
@@ -42,10 +42,12 @@ Receipt:
 
 ## Granica checkpointu
 
-Dotychczasowe `fullmag run-json` pozostaje legacy bezpośrednim wywołaniem
-runnera, ponieważ jest używane przez istniejące bramki FDM/FEM i wymaga
-osobnego cutoveru ich wejść oraz artefaktów. Ten checkpoint dostarcza docelowy
-transport accepted-run, lecz nie usuwa jeszcze legacy writera. Nie dowodzi też
+Pierwotnie transport był dostępny jako `submit-run-json`, a `run-json`
+pozostawało bezpośrednim wywołaniem runnera. Cutover z 28.09.2026 przeniósł
+publiczną nazwę na transport accepted-run, ukrył direct runner pod nazwą
+`run-problem-json-direct` i zachował `submit-run-json` wyłącznie jako ukryty
+alias zgodności. Szczegóły opisuje
+[`59-cli-run-json-cutover.md`](59-cli-run-json-cutover.md). Checkpoint nie dowodzi
 zdalnego heartbeat/Stop ACK, uwierzytelnienia transportu, retry HTTP ani
 pozostałych lane'ów wykonawczych.
 

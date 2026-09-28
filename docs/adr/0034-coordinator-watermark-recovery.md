@@ -188,6 +188,14 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
 33. `stop_requested` w receipcie opisuje intencję operatora, nie wynik procesu.
     Niezerowy exit zawsze zachowuje `failure_reason`; Stop nie może zamienić
     awarii workera w potwierdzone anulowanie.
+34. Publiczne `fullmag run-json` przyjmuje wyłącznie kompletny immutable
+    accepted-run request i wykonuje Submit, opcjonalną materializację oraz
+    readback przez HTTP API v2. Nie wolno mu wywoływać solvera bezpośrednio.
+    Dawna ścieżka kanonicznego `ProblemIR` pozostaje czasowo dostępna wyłącznie
+    jako ukryte `run-problem-json-direct` dla repozytoryjnych bramek naukowych i
+    diagnostycznych. Ukryte `submit-run-json` jest aliasem zgodności publicznego
+    transportu; oba mosty usuwa Fullmag core po migracji wszystkich zarządzanych
+    bramek na accepted RunSpec i po jednym cyklu wydania bez zewnętrznego użycia.
 
 ## Konsekwencje
 
@@ -204,6 +212,10 @@ utraconych transitionów. Recovery nie tworzy genesis z samego braku wpisów.
   transportu, reconciliation efektów workera ani dowodu zwolnienia zasobów.
 - Heartbeat procesu potwierdza liveness lokalnego procesu i utrzymanie lease.
   Nie jest dowodem postępu solvera, poprawności fizyki ani kwalifikacji lane'u.
+- Ukryty direct runner nie jest publicznym kontraktem, accepted-runtime proof
+  ani podstawą do omijania schedulera, claimu, lease'u i provenance. Jego
+  artefakty zachowują znaczenie wyłącznie w zakresie konkretnej wewnętrznej
+  bramki, która go uruchamia.
 - Receipt procesu jest dowodem wyłącznie tego, że supervisor zreapował dokładny
   proces potomny przypisany do fenced claimu. Nie jest scientific receiptem,
   dowodem zwolnienia pamięci urządzenia na zdalnym hoście ani kwalifikacją
@@ -324,6 +336,11 @@ recovery istniejącego journalu może wypełnić watermark. Wartości nie wolno
 usuwać podczas rollbacku; starszy reader ignoruje addytywne pole. Nie
 przeprowadzać migracji przez zgadywanie stanu pustego journalu.
 
+Wywołania repozytoryjne dawnego direct `run-json` przechodzą na ukryte
+`run-problem-json-direct`, a bramki accepted-runtime na publiczne `run-json`.
+Rollback może przywrócić nazwę aliasu accepted transportu, lecz nie może
+ponownie wystawić bezpośredniego wykonania jako publicznego `run-json`.
+
 ## Walidacja i status
 
 Source/contract gates są oddzielone od procesu workera i kwalifikacji solvera.
@@ -337,9 +354,10 @@ statyczna pula dwóch zasobów, rezydentne discovery runu utworzonego po starcie
 schedulera, kontrolowany drain procesu bez limitu tasków oraz monotoniczną
 dynamiczną pulę A → B z zachowaniem aktywnego lease. Lokalny discovery dry-run
 CPU/RAM/storage/VRAM oraz procesowe E2E publikacji, admission, workera FDM CPU i
-zwolnienia dokładnego lease także przechodzą. Produkcyjne CLI wykonuje immutable
-Submit/materialization/readback przez publiczne API v2; legacy `run-json`
-pozostaje bezpośrednią ścieżką do osobnego cutoveru. Immutable priority i
+zwolnienia dokładnego lease także przechodzą. Produkcyjne `run-json` wykonuje
+immutable Submit/materialization/readback przez publiczne API v2. Bezpośrednia
+ścieżka ProblemIR jest ukrytym narzędziem repozytoryjnym, a poprzednia nazwa
+accepted transportu pozostaje ukrytym aliasem przejściowym. Immutable priority i
 lokalne ograniczone okno kolejki mają process E2E dla pięciu runów. Atomowy
 limit publicznego Submitu ma osobny dowód `200/429/201` i nie publikuje intentu
 po odmowie. `worker_protocol.v3` ma procesowy dowód rzeczywistych

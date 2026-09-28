@@ -596,7 +596,7 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
             "state": "preflight",
             "paths": {key: str(value) for key, value in paths.items()},
             "runtime_scope": [
-                "fullmag submit-run-json through public HTTP v2 for six immutable RunSpec v2 payloads",
+                "fullmag run-json through public HTTP v2 for six immutable RunSpec v2 payloads",
                 "atomic six-run public Submit backlog limit, 429 rejection, and replay while full",
                 "strict immutable scheduling priority and a bounded two-run queue window",
                 "local CPU/RAM/storage and optional NVIDIA GPU discovery",
@@ -725,7 +725,7 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
                 request_path = paths["run_root"] / f"accepted-run-request-{label}.json"
                 cli_command = [
                     str(binaries["fullmag"]),
-                    "submit-run-json",
+                    "run-json",
                     str(request_path),
                     "--api-url",
                     base_url,

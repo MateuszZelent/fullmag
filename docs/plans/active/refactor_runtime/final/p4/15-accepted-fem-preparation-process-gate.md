@@ -15,7 +15,7 @@ Skrypt procesu:
 
 1. zapisuje tożsamość źródeł i buduje `libfullmag_fem` oraz wyłącznie binaria
    produkcyjne z funkcją `fem-native`;
-2. uruchamia API i składa run przez `fullmag submit-run-json` oraz publiczne
+2. uruchamia API i składa run przez `fullmag run-json` oraz publiczne
    HTTP v2;
 3. wymaga dokładnie jednego taska
    `Accepted/Blocked(accepted_task_awaiting_preparation)`;
