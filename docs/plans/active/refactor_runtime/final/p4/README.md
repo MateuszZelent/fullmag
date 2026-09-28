@@ -656,7 +656,22 @@ Typecheck, scoped ESLint, składnia skryptów, diff check i browser smoke:
 **PASS**. Smoke potwierdził automatyczne otwarcie Operations po Build Grid,
 zakończoną komendę, źródłowy problem geometrii z rewizją, brak 404/błędów
 konsoli i zdrowy WebGL (`703×478`, `contextLost=false`). Regresje jednostkowe
-dodano, ale ich nie uruchomiono zgodnie z aktywnym zakazem. Pełna konsolidacja
-backendowa do jednego trwałego dziennika nadal pozostaje otwarta. **P4 50%,
-cały plan około 49%**. Szczegóły:
+dodano, ale ich nie uruchomiono zgodnie z aktywnym zakazem. **P4 50%, cały plan
+około 49%**. Szczegóły:
 [18-operations-problems-projection.md](18-operations-problems-projection.md).
+
+## Trwały journal komend aktywnego workspace’u — 28.09.2026
+
+Kolejka `simulation/commands` ma teraz typowany, sesyjnie odgrodzony journal w
+`SessionStore`. Każdy submit, reject, dispatch, failure i terminalna
+rekoncyliacja publikuje bounded snapshot przed zmianą projekcji w pamięci.
+Restart zachowuje terminalną historię, a niepotwierdzone komendy oznacza jako
+`api_restarted_before_terminal_command_ack` bez automatycznego replayu.
+
+Immutable generation, atomowy `CURRENT`, native single-writer lock, dokładny
+readback po niepewnej publikacji i monotoniczna rewizja zasobu są podłączone.
+Produkcyjny `cargo check` API/session: **PASS**. Regresje replace/reopen i
+restart active/terminal dodano, lecz nie uruchomiono zgodnie z aktywnym zakazem
+testów jednostkowych. Managed restart pozostaje `NOT VERIFIED`; **P4 50%, cały
+plan około 49%**. Szczegóły:
+[19-live-command-journal.md](19-live-command-journal.md).

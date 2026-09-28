@@ -172,10 +172,23 @@ diagnostykę geometrii, failure preparacji, błąd kandydata meshu z last-good
 identity oraz nieudane komendy. Stare zapisane `mesh` migruje do `operations`;
 nie dodano nowego store’a. Browser smoke potwierdził automatyczne otwarcie
 Operations po Build Grid, zakończoną komendę, problem z rewizją 12, brak
-404/błędów konsoli i zdrowy WebGL. Docelowy pojedynczy trwały dziennik
-backendowy oraz managed/native gate pozostają otwarte, dlatego wskaźniki nadal
+404/błędów konsoli i zdrowy WebGL. Trwały journal komend Live opisuje następny
+checkpoint; wspólna projekcja zdarzeń preparation/mesh oraz managed/native gate
+pozostają otwarte, dlatego wskaźniki nadal
 wynoszą **P4 50%** i około **49%** dla całego planu. Szczegóły:
 [`p4/18-operations-problems-projection.md`](p4/18-operations-problems-projection.md).
+
+Aktualizacja P4-C/P5-D z 28.09.2026: `simulation/commands` ma trwały, bounded i
+sesyjnie odgrodzony journal w istniejącym `SessionStore`. Submit, reject,
+dispatch, failure i rekoncyliacja publikują snapshot przed zmianą projekcji w
+pamięci. Restart zachowuje terminalne wpisy, a operacje bez terminalnego ACK
+oznacza jako przerwane bez automatycznego replayu. Rewizja zasobu jest teraz
+monotoniczną rewizją journalu, więc sama zmiana statusu invaliduje Operations.
+Produkcyjny `cargo check` API/session: **PASS**; regresje source dodano, lecz nie
+uruchomiono zgodnie z aktywnym zakazem testów jednostkowych. Managed restart,
+native FEM i wspólna projekcja zdarzeń preparation/mesh pozostają otwarte.
+Wskaźniki: **P4 50%**, cały plan około **49%**. Szczegóły:
+[`p4/19-live-command-journal.md`](p4/19-live-command-journal.md).
 
 Uwaga do wiersza P3-B: trwałe wpisy `retry_decision.v1` oraz ich
 [`coordinator_journal.v1`](p3/03-coordinator-journal.md) są już source-level PASS (`SessionStore` zapewnia

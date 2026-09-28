@@ -1535,38 +1535,43 @@ pub(crate) async fn enqueue_session_command_impl_with_context(
             return Ok(response.clone());
         }
     }
-    let mut ledger = state.current_command_ledger.lock().await;
-    validate_runtime_command_contract(snapshot, &ledger, &command)?;
-    reserve_command_ledger_entry(&mut ledger)?;
     let command_id = command.command_id.clone();
     let request_id = command_request_id(headers);
 
-    // Enqueue
-    let seq = {
-        let mut next_seq = state.current_control_next_seq.lock().await;
-        *next_seq = next_seq.saturating_add(1);
-        *next_seq
-    };
-    let mut enqueued = command;
-    enqueued.seq = seq;
-    if enqueued.kind == "compute_fields" {
-        enqueued.field_materialization_requirements =
-            compute_fields_materialization_requirements(&snapshot);
-    }
+    // Publish the durable journal before exposing the command to the runner.
+    // A crash after this point but before queue insertion is recovered as an
+    // interrupted command and is never replayed automatically.
+    let mut next_sequence = state.current_control_next_seq.lock().await;
+    let seq = next_sequence
+        .checked_add(1)
+        .ok_or_else(|| ApiError::internal("current command sequence exhausted"))?;
+    let enqueued = crate::live_command_journal::mutate(&state, snapshot, |ledger| {
+        validate_runtime_command_contract(snapshot, ledger, &command)?;
+        reserve_command_ledger_entry(ledger)?;
+        let mut enqueued = command;
+        enqueued.seq = seq;
+        if enqueued.kind == "compute_fields" {
+            enqueued.field_materialization_requirements =
+                compute_fields_materialization_requirements(snapshot);
+        }
+        ledger.push_back(TrackedCommandRecord {
+            command: enqueued.clone(),
+            request_id: request_id.clone(),
+            status: CommandLifecycleState::Queued,
+            dispatched_at_unix_ms: None,
+            completed_at_unix_ms: None,
+            completion_status: None,
+            error: None,
+        });
+        Ok((enqueued, true))
+    })
+    .await?;
+    *next_sequence = seq;
     state
         .current_control_queue
         .lock()
         .await
         .push_back(enqueued.clone());
-    ledger.push_back(TrackedCommandRecord {
-        command: enqueued,
-        request_id: request_id.clone(),
-        status: CommandLifecycleState::Queued,
-        dispatched_at_unix_ms: None,
-        completed_at_unix_ms: None,
-        completion_status: None,
-        error: None,
-    });
 
     let response = CommandResponse {
         accepted: true,
@@ -1581,7 +1586,7 @@ pub(crate) async fn enqueue_session_command_impl_with_context(
             responses.pop_front();
         }
     }
-    drop(ledger);
+    drop(next_sequence);
     drop(responses);
     drop(current);
     let _ = state.current_control_events.send(seq);
@@ -1625,22 +1630,22 @@ async fn reject_session_command_impl_with_context(
     } else {
         None
     };
-    if state.current_live_state.read().await.is_none() {
-        return Err(ApiError::not_found("no active local live workspace"));
-    }
-    if let Some(context) = context {
+    let snapshot = {
         let current = state.current_live_state.read().await;
         let snapshot = current
             .as_ref()
             .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-        crate::ensure_current_live_request_context(
-            snapshot,
-            context,
-            state
-                .current_live_session_epoch
-                .load(std::sync::atomic::Ordering::Acquire),
-        )?;
-    }
+        if let Some(context) = context {
+            crate::ensure_current_live_request_context(
+                snapshot,
+                context,
+                state
+                    .current_live_session_epoch
+                    .load(std::sync::atomic::Ordering::Acquire),
+            )?;
+        }
+        snapshot.clone()
+    };
 
     if let Some(idempotency_key) = command_request_key(headers) {
         let responses = state.current_command_responses.lock().await;
@@ -1653,18 +1658,16 @@ async fn reject_session_command_impl_with_context(
         }
     }
 
-    let seq = {
-        let mut next_seq = state.current_control_next_seq.lock().await;
-        *next_seq = next_seq.saturating_add(1);
-        *next_seq
-    };
+    let mut next_sequence = state.current_control_next_seq.lock().await;
+    let seq = next_sequence
+        .checked_add(1)
+        .ok_or_else(|| ApiError::internal("current command sequence exhausted"))?;
     command.seq = seq;
     let command_id = command.command_id.clone();
     let request_id = command_request_id(headers);
     let completed_at_unix_ms = command.created_at_unix_ms;
-    {
-        let mut ledger = state.current_command_ledger.lock().await;
-        reserve_command_ledger_entry(&mut ledger)?;
+    crate::live_command_journal::mutate(&state, &snapshot, |ledger| {
+        reserve_command_ledger_entry(ledger)?;
         ledger.push_back(TrackedCommandRecord {
             command,
             request_id: request_id.clone(),
@@ -1674,7 +1677,11 @@ async fn reject_session_command_impl_with_context(
             completion_status: Some(crate::types::CommandCompletionState::Rejected),
             error: Some(error.clone()),
         });
-    }
+        Ok(((), true))
+    })
+    .await?;
+    *next_sequence = seq;
+    drop(next_sequence);
 
     let response = CommandResponse {
         accepted: false,

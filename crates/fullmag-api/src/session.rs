@@ -167,7 +167,15 @@ pub(crate) fn command_queue_revision_from_parts(
 
 pub(crate) fn command_ledger_revisions(
     ledger: &VecDeque<TrackedCommandRecord>,
+    durable_journal_revision: u64,
 ) -> CommandLedgerRevisions {
+    if durable_journal_revision > 0 {
+        return CommandLedgerRevisions {
+            commands_revision: durable_journal_revision,
+            command_completion_revision: durable_journal_revision,
+            command_queue_revision: durable_journal_revision,
+        };
+    }
     let commands_revision = ledger.len() as u64;
     let command_completion_revision = ledger
         .iter()

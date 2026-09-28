@@ -2113,7 +2113,13 @@ pub async fn get_command_status(
         .iter()
         .filter(|record| record.status == CommandLifecycleState::Failed)
         .count() as u64;
-    let revision = command_ledger_revisions(&ledger).command_queue_revision;
+    let revision = command_ledger_revisions(
+        &ledger,
+        state
+            .current_command_journal_revision
+            .load(std::sync::atomic::Ordering::Acquire),
+    )
+    .command_queue_revision;
     let (can_accept_commands, runtime_controls) = {
         let snapshot = current.as_ref();
         (
@@ -2267,7 +2273,7 @@ pub async fn report_command_failure(
     let request_context = crate::capture_current_live_request_context(&state).await?;
     ensure_workspace(&state).await?;
     let _transition = state.current_live_session_transition.lock().await;
-    {
+    let snapshot = {
         let current = state.current_live_state.read().await;
         let snapshot = current
             .as_ref()
@@ -2279,7 +2285,8 @@ pub async fn report_command_failure(
                 .current_live_session_epoch
                 .load(std::sync::atomic::Ordering::Acquire),
         )?;
-    }
+        snapshot.clone()
+    };
     let error = request.error.trim();
     if error.is_empty() {
         return Err(ApiError::bad_request(
@@ -2290,9 +2297,7 @@ pub async fn report_command_failure(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0);
-    let mut changed = false;
-    {
-        let mut ledger = state.current_command_ledger.lock().await;
+    let changed = crate::live_command_journal::mutate(&state, &snapshot, |ledger| {
         let record = ledger
             .iter_mut()
             .find(|record| record.command.command_id == command_id)
@@ -2307,9 +2312,11 @@ pub async fn report_command_failure(
             record.completed_at_unix_ms = Some(completed_at_unix_ms);
             record.completion_status = Some(CommandCompletionState::Failed);
             record.error = Some(error.to_string());
-            changed = true;
+            return Ok((true, true));
         }
-    }
+        Ok((false, false))
+    })
+    .await?;
     if changed {
         state
             .current_control_queue

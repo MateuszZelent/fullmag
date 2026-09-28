@@ -9,6 +9,7 @@
 //! ├── manifests/       // session manifest JSON files
 //! ├── runs/            // per-run intent/catalog/admissions/leases/manifests
 //! ├── scheduler_pools/ // local operational fairness cursors
+//! ├── live_command_journals/ // bounded current-workspace command snapshots
 //! ├── objects/         // CAS blob store
 //! │   └── sha256/
 //! ├── temp/            // in-flight writes
@@ -57,6 +58,16 @@ pub struct SessionStore {
     explicit_lease: Mutex<Option<WriteTransaction>>,
 }
 
+fn atomic_write_confirmed(path: &Path, data: &[u8]) -> Result<()> {
+    match atomic_write(path, data) {
+        Ok(()) => Ok(()),
+        Err(error) => match fs::read(path) {
+            Ok(published) if published == data => confirm_publication(path),
+            _ => Err(error),
+        },
+    }
+}
+
 impl SessionStore {
     /// Open or initialize a `SessionStore` at the given root directory.
     pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
@@ -71,6 +82,7 @@ impl SessionStore {
             "manifests",
             "runs",
             "scheduler_pools",
+            "live_command_journals",
             "recovery",
             "temp",
             "objects/sha256",
@@ -84,6 +96,7 @@ impl SessionStore {
                 "manifests",
                 "runs",
                 "scheduler_pools",
+                "live_command_journals",
                 "recovery",
                 "temp",
                 "objects",
@@ -175,6 +188,90 @@ impl SessionStore {
             anyhow::bail!("CURRENT manifest identity or schema mismatch");
         }
         Ok(Some(manifest))
+    }
+
+    /// Atomically publish the bounded command journal for one local-live
+    /// session. The payload schema remains owned by the API layer, while this
+    /// store owns path containment, the single-writer lease and durability.
+    ///
+    /// Each publication first writes an immutable generation and then advances
+    /// `CURRENT`. Old generations are best-effort compacted only after the new
+    /// pointer is durable, so an interrupted replacement never destroys the
+    /// last readable journal.
+    pub fn commit_live_command_journal(&self, session_id: &str, data: &[u8]) -> Result<()> {
+        validate_store_id(session_id)?;
+        let _lease = self.write_transaction()?;
+        let journal_root =
+            checked_path(&self.root, &format!("live_command_journals/{session_id}"))?;
+        reject_link(&journal_root)?;
+        fs::create_dir_all(&journal_root)?;
+        let generations = journal_root.join("generations");
+        reject_link(&generations)?;
+        fs::create_dir_all(&generations)?;
+
+        let generation = format!("generation-{}", uuid::Uuid::new_v4());
+        let generation_path = generations.join(format!("{generation}.json"));
+        atomic_write_confirmed(&generation_path, data)?;
+        let current_path = journal_root.join("CURRENT");
+        atomic_write_confirmed(&current_path, generation.as_bytes())?;
+
+        // The journal payload is a complete bounded snapshot. Once CURRENT is
+        // durable, older generations are no longer needed for recovery.
+        let compacted = (|| -> Result<()> {
+            for entry in fs::read_dir(&generations)? {
+                let entry = entry?;
+                reject_link(&entry.path())?;
+                if !entry.file_type()?.is_file() {
+                    anyhow::bail!("live command journal generation is not a file");
+                }
+                let file_name = entry.file_name().to_string_lossy().into_owned();
+                if file_name == format!("{generation}.json") {
+                    continue;
+                }
+                if !file_name.starts_with("generation-") || !file_name.ends_with(".json") {
+                    anyhow::bail!("unknown live command journal generation `{file_name}`");
+                }
+                fs::remove_file(entry.path())?;
+            }
+            sync_directory(&generations)
+        })();
+        if let Err(error) = compacted {
+            tracing::warn!(
+                path = %generations.display(),
+                %error,
+                "could not compact obsolete live command journal generations"
+            );
+        }
+        Ok(())
+    }
+
+    /// Read the latest atomically published local-live command journal.
+    pub fn read_live_command_journal(&self, session_id: &str) -> Result<Option<Vec<u8>>> {
+        validate_store_id(session_id)?;
+        let journal_root =
+            checked_path(&self.root, &format!("live_command_journals/{session_id}"))?;
+        if !journal_root.exists() {
+            return Ok(None);
+        }
+        reject_link(&journal_root)?;
+        let current_path = journal_root.join("CURRENT");
+        if !current_path.exists() {
+            return Ok(None);
+        }
+        reject_link(&current_path)?;
+        let generation = fs::read_to_string(&current_path)?.trim().to_string();
+        validate_store_id(&generation)?;
+        if !generation.starts_with("generation-") {
+            anyhow::bail!("live command journal CURRENT has an invalid generation");
+        }
+        let generation_path = journal_root
+            .join("generations")
+            .join(format!("{generation}.json"));
+        reject_link(&generation_path)?;
+        if !generation_path.is_file() {
+            anyhow::bail!("live command journal CURRENT points to a missing generation");
+        }
+        Ok(Some(fs::read(generation_path)?))
     }
 
     // ── Runs ───────────────────────────────────────────────────────────
@@ -4527,6 +4624,42 @@ fn magnetization_from_bytes(data: &[u8]) -> Vec<[f64; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_command_journal_replaces_current_generation_and_reopens() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("store");
+        let store = SessionStore::open(&root).unwrap();
+
+        store
+            .commit_live_command_journal("session-command-journal", br#"{"revision":1}"#)
+            .unwrap();
+        assert_eq!(
+            store
+                .read_live_command_journal("session-command-journal")
+                .unwrap()
+                .unwrap(),
+            br#"{"revision":1}"#
+        );
+        store
+            .commit_live_command_journal("session-command-journal", br#"{"revision":2}"#)
+            .unwrap();
+
+        let reopened = SessionStore::open(&root).unwrap();
+        assert_eq!(
+            reopened
+                .read_live_command_journal("session-command-journal")
+                .unwrap()
+                .unwrap(),
+            br#"{"revision":2}"#
+        );
+        let generation_count = fs::read_dir(
+            root.join("live_command_journals/session-command-journal/generations"),
+        )
+        .unwrap()
+        .count();
+        assert_eq!(generation_count, 1);
+    }
 
     fn test_resource_lease(
         run_id: &str,

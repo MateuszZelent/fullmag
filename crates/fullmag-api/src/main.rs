@@ -51,6 +51,7 @@ mod field_render_png;
 mod field_slice;
 mod field_store;
 mod live_scene_preparation;
+mod live_command_journal;
 mod openapi_v2;
 mod orientation_color;
 mod periodic_pairs_binary;
@@ -203,7 +204,12 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
 ) -> CurrentLiveRealtimeState {
     let (commands_revision, command_completion_revision) = {
         let ledger = state.current_command_ledger.lock().await;
-        let revisions = command_ledger_revisions(&ledger);
+        let revisions = command_ledger_revisions(
+            &ledger,
+            state
+                .current_command_journal_revision
+                .load(Ordering::Acquire),
+        );
         (
             revisions.commands_revision,
             revisions.command_completion_revision,
@@ -2437,6 +2443,9 @@ async fn main() {
     let current_workspace_root = crate::script::state_root(&repo_root)
         .join("local-live")
         .join("current");
+    let current_command_journal_store_root = crate::script::state_root(&repo_root)
+        .join("local-live")
+        .join("session-store");
     let static_web_root = resolve_static_web_root(&repo_root);
 
     let feature_flags = FeatureFlags::resolve();
@@ -2453,6 +2462,8 @@ async fn main() {
         submit_backlog_limit: run_intent_persistence::configured_submit_backlog_limit()
             .expect("accepted run backlog limit configuration must be valid"),
         current_workspace_root,
+        current_command_journal_store_root: Some(current_command_journal_store_root),
+        current_command_journal_revision: Arc::new(AtomicU64::new(0)),
         current_live_state: Arc::new(RwLock::new(None)),
         current_live_session_transition: Arc::new(Mutex::new(())),
         request_scope_instance_id: uuid::Uuid::new_v4().to_string(),
@@ -2909,28 +2920,48 @@ fn kb_to_mb(value: u64) -> f64 {
     value as f64 / 1024.0
 }
 
-async fn mark_command_dispatched(state: &Arc<AppState>, command: &SessionCommand) {
-    let mut ledger = state.current_command_ledger.lock().await;
-    if let Some(record) = ledger
-        .iter_mut()
-        .find(|record| record.command.command_id == command.command_id)
-    {
-        record.status = crate::types::CommandLifecycleState::Dispatched;
-        record.dispatched_at_unix_ms = Some(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_millis())
-                .unwrap_or(0),
-        );
-        record.completed_at_unix_ms = None;
-        record.completion_status = None;
+async fn mark_commands_dispatched(
+    state: &Arc<AppState>,
+    commands: &[SessionCommand],
+) -> Result<(), ApiError> {
+    if commands.is_empty() {
+        return Ok(());
     }
+    let snapshot = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let dispatched_at_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    live_command_journal::mutate(state, &snapshot, |ledger| {
+        let mut changed = false;
+        for command in commands {
+            if let Some(record) = ledger
+                .iter_mut()
+                .find(|record| record.command.command_id == command.command_id)
+            {
+                record.status = crate::types::CommandLifecycleState::Dispatched;
+                record.dispatched_at_unix_ms = Some(dispatched_at_unix_ms);
+                record.completed_at_unix_ms = None;
+                record.completion_status = None;
+                record.error = None;
+                changed = true;
+            }
+        }
+        Ok(((), changed))
+    })
+    .await
 }
 
 async fn take_next_current_control_command_after(
     state: &Arc<AppState>,
     after_seq: u64,
-) -> Option<SessionCommand> {
+) -> Result<Option<SessionCommand>, ApiError> {
     let mut stale = Vec::new();
     let selected = {
         let mut queue = state.current_control_queue.lock().await;
@@ -2952,13 +2983,24 @@ async fn take_next_current_control_command_after(
         selected
     };
 
-    for command in &stale {
-        mark_command_dispatched(state, command).await;
+    let mut dispatched = stale.clone();
+    if let Some(command) = selected.as_ref() {
+        dispatched.push(command.clone());
     }
-    if let Some(command) = &selected {
-        mark_command_dispatched(state, command).await;
+    if let Err(error) = mark_commands_dispatched(state, &dispatched).await {
+        let mut queue = state.current_control_queue.lock().await;
+        for command in dispatched {
+            if !queue
+                .iter()
+                .any(|queued| queued.command_id == command.command_id)
+            {
+                queue.push_back(command);
+            }
+        }
+        queue.make_contiguous().sort_by_key(|command| command.seq);
+        return Err(error);
     }
-    selected
+    Ok(selected)
 }
 
 async fn sync_current_live_snapshot(
@@ -3134,6 +3176,9 @@ pub(crate) async fn reset_current_live_session_resources(state: &AppState) {
     state.current_control_queue.lock().await.clear();
     state.current_command_responses.lock().await.clear();
     state.current_command_ledger.lock().await.clear();
+    state
+        .current_command_journal_revision
+        .store(0, Ordering::Release);
     *state.current_control_next_seq.lock().await = 0;
     let _ = state.current_control_events.send(0);
     state.current_live_realtime_replay.lock().await.clear();
@@ -3768,18 +3813,25 @@ where
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0);
-    {
-        let mut ledger = state.current_command_ledger.lock().await;
-        reconcile_command_ledger_from_stage_execution(
-            &mut ledger,
+    if previous_snapshot.is_none() {
+        live_command_journal::recover(state, &next).await?;
+    }
+    live_command_journal::mutate(state, &next, |ledger| {
+        let stage_changed = reconcile_command_ledger_from_stage_execution(
+            ledger,
             &next,
             command_completed_at_unix_ms,
         );
-        reconcile_dispatched_command_ledger_from_snapshot(
-            &mut ledger,
+        let dispatched_changed = reconcile_dispatched_command_ledger_from_snapshot(
+            ledger,
             &next,
             command_completed_at_unix_ms,
         );
+        Ok(((), stage_changed || dispatched_changed))
+    })
+    .await?;
+    if previous_snapshot.is_none() {
+        live_command_journal::fail_unacknowledged_after_restart(state, &next).await?;
     }
     let (preview_source_step, preview_vector_len, preview_vector_avg) =
         preview_debug_metrics(next.preview.as_ref());
@@ -3887,7 +3939,7 @@ where
 async fn dequeue_current_live_command(
     State(state): State<Arc<AppState>>,
 ) -> Result<Response, ApiError> {
-    let command = take_next_current_control_command_after(&state, 0).await;
+    let command = take_next_current_control_command_after(&state, 0).await?;
     match command {
         Some(command) => Ok(Json(command).into_response()),
         None => Ok(StatusCode::NO_CONTENT.into_response()),
@@ -3958,7 +4010,7 @@ async fn take_current_control_command_for_session(
             return Ok(None);
         }
     }
-    Ok(take_next_current_control_command_after(state, after_seq).await)
+    take_next_current_control_command_after(state, after_seq).await
 }
 
 #[allow(dead_code)]

@@ -648,6 +648,8 @@ pub(crate) fn test_app_state() -> Arc<AppState> {
         )
         .unwrap(),
         current_workspace_root: PathBuf::from("."),
+        current_command_journal_store_root: None,
+        current_command_journal_revision: Arc::new(AtomicU64::new(0)),
         current_live_state: Arc::new(RwLock::new(None)),
         current_live_session_transition: Arc::new(Mutex::new(())),
         request_scope_instance_id: "test-api-instance".to_string(),
@@ -2758,6 +2760,8 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         )
         .unwrap(),
         current_workspace_root: repo_root.clone(),
+        current_command_journal_store_root: None,
+        current_command_journal_revision: Arc::new(AtomicU64::new(0)),
         current_live_state: Arc::new(RwLock::new(None)),
         current_live_session_transition: Arc::new(Mutex::new(())),
         request_scope_instance_id: "test-api-instance".to_string(),

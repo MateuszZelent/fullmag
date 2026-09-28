@@ -60,7 +60,9 @@ nieuruchomione do czasu zniesienia zakazu testów jednostkowych.
 ## Granica etapu
 
 Przekrój realizuje wymagane powierzchnie Operations/Problems bez nowego
-frontendowego store’a. Nadal nie dowodzi docelowego pojedynczego trwałego
-dziennika backendowego dla wszystkich operacji, managed process E2E preparacji
-FEM, native FEM, kwalifikacji naukowej ani release. Stan pozostaje:
+frontendowego store’a. Następny przyrost dodał trwały journal komend Live;
+pozostałe typowane źródła preparation/mesh i ich wspólna projekcja zdarzeń,
+managed process E2E preparacji FEM, native FEM, kwalifikacja naukowa oraz release
+pozostają otwarte. Szczegóły:
+[`19-live-command-journal.md`](19-live-command-journal.md). Stan pozostaje:
 **P4 50%**, cały plan około **49%**.

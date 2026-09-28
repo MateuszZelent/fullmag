@@ -115,6 +115,11 @@ pub(crate) struct AppState {
     /// task catalog. Replays do not consume another backlog slot.
     pub submit_backlog_limit: NonZeroUsize,
     pub current_workspace_root: PathBuf,
+    /// Durable bounded journal for current-workspace command status. Tests
+    /// that do not exercise filesystem recovery may leave it disabled.
+    pub current_command_journal_store_root: Option<PathBuf>,
+    /// Monotonic revision of the durable current-workspace command journal.
+    pub current_command_journal_revision: Arc<AtomicU64>,
     /// Sessionless local-live workspace snapshot used by the root `/` GUI.
     pub current_live_state: Arc<RwLock<Option<SessionStateResponse>>>,
     /// Lock order: current_live_session_transition precedes current-session state,
@@ -173,7 +178,8 @@ pub(crate) struct AppState {
     pub current_control_queue: Arc<Mutex<VecDeque<SessionCommand>>>,
     /// Recent idempotent command responses keyed by request identity.
     pub current_command_responses: Arc<Mutex<VecDeque<(String, CommandResponse)>>>,
-    /// Submission/dispatched ledger for resource-first command status endpoints.
+    /// Recovered projection of the durable command journal used by
+    /// resource-first command status endpoints.
     pub current_command_ledger: Arc<Mutex<VecDeque<TrackedCommandRecord>>>,
     /// Latest queued control sequence number.
     pub current_control_events: watch::Sender<u64>,

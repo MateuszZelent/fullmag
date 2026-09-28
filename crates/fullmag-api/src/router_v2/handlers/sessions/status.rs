@@ -58,7 +58,12 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveS
     let connectivity = refresh_current_live_connectivity(&state).await;
     let (commands_revision, command_completion_revision) = {
         let ledger = state.current_command_ledger.lock().await;
-        let revisions = command_ledger_revisions(&ledger);
+        let revisions = command_ledger_revisions(
+            &ledger,
+            state
+                .current_command_journal_revision
+                .load(std::sync::atomic::Ordering::Acquire),
+        );
         (
             revisions.commands_revision,
             revisions.command_completion_revision,
