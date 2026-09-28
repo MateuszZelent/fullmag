@@ -46,4 +46,6 @@ payload, dostępność Explorera oraz stan bufora WebGL.
 Przyrost realizuje brakującą jawną akcję `Build Grid` oraz jej kontekstową
 dostępność z P4-C. Nie zamyka bramki P4: pozostają pełne Operations/Problems,
 managed process E2E preparacji FEM, native FEM oraz kwalifikacja naukowa i
-release. Stan pozostaje: **P4 50%**, cały plan około **49%**.
+release. Powierzchnie Operations/Problems wdrożono w kolejnym checkpointcie;
+docelowy pojedynczy trwały dziennik backendowy nadal pozostaje otwarty. Stan
+pozostaje: **P4 50%**, cały plan około **49%**.

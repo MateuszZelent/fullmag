@@ -25,7 +25,7 @@ describe("MeshBuildDialog", () => {
 
   it("keeps FDM grid/mask refresh separate from FEM mesh controls", () => {
     expect(meshBuildDialogUnavailableMessage("fdm")).toBe(
-      "FDM grid and membership masks are rebuilt by an atomic execution-plan replan. Use Study → Apply Grid.",
+      "FDM grid and membership masks are rebuilt by an atomic execution-plan replan. Use Mesh → Build Grid.",
     );
     expect(meshBuildDialogUnavailableMessage("unknown")).toBe(
       UNKNOWN_MESH_COMMAND_LANE_REASON,
@@ -33,7 +33,7 @@ describe("MeshBuildDialog", () => {
     expect(meshBuildDialogUnavailableMessage("fem")).toBeNull();
   });
 
-  it("opens the bottom engine diagnostics tab from mesh build context", () => {
+  it("opens the shared Operations projection from mesh build context", () => {
     const calls: string[] = [];
 
     openMeshBuildDiagnostics({
@@ -55,7 +55,7 @@ describe("MeshBuildDialog", () => {
     expect(calls).toEqual([
       "panel:bottom:true",
       "focus:panel-bottom",
-      "footer:tab-requested:mesh:mesh-build",
+      "footer:tab-requested:operations:mesh-build",
     ]);
   });
 });

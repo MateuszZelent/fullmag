@@ -13,6 +13,8 @@ export async function qualifyFdmBuildGrid({
   const evidence = {
     command: null,
     explorer: null,
+    operations: null,
+    problems: null,
     status: "running",
     webgl: null,
   };
@@ -73,6 +75,38 @@ export async function qualifyFdmBuildGrid({
     assert.equal(command.precondition?.scene_revision, fixture.revision);
     assert.match(command.client_intent_id ?? "", /^fdm-grid-refresh-/);
 
+    const operationsTab = page.getByRole("tab", {
+      name: "Operations",
+      exact: true,
+    });
+    await operationsTab.waitFor({ state: "visible", timeout: 10_000 });
+    assert.equal(
+      await operationsTab.getAttribute("aria-selected"),
+      "true",
+      "Build Grid did not focus the shared Operations projection.",
+    );
+    const commandOperation = page.locator(
+      '[data-operation-id="command:fixture-fdm-grid-command"]',
+    );
+    await commandOperation.waitFor({ state: "visible", timeout: 10_000 });
+    assert.match(await commandOperation.innerText(), /fdm_grid_refresh/i);
+    assert.match(await commandOperation.innerText(), /completed/i);
+
+    const problemsTab = page.getByRole("tab", {
+      name: "Problems",
+      exact: true,
+    });
+    await problemsTab.click();
+    const geometryProblem = page.locator(
+      '[data-problem-id="geometry:fixture-grid-extent-problem"]',
+    );
+    await geometryProblem.waitFor({ state: "visible", timeout: 10_000 });
+    assert.match(
+      await geometryProblem.innerText(),
+      /GRID_EXTENT_REVIEW_REQUIRED/,
+    );
+    assert.match(await geometryProblem.innerText(), /scene revision|12/i);
+
     const canvas = page.locator(".fm-viewport-3d canvas").first();
     await canvas.waitFor({ state: "visible", timeout: 30_000 });
     evidence.webgl = await canvas.evaluate((element) => {
@@ -105,6 +139,16 @@ export async function qualifyFdmBuildGrid({
 
     evidence.command = command;
     evidence.explorer = { command: "grid.build-fdm", enabled: true };
+    evidence.operations = {
+      command: "fixture-fdm-grid-command",
+      focusedAfterSubmit: true,
+      status: "completed",
+    };
+    evidence.problems = {
+      code: "GRID_EXTENT_REVIEW_REQUIRED",
+      revision: fixture.revision,
+      severity: "error",
+    };
     evidence.status = "passed";
   } catch (error) {
     evidence.status = "failed";

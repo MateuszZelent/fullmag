@@ -1924,6 +1924,24 @@ async function installInspectorFixtureApi(page, fixture) {
     if (path === "/v2/sessions/current/model/current-transports") return fulfillJson(route, { items: [], scene_revision: fixture.revision });
     if (path === "/v2/sessions/current/model/geometry/capabilities") return fulfillJson(route, { csg_capabilities: [], primitive_capabilities: [], revision: fixture.revision });
     if (path === "/v2/sessions/current/model/geometry/validation") return fulfillJson(route, { diagnostics: [], revision: fixture.revision, valid: true });
+    if (path === "/v2/sessions/current/model/geometry/diagnostics") {
+      return fulfillJson(route, {
+        backend_target: fixture.fdmBuildGridMode ? "fdm" : "fem",
+        diagnostics: fixture.fdmBuildGridMode
+          ? [{
+              blocks: ["grid"],
+              code: "GRID_EXTENT_REVIEW_REQUIRED",
+              geometry_path: "objects/film",
+              id: "fixture-grid-extent-problem",
+              message: "Grid extent requires operator review.",
+              object_id: "film",
+              severity: "error",
+            }]
+          : [],
+        scene_revision: fixture.revision,
+        status: fixture.fdmBuildGridMode ? "invalid" : "valid",
+      });
+    }
     if (path === "/v2/sessions/current/model/planar-monitors") return fulfillJson(route, { count: 0, monitors: [], scene_revision: fixture.revision });
     if (path === "/v2/sessions/current/model/universe") return fulfillJson(route, {
       mesh_dirty: false,
@@ -2065,7 +2083,37 @@ async function installInspectorFixtureApi(page, fixture) {
         status: "completed",
       });
     }
-    if (path === "/v2/sessions/current/simulation/commands") return fulfillJson(route, { commands: [], latest_completed: null, revision: fixture.revision });
+    if (path === "/v2/sessions/current/simulation/commands") {
+      const commandBody = fixture.fdmBuildGridMode
+        ? fixture.gridCommandBodies.at(-1)
+        : null;
+      const commands = commandBody
+        ? [{
+            client_intent_id: commandBody.client_intent_id ?? null,
+            command_id: "fixture-fdm-grid-command",
+            completed_at_unix_ms: Date.now(),
+            completion_status: "completed",
+            created_at_unix_ms: Date.now(),
+            kind: "fdm_grid_refresh",
+            reason: "explicit_build_grid",
+            seq: fixture.revision + 1,
+            status: "completed",
+          }]
+        : [];
+      return fulfillJson(route, {
+        accepted_count: 0,
+        can_accept_commands: true,
+        commands,
+        completed_count: commands.length,
+        dispatched_count: 0,
+        failed_count: 0,
+        pending_count: 0,
+        rejected_count: 0,
+        revision: fixture.revision + commands.length,
+        running_count: 0,
+        runtime_controls: [],
+      });
+    }
     if (
       path === "/v2/sessions/current/diagnostics/engine-log" &&
       fixture.fdmBuildGridMode

@@ -643,3 +643,20 @@ polecenie Explorera, brak 404/błędów konsoli i zdrowy WebGL
 uruchomiono z powodu aktywnego zakazu ich kompilacji. **P4 50%, cały plan około
 49%**. Szczegóły:
 [17-explicit-fdm-build-grid.md](17-explicit-fdm-build-grid.md).
+
+## Wspólne Operations i Problems — 28.09.2026
+
+Dolny panel Control Room ma jawne Operations i Problems. Operations projektuje
+kolejkę komend, preparation oraz istniejący szczegółowy Mesh Jobs; Problems
+łączy diagnostykę geometrii, failure preparacji, błąd kandydata meshu wraz z
+last-good identity oraz nieudane komendy. Nie dodano osobnego task store’a, a
+stare zapisane wskazanie zakładki `mesh` migruje do `operations`.
+
+Typecheck, scoped ESLint, składnia skryptów, diff check i browser smoke:
+**PASS**. Smoke potwierdził automatyczne otwarcie Operations po Build Grid,
+zakończoną komendę, źródłowy problem geometrii z rewizją, brak 404/błędów
+konsoli i zdrowy WebGL (`703×478`, `contextLost=false`). Regresje jednostkowe
+dodano, ale ich nie uruchomiono zgodnie z aktywnym zakazem. Pełna konsolidacja
+backendowa do jednego trwałego dziennika nadal pozostaje otwarta. **P4 50%,
+cały plan około 49%**. Szczegóły:
+[18-operations-problems-projection.md](18-operations-problems-projection.md).

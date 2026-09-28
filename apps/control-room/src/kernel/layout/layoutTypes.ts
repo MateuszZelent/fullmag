@@ -23,7 +23,8 @@ export type BottomPanelTabId =
   | "diagnostics"
   | "engine"
   | "logs"
-  | "mesh"
+  | "operations"
+  | "problems"
   | "quick-chart"
   | "telemetry";
 

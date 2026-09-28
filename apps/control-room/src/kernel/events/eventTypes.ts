@@ -75,7 +75,7 @@ export interface KernelEventMap {
   };
   "footer:tab-requested": {
     reason?: string;
-    tab: "diagnostics" | "engine" | "logs" | "mesh" | "quick-chart" | "telemetry";
+    tab: "diagnostics" | "engine" | "logs" | "operations" | "problems" | "quick-chart" | "telemetry";
   };
   "diagnostics:recorder-open-requested": {
     source: string;

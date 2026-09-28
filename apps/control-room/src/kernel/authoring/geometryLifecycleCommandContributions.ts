@@ -24,6 +24,7 @@ import {
   MODEL_REGION_DIAGNOSTICS_PATH,
   MODEL_SCENE_PATH,
   MODEL_UNIVERSE_PATH,
+  SIMULATION_COMMANDS_PATH,
   SIMULATION_PREPARATION_PATH,
 } from "../api/apiPaths";
 import type {
@@ -582,12 +583,12 @@ function invalidateMeshBuildStatus(context: CommandContext, revision: string | n
   context.resources?.invalidate(MODEL_READINESS_PATH, revision);
 }
 
-function focusMeshJobs(context: CommandContext): void {
+function focusOperations(context: CommandContext): void {
   context.layout?.setPanelVisible("bottom", true);
   context.layout?.setFocusedSlot("panel-bottom");
   context.bus?.emit("footer:tab-requested", {
     reason: "mesh-build",
-    tab: "mesh",
+    tab: "operations",
   });
 }
 
@@ -602,7 +603,7 @@ function emitMeshBuildSubmitted(
   },
 ): void {
   context.bus?.emit("mesh:build-submitted", payload);
-  focusMeshJobs(context);
+  focusOperations(context);
 }
 
 type MeshBuildRequest = Extract<StructuredCommandRequest, { kind: "mesh_build" }>;
@@ -908,6 +909,10 @@ function runMeshBuildOperation(
         operation.commandId = response.accepted ? response.command_id : undefined;
         return obsoleteAfterSubmission;
       }
+      context.resources?.invalidate(
+        SIMULATION_COMMANDS_PATH,
+        response.command_id,
+      );
       if (!response.accepted) {
         const result: CommandResult = {
           commandId: response.command_id,
@@ -990,6 +995,10 @@ export function runFdmGridRefreshOperation(
         operation.commandId = response.accepted ? response.command_id : undefined;
         return obsoleteAfterSubmission;
       }
+      context.resources?.invalidate(
+        SIMULATION_COMMANDS_PATH,
+        response.command_id,
+      );
       if (!response.accepted) {
         const result: CommandResult = {
           commandId: response.command_id,

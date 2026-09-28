@@ -166,6 +166,17 @@ P4-C, ale nie zamyka pełnego Operations/Problems ani bramki native/managed;
 wskaźniki pozostają **P4 50%** i około **49%** dla całego planu. Szczegóły:
 [`p4/17-explicit-fdm-build-grid.md`](p4/17-explicit-fdm-build-grid.md).
 
+Aktualizacja P4-C z 28.09.2026: dolny panel ma wspólne Operations i Problems.
+Operations projektuje kolejkę komend, preparation i Mesh Jobs, a Problems
+diagnostykę geometrii, failure preparacji, błąd kandydata meshu z last-good
+identity oraz nieudane komendy. Stare zapisane `mesh` migruje do `operations`;
+nie dodano nowego store’a. Browser smoke potwierdził automatyczne otwarcie
+Operations po Build Grid, zakończoną komendę, problem z rewizją 12, brak
+404/błędów konsoli i zdrowy WebGL. Docelowy pojedynczy trwały dziennik
+backendowy oraz managed/native gate pozostają otwarte, dlatego wskaźniki nadal
+wynoszą **P4 50%** i około **49%** dla całego planu. Szczegóły:
+[`p4/18-operations-problems-projection.md`](p4/18-operations-problems-projection.md).
+
 Uwaga do wiersza P3-B: trwałe wpisy `retry_decision.v1` oraz ich
 [`coordinator_journal.v1`](p3/03-coordinator-journal.md) są już source-level PASS (`SessionStore` zapewnia
 replay, claim/epoch fencing, contiguous command/event sequence, terminal

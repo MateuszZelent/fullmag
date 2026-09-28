@@ -49,7 +49,8 @@ const BOTTOM_PANEL_TABS: readonly BottomPanelTabId[] = [
   "diagnostics",
   "engine",
   "logs",
-  "mesh",
+  "operations",
+  "problems",
   "quick-chart",
   "telemetry",
 ];
@@ -124,6 +125,7 @@ function readLayoutState(record: JsonObject | null): LayoutState | null {
 function readBottomPanelTab(
   value: JsonValue | undefined,
 ): BottomPanelTabId {
+  if (value === "mesh") return "operations";
   return typeof value === "string" &&
     BOTTOM_PANEL_TABS.includes(value as BottomPanelTabId)
     ? (value as BottomPanelTabId)

@@ -2,12 +2,13 @@
 
 import {
   Activity,
+  CircleAlert,
   Clipboard,
   ClipboardCheck,
   Cpu,
   FileText,
   Gauge,
-  Hammer,
+  ListChecks,
   Trash2,
 } from "lucide-react";
 import {
@@ -37,7 +38,7 @@ import { CommandAuditTable } from "./CommandAuditTable";
 import { FooterDiagnostics } from "./FooterDiagnostics";
 import { FooterTelemetry } from "./FooterTelemetry";
 import { DiagnosticRecorderFooterPanel } from "./DiagnosticRecorderFooterPanel";
-import { MeshJobsPanel } from "./MeshJobsPanel";
+import { OperationsPanel, ProblemsPanel } from "./OperationsProblemsPanel";
 import { TransportLogTable } from "./TransportLogTable";
 
 const FOOTER_PANEL_CLASS_NAME =
@@ -90,9 +91,13 @@ function FooterModuleContent({ kernel }: ModuleProps) {
             <FileText size={14} aria-hidden="true" />
             Engine
           </TabsTrigger>
-          <TabsTrigger value="mesh" className="fm-footer__tab">
-            <Hammer size={14} aria-hidden="true" />
-            Mesh Jobs
+          <TabsTrigger value="operations" className="fm-footer__tab">
+            <ListChecks size={14} aria-hidden="true" />
+            Operations
+          </TabsTrigger>
+          <TabsTrigger value="problems" className="fm-footer__tab">
+            <CircleAlert size={14} aria-hidden="true" />
+            Problems
           </TabsTrigger>
           <TabsTrigger value="quick-chart" className="fm-footer__tab">
             <Activity size={14} aria-hidden="true" />
@@ -145,12 +150,22 @@ function FooterModuleContent({ kernel }: ModuleProps) {
         ) : null}
       </TabsContent>
 
-      <TabsContent value="mesh" className={FOOTER_CONTENT_CLASS_NAME}>
-        {activeTab === "mesh" ? (
+      <TabsContent value="operations" className={FOOTER_CONTENT_CLASS_NAME}>
+        {activeTab === "operations" ? (
           <div
             className={`${FOOTER_PANEL_CLASS_NAME} [&>.fm-footer-mesh-jobs]:overflow-auto`}
           >
-            <MeshJobsPanel />
+            <OperationsPanel />
+          </div>
+        ) : null}
+      </TabsContent>
+
+      <TabsContent value="problems" className={FOOTER_CONTENT_CLASS_NAME}>
+        {activeTab === "problems" ? (
+          <div
+            className={`${FOOTER_PANEL_CLASS_NAME} [&>.fm-footer-mesh-jobs]:overflow-auto`}
+          >
+            <ProblemsPanel />
           </div>
         ) : null}
       </TabsContent>
