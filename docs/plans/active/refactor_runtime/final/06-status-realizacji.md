@@ -1961,3 +1961,18 @@ process E2E jest **NOT VERIFIED**: `just runner-container-status` nadal kończy
 się `Docker Desktop coordinator request failed`; hostowego obejścia nie użyto.
 **P4 50%, cały plan około 49%**. Szczegóły:
 [p4/15-accepted-fem-preparation-process-gate.md](p4/15-accepted-fem-preparation-process-gate.md).
+
+## P4-C — zachowanie ostatniej poprawnej siatki w UI — 28.09.2026
+
+Explorer i Mesh Inspector rozróżniają teraz nieudanego kandydata od ostatniej
+opublikowanej siatki. UI pokazuje zachowaną nazwę, rewizję, build i generację,
+ale deklaruje `retained` tylko przy kompletnej opublikowanej tożsamości. Przy
+braku tej tożsamości przechodzi fail-closed do `identity unavailable`.
+
+Typecheck, scoped ESLint i browser smoke: **PASS**. Smoke potwierdził zachowanie
+panelu, focusu i pozycji przewijania oraz zdrowy canvas WebGL
+(`contextLost=false`, drawing buffer `703×478`). Regresje jednostkowe zostały
+dodane, lecz nie uruchomione zgodnie z aktywnym zakazem ich kompilacji.
+Managed/native process E2E pozostaje **NOT VERIFIED**. **P4 50%, cały plan około
+49%**. Szczegóły:
+[p4/16-mesh-last-good-ui.md](p4/16-mesh-last-good-ui.md).

@@ -882,6 +882,46 @@ describe("buildModelTree", () => {
     });
   });
 
+  it("keeps the published mesh identity visible after a failed candidate", () => {
+    const flattened = flattenExplorerNodes(
+      buildModelTree({
+        domainDiscretization: "fem",
+        mesh: {
+          lastError: "mesher rejected the candidate",
+          latestBuildStatus: "completed",
+          manifestSourceSceneRevision: 14,
+          meshName: "published-mesh",
+          meshRevision: 7,
+          sourceSceneRevision: 15,
+        },
+      }),
+    );
+
+    expect(flattened.find((node) => node.id === "model:mesh")).toMatchObject({
+      badge: "failed · retained published-mesh",
+      status: "mesh-failed",
+    });
+    expect(flattened.find((node) => node.id === "model:mesh:builds")).toMatchObject({
+      badge: "failed · retained rev 7",
+      status: "mesh-failed",
+    });
+
+    const unresolved = flattenExplorerNodes(
+      buildModelTree({
+        domainDiscretization: "fem",
+        mesh: {
+          lastError: "mesher rejected the candidate",
+          meshName: "unverified-mesh",
+          meshRevision: 8,
+        },
+      }),
+    );
+    expect(unresolved.find((node) => node.id === "model:mesh")).toMatchObject({
+      badge: "failed",
+      status: "mesh-failed",
+    });
+  });
+
   it("projects canonical SceneDocument objects into lifecycle-aware nodes", () => {
     const snapshot = modelTreeSnapshotFromScene({
       materials: [

@@ -1947,8 +1947,36 @@ async function installInspectorFixtureApi(page, fixture) {
     if (path === "/v2/sessions/current/meshing/meshes/shared-domain/quality") return fulfillJson(route, { quality: null, revision: 7 });
     if (path === "/v2/sessions/current/meshing/meshes/universe/report") return fulfillJson(route, { report: null, revision: 7 });
     if (path === "/v2/sessions/current/meshing/meshes/universe/quality") return fulfillJson(route, { quality: null, revision: 7 });
-    if (path === "/v2/sessions/current/meshing/builds/current") return fulfillJson(route, { active_build: null, mesh_pipeline_status: "ready", revision: 7 });
-    if (path === "/v2/sessions/current/meshing/builds/latest-successful") return fulfillJson(route, { provenance: { scene_revision: fixture.revision }, revision: 7, status: "completed" });
+    if (path === "/v2/sessions/current/meshing/builds/current") {
+      const failedCandidate = process.env.CONTROL_ROOM_INSPECTOR_RETAINED_MESH === "1";
+      return fulfillJson(route, {
+        active_build: null,
+        last_build_error: failedCandidate ? "fixture mesher rejected the candidate" : null,
+        last_build_summary: {
+          build_id: "mesh:inspector-good",
+          mesh_name: fixture.manifest.mesh_name,
+          source_scene_revision: fixture.revision,
+          status: "completed",
+        },
+        mesh_pipeline_status: failedCandidate ? "failed" : "ready",
+        revision: 7,
+      });
+    }
+    if (path === "/v2/sessions/current/meshing/builds/latest-successful") {
+      const failedCandidate = process.env.CONTROL_ROOM_INSPECTOR_RETAINED_MESH === "1";
+      return fulfillJson(route, {
+        last_build_error: failedCandidate ? "fixture mesher rejected the candidate" : null,
+        last_success: {
+          build_id: "mesh:inspector-good",
+          mesh_name: fixture.manifest.mesh_name,
+          provenance: { scene_revision: fixture.revision },
+          source_scene_revision: fixture.revision,
+          status: "completed",
+        },
+        revision: 7,
+        source_scene_revision: fixture.revision,
+      });
+    }
     if (path === "/v2/sessions/current/meshing/region-memberships") return fulfillJson(route, { memberships: [], revision: 7 });
     if (path === "/v2/sessions/current/simulation/stages/execution") return fulfillJson(route, { stages: [], stage_statuses: [], total_stages: 0, revision: fixture.revision });
     if (path === "/v2/sessions/current/simulation/solver/status") return fulfillJson(route, { can_accept_commands: true, is_busy: false, runtime_state: "idle", revision: fixture.revision });
@@ -2077,7 +2105,14 @@ function inspectorSessionStatus(fixture) {
     },
     run: null,
     runtime_bundle_version: "inspector-routing-smoke",
-    session: { created_at: "2026-08-11T00:00:00.000Z", name: "Inspector routing smoke", session_id: "inspector-routing-smoke", workspace_root: "/tmp/fullmag-inspector-routing-smoke" },
+    session: {
+      created_at: "2026-08-11T00:00:00.000Z",
+      name: "Inspector routing smoke",
+      request_scope_epoch: "inspector-request-scope-1",
+      session_epoch: "inspector-session-epoch-1",
+      session_id: "inspector-routing-smoke",
+      workspace_root: "/tmp/fullmag-inspector-routing-smoke",
+    },
     solver: { state: "idle" },
   };
 }

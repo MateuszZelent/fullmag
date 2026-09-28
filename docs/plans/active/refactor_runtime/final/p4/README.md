@@ -611,3 +611,18 @@ pozostaje **NOT VERIFIED**, ponieważ koordynator Docker Desktop nadal nie
 odpowiada; nie zastosowano hostowego fallbacku. P4 pozostaje na **50%**, a cały
 plan na około **49%**. Szczegóły:
 [15-accepted-fem-preparation-process-gate.md](15-accepted-fem-preparation-process-gate.md).
+
+## Zachowanie ostatniej poprawnej siatki w UI — 28.09.2026
+
+Control Room rozdziela teraz nieudanego kandydata od ostatniego opublikowanego
+artefaktu siatki. Explorer pokazuje `failed · retained` wraz z nazwą i rewizją,
+a Inspector wyjaśnia brak promocji i podaje build oraz generację. Stan
+`retained` jest fail-closed: wymaga jednocześnie `last_success`, błędu kandydata
+i opublikowanej tożsamości z rewizją; niepełne dane dają `identity unavailable`.
+
+Typecheck, scoped ESLint i browser smoke: **PASS**. Browser smoke potwierdził
+stabilność Inspectora oraz zdrowy WebGL (`contextLost=false`, drawing buffer
+`703×478`). Regresje jednostkowe dodano, lecz nie uruchomiono z powodu aktywnego
+zakazu ich kompilacji. Managed/native process E2E pozostaje **NOT VERIFIED**.
+**P4 50%, cały plan około 49%**. Szczegóły:
+[16-mesh-last-good-ui.md](16-mesh-last-good-ui.md).

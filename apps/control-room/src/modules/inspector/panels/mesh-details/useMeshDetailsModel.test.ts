@@ -4,10 +4,55 @@ import {
   buildSharedDomainPolicyDiffRows,
   resolveCurrentMixedCertificateQualityPresentation,
   resolveMeshDetailsLane,
+  resolveRetainedMeshArtifact,
   shouldLoadMeshDetailsFemResources,
 } from "./useMeshDetailsModel";
 
 describe("useMeshDetailsModel helpers", () => {
+  it("exposes the exact published mesh retained after a failed candidate", () => {
+    expect(resolveRetainedMeshArtifact({
+      lastBuildError: "mesher rejected the candidate",
+      latestSuccess: {
+        build_id: "mesh:good",
+        mesh_name: "previous mesh",
+        source_scene_revision: 14,
+      },
+      manifest: {
+        generation_id: "generation-7",
+        mesh_id: "mesh-id-7",
+        mesh_name: "published mesh",
+        source_scene_revision: 14,
+      },
+      meshRevision: 7,
+    })).toEqual({
+      buildId: "mesh:good",
+      generationId: "generation-7",
+      meshId: "mesh-id-7",
+      meshName: "published mesh",
+      meshRevision: 7,
+      sourceSceneRevision: 14,
+      state: "retained",
+    });
+  });
+
+  it("does not claim rollback when the published artifact identity is incomplete", () => {
+    expect(resolveRetainedMeshArtifact({
+      lastBuildError: "mesher rejected the candidate",
+      latestSuccess: { build_id: "mesh:good" },
+      manifest: null,
+      meshRevision: null,
+    })).toMatchObject({
+      buildId: "mesh:good",
+      state: "identity-unavailable",
+    });
+    expect(resolveRetainedMeshArtifact({
+      lastBuildError: null,
+      latestSuccess: { build_id: "mesh:good" },
+      manifest: { mesh_id: "mesh-id-7" },
+      meshRevision: 7,
+    })).toBeNull();
+  });
+
   it("only enables FEM mesh resources for an explicit FEM session lane", () => {
     expect(resolveMeshDetailsLane("fem")).toBe("fem");
     expect(resolveMeshDetailsLane("FEM")).toBe("fem");

@@ -28,6 +28,14 @@ export function meshRootStatus(mesh: ModelTreeSnapshot["mesh"]): ExplorerNodeSta
   return "mesh-stale";
 }
 function meshRootBadge(mesh: ModelTreeSnapshot["mesh"]): string {
+  if (
+    mesh?.lastError &&
+    mesh.latestBuildStatus &&
+    mesh.meshName &&
+    mesh.meshRevision != null
+  ) {
+    return `failed · retained ${mesh.meshName}`;
+  }
   if (mesh?.lastError) return "failed";
   if (mesh?.activeBuildStatus) return mesh.activeBuildStatus;
   if (mesh?.meshName) return mesh.meshName;
@@ -74,6 +82,13 @@ function meshBuildPipelineBadge(mesh: ModelTreeSnapshot["mesh"]): string {
   const revision = mesh?.meshRevision ?? mesh?.buildRevision ?? "none";
   const sourceSceneRevision =
     mesh?.manifestSourceSceneRevision ?? mesh?.latestBuildSourceSceneRevision;
+  if (
+    mesh?.lastError &&
+    mesh.latestBuildStatus &&
+    mesh.meshRevision != null
+  ) {
+    return `failed · retained rev ${mesh.meshRevision}`;
+  }
   return `rev ${revision} · scene ${sourceSceneRevision ?? "unknown"}`;
 }
 

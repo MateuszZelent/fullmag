@@ -655,7 +655,9 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       record(activeBuild.data?.active_build),
       normalizeMeshPipelineStatus(activeBuild.data?.mesh_pipeline_status),
     );
-    const latestSuccessfulBuildRecord = record(latestSuccessfulBuild.data);
+    const latestSuccessfulBuildRecord = record(
+      latestSuccessfulBuild.data?.last_success,
+    );
     const latestBuildProvenance = record(latestSuccessfulBuildRecord?.provenance);
     const modelResourceRecord = record(modelResource.data);
     const semanticTargetCatalog = buildSemanticRenderTargetCatalog({
@@ -672,9 +674,14 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       domainMeshMode: manifest.data?.domain_mesh_mode,
       generationId: manifest.data?.generation_id,
       latestBuildSourceSceneRevision:
-        revisionValue(latestBuildProvenance?.scene_revision),
+        revisionValue(
+          latestBuildProvenance?.scene_revision ??
+            latestSuccessfulBuildRecord?.source_scene_revision,
+        ),
       latestBuildStatus: stringValue(latestSuccessfulBuildRecord?.status),
-      lastError: activeBuild.data?.last_build_error,
+      lastError:
+        activeBuild.data?.last_build_error ??
+        latestSuccessfulBuild.data?.last_build_error,
       manifestSourceSceneRevision: manifest.data?.source_scene_revision,
       meshName: manifest.data?.mesh_name,
       meshRevision: meshSummary.data?.revision ?? manifest.data?.revision,
