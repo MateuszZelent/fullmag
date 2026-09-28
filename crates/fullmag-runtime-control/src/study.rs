@@ -850,11 +850,23 @@ pub fn publish_study_outputs(
     claim: &TaskClaim,
     step_id: &str,
     outputs: &[StudyOutputPayload],
+    accepted_state_ref: Option<&fullmag_quantities::AcceptedStateRef>,
 ) -> Result<fullmag_session::FmsArtifactCatalog> {
     let run_id = accepted.run.specification.run_id.as_str();
     let expected_task_id = fullmag_session::task_id_for_study_step(run_id, step_id)?;
     if claim.run_id.as_str() != run_id || claim.task_id.as_str() != expected_task_id {
         bail!("study output claim does not match the accepted run and step");
+    }
+    if let Some(reference) = accepted_state_ref {
+        reference
+            .validate()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        if reference.id.run_id != run_id
+            || reference.id.stage_id.as_deref() != Some(step_id)
+            || reference.generation.runtime_epoch != claim.ownership_epoch.value()
+        {
+            bail!("accepted state reference does not match the output publication claim");
+        }
     }
     let step = accepted
         .study
@@ -1038,6 +1050,7 @@ pub fn publish_study_outputs(
         step_id: step_id.into(),
         attempt_id: claim.attempt_id.as_str().into(),
         ownership_epoch: claim.ownership_epoch.value(),
+        accepted_state_ref: accepted_state_ref.cloned(),
         outputs: manifest_outputs,
     };
     manifest.validate()?;

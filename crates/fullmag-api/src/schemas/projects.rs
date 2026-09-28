@@ -129,6 +129,50 @@ pub(crate) struct ProjectRunTaskResource {
     pub resolved_input_fingerprint: Option<String>,
     pub artifact_ids: Vec<String>,
     pub resource_id: Option<String>,
+    pub accepted_state_ref: Option<ProjectAcceptedStateRefResource>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ProjectAcceptedStateRefResource {
+    pub id: ProjectAcceptedStateIdResource,
+    pub generation: ProjectAcceptedStateGenerationResource,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ProjectAcceptedStateIdResource {
+    pub run_id: String,
+    pub stage_id: Option<String>,
+    pub accepted_step: u64,
+    pub clock_digest: String,
+    pub state_digest: String,
+    pub domain_digest: String,
+    pub plan_digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ProjectAcceptedStateGenerationResource {
+    pub runtime_epoch: u64,
+    pub accepted_revision: u64,
+}
+
+impl From<fullmag_quantities::AcceptedStateRef> for ProjectAcceptedStateRefResource {
+    fn from(reference: fullmag_quantities::AcceptedStateRef) -> Self {
+        Self {
+            id: ProjectAcceptedStateIdResource {
+                run_id: reference.id.run_id,
+                stage_id: reference.id.stage_id,
+                accepted_step: reference.id.accepted_step,
+                clock_digest: reference.id.clock_digest,
+                state_digest: reference.id.state_digest,
+                domain_digest: reference.id.domain_digest,
+                plan_digest: reference.id.plan_digest,
+            },
+            generation: ProjectAcceptedStateGenerationResource {
+                runtime_epoch: reference.generation.runtime_epoch,
+                accepted_revision: reference.generation.accepted_revision,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
@@ -195,6 +239,7 @@ impl From<FmsTaskCatalogEntry> for ProjectRunTaskResource {
             resolved_input_fingerprint: task.resolved_input_fingerprint,
             artifact_ids: task.artifact_ids,
             resource_id: task.resource_id,
+            accepted_state_ref: None,
         }
     }
 }

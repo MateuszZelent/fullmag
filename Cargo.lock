@@ -1323,6 +1323,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -1359,6 +1360,7 @@ dependencies = [
  "fullmag-authoring",
  "fullmag-ir",
  "fullmag-plan",
+ "fullmag-quantities",
  "fullmag-session",
  "serde_json",
  "tempfile",
@@ -1371,6 +1373,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "fullmag-ir",
+ "fullmag-quantities",
  "libc",
  "serde",
  "serde_json",

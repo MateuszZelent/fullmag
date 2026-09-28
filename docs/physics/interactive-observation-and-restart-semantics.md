@@ -345,7 +345,7 @@ całej lane ani pozostałych kontraktów tej strony.
 - [x] backend-neutralny typ i strict walidacja `AcceptedStateRef`
 - [x] kanoniczny builder `clock_digest`/`state_digest` dla kompletu nazwanych primary carriers
 - [x] źródłowy snapshot prostego lane'u FDM CPU z transakcyjnego stanu solvera
-- [x] trwały `AcceptedStateRef` prostego FDM CPU w immutable worker receipt i recovery
+- [x] trwały `AcceptedStateRef` prostego FDM CPU w worker receipt, manifeście v2 i publicznym GET run
 - [ ] pełna materializacja `AcceptedStateRef` przez wszystkie lane'y oraz `ObservationRuntime`
 - [ ] atomowy autosave frame descriptor i reader
 - [ ] transactional `.fms` runtime import/export
@@ -366,9 +366,10 @@ całej lane ani pozostałych kontraktów tej strony.
 |---|---|---|---|---|---|
 | docelowy funkcjonał obserwacji | `docs/physics/interactive-observation-and-restart-semantics.md` | `DOC-ANCHOR:observation-functional` | planowany backend-neutralny funkcjonał quantity | wszystkie | planned contract, bez runtime proof |
 | normatywna accepted-state identity | `docs/adr/0025-persistent-runtime-and-observation-sources.md` | `DOC-ANCHOR:accepted-state-identity` | siedem pól trwałego ID i osobna generacja runtime'u | wszystkie | accepted contract |
-| accepted-state identity | `crates/fullmag-runner/src/observation.rs` | `AcceptedStateRef`, `ObservationClock`, `accepted_state_digests` | backend-neutralny typ, strict wire validation, kanoniczny zegar i content-bound primary carriers | wszystkie | source contract i known vector PASS; materializacja lane'ów i runtime proof otwarte |
+| accepted-state identity | `crates/fullmag-quantities/src/accepted_state.rs` | `AcceptedStateRef`, `ObservationClock`, `accepted_state_digests` | pojedynczy backend-neutralny owner typu, strict wire validation, kanoniczny zegar i content-bound primary carriers | wszystkie | source contract i known vector PASS; materializacja pozostałych lane'ów i runtime proof otwarte |
 | accepted-state lane snapshot | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `fullmag.fdm.cpu.accepted-state-snapshot.v1` | zegar oraz `state_digest` prostego FDM CPU związany z transakcyjnym stanem solvera | FDM CPU | source/in-process PASS; coupled transport, Frozen Spins i managed runtime otwarte |
 | trwałe związanie accepted state | `crates/fullmag-api/src/accepted_study_worker.rs` | `accepted_state_ref_from_runner_snapshot`, `WorkerExecutionCompletedReceipt.accepted_state_ref` | wiąże snapshot z RunId/stage, preparation, ProblemIR/resolved plan/requested execution i ownership epoch; recovery wymaga exact match | prosty FDM CPU | worker check i procesowy submit/recovery PASS; publiczny zasób, inne lane'y i managed runtime otwarte |
+| manifest i publiczny readback | `crates/fullmag-session/src/types.rs`, `crates/fullmag-api/src/router_v2/handlers/persistence/projects.rs` | `study_output_manifest.v2`, `ProjectRunTaskResource.accepted_state_ref` | publikuje ref pod fenced lease i projektuje go z CAS przez GET run bez prywatnego katalogu workera | prosty FDM CPU | HTTP in-process PASS; inne lane'y, browser i managed runtime otwarte |
 | docelowa availability | `docs/physics/interactive-observation-and-restart-semantics.md` | `DOC-ANCHOR:quantity-availability` | planowane przecięcie katalogu, fizyki, planu, lane'u i nośników | wszystkie | planned contract, bez runtime proof |
 | docelowa semantyka resume | `docs/physics/interactive-observation-and-restart-semantics.md` | `DOC-ANCHOR:resume-trajectory` | planowane rozróżnienie logical/exact | wszystkie | planned contract, bez runtime proof |
 | obecny eager batch do zastąpienia | `crates/fullmag-runner/src/interactive/runtime.rs` | `build_atomic_terminal_update` | bieżąca luka: terminalny snapshot FDM | FDM CPU/GPU | superseded/gap evidence, nie źródło równania docelowego |

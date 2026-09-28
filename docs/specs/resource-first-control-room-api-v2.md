@@ -279,7 +279,12 @@ RunIntent and optional task catalog from managed project storage, verifies the
 pinned project/run identity, and exposes requested execution plus a typed,
 revisioned task summary. `catalog_state=pending_materialization` means no task
 catalog exists; `materialized` means task identities are durable, not that a
-worker has started. It does not read or change the current runtime session.
+worker has started. Dla ukończonego attemptu `tasks[].accepted_state_ref`
+projektuje dokładny wspólny kontrakt z CAS-backed `study_output_manifest.v2`.
+Historyczny manifest v1 lub lane bez kompletnego refa zwraca `null`; zły scope,
+brak obiektu CAS albo więcej niż jeden manifest bieżącego attemptu daje błąd.
+Handler nie czyta prywatnego katalogu workera. Nie odczytuje ani nie zmienia
+bieżącej sesji runtime.
 
 `POST /v2/persistence/projects/{project_id}/runs` accepts the exact project
 archive, `run_intent.v1`, current `study_plan.v2` (with compatible

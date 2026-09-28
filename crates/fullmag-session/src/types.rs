@@ -1915,7 +1915,8 @@ impl FmsStudyArtifactOutput {
     }
 }
 
-pub const FMS_STUDY_OUTPUT_MANIFEST_SCHEMA: &str = "study_output_manifest.v1";
+pub const FMS_STUDY_OUTPUT_MANIFEST_SCHEMA_V1: &str = "study_output_manifest.v1";
+pub const FMS_STUDY_OUTPUT_MANIFEST_SCHEMA: &str = "study_output_manifest.v2";
 
 /// Versioned type/codec references for the exact study outputs of one attempt.
 /// The manifest is stored as a normal CAS-backed artifact catalog entry.
@@ -1928,6 +1929,8 @@ pub struct FmsStudyOutputManifest {
     pub step_id: String,
     pub attempt_id: String,
     pub ownership_epoch: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_state_ref: Option<fullmag_quantities::AcceptedStateRef>,
     pub outputs: Vec<FmsStudyOutputManifestEntry>,
 }
 
@@ -1946,11 +1949,19 @@ pub struct FmsStudyOutputManifestEntry {
 
 impl FmsStudyOutputManifest {
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != FMS_STUDY_OUTPUT_MANIFEST_SCHEMA {
+        if !matches!(
+            self.schema_version.as_str(),
+            FMS_STUDY_OUTPUT_MANIFEST_SCHEMA_V1 | FMS_STUDY_OUTPUT_MANIFEST_SCHEMA
+        ) {
             bail!(
                 "unsupported study output manifest schema `{}`",
                 self.schema_version
             );
+        }
+        if self.schema_version == FMS_STUDY_OUTPUT_MANIFEST_SCHEMA_V1
+            && self.accepted_state_ref.is_some()
+        {
+            bail!("study output manifest v1 cannot contain accepted_state_ref");
         }
         crate::repository_path::validate_store_id(&self.run_id)?;
         crate::repository_path::validate_store_id(&self.task_id)?;
@@ -1962,6 +1973,17 @@ impl FmsStudyOutputManifest {
         let expected_task_id = task_id_for_study_step(&self.run_id, &self.step_id)?;
         if self.task_id != expected_task_id {
             bail!("study output manifest task does not match its run and step");
+        }
+        if let Some(accepted_state_ref) = &self.accepted_state_ref {
+            accepted_state_ref
+                .validate()
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            if accepted_state_ref.id.run_id != self.run_id
+                || accepted_state_ref.id.stage_id.as_deref() != Some(self.step_id.as_str())
+                || accepted_state_ref.generation.runtime_epoch != self.ownership_epoch
+            {
+                bail!("study output manifest accepted state identity differs from its attempt");
+            }
         }
 
         let mut outputs = std::collections::BTreeSet::new();

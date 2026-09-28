@@ -1210,6 +1210,7 @@ fn apply_accepted_start_effect(
             claim,
             &accepted_step.step_id,
             &durable_execution.outputs,
+            durable_execution.accepted_state_ref.as_ref(),
         )
     })
     .context("publish accepted worker outputs")?;

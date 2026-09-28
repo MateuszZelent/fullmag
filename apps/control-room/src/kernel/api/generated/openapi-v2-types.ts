@@ -9554,6 +9554,26 @@ export interface components {
             label: string;
             status: components["schemas"]["GeometrySupportStatus"];
         };
+        ProjectAcceptedStateGenerationResource: {
+            /** Format: int64 */
+            accepted_revision: number;
+            /** Format: int64 */
+            runtime_epoch: number;
+        };
+        ProjectAcceptedStateIdResource: {
+            /** Format: int64 */
+            accepted_step: number;
+            clock_digest: string;
+            domain_digest: string;
+            plan_digest: string;
+            run_id: string;
+            stage_id?: string | null;
+            state_digest: string;
+        };
+        ProjectAcceptedStateRefResource: {
+            generation: components["schemas"]["ProjectAcceptedStateGenerationResource"];
+            id: components["schemas"]["ProjectAcceptedStateIdResource"];
+        };
         /** @enum {string} */
         ProjectArchiveDurability: "memory_only";
         ProjectArchiveRequest: {
@@ -9731,6 +9751,7 @@ export interface components {
             state: "blocked";
         };
         ProjectRunTaskResource: {
+            accepted_state_ref?: null | components["schemas"]["ProjectAcceptedStateRefResource"];
             artifact_ids: string[];
             attempt_id?: string | null;
             input_fingerprint: string;

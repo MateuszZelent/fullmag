@@ -16,6 +16,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 tracing.workspace = true
 libc = "0.2"
 fullmag-ir = { path = "../fullmag-ir" }
+fullmag-quantities = { path = "../fullmag-quantities" }
 utoipa = { version = "5", features = ["chrono"] }
 
 [dev-dependencies]

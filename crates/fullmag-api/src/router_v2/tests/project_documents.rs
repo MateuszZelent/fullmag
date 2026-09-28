@@ -2631,6 +2631,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             codec_version: "v1".into(),
             bytes: output_bytes.clone(),
         }],
+        None,
     )
     .is_err());
     assert!(store
@@ -2659,6 +2660,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
                 bytes: b"malformed scalar".to_vec(),
             },
         ],
+        None,
     )
     .is_err());
     assert!(
@@ -3325,9 +3327,26 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
     let manifest: fullmag_session::FmsStudyOutputManifest =
         serde_json::from_slice(&manifest_bytes).unwrap();
     manifest.validate().unwrap();
+    assert_eq!(
+        manifest.schema_version,
+        fullmag_session::FMS_STUDY_OUTPUT_MANIFEST_SCHEMA
+    );
     assert_eq!(manifest.run_id, accepted_run_id.as_str());
     assert_eq!(manifest.task_id, claim.task_id.as_str());
     assert_eq!(manifest.outputs.len(), 2);
+    let accepted_state_ref = manifest
+        .accepted_state_ref
+        .as_ref()
+        .expect("simple FDM CPU output manifest pins its accepted state");
+    assert_eq!(accepted_state_ref.id.run_id, accepted_run_id.as_str());
+    assert_eq!(
+        accepted_state_ref.id.stage_id.as_deref(),
+        Some(step.step_id.as_str())
+    );
+    assert_eq!(
+        accepted_state_ref.generation.runtime_epoch,
+        claim.ownership_epoch.value()
+    );
     fullmag_runtime_control::validate_study_task_completion(&store, &claim).unwrap();
     assert!(manifest.outputs.iter().any(|output| {
         output.port_id == "final_state"
@@ -3345,6 +3364,20 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         .outputs
         .push(duplicated_manifest_output.outputs[0].clone());
     assert!(duplicated_manifest_output.validate().is_err());
+    let public_run = app.clone().oneshot(get_run()).await.unwrap();
+    assert_eq!(public_run.status(), StatusCode::OK);
+    let public_run = body_json(public_run).await;
+    let public_accepted_state = &public_run["tasks"][0]["accepted_state_ref"];
+    assert_eq!(public_accepted_state["id"]["run_id"], accepted_run_id.as_str());
+    assert_eq!(public_accepted_state["id"]["stage_id"], step.step_id);
+    assert_eq!(
+        public_accepted_state["id"]["state_digest"],
+        accepted_state_ref.id.state_digest
+    );
+    assert_eq!(
+        public_accepted_state["generation"]["runtime_epoch"],
+        claim.ownership_epoch.value()
+    );
     assert_eq!(
         store
             .read_run_catalog(accepted_run_id.as_str())

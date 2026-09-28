@@ -14,6 +14,7 @@
 //! - **ZP-03**: separate physics from solver diagnostics.
 //! - **ZP-05**: UI never guesses quantity metadata.
 
+pub mod accepted_state;
 pub mod catalog;
 pub mod descriptor;
 pub mod eval;
@@ -25,6 +26,11 @@ pub mod schema_version;
 pub mod step_data;
 pub mod transport;
 
+pub use accepted_state::{
+    accepted_state_digests, is_canonical_sha256, AcceptedPrimaryCarrier, AcceptedStateDigests,
+    AcceptedStateGeneration, AcceptedStateId, AcceptedStateIdentityError, AcceptedStateRef,
+    ObservationClock,
+};
 pub use catalog::{
     all_quantity_ids, cached_preview_quantity_ids, field_materialization_quantity_ids,
     interactive_preview_quantity_ids, quantity_catalog, quantity_spec, quantity_specs,

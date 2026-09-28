@@ -57,6 +57,74 @@ fn map_run_store_error(
     }
 }
 
+fn project_run_task_resource(
+    store: &fullmag_session::SessionStore,
+    run_id: &str,
+    artifact_catalog: Option<&fullmag_session::FmsArtifactCatalog>,
+    task: fullmag_session::FmsTaskCatalogEntry,
+) -> Result<ProjectRunTaskResource, ApiError> {
+    let accepted_state_ref = match (task.attempt_id.as_deref(), task.ownership_epoch) {
+        (Some(attempt_id), Some(ownership_epoch)) => {
+            let mut manifests = artifact_catalog
+                .into_iter()
+                .flat_map(|catalog| catalog.entries.iter())
+                .filter(|entry| {
+                    entry.artifact_type == "study_output_manifest"
+                        && entry.task_id == task.task_id
+                        && entry.attempt_id == attempt_id
+                        && entry.ownership_epoch == ownership_epoch
+                        && task.artifact_ids.contains(&entry.artifact_id)
+                });
+            let manifest_entry = manifests.next();
+            if manifests.next().is_some() {
+                return Err(ApiError::internal(
+                    "accepted run task has multiple output manifests for its current attempt",
+                ));
+            }
+            if let Some(entry) = manifest_entry {
+                let object_ref = entry.object_ref.as_deref().ok_or_else(|| {
+                    ApiError::internal("study output manifest has no CAS reference")
+                })?;
+                if object_ref != entry.content_sha256 {
+                    return Err(ApiError::internal(
+                        "study output manifest digest differs from its CAS reference",
+                    ));
+                }
+                let bytes = store
+                    .cas()
+                    .get(object_ref)
+                    .map_err(|error| ApiError::internal(error.to_string()))?
+                    .ok_or_else(|| {
+                        ApiError::internal("study output manifest CAS object is missing")
+                    })?;
+                let manifest: fullmag_session::FmsStudyOutputManifest =
+                    serde_json::from_slice(&bytes).map_err(|error| {
+                        ApiError::internal(format!("invalid study output manifest: {error}"))
+                    })?;
+                manifest
+                    .validate()
+                    .map_err(|error| ApiError::internal(error.to_string()))?;
+                if manifest.run_id != run_id
+                    || manifest.task_id != task.task_id
+                    || manifest.attempt_id != attempt_id
+                    || manifest.ownership_epoch != ownership_epoch
+                {
+                    return Err(ApiError::internal(
+                        "study output manifest identity differs from the run task",
+                    ));
+                }
+                manifest.accepted_state_ref
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    let mut resource = ProjectRunTaskResource::from(task);
+    resource.accepted_state_ref = accepted_state_ref.map(Into::into);
+    Ok(resource)
+}
+
 #[utoipa::path(
     post,
     path = "/v2/persistence/projects/{project_id}/runs",
@@ -417,16 +485,29 @@ pub async fn get_run(
         let catalog = store
             .read_run_catalog(run_id.as_str())
             .map_err(|error| ApiError::internal(error.to_string()))?;
+        let artifact_catalog = store
+            .read_artifact_catalog(run_id.as_str())
+            .map_err(|error| ApiError::internal(error.to_string()))?;
         let (catalog_state, catalog_revision, tasks) = match catalog {
-            Some(catalog) => (
-                ProjectRunCatalogState::Materialized,
-                Some(catalog.revision),
-                catalog
+            Some(catalog) => {
+                let tasks = catalog
                     .tasks
                     .into_iter()
-                    .map(ProjectRunTaskResource::from)
-                    .collect(),
-            ),
+                    .map(|task| {
+                        project_run_task_resource(
+                            &store,
+                            run_id.as_str(),
+                            artifact_catalog.as_ref(),
+                            task,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, ApiError>>()?;
+                (
+                    ProjectRunCatalogState::Materialized,
+                    Some(catalog.revision),
+                    tasks,
+                )
+            }
             None => (
                 ProjectRunCatalogState::PendingMaterialization,
                 None,

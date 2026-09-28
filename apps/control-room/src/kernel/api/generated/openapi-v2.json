@@ -22423,6 +22423,79 @@
         ],
         "type": "object"
       },
+      "ProjectAcceptedStateGenerationResource": {
+        "properties": {
+          "accepted_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "runtime_epoch": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runtime_epoch",
+          "accepted_revision"
+        ],
+        "type": "object"
+      },
+      "ProjectAcceptedStateIdResource": {
+        "properties": {
+          "accepted_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "clock_digest": {
+            "type": "string"
+          },
+          "domain_digest": {
+            "type": "string"
+          },
+          "plan_digest": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state_digest": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "accepted_step",
+          "clock_digest",
+          "state_digest",
+          "domain_digest",
+          "plan_digest"
+        ],
+        "type": "object"
+      },
+      "ProjectAcceptedStateRefResource": {
+        "properties": {
+          "generation": {
+            "$ref": "#/components/schemas/ProjectAcceptedStateGenerationResource"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ProjectAcceptedStateIdResource"
+          }
+        },
+        "required": [
+          "id",
+          "generation"
+        ],
+        "type": "object"
+      },
       "ProjectArchiveDurability": {
         "enum": [
           "memory_only"
@@ -23034,6 +23107,16 @@
       },
       "ProjectRunTaskResource": {
         "properties": {
+          "accepted_state_ref": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectAcceptedStateRefResource"
+              }
+            ]
+          },
           "artifact_ids": {
             "items": {
               "type": "string"

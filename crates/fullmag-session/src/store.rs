@@ -5921,6 +5921,7 @@ mod tests {
             step_id: step_id.into(),
             attempt_id: "attempt-one".into(),
             ownership_epoch: 1,
+            accepted_state_ref: None,
             outputs: vec![FmsStudyOutputManifestEntry {
                 port_id: "final_state".into(),
                 case_id: "default".into(),
@@ -5932,6 +5933,26 @@ mod tests {
                 content_sha256: entry.content_sha256.clone(),
             }],
         };
+        manifest.validate().unwrap();
+        let mut legacy_manifest = manifest.clone();
+        legacy_manifest.schema_version = FMS_STUDY_OUTPUT_MANIFEST_SCHEMA_V1.into();
+        legacy_manifest.validate().unwrap();
+        legacy_manifest.accepted_state_ref = Some(fullmag_quantities::AcceptedStateRef {
+            id: fullmag_quantities::AcceptedStateId {
+                run_id: run_id.into(),
+                stage_id: Some(step_id.into()),
+                accepted_step: 1,
+                clock_digest: format!("sha256:{}", "a".repeat(64)),
+                state_digest: format!("sha256:{}", "b".repeat(64)),
+                domain_digest: format!("sha256:{}", "c".repeat(64)),
+                plan_digest: format!("sha256:{}", "d".repeat(64)),
+            },
+            generation: fullmag_quantities::AcceptedStateGeneration {
+                runtime_epoch: 1,
+                accepted_revision: 1,
+            },
+        });
+        assert!(legacy_manifest.validate().is_err());
         let manifest_ref = store
             .cas()
             .put(&serde_json::to_vec(&manifest).unwrap())

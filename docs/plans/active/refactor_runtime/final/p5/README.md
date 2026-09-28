@@ -20,9 +20,12 @@ aktywnego runtime'u.
 4. [Trwały `AcceptedStateRef` prostego FDM CPU](04-durable-fdm-cpu-accepted-state-ref.md)
    — powiązanie snapshotu z accepted RunId/stage, preparation, planem i
    ownership epoch w immutable worker receipt oraz jego recovery.
-5. [Granica zastosowania komendy Live](../p4/20-live-command-application-boundary.md)
+5. [Publiczny readback `AcceptedStateRef`](05-public-accepted-state-readback.md)
+   — manifest outputów v2, jeden wspólny typ i projekcja refa przez istniejący
+   zasób GET run oraz generowany kontrakt TypeScript.
+6. [Granica zastosowania komendy Live](../p4/20-live-command-application-boundary.md)
    — publiczny readback kroku, czasu i segmentu faktycznego zastosowania komendy.
 
-Materializacja dla coupled/Frozen Spins, FDM GPU i FEM, publiczny zasób API,
-checkpoint compatibility, observation runtime i managed qualification
-pozostają otwarte. P5 wynosi **93%**.
+Materializacja dla coupled/Frozen Spins, FDM GPU i FEM, checkpoint
+compatibility, observation runtime i managed qualification pozostają otwarte.
+P5 wynosi **94%**.
