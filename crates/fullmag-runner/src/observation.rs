@@ -1,7 +1,115 @@
 //! Backend-neutral post-stage observation provider policy.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fmt;
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObservationClock {
+    pub accepted_step: u64,
+    pub time_seconds: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dt_seconds: Option<f64>,
+}
+
+impl ObservationClock {
+    pub fn validate(&self) -> Result<(), AcceptedStateIdentityError> {
+        if !self.time_seconds.is_finite() {
+            return Err(AcceptedStateIdentityError::NonFiniteTime);
+        }
+        if self
+            .dt_seconds
+            .is_some_and(|dt_seconds| !dt_seconds.is_finite() || dt_seconds <= 0.0)
+        {
+            return Err(AcceptedStateIdentityError::InvalidTimestep);
+        }
+        Ok(())
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, AcceptedStateIdentityError> {
+        self.validate()?;
+        let mut bytes = Vec::with_capacity(128);
+        push_canonical_field(&mut bytes, b"fullmag.observation-clock.v1");
+        push_canonical_field(&mut bytes, &self.accepted_step.to_be_bytes());
+        push_canonical_field(&mut bytes, &self.time_seconds.to_bits().to_be_bytes());
+        match self.dt_seconds {
+            Some(dt_seconds) => {
+                push_canonical_field(&mut bytes, &[1]);
+                push_canonical_field(&mut bytes, &dt_seconds.to_bits().to_be_bytes());
+            }
+            None => push_canonical_field(&mut bytes, &[0]),
+        }
+        Ok(bytes)
+    }
+
+    pub fn digest(&self) -> Result<String, AcceptedStateIdentityError> {
+        Ok(sha256_prefixed(&self.canonical_bytes()?))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AcceptedPrimaryCarrier<'a> {
+    pub carrier_id: &'a str,
+    pub canonical_bytes: &'a [u8],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcceptedStateDigests {
+    pub clock_digest: String,
+    pub state_digest: String,
+}
+
+pub fn accepted_state_digests(
+    clock: ObservationClock,
+    primary_carriers: &[AcceptedPrimaryCarrier<'_>],
+) -> Result<AcceptedStateDigests, AcceptedStateIdentityError> {
+    let clock_bytes = clock.canonical_bytes()?;
+    if primary_carriers.is_empty() {
+        return Err(AcceptedStateIdentityError::MissingPrimaryCarriers);
+    }
+
+    let mut carriers = primary_carriers.to_vec();
+    carriers.sort_unstable_by(|left, right| left.carrier_id.cmp(right.carrier_id));
+    for (index, carrier) in carriers.iter().enumerate() {
+        if carrier.carrier_id.trim().is_empty() {
+            return Err(AcceptedStateIdentityError::EmptyCarrierId);
+        }
+        if index > 0 && carriers[index - 1].carrier_id == carrier.carrier_id {
+            return Err(AcceptedStateIdentityError::DuplicateCarrierId);
+        }
+    }
+
+    let mut state_bytes = Vec::new();
+    push_canonical_field(&mut state_bytes, b"fullmag.accepted-state.v1");
+    push_canonical_field(&mut state_bytes, &clock_bytes);
+    push_canonical_field(&mut state_bytes, &(carriers.len() as u64).to_be_bytes());
+    for carrier in carriers {
+        push_canonical_field(&mut state_bytes, carrier.carrier_id.as_bytes());
+        push_canonical_field(&mut state_bytes, carrier.canonical_bytes);
+    }
+
+    Ok(AcceptedStateDigests {
+        clock_digest: sha256_prefixed(&clock_bytes),
+        state_digest: sha256_prefixed(&state_bytes),
+    })
+}
+
+fn push_canonical_field(destination: &mut Vec<u8>, field: &[u8]) {
+    destination.extend_from_slice(&(field.len() as u64).to_be_bytes());
+    destination.extend_from_slice(field);
+}
+
+fn sha256_prefixed(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut encoded = String::with_capacity(71);
+    encoded.push_str("sha256:");
+    for byte in digest {
+        use fmt::Write as _;
+        write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    encoded
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -17,6 +125,28 @@ pub struct AcceptedStateId {
 }
 
 impl AcceptedStateId {
+    pub fn from_canonical_state(
+        run_id: impl Into<String>,
+        stage_id: Option<String>,
+        clock: ObservationClock,
+        primary_carriers: &[AcceptedPrimaryCarrier<'_>],
+        domain_digest: impl Into<String>,
+        plan_digest: impl Into<String>,
+    ) -> Result<Self, AcceptedStateIdentityError> {
+        let digests = accepted_state_digests(clock, primary_carriers)?;
+        let identity = Self {
+            run_id: run_id.into(),
+            stage_id,
+            accepted_step: clock.accepted_step,
+            clock_digest: digests.clock_digest,
+            state_digest: digests.state_digest,
+            domain_digest: domain_digest.into(),
+            plan_digest: plan_digest.into(),
+        };
+        identity.validate()?;
+        Ok(identity)
+    }
+
     pub fn validate(&self) -> Result<(), AcceptedStateIdentityError> {
         if self.run_id.trim().is_empty() {
             return Err(AcceptedStateIdentityError::EmptyRunId);
@@ -66,6 +196,11 @@ impl AcceptedStateRef {
 pub enum AcceptedStateIdentityError {
     EmptyRunId,
     EmptyStageId,
+    NonFiniteTime,
+    InvalidTimestep,
+    MissingPrimaryCarriers,
+    EmptyCarrierId,
+    DuplicateCarrierId,
     InvalidDigest { field: &'static str },
 }
 
@@ -74,6 +209,20 @@ impl fmt::Display for AcceptedStateIdentityError {
         match self {
             Self::EmptyRunId => formatter.write_str("accepted state run_id must not be empty"),
             Self::EmptyStageId => formatter.write_str("accepted state stage_id must not be empty"),
+            Self::NonFiniteTime => {
+                formatter.write_str("accepted state time_seconds must be finite")
+            }
+            Self::InvalidTimestep => formatter
+                .write_str("accepted state dt_seconds must be finite and greater than zero"),
+            Self::MissingPrimaryCarriers => {
+                formatter.write_str("accepted state requires at least one primary carrier")
+            }
+            Self::EmptyCarrierId => {
+                formatter.write_str("accepted state primary carrier id must not be empty")
+            }
+            Self::DuplicateCarrierId => {
+                formatter.write_str("accepted state primary carrier ids must be unique")
+            }
             Self::InvalidDigest { field } => {
                 write!(formatter, "accepted state {field} must be canonical sha256")
             }
@@ -181,7 +330,8 @@ pub fn observation_provider_policy(
 #[cfg(test)]
 mod tests {
     use super::{
-        AcceptedStateGeneration, AcceptedStateId, AcceptedStateIdentityError, AcceptedStateRef,
+        accepted_state_digests, AcceptedPrimaryCarrier, AcceptedStateGeneration, AcceptedStateId,
+        AcceptedStateIdentityError, AcceptedStateRef, ObservationClock,
     };
 
     fn digest(character: char) -> String {
@@ -204,6 +354,113 @@ mod tests {
                 accepted_revision: 17,
             },
         }
+    }
+
+    #[test]
+    fn accepted_state_digests_are_order_independent_and_content_bound() {
+        let clock = ObservationClock {
+            accepted_step: 42,
+            time_seconds: 2.5e-12,
+            dt_seconds: Some(1.0e-15),
+        };
+        let magnetization = [1_u8, 2, 3, 4];
+        let rng = [9_u8, 8, 7];
+        let forward = [
+            AcceptedPrimaryCarrier {
+                carrier_id: "magnetization.f64le.v1",
+                canonical_bytes: &magnetization,
+            },
+            AcceptedPrimaryCarrier {
+                carrier_id: "thermal_rng.v1",
+                canonical_bytes: &rng,
+            },
+        ];
+        let reverse = [forward[1], forward[0]];
+
+        let first = accepted_state_digests(clock, &forward).expect("canonical digests");
+        let second = accepted_state_digests(clock, &reverse).expect("canonical digests");
+        assert_eq!(first, second);
+        assert_eq!(
+            first.clock_digest,
+            "sha256:261d0b553b39c3df26e5190ea8c7454378708dceea3c85f84ff92425961bc98b"
+        );
+        assert_eq!(
+            first.state_digest,
+            "sha256:c55aa55ee9c67629dd15e1b9634b99e59edbbbddc6b63fcebd98b505866a35c2"
+        );
+
+        let changed_magnetization = [1_u8, 2, 3, 5];
+        let changed = accepted_state_digests(
+            clock,
+            &[
+                AcceptedPrimaryCarrier {
+                    carrier_id: "magnetization.f64le.v1",
+                    canonical_bytes: &changed_magnetization,
+                },
+                forward[1],
+            ],
+        )
+        .expect("changed canonical digests");
+        assert_eq!(changed.clock_digest, first.clock_digest);
+        assert_ne!(changed.state_digest, first.state_digest);
+    }
+
+    #[test]
+    fn accepted_state_digests_reject_ambiguous_or_invalid_inputs() {
+        let clock = ObservationClock {
+            accepted_step: 0,
+            time_seconds: 0.0,
+            dt_seconds: None,
+        };
+        assert_eq!(
+            accepted_state_digests(clock, &[]),
+            Err(AcceptedStateIdentityError::MissingPrimaryCarriers)
+        );
+
+        let carrier = AcceptedPrimaryCarrier {
+            carrier_id: "m.v1",
+            canonical_bytes: &[1, 2, 3],
+        };
+        assert_eq!(
+            accepted_state_digests(clock, &[carrier, carrier]),
+            Err(AcceptedStateIdentityError::DuplicateCarrierId)
+        );
+
+        let invalid_clock = ObservationClock {
+            accepted_step: 1,
+            time_seconds: f64::NAN,
+            dt_seconds: Some(1.0e-15),
+        };
+        assert_eq!(
+            accepted_state_digests(invalid_clock, &[carrier]),
+            Err(AcceptedStateIdentityError::NonFiniteTime)
+        );
+    }
+
+    #[test]
+    fn accepted_state_id_is_built_from_the_same_canonical_clock() {
+        let clock = ObservationClock {
+            accepted_step: 7,
+            time_seconds: 3.0e-12,
+            dt_seconds: None,
+        };
+        let carrier = AcceptedPrimaryCarrier {
+            carrier_id: "magnetization.f64le.v1",
+            canonical_bytes: &[0, 1, 2, 3],
+        };
+        let identity = AcceptedStateId::from_canonical_state(
+            "run-7",
+            Some("stage-003".into()),
+            clock,
+            &[carrier],
+            digest('c'),
+            digest('d'),
+        )
+        .expect("accepted state identity");
+
+        assert_eq!(identity.accepted_step, clock.accepted_step);
+        assert_eq!(identity.clock_digest, clock.digest().expect("clock digest"));
+        identity.validate().expect("valid accepted state identity");
     }
 
     #[test]

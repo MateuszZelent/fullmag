@@ -76,6 +76,12 @@ pierwotnych nośników. `domain_digest` obejmuje domenę, grid/mesh, ownership i
 materiały. `plan_digest` obejmuje znormalizowany `ProblemIR`, resolved plan oraz
 requested/resolved execution. Wszystkie preimage są długościowo prefiksowane,
 mają ustaloną kolejność pól i nie zależą od kolejności mapy ani platformy.
+Kanoniczne ramkowanie pola ma postać `u64_be(length) || bytes`. Zegar koduje
+kolejno separator domeny, `accepted_step`, bity `t`, jednobajtowy znacznik
+obecności `dt` i — tylko gdy znacznik wynosi `1` — bity `dt`. Primary carriers
+w `state_digest` są sortowane leksykograficznie po niepustym `carrier_id`,
+identyfikatory muszą być unikalne, a preimage zawiera ich liczbę oraz dla
+każdego długościowo prefiksowane `carrier_id` i kanoniczny payload.
 
 `AcceptedStateGeneration` jest lokalnym guardem epoki i rewizji. Pola
 `runtime_epoch` i `accepted_revision` nie wchodzą do trwałych digestów;

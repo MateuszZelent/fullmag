@@ -63,6 +63,11 @@ obejmuje kanoniczną domenę, grid/mesh, ownership i materiały. `plan_digest`
 obejmuje znormalizowany `ProblemIR`, resolved plan i requested/resolved
 execution. Każdy digest jest liczony z długościowo prefiksowanych bajtów, z
 ustaloną kolejnością pól i bez zależności od kolejności mapy lub platformy.
+Ramkowanie `u64_be(length) || bytes` rozdziela każde pole. Zegar koduje
+`accepted_step`, bity `t`, znacznik obecności `dt` i opcjonalne bity `dt`.
+`state_digest` zawiera ten sam kanoniczny zegar oraz uporządkowaną
+leksykograficznie listę unikalnych, nazwanych primary carriers wraz z ich
+kanonicznymi payloadami.
 
 `AcceptedStateGeneration` ma dokładnie pola `runtime_epoch` i
 `accepted_revision`; jest lokalnym guardem przeciw stale command i nie wchodzi
@@ -338,7 +343,8 @@ całej lane ani pozostałych kontraktów tej strony.
 - [x] runtime/API/proweniencja opisane
 - [x] walidacja i typowane błędy opisane
 - [x] backend-neutralny typ i strict walidacja `AcceptedStateRef`
-- [ ] materializacja `AcceptedStateRef` przez lane'y i `ObservationRuntime`
+- [x] kanoniczny builder `clock_digest`/`state_digest` dla kompletu nazwanych primary carriers
+- [ ] podłączenie buildera i materializacja `AcceptedStateRef` przez lane'y oraz `ObservationRuntime`
 - [ ] atomowy autosave frame descriptor i reader
 - [ ] transactional `.fms` runtime import/export
 - [ ] receipts numeryczne, managed CPU/GPU i browser/WebGL
@@ -358,7 +364,7 @@ całej lane ani pozostałych kontraktów tej strony.
 |---|---|---|---|---|---|
 | docelowy funkcjonał obserwacji | `docs/physics/interactive-observation-and-restart-semantics.md` | `DOC-ANCHOR:observation-functional` | planowany backend-neutralny funkcjonał quantity | wszystkie | planned contract, bez runtime proof |
 | normatywna accepted-state identity | `docs/adr/0025-persistent-runtime-and-observation-sources.md` | `DOC-ANCHOR:accepted-state-identity` | siedem pól trwałego ID i osobna generacja runtime'u | wszystkie | accepted contract |
-| accepted-state identity | `crates/fullmag-runner/src/observation.rs` | `AcceptedStateRef` | backend-neutralny typ, strict wire validation i dokładna równość ID/generacji | wszystkie | source contract PASS; materializacja lane'ów i runtime proof otwarte |
+| accepted-state identity | `crates/fullmag-runner/src/observation.rs` | `AcceptedStateRef`, `ObservationClock`, `accepted_state_digests` | backend-neutralny typ, strict wire validation, kanoniczny zegar i content-bound primary carriers | wszystkie | source contract i known vector PASS; materializacja lane'ów i runtime proof otwarte |
 | docelowa availability | `docs/physics/interactive-observation-and-restart-semantics.md` | `DOC-ANCHOR:quantity-availability` | planowane przecięcie katalogu, fizyki, planu, lane'u i nośników | wszystkie | planned contract, bez runtime proof |
 | docelowa semantyka resume | `docs/physics/interactive-observation-and-restart-semantics.md` | `DOC-ANCHOR:resume-trajectory` | planowane rozróżnienie logical/exact | wszystkie | planned contract, bez runtime proof |
 | obecny eager batch do zastąpienia | `crates/fullmag-runner/src/interactive/runtime.rs` | `build_atomic_terminal_update` | bieżąca luka: terminalny snapshot FDM | FDM CPU/GPU | superseded/gap evidence, nie źródło równania docelowego |

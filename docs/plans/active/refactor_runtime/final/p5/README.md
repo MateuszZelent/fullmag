@@ -11,9 +11,12 @@ aktywnego runtime'u.
 1. [Kontrakt `AcceptedStateRef`](01-accepted-state-ref-contract.md) — dokładny
    siedmiopolowy trwały identyfikator, osobna generacja runtime'u, strict
    deserializacja i walidacja kanonicznych digestów.
-2. [Granica zastosowania komendy Live](../p4/20-live-command-application-boundary.md)
+2. [Kanoniczne digesty accepted state](02-accepted-state-canonical-digests.md) —
+   jednoznaczne ramkowanie zegara i kompletnego zbioru primary carriers oraz
+   zamrożony known vector.
+3. [Granica zastosowania komendy Live](../p4/20-live-command-application-boundary.md)
    — publiczny readback kroku, czasu i segmentu faktycznego zastosowania komendy.
 
 Pełna materializacja digestów przez wszystkie lane'y, publikacja
 `AcceptedStateRef` w runtime/API, checkpoint compatibility, observation runtime
-i managed qualification pozostają otwarte. P5 wynosi **90%**.
+i managed qualification pozostają otwarte. P5 wynosi **91%**.

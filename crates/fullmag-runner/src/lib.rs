@@ -46,8 +46,9 @@ mod preview;
 pub mod quantities;
 mod solvers;
 pub use observation::{
-    observation_provider_policy, AcceptedStateGeneration, AcceptedStateId,
-    AcceptedStateIdentityError, AcceptedStateRef, ObservationLane, ObservationProviderPolicy,
+    accepted_state_digests, observation_provider_policy, AcceptedPrimaryCarrier,
+    AcceptedStateDigests, AcceptedStateGeneration, AcceptedStateId, AcceptedStateIdentityError,
+    AcceptedStateRef, ObservationClock, ObservationLane, ObservationProviderPolicy,
     ObservationProviderResolver,
 };
 mod regional_field_drive_artifacts;
