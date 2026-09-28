@@ -594,3 +594,20 @@ nie kompilowano zgodnie z aktywnym zakazem testów jednostkowych. Managed
 process/native FEM E2E oraz rzeczywiste paczki pozostają `NOT VERIFIED`; P4
 pozostaje na **50%**, a cały plan na około **49%**. Szczegóły:
 [14-preparation-retry-decision.md](14-preparation-retry-decision.md).
+
+## Bramka procesu accepted FEM preparation — 28.09.2026
+
+Commit `b1066e761` dodaje kanoniczny fixture FEM CPU/strict oraz trasę
+`verify-api-accepted-fem-preparation-runtime`. Bramka buduje native FEM i pięć
+procesów produkcyjnych z jedną tożsamością źródeł, składa immutable run przez
+publiczne HTTP, publikuje osobną pulę `Meshing`, uruchamia scheduler i wymaga
+zgodnego task receiptu, launch/exit receiptów, zwolnionego lease oraz przejścia
+publicznej projekcji do dependency resolution. Receipt bramki zachowuje hashe
+binariów, biblioteki native i trwałych dowodów.
+
+Fixture generation, Python AST/help, dry-run recepty, produkcyjny `cargo check`
+i diff check przeszły bez kompilowania testów jednostkowych. Managed przebieg
+pozostaje **NOT VERIFIED**, ponieważ koordynator Docker Desktop nadal nie
+odpowiada; nie zastosowano hostowego fallbacku. P4 pozostaje na **50%**, a cały
+plan na około **49%**. Szczegóły:
+[15-accepted-fem-preparation-process-gate.md](15-accepted-fem-preparation-process-gate.md).

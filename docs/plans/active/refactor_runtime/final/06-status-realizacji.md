@@ -1944,3 +1944,20 @@ Regresja store została dodana, lecz nie uruchomiona z powodu zakazu kompilacji
 testów jednostkowych. Managed process/native FEM E2E i rzeczywiste paczki
 pozostają **NOT VERIFIED**. **P4 50%, cały plan około 49%**. Szczegóły:
 [p4/14-preparation-retry-decision.md](p4/14-preparation-retry-decision.md).
+
+## P4-B — bramka procesu accepted FEM preparation — 28.09.2026
+
+Commit `b1066e761` dodaje stałą bramkę produkcyjnego procesu oraz kanoniczny
+fixture immutable RunSpec `FEM/CPU/double/strict`. Trasa buduje native FEM i
+procesy API/CLI z jedną tożsamością źródeł, składa run przez publiczne HTTP,
+publikuje osobny zasób `Meshing`, uruchamia scheduler/supervisor/preparer i
+sprawdza zgodność preparation receiptu, launch/exit receiptów, zwolnionego lease
+oraz publicznego readiness po sukcesie. Receipt bramki zachowuje hashe każdego
+artefaktu i jawnie wyłącza solver, fizykę oraz release qualification.
+
+Generacja fixture przez typy Rust, Python AST/help, dry-run recepty,
+produkcyjny source check pięciu binariów i diff check: **PASS**. Managed native
+process E2E jest **NOT VERIFIED**: `just runner-container-status` nadal kończy
+się `Docker Desktop coordinator request failed`; hostowego obejścia nie użyto.
+**P4 50%, cały plan około 49%**. Szczegóły:
+[p4/15-accepted-fem-preparation-process-gate.md](p4/15-accepted-fem-preparation-process-gate.md).
