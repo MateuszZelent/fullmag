@@ -61,6 +61,7 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { usePhysicsGraphResource } from "@/kernel/resources/physicsGraphResources";
+import { useObservationFrameListResource } from "@/kernel/resources/observationFrameResources";
 import { useCurrentTransportsResource } from "@/kernel/resources/spinAuthoringResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import {
@@ -90,6 +91,7 @@ import {
 import type { ModuleProps } from "@/kernel/types";
 import { useCrossSectionWorkspaceSelector } from "@/kernel/workspace/useCrossSectionWorkspace";
 import { useQuickChartWorkspaceSelector } from "@/kernel/workspace/useQuickChartWorkspace";
+import { useObservationSourceWorkspaceSelector } from "@/kernel/workspace/useObservationSourceWorkspace";
 import { usePlanarMonitorsResource } from "@/kernel/resources/planarMonitorResources";
 import { useFrozenSpinsCollectionResource } from "@/kernel/resources/frozenSpinsResources";
 import {
@@ -331,6 +333,9 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   );
   const objectExtensionActivation = useObjectExtensionActivationSnapshot();
   const pinnedQuickChart = useQuickChartWorkspaceSelector((state) => state.pinned);
+  const pinnedObservationSource = useObservationSourceWorkspaceSelector(
+    (state) => state.pinned,
+  );
   const selectedNodeId = useSelectionSelector((selection) => selection.nodeId);
   const selectedRef = useSelectionSelector((selection) => selection.ref);
   const resultContextRunId = useExplorerStoreSelector(
@@ -494,6 +499,10 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   });
   const resolvedResultContextRunId = reconciledResultContextRunId;
   const resultContextIsCurrent = resolvedResultContextRunId === currentRunId;
+  const observationFrames = useObservationFrameListResource({
+    enabled: resultsResourceActive && resultContextIsCurrent,
+    runId: resultContextIsCurrent ? resolvedResultContextRunId : null,
+  });
   const resultContextRun = useResultContextRunResource(
     resultContextIsCurrent ? null : resolvedResultContextRunId,
     { enabled: resultsResourceActive },
@@ -763,6 +772,13 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
               frequencyDomainManifest: resultContextIsCurrent ? frequencyDomainManifest.data : null,
               frequencyDomainResponseSweep: resultContextIsCurrent ? frequencyDomainResponseSweep.data : null,
               frequencyDomainSpectrum: resultContextIsCurrent ? frequencyDomainSpectrum.data : null,
+              observationFrames: resultContextIsCurrent
+                ? runtimeResourceSnapshot(observationFrames)
+                : undefined,
+              pinnedObservationFrameId:
+                pinnedObservationSource?.runId === resolvedResultContextRunId
+                  ? pinnedObservationSource.frameId
+                  : null,
               pinnedQuickChart,
     tableCatalog: resultContextIsCurrent ? runtimeSnapshot.source.tableCatalog : undefined,
               currentRun: resultsRun.data,
@@ -813,6 +829,8 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     frequencyDomainResponseSweep.data,
     frequencyDomainSpectrum.data,
     pinnedQuickChart,
+    pinnedObservationSource,
+    observationFrames,
     resultContextContractGaps,
     resultContextIsCurrent,
     resolvedResultContextRunId,
@@ -873,7 +891,10 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       baseNodes,
     );
     if (!currentNode) {
-      if (selectedRef?.type === "postprocessing") {
+      if (
+        selectedRef?.type === "postprocessing" ||
+        selectedRef?.type === "observation-frame"
+      ) {
         kernel.selection.clear("explorer");
       }
       return;

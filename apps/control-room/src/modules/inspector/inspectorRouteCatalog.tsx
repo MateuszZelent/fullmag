@@ -11,6 +11,10 @@ import { FdmMultilayerAirboxTargetPanel } from "./panels/airbox/FdmMultilayerAir
 import { AirboxVisualizationDebugInspectorPanel } from "./panels/airbox/AirboxVisualizationDebugInspectorPanel";
 import { AntennaObjectPanel } from "./panels/AntennaObjectPanel";
 import { QuickChartInspectorPanel } from "./panels/QuickChartInspectorPanel";
+import {
+  ObservationFrameInspectorPanel,
+  ObservationFramesOverviewPanel,
+} from "./panels/ObservationFrameInspectorPanel";
 import { BoundaryFacesOverviewPanel } from "./panels/boundary-faces/BoundaryFacesOverviewPanel";
 import { CouplingInspectorPanel } from "./panels/CouplingInspectorPanel";
 import {
@@ -664,6 +668,18 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
     title: "Quick Chart",
     selectionKinds: ["results.quick_chart"],
     component: QuickChartInspectorPanel,
+  },
+  {
+    id: "observation-frames-overview",
+    title: "State Snapshots",
+    selectionKinds: ["results.observation_frames.root"],
+    component: ObservationFramesOverviewPanel,
+  },
+  {
+    id: "observation-frame",
+    title: "Observation Frame",
+    selectionKinds: ["results.observation_frame"],
+    component: ObservationFrameInspectorPanel,
   },
   {
     id: "session-root",

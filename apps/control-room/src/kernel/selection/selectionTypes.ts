@@ -273,6 +273,19 @@ export type SelectionRef =
   | LiveChartPointSelectionRef
   | AnalysisResultSelectionRef
   | {
+      acceptedRevision: number;
+      acceptedStep: number;
+      adapterId: string;
+      frameId: string;
+      kind: "results.observation_frame";
+      nodeId: string;
+      runId: string;
+      runtimeEpoch: number;
+      stageId: string;
+      stateDigest: string;
+      type: "observation-frame";
+    }
+  | {
       constraintId: string;
       kind: "object.frozen-spins";
       nodeId: string;
@@ -795,6 +808,20 @@ export function selectionRefEquals(
   if (left.type !== right.type) return false;
 
   switch (left.type) {
+    case "observation-frame":
+      return (
+        right.type === "observation-frame" &&
+        left.acceptedRevision === right.acceptedRevision &&
+        left.acceptedStep === right.acceptedStep &&
+        left.adapterId === right.adapterId &&
+        left.frameId === right.frameId &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.runId === right.runId &&
+        left.runtimeEpoch === right.runtimeEpoch &&
+        left.stageId === right.stageId &&
+        left.stateDigest === right.stateDigest
+      );
     case "analysis-result":
       return (
         right.type === "analysis-result" &&

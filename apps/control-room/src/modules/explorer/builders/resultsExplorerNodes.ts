@@ -14,6 +14,7 @@ import {
 import { fieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
 import type {
   ArtifactResource,
+  ObservationFrameListResource,
   TableListResource,
 } from "@/kernel/api/apiTypes";
 import {
@@ -71,6 +72,8 @@ export interface PhysicsFirstAnalysisFieldTarget {
 export interface PhysicsFirstResultsSnapshot {
   contractGaps?: readonly string[];
   entries: readonly PhysicsFirstResultEntry[];
+  observationFrames?: PostprocessingCatalogSnapshot<ObservationFrameListResource>;
+  pinnedObservationFrameId?: string | null;
   postprocessing?: PhysicsFirstPostprocessingSnapshot;
   resultContextRunId: string;
 }
@@ -101,6 +104,8 @@ export interface PhysicsFirstResultResourceInput {
   currentRun?: { revision: number | string; run_id: string } | null;
   dispersion?: (ResultResourceLike & { path_metadata?: unknown; text?: string | null }) | null;
   manifest?: { result_manifest?: ResultManifestLike | null } | null;
+  observationFrames?: PostprocessingCatalogSnapshot<ObservationFrameListResource>;
+  pinnedObservationFrameId?: string | null;
   responseSweep?: (ResultResourceLike & { payload?: unknown }) | null;
   spectrum?: (ResultResourceLike & { payload?: unknown }) | null;
   tableCatalog?: PostprocessingCatalogSnapshot<TableListResource>;
@@ -430,6 +435,10 @@ export function physicsFirstResultsSnapshotFromResources(
   const emptySnapshot: PhysicsFirstResultsSnapshot = {
     contractGaps,
     entries: [],
+    ...(input.observationFrames ? { observationFrames: input.observationFrames } : {}),
+    ...(input.pinnedObservationFrameId
+      ? { pinnedObservationFrameId: input.pinnedObservationFrameId }
+      : {}),
     ...(postprocessing ? { postprocessing } : {}),
     resultContextRunId: runId,
   };
@@ -520,6 +529,10 @@ export function physicsFirstResultsSnapshotFromResources(
     snapshot: {
       contractGaps: [...contractGaps],
       entries: [entry],
+      ...(input.observationFrames ? { observationFrames: input.observationFrames } : {}),
+      ...(input.pinnedObservationFrameId
+        ? { pinnedObservationFrameId: input.pinnedObservationFrameId }
+        : {}),
       ...(postprocessing ? { postprocessing } : {}),
       resultContextRunId: runId,
     },
@@ -528,6 +541,39 @@ export function physicsFirstResultsSnapshotFromResources(
 
 function key(identity: string): string {
   return encodeURIComponent(identity);
+}
+
+function observationFramesRoot(
+  parentId: string,
+  snapshot: PhysicsFirstResultsSnapshot,
+): ExplorerNode {
+  const id = `${parentId}:observation-frames`;
+  const resource = snapshot.observationFrames;
+  const frames = resource?.data?.frames ?? [];
+  const resourceReady = resource?.status === "ready" && resource.data !== null;
+  const resourceFailed = resource?.status === "error";
+  const children = frames.map((frame) => {
+    const pinned = frame.frame_id === snapshot.pinnedObservationFrameId;
+    return node(
+      `${id}:${key(frame.frame_id)}`,
+      "results.observation_frame",
+      `Step ${frame.accepted_state_ref.id.accepted_step}`,
+      id,
+      {
+        badge: pinned ? "pinned" : frame.stage_id,
+        icon: "database",
+        observationFrame: frame,
+      },
+    );
+  });
+  return node(id, "results.observation_frames.root", "State snapshots", parentId, {
+    availability: resourceReady ? "available" : "unavailable",
+    badge: resourceReady ? String(frames.length) : resourceFailed ? "error" : "loading",
+    children,
+    executionState: resourceReady ? "completed" : "not_started",
+    resourceState: resource?.status ?? "idle",
+    status: resourceFailed ? "failed" : resourceReady ? "ready" : "unavailable",
+  });
 }
 
 function node(
@@ -1052,7 +1098,7 @@ export function buildPhysicsFirstResultsTree(snapshot: PhysicsFirstResultsSnapsh
   const contractGap = snapshot.contractGaps?.filter(Boolean).join("; ") ?? "";
   const resultHasPublishedProducts = snapshot.entries.some((entry) =>
     hasPublishedProduct(entry.products),
-  );
+  ) || (snapshot.observationFrames?.data?.frames.length ?? 0) > 0;
 
   return [
     node(resultsId, "results.root", "Results", null, {
@@ -1067,7 +1113,13 @@ export function buildPhysicsFirstResultsTree(snapshot: PhysicsFirstResultsSnapsh
           }
         : {}),
       children: [
-        rootWithChildren(`${resultsId}:dynamics`, "results.dynamics.root", "Dynamics", resultsId, []),
+        rootWithChildren(
+          `${resultsId}:dynamics`,
+          "results.dynamics.root",
+          "Dynamics",
+          resultsId,
+          [observationFramesRoot(`${resultsId}:dynamics`, snapshot)],
+        ),
         rootWithChildren(resonanceId, "results.resonance.root", "Resonance & FMR", resultsId, resonanceStages),
         rootWithChildren(
           dispersionId,

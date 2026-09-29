@@ -10,7 +10,10 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 1. [Resource hooks trwałych ramek obserwacji](01-observation-frame-resources.md)
    — session-scoped katalog, descriptor i historyczne `m` z exact source oraz
    field generation identity.
+2. [Explorer i pinned observation source](02-pinned-observation-source.md)
+   — ramki w drzewie Results, typowana selekcja, dedykowany Inspector i mały
+   session-fenced workspace descriptor bez kopiowania payloadu pola.
 
 SolutionSet, DatasetDefinition, pozostałe quantities, partial reads, porównania,
-plot/export recipes oraz produkcyjne dowody pamięci i WebGL pozostają otwarte.
-P6 wynosi **2%**.
+podłączenie pinned source do render-modelu, plot/export recipes oraz produkcyjne
+dowody pamięci i WebGL pozostają otwarte. P6 wynosi **4%**.
