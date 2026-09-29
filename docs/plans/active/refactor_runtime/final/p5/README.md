@@ -23,9 +23,12 @@ aktywnego runtime'u.
 5. [Publiczny readback `AcceptedStateRef`](05-public-accepted-state-readback.md)
    — manifest outputów v2, jeden wspólny typ i projekcja refa przez istniejący
    zasób GET run oraz generowany kontrakt TypeScript.
-6. [Granica zastosowania komendy Live](../p4/20-live-command-application-boundary.md)
+6. [Accepted state prostego FDM GPU](06-fdm-gpu-accepted-state.md) — terminalny
+   snapshot magnetyzacji urządzenia, trwały ref i rozszerzona zarządzana bramka
+   publicznego readbacku.
+7. [Granica zastosowania komendy Live](../p4/20-live-command-application-boundary.md)
    — publiczny readback kroku, czasu i segmentu faktycznego zastosowania komendy.
 
-Materializacja dla coupled/Frozen Spins, FDM GPU i FEM, checkpoint
-compatibility, observation runtime i managed qualification pozostają otwarte.
-P5 wynosi **94%**.
+Materializacja dla coupled/Frozen Spins i FEM, checkpoint compatibility,
+observation runtime oraz zarządzana rekwalifikacja nowego refa GPU pozostają
+otwarte. P5 wynosi **95%**.

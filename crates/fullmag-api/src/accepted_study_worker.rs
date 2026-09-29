@@ -6,7 +6,8 @@ use fullmag_authoring::{
 use fullmag_ir::ExecutionPlanIR;
 use fullmag_runner::{
     AcceptedStateGeneration, AcceptedStateId, AcceptedStateRef, FdmCpuAcceptedStateSnapshotV1,
-    RunResult, RunStatus, StepAction, FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE,
+    FdmGpuAcceptedStateSnapshotV1, RunResult, RunStatus, StepAction,
+    FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE, FDM_GPU_ACCEPTED_STATE_SNAPSHOT_FILE,
 };
 use fullmag_runtime_control::{AcceptedWorkerStep, StudyOutputPayload};
 use fullmag_session::SessionStore;
@@ -286,9 +287,6 @@ fn accepted_state_ref_from_runner_snapshot(
     accepted_step: &AcceptedWorkerStep,
     required_for_supported_lane: bool,
 ) -> Result<Option<AcceptedStateRef>> {
-    if accepted_step.resolved_input.requested_execution.device != "cpu" {
-        return Ok(None);
-    }
     let fullmag_ir::BackendPlanIR::Fdm(fdm_plan) = &accepted_step.execution_plan.backend_plan
     else {
         return Ok(None);
@@ -297,7 +295,24 @@ fn accepted_state_ref_from_runner_snapshot(
         return Ok(None);
     }
 
-    let snapshot_path = attempt_output_dir.join(FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE);
+    let requested_device = accepted_step
+        .resolved_input
+        .requested_execution
+        .device
+        .as_str();
+    if requested_device == "gpu"
+        && (!fdm_plan.fdm_gpu_charge_transports.is_empty()
+            || fdm_plan.temperature.unwrap_or(0.0) > 0.0
+            || fdm_plan.thermal_seed_config.is_some())
+    {
+        return Ok(None);
+    }
+    let snapshot_file = match requested_device {
+        "cpu" => FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE,
+        "gpu" => FDM_GPU_ACCEPTED_STATE_SNAPSHOT_FILE,
+        _ => return Ok(None),
+    };
+    let snapshot_path = attempt_output_dir.join(snapshot_file);
     match fs::symlink_metadata(&snapshot_path) {
         Ok(_) => {}
         Err(error)
@@ -314,18 +329,29 @@ fn accepted_state_ref_from_runner_snapshot(
             });
         }
     }
-    let bytes = read_explicit_runner_artifact(
-        attempt_output_dir,
-        FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE,
-        64 * 1024,
-    )
-    .context("read accepted FDM CPU state snapshot")?;
-    let snapshot: FdmCpuAcceptedStateSnapshotV1 =
-        serde_json::from_slice(&bytes).context("decode accepted FDM CPU state snapshot")?;
-    snapshot
-        .validate()
-        .map_err(|error| anyhow::anyhow!(error.to_string()))
-        .context("validate accepted FDM CPU state snapshot")?;
+    let bytes = read_explicit_runner_artifact(attempt_output_dir, snapshot_file, 64 * 1024)
+        .with_context(|| format!("read accepted FDM {requested_device} state snapshot"))?;
+    let (clock, clock_digest, state_digest) = match requested_device {
+        "cpu" => {
+            let snapshot: FdmCpuAcceptedStateSnapshotV1 =
+                serde_json::from_slice(&bytes).context("decode accepted FDM CPU state snapshot")?;
+            snapshot
+                .validate()
+                .map_err(|error| anyhow::anyhow!(error.to_string()))
+                .context("validate accepted FDM CPU state snapshot")?;
+            (snapshot.clock, snapshot.clock_digest, snapshot.state_digest)
+        }
+        "gpu" => {
+            let snapshot: FdmGpuAcceptedStateSnapshotV1 =
+                serde_json::from_slice(&bytes).context("decode accepted FDM GPU state snapshot")?;
+            snapshot
+                .validate()
+                .map_err(|error| anyhow::anyhow!(error.to_string()))
+                .context("validate accepted FDM GPU state snapshot")?;
+            (snapshot.clock, snapshot.clock_digest, snapshot.state_digest)
+        }
+        _ => unreachable!("requested device was matched above"),
+    };
 
     let plan_digest = format!(
         "sha256:{}",
@@ -340,9 +366,9 @@ fn accepted_state_ref_from_runner_snapshot(
         id: AcceptedStateId {
             run_id: accepted_step.claim.run_id.as_str().to_string(),
             stage_id: Some(accepted_step.step_id.clone()),
-            accepted_step: snapshot.clock.accepted_step,
-            clock_digest: snapshot.clock_digest,
-            state_digest: snapshot.state_digest,
+            accepted_step: clock.accepted_step,
+            clock_digest,
+            state_digest,
             domain_digest: accepted_step
                 .resolved_input
                 .preparation
@@ -352,13 +378,13 @@ fn accepted_state_ref_from_runner_snapshot(
         },
         generation: AcceptedStateGeneration {
             runtime_epoch: accepted_step.claim.ownership_epoch.value(),
-            accepted_revision: snapshot.clock.accepted_step,
+            accepted_revision: clock.accepted_step,
         },
     };
     reference
         .validate()
         .map_err(|error| anyhow::anyhow!(error.to_string()))
-        .context("validate accepted FDM CPU state reference")?;
+        .with_context(|| format!("validate accepted FDM {requested_device} state reference"))?;
     Ok(Some(reference))
 }
 

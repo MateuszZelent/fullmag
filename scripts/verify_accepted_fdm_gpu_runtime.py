@@ -289,6 +289,7 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
             run_id, idempotency_key, request = prepare_gpu_request(
                 fixture, str(fixture_evidence["identity"])
             )
+            expected_step_id = request["study_plan"]["steps"][0]["step_id"]
             request_path = paths["run_root"] / "accepted-fdm-gpu-request.json"
             write_atomic_json(request_path, request)
             minimum = request["run_intent"]["specification"]["requested_execution"][
@@ -511,14 +512,23 @@ def run(repo_root: Path) -> tuple[int, dict[str, object]]:
                 f"{result_url}/v2/persistence/projects/{project_id}/runs/{run_id}"
             )
             after_tasks = after.get("tasks", [])
+            accepted_state_ref = (
+                after_tasks[0].get("accepted_state_ref") if len(after_tasks) == 1 else None
+            )
             if (
                 after.get("requested_execution", {}).get("device") != "gpu"
                 or after.get("requested_execution", {}).get("minimum_resources") != minimum
                 or len(after_tasks) != 1
                 or after_tasks[0].get("lifecycle") != "succeeded"
+                or not isinstance(accepted_state_ref, dict)
+                or accepted_state_ref.get("id", {}).get("run_id") != run_id
+                or accepted_state_ref.get("id", {}).get("stage_id")
+                != expected_step_id
+                or accepted_state_ref.get("generation", {}).get("runtime_epoch")
+                != leases[0].get("ownership_epoch")
             ):
                 raise AcceptedFdmGpuRuntimeError(
-                    "public run projection did not expose the successful immutable GPU run"
+                    "public run projection did not expose the successful immutable GPU accepted state"
                 )
             receipt["run"] = after
             receipt["api_result_exit_code"] = terminate_process(api_process)

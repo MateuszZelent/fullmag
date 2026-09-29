@@ -5,11 +5,16 @@ pub use fullmag_quantities::{
     AcceptedStateId, AcceptedStateIdentityError, AcceptedStateRef, ObservationClock,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 pub const FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA: &str =
     "fullmag.fdm.cpu.accepted-state-snapshot.v1";
 pub const FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE: &str =
     "solver/fdm_cpu_accepted_state_snapshot.v1.json";
+pub const FDM_GPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA: &str =
+    "fullmag.fdm.gpu.accepted-state-snapshot.v1";
+pub const FDM_GPU_ACCEPTED_STATE_SNAPSHOT_FILE: &str =
+    "solver/fdm_gpu_accepted_state_snapshot.v1.json";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -65,6 +70,88 @@ impl FdmCpuAcceptedStateSnapshotV1 {
         }
         if self.primary_carrier_ids != ["fdm.cpu.transactional-state-digest.v1"] {
             return Err(AcceptedStateIdentityError::InvalidPrimaryCarrierSet);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FdmGpuAcceptedStateSnapshotV1 {
+    pub schema_version: String,
+    pub clock: ObservationClock,
+    pub magnetization_digest: String,
+    pub clock_digest: String,
+    pub state_digest: String,
+    pub primary_carrier_ids: Vec<String>,
+}
+
+impl FdmGpuAcceptedStateSnapshotV1 {
+    pub fn from_final_magnetization(
+        clock: ObservationClock,
+        magnetization: &[[f64; 3]],
+    ) -> Result<Self, AcceptedStateIdentityError> {
+        if magnetization.is_empty()
+            || magnetization
+                .iter()
+                .flat_map(|value| value.iter())
+                .any(|value| !value.is_finite())
+        {
+            return Err(AcceptedStateIdentityError::InvalidPrimaryCarrierSet);
+        }
+        let mut canonical = Vec::with_capacity(8 + magnetization.len() * 24);
+        canonical.extend_from_slice(&(magnetization.len() as u64).to_be_bytes());
+        for value in magnetization.iter().flat_map(|value| value.iter()) {
+            canonical.extend_from_slice(&value.to_bits().to_be_bytes());
+        }
+        let magnetization_digest = format!("sha256:{:x}", Sha256::digest(&canonical));
+        let carrier_id = "fdm.gpu.magnetization-digest.f64be.v1";
+        let digests = accepted_state_digests(
+            clock,
+            &[AcceptedPrimaryCarrier {
+                carrier_id,
+                canonical_bytes: magnetization_digest.as_bytes(),
+            }],
+        )?;
+        Ok(Self {
+            schema_version: FDM_GPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA.to_string(),
+            clock,
+            magnetization_digest,
+            clock_digest: digests.clock_digest,
+            state_digest: digests.state_digest,
+            primary_carrier_ids: vec![carrier_id.to_string()],
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), AcceptedStateIdentityError> {
+        if self.schema_version != FDM_GPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA {
+            return Err(AcceptedStateIdentityError::InvalidSnapshotSchema);
+        }
+        if !fullmag_quantities::is_canonical_sha256(&self.magnetization_digest) {
+            return Err(AcceptedStateIdentityError::InvalidDigest {
+                field: "magnetization_digest",
+            });
+        }
+        let carrier_id = "fdm.gpu.magnetization-digest.f64be.v1";
+        if self.primary_carrier_ids != [carrier_id] {
+            return Err(AcceptedStateIdentityError::InvalidPrimaryCarrierSet);
+        }
+        let digests = accepted_state_digests(
+            self.clock,
+            &[AcceptedPrimaryCarrier {
+                carrier_id,
+                canonical_bytes: self.magnetization_digest.as_bytes(),
+            }],
+        )?;
+        if digests.clock_digest != self.clock_digest {
+            return Err(AcceptedStateIdentityError::InvalidDigest {
+                field: "clock_digest",
+            });
+        }
+        if digests.state_digest != self.state_digest {
+            return Err(AcceptedStateIdentityError::InvalidDigest {
+                field: "state_digest",
+            });
         }
         Ok(())
     }
@@ -159,7 +246,8 @@ pub fn observation_provider_policy(
 mod tests {
     use super::{
         accepted_state_digests, AcceptedPrimaryCarrier, AcceptedStateGeneration, AcceptedStateId,
-        AcceptedStateIdentityError, AcceptedStateRef, ObservationClock,
+        AcceptedStateIdentityError, AcceptedStateRef, FdmGpuAcceptedStateSnapshotV1,
+        ObservationClock,
     };
 
     fn digest(character: char) -> String {
@@ -349,5 +437,53 @@ mod tests {
         let mut other_stage = reference.clone();
         other_stage.id.stage_id = Some("stage-004".into());
         assert_ne!(other_stage.id, reference.id);
+    }
+
+    #[test]
+    fn fdm_gpu_accepted_state_snapshot_is_content_bound_and_self_validating() {
+        let clock = ObservationClock {
+            accepted_step: 9,
+            time_seconds: 9.0e-14,
+            dt_seconds: Some(1.0e-14),
+        };
+        let first = FdmGpuAcceptedStateSnapshotV1::from_final_magnetization(
+            clock,
+            &[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        )
+        .expect("GPU accepted state snapshot");
+        first.validate().expect("valid GPU snapshot");
+
+        let changed = FdmGpuAcceptedStateSnapshotV1::from_final_magnetization(
+            clock,
+            &[[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        )
+        .expect("changed GPU accepted state snapshot");
+        assert_eq!(changed.clock_digest, first.clock_digest);
+        assert_ne!(changed.magnetization_digest, first.magnetization_digest);
+        assert_ne!(changed.state_digest, first.state_digest);
+
+        let encoded = serde_json::to_vec(&first).expect("encode GPU snapshot");
+        let decoded: FdmGpuAcceptedStateSnapshotV1 =
+            serde_json::from_slice(&encoded).expect("decode GPU snapshot");
+        assert_eq!(decoded, first);
+        decoded.validate().expect("round-trip GPU snapshot");
+    }
+
+    #[test]
+    fn fdm_gpu_accepted_state_snapshot_rejects_missing_or_nonfinite_magnetization() {
+        let clock = ObservationClock {
+            accepted_step: 1,
+            time_seconds: 1.0e-14,
+            dt_seconds: Some(1.0e-14),
+        };
+        assert_eq!(
+            FdmGpuAcceptedStateSnapshotV1::from_final_magnetization(clock, &[]),
+            Err(AcceptedStateIdentityError::InvalidPrimaryCarrierSet)
+        );
+        let nonfinite = [[f64::NAN, 0.0, 1.0]];
+        assert_eq!(
+            FdmGpuAcceptedStateSnapshotV1::from_final_magnetization(clock, &nonfinite),
+            Err(AcceptedStateIdentityError::InvalidPrimaryCarrierSet)
+        );
     }
 }

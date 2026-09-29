@@ -48,9 +48,10 @@ mod solvers;
 pub use observation::{
     accepted_state_digests, observation_provider_policy, AcceptedPrimaryCarrier,
     AcceptedStateDigests, AcceptedStateGeneration, AcceptedStateId, AcceptedStateIdentityError,
-    AcceptedStateRef, FdmCpuAcceptedStateSnapshotV1, ObservationClock, ObservationLane,
-    ObservationProviderPolicy, ObservationProviderResolver, FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE,
-    FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA,
+    AcceptedStateRef, FdmCpuAcceptedStateSnapshotV1, FdmGpuAcceptedStateSnapshotV1,
+    ObservationClock, ObservationLane, ObservationProviderPolicy, ObservationProviderResolver,
+    FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE, FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA,
+    FDM_GPU_ACCEPTED_STATE_SNAPSHOT_FILE, FDM_GPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA,
 };
 mod regional_field_drive_artifacts;
 mod relaxation;
