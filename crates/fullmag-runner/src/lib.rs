@@ -41,6 +41,7 @@ mod native_fem;
 #[cfg(feature = "fem-native")]
 pub use native_fem::prepare_fem_mesh_space;
 mod observation;
+mod observation_runtime;
 mod physics_graph_execution;
 mod preview;
 pub mod quantities;
@@ -52,6 +53,10 @@ pub use observation::{
     ObservationClock, ObservationLane, ObservationProviderPolicy, ObservationProviderResolver,
     FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE, FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA,
     FDM_GPU_ACCEPTED_STATE_SNAPSHOT_FILE, FDM_GPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA,
+};
+pub use observation_runtime::{
+    ObservationFrame, ObservationPrimaryCarrier, ObservationQuantityBatch, ObservationRuntime,
+    ObservationRuntimeError,
 };
 mod regional_field_drive_artifacts;
 mod relaxation;
