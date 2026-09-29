@@ -38,8 +38,11 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 10. [Bounded decoder slice'ów](10-bounded-slice-decoder.md)
     — checksum-first decode bez pełnego bufora pośredniego, zachowanie
     precision i real/imag planes oraz fail-closed finite/alignment checks.
+11. [Adapter TensorDescriptor/CAS](11-tensor-cas-slice-adapter.md)
+    — integralny odczyt ograniczonych chunków CAS, exact-range checksum oraz
+    manifest slice bez niejawnego odczytu nieograniczonego obiektu.
 
 Writers i trwały katalog SolutionSet, materializator/evaluator datasetów, API i
 generated client, pozostałe quantities, frontend porównań i wykresów oraz
 produkcyjne dowody pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi
-**21%**.
+**23%**.

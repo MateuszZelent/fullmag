@@ -17,6 +17,7 @@
 pub mod capture;
 pub mod cas;
 pub mod communication_policy;
+pub mod dataset_slice_adapter;
 mod durability;
 pub mod fms;
 pub mod mesh_operation;
