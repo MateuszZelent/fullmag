@@ -47,8 +47,11 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 13. [Trwały katalog SolutionSet](13-durable-solution-set-catalog.md)
     — monotoniczne immutable revisions, append-only artifacts/coverage,
     atomowy current manifest i idempotentne domknięcie po przerwaniu zapisu.
+14. [Reconciliation rewizji SolutionSet](14-solution-set-reconciliation.md)
+    — pełny skan ciągłego łańcucha, weryfikacja current wobec historii i
+    atomowa promocja ostatniej poprawnej orphan revision.
 
 Writers i trwały katalog SolutionSet, materializator/evaluator datasetów, API i
 generated client, pozostałe quantities, frontend porównań i wykresów oraz
 produkcyjne dowody pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi
-**28%**.
+**30%**.

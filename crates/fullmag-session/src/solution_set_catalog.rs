@@ -18,6 +18,14 @@ pub struct SolutionSetCatalog {
     writer: Arc<Writer>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SolutionSetReconciliation {
+    pub solution_set_id: String,
+    pub previous_current_revision: Option<u64>,
+    pub promoted_revision: Option<u64>,
+    pub revision_count: usize,
+}
+
 impl SolutionSetCatalog {
     pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
@@ -147,6 +155,67 @@ impl SolutionSetCatalog {
         crate::durability::atomic_write(&current_path, &bytes)
     }
 
+    pub fn reconcile(&self, solution_set_id: &str) -> Result<SolutionSetReconciliation> {
+        require_logical_id(solution_set_id)?;
+        let _lease = self.writer.acquire()?;
+        let current = self.read(solution_set_id)?;
+        let revisions = self.read_revision_chain(solution_set_id)?;
+        if revisions.is_empty() {
+            if current.is_some() {
+                bail!("solution-set current manifest has no immutable revision history");
+            }
+            return Ok(SolutionSetReconciliation {
+                solution_set_id: solution_set_id.to_string(),
+                previous_current_revision: None,
+                promoted_revision: None,
+                revision_count: 0,
+            });
+        }
+
+        let mut previous: Option<&SolutionSet> = None;
+        for (index, (revision, solution)) in revisions.iter().enumerate() {
+            let expected = u64::try_from(index + 1).context("solution-set revision overflow")?;
+            if *revision != expected || solution.revision != *revision {
+                bail!("solution-set revision history has a gap or path mismatch");
+            }
+            if let Some(previous) = previous {
+                validate_successor(previous, solution)?;
+            }
+            previous = Some(solution);
+        }
+
+        let latest = previous.expect("non-empty revision chain has a latest revision");
+        let previous_current_revision = current.as_ref().map(|value| value.revision);
+        if let Some(current) = &current {
+            let persisted = revisions
+                .get(&current.revision)
+                .ok_or_else(|| anyhow::anyhow!("current solution-set revision is missing"))?;
+            if persisted != current {
+                bail!("current solution-set manifest conflicts with immutable revision history");
+            }
+            if current.revision > latest.revision {
+                bail!("current solution-set revision is ahead of immutable revision history");
+            }
+        }
+
+        let promoted_revision =
+            (previous_current_revision != Some(latest.revision)).then_some(latest.revision);
+        if promoted_revision.is_some() {
+            let bytes = serde_json::to_vec_pretty(latest)?;
+            let current_path = create_parent(
+                &self.root,
+                &self.current_manifest_relative_path(solution_set_id),
+            )?;
+            crate::durability::atomic_write(&current_path, &bytes)?;
+        }
+        Ok(SolutionSetReconciliation {
+            solution_set_id: solution_set_id.to_string(),
+            previous_current_revision,
+            promoted_revision,
+            revision_count: revisions.len(),
+        })
+    }
+
     fn current_manifest_path(&self, solution_set_id: &str) -> Result<PathBuf> {
         checked_path(
             &self.root,
@@ -159,6 +228,47 @@ impl SolutionSetCatalog {
             &self.root,
             &self.revision_relative_path(solution_set_id, revision),
         )
+    }
+
+    fn read_revision_chain(&self, solution_set_id: &str) -> Result<BTreeMap<u64, SolutionSet>> {
+        let relative = format!(
+            "solutions/{}/revisions",
+            solution_directory(solution_set_id)
+        );
+        let directory = checked_path(&self.root, &relative)?;
+        if !directory.exists() {
+            return Ok(BTreeMap::new());
+        }
+        let mut revisions = BTreeMap::new();
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            let file_name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("non-UTF8 solution-set revision filename"))?;
+            let revision_text = file_name
+                .strip_suffix(".json")
+                .filter(|value| {
+                    value.len() == 20 && value.bytes().all(|byte| byte.is_ascii_digit())
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!("invalid solution-set revision filename `{file_name}`")
+                })?;
+            let revision = revision_text.parse::<u64>()?;
+            if revision == 0 || !entry.file_type()?.is_file() {
+                bail!("invalid solution-set revision entry `{file_name}`");
+            }
+            let relative_path = format!("{relative}/{file_name}");
+            let path = checked_path(&self.root, &relative_path)?;
+            let solution = read_solution_set(&path)?;
+            if solution.solution_set_id != solution_set_id || solution.revision != revision {
+                bail!("solution-set revision path identity mismatch");
+            }
+            if revisions.insert(revision, solution).is_some() {
+                bail!("duplicate solution-set revision `{revision}`");
+            }
+        }
+        Ok(revisions)
     }
 
     fn current_manifest_relative_path(&self, solution_set_id: &str) -> String {
@@ -368,5 +478,32 @@ mod tests {
                 .manifest_state,
             SolutionSetManifestState::Open
         );
+    }
+
+    #[test]
+    fn reconcile_promotes_valid_orphan_revision() {
+        let directory = tempfile::tempdir().expect("temporary catalog");
+        let catalog = SolutionSetCatalog::open(directory.path()).expect("open catalog");
+        catalog
+            .publish(&solution(1, SolutionSetManifestState::Open))
+            .expect("publish first revision");
+        let orphan = solution(2, SolutionSetManifestState::Closed);
+        let orphan_path = create_parent(
+            &catalog.root,
+            &catalog.revision_relative_path(&orphan.solution_set_id, orphan.revision),
+        )
+        .expect("orphan path");
+        crate::durability::atomic_write(
+            &orphan_path,
+            &serde_json::to_vec_pretty(&orphan).expect("serialize orphan"),
+        )
+        .expect("persist orphan revision");
+
+        let outcome = catalog
+            .reconcile("solution:run-1")
+            .expect("reconcile orphan");
+        assert_eq!(outcome.previous_current_revision, Some(1));
+        assert_eq!(outcome.promoted_revision, Some(2));
+        assert_eq!(catalog.read("solution:run-1").unwrap(), Some(orphan));
     }
 }
