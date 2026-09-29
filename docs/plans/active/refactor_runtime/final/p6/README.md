@@ -44,8 +44,11 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 12. [Strumieniowy integralny range-read CAS](12-streaming-cas-range-read.md)
     — pełna weryfikacja SHA-256 dużego obiektu przy stałym buforze I/O i
     alokacji ograniczonej do żądanego zakresu.
+13. [Trwały katalog SolutionSet](13-durable-solution-set-catalog.md)
+    — monotoniczne immutable revisions, append-only artifacts/coverage,
+    atomowy current manifest i idempotentne domknięcie po przerwaniu zapisu.
 
 Writers i trwały katalog SolutionSet, materializator/evaluator datasetów, API i
 generated client, pozostałe quantities, frontend porównań i wykresów oraz
 produkcyjne dowody pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi
-**25%**.
+**28%**.

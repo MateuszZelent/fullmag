@@ -23,6 +23,7 @@ pub mod fms;
 pub mod mesh_operation;
 pub mod reachability;
 pub mod repository_path;
+pub mod solution_set_catalog;
 pub mod store;
 pub mod types;
 mod writer;

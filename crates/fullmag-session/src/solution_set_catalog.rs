@@ -1,0 +1,372 @@
+//! Durable, monotonic catalog for immutable solution-set revisions.
+
+use crate::cas::hex_sha256;
+use crate::repository_path::{checked_path, create_parent, reject_link};
+use crate::writer::{require_local_filesystem, Writer};
+use anyhow::{bail, Context, Result};
+use fullmag_quantities::{
+    SolutionArtifactCoverage, SolutionExecutionStatus, SolutionMember, SolutionSet,
+    SolutionSetManifestState,
+};
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+pub struct SolutionSetCatalog {
+    root: PathBuf,
+    writer: Arc<Writer>,
+}
+
+impl SolutionSetCatalog {
+    pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
+        let root = root.into();
+        reject_link(&root)?;
+        require_local_filesystem(&root)?;
+        fs::create_dir_all(&root)?;
+        let root = fs::canonicalize(root)?;
+        Ok(Self {
+            writer: Writer::new(root.clone()),
+            root,
+        })
+    }
+
+    pub fn read(&self, solution_set_id: &str) -> Result<Option<SolutionSet>> {
+        require_logical_id(solution_set_id)?;
+        let path = self.current_manifest_path(solution_set_id)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        let solution = read_solution_set(&path)?;
+        if solution.solution_set_id != solution_set_id {
+            bail!(
+                "solution-set catalog path identity mismatch: requested `{solution_set_id}`, found `{}`",
+                solution.solution_set_id
+            );
+        }
+        Ok(Some(solution))
+    }
+
+    pub fn read_revision(
+        &self,
+        solution_set_id: &str,
+        revision: u64,
+    ) -> Result<Option<SolutionSet>> {
+        require_logical_id(solution_set_id)?;
+        if revision == 0 {
+            bail!("solution-set revision must be positive");
+        }
+        let path = self.revision_path(solution_set_id, revision)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        let solution = read_solution_set(&path)?;
+        if solution.solution_set_id != solution_set_id || solution.revision != revision {
+            bail!("solution-set revision path identity mismatch");
+        }
+        Ok(Some(solution))
+    }
+
+    pub fn list(&self) -> Result<Vec<SolutionSet>> {
+        let solutions_root = checked_path(&self.root, "solutions")?;
+        if !solutions_root.exists() {
+            return Ok(Vec::new());
+        }
+        let mut solutions = Vec::new();
+        for entry in fs::read_dir(&solutions_root)? {
+            let entry = entry?;
+            let directory_name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("non-UTF8 solution-set catalog directory"))?;
+            if directory_name.len() != 64
+                || !directory_name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                bail!("invalid solution-set catalog directory `{directory_name}`");
+            }
+            let relative = format!("solutions/{directory_name}/manifest.json");
+            let path = checked_path(&self.root, &relative)?;
+            if !path.exists() {
+                // A crash after immutable revision publication and before the
+                // current-manifest commit leaves a safe recoverable orphan.
+                continue;
+            }
+            let solution = read_solution_set(&path)?;
+            if solution_directory(&solution.solution_set_id) != directory_name {
+                bail!("solution-set catalog directory does not match logical identity");
+            }
+            solutions.push(solution);
+        }
+        solutions.sort_unstable_by(|left, right| left.solution_set_id.cmp(&right.solution_set_id));
+        Ok(solutions)
+    }
+
+    pub fn publish(&self, solution: &SolutionSet) -> Result<()> {
+        solution
+            .validate()
+            .context("validating solution-set manifest")?;
+        require_logical_id(&solution.solution_set_id)?;
+        if solution.revision == 0 {
+            bail!("solution-set revision must be positive");
+        }
+
+        let _lease = self.writer.acquire()?;
+        let current = self.read(&solution.solution_set_id)?;
+        if let Some(current) = &current {
+            if solution.revision == current.revision {
+                if solution == current {
+                    return Ok(());
+                }
+                bail!("solution-set revision already exists with different content");
+            }
+            validate_successor(current, solution)?;
+        } else if solution.revision != 1 {
+            bail!("first solution-set revision must be 1");
+        }
+
+        let bytes = serde_json::to_vec_pretty(solution)?;
+        let revision_path = create_parent(
+            &self.root,
+            &self.revision_relative_path(&solution.solution_set_id, solution.revision),
+        )?;
+        if revision_path.exists() {
+            let persisted = read_solution_set(&revision_path)?;
+            if persisted != *solution {
+                bail!("immutable solution-set revision conflicts with persisted content");
+            }
+        } else {
+            crate::durability::atomic_write(&revision_path, &bytes)?;
+        }
+
+        let current_path = create_parent(
+            &self.root,
+            &self.current_manifest_relative_path(&solution.solution_set_id),
+        )?;
+        crate::durability::atomic_write(&current_path, &bytes)
+    }
+
+    fn current_manifest_path(&self, solution_set_id: &str) -> Result<PathBuf> {
+        checked_path(
+            &self.root,
+            &self.current_manifest_relative_path(solution_set_id),
+        )
+    }
+
+    fn revision_path(&self, solution_set_id: &str, revision: u64) -> Result<PathBuf> {
+        checked_path(
+            &self.root,
+            &self.revision_relative_path(solution_set_id, revision),
+        )
+    }
+
+    fn current_manifest_relative_path(&self, solution_set_id: &str) -> String {
+        format!(
+            "solutions/{}/manifest.json",
+            solution_directory(solution_set_id)
+        )
+    }
+
+    fn revision_relative_path(&self, solution_set_id: &str, revision: u64) -> String {
+        format!(
+            "solutions/{}/revisions/{revision:020}.json",
+            solution_directory(solution_set_id)
+        )
+    }
+}
+
+fn read_solution_set(path: &Path) -> Result<SolutionSet> {
+    let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let solution: SolutionSet =
+        serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))?;
+    solution
+        .validate()
+        .with_context(|| format!("validating {}", path.display()))?;
+    Ok(solution)
+}
+
+fn require_logical_id(solution_set_id: &str) -> Result<()> {
+    if solution_set_id.trim().is_empty()
+        || solution_set_id.len() > 1024
+        || solution_set_id.chars().any(char::is_control)
+    {
+        bail!("invalid logical solution_set_id");
+    }
+    Ok(())
+}
+
+fn solution_directory(solution_set_id: &str) -> String {
+    hex_sha256(solution_set_id.as_bytes())
+}
+
+fn validate_successor(previous: &SolutionSet, next: &SolutionSet) -> Result<()> {
+    if previous.manifest_state == SolutionSetManifestState::Closed {
+        bail!("closed solution-set manifest is immutable");
+    }
+    let expected_revision = previous
+        .revision
+        .checked_add(1)
+        .ok_or_else(|| anyhow::anyhow!("solution-set revision overflow"))?;
+    if next.revision != expected_revision {
+        bail!("solution-set revisions must advance exactly by one");
+    }
+    if next.solution_set_id != previous.solution_set_id
+        || next.run_id != previous.run_id
+        || next.provenance != previous.provenance
+    {
+        bail!("solution-set identity or provenance changed across revisions");
+    }
+    validate_execution_transition(previous.execution_status, next.execution_status)?;
+
+    let next_members = next
+        .members
+        .iter()
+        .map(|member| (member.member_id.as_str(), member))
+        .collect::<BTreeMap<_, _>>();
+    for previous_member in &previous.members {
+        let next_member = next_members
+            .get(previous_member.member_id.as_str())
+            .ok_or_else(|| anyhow::anyhow!("solution-set member was removed"))?;
+        validate_member_successor(previous_member, next_member)?;
+    }
+
+    let next_coverage = next
+        .coverage
+        .iter()
+        .map(|coverage| (coverage.artifact_id.as_str(), coverage))
+        .collect::<BTreeMap<_, _>>();
+    for previous_coverage in &previous.coverage {
+        let next_entry = next_coverage
+            .get(previous_coverage.artifact_id.as_str())
+            .ok_or_else(|| anyhow::anyhow!("solution-set artifact coverage was removed"))?;
+        validate_coverage_successor(previous_coverage, next_entry)?;
+    }
+    Ok(())
+}
+
+fn validate_member_successor(previous: &SolutionMember, next: &SolutionMember) -> Result<()> {
+    if previous.task_id != next.task_id
+        || previous.attempt_id != next.attempt_id
+        || previous.ownership_epoch != next.ownership_epoch
+        || previous.case_id != next.case_id
+        || previous.stage_id != next.stage_id
+    {
+        bail!("solution-set member execution identity changed across revisions");
+    }
+    validate_execution_transition(previous.execution_status, next.execution_status)?;
+    let next_artifacts = next
+        .artifacts
+        .iter()
+        .map(|artifact| (artifact.artifact_id.as_str(), artifact))
+        .collect::<BTreeMap<_, _>>();
+    for previous_artifact in &previous.artifacts {
+        if next_artifacts.get(previous_artifact.artifact_id.as_str()) != Some(&previous_artifact) {
+            bail!("solution-set immutable artifact was removed or changed");
+        }
+    }
+    Ok(())
+}
+
+fn validate_execution_transition(
+    previous: SolutionExecutionStatus,
+    next: SolutionExecutionStatus,
+) -> Result<()> {
+    if previous == SolutionExecutionStatus::Running || previous == next {
+        Ok(())
+    } else {
+        bail!("terminal solution execution status cannot change")
+    }
+}
+
+fn validate_coverage_successor(
+    previous: &SolutionArtifactCoverage,
+    next: &SolutionArtifactCoverage,
+) -> Result<()> {
+    if coverage_rank(next.state) < coverage_rank(previous.state)
+        || (previous.expected_samples.is_some()
+            && previous.expected_samples != next.expected_samples)
+        || next.committed_samples < previous.committed_samples
+        || !next.segments.starts_with(&previous.segments)
+    {
+        bail!("solution-set coverage must advance monotonically with immutable segments");
+    }
+    Ok(())
+}
+
+fn coverage_rank(state: fullmag_quantities::SolutionCoverageState) -> u8 {
+    match state {
+        fullmag_quantities::SolutionCoverageState::Unknown => 0,
+        fullmag_quantities::SolutionCoverageState::Partial => 1,
+        fullmag_quantities::SolutionCoverageState::Complete => 2,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fullmag_quantities::{
+        ScientificAssessment, ScientificAssessmentStatus, SolutionSetProvenance,
+        SOLUTION_SET_SCHEMA_VERSION,
+    };
+
+    fn digest(character: char) -> String {
+        format!("sha256:{}", character.to_string().repeat(64))
+    }
+
+    fn solution(revision: u64, manifest_state: SolutionSetManifestState) -> SolutionSet {
+        SolutionSet {
+            schema_version: SOLUTION_SET_SCHEMA_VERSION.to_string(),
+            solution_set_id: "solution:run-1".to_string(),
+            revision,
+            run_id: "run:1".to_string(),
+            manifest_state,
+            execution_status: if manifest_state == SolutionSetManifestState::Open {
+                SolutionExecutionStatus::Running
+            } else {
+                SolutionExecutionStatus::Succeeded
+            },
+            scientific_assessment: ScientificAssessment {
+                status: ScientificAssessmentStatus::Unassessed,
+                reason: Some("assessment pending".to_string()),
+                evidence_artifact_ids: Vec::new(),
+            },
+            provenance: SolutionSetProvenance {
+                run_spec_digest: digest('a'),
+                model_digest: digest('b'),
+                physics_digest: digest('c'),
+                discretization_digest: digest('d'),
+                resolved_plan_digest: digest('e'),
+                acquisition_digest: digest('f'),
+                seed_digest: None,
+            },
+            members: Vec::new(),
+            coverage: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn revisions_are_monotonic_and_closed_manifest_is_immutable() {
+        let directory = tempfile::tempdir().expect("temporary catalog");
+        let catalog = SolutionSetCatalog::open(directory.path()).expect("open catalog");
+        catalog
+            .publish(&solution(1, SolutionSetManifestState::Open))
+            .expect("publish first revision");
+        catalog
+            .publish(&solution(2, SolutionSetManifestState::Closed))
+            .expect("close solution set");
+
+        assert_eq!(catalog.read("solution:run-1").unwrap().unwrap().revision, 2);
+        assert!(catalog
+            .publish(&solution(3, SolutionSetManifestState::Closed))
+            .is_err());
+        assert_eq!(
+            catalog
+                .read_revision("solution:run-1", 1)
+                .unwrap()
+                .unwrap()
+                .manifest_state,
+            SolutionSetManifestState::Open
+        );
+    }
+}
