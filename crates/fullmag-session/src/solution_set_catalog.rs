@@ -33,12 +33,18 @@ impl SolutionSetCatalog {
         require_local_filesystem(&root)?;
         fs::create_dir_all(&root)?;
         let root = fs::canonicalize(root)?;
-        let catalog = Self {
-            writer: Writer::new(root.clone()),
-            root,
-        };
+        let writer = Writer::new(root.clone());
+        Self::with_writer(root, writer)
+    }
+
+    pub(crate) fn with_writer(root: PathBuf, writer: Arc<Writer>) -> Result<Self> {
+        let catalog = Self { root, writer };
         catalog.reconcile_all()?;
         Ok(catalog)
+    }
+
+    pub(crate) fn with_existing_writer(root: PathBuf, writer: Arc<Writer>) -> Self {
+        Self { root, writer }
     }
 
     pub fn read(&self, solution_set_id: &str) -> Result<Option<SolutionSet>> {
@@ -504,6 +510,7 @@ fn coverage_rank(state: fullmag_quantities::SolutionCoverageState) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::SessionStore;
     use fullmag_quantities::{
         ScientificAssessment, ScientificAssessmentStatus, SolutionSetProvenance,
         SOLUTION_SET_SCHEMA_VERSION,
@@ -597,5 +604,35 @@ mod tests {
             .expect("reconcile recovered catalog");
         assert_eq!(outcome.previous_current_revision, Some(2));
         assert_eq!(outcome.promoted_revision, None);
+    }
+
+    #[test]
+    fn session_store_open_reconciles_solution_set_catalog() {
+        let directory = tempfile::tempdir().expect("temporary session store");
+        let store = SessionStore::open(directory.path()).expect("open session store");
+        let orphan = solution(2, SolutionSetManifestState::Closed);
+        {
+            let catalog = store.solution_sets();
+            catalog
+                .publish(&solution(1, SolutionSetManifestState::Open))
+                .expect("publish first revision");
+            let orphan_path = create_parent(
+                &catalog.root,
+                &catalog.revision_relative_path(&orphan.solution_set_id, orphan.revision),
+            )
+            .expect("orphan path");
+            crate::durability::atomic_write(
+                &orphan_path,
+                &serde_json::to_vec_pretty(&orphan).expect("serialize orphan"),
+            )
+            .expect("persist orphan revision");
+        }
+        drop(store);
+
+        let store = SessionStore::open(directory.path()).expect("reopen session store");
+        assert_eq!(
+            store.solution_sets().read("solution:run-1").unwrap(),
+            Some(orphan)
+        );
     }
 }

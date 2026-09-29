@@ -2,7 +2,7 @@
 
 Data: 29.09.2026
 
-Status: **SOURCE VERIFIED / UNIT TESTS NOT RUN / SESSIONSTORE/RUNTIME NOT VERIFIED**
+Status: **SOURCE VERIFIED / UNIT TESTS NOT RUN / API/RUNTIME NOT VERIFIED**
 
 ## Zakres przyrostu
 
@@ -40,8 +40,7 @@ startupowi SessionStore/API emitować diagnostykę bez ponownego skanowania.
 
 ## Otwarte elementy
 
-Brakuje osadzenia katalogu w `SessionStore`, raportowania recovery przez
-startup API, writerów runnera, fault injection procesu/zasilania, quarantine
-i kontrolowanej naprawy uszkodzonego katalogu, GC reachability, `.fms`
-pack/unpack oraz kwalifikacji czterech lane'ów. CAE-04/37/61/70 pozostają
-**NOT VERIFIED**.
+Katalog jest osadzony w `SessionStore`, ale brakuje raportowania recovery przez
+startup API, writerów runnera, fault injection procesu/zasilania, quarantine i
+kontrolowanej naprawy uszkodzonego katalogu, GC reachability, `.fms` pack/unpack
+oraz kwalifikacji czterech lane'ów. CAE-04/37/61/70 pozostają **NOT VERIFIED**.

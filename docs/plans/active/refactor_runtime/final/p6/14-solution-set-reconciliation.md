@@ -41,9 +41,9 @@ bez current jest poprawnym no-op; current bez historii jest odrzucany.
 
 ## Otwarte elementy
 
-Reconciliation działa przy otwarciu samego katalogu, lecz katalog nie jest
-jeszcze osadzony w startupie `SessionStore` ani podłączony do runner publication
-barrier i publicznego API/CLI. Brakuje fault injection dla awarii zasilania,
+Reconciliation działa przy otwarciu katalogu i zwykłym startupie `SessionStore`,
+lecz nie jest jeszcze podłączone do runner publication barrier i publicznego
+API/CLI. Brakuje fault injection dla awarii zasilania,
 quarantine/diagnostyki uszkodzonych łańcuchów, GC reachability, `.fms`
 pack/unpack, writerów czterech lane'ów oraz ich kwalifikacji. CAE-04/37/61/70
 pozostają **NOT VERIFIED**.

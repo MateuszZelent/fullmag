@@ -46,8 +46,8 @@ lecz pozostają dostępne dla kontrolowanego ponowienia publikacji.
 
 ## Otwarte elementy
 
-Katalog nie jest jeszcze osadzony w `SessionStore`, wywoływany przez runner
-publication barrier ani udostępniony w publicznym API. Brakuje writerów
+Katalog jest osadzony w `SessionStore`, lecz nie jest jeszcze wywoływany przez
+runner publication barrier ani udostępniony w publicznym API. Brakuje writerów
 artefaktów czterech lane'ów, fault injection durability, GC reachability,
 `.fms` pack/unpack oraz migracji legacy resource keys. CAE-04/37/61/70
 pozostają **NOT VERIFIED**.

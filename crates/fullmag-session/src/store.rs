@@ -26,6 +26,7 @@ use anyhow::{Context, Result};
 use crate::cas::CasStore;
 use crate::durability::{atomic_write, confirm_publication, sync_directory};
 use crate::repository_path::{checked_path, create_parent, reject_link, validate_store_id};
+use crate::solution_set_catalog::SolutionSetCatalog;
 use crate::types::*;
 use crate::writer::{WriteTransaction, Writer};
 
@@ -54,6 +55,7 @@ impl std::error::Error for RunBacklogFull {}
 pub struct SessionStore {
     root: PathBuf,
     cas: CasStore,
+    solution_sets: SolutionSetCatalog,
     writer: Arc<Writer>,
     explicit_lease: Mutex<Option<WriteTransaction>>,
 }
@@ -107,9 +109,11 @@ impl SessionStore {
             sync_directory(&root)?;
         }
         let cas = CasStore::existing(checked_path(&root, "objects")?, writer.clone())?;
+        let solution_sets = SolutionSetCatalog::with_writer(root.clone(), writer.clone())?;
         Ok(Self {
             root,
             cas,
+            solution_sets,
             writer,
             explicit_lease: Mutex::new(None),
         })
@@ -123,9 +127,12 @@ impl SessionStore {
         let root = fs::canonicalize(root)?;
         let writer = Writer::new(root.clone());
         let cas = CasStore::existing(checked_path(&root, "objects")?, writer.clone())?;
+        let solution_sets =
+            SolutionSetCatalog::with_existing_writer(root.clone(), writer.clone());
         Ok(Self {
             root,
             cas,
+            solution_sets,
             writer,
             explicit_lease: Mutex::new(None),
         })
@@ -137,6 +144,10 @@ impl SessionStore {
 
     pub fn cas(&self) -> &CasStore {
         &self.cas
+    }
+
+    pub fn solution_sets(&self) -> &SolutionSetCatalog {
+        &self.solution_sets
     }
 
     /// Bind a multi-file operation to one native writer lease.
