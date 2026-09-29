@@ -22,10 +22,10 @@ Nowy `fullmag_session::dataset_slice_adapter` łączy istniejące
 - buduje manifest oraz bajty w tej samej kolejności i ponownie je waliduje,
 - może bezpośrednio wywołać bounded decoder z poprzedniego przyrostu.
 
-Obecny `CasStore` nie ma integralnego range-read. Adapter dlatego odrzuca chunk
-większy niż 64 MiB i wymaga rechunkingu, zamiast ukrycie wczytywać cały duży
-obiekt dla małego żądania. Suma zwracanych zakresów musi mieścić się w
-`max_response_bytes` żądania.
+W tym przyroście `CasStore` nie miał integralnego range-read, dlatego adapter
+odrzucał chunk większy niż 64 MiB. Ograniczenie zostało następnie usunięte przez
+[strumieniowy integralny range-read](12-streaming-cas-range-read.md). Suma
+zwracanych zakresów nadal musi mieścić się w `max_response_bytes` żądania.
 
 ## Dowody
 
@@ -42,6 +42,5 @@ obiekt dla małego żądania. Suma zwracanych zakresów musi mieścić się w
 ## Otwarte elementy
 
 Brakuje publicznego API i generated clienta, adaptera pola do właściwego
-descriptoru datasetu, streamującego integralnego range-read, profilu peak RAM/
-throughput oraz realnego artefaktu FDM/FEM. FINAL-09 i kwalifikacja runtime
-pozostają **NOT VERIFIED**.
+descriptoru datasetu, profilu peak RAM/throughput oraz realnego artefaktu
+FDM/FEM. FINAL-09 i kwalifikacja runtime pozostają **NOT VERIFIED**.

@@ -41,8 +41,11 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 11. [Adapter TensorDescriptor/CAS](11-tensor-cas-slice-adapter.md)
     — integralny odczyt ograniczonych chunków CAS, exact-range checksum oraz
     manifest slice bez niejawnego odczytu nieograniczonego obiektu.
+12. [Strumieniowy integralny range-read CAS](12-streaming-cas-range-read.md)
+    — pełna weryfikacja SHA-256 dużego obiektu przy stałym buforze I/O i
+    alokacji ograniczonej do żądanego zakresu.
 
 Writers i trwały katalog SolutionSet, materializator/evaluator datasetów, API i
 generated client, pozostałe quantities, frontend porównań i wykresów oraz
 produkcyjne dowody pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi
-**23%**.
+**25%**.

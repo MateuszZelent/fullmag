@@ -5,7 +5,7 @@ use crate::{CasStore, TensorDescriptor, TensorDtype};
 use fullmag_quantities::{
     is_canonical_sha256, ComplexEncoding, DatasetByteOrder, DatasetFieldSlice,
     DatasetFieldSliceRequest, DatasetNumericPrecision, DatasetSliceError, DatasetSlicePart,
-    DatasetSlicePlane, HarmonicConvention, MAX_DATASET_SLICE_BYTES, MAX_DATASET_SLICE_PARTS,
+    DatasetSlicePlane, HarmonicConvention, MAX_DATASET_SLICE_PARTS,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -192,7 +192,6 @@ pub enum TensorDatasetSliceError {
     TensorAxisMismatch,
     TensorPrecisionMismatch,
     TensorChunkCoverage,
-    TensorChunkTooLarge,
     TensorChunkDigestMismatch,
     MissingCasObject(String),
     CasRead(String),
@@ -229,8 +228,6 @@ impl fmt::Display for TensorDatasetSliceError {
             Self::TensorChunkCoverage => formatter.write_str(
                 "tensor chunks must be aligned, ordered, non-overlapping, and cover the tensor",
             ),
-            Self::TensorChunkTooLarge => formatter
-                .write_str("tensor chunk exceeds bounded CAS read size and requires rechunking"),
             Self::TensorChunkDigestMismatch => formatter.write_str(
                 "tensor chunk checksum does not match its immutable CAS object identity",
             ),
@@ -304,9 +301,6 @@ fn validate_tensor_descriptor(
         {
             return Err(TensorDatasetSliceError::TensorChunkCoverage);
         }
-        if length > MAX_DATASET_SLICE_BYTES {
-            return Err(TensorDatasetSliceError::TensorChunkTooLarge);
-        }
         if chunk
             .sha256
             .as_deref()
@@ -349,22 +343,20 @@ fn append_plane_ranges(
                 DatasetSliceError::PartCountOutOfRange,
             ));
         }
-        let object = cas
-            .get(&chunk.object_ref)
+        let range_length = overlap_end - overlap_start;
+        let object_start = overlap_start - chunk_start;
+        let range = cas
+            .get_verified_range(&chunk.object_ref, object_start, range_length, range_length)
             .map_err(|error| TensorDatasetSliceError::CasRead(error.to_string()))?
             .ok_or_else(|| TensorDatasetSliceError::MissingCasObject(chunk.object_ref.clone()))?;
-        if object.len() != chunk.length {
+        if range.object_length != chunk.length as u64 {
             return Err(TensorDatasetSliceError::TensorChunkCoverage);
         }
-        let object_start = usize::try_from(overlap_start - chunk_start)
-            .map_err(|_| TensorDatasetSliceError::SizeOverflow)?;
-        let object_end = usize::try_from(overlap_end - chunk_start)
-            .map_err(|_| TensorDatasetSliceError::SizeOverflow)?;
-        let bytes = object[object_start..object_end].to_vec();
+        let bytes = range.bytes;
         parts.push(DatasetSlicePart {
             plane,
             object_ref: chunk.object_ref.clone(),
-            object_offset_bytes: object_start as u64,
+            object_offset_bytes: object_start,
             plane_offset_bytes: overlap_start - request_start,
             byte_length: bytes.len() as u64,
             range_sha256: sha256_prefixed(&bytes),
