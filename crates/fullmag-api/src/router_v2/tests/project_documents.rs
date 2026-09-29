@@ -2632,6 +2632,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             bytes: output_bytes.clone(),
         }],
         None,
+        None,
     )
     .is_err());
     assert!(store
@@ -2660,6 +2661,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
                 bytes: b"malformed scalar".to_vec(),
             },
         ],
+        None,
         None,
     )
     .is_err());
@@ -3180,6 +3182,14 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             );
             assert!(accepted_state_ref.id.plan_digest.starts_with("sha256:"));
             assert!(accepted_state_ref.id.domain_digest.starts_with("sha256:"));
+            let observation_source = process_result
+                .execution
+                .observation_source
+                .as_ref()
+                .expect("simple accepted FDM CPU worker retains its observation source");
+            assert_eq!(observation_source.accepted_state_ref, *accepted_state_ref);
+            assert_eq!(observation_source.grid_cells, [1, 1, 1]);
+            observation_source.validate().unwrap();
 
             let mut recovered_inbox = fullmag_runtime_control::DurableWorkerInbox::recover(
                 fullmag_session::SessionStore::open(store.root().to_path_buf()).unwrap(),
@@ -3347,6 +3357,51 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         accepted_state_ref.generation.runtime_epoch,
         claim.ownership_epoch.value()
     );
+    let observation_source = manifest
+        .observation_source
+        .as_ref()
+        .expect("simple FDM CPU manifest pins its observation source");
+    assert_eq!(observation_source.accepted_state_ref, *accepted_state_ref);
+    assert_eq!(observation_source.grid_cells, [1, 1, 1]);
+    assert_eq!(observation_source.quantity_ids, vec!["m".to_string()]);
+    for (artifact_id, artifact_type, object_ref) in [
+        (
+            &observation_source.snapshot_artifact_id,
+            fullmag_session::FMS_OBSERVATION_SNAPSHOT_ARTIFACT_TYPE,
+            &observation_source.snapshot_object_ref,
+        ),
+        (
+            &observation_source.state_artifact_id,
+            fullmag_session::FMS_OBSERVATION_STATE_ARTIFACT_TYPE,
+            &observation_source.state_object_ref,
+        ),
+    ] {
+        let artifact = output_catalog
+            .entries
+            .iter()
+            .find(|entry| entry.artifact_id == artifact_id.as_str())
+            .expect("observation source artifact is present in the catalog");
+        assert_eq!(artifact.artifact_type, artifact_type);
+        assert_eq!(artifact.object_ref.as_deref(), Some(object_ref.as_str()));
+        assert_eq!(artifact.content_sha256, object_ref.as_str());
+        assert!(artifact.study_output.is_none());
+    }
+    assert_eq!(
+        store
+            .cas()
+            .get(&observation_source.state_object_ref)
+            .unwrap(),
+        Some(output_bytes.clone()),
+        "system observation state is independent of, but content-equal to, the declared State output"
+    );
+    let snapshot_bytes = store
+        .cas()
+        .get(&observation_source.snapshot_object_ref)
+        .unwrap()
+        .expect("observation accepted-state snapshot is stored in CAS");
+    let snapshot: fullmag_runner::FdmCpuAcceptedStateSnapshotV1 =
+        serde_json::from_slice(&snapshot_bytes).unwrap();
+    snapshot.validate().unwrap();
     fullmag_runtime_control::validate_study_task_completion(&store, &claim).unwrap();
     assert!(manifest.outputs.iter().any(|output| {
         output.port_id == "final_state"

@@ -2789,8 +2789,13 @@ impl SessionStore {
                 .as_ref()
                 .context("published output manifest has no artifact catalog")?;
             for entry in entries {
-                let is_output_or_manifest =
-                    entry.study_output.is_some() || entry.artifact_type == "study_output_manifest";
+                let is_output_or_manifest = entry.study_output.is_some()
+                    || matches!(
+                        entry.artifact_type.as_str(),
+                        "study_output_manifest"
+                            | FMS_OBSERVATION_SNAPSHOT_ARTIFACT_TYPE
+                            | FMS_OBSERVATION_STATE_ARTIFACT_TYPE
+                    );
                 let exact_existing_entry = existing
                     .entries
                     .iter()
@@ -5922,6 +5927,7 @@ mod tests {
             attempt_id: "attempt-one".into(),
             ownership_epoch: 1,
             accepted_state_ref: None,
+            observation_source: None,
             outputs: vec![FmsStudyOutputManifestEntry {
                 port_id: "final_state".into(),
                 case_id: "default".into(),
@@ -5934,6 +5940,9 @@ mod tests {
             }],
         };
         manifest.validate().unwrap();
+        let mut previous_manifest = manifest.clone();
+        previous_manifest.schema_version = FMS_STUDY_OUTPUT_MANIFEST_SCHEMA_V2.into();
+        previous_manifest.validate().unwrap();
         let mut legacy_manifest = manifest.clone();
         legacy_manifest.schema_version = FMS_STUDY_OUTPUT_MANIFEST_SCHEMA_V1.into();
         legacy_manifest.validate().unwrap();

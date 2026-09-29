@@ -280,9 +280,10 @@ pinned project/run identity, and exposes requested execution plus a typed,
 revisioned task summary. `catalog_state=pending_materialization` means no task
 catalog exists; `materialized` means task identities are durable, not that a
 worker has started. Dla ukończonego attemptu `tasks[].accepted_state_ref`
-projektuje dokładny wspólny kontrakt z CAS-backed `study_output_manifest.v2`.
-Historyczny manifest v1 lub lane bez kompletnego refa zwraca `null`; zły scope,
-brak obiektu CAS albo więcej niż jeden manifest bieżącego attemptu daje błąd.
+projektuje dokładny wspólny kontrakt z CAS-backed `study_output_manifest.v3`.
+Historyczny manifest v1 albo lane bez kompletnego refa zwraca `null`; v2 nadal
+projektuje swój `accepted_state_ref`, lecz nie deklaruje źródła obserwacji. Zły
+scope, brak obiektu CAS albo więcej niż jeden manifest bieżącego attemptu daje błąd.
 Handler nie czyta prywatnego katalogu workera. Nie odczytuje ani nie zmienia
 bieżącej sesji runtime.
 
@@ -1087,6 +1088,14 @@ niezależne od cache/materialization. Brak primary carriera zwraca typed
 `unsupported_missing_primary_state`. `ComputeFields` i `ComputeEnergies`
 mogą być przejściowymi command aliases, ale wywołują ten sam koordynator
 `ComputeQuantities`; nie ustanawiają alternatywnego ownera pól lub skalarów.
+
+Trwała publikacja prostego FDM CPU używa `study_output_manifest.v3` z opcjonalnym
+`observation_source.v1`. Descriptor wiąże ten sam pełny `AcceptedStateRef` z
+dwoma systemowymi obiektami CAS: strict snapshotem primary carriers i terminalną
+magnetyzacją w zarejestrowanym codec. Zawiera także grid, adapter i allow-listę
+quantity. Obiekty nie są deklarowanymi portami study, ale są publikowane w tym
+samym fenced batchu i po manifeście dopuszczają wyłącznie exact replay.
+Manifesty v1/v2 nie są reinterpretowane jako źródła obserwacji.
 
 Autosave frame jest observation source, nie resume checkpointem. `.fms`
 powstaje wyłącznie po jawnym Save/Save As/Export; import waliduje kandydacki

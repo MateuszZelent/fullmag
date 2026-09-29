@@ -8,6 +8,8 @@ publish.workspace = true
 anyhow.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
 serde_json.workspace = true
+serde.workspace = true
+sha2 = "0.10"
 fullmag-application = { path = "../fullmag-application" }
 fullmag-session = { path = "../fullmag-session" }
 fullmag-authoring = { path = "../fullmag-authoring" }

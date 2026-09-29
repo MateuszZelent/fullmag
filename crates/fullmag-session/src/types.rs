@@ -1916,7 +1916,102 @@ impl FmsStudyArtifactOutput {
 }
 
 pub const FMS_STUDY_OUTPUT_MANIFEST_SCHEMA_V1: &str = "study_output_manifest.v1";
-pub const FMS_STUDY_OUTPUT_MANIFEST_SCHEMA: &str = "study_output_manifest.v2";
+pub const FMS_STUDY_OUTPUT_MANIFEST_SCHEMA_V2: &str = "study_output_manifest.v2";
+pub const FMS_STUDY_OUTPUT_MANIFEST_SCHEMA: &str = "study_output_manifest.v3";
+pub const FMS_OBSERVATION_SOURCE_SCHEMA: &str = "observation_source.v1";
+pub const FMS_FDM_CPU_OBSERVATION_ADAPTER_ID: &str = "fdm_cpu_observation.v1";
+pub const FMS_FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA: &str =
+    "fullmag.fdm.cpu.accepted-state-snapshot.v1";
+pub const FMS_OBSERVATION_STATE_CODEC_ID: &str = "fullmag.runner.field_json";
+pub const FMS_OBSERVATION_STATE_CODEC_VERSION: &str = "v1";
+pub const FMS_OBSERVATION_SNAPSHOT_ARTIFACT_TYPE: &str = "observation_state_snapshot";
+pub const FMS_OBSERVATION_STATE_ARTIFACT_TYPE: &str = "observation_terminal_state";
+
+/// Immutable CAS-backed carriers required to reconstruct one historical
+/// observation runtime. These are system artifacts, not declared study ports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsObservationSourceDescriptor {
+    pub schema_version: String,
+    pub adapter_id: String,
+    pub accepted_state_ref: fullmag_quantities::AcceptedStateRef,
+    pub snapshot_schema_version: String,
+    pub snapshot_artifact_id: String,
+    pub snapshot_object_ref: String,
+    pub state_codec_id: String,
+    pub state_codec_version: String,
+    pub state_artifact_id: String,
+    pub state_object_ref: String,
+    pub grid_cells: [u32; 3],
+    pub quantity_ids: Vec<String>,
+}
+
+impl FmsObservationSourceDescriptor {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != FMS_OBSERVATION_SOURCE_SCHEMA {
+            bail!(
+                "unsupported observation source schema `{}`",
+                self.schema_version
+            );
+        }
+        if self.adapter_id != FMS_FDM_CPU_OBSERVATION_ADAPTER_ID
+            || self.snapshot_schema_version != FMS_FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA
+            || self.state_codec_id != FMS_OBSERVATION_STATE_CODEC_ID
+            || self.state_codec_version != FMS_OBSERVATION_STATE_CODEC_VERSION
+            || self.quantity_ids != ["m"]
+        {
+            bail!("observation source v1 has an unsupported adapter or carrier contract");
+        }
+        for (value, label) in [
+            (&self.adapter_id, "observation adapter_id"),
+            (
+                &self.snapshot_schema_version,
+                "observation snapshot_schema_version",
+            ),
+            (
+                &self.snapshot_artifact_id,
+                "observation snapshot_artifact_id",
+            ),
+            (&self.state_codec_id, "observation state_codec_id"),
+            (&self.state_codec_version, "observation state_codec_version"),
+            (&self.state_artifact_id, "observation state_artifact_id"),
+        ] {
+            crate::repository_path::validate_store_id(value)
+                .with_context(|| format!("invalid {label}"))?;
+        }
+        validate_sha256(&self.snapshot_object_ref, "observation snapshot_object_ref")?;
+        validate_sha256(&self.state_object_ref, "observation state_object_ref")?;
+        if self.snapshot_artifact_id == self.state_artifact_id {
+            bail!("observation source artifact identities must be distinct");
+        }
+        let cell_count = self
+            .grid_cells
+            .into_iter()
+            .try_fold(1_u64, |count, extent| {
+                (extent > 0)
+                    .then_some(extent as u64)
+                    .and_then(|extent| count.checked_mul(extent))
+            });
+        if cell_count.is_none() {
+            bail!("observation source grid must contain a positive finite cell count");
+        }
+        if self.quantity_ids.is_empty() {
+            bail!("observation source must expose at least one quantity");
+        }
+        let mut quantity_ids = std::collections::BTreeSet::new();
+        for quantity_id in &self.quantity_ids {
+            crate::repository_path::validate_store_id(quantity_id)
+                .context("invalid observation quantity id")?;
+            if !quantity_ids.insert(quantity_id.as_str()) {
+                bail!("observation source contains a duplicate quantity id");
+            }
+        }
+        self.accepted_state_ref
+            .validate()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        Ok(())
+    }
+}
 
 /// Versioned type/codec references for the exact study outputs of one attempt.
 /// The manifest is stored as a normal CAS-backed artifact catalog entry.
@@ -1931,6 +2026,8 @@ pub struct FmsStudyOutputManifest {
     pub ownership_epoch: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accepted_state_ref: Option<fullmag_quantities::AcceptedStateRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation_source: Option<FmsObservationSourceDescriptor>,
     pub outputs: Vec<FmsStudyOutputManifestEntry>,
 }
 
@@ -1951,7 +2048,9 @@ impl FmsStudyOutputManifest {
     pub fn validate(&self) -> Result<()> {
         if !matches!(
             self.schema_version.as_str(),
-            FMS_STUDY_OUTPUT_MANIFEST_SCHEMA_V1 | FMS_STUDY_OUTPUT_MANIFEST_SCHEMA
+            FMS_STUDY_OUTPUT_MANIFEST_SCHEMA_V1
+                | FMS_STUDY_OUTPUT_MANIFEST_SCHEMA_V2
+                | FMS_STUDY_OUTPUT_MANIFEST_SCHEMA
         ) {
             bail!(
                 "unsupported study output manifest schema `{}`",
@@ -1962,6 +2061,11 @@ impl FmsStudyOutputManifest {
             && self.accepted_state_ref.is_some()
         {
             bail!("study output manifest v1 cannot contain accepted_state_ref");
+        }
+        if self.schema_version != FMS_STUDY_OUTPUT_MANIFEST_SCHEMA
+            && self.observation_source.is_some()
+        {
+            bail!("study output manifest before v3 cannot contain observation_source");
         }
         crate::repository_path::validate_store_id(&self.run_id)?;
         crate::repository_path::validate_store_id(&self.task_id)?;
@@ -1985,6 +2089,23 @@ impl FmsStudyOutputManifest {
                 bail!("study output manifest accepted state identity differs from its attempt");
             }
         }
+        if let Some(observation_source) = &self.observation_source {
+            observation_source.validate()?;
+            if self.accepted_state_ref.as_ref() != Some(&observation_source.accepted_state_ref) {
+                bail!("observation source differs from manifest accepted_state_ref");
+            }
+            if observation_source.accepted_state_ref.id.run_id != self.run_id
+                || observation_source.accepted_state_ref.id.stage_id.as_deref()
+                    != Some(self.step_id.as_str())
+                || observation_source
+                    .accepted_state_ref
+                    .generation
+                    .runtime_epoch
+                    != self.ownership_epoch
+            {
+                bail!("observation source identity differs from its manifest attempt");
+            }
+        }
 
         let mut outputs = std::collections::BTreeSet::new();
         let mut artifact_ids = std::collections::BTreeSet::new();
@@ -2005,6 +2126,13 @@ impl FmsStudyOutputManifest {
             }
             if !artifact_ids.insert(output.artifact_id.as_str()) {
                 bail!("study output manifest contains a duplicate artifact id");
+            }
+        }
+        if let Some(observation_source) = &self.observation_source {
+            if artifact_ids.contains(observation_source.snapshot_artifact_id.as_str())
+                || artifact_ids.contains(observation_source.state_artifact_id.as_str())
+            {
+                bail!("observation source artifact identity collides with a study output");
             }
         }
         Ok(())

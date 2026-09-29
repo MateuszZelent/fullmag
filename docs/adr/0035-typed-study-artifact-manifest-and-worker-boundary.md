@@ -63,6 +63,13 @@ diagnostykę, pliki pośrednie i częściowe wyniki.
    dopiero potem publikuje manifest/outputy oraz `Completed`. Heartbeat i Stop
    mają worker-originated `HeartbeatAck`/`Stopped`; v2 pozostaje czytelny tylko
    przy recovery istniejącego attemptu i nie może być mieszany z v3.
+10. `study_output_manifest.v3` może zawierać osobny, systemowy
+    `observation_source.v1`. Descriptor wskazuje dokładny `AcceptedStateRef`,
+    snapshot primary carriers oraz terminalną magnetyzację w CAS, grid, adapter
+    i dostępne quantity. Te nośniki nie są portami `StudyOutput`, ale podlegają
+    temu samemu claimowi, epoch, immutable allow-list, completion barrier i
+    recovery. Manifesty v1/v2 pozostają czytelne i nie mogą deklarować tego
+    descriptora.
 
 ## Konsekwencje
 
@@ -133,6 +140,16 @@ worker-originated Stop/Stopped, atomowy cross-stream checkpoint oraz
 rzeczywistych binariów przechodzi dla sukcesu i publicznego anulowania FDM
 CPU/double/strict (receipt `ee5c9689c1af4be7b11797c3815d960b`). Nie
 rozszerza to kwalifikacji manifestu ani solvera na GPU/FEM lub host zdalny.
+
+Aktualizacja 29.09.2026: `study_output_manifest.v3` publikuje dla prostego FDM
+CPU `observation_source.v1` niezależnie od deklaracji portu `State`. Worker
+przed receiptem odtwarza izolowany `ObservationRuntime`, zapisuje snapshot i
+terminalne `m` do CAS, a recovery oraz completion barrier ponownie sprawdzają
+digesty, clock, grid, codec, artifact IDs i aktywny epoch. `cargo check` przeszedł
+dla session/runtime-control oraz binarki accepted workera. Regresję E2E zapisano,
+lecz nie zbudowano ani nie uruchomiono z powodu tymczasowego zakazu testów.
+Pozostałe lane'y, publiczne `ComputeQuantities` i managed runtime proof są nadal
+otwarte.
 
 ## Migracja i rollback
 

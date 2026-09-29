@@ -37,8 +37,11 @@ aktywnego runtime'u.
    materializacja historycznego `m`.
 10. [Granica zastosowania komendy Live](../p4/20-live-command-application-boundary.md)
    — publiczny readback kroku, czasu i segmentu faktycznego zastosowania komendy.
+11. [Trwałe źródło obserwacji w CAS](11-durable-fdm-cpu-observation-source.md)
+    — manifest v3, systemowe nośniki niezależne od portów study, fenced
+    publication, recovery i completion barrier.
 
 Materializacja accepted state dla coupled/Frozen Spins i FEM, ogólna
-checkpoint compatibility, pozostałe adaptery/autosave/CAS/API
-`ObservationRuntime` oraz zarządzana rekwalifikacja nowego refa GPU pozostają
-otwarte. P5 wynosi **98%**.
+checkpoint compatibility, publiczne `ComputeQuantities`, adaptery pozostałych
+lane'ów, autosave frame oraz zarządzana rekwalifikacja nowego refa GPU pozostają
+otwarte. P5 wynosi **99%**.

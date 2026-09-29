@@ -9,7 +9,7 @@ use fullmag_runner::{
     FdmGpuAcceptedStateSnapshotV1, RunResult, RunStatus, StepAction,
     FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE, FDM_GPU_ACCEPTED_STATE_SNAPSHOT_FILE,
 };
-use fullmag_runtime_control::{AcceptedWorkerStep, StudyOutputPayload};
+use fullmag_runtime_control::{AcceptedWorkerStep, ObservationSourcePayload, StudyOutputPayload};
 use fullmag_session::SessionStore;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -34,6 +34,7 @@ pub(crate) struct AcceptedRunnerExecution {
     pub(crate) attempt_output_dir: PathBuf,
     pub(crate) recovered_from_receipt: bool,
     pub(crate) accepted_state_ref: Option<AcceptedStateRef>,
+    pub(crate) observation_source: Option<ObservationSourcePayload>,
 }
 
 pub(crate) enum AcceptedWorkerProcessOutcome {
@@ -94,6 +95,17 @@ struct WorkerExecutionOutputReference {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct WorkerObservationSourceReference {
+    accepted_state_ref: AcceptedStateRef,
+    snapshot_object_ref: String,
+    snapshot_byte_count: u64,
+    state_object_ref: String,
+    state_byte_count: u64,
+    grid_cells: [u32; 3],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct WorkerExecutionCompletedReceipt {
     schema_version: String,
     identity: WorkerExecutionReceiptIdentity,
@@ -102,6 +114,8 @@ struct WorkerExecutionCompletedReceipt {
     outputs: Vec<WorkerExecutionOutputReference>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     accepted_state_ref: Option<AcceptedStateRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    observation_source: Option<WorkerObservationSourceReference>,
 }
 
 /// Reserve one private runner output directory for the exact active task
@@ -388,6 +402,74 @@ fn accepted_state_ref_from_runner_snapshot(
     Ok(Some(reference))
 }
 
+fn collect_fdm_cpu_observation_source(
+    attempt_output_dir: &Path,
+    accepted_step: &AcceptedWorkerStep,
+    accepted_state_ref: Option<&AcceptedStateRef>,
+    max_output_bytes: u64,
+) -> Result<Option<ObservationSourcePayload>> {
+    let Some(grid_cells) = fdm_cpu_observation_grid(accepted_step) else {
+        return Ok(None);
+    };
+    let accepted_state_ref = accepted_state_ref
+        .cloned()
+        .context("supported FDM CPU observation source has no accepted state reference")?;
+    let snapshot_bytes = read_explicit_runner_artifact(
+        attempt_output_dir,
+        FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE,
+        max_output_bytes,
+    )
+    .context("read FDM CPU observation accepted-state snapshot")?;
+    let state_bytes = read_explicit_runner_artifact(
+        attempt_output_dir,
+        RUNNER_FINAL_STATE_FILE,
+        max_output_bytes,
+    )
+    .context("read FDM CPU observation terminal state")?;
+    let payload = ObservationSourcePayload {
+        accepted_state_ref,
+        snapshot_bytes,
+        state_bytes,
+        grid_cells,
+    };
+    payload
+        .validate()
+        .context("validate FDM CPU observation source before worker receipt")?;
+    let snapshot: FdmCpuAcceptedStateSnapshotV1 =
+        serde_json::from_slice(&payload.snapshot_bytes)
+            .context("decode FDM CPU observation snapshot for adapter proof")?;
+    let state = fullmag_application::decode_study_artifact_bytes(
+        "state",
+        fullmag_application::STUDY_MAGNETIZATION_CODEC_ID,
+        fullmag_application::STUDY_MAGNETIZATION_CODEC_VERSION,
+        &payload.state_bytes,
+    )
+    .context("decode FDM CPU observation terminal state for adapter proof")?;
+    let DecodedStudyArtifact::MagnetizationState(state) = state else {
+        bail!("FDM CPU observation state codec did not produce magnetization");
+    };
+    fullmag_runner::ObservationRuntime::from_fdm_cpu_accepted_state(
+        payload.accepted_state_ref.id.clone(),
+        snapshot,
+        payload.grid_cells,
+        state.values,
+    )
+    .map_err(|error| anyhow::anyhow!(error.to_string()))
+    .context("materialize isolated FDM CPU ObservationRuntime before publication")?;
+    Ok(Some(payload))
+}
+
+fn fdm_cpu_observation_grid(accepted_step: &AcceptedWorkerStep) -> Option<[u32; 3]> {
+    let fullmag_ir::BackendPlanIR::Fdm(fdm_plan) = &accepted_step.execution_plan.backend_plan
+    else {
+        return None;
+    };
+    (accepted_step.resolved_input.requested_execution.device == "cpu"
+        && fdm_plan.spin_transport_plans.is_empty()
+        && fdm_plan.frozen_spins.is_none())
+    .then_some(fdm_plan.grid.cells)
+}
+
 fn expected_output_binding(
     port: &StudyOutputPort,
 ) -> Result<(&'static str, &'static str, &'static str)> {
@@ -423,6 +505,7 @@ fn persist_completed_worker_execution(
     completed_step_count: usize,
     outputs: &[StudyOutputPayload],
     accepted_state_ref: Option<&AcceptedStateRef>,
+    observation_source: Option<&ObservationSourcePayload>,
 ) -> Result<()> {
     let mut declared = BTreeMap::new();
     for port in declared_outputs {
@@ -435,6 +518,34 @@ fn persist_completed_worker_execution(
     }
     let mut output_refs = Vec::with_capacity(outputs.len());
     let mut seen = BTreeSet::new();
+    let mut unique_object_sizes = BTreeMap::new();
+    for output in outputs {
+        let object_ref = fullmag_application::study_artifact_content_sha256(&output.bytes);
+        unique_object_sizes.entry(object_ref).or_insert(
+            u64::try_from(output.bytes.len())
+                .context("accepted worker output byte count overflowed")?,
+        );
+    }
+    if let Some(source) = observation_source {
+        source.validate()?;
+        if accepted_state_ref != Some(&source.accepted_state_ref) {
+            bail!("worker observation source differs from accepted state reference");
+        }
+        for bytes in [&source.snapshot_bytes, &source.state_bytes] {
+            let object_ref = fullmag_application::study_artifact_content_sha256(bytes);
+            unique_object_sizes.entry(object_ref).or_insert(
+                u64::try_from(bytes.len())
+                    .context("accepted worker observation byte count overflowed")?,
+            );
+        }
+    }
+    let unique_byte_count = unique_object_sizes
+        .values()
+        .try_fold(0_u64, |total, size| total.checked_add(*size))
+        .context("accepted worker persisted byte count overflowed")?;
+    if unique_byte_count > identity.claim.lease.budget.storage_bytes {
+        bail!("accepted worker persisted artifacts exceed the attempt storage budget");
+    }
     for output in outputs {
         if !seen.insert(output.port_id.as_str()) {
             bail!(
@@ -467,6 +578,24 @@ fn persist_completed_worker_execution(
     if seen.len() != declared.len() {
         bail!("accepted worker execution produced an incomplete output set");
     }
+    let observation_source = observation_source
+        .map(|source| -> Result<WorkerObservationSourceReference> {
+            let snapshot_object_ref =
+                retry_store_writer_busy(|| store.cas().put(&source.snapshot_bytes))?;
+            let state_object_ref =
+                retry_store_writer_busy(|| store.cas().put(&source.state_bytes))?;
+            Ok(WorkerObservationSourceReference {
+                accepted_state_ref: source.accepted_state_ref.clone(),
+                snapshot_object_ref,
+                snapshot_byte_count: u64::try_from(source.snapshot_bytes.len())
+                    .context("observation snapshot byte count overflowed")?,
+                state_object_ref,
+                state_byte_count: u64::try_from(source.state_bytes.len())
+                    .context("observation state byte count overflowed")?,
+                grid_cells: source.grid_cells,
+            })
+        })
+        .transpose()?;
     let receipt = WorkerExecutionCompletedReceipt {
         schema_version: WORKER_EXECUTION_RECEIPT_SCHEMA.into(),
         identity: identity.clone(),
@@ -474,6 +603,7 @@ fn persist_completed_worker_execution(
         completed_step_count,
         outputs: output_refs,
         accepted_state_ref: accepted_state_ref.cloned(),
+        observation_source,
     };
     write_immutable_attempt_receipt(
         attempt_output_dir,
@@ -489,6 +619,7 @@ fn recover_completed_worker_execution(
     declared_outputs: &[StudyOutputPort],
     max_output_bytes: u64,
     expected_accepted_state_ref: Option<&AcceptedStateRef>,
+    expected_observation_grid: Option<[u32; 3]>,
 ) -> Result<AcceptedRunnerExecution> {
     let started: WorkerExecutionStartedReceipt =
         read_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_STARTED_RECEIPT)?
@@ -522,7 +653,7 @@ fn recover_completed_worker_execution(
         bail!("completed worker receipt has an incomplete output set");
     }
     let mut seen = BTreeSet::new();
-    let mut total_bytes = 0_u64;
+    let mut unique_object_sizes = BTreeMap::new();
     let mut outputs = Vec::with_capacity(completed.outputs.len());
     for output in &completed.outputs {
         if !seen.insert(output.port_id.as_str()) {
@@ -544,12 +675,6 @@ fn recover_completed_worker_execution(
                 "completed worker output `{}` differs from its accepted port",
                 output.port_id
             );
-        }
-        let next_total = total_bytes
-            .checked_add(output.byte_count)
-            .context("recovered worker output byte count overflowed")?;
-        if next_total > max_output_bytes {
-            bail!("recovered worker outputs exceed the attempt storage budget");
         }
         let bytes = store.cas().get(&output.object_ref)?.with_context(|| {
             format!(
@@ -579,10 +704,59 @@ fn recover_completed_worker_execution(
             codec_version: output.codec_version.clone(),
             bytes,
         });
-        total_bytes = next_total;
+        unique_object_sizes
+            .entry(output.object_ref.clone())
+            .or_insert(output.byte_count);
     }
     if seen.len() != declared.len() {
         bail!("completed worker receipt omits an accepted output port");
+    }
+    let observation_source = match (&completed.observation_source, expected_observation_grid) {
+        (Some(source), Some(grid_cells)) => {
+            if Some(&source.accepted_state_ref) != expected_accepted_state_ref
+                || source.grid_cells != grid_cells
+            {
+                bail!("completed worker observation source differs from the accepted attempt");
+            }
+            let snapshot_bytes = store
+                .cas()
+                .get(&source.snapshot_object_ref)?
+                .context("completed worker observation snapshot is missing from CAS")?;
+            let state_bytes = store
+                .cas()
+                .get(&source.state_object_ref)?
+                .context("completed worker observation state is missing from CAS")?;
+            if u64::try_from(snapshot_bytes.len())? != source.snapshot_byte_count
+                || u64::try_from(state_bytes.len())? != source.state_byte_count
+            {
+                bail!("completed worker observation source has a mismatched byte count");
+            }
+            unique_object_sizes
+                .entry(source.snapshot_object_ref.clone())
+                .or_insert(source.snapshot_byte_count);
+            unique_object_sizes
+                .entry(source.state_object_ref.clone())
+                .or_insert(source.state_byte_count);
+            let payload = ObservationSourcePayload {
+                accepted_state_ref: source.accepted_state_ref.clone(),
+                snapshot_bytes,
+                state_bytes,
+                grid_cells,
+            };
+            payload
+                .validate()
+                .context("validate recovered worker observation source")?;
+            Some(payload)
+        }
+        (None, None) => None,
+        _ => bail!("completed worker receipt has an invalid observation source presence"),
+    };
+    let unique_byte_count = unique_object_sizes
+        .values()
+        .try_fold(0_u64, |total, size| total.checked_add(*size))
+        .context("recovered worker persisted byte count overflowed")?;
+    if unique_byte_count > max_output_bytes {
+        bail!("recovered worker artifacts exceed the attempt storage budget");
     }
     Ok(AcceptedRunnerExecution {
         status: completed.status,
@@ -591,6 +765,7 @@ fn recover_completed_worker_execution(
         attempt_output_dir: attempt_output_dir.to_path_buf(),
         recovered_from_receipt: true,
         accepted_state_ref: completed.accepted_state_ref,
+        observation_source,
     })
 }
 
@@ -899,6 +1074,7 @@ pub(crate) fn execute_accepted_worker_start(
                 &study_step.outputs,
                 accepted_step.claim.lease.budget.storage_bytes,
                 expected_accepted_state_ref.as_ref(),
+                fdm_cpu_observation_grid(accepted_step),
             )
             .context("recover completed accepted worker attempt without rerunning solver");
         }
@@ -935,6 +1111,7 @@ pub(crate) fn execute_accepted_worker_start(
             attempt_output_dir,
             recovered_from_receipt: false,
             accepted_state_ref: None,
+            observation_source: None,
         });
     }
     if result.status != RunStatus::Completed {
@@ -953,6 +1130,12 @@ pub(crate) fn execute_accepted_worker_start(
     .context("collect explicit typed outputs from the accepted runner attempt")?;
     let accepted_state_ref =
         accepted_state_ref_from_runner_snapshot(&attempt_output_dir, accepted_step, true)?;
+    let observation_source = collect_fdm_cpu_observation_source(
+        &attempt_output_dir,
+        accepted_step,
+        accepted_state_ref.as_ref(),
+        accepted_step.claim.lease.budget.storage_bytes,
+    )?;
     persist_completed_worker_execution(
         store,
         &attempt_output_dir,
@@ -962,6 +1145,7 @@ pub(crate) fn execute_accepted_worker_start(
         result.steps.len(),
         &outputs,
         accepted_state_ref.as_ref(),
+        observation_source.as_ref(),
     )
     .context("persist immutable completed worker output receipt")?;
 
@@ -972,6 +1156,7 @@ pub(crate) fn execute_accepted_worker_start(
         attempt_output_dir,
         recovered_from_receipt: false,
         accepted_state_ref,
+        observation_source,
     })
 }
 
@@ -1237,6 +1422,7 @@ fn apply_accepted_start_effect(
             &accepted_step.step_id,
             &durable_execution.outputs,
             durable_execution.accepted_state_ref.as_ref(),
+            durable_execution.observation_source.as_ref(),
         )
     })
     .context("publish accepted worker outputs")?;

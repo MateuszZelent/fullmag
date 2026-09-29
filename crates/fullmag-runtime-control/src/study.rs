@@ -15,6 +15,8 @@ use fullmag_plan::{
     StudyStepLoweringStatus, lower_study_plan_with_catalog,
 };
 use fullmag_session::SessionStore;
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 pub struct AcceptedStudySnapshot {
     pub run: crate::AcceptedRunSnapshot,
@@ -837,6 +839,150 @@ pub struct StudyOutputPayload {
     pub bytes: Vec<u8>,
 }
 
+/// System-owned bytes needed to rebuild one historical FDM CPU observation
+/// runtime. They are published beside, but never masquerade as, declared study
+/// outputs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ObservationSourcePayload {
+    pub accepted_state_ref: fullmag_quantities::AcceptedStateRef,
+    pub snapshot_bytes: Vec<u8>,
+    pub state_bytes: Vec<u8>,
+    pub grid_cells: [u32; 3],
+}
+
+impl ObservationSourcePayload {
+    pub fn validate(&self) -> Result<()> {
+        validate_observation_source_payload(self)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FdmCpuObservationSnapshotWire {
+    schema_version: String,
+    clock: fullmag_quantities::ObservationClock,
+    #[serde(default)]
+    transactional_state_digest: Option<String>,
+    #[serde(default)]
+    magnetization_digest: Option<String>,
+    clock_digest: String,
+    state_digest: String,
+    primary_carrier_ids: Vec<String>,
+}
+
+fn validate_observation_source_payload(payload: &ObservationSourcePayload) -> Result<()> {
+    payload
+        .accepted_state_ref
+        .validate()
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let snapshot: FdmCpuObservationSnapshotWire =
+        serde_json::from_slice(&payload.snapshot_bytes)
+            .context("observation source snapshot is not strict FDM CPU v1 JSON")?;
+    if snapshot.schema_version != fullmag_session::FMS_FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA {
+        bail!("observation source has an unsupported accepted-state snapshot schema");
+    }
+    snapshot
+        .clock
+        .validate()
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    if snapshot
+        .clock
+        .digest()
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?
+        != snapshot.clock_digest
+        || snapshot.clock_digest != payload.accepted_state_ref.id.clock_digest
+        || snapshot.state_digest != payload.accepted_state_ref.id.state_digest
+        || snapshot.clock.accepted_step != payload.accepted_state_ref.id.accepted_step
+    {
+        bail!("observation snapshot identity differs from accepted_state_ref");
+    }
+    let transactional_state_digest = snapshot
+        .transactional_state_digest
+        .as_deref()
+        .context("observation snapshot lacks the transactional-state preimage")?;
+    let magnetization_digest = snapshot
+        .magnetization_digest
+        .as_deref()
+        .context("observation snapshot lacks a magnetization binding")?;
+    if !fullmag_quantities::is_canonical_sha256(transactional_state_digest)
+        || !fullmag_quantities::is_canonical_sha256(magnetization_digest)
+        || snapshot.primary_carrier_ids != ["fdm.cpu.transactional-state-digest.v1"]
+    {
+        bail!("observation snapshot primary carriers are invalid");
+    }
+    let digests = fullmag_quantities::accepted_state_digests(
+        snapshot.clock,
+        &[fullmag_quantities::AcceptedPrimaryCarrier {
+            carrier_id: "fdm.cpu.transactional-state-digest.v1",
+            canonical_bytes: transactional_state_digest.as_bytes(),
+        }],
+    )
+    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    if digests.clock_digest != snapshot.clock_digest
+        || digests.state_digest != snapshot.state_digest
+    {
+        bail!("observation snapshot digest preimage differs from its accepted identity");
+    }
+
+    let decoded = fullmag_application::decode_study_artifact_bytes(
+        "state",
+        fullmag_application::STUDY_MAGNETIZATION_CODEC_ID,
+        fullmag_application::STUDY_MAGNETIZATION_CODEC_VERSION,
+        &payload.state_bytes,
+    )
+    .context("observation terminal state does not match the registered codec")?;
+    let fullmag_application::DecodedStudyArtifact::MagnetizationState(state) = decoded else {
+        bail!("observation terminal state is not a magnetization state");
+    };
+    let snapshot_dt_bits = snapshot.clock.dt_seconds.map(f64::to_bits);
+    let state_dt_bits = (state.solver_dt_s > 0.0).then(|| state.solver_dt_s.to_bits());
+    if state.step != snapshot.clock.accepted_step
+        || state.time_s.to_bits() != snapshot.clock.time_seconds.to_bits()
+        || state_dt_bits != snapshot_dt_bits
+    {
+        bail!("observation terminal state clock differs from its accepted snapshot");
+    }
+    let layout_grid = state
+        .layout
+        .get("grid_cells")
+        .and_then(serde_json::Value::as_array)
+        .filter(|values| values.len() == 3)
+        .and_then(|values| {
+            Some([
+                u32::try_from(values[0].as_u64()?).ok()?,
+                u32::try_from(values[1].as_u64()?).ok()?,
+                u32::try_from(values[2].as_u64()?).ok()?,
+            ])
+        })
+        .context("observation terminal state has no valid FDM grid")?;
+    if layout_grid != payload.grid_cells {
+        bail!("observation terminal state grid differs from its descriptor");
+    }
+    let expected_cell_count = payload
+        .grid_cells
+        .into_iter()
+        .try_fold(1_usize, |count, extent| {
+            usize::try_from(extent)
+                .ok()
+                .filter(|extent| *extent > 0)
+                .and_then(|extent| count.checked_mul(extent))
+        })
+        .context("observation source grid cell count is invalid")?;
+    if state.values.len() != expected_cell_count {
+        bail!("observation terminal state sample count differs from its grid");
+    }
+    let mut canonical = Vec::with_capacity(8 + state.values.len() * 24);
+    canonical.extend_from_slice(&(state.values.len() as u64).to_be_bytes());
+    for value in state.values.iter().flat_map(|value| value.iter()) {
+        canonical.extend_from_slice(&value.to_bits().to_be_bytes());
+    }
+    let actual_magnetization_digest = format!("sha256:{:x}", Sha256::digest(canonical));
+    if actual_magnetization_digest != magnetization_digest {
+        bail!("observation terminal magnetization differs from its accepted snapshot");
+    }
+    Ok(())
+}
+
 /// Persist study outputs under the task's exact active lease before completion.
 ///
 /// Output ports are taken from the immutable accepted study. Bytes and a
@@ -851,6 +997,7 @@ pub fn publish_study_outputs(
     step_id: &str,
     outputs: &[StudyOutputPayload],
     accepted_state_ref: Option<&fullmag_quantities::AcceptedStateRef>,
+    observation_source: Option<&ObservationSourcePayload>,
 ) -> Result<fullmag_session::FmsArtifactCatalog> {
     let run_id = accepted.run.specification.run_id.as_str();
     let expected_task_id = fullmag_session::task_id_for_study_step(run_id, step_id)?;
@@ -866,6 +1013,12 @@ pub fn publish_study_outputs(
             || reference.generation.runtime_epoch != claim.ownership_epoch.value()
         {
             bail!("accepted state reference does not match the output publication claim");
+        }
+    }
+    if let Some(source) = observation_source {
+        source.validate()?;
+        if accepted_state_ref != Some(&source.accepted_state_ref) {
+            bail!("observation source differs from the published accepted state reference");
         }
     }
     let step = accepted
@@ -976,7 +1129,7 @@ pub fn publish_study_outputs(
     }
 
     // Validate the complete declared output set before pinning any CAS object.
-    let mut entries = Vec::with_capacity(outputs.len() + 1);
+    let mut entries = Vec::with_capacity(outputs.len() + 3);
     let mut manifest_outputs = Vec::with_capacity(outputs.len());
     for output in outputs {
         let declared = step
@@ -1043,6 +1196,81 @@ pub fn publish_study_outputs(
     manifest_outputs.sort_by(|left, right| {
         (&left.port_id, &left.case_id).cmp(&(&right.port_id, &right.case_id))
     });
+    let observation_source = if let Some(source) = observation_source {
+        let snapshot_object_ref = store.cas().put(&source.snapshot_bytes)?;
+        let state_object_ref = store.cas().put(&source.state_bytes)?;
+        let snapshot_artifact_id = format!(
+            "artifact-{}",
+            fullmag_session::canonical_json_sha256(&serde_json::json!({
+                "run_id": run_id,
+                "task_id": expected_task_id,
+                "attempt_id": claim.attempt_id.as_str(),
+                "ownership_epoch": claim.ownership_epoch.value(),
+                "artifact_type": fullmag_session::FMS_OBSERVATION_SNAPSHOT_ARTIFACT_TYPE,
+                "object_ref": snapshot_object_ref,
+            }))
+        );
+        let state_artifact_id = format!(
+            "artifact-{}",
+            fullmag_session::canonical_json_sha256(&serde_json::json!({
+                "run_id": run_id,
+                "task_id": expected_task_id,
+                "attempt_id": claim.attempt_id.as_str(),
+                "ownership_epoch": claim.ownership_epoch.value(),
+                "artifact_type": fullmag_session::FMS_OBSERVATION_STATE_ARTIFACT_TYPE,
+                "object_ref": state_object_ref,
+            }))
+        );
+        entries.push(fullmag_session::FmsArtifactCatalogEntry {
+            artifact_id: snapshot_artifact_id.clone(),
+            task_id: expected_task_id.clone(),
+            attempt_id: claim.attempt_id.as_str().to_owned(),
+            ownership_epoch: claim.ownership_epoch.value(),
+            logical_path: format!(
+                "outputs/{expected_task_id}/{}/observation/accepted-state-snapshot.v1.json",
+                claim.attempt_id.as_str()
+            ),
+            artifact_type: fullmag_session::FMS_OBSERVATION_SNAPSHOT_ARTIFACT_TYPE.into(),
+            content_sha256: snapshot_object_ref.clone(),
+            object_ref: Some(snapshot_object_ref.clone()),
+            status: fullmag_session::FmsArtifactStatus::Published,
+            required: true,
+            study_output: None,
+        });
+        entries.push(fullmag_session::FmsArtifactCatalogEntry {
+            artifact_id: state_artifact_id.clone(),
+            task_id: expected_task_id.clone(),
+            attempt_id: claim.attempt_id.as_str().to_owned(),
+            ownership_epoch: claim.ownership_epoch.value(),
+            logical_path: format!(
+                "outputs/{expected_task_id}/{}/observation/magnetization-state.v1.json",
+                claim.attempt_id.as_str()
+            ),
+            artifact_type: fullmag_session::FMS_OBSERVATION_STATE_ARTIFACT_TYPE.into(),
+            content_sha256: state_object_ref.clone(),
+            object_ref: Some(state_object_ref.clone()),
+            status: fullmag_session::FmsArtifactStatus::Published,
+            required: true,
+            study_output: None,
+        });
+        Some(fullmag_session::FmsObservationSourceDescriptor {
+            schema_version: fullmag_session::FMS_OBSERVATION_SOURCE_SCHEMA.into(),
+            adapter_id: fullmag_session::FMS_FDM_CPU_OBSERVATION_ADAPTER_ID.into(),
+            accepted_state_ref: source.accepted_state_ref.clone(),
+            snapshot_schema_version:
+                fullmag_session::FMS_FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA.into(),
+            snapshot_artifact_id,
+            snapshot_object_ref,
+            state_codec_id: fullmag_application::STUDY_MAGNETIZATION_CODEC_ID.into(),
+            state_codec_version: fullmag_application::STUDY_MAGNETIZATION_CODEC_VERSION.into(),
+            state_artifact_id,
+            state_object_ref,
+            grid_cells: source.grid_cells,
+            quantity_ids: vec!["m".into()],
+        })
+    } else {
+        None
+    };
     let manifest = fullmag_session::FmsStudyOutputManifest {
         schema_version: fullmag_session::FMS_STUDY_OUTPUT_MANIFEST_SCHEMA.into(),
         run_id: run_id.into(),
@@ -1051,6 +1279,7 @@ pub fn publish_study_outputs(
         attempt_id: claim.attempt_id.as_str().into(),
         ownership_epoch: claim.ownership_epoch.value(),
         accepted_state_ref: accepted_state_ref.cloned(),
+        observation_source,
         outputs: manifest_outputs,
     };
     manifest.validate()?;
@@ -1073,7 +1302,7 @@ pub fn publish_study_outputs(
         attempt_id: claim.attempt_id.as_str().to_owned(),
         ownership_epoch: claim.ownership_epoch.value(),
         logical_path: format!(
-            "outputs/{expected_task_id}/{}/study-output-manifest.v1.json",
+            "outputs/{expected_task_id}/{}/study-output-manifest.v3.json",
             claim.attempt_id.as_str()
         ),
         artifact_type: "study_output_manifest".into(),
@@ -1193,6 +1422,56 @@ pub fn validate_study_task_completion(store: &SessionStore, claim: &TaskClaim) -
     {
         bail!("study completion manifest identity differs from its accepted attempt");
     }
+    if let Some(source) = &manifest.observation_source {
+        let find_source_artifact = |artifact_id: &str,
+                                    artifact_type: &str,
+                                    object_ref: &str|
+         -> Result<&fullmag_session::FmsArtifactCatalogEntry> {
+            let mut matches = artifact_catalog.entries.iter().filter(|entry| {
+                entry.artifact_id == artifact_id
+                    && entry.task_id == task_id
+                    && entry.attempt_id == attempt_id
+                    && entry.ownership_epoch == ownership_epoch
+                    && entry.artifact_type == artifact_type
+                    && entry.object_ref.as_deref() == Some(object_ref)
+                    && entry.content_sha256 == object_ref
+                    && entry.status == fullmag_session::FmsArtifactStatus::Published
+                    && entry.study_output.is_none()
+            });
+            let artifact = matches
+                .next()
+                .context("observation source artifact is absent from the catalog")?;
+            if matches.next().is_some() {
+                bail!("observation source artifact is ambiguous in the catalog");
+            }
+            Ok(artifact)
+        };
+        find_source_artifact(
+            &source.snapshot_artifact_id,
+            fullmag_session::FMS_OBSERVATION_SNAPSHOT_ARTIFACT_TYPE,
+            &source.snapshot_object_ref,
+        )?;
+        find_source_artifact(
+            &source.state_artifact_id,
+            fullmag_session::FMS_OBSERVATION_STATE_ARTIFACT_TYPE,
+            &source.state_object_ref,
+        )?;
+        let snapshot_bytes = store
+            .cas()
+            .get(&source.snapshot_object_ref)?
+            .context("observation source snapshot CAS object is missing")?;
+        let state_bytes = store
+            .cas()
+            .get(&source.state_object_ref)?
+            .context("observation source state CAS object is missing")?;
+        ObservationSourcePayload {
+            accepted_state_ref: source.accepted_state_ref.clone(),
+            snapshot_bytes,
+            state_bytes,
+            grid_cells: source.grid_cells,
+        }
+        .validate()?;
+    }
 
     for declared in &source_step.outputs {
         if !manifest
@@ -1288,6 +1567,26 @@ pub fn validate_study_task_completion(store: &SessionStore, claim: &TaskClaim) -
             })
         {
             bail!("study completion found an output artifact outside its manifest allow-list");
+        }
+    }
+    for artifact in artifact_catalog.entries.iter().filter(|entry| {
+        entry.task_id == task_id
+            && entry.attempt_id == attempt_id
+            && entry.ownership_epoch == ownership_epoch
+            && matches!(
+                entry.artifact_type.as_str(),
+                fullmag_session::FMS_OBSERVATION_SNAPSHOT_ARTIFACT_TYPE
+                    | fullmag_session::FMS_OBSERVATION_STATE_ARTIFACT_TYPE
+            )
+    }) {
+        let listed = manifest.observation_source.as_ref().is_some_and(|source| {
+            (artifact.artifact_id == source.snapshot_artifact_id
+                && artifact.object_ref.as_deref() == Some(source.snapshot_object_ref.as_str()))
+                || (artifact.artifact_id == source.state_artifact_id
+                    && artifact.object_ref.as_deref() == Some(source.state_object_ref.as_str()))
+        });
+        if !listed {
+            bail!("study completion found an observation artifact outside its manifest allow-list");
         }
     }
     Ok(())

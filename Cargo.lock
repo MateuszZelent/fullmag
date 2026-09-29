@@ -1362,7 +1362,9 @@ dependencies = [
  "fullmag-plan",
  "fullmag-quantities",
  "fullmag-session",
+ "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 
