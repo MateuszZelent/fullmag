@@ -3443,6 +3443,63 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         fullmag_session::FmsTaskLifecycle::Succeeded,
         "the task completes only after its accepted output manifest is published"
     );
+    let solutions = store.solution_sets().list().unwrap();
+    assert_eq!(solutions.len(), 1);
+    let solution = &solutions[0];
+    assert_eq!(solution.run_id, accepted_run_id.as_str());
+    assert_eq!(solution.revision, 2);
+    assert_eq!(
+        solution.manifest_state,
+        fullmag_quantities::SolutionSetManifestState::Closed
+    );
+    assert_eq!(
+        solution.execution_status,
+        fullmag_quantities::SolutionExecutionStatus::Succeeded
+    );
+    assert_eq!(
+        solution.scientific_assessment.status,
+        fullmag_quantities::ScientificAssessmentStatus::Unassessed
+    );
+    assert_eq!(solution.coverage.len(), manifest.outputs.len());
+    assert!(solution.coverage.iter().all(|coverage| {
+        coverage.state == fullmag_quantities::SolutionCoverageState::Unknown
+            && coverage.expected_samples.is_none()
+            && coverage.committed_samples == 0
+    }));
+    let solution_artifact_ids = solution
+        .members
+        .iter()
+        .flat_map(|member| member.artifacts.iter())
+        .map(|artifact| artifact.artifact_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(solution_artifact_ids.len(), output_catalog.entries.len());
+    assert!(output_catalog
+        .entries
+        .iter()
+        .all(|entry| solution_artifact_ids.contains(entry.artifact_id.as_str())));
+    assert!(solution.provenance.run_spec_digest.starts_with("sha256:"));
+    assert!(solution.provenance.model_digest.starts_with("sha256:"));
+    assert!(solution.provenance.physics_digest.starts_with("sha256:"));
+    assert!(solution
+        .provenance
+        .discretization_digest
+        .starts_with("sha256:"));
+    assert!(solution
+        .provenance
+        .resolved_plan_digest
+        .starts_with("sha256:"));
+    assert!(solution.provenance.acquisition_digest.starts_with("sha256:"));
+    fullmag_runtime_control::reconcile_coordinator_catalog(&store, &claim).unwrap();
+    assert_eq!(
+        store
+            .solution_sets()
+            .read(&solution.solution_set_id)
+            .unwrap()
+            .unwrap()
+            .revision,
+        2,
+        "terminal catalog reconciliation must not duplicate solution revisions"
+    );
     let mut loaded_observation =
         fullmag_runtime_control::load_study_observation_runtime(&store, accepted_state_ref)
             .expect("reconstruct historical observation runtime from the exact manifest and CAS");

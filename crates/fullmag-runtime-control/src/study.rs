@@ -1483,9 +1483,10 @@ pub fn publish_study_outputs(
         required: true,
         study_output: None,
     });
-    store
-        .append_artifact_catalog_entries_for_lease(&durable_lease, &entries)
-        .map_err(Into::into)
+    let catalog = store
+        .append_artifact_catalog_entries_for_lease(&durable_lease, &entries)?;
+    crate::solution_set::publish_open_study_solution(store, accepted, claim, step_id, &catalog)?;
+    Ok(catalog)
 }
 
 fn study_port_data_kind_label(kind: &StudyPortDataKind) -> &'static str {

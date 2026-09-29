@@ -231,7 +231,7 @@ pub fn reconcile_coordinator_catalog(
     use fullmag_session::{
         FmsObservationState as StoredObservation, FmsTaskLifecycle as StoredLifecycle,
     };
-    let _transaction = store.write_transaction()?;
+    let transaction = store.write_transaction()?;
     let recovered = recover_coordinator(store, claim)?;
     let recovered_task = recovered.coordinator.task();
     if recovered_task.lifecycle == fullmag_application::TaskLifecycle::Succeeded {
@@ -297,6 +297,8 @@ pub fn reconcile_coordinator_catalog(
         catalog.updated_at = chrono::Utc::now();
         store.commit_run_catalog(&catalog)?;
     }
+    drop(transaction);
+    solution_set::reconcile_study_solution(store, claim, recovered_task)?;
     Ok(catalog)
 }
 
@@ -579,6 +581,8 @@ pub use scheduler::{
     accepted_run_has_scheduler_ready_task, schedule_next_ready_accepted_task,
     ScheduledAcceptedTask,
 };
+
+mod solution_set;
 
 mod study;
 pub use study::{

@@ -68,8 +68,11 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 20. [Zwalnianie pinów CAS po publikacji SolutionSet](20-solution-set-pin-retirement.md)
     — selektywny unpin po trwałym root commit oraz restartowe domknięcie
     przerwanej operacji przez pełną walidację immutable historii.
+21. [Produkcyjny writer SolutionSet dla accepted study](21-accepted-study-solution-writer.md)
+    — automatyczna otwarta rewizja po output-manifest barrier, terminalne
+    domknięcie z oceną koordynatora, exact provenance i idempotentny replay.
 
-Writers runnera, materializator/evaluator datasetów, API i
-generated client, pozostałe quantities, frontend porównań i wykresów oraz
-produkcyjne dowody pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi
-**43%**.
+Bezpośredni writers `runner/eigen/artifacts` i `fmr.rs`, migracja legacy
+resource keys, materializator/evaluator datasetów, API i generated client,
+pozostałe quantities, frontend porównań i wykresów oraz produkcyjne dowody
+pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **47%**.
