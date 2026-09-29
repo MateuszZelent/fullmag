@@ -16,6 +16,7 @@
 
 pub mod accepted_state;
 pub mod catalog;
+pub mod dataset;
 pub mod descriptor;
 pub mod eval;
 pub mod id;
@@ -35,6 +36,17 @@ pub use catalog::{
     all_quantity_ids, cached_preview_quantity_ids, field_materialization_quantity_ids,
     interactive_preview_quantity_ids, quantity_catalog, quantity_spec, quantity_specs,
     quantity_unit,
+};
+pub use dataset::{
+    validate_field_compatibility, ApproximationPolicy, ComplexEncoding, DatasetAvailability,
+    DatasetAxis, DatasetAxisCoordinate, DatasetAxisKind, DatasetAxisSelection, DatasetBranch,
+    DatasetContractError, DatasetDefinition, DatasetDefinitionRef, DatasetEvaluationPolicy,
+    DatasetFieldDescriptor, DatasetFieldRef, DatasetItem, DatasetItemRef, DatasetSample,
+    DatasetSource, DatasetStatus, DatasetTransform, DerivedOperator, DerivedValueDefinition,
+    DerivedValuePurpose, EvaluationPrecision, FieldProjection, FieldResolution, IntegrationMeasure,
+    MaterializedDataset, MaterializedDatasetRef, PlotDefinition, PlotKind, PlotSource,
+    ProjectionMethod, SelectionReference, UnavailableAction, UnavailableDataPolicy,
+    DATASET_CONTRACT_SCHEMA_VERSION,
 };
 pub use descriptor::{NormalizationHint, QuantityDomain, QuantityLocation, QuantitySpec};
 pub use eval::{eval_global_scalar, reduce_scalars, reduce_vector_field, QuantityValue};
