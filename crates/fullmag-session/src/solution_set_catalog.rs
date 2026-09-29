@@ -410,7 +410,7 @@ fn solution_directory(solution_set_id: &str) -> String {
     hex_sha256(solution_set_id.as_bytes())
 }
 
-fn validate_successor(previous: &SolutionSet, next: &SolutionSet) -> Result<()> {
+pub(crate) fn validate_successor(previous: &SolutionSet, next: &SolutionSet) -> Result<()> {
     if previous.manifest_state == SolutionSetManifestState::Closed {
         bail!("closed solution-set manifest is immutable");
     }
@@ -694,5 +694,31 @@ mod tests {
         store
             .publish_solution_set(&solution_with_artifact(object_ref, payload.len() as u64))
             .expect("publish verified solution set");
+    }
+
+    #[test]
+    fn solution_set_objects_are_gc_reachable() {
+        let directory = tempfile::tempdir().expect("temporary session store");
+        let store = SessionStore::open(directory.path()).expect("open session store");
+        let payload = b"retained state";
+        let object_ref = store.cas().put(payload).expect("publish CAS object");
+        store
+            .publish_solution_set(&solution_with_artifact(
+                object_ref.clone(),
+                payload.len() as u64,
+            ))
+            .expect("publish verified solution set");
+
+        let report = crate::reachability::walk_store_root(
+            store.root(),
+            crate::reachability::ReachabilityMode::Gc,
+        )
+        .expect("walk solution set reachability");
+        assert!(report.complete);
+        assert!(report.object_refs.contains(&object_ref));
+        assert!(report
+            .file_refs
+            .iter()
+            .any(|path| path.ends_with("/manifest.json")));
     }
 }

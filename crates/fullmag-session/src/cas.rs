@@ -6,7 +6,7 @@
 
 use std::fs;
 use std::io::{BufReader, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::repository_path::{checked_path, create_parent, reject_link};
@@ -162,37 +162,7 @@ impl CasStore {
         if !path.exists() {
             return Ok(None);
         }
-        let file = fs::File::open(&path).with_context(|| format!("opening CAS object {hash}"))?;
-        let metadata = file
-            .metadata()
-            .with_context(|| format!("reading metadata for CAS object {hash}"))?;
-        if !metadata.is_file() {
-            anyhow::bail!("CAS object {hash} is not a regular file");
-        }
-        let mut reader = BufReader::new(file);
-        let mut hasher = Sha256::new();
-        let mut buffer = [0_u8; 64 * 1024];
-        let mut object_length = 0_u64;
-        loop {
-            let count = reader
-                .read(&mut buffer)
-                .with_context(|| format!("streaming CAS object {hash}"))?;
-            if count == 0 {
-                break;
-            }
-            hasher.update(&buffer[..count]);
-            object_length = object_length
-                .checked_add(count as u64)
-                .context("CAS object length overflow")?;
-        }
-        let actual = hex_encode(&hasher.finalize());
-        if actual != hash {
-            anyhow::bail!("CAS integrity error: expected {hash}, got {actual}");
-        }
-        if object_length != metadata.len() {
-            anyhow::bail!("CAS object {hash} changed length while reading");
-        }
-        Ok(Some(object_length))
+        Ok(Some(verified_file_length(&path, hash)?))
     }
 
     /// Read one bounded byte range while streaming and hashing the complete
@@ -324,6 +294,40 @@ impl CasStore {
         validate_hash(hash)?;
         checked_path(&self.root, &format!("sha256/{hash}"))
     }
+}
+
+pub(crate) fn verified_file_length(path: &Path, hash: &str) -> Result<u64> {
+    let file = fs::File::open(path).with_context(|| format!("opening CAS object {hash}"))?;
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("reading metadata for CAS object {hash}"))?;
+    if !metadata.is_file() {
+        anyhow::bail!("CAS object {hash} is not a regular file");
+    }
+    let mut reader = BufReader::new(file);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut object_length = 0_u64;
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .with_context(|| format!("streaming CAS object {hash}"))?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+        object_length = object_length
+            .checked_add(count as u64)
+            .context("CAS object length overflow")?;
+    }
+    let actual = hex_encode(&hasher.finalize());
+    if actual != hash {
+        anyhow::bail!("CAS integrity error: expected {hash}, got {actual}");
+    }
+    if object_length != metadata.len() {
+        anyhow::bail!("CAS object {hash} changed length while reading");
+    }
+    Ok(object_length)
 }
 
 pub(crate) fn validate_hash(hash: &str) -> Result<()> {

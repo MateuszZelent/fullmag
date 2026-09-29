@@ -37,7 +37,8 @@ tego samego native writer lease.
 
 ## Otwarte elementy
 
-SolutionSet nie uczestniczy jeszcze w reachability/GC, `.fms` pack/unpack ani
-publicznym API. CAS publication barrier jest wdrożony, lecz brakuje mappera terminalnego run/task catalogu do rewizji,
+SolutionSet uczestniczy w store reachability/GC, lecz nie w `.fms` pack/unpack
+ani publicznym API. CAS publication barrier jest wdrożony, lecz brakuje mappera
+terminalnego run/task catalogu do rewizji,
 writerów artefaktów FDM CPU/GPU i FEM CPU/GPU, migracji legacy resource keys,
 fault injection procesu/zasilania oraz kwalifikacji CAE-04/37/61/70.

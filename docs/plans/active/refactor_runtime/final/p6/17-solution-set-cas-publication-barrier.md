@@ -39,6 +39,6 @@ korzysta z `SessionStore`.
 ## Otwarte elementy
 
 Brakuje automatycznego mapowania terminalnych outputów runnera do SolutionSet,
-GC reachability i zwalniania pinów, `.fms` pack/unpack, publicznego API,
+zwalniania pinów, `.fms` pack/unpack, publicznego API,
 migracji legacy resource keys, process/power-loss fault injection oraz
 kwalifikacji czterech lane'ów i CAE-04/37/61/70.

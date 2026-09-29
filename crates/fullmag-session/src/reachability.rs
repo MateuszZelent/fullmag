@@ -5,11 +5,12 @@
 //! traversal here gives garbage collection, export, and restore the same
 //! interpretation of that graph.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use fullmag_quantities::SolutionSet;
 
 use crate::types::{
     ArtifactIndex, BackendStatePayload, CommonSolverState, FieldRole, FmsArtifactCatalog,
@@ -225,6 +226,7 @@ impl StoreWalker {
         self.walk_scheduler_pools_dir()?;
         self.walk_live_command_journals_dir()?;
         self.walk_runs_dir()?;
+        self.walk_solutions_dir()?;
         self.walk_objects_dir()?;
 
         if matches!(self.mode, ReachabilityMode::Gc) && !self.report.complete {
@@ -256,6 +258,7 @@ impl StoreWalker {
                 | "scheduler_pools"
                 | "live_command_journals"
                 | "recovery"
+                | "solutions"
                 | "objects" => {
                     if !entry.file_type()?.is_dir() {
                         bail!("session root `{name}` is not a directory")
@@ -405,6 +408,171 @@ impl StoreWalker {
                 }
                 _ => bail!("unknown session objects entry `{name}`"),
             }
+        }
+        Ok(())
+    }
+
+    fn walk_solutions_dir(&mut self) -> Result<()> {
+        let directory = self.root.join("solutions");
+        if !directory.exists() {
+            return Ok(());
+        }
+        for entry in read_directory(&directory)? {
+            let directory_name = entry.file_name().to_string_lossy().into_owned();
+            validate_object_ref(&directory_name)
+                .with_context(|| format!("invalid solution-set directory `{directory_name}`"))?;
+            if entry.file_type()?.is_symlink() || !entry.file_type()?.is_dir() {
+                bail!("solution-set entry `{directory_name}` is not a directory")
+            }
+            reject_link_chain(&self.root, &format!("solutions/{directory_name}"))?;
+            self.walk_solution_directory(&entry.path(), &directory_name)?;
+        }
+        Ok(())
+    }
+
+    fn walk_solution_directory(&mut self, directory: &Path, directory_name: &str) -> Result<()> {
+        let mut current: Option<SolutionSet> = None;
+        let mut revisions = BTreeMap::new();
+        for entry in read_directory(directory)? {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            match name.as_str() {
+                "manifest.json" => {
+                    if entry.file_type()?.is_symlink() || !entry.file_type()?.is_file() {
+                        bail!("solution-set current manifest is not a file")
+                    }
+                    let relative = format!("solutions/{directory_name}/manifest.json");
+                    let data = self.read_file(&entry.path(), &relative)?;
+                    let solution: SolutionSet = parse_json(&data, &relative)?;
+                    self.validate_solution_identity(&solution, directory_name, None, &relative)?;
+                    self.walk_solution_objects(&solution, &relative)?;
+                    current = Some(solution);
+                }
+                "revisions" => {
+                    if entry.file_type()?.is_symlink() || !entry.file_type()?.is_dir() {
+                        bail!("solution-set revisions entry is not a directory")
+                    }
+                    reject_link_chain(
+                        &self.root,
+                        &format!("solutions/{directory_name}/revisions"),
+                    )?;
+                    for revision_entry in read_directory(&entry.path())? {
+                        let file_name = revision_entry.file_name().to_string_lossy().into_owned();
+                        if revision_entry.file_type()?.is_symlink()
+                            || !revision_entry.file_type()?.is_file()
+                        {
+                            bail!("solution-set revision `{file_name}` is not a file")
+                        }
+                        let revision_text = file_name
+                            .strip_suffix(".json")
+                            .filter(|value| {
+                                value.len() == 20 && value.bytes().all(|byte| byte.is_ascii_digit())
+                            })
+                            .with_context(|| {
+                                format!("invalid solution-set revision filename `{file_name}`")
+                            })?;
+                        let revision = revision_text.parse::<u64>()?;
+                        if revision == 0 {
+                            bail!("solution-set revision must be positive")
+                        }
+                        let relative = format!("solutions/{directory_name}/revisions/{file_name}");
+                        let data = self.read_file(&revision_entry.path(), &relative)?;
+                        let solution: SolutionSet = parse_json(&data, &relative)?;
+                        self.validate_solution_identity(
+                            &solution,
+                            directory_name,
+                            Some(revision),
+                            &relative,
+                        )?;
+                        self.walk_solution_objects(&solution, &relative)?;
+                        if revisions.insert(revision, solution).is_some() {
+                            bail!("duplicate solution-set revision `{revision}`")
+                        }
+                    }
+                }
+                _ => bail!("unknown solution-set entry `{name}`"),
+            }
+        }
+
+        let mut previous: Option<&SolutionSet> = None;
+        for (index, (revision, solution)) in revisions.iter().enumerate() {
+            let expected = u64::try_from(index + 1).context("solution-set revision overflow")?;
+            if *revision != expected {
+                bail!("solution-set revision history has a gap")
+            }
+            if let Some(previous) = previous {
+                crate::solution_set_catalog::validate_successor(previous, solution)?;
+            }
+            previous = Some(solution);
+        }
+        if let Some(current) = current {
+            let persisted = revisions
+                .get(&current.revision)
+                .context("solution-set current revision is missing from immutable history")?;
+            if persisted != &current {
+                bail!("solution-set current manifest conflicts with immutable history")
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_solution_identity(
+        &self,
+        solution: &SolutionSet,
+        directory_name: &str,
+        expected_revision: Option<u64>,
+        source: &str,
+    ) -> Result<()> {
+        solution
+            .validate()
+            .with_context(|| format!("validating solution set `{source}`"))?;
+        if crate::cas::hex_sha256(solution.solution_set_id.as_bytes()) != directory_name {
+            bail!("solution-set directory does not match logical identity")
+        }
+        if expected_revision.is_some_and(|revision| solution.revision != revision) {
+            bail!("solution-set revision path identity mismatch")
+        }
+        Ok(())
+    }
+
+    fn walk_solution_objects(&mut self, solution: &SolutionSet, source: &str) -> Result<()> {
+        for member in &solution.members {
+            for artifact in &member.artifacts {
+                self.follow_solution_object_ref(
+                    &artifact.object_ref,
+                    artifact.byte_length,
+                    source,
+                )?;
+            }
+        }
+        for coverage in &solution.coverage {
+            for segment in &coverage.segments {
+                self.follow_solution_object_ref(&segment.object_ref, segment.byte_length, source)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn follow_solution_object_ref(
+        &mut self,
+        object_ref: &str,
+        expected_length: u64,
+        source: &str,
+    ) -> Result<()> {
+        validate_object_ref(object_ref)
+            .with_context(|| format!("invalid solution object reference in `{source}`"))?;
+        self.add_object(object_ref);
+        let object_path = self.root.join("objects/sha256").join(object_ref);
+        reject_link_chain(&self.root, &format!("objects/sha256/{object_ref}"))?;
+        if !object_path.exists() {
+            return self.missing(format!(
+                "solution set `{source}` references missing object `{object_ref}`"
+            ));
+        }
+        let actual_length = crate::cas::verified_file_length(&object_path, object_ref)?;
+        if actual_length != expected_length {
+            bail!(
+                "solution set `{source}` object `{object_ref}` length mismatch: expected {expected_length}, found {actual_length}"
+            )
         }
         Ok(())
     }

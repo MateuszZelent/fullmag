@@ -59,8 +59,11 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 17. [CAS publication barrier SolutionSet](17-solution-set-cas-publication-barrier.md)
     — pełny streaming hash i exact byte length wszystkich artifacts/segments
     pod tym samym writer lease przed publikacją immutable revision.
+18. [GC reachability SolutionSet](18-solution-set-gc-reachability.md)
+    — typowany traversal current i pełnej historii rewizji, walidacja identity,
+    ciągłości oraz bounded integralności wszystkich obiektów CAS.
 
 Writers runnera, materializator/evaluator datasetów, API i
 generated client, pozostałe quantities, frontend porównań i wykresów oraz
 produkcyjne dowody pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi
-**36%**.
+**38%**.
