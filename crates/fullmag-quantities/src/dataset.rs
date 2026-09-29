@@ -4,7 +4,7 @@
 //! immutable result with its own identity and revision. Presentation recipes
 //! refer to either of those identities but never own numerical data.
 
-use crate::QuantityId;
+use crate::{is_canonical_sha256, QuantityId};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -271,16 +271,114 @@ pub enum ComplexEncoding {
     RealImagPair,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HarmonicConvention {
+    ExpPositiveIOmegaT,
+    ExpNegativeIOmegaT,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldFrameKind {
+    Laboratory,
+    Object,
+    Material,
+    LocalBasis,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldFrameDescriptor {
+    pub kind: FieldFrameKind,
+    pub frame_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldSampleLocation {
+    Node,
+    Cell,
+    DegreeOfFreedom,
+    IntegrationPoint,
+    Global,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FunctionSpaceOrdering {
+    ByNode,
+    ByComponent,
+    Lexicographic,
+    NativeWithMapping,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FunctionSpaceDescriptor {
+    pub space_id: String,
+    pub family: String,
+    pub order: u32,
+    pub vector_dimension: u32,
+    pub ordering: FunctionSpaceOrdering,
+    pub basis_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constraints_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation_mapping_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActiveSupportDescriptor {
+    pub support_fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<SelectionReference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldAxisDescriptor {
+    pub axis_id: String,
+    pub unit: String,
+    pub length: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldNormalization {
+    None,
+    UnitVector,
+    MaxAbs,
+    L2,
+    Modal,
+    PhysicalAmplitude,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DatasetFieldDescriptor {
     pub quantity_id: QuantityId,
     pub unit: String,
     pub tensor_rank: u8,
-    pub function_space_id: String,
+    pub frame: FieldFrameDescriptor,
+    pub sample_location: FieldSampleLocation,
+    pub active_support: ActiveSupportDescriptor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub function_space: Option<FunctionSpaceDescriptor>,
     pub topology_id: String,
+    pub carrier_id: String,
     pub layout_digest: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub axes: Vec<FieldAxisDescriptor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_axis: Option<String>,
     pub complex_encoding: ComplexEncoding,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harmonic_convention: Option<HarmonicConvention>,
+    pub normalization: FieldNormalization,
     pub resolution: FieldResolution,
 }
 
@@ -532,16 +630,26 @@ pub fn validate_field_compatibility(
     right: &DatasetFieldDescriptor,
     projection: Option<&FieldProjection>,
 ) -> Result<(), DatasetContractError> {
+    validate_field_descriptor(left)?;
+    validate_field_descriptor(right)?;
     if left.quantity_id != right.quantity_id
         || left.unit != right.unit
         || left.tensor_rank != right.tensor_rank
+        || left.frame != right.frame
+        || left.sample_location != right.sample_location
+        || left.active_support != right.active_support
+        || left.axes != right.axes
+        || left.component_axis != right.component_axis
         || left.complex_encoding != right.complex_encoding
+        || left.harmonic_convention != right.harmonic_convention
+        || left.normalization != right.normalization
     {
         return Err(DatasetContractError::IncompatibleFieldSemantics);
     }
 
-    let same_layout = left.function_space_id == right.function_space_id
+    let same_layout = left.function_space == right.function_space
         && left.topology_id == right.topology_id
+        && left.carrier_id == right.carrier_id
         && left.layout_digest == right.layout_digest;
     if !same_layout {
         let projection = projection.ok_or(DatasetContractError::ProjectionRequired)?;
@@ -642,6 +750,17 @@ pub enum DatasetContractError {
     IncompatibleFieldSemantics,
     ProjectionRequired,
     ReadyFieldMissingResource,
+    InvalidFieldDigest(&'static str),
+    SpatialFieldMissingFunctionSpace,
+    GlobalFieldHasFunctionSpace,
+    ZeroFunctionSpaceVectorDimension,
+    NativeOrderingMissingMapping,
+    TensorFieldMissingComponentAxis,
+    ScalarFieldHasComponentAxis,
+    UnknownComponentAxis(String),
+    ComplexFieldMissingHarmonicConvention,
+    RealFieldHasHarmonicConvention,
+    ZeroFieldAxisLength(String),
     InvalidPlotRange,
 }
 
@@ -694,13 +813,43 @@ impl fmt::Display for DatasetContractError {
             }
             Self::PreviewOnlyQuantitativeInput => formatter
                 .write_str("preview-only data cannot be used for a quantitative derived value"),
-            Self::IncompatibleFieldSemantics => formatter
-                .write_str("field quantity, unit, rank, or complex encoding is incompatible"),
+            Self::IncompatibleFieldSemantics => formatter.write_str(
+                "field quantity, unit, rank, frame, support, axes, encoding, or normalization is incompatible",
+            ),
             Self::ProjectionRequired => formatter.write_str(
                 "field comparison across different function spaces requires an explicit projection",
             ),
             Self::ReadyFieldMissingResource => {
                 formatter.write_str("ready dataset field requires a resource key")
+            }
+            Self::InvalidFieldDigest(field) => {
+                write!(formatter, "dataset field {field} must be canonical sha256")
+            }
+            Self::SpatialFieldMissingFunctionSpace => formatter
+                .write_str("spatial dataset field requires a function-space descriptor"),
+            Self::GlobalFieldHasFunctionSpace => formatter
+                .write_str("global dataset field cannot carry a function-space descriptor"),
+            Self::ZeroFunctionSpaceVectorDimension => formatter
+                .write_str("function-space vector_dimension must be greater than zero"),
+            Self::NativeOrderingMissingMapping => formatter.write_str(
+                "native function-space ordering requires an orientation/mapping reference",
+            ),
+            Self::TensorFieldMissingComponentAxis => {
+                formatter.write_str("non-scalar dataset field requires a component axis")
+            }
+            Self::ScalarFieldHasComponentAxis => {
+                formatter.write_str("scalar dataset field cannot carry a component axis")
+            }
+            Self::UnknownComponentAxis(axis_id) => write!(
+                formatter,
+                "dataset field component axis '{axis_id}' is not present in axes"
+            ),
+            Self::ComplexFieldMissingHarmonicConvention => formatter
+                .write_str("real/imag dataset field requires a harmonic convention"),
+            Self::RealFieldHasHarmonicConvention => formatter
+                .write_str("real dataset field cannot carry a harmonic convention"),
+            Self::ZeroFieldAxisLength(axis_id) => {
+                write!(formatter, "dataset field axis '{axis_id}' must have positive length")
             }
             Self::InvalidPlotRange => {
                 formatter.write_str("plot range must be finite and strictly increasing")
@@ -777,10 +926,7 @@ fn validate_items(items: &[DatasetItem]) -> Result<(), DatasetContractError> {
             } else if field.status.availability == DatasetAvailability::Ready {
                 return Err(DatasetContractError::ReadyFieldMissingResource);
             }
-            require_id("field unit", &field.descriptor.unit)?;
-            require_id("function_space_id", &field.descriptor.function_space_id)?;
-            require_id("topology_id", &field.descriptor.topology_id)?;
-            require_id("layout_digest", &field.descriptor.layout_digest)?;
+            validate_field_descriptor(&field.descriptor)?;
             field.status.validate()?;
             if !field_ids.insert(field.field_id.as_str()) {
                 return Err(DatasetContractError::DuplicateId {
@@ -798,19 +944,149 @@ fn validate_projection(projection: &FieldProjection) -> Result<(), DatasetContra
     require_id("projection producer_version", &projection.producer_version)
 }
 
+fn validate_field_descriptor(
+    descriptor: &DatasetFieldDescriptor,
+) -> Result<(), DatasetContractError> {
+    require_id("field unit", &descriptor.unit)?;
+    require_id("frame_id", &descriptor.frame.frame_id)?;
+    require_id(
+        "active support fingerprint",
+        &descriptor.active_support.support_fingerprint,
+    )?;
+    if let Some(selection) = &descriptor.active_support.selection {
+        validate_selection(selection)?;
+    }
+    require_id("topology_id", &descriptor.topology_id)?;
+    require_id("carrier_id", &descriptor.carrier_id)?;
+    if !is_canonical_sha256(&descriptor.layout_digest) {
+        return Err(DatasetContractError::InvalidFieldDigest("layout_digest"));
+    }
+
+    match (&descriptor.sample_location, &descriptor.function_space) {
+        (FieldSampleLocation::Global, Some(_)) => {
+            return Err(DatasetContractError::GlobalFieldHasFunctionSpace)
+        }
+        (FieldSampleLocation::Global, None) => {}
+        (_, None) => return Err(DatasetContractError::SpatialFieldMissingFunctionSpace),
+        (_, Some(space)) => validate_function_space(space)?,
+    }
+
+    match (descriptor.tensor_rank, descriptor.component_axis.as_deref()) {
+        (0, Some(_)) => return Err(DatasetContractError::ScalarFieldHasComponentAxis),
+        (0, None) => {}
+        (_, None) => return Err(DatasetContractError::TensorFieldMissingComponentAxis),
+        (_, Some(component_axis)) => require_id("component_axis", component_axis)?,
+    }
+
+    match (descriptor.complex_encoding, descriptor.harmonic_convention) {
+        (ComplexEncoding::Real, Some(_)) => {
+            return Err(DatasetContractError::RealFieldHasHarmonicConvention)
+        }
+        (ComplexEncoding::RealImagPair, None) => {
+            return Err(DatasetContractError::ComplexFieldMissingHarmonicConvention)
+        }
+        _ => {}
+    }
+
+    let mut axis_ids = BTreeSet::new();
+    for axis in &descriptor.axes {
+        require_id("field axis_id", &axis.axis_id)?;
+        require_id("field axis unit", &axis.unit)?;
+        if axis.length == 0 {
+            return Err(DatasetContractError::ZeroFieldAxisLength(
+                axis.axis_id.clone(),
+            ));
+        }
+        if !axis_ids.insert(axis.axis_id.as_str()) {
+            return Err(DatasetContractError::DuplicateId {
+                field: "field axis_id",
+                value: axis.axis_id.clone(),
+            });
+        }
+    }
+    if let Some(component_axis) = &descriptor.component_axis {
+        if !axis_ids.contains(component_axis.as_str()) {
+            return Err(DatasetContractError::UnknownComponentAxis(
+                component_axis.clone(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_function_space(space: &FunctionSpaceDescriptor) -> Result<(), DatasetContractError> {
+    require_id("function space_id", &space.space_id)?;
+    require_id("function space family", &space.family)?;
+    require_id("function space basis_id", &space.basis_id)?;
+    if space.vector_dimension == 0 {
+        return Err(DatasetContractError::ZeroFunctionSpaceVectorDimension);
+    }
+    if let Some(fingerprint) = &space.constraints_fingerprint {
+        require_id("constraints_fingerprint", fingerprint)?;
+    }
+    if let Some(fingerprint) = &space.partition_fingerprint {
+        require_id("partition_fingerprint", fingerprint)?;
+    }
+    if let Some(mapping_ref) = &space.orientation_mapping_ref {
+        require_id("orientation_mapping_ref", mapping_ref)?;
+    } else if space.ordering == FunctionSpaceOrdering::NativeWithMapping {
+        return Err(DatasetContractError::NativeOrderingMissingMapping);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
+
+    fn digest(value: &str) -> String {
+        let bytes = Sha256::digest(value.as_bytes());
+        let mut encoded = String::from("sha256:");
+        for byte in bytes {
+            use std::fmt::Write as _;
+            write!(&mut encoded, "{byte:02x}").expect("write digest");
+        }
+        encoded
+    }
 
     fn field(space: &str, topology: &str, layout: &str) -> DatasetFieldDescriptor {
         DatasetFieldDescriptor {
             quantity_id: QuantityId::M,
             unit: "1".to_string(),
             tensor_rank: 1,
-            function_space_id: space.to_string(),
+            frame: FieldFrameDescriptor {
+                kind: FieldFrameKind::Laboratory,
+                frame_id: "frame:lab".to_string(),
+            },
+            sample_location: FieldSampleLocation::Cell,
+            active_support: ActiveSupportDescriptor {
+                support_fingerprint: "support:all-magnetic".to_string(),
+                selection: None,
+            },
+            function_space: Some(FunctionSpaceDescriptor {
+                space_id: space.to_string(),
+                family: "piecewise_constant".to_string(),
+                order: 0,
+                vector_dimension: 3,
+                ordering: FunctionSpaceOrdering::ByComponent,
+                basis_id: "basis:cartesian-xyz".to_string(),
+                constraints_fingerprint: None,
+                partition_fingerprint: None,
+                orientation_mapping_ref: None,
+            }),
             topology_id: topology.to_string(),
-            layout_digest: layout.to_string(),
+            carrier_id: topology.to_string(),
+            layout_digest: digest(layout),
+            axes: vec![FieldAxisDescriptor {
+                axis_id: "component".to_string(),
+                unit: "1".to_string(),
+                length: 3,
+            }],
+            component_axis: Some("component".to_string()),
             complex_encoding: ComplexEncoding::Real,
+            harmonic_convention: None,
+            normalization: FieldNormalization::UnitVector,
             resolution: FieldResolution::Quantitative,
         }
     }
@@ -872,6 +1148,32 @@ mod tests {
             producer_version: "projector/1".to_string(),
         };
         assert!(validate_field_compatibility(&left, &right, Some(&projection)).is_ok());
+    }
+
+    #[test]
+    fn field_descriptor_requires_mapping_for_native_ordering() {
+        let mut descriptor = field("fem-h1", "mesh:a", "layout:a");
+        descriptor
+            .function_space
+            .as_mut()
+            .expect("spatial field space")
+            .ordering = FunctionSpaceOrdering::NativeWithMapping;
+
+        assert_eq!(
+            validate_field_descriptor(&descriptor),
+            Err(DatasetContractError::NativeOrderingMissingMapping)
+        );
+    }
+
+    #[test]
+    fn complex_field_requires_harmonic_convention() {
+        let mut descriptor = field("fem-h1", "mesh:a", "layout:a");
+        descriptor.complex_encoding = ComplexEncoding::RealImagPair;
+
+        assert_eq!(
+            validate_field_descriptor(&descriptor),
+            Err(DatasetContractError::ComplexFieldMissingHarmonicConvention)
+        );
     }
 
     #[test]

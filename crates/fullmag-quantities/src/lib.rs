@@ -39,21 +39,22 @@ pub use catalog::{
     quantity_unit,
 };
 pub use dataset::{
-    validate_field_compatibility, ApproximationPolicy, ComplexEncoding, DatasetAvailability,
-    DatasetAxis, DatasetAxisCoordinate, DatasetAxisKind, DatasetAxisSelection, DatasetBranch,
-    DatasetContractError, DatasetDefinition, DatasetDefinitionRef, DatasetEvaluationPolicy,
-    DatasetFieldDescriptor, DatasetFieldRef, DatasetItem, DatasetItemRef, DatasetSample,
-    DatasetSource, DatasetStatus, DatasetTransform, DerivedOperator, DerivedValueDefinition,
-    DerivedValuePurpose, EvaluationPrecision, FieldProjection, FieldResolution, IntegrationMeasure,
-    MaterializedDataset, MaterializedDatasetRef, PlotDefinition, PlotKind, PlotSource,
-    ProjectionMethod, SelectionReference, UnavailableAction, UnavailableDataPolicy,
+    validate_field_compatibility, ActiveSupportDescriptor, ApproximationPolicy, ComplexEncoding,
+    DatasetAvailability, DatasetAxis, DatasetAxisCoordinate, DatasetAxisKind, DatasetAxisSelection,
+    DatasetBranch, DatasetContractError, DatasetDefinition, DatasetDefinitionRef,
+    DatasetEvaluationPolicy, DatasetFieldDescriptor, DatasetFieldRef, DatasetItem, DatasetItemRef,
+    DatasetSample, DatasetSource, DatasetStatus, DatasetTransform, DerivedOperator,
+    DerivedValueDefinition, DerivedValuePurpose, EvaluationPrecision, FieldAxisDescriptor,
+    FieldFrameDescriptor, FieldFrameKind, FieldNormalization, FieldProjection, FieldResolution,
+    FieldSampleLocation, FunctionSpaceDescriptor, FunctionSpaceOrdering, HarmonicConvention,
+    IntegrationMeasure, MaterializedDataset, MaterializedDatasetRef, PlotDefinition, PlotKind,
+    PlotSource, ProjectionMethod, SelectionReference, UnavailableAction, UnavailableDataPolicy,
     DATASET_CONTRACT_SCHEMA_VERSION,
 };
 pub use dataset_slice::{
     DatasetByteOrder, DatasetFieldSlice, DatasetFieldSliceRequest, DatasetNumericPrecision,
-    DatasetSliceError, DatasetSlicePart, DatasetSlicePlane, HarmonicConvention,
-    DATASET_SLICE_SCHEMA_VERSION, MAX_DATASET_SLICE_BYTES, MAX_DATASET_SLICE_ELEMENTS,
-    MAX_DATASET_SLICE_PARTS,
+    DatasetSliceError, DatasetSlicePart, DatasetSlicePlane, DATASET_SLICE_SCHEMA_VERSION,
+    MAX_DATASET_SLICE_BYTES, MAX_DATASET_SLICE_ELEMENTS, MAX_DATASET_SLICE_PARTS,
 };
 pub use descriptor::{NormalizationHint, QuantityDomain, QuantityLocation, QuantitySpec};
 pub use eval::{eval_global_scalar, reduce_scalars, reduce_vector_field, QuantityValue};

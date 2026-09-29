@@ -23,8 +23,11 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 5. [Ograniczone partial reads datasetów](05-bounded-dataset-slices.md)
    — storage-neutralny slice manifest ponad istniejącym CAS/TensorDescriptor,
    twarde budżety, exact range checksums i pełne płaszczyzny real/imag.
+6. [Pełny descriptor pola K11](06-field-descriptor-k11.md)
+   — frame, sample location, support, carrier, function space/basis/order,
+   axes, complex convention, normalization i fail-closed compatibility.
 
 SolutionSet, materializator/evaluator datasetów, API i generated client,
 pozostałe quantities, partial reads, frontend porównań i wykresów oraz
 produkcyjne dowody pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi
-**11%**.
+**13%**.

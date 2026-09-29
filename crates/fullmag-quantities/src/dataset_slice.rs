@@ -5,7 +5,7 @@
 //! returned from those objects. It deliberately does not define another field
 //! or viewport codec.
 
-use crate::{is_canonical_sha256, ComplexEncoding, MaterializedDatasetRef};
+use crate::{is_canonical_sha256, ComplexEncoding, HarmonicConvention, MaterializedDatasetRef};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -36,13 +36,6 @@ impl DatasetNumericPrecision {
 #[serde(rename_all = "snake_case")]
 pub enum DatasetByteOrder {
     LittleEndian,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HarmonicConvention {
-    ExpPositiveIOmegaT,
-    ExpNegativeIOmegaT,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
