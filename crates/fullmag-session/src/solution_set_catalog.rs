@@ -113,7 +113,13 @@ impl SolutionSetCatalog {
         Ok(solutions)
     }
 
-    pub fn publish(&self, solution: &SolutionSet) -> Result<()> {
+    #[cfg(test)]
+    pub(crate) fn publish(&self, solution: &SolutionSet) -> Result<()> {
+        let _lease = self.writer.acquire()?;
+        self.publish_locked(solution)
+    }
+
+    pub(crate) fn publish_locked(&self, solution: &SolutionSet) -> Result<()> {
         solution
             .validate()
             .context("validating solution-set manifest")?;
@@ -122,7 +128,6 @@ impl SolutionSetCatalog {
             bail!("solution-set revision must be positive");
         }
 
-        let _lease = self.writer.acquire()?;
         let current = self.read(&solution.solution_set_id)?;
         if let Some(current) = &current {
             if solution.revision == current.revision {
@@ -512,8 +517,8 @@ mod tests {
     use super::*;
     use crate::store::SessionStore;
     use fullmag_quantities::{
-        ScientificAssessment, ScientificAssessmentStatus, SolutionSetProvenance,
-        SOLUTION_SET_SCHEMA_VERSION,
+        ScientificAssessment, ScientificAssessmentStatus, SolutionArtifactKind,
+        SolutionArtifactRef, SolutionMember, SolutionSetProvenance, SOLUTION_SET_SCHEMA_VERSION,
     };
 
     fn digest(character: char) -> String {
@@ -549,6 +554,33 @@ mod tests {
             members: Vec::new(),
             coverage: Vec::new(),
         }
+    }
+
+    fn solution_with_artifact(object_ref: String, byte_length: u64) -> SolutionSet {
+        let mut solution = solution(1, SolutionSetManifestState::Open);
+        solution.members.push(SolutionMember {
+            member_id: "member:1".to_string(),
+            task_id: "task:1".to_string(),
+            attempt_id: "attempt:1".to_string(),
+            ownership_epoch: 1,
+            case_id: None,
+            stage_id: "stage:1".to_string(),
+            execution_status: SolutionExecutionStatus::Running,
+            scientific_assessment: ScientificAssessment {
+                status: ScientificAssessmentStatus::Unassessed,
+                reason: Some("assessment pending".to_string()),
+                evidence_artifact_ids: Vec::new(),
+            },
+            artifacts: vec![SolutionArtifactRef {
+                artifact_id: "artifact:state".to_string(),
+                kind: SolutionArtifactKind::State,
+                schema_id: "fullmag.state.test.v1".to_string(),
+                object_ref,
+                byte_length,
+                accepted_state: None,
+            }],
+        });
+        solution
     }
 
     #[test]
@@ -634,5 +666,33 @@ mod tests {
             store.solution_sets().read("solution:run-1").unwrap(),
             Some(orphan)
         );
+    }
+
+    #[test]
+    fn session_store_checks_cas_integrity_before_solution_publication() {
+        let directory = tempfile::tempdir().expect("temporary session store");
+        let store = SessionStore::open(directory.path()).expect("open session store");
+
+        let missing = solution_with_artifact("0".repeat(64), 5);
+        assert!(store.publish_solution_set(&missing).is_err());
+        assert!(store
+            .solution_sets()
+            .read("solution:run-1")
+            .unwrap()
+            .is_none());
+
+        let payload = b"state";
+        let object_ref = store.cas().put(payload).expect("publish CAS object");
+        let wrong_length = solution_with_artifact(object_ref.clone(), 6);
+        assert!(store.publish_solution_set(&wrong_length).is_err());
+        assert!(store
+            .solution_sets()
+            .read("solution:run-1")
+            .unwrap()
+            .is_none());
+
+        store
+            .publish_solution_set(&solution_with_artifact(object_ref, payload.len() as u64))
+            .expect("publish verified solution set");
     }
 }

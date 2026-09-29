@@ -8,8 +8,9 @@ Status: **SOURCE VERIFIED / UNIT TESTS NOT RUN / API/RUNTIME NOT VERIFIED**
 
 `SessionStore` posiada teraz jeden `SolutionSetCatalog` związany z tym samym
 kanonicznym rootem i tym samym `Arc<Writer>` co manifesty, CAS, runy i lease'y.
-Publiczny accessor `solution_sets()` jest jedynym wejściem sesji do odczytu,
-publikacji i reconciliation katalogu wyników.
+Publiczny accessor `solution_sets()` udostępnia odczyt i reconciliation;
+publikacja przechodzi przez `SessionStore::publish_solution_set`, który
+egzekwuje integralność referencji CAS.
 
 Zwykły `SessionStore::open` tworzy katalog współdzielonym writerem i wykonuje
 pełne startup recovery przed zwróceniem store klientowi. W rezultacie restart
@@ -37,6 +38,6 @@ tego samego native writer lease.
 ## Otwarte elementy
 
 SolutionSet nie uczestniczy jeszcze w reachability/GC, `.fms` pack/unpack ani
-publicznym API. Brakuje mappera terminalnego run/task catalogu do rewizji,
+publicznym API. CAS publication barrier jest wdrożony, lecz brakuje mappera terminalnego run/task catalogu do rewizji,
 writerów artefaktów FDM CPU/GPU i FEM CPU/GPU, migracji legacy resource keys,
 fault injection procesu/zasilania oraz kwalifikacji CAE-04/37/61/70.

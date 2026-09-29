@@ -16,7 +16,7 @@
 //! └── recovery/        // crash recovery snapshots
 //! ```
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -68,6 +68,21 @@ fn atomic_write_confirmed(path: &Path, data: &[u8]) -> Result<()> {
             _ => Err(error),
         },
     }
+}
+
+fn register_solution_object(
+    objects: &mut BTreeMap<String, u64>,
+    object_ref: &str,
+    byte_length: u64,
+) -> Result<()> {
+    if let Some(previous_length) = objects.insert(object_ref.to_string(), byte_length) {
+        if previous_length != byte_length {
+            anyhow::bail!(
+                "solution-set CAS object `{object_ref}` has conflicting declared lengths"
+            );
+        }
+    }
+    Ok(())
 }
 
 impl SessionStore {
@@ -148,6 +163,44 @@ impl SessionStore {
 
     pub fn solution_sets(&self) -> &SolutionSetCatalog {
         &self.solution_sets
+    }
+
+    pub fn publish_solution_set(&self, solution: &fullmag_quantities::SolutionSet) -> Result<()> {
+        solution
+            .validate()
+            .context("validating solution-set before CAS publication barrier")?;
+        let _lease = self.write_transaction()?;
+        let mut referenced_objects = BTreeMap::new();
+        for member in &solution.members {
+            for artifact in &member.artifacts {
+                register_solution_object(
+                    &mut referenced_objects,
+                    &artifact.object_ref,
+                    artifact.byte_length,
+                )?;
+            }
+        }
+        for coverage in &solution.coverage {
+            for segment in &coverage.segments {
+                register_solution_object(
+                    &mut referenced_objects,
+                    &segment.object_ref,
+                    segment.byte_length,
+                )?;
+            }
+        }
+        for (object_ref, expected_length) in referenced_objects {
+            let actual_length = self
+                .cas
+                .verified_length(&object_ref)?
+                .with_context(|| format!("solution-set CAS object `{object_ref}` is missing"))?;
+            if actual_length != expected_length {
+                anyhow::bail!(
+                    "solution-set CAS object `{object_ref}` length mismatch: expected {expected_length}, found {actual_length}"
+                );
+            }
+        }
+        self.solution_sets.publish_locked(solution)
     }
 
     /// Bind a multi-file operation to one native writer lease.

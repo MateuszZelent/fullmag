@@ -56,8 +56,11 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 16. [Integracja SolutionSet z SessionStore](16-session-store-solution-sets.md)
     — jeden writer i root sesji, recovery podczas zwykłego open oraz
     bezefektowy `open_existing` dla inspekcji i GC preview.
+17. [CAS publication barrier SolutionSet](17-solution-set-cas-publication-barrier.md)
+    — pełny streaming hash i exact byte length wszystkich artifacts/segments
+    pod tym samym writer lease przed publikacją immutable revision.
 
 Writers runnera, materializator/evaluator datasetów, API i
 generated client, pozostałe quantities, frontend porównań i wykresów oraz
 produkcyjne dowody pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi
-**34%**.
+**36%**.
