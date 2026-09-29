@@ -460,6 +460,7 @@ pub(crate) fn execute_fem_eigen_path(
         plan,
         &tracking_outputs,
         None, // we collect artifacts manually below
+        None,
         plan.mode_tracking.as_ref(),
     )?;
     path_result.k0_kittel_periodic_airbox_demag = adapter.periodic_airbox_k0_metrics.into_inner();

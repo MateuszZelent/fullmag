@@ -71,8 +71,12 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 21. [Produkcyjny writer SolutionSet dla accepted study](21-accepted-study-solution-writer.md)
     — automatyczna otwarta rewizja po output-manifest barrier, terminalne
     domknięcie z oceną koordynatora, exact provenance i idempotentny replay.
+22. [Jawna tożsamość bezpośredniego writera modal-eigen](22-direct-eigen-artifact-identity.md)
+    — wymagane session/run/stage/runtime ID, fail-closed brak kontekstu i
+    zachowanie exact identity w manifeście rodziny oraz field-sweep.
 
-Bezpośredni writers `runner/eigen/artifacts` i `fmr.rs`, migracja legacy
-resource keys, materializator/evaluator datasetów, API i generated client,
+Pozostałe resource keys oraz pochodny writer Kittel w
+`runner/eigen/artifacts`, writer `fmr.rs`, FEM artifact writers i migracja
+legacy copy-on-write, materializator/evaluator datasetów, API i generated client,
 pozostałe quantities, frontend porównań i wykresów oraz produkcyjne dowody
-pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **47%**.
+pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **49%**.

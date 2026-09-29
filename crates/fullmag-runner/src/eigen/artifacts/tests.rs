@@ -37,6 +37,34 @@ impl Drop for TempDirGuard {
     }
 }
 
+fn artifact_identity() -> FrequencyDomainArtifactIdentity {
+    FrequencyDomainArtifactIdentity::try_new(
+        "session:test-frequency-domain",
+        "run:test-frequency-domain",
+        "stage:test-frequency-domain",
+        "runtime:test-frequency-domain",
+    )
+    .expect("test artifact identity should be valid")
+}
+
+#[test]
+fn artifact_identity_rejects_mutable_aliases() {
+    for (session_id, run_id) in [
+        ("current", "run:exact"),
+        ("session:exact", "current"),
+        ("session:exact", "run:current"),
+    ] {
+        let error = FrequencyDomainArtifactIdentity::try_new(
+            session_id,
+            run_id,
+            "stage:eigenmodes",
+            "runtime:exact",
+        )
+        .expect_err("mutable aliases must not enter durable artifacts");
+        assert!(error.to_string().contains("exact identity"));
+    }
+}
+
 fn sample_result() -> PathSolveResult {
     sample_result_with_solver_model(EigenSolverModel::ReferenceScalarTangent)
 }
@@ -245,7 +273,7 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
     write_branch_bundle(&temp.path, &result).expect("branch bundle should write");
     write_branch_bundle(&temp.path, &result).expect("branch bundle should write");
     write_mode_bundle(&temp.path, &result).expect("mode bundle should write");
-    write_frequency_domain_eigen_manifest(&temp.path, &result)
+    write_frequency_domain_eigen_manifest(&temp.path, &result, &artifact_identity())
         .expect("frequency-domain eigen manifest should write");
 
     let eigen_dir = temp.path.join("eigen");
@@ -457,6 +485,12 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
         "magnetic_frequency_domain"
     );
     assert_eq!(family_manifest["study_product"], "modal_eigen");
+    assert_eq!(
+        family_manifest["session_id"],
+        "session:test-frequency-domain"
+    );
+    assert_eq!(family_manifest["run_id"], "run:test-frequency-domain");
+    assert_eq!(family_manifest["stage_id"], "stage:test-frequency-domain");
     assert_eq!(family_manifest["stage_kind"], "eigenmodes");
     assert_eq!(
         family_manifest["requested_execution"]["calculation_mode"],
@@ -512,7 +546,7 @@ fn eigen_manifest_does_not_publish_dispersion_for_single_free_modes() {
     let temp = TempDirGuard::new("eigen-manifest-free-modes");
     let result = sample_result();
 
-    write_frequency_domain_eigen_manifest(&temp.path, &result)
+    write_frequency_domain_eigen_manifest(&temp.path, &result, &artifact_identity())
         .expect("frequency-domain eigen manifest should write");
 
     let manifest: Value = serde_json::from_slice(
@@ -623,7 +657,7 @@ fn eigen_manifest_preserves_real_planner_resolution_for_all_exact_k0_lanes() {
         let temp = TempDirGuard::new(&format!(
             "eigen-manifest-real-exact-execution-{requested_device}"
         ));
-        write_frequency_domain_eigen_manifest(&temp.path, &result)
+        write_frequency_domain_eigen_manifest(&temp.path, &result, &artifact_identity())
             .expect("frequency-domain eigen manifest should write");
         let manifest: Value = serde_json::from_slice(
             &std::fs::read(temp.path.join("frequency_domain/manifest.v1.json"))
@@ -679,7 +713,7 @@ fn eigen_manifest_does_not_publish_dispersion_for_multi_sample_k0_field_sweep() 
     let temp = TempDirGuard::new("eigen-manifest-k0-field-sweep");
     let result = sample_result_with_k0_kittel_sweep();
 
-    write_frequency_domain_eigen_manifest(&temp.path, &result)
+    write_frequency_domain_eigen_manifest(&temp.path, &result, &artifact_identity())
         .expect("frequency-domain eigen manifest should write");
 
     let manifest: Value = serde_json::from_slice(
@@ -732,7 +766,7 @@ fn eigen_manifest_marks_production_cpu_shift_invert_as_native_production() {
     let temp = TempDirGuard::new("eigen-artifacts-production-manifest");
     let result = sample_result_with_solver_model(EigenSolverModel::ProductionCpuShiftInvert);
 
-    write_frequency_domain_eigen_manifest(&temp.path, &result)
+    write_frequency_domain_eigen_manifest(&temp.path, &result, &artifact_identity())
         .expect("frequency-domain eigen manifest should write");
 
     let family_manifest: Value = serde_json::from_slice(
@@ -830,7 +864,7 @@ fn eigen_manifest_preserves_native_gpu_execution_and_hardened_provenance() {
         }]
     }));
 
-    write_frequency_domain_eigen_manifest(&temp.path, &result)
+    write_frequency_domain_eigen_manifest(&temp.path, &result, &artifact_identity())
         .expect("frequency-domain manifest should write");
     let manifest: Value = serde_json::from_slice(
         &std::fs::read(temp.path.join("frequency_domain/manifest.v1.json"))
@@ -883,7 +917,7 @@ fn eigen_artifacts_write_k0_kittel_summary_and_points() {
     write_path_bundle(&temp.path, &result).expect("path bundle should write");
     write_branch_bundle(&temp.path, &result).expect("branch bundle should write");
     write_mode_bundle(&temp.path, &result).expect("mode bundle should write");
-    write_frequency_domain_eigen_manifest(&temp.path, &result)
+    write_frequency_domain_eigen_manifest(&temp.path, &result, &artifact_identity())
         .expect("frequency-domain eigen manifest should write");
 
     let validation_dir = temp.path.join("validation/kittel_k0_pbc");
@@ -1237,7 +1271,7 @@ fn k0_kittel_selector_prefers_uniform_branch_over_frequency_only_match() {
         });
     }
 
-    write_frequency_domain_eigen_manifest(&temp.path, &result)
+    write_frequency_domain_eigen_manifest(&temp.path, &result, &artifact_identity())
         .expect("frequency-domain eigen manifest should write");
 
     let summary: Value = serde_json::from_slice(
@@ -1336,7 +1370,7 @@ fn k0_kittel_selector_does_not_use_expected_frequency_as_a_tiebreaker() {
         });
     }
 
-    write_frequency_domain_eigen_manifest(&temp.path, &result)
+    write_frequency_domain_eigen_manifest(&temp.path, &result, &artifact_identity())
         .expect("frequency-domain eigen manifest should write");
 
     let summary: Value = serde_json::from_slice(
@@ -1427,7 +1461,7 @@ fn k0_kittel_selector_uses_mass_weighted_uniformity_when_weights_are_available()
         });
     }
 
-    write_frequency_domain_eigen_manifest(&temp.path, &result)
+    write_frequency_domain_eigen_manifest(&temp.path, &result, &artifact_identity())
         .expect("frequency-domain eigen manifest should write");
 
     let summary: Value = serde_json::from_slice(
@@ -1441,7 +1475,7 @@ fn k0_kittel_selector_uses_mass_weighted_uniformity_when_weights_are_available()
 #[test]
 fn field_sweep_builder_does_not_fabricate_bias_field_from_kittel_metadata() {
     let result = sample_result_with_k0_kittel_sweep();
-    let artifact = build_frequency_domain_field_sweep_artifact(&result)
+    let artifact = build_frequency_domain_field_sweep_artifact(&result, &artifact_identity())
         .expect("field-sweep builder should validate the source");
     assert!(
         artifact.is_none(),
@@ -1462,10 +1496,14 @@ fn field_sweep_builder_preserves_sample_and_mode_identity_and_marks_missing_hand
         "linearization_state_sha256": "sha256:linearization",
         "status": "completed"
     }));
-    let artifact = build_frequency_domain_field_sweep_artifact(&result)
+    let artifact = build_frequency_domain_field_sweep_artifact(&result, &artifact_identity())
         .expect("field-sweep builder should validate the source")
         .expect("declared physical bias field should produce an artifact");
     assert_eq!(artifact.schema_version, "eigen/field_sweep.v1");
+    assert_eq!(artifact.session_id, "session:test-frequency-domain");
+    assert_eq!(artifact.run_id, "run:test-frequency-domain");
+    assert_eq!(artifact.stage_id, "stage:test-frequency-domain");
+    assert_eq!(artifact.runtime_id, "runtime:test-frequency-domain");
     assert_eq!(artifact.status, ServerArtifactStatus::Complete);
     assert!(artifact.complete);
     assert_eq!(artifact.samples[0].sample_id, "bias-field-sample-0000");
@@ -1507,7 +1545,7 @@ fn partial_field_sweep_uses_declared_requested_count_and_completed_statuses() {
         }
     }));
 
-    let artifact = build_frequency_domain_field_sweep_artifact(&result)
+    let artifact = build_frequency_domain_field_sweep_artifact(&result, &artifact_identity())
         .expect("partial field-sweep source should validate")
         .expect("physical bias field should produce a typed artifact");
 
@@ -1530,7 +1568,7 @@ fn field_sweep_is_spectrum_only_when_cartesian_complex_mode_payload_is_missing()
     result.samples[0].modes[0].lifted_real = None;
     result.samples[0].modes[0].lifted_imag = None;
 
-    let artifact = build_frequency_domain_field_sweep_artifact(&result)
+    let artifact = build_frequency_domain_field_sweep_artifact(&result, &artifact_identity())
         .expect("field sweep builder should not fail")
         .expect("field sweep should still preserve spectrum metadata");
     let mode = &artifact.samples[0].modes[0];
@@ -1564,7 +1602,7 @@ fn field_sweep_writer_binds_to_published_spectrum_and_branches_bytes() {
     write_branch_bundle(&temp.path, &result).expect("branches should be published first");
     write_mode_bundle(&temp.path, &result).expect("mode metadata should be published first");
 
-    write_frequency_domain_field_sweep_artifact(&temp.path, &result)
+    write_frequency_domain_field_sweep_artifact(&temp.path, &result, &artifact_identity())
         .expect("field sweep should bind published sources");
 
     let field_sweep: Value = serde_json::from_slice(
@@ -1636,7 +1674,7 @@ fn typed_artifact_revision_binds_execution_and_topology() {
         "linearization_state_sha256": "sha256:linearization",
         "status": "completed"
     }));
-    let artifact = build_frequency_domain_field_sweep_artifact(&result)
+    let artifact = build_frequency_domain_field_sweep_artifact(&result, &artifact_identity())
         .expect("field-sweep builder should validate the source")
         .expect("declared physical bias field should produce an artifact");
 
@@ -1835,7 +1873,7 @@ fn eigen_manifest_carries_k0_kittel_validation_contract() {
     let temp = TempDirGuard::new("eigen-artifacts-k0-kittel-validation");
     let result = sample_result_with_k0_kittel_sweep();
 
-    write_frequency_domain_eigen_manifest(&temp.path, &result)
+    write_frequency_domain_eigen_manifest(&temp.path, &result, &artifact_identity())
         .expect("frequency-domain eigen manifest should write");
 
     let manifest: Value = serde_json::from_slice(
@@ -1921,7 +1959,7 @@ fn production_dispersion_with_de_bv_validation_writes_analytic_columns() {
 
     write_path_bundle(&temp.path, &result).expect("path bundle should write");
     write_branch_bundle(&temp.path, &result).expect("branch bundle should write");
-    write_frequency_domain_eigen_manifest(&temp.path, &result)
+    write_frequency_domain_eigen_manifest(&temp.path, &result, &artifact_identity())
         .expect("frequency-domain manifest should write");
 
     let dispersion = std::fs::read_to_string(temp.path.join("eigen/dispersion.csv"))
@@ -2002,7 +2040,7 @@ fn de_bv_reference_manifest_names_analytic_frequency_source_not_demag_k() {
         }],
     });
 
-    write_frequency_domain_eigen_manifest(&temp.path, &result)
+    write_frequency_domain_eigen_manifest(&temp.path, &result, &artifact_identity())
         .expect("frequency-domain manifest should write");
 
     let manifest: Value = serde_json::from_slice(

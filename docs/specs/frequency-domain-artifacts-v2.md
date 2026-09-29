@@ -43,7 +43,7 @@ Każdy z artefaktów A1S publikuje te same pola identyfikujące zakres i pochodz
 | `artifact_id` | `string` | Stabilny identyfikator produktu analizy, niezależny od ścieżki pliku. |
 | `source` | `{kind, artifact, revision}` | Bezpośrednie źródło danych; `revision` musi być zgodne z `source_revision`. |
 | `source_revision` | `string` | Digest `sha256:<hex>` źródła, a nie timestamp ani długość pliku. |
-| `run_id`, `stage_id`, `scope_id`, `runtime_id` | `string` | Tożsamość sesji/run/stage/zakresu/runtime. Brak runtime proof jest jawnie oznaczany `runtime:not_provided`. |
+| `session_id`, `run_id`, `stage_id`, `scope_id`, `runtime_id` | `string` | Dokładna tożsamość właściciela sesji/run/stage/zakresu/runtime. Nowy producer nie może zapisać `current`, `run:current` ani `runtime:not_provided`; historyczny dokument z takim tokenem pozostaje legacy i nie może być reinterpretowany bez prawdziwego ID. |
 | `revision` | `string` | Digest treści artefaktu; zmiana dowolnego pola naukowego musi go zmienić. |
 | `content_sha256` | `string` | Ten sam digest co `revision`; obliczany z pełnego JSON po wyzerowaniu `revision` i `content_sha256`. |
 | `status` | enum | `complete`, `partial`, `interrupted` albo `corrupt`. |

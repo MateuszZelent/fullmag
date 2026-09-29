@@ -10,8 +10,8 @@ pub use super::response_block_real::{
     solve_and_write_field_driven_response_sweep_bundle_with_interrupt,
 };
 pub use common::{
-    ServerArtifactExecution, ServerArtifactReference, ServerArtifactSource, ServerArtifactStatus,
-    ServerArtifactTopology, ServerArtifactUnits,
+    FrequencyDomainArtifactIdentity, ServerArtifactExecution, ServerArtifactReference,
+    ServerArtifactSource, ServerArtifactStatus, ServerArtifactTopology, ServerArtifactUnits,
 };
 pub use field_sweep::{
     build_frequency_domain_field_sweep_artifact, write_frequency_domain_field_sweep_artifact,

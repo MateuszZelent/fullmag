@@ -448,7 +448,9 @@ fn dispersion_dynamic_demag_operator_source(result: &PathSolveResult) -> Option<
 pub fn write_frequency_domain_eigen_manifest(
     base_dir: &Path,
     result: &PathSolveResult,
+    identity: &FrequencyDomainArtifactIdentity,
 ) -> std::io::Result<()> {
+    identity.validate()?;
     write_eigen_solver_diagnostics_artifact(base_dir, result)?;
     let manifest_dir = base_dir.join("frequency_domain");
     fs::create_dir_all(&manifest_dir)?;
@@ -459,7 +461,7 @@ pub fn write_frequency_domain_eigen_manifest(
     let mode_metadata_paths = eigen_mode_metadata_paths(result);
     let mode_field_resources = eigen_mode_field_resources(result);
     let sample_count = result.samples.len();
-    let field_sweep_v1_path = build_frequency_domain_field_sweep_artifact(result)?
+    let field_sweep_v1_path = build_frequency_domain_field_sweep_artifact(result, identity)?
         .is_some()
         .then_some("eigen/field_sweep.v1.json");
     let fmr_kittel_fit_v1_path = build_kittel_fit_artifact(result)?
@@ -524,9 +526,9 @@ pub fn write_frequency_domain_eigen_manifest(
             sample_count,
             mode_metadata_paths.len()
         ),
-        session_id: "current",
-        run_id: "current",
-        stage_id: "eigenmodes",
+        session_id: identity.session_id.as_str(),
+        run_id: identity.run_id.as_str(),
+        stage_id: identity.stage_id.as_str(),
         stage_kind: "eigenmodes",
         created_at,
         requested_execution,
@@ -640,7 +642,7 @@ pub fn write_frequency_domain_eigen_manifest(
         manifest_dir.join("manifest.v1.json"),
         serde_json::to_vec_pretty(&manifest).unwrap(),
     )?;
-    let _ = write_frequency_domain_field_sweep_artifact(base_dir, result)?;
+    let _ = write_frequency_domain_field_sweep_artifact(base_dir, result, identity)?;
     let _ = write_kittel_fit_artifact(base_dir, result)?;
     write_k0_kittel_validation_artifacts(base_dir, result)?;
     Ok(())

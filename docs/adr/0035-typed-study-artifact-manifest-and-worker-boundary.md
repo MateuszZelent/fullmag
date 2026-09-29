@@ -70,6 +70,13 @@ diagnostykę, pliki pośrednie i częściowe wyniki.
     temu samemu claimowi, epoch, immutable allow-list, completion barrier i
     recovery. Manifesty v1/v2 pozostają czytelne i nie mogą deklarować tego
     descriptora.
+11. Bezpośredni writer artefaktów częstotliwościowych otrzymuje od właściciela
+    wykonania jawne `session_id`, `run_id`, `stage_id` i `runtime_id`.
+    Aliasów `current`, `run:current` ani `runtime:not_provided` nie wolno
+    publikować jako tożsamości nowego artefaktu. API rozwiązuje transport po
+    odczycie; trwały dokument nie wyprowadza właściciela z aktywnej sesji ani
+    ze ścieżki katalogu. Stare pliki pozostają czytelne i mogą być migrowane
+    wyłącznie copy-on-write, gdy prawdziwa tożsamość jest dostępna.
 
 ## Konsekwencje
 
@@ -158,6 +165,14 @@ artifactów w task allow-list oraz ponownie waliduje bajty CAS przed utworzeniem
 izolowanego evaluatora. Nie czyta ani nie podmienia `LiveRuntime`. Publiczny
 coordinator, observation-results i source-aware field data plane pozostają
 odrębną otwartą bramką.
+
+Aktualizacja 29.09.2026: bezpośredni orchestrator modal-eigen wymaga teraz
+`FrequencyDomainArtifactIdentity` przed utworzeniem trwałego outputu. Typ
+odrzuca mutable aliasy, a manifest rodziny i `eigen/field_sweep.v1` zachowują
+dokładne session/run/stage/runtime ID. Wywołanie bez identity kończy się przed
+zapisem manifestu. Pozostałe resource keys, pochodny artefakt Kittel oraz
+produkcyjny writer FMR nadal używają kontraktu legacy; ich migracja wymaga
+najpierw przeprowadzenia identity przez wszystkie właściwe granice wykonania.
 
 ## Migracja i rollback
 
