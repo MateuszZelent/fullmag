@@ -13,7 +13,10 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 2. [Explorer i pinned observation source](02-pinned-observation-source.md)
    — ramki w drzewie Results, typowana selekcja, dedykowany Inspector i mały
    session-fenced workspace descriptor bez kopiowania payloadu pola.
+3. [Pinned observation source w viewport 3D](03-pinned-observation-viewport.md)
+   — historyczne `m` w istniejącym render-modelu, bounded cache, exact-source
+   validation, source-fenced last-good retention i browser/WebGL proof.
 
 SolutionSet, DatasetDefinition, pozostałe quantities, partial reads, porównania,
-podłączenie pinned source do render-modelu, plot/export recipes oraz produkcyjne
-dowody pamięci i WebGL pozostają otwarte. P6 wynosi **4%**.
+plot/export recipes oraz produkcyjne dowody pamięci i wszystkich lane'ów
+pozostają otwarte. P6 wynosi **6%**.

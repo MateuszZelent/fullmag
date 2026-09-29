@@ -1641,6 +1641,51 @@ describe("useViewport3DSceneModel", () => {
     });
   });
 
+  it("does not retain a live field after switching to an observation frame source", () => {
+    const envelope: Viewport3DFieldVectorEnvelope = {
+      data: {
+        dtype: "float64",
+        grid: [1, 1, 1],
+        nComp: 3,
+        pointCount: 1,
+        quantityId: "m",
+        valueCount: 3,
+        values: new Float64Array([1, 0, 0]),
+      },
+      etag: '"live-1"',
+      resourceKey: "/v2/sessions/current/data/fields/m/vector",
+      responseMetadata: null,
+    };
+    const request = {
+      quantityId: "m",
+      query: { component: "full", scope_kind: "full" },
+    };
+    const live = resolvePrimaryFieldDisplayedEnvelope({
+      incomingEnvelope: envelope,
+      preparedRevision: "live-1",
+      request,
+      retained: null,
+      sourceResourceKey: envelope.resourceKey,
+      status: "ready",
+    });
+
+    const historical = resolvePrimaryFieldDisplayedEnvelope({
+      incomingEnvelope: null,
+      preparedRevision: null,
+      request,
+      retained: live.nextRetained,
+      sourceResourceKey:
+        "/v2/sessions/current/data/observation-frames/frame-7/magnetization",
+      status: "loading",
+    });
+
+    expect(historical).toEqual({
+      displayedEnvelope: null,
+      displayedRevision: null,
+      nextRetained: null,
+    });
+  });
+
   it("reaches a retention fixed point in one step (regression: render loop)", () => {
     const tracker = new Viewport3DResourceTracker();
     const frameA: Viewport3DFieldVectorEnvelope = {

@@ -89,6 +89,8 @@ import {
   crossSectionFramePreviewToClip,
 } from "@/kernel/workspace/crossSectionWorkspace";
 import { useCrossSectionWorkspaceSelector } from "@/kernel/workspace/useCrossSectionWorkspace";
+import { useObservationSourceWorkspaceSelector } from "@/kernel/workspace/useObservationSourceWorkspace";
+import { observationFrameMagnetizationResourceKey } from "@/kernel/resources/observationFrameResources";
 import {
   planarMonitorFramePreviewFromDraft,
   usePlanarMonitorFramePreview,
@@ -354,6 +356,7 @@ import {
   useViewport3DDomainTopology,
   useViewport3DAnalysisFieldVector,
   useViewport3DFieldVectorRequest,
+  useViewport3DObservationFrameMagnetization,
   useViewport3DMeshQualityData,
   useViewport3DPartFieldVectors,
   useViewport3DQuantityFieldVectors,
@@ -1901,6 +1904,7 @@ export function resolvePrimaryFieldDisplayedEnvelope({
   preparedRevision,
   retained,
   request,
+  sourceResourceKey,
   tracker,
 }: {
   incomingEnvelope: Viewport3DFieldVectorEnvelope | null;
@@ -1908,6 +1912,7 @@ export function resolvePrimaryFieldDisplayedEnvelope({
   preparedRevision: string | null;
   retained: Viewport3DPrimaryFieldRetainedState | null;
   request: Pick<Viewport3DFieldResourceRequest, "quantityId" | "query">;
+  sourceResourceKey?: string;
   tracker?: Viewport3DResourceTracker;
 }): ResolvePrimaryFieldDisplayedEnvelopeResult {
   if (status === "ready" && incomingEnvelope) {
@@ -1944,6 +1949,18 @@ export function resolvePrimaryFieldDisplayedEnvelope({
         },
       };
     }
+  }
+
+  if (
+    retained &&
+    sourceResourceKey !== undefined &&
+    retained.envelope.resourceKey !== sourceResourceKey
+  ) {
+    return {
+      displayedEnvelope: null,
+      displayedRevision: null,
+      nextRetained: null,
+    };
   }
 
   if (retained) {
@@ -2843,6 +2860,11 @@ export function useViewport3DSceneModel({
   const visualProfile = getViewport3DVisualProfile(commandState.visualProfileId);
   const computeRunning = useSessionStatusSelector(selectViewport3DComputeRunning);
   const sessionIdentity = useSessionResourceIdentity();
+  const pinnedObservationSource = useObservationSourceWorkspaceSelector(
+    (state) => state.pinned,
+  );
+  const pinnedObservationActive =
+    pinnedObservationSource !== null && analysisOverlay === null;
   const renderingState = visualizationState.data;
   const maxInteractiveVectorGlyphs = useMemo(
     () => resolveViewport3DMaxVectorGlyphs(renderingState),
@@ -2888,7 +2910,8 @@ export function useViewport3DSceneModel({
     selection,
     visualizationState: renderingState,
   });
-  const primaryFieldQuantityId = analysisOverlay?.fieldId ?? quantityId;
+  const primaryFieldQuantityId = analysisOverlay?.fieldId ??
+    (pinnedObservationActive ? "m" : quantityId);
   const scalarColorPalette =
     renderingState?.quantity?.colormap ?? renderingState?.colormap ?? "viridis";
   const vectorStyleState = renderingState?.vector_style;
@@ -4442,11 +4465,14 @@ export function useViewport3DSceneModel({
     primaryFieldDemandPlan,
     targetQuantityFieldDemandPlan,
   ]);
-  const fieldVectorResourceKey = useMemo(
+  const liveFieldVectorResourceKey = useMemo(
     () =>
       resolveViewport3DFieldVectorRequestResourceKey(primaryFieldRequest),
     [primaryFieldRequest],
   );
+  const fieldVectorResourceKey = pinnedObservationActive
+    ? observationFrameMagnetizationResourceKey(pinnedObservationSource.frameId)
+    : liveFieldVectorResourceKey;
   const hysteresisReplayMeshCompatibility = useMemo(
     () =>
       resolveHysteresisReplayMeshCompatibility(
@@ -4473,6 +4499,7 @@ export function useViewport3DSceneModel({
     fieldVectorEnabled && primaryFieldRenderOptions.scalarColorsVisible !== false;
   const primaryFieldMetaEnabled =
     scalarRangeStatsEnabled &&
+    !pinnedObservationActive &&
     !isAnalysisFieldQuantityId(primaryFieldQuantityId) &&
     viewport3DFieldQuantityAvailable(
       primaryFieldQuantityId,
@@ -4563,10 +4590,17 @@ export function useViewport3DSceneModel({
     primaryZFieldMeta.data,
     scalarRangeModeFlags,
   ]);
-  const fieldVector = useViewport3DFieldVectorRequest(
+  const liveFieldVector = useViewport3DFieldVectorRequest(
     primaryFieldRequest,
-    fieldVectorEnabled,
+    fieldVectorEnabled && !pinnedObservationActive,
   );
+  const observationFieldVector = useViewport3DObservationFrameMagnetization(
+    pinnedObservationSource?.frameId,
+    fieldVectorEnabled && pinnedObservationActive,
+  );
+  const fieldVector = pinnedObservationActive
+    ? observationFieldVector
+    : liveFieldVector;
   const incomingFieldVectorEnvelope = useMemo<Viewport3DFieldVectorEnvelope | null>(
     () =>
       fieldVector.data
@@ -4618,6 +4652,7 @@ export function useViewport3DSceneModel({
       preparedRevision: fieldVectorPreparedRevision,
       retained: primaryFieldRetained,
       request: primaryFieldRequest,
+      sourceResourceKey: fieldVectorResourceKey,
       tracker,
     });
   }, [
@@ -4627,6 +4662,7 @@ export function useViewport3DSceneModel({
     incomingFieldVectorEnvelope,
     primaryFieldRequest,
     primaryFieldRetained,
+    fieldVectorResourceKey,
     tracker,
   ]);
   if (nextPrimaryFieldRetained !== primaryFieldRetained) {
@@ -4679,7 +4715,7 @@ export function useViewport3DSceneModel({
   ]);
   const fieldRefresh = useMemo<Viewport3DFieldRefreshState>(
     () => ({
-      enabled: computeRunning && fieldVectorEnabled,
+      enabled: !pinnedObservationActive && computeRunning && fieldVectorEnabled,
       payloadRevision: fieldVector.payloadRevision ?? null,
       quantityId: primaryFieldQuantityId,
       resourceKey: fieldVectorResourceKey,
@@ -4694,6 +4730,7 @@ export function useViewport3DSceneModel({
       fieldVector.status,
       fieldVectorEnabled,
       fieldVectorResourceKey,
+      pinnedObservationActive,
       primaryFieldQuantityId,
     ],
   );

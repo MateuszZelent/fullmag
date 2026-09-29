@@ -50,6 +50,7 @@ import type { ResourceInvalidationController } from "@/kernel/resources/Resource
 import { useResource } from "@/kernel/resources/useResource";
 import { sessionResourceIdentityKey, sessionScopedResourceKey } from "@/kernel/resources/sessionResourceIdentity";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
+import { observationFrameMagnetizationResourceKey } from "@/kernel/resources/observationFrameResources";
 
 import {
   buildViewport3DFieldResourceRequestId,
@@ -1558,6 +1559,89 @@ export function useViewport3DFieldVectorRequest(
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
     pauseLoad: options.pauseLoad,
+    retryPolicy: FIELD_VECTOR_RETRY_POLICY,
+    resolveRevision,
+    resourceKey: requestKey,
+  });
+  return {
+    ...resource,
+    data: resource.data?.data ?? null,
+    payloadRevision: resource.data?.etag ?? resolveRevision(),
+    responseMetadata: resource.data?.responseMetadata ?? null,
+  };
+}
+
+export function validateViewport3DObservationFrameMagnetization(
+  data: DecodedFieldVector,
+  frameId: string,
+): void {
+  if (data.sourceKind !== "observation_frame") {
+    throw new Error(
+      `Observation frame ${frameId} returned field source kind ${data.sourceKind ?? "unknown"}.`,
+    );
+  }
+  if (data.sourceId !== frameId) {
+    throw new Error(
+      `Observation frame ${frameId} returned field source ${data.sourceId ?? "unknown"}.`,
+    );
+  }
+  if (resolveCanonicalQuantityId(data.quantityId) !== "m") {
+    throw new Error(
+      `Observation frame ${frameId} returned quantity ${data.quantityId}.`,
+    );
+  }
+}
+
+export function useViewport3DObservationFrameMagnetization(
+  frameId: string | null | undefined,
+  enabled = true,
+) {
+  const { api } = useKernel();
+  const sessionIdentity = useViewport3DSessionIdentity();
+  const unscopedRequestKey = observationFrameMagnetizationResourceKey(frameId);
+  const requestKey = sessionIdentity
+    ? sessionScopedResourceKey(sessionIdentity, unscopedRequestKey)
+    : unscopedRequestKey;
+  const load = useCallback(
+    async ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => {
+      if (!frameId) {
+        throw new Error("An observation frame must be pinned before it can be rendered.");
+      }
+      const data = await loadCachedBinaryResource(
+        fieldVectorCache,
+        requestKey,
+        async (etag, requestSignal) => {
+          const result = await api.data.observationFrames.magnetization(frameId, {
+            etag,
+            sessionScopeKey,
+            signal: requestSignal,
+          });
+          if (result.status === "ready") {
+            validateViewport3DObservationFrameMagnetization(result.data, frameId);
+          }
+          return result;
+        },
+        {
+          onFreshAdoption: recordFieldVectorCacheAdoption,
+          preferCached: true,
+          signal,
+        },
+      );
+      return data === null
+        ? null
+        : resolveCachedFieldVectorEnvelope(fieldVectorCache, requestKey, data);
+    },
+    [api, frameId, requestKey],
+  );
+  const resolveRevision = useCallback(
+    () => fieldVectorCache.peek(requestKey)?.etag ?? null,
+    [requestKey],
+  );
+  const resource = useResource({
+    abortStaleInflight: true,
+    enabled: enabled && Boolean(frameId) && sessionIdentity !== null,
+    load,
+    pauseLoad: false,
     retryPolicy: FIELD_VECTOR_RETRY_POLICY,
     resolveRevision,
     resourceKey: requestKey,

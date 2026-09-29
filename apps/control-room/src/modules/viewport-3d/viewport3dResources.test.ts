@@ -36,6 +36,7 @@ import {
   resolveViewport3DQuantityFieldVectorResourceRequests,
   resolveViewport3DQuantityFieldVectorResourceKeys,
   synchronizeViewport3DSessionIdentity,
+  validateViewport3DObservationFrameMagnetization,
   resolveViewport3DFieldVectorIdentityMatch,
   viewport3DFieldVectorMatchesRequestIdentity,
   viewport3DFieldMetaResourceMatchesQuantity,
@@ -87,6 +88,37 @@ function fieldResponseMetadata(
 }
 
 describe("viewport3dResources", () => {
+  it("accepts only magnetization payloads from the exact observation frame", () => {
+    const field: DecodedFieldVector = {
+      dtype: "float64",
+      grid: [1, 1, 1],
+      nComp: 3,
+      pointCount: 1,
+      quantityId: "m",
+      sourceId: "frame-7",
+      sourceKind: "observation_frame",
+      sourceRevision: "accepted-12",
+      valueCount: 3,
+      values: new Float64Array([1, 0, 0]),
+    };
+
+    expect(() =>
+      validateViewport3DObservationFrameMagnetization(field, "frame-7"),
+    ).not.toThrow();
+    expect(() =>
+      validateViewport3DObservationFrameMagnetization(
+        { ...field, sourceId: "frame-8" },
+        "frame-7",
+      ),
+    ).toThrow(/returned field source frame-8/);
+    expect(() =>
+      validateViewport3DObservationFrameMagnetization(
+        { ...field, sourceKind: "live" },
+        "frame-7",
+      ),
+    ).toThrow(/returned field source kind live/);
+  });
+
   it("purges session caches and stale inflight work synchronously before resource reads", () => {
     const source = readFileSync(viewport3dResourcesSourceUrl, "utf8");
     const hookStart = source.indexOf("function useViewport3DSessionIdentity()");
