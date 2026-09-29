@@ -57,7 +57,8 @@ pub use dataset::{
 };
 pub use dataset_slice::{
     DatasetByteOrder, DatasetFieldSlice, DatasetFieldSliceRequest, DatasetNumericPrecision,
-    DatasetSliceError, DatasetSlicePart, DatasetSlicePlane, DATASET_SLICE_SCHEMA_VERSION,
+    DatasetNumericValues, DatasetSliceError, DatasetSlicePart, DatasetSlicePlane,
+    DecodedDatasetFieldSlice, DecodedDatasetSlicePlane, DATASET_SLICE_SCHEMA_VERSION,
     MAX_DATASET_SLICE_BYTES, MAX_DATASET_SLICE_ELEMENTS, MAX_DATASET_SLICE_PARTS,
 };
 pub use descriptor::{NormalizationHint, QuantityDomain, QuantityLocation, QuantitySpec};

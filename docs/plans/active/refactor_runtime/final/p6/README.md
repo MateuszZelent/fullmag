@@ -35,8 +35,11 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 9. [Fundament katalogu SolutionSet](09-solution-set-catalog.md)
    — immutable artifact refs, provenance wejść i wykonania, osobna ocena
    naukowa oraz jawne kompletne/częściowe/nieznane pokrycie segmentów.
+10. [Bounded decoder slice'ów](10-bounded-slice-decoder.md)
+    — checksum-first decode bez pełnego bufora pośredniego, zachowanie
+    precision i real/imag planes oraz fail-closed finite/alignment checks.
 
 Writers i trwały katalog SolutionSet, materializator/evaluator datasetów, API i
 generated client, pozostałe quantities, frontend porównań i wykresów oraz
 produkcyjne dowody pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi
-**19%**.
+**21%**.

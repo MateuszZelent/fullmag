@@ -116,6 +116,47 @@ pub struct DatasetFieldSlice {
     pub parts: Vec<DatasetSlicePart>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum DatasetNumericValues {
+    F32(Vec<f32>),
+    F64(Vec<f64>),
+}
+
+impl DatasetNumericValues {
+    pub fn len(&self) -> usize {
+        match self {
+            Self::F32(values) => values.len(),
+            Self::F64(values) => values.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecodedDatasetSlicePlane {
+    pub plane: DatasetSlicePlane,
+    pub values: DatasetNumericValues,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecodedDatasetFieldSlice {
+    pub dataset: MaterializedDatasetRef,
+    pub sample_id: String,
+    pub item_id: String,
+    pub field_id: String,
+    pub field_layout_digest: String,
+    pub element_offset: u64,
+    pub element_count: u64,
+    pub component_count: u32,
+    pub precision: DatasetNumericPrecision,
+    pub complex_encoding: ComplexEncoding,
+    pub harmonic_convention: Option<HarmonicConvention>,
+    pub planes: Vec<DecodedDatasetSlicePlane>,
+}
+
 impl DatasetFieldSlice {
     pub fn validate_for_request(
         &self,
@@ -196,7 +237,12 @@ impl DatasetFieldSlice {
                 &[DatasetSlicePlane::Real, DatasetSlicePlane::Imaginary]
             }
         };
-        validate_parts(&self.parts, expected_planes, plane_bytes)?;
+        validate_parts(
+            &self.parts,
+            expected_planes,
+            plane_bytes,
+            self.precision.byte_size(),
+        )?;
         Ok(())
     }
 
@@ -216,6 +262,65 @@ impl DatasetFieldSlice {
             }
         }
         Ok(())
+    }
+
+    /// Decodes checksum-verified little-endian parts without assembling an
+    /// additional full byte payload. Parts may be interleaved in the manifest;
+    /// values are emitted in plane-offset order.
+    pub fn decode_part_bytes(
+        &self,
+        part_bytes: &[&[u8]],
+    ) -> Result<DecodedDatasetFieldSlice, DatasetSliceError> {
+        self.validate_part_bytes(part_bytes)?;
+        let expected_values = self
+            .element_count
+            .checked_mul(u64::from(self.component_count))
+            .ok_or(DatasetSliceError::PayloadSizeOverflow)?;
+        let expected_values =
+            usize::try_from(expected_values).map_err(|_| DatasetSliceError::PayloadSizeOverflow)?;
+
+        let expected_planes: &[DatasetSlicePlane] = match self.complex_encoding {
+            ComplexEncoding::Real => &[DatasetSlicePlane::Values],
+            ComplexEncoding::RealImagPair => {
+                &[DatasetSlicePlane::Real, DatasetSlicePlane::Imaginary]
+            }
+        };
+        let mut planes = Vec::with_capacity(expected_planes.len());
+        for plane in expected_planes {
+            let mut part_indexes = self
+                .parts
+                .iter()
+                .enumerate()
+                .filter_map(|(index, part)| (part.plane == *plane).then_some(index))
+                .collect::<Vec<_>>();
+            part_indexes.sort_unstable_by_key(|index| self.parts[*index].plane_offset_bytes);
+            let values = decode_plane_values(
+                *plane,
+                self.precision,
+                expected_values,
+                &part_indexes,
+                part_bytes,
+            )?;
+            planes.push(DecodedDatasetSlicePlane {
+                plane: *plane,
+                values,
+            });
+        }
+
+        Ok(DecodedDatasetFieldSlice {
+            dataset: self.dataset.clone(),
+            sample_id: self.sample_id.clone(),
+            item_id: self.item_id.clone(),
+            field_id: self.field_id.clone(),
+            field_layout_digest: self.field_layout_digest.clone(),
+            element_offset: self.element_offset,
+            element_count: self.element_count,
+            component_count: self.component_count,
+            precision: self.precision,
+            complex_encoding: self.complex_encoding,
+            harmonic_convention: self.harmonic_convention,
+            planes,
+        })
     }
 }
 
@@ -244,6 +349,12 @@ pub enum DatasetSliceError {
     PartCountMismatch,
     PartLengthMismatch,
     PartChecksumMismatch,
+    MisalignedPart,
+    DecodedValueCountMismatch(DatasetSlicePlane),
+    NonFinitePayloadValue {
+        plane: DatasetSlicePlane,
+        value_index: usize,
+    },
 }
 
 impl fmt::Display for DatasetSliceError {
@@ -313,6 +424,17 @@ impl fmt::Display for DatasetSliceError {
             Self::PartChecksumMismatch => {
                 formatter.write_str("dataset slice part checksum does not match returned bytes")
             }
+            Self::MisalignedPart => formatter.write_str(
+                "dataset slice part offsets and length must align to the numeric precision",
+            ),
+            Self::DecodedValueCountMismatch(plane) => write!(
+                formatter,
+                "dataset slice {plane:?} plane decoded value count does not match its shape"
+            ),
+            Self::NonFinitePayloadValue { plane, value_index } => write!(
+                formatter,
+                "dataset slice {plane:?} plane contains a non-finite value at index {value_index}"
+            ),
         }
     }
 }
@@ -323,6 +445,7 @@ fn validate_parts(
     parts: &[DatasetSlicePart],
     expected_planes: &[DatasetSlicePlane],
     plane_bytes: u64,
+    scalar_bytes: u64,
 ) -> Result<(), DatasetSliceError> {
     if parts.is_empty() || parts.len() > MAX_DATASET_SLICE_PARTS {
         return Err(DatasetSliceError::PartCountOutOfRange);
@@ -334,6 +457,12 @@ fn validate_parts(
         }
         if part.byte_length == 0 {
             return Err(DatasetSliceError::EmptyPart);
+        }
+        if part.object_offset_bytes % scalar_bytes != 0
+            || part.plane_offset_bytes % scalar_bytes != 0
+            || part.byte_length % scalar_bytes != 0
+        {
+            return Err(DatasetSliceError::MisalignedPart);
         }
         if !is_cas_object_ref(&part.object_ref) {
             return Err(DatasetSliceError::InvalidDigest("object_ref"));
@@ -366,6 +495,63 @@ fn validate_parts(
         }
     }
     Ok(())
+}
+
+fn decode_plane_values(
+    plane: DatasetSlicePlane,
+    precision: DatasetNumericPrecision,
+    expected_values: usize,
+    part_indexes: &[usize],
+    part_bytes: &[&[u8]],
+) -> Result<DatasetNumericValues, DatasetSliceError> {
+    match precision {
+        DatasetNumericPrecision::F32 => {
+            let mut values = Vec::with_capacity(expected_values);
+            for part_index in part_indexes {
+                for bytes in part_bytes[*part_index].chunks_exact(4) {
+                    let value = f32::from_le_bytes(
+                        bytes
+                            .try_into()
+                            .expect("chunks_exact always yields four bytes"),
+                    );
+                    if !value.is_finite() {
+                        return Err(DatasetSliceError::NonFinitePayloadValue {
+                            plane,
+                            value_index: values.len(),
+                        });
+                    }
+                    values.push(value);
+                }
+            }
+            if values.len() != expected_values {
+                return Err(DatasetSliceError::DecodedValueCountMismatch(plane));
+            }
+            Ok(DatasetNumericValues::F32(values))
+        }
+        DatasetNumericPrecision::F64 => {
+            let mut values = Vec::with_capacity(expected_values);
+            for part_index in part_indexes {
+                for bytes in part_bytes[*part_index].chunks_exact(8) {
+                    let value = f64::from_le_bytes(
+                        bytes
+                            .try_into()
+                            .expect("chunks_exact always yields eight bytes"),
+                    );
+                    if !value.is_finite() {
+                        return Err(DatasetSliceError::NonFinitePayloadValue {
+                            plane,
+                            value_index: values.len(),
+                        });
+                    }
+                    values.push(value);
+                }
+            }
+            if values.len() != expected_values {
+                return Err(DatasetSliceError::DecodedValueCountMismatch(plane));
+            }
+            Ok(DatasetNumericValues::F64(values))
+        }
+    }
 }
 
 fn require_schema(schema: &str) -> Result<(), DatasetSliceError> {
@@ -545,6 +731,107 @@ mod tests {
             Err(DatasetSliceError::PlaneCoverageGapOrOverlap(
                 DatasetSlicePlane::Values
             ))
+        );
+    }
+
+    #[test]
+    fn decoder_preserves_real_imag_planes_and_precision() {
+        let real = [1.0_f32, -2.5_f32]
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect::<Vec<_>>();
+        let imaginary = [0.25_f32, 4.0_f32]
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect::<Vec<_>>();
+        let response = DatasetFieldSlice {
+            schema_version: DATASET_SLICE_SCHEMA_VERSION.to_string(),
+            dataset: request().dataset,
+            sample_id: "sample:h-50mt".to_string(),
+            item_id: "mode:2".to_string(),
+            field_id: "field:mode-m".to_string(),
+            field_layout_digest: digest(b"layout"),
+            element_offset: 2,
+            element_count: 1,
+            total_elements: 10,
+            component_count: 2,
+            precision: DatasetNumericPrecision::F32,
+            byte_order: DatasetByteOrder::LittleEndian,
+            complex_encoding: ComplexEncoding::RealImagPair,
+            harmonic_convention: Some(HarmonicConvention::ExpNegativeIOmegaT),
+            payload_bytes: 16,
+            parts: vec![
+                DatasetSlicePart {
+                    plane: DatasetSlicePlane::Imaginary,
+                    object_ref: object_ref(b"imaginary"),
+                    object_offset_bytes: 0,
+                    plane_offset_bytes: 0,
+                    byte_length: 8,
+                    range_sha256: digest(&imaginary),
+                },
+                DatasetSlicePart {
+                    plane: DatasetSlicePlane::Real,
+                    object_ref: object_ref(b"real"),
+                    object_offset_bytes: 0,
+                    plane_offset_bytes: 0,
+                    byte_length: 8,
+                    range_sha256: digest(&real),
+                },
+            ],
+        };
+
+        let decoded = response
+            .decode_part_bytes(&[imaginary.as_slice(), real.as_slice()])
+            .expect("decode verified complex payload");
+        assert_eq!(decoded.precision, DatasetNumericPrecision::F32);
+        assert_eq!(decoded.planes.len(), 2);
+        assert_eq!(decoded.planes[0].plane, DatasetSlicePlane::Real);
+        assert_eq!(
+            decoded.planes[0].values,
+            DatasetNumericValues::F32(vec![1.0, -2.5])
+        );
+        assert_eq!(decoded.planes[1].plane, DatasetSlicePlane::Imaginary);
+        assert_eq!(
+            decoded.planes[1].values,
+            DatasetNumericValues::F32(vec![0.25, 4.0])
+        );
+    }
+
+    #[test]
+    fn decoder_rejects_non_finite_values() {
+        let bytes = f64::NAN.to_le_bytes();
+        let response = DatasetFieldSlice {
+            schema_version: DATASET_SLICE_SCHEMA_VERSION.to_string(),
+            dataset: request().dataset,
+            sample_id: "sample:h-50mt".to_string(),
+            item_id: "mode:2".to_string(),
+            field_id: "field:mode-m".to_string(),
+            field_layout_digest: digest(b"layout"),
+            element_offset: 2,
+            element_count: 1,
+            total_elements: 10,
+            component_count: 1,
+            precision: DatasetNumericPrecision::F64,
+            byte_order: DatasetByteOrder::LittleEndian,
+            complex_encoding: ComplexEncoding::Real,
+            harmonic_convention: None,
+            payload_bytes: 8,
+            parts: vec![DatasetSlicePart {
+                plane: DatasetSlicePlane::Values,
+                object_ref: object_ref(b"values"),
+                object_offset_bytes: 0,
+                plane_offset_bytes: 0,
+                byte_length: 8,
+                range_sha256: digest(&bytes),
+            }],
+        };
+
+        assert_eq!(
+            response.decode_part_bytes(&[bytes.as_slice()]),
+            Err(DatasetSliceError::NonFinitePayloadValue {
+                plane: DatasetSlicePlane::Values,
+                value_index: 0,
+            })
         );
     }
 }
