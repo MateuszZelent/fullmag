@@ -50,8 +50,11 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 14. [Reconciliation rewizji SolutionSet](14-solution-set-reconciliation.md)
     — pełny skan ciągłego łańcucha, weryfikacja current wobec historii i
     atomowa promocja ostatniej poprawnej orphan revision.
+15. [Automatyczne recovery katalogu SolutionSet](15-solution-set-startup-recovery.md)
+    — discovery logicznych ID z portable katalogów, fail-closed kontrola
+    tożsamości i reconciliation wszystkich wyników podczas otwarcia katalogu.
 
-Writers i trwały katalog SolutionSet, materializator/evaluator datasetów, API i
+Writers i integracja katalogu SolutionSet z SessionStore, materializator/evaluator datasetów, API i
 generated client, pozostałe quantities, frontend porównań i wykresów oraz
 produkcyjne dowody pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi
-**30%**.
+**32%**.

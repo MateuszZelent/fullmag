@@ -2,7 +2,7 @@
 
 Data: 29.09.2026
 
-Status: **SOURCE VERIFIED / UNIT TESTS NOT RUN / STARTUP/API NOT VERIFIED**
+Status: **SOURCE VERIFIED / UNIT TESTS NOT RUN / SESSIONSTORE/API NOT VERIFIED**
 
 ## Zakres przyrostu
 
@@ -41,8 +41,9 @@ bez current jest poprawnym no-op; current bez historii jest odrzucany.
 
 ## Otwarte elementy
 
-Reconciliation nie jest jeszcze uruchamiane przez startup ani runner
-publication barrier i nie ma publicznego API/CLI. Brakuje fault injection dla
-awarii zasilania, quarantine/diagnostyki uszkodzonych łańcuchów, GC
-reachability, `.fms` pack/unpack, writerów czterech lane'ów oraz ich
-kwalifikacji. CAE-04/37/61/70 pozostają **NOT VERIFIED**.
+Reconciliation działa przy otwarciu samego katalogu, lecz katalog nie jest
+jeszcze osadzony w startupie `SessionStore` ani podłączony do runner publication
+barrier i publicznego API/CLI. Brakuje fault injection dla awarii zasilania,
+quarantine/diagnostyki uszkodzonych łańcuchów, GC reachability, `.fms`
+pack/unpack, writerów czterech lane'ów oraz ich kwalifikacji. CAE-04/37/61/70
+pozostają **NOT VERIFIED**.

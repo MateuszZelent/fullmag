@@ -33,10 +33,12 @@ impl SolutionSetCatalog {
         require_local_filesystem(&root)?;
         fs::create_dir_all(&root)?;
         let root = fs::canonicalize(root)?;
-        Ok(Self {
+        let catalog = Self {
             writer: Writer::new(root.clone()),
             root,
-        })
+        };
+        catalog.reconcile_all()?;
+        Ok(catalog)
     }
 
     pub fn read(&self, solution_set_id: &str) -> Result<Option<SolutionSet>> {
@@ -87,13 +89,7 @@ impl SolutionSetCatalog {
                 .file_name()
                 .into_string()
                 .map_err(|_| anyhow::anyhow!("non-UTF8 solution-set catalog directory"))?;
-            if directory_name.len() != 64
-                || !directory_name
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            {
-                bail!("invalid solution-set catalog directory `{directory_name}`");
-            }
+            validate_directory_name(&directory_name)?;
             let relative = format!("solutions/{directory_name}/manifest.json");
             let path = checked_path(&self.root, &relative)?;
             if !path.exists() {
@@ -158,6 +154,19 @@ impl SolutionSetCatalog {
     pub fn reconcile(&self, solution_set_id: &str) -> Result<SolutionSetReconciliation> {
         require_logical_id(solution_set_id)?;
         let _lease = self.writer.acquire()?;
+        self.reconcile_locked(solution_set_id)
+    }
+
+    pub fn reconcile_all(&self) -> Result<Vec<SolutionSetReconciliation>> {
+        let _lease = self.writer.acquire()?;
+        let mut reconciliations = Vec::new();
+        for solution_set_id in self.discover_solution_set_ids()? {
+            reconciliations.push(self.reconcile_locked(&solution_set_id)?);
+        }
+        Ok(reconciliations)
+    }
+
+    fn reconcile_locked(&self, solution_set_id: &str) -> Result<SolutionSetReconciliation> {
         let current = self.read(solution_set_id)?;
         let revisions = self.read_revision_chain(solution_set_id)?;
         if revisions.is_empty() {
@@ -216,6 +225,74 @@ impl SolutionSetCatalog {
         })
     }
 
+    fn discover_solution_set_ids(&self) -> Result<Vec<String>> {
+        let solutions_root = checked_path(&self.root, "solutions")?;
+        if !solutions_root.exists() {
+            return Ok(Vec::new());
+        }
+        let mut solution_set_ids = Vec::new();
+        for entry in fs::read_dir(&solutions_root)? {
+            let entry = entry?;
+            let directory_name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("non-UTF8 solution-set catalog directory"))?;
+            validate_directory_name(&directory_name)?;
+            if !entry.file_type()?.is_dir() {
+                bail!("invalid solution-set catalog entry `{directory_name}`");
+            }
+
+            let current_relative = format!("solutions/{directory_name}/manifest.json");
+            let current_path = checked_path(&self.root, &current_relative)?;
+            let discovered = if current_path.exists() {
+                Some(read_solution_set(&current_path)?)
+            } else {
+                self.read_first_revision(&directory_name)?
+            };
+            let Some(solution) = discovered else {
+                // A crash before the first immutable revision may leave only
+                // empty catalog directories. They carry no recoverable state.
+                continue;
+            };
+            if solution_directory(&solution.solution_set_id) != directory_name {
+                bail!("solution-set catalog directory does not match logical identity");
+            }
+            solution_set_ids.push(solution.solution_set_id);
+        }
+        solution_set_ids.sort_unstable();
+        solution_set_ids.dedup();
+        Ok(solution_set_ids)
+    }
+
+    fn read_first_revision(&self, directory_name: &str) -> Result<Option<SolutionSet>> {
+        let relative = format!("solutions/{directory_name}/revisions");
+        let directory = checked_path(&self.root, &relative)?;
+        if !directory.exists() {
+            return Ok(None);
+        }
+        let mut first: Option<(u64, SolutionSet)> = None;
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            let file_name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("non-UTF8 solution-set revision filename"))?;
+            let revision = parse_revision_entry(&entry, &file_name)?;
+            let path = checked_path(&self.root, &format!("{relative}/{file_name}"))?;
+            let solution = read_solution_set(&path)?;
+            if solution.revision != revision {
+                bail!("solution-set revision path identity mismatch");
+            }
+            if first
+                .as_ref()
+                .is_none_or(|(first_revision, _)| revision < *first_revision)
+            {
+                first = Some((revision, solution));
+            }
+        }
+        Ok(first.map(|(_, solution)| solution))
+    }
+
     fn current_manifest_path(&self, solution_set_id: &str) -> Result<PathBuf> {
         checked_path(
             &self.root,
@@ -246,18 +323,7 @@ impl SolutionSetCatalog {
                 .file_name()
                 .into_string()
                 .map_err(|_| anyhow::anyhow!("non-UTF8 solution-set revision filename"))?;
-            let revision_text = file_name
-                .strip_suffix(".json")
-                .filter(|value| {
-                    value.len() == 20 && value.bytes().all(|byte| byte.is_ascii_digit())
-                })
-                .ok_or_else(|| {
-                    anyhow::anyhow!("invalid solution-set revision filename `{file_name}`")
-                })?;
-            let revision = revision_text.parse::<u64>()?;
-            if revision == 0 || !entry.file_type()?.is_file() {
-                bail!("invalid solution-set revision entry `{file_name}`");
-            }
+            let revision = parse_revision_entry(&entry, &file_name)?;
             let relative_path = format!("{relative}/{file_name}");
             let path = checked_path(&self.root, &relative_path)?;
             let solution = read_solution_set(&path)?;
@@ -284,6 +350,29 @@ impl SolutionSetCatalog {
             solution_directory(solution_set_id)
         )
     }
+}
+
+fn validate_directory_name(directory_name: &str) -> Result<()> {
+    if directory_name.len() != 64
+        || !directory_name
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        bail!("invalid solution-set catalog directory `{directory_name}`");
+    }
+    Ok(())
+}
+
+fn parse_revision_entry(entry: &fs::DirEntry, file_name: &str) -> Result<u64> {
+    let revision_text = file_name
+        .strip_suffix(".json")
+        .filter(|value| value.len() == 20 && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .ok_or_else(|| anyhow::anyhow!("invalid solution-set revision filename `{file_name}`"))?;
+    let revision = revision_text.parse::<u64>()?;
+    if revision == 0 || !entry.file_type()?.is_file() {
+        bail!("invalid solution-set revision entry `{file_name}`");
+    }
+    Ok(revision)
 }
 
 fn read_solution_set(path: &Path) -> Result<SolutionSet> {
@@ -481,7 +570,7 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_promotes_valid_orphan_revision() {
+    fn open_reconciles_valid_orphan_revision() {
         let directory = tempfile::tempdir().expect("temporary catalog");
         let catalog = SolutionSetCatalog::open(directory.path()).expect("open catalog");
         catalog
@@ -499,11 +588,14 @@ mod tests {
         )
         .expect("persist orphan revision");
 
+        drop(catalog);
+        let catalog = SolutionSetCatalog::open(directory.path()).expect("reopen catalog");
+        assert_eq!(catalog.read("solution:run-1").unwrap(), Some(orphan));
+
         let outcome = catalog
             .reconcile("solution:run-1")
-            .expect("reconcile orphan");
-        assert_eq!(outcome.previous_current_revision, Some(1));
-        assert_eq!(outcome.promoted_revision, Some(2));
-        assert_eq!(catalog.read("solution:run-1").unwrap(), Some(orphan));
+            .expect("reconcile recovered catalog");
+        assert_eq!(outcome.previous_current_revision, Some(2));
+        assert_eq!(outcome.promoted_revision, None);
     }
 }
