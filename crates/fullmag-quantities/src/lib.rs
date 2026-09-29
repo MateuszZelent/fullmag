@@ -39,16 +39,18 @@ pub use catalog::{
     quantity_unit,
 };
 pub use dataset::{
-    validate_field_compatibility, ActiveSupportDescriptor, ApproximationPolicy, ComplexEncoding,
-    DatasetAvailability, DatasetAxis, DatasetAxisCoordinate, DatasetAxisKind, DatasetAxisSelection,
-    DatasetBranch, DatasetContractError, DatasetDefinition, DatasetDefinitionRef,
-    DatasetEvaluationPolicy, DatasetFieldDescriptor, DatasetFieldRef, DatasetItem, DatasetItemRef,
-    DatasetSample, DatasetSource, DatasetStatus, DatasetTransform, DerivedOperator,
-    DerivedValueDefinition, DerivedValuePurpose, EvaluationPrecision, FieldAxisDescriptor,
-    FieldFrameDescriptor, FieldFrameKind, FieldNormalization, FieldProjection, FieldResolution,
+    validate_field_compatibility, validate_field_projection_receipt, ActiveSupportDescriptor,
+    ApproximationPolicy, ComplexEncoding, DatasetAvailability, DatasetAxis, DatasetAxisCoordinate,
+    DatasetAxisKind, DatasetAxisSelection, DatasetBranch, DatasetContractError, DatasetDefinition,
+    DatasetDefinitionRef, DatasetEvaluationPolicy, DatasetFieldDescriptor, DatasetFieldRef,
+    DatasetItem, DatasetItemRef, DatasetSample, DatasetSource, DatasetStatus, DatasetTransform,
+    DerivedOperator, DerivedValueDefinition, DerivedValuePurpose, EvaluationPrecision,
+    FieldAxisDescriptor, FieldFrameDescriptor, FieldFrameKind, FieldLayoutIdentity,
+    FieldNormalization, FieldProjection, FieldProjectionReceipt, FieldResolution,
     FieldSampleLocation, FunctionSpaceDescriptor, FunctionSpaceOrdering, HarmonicConvention,
     IntegrationMeasure, MaterializedDataset, MaterializedDatasetRef, PlotDefinition, PlotKind,
-    PlotSource, ProjectionMethod, SelectionReference, UnavailableAction, UnavailableDataPolicy,
+    PlotSource, ProjectionErrorMetric, ProjectionErrorMetricKind, ProjectionErrorValueKind,
+    ProjectionMethod, SelectionReference, UnavailableAction, UnavailableDataPolicy,
     DATASET_CONTRACT_SCHEMA_VERSION,
 };
 pub use dataset_slice::{

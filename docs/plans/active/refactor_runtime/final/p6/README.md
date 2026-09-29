@@ -26,8 +26,11 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 6. [Pełny descriptor pola K11](06-field-descriptor-k11.md)
    — frame, sample location, support, carrier, function space/basis/order,
    axes, complex convention, normalization i fail-closed compatibility.
+7. [Receipts projekcji i metryki błędu](07-projection-receipts.md)
+   — osobna receptura i dowód wykonania, exact source/target layout oraz jawne
+   measured/estimated/certified error metrics z jednostkami.
 
 SolutionSet, materializator/evaluator datasetów, API i generated client,
 pozostałe quantities, partial reads, frontend porównań i wykresów oraz
 produkcyjne dowody pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi
-**13%**.
+**15%**.

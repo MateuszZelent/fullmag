@@ -57,6 +57,7 @@ pub enum DatasetTransform {
     Projection {
         target_space_id: String,
         method: ProjectionMethod,
+        producer_version: String,
     },
     Cut {
         selection: SelectionReference,
@@ -137,8 +138,13 @@ impl DatasetDefinition {
         for transform in &self.transforms {
             match transform {
                 DatasetTransform::Projection {
-                    target_space_id, ..
-                } => require_id("target_space_id", target_space_id)?,
+                    target_space_id,
+                    producer_version,
+                    ..
+                } => {
+                    require_id("target_space_id", target_space_id)?;
+                    require_id("projection producer_version", producer_version)?;
+                }
                 DatasetTransform::Cut { selection } => validate_selection(selection)?,
                 DatasetTransform::Composition { component } => require_id("component", component)?,
                 DatasetTransform::Difference {
@@ -625,10 +631,107 @@ pub struct FieldProjection {
     pub producer_version: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldLayoutIdentity {
+    pub topology_id: String,
+    pub carrier_id: String,
+    pub function_space_id: String,
+    pub layout_digest: String,
+}
+
+impl FieldLayoutIdentity {
+    pub fn from_descriptor(
+        descriptor: &DatasetFieldDescriptor,
+    ) -> Result<Self, DatasetContractError> {
+        validate_field_descriptor(descriptor)?;
+        let function_space = descriptor
+            .function_space
+            .as_ref()
+            .ok_or(DatasetContractError::ProjectionRequiresSpatialFields)?;
+        Ok(Self {
+            topology_id: descriptor.topology_id.clone(),
+            carrier_id: descriptor.carrier_id.clone(),
+            function_space_id: function_space.space_id.clone(),
+            layout_digest: descriptor.layout_digest.clone(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionErrorMetricKind {
+    L1,
+    L2,
+    LInf,
+    RelativeL2,
+    ConservationResidual,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionErrorValueKind {
+    Measured,
+    EstimatedUpperBound,
+    CertifiedUpperBound,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectionErrorMetric {
+    pub kind: ProjectionErrorMetricKind,
+    pub value_kind: ProjectionErrorValueKind,
+    pub value: f64,
+    pub unit: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldProjectionReceipt {
+    pub definition: FieldProjection,
+    pub source: FieldLayoutIdentity,
+    pub target: FieldLayoutIdentity,
+    pub error_metrics: Vec<ProjectionErrorMetric>,
+}
+
+pub fn validate_field_projection_receipt(
+    receipt: &FieldProjectionReceipt,
+    expected_source: &DatasetFieldDescriptor,
+    expected_target: &DatasetFieldDescriptor,
+) -> Result<(), DatasetContractError> {
+    validate_projection(&receipt.definition)?;
+    let source = FieldLayoutIdentity::from_descriptor(expected_source)?;
+    let target = FieldLayoutIdentity::from_descriptor(expected_target)?;
+    if receipt.source != source
+        || receipt.target != target
+        || receipt.definition.target_space_id != target.function_space_id
+    {
+        return Err(DatasetContractError::ProjectionIdentityMismatch);
+    }
+    validate_layout_identity(&receipt.source)?;
+    validate_layout_identity(&receipt.target)?;
+    if receipt.error_metrics.is_empty() {
+        return Err(DatasetContractError::MissingProjectionErrorMetrics);
+    }
+    let mut kinds = BTreeSet::new();
+    for metric in &receipt.error_metrics {
+        require_id("projection error unit", &metric.unit)?;
+        if !metric.value.is_finite() || metric.value < 0.0 {
+            return Err(DatasetContractError::InvalidProjectionErrorMetric);
+        }
+        if !kinds.insert(metric.kind) {
+            return Err(DatasetContractError::DuplicateProjectionErrorMetric(
+                metric.kind,
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn validate_field_compatibility(
     left: &DatasetFieldDescriptor,
     right: &DatasetFieldDescriptor,
-    projection: Option<&FieldProjection>,
+    projection: Option<&FieldProjectionReceipt>,
 ) -> Result<(), DatasetContractError> {
     validate_field_descriptor(left)?;
     validate_field_descriptor(right)?;
@@ -653,7 +756,9 @@ pub fn validate_field_compatibility(
         && left.layout_digest == right.layout_digest;
     if !same_layout {
         let projection = projection.ok_or(DatasetContractError::ProjectionRequired)?;
-        validate_projection(projection)?;
+        validate_field_projection_receipt(projection, right, left)?;
+    } else if let Some(projection) = projection {
+        validate_field_projection_receipt(projection, right, left)?;
     }
     Ok(())
 }
@@ -749,6 +854,11 @@ pub enum DatasetContractError {
     PreviewOnlyQuantitativeInput,
     IncompatibleFieldSemantics,
     ProjectionRequired,
+    ProjectionRequiresSpatialFields,
+    ProjectionIdentityMismatch,
+    MissingProjectionErrorMetrics,
+    InvalidProjectionErrorMetric,
+    DuplicateProjectionErrorMetric(ProjectionErrorMetricKind),
     ReadyFieldMissingResource,
     InvalidFieldDigest(&'static str),
     SpatialFieldMissingFunctionSpace,
@@ -818,6 +928,20 @@ impl fmt::Display for DatasetContractError {
             ),
             Self::ProjectionRequired => formatter.write_str(
                 "field comparison across different function spaces requires an explicit projection",
+            ),
+            Self::ProjectionRequiresSpatialFields => formatter
+                .write_str("field projection requires spatial function-space descriptors"),
+            Self::ProjectionIdentityMismatch => formatter.write_str(
+                "field projection receipt does not match exact source and target layout identity",
+            ),
+            Self::MissingProjectionErrorMetrics => formatter
+                .write_str("field projection receipt requires explicit error metrics"),
+            Self::InvalidProjectionErrorMetric => formatter.write_str(
+                "field projection error metric must be finite and non-negative",
+            ),
+            Self::DuplicateProjectionErrorMetric(kind) => write!(
+                formatter,
+                "field projection error metric {kind:?} must be unique"
             ),
             Self::ReadyFieldMissingResource => {
                 formatter.write_str("ready dataset field requires a resource key")
@@ -942,6 +1066,18 @@ fn validate_items(items: &[DatasetItem]) -> Result<(), DatasetContractError> {
 fn validate_projection(projection: &FieldProjection) -> Result<(), DatasetContractError> {
     require_id("projection target_space_id", &projection.target_space_id)?;
     require_id("projection producer_version", &projection.producer_version)
+}
+
+fn validate_layout_identity(identity: &FieldLayoutIdentity) -> Result<(), DatasetContractError> {
+    require_id("projection topology_id", &identity.topology_id)?;
+    require_id("projection carrier_id", &identity.carrier_id)?;
+    require_id("projection function_space_id", &identity.function_space_id)?;
+    if !is_canonical_sha256(&identity.layout_digest) {
+        return Err(DatasetContractError::InvalidFieldDigest(
+            "projection layout_digest",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_field_descriptor(
@@ -1142,12 +1278,54 @@ mod tests {
             Err(DatasetContractError::ProjectionRequired)
         );
 
-        let projection = FieldProjection {
-            method: ProjectionMethod::L2,
-            target_space_id: "comparison-space".to_string(),
-            producer_version: "projector/1".to_string(),
+        let projection = FieldProjectionReceipt {
+            definition: FieldProjection {
+                method: ProjectionMethod::L2,
+                target_space_id: "fdm-cell".to_string(),
+                producer_version: "projector/1".to_string(),
+            },
+            source: FieldLayoutIdentity::from_descriptor(&right).expect("right layout"),
+            target: FieldLayoutIdentity::from_descriptor(&left).expect("left layout"),
+            error_metrics: vec![ProjectionErrorMetric {
+                kind: ProjectionErrorMetricKind::RelativeL2,
+                value_kind: ProjectionErrorValueKind::EstimatedUpperBound,
+                value: 1.0e-6,
+                unit: "1".to_string(),
+            }],
         };
         assert!(validate_field_compatibility(&left, &right, Some(&projection)).is_ok());
+    }
+
+    #[test]
+    fn projection_receipt_requires_error_metrics_and_exact_layouts() {
+        let left = field("fdm-cell", "grid:a", "layout:a");
+        let right = field("fem-h1", "mesh:b", "layout:b");
+        let mut receipt = FieldProjectionReceipt {
+            definition: FieldProjection {
+                method: ProjectionMethod::Conservative,
+                target_space_id: "fdm-cell".to_string(),
+                producer_version: "projector/1".to_string(),
+            },
+            source: FieldLayoutIdentity::from_descriptor(&right).expect("right layout"),
+            target: FieldLayoutIdentity::from_descriptor(&left).expect("left layout"),
+            error_metrics: Vec::new(),
+        };
+        assert_eq!(
+            validate_field_projection_receipt(&receipt, &right, &left),
+            Err(DatasetContractError::MissingProjectionErrorMetrics)
+        );
+
+        receipt.error_metrics.push(ProjectionErrorMetric {
+            kind: ProjectionErrorMetricKind::ConservationResidual,
+            value_kind: ProjectionErrorValueKind::Measured,
+            value: 0.0,
+            unit: "1".to_string(),
+        });
+        receipt.source.layout_digest = digest("wrong-layout");
+        assert_eq!(
+            validate_field_projection_receipt(&receipt, &right, &left),
+            Err(DatasetContractError::ProjectionIdentityMismatch)
+        );
     }
 
     #[test]
