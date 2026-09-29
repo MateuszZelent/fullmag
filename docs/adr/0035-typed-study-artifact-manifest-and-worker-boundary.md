@@ -151,6 +151,14 @@ lecz nie zbudowano ani nie uruchomiono z powodu tymczasowego zakazu testów.
 Pozostałe lane'y, publiczne `ComputeQuantities` i managed runtime proof są nadal
 otwarte.
 
+Ten sam przyrost udostępnia następnie
+`load_study_observation_runtime(expected_source)`. Loader wymaga zakończonego
+bieżącego attemptu, pełnej zgodności generation, manifestu i systemowych
+artifactów w task allow-list oraz ponownie waliduje bajty CAS przed utworzeniem
+izolowanego evaluatora. Nie czyta ani nie podmienia `LiveRuntime`. Publiczny
+coordinator, observation-results i source-aware field data plane pozostają
+odrębną otwartą bramką.
+
 ## Migracja i rollback
 
 Stare outputy bez manifestu pozostają zachowane i eksportowalne, ale nie są

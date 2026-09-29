@@ -585,8 +585,9 @@ pub use study::{
     load_accepted_study_snapshot, load_accepted_worker_step, load_accepted_worker_step_for_start,
     publish_accepted_task_prepare, publish_accepted_task_start, publish_study_outputs,
     queue_accepted_study_task, validate_requested_execution, validate_study_task_completion,
-    AcceptedStudySnapshot, AcceptedWorkerStep, ObservationSourcePayload, QueuedAcceptedStudyTask,
-    StudyOutputPayload, ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION,
+    AcceptedStudySnapshot, AcceptedWorkerStep, LoadedStudyObservationRuntime,
+    ObservationSourcePayload, QueuedAcceptedStudyTask, StudyOutputPayload,
+    ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION, load_study_observation_runtime,
 };
 
 mod worker_inbox;

@@ -40,8 +40,11 @@ aktywnego runtime'u.
 11. [Trwałe źródło obserwacji w CAS](11-durable-fdm-cpu-observation-source.md)
     — manifest v3, systemowe nośniki niezależne od portów study, fenced
     publication, recovery i completion barrier.
+12. [Loader historycznego `ObservationRuntime`](12-historical-observation-runtime-loader.md)
+    — exact AcceptedStateRef precondition, odczyt manifestu i carrierów CAS,
+    izolowana rekonstrukcja oraz fail-closed stale generation.
 
 Materializacja accepted state dla coupled/Frozen Spins i FEM, ogólna
-checkpoint compatibility, publiczne `ComputeQuantities`, adaptery pozostałych
-lane'ów, autosave frame oraz zarządzana rekwalifikacja nowego refa GPU pozostają
-otwarte. P5 wynosi **99%**.
+checkpoint compatibility, publiczny coordinator/result data plane
+`ComputeQuantities`, adaptery pozostałych lane'ów, autosave frame oraz
+zarządzana rekwalifikacja nowego refa GPU pozostają otwarte. P5 wynosi **99%**.

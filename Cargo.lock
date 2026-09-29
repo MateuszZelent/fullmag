@@ -1361,6 +1361,7 @@ dependencies = [
  "fullmag-ir",
  "fullmag-plan",
  "fullmag-quantities",
+ "fullmag-runner",
  "fullmag-session",
  "serde",
  "serde_json",

@@ -856,6 +856,13 @@ impl ObservationSourcePayload {
     }
 }
 
+/// Historical evaluator reconstructed only from one immutable accepted source.
+/// It owns no live runtime, publisher, worker, or command handle.
+pub struct LoadedStudyObservationRuntime {
+    pub descriptor: fullmag_session::FmsObservationSourceDescriptor,
+    pub runtime: fullmag_runner::ObservationRuntime,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FdmCpuObservationSnapshotWire {
@@ -981,6 +988,170 @@ fn validate_observation_source_payload(payload: &ObservationSourcePayload) -> Re
         bail!("observation terminal magnetization differs from its accepted snapshot");
     }
     Ok(())
+}
+
+/// Reconstruct the observation runtime for one exact completed study source.
+///
+/// The accepted-state generation is an optimistic precondition. The loader
+/// rejects a different current attempt, an ambiguous or unlisted manifest,
+/// missing catalog lineage, missing CAS bytes, and every carrier mismatch
+/// before constructing the isolated evaluator.
+pub fn load_study_observation_runtime(
+    store: &SessionStore,
+    expected_source: &fullmag_quantities::AcceptedStateRef,
+) -> Result<LoadedStudyObservationRuntime> {
+    expected_source
+        .validate()
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let run_id = expected_source.id.run_id.as_str();
+    let step_id = expected_source
+        .id
+        .stage_id
+        .as_deref()
+        .context("study observation source has no stage identity")?;
+    let task_id = fullmag_session::task_id_for_study_step(run_id, step_id)?;
+    let run_catalog = store
+        .read_run_catalog(run_id)?
+        .context("study observation source has no durable run catalog")?;
+    let task = run_catalog
+        .tasks
+        .iter()
+        .find(|task| task.task_id == task_id)
+        .context("study observation source task is absent from the run catalog")?;
+    let attempt_id = task
+        .attempt_id
+        .as_deref()
+        .context("study observation source task has no accepted attempt")?;
+    let ownership_epoch = task
+        .ownership_epoch
+        .context("study observation source task has no ownership epoch")?;
+    if task.lifecycle != fullmag_session::FmsTaskLifecycle::Succeeded
+        || ownership_epoch != expected_source.generation.runtime_epoch
+    {
+        bail!("study observation source is not the succeeded current attempt");
+    }
+
+    let artifact_catalog = store
+        .read_artifact_catalog(run_id)?
+        .context("study observation source has no artifact catalog")?;
+    artifact_catalog.validate()?;
+    let mut manifests = artifact_catalog.entries.iter().filter(|entry| {
+        entry.artifact_type == "study_output_manifest"
+            && entry.task_id == task_id
+            && entry.attempt_id == attempt_id
+            && entry.ownership_epoch == ownership_epoch
+            && entry.status == fullmag_session::FmsArtifactStatus::Published
+            && task.artifact_ids.contains(&entry.artifact_id)
+    });
+    let manifest_artifact = manifests
+        .next()
+        .context("study observation source has no published manifest")?;
+    if manifests.next().is_some() {
+        bail!("study observation source manifest is ambiguous");
+    }
+    let manifest_ref = manifest_artifact
+        .object_ref
+        .as_deref()
+        .context("study observation source manifest has no CAS reference")?;
+    if manifest_ref != manifest_artifact.content_sha256 {
+        bail!("study observation source manifest digest differs from its CAS reference");
+    }
+    let manifest_bytes = store
+        .cas()
+        .get(manifest_ref)?
+        .context("study observation source manifest is missing from CAS")?;
+    let manifest: fullmag_session::FmsStudyOutputManifest =
+        serde_json::from_slice(&manifest_bytes)
+            .context("study observation source manifest is not a typed document")?;
+    manifest.validate()?;
+    if manifest.run_id != run_id
+        || manifest.task_id != task_id
+        || manifest.step_id != step_id
+        || manifest.attempt_id != attempt_id
+        || manifest.ownership_epoch != ownership_epoch
+        || manifest.accepted_state_ref.as_ref() != Some(expected_source)
+    {
+        bail!("study observation source manifest differs from the requested accepted state");
+    }
+    let descriptor = manifest
+        .observation_source
+        .context("study observation source manifest has no observation descriptor")?;
+    if descriptor.accepted_state_ref != *expected_source {
+        bail!("study observation descriptor differs from the requested accepted state");
+    }
+
+    for (artifact_id, artifact_type, object_ref) in [
+        (
+            descriptor.snapshot_artifact_id.as_str(),
+            fullmag_session::FMS_OBSERVATION_SNAPSHOT_ARTIFACT_TYPE,
+            descriptor.snapshot_object_ref.as_str(),
+        ),
+        (
+            descriptor.state_artifact_id.as_str(),
+            fullmag_session::FMS_OBSERVATION_STATE_ARTIFACT_TYPE,
+            descriptor.state_object_ref.as_str(),
+        ),
+    ] {
+        let mut matches = artifact_catalog.entries.iter().filter(|entry| {
+            entry.artifact_id == artifact_id
+                && entry.task_id == task_id
+                && entry.attempt_id == attempt_id
+                && entry.ownership_epoch == ownership_epoch
+                && entry.artifact_type == artifact_type
+                && entry.object_ref.as_deref() == Some(object_ref)
+                && entry.content_sha256 == object_ref
+                && entry.status == fullmag_session::FmsArtifactStatus::Published
+                && entry.study_output.is_none()
+                && task.artifact_ids.contains(&entry.artifact_id)
+        });
+        matches
+            .next()
+            .context("study observation carrier is absent from the artifact catalog")?;
+        if matches.next().is_some() {
+            bail!("study observation carrier is ambiguous in the artifact catalog");
+        }
+    }
+
+    let snapshot_bytes = store
+        .cas()
+        .get(&descriptor.snapshot_object_ref)?
+        .context("study observation snapshot is missing from CAS")?;
+    let state_bytes = store
+        .cas()
+        .get(&descriptor.state_object_ref)?
+        .context("study observation state is missing from CAS")?;
+    ObservationSourcePayload {
+        accepted_state_ref: expected_source.clone(),
+        snapshot_bytes: snapshot_bytes.clone(),
+        state_bytes: state_bytes.clone(),
+        grid_cells: descriptor.grid_cells,
+    }
+    .validate()?;
+    let snapshot: fullmag_runner::FdmCpuAcceptedStateSnapshotV1 =
+        serde_json::from_slice(&snapshot_bytes)
+            .context("study observation snapshot cannot initialize its adapter")?;
+    let decoded = fullmag_application::decode_study_artifact_bytes(
+        "state",
+        &descriptor.state_codec_id,
+        &descriptor.state_codec_version,
+        &state_bytes,
+    )
+    .context("study observation state cannot initialize its adapter")?;
+    let fullmag_application::DecodedStudyArtifact::MagnetizationState(state) = decoded else {
+        bail!("study observation state adapter requires magnetization");
+    };
+    let runtime = fullmag_runner::ObservationRuntime::from_fdm_cpu_accepted_state(
+        expected_source.id.clone(),
+        snapshot,
+        descriptor.grid_cells,
+        state.values,
+    )
+    .map_err(|error| anyhow::anyhow!(error.to_string()))
+    .context("reconstruct isolated study observation runtime")?;
+    Ok(LoadedStudyObservationRuntime {
+        descriptor,
+        runtime,
+    })
 }
 
 /// Persist study outputs under the task's exact active lease before completion.

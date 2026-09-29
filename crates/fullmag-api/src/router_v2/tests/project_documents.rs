@@ -3443,6 +3443,32 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         fullmag_session::FmsTaskLifecycle::Succeeded,
         "the task completes only after its accepted output manifest is published"
     );
+    let mut loaded_observation =
+        fullmag_runtime_control::load_study_observation_runtime(&store, accepted_state_ref)
+            .expect("reconstruct historical observation runtime from the exact manifest and CAS");
+    assert_eq!(
+        loaded_observation.descriptor.accepted_state_ref,
+        *accepted_state_ref
+    );
+    let observation_batch = loaded_observation
+        .runtime
+        .compute_quantities(&accepted_state_ref.id, &[fullmag_quantities::QuantityId::M])
+        .expect("compute one atomic historical magnetization batch");
+    assert_eq!(observation_batch.source, accepted_state_ref.id);
+    assert_eq!(observation_batch.quantity_ids, [fullmag_quantities::QuantityId::M]);
+    let fullmag_quantities::QuantityValue::VectorField(values) =
+        &observation_batch.values[0].1
+    else {
+        panic!("historical m must remain a vector field");
+    };
+    assert_eq!(values, &[1.0, 0.0, 0.0]);
+    let mut stale_observation_source = accepted_state_ref.clone();
+    stale_observation_source.generation.runtime_epoch += 1;
+    assert!(fullmag_runtime_control::load_study_observation_runtime(
+        &store,
+        &stale_observation_source
+    )
+    .is_err());
     assert!(accepted_study
         .resolve_task_input_from_store(&store, &task, &claim, "another-step", Default::default(),)
         .is_err());
