@@ -20,8 +20,11 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
    — osobne identity receptury i materializowanego wyniku, typowane
    axis/sample/item/branch, jawne availability, derived value, plot oraz
    obowiązkowa projekcja między niezgodnymi przestrzeniami pól.
+5. [Ograniczone partial reads datasetów](05-bounded-dataset-slices.md)
+   — storage-neutralny slice manifest ponad istniejącym CAS/TensorDescriptor,
+   twarde budżety, exact range checksums i pełne płaszczyzny real/imag.
 
 SolutionSet, materializator/evaluator datasetów, API i generated client,
 pozostałe quantities, partial reads, frontend porównań i wykresów oraz
 produkcyjne dowody pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi
-**9%**.
+**11%**.

@@ -17,6 +17,7 @@
 pub mod accepted_state;
 pub mod catalog;
 pub mod dataset;
+pub mod dataset_slice;
 pub mod descriptor;
 pub mod eval;
 pub mod id;
@@ -47,6 +48,12 @@ pub use dataset::{
     MaterializedDataset, MaterializedDatasetRef, PlotDefinition, PlotKind, PlotSource,
     ProjectionMethod, SelectionReference, UnavailableAction, UnavailableDataPolicy,
     DATASET_CONTRACT_SCHEMA_VERSION,
+};
+pub use dataset_slice::{
+    DatasetByteOrder, DatasetFieldSlice, DatasetFieldSliceRequest, DatasetNumericPrecision,
+    DatasetSliceError, DatasetSlicePart, DatasetSlicePlane, HarmonicConvention,
+    DATASET_SLICE_SCHEMA_VERSION, MAX_DATASET_SLICE_BYTES, MAX_DATASET_SLICE_ELEMENTS,
+    MAX_DATASET_SLICE_PARTS,
 };
 pub use descriptor::{NormalizationHint, QuantityDomain, QuantityLocation, QuantitySpec};
 pub use eval::{eval_global_scalar, reduce_scalars, reduce_vector_field, QuantityValue};
