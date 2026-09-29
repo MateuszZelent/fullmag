@@ -1,6 +1,56 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct AcceptedStateRefResource {
+    pub id: AcceptedStateIdResource,
+    pub generation: AcceptedStateGenerationResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct AcceptedStateIdResource {
+    pub run_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_id: Option<String>,
+    pub accepted_step: u64,
+    pub clock_digest: String,
+    pub state_digest: String,
+    pub domain_digest: String,
+    pub plan_digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct AcceptedStateGenerationResource {
+    pub runtime_epoch: u64,
+    pub accepted_revision: u64,
+}
+
+impl From<fullmag_quantities::AcceptedStateRef> for AcceptedStateRefResource {
+    fn from(reference: fullmag_quantities::AcceptedStateRef) -> Self {
+        Self {
+            id: AcceptedStateIdResource {
+                run_id: reference.id.run_id,
+                stage_id: reference.id.stage_id,
+                accepted_step: reference.id.accepted_step,
+                clock_digest: reference.id.clock_digest,
+                state_digest: reference.id.state_digest,
+                domain_digest: reference.id.domain_digest,
+                plan_digest: reference.id.plan_digest,
+            },
+            generation: AcceptedStateGenerationResource {
+                runtime_epoch: reference.generation.runtime_epoch,
+                accepted_revision: reference.generation.accepted_revision,
+            },
+        }
+    }
+}
+
+impl From<&fullmag_quantities::AcceptedStateRef> for AcceptedStateRefResource {
+    fn from(reference: &fullmag_quantities::AcceptedStateRef) -> Self {
+        reference.clone().into()
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct ApiErrorDiagnosticResponse {
     pub code: String,

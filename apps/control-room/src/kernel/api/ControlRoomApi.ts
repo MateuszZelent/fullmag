@@ -78,6 +78,9 @@ import {
   DATA_PLANAR_DEFAULT_FIELD_SCALAR_PATH,
   DATA_PLANAR_DEFAULT_FIELD_VECTORS_PATH,
   DATA_FIELD_VECTOR_PATH,
+  DATA_OBSERVATION_FRAME_MAGNETIZATION_PATH,
+  DATA_OBSERVATION_FRAME_PATH,
+  DATA_OBSERVATION_FRAMES_PATH,
   DATA_MESH_REGION_MEMBERSHIP_PATH,
   DATA_MESH_REGION_MEMBERSHIPS_PATH,
   EXPECTED_API_CONTRACT_VERSION,
@@ -453,6 +456,9 @@ import type {
   ProjectRunListResource,
   ProjectRunTaskCancellationRequest,
   ProjectRunTaskCancellationResource,
+  ObservationFrameListQuery,
+  ObservationFrameListResource,
+  ObservationFrameResource,
   LivePreparationMaterializationRequest,
   LivePreparationMaterializationResource,
   SolverEnergyCurrentResource,
@@ -492,6 +498,7 @@ export function parseFieldVectorResponseMetadata(
     domainGenerationId: headers.get("x-fullmag-domain-generation-id"),
     encoding: headers.get("x-fullmag-encoding"),
     fieldIndexing: headers.get("x-fullmag-field-indexing"),
+    fieldGenerationId: headers.get("x-fullmag-field-generation-id"),
     fieldRevision: headers.get("x-fullmag-field-revision"),
     identityIssues: [],
     meshTopologyHash: headers.get("x-fullmag-mesh-topology-hash"),
@@ -501,6 +508,9 @@ export function parseFieldVectorResponseMetadata(
     quantityId: headers.get("x-fullmag-quantity-id"),
     scopeId: headers.get("x-fullmag-scope-id"),
     scopeKind: headers.get("x-fullmag-scope-kind"),
+    sourceId: headers.get("x-fullmag-source-id"),
+    sourceKind: headers.get("x-fullmag-source-kind"),
+    sourceRevision: headers.get("x-fullmag-source-revision"),
     snapshotId: headers.get("x-fullmag-snapshot-id"),
     valueCount: optionalIntegerHeader(headers, "x-fullmag-value-count"),
   };
@@ -524,7 +534,7 @@ export function collectFieldVectorIdentityIssues(
   compare("pointCount", metadata.pointCount, payload.pointCount);
   compare("valueCount", metadata.valueCount, payload.valueCount);
   compare("nComp", metadata.nComp, payload.nComp);
-  if (payload.formatVersion === 3) {
+  if (payload.formatVersion === 3 || payload.formatVersion === 4) {
     compare("scopeKind", metadata.scopeKind, payload.scopeKind ?? null);
     compare("scopeId", metadata.scopeId, payload.scopeId ?? null);
     const payloadMeshTopologyHash = payload.meshTopologyHash ?? null;
@@ -549,6 +559,20 @@ export function collectFieldVectorIdentityIssues(
       "domainGenerationId",
       metadata.domainGenerationId,
       payload.domainGenerationId ?? null,
+    );
+  }
+  if (payload.formatVersion === 4) {
+    compare("sourceKind", metadata.sourceKind ?? null, payload.sourceKind ?? null);
+    compare("sourceId", metadata.sourceId ?? null, payload.sourceId ?? null);
+    compare(
+      "sourceRevision",
+      metadata.sourceRevision ?? null,
+      payload.sourceRevision ?? null,
+    );
+    compare(
+      "fieldGenerationId",
+      metadata.fieldGenerationId ?? null,
+      payload.fieldGenerationId ?? null,
     );
   }
   return issues;
@@ -1360,6 +1384,30 @@ export class ControlRoomApi {
         this.requestBinaryBytes(DATA_DOMAIN_TOPOLOGY_PATH, options),
       topologyChunked: (options?: BinaryRequestOptions) =>
         this.requestTopologyChunked(DATA_DOMAIN_TOPOLOGY_PATH, options),
+    },
+    observationFrames: {
+      list: (
+        query: ObservationFrameListQuery = {},
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<ObservationFrameListResource>(
+          DATA_OBSERVATION_FRAMES_PATH,
+          options,
+          { query },
+        ),
+      get: (frameId: string, options?: RequestOptions) =>
+        this.requestJson<ObservationFrameResource>(
+          DATA_OBSERVATION_FRAME_PATH,
+          options,
+          { path: { frame_id: frameId } },
+        ),
+      magnetization: (frameId: string, options?: BinaryRequestOptions) =>
+        this.requestFieldVector(
+          DATA_OBSERVATION_FRAME_MAGNETIZATION_PATH,
+          { frame_id: frameId },
+          {},
+          options,
+        ),
     },
     fields: {
       catalog: (options?: RequestOptions) =>

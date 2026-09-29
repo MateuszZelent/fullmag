@@ -1010,6 +1010,21 @@ surface coloring still requires complete field coverage. FMVP v2 remains a
 legacy full-domain compatibility format and must not be treated as proof for
 scoped FEM surface mapping.
 
+FMVP v4 zachowuje ten sam 48-bajtowy nagłówek i rozszerza blok `FMMI` do
+wersji metadanych 3. Stała część ma 80 bajtów. Offsety 8, 10, 12 i 14 zawierają
+odpowiednio długości `domain_generation_id`, `source_kind`, `source_id` i
+`field_generation_id`; offset 68 zawiera `source_revision` jako `u64`, a bajty
+76..80 są zerami. Po części stałej występują kolejno `scope_kind`, `scope_id`,
+`domain_generation_id`, `source_kind`, `source_id`, `field_generation_id` oraz
+indeksy. Wszystkie teksty są UTF-8, a blok pozostaje wyrównany do 8 bajtów.
+
+`source_kind` przyjmuje `live` albo `observation_frame`. Dla historycznej ramki
+`source_id` jest immutable `frame_id`, a `source_revision` jest dokładną
+accepted revision. Klient musi porównać te wartości oraz
+`field_generation_id` z nagłówkami odpowiedzi. Rozbieżność dyskwalifikuje
+payload. FMVP v4 rozszerza kanoniczny data plane; nie tworzy drugiego formatu
+snapshotów ani prawa do użycia danych z innego source.
+
 The same rule applies to realtime fetch hints. If the active viewport consumes
 `component=magnitude&scope_kind=airbox&scope_id=airbox`, the invalidation
 system must prefer that aggregate query. It must not fall back to

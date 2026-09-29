@@ -1,6 +1,6 @@
 //! Native OpenAPI v2 spec assembly.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use utoipa::OpenApi;
 
 #[derive(OpenApi)]
@@ -29,6 +29,9 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::data::fdm_region_membership::get_fdm_region_membership_binary_scoped,
         crate::router_v2::handlers::data::frozen_spins::get_frozen_spins_resolved_mask,
         crate::router_v2::handlers::data::quantities::get_quantities_catalog,
+        crate::router_v2::handlers::data::observation_frames::list_observation_frames,
+        crate::router_v2::handlers::data::observation_frames::get_observation_frame,
+        crate::router_v2::handlers::data::observation_frames::get_observation_frame_magnetization,
         crate::router_v2::handlers::data::fields::get_field_catalog,
         crate::router_v2::handlers::data::fields::get_field_availability,
         crate::router_v2::handlers::data::fields::get_field_meta,
@@ -374,12 +377,19 @@ use utoipa::OpenApi;
         crate::schemas::fields::TargetFieldAvailabilityState,
         crate::schemas::fields::FieldMeta,
         crate::schemas::common::AcceptedObservationFrameRef,
+        crate::schemas::common::AcceptedStateRefResource,
+        crate::schemas::common::AcceptedStateIdResource,
+        crate::schemas::common::AcceptedStateGenerationResource,
         crate::schemas::common::FieldPublicationBundle,
         crate::schemas::common::FieldPublicationResponseRevisions,
         crate::schemas::common::FieldPublicationBinding,
         crate::schemas::fields::FieldStats,
         crate::schemas::fields::FieldVectorQuery,
         crate::schemas::fields::FieldVectorPendingResponse,
+        crate::schemas::observations::ObservationFrameListQuery,
+        crate::schemas::observations::ObservationFrameStatus,
+        crate::schemas::observations::ObservationFrameResource,
+        crate::schemas::observations::ObservationFrameListResource,
         crate::schemas::fields::FieldSliceMeta,
         crate::schemas::fields::FieldMatrixResponse,
         crate::schemas::fields::FieldProjectionMeta,
@@ -522,9 +532,6 @@ use utoipa::OpenApi;
         crate::schemas::projects::ProjectRunMinimumResourceBudgetResource,
         crate::schemas::projects::ProjectRunCatalogState,
         crate::schemas::projects::ProjectRunTaskResource,
-        crate::schemas::projects::ProjectAcceptedStateRefResource,
-        crate::schemas::projects::ProjectAcceptedStateIdResource,
-        crate::schemas::projects::ProjectAcceptedStateGenerationResource,
         crate::schemas::projects::ProjectRunTaskLifecycle,
         crate::schemas::projects::ProjectRunTaskReadiness,
         crate::schemas::projects::ProjectRunObservationState,
@@ -1182,15 +1189,21 @@ mod tests {
         let document = openapi_json();
         let schemas = &document["components"]["schemas"];
 
-        assert!(schemas["SamplingPeriodPolicyResource"]
-            .to_string()
-            .contains("auto_sinc_cutoff"));
-        assert!(schemas["AutomaticOutputSamplingResource"]
-            .to_string()
-            .contains("field_auto"));
-        assert!(schemas["AutomaticOutputSamplingResource"]
-            .to_string()
-            .contains("scalar_auto"));
+        assert!(
+            schemas["SamplingPeriodPolicyResource"]
+                .to_string()
+                .contains("auto_sinc_cutoff")
+        );
+        assert!(
+            schemas["AutomaticOutputSamplingResource"]
+                .to_string()
+                .contains("field_auto")
+        );
+        assert!(
+            schemas["AutomaticOutputSamplingResource"]
+                .to_string()
+                .contains("scalar_auto")
+        );
     }
 
     #[test]
@@ -1201,19 +1214,23 @@ mod tests {
         assert!(stage.contains("target"));
         assert!(stage.contains("layout"));
         assert!(stage.contains("format"));
-        assert!(schemas["StageAutosaveFormatResource"]
-            .to_string()
-            .contains("hdf5"));
-        assert!(schemas["StageAutosaveLayoutResource"]
-            .to_string()
-            .contains("continuous"));
+        assert!(
+            schemas["StageAutosaveFormatResource"]
+                .to_string()
+                .contains("hdf5")
+        );
+        assert!(
+            schemas["StageAutosaveLayoutResource"]
+                .to_string()
+                .contains("continuous")
+        );
     }
 
     #[test]
     fn openapi_current_transport_preserves_conservative_current_view_payload() {
         let document = openapi_json();
-        let property = &document["components"]["schemas"]["KnownSceneCurrentTransport"]
-            ["properties"]["conservative_current_view"];
+        let property = &document["components"]["schemas"]["KnownSceneCurrentTransport"]["properties"]
+            ["conservative_current_view"];
 
         assert_eq!(
             property["additionalProperties"],
@@ -1229,25 +1246,32 @@ mod tests {
         let property =
             &schemas["KnownSceneCurrentTransport"]["properties"]["structured_current_closure"];
 
-        assert!(property
-            .to_string()
-            .contains("#/components/schemas/SceneStructuredCurrentClosure"));
-        assert!(schemas["SceneStructuredCurrentClosure"]
-            .to_string()
-            .contains("closed_geometry"));
-        assert!(!schemas["SceneStructuredCurrentClosure"]
-            .to_string()
-            .contains("certified_import"));
-        assert!(schemas["SceneStructuredCurrentDrive"]
-            .to_string()
-            .contains("impressed_potential_jump"));
+        assert!(
+            property
+                .to_string()
+                .contains("#/components/schemas/SceneStructuredCurrentClosure")
+        );
+        assert!(
+            schemas["SceneStructuredCurrentClosure"]
+                .to_string()
+                .contains("closed_geometry")
+        );
+        assert!(
+            !schemas["SceneStructuredCurrentClosure"]
+                .to_string()
+                .contains("certified_import")
+        );
+        assert!(
+            schemas["SceneStructuredCurrentDrive"]
+                .to_string()
+                .contains("impressed_potential_jump")
+        );
     }
 
     #[test]
     fn openapi_topological_charge_v2_is_closed_and_versioned() {
         let document = openapi_json();
-        let operation = &document["paths"]
-            ["/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge"]
+        let operation = &document["paths"]["/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge"]
             ["get"];
         let parameters = operation["parameters"]
             .as_array()

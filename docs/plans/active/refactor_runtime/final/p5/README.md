@@ -43,8 +43,11 @@ aktywnego runtime'u.
 12. [Loader historycznego `ObservationRuntime`](12-historical-observation-runtime-loader.md)
     — exact AcceptedStateRef precondition, odczyt manifestu i carrierów CAS,
     izolowana rekonstrukcja oraz fail-closed stale generation.
+13. [Publiczny readback ramek obserwacji](13-public-observation-frame-readback.md)
+    — cienki katalog immutable sources, source-qualified FMVP v4 i centralna
+    fasada Control Room bez drugiego snapshot API.
 
 Materializacja accepted state dla coupled/Frozen Spins i FEM, ogólna
-checkpoint compatibility, publiczny coordinator/result data plane
-`ComputeQuantities`, adaptery pozostałych lane'ów, autosave frame oraz
+checkpoint compatibility, ogólny coordinator/result batch `ComputeQuantities`,
+adaptery pozostałych lane'ów, autosave frame oraz
 zarządzana rekwalifikacja nowego refa GPU pozostają otwarte. P5 wynosi **99%**.

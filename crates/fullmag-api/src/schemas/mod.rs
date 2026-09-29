@@ -14,6 +14,7 @@ pub mod hysteresis;
 pub mod logs;
 pub mod mesh;
 pub mod mode_composition;
+pub mod observations;
 pub mod planar_fields;
 pub mod planar_monitors;
 pub mod preparation;

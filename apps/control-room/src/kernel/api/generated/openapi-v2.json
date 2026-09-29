@@ -50,6 +50,79 @@
         ],
         "type": "object"
       },
+      "AcceptedStateGenerationResource": {
+        "properties": {
+          "accepted_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "runtime_epoch": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runtime_epoch",
+          "accepted_revision"
+        ],
+        "type": "object"
+      },
+      "AcceptedStateIdResource": {
+        "properties": {
+          "accepted_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "clock_digest": {
+            "type": "string"
+          },
+          "domain_digest": {
+            "type": "string"
+          },
+          "plan_digest": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state_digest": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "accepted_step",
+          "clock_digest",
+          "state_digest",
+          "domain_digest",
+          "plan_digest"
+        ],
+        "type": "object"
+      },
+      "AcceptedStateRefResource": {
+        "properties": {
+          "generation": {
+            "$ref": "#/components/schemas/AcceptedStateGenerationResource"
+          },
+          "id": {
+            "$ref": "#/components/schemas/AcceptedStateIdResource"
+          }
+        },
+        "required": [
+          "id",
+          "generation"
+        ],
+        "type": "object"
+      },
       "ActiveLaneCapabilityReasonCode": {
         "description": "Stable machine-readable classification for an active-lane operation reason.\nHuman-readable `reason` text may evolve without changing UI behavior.",
         "enum": [
@@ -20156,6 +20229,150 @@
         ],
         "type": "object"
       },
+      "ObservationFrameListQuery": {
+        "properties": {
+          "cursor": {
+            "description": "Return entries strictly after this immutable frame identity.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "description": "Page size. Defaults to 50 and is capped at 200.",
+            "format": "int32",
+            "maximum": 200,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "run_id": {
+            "description": "Optional exact run precondition. It must equal the active session run.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage_id": {
+            "description": "Optional exact study stage filter.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ObservationFrameListResource": {
+        "properties": {
+          "frames": {
+            "items": {
+              "$ref": "#/components/schemas/ObservationFrameResource"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "frames"
+        ],
+        "type": "object"
+      },
+      "ObservationFrameResource": {
+        "description": "Thin immutable descriptor for a durable observation source. Heavy field\nvalues remain in the canonical field binary data plane.",
+        "properties": {
+          "accepted_state_ref": {
+            "$ref": "#/components/schemas/AcceptedStateRefResource"
+          },
+          "adapter_id": {
+            "type": "string"
+          },
+          "attempt_id": {
+            "type": "string"
+          },
+          "frame_id": {
+            "type": "string"
+          },
+          "grid_cells": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "magnetization_href": {
+            "type": "string"
+          },
+          "ownership_epoch": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "quantity_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "state_codec_id": {
+            "type": "string"
+          },
+          "state_codec_version": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ObservationFrameStatus"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "frame_id",
+          "status",
+          "run_id",
+          "task_id",
+          "stage_id",
+          "attempt_id",
+          "ownership_epoch",
+          "accepted_state_ref",
+          "adapter_id",
+          "grid_cells",
+          "quantity_ids",
+          "state_codec_id",
+          "state_codec_version",
+          "magnetization_href"
+        ],
+        "type": "object"
+      },
+      "ObservationFrameStatus": {
+        "enum": [
+          "complete"
+        ],
+        "type": "string"
+      },
       "OerstedFieldCommitResource": {
         "properties": {
           "committed_scene": {
@@ -22423,79 +22640,6 @@
         ],
         "type": "object"
       },
-      "ProjectAcceptedStateGenerationResource": {
-        "properties": {
-          "accepted_revision": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "runtime_epoch": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "runtime_epoch",
-          "accepted_revision"
-        ],
-        "type": "object"
-      },
-      "ProjectAcceptedStateIdResource": {
-        "properties": {
-          "accepted_step": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "clock_digest": {
-            "type": "string"
-          },
-          "domain_digest": {
-            "type": "string"
-          },
-          "plan_digest": {
-            "type": "string"
-          },
-          "run_id": {
-            "type": "string"
-          },
-          "stage_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "state_digest": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "run_id",
-          "accepted_step",
-          "clock_digest",
-          "state_digest",
-          "domain_digest",
-          "plan_digest"
-        ],
-        "type": "object"
-      },
-      "ProjectAcceptedStateRefResource": {
-        "properties": {
-          "generation": {
-            "$ref": "#/components/schemas/ProjectAcceptedStateGenerationResource"
-          },
-          "id": {
-            "$ref": "#/components/schemas/ProjectAcceptedStateIdResource"
-          }
-        },
-        "required": [
-          "id",
-          "generation"
-        ],
-        "type": "object"
-      },
       "ProjectArchiveDurability": {
         "enum": [
           "memory_only"
@@ -23113,7 +23257,7 @@
                 "type": "null"
               },
               {
-                "$ref": "#/components/schemas/ProjectAcceptedStateRefResource"
+                "$ref": "#/components/schemas/AcceptedStateRefResource"
               }
             ]
           },
@@ -46553,6 +46697,167 @@
               }
             },
             "description": "An authored selection geometry cannot be evaluated"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/observation-frames": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_observation_frames",
+        "parameters": [
+          {
+            "description": "Optional exact run precondition. It must equal the active session run.",
+            "in": "query",
+            "name": "run_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional exact study stage filter.",
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Return entries strictly after this immutable frame identity.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Page size. Defaults to 50 and is capped at 200.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObservationFrameListResource"
+                }
+              }
+            },
+            "description": "Immutable observation frames for the active durable run"
+          },
+          "400": {
+            "description": "Invalid cursor or page size"
+          },
+          "404": {
+            "description": "No active durable run or run storage"
+          },
+          "409": {
+            "description": "Requested run differs from the active session"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/observation-frames/{frame_id}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_observation_frames_frame_id",
+        "parameters": [
+          {
+            "description": "Immutable observation frame identity",
+            "in": "path",
+            "name": "frame_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObservationFrameResource"
+                }
+              }
+            },
+            "description": "Immutable observation frame descriptor"
+          },
+          "404": {
+            "description": "Observation frame was not found"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/observation-frames/{frame_id}/magnetization": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_observation_frames_frame_id_magnetization",
+        "parameters": [
+          {
+            "description": "Immutable observation frame identity",
+            "in": "path",
+            "name": "frame_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Source-qualified FMVP v4 magnetization"
+          },
+          "304": {
+            "description": "Magnetization payload is unchanged"
+          },
+          "404": {
+            "description": "Observation frame was not found"
+          },
+          "422": {
+            "description": "Observation source cannot materialize magnetization"
           }
         },
         "tags": [

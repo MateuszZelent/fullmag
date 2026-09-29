@@ -14,10 +14,13 @@ export type DecodedFieldVectorScopeKind =
   | "region"
   | "selection";
 
+export type DecodedFieldVectorSourceKind = "live" | "observation_frame";
+
 export interface DecodedFieldVector {
   dtype: "float64";
   domainGenerationId?: string | null;
-  formatVersion?: 2 | 3;
+  fieldGenerationId?: string | null;
+  formatVersion?: 2 | 3 | 4;
   grid: [number, number, number];
   indexing?: DecodedFieldVectorIndexing;
   meshTopologyHash?: string | null;
@@ -28,6 +31,9 @@ export interface DecodedFieldVector {
   quantityId: string;
   scopeId?: string | null;
   scopeKind?: DecodedFieldVectorScopeKind | null;
+  sourceId?: string | null;
+  sourceKind?: DecodedFieldVectorSourceKind | null;
+  sourceRevision?: string | null;
   valueCount: number;
   values: Float64Array;
 }
@@ -36,7 +42,8 @@ export interface DecodedComplexFieldVector {
   componentCount: number;
   dtype: "complex128";
   domainGenerationId?: string | null;
-  formatVersion?: 2 | 3;
+  fieldGenerationId?: string | null;
+  formatVersion?: 2 | 3 | 4;
   grid: [number, number, number];
   indexing?: DecodedFieldVectorIndexing;
   meshTopologyHash?: string | null;
@@ -46,6 +53,9 @@ export interface DecodedComplexFieldVector {
   quantityId: string;
   scopeId?: string | null;
   scopeKind?: DecodedFieldVectorScopeKind | null;
+  sourceId?: string | null;
+  sourceKind?: DecodedFieldVectorSourceKind | null;
+  sourceRevision?: string | null;
   valueCount: number;
   values: Float64Array;
 }

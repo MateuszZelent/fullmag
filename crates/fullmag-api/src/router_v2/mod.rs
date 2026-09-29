@@ -10,13 +10,13 @@ pub mod middleware;
 pub(crate) mod tests;
 
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, patch, post},
-    Json, Router,
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 
 use crate::error::ApiError;
@@ -526,6 +526,18 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/sessions/current/data/quantities",
             get(handlers::data::get_quantities_catalog),
+        )
+        .route(
+            "/v2/sessions/current/data/observation-frames",
+            get(handlers::data::list_observation_frames),
+        )
+        .route(
+            "/v2/sessions/current/data/observation-frames/:frame_id",
+            get(handlers::data::get_observation_frame),
+        )
+        .route(
+            "/v2/sessions/current/data/observation-frames/:frame_id/magnetization",
+            get(handlers::data::get_observation_frame_magnetization),
         )
         .route(
             "/v2/sessions/current/data/fields",

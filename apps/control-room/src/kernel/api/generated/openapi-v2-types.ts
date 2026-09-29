@@ -1876,6 +1876,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/data/observation-frames": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_observation_frames"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/observation-frames/{frame_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_observation_frames_frame_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/observation-frames/{frame_id}/magnetization": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_observation_frames_frame_id_magnetization"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/quantities": {
         parameters: {
             query?: never;
@@ -4072,6 +4120,26 @@ export interface components {
             /** Format: double */
             source_time_seconds?: number | null;
             topology_revision: string;
+        };
+        AcceptedStateGenerationResource: {
+            /** Format: int64 */
+            accepted_revision: number;
+            /** Format: int64 */
+            runtime_epoch: number;
+        };
+        AcceptedStateIdResource: {
+            /** Format: int64 */
+            accepted_step: number;
+            clock_digest: string;
+            domain_digest: string;
+            plan_digest: string;
+            run_id: string;
+            stage_id?: string | null;
+            state_digest: string;
+        };
+        AcceptedStateRefResource: {
+            generation: components["schemas"]["AcceptedStateGenerationResource"];
+            id: components["schemas"]["AcceptedStateIdResource"];
         };
         /**
          * @description Stable machine-readable classification for an active-lane operation reason.
@@ -9001,6 +9069,48 @@ export interface components {
             base_revision?: number | null;
             region_ids: string[];
         };
+        ObservationFrameListQuery: {
+            /** @description Return entries strictly after this immutable frame identity. */
+            cursor?: string | null;
+            /**
+             * Format: int32
+             * @description Page size. Defaults to 50 and is capped at 200.
+             */
+            limit?: number | null;
+            /** @description Optional exact run precondition. It must equal the active session run. */
+            run_id?: string | null;
+            /** @description Optional exact study stage filter. */
+            stage_id?: string | null;
+        };
+        ObservationFrameListResource: {
+            frames: components["schemas"]["ObservationFrameResource"][];
+            next_cursor?: string | null;
+            run_id: string;
+        };
+        /**
+         * @description Thin immutable descriptor for a durable observation source. Heavy field
+         *     values remain in the canonical field binary data plane.
+         */
+        ObservationFrameResource: {
+            accepted_state_ref: components["schemas"]["AcceptedStateRefResource"];
+            adapter_id: string;
+            attempt_id: string;
+            frame_id: string;
+            grid_cells: number[];
+            magnetization_href: string;
+            /** Format: int64 */
+            ownership_epoch: number;
+            quantity_ids: string[];
+            run_id: string;
+            schema_version: string;
+            stage_id: string;
+            state_codec_id: string;
+            state_codec_version: string;
+            status: components["schemas"]["ObservationFrameStatus"];
+            task_id: string;
+        };
+        /** @enum {string} */
+        ObservationFrameStatus: "complete";
         OerstedFieldCommitResource: {
             committed_scene: components["schemas"]["SceneResource"];
             resource: components["schemas"]["SceneOerstedField"];
@@ -9554,26 +9664,6 @@ export interface components {
             label: string;
             status: components["schemas"]["GeometrySupportStatus"];
         };
-        ProjectAcceptedStateGenerationResource: {
-            /** Format: int64 */
-            accepted_revision: number;
-            /** Format: int64 */
-            runtime_epoch: number;
-        };
-        ProjectAcceptedStateIdResource: {
-            /** Format: int64 */
-            accepted_step: number;
-            clock_digest: string;
-            domain_digest: string;
-            plan_digest: string;
-            run_id: string;
-            stage_id?: string | null;
-            state_digest: string;
-        };
-        ProjectAcceptedStateRefResource: {
-            generation: components["schemas"]["ProjectAcceptedStateGenerationResource"];
-            id: components["schemas"]["ProjectAcceptedStateIdResource"];
-        };
         /** @enum {string} */
         ProjectArchiveDurability: "memory_only";
         ProjectArchiveRequest: {
@@ -9751,7 +9841,7 @@ export interface components {
             state: "blocked";
         };
         ProjectRunTaskResource: {
-            accepted_state_ref?: null | components["schemas"]["ProjectAcceptedStateRefResource"];
+            accepted_state_ref?: null | components["schemas"]["AcceptedStateRefResource"];
             artifact_ids: string[];
             attempt_id?: string | null;
             input_fingerprint: string;
@@ -18508,6 +18598,139 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ApiErrorResponse"];
                 };
+            };
+        };
+    };
+    data_get_sessions_current_data_observation_frames: {
+        parameters: {
+            query?: {
+                /** @description Optional exact run precondition. It must equal the active session run. */
+                run_id?: string | null;
+                /** @description Optional exact study stage filter. */
+                stage_id?: string | null;
+                /** @description Return entries strictly after this immutable frame identity. */
+                cursor?: string | null;
+                /** @description Page size. Defaults to 50 and is capped at 200. */
+                limit?: number | null;
+            };
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Immutable observation frames for the active durable run */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservationFrameListResource"];
+                };
+            };
+            /** @description Invalid cursor or page size */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active durable run or run storage */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested run differs from the active session */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_observation_frames_frame_id: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                /** @description Immutable observation frame identity */
+                frame_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Immutable observation frame descriptor */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservationFrameResource"];
+                };
+            };
+            /** @description Observation frame was not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_observation_frames_frame_id_magnetization: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                /** @description Immutable observation frame identity */
+                frame_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Source-qualified FMVP v4 magnetization */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Magnetization payload is unchanged */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Observation frame was not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Observation source cannot materialize magnetization */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

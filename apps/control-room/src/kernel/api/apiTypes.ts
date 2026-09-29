@@ -834,6 +834,12 @@ export type ProjectRunTaskCancellationRequest =
   components["schemas"]["ProjectRunTaskCancellationRequest"];
 export type ProjectRunTaskCancellationResource =
   components["schemas"]["ProjectRunTaskCancellationResource"];
+export type ObservationFrameListQuery =
+  components["schemas"]["ObservationFrameListQuery"];
+export type ObservationFrameListResource =
+  components["schemas"]["ObservationFrameListResource"];
+export type ObservationFrameResource =
+  components["schemas"]["ObservationFrameResource"];
 type GeneratedStructuredCommandRequest =
   components["schemas"]["StructuredCommandRequest"];
 type RuntimeCommandIntent = components["schemas"]["RuntimeCommandIntent"];
@@ -918,6 +924,7 @@ export interface FieldVectorResponseMetadata {
   domainGenerationId: string | null;
   encoding: string | null;
   fieldIndexing: string | null;
+  fieldGenerationId?: string | null;
   fieldRevision: string | null;
   identityIssues: FieldVectorIdentityIssue[];
   meshTopologyHash: string | null;
@@ -927,6 +934,9 @@ export interface FieldVectorResponseMetadata {
   quantityId: string | null;
   scopeId: string | null;
   scopeKind: string | null;
+  sourceId?: string | null;
+  sourceKind?: string | null;
+  sourceRevision?: string | null;
   snapshotId: string | null;
   stageId?: string | null;
   phaseRad?: number | null;

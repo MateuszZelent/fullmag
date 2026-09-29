@@ -215,3 +215,14 @@ Gate źródłowy wymaga pięciu definicji i braku starej reguły eager. Dalsze t
 muszą dowieść zerowej mutacji live state, atomowości batchu i importu, czasu
 ramki, typed missing-carrier, cache isolation oraz osobnych receipts dla FDM
 CPU/GPU i FEM CPU/GPU. GPU proof musi podać device identity i zero fallbacku.
+
+## Stan implementacji — 29.09.2026
+
+Prosty lane FDM CPU publikuje `observation_source.v1` i primary carriers w CAS,
+a fail-closed loader odtwarza izolowany `ObservationRuntime` dla dokładnego
+`AcceptedStateRef`. API v2 projektuje immutable katalog ramek i materializuje
+historyczne `m` przez ten loader do kanonicznego FMVP v4. Format zachowuje
+source identity i field generation zarówno w payloadzie, jak i nagłówkach.
+Control Room używa wygenerowanego OpenAPI, centralnej fasady i wspólnego
+dekodera. Ogólny batch `ComputeQuantities`, pozostałe lane'y, autosave aktywnego
+stage i managed/runtime qualification pozostają otwarte.

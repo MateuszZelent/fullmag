@@ -490,6 +490,18 @@ export const DATA_FIELD_VECTOR_PATH = openApiV2Path(
   "/v2/sessions/current/data/fields/{quantity_id}/samples/vector",
 );
 
+export const DATA_OBSERVATION_FRAMES_PATH = openApiV2Path(
+  "/v2/sessions/current/data/observation-frames",
+);
+
+export const DATA_OBSERVATION_FRAME_PATH = openApiV2Path(
+  "/v2/sessions/current/data/observation-frames/{frame_id}",
+);
+
+export const DATA_OBSERVATION_FRAME_MAGNETIZATION_PATH = openApiV2Path(
+  "/v2/sessions/current/data/observation-frames/{frame_id}/magnetization",
+);
+
 export const DIAGNOSTICS_ENGINE_LOG_PATH = openApiV2Path(
   "/v2/sessions/current/diagnostics/engine-log",
 );
