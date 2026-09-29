@@ -1,4 +1,8 @@
-use super::artifacts::{write_response_sweep_bundle, write_response_sweep_bundle_with_progress};
+use super::artifacts::{
+    write_response_sweep_bundle, write_response_sweep_bundle_with_identity,
+    write_response_sweep_bundle_with_progress,
+    write_response_sweep_bundle_with_progress_and_identity, FrequencyDomainArtifactIdentity,
+};
 use nalgebra::{DMatrix, DVector};
 use num_complex::Complex64;
 use serde::Serialize;
@@ -790,6 +794,34 @@ pub fn solve_and_write_field_driven_response_sweep_bundle(
     Ok(artifact)
 }
 
+pub fn solve_and_write_field_driven_response_sweep_bundle_with_identity(
+    base_dir: &Path,
+    identity: &FrequencyDomainArtifactIdentity,
+    template: &BlockRealHarmonicTemplate,
+    frequencies_rad_per_s: &[f64],
+    field_excitation: &DVector<Complex64>,
+    backend_engine_id: &str,
+    solver_model: &str,
+    damping_policy: &str,
+    lane_classification: &str,
+) -> Result<FieldDrivenResponseSweepArtifact, String> {
+    identity
+        .validate()
+        .map_err(|error| format!("invalid frequency-domain artifact identity: {error}"))?;
+    let points =
+        solve_field_driven_block_real_sweep(template, frequencies_rad_per_s, field_excitation)?;
+    let artifact = build_field_driven_response_sweep_artifact(
+        &points,
+        backend_engine_id,
+        solver_model,
+        damping_policy,
+        lane_classification,
+    );
+    write_response_sweep_bundle_with_identity(base_dir, &artifact, identity)
+        .map_err(|error| format!("failed to write response sweep bundle: {error}"))?;
+    Ok(artifact)
+}
+
 pub fn solve_and_write_field_driven_response_sweep_bundle_with_interrupt(
     base_dir: &Path,
     template: &BlockRealHarmonicTemplate,
@@ -819,6 +851,45 @@ pub fn solve_and_write_field_driven_response_sweep_bundle_with_interrupt(
         &artifact,
         outcome.requested_point_count,
         outcome.interrupted,
+    )
+    .map_err(|error| format!("failed to write response sweep bundle: {error}"))?;
+    Ok(artifact)
+}
+
+pub fn solve_and_write_field_driven_response_sweep_bundle_with_interrupt_and_identity(
+    base_dir: &Path,
+    identity: &FrequencyDomainArtifactIdentity,
+    template: &BlockRealHarmonicTemplate,
+    frequencies_rad_per_s: &[f64],
+    field_excitation: &DVector<Complex64>,
+    should_interrupt_after_completed_points: impl FnMut(usize) -> bool,
+    backend_engine_id: &str,
+    solver_model: &str,
+    damping_policy: &str,
+    lane_classification: &str,
+) -> Result<FieldDrivenResponseSweepArtifact, String> {
+    identity
+        .validate()
+        .map_err(|error| format!("invalid frequency-domain artifact identity: {error}"))?;
+    let outcome = solve_field_driven_block_real_sweep_with_interrupt(
+        template,
+        frequencies_rad_per_s,
+        field_excitation,
+        should_interrupt_after_completed_points,
+    )?;
+    let artifact = build_field_driven_response_sweep_artifact(
+        &outcome.points,
+        backend_engine_id,
+        solver_model,
+        damping_policy,
+        lane_classification,
+    );
+    write_response_sweep_bundle_with_progress_and_identity(
+        base_dir,
+        &artifact,
+        outcome.requested_point_count,
+        outcome.interrupted,
+        identity,
     )
     .map_err(|error| format!("failed to write response sweep bundle: {error}"))?;
     Ok(artifact)

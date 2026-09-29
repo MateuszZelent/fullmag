@@ -77,9 +77,14 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 23. [Jawna tożsamość pochodnego Kittel fit](23-direct-kittel-artifact-identity.md)
     — identity-aware builder/writer dla bezpośredniej gałęzi modal-eigen oraz
     jawne odseparowanie niemigrowanych adapterów legacy.
+24. [Jawna tożsamość writera FMR](24-direct-fmr-artifact-identity.md)
+    — identity-aware entrypointy pełnego i przerwanego response sweep,
+    walidacja przed solve oraz dokładne session/run/stage/runtime w manifeście
+    rodziny `driven_response`.
 
-Pozostałe resource keys w `runner/eigen/artifacts`, writer `fmr.rs`, FEM
-artifact writers i migracja legacy copy-on-write, materializator/evaluator
+Pozostałe resource keys w `runner/eigen/artifacts`, przeprowadzenie identity z
+głównego runner context, FEM artifact writers i migracja legacy copy-on-write,
+materializator/evaluator
 datasetów, API i generated client,
 pozostałe quantities, frontend porównań i wykresów oraz produkcyjne dowody
-pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **50%**.
+pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.

@@ -728,11 +728,58 @@ pub fn write_response_sweep_bundle(
     write_response_sweep_bundle_with_progress(base_dir, artifact, artifact.points.len(), false)
 }
 
+pub fn write_response_sweep_bundle_with_identity(
+    base_dir: &Path,
+    artifact: &FieldDrivenResponseSweepArtifact,
+    identity: &FrequencyDomainArtifactIdentity,
+) -> std::io::Result<()> {
+    write_response_sweep_bundle_with_progress_and_identity(
+        base_dir,
+        artifact,
+        artifact.points.len(),
+        false,
+        identity,
+    )
+}
+
 pub fn write_response_sweep_bundle_with_progress(
     base_dir: &Path,
     artifact: &FieldDrivenResponseSweepArtifact,
     requested_frequency_point_count: usize,
     interrupted: bool,
+) -> std::io::Result<()> {
+    write_response_sweep_bundle_with_progress_internal(
+        base_dir,
+        artifact,
+        requested_frequency_point_count,
+        interrupted,
+        None,
+    )
+}
+
+pub fn write_response_sweep_bundle_with_progress_and_identity(
+    base_dir: &Path,
+    artifact: &FieldDrivenResponseSweepArtifact,
+    requested_frequency_point_count: usize,
+    interrupted: bool,
+    identity: &FrequencyDomainArtifactIdentity,
+) -> std::io::Result<()> {
+    identity.validate()?;
+    write_response_sweep_bundle_with_progress_internal(
+        base_dir,
+        artifact,
+        requested_frequency_point_count,
+        interrupted,
+        Some(identity),
+    )
+}
+
+fn write_response_sweep_bundle_with_progress_internal(
+    base_dir: &Path,
+    artifact: &FieldDrivenResponseSweepArtifact,
+    requested_frequency_point_count: usize,
+    interrupted: bool,
+    identity: Option<&FrequencyDomainArtifactIdentity>,
 ) -> std::io::Result<()> {
     write_response_sweep_artifact(base_dir, artifact)?;
     let response_dir = base_dir.join("response");
@@ -846,6 +893,7 @@ pub fn write_response_sweep_bundle_with_progress(
     write_frequency_domain_response_manifest(
         base_dir,
         artifact,
+        identity,
         requested_frequency_point_count,
         manifest.frequency_point_artifacts.clone(),
         manifest.status,
@@ -1245,6 +1293,7 @@ fn write_response_diagnostics_artifact(
 fn write_frequency_domain_response_manifest(
     base_dir: &Path,
     artifact: &FieldDrivenResponseSweepArtifact,
+    identity: Option<&FrequencyDomainArtifactIdentity>,
     requested_frequency_point_count: usize,
     frequency_point_artifacts: Vec<String>,
     status: &'static str,
@@ -1264,6 +1313,21 @@ fn write_frequency_domain_response_manifest(
             format!("/v2/sessions/current/analysis/frequency-domain/response/field/{index}/meta")
         })
         .collect::<Vec<_>>();
+    let (session_id, run_id, stage_id, runtime_id) = identity
+        .map(|identity| {
+            (
+                identity.session_id.as_str(),
+                identity.run_id.as_str(),
+                identity.stage_id.as_str(),
+                identity.runtime_id.as_str(),
+            )
+        })
+        .unwrap_or((
+            "current",
+            "current",
+            "frequency-response",
+            "runtime:not_provided",
+        ));
     let manifest = FrequencyDomainArtifactManifest {
         schema_version: "frequency_domain_manifest.v1",
         analysis_family: "magnetic_frequency_domain",
@@ -1274,9 +1338,10 @@ fn write_frequency_domain_response_manifest(
             artifact.points.len(),
             requested_frequency_point_count
         ),
-        session_id: "current",
-        run_id: "current",
-        stage_id: "frequency-response",
+        session_id,
+        run_id,
+        stage_id,
+        runtime_id,
         stage_kind: "frequency_response",
         created_at,
         requested_execution: FrequencyDomainRequestedExecution {

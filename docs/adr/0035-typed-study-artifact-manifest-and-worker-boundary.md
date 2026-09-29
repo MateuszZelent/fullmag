@@ -172,9 +172,12 @@ odrzuca mutable aliasy, a manifest rodziny i `eigen/field_sweep.v1` zachowują
 dokładne session/run/stage/runtime ID. Wywołanie bez identity kończy się przed
 zapisem manifestu. Identity-aware gałąź writera przenosi ten sam kontekst do
 pochodnego artefaktu Kittel; niemigrowane adaptery FEM zachowują jawny legacy
-wrapper. Pozostałe resource keys oraz produkcyjny writer FMR nadal używają
-kontraktu legacy; ich migracja wymaga przeprowadzenia identity przez wszystkie
-właściwe granice wykonania.
+wrapper. Rodzina FMR ma teraz osobny identity-aware writer, który waliduje
+dokładne ID przed solve/zapisem i przenosi session/run/stage/runtime do
+manifestu `driven_response`. Główne entrypointy runnera nie przekazują jeszcze
+tego kontekstu, więc nadal korzystają z jawnego legacy wrappera. Pozostałe
+resource keys oraz pełne przeprowadzenie identity przez właściwe granice
+wykonania pozostają kolejnym krokiem migracji.
 
 ## Migracja i rollback
 

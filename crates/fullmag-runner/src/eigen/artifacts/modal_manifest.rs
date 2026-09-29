@@ -530,6 +530,7 @@ pub fn write_frequency_domain_eigen_manifest(
         session_id: identity.session_id.as_str(),
         run_id: identity.run_id.as_str(),
         stage_id: identity.stage_id.as_str(),
+        runtime_id: identity.runtime_id.as_str(),
         stage_kind: "eigenmodes",
         created_at,
         requested_execution,

@@ -139,6 +139,7 @@ pub(super) struct FrequencyDomainArtifactManifest<'a> {
     pub(super) session_id: &'a str,
     pub(super) run_id: &'a str,
     pub(super) stage_id: &'a str,
+    pub(super) runtime_id: &'a str,
     pub(super) stage_kind: &'static str,
     pub(super) created_at: String,
     pub(super) requested_execution: FrequencyDomainRequestedExecution<'a>,

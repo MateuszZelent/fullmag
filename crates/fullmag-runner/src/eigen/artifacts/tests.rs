@@ -2440,6 +2440,74 @@ fn dense_validation_response_entrypoint_solves_and_writes_bundle() {
 }
 
 #[test]
+fn identity_aware_response_entrypoint_preserves_exact_owner_identity() {
+    let temp = TempDirGuard::new("response-exact-identity");
+    let template = BlockRealHarmonicTemplate {
+        stiffness: DMatrix::from_element(1, 1, 4.0),
+        mass: DMatrix::from_element(1, 1, 1.0),
+        damping: Some(DMatrix::from_element(1, 1, 0.5)),
+    };
+    let field_excitation = DVector::from_element(1, Complex64::new(1.0, 0.0));
+    let identity = artifact_identity();
+
+    solve_and_write_field_driven_response_sweep_bundle_with_identity(
+        &temp.path,
+        &identity,
+        &template,
+        &[2.0, 3.0],
+        &field_excitation,
+        "runner.dense_block_real",
+        "dense_block_real_lu",
+        "gilbert_linear",
+        "local_validation",
+    )
+    .expect("identity-aware response entrypoint should write its bundle");
+
+    let family_manifest: Value = serde_json::from_slice(
+        &std::fs::read(temp.path.join("frequency_domain/manifest.v1.json"))
+            .expect("frequency-domain manifest should be written"),
+    )
+    .expect("frequency-domain manifest should be valid JSON");
+    assert_eq!(family_manifest["session_id"], identity.session_id);
+    assert_eq!(family_manifest["run_id"], identity.run_id);
+    assert_eq!(family_manifest["stage_id"], identity.stage_id);
+    assert_eq!(family_manifest["runtime_id"], identity.runtime_id);
+}
+
+#[test]
+fn identity_aware_response_entrypoint_rejects_mutable_owner_alias() {
+    let temp = TempDirGuard::new("response-invalid-identity");
+    let template = BlockRealHarmonicTemplate {
+        stiffness: DMatrix::from_element(1, 1, 4.0),
+        mass: DMatrix::from_element(1, 1, 1.0),
+        damping: Some(DMatrix::from_element(1, 1, 0.5)),
+    };
+    let field_excitation = DVector::from_element(1, Complex64::new(1.0, 0.0));
+    let invalid_identity = FrequencyDomainArtifactIdentity {
+        session_id: "current".to_string(),
+        run_id: "run:exact".to_string(),
+        stage_id: "stage:response".to_string(),
+        runtime_id: "runtime:exact".to_string(),
+    };
+
+    let error = solve_and_write_field_driven_response_sweep_bundle_with_identity(
+        &temp.path,
+        &invalid_identity,
+        &template,
+        &[2.0],
+        &field_excitation,
+        "runner.dense_block_real",
+        "dense_block_real_lu",
+        "gilbert_linear",
+        "local_validation",
+    )
+    .expect_err("mutable identity alias must fail before artifact publication");
+
+    assert!(error.contains("exact identity"));
+    assert!(!temp.path.join("frequency_domain/manifest.v1.json").exists());
+}
+
+#[test]
 fn dense_validation_response_entrypoint_writes_interrupted_partial_bundle() {
     let temp = TempDirGuard::new("response-interrupted-bundle");
     let template = BlockRealHarmonicTemplate {

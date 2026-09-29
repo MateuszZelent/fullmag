@@ -7,7 +7,9 @@ mod mode_bundle;
 
 pub use super::response_block_real::{
     solve_and_write_field_driven_response_sweep_bundle,
+    solve_and_write_field_driven_response_sweep_bundle_with_identity,
     solve_and_write_field_driven_response_sweep_bundle_with_interrupt,
+    solve_and_write_field_driven_response_sweep_bundle_with_interrupt_and_identity,
 };
 pub use common::{
     FrequencyDomainArtifactIdentity, ServerArtifactExecution, ServerArtifactReference,
@@ -21,8 +23,10 @@ pub use field_sweep::{
 pub use fmr::{
     build_fmr_peaks_artifact, build_fmr_peaks_artifact_with_progress,
     build_resonance_fits_artifact, write_fmr_analysis_artifacts, write_response_sweep_artifact,
-    write_response_sweep_bundle, write_response_sweep_bundle_with_progress, FmrPeakArtifact,
-    FmrPeakSource, FmrPeakSourceKind, FmrPeakUncertainty, FmrPeaksArtifact, ResonanceFitArtifact,
+    write_response_sweep_bundle, write_response_sweep_bundle_with_identity,
+    write_response_sweep_bundle_with_progress,
+    write_response_sweep_bundle_with_progress_and_identity, FmrPeakArtifact, FmrPeakSource,
+    FmrPeakSourceKind, FmrPeakUncertainty, FmrPeaksArtifact, ResonanceFitArtifact,
     ResonanceFitsArtifact,
 };
 pub use kittel::{
