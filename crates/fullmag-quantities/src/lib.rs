@@ -47,11 +47,12 @@ pub use dataset::{
     DerivedOperator, DerivedValueDefinition, DerivedValuePurpose, EvaluationPrecision,
     FieldAxisDescriptor, FieldFrameDescriptor, FieldFrameKind, FieldLayoutIdentity,
     FieldNormalization, FieldProjection, FieldProjectionReceipt, FieldResolution,
-    FieldSampleLocation, FunctionSpaceDescriptor, FunctionSpaceOrdering, HarmonicConvention,
-    IntegrationMeasure, MaterializedDataset, MaterializedDatasetRef, PlotDefinition, PlotKind,
-    PlotSource, ProjectionErrorMetric, ProjectionErrorMetricKind, ProjectionErrorValueKind,
-    ProjectionMethod, SelectionReference, UnavailableAction, UnavailableDataPolicy,
-    DATASET_CONTRACT_SCHEMA_VERSION,
+    FieldSampleLocation, FieldValueRepresentation, FunctionSpaceDescriptor, FunctionSpaceOrdering,
+    HarmonicConvention, IntegrationMeasure, MaterializedDataset, MaterializedDatasetRef,
+    ModalAmplitudeSemantics, ModalFieldSemantics, ModalNormalizationDescriptor,
+    ModalNormalizationKind, ModalReconstructionRule, PlotDefinition, PlotKind, PlotSource,
+    ProjectionErrorMetric, ProjectionErrorMetricKind, ProjectionErrorValueKind, ProjectionMethod,
+    SelectionReference, UnavailableAction, UnavailableDataPolicy, DATASET_CONTRACT_SCHEMA_VERSION,
 };
 pub use dataset_slice::{
     DatasetByteOrder, DatasetFieldSlice, DatasetFieldSliceRequest, DatasetNumericPrecision,

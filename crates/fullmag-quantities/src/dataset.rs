@@ -4,7 +4,7 @@
 //! immutable result with its own identity and revision. Presentation recipes
 //! refer to either of those identities but never own numerical data.
 
-use crate::{is_canonical_sha256, QuantityId};
+use crate::{is_canonical_sha256, AcceptedStateId, QuantityId};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -363,6 +363,62 @@ pub enum FieldNormalization {
     PhysicalAmplitude,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldValueRepresentation {
+    PhysicalField,
+    ModalPhysicalComponents,
+    ModalFunctionSpaceCoefficients,
+    ModalLocalTangentCoefficients,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModalReconstructionRule {
+    PhysicalComponents,
+    FunctionSpaceBasisExpansion,
+    LocalTangentBasisToCartesian,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModalAmplitudeSemantics {
+    RelativeEigenvector,
+    PhysicalDrivenResponse,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModalNormalizationKind {
+    L2,
+    MaxAbs,
+    Energy,
+    Biorthogonal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModalNormalizationDescriptor {
+    pub kind: ModalNormalizationKind,
+    /// Positive decimal scale used by the producer. A string preserves the
+    /// exact serialized value and avoids silently changing receipt identity.
+    pub scale: String,
+    pub unit: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModalFieldSemantics {
+    pub equilibrium_state: AcceptedStateId,
+    pub linearization_id: String,
+    pub modal_basis_id: String,
+    pub reconstruction: ModalReconstructionRule,
+    pub phase_reference_id: String,
+    pub normalization: ModalNormalizationDescriptor,
+    pub amplitude_semantics: ModalAmplitudeSemantics,
+    pub producer_version: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DatasetFieldDescriptor {
@@ -385,6 +441,9 @@ pub struct DatasetFieldDescriptor {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harmonic_convention: Option<HarmonicConvention>,
     pub normalization: FieldNormalization,
+    pub value_representation: FieldValueRepresentation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modal_semantics: Option<ModalFieldSemantics>,
     pub resolution: FieldResolution,
 }
 
@@ -746,6 +805,8 @@ pub fn validate_field_compatibility(
         || left.complex_encoding != right.complex_encoding
         || left.harmonic_convention != right.harmonic_convention
         || left.normalization != right.normalization
+        || left.value_representation != right.value_representation
+        || left.modal_semantics != right.modal_semantics
     {
         return Err(DatasetContractError::IncompatibleFieldSemantics);
     }
@@ -871,6 +932,11 @@ pub enum DatasetContractError {
     ComplexFieldMissingHarmonicConvention,
     RealFieldHasHarmonicConvention,
     ZeroFieldAxisLength(String),
+    PhysicalFieldHasModalSemantics,
+    ModalFieldMissingSemantics,
+    ModalReconstructionMismatch,
+    InvalidModalEquilibriumState,
+    InvalidModalNormalizationScale,
     InvalidPlotRange,
 }
 
@@ -975,6 +1041,18 @@ impl fmt::Display for DatasetContractError {
             Self::ZeroFieldAxisLength(axis_id) => {
                 write!(formatter, "dataset field axis '{axis_id}' must have positive length")
             }
+            Self::PhysicalFieldHasModalSemantics => formatter
+                .write_str("physical dataset field cannot carry modal reconstruction semantics"),
+            Self::ModalFieldMissingSemantics => formatter
+                .write_str("modal dataset field requires explicit reconstruction semantics"),
+            Self::ModalReconstructionMismatch => formatter.write_str(
+                "modal reconstruction rule does not match the field value representation",
+            ),
+            Self::InvalidModalEquilibriumState => formatter
+                .write_str("modal field requires a valid accepted equilibrium state identity"),
+            Self::InvalidModalNormalizationScale => formatter.write_str(
+                "modal normalization scale must be a finite positive decimal value",
+            ),
             Self::InvalidPlotRange => {
                 formatter.write_str("plot range must be finite and strictly increasing")
             }
@@ -1124,6 +1202,8 @@ fn validate_field_descriptor(
         _ => {}
     }
 
+    validate_field_value_representation(descriptor)?;
+
     let mut axis_ids = BTreeSet::new();
     for axis in &descriptor.axes {
         require_id("field axis_id", &axis.axis_id)?;
@@ -1146,6 +1226,54 @@ fn validate_field_descriptor(
                 component_axis.clone(),
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_field_value_representation(
+    descriptor: &DatasetFieldDescriptor,
+) -> Result<(), DatasetContractError> {
+    let expected_reconstruction = match descriptor.value_representation {
+        FieldValueRepresentation::PhysicalField => {
+            if descriptor.modal_semantics.is_some() {
+                return Err(DatasetContractError::PhysicalFieldHasModalSemantics);
+            }
+            return Ok(());
+        }
+        FieldValueRepresentation::ModalPhysicalComponents => {
+            ModalReconstructionRule::PhysicalComponents
+        }
+        FieldValueRepresentation::ModalFunctionSpaceCoefficients => {
+            ModalReconstructionRule::FunctionSpaceBasisExpansion
+        }
+        FieldValueRepresentation::ModalLocalTangentCoefficients => {
+            ModalReconstructionRule::LocalTangentBasisToCartesian
+        }
+    };
+
+    let semantics = descriptor
+        .modal_semantics
+        .as_ref()
+        .ok_or(DatasetContractError::ModalFieldMissingSemantics)?;
+    if semantics.reconstruction != expected_reconstruction {
+        return Err(DatasetContractError::ModalReconstructionMismatch);
+    }
+    semantics
+        .equilibrium_state
+        .validate()
+        .map_err(|_| DatasetContractError::InvalidModalEquilibriumState)?;
+    require_id("modal linearization_id", &semantics.linearization_id)?;
+    require_id("modal basis_id", &semantics.modal_basis_id)?;
+    require_id("modal phase_reference_id", &semantics.phase_reference_id)?;
+    require_id("modal normalization unit", &semantics.normalization.unit)?;
+    require_id("modal producer_version", &semantics.producer_version)?;
+    let scale = semantics
+        .normalization
+        .scale
+        .parse::<f64>()
+        .map_err(|_| DatasetContractError::InvalidModalNormalizationScale)?;
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(DatasetContractError::InvalidModalNormalizationScale);
     }
     Ok(())
 }
@@ -1223,8 +1351,64 @@ mod tests {
             complex_encoding: ComplexEncoding::Real,
             harmonic_convention: None,
             normalization: FieldNormalization::UnitVector,
+            value_representation: FieldValueRepresentation::PhysicalField,
+            modal_semantics: None,
             resolution: FieldResolution::Quantitative,
         }
+    }
+
+    fn accepted_state() -> AcceptedStateId {
+        AcceptedStateId {
+            run_id: "run:equilibrium".to_string(),
+            stage_id: Some("stage:relax".to_string()),
+            accepted_step: 12,
+            clock_digest: digest("clock"),
+            state_digest: digest("state"),
+            domain_digest: digest("domain"),
+            plan_digest: digest("plan"),
+        }
+    }
+
+    fn modal_semantics(reconstruction: ModalReconstructionRule) -> ModalFieldSemantics {
+        ModalFieldSemantics {
+            equilibrium_state: accepted_state(),
+            linearization_id: "linearization:1".to_string(),
+            modal_basis_id: "basis:tangent-at-m0".to_string(),
+            reconstruction,
+            phase_reference_id: "coefficient:max-magnitude-real-positive".to_string(),
+            normalization: ModalNormalizationDescriptor {
+                kind: ModalNormalizationKind::L2,
+                scale: "1.0".to_string(),
+                unit: "1".to_string(),
+            },
+            amplitude_semantics: ModalAmplitudeSemantics::RelativeEigenvector,
+            producer_version: "eigensolver/1".to_string(),
+        }
+    }
+
+    #[test]
+    fn modal_coefficients_require_reconstruction_semantics() {
+        let mut descriptor = field("fem-h1", "mesh:a", "layout:a");
+        descriptor.value_representation = FieldValueRepresentation::ModalFunctionSpaceCoefficients;
+
+        assert_eq!(
+            validate_field_descriptor(&descriptor),
+            Err(DatasetContractError::ModalFieldMissingSemantics)
+        );
+    }
+
+    #[test]
+    fn modal_reconstruction_must_match_value_representation() {
+        let mut descriptor = field("fem-h1", "mesh:a", "layout:a");
+        descriptor.value_representation = FieldValueRepresentation::ModalLocalTangentCoefficients;
+        descriptor.modal_semantics = Some(modal_semantics(
+            ModalReconstructionRule::FunctionSpaceBasisExpansion,
+        ));
+
+        assert_eq!(
+            validate_field_descriptor(&descriptor),
+            Err(DatasetContractError::ModalReconstructionMismatch)
+        );
     }
 
     #[test]

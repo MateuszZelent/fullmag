@@ -29,8 +29,11 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 7. [Receipts projekcji i metryki błędu](07-projection-receipts.md)
    — osobna receptura i dowód wykonania, exact source/target layout oraz jawne
    measured/estimated/certified error metrics z jednostkami.
+8. [Semantyka pól modalnych K18](08-modal-field-semantics.md)
+   — jawne rozróżnienie składowych fizycznych, współczynników FEM i lokalnej
+   bazy stycznej, przypięty stan równowagi oraz reguła rekonstrukcji.
 
 SolutionSet, materializator/evaluator datasetów, API i generated client,
 pozostałe quantities, partial reads, frontend porównań i wykresów oraz
 produkcyjne dowody pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi
-**15%**.
+**17%**.
