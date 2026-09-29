@@ -74,9 +74,12 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 22. [Jawna tożsamość bezpośredniego writera modal-eigen](22-direct-eigen-artifact-identity.md)
     — wymagane session/run/stage/runtime ID, fail-closed brak kontekstu i
     zachowanie exact identity w manifeście rodziny oraz field-sweep.
+23. [Jawna tożsamość pochodnego Kittel fit](23-direct-kittel-artifact-identity.md)
+    — identity-aware builder/writer dla bezpośredniej gałęzi modal-eigen oraz
+    jawne odseparowanie niemigrowanych adapterów legacy.
 
-Pozostałe resource keys oraz pochodny writer Kittel w
-`runner/eigen/artifacts`, writer `fmr.rs`, FEM artifact writers i migracja
-legacy copy-on-write, materializator/evaluator datasetów, API i generated client,
+Pozostałe resource keys w `runner/eigen/artifacts`, writer `fmr.rs`, FEM
+artifact writers i migracja legacy copy-on-write, materializator/evaluator
+datasetów, API i generated client,
 pozostałe quantities, frontend porównań i wykresów oraz produkcyjne dowody
-pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **49%**.
+pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **50%**.

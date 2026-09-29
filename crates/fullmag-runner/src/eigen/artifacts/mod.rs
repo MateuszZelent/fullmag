@@ -26,8 +26,9 @@ pub use fmr::{
     ResonanceFitsArtifact,
 };
 pub use kittel::{
-    build_kittel_fit_artifact, write_kittel_fit_artifact, KittelFitArtifact,
-    KittelFitParameterArtifact, KittelFitPointArtifact,
+    build_kittel_fit_artifact, build_kittel_fit_artifact_with_identity, write_kittel_fit_artifact,
+    write_kittel_fit_artifact_with_identity, KittelFitArtifact, KittelFitParameterArtifact,
+    KittelFitPointArtifact,
 };
 pub(crate) use kittel::{
     k0_kittel_validation_auxiliary_artifacts,

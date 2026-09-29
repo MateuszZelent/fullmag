@@ -170,9 +170,11 @@ Aktualizacja 29.09.2026: bezpośredni orchestrator modal-eigen wymaga teraz
 `FrequencyDomainArtifactIdentity` przed utworzeniem trwałego outputu. Typ
 odrzuca mutable aliasy, a manifest rodziny i `eigen/field_sweep.v1` zachowują
 dokładne session/run/stage/runtime ID. Wywołanie bez identity kończy się przed
-zapisem manifestu. Pozostałe resource keys, pochodny artefakt Kittel oraz
-produkcyjny writer FMR nadal używają kontraktu legacy; ich migracja wymaga
-najpierw przeprowadzenia identity przez wszystkie właściwe granice wykonania.
+zapisem manifestu. Identity-aware gałąź writera przenosi ten sam kontekst do
+pochodnego artefaktu Kittel; niemigrowane adaptery FEM zachowują jawny legacy
+wrapper. Pozostałe resource keys oraz produkcyjny writer FMR nadal używają
+kontraktu legacy; ich migracja wymaga przeprowadzenia identity przez wszystkie
+właściwe granice wykonania.
 
 ## Migracja i rollback
 

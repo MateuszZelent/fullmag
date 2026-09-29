@@ -953,6 +953,10 @@ fn eigen_artifacts_write_k0_kittel_summary_and_points() {
     )
     .expect("typed Kittel fit artifact should be valid JSON");
     assert_eq!(kittel_fit["schema_version"], "fmr/kittel_fit.v1");
+    assert_eq!(kittel_fit["session_id"], "session:test-frequency-domain");
+    assert_eq!(kittel_fit["run_id"], "run:test-frequency-domain");
+    assert_eq!(kittel_fit["stage_id"], "stage:test-frequency-domain");
+    assert_eq!(kittel_fit["runtime_id"], "runtime:test-frequency-domain");
     assert_eq!(kittel_fit["source"]["artifact"], "eigen/spectrum.v2.json");
     assert_eq!(kittel_fit["model"], "macrospin_larmor");
     assert_eq!(kittel_fit["complete"], false);

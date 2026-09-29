@@ -3,7 +3,8 @@ use super::field_sweep::{
     build_frequency_domain_field_sweep_artifact, write_frequency_domain_field_sweep_artifact,
 };
 use super::kittel::{
-    build_kittel_fit_artifact, write_k0_kittel_validation_artifacts, write_kittel_fit_artifact,
+    build_kittel_fit_artifact_with_identity, write_k0_kittel_validation_artifacts,
+    write_kittel_fit_artifact_with_identity,
 };
 use crate::eigen::types::{
     EigenSolverModel, KSampleDescriptor, PathSolveResult, SingleKModeResult, SingleKSolveResult,
@@ -464,7 +465,7 @@ pub fn write_frequency_domain_eigen_manifest(
     let field_sweep_v1_path = build_frequency_domain_field_sweep_artifact(result, identity)?
         .is_some()
         .then_some("eigen/field_sweep.v1.json");
-    let fmr_kittel_fit_v1_path = build_kittel_fit_artifact(result)?
+    let fmr_kittel_fit_v1_path = build_kittel_fit_artifact_with_identity(result, identity)?
         .is_some()
         .then_some("fmr/kittel_fit.v1.json");
     let calculation_mode = eigen_calculation_mode(result);
@@ -643,7 +644,7 @@ pub fn write_frequency_domain_eigen_manifest(
         serde_json::to_vec_pretty(&manifest).unwrap(),
     )?;
     let _ = write_frequency_domain_field_sweep_artifact(base_dir, result, identity)?;
-    let _ = write_kittel_fit_artifact(base_dir, result)?;
+    let _ = write_kittel_fit_artifact_with_identity(base_dir, result, identity)?;
     write_k0_kittel_validation_artifacts(base_dir, result)?;
     Ok(())
 }

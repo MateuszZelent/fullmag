@@ -35,9 +35,9 @@ aktywnej sesji, nazwy katalogu ani ustawień procesu.
 
 Trwałe `mode_field_resource_key` i indeks `resources` nadal zawierają
 transportowe `/v2/sessions/current`; ich zamiana wymaga identity-only field
-references oraz projekcji route po stronie API. Pochodny Kittel fit zachowuje
-jeszcze legacy run/runtime tokens. Writer FMR nie otrzymuje tożsamości
-wykonania z głównego runner context, dlatego pozostaje legacy zamiast
-konstruować fałszywy run. Osobno otwarte są generatory FEM, copy-on-write
-migrator starych plików, publiczne API/generated client oraz runtime i
-czterolane qualification.
+references oraz projekcji route po stronie API. Identity-aware pochodny Kittel
+fit jest opisany w checkpointcie 23; jego stare adaptery pozostają legacy.
+Writer FMR nie otrzymuje tożsamości wykonania z głównego runner context,
+dlatego pozostaje legacy zamiast konstruować fałszywy run. Osobno otwarte są
+generatory FEM, copy-on-write migrator starych plików, publiczne API/generated
+client oraz runtime i czterolane qualification.
