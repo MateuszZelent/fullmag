@@ -25,6 +25,7 @@ pub mod provider;
 pub mod reduction;
 pub mod registry;
 pub mod schema_version;
+pub mod solution_set;
 pub mod step_data;
 pub mod transport;
 
@@ -64,6 +65,12 @@ pub use eval::{eval_global_scalar, reduce_scalars, reduce_vector_field, Quantity
 pub use id::{normalize_quantity_id, QuantityId, QuantityIdError};
 pub use reduction::QuantityReduction;
 pub use schema_version::SCHEMA_VERSION;
+pub use solution_set::{
+    ScientificAssessment, ScientificAssessmentStatus, SolutionArtifactCoverage,
+    SolutionArtifactKind, SolutionArtifactRef, SolutionCoverageState, SolutionExecutionStatus,
+    SolutionMember, SolutionSegmentRef, SolutionSet, SolutionSetError, SolutionSetManifestState,
+    SolutionSetProvenance, SOLUTION_SET_SCHEMA_VERSION,
+};
 pub use step_data::{
     EndpointCacheTelemetry, FemMaterialFieldLocation, FemRepresentationReceipt,
     FemStateRepresentation, GlobalQuantityRow, StepDiagnostics,

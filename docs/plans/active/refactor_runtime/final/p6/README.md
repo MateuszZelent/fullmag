@@ -32,8 +32,11 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 8. [Semantyka pól modalnych K18](08-modal-field-semantics.md)
    — jawne rozróżnienie składowych fizycznych, współczynników FEM i lokalnej
    bazy stycznej, przypięty stan równowagi oraz reguła rekonstrukcji.
+9. [Fundament katalogu SolutionSet](09-solution-set-catalog.md)
+   — immutable artifact refs, provenance wejść i wykonania, osobna ocena
+   naukowa oraz jawne kompletne/częściowe/nieznane pokrycie segmentów.
 
-SolutionSet, materializator/evaluator datasetów, API i generated client,
-pozostałe quantities, partial reads, frontend porównań i wykresów oraz
+Writers i trwały katalog SolutionSet, materializator/evaluator datasetów, API i
+generated client, pozostałe quantities, frontend porównań i wykresów oraz
 produkcyjne dowody pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi
-**17%**.
+**19%**.
