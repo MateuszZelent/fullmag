@@ -8,6 +8,8 @@ use fullmag_quantities::{
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
+use crate::observation::{magnetization_digest_f64be, FdmCpuAcceptedStateSnapshotV1};
+
 /// Owned state required to evaluate quantities for one immutable source.
 ///
 /// Construction consumes every carrier. The resulting runtime has no handle to
@@ -64,6 +66,62 @@ impl ObservationRuntime {
 
     pub fn source(&self) -> &AcceptedStateId {
         &self.frame.source
+    }
+
+    pub fn from_fdm_cpu_accepted_state(
+        source: AcceptedStateId,
+        snapshot: FdmCpuAcceptedStateSnapshotV1,
+        grid: [u32; 3],
+        magnetization: Vec<[f64; 3]>,
+    ) -> Result<Self, ObservationRuntimeError> {
+        snapshot
+            .validate()
+            .map_err(|error| ObservationRuntimeError::InvalidSource(error.to_string()))?;
+        if source.accepted_step != snapshot.clock.accepted_step
+            || source.clock_digest != snapshot.clock_digest
+            || source.state_digest != snapshot.state_digest
+        {
+            return Err(ObservationRuntimeError::SourceMismatch);
+        }
+        let transactional_state_digest = snapshot
+            .transactional_state_digest
+            .ok_or(ObservationRuntimeError::MissingPrimaryCarrierPreimage)?;
+        let expected_magnetization_digest = snapshot
+            .magnetization_digest
+            .ok_or(ObservationRuntimeError::MissingMagnetizationBinding)?;
+        let actual_magnetization_digest = magnetization_digest_f64be(&magnetization)
+            .map_err(|error| ObservationRuntimeError::InvalidSource(error.to_string()))?;
+        if actual_magnetization_digest != expected_magnetization_digest {
+            return Err(ObservationRuntimeError::MagnetizationIdentityMismatch);
+        }
+        let n_cells = grid.into_iter().try_fold(1_usize, |count, extent| {
+            usize::try_from(extent)
+                .ok()
+                .and_then(|extent| count.checked_mul(extent))
+        });
+        let Some(n_cells) = n_cells else {
+            return Err(ObservationRuntimeError::InvalidGrid);
+        };
+        Self::new(ObservationFrame {
+            source,
+            clock: snapshot.clock,
+            primary_carriers: vec![ObservationPrimaryCarrier {
+                carrier_id: "fdm.cpu.transactional-state-digest.v1".into(),
+                canonical_bytes: transactional_state_digest.into_bytes(),
+            }],
+            grid,
+            n_cells,
+            active_mask: None,
+            magnetization: Some(
+                magnetization
+                    .into_iter()
+                    .flat_map(|value| value.into_iter())
+                    .collect(),
+            ),
+            named_fields: HashMap::new(),
+            global_scalars: None,
+            available_quantity_ids: vec![QuantityId::M],
+        })
     }
 
     pub fn cached_quantity_ids(&self) -> Vec<QuantityId> {
@@ -144,6 +202,9 @@ pub enum ObservationRuntimeError {
     InvalidSource(String),
     ClockIdentityMismatch,
     StateIdentityMismatch,
+    MissingPrimaryCarrierPreimage,
+    MissingMagnetizationBinding,
+    MagnetizationIdentityMismatch,
     InvalidGrid,
     InvalidActiveMask,
     InvalidMagnetization,
@@ -171,6 +232,13 @@ impl fmt::Display for ObservationRuntimeError {
             Self::StateIdentityMismatch => formatter.write_str(
                 "observation primary carriers do not match the accepted source identity",
             ),
+            Self::MissingPrimaryCarrierPreimage => formatter
+                .write_str("observation source does not retain the primary carrier preimage"),
+            Self::MissingMagnetizationBinding => formatter
+                .write_str("observation source does not bind its materialized magnetization"),
+            Self::MagnetizationIdentityMismatch => {
+                formatter.write_str("observation magnetization does not match the accepted source")
+            }
             Self::InvalidGrid => {
                 formatter.write_str("observation grid and n_cells are inconsistent")
             }
@@ -419,6 +487,49 @@ mod tests {
         assert!(matches!(
             ObservationRuntime::new(frame),
             Err(ObservationRuntimeError::StateIdentityMismatch)
+        ));
+    }
+
+    #[test]
+    fn fdm_cpu_adapter_binds_terminal_magnetization_and_computes_m() {
+        let clock = ObservationClock {
+            accepted_step: 8,
+            time_seconds: 4.0e-12,
+            dt_seconds: Some(5.0e-13),
+        };
+        let magnetization = vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let transactional_digest = format!("sha256:{}", "e".repeat(64));
+        let snapshot = FdmCpuAcceptedStateSnapshotV1::from_transactional_state(
+            clock,
+            &transactional_digest,
+            &magnetization,
+        )
+        .unwrap();
+        let source = AcceptedStateId {
+            run_id: "run-fdm-cpu".into(),
+            stage_id: Some("stage-1".into()),
+            accepted_step: clock.accepted_step,
+            clock_digest: snapshot.clock_digest.clone(),
+            state_digest: snapshot.state_digest.clone(),
+            domain_digest: format!("sha256:{}", "c".repeat(64)),
+            plan_digest: format!("sha256:{}", "d".repeat(64)),
+        };
+        let mut runtime = ObservationRuntime::from_fdm_cpu_accepted_state(
+            source.clone(),
+            snapshot.clone(),
+            [2, 1, 1],
+            magnetization.clone(),
+        )
+        .unwrap();
+        runtime
+            .compute_quantities(&source, &[QuantityId::M])
+            .unwrap();
+
+        let mut changed = magnetization;
+        changed[1] = [0.0, 0.0, 1.0];
+        assert!(matches!(
+            ObservationRuntime::from_fdm_cpu_accepted_state(source, snapshot, [2, 1, 1], changed,),
+            Err(ObservationRuntimeError::MagnetizationIdentityMismatch)
         ));
     }
 }

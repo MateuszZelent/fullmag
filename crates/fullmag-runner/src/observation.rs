@@ -21,6 +21,10 @@ pub const FDM_GPU_ACCEPTED_STATE_SNAPSHOT_FILE: &str =
 pub struct FdmCpuAcceptedStateSnapshotV1 {
     pub schema_version: String,
     pub clock: ObservationClock,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transactional_state_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_digest: Option<String>,
     pub clock_digest: String,
     pub state_digest: String,
     pub primary_carrier_ids: Vec<String>,
@@ -47,10 +51,23 @@ impl FdmCpuAcceptedStateSnapshotV1 {
         Ok(Self {
             schema_version: FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA.to_string(),
             clock,
+            transactional_state_digest: Some(transactional_state_digest.to_string()),
+            magnetization_digest: None,
             clock_digest: digests.clock_digest,
             state_digest: digests.state_digest,
             primary_carrier_ids: vec![carrier_id.to_string()],
         })
+    }
+
+    pub fn from_transactional_state(
+        clock: ObservationClock,
+        transactional_state_digest: &str,
+        magnetization: &[[f64; 3]],
+    ) -> Result<Self, AcceptedStateIdentityError> {
+        let mut snapshot =
+            Self::from_transactional_state_digest(clock, transactional_state_digest)?;
+        snapshot.magnetization_digest = Some(magnetization_digest_f64be(magnetization)?);
+        Ok(snapshot)
     }
 
     pub fn validate(&self) -> Result<(), AcceptedStateIdentityError> {
@@ -61,6 +78,34 @@ impl FdmCpuAcceptedStateSnapshotV1 {
         if self.clock.digest()? != self.clock_digest {
             return Err(AcceptedStateIdentityError::InvalidDigest {
                 field: "clock_digest",
+            });
+        }
+        if let Some(transactional_state_digest) = &self.transactional_state_digest {
+            if !fullmag_quantities::is_canonical_sha256(transactional_state_digest) {
+                return Err(AcceptedStateIdentityError::InvalidDigest {
+                    field: "transactional_state_digest",
+                });
+            }
+            let digests = accepted_state_digests(
+                self.clock,
+                &[AcceptedPrimaryCarrier {
+                    carrier_id: "fdm.cpu.transactional-state-digest.v1",
+                    canonical_bytes: transactional_state_digest.as_bytes(),
+                }],
+            )?;
+            if digests.state_digest != self.state_digest {
+                return Err(AcceptedStateIdentityError::InvalidDigest {
+                    field: "state_digest",
+                });
+            }
+        }
+        if self
+            .magnetization_digest
+            .as_deref()
+            .is_some_and(|digest| !fullmag_quantities::is_canonical_sha256(digest))
+        {
+            return Err(AcceptedStateIdentityError::InvalidDigest {
+                field: "magnetization_digest",
             });
         }
         if !fullmag_quantities::is_canonical_sha256(&self.state_digest) {
@@ -91,20 +136,7 @@ impl FdmGpuAcceptedStateSnapshotV1 {
         clock: ObservationClock,
         magnetization: &[[f64; 3]],
     ) -> Result<Self, AcceptedStateIdentityError> {
-        if magnetization.is_empty()
-            || magnetization
-                .iter()
-                .flat_map(|value| value.iter())
-                .any(|value| !value.is_finite())
-        {
-            return Err(AcceptedStateIdentityError::InvalidPrimaryCarrierSet);
-        }
-        let mut canonical = Vec::with_capacity(8 + magnetization.len() * 24);
-        canonical.extend_from_slice(&(magnetization.len() as u64).to_be_bytes());
-        for value in magnetization.iter().flat_map(|value| value.iter()) {
-            canonical.extend_from_slice(&value.to_bits().to_be_bytes());
-        }
-        let magnetization_digest = format!("sha256:{:x}", Sha256::digest(&canonical));
+        let magnetization_digest = magnetization_digest_f64be(magnetization)?;
         let carrier_id = "fdm.gpu.magnetization-digest.f64be.v1";
         let digests = accepted_state_digests(
             clock,
@@ -155,6 +187,25 @@ impl FdmGpuAcceptedStateSnapshotV1 {
         }
         Ok(())
     }
+}
+
+pub(crate) fn magnetization_digest_f64be(
+    magnetization: &[[f64; 3]],
+) -> Result<String, AcceptedStateIdentityError> {
+    if magnetization.is_empty()
+        || magnetization
+            .iter()
+            .flat_map(|value| value.iter())
+            .any(|value| !value.is_finite())
+    {
+        return Err(AcceptedStateIdentityError::InvalidPrimaryCarrierSet);
+    }
+    let mut canonical = Vec::with_capacity(8 + magnetization.len() * 24);
+    canonical.extend_from_slice(&(magnetization.len() as u64).to_be_bytes());
+    for value in magnetization.iter().flat_map(|value| value.iter()) {
+        canonical.extend_from_slice(&value.to_bits().to_be_bytes());
+    }
+    Ok(format!("sha256:{:x}", Sha256::digest(&canonical)))
 }
 
 /// Execution lane whose accepted state backs post-stage observations.

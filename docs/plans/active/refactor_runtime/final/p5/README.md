@@ -32,9 +32,13 @@ aktywnego runtime'u.
 8. [Izolowany rdzeń `ObservationRuntime`](08-observation-runtime-core.md) —
    jedna content-bound ramka, jawny allow-list quantity i atomowy batch/cache
    bez uchwytu do live runtime'u.
-9. [Granica zastosowania komendy Live](../p4/20-live-command-application-boundary.md)
+9. [Adapter prostego FDM CPU](09-fdm-cpu-observation-adapter.md) — zachowany
+   primary-carrier preimage, osobny digest magnetyzacji i fail-closed
+   materializacja historycznego `m`.
+10. [Granica zastosowania komendy Live](../p4/20-live-command-application-boundary.md)
    — publiczny readback kroku, czasu i segmentu faktycznego zastosowania komendy.
 
 Materializacja accepted state dla coupled/Frozen Spins i FEM, ogólna
-checkpoint compatibility, adaptery/autosave/API `ObservationRuntime` oraz
-zarządzana rekwalifikacja nowego refa GPU pozostają otwarte. P5 wynosi **97%**.
+checkpoint compatibility, pozostałe adaptery/autosave/CAS/API
+`ObservationRuntime` oraz zarządzana rekwalifikacja nowego refa GPU pozostają
+otwarte. P5 wynosi **98%**.

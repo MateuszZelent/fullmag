@@ -75,6 +75,7 @@ fn fdm_cpu_accepted_state_snapshot(
     time_seconds: f64,
     dt_seconds: Option<f64>,
     transactional_state_digest: &str,
+    magnetization: &[[f64; 3]],
 ) -> Result<Option<FdmCpuAcceptedStateSnapshotV1>, RunError> {
     // The transactional CPU digest covers magnetization, integrator memory,
     // and the accepted thermal RNG interval. Coupled transport and Frozen
@@ -88,9 +89,10 @@ fn fdm_cpu_accepted_state_snapshot(
         time_seconds,
         dt_seconds,
     };
-    FdmCpuAcceptedStateSnapshotV1::from_transactional_state_digest(
+    FdmCpuAcceptedStateSnapshotV1::from_transactional_state(
         clock,
         transactional_state_digest,
+        magnetization,
     )
     .map(Some)
     .map_err(|error| RunError {
@@ -2441,6 +2443,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         state.time_seconds,
         (!is_direct_minimization && last_solver_dt > 0.0).then_some(last_solver_dt),
         &checkpoint_digest,
+        state.magnetization(),
     )?;
     let mut final_provenance = artifacts.provenance_snapshot();
     if let Some(fft_execution) = final_provenance.fdm_fft_execution.as_mut() {
@@ -3908,6 +3911,7 @@ mod tests {
             5.0e-14,
             Some(1.0e-14),
             &format!("sha256:{}", "a".repeat(64)),
+            &plan.initial_magnetization,
         )
         .expect("accepted state snapshot")
         .expect("supported simple FDM CPU lane");
@@ -3917,6 +3921,7 @@ mod tests {
             5.0e-14,
             Some(1.0e-14),
             &format!("sha256:{}", "b".repeat(64)),
+            &plan.initial_magnetization,
         )
         .expect("changed accepted state snapshot")
         .expect("supported simple FDM CPU lane");
@@ -3931,9 +3936,15 @@ mod tests {
         assert_eq!(first.clock_digest, changed.clock_digest);
         assert_ne!(first.state_digest, changed.state_digest);
 
-        let invalid =
-            fdm_cpu_accepted_state_snapshot(&plan, 5, 5.0e-14, Some(1.0e-14), "not-a-digest")
-                .expect_err("noncanonical carrier digest must fail closed");
+        let invalid = fdm_cpu_accepted_state_snapshot(
+            &plan,
+            5,
+            5.0e-14,
+            Some(1.0e-14),
+            "not-a-digest",
+            &plan.initial_magnetization,
+        )
+        .expect_err("noncanonical carrier digest must fail closed");
         assert!(invalid.message.contains("transactional_state_digest"));
 
         let mut frozen = plan;
@@ -3944,6 +3955,7 @@ mod tests {
             5.0e-14,
             Some(1.0e-14),
             &format!("sha256:{}", "a".repeat(64)),
+            &frozen.initial_magnetization,
         )
         .expect("unsupported lane remains unavailable")
         .is_none());
