@@ -177,6 +177,66 @@ impl SolutionSetCatalog {
         Ok(reconciliations)
     }
 
+    /// Return CAS identities protected by immutable SolutionSet revisions.
+    ///
+    /// The caller must hold the repository writer lease. Every revision chain
+    /// is validated before any identity is returned so pin retirement remains
+    /// fail-closed after a crash between manifest publication and pin release.
+    pub(crate) fn durable_objects_locked(&self) -> Result<BTreeMap<String, u64>> {
+        let mut objects = BTreeMap::new();
+        for solution_set_id in self.discover_solution_set_ids()? {
+            let current = self.read(&solution_set_id)?;
+            let revisions = self.read_revision_chain(&solution_set_id)?;
+            if revisions.is_empty() {
+                bail!("solution-set catalog entry has no immutable revision history");
+            }
+
+            let mut previous: Option<&SolutionSet> = None;
+            for (index, (revision, solution)) in revisions.iter().enumerate() {
+                let expected =
+                    u64::try_from(index + 1).context("solution-set revision overflow")?;
+                if *revision != expected || solution.revision != *revision {
+                    bail!("solution-set revision history has a gap or path mismatch");
+                }
+                if let Some(previous) = previous {
+                    validate_successor(previous, solution)?;
+                }
+                previous = Some(solution);
+
+                for member in &solution.members {
+                    for artifact in &member.artifacts {
+                        register_durable_object(
+                            &mut objects,
+                            &artifact.object_ref,
+                            artifact.byte_length,
+                        )?;
+                    }
+                }
+                for coverage in &solution.coverage {
+                    for segment in &coverage.segments {
+                        register_durable_object(
+                            &mut objects,
+                            &segment.object_ref,
+                            segment.byte_length,
+                        )?;
+                    }
+                }
+            }
+
+            if let Some(current) = current {
+                let persisted = revisions
+                    .get(&current.revision)
+                    .context("solution-set current revision is missing")?;
+                if persisted != &current {
+                    bail!(
+                        "current solution-set manifest conflicts with immutable revision history"
+                    );
+                }
+            }
+        }
+        Ok(objects)
+    }
+
     fn reconcile_locked(&self, solution_set_id: &str) -> Result<SolutionSetReconciliation> {
         let current = self.read(solution_set_id)?;
         let revisions = self.read_revision_chain(solution_set_id)?;
@@ -361,6 +421,19 @@ impl SolutionSetCatalog {
             solution_directory(solution_set_id)
         )
     }
+}
+
+fn register_durable_object(
+    objects: &mut BTreeMap<String, u64>,
+    object_ref: &str,
+    byte_length: u64,
+) -> Result<()> {
+    if let Some(previous) = objects.insert(object_ref.to_string(), byte_length) {
+        if previous != byte_length {
+            bail!("solution-set object has conflicting declared lengths");
+        }
+    }
+    Ok(())
 }
 
 fn validate_directory_name(directory_name: &str) -> Result<()> {
@@ -720,5 +793,60 @@ mod tests {
             .file_refs
             .iter()
             .any(|path| path.ends_with("/manifest.json")));
+    }
+
+    #[test]
+    fn solution_set_publication_releases_only_its_rooted_pins() {
+        let directory = tempfile::tempdir().expect("temporary session store");
+        let store = SessionStore::open(directory.path()).expect("open session store");
+        let referenced_payload = b"published solution state";
+        let referenced = store
+            .cas()
+            .put(referenced_payload)
+            .expect("publish referenced CAS object");
+        let unrelated = store
+            .cas()
+            .put(b"unpublished ingest")
+            .expect("publish unrelated CAS object");
+
+        store
+            .publish_solution_set(&solution_with_artifact(
+                referenced.clone(),
+                referenced_payload.len() as u64,
+            ))
+            .expect("publish verified solution set");
+
+        let pins = store.cas().pinned_refs().expect("read CAS pins");
+        assert!(!pins.contains(&referenced));
+        assert!(pins.contains(&unrelated));
+    }
+
+    #[test]
+    fn store_open_recovers_pin_release_after_manifest_only_commit() {
+        let directory = tempfile::tempdir().expect("temporary session store");
+        let store = SessionStore::open(directory.path()).expect("open session store");
+        let payload = b"interrupted pin retirement";
+        let object_ref = store.cas().put(payload).expect("publish CAS object");
+        let solution = solution_with_artifact(object_ref.clone(), payload.len() as u64);
+        {
+            let _lease = store.write_transaction().expect("acquire writer");
+            store
+                .solution_sets()
+                .publish_locked(&solution)
+                .expect("commit immutable solution manifest");
+        }
+        assert!(store
+            .cas()
+            .pinned_refs()
+            .expect("read pins before recovery")
+            .contains(&object_ref));
+
+        drop(store);
+        let store = SessionStore::open(directory.path()).expect("reopen session store");
+        assert!(!store
+            .cas()
+            .pinned_refs()
+            .expect("read pins after recovery")
+            .contains(&object_ref));
     }
 }

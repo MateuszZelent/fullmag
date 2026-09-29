@@ -125,13 +125,15 @@ impl SessionStore {
         }
         let cas = CasStore::existing(checked_path(&root, "objects")?, writer.clone())?;
         let solution_sets = SolutionSetCatalog::with_writer(root.clone(), writer.clone())?;
-        Ok(Self {
+        let store = Self {
             root,
             cas,
             solution_sets,
             writer,
             explicit_lease: Mutex::new(None),
-        })
+        };
+        store.release_solution_set_pins()?;
+        Ok(store)
     }
 
     /// Open without creating repository directories or files. Mutations still
@@ -189,18 +191,20 @@ impl SessionStore {
                 )?;
             }
         }
-        for (object_ref, expected_length) in referenced_objects {
+        for (object_ref, expected_length) in &referenced_objects {
             let actual_length = self
                 .cas
-                .verified_length(&object_ref)?
+                .verified_length(object_ref)?
                 .with_context(|| format!("solution-set CAS object `{object_ref}` is missing"))?;
-            if actual_length != expected_length {
+            if actual_length != *expected_length {
                 anyhow::bail!(
                     "solution-set CAS object `{object_ref}` length mismatch: expected {expected_length}, found {actual_length}"
                 );
             }
         }
-        self.solution_sets.publish_locked(solution)
+        self.solution_sets.publish_locked(solution)?;
+        let rooted_refs = referenced_objects.into_keys().collect();
+        self.cas.release_referenced_pins(&rooted_refs)
     }
 
     /// Bind a multi-file operation to one native writer lease.
@@ -4557,8 +4561,9 @@ impl SessionStore {
         Ok(fresh.candidates.len())
     }
 
-    /// Retire pins backed by immutable checkpoint roots. Mutable recovery/run
-    /// records alone cannot retire another in-flight ingest's hash pin.
+    /// Retire pins backed by immutable checkpoint or SolutionSet roots.
+    /// Mutable recovery/run records alone cannot retire another in-flight
+    /// ingest's hash pin.
     pub fn release_published_pins(&self) -> Result<()> {
         let _lease = self.write_transaction()?;
         let graph = crate::reachability::walk_store_root(
@@ -4583,7 +4588,26 @@ impl SessionStore {
             permanent
                 .extend(crate::reachability::walk_checkpoint(&self.root, &checkpoint)?.object_refs);
         }
+        permanent.extend(self.solution_sets.durable_objects_locked()?.into_keys());
         self.cas.release_referenced_pins(&permanent)
+    }
+
+    fn release_solution_set_pins(&self) -> Result<()> {
+        let _lease = self.write_transaction()?;
+        let objects = self.solution_sets.durable_objects_locked()?;
+        for (object_ref, expected_length) in &objects {
+            let actual_length = self
+                .cas
+                .verified_length(object_ref)?
+                .with_context(|| format!("solution-set CAS object `{object_ref}` is missing"))?;
+            if actual_length != *expected_length {
+                anyhow::bail!(
+                    "solution-set CAS object `{object_ref}` length mismatch: expected {expected_length}, found {actual_length}"
+                );
+            }
+        }
+        self.cas
+            .release_referenced_pins(&objects.into_keys().collect())
     }
 }
 

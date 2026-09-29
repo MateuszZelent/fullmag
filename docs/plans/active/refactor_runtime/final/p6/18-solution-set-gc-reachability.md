@@ -37,7 +37,7 @@ publikacji, nawet gdy current wskazuje wcześniejszą wersję.
 
 ## Otwarte elementy
 
-Portable `.fms` pakuje i odtwarza typowany namespace `solutions/`. Brakuje
-kontrolowanego zwalniania pinów po trwałym root graph, mappera outputów
+Portable `.fms` pakuje i odtwarza typowany namespace `solutions/`, a trwały
+root graph zwalnia dokładne piny SolutionSet. Brakuje mappera outputów
 runnera, publicznego API, migracji legacy resource keys, process/power-loss
 fault injection oraz kwalifikacji czterech lane'ów i CAE-04/37/61/70.

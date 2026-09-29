@@ -65,8 +65,11 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 19. [Portable `.fms` dla SolutionSet](19-solution-set-fms-roundtrip.md)
     — typed archive preflight, profile-aware pack, exact CAS selection oraz
     restore immutable rewizji z reconciliation przed publikacją sesji.
+20. [Zwalnianie pinów CAS po publikacji SolutionSet](20-solution-set-pin-retirement.md)
+    — selektywny unpin po trwałym root commit oraz restartowe domknięcie
+    przerwanej operacji przez pełną walidację immutable historii.
 
 Writers runnera, materializator/evaluator datasetów, API i
 generated client, pozostałe quantities, frontend porównań i wykresów oraz
 produkcyjne dowody pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi
-**41%**.
+**43%**.

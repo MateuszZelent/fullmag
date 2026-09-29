@@ -42,6 +42,6 @@ history jest domykana tym samym mechanizmem recovery co lokalny restart.
 ## Otwarte elementy
 
 Brakuje migracji legacy resource keys copy-on-write i raportu CAE-04/70,
-kontrolowanego pin release po eksporcie/root commit, mappera terminalnych
-outputów runnera, publicznego API, process/power-loss fault injection oraz
+mappera terminalnych outputów runnera, publicznego API, process/power-loss
+fault injection oraz
 kwalifikacji reopen bez solvera i czterech lane'ów (CAE-37/61).
