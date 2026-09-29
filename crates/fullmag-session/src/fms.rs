@@ -35,6 +35,10 @@
 //! │     ├─ coordinator_journal/
 //! │     ├─ checkpoints/
 //! │     └─ artifacts/
+//! ├─ solutions/
+//! │  └─ <sha256(logical-id)>/
+//! │     ├─ manifest.json
+//! │     └─ revisions/<20-digit-revision>.json
 //! └─ objects/
 //!    └─ sha256/
 //! ```
@@ -161,13 +165,20 @@ pub fn pack_fms<W: Write + Seek>(
     validate_pack_input(workspace, documents)?;
     let canonical_root = canonical_store_root(store.root())?;
     let run_entries = plan_run_entries(store.root(), &canonical_root, session, export_profile)?;
-    let cas_entries = plan_cas_entries(store.root(), &canonical_root, &run_entries)?;
+    let solution_entries = plan_solution_entries(store.root(), &canonical_root, export_profile)?;
+    let cas_entries = plan_cas_entries(
+        store.root(),
+        &canonical_root,
+        &run_entries,
+        &solution_entries,
+    )?;
     validate_export_plan(
         session,
         workspace,
         export_profile,
         documents,
         &run_entries,
+        &solution_entries,
         &cas_entries,
     )?;
 
@@ -193,6 +204,12 @@ pub fn pack_fms<W: Write + Seek>(
 
     // ── runs/ ──────────────────────────────────────────────────────────
     for entry in run_entries {
+        zip.start_file(&entry.archive_path, fopts)?;
+        zip.write_all(&entry.data)?;
+    }
+
+    // ── solutions/ ─────────────────────────────────────────────────────
+    for entry in solution_entries {
         zip.start_file(&entry.archive_path, fopts)?;
         zip.write_all(&entry.data)?;
     }
@@ -286,9 +303,10 @@ fn plan_cas_entries(
     store_root: &Path,
     canonical_root: &Path,
     run_entries: &[PackEntry],
+    solution_entries: &[PackEntry],
 ) -> Result<Vec<PackEntry>> {
     let mut documents = HashMap::new();
-    for entry in run_entries {
+    for entry in run_entries.iter().chain(solution_entries) {
         documents.insert(entry.archive_path.clone(), entry.data.clone());
     }
 
@@ -325,6 +343,29 @@ fn plan_cas_entries(
             entries.push(PackEntry { archive_path, data });
         }
     }
+    Ok(entries)
+}
+
+fn plan_solution_entries(
+    store_root: &Path,
+    canonical_root: &Path,
+    profile: &FmsExportProfile,
+) -> Result<Vec<PackEntry>> {
+    if matches!(profile.include_artifacts, ArtifactPolicy::None) {
+        return Ok(Vec::new());
+    }
+    let directory = store_root.join("solutions");
+    if !store_source_exists(&directory)? {
+        return Ok(Vec::new());
+    }
+    let mut entries = Vec::new();
+    plan_artifact_directory(
+        store_root,
+        canonical_root,
+        &directory,
+        "solutions",
+        &mut entries,
+    )?;
     Ok(entries)
 }
 
@@ -1189,6 +1230,7 @@ fn validate_export_plan(
     export_profile: &FmsExportProfile,
     documents: &HashMap<String, Vec<u8>>,
     run_entries: &[PackEntry],
+    solution_entries: &[PackEntry],
     cas_entries: &[PackEntry],
 ) -> Result<()> {
     let mut entries = vec![
@@ -1213,6 +1255,12 @@ fn validate_export_plan(
     );
     entries.extend(
         run_entries
+            .iter()
+            .map(|entry| Ok((entry.archive_path.clone(), archive_entry_size(&entry.data)?)))
+            .collect::<Result<Vec<_>>>()?,
+    );
+    entries.extend(
+        solution_entries
             .iter()
             .map(|entry| Ok((entry.archive_path.clone(), archive_entry_size(&entry.data)?)))
             .collect::<Result<Vec<_>>>()?,
@@ -1677,6 +1725,7 @@ pub fn unpack_fms<R: Read + Seek>(reader: R, store: &SessionStore) -> Result<Fms
             store.write_import_document(name, data)?;
         }
     }
+    store.solution_sets().reconcile_all()?;
 
     // Commit the session manifest.
     store.commit_session(&preflight.session)?;
@@ -1694,6 +1743,7 @@ fn ensure_unpack_destination_pristine(root: &Path) -> Result<()> {
         "recovery",
         "temp",
         "objects",
+        "solutions",
     ];
     for entry in fs::read_dir(root)? {
         let entry = entry?;
@@ -1850,6 +1900,11 @@ impl FmsExportProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fullmag_quantities::{
+        ScientificAssessment, ScientificAssessmentStatus, SolutionArtifactKind,
+        SolutionArtifactRef, SolutionExecutionStatus, SolutionMember, SolutionSet,
+        SolutionSetManifestState, SolutionSetProvenance, SOLUTION_SET_SCHEMA_VERSION,
+    };
     use std::io::{Cursor, Write};
 
     fn test_session() -> FmsSessionManifest {
@@ -1950,6 +2005,104 @@ mod tests {
             FmsExportProfile::for_profile(profile),
             documents,
         )
+    }
+
+    fn portable_solution(object_ref: String, byte_length: u64) -> SolutionSet {
+        let digest = |character: char| format!("sha256:{}", character.to_string().repeat(64));
+        SolutionSet {
+            schema_version: SOLUTION_SET_SCHEMA_VERSION.to_string(),
+            solution_set_id: "solution:portable".to_string(),
+            revision: 1,
+            run_id: "run:portable".to_string(),
+            manifest_state: SolutionSetManifestState::Closed,
+            execution_status: SolutionExecutionStatus::Succeeded,
+            scientific_assessment: ScientificAssessment {
+                status: ScientificAssessmentStatus::Unassessed,
+                reason: Some("not assessed".to_string()),
+                evidence_artifact_ids: Vec::new(),
+            },
+            provenance: SolutionSetProvenance {
+                run_spec_digest: digest('a'),
+                model_digest: digest('b'),
+                physics_digest: digest('c'),
+                discretization_digest: digest('d'),
+                resolved_plan_digest: digest('e'),
+                acquisition_digest: digest('f'),
+                seed_digest: None,
+            },
+            members: vec![SolutionMember {
+                member_id: "member:portable".to_string(),
+                task_id: "task:portable".to_string(),
+                attempt_id: "attempt:portable".to_string(),
+                ownership_epoch: 1,
+                case_id: None,
+                stage_id: "stage:portable".to_string(),
+                execution_status: SolutionExecutionStatus::Succeeded,
+                scientific_assessment: ScientificAssessment {
+                    status: ScientificAssessmentStatus::Unassessed,
+                    reason: Some("not assessed".to_string()),
+                    evidence_artifact_ids: Vec::new(),
+                },
+                artifacts: vec![SolutionArtifactRef {
+                    artifact_id: "artifact:portable".to_string(),
+                    kind: SolutionArtifactKind::State,
+                    schema_id: "fullmag.state.test.v1".to_string(),
+                    object_ref,
+                    byte_length,
+                    accepted_state: None,
+                }],
+            }],
+            coverage: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn solved_archive_round_trips_solution_set_and_exact_cas_object() {
+        let (_directory, store, mut session, workspace, profile, documents) =
+            pack_fixture(SaveProfile::Solved);
+        session.profile = SaveProfile::Solved;
+        let payload = b"portable solution state";
+        let object_ref = store.cas().put(payload).expect("publish CAS object");
+        let solution = portable_solution(object_ref.clone(), payload.len() as u64);
+        store
+            .publish_solution_set(&solution)
+            .expect("publish solution set");
+
+        let mut archive = Cursor::new(Vec::new());
+        pack_fms(
+            &mut archive,
+            &store,
+            &session,
+            &workspace,
+            &profile,
+            &documents,
+            &PackOptions::default(),
+        )
+        .expect("pack solved archive");
+        let archive = archive.into_inner();
+        let directory = crate::cas::hex_sha256(solution.solution_set_id.as_bytes());
+        let current_path = format!("solutions/{directory}/manifest.json");
+        let revision_path = format!("solutions/{directory}/revisions/{:020}.json", 1);
+        let preflight = preflight_fms(Cursor::new(&archive), &[]).expect("preflight archive");
+        assert!(preflight.documents.contains_key(&current_path));
+        assert!(preflight.documents.contains_key(&revision_path));
+        assert_eq!(
+            preflight.documents[&format!("objects/sha256/{object_ref}")],
+            payload
+        );
+
+        let restored_directory = tempfile::tempdir().expect("restored store directory");
+        let restored = SessionStore::open(restored_directory.path().join("store"))
+            .expect("open restored store");
+        unpack_fms(Cursor::new(archive), &restored).expect("restore solved archive");
+        assert_eq!(
+            restored
+                .solution_sets()
+                .read(&solution.solution_set_id)
+                .unwrap(),
+            Some(solution)
+        );
+        assert_eq!(restored.cas().get(&object_ref).unwrap().unwrap(), payload);
     }
 
     fn assert_pack_rejected_without_output(

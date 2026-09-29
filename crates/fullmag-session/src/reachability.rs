@@ -1818,6 +1818,7 @@ struct ArchiveWalker<'a> {
 impl<'a> ArchiveWalker<'a> {
     fn walk_archive(&mut self) -> Result<ReachabilityReport> {
         self.validate_archive_namespace()?;
+        self.walk_archive_solutions()?;
         if let Some(data) = self.documents.get("manifest/session.json") {
             let session: FmsSessionManifest = parse_json(data, "manifest/session.json")?;
             validate_session(&session, "manifest/session.json")?;
@@ -2054,6 +2055,7 @@ impl<'a> ArchiveWalker<'a> {
                     }
                 }
                 "runs" => {}
+                "solutions" => validate_solution_archive_path(name)?,
                 "objects" => {
                     let Some(object_ref) = name.strip_prefix("objects/sha256/") else {
                         bail!("unknown archive objects document `{name}`")
@@ -2062,6 +2064,154 @@ impl<'a> ArchiveWalker<'a> {
                 }
                 _ => bail!("unknown archive document namespace `{namespace}`"),
             }
+        }
+        Ok(())
+    }
+
+    fn walk_archive_solutions(&mut self) -> Result<()> {
+        let directories = self
+            .documents
+            .keys()
+            .filter_map(|name| {
+                let remainder = name.strip_prefix("solutions/")?;
+                let (directory, _) = remainder.split_once('/')?;
+                Some(directory.to_string())
+            })
+            .collect::<HashSet<_>>();
+        for directory in directories {
+            validate_object_ref(&directory)?;
+            let current_path = format!("solutions/{directory}/manifest.json");
+            let current = self
+                .documents
+                .get(&current_path)
+                .map(|data| -> Result<SolutionSet> {
+                    let solution = parse_json(data, &current_path)?;
+                    self.validate_archive_solution_identity(
+                        &solution,
+                        &directory,
+                        None,
+                        &current_path,
+                    )?;
+                    self.walk_archive_solution_objects(&solution, &current_path)?;
+                    self.report.file_refs.insert(current_path.clone());
+                    Ok(solution)
+                })
+                .transpose()?;
+
+            let revision_prefix = format!("solutions/{directory}/revisions/");
+            let mut revisions = BTreeMap::new();
+            for name in self.documents.keys() {
+                let Some(file_name) = name.strip_prefix(&revision_prefix) else {
+                    continue;
+                };
+                let revision = parse_solution_revision_filename(file_name)?;
+                let data = self
+                    .documents
+                    .get(name)
+                    .context("solution-set revision disappeared during archive walk")?;
+                let solution: SolutionSet = parse_json(data, name)?;
+                self.validate_archive_solution_identity(
+                    &solution,
+                    &directory,
+                    Some(revision),
+                    name,
+                )?;
+                self.walk_archive_solution_objects(&solution, name)?;
+                self.report.file_refs.insert(name.clone());
+                if revisions.insert(revision, solution).is_some() {
+                    bail!("duplicate solution-set revision `{revision}`")
+                }
+            }
+
+            let mut previous: Option<&SolutionSet> = None;
+            for (index, (revision, solution)) in revisions.iter().enumerate() {
+                let expected =
+                    u64::try_from(index + 1).context("solution-set revision overflow")?;
+                if *revision != expected {
+                    bail!("solution-set revision history has a gap")
+                }
+                if let Some(previous) = previous {
+                    crate::solution_set_catalog::validate_successor(previous, solution)?;
+                }
+                previous = Some(solution);
+            }
+            if let Some(current) = current {
+                let persisted = revisions
+                    .get(&current.revision)
+                    .context("solution-set current revision is missing from immutable history")?;
+                if persisted != &current {
+                    bail!("solution-set current manifest conflicts with immutable history")
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_archive_solution_identity(
+        &self,
+        solution: &SolutionSet,
+        directory: &str,
+        expected_revision: Option<u64>,
+        source: &str,
+    ) -> Result<()> {
+        solution
+            .validate()
+            .with_context(|| format!("validating solution set `{source}`"))?;
+        if crate::cas::hex_sha256(solution.solution_set_id.as_bytes()) != directory {
+            bail!("solution-set directory does not match logical identity")
+        }
+        if expected_revision.is_some_and(|revision| solution.revision != revision) {
+            bail!("solution-set revision path identity mismatch")
+        }
+        Ok(())
+    }
+
+    fn walk_archive_solution_objects(
+        &mut self,
+        solution: &SolutionSet,
+        source: &str,
+    ) -> Result<()> {
+        for member in &solution.members {
+            for artifact in &member.artifacts {
+                self.add_archive_solution_object(
+                    &artifact.object_ref,
+                    artifact.byte_length,
+                    source,
+                )?;
+            }
+        }
+        for coverage in &solution.coverage {
+            for segment in &coverage.segments {
+                self.add_archive_solution_object(&segment.object_ref, segment.byte_length, source)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn add_archive_solution_object(
+        &mut self,
+        object_ref: &str,
+        expected_length: u64,
+        source: &str,
+    ) -> Result<()> {
+        validate_object_ref(object_ref)
+            .with_context(|| format!("invalid solution object reference in `{source}`"))?;
+        self.report.object_refs.insert(object_ref.to_string());
+        let archive_path = format!("objects/sha256/{object_ref}");
+        let Some(data) = self.documents.get(&archive_path) else {
+            return self.report.missing(format!(
+                "solution set `{source}` references missing object `{object_ref}`"
+            ));
+        };
+        if crate::cas::hex_sha256(data) != object_ref {
+            bail!("CAS SHA-256 mismatch for `{archive_path}`")
+        }
+        if u64::try_from(data.len()).context("solution object length exceeds u64")?
+            != expected_length
+        {
+            bail!(
+                "solution set `{source}` object `{object_ref}` length does not match its manifest"
+            )
         }
         Ok(())
     }
@@ -3068,6 +3218,33 @@ fn validate_descriptor(
 
 fn parse_json<T: serde::de::DeserializeOwned>(data: &[u8], source: &str) -> Result<T> {
     serde_json::from_slice(data).with_context(|| format!("parsing JSON root `{source}`"))
+}
+
+fn validate_solution_archive_path(name: &str) -> Result<()> {
+    let components = name.split('/').collect::<Vec<_>>();
+    if components.len() < 3 || components[0] != "solutions" {
+        bail!("invalid solution-set archive path `{name}`")
+    }
+    validate_object_ref(components[1])?;
+    match components.as_slice() {
+        ["solutions", _, "manifest.json"] => Ok(()),
+        ["solutions", _, "revisions", file_name] => {
+            parse_solution_revision_filename(file_name).map(|_| ())
+        }
+        _ => bail!("invalid solution-set archive path `{name}`"),
+    }
+}
+
+fn parse_solution_revision_filename(file_name: &str) -> Result<u64> {
+    let revision_text = file_name
+        .strip_suffix(".json")
+        .filter(|value| value.len() == 20 && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .with_context(|| format!("invalid solution-set revision filename `{file_name}`"))?;
+    let revision = revision_text.parse::<u64>()?;
+    if revision == 0 {
+        bail!("solution-set revision must be positive")
+    }
+    Ok(revision)
 }
 
 fn is_object_ref(value: &str) -> bool {

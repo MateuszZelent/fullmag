@@ -2,7 +2,7 @@
 
 Data: 29.09.2026
 
-Status: **SOURCE VERIFIED / UNIT TESTS NOT RUN / FMS/RUNTIME NOT VERIFIED**
+Status: **SOURCE VERIFIED / UNIT TESTS NOT RUN / RUNTIME NOT VERIFIED**
 
 ## Zakres przyrostu
 
@@ -37,7 +37,7 @@ publikacji, nawet gdy current wskazuje wcześniejszą wersję.
 
 ## Otwarte elementy
 
-Portable `.fms` nie pakuje i nie odtwarza jeszcze namespace `solutions/`.
-Brakuje kontrolowanego zwalniania pinów po trwałym root graph, mappera outputów
+Portable `.fms` pakuje i odtwarza typowany namespace `solutions/`. Brakuje
+kontrolowanego zwalniania pinów po trwałym root graph, mappera outputów
 runnera, publicznego API, migracji legacy resource keys, process/power-loss
 fault injection oraz kwalifikacji czterech lane'ów i CAE-04/37/61/70.

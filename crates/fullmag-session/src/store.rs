@@ -4656,7 +4656,7 @@ fn validate_document_namespace(relative: &str) -> Result<()> {
     crate::repository_path::validate_relative_path(relative)?;
     if !matches!(
         relative.split('/').next(),
-        Some("project" | "manifest" | "runs" | "recovery")
+        Some("project" | "manifest" | "runs" | "recovery" | "solutions")
     ) {
         anyhow::bail!("document writer cannot modify repository control files or CAS");
     }

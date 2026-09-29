@@ -62,8 +62,11 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
 18. [GC reachability SolutionSet](18-solution-set-gc-reachability.md)
     — typowany traversal current i pełnej historii rewizji, walidacja identity,
     ciągłości oraz bounded integralności wszystkich obiektów CAS.
+19. [Portable `.fms` dla SolutionSet](19-solution-set-fms-roundtrip.md)
+    — typed archive preflight, profile-aware pack, exact CAS selection oraz
+    restore immutable rewizji z reconciliation przed publikacją sesji.
 
 Writers runnera, materializator/evaluator datasetów, API i
 generated client, pozostałe quantities, frontend porównań i wykresów oraz
 produkcyjne dowody pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi
-**38%**.
+**41%**.
