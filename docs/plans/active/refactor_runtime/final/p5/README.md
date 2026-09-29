@@ -26,9 +26,12 @@ aktywnego runtime'u.
 6. [Accepted state prostego FDM GPU](06-fdm-gpu-accepted-state.md) — terminalny
    snapshot magnetyzacji urządzenia, trwały ref i rozszerzona zarządzana bramka
    publicznego readbacku.
-7. [Granica zastosowania komendy Live](../p4/20-live-command-application-boundary.md)
+7. [Fail-closed checkpoint compatibility](07-checkpoint-compatibility.md) —
+   kompletne identity dla exact/logical resume, materialny backend state i
+   odmowa restore magnetization-only bez mutacji live state.
+8. [Granica zastosowania komendy Live](../p4/20-live-command-application-boundary.md)
    — publiczny readback kroku, czasu i segmentu faktycznego zastosowania komendy.
 
-Materializacja dla coupled/Frozen Spins i FEM, checkpoint compatibility,
-observation runtime oraz zarządzana rekwalifikacja nowego refa GPU pozostają
-otwarte. P5 wynosi **95%**.
+Materializacja accepted state dla coupled/Frozen Spins i FEM, ogólna
+checkpoint compatibility, observation runtime oraz zarządzana rekwalifikacja
+nowego refa GPU pozostają otwarte. P5 wynosi **96%**.

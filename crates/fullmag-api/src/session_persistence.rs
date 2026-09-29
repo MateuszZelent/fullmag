@@ -1953,10 +1953,15 @@ pub(crate) async fn restore_checkpoint_with_context(
     }
     validate_checkpoint_restore_shape(snapshot, magnetization.len())?;
 
-    let restore_class = determine_restore_class(
-        &checkpoint.compatibility,
+    let restore_class = supported_checkpoint_restore_class(
+        &checkpoint,
         &checkpoint_compatibility(snapshot),
     );
+    if restore_class != fullmag_session::RestoreClass::ExactResume {
+        return Err(ApiError::conflict(format!(
+            "checkpoint_restore_requires_exact_resume: checkpoint is classified as {restore_class:?}"
+        )));
+    }
     let flat_magnetization = flatten_magnetization(&magnetization);
     let live_state = snapshot
         .live_state
@@ -2961,7 +2966,7 @@ fn checkpoint_entry(
         field_revision: context.field_revision,
         scene_revision: context.scene_revision,
         backend_family: context.backend_family.clone(),
-        resume_class: checkpoint_resume_class(&checkpoint.compatibility),
+        resume_class: checkpoint_resume_class(&checkpoint),
         artifact_ref: checkpoint.common_state_ref,
         checksum: context.checksum.clone(),
     }
@@ -3178,14 +3183,22 @@ fn now_unix_ms() -> u128 {
 }
 
 fn checkpoint_resume_class(
-    compatibility: &CheckpointCompatibility,
+    checkpoint: &fullmag_session::FmsCheckpoint,
 ) -> fullmag_session::RestoreClass {
-    if compatibility.restart_abi.is_some() {
-        fullmag_session::RestoreClass::ExactResume
-    } else if compatibility.discretization_signature.is_some() {
+    supported_checkpoint_restore_class(checkpoint, &checkpoint.compatibility)
+}
+
+fn supported_checkpoint_restore_class(
+    checkpoint: &fullmag_session::FmsCheckpoint,
+    current: &CheckpointCompatibility,
+) -> fullmag_session::RestoreClass {
+    let class = determine_restore_class(&checkpoint.compatibility, current);
+    if class == fullmag_session::RestoreClass::ExactResume
+        && checkpoint.backend_state_ref.is_none()
+    {
         fullmag_session::RestoreClass::LogicalResume
     } else {
-        fullmag_session::RestoreClass::InitialConditionImport
+        class
     }
 }
 
@@ -3203,20 +3216,43 @@ fn checkpoint_compatibility(snapshot: &SessionStateResponse) -> CheckpointCompat
         .or_else(|| snapshot.session.resolved_device.clone())
         .unwrap_or_else(|| "fdm_cpu_reference".to_string());
 
-    let restart_abi = Some(format!(
-        "{}:{}",
-        runtime_family,
-        snapshot
-            .session
-            .resolved_engine_id
-            .as_deref()
-            .unwrap_or("default")
-    ));
-    let problem_hash = snapshot.scene_document.as_ref().and_then(|scene| {
-        serde_json::to_vec(scene)
-            .ok()
-            .map(|bytes| format!("problem:sha256:{:x}", Sha256::digest(bytes)))
+    let checkpoint_schema = snapshot
+        .coupled_checkpoint
+        .as_ref()
+        .and_then(|checkpoint| checkpoint["schema"].as_str());
+    let exact_resume_supported = checkpoint_schema == Some("fullmag.fdm.coupled_m3_checkpoint.v1");
+    let restart_abi = exact_resume_supported.then(|| {
+        format!(
+            "{}:{}:{}",
+            runtime_family,
+            snapshot
+                .session
+                .resolved_engine_id
+                .as_deref()
+                .unwrap_or("default"),
+            checkpoint_schema.expect("exact resume schema was matched")
+        )
     });
+    let problem_hash = snapshot
+        .scene_document
+        .as_ref()
+        .and_then(|scene| {
+            serde_json::to_vec(scene)
+                .ok()
+                .map(|bytes| format!("problem:sha256:{:x}", Sha256::digest(bytes)))
+        })
+        .or_else(|| {
+            snapshot
+                .coupled_checkpoint
+                .as_ref()
+                .and_then(|checkpoint| checkpoint.get("identity"))
+                .map(|identity| {
+                    format!(
+                        "problem:sha256:{}",
+                        fullmag_session::canonical_json_sha256(identity)
+                    )
+                })
+        });
     let plan_hash = serde_json::to_vec(&snapshot.session.plan_summary)
         .ok()
         .map(|bytes| format!("plan:sha256:{:x}", Sha256::digest(bytes)));
@@ -3235,7 +3271,13 @@ fn checkpoint_compatibility(snapshot: &SessionStateResponse) -> CheckpointCompat
                 .clone()
                 .unwrap_or_else(|| snapshot.session.requested_precision.clone()),
         ),
-        study_kind: None,
+        study_kind: checkpoint_schema.map(|schema| match schema {
+            "fullmag.fdm.coupled_m3_checkpoint.v1" => "fdm_coupled_m3".to_string(),
+            fullmag_runner::constraints::FROZEN_SPINS_CHECKPOINT_SCHEMA => {
+                "fdm_frozen_spins".to_string()
+            }
+            other => format!("unsupported:{other}"),
+        }),
         discretization_signature: Some(format!(
             "mesh:{};vectors:{}",
             snapshot.mesh_revision, vector_count

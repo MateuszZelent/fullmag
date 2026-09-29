@@ -27973,6 +27973,75 @@ async fn legacy_checkpoint_fails_closed_for_active_coupled_m3_session() {
 }
 
 #[tokio::test]
+async fn magnetization_only_checkpoint_is_not_promoted_to_resume_and_cannot_mutate_live_state() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/checkpoints")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"profile": "resume"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::OK);
+    let created = body_json(create).await;
+    assert_eq!(
+        created["checkpoint"]["resume_class"],
+        "initial_condition_import"
+    );
+    let checkpoint_id = created["checkpoint"]["checkpoint_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (before_step, before_time, before_magnetization, before_version) = {
+        let guard = state.current_live_state.read().await;
+        let snapshot = guard.as_ref().unwrap();
+        let latest = &snapshot.live_state.as_ref().unwrap().latest_step;
+        (
+            latest.step,
+            latest.time,
+            latest.magnetization.clone(),
+            snapshot.state_version,
+        )
+    };
+
+    let restore = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}/restore"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::json!({}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(restore.status(), StatusCode::CONFLICT);
+    assert!(body_json(restore)
+        .await
+        .to_string()
+        .contains("checkpoint_restore_requires_exact_resume"));
+
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard.as_ref().unwrap();
+    let latest = &snapshot.live_state.as_ref().unwrap().latest_step;
+    assert_eq!(latest.step, before_step);
+    assert_eq!(latest.time, before_time);
+    assert_eq!(latest.magnetization, before_magnetization);
+    assert_eq!(snapshot.state_version, before_version);
+    drop(guard);
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
 async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_without_mutation() {
     let (app, state, repo_root) = test_router_with_session_store_state().await;
     let mut expected = complete_coupled_m3_checkpoint();
