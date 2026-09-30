@@ -78,3 +78,8 @@ właścicielem, publikacja wyników signed-difference, API/generated client
 oraz consumer istniejącego UI. Cały P6 oraz P7/P8 pozostają otwarte.
 
 Kontrakt: [przypięty tensor](../../../../../specs/pinned-solution-tensor-v1.md).
+
+Dodatkowy przegląd natywnej ścieżki wskazał brak pełnej bramki geometrii
+i brak współdzielonej walidacji reguł regionów. Poprawki oraz dokładne
+rozstrzygnięcie zgodności masek opisuje [przyrost 46](46-fem-field-runtime-support-parity.md).
+Nie zmienia to źródłowego PASS z tego przyrostu w dowód wykonania runtime.

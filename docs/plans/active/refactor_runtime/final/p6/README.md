@@ -173,3 +173,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 45. [Binarny tensor zapisanego pola FEM P1](45-recorded-fem-state-tensor-materializer.md)
     — wersjonowany opis producenta, walidacja accepted planu i chunky w tym samym
     SolutionSet; pełny MaterializedDataset, API/UI i runtime nadal otwarte.
+
+46. [Zgodność opisu pola z regionami runtime FEM](46-fem-field-runtime-support-parity.md)
+    — pełna bramka geometrii, wspólna normalizacja markerów i maska bez kopii
+    topologii; runtime, RAM i trwały manifest datasetu nadal otwarte.
