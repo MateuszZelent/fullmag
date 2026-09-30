@@ -224,3 +224,19 @@ oznacza failure nawet wtedy, gdy Docker zwrócił exit code 0.
 
 Nie nadawaj temu wykonawcy etykiety `fem-managed` ani nie używaj diagnostycznego
 receipt do zaliczenia CI/kwalifikacji solvera.
+
+
+### Toolchain CPU dla runtime-v2
+
+Jeśli istniejący obraz SLEPc nie ma `/opt/fullmag-mfem-cpu`, recepta
+`just runner-build-image <verified-local-toolchain-tag> <new-tag> 1 default`
+dodaje MFEM v4.9 z niezmiennego obiektu tagu b9a58a4c0bd073025336cb7b9f4c3dade8df7e59
+(commit d9d6526cc1749980a2ba1da16e2c1ca1e07d82ec) i HYPRE v3.1.0
+z commita 9dc9e18aed6a945a95f966e57daacfb1c269f6ec,
+bez CUDA i bez testów, przykładów oraz miniapps. Zachowuje stary prefix.
+To jawna budowa obrazu operatorowego, nie build ani kwalifikacja Fullmaga.
+Domyślne argumenty recepty pozostają bez dostępu sieci i bez tego kroku.
+Obraz wymaga kontroli CPU prefix, a następnie konfiguracji immutable ID
+profilu runtime-v2 i osobnego builda Fullmaga przez kolejkę.
+
+Bootstrap zweryfikowano: obraz f12e618dce9e212fc7f1be5947fa1e92acbb9736d4820eca892b5b7dbc2eebcc; MFEM/HYPRE bez CUDA, loader HYPRE z CPU prefixu. To obraz zależności; build Fullmaga i fizyka NOT VERIFIED.

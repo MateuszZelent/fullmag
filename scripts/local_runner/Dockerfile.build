@@ -2,6 +2,42 @@
 ARG TOOLCHAIN_IMAGE
 FROM ${TOOLCHAIN_IMAGE}
 USER root
+# Optional CPU-only MFEM for the ABI-separated SLEPc runtime-v2 profile.
+# Keep the existing CUDA-enabled installation for the historical/GPU profiles.
+ARG CPU_MFEM_ONLY=0
+RUN if [ "$CPU_MFEM_ONLY" = "1" ]; then \
+      mkdir -p /tmp/fullmag-runner-hypre-src && \
+      git -C /tmp/fullmag-runner-hypre-src init && \
+      git -C /tmp/fullmag-runner-hypre-src remote add origin https://github.com/hypre-space/hypre.git && \
+      git -C /tmp/fullmag-runner-hypre-src fetch --depth 1 origin 9dc9e18aed6a945a95f966e57daacfb1c269f6ec && \
+      git -C /tmp/fullmag-runner-hypre-src checkout --detach FETCH_HEAD && \
+      cmake -S /tmp/fullmag-runner-hypre-src/src -B /tmp/fullmag-runner-hypre-build \
+        -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/opt/fullmag-mfem-cpu -DBUILD_SHARED_LIBS=ON \
+        -DHYPRE_ENABLE_MPI=ON -DHYPRE_ENABLE_OPENMP=ON -DHYPRE_ENABLE_CUDA=OFF \
+        -DHYPRE_BUILD_TESTS=OFF -DHYPRE_BUILD_EXAMPLES=OFF && \
+      cmake --build /tmp/fullmag-runner-hypre-build -j2 && \
+      cmake --install /tmp/fullmag-runner-hypre-build && \
+      rm -rf /tmp/fullmag-runner-hypre-src /tmp/fullmag-runner-hypre-build; \
+    elif [ "$CPU_MFEM_ONLY" != "0" ]; then exit 2; fi
+RUN if [ "$CPU_MFEM_ONLY" = "1" ]; then \
+      mkdir -p /tmp/fullmag-runner-mfem-src && \
+      git -C /tmp/fullmag-runner-mfem-src init && \
+      git -C /tmp/fullmag-runner-mfem-src remote add origin https://github.com/mfem/mfem.git && \
+      git -C /tmp/fullmag-runner-mfem-src fetch --depth 1 origin d9d6526cc1749980a2ba1da16e2c1ca1e07d82ec && \
+      git -C /tmp/fullmag-runner-mfem-src checkout --detach FETCH_HEAD && \
+      cmake -S /tmp/fullmag-runner-mfem-src -B /tmp/fullmag-runner-mfem-build -G "Unix Makefiles" \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/fullmag-mfem-cpu \
+        -DCMAKE_PREFIX_PATH=/opt/fullmag-deps -DBUILD_SHARED_LIBS=ON \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DMFEM_USE_MPI=YES \
+        -DMFEM_USE_OPENMP=YES -DMFEM_USE_METIS=NO -DMFEM_USE_CUDA=NO \
+        -DMFEM_USE_CEED=YES -DCEED_DIR=/opt/fullmag-deps \
+        -DHYPRE_DIR=/opt/fullmag-mfem-cpu \
+        -DMFEM_ENABLE_TESTING=OFF && \
+      cmake --build /tmp/fullmag-runner-mfem-build --target mfem -j2 && \
+      cmake --install /tmp/fullmag-runner-mfem-build && \
+      rm -rf /tmp/fullmag-runner-mfem-src /tmp/fullmag-runner-mfem-build /tmp/fullmag-runner-hypre-src; \
+    elif [ "$CPU_MFEM_ONLY" != "0" ]; then exit 2; fi
 RUN mkdir -p /opt/fullmag-runner-tools/bin && \
     cp -a /root/.cargo/bin/. /opt/fullmag-runner-tools/bin/ && \
     chmod -R a+rX /opt/fullmag-runner-tools

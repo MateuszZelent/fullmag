@@ -33,8 +33,8 @@ storage-prepare:
 runner-image:
     docker build --network none --pull=false -t fullmag/local-runner-source:development scripts/local_runner
 
-runner-build-image toolchain_image tag="fullmag/local-runner-build:development":
-    docker --context desktop-linux build --network none --pull=false --build-arg TOOLCHAIN_IMAGE={{quote(toolchain_image)}} -f scripts/local_runner/Dockerfile.build -t {{quote(tag)}} scripts/local_runner
+runner-build-image toolchain_image tag="fullmag/local-runner-build:development" cpu_mfem="0" network="none":
+    docker --context desktop-linux build --network {{quote(network)}} --pull=false --build-arg TOOLCHAIN_IMAGE={{quote(toolchain_image)}} --build-arg CPU_MFEM_ONLY={{quote(cpu_mfem)}} -f scripts/local_runner/Dockerfile.build -t {{quote(tag)}} scripts/local_runner
 
 runner-coordinator-image:
     docker --context desktop-linux build --network none --pull=false -f scripts/local_runner/Dockerfile.coordinator -t fullmag/build-runner:development scripts
