@@ -117,3 +117,33 @@ it is never upgraded into a physical sweep. New writes use
 `BiasFieldSweepIR` and the frozen field-sweep axis. Rollback may hide the
 derived analysis view; it must not restore oracle-driven physical inputs or
 make Results a solver.
+
+## Scoped extension: constant first-order uniaxial source identity
+
+The source equilibrium and its modal consumer must bind the same signed Ku
+and canonical rank-one axis. The material builder keeps the existing v1
+serialization and namespace exactly for requests without Ku; requests with
+Ku use `EquilibriumMaterialSignaturePreimage.v2`. The unit axis is normalized,
+its first nonzero component is positive, and signed zero is canonicalized.
+The v2 preimage includes Ku in SI and all existing material fields. Both
+relaxation and eigen plans use this single builder. Previously rejected Ku
+requests have no valid historical v1 handoff to migrate; an old source cannot
+be reinterpreted as a Ku source. This is a scoped provenance extension, not
+a new execution lane or a promotion of backend readiness.
+
+The equilibrium observer uses the typed uniaxial interaction so its field
+and energy stay separate from Zeeman. Native CPU assembly uses the constrained
+energy derivative and total accepted-field curvature in note 0831. Uniform Ms,
+constant first-order Ku and a global axis define this increment. Spatial Ku,
+second-order/cubic/surface terms and DMI remain gated. Public planner guards
+stay until end-to-end identity, field, payload and managed scientific checks
+are available. FDM/GPU, OpenAPI and frontend contracts receive no extension.
+
+Owners: `crates/fullmag-runner/src/fem/equilibrium_identity.rs`,
+`eigen_equilibrium.rs`, `eigen_shared_domain.rs`, native shared-domain operator,
+and `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`.
+Rust regression sources must exercise Ku/axis mutations, equivalent axes,
+producer/consumer equality, legacy v1 bytes and unsupported material views.
+Native unit compilation remains prohibited by the current repository rule;
+source checks do not replace managed build/runtime evidence. Rollback may
+keep Ku planner-gated but must not reuse a Ku-free handoff for Ku.

@@ -716,6 +716,110 @@ int main()
     check(covariance_scale > 0.0 && covariance_error <= 1.0e-12 * covariance_scale,
           "static field Hessian must transform between independent nodal tangent bases");
 
+    // Signed uniaxial derivatives use both nodal frames and subtract the
+    // Cartesian field Jacobian from the total longitudinal curvature.
+    std::vector<double> uniaxial_axes(static_cast<std::size_t>(3u * node_count), 0.0);
+    for (std::uint64_t node = 0; node < node_count; ++node) uniaxial_axes[3u * node] = 2.0;
+    double uniaxial_field = 3.0;
+    FullmagFemModalLinearizationDescriptor uniaxial_descriptor = static_descriptor;
+    uniaxial_descriptor.term_presence_mask |= FULLMAG_FEM_MODAL_LINEARIZATION_TERM_ANISOTROPY;
+    uniaxial_descriptor.anisotropy_term_digest = producer_descriptor.linearization_state_digest;
+    uniaxial_descriptor.tangent_frame_xyz = descriptor_frames.data();
+    uniaxial_descriptor.uniaxial_axis_xyz = uniaxial_axes.data();
+    uniaxial_descriptor.uniaxial_axis_xyz_count = uniaxial_axes.size();
+    uniaxial_descriptor.uniaxial_anisotropy_field_a_per_m = &uniaxial_field;
+    uniaxial_descriptor.uniaxial_anisotropy_field_count = 1u;
+    fd::PoissonAirboxSharedDomainCsrMatrix uniaxial_a{};
+    for (const double signed_field : {3.0, -3.0}) {
+        uniaxial_field = signed_field;
+        check(fd::assemble_native_magnetic_a_qq(
+                  uniaxial_descriptor, &scalar_space, magnetic_elements.data(),
+                  magnetic_elements.size(), &uniaxial_a, producer_error, nullptr,
+                  producer_frames.data(), producer_frames.size()) == fd::FrequencyDomainStatus::ok,
+              producer_error);
+        double error = 0.0, scale = 0.0;
+        for (std::uint64_t i = 0; i < node_count; ++i) {
+            for (std::uint64_t j = 0; j < node_count; ++j) {
+                const double integral = matrix_value(common_static, 2u * i, 2u * j) / 7.0;
+                for (std::uint64_t a = 0; a < 2; ++a) {
+                    for (std::uint64_t b = 0; b < 2; ++b) {
+                        const double *left = a == 0 ? producer_frames[i].e1 : producer_frames[i].e2;
+                        const double *right = b == 0 ? producer_frames[j].e1 : producer_frames[j].e2;
+                        double inner = 0.0;
+                        for (int axis = 0; axis < 3; ++axis) inner += left[axis] * right[axis];
+                        const double expected = integral * (7.0 * inner - signed_field * left[0] * right[0]);
+                        error = std::max(error, std::abs(matrix_value(uniaxial_a, 2u * i + a, 2u * j + b) - expected));
+                        scale = std::max(scale, std::abs(expected));
+                    }
+                }
+            }
+        }
+        check(scale > 0.0 && error <= 1.0e-12 * scale,
+              "signed uniaxial weak form subtracts its Cartesian derivative with frame transport");
+    }
+    // An easy axis parallel to m0 has zero tangent field derivative, but
+    // retains its positive constrained curvature even with no FIELD term.
+    uniaxial_field = 3.0;
+    for (std::uint64_t node = 0; node < node_count; ++node) {
+        uniaxial_axes[3u * node] = 0.0;
+        uniaxial_axes[3u * node + 2u] = 1.0;
+        static_h_eff[3u * node + 2u] = 3.0;
+    }
+    uniaxial_descriptor.term_presence_mask = FULLMAG_FEM_MODAL_LINEARIZATION_TERM_ANISOTROPY;
+    uniaxial_descriptor.field_term_digest = nullptr;
+    uniaxial_descriptor.tangent_frame_xyz = common_frame_values.data();
+    check(fd::assemble_native_magnetic_a_qq(
+              uniaxial_descriptor, &scalar_space, magnetic_elements.data(),
+              magnetic_elements.size(), &uniaxial_a, producer_error, nullptr,
+              common_frames.data(), common_frames.size()) == fd::FrequencyDomainStatus::ok,
+          producer_error);
+    for (std::uint64_t row = 0; row < q_count; ++row) {
+        for (std::uint64_t column = 0; column < q_count; ++column) {
+            const double expected = matrix_value(common_static, row, column) * (3.0 / 7.0);
+            check(std::abs(matrix_value(uniaxial_a, row, column) - expected) <=
+                      1.0e-12 * covariance_scale,
+                  "anisotropy-only easy-axis request retains total static curvature");
+        }
+    }
+    std::fill(uniaxial_axes.begin(), uniaxial_axes.end(), 0.0);
+    check(fd::assemble_native_magnetic_a_qq(
+              uniaxial_descriptor, &scalar_space, magnetic_elements.data(),
+              magnetic_elements.size(), &uniaxial_a, producer_error, nullptr,
+              common_frames.data(), common_frames.size()) == fd::FrequencyDomainStatus::validation_error,
+          "zero anisotropy axes must reject before assembly");
+    for (std::uint64_t node = 0; node < node_count; ++node) uniaxial_axes[3u * node + 2u] = 1.0;
+    uniaxial_axes[3u + 2u] = -1.0;
+    check(fd::assemble_native_magnetic_a_qq(
+              uniaxial_descriptor, &scalar_space, magnetic_elements.data(),
+              magnetic_elements.size(), &uniaxial_a, producer_error, nullptr,
+              common_frames.data(), common_frames.size()) == fd::FrequencyDomainStatus::ok,
+          "opposite nodal axes define the same constant uniaxial energy");
+    std::vector<double> nodal_uniaxial_fields(static_cast<std::size_t>(node_count), 3.0);
+    auto unsupported_nodal_uniaxial = uniaxial_descriptor;
+    unsupported_nodal_uniaxial.uniaxial_anisotropy_field_a_per_m = nodal_uniaxial_fields.data();
+    unsupported_nodal_uniaxial.uniaxial_anisotropy_field_count = node_count;
+    check(fd::assemble_native_magnetic_a_qq(
+              unsupported_nodal_uniaxial, &scalar_space, magnetic_elements.data(),
+              magnetic_elements.size(), &uniaxial_a, producer_error, nullptr,
+              common_frames.data(), common_frames.size()) == fd::FrequencyDomainStatus::unavailable,
+          "nodal uniaxial field views remain unsupported in this increment");
+    auto unadvertised_uniaxial = uniaxial_descriptor;
+    unadvertised_uniaxial.term_presence_mask = FULLMAG_FEM_MODAL_LINEARIZATION_TERM_FIELD;
+    unadvertised_uniaxial.field_term_digest = producer_descriptor.linearization_state_digest;
+    unadvertised_uniaxial.anisotropy_term_digest = nullptr;
+    check(fd::assemble_native_magnetic_a_qq(
+              unadvertised_uniaxial, &scalar_space, magnetic_elements.data(),
+              magnetic_elements.size(), &uniaxial_a, producer_error, nullptr,
+              common_frames.data(), common_frames.size()) == fd::FrequencyDomainStatus::validation_error,
+          "uniaxial views without an advertised term must reject");
+    uniaxial_axes[3u] = 1.0;
+    uniaxial_axes[3u + 2u] = 0.0;
+    check(fd::assemble_native_magnetic_a_qq(
+              uniaxial_descriptor, &scalar_space, magnetic_elements.data(),
+              magnetic_elements.size(), &uniaxial_a, producer_error, nullptr,
+              common_frames.data(), common_frames.size()) == fd::FrequencyDomainStatus::unavailable,
+          "spatial anisotropy axes remain unsupported in this increment");
+
     // The independent affine P1 oracle uses only the native MFEM gradients,
     // quadrature weight and the declared material scalar.  Every entry must
     // match 2 A_ex (e_c(i).e_d(j)) (grad N_i.grad N_j) w; no runner graph

@@ -27,6 +27,7 @@
     }
   ],
   "equations": [
+    {"id": "eq-fem-modal-uniaxial-energy-hessian", "symbols": ["uniaxial_ku", "uniaxial_axis", "uniaxial_field", "mu0", "magnetization", "tangent_maps"], "sources": ["source-native-uniaxial-weak-form", "source-uniaxial-energy-finite-difference", "source-uniaxial-descriptor-builder", "source-uniaxial-ffi-envelope", "source-uniaxial-equilibrium-material-identity", "source-uniaxial-equilibrium-field-owner"]},
     {
       "id": "eq-fem-modal-static-field-frame-transport",
       "symbols": [
@@ -191,6 +192,9 @@
     {"id": "eq-oracle-exchange-free-de-limit", "symbols": ["thickness_f", "thickness_gamma", "thickness_mu0", "thickness_B0", "thickness_Ms", "thickness_k", "thickness_t"], "sources": ["source-oracle-exact-de-limit", "source-thickness-oracle-solve"]}
   ],
   "symbols": [
+    {"id": "uniaxial_ku", "latex": "$K_u$", "meaning": "first-order uniaxial anisotropy energy density", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "uniaxial_axis", "latex": "$\\mathbf u$", "meaning": "normalized uniaxial easy axis", "si_unit": "$1$"},
+    {"id": "uniaxial_field", "latex": "$H_a$", "meaning": "signed uniaxial field coefficient", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
     {"id": "position", "latex": "$\\mathbf r$", "meaning": "spatial position", "si_unit": "$\\mathrm{m}$"},
     {"id": "time", "latex": "$t$", "meaning": "time", "si_unit": "$\\mathrm{s}$"},
     {"id": "magnetization", "latex": "$\\mathbf m$, $\\mathbf m_0$, $\\delta\\mathbf m$", "meaning": "normalized magnetization, accepted equilibrium and tangent perturbation", "si_unit": "$1$"},
@@ -419,6 +423,12 @@
     }
   ],
   "sources": [
+    {"id": "source-native-uniaxial-weak-form", "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp", "symbol": "FrequencyDomainStatus assemble_native_magnetic_a_qq", "responsibility": "Negative uniaxial field derivative with both nodal tangent projections and total-field curvature"},
+    {"id": "source-uniaxial-energy-finite-difference", "path": "scripts/test_uniaxial_constrained_energy_hessian.py", "symbol": "sphere_energy", "responsibility": "Independent constrained energy with a transverse-equilibrium-balancing external field; finite differences are not native FEM execution"},
+    {"id": "source-uniaxial-descriptor-builder", "path": "crates/fullmag-runner/src/fem/eigen_shared_domain.rs", "symbol": "build_native_shared_domain_modal_problem", "responsibility": "Own repeated global easy axis, signed field coefficient and content digests; planner legality remains gated"},
+    {"id": "source-uniaxial-ffi-envelope", "path": "crates/fullmag-runner/src/native_fem/frequency_domain.rs", "symbol": "ffi_envelope_contract", "responsibility": "Validate owned anisotropy views, advertised term and digest before shared-domain C ABI transport"},
+    {"id": "source-uniaxial-equilibrium-material-identity", "path": "crates/fullmag-runner/src/fem/equilibrium_identity.rs", "symbol": "equilibrium_material_signature", "responsibility": "Shared Ku-aware equilibrium material preimage and separate v2 namespace; preserve exact Ku-free v1"},
+    {"id": "source-uniaxial-equilibrium-field-owner", "path": "crates/fullmag-runner/src/fem/eigen_equilibrium.rs", "symbol": "materialize_equilibrium", "responsibility": "Evaluate typed anisotropy at accepted equilibrium with separate field and energy channels"},
     {
       "id": "source-static-field-frame-transport",
       "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",

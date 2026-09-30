@@ -1760,12 +1760,45 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
                        "native magnetic A_qq descriptor has incomplete dimensions or terms");
             return FrequencyDomainStatus::validation_error;
         }
-        if ((descriptor.term_presence_mask &
-             (FULLMAG_FEM_MODAL_LINEARIZATION_TERM_ANISOTROPY |
-              FULLMAG_FEM_MODAL_LINEARIZATION_TERM_DMI)) != 0u) {
+        if ((descriptor.term_presence_mask & FULLMAG_FEM_MODAL_LINEARIZATION_TERM_DMI) != 0u) {
             copy_error(error_message,
-                       "native magnetic A_qq producer does not yet certify anisotropy or DMI weak forms");
+                       "native magnetic A_qq producer does not yet certify DMI weak forms");
             return FrequencyDomainStatus::unavailable;
+        }
+        const bool has_uniaxial =
+            (descriptor.term_presence_mask & FULLMAG_FEM_MODAL_LINEARIZATION_TERM_ANISOTROPY) != 0u;
+        double unit_anisotropy_axis[3] = {0.0, 0.0, 0.0};
+        double anisotropy_field = 0.0;
+        if (has_uniaxial) {
+            if (node_count == 0u || descriptor.uniaxial_anisotropy_field_count != 1u) {
+                copy_error(error_message,
+                           "native magnetic A_qq requires one constant uniaxial field coefficient");
+                return FrequencyDomainStatus::unavailable;
+            }
+            anisotropy_field = descriptor.uniaxial_anisotropy_field_a_per_m[0];
+            for (std::uint64_t node = 0; node < node_count; ++node) {
+                const double *axis = &descriptor.uniaxial_axis_xyz[3u * node];
+                const double norm = std::hypot(std::hypot(axis[0], axis[1]), axis[2]);
+                if (!finite_positive(norm)) {
+                    copy_error(error_message,
+                               "native magnetic A_qq uniaxial axis must be finite and non-zero");
+                    return FrequencyDomainStatus::validation_error;
+                }
+                double normalized[3] = {axis[0] / norm, axis[1] / norm, axis[2] / norm};
+                if (node == 0u) {
+                    std::copy(normalized, normalized + 3, unit_anisotropy_axis);
+                } else {
+                    // u and -u define the same rank-one energy Hessian.
+                    const double sign = dot3(normalized, unit_anisotropy_axis) >= 0.0 ? 1.0 : -1.0;
+                    for (int component = 0; component < 3; ++component) {
+                        if (std::abs(normalized[component] - sign * unit_anisotropy_axis[component]) > 1.0e-12) {
+                            copy_error(error_message,
+                                       "native magnetic A_qq does not yet certify spatial uniaxial axes");
+                            return FrequencyDomainStatus::unavailable;
+                        }
+                    }
+                }
+            }
         }
         const bool has_exchange_material_view = exchange_material_view != nullptr;
         if ((descriptor.term_presence_mask & FULLMAG_FEM_MODAL_LINEARIZATION_TERM_EXCHANGE) != 0u &&
@@ -2069,7 +2102,7 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
             }
         }
 
-        if ((descriptor.term_presence_mask & FULLMAG_FEM_MODAL_LINEARIZATION_TERM_FIELD) != 0u) {
+        if ((descriptor.term_presence_mask & FULLMAG_FEM_MODAL_LINEARIZATION_TERM_FIELD) != 0u || has_uniaxial) {
             constexpr double kStaticFieldParallelRelativeTolerance = 1.0e-8;
             for (std::uint64_t node = 0u; node < node_count; ++node) {
                 if (magnetic_node_mask[static_cast<std::size_t>(node)] == 0u) {
@@ -2150,15 +2183,19 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
                             const double *row_tangent[2] = {row_frame.e1, row_frame.e2};
                             const double *column_tangent[2] = {column_frame.e1, column_frame.e2};
                             const double coefficient = row_sign * column_sign * weight *
-                                shape[local_row] * shape[local_column] * mu0 * ms * h_parallel;
+                                shape[local_row] * shape[local_column] * mu0 * ms;
                             for (std::uint32_t row_component = 0; row_component < 2u; ++row_component) {
                                 for (std::uint32_t column_component = 0; column_component < 2u;
                                      ++column_component) {
                                     assembled.add(
                                         2u * row_node + row_component,
                                         2u * column_node + column_component,
-                                        coefficient * dot3(row_tangent[row_component],
-                                                           column_tangent[column_component]));
+                                        coefficient *
+                                            (h_parallel * dot3(row_tangent[row_component],
+                                                               column_tangent[column_component]) -
+                                             anisotropy_field *
+                                                 dot3(row_tangent[row_component], unit_anisotropy_axis) *
+                                                 dot3(column_tangent[column_component], unit_anisotropy_axis)));
                                 }
                             }
                         }

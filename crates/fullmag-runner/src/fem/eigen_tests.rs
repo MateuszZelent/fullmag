@@ -247,6 +247,44 @@ fn equilibrium_identity_signatures_mutate_only_in_the_owning_source_family() {
     );
 }
 
+#[test]
+fn equilibrium_uniaxial_identity_binds_signed_ku_and_canonical_rank_one_axis() {
+    use crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1;
+    let mut plan = minimal_native_modal_plan();
+    let baseline = EquilibriumIdentitySignaturesV1::from_eigen_plan(&plan).unwrap();
+    assert_eq!(baseline, EquilibriumIdentitySignaturesV1::from_relax_plan(
+        &relax_source_plan_from_eigen(&plan)).unwrap());
+    plan.material.uniaxial_anisotropy = Some(1000.0);
+    let ku = EquilibriumIdentitySignaturesV1::from_eigen_plan(&plan).unwrap();
+    assert_eq!(ku, EquilibriumIdentitySignaturesV1::from_relax_plan(
+        &relax_source_plan_from_eigen(&plan)).unwrap());
+    assert_ne!(baseline.equilibrium_material_signature, ku.equilibrium_material_signature);
+    assert_eq!(baseline.equilibrium_static_physics_signature, ku.equilibrium_static_physics_signature);
+    for axis in [[0.0, 0.0, 2.0], [-0.0, 0.0, -4.0], [0.0, 0.0, f64::MAX]] {
+        plan.material.anisotropy_axis = Some(axis);
+        assert_eq!(ku, EquilibriumIdentitySignaturesV1::from_eigen_plan(&plan).unwrap());
+        assert_eq!(ku, EquilibriumIdentitySignaturesV1::from_relax_plan(
+            &relax_source_plan_from_eigen(&plan)).unwrap());
+    }
+    plan.material.anisotropy_axis = Some([1.0, 0.0, 0.0]);
+    assert_ne!(ku.equilibrium_material_signature,
+        EquilibriumIdentitySignaturesV1::from_eigen_plan(&plan).unwrap().equilibrium_material_signature);
+    plan.material.anisotropy_axis = None;
+    plan.material.uniaxial_anisotropy = Some(-1000.0);
+    assert_ne!(ku.equilibrium_material_signature,
+        EquilibriumIdentitySignaturesV1::from_eigen_plan(&plan).unwrap().equilibrium_material_signature);
+    for axis in [[0.0; 3], [f64::NAN, 0.0, 1.0], [f64::INFINITY, 0.0, 1.0]] {
+        plan.material.anisotropy_axis = Some(axis);
+        assert!(EquilibriumIdentitySignaturesV1::from_eigen_plan(&plan).is_err());
+    }
+    plan.material.anisotropy_axis = None;
+    plan.material.ms_field = Some(vec![800_000.0]);
+    assert!(EquilibriumIdentitySignaturesV1::from_eigen_plan(&plan).is_err());
+    plan.material.ms_field = None;
+    plan.material.uniaxial_anisotropy_k2 = Some(1.0);
+    assert!(EquilibriumIdentitySignaturesV1::from_eigen_plan(&plan).is_err());
+}
+
 fn certified_fields(node_count: usize) -> crate::types::CertifiedFemEquilibriumFields {
     let zeros = vec![[0.0, 0.0, 0.0]; node_count];
     crate::types::CertifiedFemEquilibriumFields::from_fields(

@@ -142,6 +142,9 @@ algebraic realization of this complex contract, not another convention.
 | $q$, $q_{\mathrm{src}}$, $q_{\mathrm{dst}}$ | tangent-plane coefficient vectors | $1$ |
 | $\mathbf H_{\mathrm{eff},0}$, $\delta\mathbf h$ | static effective field and RF field phasor | $\mathrm{A\,m^{-1}}$ |
 | $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
+| $K_u$ | first-order uniaxial anisotropy energy density | $\mathrm{J\,m^{-3}}$ |
+| $\mathbf u$ | normalized uniaxial easy axis | $1$ |
+| $H_a$ | signed uniaxial field coefficient | $\mathrm{A\,m^{-1}}$ |
 | $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
 | $\gamma$, $\gamma_0$ | gyromagnetic ratio and $\mu_0|\gamma|$ in the A/m convention | $\mathrm{rad\,s^{-1}\,T^{-1}}$, $\mathrm{rad\,s^{-1}\,(A\,m^{-1})^{-1}}$ |
 | $\omega$, $\omega_r$, $\Gamma$, $\omega_{\mathrm{target}}$, $\tau$ | complex angular frequency, oscillation part, decay rate, requested angular target and rotated target | $\mathrm{rad\,s^{-1}}$ |
@@ -412,6 +415,49 @@ owned by the coupled potential, not this local term. Native CPU covariance,
 common-frame parity and managed runtime validation are required; source
 regression coverage alone does not certify execution. It does not explain
 uniform-film DE/BV discrepancies when all tangent frames coincide.
+
+The next native CPU interaction increment is first-order uniaxial bulk
+anisotropy, with the energy convention of `0402-uniaxial-anisotropy.md`.
+For a constant unit axis and constant field coefficient,
+
+```{math}
+:label: eq-fem-modal-uniaxial-energy-hessian
+w_K=-K_u(\mathbf m\cdot\mathbf u)^2,\qquad
+H_a=\frac{2K_u}{\mu_0 M_s},\qquad
+A^{K,\mathrm{derivative}}_{(i,a),(j,b)}
+=-\int_{\Omega_m}\mu_0 M_s H_a N_iN_j
+(\mathbf e_{a,i}\cdot\mathbf u)(\mathbf u\cdot\mathbf e_{b,j})\,\mathrm dV.
+```
+
+This negative field-derivative contribution is added to the longitudinal
+curvature above, which uses the **total** accepted effective field, including
+anisotropy. The curvature must also be assembled for an anisotropy-only
+request without a Zeeman term. Positive and negative finite coefficients are
+both permitted; stability is determined by the total constrained Hessian.
+The existing C ABI stores the axis at every scalar node (`3*node_count`) and
+one field coefficient in A/m. The first increment normalizes finite nonzero
+nodal axes and requires their rank-one axes to agree within `1e-12`; a
+nonconstant axis or field view remains unsupported. No spatial axis,
+second-order Ku, cubic anisotropy, surface term or DMI is inferred from this
+increment. Native assembly coverage does not change public planner legality
+until the Rust transport, identities, equilibrium fields and managed gates
+are connected. GPU and FDM receive no new implementation from this change.
+The equilibrium material identity keeps the exact v1 preimage for requests
+without Ku. A request with finite signed constant Ku uses a v2 namespace and
+binds Ku in J/m3 and the canonical unit axis: the first nonzero axis component
+is positive, signed zero is removed, and the default axis is z. Both relaxation
+producer and modal consumer use the same builder. A scaled or opposite axis
+represents the same rank-one energy, while a changed Ku or physical axis must
+invalidate the stored equilibrium. Uniform Ms is required for this increment;
+spatial coefficients, second-order and cubic terms remain unsupported.
+The equilibrium observer registers Ku as a typed anisotropy interaction, never
+as a frozen per-node external field. This keeps Zeeman and anisotropy energies
+and field components separate and evaluates Ku at the actual accepted m0.
+This source increment does not remove public planner guards or certify runtime.
+
+Required evidence includes easy-axis curvature, transverse-axis derivative,
+signed coefficient, nodal-basis covariance, invalid/unsupported view rejection,
+then full payload binding, K0 and reciprocal nonzero-k runtime checks.
 
 Constraint construction operates on complete corner/edge equivalence classes
 and checks cycle consistency. A phase-only tangent constraint is invalid for
@@ -1004,6 +1050,12 @@ visibility into runtime qualification.
 
 | Equation/claim | Lane | Repository path + stable symbol | Responsibility | Tests/evidence | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|
+| {eq}`eq-fem-modal-uniaxial-energy-hessian` (source-native-uniaxial-weak-form) | FEM CPU | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` + `FrequencyDomainStatus assemble_native_magnetic_a_qq` | Constrained uniaxial weak form and total-field curvature | Native regression pending; public bridge pending | source-visible / NOT VERIFIED | working tree |
+| Independent constrained energy (source-uniaxial-energy-finite-difference) | reference | `scripts/test_uniaxial_constrained_energy_hessian.py` + `sphere_energy` | Energy finite differences including equilibrium-balancing bias | 3 Python tests PASS; no native execution | reference check only | working tree |
+| Uniaxial descriptor transport (source-uniaxial-descriptor-builder) | FEM CPU runner | `crates/fullmag-runner/src/fem/eigen_shared_domain.rs` + `build_native_shared_domain_modal_problem` | Own normalized axes, signed H_a and term/operator digests | Rust compilation pending; public guard retained | NOT VERIFIED | working tree |
+| Uniaxial FFI ownership (source-uniaxial-ffi-envelope) | FEM CPU bridge | `crates/fullmag-runner/src/native_fem/frequency_domain.rs` + `ffi_envelope_contract` | Cardinalities, advertised views and digest coherence before C ABI | Native runtime pending | NOT VERIFIED | working tree |
+| Ku material identity (source-uniaxial-equilibrium-material-identity) | FEM CPU runner | `crates/fullmag-runner/src/fem/equilibrium_identity.rs` + `equilibrium_material_signature` | Shared producer/consumer v2 Ku signature; exact Ku-free v1 preserved | Rust regression source; runtime pending | NOT VERIFIED | working tree |
+| Ku equilibrium field owner (source-uniaxial-equilibrium-field-owner) | FEM CPU reference observer | `crates/fullmag-runner/src/fem/eigen_equilibrium.rs` + `materialize_equilibrium` | Typed anisotropy channel, separate Zeeman energy and fields | Managed runtime pending; public guards retained | NOT VERIFIED | working tree |
 | {eq}`eq-fem-modal-static-field-frame-transport` (source-static-field-frame-transport) | FEM CPU | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` + `FrequencyDomainStatus assemble_native_magnetic_a_qq` | Cross-node static-field tangent projection | Native covariance regression prepared, not compiled | source-visible / runtime NOT VERIFIED | working tree |
 | Stage-first modal capture | common | `packages/fullmag-py/src/fullmag/world.py` + `eigenmodes_stage` | Build the public modal stage specification. | Python API round-trip tests | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/70636fa61fcdf32b6f61b7544f347172ef36a219/packages/fullmag-py/src/fullmag/world.py) |
 | Stage-first driven capture | common | `packages/fullmag-py/src/fullmag/world.py` + `frequency_response_stage` | Build the public driven stage and normalized solver policy. | Python API round-trip tests | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/70636fa61fcdf32b6f61b7544f347172ef36a219/packages/fullmag-py/src/fullmag/world.py) |

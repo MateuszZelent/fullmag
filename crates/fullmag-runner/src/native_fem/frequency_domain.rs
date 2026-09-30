@@ -308,6 +308,9 @@ pub(crate) struct NativeModalEigenSharedDomainProblem<'a> {
     pub term_presence_mask: u32,
     pub exchange_term_digest: Option<String>,
     pub field_term_digest: Option<String>,
+    pub anisotropy_term_digest: Option<String>,
+    pub uniaxial_axis_xyz: Vec<f64>,
+    pub uniaxial_anisotropy_field_a_per_m: Vec<f64>,
     pub demag_term_digest: Option<String>,
     pub operator_input_digest: String,
     pub demag_provider_signature: Option<String>,
@@ -504,6 +507,7 @@ impl<'a> NativeModalEigenSharedDomainProblem<'a> {
     fn ffi_envelope_contract(&self) -> Result<NativeModalSharedDomainFfiEnvelopeContract, String> {
         const TERM_EXCHANGE: u32 = 1 << 0;
         const TERM_FIELD: u32 = 1 << 1;
+        const TERM_ANISOTROPY: u32 = 1 << 2;
         const TERM_DEMAG: u32 = 1 << 4;
         let node_count = self.mesh.nodes.len();
         let digest_valid = |value: &str| {
@@ -642,11 +646,29 @@ impl<'a> NativeModalEigenSharedDomainProblem<'a> {
         };
         if !term_digest_matches(TERM_EXCHANGE, self.exchange_term_digest.as_ref())
             || !term_digest_matches(TERM_FIELD, self.field_term_digest.as_ref())
+            || !term_digest_matches(TERM_ANISOTROPY, self.anisotropy_term_digest.as_ref())
             || !term_digest_matches(TERM_DEMAG, self.demag_term_digest.as_ref())
         {
             return Err(
                 "native FEM modal_eigen descriptor term mask and digests disagree".to_string(),
             );
+        }
+        if self.term_presence_mask & TERM_ANISOTROPY != 0 {
+            if self.uniaxial_axis_xyz.len() != 3 * node_count
+                || self.uniaxial_anisotropy_field_a_per_m.len() != 1
+                || !finite(&self.uniaxial_axis_xyz)
+                || !finite(&self.uniaxial_anisotropy_field_a_per_m)
+                || self.uniaxial_axis_xyz.chunks_exact(3).any(|axis| {
+                    let norm = axis[0].hypot(axis[1]).hypot(axis[2]);
+                    !norm.is_finite() || norm <= 0.0
+                })
+            {
+                return Err("native FEM modal_eigen uniaxial descriptor views are invalid".to_string());
+            }
+        } else if !self.uniaxial_axis_xyz.is_empty()
+            || !self.uniaxial_anisotropy_field_a_per_m.is_empty()
+        {
+            return Err("native FEM modal_eigen descriptor carries unadvertised anisotropy views".to_string());
         }
         if self.term_presence_mask & TERM_EXCHANGE != 0
             && !self
@@ -2009,6 +2031,11 @@ fn solve_native_modal_eigen_impl(
         .map(CString::new)
         .transpose()
         .map_err(|_| "native FEM modal_eigen field term digest contains NUL".to_string())?;
+    let shared_anisotropy_term_digest = shared_domain
+        .and_then(|problem| problem.anisotropy_term_digest.as_deref())
+        .map(CString::new)
+        .transpose()
+        .map_err(|_| "native FEM modal_eigen anisotropy term digest contains NUL".to_string())?;
     let shared_demag_term_digest = shared_domain
         .and_then(|problem| problem.demag_term_digest.as_deref())
         .map(CString::new)
@@ -2053,7 +2080,7 @@ fn solve_native_modal_eigen_impl(
                         .as_ptr(),
                     exchange_term_digest: optional_str_ptr(shared_exchange_term_digest.as_ref()),
                     field_term_digest: optional_str_ptr(shared_field_term_digest.as_ref()),
-                    anisotropy_term_digest: std::ptr::null(),
+                    anisotropy_term_digest: optional_str_ptr(shared_anisotropy_term_digest.as_ref()),
                     dmi_term_digest: std::ptr::null(),
                     demag_term_digest: optional_str_ptr(shared_demag_term_digest.as_ref()),
                     operator_input_digest: shared_operator_input_digest
@@ -2075,10 +2102,18 @@ fn solve_native_modal_eigen_impl(
                     external_field_h_ext0_xyz_count: envelope.external_field_count,
                     alpha_per_node: problem.alpha_per_node.as_ptr(),
                     alpha_per_node_count: envelope.alpha_count,
-                    uniaxial_axis_xyz: std::ptr::null(),
-                    uniaxial_axis_xyz_count: 0,
-                    uniaxial_anisotropy_field_a_per_m: std::ptr::null(),
-                    uniaxial_anisotropy_field_count: 0,
+                    uniaxial_axis_xyz: if problem.uniaxial_axis_xyz.is_empty() {
+                        std::ptr::null()
+                    } else {
+                        problem.uniaxial_axis_xyz.as_ptr()
+                    },
+                    uniaxial_axis_xyz_count: problem.uniaxial_axis_xyz.len() as u64,
+                    uniaxial_anisotropy_field_a_per_m: if problem.uniaxial_anisotropy_field_a_per_m.is_empty() {
+                        std::ptr::null()
+                    } else {
+                        problem.uniaxial_anisotropy_field_a_per_m.as_ptr()
+                    },
+                    uniaxial_anisotropy_field_count: problem.uniaxial_anisotropy_field_a_per_m.len() as u64,
                     saturation_magnetisation_a_per_m: if problem
                         .saturation_magnetisation_a_per_m
                         .is_empty()
@@ -4419,6 +4454,9 @@ mod tests {
             term_presence_mask: (1 << 0) | (1 << 1) | (1 << 4),
             exchange_term_digest: Some(digest.to_string()),
             field_term_digest: Some(digest.to_string()),
+            anisotropy_term_digest: None,
+            uniaxial_axis_xyz: Vec::new(),
+            uniaxial_anisotropy_field_a_per_m: Vec::new(),
             demag_term_digest: Some(digest.to_string()),
             operator_input_digest: digest.to_string(),
             demag_provider_signature: Some(digest.to_string()),

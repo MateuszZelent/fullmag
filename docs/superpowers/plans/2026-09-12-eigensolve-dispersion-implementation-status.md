@@ -1,5 +1,13 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S10/S12 — Ku w źródłach; ten sam job #187
+
+- Wdrożony koordynator 7753401fbbf748625b8ec2fda0fc244b07e8ef492426102102dd88bd22c6f901, zachowane siedem profili i dane. Worker wznowiony; nowy snapshot #187 c52c7fd053e745d9b113ffeb0268a472, digest 15733ecfc2d145cc04340f0284c50122dca3fe92f8e223d4a7440afc8fdf691a, HEAD b62bfe9025dd93914b8e13468d8320d9af4ac2a2 + jawny WIP. Kapsuła 2272f012edb6422ba50877a2c9dbe62f/source: verify_source PASS, 7491 plików. Bieżący status running; potwierdzony worker 98cb548305f4e1f07e03bf2681988eff40e09999d6e1c74e00bd02db41e2dd70. Log: stage native-build start make install-cli-dev; docker top potwierdza cargo/rustc. Poprawiony preflight przeszedł. Bez nowych częstotliwości; nie restartowano zadania.
+- Native Ku: constrained Hessian, obie bazy, signed coefficient i total h_eff0; Rust owns views/digests. Nowy wspólny material builder wiąże Ku/oś w namespace v2 i zachowuje Ku-free v1. Observer rejestruje typed anisotropy zamiast zamrożonego pola Zeemana. Publiczne guardy pozostają; reszta S10 nie jest zamknięta.
+- Niezależna energia: 3 Python PASS; Rust/native regresje źródłowe przygotowane, NIE kompilowane. Nota 0831 i ADR0023 rozszerzone. Audyt: docs/audits/2026-10-01-uniaxial-modal-identity-and-field-channel.md. #187 nie obejmuje dopisanych po capture identity/observer.
+- Review Ku: certyfikat pól v1 nie obejmuje h_anisotropy, a material_snapshot_id/artefakty nadal haszują surowy materiał. Przed odblokowaniem potrzebne v2 pól, digest/konsumenci, spójny kanoniczny materiał oraz sprawdzenie cache modalnego i zero-h_eff. Dodane regresje source-only producer/consumer i legacy bytes/hash; wykonanie natywne nadal NOT VERIFIED. Szczegóły w audycie Ku.
+- Wykres de-bv-updated-job187: 27 archiwalnych punktów i referencje P00/N32, bez nowych wyników. Następnie receipt tego samego #187, Γ+DE/BV, kompletne pola i residuale; osobny snapshot Ku, K0 i +/-k oraz zbieżność. Pełny S00–S12, COMSOL A1, interakcje, GPU, browser i integracja pozostają otwarte.
+
 ## S12 — #186 terminalny; poprawka offline nightly
 
 - #186 failed/exit2 przed kompilacją, ponownie rustup toolchain list timeout30 s. Kontroler48901 terminalny exit1; nie ma nowych częstotliwości. Dane zachowane.

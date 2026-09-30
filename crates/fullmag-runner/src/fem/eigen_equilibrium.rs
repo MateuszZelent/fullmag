@@ -1,4 +1,4 @@
-use super::eigen_anisotropy::volume_anisotropy_field;
+use super::equilibrium_identity::constant_uniaxial_descriptor;
 use super::eigen_digest::{is_sha256_digest, shared_domain_content_digest};
 use super::eigen_equilibrium_contract::{
     validate_certified_equilibrium_fields, AcceptedFemRelaxStageHandoff,
@@ -14,6 +14,7 @@ use crate::types::ExecutedRun;
 use crate::types::RunError;
 use fullmag_engine::fem::FemLlgProblem;
 use fullmag_engine::fem::MeshTopology;
+use fullmag_engine::{CubicAnisotropyConfig, UniaxialAnisotropyConfig};
 use fullmag_engine::EffectiveFieldObservables;
 use fullmag_engine::EffectiveFieldTerms;
 use fullmag_engine::LlgConfig;
@@ -358,38 +359,30 @@ pub(super) fn materialize_equilibrium(
             message: format!("LLG: {}", error),
         })?
         .with_precession_enabled(false);
-    // Compute volume anisotropy field at equilibrium guess so that the
-    // relaxation includes the anisotropy contribution.  Because the FEM
-    // engine treats per_node_field as static, we recompute it once after
-    // an initial relaxation pass (self-consistent field iteration).
-    let aniso_per_node: Option<Vec<Vector3>> = {
-        let has_uni = plan
-            .material
-            .uniaxial_anisotropy
-            .map_or(false, |k| k.abs() > 0.0);
-        let has_cub = plan
-            .material
-            .cubic_anisotropy_kc1
-            .map_or(false, |k| k.abs() > 0.0);
-        if has_uni || has_cub {
-            Some(
-                equilibrium_guess
-                    .iter()
-                    .map(|m| volume_anisotropy_field(*m, plan))
-                    .collect(),
-            )
-        } else {
-            None
-        }
-    };
+    // Keep anisotropy in its own field/energy channel. A frozen per-node
+    // external field misclassifies its Zeeman energy and does not follow m0.
+    let uniaxial_anisotropy = constant_uniaxial_descriptor(&plan.material)?
+        .map(|(ku1, axis)| UniaxialAnisotropyConfig {
+            ku1,
+            ku2: plan.material.uniaxial_anisotropy_k2.unwrap_or(0.0),
+            axis,
+        });
+    let cubic_anisotropy = plan.material.cubic_anisotropy_kc1
+        .map(|kc1| CubicAnisotropyConfig {
+            kc1,
+            kc2: plan.material.cubic_anisotropy_kc2.unwrap_or(0.0),
+            kc3: plan.material.cubic_anisotropy_kc3.unwrap_or(0.0),
+            axis1: plan.material.cubic_anisotropy_axis1.unwrap_or([1.0, 0.0, 0.0]),
+            axis2: plan.material.cubic_anisotropy_axis2.unwrap_or([0.0, 1.0, 0.0]),
+        });
     let terms = EffectiveFieldTerms {
         exchange: plan.enable_exchange,
         demag: plan.enable_demag,
         external_field: plan.external_field,
-        per_node_field: aniso_per_node,
+        per_node_field: None,
         magnetoelastic: None,
-        uniaxial_anisotropy: None,
-        cubic_anisotropy: None,
+        uniaxial_anisotropy,
+        cubic_anisotropy,
         interfacial_dmi: None,
         rotated_interfacial_dmi: None,
         bulk_dmi: None,

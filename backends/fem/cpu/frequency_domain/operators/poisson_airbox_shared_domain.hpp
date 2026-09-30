@@ -199,7 +199,8 @@ bool import_modal_shared_domain_mesh(
  * the runner may describe the accepted state and physical terms, but it must
  * not materialize A_qq and pass a synthetic CSR into the shared-domain path.
  *
- * The current producer covers the certified exchange + static h_eff0 scope.
+ * The current producer covers exchange, total static h_eff0 curvature, and
+ * constant first-order uniaxial anisotropy; managed qualification remains separate.
  * Its static-field Hessian projects between both accepted nodal tangent frames and is
  * available only when h_eff0 is parallel to m0 within the declared tolerance.
  * Dynamic demagnetization is deliberately not an A_qq term: the native

@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 use crate::types::RunError;
 
 const EQUILIBRIUM_MATERIAL_PREIMAGE_V1: &str = "EquilibriumMaterialSignaturePreimage.v1";
+const EQUILIBRIUM_MATERIAL_PREIMAGE_V2: &str = "EquilibriumMaterialSignaturePreimage.v2";
 const EQUILIBRIUM_STATIC_PHYSICS_PREIMAGE_V1: &str = "EquilibriumStaticPhysicsSignaturePreimage.v1";
 const EQUILIBRIUM_BOUNDARY_PREIMAGE_V1: &str = "EquilibriumBoundarySignaturePreimage.v1";
 const MODAL_OPERATOR_PREIMAGE_V1: &str = "ModalOperatorSignaturePreimage.v1";
@@ -18,6 +19,70 @@ pub(crate) struct EquilibriumMaterialSignaturePreimageV1 {
     exchange_stiffness_j_per_m: f64,
     saturation_magnetisation_field_a_per_m: Option<Vec<f64>>,
     exchange_stiffness_field_j_per_m: Option<Vec<f64>>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+struct EquilibriumMaterialSignaturePreimageV2 {
+    #[serde(flatten)]
+    material: EquilibriumMaterialSignaturePreimageV1,
+    uniaxial_anisotropy_j_per_m3: f64,
+    canonical_uniaxial_axis: [f64; 3],
+}
+
+/// One normalization owner for equilibrium identity and native Ku transport.
+/// The axis is a rank-one direction: u and -u describe identical energies.
+pub(super) fn constant_uniaxial_descriptor(
+    material: &fullmag_ir::MaterialIR,
+) -> Result<Option<(f64, [f64; 3])>, RunError> {
+    let Some(ku) = material.uniaxial_anisotropy else {
+        if material.anisotropy_axis.is_some() {
+            return Err(unsupported_source_identity("uniaxial axis supplied without Ku"));
+        }
+        return Ok(None);
+    };
+    if !ku.is_finite() || !material.saturation_magnetisation.is_finite()
+        || material.saturation_magnetisation <= 0.0 || material.ms_field.is_some()
+    {
+        return Err(unsupported_source_identity("constant Ku requires finite Ku and uniform positive Ms"));
+    }
+    let axis = material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]);
+    if axis.iter().any(|value| !value.is_finite()) {
+        return Err(unsupported_source_identity("uniaxial axis must be finite"));
+    }
+    // Scale before normalization to avoid overflow and underflow for finite axes.
+    let scale = axis.iter().fold(0.0_f64, |value, component| value.max(component.abs()));
+    if scale == 0.0 {
+        return Err(unsupported_source_identity("uniaxial axis must be nonzero"));
+    }
+    let scaled = axis.map(|component| component / scale);
+    let norm = scaled[0].hypot(scaled[1]).hypot(scaled[2]);
+    let orientation = scaled.iter().find(|component| **component != 0.0).unwrap().signum();
+    let canonical_axis = scaled.map(|component| {
+        let value = orientation * component / norm;
+        if value == 0.0 { 0.0 } else { value }
+    });
+    Ok(Some((if ku == 0.0 { 0.0 } else { ku }, canonical_axis)))
+}
+
+fn equilibrium_material_signature(material: &fullmag_ir::MaterialIR) -> Result<String, RunError> {
+    let uniaxial = constant_uniaxial_descriptor(material)?;
+    let mut preimage = EquilibriumMaterialSignaturePreimageV1 {
+        schema_version: EQUILIBRIUM_MATERIAL_PREIMAGE_V1.to_string(),
+        saturation_magnetisation_a_per_m: material.saturation_magnetisation,
+        exchange_stiffness_j_per_m: material.exchange_stiffness,
+        saturation_magnetisation_field_a_per_m: material.ms_field.clone(),
+        exchange_stiffness_field_j_per_m: material.a_field.clone(),
+    };
+    if let Some((ku, axis)) = uniaxial {
+        preimage.schema_version = EQUILIBRIUM_MATERIAL_PREIMAGE_V2.to_string();
+        signature_digest(EQUILIBRIUM_MATERIAL_PREIMAGE_V2, &EquilibriumMaterialSignaturePreimageV2 {
+            material: preimage,
+            uniaxial_anisotropy_j_per_m3: ku,
+            canonical_uniaxial_axis: axis,
+        })
+    } else {
+        signature_digest(EQUILIBRIUM_MATERIAL_PREIMAGE_V1, &preimage)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -86,13 +151,7 @@ impl EquilibriumIdentitySignaturesV1 {
     pub(crate) fn from_relax_plan(plan: &FemPlanIR) -> Result<Self, RunError> {
         validate_supported_relax_source(plan)?;
         Self::from_preimages(
-            EquilibriumMaterialSignaturePreimageV1 {
-                schema_version: EQUILIBRIUM_MATERIAL_PREIMAGE_V1.to_string(),
-                saturation_magnetisation_a_per_m: plan.material.saturation_magnetisation,
-                exchange_stiffness_j_per_m: plan.material.exchange_stiffness,
-                saturation_magnetisation_field_a_per_m: plan.material.ms_field.clone(),
-                exchange_stiffness_field_j_per_m: plan.material.a_field.clone(),
-            },
+            equilibrium_material_signature(&plan.material)?,
             EquilibriumStaticPhysicsSignaturePreimageV1 {
                 schema_version: EQUILIBRIUM_STATIC_PHYSICS_PREIMAGE_V1.to_string(),
                 enable_exchange: plan.enable_exchange,
@@ -118,13 +177,7 @@ impl EquilibriumIdentitySignaturesV1 {
             ));
         }
         Self::from_preimages(
-            EquilibriumMaterialSignaturePreimageV1 {
-                schema_version: EQUILIBRIUM_MATERIAL_PREIMAGE_V1.to_string(),
-                saturation_magnetisation_a_per_m: plan.material.saturation_magnetisation,
-                exchange_stiffness_j_per_m: plan.material.exchange_stiffness,
-                saturation_magnetisation_field_a_per_m: plan.material.ms_field.clone(),
-                exchange_stiffness_field_j_per_m: plan.material.a_field.clone(),
-            },
+            equilibrium_material_signature(&plan.material)?,
             EquilibriumStaticPhysicsSignaturePreimageV1 {
                 schema_version: EQUILIBRIUM_STATIC_PHYSICS_PREIMAGE_V1.to_string(),
                 enable_exchange: plan.enable_exchange,
@@ -143,15 +196,12 @@ impl EquilibriumIdentitySignaturesV1 {
     }
 
     fn from_preimages(
-        material: EquilibriumMaterialSignaturePreimageV1,
+        material_signature: String,
         static_physics: EquilibriumStaticPhysicsSignaturePreimageV1,
         boundary: EquilibriumBoundarySignaturePreimageV1,
     ) -> Result<Self, RunError> {
         Ok(Self {
-            equilibrium_material_signature: signature_digest(
-                EQUILIBRIUM_MATERIAL_PREIMAGE_V1,
-                &material,
-            )?,
+            equilibrium_material_signature: material_signature,
             equilibrium_static_physics_signature: signature_digest(
                 EQUILIBRIUM_STATIC_PHYSICS_PREIMAGE_V1,
                 &static_physics,
@@ -222,9 +272,8 @@ fn validate_supported_material(
     material: &fullmag_ir::MaterialIR,
     source: &str,
 ) -> Result<(), RunError> {
-    if material.uniaxial_anisotropy.is_some()
-        || material.uniaxial_anisotropy_k2.is_some()
-        || material.anisotropy_axis.is_some()
+    constant_uniaxial_descriptor(material)?;
+    if material.uniaxial_anisotropy_k2.is_some()
         || material.cubic_anisotropy_kc1.is_some()
         || material.cubic_anisotropy_kc2.is_some()
         || material.cubic_anisotropy_kc3.is_some()
@@ -241,7 +290,7 @@ fn validate_supported_material(
         || material.dbulk_field.is_some()
     {
         return Err(unsupported_source_identity(&format!(
-            "{source} contains anisotropy or DMI material data outside the supported exchange/demag/Zeeman source identity scope"
+            "{source} contains spatial, higher-order anisotropy or DMI outside the supported constant-Ku source identity scope"
         )));
     }
     Ok(())
@@ -263,4 +312,29 @@ fn signature_digest<T: Serialize>(namespace: &str, value: &T) -> Result<String, 
     hash.update((bytes.len() as u64).to_le_bytes());
     hash.update(bytes);
     Ok(format!("sha256:{:x}", hash.finalize()))
+}
+
+#[cfg(test)]
+mod material_identity_tests {
+    use super::*;
+
+    #[test]
+    fn ku_free_material_preserves_legacy_v1_bytes_and_digest() {
+        let material = fullmag_ir::MaterialIR {
+            saturation_magnetisation: 800_000.0,
+            exchange_stiffness: 1.3e-11,
+            ..Default::default()
+        };
+        let preimage = EquilibriumMaterialSignaturePreimageV1 {
+            schema_version: EQUILIBRIUM_MATERIAL_PREIMAGE_V1.to_string(),
+            saturation_magnetisation_a_per_m: material.saturation_magnetisation,
+            exchange_stiffness_j_per_m: material.exchange_stiffness,
+            saturation_magnetisation_field_a_per_m: None,
+            exchange_stiffness_field_j_per_m: None,
+        };
+        let golden_bytes = br#"{"schema_version":"EquilibriumMaterialSignaturePreimage.v1","saturation_magnetisation_a_per_m":800000.0,"exchange_stiffness_j_per_m":1.3e-11,"saturation_magnetisation_field_a_per_m":null,"exchange_stiffness_field_j_per_m":null}"#;
+        assert_eq!(serde_json::to_vec(&preimage).unwrap(), golden_bytes.as_slice());
+        assert_eq!(equilibrium_material_signature(&material).unwrap(),
+            "sha256:5acf82b569d679296e01d7724e5a2a83fc60ce37d3d711afd535143c4bdad5af");
+    }
 }

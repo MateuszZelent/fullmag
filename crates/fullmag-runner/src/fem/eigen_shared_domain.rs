@@ -2,6 +2,7 @@ use super::eigen_certificate::{
     build_owned_modal_certificate_v6_binding, modal_v6_error, MODAL_CERTIFICATE_BINDING_ACCEPTED,
 };
 use super::eigen_constants::{
+    MODAL_LINEARIZATION_TERM_ANISOTROPY,
     MODAL_LINEARIZATION_TERM_DEMAG, MODAL_LINEARIZATION_TERM_EXCHANGE,
     MODAL_LINEARIZATION_TERM_FIELD, SHARED_DOMAIN_K0_RUNTIME_UNAVAILABLE_DETAIL,
     SHARED_DOMAIN_K0_RUNTIME_UNAVAILABLE_REASON,
@@ -933,6 +934,26 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
         "linearization_field_term",
         &external_field_h_ext0_xyz,
     )?);
+    let (uniaxial_axis_xyz, uniaxial_anisotropy_field_a_per_m) =
+        if let Some((ku, normalized)) = super::equilibrium_identity::constant_uniaxial_descriptor(&plan.material)? {
+            if !ms_values.is_empty() {
+                return Err(RunError { message: "shared-domain constant anisotropy field requires uniform Ms".to_string() });
+            }
+            let field = 2.0 * (ku / (MU0 * plan.material.saturation_magnetisation));
+            if !field.is_finite() {
+                return Err(RunError { message: "shared-domain uniaxial field is not finite".to_string() });
+            }
+            ((0..topology.n_nodes).flat_map(|_| normalized).collect::<Vec<f64>>(), vec![field])
+        } else {
+            (Vec::new(), Vec::new())
+        };
+    let anisotropy_term_digest = if uniaxial_anisotropy_field_a_per_m.is_empty() {
+        None
+    } else {
+        Some(shared_domain_content_digest("linearization_uniaxial_term", &(
+            uniaxial_axis_xyz.as_slice(), uniaxial_anisotropy_field_a_per_m.as_slice(),
+        ))?)
+    };
     let demag_term_digest = Some(shared_domain_content_digest(
         "linearization_demag_term",
         &(
@@ -946,7 +967,8 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
     } else {
         0
     }) | MODAL_LINEARIZATION_TERM_FIELD
-        | MODAL_LINEARIZATION_TERM_DEMAG;
+        | MODAL_LINEARIZATION_TERM_DEMAG
+        | if anisotropy_term_digest.is_some() { MODAL_LINEARIZATION_TERM_ANISOTROPY } else { 0 };
     let operator_input_digest = shared_domain_content_digest(
         "linearization_operator_input",
         &(
@@ -955,6 +977,9 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
             term_presence_mask,
             exchange_term_digest.as_deref(),
             field_term_digest.as_deref(),
+            anisotropy_term_digest.as_deref(),
+            uniaxial_axis_xyz.as_slice(),
+            uniaxial_anisotropy_field_a_per_m.as_slice(),
             demag_term_digest.as_deref(),
             tangent_frame_xyz.as_slice(),
             linearization_m0_xyz.as_slice(),
@@ -1015,6 +1040,9 @@ pub(super) fn build_native_shared_domain_modal_problem<'a>(
         term_presence_mask,
         exchange_term_digest,
         field_term_digest,
+        anisotropy_term_digest,
+        uniaxial_axis_xyz,
+        uniaxial_anisotropy_field_a_per_m,
         demag_term_digest,
         operator_input_digest: operator_input_digest.clone(),
         demag_provider_signature: Some(operator_input_digest),
