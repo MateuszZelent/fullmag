@@ -141,3 +141,7 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 37. [Plikowy preflight i import archiwów](37-file-backed-archive-import.md)
     — API/CLI dekodują raz do prywatnych plików, streamują publikację i blokują
     GC przy niepokrytym grafie; source checks/review PASS, runtime/RAM otwarte.
+
+38. [Zgodność rewizji z odczytanymi wynikami](38-result-artifact-snapshot-identity.md)
+    — jeden odczyt dla JSON i hasha sześciu rodzin, limit wejścia 64 MiB;
+    kontrola źródeł PASS, regresje NOT RUN, comparison API i runtime otwarte.
