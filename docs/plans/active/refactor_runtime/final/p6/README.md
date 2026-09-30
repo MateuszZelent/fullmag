@@ -185,3 +185,8 @@ pamięci i wszystkich lane'ów pozostają otwarte. P6 wynosi **52%**.
 48. [Audyt markerów regionów native FEM](48-native-region-marker-followup-audit.md)
     — potwierdzona podwójna normalizacja i granice raw IDs / binary mask;
     audyt źródłowy, implementacja i runtime pozostają otwarte.
+
+49. [Przypięty zasób MaterializedDataset](49-pinned-materialized-dataset-resource.md)
+    — exact owner reader, project-owned API, pełne typed metadata, generowane
+    OpenAPI/client i resource hook; source/codegen/API hygiene PASS,
+    konsumenci UI, binarny slice i runtime pozostają otwarte.
