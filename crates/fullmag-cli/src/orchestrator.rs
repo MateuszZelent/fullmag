@@ -3225,6 +3225,18 @@ fn attach_solved_antenna_drive_bases(
     if problem.solved_antenna_drives.is_empty() {
         return Ok(());
     }
+    let active_stage_id = problem
+        .problem_meta
+        .runtime_metadata
+        .get("active_stage_id")
+        .and_then(serde_json::Value::as_str);
+    if !problem.solved_antenna_drives.iter().any(|drive| {
+        drive
+            .activation
+            .is_active_for(problem.study.kind(), active_stage_id)
+    }) {
+        return Ok(());
+    }
     match &execution_plan.backend_plan {
         BackendPlanIR::Fem(_) | BackendPlanIR::Fdm(_) => {}
         BackendPlanIR::FdmMultilayer(_) => {
@@ -12913,6 +12925,62 @@ mod tests {
         .expect_err("FDM solved-antenna attachment must fail closed on invalid projection");
         assert!(error.to_string().contains(
             "solved_antenna_drives[0] has an invalid projection, port mode, or peak current"
+        ));
+    }
+
+    #[test]
+    fn solved_antenna_attachment_skips_inactive_future_stage_without_asset() {
+        let mut problem = ProblemIR::bootstrap_example();
+        let (dynamics, sampling) = match &problem.study {
+            StudyIR::TimeEvolution { dynamics, sampling } => (dynamics.clone(), sampling.clone()),
+            _ => unreachable!("bootstrap fixture is a time-evolution study"),
+        };
+        problem.study = StudyIR::Relaxation {
+            algorithm: fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+            dynamics: Some(dynamics),
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(1.0),
+                energy_tolerance_j: None,
+                max_steps: Some(10),
+                max_relaxation_time_s: None,
+            },
+            sampling,
+        };
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("active_stage_id".into(), serde_json::json!("relax"));
+        problem.solved_antenna_drives = vec![serde_json::from_value(serde_json::json!({
+            "id": "drive_1",
+            "name": "Drive 1",
+            "projection_ref": "projection_1",
+            "port_mode_id": "port_1",
+            "peak_current_a": 1.0,
+            "waveform": {"kind": "sinusoidal", "frequency_hz": 1e9, "phase_rad": 0.0, "offset": 0.0},
+            "time_origin": "stage_local",
+            "activation": {"kind": "stage_ids", "stage_ids": ["run"]}
+        }))
+        .expect("fixture drive should deserialize")];
+        let mut plan = fullmag_ir::ExecutionPlanIR {
+            common: fullmag_ir::CommonPlanMeta {
+                ir_version: "test".into(),
+                requested_backend: fullmag_ir::BackendTarget::Fdm,
+                resolved_backend: fullmag_ir::BackendTarget::Fdm,
+                execution_mode: fullmag_ir::ExecutionMode::Strict,
+                material_field_plans: Vec::new(),
+            },
+            backend_plan: BackendPlanIR::Fdm(fullmag_ir::FdmPlanIR::default()),
+            output_plan: fullmag_ir::OutputPlanIR {
+                outputs: Vec::new(),
+            },
+            provenance: fullmag_ir::ProvenancePlanIR::default(),
+        };
+
+        attach_solved_antenna_drive_bases(&problem, &mut plan, Path::new("antenna-test-artifacts"))
+            .expect("an inactive future drive must not load its unpublished asset");
+        assert!(matches!(
+            plan.backend_plan,
+            BackendPlanIR::Fdm(ref fdm) if fdm.solved_antenna_drive_bases.is_empty()
         ));
     }
 
