@@ -2,6 +2,7 @@ mod common;
 mod field_sweep;
 mod fmr;
 mod kittel;
+mod legacy_manifest;
 mod modal_manifest;
 mod mode_bundle;
 
@@ -14,6 +15,10 @@ pub use super::response_block_real::{
 pub use common::{
     FrequencyDomainArtifactIdentity, ServerArtifactExecution, ServerArtifactReference,
     ServerArtifactSource, ServerArtifactStatus, ServerArtifactTopology, ServerArtifactUnits,
+};
+pub use legacy_manifest::{
+    migrate_legacy_frequency_domain_manifest, LegacyFrequencyDomainManifestMigration,
+    MigratedFrequencyDomainManifest,
 };
 pub use field_sweep::{
     build_frequency_domain_field_sweep_artifact, write_frequency_domain_field_sweep_artifact,

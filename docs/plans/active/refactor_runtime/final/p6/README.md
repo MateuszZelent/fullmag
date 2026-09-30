@@ -101,7 +101,9 @@ bounded data plane oraz jeden frontend analityczny oparty o pinned source.
     walidatory oraz projekcje API/wykresów; review i managed build PASS,
     testy NOT RUN, runtime pozostaje otwarty.
 
-
+30. [Copy-on-write legacy manifestu rodziny — build PASS](30-legacy-family-manifest-copy-on-write-adapter.md)
+    — bounded adapter zachowuje oryginalny hash i naukowe bajty; publikacja,
+    pełne bundles oraz runtime pozostają otwarte.
 
 31. [Niezmienne artefakty terminalnego membera](31-terminal-solution-member-artifact-fence.md)
     — blokada late append w nadal otwartym SolutionSet; review i kontrola
