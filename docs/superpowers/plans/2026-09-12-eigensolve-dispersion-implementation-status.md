@@ -1,5 +1,15 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## Aktualny checkpoint #184 i wykres DE/BV — 2026-09-30
+
+- #184 / 5718d8d81e25496b966dd77c4d0ae1b0: live running; kontener fullmag-worker-5718d8d81e25496b966dd77c4d0ae1b0 i proces build_entrypoint potwierdzone. Katalog joba utworzył koordynator. Brak jeszcze dowodu kompilacji i nowych częstotliwości.
+- Profil fem-cpu-slepc-runtime-v2; source digest e1f20c2f6c39f8a8247a8460249aed1fd1f31c5f9d011fdde973040f120b5310; native snapshot SHA-256 92ffea2e1e0a62cfeb7d5247f6bfa80e427022f65e4a19ab3cd8aff2cfa37da4. Snapshot HEAD 431a5f26047c8f6b1fc6d8326f6120d399a31373 wraz z WIP i jawnym tracking_mass.rs.
+- Kapsuła 78d2a29fca6443b5bf933a3703355e67/source. Pełne verify_source PASS, 0 plików .pyc w drzewie po uruchomieniu obserwatora. Konfiguracja obserwatora znajduje się wyłącznie w scientific-batches/nonzero-k-validation/5718d8d81e25496b966dd77c4d0ae1b0. Sesja 18780 potwierdzona żywa; nie zgłoszono duplikatu.
+- Po sukcesie builda: Γ L2/t3, następnie DE/BV k25 L2/t3/t6/t9; pierwszy błąd zatrzymuje serię do diagnozy. #182/#183 pozostają terminalne i zachowane.
+- Zaktualizowany PNG/PDF/plot-receipt.json: scientific-batches/updated-de-bv-dispersion-20260930-v2. 27 historycznych rekordów FEM, sprawdzone hashe wejść, wspólne parametry SI, P00 i referencja N32, różnice procentowe oraz poziomy siatki. Obraz obejrzany; nie dodano hipotetycznych punktów #184. Producent: commit 22802948551fee0e83d5f58a5a6d0eb621c572f8, wysłany na remote.
+- Oracle ma niezależną regresję granicy A=0 względem dokładnego magnetostatycznego DE oraz degeneracji Kittela w Γ: 7 testów Python PASS, commit 431a5f26047c8f6b1fc6d8326f6120d399a31373. To dowód referencji w określonej granicy, nie kwalifikacja FEM.
+- Pełne S00–S12 pozostają otwarte: bieżący runtime i residuale, zbieżność grubości/siatki/airboxu, A1/COMSOL, interakcje, GPU, browser, review i integracja. Następny krok zależy od terminalnego wyniku tego samego joba #184.
+
 ## S12 — odrębna własność katalogu obserwatora
 
 - #183 terminalny blocked przed kompilacją: Errno 17, katalog joba utworzony za wcześnie przez konfigurację kontrolera. Kapsuła integralna, bez bytecode.
