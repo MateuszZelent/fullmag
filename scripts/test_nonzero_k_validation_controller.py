@@ -32,6 +32,33 @@ class ControllerTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 controller.build_state({**data, key: "different"}, config)
 
+    def test_config_preparation_never_creates_coordinator_job_root(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temporary:
+            storage = Path(temporary)
+            layout = {"storage_root": str(storage), "repo_root": str(storage / "checkout"),
+                      "worktree_id": "worktree-test"}
+            job = {"job_id": "a" * 32, "source_digest": "b" * 64,
+                   "worktree_id": "worktree-test", "payload": {"capsule_relative":
+                   "runs/worktree-test/" + "c" * 32 + "/source"}}
+            config = controller.prepare_controller_config(job, layout, "d" * 40)
+            self.assertTrue(config.is_file())
+            self.assertFalse((storage / "runs/worktree-test" / job["job_id"]).exists())
+            self.assertEqual(controller.validate_observer_root(config, layout, job["job_id"]), config.parent)
+            with self.assertRaises(ValueError):
+                controller.validate_observer_root(storage / "runs/worktree-test" / job["job_id"] / "controller-config.json", layout, job["job_id"])
+
+    def test_config_preparation_rejects_job_identity_and_path_traversal(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temporary:
+            storage = Path(temporary)
+            layout = {"storage_root": str(storage), "repo_root": str(storage), "worktree_id": "wt"}
+            for job in ({"job_id": "../job", "worktree_id": "wt"},
+                        {"job_id": "a" * 32, "worktree_id": "different"}):
+                with self.subTest(job=job), self.assertRaises(ValueError):
+                    controller.prepare_controller_config(job, layout, "b" * 40)
+            self.assertEqual(list(storage.iterdir()), [])
+
     def test_success_requires_exit_zero(self):
         config = {"job_id": "one", "source_digest": "pinned"}
         for code in (None, 1):

@@ -3,6 +3,8 @@
 Never write Python bytecode into the immutable source capsule.
 """
 import argparse
+import hashlib
+import re
 import json
 import os
 from pathlib import Path
@@ -30,12 +32,63 @@ def build_state(data, config):
     return state
 
 
+def validate_observer_root(config_path, layout, job_id):
+    if not isinstance(job_id, str) or re.fullmatch(r"[a-f0-9]{32}", job_id) is None:
+        raise ValueError("invalid managed job ID")
+    expected = (Path(layout["storage_root"]) / "runs" / layout["worktree_id"]
+                / "scientific-batches/nonzero-k-validation" / job_id).resolve()
+    import fullmag_storage
+    actual = fullmag_storage.validate_path(
+        Path(config_path), Path(layout["storage_root"]), "nonzero-k observer config").parent
+    if actual != expected:
+        raise ValueError("observer configuration must use scientific-batches, outside coordinator job root")
+    return actual
+
+
+def prepare_controller_config(job, layout, model_ref):
+    """Prepare observer state without reserving the coordinator-owned job root."""
+    job_id = job.get("job_id")
+    if job.get("worktree_id") != layout["worktree_id"]:
+        raise ValueError("job worktree identity mismatch")
+    if not isinstance(model_ref, str) or re.fullmatch(r"[a-f0-9]{40}", model_ref) is None:
+        raise ValueError("model ref must be a full commit SHA")
+    storage = Path(layout["storage_root"])
+    path = storage / "runs" / layout["worktree_id"] / "scientific-batches/nonzero-k-validation" / str(job_id) / "controller-config.json"
+    validate_observer_root(path, layout, job_id)
+    digest = job.get("source_digest")
+    if not isinstance(digest, str) or re.fullmatch(r"[a-f0-9]{64}", digest) is None:
+        raise ValueError("invalid managed source digest")
+    relative = job["payload"]["capsule_relative"]
+    expected_prefix = "runs/" + layout["worktree_id"] + "/"
+    if not isinstance(relative, str) or re.fullmatch(re.escape(expected_prefix) + r"[a-f0-9]{32}/source", relative) is None:
+        raise ValueError("noncanonical managed source capsule")
+    config = {"worktree": str(Path(layout["repo_root"])),
+              "capsule": str(storage / relative / "tree"), "job_id": job_id,
+              "source_digest": digest, "model_ref": model_ref,
+              "controller_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x", encoding="utf-8") as stream:
+        json.dump(config, stream, indent=2)
+    return path
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", required=True, type=Path)
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--config", type=Path)
+    action.add_argument("--prepare-job", type=Path, help="saved managed submission JSON")
+    parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--model-ref", help="full commit SHA for observer preparation")
     args = parser.parse_args()
-    root = args.config.resolve().parent
+    import fullmag_storage
+    if args.prepare_job:
+        job = json.loads(args.prepare_job.read_text(encoding="utf-8"))
+        layout = fullmag_storage.resolve_layout(args.repo_root, "windows-native")
+        print(prepare_controller_config(job, layout, args.model_ref), flush=True)
+        return
     config = json.loads(args.config.read_text(encoding="utf-8"))
+    layout = fullmag_storage.resolve_layout(config["worktree"], "windows-native")
+    root = validate_observer_root(args.config, layout, config["job_id"])
     repo, capsule = Path(config["worktree"]), Path(config["capsule"])
     env = child_environment()
     last = None

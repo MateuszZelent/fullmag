@@ -1,5 +1,12 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S12 — odrębna własność katalogu obserwatora
+
+- #183 terminalny blocked przed kompilacją: Errno 17, katalog joba utworzony za wcześnie przez konfigurację kontrolera. Kapsuła integralna, bez bytecode.
+- prepare_controller_config/CLI --prepare-job zapisują konfigurację wyłącznie w scientific-batches/nonzero-k-validation/<job-id>; runtime odrzuca konfigurację pod rootem koordynatora. 6 testów Python PASS.
+- Kontroler 42767 terminalny exit1. Zachowano #182/#183 i ich kapsuły. Audyt: docs/audits/2026-09-30-observer-job-root-ownership.md.
+- Następnie: nowe zgłoszenie runtime-v2 i kontrolowany setup obserwatora; potem Γ/DE/BV. Brak nowych częstotliwości, cały plan nadal otwarty.
+
 ## #183 running — poprawiony kontroler i integralność kapsuły
 
 - Job #183: 57615a161f6d4db5bd475a3499b6c5ef, runtime-v2, running. Nowa kapsuła c0bc3613dc2f41d4a6ab24be7ca09bff/source.
