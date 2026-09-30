@@ -1,5 +1,22 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S07 — diagnostyka nie może pochodzić z obcej próbki
+
+- Poprzedni turn: postęp 59ea8fd54093e89ed8b22d4adb9bf393e89d1528 na remote;
+  poprawny payload Inspectora, dziewięć testów i replay artefaktu.
+- Potwierdzono fallback pierwszej próbki w sample_native_solver_diagnostics.
+  Przygotowano usunięcie fallbacku, unikalne dopasowanie sample_index oraz
+  regresje brakującej/obcej/zdublowanej tożsamości. Stary GPU fixture otrzymał
+  jawny indeks próbki. Zachowano pozostały WIP tests.rs.
+- Parser rustfmt oraz diff check PASS; regresje Rust NIE uruchomione i NIE
+  skompilowane (zakaz AGENTS.md). Kod pozostaje WIP, naprawa nieukończona.
+  Wymagana właściwa bramka wykonawcza; nie traktować składni jako dowodu.
+- Audyt: docs/audits/2026-09-30-eigen-sample-diagnostics-identity.md.
+- Job #179 jest wcześniejszym snapshotem i nie zawiera nowej poprawki.
+  Kontrolery 66068/28993 potwierdzono żywe, nie restartowano ich.
+- Pełne S00–S12, runtime, fizyka/zbieżność, browser i integracja nadal otwarte.
+
+
 ## S07/S08 — korekta diagnozy certyfikatu i koperty zasobu
 
 - Poprzedni turn: postęp ce954ba5d76741bc31011bdb9bf577baddbcbd44 na remote.
