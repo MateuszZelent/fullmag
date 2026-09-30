@@ -728,12 +728,54 @@ impl StoreWalker {
                     artifact.byte_length,
                     source,
                 )?;
+                if artifact.schema_id == crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA {
+                    self.follow_solution_tensor_artifact(artifact, source)?;
+                }
             }
         }
         for coverage in &solution.coverage {
             for segment in &coverage.segments {
                 self.follow_solution_object_ref(&segment.object_ref, segment.byte_length, source)?;
             }
+        }
+        Ok(())
+    }
+
+    fn follow_solution_tensor_artifact(
+        &mut self,
+        artifact: &fullmag_quantities::SolutionArtifactRef,
+        source: &str,
+    ) -> Result<()> {
+        let object_path = self.root.join("objects/sha256").join(&artifact.object_ref);
+        if !object_path.exists() {
+            return Ok(());
+        }
+        if artifact.byte_length
+            > crate::solution_tensor_source::MAX_SOLUTION_TENSOR_METADATA_BYTES
+        {
+            bail!(
+                "solution tensor descriptor `{}` exceeds metadata budget",
+                artifact.object_ref
+            )
+        }
+
+        use std::io::Read;
+        reject_link_chain(&self.root, &format!("objects/sha256/{}", artifact.object_ref))?;
+        let mut data = Vec::new();
+        fs::File::open(&object_path)?
+            .take(crate::solution_tensor_source::MAX_SOLUTION_TENSOR_METADATA_BYTES + 1)
+            .read_to_end(&mut data)?;
+        if data.len() as u64 > crate::solution_tensor_source::MAX_SOLUTION_TENSOR_METADATA_BYTES {
+            bail!(
+                "solution tensor descriptor `{}` exceeds metadata budget",
+                artifact.object_ref
+            )
+        }
+        let descriptor = crate::solution_tensor_source::parse_solution_tensor_artifact(
+            &data, artifact,
+        )?;
+        for chunk in descriptor.chunks {
+            self.follow_solution_object_ref(&chunk.object_ref, chunk.length as u64, source)?;
         }
         Ok(())
     }
@@ -2508,17 +2550,64 @@ impl<'a> ArchiveWalker<'a> {
     ) -> Result<()> {
         for member in &solution.members {
             for artifact in &member.artifacts {
-                self.add_archive_solution_object(
-                    &artifact.object_ref,
-                    artifact.byte_length,
-                    source,
-                )?;
+                if artifact.schema_id == crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA {
+                    self.add_archive_solution_tensor_artifact(artifact, source)?;
+                } else {
+                    self.add_archive_solution_object(
+                        &artifact.object_ref,
+                        artifact.byte_length,
+                        source,
+                    )?;
+                }
             }
         }
         for coverage in &solution.coverage {
             for segment in &coverage.segments {
                 self.add_archive_solution_object(&segment.object_ref, segment.byte_length, source)?;
             }
+        }
+        Ok(())
+    }
+
+    fn add_archive_solution_tensor_artifact(
+        &mut self,
+        artifact: &fullmag_quantities::SolutionArtifactRef,
+        source: &str,
+    ) -> Result<()> {
+        crate::solution_tensor_source::validate_metadata_length(artifact)?;
+        self.report.object_refs.insert(artifact.object_ref.clone());
+        let relative = format!("objects/sha256/{}", artifact.object_ref);
+        let file_root = self.cas_root.or_else(|| match &self.documents {
+            ArchiveDocuments::Files { root, .. } => Some(*root),
+            ArchiveDocuments::Memory(_) => None,
+        });
+        let data;
+        let bytes = if let Some(root) = file_root {
+            use std::io::Read;
+            let path = crate::repository_path::checked_path(root, &relative)?;
+            if !path.exists() {
+                return self.report.missing(format!(
+                    "solution set `{source}` references missing object `{}`", artifact.object_ref
+                ));
+            }
+            let mut bounded = Vec::new();
+            fs::File::open(path)?
+                .take(crate::solution_tensor_source::MAX_SOLUTION_TENSOR_METADATA_BYTES + 1)
+                .read_to_end(&mut bounded)?;
+            data = bounded;
+            data.as_slice()
+        } else {
+            let ArchiveDocuments::Memory(documents) = &self.documents else { unreachable!() };
+            let Some(bytes) = documents.get(&relative) else {
+                return self.report.missing(format!(
+                    "solution set `{source}` references missing object `{}`", artifact.object_ref
+                ));
+            };
+            bytes.as_slice()
+        };
+        let descriptor = crate::solution_tensor_source::parse_solution_tensor_artifact(bytes, artifact)?;
+        for chunk in descriptor.chunks {
+            self.add_archive_solution_object(&chunk.object_ref, chunk.length as u64, source)?;
         }
         Ok(())
     }

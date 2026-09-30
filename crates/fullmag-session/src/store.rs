@@ -177,6 +177,12 @@ impl SessionStore {
         let mut referenced_objects = BTreeMap::new();
         for member in &solution.members {
             for artifact in &member.artifacts {
+                if artifact.schema_id == crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA {
+                    let descriptor = crate::solution_tensor_source::verify_solution_tensor_payload(&self.cas, artifact)?;
+                    for chunk in &descriptor.chunks {
+                        register_solution_object(&mut referenced_objects, &chunk.object_ref, chunk.length as u64)?;
+                    }
+                }
                 register_solution_object(
                     &mut referenced_objects,
                     &artifact.object_ref,

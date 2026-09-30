@@ -1,12 +1,12 @@
 //! Durable, monotonic catalog for immutable solution-set revisions.
 
-use crate::cas::hex_sha256;
+use crate::cas::{hex_sha256, CasStore};
 use crate::repository_path::{checked_path, create_parent, reject_link};
 use crate::writer::{require_local_filesystem, Writer};
 use anyhow::{bail, Context, Result};
 use fullmag_quantities::{
-    SolutionArtifactCoverage, SolutionExecutionStatus, SolutionMember, SolutionSet,
-    SolutionSetManifestState,
+    SolutionArtifactCoverage, SolutionArtifactRef, SolutionExecutionStatus, SolutionMember,
+    SolutionSet, SolutionSetManifestState,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -145,6 +145,11 @@ impl SolutionSetCatalog {
             bail!("first solution-set revision must be 1");
         }
 
+        // Keep the catalog's direct publication path behind the same typed
+        // descriptor barrier as SessionStore::publish_solution_set.  This
+        // must happen before the immutable revision write below.
+        self.verify_typed_artifacts(std::iter::once(solution))?;
+
         let bytes = serde_json::to_vec_pretty(solution)?;
         if bytes.len() as u64 > MAX_SOLUTION_MANIFEST_BYTES {
             bail!("solution-set manifest exceeds the 16 MiB control-plane budget");
@@ -217,6 +222,17 @@ impl SolutionSetCatalog {
                             &artifact.object_ref,
                             artifact.byte_length,
                         )?;
+                        // Recognized tensor roots expand to verified chunks;
+                        // unknown schemas remain opaque for compatibility.
+                        if artifact.schema_id
+                            == crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA
+                        {
+                            let cas = self.existing_cas()?;
+                            let chunks = verified_tensor_chunks(&cas, artifact)?;
+                            for (object_ref, byte_length) in chunks {
+                                register_durable_object(&mut objects, &object_ref, byte_length)?;
+                            }
+                        }
                     }
                 }
                 for coverage in &solution.coverage {
@@ -270,6 +286,11 @@ impl SolutionSetCatalog {
             }
             previous = Some(solution);
         }
+
+        // Reconciliation is allowed to promote only a graph whose every
+        // immutable revision has a verified typed tensor payload.  Otherwise
+        // the current pointer could publish a descriptor with missing chunks.
+        self.verify_typed_artifacts(revisions.values())?;
 
         let latest = previous.expect("non-empty revision chain has a latest revision");
         let previous_current_revision = current.as_ref().map(|value| value.revision);
@@ -428,6 +449,48 @@ impl SolutionSetCatalog {
             solution_directory(solution_set_id)
         )
     }
+
+    fn existing_cas(&self) -> Result<CasStore> {
+        CasStore::existing(checked_path(&self.root, "objects")?, self.writer.clone())
+    }
+
+    fn verify_typed_artifacts<'a>(
+        &self,
+        solutions: impl IntoIterator<Item = &'a SolutionSet>,
+    ) -> Result<()> {
+        let mut cas = None;
+        for solution in solutions {
+            for member in &solution.members {
+                for artifact in &member.artifacts {
+                    // Keep unknown schemas opaque until their typed contract
+                    // is explicitly introduced.
+                    if artifact.schema_id != crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA {
+                        continue;
+                    }
+                    if cas.is_none() {
+                        cas = Some(self.existing_cas()?);
+                    }
+                    let _ =
+                        verified_tensor_chunks(cas.as_ref().expect("CAS initialized"), artifact)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn verified_tensor_chunks(
+    cas: &CasStore,
+    artifact: &SolutionArtifactRef,
+) -> Result<Vec<(String, u64)>> {
+    let descriptor = crate::solution_tensor_source::verify_solution_tensor_payload(cas, artifact)?;
+    let mut chunks = Vec::with_capacity(descriptor.chunks.len());
+    for chunk in descriptor.chunks {
+        let expected_length =
+            u64::try_from(chunk.length).context("solution tensor chunk length does not fit u64")?;
+        chunks.push((chunk.object_ref, expected_length));
+    }
+    Ok(chunks)
 }
 
 fn register_durable_object(
@@ -687,6 +750,22 @@ mod tests {
     }
 
     #[test]
+    fn direct_catalog_publish_rejects_unverified_tensor_before_revision_write() {
+        let directory = tempfile::tempdir().unwrap();
+        let catalog = SolutionSetCatalog::open(directory.path()).unwrap();
+        let mut value = solution_with_artifact("0".repeat(64), 1);
+        value.members[0].artifacts[0].schema_id =
+            crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA.to_string();
+
+        assert!(catalog.publish(&value).is_err());
+        assert!(catalog.read(&value.solution_set_id).unwrap().is_none());
+        assert!(catalog
+            .read_revision(&value.solution_set_id, 1)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
     fn oversized_control_file_is_rejected_before_json_parsing() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("oversized.json");
@@ -906,6 +985,47 @@ mod tests {
         let pins = store.cas().pinned_refs().expect("read CAS pins");
         assert!(!pins.contains(&referenced));
         assert!(pins.contains(&unrelated));
+    }
+
+    #[test]
+    fn durable_solution_objects_include_verified_tensor_chunks() {
+        let directory = tempfile::tempdir().expect("temporary session store");
+        let store = SessionStore::open(directory.path()).expect("open session store");
+        let payload = 1.0_f64.to_le_bytes().to_vec();
+        let chunk_ref = store.cas().put(&payload).expect("publish tensor chunk");
+
+        let mut descriptor =
+            crate::TensorDescriptor::new_f64("value", vec![1], vec!["sample".to_string()]);
+        descriptor.chunks.push(crate::TensorChunk {
+            object_ref: chunk_ref.clone(),
+            offset: 0,
+            length: payload.len(),
+            sha256: Some(chunk_ref.clone()),
+        });
+        let descriptor_bytes = serde_json::to_vec_pretty(&descriptor).unwrap();
+        let descriptor_ref = store
+            .cas()
+            .put(&descriptor_bytes)
+            .expect("publish tensor descriptor");
+
+        let mut value =
+            solution_with_artifact(descriptor_ref.clone(), descriptor_bytes.len() as u64);
+        value.members[0].artifacts[0].schema_id =
+            crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA.to_string();
+        store
+            .publish_solution_set(&value)
+            .expect("publish verified tensor solution");
+
+        let _lease = store.write_transaction().expect("acquire writer lease");
+        let durable = store
+            .solution_sets()
+            .durable_objects_locked()
+            .expect("collect durable tensor graph");
+        assert_eq!(
+            durable.get(&descriptor_ref),
+            Some(&(descriptor_bytes.len() as u64))
+        );
+        assert_eq!(durable.get(&chunk_ref), Some(&(payload.len() as u64)));
     }
 
     #[test]
