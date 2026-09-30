@@ -1,5 +1,11 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S12 — #186 terminalny; poprawka offline nightly
+
+- #186 failed/exit2 przed kompilacją, ponownie rustup toolchain list timeout30 s. Kontroler48901 terminalny exit1; nie ma nowych częstotliwości. Dane zachowane.
+- Kontrola z katalogu kapsuły uruchamiała synchronizację stable z rust-toolchain.toml. Poprawiony inventory/version/build environment jawnie wybiera wymagany nightly i wyłącza autoinstalację. RED dwie regresje; GREEN31 lekkich testów Python PASS. Prawdziwy offline preflight tego samego obrazu/kapsuły/cache PASS w0.02253 s, rustc -Vv exit0.
+- Audyt docs/audits/2026-10-01-runner-rustup-project-override.md. Następnie wdrożenie koordynatora przy pustej kolejce i potwierdzonej pauzie, nowy snapshot, Γ+DE/BV i bramki nauki. Pełny S00–S12 pozostaje otwarty.
+
 ## #186 — nowy snapshot z transportem pola statycznego
 
 - Poprawka źródła: commit 916cb24f8f3cb4cef9dc43859371708b04a7c1c9, selektywnie siedem plików bez pozostałego WIP. Dokładna nota/mapa/źródła tego commita PASS; kapsuła #186 verify_source PASS. Test natywny nieuruchomiony; nowe częstotliwości nadal niedostępne.

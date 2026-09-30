@@ -569,6 +569,8 @@ def build_environment(
             "CARGO_TARGET_ROOT": str(build / "cargo-targets"),
             "CARGO_HOME": "/workspace/.fullmag-cargo",
             "RUSTUP_HOME": "/workspace/.fullmag-rustup",
+            "RUSTUP_TOOLCHAIN": "nightly",
+            "RUSTUP_AUTO_INSTALL": "0",
             "npm_config_store_dir": "/pnpm/store",
             "NPM_CONFIG_STORE_DIR": "/pnpm/store",
             "CARGO_BUILD_JOBS": str(jobs),
@@ -589,6 +591,12 @@ def build_environment(
     # retaining it here is useful to scripts that record their execution root.
     environment["FULLMAG_RUNNER_WORKSPACE"] = str(workspace)
     return environment
+
+
+def _offline_rustup_environment() -> dict[str, str]:
+    # All managed profiles require a provisioned nightly.  A project override
+    # must not make inventory/version probes sync or install another channel.
+    return {**os.environ, "RUSTUP_TOOLCHAIN": "nightly", "RUSTUP_AUTO_INSTALL": "0"}
 
 
 def _require_tool(name: str) -> str:
@@ -616,6 +624,7 @@ def preflight(profile: Profile, *, release: bool = True) -> dict[str, str]:
             text=True,
             check=False,
             timeout=30,
+            env=_offline_rustup_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise BuildEntryPointError(
@@ -659,6 +668,7 @@ def _command_version(command: list[str]) -> dict[str, Any]:
             text=True,
             check=False,
             timeout=30,
+            env=_offline_rustup_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         return {"command": command, "exit_code": None, "output": _error_text(error)}

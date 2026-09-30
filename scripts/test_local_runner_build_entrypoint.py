@@ -852,6 +852,28 @@ class BuildEntryPointTests(unittest.TestCase):
         self.assertEqual(receipt["state"], "failed")
         self.assertIn("missing contract receipt", receipt["error"])
 
+    def test_rust_inventory_and_versions_do_not_sync_project_override(self) -> None:
+        installed = entrypoint.subprocess.CompletedProcess(
+            ["rustup", "toolchain", "list"], 0,
+            "nightly-x86_64-unknown-linux-gnu (default)\n", "")
+        with patch.object(entrypoint.shutil, "which", side_effect=lambda name: f"/usr/bin/{name}"), \
+             patch.object(entrypoint.subprocess, "run", return_value=installed) as run:
+            entrypoint.preflight(entrypoint.profile_for("fem-cpu-slepc-runtime-v2"), release=False)
+            environment = run.call_args.kwargs.get("env", {})
+            self.assertEqual(environment.get("RUSTUP_TOOLCHAIN"), "nightly")
+            self.assertEqual(environment.get("RUSTUP_AUTO_INSTALL"), "0")
+            entrypoint._command_version(["/usr/bin/rustc", "--version"])
+            environment = run.call_args.kwargs.get("env", {})
+            self.assertEqual(environment.get("RUSTUP_TOOLCHAIN"), "nightly")
+            self.assertEqual(environment.get("RUSTUP_AUTO_INSTALL"), "0")
+
+    def test_build_environment_pins_offline_nightly(self) -> None:
+        environment = entrypoint.build_environment(
+            entrypoint.profile_for(self.profile), workspace=self.workspace,
+            build=self.build, jobs=2, native_identity=self._identity())
+        self.assertEqual(environment.get("RUSTUP_TOOLCHAIN"), "nightly")
+        self.assertEqual(environment.get("RUSTUP_AUTO_INSTALL"), "0")
+
     def test_preflight_requires_an_installed_nightly_toolchain(self) -> None:
         with patch.object(
             entrypoint.shutil,
