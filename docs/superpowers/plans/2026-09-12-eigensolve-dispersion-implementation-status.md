@@ -1,5 +1,23 @@
 # Eigensolve dyspersji — checkpoint implementacji
 
+## S01 — naprawiona kontrola rewizji dokumentacji; aktualizacja storage
+
+- Poprzedni turn był postępem: źródłowa poprawka tożsamości diagnostyki WIP,
+  audyt b5a77f982d4f6ac4bbca81514f18181861bde1e6 na remote. Rust regresje nadal
+  niewykonane; nie uznawać source-only jako zamknięcia S07.
+- Naprawiono mieszanie source-map z commita z roboczą stroną i źródłami w
+  changed-page checkerze. RED trzy regresje; GREEN pełne 35 testów Python.
+  Nota 0831 na b5a77f982 przeszła realną kontrolę rewizji exit0.
+  To dokumentacja/source anchoring, nie runtime/numerical qualification.
+- Audyt: docs/audits/2026-09-30-scientific-doc-revision-validation.md.
+- #179 nadal queued. Miejsce 5647167488 B; stare sześć execution nie wystarczy.
+  Nowa prośba obejmuje osiem terminalnych jobów tego worktree (dodano #164/#159),
+  ok. 3.32 GiB. Zastępuje poprzednią niezaakceptowaną prośbę. Zgody nie ma,
+  niczego nie usunięto; po odpowiedzi wymagane świeże kontrole bezpieczeństwa.
+- Pełny zakres S00–S12, nowe piloty, zbieżność, A1/COMSOL, browser i integracja
+  pozostają otwarte. Nie podmieniano oczekujących snapshotów ani procesów.
+
+
 ## S07 — diagnostyka nie może pochodzić z obcej próbki
 
 - Poprzedni turn: postęp 59ea8fd54093e89ed8b22d4adb9bf393e89d1528 na remote;
